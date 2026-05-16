@@ -1,57 +1,48 @@
-# CoproManager - PRD (Product Requirements Document)
+# CoproManager - PRD
 
 ## Problem Statement
-Application de gestion de copropriété basée sur le droit belge: gestion des propriétaires, lots, locataires, comptabilisation PCMN, import CODA, facturation avec clés de répartition, gestion des compteurs, interface bancaire complète avec lettrage, portail propriétaires avec documents.
+Programme comptable complet pour la gestion de copropriete en Belgique, integrant: PCMN, journaux comptables, exercices, budgets, appels de fonds, fournisseurs, facturation avec cles de repartition, compteurs, interface bancaire CODA, lettrage, decomptes annuels PDF, bilan, compte de resultats, grand livre, gestion multi-coproprietes, roles superadmin/syndic/owner, codes VCS.
 
 ## Architecture
-- **Backend**: FastAPI + MongoDB (Motor async) on port 8001
-- **Frontend**: React 19 + Tailwind CSS + Shadcn/UI on port 3000
-- **Auth**: JWT httpOnly cookies, bcrypt password hashing, admin/owner roles
-- **Database**: MongoDB (test_database)
+- Backend: FastAPI + MongoDB (Motor async) - 12 route modules
+- Frontend: React 19 + Tailwind + Shadcn/UI - 18 pages
+- Auth: JWT httpOnly cookies, bcrypt, 3 roles (superadmin/syndic/owner)
+- PDF: reportlab
 
-## User Personas
-1. **Syndic/Admin**: Full access to all management features
-2. **Propriétaire/Owner**: View own documents and statements
+## Implemented (May 2026)
+- [x] Auth JWT avec roles superadmin/syndic/owner
+- [x] Multi-coproprietes avec selecteur
+- [x] PCMN complet (95 comptes belges)
+- [x] Exercices comptables avec cloture et a-nouveau
+- [x] Budgets previsionnels avec comparaison budget/reel
+- [x] Journaux comptables (OD, AV, AP, AN) avec validation equilibre
+- [x] Grand Livre avec solde progressif
+- [x] Balance des comptes
+- [x] Bilan (actif/passif)
+- [x] Compte de resultats (charges/produits)
+- [x] Fournisseurs (TVA, IBAN, BIC)
+- [x] Facturation avec cles de repartition
+- [x] Appels de fonds avec suivi paiements et generation ecritures
+- [x] Codes VCS auto-generes (communication structuree belge mod-97)
+- [x] Import CODA (parser fichiers bancaires belges)
+- [x] Lettrage transactions/factures/proprietaires
+- [x] Compteurs (eau, chauffage, electricite) avec releves
+- [x] Decomptes annuels par proprietaire avec PDF
+- [x] Documents par categories
+- [x] Gestion utilisateurs avec droits
+- [x] 68/68 tests backend passent
 
-## Core Requirements
-- [x] JWT Authentication with roles
-- [x] Propriétaires CRUD
-- [x] Lots CRUD (with tantièmes/quotity)
-- [x] Locataires CRUD
-- [x] Plan Comptable PCMN (95 accounts pre-seeded)
-- [x] Journaux Comptables (OD, Avances, Appels) with balance validation
-- [x] Facturation avec clés de répartition
-- [x] Gestion des compteurs (eau, chauffage, électricité) avec relevés
-- [x] Interface bancaire (extraits, transactions, lettrage)
-- [x] Import CODA (parser Belgian bank file format)
-- [x] Gestion documents par catégories
+## Backlog
+### P0
+- Ajouter auth middleware a tous les routes (seuls coproprietes et admin sont proteges)
+- Tests CODA avec fichiers reels
 
-## What's Been Implemented (May 2026)
-- Complete backend with 9 route modules, CODA parser, PCMN data
-- Full frontend with 10 pages, sidebar layout, Swiss/High-Contrast design
-- 31 backend tests passing (100%)
-- All 9 sidebar pages loading correctly in frontend
+### P1
+- Portail proprietaire (vue restreinte)
+- Rappels de paiement automatiques
+- Historique transferts de propriete
 
-## Prioritized Backlog
-### P0 (Critical)
-- PDF generation for annual statements (décomptes annuels)
-- Role-based access control on API routes (currently all routes open)
-
-### P1 (Important)
-- Owner portal (restricted view for propriétaires)
-- Bilan comptable (balance sheet report)
-- Payment encoding for supplier payments
-- Real CODA file testing with sample files
-
-### P2 (Nice to have)
-- Email notifications for invoices/statements
-- Automatic lettrage suggestions
-- Multi-building support
-- Audit trail / activity logs
-- Dashboard charts with Recharts
-
-## Next Tasks
-1. Add auth middleware to all CRUD routes
-2. Implement PDF décompte annuel generation
-3. Create owner-restricted portal view
-4. Add bilan comptable report
+### P2
+- Gestion AG (assemblees generales)
+- Multi-exercice dans les rapports
+- Export CSV/Excel des rapports

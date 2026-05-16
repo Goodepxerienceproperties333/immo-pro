@@ -29,6 +29,7 @@ def create_properties_router(db):
     async def create_owner(data: OwnerInput):
         from server import generate_vcs
         vcs_code = await generate_vcs(db)
+        vcs_digits = vcs_code.replace("+", "").replace("/", "")
         doc = {
             "id": str(uuid.uuid4()),
             "name": data.name,
@@ -36,6 +37,7 @@ def create_properties_router(db):
             "phone": data.phone,
             "address": data.address,
             "vcs_code": vcs_code,
+            "vcs_digits": vcs_digits,
             "copropriete_id": data.copropriete_id,
             "created_at": datetime.now(timezone.utc).isoformat()
         }
@@ -47,12 +49,11 @@ def create_properties_router(db):
         """Lookup owner by VCS structured communication."""
         if not vcs:
             return []
-        # Clean VCS - remove +++ and /
-        clean = vcs.replace("+", "").replace("/", "").strip()
+        clean = vcs.replace("+", "").replace("/", "").replace(" ", "").strip()
         results = await db.owners.find(
             {"$or": [
-                {"vcs_code": {"$regex": clean, "$options": "i"}},
-                {"vcs_code": {"$regex": vcs, "$options": "i"}},
+                {"vcs_code": {"$regex": vcs.replace("+", "\\+"), "$options": "i"}},
+                {"vcs_digits": {"$regex": clean, "$options": "i"}},
                 {"name": {"$regex": vcs, "$options": "i"}},
             ]},
             {"_id": 0}

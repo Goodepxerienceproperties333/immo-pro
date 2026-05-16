@@ -231,14 +231,13 @@ def create_banking_router(db):
         clean = communication.replace("+", "").replace("/", "").replace(" ", "").strip()
         if not clean:
             return {"owner": None}
-        # Try exact match first
-        owner = await db.owners.find_one({"vcs_code": {"$regex": clean}}, {"_id": 0})
-        if not owner:
-            # Try partial match
-            owner = await db.owners.find_one(
-                {"vcs_code": {"$regex": clean[:6], "$options": "i"}},
-                {"_id": 0}
-            )
+        owner = await db.owners.find_one(
+            {"$or": [
+                {"vcs_digits": {"$regex": clean, "$options": "i"}},
+                {"vcs_code": {"$regex": communication.replace("+", "\\+"), "$options": "i"}},
+            ]},
+            {"_id": 0}
+        )
         return {"owner": owner}
 
     # ---- BATCH TRANSACTIONS ----
