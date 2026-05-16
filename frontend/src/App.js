@@ -18,6 +18,7 @@ import FundCallsPage from "@/pages/FundCallsPage";
 import MetersPage from "@/pages/MetersPage";
 import BankingPage from "@/pages/BankingPage";
 import ReportsPage from "@/pages/ReportsPage";
+import BalanceTiersPage from "@/pages/BalanceTiersPage";
 import DocumentsPage from "@/pages/DocumentsPage";
 import AdminUsersPage from "@/pages/AdminUsersPage";
 import CoproprietesPage from "@/pages/CoproprietesPage";
@@ -52,6 +53,7 @@ function AppRoutes() {
         <Route path="meters" element={<MetersPage />} />
         <Route path="banking" element={<BankingPage />} />
         <Route path="reports" element={<ReportsPage />} />
+        <Route path="balance-tiers" element={<BalanceTiersPage />} />
         <Route path="documents" element={<DocumentsPage />} />
         <Route path="admin/users" element={<AdminUsersPage />} />
       </Route>

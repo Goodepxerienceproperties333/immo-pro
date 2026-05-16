@@ -35,6 +35,7 @@ const sections = [
   ]},
   { title: 'Rapports', items: [
     { to: '/reports', icon: BarChart3, label: 'Bilan & Resultats' },
+    { to: '/balance-tiers', icon: Users, label: 'Balance de Tiers' },
     { to: '/documents', icon: FolderOpen, label: 'Documents' },
   ]},
 ];

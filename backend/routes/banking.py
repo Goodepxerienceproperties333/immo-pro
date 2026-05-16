@@ -32,7 +32,20 @@ class BatchTransactionInput(BaseModel):
 class LettrageInput(BaseModel):
     transaction_id: str
     match_to_id: str
-    match_type: str  # invoice, owner_payment
+    match_type: str  # invoice, owner_payment, supplier_payment
+
+
+class InlineLineInput(BaseModel):
+    date: str
+    amount: float
+    counterparty_name: Optional[str] = ""
+    counterparty_account: Optional[str] = ""
+    communication: Optional[str] = ""
+    transaction_type: Optional[str] = "credit"
+
+
+class AddLinesInput(BaseModel):
+    lines: List[InlineLineInput]
 
 
 def create_banking_router(db):
@@ -205,6 +218,37 @@ def create_banking_router(db):
             "opening_balance": statement["opening_balance"],
             "closing_balance": statement["closing_balance"]
         }
+
+    # ---- ADD LINES TO EXISTING STATEMENT ----
+    @router.post("/statements/{stmt_id}/add-lines")
+    async def add_lines_to_statement(stmt_id: str, data: AddLinesInput):
+        """Add multiple transaction lines to an existing statement at once."""
+        stmt = await db.bank_statements.find_one({"id": stmt_id}, {"_id": 0})
+        if not stmt:
+            raise HTTPException(404, "Extrait non trouve")
+        txns = []
+        for line in data.lines:
+            if abs(line.amount) < 0.001:
+                continue
+            txn = {
+                "id": str(uuid.uuid4()),
+                "statement_id": stmt_id,
+                "date": line.date,
+                "amount": line.amount,
+                "counterparty_name": line.counterparty_name,
+                "counterparty_account": line.counterparty_account,
+                "communication": line.communication,
+                "transaction_type": line.transaction_type,
+                "account_number": "",
+                "matched": False,
+                "matched_to": "",
+                "match_type": "",
+                "created_at": datetime.now(timezone.utc).isoformat()
+            }
+            txns.append(txn)
+        if txns:
+            await db.bank_transactions.insert_many(txns)
+        return {"message": f"{len(txns)} lignes ajoutees", "count": len(txns)}
 
     # ---- SEARCH (for owner payments) ----
     @router.get("/search-owners")

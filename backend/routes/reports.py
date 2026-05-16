@@ -320,4 +320,178 @@ def create_reports_router(db):
         filename = f"decompte_{owner['name'].replace(' ', '_')}_{date_from}_{date_to}.pdf"
         return StreamingResponse(buf, media_type="application/pdf", headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
+    # ---- BALANCE DE TIERS PROPRIETAIRES ----
+    @router.get("/balance-tiers/owners")
+    async def balance_tiers_owners():
+        """Balance de tiers: situation de compte de chaque proprietaire.
+        Debiteur = le proprietaire doit payer a la copropriete.
+        Crediteur = la copropriete doit rembourser le proprietaire."""
+        owners = await db.owners.find({}, {"_id": 0}).sort("name", 1).to_list(1000)
+        fund_calls = await db.fund_calls.find({}, {"_id": 0}).to_list(10000)
+        bank_txns = await db.bank_transactions.find({"matched": True, "match_type": "owner_payment"}, {"_id": 0}).to_list(10000)
+
+        result = []
+        for owner in owners:
+            oid = owner["id"]
+            # Montants appeles (ce que le proprietaire doit)
+            total_called = 0
+            calls_detail = []
+            for fc in fund_calls:
+                for d in fc.get("distribution", []):
+                    if d.get("owner_id") == oid:
+                        total_called += d.get("amount", 0)
+                        calls_detail.append({"date": fc["date"], "description": fc["name"], "amount": d["amount"], "type": "appel"})
+
+            # Paiements recus (ce que le proprietaire a paye)
+            total_paid = 0
+            payments_detail = []
+            for txn in bank_txns:
+                if txn.get("matched_to") == oid:
+                    total_paid += abs(txn.get("amount", 0))
+                    payments_detail.append({"date": txn["date"], "description": txn.get("counterparty_name", "") or txn.get("communication", ""), "amount": abs(txn["amount"]), "type": "paiement"})
+
+            balance = round(total_called - total_paid, 2)
+            movements = sorted(calls_detail + payments_detail, key=lambda x: x["date"])
+
+            result.append({
+                "owner_id": oid,
+                "owner_name": owner["name"],
+                "vcs_code": owner.get("vcs_code", ""),
+                "total_called": round(total_called, 2),
+                "total_paid": round(total_paid, 2),
+                "balance": balance,
+                "status": "debiteur" if balance > 0.01 else ("crediteur" if balance < -0.01 else "solde"),
+                "movements": movements,
+            })
+
+        total_debiteurs = round(sum(r["balance"] for r in result if r["balance"] > 0), 2)
+        total_crediteurs = round(sum(abs(r["balance"]) for r in result if r["balance"] < 0), 2)
+        return {"owners": result, "total_debiteurs": total_debiteurs, "total_crediteurs": total_crediteurs}
+
+    @router.get("/balance-tiers/owners/{owner_id}")
+    async def situation_compte_owner(owner_id: str):
+        """Situation de compte detaillee d'un proprietaire."""
+        owner = await db.owners.find_one({"id": owner_id}, {"_id": 0})
+        if not owner:
+            raise HTTPException(404, "Proprietaire non trouve")
+
+        movements = []
+
+        # Fund calls
+        fund_calls = await db.fund_calls.find({}, {"_id": 0}).to_list(10000)
+        for fc in fund_calls:
+            for d in fc.get("distribution", []):
+                if d.get("owner_id") == owner_id:
+                    movements.append({"date": fc["date"], "description": f"Appel: {fc['name']}", "debit": d["amount"], "credit": 0, "type": "appel", "reference": fc.get("id", "")})
+
+        # Invoice distributions
+        invoices = await db.invoices.find({}, {"_id": 0}).to_list(10000)
+        owner_lots = await db.lots.find({"owner_id": owner_id}, {"_id": 0}).to_list(100)
+        lot_ids = [l["id"] for l in owner_lots]
+        for inv in invoices:
+            for dl in inv.get("distribution_lines", []):
+                if dl.get("lot_id") in lot_ids:
+                    movements.append({"date": inv["date"], "description": f"Charge: {inv.get('supplier', '')} - {inv.get('description', '')}", "debit": dl["amount"], "credit": 0, "type": "charge", "reference": inv.get("number", "")})
+
+        # Bank transactions (payments received)
+        bank_txns = await db.bank_transactions.find({"matched": True, "matched_to": owner_id, "match_type": "owner_payment"}, {"_id": 0}).to_list(10000)
+        for txn in bank_txns:
+            movements.append({"date": txn["date"], "description": f"Paiement recu: {txn.get('communication', '') or txn.get('counterparty_name', '')}", "debit": 0, "credit": abs(txn["amount"]), "type": "paiement", "reference": txn.get("id", "")})
+
+        movements.sort(key=lambda x: x["date"])
+        running = 0
+        for m in movements:
+            running += m["debit"] - m["credit"]
+            m["running_balance"] = round(running, 2)
+
+        total_debit = round(sum(m["debit"] for m in movements), 2)
+        total_credit = round(sum(m["credit"] for m in movements), 2)
+
+        return {
+            "owner": owner,
+            "movements": movements,
+            "total_debit": total_debit,
+            "total_credit": total_credit,
+            "balance": round(total_debit - total_credit, 2),
+            "status": "debiteur" if total_debit > total_credit + 0.01 else ("crediteur" if total_credit > total_debit + 0.01 else "solde"),
+        }
+
+    # ---- BALANCE DE TIERS FOURNISSEURS ----
+    @router.get("/balance-tiers/suppliers")
+    async def balance_tiers_suppliers():
+        """Balance de tiers fournisseurs.
+        Crediteur = on doit payer le fournisseur.
+        Debiteur = on a paye le fournisseur (ou trop-paye)."""
+        suppliers = await db.suppliers.find({}, {"_id": 0}).sort("name", 1).to_list(1000)
+        invoices = await db.invoices.find({}, {"_id": 0}).to_list(10000)
+        bank_txns = await db.bank_transactions.find({"matched": True, "match_type": "invoice"}, {"_id": 0}).to_list(10000)
+
+        # Map invoice_id -> supplier
+        inv_map = {inv["id"]: inv for inv in invoices}
+
+        result = []
+        for supplier in suppliers:
+            sname = supplier["name"]
+            # Total facture (ce qu'on doit)
+            total_invoiced = sum(inv.get("total_amount", 0) for inv in invoices if inv.get("supplier", "") == sname)
+            # Total paye (ce qu'on a paye)
+            total_paid = 0
+            for txn in bank_txns:
+                matched_inv = inv_map.get(txn.get("matched_to", ""))
+                if matched_inv and matched_inv.get("supplier", "") == sname:
+                    total_paid += abs(txn.get("amount", 0))
+
+            balance = round(total_invoiced - total_paid, 2)
+            result.append({
+                "supplier_id": supplier["id"],
+                "supplier_name": sname,
+                "vat_number": supplier.get("vat_number", ""),
+                "total_invoiced": round(total_invoiced, 2),
+                "total_paid": round(total_paid, 2),
+                "balance": balance,
+                "status": "crediteur" if balance > 0.01 else ("debiteur" if balance < -0.01 else "solde"),
+            })
+
+        total_a_payer = round(sum(r["balance"] for r in result if r["balance"] > 0), 2)
+        return {"suppliers": result, "total_a_payer": total_a_payer}
+
+    @router.get("/balance-tiers/suppliers/{supplier_id}")
+    async def situation_compte_supplier(supplier_id: str):
+        """Situation de compte detaillee d'un fournisseur."""
+        supplier = await db.suppliers.find_one({"id": supplier_id}, {"_id": 0})
+        if not supplier:
+            raise HTTPException(404, "Fournisseur non trouve")
+
+        sname = supplier["name"]
+        movements = []
+
+        invoices = await db.invoices.find({"supplier": sname}, {"_id": 0}).to_list(10000)
+        for inv in invoices:
+            movements.append({"date": inv["date"], "description": f"Facture {inv.get('number', '')}: {inv.get('description', '')}", "debit": 0, "credit": inv.get("total_amount", 0), "type": "facture", "reference": inv.get("number", "")})
+
+        bank_txns = await db.bank_transactions.find({"matched": True, "match_type": "invoice"}, {"_id": 0}).to_list(10000)
+        inv_map = {inv["id"]: inv for inv in invoices}
+        for txn in bank_txns:
+            matched_inv = inv_map.get(txn.get("matched_to", ""))
+            if matched_inv:
+                movements.append({"date": txn["date"], "description": f"Paiement: {txn.get('communication', '') or txn.get('counterparty_name', '')}", "debit": abs(txn["amount"]), "credit": 0, "type": "paiement", "reference": txn.get("id", "")})
+
+        movements.sort(key=lambda x: x["date"])
+        running = 0
+        for m in movements:
+            running += m["credit"] - m["debit"]
+            m["running_balance"] = round(running, 2)
+
+        total_debit = round(sum(m["debit"] for m in movements), 2)
+        total_credit = round(sum(m["credit"] for m in movements), 2)
+
+        return {
+            "supplier": supplier,
+            "movements": movements,
+            "total_debit": total_debit,
+            "total_credit": total_credit,
+            "balance": round(total_credit - total_debit, 2),
+            "status": "crediteur" if total_credit > total_debit + 0.01 else ("debiteur" if total_debit > total_credit + 0.01 else "solde"),
+        }
+
     return router

@@ -10,6 +10,7 @@ class CoproprieteInput(BaseModel):
     address: Optional[str] = ""
     description: Optional[str] = ""
     bank_account: Optional[str] = ""
+    status: Optional[str] = "active"
 
 
 def create_coproprietes_router(db):
@@ -23,15 +24,17 @@ def create_coproprietes_router(db):
         return user
 
     @router.get("")
-    async def list_coproprietes(request: Request):
+    async def list_coproprietes(request: Request, show_archived: Optional[bool] = False):
         from server import get_current_user, is_admin_role
         user = await get_current_user(request)
+        q = {} if show_archived else {"status": {"$ne": "archived"}}
         if is_admin_role(user.get("role", "")):
-            copros = await db.coproprietes.find({}, {"_id": 0}).sort("name", 1).to_list(1000)
+            copros = await db.coproprietes.find(q, {"_id": 0}).sort("name", 1).to_list(1000)
         else:
             user_copro_ids = user.get("copropriete_ids", [])
             if user_copro_ids:
-                copros = await db.coproprietes.find({"id": {"$in": user_copro_ids}}, {"_id": 0}).sort("name", 1).to_list(1000)
+                q["id"] = {"$in": user_copro_ids}
+                copros = await db.coproprietes.find(q, {"_id": 0}).sort("name", 1).to_list(1000)
             else:
                 copros = []
         return copros
@@ -73,5 +76,21 @@ def create_coproprietes_router(db):
         if result.deleted_count == 0:
             raise HTTPException(404, "Copropriete non trouvee")
         return {"message": "Copropriete supprimee"}
+
+    @router.post("/{copro_id}/archive")
+    async def archive_copropriete(copro_id: str, request: Request):
+        await _get_manager(request)
+        result = await db.coproprietes.update_one({"id": copro_id}, {"$set": {"status": "archived"}})
+        if result.matched_count == 0:
+            raise HTTPException(404, "Copropriete non trouvee")
+        return {"message": "Copropriete archivee"}
+
+    @router.post("/{copro_id}/unarchive")
+    async def unarchive_copropriete(copro_id: str, request: Request):
+        await _get_manager(request)
+        result = await db.coproprietes.update_one({"id": copro_id}, {"$set": {"status": "active"}})
+        if result.matched_count == 0:
+            raise HTTPException(404, "Copropriete non trouvee")
+        return {"message": "Copropriete reactivee"}
 
     return router

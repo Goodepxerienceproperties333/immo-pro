@@ -1,0 +1,41 @@
+{
+  "summary": "Iteration 3 verified: Balance de Tiers (owners + suppliers + situation de compte), Banking add-lines (inline batch), Banking VCS lookup, Copropriete archive/unarchive with show_archived filter, and Lettrage match_type='supplier_payment'. Backend: 95/95 pytest pass (68 regression + 27 new). Frontend: /balance-tiers shows owner/supplier tabs with TOTAL DEBITEURS/CREDITEURS cards and Debiteur/Crediteur/Solde status badges (real data: 13333.36 EUR debit for owner 'Gerald Evrard'). /banking shows 'Extraits, saisie en ligne, lettrage et import CODA' with statement cards. /coproprietes has 'Voir archives' toggle and archive flow works. 0 console errors.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter3_features.py",
+    "/app/backend/tests/test_new_features.py",
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/iter3.xml",
+    "/app/test_reports/pytest/iter3_all.xml"
+  ],
+  "action_items": [
+    "(carry-over MINOR from iter2) Auth still NOT enforced on /api/reports/*, /api/banking/*, /api/suppliers, /api/fund-calls, /api/fiscal/*. Only /api/coproprietes and /api/admin/users are gated by Depends/get_current_user. Recommend adding auth dependency to all financial routers before production.",
+    "(carry-over MINOR) /api/owners/lookup-vcs digit-only search is dead code (still uses regex against stored '+++.../...+++'). The NEW /api/banking/vcs-lookup correctly handles this by including a stored 'vcs_digits' regex branch AND a full-format regex - both digits-only and full VCS work.",
+    "(observation) Both /api/banking/lettrage and POST /api/banking/statements/{id}/add-lines do NOT require authentication and accept any payload over public ingress."
+  ],
+  "critical_code_review_comments": [
+    "Auth: financial endpoints remain unauthenticated across the public ingress (carry-over from iter2). Specifically /api/banking/* (lettrage, transactions, statements/add-lines, vcs-lookup, search-owners), /api/reports/* (balance-tiers, decompte/pdf), /api/suppliers, /api/fund-calls, /api/fiscal/*. This is a HIGH-priority pre-prod fix.",
+    "Banking add-lines correctly skips lines with |amount| < 0.001 (verified via test - sent 3 lines incl. one zero, got count=2).",
+    "VCS lookup uses a smart $or: matches both the cleaned digits (vs stored vcs_digits) AND the full format (escapes '+' in regex). Validated end-to-end via test that creates owner -> POST returns vcs_code -> GET vcs-lookup with that exact string returns the owner.",
+    "Copropriete listing correctly filters by status: default hides 'archived', show_archived=true returns all. Archive/unarchive endpoints return 404 for unknown ids. Archive flow is fully idempotent for the tests.",
+    "Balance de tiers OWNERS: total_called computed from fund_calls.distribution[].amount; total_paid from bank_transactions with matched=true & match_type='owner_payment' & matched_to=owner_id. balance = called - paid. status correctly debiteur/crediteur/solde with 0.01 tolerance.",
+    "Balance de tiers SUPPLIERS: matches invoices by supplier NAME (not supplier_id) and pairs with bank_transactions matched via match_type='invoice'. Brittle - if a supplier is renamed the historical totals will diverge. Suggest storing supplier_id on invoice and matching by id.",
+    "Lettrage supplier_payment is accepted by the unchanged LettrageInput model (no enum constraint) - the value is stored on the txn as-is. Works as expected. Consider adding Literal['invoice','owner_payment','supplier_payment'] for validation.",
+    "GET /api/reports/balance-tiers/suppliers/{id} returns balance as credit - debit (i.e. positive = we owe supplier). Owner version returns debit - credit (positive = owner owes us). Asymmetric sign convention is intentional/correct but should be documented in API."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter3_features.py (new - 27 test cases for iter3 features)"
+  ],
+  "success_rate": {"backend": "100% (95/95 = 27 new + 68 regression)", "frontend": "100% (all 3 target pages load with expected UI, sidebar shows new 'Balance de Tiers' entry under RAPPORTS)"},
+  "test_credentials": "admin@copro.be / admin123 (superadmin) - confirmed working",
+  "seed_data_creation": "All test resources prefixed TEST3_. Each test cleans up its own owners, suppliers, statements, coproprietes via teardown DELETE calls.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Three backend pytest files now: tests/backend_test.py (31 base), tests/test_new_features.py (37 iter2), tests/test_iter3_features.py (27 iter3). Run all with: pytest /app/backend/tests/ -v. Iter3 features all green. Known open items (carry-over from iter2, NOT regressions): (1) financial routers lack auth, (2) /api/owners/lookup-vcs digit-only search is dead code (the new /api/banking/vcs-lookup is correct and uses vcs_digits + escaped vcs_code). Frontend UI components for the 3 new flows are present and rendering.",
+  "rca_of_minor_issues": "Suppliers balance-tiers matches by supplier name string - if a supplier is renamed via PUT /api/suppliers/{id} after invoices exist, historical invoices keep old name and the new supplier doc no longer matches them. Should index by supplier_id on invoices instead."
+}
