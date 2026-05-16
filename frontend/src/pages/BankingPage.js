@@ -93,10 +93,14 @@ export default function BankingPage() {
     } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); }
   };
 
-  // VCS Lookup on communication change
-  const handleVcsLookup = async (value) => {
+  // VCS Lookup on communication change - uses global lookup
+  const handleVcsLookup = async (value, lineIdx) => {
     if (value.length >= 3) {
-      try { const { data } = await api.get('/banking/vcs-lookup', { params: { communication: value } }); setVcsLookupResult(data.owner); } catch { setVcsLookupResult(null); }
+      try {
+        const { data } = await api.get('/banking/lookup', { params: { q: value } });
+        const found = data.owners?.[0] || null;
+        setVcsLookupResult({ owner: found, suppliers: data.suppliers || [], invoices: data.invoices || [], lineIdx });
+      } catch { setVcsLookupResult(null); }
     } else { setVcsLookupResult(null); }
   };
 
@@ -190,10 +194,13 @@ export default function BankingPage() {
                             </td>
                             <td className="p-1"><Input className="h-7 text-xs" value={line.counterparty_name} onChange={e => updateInlineLine(i, 'counterparty_name', e.target.value)} placeholder="Nom" /></td>
                             <td className="p-1 relative">
-                              <Input className="h-7 text-xs" value={line.communication} onChange={e => { updateInlineLine(i, 'communication', e.target.value); handleVcsLookup(e.target.value); }} placeholder="Communication / VCS" />
-                              {vcsLookupResult && i === inlineLines.length - 1 && (
-                                <div className="absolute top-8 left-0 z-10 bg-white border border-blue-200 shadow-lg rounded p-2 text-xs">
-                                  <span className="text-[#0055FF] font-medium">VCS:</span> {vcsLookupResult.name} <span className="font-mono">{vcsLookupResult.vcs_code}</span>
+                              <Input className="h-7 text-xs" value={line.communication} onChange={e => { updateInlineLine(i, 'communication', e.target.value); handleVcsLookup(e.target.value, i); }} placeholder="Communication / VCS" />
+                              {vcsLookupResult && vcsLookupResult.lineIdx === i && vcsLookupResult.owner && (
+                                <div className="absolute top-8 left-0 z-10 bg-white border border-[#0055FF] shadow-lg rounded-md p-2 text-xs max-w-xs">
+                                  <div className="text-[#0055FF] font-semibold mb-1">Proprietaire trouve:</div>
+                                  <div className="font-medium">{vcsLookupResult.owner.name}</div>
+                                  <div className="font-mono text-[10px] text-slate-500">{vcsLookupResult.owner.vcs_code}</div>
+                                  <div className="text-[10px] text-green-600 mt-1">Auto-lettrage a l'enregistrement</div>
                                 </div>
                               )}
                             </td>

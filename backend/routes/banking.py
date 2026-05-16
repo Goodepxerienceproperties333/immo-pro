@@ -51,6 +51,33 @@ class AddLinesInput(BaseModel):
 def create_banking_router(db):
     router = APIRouter(prefix="/api/banking")
 
+    async def _try_auto_lettrage_vcs(txn_doc):
+        """Try to auto-match a transaction by VCS communication."""
+        comm = txn_doc.get("communication", "")
+        if not comm or len(comm) < 3:
+            return
+        clean = comm.replace("+", "").replace("/", "").replace(" ", "").strip()
+        if not clean:
+            return
+        owner = await db.owners.find_one(
+            {"$or": [
+                {"vcs_digits": clean},
+                {"vcs_digits": {"$regex": clean, "$options": "i"}},
+            ]},
+            {"_id": 0}
+        )
+        if not owner:
+            owner = await db.owners.find_one(
+                {"vcs_code": {"$regex": comm.replace("+", "\\+"), "$options": "i"}},
+                {"_id": 0}
+            )
+        if owner:
+            await db.bank_transactions.update_one(
+                {"id": txn_doc["id"]},
+                {"$set": {"matched": True, "matched_to": owner["id"], "match_type": "owner_payment",
+                          "counterparty_name": txn_doc.get("counterparty_name") or owner["name"]}}
+            )
+
     # ---- BANK STATEMENTS ----
     @router.get("/statements")
     async def list_statements():
@@ -117,7 +144,9 @@ def create_banking_router(db):
             "created_at": datetime.now(timezone.utc).isoformat()
         }
         await db.bank_transactions.insert_one(doc)
-        return {k: v for k, v in doc.items() if k != "_id"}
+        await _try_auto_lettrage_vcs(doc)
+        updated = await db.bank_transactions.find_one({"id": doc["id"]}, {"_id": 0})
+        return updated or {k: v for k, v in doc.items() if k != "_id"}
 
     @router.put("/transactions/{txn_id}")
     async def update_transaction(txn_id: str, data: TransactionInput):
@@ -210,6 +239,8 @@ def create_banking_router(db):
 
         if transactions:
             await db.bank_transactions.insert_many(transactions)
+            for txn in transactions:
+                await _try_auto_lettrage_vcs(txn)
 
         return {
             "message": f"Import CODA reussi: {len(transactions)} transactions importees",
@@ -248,6 +279,9 @@ def create_banking_router(db):
             txns.append(txn)
         if txns:
             await db.bank_transactions.insert_many(txns)
+            # Auto-lettrage VCS for each new transaction
+            for txn in txns:
+                await _try_auto_lettrage_vcs(txn)
         return {"message": f"{len(txns)} lignes ajoutees", "count": len(txns)}
 
     # ---- SEARCH (for owner payments) ----
@@ -260,11 +294,55 @@ def create_banking_router(db):
                 {"$or": [
                     {"name": {"$regex": q, "$options": "i"}},
                     {"email": {"$regex": q, "$options": "i"}},
-                    {"vcs_code": {"$regex": q, "$options": "i"}},
+                    {"vcs_code": {"$regex": q.replace("+", "\\+"), "$options": "i"}},
+                    {"vcs_digits": {"$regex": q.replace("+", "").replace("/", ""), "$options": "i"}},
                 ]},
                 {"_id": 0}
             ).to_list(50)
         return owners
+
+    # ---- GLOBAL LOOKUP (owners, suppliers, invoices by any text) ----
+    @router.get("/lookup")
+    async def global_lookup(q: str = ""):
+        """Search across owners, suppliers, invoices by name/VCS/number."""
+        if not q or len(q) < 2:
+            return {"owners": [], "suppliers": [], "invoices": []}
+        clean = q.replace("+", "").replace("/", "").replace(" ", "")
+        owners = await db.owners.find(
+            {"$or": [
+                {"name": {"$regex": q, "$options": "i"}},
+                {"vcs_digits": {"$regex": clean, "$options": "i"}},
+                {"vcs_code": {"$regex": q.replace("+", "\\+"), "$options": "i"}},
+                {"email": {"$regex": q, "$options": "i"}},
+            ]}, {"_id": 0}
+        ).to_list(10)
+        suppliers = await db.suppliers.find(
+            {"$or": [
+                {"name": {"$regex": q, "$options": "i"}},
+                {"vat_number": {"$regex": q, "$options": "i"}},
+            ]}, {"_id": 0}
+        ).to_list(10)
+        inv_q = {"$or": [
+            {"number": {"$regex": q, "$options": "i"}},
+            {"supplier": {"$regex": q, "$options": "i"}},
+        ]}
+        invoices_data = await db.invoices.find(inv_q, {"_id": 0}).to_list(10)
+        return {"owners": owners, "suppliers": suppliers, "invoices": invoices_data}
+
+    # ---- AUTO-LETTRAGE existing unmatched txns ----
+    @router.post("/auto-lettrage-vcs")
+    async def auto_lettrage_all_vcs():
+        """Scan all unmatched transactions and try to auto-match by VCS."""
+        unmatched = await db.bank_transactions.find({"matched": False}, {"_id": 0}).to_list(10000)
+        matched_count = 0
+        for txn in unmatched:
+            comm = txn.get("communication", "")
+            if comm and len(comm) >= 3:
+                await _try_auto_lettrage_vcs(txn)
+                updated = await db.bank_transactions.find_one({"id": txn["id"]}, {"_id": 0})
+                if updated and updated.get("matched"):
+                    matched_count += 1
+        return {"message": f"{matched_count} transactions auto-lettrees", "count": matched_count}
 
     # ---- VCS LOOKUP ----
     @router.get("/vcs-lookup")

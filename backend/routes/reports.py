@@ -328,12 +328,20 @@ def create_reports_router(db):
         Crediteur = la copropriete doit rembourser le proprietaire."""
         owners = await db.owners.find({}, {"_id": 0}).sort("name", 1).to_list(1000)
         fund_calls = await db.fund_calls.find({}, {"_id": 0}).to_list(10000)
-        bank_txns = await db.bank_transactions.find({"matched": True, "match_type": "owner_payment"}, {"_id": 0}).to_list(10000)
+        # Get ALL bank transactions (matched to owner + unmatched with VCS)
+        all_bank_txns = await db.bank_transactions.find({}, {"_id": 0}).to_list(100000)
+
+        # Build VCS lookup map
+        vcs_to_owner = {}
+        for owner in owners:
+            if owner.get("vcs_digits"):
+                vcs_to_owner[owner["vcs_digits"]] = owner["id"]
+            if owner.get("vcs_code"):
+                vcs_to_owner[owner["vcs_code"]] = owner["id"]
 
         result = []
         for owner in owners:
             oid = owner["id"]
-            # Montants appeles (ce que le proprietaire doit)
             total_called = 0
             calls_detail = []
             for fc in fund_calls:
@@ -342,11 +350,20 @@ def create_reports_router(db):
                         total_called += d.get("amount", 0)
                         calls_detail.append({"date": fc["date"], "description": fc["name"], "amount": d["amount"], "type": "appel"})
 
-            # Paiements recus (ce que le proprietaire a paye)
             total_paid = 0
             payments_detail = []
-            for txn in bank_txns:
-                if txn.get("matched_to") == oid:
+            for txn in all_bank_txns:
+                resolved_owner = None
+                if txn.get("matched") and txn.get("match_type") == "owner_payment" and txn.get("matched_to") == oid:
+                    resolved_owner = oid
+                elif not txn.get("matched"):
+                    comm = txn.get("communication", "")
+                    if comm:
+                        clean = comm.replace("+", "").replace("/", "").replace(" ", "")
+                        if vcs_to_owner.get(clean) == oid or vcs_to_owner.get(comm) == oid:
+                            resolved_owner = oid
+
+                if resolved_owner == oid:
                     total_paid += abs(txn.get("amount", 0))
                     payments_detail.append({"date": txn["date"], "description": txn.get("counterparty_name", "") or txn.get("communication", ""), "amount": abs(txn["amount"]), "type": "paiement"})
 
@@ -393,10 +410,20 @@ def create_reports_router(db):
                 if dl.get("lot_id") in lot_ids:
                     movements.append({"date": inv["date"], "description": f"Charge: {inv.get('supplier', '')} - {inv.get('description', '')}", "debit": dl["amount"], "credit": 0, "type": "charge", "reference": inv.get("number", "")})
 
-        # Bank transactions (payments received)
-        bank_txns = await db.bank_transactions.find({"matched": True, "matched_to": owner_id, "match_type": "owner_payment"}, {"_id": 0}).to_list(10000)
-        for txn in bank_txns:
-            movements.append({"date": txn["date"], "description": f"Paiement recu: {txn.get('communication', '') or txn.get('counterparty_name', '')}", "debit": 0, "credit": abs(txn["amount"]), "type": "paiement", "reference": txn.get("id", "")})
+        # Bank transactions (payments received - matched + VCS resolved)
+        all_bank_txns = await db.bank_transactions.find({}, {"_id": 0}).to_list(100000)
+        for txn in all_bank_txns:
+            is_owner_payment = False
+            if txn.get("matched") and txn.get("match_type") == "owner_payment" and txn.get("matched_to") == owner_id:
+                is_owner_payment = True
+            elif not txn.get("matched"):
+                comm = txn.get("communication", "")
+                if comm and owner.get("vcs_digits"):
+                    clean = comm.replace("+", "").replace("/", "").replace(" ", "")
+                    if clean == owner.get("vcs_digits") or comm == owner.get("vcs_code"):
+                        is_owner_payment = True
+            if is_owner_payment:
+                movements.append({"date": txn["date"], "description": f"Paiement recu: {txn.get('communication', '') or txn.get('counterparty_name', '')}", "debit": 0, "credit": abs(txn["amount"]), "type": "paiement", "reference": txn.get("id", "")})
 
         movements.sort(key=lambda x: x["date"])
         running = 0
