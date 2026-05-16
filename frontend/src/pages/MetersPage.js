@@ -179,7 +179,7 @@ export default function MetersPage() {
               <Select value={meterForm.lot_id} onValueChange={v => setMeterForm({...meterForm, lot_id: v})}>
                 <SelectTrigger><SelectValue placeholder="Selectionner un lot" /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">Commun</SelectItem>
+                  <SelectItem value="none">Commun</SelectItem>
                   {lots.map(l => <SelectItem key={l.id} value={l.id}>Lot {l.number}</SelectItem>)}
                 </SelectContent>
               </Select>

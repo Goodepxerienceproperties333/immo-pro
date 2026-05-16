@@ -188,7 +188,7 @@ export default function InvoicesPage() {
                 <Select value={invForm.distribution_key_id} onValueChange={v => setInvForm({...invForm, distribution_key_id: v})}>
                   <SelectTrigger><SelectValue placeholder="Selectionner une cle" /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="">Aucune</SelectItem>
+                    <SelectItem value="none">Aucune</SelectItem>
                     {distKeys.map(k => <SelectItem key={k.id} value={k.id}>{k.name}</SelectItem>)}
                   </SelectContent>
                 </Select>

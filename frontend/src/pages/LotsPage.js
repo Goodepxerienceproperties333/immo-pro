@@ -165,7 +165,7 @@ export default function LotsPage() {
               <Select value={form.owner_id} onValueChange={v => setForm({...form, owner_id: v})}>
                 <SelectTrigger data-testid="lot-owner-select"><SelectValue placeholder="Selectionner un proprietaire" /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">Aucun</SelectItem>
+                  <SelectItem value="none">Aucun</SelectItem>
                   {owners.map(o => <SelectItem key={o.id} value={o.id}>{o.name}</SelectItem>)}
                 </SelectContent>
               </Select>

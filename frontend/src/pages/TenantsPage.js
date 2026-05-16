@@ -96,7 +96,7 @@ export default function TenantsPage() {
               <Select value={form.lot_id} onValueChange={v => setForm({...form, lot_id: v})}>
                 <SelectTrigger><SelectValue placeholder="Selectionner un lot" /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">Aucun</SelectItem>
+                  <SelectItem value="none">Aucun</SelectItem>
                   {lots.map(l => <SelectItem key={l.id} value={l.id}>Lot {l.number}</SelectItem>)}
                 </SelectContent>
               </Select>

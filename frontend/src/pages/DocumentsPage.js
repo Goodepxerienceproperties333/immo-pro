@@ -16,7 +16,7 @@ export default function DocumentsPage() {
   const [tab, setTab] = useState('documents');
   const [documents, setDocuments] = useState([]);
   const [categories, setCategories] = useState([]);
-  const [filterCategory, setFilterCategory] = useState('');
+  const [filterCategory, setFilterCategory] = useState('all');
   const [docDialog, setDocDialog] = useState(false);
   const [catDialog, setCatDialog] = useState(false);
   const [editingCat, setEditingCat] = useState(null);
@@ -25,7 +25,7 @@ export default function DocumentsPage() {
 
   const load = useCallback(async () => {
     const [d, c] = await Promise.all([
-      api.get('/documents', { params: filterCategory ? { category_id: filterCategory } : {} }),
+      api.get('/documents', { params: filterCategory && filterCategory !== 'all' ? { category_id: filterCategory } : {} }),
       api.get('/documents/categories')
     ]);
     setDocuments(d.data); setCategories(c.data);
@@ -78,7 +78,7 @@ export default function DocumentsPage() {
             <Select value={filterCategory} onValueChange={setFilterCategory}>
               <SelectTrigger className="w-[250px]" data-testid="filter-category"><SelectValue placeholder="Toutes les categories" /></SelectTrigger>
               <SelectContent>
-                <SelectItem value="">Toutes les categories</SelectItem>
+                <SelectItem value="all">Toutes les categories</SelectItem>
                 {categories.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
               </SelectContent>
             </Select>
@@ -150,7 +150,7 @@ export default function DocumentsPage() {
               <Select value={docForm.category_id} onValueChange={v => setDocForm({...docForm, category_id: v})}>
                 <SelectTrigger><SelectValue placeholder="Selectionner" /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">Aucune</SelectItem>
+                  <SelectItem value="none">Aucune</SelectItem>
                   {categories.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
                 </SelectContent>
               </Select>
