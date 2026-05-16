@@ -32,7 +32,7 @@ class TestAuth:
         assert r.status_code == 200
         data = r.json()
         assert data["email"] == ADMIN_EMAIL
-        assert data["role"] == "admin"
+        assert data["role"] in ("admin", "superadmin")
         # httpOnly cookie set
         assert "access_token" in session.cookies.get_dict()
 

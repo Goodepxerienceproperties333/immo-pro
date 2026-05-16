@@ -24,6 +24,11 @@ class TransactionInput(BaseModel):
     account_number: Optional[str] = ""
 
 
+class BatchTransactionInput(BaseModel):
+    statement_id: str
+    transactions: List[TransactionInput]
+
+
 class LettrageInput(BaseModel):
     transaction_id: str
     match_to_id: str
@@ -208,9 +213,61 @@ def create_banking_router(db):
             owners = await db.owners.find({}, {"_id": 0}).to_list(50)
         else:
             owners = await db.owners.find(
-                {"$or": [{"name": {"$regex": q, "$options": "i"}}, {"email": {"$regex": q, "$options": "i"}}]},
+                {"$or": [
+                    {"name": {"$regex": q, "$options": "i"}},
+                    {"email": {"$regex": q, "$options": "i"}},
+                    {"vcs_code": {"$regex": q, "$options": "i"}},
+                ]},
                 {"_id": 0}
             ).to_list(50)
         return owners
+
+    # ---- VCS LOOKUP ----
+    @router.get("/vcs-lookup")
+    async def vcs_lookup(communication: str = ""):
+        """Lookup owner by VCS structured communication."""
+        if not communication:
+            return {"owner": None}
+        clean = communication.replace("+", "").replace("/", "").replace(" ", "").strip()
+        if not clean:
+            return {"owner": None}
+        # Try exact match first
+        owner = await db.owners.find_one({"vcs_code": {"$regex": clean}}, {"_id": 0})
+        if not owner:
+            # Try partial match
+            owner = await db.owners.find_one(
+                {"vcs_code": {"$regex": clean[:6], "$options": "i"}},
+                {"_id": 0}
+            )
+        return {"owner": owner}
+
+    # ---- BATCH TRANSACTIONS ----
+    @router.post("/transactions/batch")
+    async def create_batch_transactions(data: BatchTransactionInput):
+        """Create multiple transactions at once for a statement."""
+        stmt = await db.bank_statements.find_one({"id": data.statement_id}, {"_id": 0})
+        if not stmt:
+            raise HTTPException(404, "Extrait non trouve")
+        txns = []
+        for t in data.transactions:
+            txn = {
+                "id": str(uuid.uuid4()),
+                "statement_id": data.statement_id,
+                "date": t.date,
+                "amount": t.amount,
+                "counterparty_name": t.counterparty_name,
+                "counterparty_account": t.counterparty_account,
+                "communication": t.communication,
+                "transaction_type": t.transaction_type,
+                "account_number": t.account_number,
+                "matched": False,
+                "matched_to": "",
+                "match_type": "",
+                "created_at": datetime.now(timezone.utc).isoformat()
+            }
+            txns.append(txn)
+        if txns:
+            await db.bank_transactions.insert_many(txns)
+        return {"message": f"{len(txns)} transactions creees", "count": len(txns)}
 
     return router

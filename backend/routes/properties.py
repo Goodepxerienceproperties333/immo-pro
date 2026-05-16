@@ -15,24 +15,49 @@ def create_properties_router(db):
         email: Optional[str] = ""
         phone: Optional[str] = ""
         address: Optional[str] = ""
+        copropriete_id: Optional[str] = ""
 
     @router.get("/owners")
-    async def list_owners(request: Request):
-        owners = await db.owners.find({}, {"_id": 0}).sort("name", 1).to_list(1000)
+    async def list_owners(request: Request, copropriete_id: Optional[str] = None):
+        q = {}
+        if copropriete_id:
+            q["copropriete_id"] = copropriete_id
+        owners = await db.owners.find(q, {"_id": 0}).sort("name", 1).to_list(1000)
         return owners
 
     @router.post("/owners")
     async def create_owner(data: OwnerInput):
+        from server import generate_vcs
+        vcs_code = await generate_vcs(db)
         doc = {
             "id": str(uuid.uuid4()),
             "name": data.name,
             "email": data.email,
             "phone": data.phone,
             "address": data.address,
+            "vcs_code": vcs_code,
+            "copropriete_id": data.copropriete_id,
             "created_at": datetime.now(timezone.utc).isoformat()
         }
         await db.owners.insert_one(doc)
         return {k: v for k, v in doc.items() if k != "_id"}
+
+    @router.get("/owners/lookup-vcs")
+    async def lookup_vcs(vcs: str = ""):
+        """Lookup owner by VCS structured communication."""
+        if not vcs:
+            return []
+        # Clean VCS - remove +++ and /
+        clean = vcs.replace("+", "").replace("/", "").strip()
+        results = await db.owners.find(
+            {"$or": [
+                {"vcs_code": {"$regex": clean, "$options": "i"}},
+                {"vcs_code": {"$regex": vcs, "$options": "i"}},
+                {"name": {"$regex": vcs, "$options": "i"}},
+            ]},
+            {"_id": 0}
+        ).to_list(20)
+        return results
 
     @router.get("/owners/{owner_id}")
     async def get_owner(owner_id: str):

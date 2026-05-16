@@ -11,6 +11,14 @@ export function useAuth() {
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [selectedCopro, setSelectedCoproState] = useState(() => {
+    try { return localStorage.getItem('selectedCopro') || ''; } catch { return ''; }
+  });
+
+  const setSelectedCopro = (id) => {
+    setSelectedCoproState(id);
+    try { localStorage.setItem('selectedCopro', id || ''); } catch {}
+  };
 
   const checkAuth = useCallback(async () => {
     try {
@@ -23,9 +31,7 @@ export function AuthProvider({ children }) {
     }
   }, []);
 
-  useEffect(() => {
-    checkAuth();
-  }, [checkAuth]);
+  useEffect(() => { checkAuth(); }, [checkAuth]);
 
   const login = async (email, password) => {
     const { data } = await axios.post(`${API}/api/auth/login`, { email, password }, { withCredentials: true });
@@ -44,8 +50,11 @@ export function AuthProvider({ children }) {
     setUser(false);
   };
 
+  const isAdmin = user && (user.role === 'superadmin' || user.role === 'admin');
+  const isManager = user && (user.role === 'superadmin' || user.role === 'admin' || user.role === 'syndic');
+
   return (
-    <AuthContext.Provider value={{ user, loading, login, register, logout }}>
+    <AuthContext.Provider value={{ user, loading, login, register, logout, selectedCopro, setSelectedCopro, isAdmin, isManager }}>
       {children}
     </AuthContext.Provider>
   );

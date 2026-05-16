@@ -80,6 +80,7 @@ export default function OwnersPage() {
           <TableHeader>
             <TableRow>
               <TableHead className="data-table">Nom</TableHead>
+              <TableHead className="data-table">VCS</TableHead>
               <TableHead className="data-table">Email</TableHead>
               <TableHead className="data-table">Telephone</TableHead>
               <TableHead className="data-table">Adresse</TableHead>
@@ -88,10 +89,11 @@ export default function OwnersPage() {
           </TableHeader>
           <TableBody>
             {filtered.length === 0 ? (
-              <TableRow><TableCell colSpan={5} className="text-center py-8 text-slate-400">Aucun proprietaire</TableCell></TableRow>
+              <TableRow><TableCell colSpan={6} className="text-center py-8 text-slate-400">Aucun proprietaire</TableCell></TableRow>
             ) : filtered.map(owner => (
               <TableRow key={owner.id} className="hover:bg-slate-50/50" data-testid={`owner-row-${owner.id}`}>
                 <TableCell className="font-medium text-slate-900">{owner.name}</TableCell>
+                <TableCell className="font-mono text-xs text-[#0055FF]">{owner.vcs_code || '-'}</TableCell>
                 <TableCell className="text-slate-600">{owner.email}</TableCell>
                 <TableCell className="text-slate-600">{owner.phone}</TableCell>
                 <TableCell className="text-slate-600 max-w-[200px] truncate">{owner.address}</TableCell>
