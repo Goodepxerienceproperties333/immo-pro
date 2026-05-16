@@ -11,10 +11,17 @@ def create_properties_router(db):
 
     # ---- OWNERS ----
     class OwnerInput(BaseModel):
-        name: str
-        email: Optional[str] = ""
-        phone: Optional[str] = ""
+        first_name: Optional[str] = ""
+        last_name: Optional[str] = ""
+        name: Optional[str] = ""
         address: Optional[str] = ""
+        postal_code: Optional[str] = ""
+        city: Optional[str] = ""
+        country: Optional[str] = "Belgique"
+        email: Optional[str] = ""
+        email2: Optional[str] = ""
+        phone: Optional[str] = ""
+        phone2: Optional[str] = ""
         copropriete_id: Optional[str] = ""
 
     @router.get("/owners")
@@ -22,7 +29,7 @@ def create_properties_router(db):
         q = {}
         if copropriete_id:
             q["copropriete_id"] = copropriete_id
-        owners = await db.owners.find(q, {"_id": 0}).sort("name", 1).to_list(1000)
+        owners = await db.owners.find(q, {"_id": 0}).sort("last_name", 1).to_list(1000)
         return owners
 
     @router.post("/owners")
@@ -30,12 +37,20 @@ def create_properties_router(db):
         from server import generate_vcs
         vcs_code = await generate_vcs(db)
         vcs_digits = vcs_code.replace("+", "").replace("/", "")
+        full_name = data.name or f"{data.last_name} {data.first_name}".strip()
         doc = {
             "id": str(uuid.uuid4()),
-            "name": data.name,
-            "email": data.email,
-            "phone": data.phone,
+            "first_name": data.first_name,
+            "last_name": data.last_name,
+            "name": full_name,
             "address": data.address,
+            "postal_code": data.postal_code,
+            "city": data.city,
+            "country": data.country,
+            "email": data.email,
+            "email2": data.email2,
+            "phone": data.phone,
+            "phone2": data.phone2,
             "vcs_code": vcs_code,
             "vcs_digits": vcs_digits,
             "copropriete_id": data.copropriete_id,
@@ -46,15 +61,16 @@ def create_properties_router(db):
 
     @router.get("/owners/lookup-vcs")
     async def lookup_vcs(vcs: str = ""):
-        """Lookup owner by VCS structured communication."""
         if not vcs:
             return []
         clean = vcs.replace("+", "").replace("/", "").replace(" ", "").strip()
         results = await db.owners.find(
             {"$or": [
                 {"vcs_code": {"$regex": vcs.replace("+", "\\+"), "$options": "i"}},
-                {"vcs_digits": {"$regex": clean, "$options": "i"}},
+                {"vcs_digits": clean},
                 {"name": {"$regex": vcs, "$options": "i"}},
+                {"last_name": {"$regex": vcs, "$options": "i"}},
+                {"first_name": {"$regex": vcs, "$options": "i"}},
             ]},
             {"_id": 0}
         ).to_list(20)
@@ -69,9 +85,15 @@ def create_properties_router(db):
 
     @router.put("/owners/{owner_id}")
     async def update_owner(owner_id: str, data: OwnerInput):
+        full_name = data.name or f"{data.last_name} {data.first_name}".strip()
         result = await db.owners.update_one(
             {"id": owner_id},
-            {"$set": {"name": data.name, "email": data.email, "phone": data.phone, "address": data.address}}
+            {"$set": {
+                "first_name": data.first_name, "last_name": data.last_name, "name": full_name,
+                "address": data.address, "postal_code": data.postal_code, "city": data.city,
+                "country": data.country, "email": data.email, "email2": data.email2,
+                "phone": data.phone, "phone2": data.phone2,
+            }}
         )
         if result.matched_count == 0:
             raise HTTPException(404, "Proprietaire non trouve")
@@ -93,6 +115,7 @@ def create_properties_router(db):
         area: Optional[float] = 0.0
         quotity: Optional[float] = 0.0
         owner_id: Optional[str] = ""
+        owner_ids: Optional[List[str]] = []
 
     @router.get("/lots")
     async def list_lots():
@@ -101,6 +124,7 @@ def create_properties_router(db):
 
     @router.post("/lots")
     async def create_lot(data: LotInput):
+        ids = data.owner_ids if data.owner_ids else ([data.owner_id] if data.owner_id else [])
         doc = {
             "id": str(uuid.uuid4()),
             "number": data.number,
@@ -109,7 +133,8 @@ def create_properties_router(db):
             "floor": data.floor,
             "area": data.area,
             "quotity": data.quotity,
-            "owner_id": data.owner_id,
+            "owner_id": ids[0] if ids else "",
+            "owner_ids": ids,
             "created_at": datetime.now(timezone.utc).isoformat()
         }
         await db.lots.insert_one(doc)
@@ -117,10 +142,13 @@ def create_properties_router(db):
 
     @router.put("/lots/{lot_id}")
     async def update_lot(lot_id: str, data: LotInput):
+        ids = data.owner_ids if data.owner_ids else ([data.owner_id] if data.owner_id else [])
         update = {
             "number": data.number, "description": data.description,
             "lot_type": data.lot_type, "floor": data.floor,
-            "area": data.area, "quotity": data.quotity, "owner_id": data.owner_id
+            "area": data.area, "quotity": data.quotity,
+            "owner_id": ids[0] if ids else "",
+            "owner_ids": ids,
         }
         result = await db.lots.update_one({"id": lot_id}, {"$set": update})
         if result.matched_count == 0:

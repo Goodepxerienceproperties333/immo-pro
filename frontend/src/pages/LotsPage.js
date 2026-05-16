@@ -6,6 +6,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
+import { Checkbox } from '@/components/ui/checkbox';
 import { toast } from 'sonner';
 import { Plus, Pencil, Trash2, Search } from 'lucide-react';
 
@@ -23,7 +24,7 @@ export default function LotsPage() {
   const [search, setSearch] = useState('');
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState(null);
-  const [form, setForm] = useState({ number: '', description: '', lot_type: 'apartment', floor: 0, area: 0, quotity: 0, owner_id: '' });
+  const [form, setForm] = useState({ number: '', description: '', lot_type: 'apartment', floor: 0, area: 0, quotity: 0, owner_id: '', owner_ids: [] });
 
   const load = useCallback(async () => {
     const [lotsRes, ownersRes] = await Promise.all([api.get('/lots'), api.get('/owners')]);
@@ -35,10 +36,13 @@ export default function LotsPage() {
 
   const filtered = lots.filter(l => l.number.toLowerCase().includes(search.toLowerCase()) || l.description?.toLowerCase().includes(search.toLowerCase()));
 
-  const getOwnerName = (ownerId) => owners.find(o => o.id === ownerId)?.name || '-';
+  const getOwnerNames = (lot) => {
+    const ids = lot.owner_ids?.length ? lot.owner_ids : (lot.owner_id ? [lot.owner_id] : []);
+    return ids.map(id => owners.find(o => o.id === id)?.name || '').filter(Boolean).join(', ') || '-';
+  };
 
-  const openCreate = () => { setEditing(null); setForm({ number: '', description: '', lot_type: 'apartment', floor: 0, area: 0, quotity: 0, owner_id: '' }); setDialogOpen(true); };
-  const openEdit = (lot) => { setEditing(lot); setForm({ number: lot.number, description: lot.description || '', lot_type: lot.lot_type || 'apartment', floor: lot.floor || 0, area: lot.area || 0, quotity: lot.quotity || 0, owner_id: lot.owner_id || '' }); setDialogOpen(true); };
+  const openCreate = () => { setEditing(null); setForm({ number: '', description: '', lot_type: 'apartment', floor: 0, area: 0, quotity: 0, owner_id: '', owner_ids: [] }); setDialogOpen(true); };
+  const openEdit = (lot) => { setEditing(lot); setForm({ number: lot.number, description: lot.description || '', lot_type: lot.lot_type || 'apartment', floor: lot.floor || 0, area: lot.area || 0, quotity: lot.quotity || 0, owner_id: lot.owner_id || '', owner_ids: lot.owner_ids || (lot.owner_id ? [lot.owner_id] : []) }); setDialogOpen(true); };
 
   const handleSave = async () => {
     try {
@@ -108,7 +112,7 @@ export default function LotsPage() {
                 <TableCell>{lot.floor}</TableCell>
                 <TableCell>{lot.area}</TableCell>
                 <TableCell className="font-mono text-sm">{lot.quotity}</TableCell>
-                <TableCell className="text-slate-600">{getOwnerName(lot.owner_id)}</TableCell>
+                <TableCell className="text-slate-600">{getOwnerNames(lot)}</TableCell>
                 <TableCell>
                   <div className="flex gap-1">
                     <Button variant="ghost" size="sm" onClick={() => openEdit(lot)}><Pencil size={14} /></Button>
@@ -161,14 +165,25 @@ export default function LotsPage() {
               </div>
             </div>
             <div>
-              <label className="form-label">Proprietaire</label>
-              <Select value={form.owner_id} onValueChange={v => setForm({...form, owner_id: v})}>
-                <SelectTrigger data-testid="lot-owner-select"><SelectValue placeholder="Selectionner un proprietaire" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">Aucun</SelectItem>
-                  {owners.map(o => <SelectItem key={o.id} value={o.id}>{o.name}</SelectItem>)}
-                </SelectContent>
-              </Select>
+              <label className="form-label">Proprietaires</label>
+              <div className="border rounded-md p-2 space-y-1 max-h-32 overflow-y-auto">
+                {owners.map(o => (
+                  <label key={o.id} className="flex items-center gap-2 cursor-pointer text-sm hover:bg-slate-50 rounded px-1 py-0.5">
+                    <Checkbox
+                      checked={form.owner_ids.includes(o.id)}
+                      onCheckedChange={(checked) => {
+                        setForm(prev => ({
+                          ...prev,
+                          owner_ids: checked ? [...prev.owner_ids, o.id] : prev.owner_ids.filter(x => x !== o.id),
+                          owner_id: checked ? o.id : prev.owner_ids.filter(x => x !== o.id)[0] || ''
+                        }));
+                      }}
+                    />
+                    <span>{o.name}</span>
+                    {o.vcs_code && <span className="font-mono text-[10px] text-[#0055FF] ml-auto">{o.vcs_code}</span>}
+                  </label>
+                ))}
+              </div>
             </div>
             <div className="flex gap-3 justify-end">
               <Button variant="outline" onClick={() => setDialogOpen(false)}>Annuler</Button>

@@ -161,7 +161,11 @@ def create_banking_router(db):
         result = await db.bank_transactions.update_one({"id": txn_id}, {"$set": update})
         if result.matched_count == 0:
             raise HTTPException(404, "Transaction non trouvee")
-        return await db.bank_transactions.find_one({"id": txn_id}, {"_id": 0})
+        updated = await db.bank_transactions.find_one({"id": txn_id}, {"_id": 0})
+        if updated and not updated.get("matched"):
+            await _try_auto_lettrage_vcs(updated)
+            updated = await db.bank_transactions.find_one({"id": txn_id}, {"_id": 0})
+        return updated
 
     # ---- LETTRAGE ----
     @router.post("/lettrage")
