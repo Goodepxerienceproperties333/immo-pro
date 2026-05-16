@@ -1,48 +1,39 @@
 # CoproManager - PRD
 
 ## Problem Statement
-Programme comptable complet pour la gestion de copropriete en Belgique, integrant: PCMN, journaux comptables, exercices, budgets, appels de fonds, fournisseurs, facturation avec cles de repartition, compteurs, interface bancaire CODA, lettrage, decomptes annuels PDF, bilan, compte de resultats, grand livre, gestion multi-coproprietes, roles superadmin/syndic/owner, codes VCS.
+Programme comptable complet pour gestion copropriete belge: PCMN, exercices, budgets, appels de fonds, balance de tiers proprietaires/fournisseurs, fournisseurs, facturation cles de repartition, compteurs, interface bancaire CODA avec saisie en ligne et lettrage fournisseur, decomptes PDF, bilan, resultats, grand livre, multi-coproprietes archivables, roles superadmin/syndic/owner, codes VCS.
 
 ## Architecture
-- Backend: FastAPI + MongoDB (Motor async) - 12 route modules
-- Frontend: React 19 + Tailwind + Shadcn/UI - 18 pages
-- Auth: JWT httpOnly cookies, bcrypt, 3 roles (superadmin/syndic/owner)
+- Backend: FastAPI + MongoDB - 14 route modules, 95 tests
+- Frontend: React 19 + Tailwind + Shadcn/UI - 19 pages
+- Auth: JWT httpOnly cookies, bcrypt, 3 roles
 - PDF: reportlab
 
 ## Implemented (May 2026)
-- [x] Auth JWT avec roles superadmin/syndic/owner
-- [x] Multi-coproprietes avec selecteur
+- [x] Auth JWT (superadmin/syndic/owner)
+- [x] Multi-coproprietes avec archivage
 - [x] PCMN complet (95 comptes belges)
-- [x] Exercices comptables avec cloture et a-nouveau
-- [x] Budgets previsionnels avec comparaison budget/reel
-- [x] Journaux comptables (OD, AV, AP, AN) avec validation equilibre
+- [x] Exercices comptables + cloture + a-nouveau
+- [x] Budgets previsionnels + comparaison budget/reel
+- [x] Journaux comptables (OD, AV, AP, AN)
 - [x] Grand Livre avec solde progressif
-- [x] Balance des comptes
-- [x] Bilan (actif/passif)
-- [x] Compte de resultats (charges/produits)
+- [x] Balance des comptes + Bilan + Compte de resultats
+- [x] Balance de tiers proprietaires (debiteur/crediteur)
+- [x] Balance de tiers fournisseurs (a payer/trop-paye)
+- [x] Situation de compte detaillee par tiers
 - [x] Fournisseurs (TVA, IBAN, BIC)
 - [x] Facturation avec cles de repartition
-- [x] Appels de fonds avec suivi paiements et generation ecritures
-- [x] Codes VCS auto-generes (communication structuree belge mod-97)
-- [x] Import CODA (parser fichiers bancaires belges)
-- [x] Lettrage transactions/factures/proprietaires
-- [x] Compteurs (eau, chauffage, electricite) avec releves
-- [x] Decomptes annuels par proprietaire avec PDF
+- [x] Appels de fonds + suivi paiements + generation ecritures
+- [x] Codes VCS auto-generes (mod-97)
+- [x] Import CODA + saisie en ligne (ajout lignes a la volee)
+- [x] Lettrage transactions/factures/proprietaires/fournisseurs
+- [x] VCS lookup automatique dans saisie bancaire
+- [x] Compteurs (eau, chauffage, electricite)
+- [x] Decomptes annuels PDF par proprietaire
 - [x] Documents par categories
 - [x] Gestion utilisateurs avec droits
-- [x] 68/68 tests backend passent
+- [x] 95/95 tests passent
 
-## Backlog
-### P0
-- Ajouter auth middleware a tous les routes (seuls coproprietes et admin sont proteges)
-- Tests CODA avec fichiers reels
-
-### P1
-- Portail proprietaire (vue restreinte)
-- Rappels de paiement automatiques
-- Historique transferts de propriete
-
-### P2
-- Gestion AG (assemblees generales)
-- Multi-exercice dans les rapports
-- Export CSV/Excel des rapports
+## Backlog P0
+- Auth middleware sur toutes les routes
+- Stocker supplier_id sur factures (au lieu du nom)
