@@ -1,0 +1,177 @@
+{
+  "project_context": {
+    "domain": "Property Management (Copropriété), Finance & Accounting, Real Estate",
+    "target_audience": "Property Managers (Syndic), Co-owners (Propriétaires)",
+    "app_type": "SaaS Dashboard / Admin Panel"
+  },
+  "theme": {
+    "mode": "light",
+    "archetype": "Archetype 4: Swiss & High-Contrast",
+    "description": "Objective, rigid, functional-first. High data density requires clarity over decoration. 95% of UI is monochrome. Signal colors are reserved strictly for actions and status indicators. Fits perfectly for dense, trust-critical financial and property management software."
+  },
+  "typography": {
+    "primary_font_url": "https://fonts.googleapis.com/css2?family=Chivo:wght@300;400;700;900&family=IBM+Plex+Sans:wght@400;500;600&display=swap",
+    "headings": {
+      "family": "'Chivo', sans-serif",
+      "style": "Swiss brutalist edge. Tight tracking. Variable weights (Black for emphasis, Light for elegance). Never center by default.",
+      "h1": "text-4xl sm:text-5xl lg:text-5xl font-black tracking-tighter text-slate-950",
+      "h2": "text-2xl sm:text-3xl font-bold tracking-tight text-slate-900",
+      "h3": "text-lg sm:text-xl font-semibold tracking-tight text-slate-900",
+      "h4": "text-base font-semibold tracking-tight text-slate-900 uppercase"
+    },
+    "body": {
+      "family": "'IBM Plex Sans', sans-serif",
+      "style": "Sterile, highly legible monospace-adjacent sans for dense data and accounting grids.",
+      "base": "text-sm text-slate-700 leading-relaxed",
+      "small": "text-xs text-slate-500",
+      "overline": "text-[10px] uppercase tracking-[0.2em] font-semibold text-slate-500"
+    }
+  },
+  "colors": {
+    "base": {
+      "background": "#FAFAFA",
+      "surface": "#FFFFFF",
+      "border": "#E2E8F0"
+    },
+    "neutral": {
+      "50": "#F8FAFC",
+      "100": "#F1F5F9",
+      "200": "#E2E8F0",
+      "300": "#CBD5E1",
+      "400": "#94A3B8",
+      "500": "#64748B",
+      "600": "#475569",
+      "700": "#334155",
+      "800": "#1E293B",
+      "900": "#0F172A",
+      "950": "#020617"
+    },
+    "brand_primary": {
+      "DEFAULT": "#0055FF",
+      "hover": "#0040CC",
+      "foreground": "#FFFFFF"
+    },
+    "status": {
+      "success": {
+        "DEFAULT": "#00A650",
+        "bg": "#ECFDF5",
+        "text": "#065F46"
+      },
+      "warning": {
+        "DEFAULT": "#FF6B00",
+        "bg": "#FFF7ED",
+        "text": "#9A3412"
+      },
+      "danger": {
+        "DEFAULT": "#DC2626",
+        "bg": "#FEF2F2",
+        "text": "#991B1B"
+      },
+      "info": {
+        "DEFAULT": "#0284C7",
+        "bg": "#F0F9FF",
+        "text": "#075985"
+      }
+    }
+  },
+  "layout_and_spacing": {
+    "grid_system": "MODE B: THE CONTROL ROOM GRID",
+    "description": "Density, Data Correlation, Scanability. Tight gaps, structural alignment. Ideal for complex accounting and property modules.",
+    "container": "max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8",
+    "base_grid": "grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-12 gap-4 md:gap-6",
+    "spacing_scale": "p-4, p-6, p-8. Inner card padding must be generous (p-6) to prevent text collision.",
+    "patterns": {
+      "dashboard_wrapper": "F-pattern. Left collapsible sidebar. Top-left most important KPI.",
+      "widgets": "Span logic: Summary (col-span-3), Main Chart (col-span-6 row-span-2), List/Feed (col-span-3 row-span-2). Every pixel utilized, h-full on children."
+    }
+  },
+  "surface_strategies": {
+    "dashboard_cards": {
+      "style": "Grid Borders & Tactical Neumorphism",
+      "background": "bg-white",
+      "border": "1px solid border-slate-200",
+      "shadow": "shadow-sm",
+      "radius": "rounded-md",
+      "hover_state": "hover:shadow-md hover:-translate-y-[1px] transition-all duration-200"
+    },
+    "header_nav": {
+      "style": "Solid Background",
+      "background": "bg-white",
+      "border_bottom": "1px solid border-slate-200",
+      "behavior": "sticky top-0 z-50"
+    },
+    "sidebar": {
+      "style": "Solid Background",
+      "background": "bg-slate-950",
+      "text": "text-slate-300",
+      "active_text": "text-white bg-slate-800"
+    }
+  },
+  "components": {
+    "buttons": {
+      "primary": "bg-[#0055FF] text-white font-semibold rounded-md px-4 py-2 hover:bg-[#0040CC] focus:ring-2 focus:ring-[#0055FF]/50 transition-colors",
+      "secondary": "bg-white text-slate-700 border border-slate-200 font-semibold rounded-md px-4 py-2 hover:bg-slate-50 transition-colors",
+      "ghost": "text-slate-600 hover:bg-slate-100 hover:text-slate-900 rounded-md px-4 py-2 transition-colors"
+    },
+    "forms_and_inputs": {
+      "strategy": "Shadcn modified. Strict 1px borders, subtle focus rings.",
+      "input": "border-slate-200 rounded-md focus:border-[#0055FF] focus:ring-1 focus:ring-[#0055FF]",
+      "labels": "text-xs font-semibold text-slate-700 uppercase tracking-wide mb-1"
+    },
+    "tables": {
+      "strategy": "Dense, high-data capacity. Hover states on rows.",
+      "header": "bg-slate-50 text-slate-600 text-xs font-bold uppercase tracking-wider py-3 px-4 border-b border-slate-200",
+      "cell": "py-3 px-4 text-sm text-slate-700 border-b border-slate-100",
+      "row_hover": "hover:bg-slate-50/50"
+    },
+    "charts": {
+      "library": "Shadcn Recharts",
+      "style": "Monochrome with signal color highlights. No 3D effects. Clean tooltips."
+    }
+  },
+  "motion_and_interactions": {
+    "philosophy": "Minimalist. Micro-interactions for feedback.",
+    "hover": "Subtle background shifts, slight lifts (-translate-y-[1px]) for cards.",
+    "transitions": "transition-all duration-200 ease-in-out",
+    "loaders": "Linear indeterminate progress bars at top of sections, avoid bulky spinners."
+  },
+  "icons_and_assets": {
+    "library": "lucide-react",
+    "usage": "Stroke width 1.5, sizes 16px to 20px. Keep them sharp and unobtrusive."
+  },
+  "media": {
+    "image_urls": {
+      "login_hero_bg": {
+        "url": "https://static.prod-images.emergentagent.com/jobs/ac7212f5-7097-4143-9040-c86e8f3b4207/images/44f29d66e326ce8d9c843c10ae9d5d76da988703cdae641f58ec60defdc6aad7.png",
+        "description": "Generated image. Abstract geometric architectural shapes in light gray and off-white. Use this for the auth split-screen background.",
+        "category": "auth_background"
+      },
+      "abstract_lines": {
+        "url": "https://images.unsplash.com/photo-1498262257252-c282316270bc?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDk1ODB8MHwxfHNlYXJjaHwyfHxhYnN0cmFjdCUyMGFyY2hpdGVjdHVyYWwlMjBsaW5lcyUyMG1pbmltYWx8ZW58MHx8fHwxNzc4OTY1MzkwfDA&ixlib=rb-4.1.0&q=85",
+        "description": "Gray digital wallpaper architectural lines.",
+        "category": "texture_overlay"
+      },
+      "modern_building": {
+        "url": "https://images.unsplash.com/photo-1515263487990-61b07816b324?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2OTV8MHwxfHNlYXJjaHwxfHxtb2Rlcm4lMjBhcGFydG1lbnQlMjBidWlsZGluZyUyMGV4dGVyaW9yfGVufDB8fHx8MTc3ODk2NTM5MHww&ixlib=rb-4.1.0&q=85",
+        "description": "Black and white concrete building. Good for marketing portal hero if needed.",
+        "category": "marketing_hero"
+      }
+    }
+  },
+  "accessibility_and_testing": {
+    "contrast": "Ensure APCA contrast ratios. Text on brand primary must be white.",
+    "data_testid": "ALL interactive elements (buttons, links, inputs, tabs, table rows) MUST have descriptive data-testid attributes formatted in kebab-case (e.g., data-testid='login-submit-button').",
+    "focus_states": "All focusable elements must have visible focus rings."
+  },
+  "instructions_to_main_agent": [
+    "Prioritize data density and clarity over flashy visuals.",
+    "Use pure HTML and Tailwind for any marketing/login layouts, and customized Shadcn for the main dashboard (tables, forms, dialogs).",
+    "Do NOT use 'Inter' for headings. Use 'Chivo' for headings and 'IBM Plex Sans' for body text. Integrate them via Google Fonts.",
+    "Implement the 'Control Room' grid for the dashboard. Use F-pattern layout with a left collapsible sidebar.",
+    "Customize Shadcn components to have 1px solid borders (`border-slate-200`) and slight `rounded-md` corners. Avoid heavy drop shadows.",
+    "Never use full-screen gradients. Keep UI primarily monochrome with signal colors (Blue, Red, Green) mapping exactly to semantic actions.",
+    "Add 'data-testid' to every interactive element.",
+    "Apply real Belgian PCMN accounting rules and CODA import flows structurally. Visually group accounting vs property management vs billing widgets cleanly.",
+    "Use the provided media image URLs for auth backgrounds and visual textures."
+  ]
+}
