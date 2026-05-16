@@ -1,53 +1,58 @@
-import { useEffect } from "react";
 import "@/App.css";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
-import axios from "axios";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { AuthProvider, useAuth } from "@/contexts/AuthContext";
+import { Toaster } from "@/components/ui/sonner";
+import Layout from "@/components/Layout";
+import LoginPage from "@/pages/LoginPage";
+import DashboardPage from "@/pages/DashboardPage";
+import OwnersPage from "@/pages/OwnersPage";
+import LotsPage from "@/pages/LotsPage";
+import TenantsPage from "@/pages/TenantsPage";
+import AccountingPage from "@/pages/AccountingPage";
+import JournalsPage from "@/pages/JournalsPage";
+import InvoicesPage from "@/pages/InvoicesPage";
+import MetersPage from "@/pages/MetersPage";
+import BankingPage from "@/pages/BankingPage";
+import DocumentsPage from "@/pages/DocumentsPage";
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
-const API = `${BACKEND_URL}/api`;
+function ProtectedRoute({ children }) {
+  const { user, loading } = useAuth();
+  if (loading) return <div className="flex h-screen items-center justify-center"><div className="h-1 w-48 bg-slate-200 rounded overflow-hidden"><div className="h-full bg-[#0055FF] animate-pulse w-1/2" /></div></div>;
+  if (!user) return <Navigate to="/login" replace />;
+  return children;
+}
 
-const Home = () => {
-  const helloWorldApi = async () => {
-    try {
-      const response = await axios.get(`${API}/`);
-      console.log(response.data.message);
-    } catch (e) {
-      console.error(e, `errored out requesting / api`);
-    }
-  };
-
-  useEffect(() => {
-    helloWorldApi();
-  }, []);
+function AppRoutes() {
+  const { user, loading } = useAuth();
+  if (loading) return <div className="flex h-screen items-center justify-center"><div className="h-1 w-48 bg-slate-200 rounded overflow-hidden"><div className="h-full bg-[#0055FF] animate-pulse w-1/2" /></div></div>;
 
   return (
-    <div>
-      <header className="App-header">
-        <a
-          className="App-link"
-          href="https://emergent.sh"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <img src="https://avatars.githubusercontent.com/in/1201222?s=120&u=2686cf91179bbafbc7a71bfbc43004cf9ae1acea&v=4" />
-        </a>
-        <p className="mt-5">Building something incredible ~!</p>
-      </header>
-    </div>
+    <Routes>
+      <Route path="/login" element={user ? <Navigate to="/" replace /> : <LoginPage />} />
+      <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
+        <Route index element={<DashboardPage />} />
+        <Route path="owners" element={<OwnersPage />} />
+        <Route path="lots" element={<LotsPage />} />
+        <Route path="tenants" element={<TenantsPage />} />
+        <Route path="accounting" element={<AccountingPage />} />
+        <Route path="journals" element={<JournalsPage />} />
+        <Route path="invoices" element={<InvoicesPage />} />
+        <Route path="meters" element={<MetersPage />} />
+        <Route path="banking" element={<BankingPage />} />
+        <Route path="documents" element={<DocumentsPage />} />
+      </Route>
+    </Routes>
   );
-};
+}
 
 function App() {
   return (
-    <div className="App">
-      <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<Home />}>
-            <Route index element={<Home />} />
-          </Route>
-        </Routes>
-      </BrowserRouter>
-    </div>
+    <BrowserRouter>
+      <AuthProvider>
+        <AppRoutes />
+        <Toaster position="top-right" />
+      </AuthProvider>
+    </BrowserRouter>
   );
 }
 
