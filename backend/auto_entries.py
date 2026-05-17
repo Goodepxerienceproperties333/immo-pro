@@ -278,7 +278,12 @@ async def generate_bank_entry(db, txn: dict) -> dict | None:
     """FI: Dr 550xxx + Cr 40000XXX (owner payment) OR
         Dr 44000XXX + Cr 550xxx (supplier payment) OR
         Dr/Cr 550xxx + 70xxxx/6xxxxx (manual category).
-    Only triggered for MATCHED transactions."""
+    Only triggered for MATCHED transactions.
+
+    NOTE : txn['account_number'] est un IBAN (ex BE68...). On le resout vers
+    le compte PCMN bancaire (ex 55103400) via les bank_accounts de l'ACP.
+    Fallback: 550000.
+    """
     copro_id = txn.get("copropriete_id", "")
     if not copro_id:
         return None
@@ -287,7 +292,19 @@ async def generate_bank_entry(db, txn: dict) -> dict | None:
     amount = abs(float(txn.get("amount", 0) or 0))
     if amount <= 0:
         return None
-    bank_acc = txn.get("account_number") or "550000"
+    # Resoud IBAN -> compte PCMN via la config de l'ACP
+    iban = (txn.get("account_number") or "").replace(" ", "").upper()
+    bank_acc = "550000"  # fallback compte banque generique
+    bank_label = "Banque"
+    if iban:
+        copro = await db.coproprietes.find_one({"id": copro_id}, {"_id": 0, "bank_accounts": 1})
+        if copro:
+            for ba in (copro.get("bank_accounts") or []):
+                ba_iban = (ba.get("iban") or "").replace(" ", "").upper()
+                if ba_iban == iban and ba.get("pcmn_number"):
+                    bank_acc = ba["pcmn_number"]
+                    bank_label = ba.get("label") or "Banque"
+                    break
     match_type = txn.get("match_type", "")
     txn_type = txn.get("transaction_type", "credit")
     is_credit = txn_type == "credit" or float(txn.get("amount", 0)) > 0
@@ -334,7 +351,7 @@ async def generate_bank_entry(db, txn: dict) -> dict | None:
     if is_credit:
         # Money in: Dr bank + Cr counterpart (owner pays / refund)
         lines = [
-            {"account_number": bank_acc, "account_name": pcmn_names.get(bank_acc, "Banque"),
+            {"account_number": bank_acc, "account_name": pcmn_names.get(bank_acc, bank_label),
              "debit": amount, "credit": 0.0, "third_party_id": None, "third_party_name": ""},
             {"account_number": counterpart_acc, "account_name": pcmn_names.get(counterpart_acc, counterpart_name),
              "debit": 0.0, "credit": amount, "third_party_id": third_party_id, "third_party_name": counterpart_name},
@@ -344,7 +361,7 @@ async def generate_bank_entry(db, txn: dict) -> dict | None:
         lines = [
             {"account_number": counterpart_acc, "account_name": pcmn_names.get(counterpart_acc, counterpart_name),
              "debit": amount, "credit": 0.0, "third_party_id": third_party_id, "third_party_name": counterpart_name},
-            {"account_number": bank_acc, "account_name": pcmn_names.get(bank_acc, "Banque"),
+            {"account_number": bank_acc, "account_name": pcmn_names.get(bank_acc, bank_label),
              "debit": 0.0, "credit": amount, "third_party_id": None, "third_party_name": ""},
         ]
 

@@ -1,0 +1,57 @@
+{
+  "summary": "Iter21 backend tests - Bug fix verification: generate_bank_entry resolves IBAN -> pcmn_number via copro.bank_accounts. 8/8 iter21 PASS + regression iter16/18/19/20 = 55/55 PASS. Total: 63/63.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter21_bank_pcmn_resolution.py",
+    "/app/test_reports/pytest/pytest_iter21.xml",
+    "/app/test_reports/pytest/pytest_iter21_regression.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "auto_entries.py generate_bank_entry ligne 296-307 : la normalisation IBAN .replace(' ','').upper() est correcte cote runtime, mais le matching ne fait pas de normalisation IBAN canonique (espaces, casse) cote seed bank_accounts. OK pour le seed actuel, mais si un syndic edite manuellement bank_accounts avec 'BE68 5390 0754 7034', la resolution echouera car le compare deja normalise les deux cotes => en fait OK. Verifie.",
+    "auto_entries.py ligne 297 fallback bank_acc='550000' : si 550000 PCMN n'est pas seede pour la copro (ex: import partiel PCMN), pcmn_names sera vide et account_name retombera sur bank_label='Banque' generique. Pas critique mais pourrait masquer un probleme de seed PCMN.",
+    "routes/banking.py TransactionInput.account_number reste un Optional[str] sans validation : un IBAN malforme ou trop long sera quand meme accepte. Validation Pydantic IBAN BE pourrait etre ajoutee (regex BE\\d{14}).",
+    "auto_entries.py : pas de cache du fetch copro.bank_accounts au sein d'un batch import (CODA). Pour un releve avec 50 transactions, 50 round-trips MongoDB sur la meme copro. Optimisation : preloader bank_accounts une fois si appel batch."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter21_bank_pcmn_resolution.py"
+  ],
+  "success_rate": {
+    "backend": "100% (8/8 iter21) + regression iter16 (16/16) + iter18 (17/17) + iter19 (12/12) + iter20 (10/10) = 63/63",
+    "frontend": "not tested (backend-only request)"
+  },
+  "test_credentials": "admin@copro.be / admin123 (superadmin) - cookies httpOnly",
+  "seed_data_creation": "Bank accounts seed deja present sur ACP demo : BE68539007547034->55103400 (Banque compte courant 7034, default), BE71096123456769->55076900 (Banque epargne 6769). Tests creent des bank_transactions TEST_ITER21 + 1 supplier TEST_ITER21_FOURN_*, nettoyes par fixture autouse.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iter21 valide: POST /api/banking/transactions accepte account_number=IBAN+copropriete_id+transaction_type(credit/debit) puis POST /api/banking/lettrage {transaction_id, match_to_id, match_type} declenche generate_bank_entry. L'ecriture FI generee a line bank avec account_number = pcmn_number (55103400 ou 55076900) resolu via copro.bank_accounts, PAS l'IBAN. Fallback 550000 si IBAN inconnu ou absent. account_name = nom PCMN reel (ex 'Banque compte courant 7034'). Sens credit owner_payment: Dr bank/Cr 40000XXX. Sens debit supplier_payment: Dr 44000XXX/Cr bank. Aucune regression iter16-20. Endpoint PCMN reel: /api/accounting/pcmn (pas /api/pcmn). Auth = cookies httpOnly (pas Bearer). Test file: /app/backend/tests/test_iter21_bank_pcmn_resolution.py.",
+  "tests_executed": {
+    "total": 8,
+    "passed": 8,
+    "failed": 0,
+    "list": [
+      "TestIter21BankPcmnResolution::test_credit_known_iban_courant_uses_pcmn_55103400",
+      "TestIter21BankPcmnResolution::test_credit_known_iban_epargne_uses_pcmn_55076900",
+      "TestIter21BankPcmnResolution::test_unknown_iban_falls_back_to_550000",
+      "TestIter21BankPcmnResolution::test_no_iban_falls_back_to_550000",
+      "TestIter21BankPcmnResolution::test_debit_supplier_payment_dr_supplier_cr_bank_pcmn",
+      "TestIter21BankPcmnResolution::test_account_name_is_real_pcmn_name",
+      "TestRegressionIter20::test_balance_tiers_owners_returns_expected_fields",
+      "TestRegressionIter18::test_pcmn_count_337"
+    ]
+  },
+  "regression": "iter16_auto_entries 16/16 + iter18_pcmn_new 17/17 + iter19_private_fee_roulement 12/12 + iter20_balance_tiers_and_wizard 10/10 = 55/55 PASS. Aucune regression detectee.",
+  "not_tested": [
+    "Import CODA batch avec generation auto de FI entries via _try_auto_lettrage_vcs - le code path est partage avec lettrage manuel donc le bug fix s'applique transitivement, mais pas teste end-to-end avec fichier CODA reel.",
+    "Multi-bank simultane (un seul releve avec txns sur 2 IBANs differents melanges) - cas peu probable car releve = 1 IBAN, mais pas teste."
+  ],
+  "rca_of_the_issue": "Bug iter21 RCA: auto_entries.generate_bank_entry utilisait bank_acc = txn.get('account_number') ou '550000' directement, sans resoudre l'IBAN vers pcmn_number. Le fix (lignes 295-307) fetch copro.bank_accounts, normalise IBANs (replace ' ','' + upper), compare et substitue bank_acc=ba['pcmn_number'] + bank_label=ba['label']. Verifie via 6 tests: 2 IBANs connus -> pcmn correct + nom PCMN reel; 2 fallbacks (IBAN inconnu + IBAN vide) -> 550000; sens credit/debit corrects."
+}
