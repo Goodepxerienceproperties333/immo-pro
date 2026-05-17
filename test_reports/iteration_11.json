@@ -1,0 +1,33 @@
+{
+  "summary": "Iter11: P0 Owner Portal + tightened RBAC whitelist. Created /app/backend/tests/test_iter11_owner_portal.py (30 tests, 5 classes). Result: 30/30 PASS. Coverage: (a) 6 owner-portal endpoints with Sophie Martin user (auto-created via /api/admin/users, auto-cleaned), (b) 404 path for orphan owner (no matching owner record), (c) 403 on /situation/{copro} when owner has no lot, (d) new tightened whitelist: GET /api/owners, /api/admin/users, /api/accounting/pcmn, /api/invoices, /api/lots, /api/banking/transactions, /api/reports/bilan all return 403 for owner role, (e) whitelist allows GET /api/coproprietes, /api/auth/me, write methods 403 on /api/owner/*, (f) regression gestionnaire/superadmin keep their CRUD. Regression run iter7+iter9+iter10: 84/87 PASS, 3 expected breakages in iter10 (iter10 expected owner could GET /api/owners and /api/invoices with 200; iter11 spec tightens this to 403 by design – the iter10 tests are now obsolete and need to be updated/removed by main agent).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/admin/users (DELETE)", "issue": "Existing leftover test users from prior iter9/iter10 runs (test_iter9_*@example.com, TEST_iter10_owner_*@x.com in owners collection) still in DB. Not introduced by this iteration, but cleanup recommended."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter11_owner_portal.py",
+    "/app/test_reports/pytest/iter11.xml",
+    "/app/test_reports/pytest/iter11_regression.xml"
+  ],
+  "action_items": [
+    "Update /app/backend/tests/test_iter10_rbac.py: 3 tests (TestOwnerReadAccess::test_owner_get_owners_200, test_owner_get_invoices_200, TestOwnerWriteForbidden::test_owner_post_owners_403 text-assertion) are now obsolete due to iter11 RBAC tightening. Recommend either deleting them or flipping the expected status to 403 / updating the message substring to 'portail proprietaire'.",
+    "Optional cleanup of leftover seeded test data (test_iter9_*@example.com users + TEST_iter10_owner_*@x.com owners) from prior iterations."
+  ],
+  "critical_code_review_comments": [
+    "owner_portal.py _resolve_owner does case-sensitive email comparison via .lower().strip() on lookup but assumes owner.email is also stored lowercase. If owner records contain mixed-case emails (e.g. user-typed), lookup will fail. Recommend a case-insensitive regex query OR normalising owner.email at write time.",
+    "owner_portal.py /situation/{copropriete_id}: bank_transactions could be very large (.to_list(100000)). Consider streaming or pagination, and filter at DB level with the owner's vcs_digits in the query rather than in Python.",
+    "owner_portal.py /dashboard fetches fund_calls + bank_transactions per ACP in a Python loop; if an owner has many ACPs this is N round-trips. Consider one aggregated query or $in over copro_ids.",
+    "server.py middleware (line 127 elif role == 'owner'): allowed_owner_exact_get currently only matches '/api/coproprietes' but the same path with trailing slash '/api/coproprietes/' would fall through to the prefix check at line 136 which catches '/api/coproprietes/' too. Behaviour OK but worth a comment.",
+    "owner_portal.py /documents masks stored_path but does not mask original_name path components or any sensitive metadata; consider whitelisting fields returned rather than blacklisting one key."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter11_owner_portal.py (NEW)"],
+  "success_rate": {"backend": "100% (30/30 iter11) ; regression 84/87 (3 expected iter10 breakages by design)", "frontend": "n/a (skipped per request)"},
+  "test_credentials": "admin@copro.be / admin123 (superadmin). For owner tests: sophie.martin@example.be / sophie123 (created during test, cleaned up).",
+  "seed_data_creation": "Test fixtures create 3 users (sophie.martin@example.be, TEST_iter11_orphan_*, TEST_iter11_gest_*) via /api/admin/users and DELETE them in fixture teardown. Verified post-run: no TEST_iter11_* nor sophie.martin@example.be remains in users collection.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iter11 introduced new tighter whitelist for role=owner. iter10 RBAC tests now have 3 stale assertions that should be updated. Use /app/backend/tests/test_iter11_owner_portal.py as the canonical regression for owner-portal behaviour going forward. The fixture creates Sophie Martin user dynamically — make sure admin@copro.be/admin123 login works. Existing leftover test users from previous iterations (test_iter9_*@example.com, TEST_iter10_owner_*@x.com) are still in DB; not blocking but main agent may want to GC."
+}

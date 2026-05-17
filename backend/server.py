@@ -121,12 +121,31 @@ async def auth_middleware(request: Request, call_next):
             if not is_admin_role(role):
                 from fastapi.responses import JSONResponse
                 return JSONResponse(status_code=403, content={"detail": "Reserve aux syndics / superadmins"})
-        # Write operations on any other /api path require manager+ role.
-        # Owners (proprietaires) get read-only access via 403 on writes.
+        # Owners (proprietaires) are limited to /api/owner/* + /api/auth/* + their own
+        # GET on /api/coproprietes (so they can see ACP names referenced in their portal).
+        # Anything else returns 403 (no leaking other owners' info, no admin tools).
+        elif role == "owner":
+            allowed_owner_prefixes = ("/api/owner/", "/api/auth/")
+            allowed_owner_exact_get = {"/api/coproprietes"}
+            is_allowed = False
+            if path.startswith(allowed_owner_prefixes):
+                is_allowed = True
+            elif method == "GET" and path in allowed_owner_exact_get:
+                is_allowed = True
+            # Allow GET on a specific copropriete (to display name)
+            elif method == "GET" and path.startswith("/api/coproprietes/"):
+                is_allowed = True
+            # Allow GET on download of documents (file fetch) - we still check upstream that doc is in owner's ACPs
+            elif method == "GET" and path.startswith("/api/documents/") and path.endswith("/download"):
+                is_allowed = True
+            if not is_allowed:
+                from fastapi.responses import JSONResponse
+                return JSONResponse(status_code=403, content={"detail": "Acces restreint au portail proprietaire (/portal)"})
+        # Write operations for non-owner authenticated roles require manager+
         elif method in WRITE_METHODS:
             if not can_manage(role):
                 from fastapi.responses import JSONResponse
-                return JSONResponse(status_code=403, content={"detail": "Acces en lecture seule pour les proprietaires"})
+                return JSONResponse(status_code=403, content={"detail": "Acces en lecture seule"})
 
     return await call_next(request)
 
@@ -371,6 +390,7 @@ from routes.fiscal import create_fiscal_router
 from routes.reports import create_reports_router
 from routes.fund_calls import create_fund_calls_router
 from routes.demo_seed import create_demo_router
+from routes.owner_portal import create_owner_portal_router
 
 app.include_router(create_properties_router(db))
 app.include_router(create_accounting_router(db))
@@ -385,3 +405,4 @@ app.include_router(create_fiscal_router(db))
 app.include_router(create_reports_router(db))
 app.include_router(create_fund_calls_router(db))
 app.include_router(create_demo_router(db))
+app.include_router(create_owner_portal_router(db))

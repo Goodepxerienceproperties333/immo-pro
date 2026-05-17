@@ -22,6 +22,7 @@ import BalanceTiersPage from "@/pages/BalanceTiersPage";
 import DocumentsPage from "@/pages/DocumentsPage";
 import AdminUsersPage from "@/pages/AdminUsersPage";
 import CoproprietesPage from "@/pages/CoproprietesPage";
+import OwnerPortalPage from "@/pages/OwnerPortalPage";
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
@@ -34,10 +35,14 @@ function AppRoutes() {
   const { user, loading } = useAuth();
   if (loading) return <div className="flex h-screen items-center justify-center"><div className="h-1 w-48 bg-slate-200 rounded overflow-hidden"><div className="h-full bg-[#0055FF] animate-pulse w-1/2" /></div></div>;
 
+  // Owners go directly to their dedicated portal
+  const isOwnerRole = user && user.role === 'owner';
+
   return (
     <Routes>
-      <Route path="/login" element={user ? <Navigate to="/" replace /> : <LoginPage />} />
-      <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
+      <Route path="/login" element={user ? <Navigate to={isOwnerRole ? "/portal" : "/"} replace /> : <LoginPage />} />
+      <Route path="/portal" element={<ProtectedRoute><OwnerPortalPage /></ProtectedRoute>} />
+      <Route path="/" element={<ProtectedRoute>{isOwnerRole ? <Navigate to="/portal" replace /> : <Layout />}</ProtectedRoute>}>
         <Route index element={<DashboardPage />} />
         <Route path="coproprietes" element={<CoproprietesPage />} />
         <Route path="owners" element={<OwnersPage />} />
