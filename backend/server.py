@@ -240,11 +240,8 @@ async def seed_admin():
             await db.users.update_one({"email": admin_email}, {"$set": updates})
 
 async def seed_pcmn():
-    from pcmn_data import PCMN_ACCOUNTS
-    count = await db.pcmn_accounts.count_documents({})
-    if count == 0:
-        await db.pcmn_accounts.insert_many(PCMN_ACCOUNTS)
-        logger.info(f"Seeded {len(PCMN_ACCOUNTS)} PCMN accounts")
+    """Legacy: PCMN was global. Now per-ACP, seeded on ACP creation. No-op kept for safety."""
+    return
 
 @app.on_event("startup")
 async def startup():
@@ -278,6 +275,7 @@ from routes.suppliers import create_suppliers_router
 from routes.fiscal import create_fiscal_router
 from routes.reports import create_reports_router
 from routes.fund_calls import create_fund_calls_router
+from routes.demo_seed import create_demo_router
 
 app.include_router(create_properties_router(db))
 app.include_router(create_accounting_router(db))
@@ -291,3 +289,4 @@ app.include_router(create_suppliers_router(db))
 app.include_router(create_fiscal_router(db))
 app.include_router(create_reports_router(db))
 app.include_router(create_fund_calls_router(db))
+app.include_router(create_demo_router(db))

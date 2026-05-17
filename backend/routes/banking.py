@@ -178,6 +178,13 @@ def create_banking_router(db):
             updated = await db.bank_transactions.find_one({"id": txn_id}, {"_id": 0})
         return updated
 
+    @router.delete("/transactions/{txn_id}")
+    async def delete_transaction(txn_id: str):
+        result = await db.bank_transactions.delete_one({"id": txn_id})
+        if result.deleted_count == 0:
+            raise HTTPException(404, "Transaction non trouvee")
+        return {"message": "Transaction supprimee"}
+
     # ---- LETTRAGE ----
     @router.post("/lettrage")
     async def lettrage(data: LettrageInput):

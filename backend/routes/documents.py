@@ -1,8 +1,31 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime, timezone
+from pathlib import Path
 import uuid
+import os
+import json
+
+
+# Default categories created on ACP creation (mentioned by user)
+DEFAULT_CATEGORIES = [
+    "Reglement d'ordre interieur",
+    "Acte de base",
+    "Statuts",
+    "PV d'AG",
+    "Contrats",
+    "Polices d'assurance",
+    "Factures fournisseurs",
+    "Decomptes",
+    "Rapports techniques",
+    "Autres",
+]
+
+
+UPLOAD_DIR = Path("/app/uploads/documents")
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
 class CategoryInput(BaseModel):
@@ -15,8 +38,69 @@ class DocumentInput(BaseModel):
     title: str
     description: Optional[str] = ""
     category_id: Optional[str] = ""
-    content: Optional[str] = ""  # text content or reference
+    content: Optional[str] = ""
     copropriete_id: Optional[str] = ""
+
+
+async def _extract_pdf_text(file_path: str, max_chars: int = 6000) -> str:
+    """Extract text from PDF using pypdf. Returns up to max_chars chars."""
+    try:
+        from pypdf import PdfReader
+        reader = PdfReader(file_path)
+        text = ""
+        for page in reader.pages:
+            text += page.extract_text() + "\n"
+            if len(text) > max_chars:
+                break
+        return text[:max_chars].strip()
+    except Exception as e:
+        print(f"[PDF extract failed]: {e}")
+        return ""
+
+
+async def _classify_with_ai(file_path: str, mime_type: str, available_categories: list) -> dict:
+    """Classify a document using Claude Sonnet (text-only via PDF extraction).
+    Returns {category, document_type, doc_date, summary, parties}.
+    Falls back to empty dict on error - never blocks the upload."""
+    try:
+        # Only PDF supported for now (Claude is text-only via Emergent key)
+        if mime_type != "application/pdf":
+            return {}
+        text = await _extract_pdf_text(file_path)
+        if not text:
+            return {}
+
+        from emergentintegrations.llm.chat import LlmChat, UserMessage
+        api_key = os.environ.get("EMERGENT_LLM_KEY")
+        if not api_key:
+            return {}
+        cats_str = ", ".join(f'"{c}"' for c in available_categories)
+        chat = LlmChat(
+            api_key=api_key,
+            session_id=f"doc-{uuid.uuid4().hex[:8]}",
+            system_message=(
+                "You are a Belgian condominium document classifier. "
+                f"Choose ONE category from this list: {cats_str}. "
+                "Reply ONLY with strict JSON, no markdown, no code fences. Schema: "
+                '{"category": "<exact name from list>", "document_type": "<short type>", '
+                '"doc_date": "<YYYY-MM-DD or empty>", "summary": "<3-line max>", '
+                '"parties": ["<party1>", "<party2>"]}. Use empty strings/arrays if unknown.'
+            ),
+        ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+
+        msg = UserMessage(text=f"Classify this Belgian condominium document and extract metadata. Return only the JSON object.\n\nDocument content:\n{text}")
+        response = await chat.send_message(msg)
+        txt = response.strip()
+        if txt.startswith("```"):
+            txt = txt.split("```")[1] if "```" in txt[3:] else txt[3:]
+            if txt.startswith("json"):
+                txt = txt[4:]
+            txt = txt.strip("` \n")
+        data = json.loads(txt)
+        return data
+    except Exception as e:
+        print(f"[AI classification skipped]: {e}")
+        return {}
 
 
 def create_documents_router(db):
@@ -42,6 +126,26 @@ def create_documents_router(db):
         }
         await db.document_categories.insert_one(doc)
         return {k: v for k, v in doc.items() if k != "_id"}
+
+    @router.post("/categories/seed-defaults")
+    async def seed_default_categories(copropriete_id: str):
+        """Create the default Belgian copropriete categories for a given ACP."""
+        existing = await db.document_categories.find({"copropriete_id": copropriete_id}, {"_id": 0, "name": 1}).to_list(100)
+        existing_names = {c["name"] for c in existing}
+        to_create = []
+        for name in DEFAULT_CATEGORIES:
+            if name in existing_names:
+                continue
+            to_create.append({
+                "id": str(uuid.uuid4()),
+                "name": name,
+                "description": "",
+                "copropriete_id": copropriete_id,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            })
+        if to_create:
+            await db.document_categories.insert_many(to_create)
+        return {"created": len(to_create), "total": len(to_create) + len(existing_names)}
 
     @router.put("/categories/{cat_id}")
     async def update_category(cat_id: str, data: CategoryInput):
@@ -84,6 +188,79 @@ def create_documents_router(db):
         await db.documents.insert_one(doc)
         return {k: v for k, v in doc.items() if k != "_id"}
 
+    @router.post("/upload")
+    async def upload_document(
+        file: UploadFile = File(...),
+        title: Optional[str] = Form(""),
+        description: Optional[str] = Form(""),
+        category_id: Optional[str] = Form(""),
+        copropriete_id: Optional[str] = Form(""),
+        auto_classify: Optional[bool] = Form(True),
+    ):
+        """Upload a document file and optionally auto-classify it with AI."""
+        # Save file to disk with a unique name
+        ext = Path(file.filename or "file").suffix.lower()
+        if ext not in {".pdf", ".png", ".jpg", ".jpeg", ".webp", ".heic", ".heif"}:
+            raise HTTPException(400, "Format non supporte. PDF ou image uniquement.")
+        doc_id = str(uuid.uuid4())
+        stored_name = f"{doc_id}{ext}"
+        file_path = UPLOAD_DIR / stored_name
+        content = await file.read()
+        with open(file_path, "wb") as f:
+            f.write(content)
+
+        # Optional AI classification
+        ai_result = {}
+        if auto_classify and copropriete_id:
+            mime_map = {
+                ".pdf": "application/pdf", ".png": "image/png", ".jpg": "image/jpeg",
+                ".jpeg": "image/jpeg", ".webp": "image/webp",
+                ".heic": "image/heic", ".heif": "image/heif",
+            }
+            mime_type = mime_map.get(ext, "application/octet-stream")
+            cats = await db.document_categories.find({"copropriete_id": copropriete_id}, {"_id": 0, "id": 1, "name": 1}).to_list(100)
+            if cats:
+                ai_result = await _classify_with_ai(str(file_path), mime_type, [c["name"] for c in cats])
+                # Map AI category name to category_id
+                if ai_result.get("category") and not category_id:
+                    matched = next((c for c in cats if c["name"].lower() == ai_result["category"].lower()), None)
+                    if matched:
+                        category_id = matched["id"]
+
+        doc = {
+            "id": doc_id,
+            "title": title or ai_result.get("summary", "")[:80] or file.filename,
+            "description": description or ai_result.get("summary", ""),
+            "category_id": category_id or "",
+            "filename": file.filename,
+            "stored_path": str(file_path),
+            "stored_name": stored_name,
+            "mime_type": file.content_type,
+            "size_bytes": len(content),
+            "copropriete_id": copropriete_id or "",
+            "ai_classification": ai_result,
+            "doc_date": ai_result.get("doc_date", ""),
+            "document_type": ai_result.get("document_type", ""),
+            "parties": ai_result.get("parties", []),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        await db.documents.insert_one(doc)
+        return {k: v for k, v in doc.items() if k != "_id"}
+
+    @router.get("/{doc_id}/download")
+    async def download_document(doc_id: str):
+        doc = await db.documents.find_one({"id": doc_id}, {"_id": 0})
+        if not doc or not doc.get("stored_path"):
+            raise HTTPException(404, "Fichier non trouve")
+        path = doc["stored_path"]
+        if not os.path.exists(path):
+            raise HTTPException(404, "Fichier supprime du disque")
+        return FileResponse(
+            path,
+            media_type=doc.get("mime_type") or "application/octet-stream",
+            filename=doc.get("filename") or doc.get("stored_name"),
+        )
+
     @router.put("/{doc_id}")
     async def update_document(doc_id: str, data: DocumentInput):
         update = {
@@ -97,9 +274,16 @@ def create_documents_router(db):
 
     @router.delete("/{doc_id}")
     async def delete_document(doc_id: str):
-        result = await db.documents.delete_one({"id": doc_id})
-        if result.deleted_count == 0:
+        doc = await db.documents.find_one({"id": doc_id}, {"_id": 0})
+        if not doc:
             raise HTTPException(404, "Document non trouve")
+        # Best-effort delete the file from disk
+        if doc.get("stored_path") and os.path.exists(doc["stored_path"]):
+            try:
+                os.remove(doc["stored_path"])
+            except Exception:
+                pass
+        await db.documents.delete_one({"id": doc_id})
         return {"message": "Document supprime"}
 
     return router

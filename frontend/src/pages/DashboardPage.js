@@ -4,18 +4,21 @@ import api from '@/lib/api';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Users, Building2, UserCheck, Receipt, AlertCircle, TrendingUp, Home, ArrowLeft, Landmark, FileText, Megaphone } from 'lucide-react';
+import { toast } from 'sonner';
+import { Users, Building2, UserCheck, Receipt, AlertCircle, TrendingUp, Home, ArrowLeft, Landmark, FileText, Megaphone, Sparkles, Loader2 } from 'lucide-react';
 
 export default function DashboardPage() {
-  const { selectedCopro, setSelectedCopro } = useAuth();
+  const { selectedCopro, setSelectedCopro, isAdmin } = useAuth();
   const [coproprietes, setCoproprietes] = useState([]);
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [seeding, setSeeding] = useState(false);
 
-  // Load coproprietes list
-  useEffect(() => {
+  const reload = useCallback(() => {
     api.get('/coproprietes').then(r => setCoproprietes(r.data)).catch(() => {});
   }, []);
+
+  useEffect(() => { reload(); }, [reload]);
 
   // Load stats when a copro is selected
   useEffect(() => {
@@ -27,13 +30,42 @@ export default function DashboardPage() {
   const getDefaultIban = (c) => (c.bank_accounts || []).find(b => b.is_default)?.iban || (c.bank_accounts || [])[0]?.iban || '-';
   const selectedCoproData = coproprietes.find(c => c.id === selectedCopro);
 
+  const handleSeedDemo = async () => {
+    if (!window.confirm('Generer une ACP de demonstration avec donnees fictives ?')) return;
+    setSeeding(true);
+    try {
+      const { data } = await api.post('/admin/demo/seed', {});
+      toast.success(`ACP demo creee: ${data.name} (${data.counts.owners} prop, ${data.counts.lots} lots, ${data.counts.invoices} factures)`);
+      reload();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur seed demo');
+    } finally {
+      setSeeding(false);
+    }
+  };
+
   // ---- ACP TILES VIEW (no copro selected) ----
   if (!selectedCopro) {
     return (
       <div data-testid="dashboard-page">
-        <div className="page-header">
-          <h1 className="page-title">Tableau de bord</h1>
-          <p className="page-subtitle">Selectionnez une copropriete pour acceder a sa gestion</p>
+        <div className="page-header flex items-start justify-between">
+          <div>
+            <h1 className="page-title">Tableau de bord</h1>
+            <p className="page-subtitle">Selectionnez une copropriete pour acceder a sa gestion</p>
+          </div>
+          {isAdmin && (
+            <Button
+              onClick={handleSeedDemo}
+              disabled={seeding}
+              variant="outline"
+              size="sm"
+              className="border-[#0055FF]/30 text-[#0055FF] hover:bg-[#0055FF]/5"
+              data-testid="seed-demo-btn"
+            >
+              {seeding ? <Loader2 size={14} className="mr-2 animate-spin" /> : <Sparkles size={14} className="mr-2" />}
+              Generer ACP de demo
+            </Button>
+          )}
         </div>
 
         {/* Global stats */}

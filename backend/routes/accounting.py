@@ -28,6 +28,12 @@ class PCMNAccountInput(BaseModel):
     class_num: int
     parent: Optional[str] = None
     type: Optional[str] = "balance"
+    copropriete_id: Optional[str] = ""
+    active: Optional[bool] = False
+
+
+class PCMNToggleInput(BaseModel):
+    active: bool
 
 
 def create_accounting_router(db):
@@ -35,8 +41,13 @@ def create_accounting_router(db):
 
     # ---- PCMN ----
     @router.get("/pcmn")
-    async def list_pcmn(search: Optional[str] = None, class_num: Optional[int] = None):
+    async def list_pcmn(search: Optional[str] = None, class_num: Optional[int] = None,
+                        copropriete_id: Optional[str] = None, only_active: Optional[bool] = False):
         query = {}
+        if copropriete_id:
+            query["copropriete_id"] = copropriete_id
+        if only_active:
+            query["active"] = True
         if search:
             query["$or"] = [
                 {"number": {"$regex": search, "$options": "i"}},
@@ -49,32 +60,54 @@ def create_accounting_router(db):
 
     @router.post("/pcmn")
     async def create_pcmn_account(data: PCMNAccountInput):
-        existing = await db.pcmn_accounts.find_one({"number": data.number})
+        q = {"number": data.number}
+        if data.copropriete_id:
+            q["copropriete_id"] = data.copropriete_id
+        existing = await db.pcmn_accounts.find_one(q)
         if existing:
-            raise HTTPException(400, "Ce numero de compte existe deja")
+            raise HTTPException(400, "Ce numero de compte existe deja dans cette ACP")
         doc = {
             "number": data.number,
             "name": data.name,
             "class_num": data.class_num,
             "parent": data.parent,
-            "type": data.type
+            "type": data.type,
+            "copropriete_id": data.copropriete_id or "",
+            "active": data.active if data.active is not None else False,
         }
         await db.pcmn_accounts.insert_one(doc)
         return {k: v for k, v in doc.items() if k != "_id"}
 
     @router.put("/pcmn/{number}")
     async def update_pcmn_account(number: str, data: PCMNAccountInput):
+        q = {"number": number}
+        if data.copropriete_id:
+            q["copropriete_id"] = data.copropriete_id
         result = await db.pcmn_accounts.update_one(
-            {"number": number},
-            {"$set": {"name": data.name, "class_num": data.class_num, "parent": data.parent, "type": data.type}}
+            q,
+            {"$set": {"name": data.name, "class_num": data.class_num, "parent": data.parent,
+                      "type": data.type, "active": data.active if data.active is not None else False}}
         )
         if result.matched_count == 0:
             raise HTTPException(404, "Compte non trouve")
-        return await db.pcmn_accounts.find_one({"number": number}, {"_id": 0})
+        return await db.pcmn_accounts.find_one(q, {"_id": 0})
+
+    @router.patch("/pcmn/{number}/toggle-active")
+    async def toggle_pcmn_active(number: str, data: PCMNToggleInput, copropriete_id: Optional[str] = None):
+        q = {"number": number}
+        if copropriete_id:
+            q["copropriete_id"] = copropriete_id
+        result = await db.pcmn_accounts.update_one(q, {"$set": {"active": data.active}})
+        if result.matched_count == 0:
+            raise HTTPException(404, "Compte non trouve")
+        return await db.pcmn_accounts.find_one(q, {"_id": 0})
 
     @router.delete("/pcmn/{number}")
-    async def delete_pcmn_account(number: str):
-        result = await db.pcmn_accounts.delete_one({"number": number})
+    async def delete_pcmn_account(number: str, copropriete_id: Optional[str] = None):
+        q = {"number": number}
+        if copropriete_id:
+            q["copropriete_id"] = copropriete_id
+        result = await db.pcmn_accounts.delete_one(q)
         if result.deleted_count == 0:
             raise HTTPException(404, "Compte non trouve")
         return {"message": "Compte supprime"}

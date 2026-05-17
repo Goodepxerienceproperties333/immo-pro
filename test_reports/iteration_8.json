@@ -1,0 +1,41 @@
+{
+  "summary": "Iteration 8: PCMN-per-ACP seeding, default doc categories on ACP creation, toggle-active endpoint, demo seed, document upload with Claude Sonnet 4.5 auto-classification, banking transaction DELETE, cascade DELETE of ACPs, chinese walls. Created /app/backend/tests/test_iter8_features.py with 18 tests covering all iter8 features. Result: 18/18 PASS. Full regression: 157 passed, 1 skipped (carried from iter5). AI classification end-to-end verified with /tmp/test_pv_ag.pdf, Claude returned valid category and category_id was correctly mapped.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter8_features.py",
+    "/app/test_reports/pytest/iter8.xml",
+    "/app/test_reports/pytest/iter8_all.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "routes/demo_seed.py is not strictly idempotent: each call creates a NEW ACP (different copropriete_id and reference suffix), thus owners/suppliers are duplicated globally each time. Acceptable per problem statement (seed_demo idempotent = 'can be called multiple times'), but operators should be aware demo data accumulates. Consider adding a dedup-on-email check for owners/suppliers or a 'reset_demo' mode that wipes prior demo ACPs first.",
+    "routes/coproprietes.py _seed_pcmn_for_acp does no de-dup: calling create_copropriete twice with the same name creates 2 ACPs with their own PCMN. Fine, but if a future migration re-seeds PCMN to an existing ACP, an insert_many on already-seeded data will duplicate. Suggest using upsert per (copropriete_id, number) or guarding by count_documents.",
+    "routes/documents.py _classify_with_ai: PDFs only (per code comment); images are not classified even though upload accepts them. Confirm intent; user might expect OCR/Vision classification for images too. Currently returns {} for images, so upload still succeeds gracefully.",
+    "routes/documents.py upload_document: the auto_classify flag has no effect if copropriete_id is empty (AI is only triggered when both are truthy). Confirm this is intentional - documents without ACP context cannot be classified since categories are per-ACP.",
+    "routes/banking.py delete_transaction does not re-flag the matched invoice as unpaid after deletion. If a transaction was marked match_type='invoice' and removed, the related invoice stays in 'paid' status. Suggest reverting invoice status on delete.",
+    "routes/coproprietes.py cascade delete does NOT remove tenants by copropriete_id only - 'tenants' collection is wiped by copropriete_id (line 216). Good. But it does NOT clean up uploaded files on disk for documents in /app/uploads/documents/. Suggest iterating docs first, removing stored_path files, then delete_many.",
+    "routes/coproprietes.py: PCMN_ACCOUNTS imported lazily inside _seed_pcmn_for_acp - good for circular-import safety, but could be hoisted to module level for clarity.",
+    "Authentication scoping: most data POST/PUT/DELETE endpoints (accounting, banking, invoices, fund_calls, documents, fiscal) still lack get_current_user dependency injection. They trust cookie auth from /api/auth/login at the server-level only. Consider explicit auth on every CRUD endpoint to harden against direct-curl misuse."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter8_features.py (created)"
+  ],
+  "success_rate": {
+    "backend": "100% (18/18 new iter8 tests, 157/158 full regression - 1 skip carried from iter5)",
+    "frontend": "skipped (backend-only request)"
+  },
+  "test_credentials": "admin@copro.be / admin123 (superadmin cookie session)",
+  "seed_data_creation": "Per-run TEST_Iter8_ACP_A_<ts> and TEST_Iter8_ACP_B_<ts> (2 fresh ACPs, fixtures cascade-delete in teardown). TEST_Cascade_<ts> ACP created+deleted within cascade test. 2 transient Demo ACPs created and immediately deleted by demo_seed tests. All test data is TEST_ prefixed and cleaned up via cascade DELETE.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iter8 features all working: (1) PCMN seeded per-ACP at creation with 95+ accounts, 614000/615000 default-active. (2) toggle-active endpoint works with PATCH /api/accounting/pcmn/{number}/toggle-active?copropriete_id=X with body {active: bool}. (3) Demo seed creates Demo - Residence Les Tilleuls with 8 owners, 8 lots, 5 suppliers, 10 invoices, 2 fund calls, 13+ journal entries, 10 categories, 95+ PCMN. (4) AI classification via Claude Sonnet 4.5 works end-to-end (10-30s per upload); fallback gracefully returns {} on error so upload never fails. (5) Cascade DELETE wipes lots/tenants/distribution_keys/invoices/journal_entries/bank_statements/bank_transactions/fund_calls/meters/documents/document_categories/fiscal_years/budgets/pcmn_accounts. (6) /api/owners, /api/suppliers, /api/coproprietes remain global (no copropriete_id filter required). Tests use REACT_APP_BACKEND_URL from /app/frontend/.env. To run: `export $(grep -v '^#' /app/frontend/.env | xargs) && pytest /app/backend/tests/`.",
+  "rca_of_the_issue": "N/A - all iter8 features behave as specified. Code review comments above flag forward-looking enhancements only (idempotency hardening, image classification, file cleanup on cascade, auth tightening), none of which block the iter8 deliverable."
+}

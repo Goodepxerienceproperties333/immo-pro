@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import api from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -10,7 +10,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { toast } from 'sonner';
-import { Plus, Trash2, Pencil, FolderOpen, FileText, Tag } from 'lucide-react';
+import { Plus, Trash2, Pencil, FileText, Tag, Upload, Loader2, Download, Sparkles } from 'lucide-react';
 
 export default function DocumentsPage() {
   const [tab, setTab] = useState('documents');
@@ -22,6 +22,8 @@ export default function DocumentsPage() {
   const [editingCat, setEditingCat] = useState(null);
   const [docForm, setDocForm] = useState({ title: '', description: '', category_id: '', content: '' });
   const [catForm, setCatForm] = useState({ name: '', description: '' });
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef(null);
 
   const load = useCallback(async () => {
     const [d, c] = await Promise.all([
@@ -46,6 +48,29 @@ export default function DocumentsPage() {
   const deleteDoc = async (id) => {
     if (!window.confirm('Supprimer ce document ?')) return;
     await api.delete(`/documents/${id}`); toast.success('Document supprime'); load();
+  };
+
+  const handleFileChange = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const coproId = localStorage.getItem('selectedCopro');
+    if (!coproId) { toast.error('Selectionnez une copropriete'); return; }
+    setUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('copropriete_id', coproId);
+      fd.append('auto_classify', 'true');
+      const { data } = await api.post('/documents/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      const aiMsg = data.ai_classification?.category ? ` (IA: ${data.ai_classification.category})` : '';
+      toast.success(`Document importe${aiMsg}`);
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur upload');
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
   };
 
   // Category handlers
@@ -82,23 +107,43 @@ export default function DocumentsPage() {
                 {categories.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
               </SelectContent>
             </Select>
-            <Button onClick={openCreateDoc} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="create-doc-btn"><Plus size={16} className="mr-2" /> Nouveau document</Button>
+            <div className="flex gap-2">
+            <Button onClick={openCreateDoc} variant="outline" data-testid="create-doc-btn"><Plus size={16} className="mr-2" /> Note manuelle</Button>
+            <input type="file" ref={fileInputRef} onChange={handleFileChange} accept=".pdf,.png,.jpg,.jpeg,.webp,.heic,.heif" className="hidden" data-testid="doc-file-input" />
+            <Button onClick={() => fileInputRef.current?.click()} disabled={uploading} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="upload-doc-btn">
+              {uploading ? <><Loader2 size={16} className="mr-2 animate-spin" /> Analyse IA en cours...</> : <><Upload size={16} className="mr-2" /> Importer fichier (auto-classement IA)</>}
+            </Button>
+            </div>
           </div>
           {documents.length === 0 ? (
-            <Card className="border-slate-200"><CardContent className="p-8 text-center text-slate-400">Aucun document</CardContent></Card>
+            <Card className="border-slate-200"><CardContent className="p-8 text-center text-slate-400">Aucun document - importez votre premier fichier (PDF ou image)</CardContent></Card>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {documents.map(doc => (
                 <Card key={doc.id} className="border-slate-200 hover:shadow-md transition-shadow" data-testid={`doc-card-${doc.id}`}>
                   <CardContent className="p-4">
                     <div className="flex items-start justify-between mb-2">
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 min-w-0">
                         <FileText size={16} className="text-[#0055FF] flex-shrink-0" />
-                        <span className="font-medium text-sm text-slate-900">{doc.title}</span>
+                        <span className="font-medium text-sm text-slate-900 truncate">{doc.title}</span>
                       </div>
-                      <Button variant="ghost" size="sm" onClick={() => deleteDoc(doc.id)} className="text-red-400 h-6 w-6 p-0"><Trash2 size={12} /></Button>
+                      <div className="flex gap-0 flex-shrink-0">
+                        {doc.stored_path && (
+                          <Button variant="ghost" size="sm" onClick={() => window.open(`${process.env.REACT_APP_BACKEND_URL}/api/documents/${doc.id}/download`, '_blank')} className="h-6 w-6 p-0 text-slate-400" title="Telecharger">
+                            <Download size={12} />
+                          </Button>
+                        )}
+                        <Button variant="ghost" size="sm" onClick={() => deleteDoc(doc.id)} className="text-red-400 h-6 w-6 p-0"><Trash2 size={12} /></Button>
+                      </div>
                     </div>
                     {doc.description && <p className="text-xs text-slate-500 mb-2 line-clamp-2">{doc.description}</p>}
+                    {doc.ai_classification?.category && (
+                      <div className="flex items-center gap-1 mb-2 text-[10px] text-purple-600">
+                        <Sparkles size={10} />
+                        <span>Auto-classifie</span>
+                        {doc.doc_date && <span className="text-slate-400">- {doc.doc_date}</span>}
+                      </div>
+                    )}
                     <div className="flex items-center justify-between">
                       <Badge variant="outline" className="text-[10px]">{getCatName(doc.category_id)}</Badge>
                       <span className="text-[10px] text-slate-400">{doc.created_at?.split('T')[0]}</span>

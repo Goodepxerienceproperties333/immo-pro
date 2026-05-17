@@ -53,6 +53,22 @@ def create_coproprietes_router(db):
         prefix = "550" if account_type == "epargne" else "551"
         return f"{prefix}{last3}00"
 
+    # Accounts that are pre-activated (visible in default selection lists)
+    DEFAULT_ACTIVE_ACCOUNTS = {"614000", "615000"}  # Honoraires syndic + Frais de gestion (admin)
+
+    async def _seed_pcmn_for_acp(copro_id: str):
+        """Seed the full PCMN (Belgian 95-account plan) for a newly-created ACP."""
+        from pcmn_data import PCMN_ACCOUNTS
+        docs = []
+        for acc in PCMN_ACCOUNTS:
+            docs.append({
+                **acc,
+                "copropriete_id": copro_id,
+                "active": acc["number"] in DEFAULT_ACTIVE_ACCOUNTS,
+            })
+        if docs:
+            await db.pcmn_accounts.insert_many(docs)
+
     async def _generate_reference(db_ref):
         """Generate chronological reference ACP-YYYYMM-NNN."""
         now = datetime.now(timezone.utc)
@@ -60,19 +76,21 @@ def create_coproprietes_router(db):
         count = await db_ref.coproprietes.count_documents({"reference": {"$regex": f"^{prefix}"}})
         return f"{prefix}-{str(count + 1).zfill(3)}"
 
-    async def _create_pcmn_accounts(bank_accounts):
-        """Auto-create PCMN accounts for bank accounts."""
+    async def _create_pcmn_accounts(bank_accounts, copro_id: str):
+        """Auto-create PCMN accounts for bank accounts, scoped by ACP."""
         for ba in bank_accounts:
             pcmn_number = _generate_pcmn_number(ba["iban"], ba["account_type"])
             label = f"Banque {'epargne' if ba['account_type'] == 'epargne' else 'compte a vue'} {ba['iban'][-4:]}"
-            existing = await db.pcmn_accounts.find_one({"number": pcmn_number})
+            existing = await db.pcmn_accounts.find_one({"number": pcmn_number, "copropriete_id": copro_id})
             if not existing:
                 await db.pcmn_accounts.insert_one({
                     "number": pcmn_number,
                     "name": ba.get("label") or label,
                     "class_num": 5,
-                    "parent": "550000" if ba["account_type"] == "epargne" else "550000",
+                    "parent": "550000",
                     "type": "balance",
+                    "copropriete_id": copro_id,
+                    "active": True,  # bank accounts are always active
                 })
 
     @router.get("")
@@ -122,7 +140,17 @@ def create_coproprietes_router(db):
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
         await db.coproprietes.insert_one(doc)
-        await _create_pcmn_accounts(bank_accounts)
+        # Seed full PCMN plan for this ACP + bank account PCMN entries
+        await _seed_pcmn_for_acp(doc["id"])
+        await _create_pcmn_accounts(bank_accounts, doc["id"])
+        # Seed default document categories
+        from routes.documents import DEFAULT_CATEGORIES
+        now_iso = datetime.now(timezone.utc).isoformat()
+        cat_docs = [{
+            "id": str(uuid.uuid4()), "name": cn, "description": "",
+            "copropriete_id": doc["id"], "created_at": now_iso,
+        } for cn in DEFAULT_CATEGORIES]
+        await db.document_categories.insert_many(cat_docs)
         # Create lots on the fly (if provided during ACP creation)
         if data.lots:
             now_iso = datetime.now(timezone.utc).isoformat()
@@ -165,7 +193,7 @@ def create_coproprietes_router(db):
         result = await db.coproprietes.update_one({"id": copro_id}, {"$set": update})
         if result.matched_count == 0:
             raise HTTPException(404, "Copropriete non trouvee")
-        await _create_pcmn_accounts(bank_accounts)
+        await _create_pcmn_accounts(bank_accounts, copro_id)
         return await db.coproprietes.find_one({"id": copro_id}, {"_id": 0})
 
     @router.get("/{copro_id}")
@@ -184,7 +212,13 @@ def create_coproprietes_router(db):
         result = await db.coproprietes.delete_one({"id": copro_id})
         if result.deleted_count == 0:
             raise HTTPException(404, "Copropriete non trouvee")
-        return {"message": "Copropriete supprimee"}
+        # Cascade: wipe all scoped data for this ACP
+        for col in ["lots", "tenants", "distribution_keys", "invoices",
+                    "journal_entries", "bank_statements", "bank_transactions",
+                    "fund_calls", "meters", "documents", "document_categories",
+                    "fiscal_years", "budgets", "pcmn_accounts"]:
+            await db[col].delete_many({"copropriete_id": copro_id})
+        return {"message": "Copropriete supprimee (cascade)"}
 
     @router.post("/{copro_id}/archive")
     async def archive_copropriete(copro_id: str, request: Request):

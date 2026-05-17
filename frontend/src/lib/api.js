@@ -8,13 +8,15 @@ const api = axios.create({
 });
 
 // Chinese-wall interceptor: scope every request by the currently selected ACP.
-// - GET: add copropriete_id as query param
-// - POST/PUT/PATCH: inject copropriete_id into JSON body (unless already set)
-// - Header X-Copropriete-Id sent on every request for backend awareness
+// Global resources (owners, suppliers, users) are excluded from auto-scoping.
+const GLOBAL_PATH_PREFIXES = ['/owners', '/suppliers', '/users', '/auth', '/coproprietes', '/banking/lookup'];
+const isGlobalPath = (url = '') => GLOBAL_PATH_PREFIXES.some(p => url === p || url.startsWith(p + '/') || url.startsWith(p + '?'));
+
 api.interceptors.request.use((config) => {
   try {
     const coproId = localStorage.getItem('selectedCopro');
-    if (coproId && coproId !== 'all' && coproId !== '') {
+    const url = config.url || '';
+    if (coproId && coproId !== 'all' && coproId !== '' && !isGlobalPath(url)) {
       config.headers = config.headers || {};
       config.headers['X-Copropriete-Id'] = coproId;
       const method = (config.method || 'get').toLowerCase();
@@ -24,7 +26,6 @@ api.interceptors.request.use((config) => {
           config.params.copropriete_id = coproId;
         }
       } else if (['post', 'put', 'patch'].includes(method)) {
-        // Inject into body when body is a plain object (not FormData)
         if (config.data && typeof config.data === 'object' && !(config.data instanceof FormData)) {
           if (config.data.copropriete_id === undefined || config.data.copropriete_id === '' || config.data.copropriete_id === null) {
             config.data = { ...config.data, copropriete_id: coproId };

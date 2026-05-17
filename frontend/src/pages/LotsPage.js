@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import api from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -6,9 +6,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
-import { Checkbox } from '@/components/ui/checkbox';
 import { toast } from 'sonner';
-import { Plus, Pencil, Trash2, Search } from 'lucide-react';
+import { Plus, Pencil, Trash2, Search, X } from 'lucide-react';
 
 const LOT_TYPES = [
   { value: 'apartment', label: 'Appartement' },
@@ -25,6 +24,37 @@ export default function LotsPage() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState({ number: '', description: '', lot_type: 'apartment', floor: 0, area: 0, quotity: 0, owner_id: '', owner_ids: [] });
+  const [ownerSearch, setOwnerSearch] = useState('');
+
+  const ownerById = useMemo(() => Object.fromEntries(owners.map(o => [o.id, o])), [owners]);
+  const filteredOwners = useMemo(() => {
+    const q = ownerSearch.trim().toLowerCase();
+    if (!q) return [];
+    return owners.filter(o =>
+      !form.owner_ids.includes(o.id) && (
+        (o.name || '').toLowerCase().includes(q) ||
+        (o.first_name || '').toLowerCase().includes(q) ||
+        (o.last_name || '').toLowerCase().includes(q) ||
+        (o.email || '').toLowerCase().includes(q) ||
+        (o.vcs_code || '').includes(q)
+      )
+    ).slice(0, 8);
+  }, [ownerSearch, owners, form.owner_ids]);
+
+  const addOwner = (o) => {
+    setForm(prev => ({
+      ...prev,
+      owner_ids: [...prev.owner_ids, o.id],
+      owner_id: prev.owner_id || o.id,
+    }));
+    setOwnerSearch('');
+  };
+  const removeOwner = (id) => {
+    setForm(prev => {
+      const next = prev.owner_ids.filter(x => x !== id);
+      return { ...prev, owner_ids: next, owner_id: next[0] || '' };
+    });
+  };
 
   const load = useCallback(async () => {
     const [lotsRes, ownersRes] = await Promise.all([api.get('/lots'), api.get('/owners')]);
@@ -165,24 +195,57 @@ export default function LotsPage() {
               </div>
             </div>
             <div>
-              <label className="form-label">Proprietaires</label>
-              <div className="border rounded-md p-2 space-y-1 max-h-32 overflow-y-auto">
-                {owners.map(o => (
-                  <label key={o.id} className="flex items-center gap-2 cursor-pointer text-sm hover:bg-slate-50 rounded px-1 py-0.5">
-                    <Checkbox
-                      checked={form.owner_ids.includes(o.id)}
-                      onCheckedChange={(checked) => {
-                        setForm(prev => ({
-                          ...prev,
-                          owner_ids: checked ? [...prev.owner_ids, o.id] : prev.owner_ids.filter(x => x !== o.id),
-                          owner_id: checked ? o.id : prev.owner_ids.filter(x => x !== o.id)[0] || ''
-                        }));
-                      }}
-                    />
-                    <span>{o.name}</span>
-                    {o.vcs_code && <span className="font-mono text-[10px] text-[#0055FF] ml-auto">{o.vcs_code}</span>}
-                  </label>
-                ))}
+              <label className="form-label">Proprietaires <span className="text-slate-400 font-normal">(recherche par nom, email, VCS)</span></label>
+
+              {/* Selected owners as tags */}
+              {form.owner_ids.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 mb-2">
+                  {form.owner_ids.map(id => {
+                    const o = ownerById[id];
+                    return (
+                      <Badge key={id} variant="outline" className="bg-[#0055FF]/10 border-[#0055FF]/30 text-slate-700 gap-1.5 pl-2 pr-1 py-1" data-testid={`owner-tag-${id}`}>
+                        <span>{o?.name || '(inconnu)'}</span>
+                        {o?.vcs_code && <span className="font-mono text-[9px] text-[#0055FF]">{o.vcs_code.replace(/\+/g,'').slice(0, 10)}</span>}
+                        <button onClick={() => removeOwner(id)} className="text-slate-400 hover:text-red-500"><X size={11} /></button>
+                      </Badge>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Search field with dropdown suggestions */}
+              <div className="relative">
+                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                <Input
+                  value={ownerSearch}
+                  onChange={e => setOwnerSearch(e.target.value)}
+                  placeholder="Tapez un nom, email ou code VCS..."
+                  className="pl-9"
+                  data-testid="owner-search-input"
+                />
+                {filteredOwners.length > 0 && (
+                  <div className="absolute z-50 left-0 right-0 mt-1 bg-white border border-slate-200 rounded-md shadow-lg max-h-56 overflow-y-auto">
+                    {filteredOwners.map(o => (
+                      <button
+                        key={o.id}
+                        onClick={() => addOwner(o)}
+                        className="w-full text-left px-3 py-2 hover:bg-[#0055FF]/5 border-b last:border-b-0 border-slate-100 flex items-center justify-between text-sm"
+                        data-testid={`owner-suggestion-${o.id}`}
+                      >
+                        <div>
+                          <div className="font-medium text-slate-900">{o.name}</div>
+                          {o.email && <div className="text-[11px] text-slate-500">{o.email}</div>}
+                        </div>
+                        {o.vcs_code && <span className="font-mono text-[10px] text-[#0055FF] flex-shrink-0">{o.vcs_code}</span>}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {ownerSearch && filteredOwners.length === 0 && (
+                  <div className="absolute z-50 left-0 right-0 mt-1 bg-white border border-slate-200 rounded-md shadow-lg p-3 text-center text-xs text-slate-400">
+                    Aucun proprietaire trouve. Allez dans Proprietaires pour en creer un.
+                  </div>
+                )}
               </div>
             </div>
             <div className="flex gap-3 justify-end">

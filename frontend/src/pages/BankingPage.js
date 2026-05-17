@@ -87,6 +87,10 @@ export default function BankingPage() {
   const saveEdit = async () => {
     try { await api.put(`/banking/transactions/${editingTxn}`, { ...editForm, amount: Number(editForm.amount) }); toast.success('Transaction modifiee'); setEditingTxn(null); loadStmtTxns(selectedStmt); } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); }
   };
+  const deleteTxn = async (id) => {
+    if (!window.confirm('Supprimer cette transaction ? Cette action est irreversible.')) return;
+    try { await api.delete(`/banking/transactions/${id}`); toast.success('Transaction supprimee'); loadStmtTxns(selectedStmt); } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); }
+  };
 
   // LETTRAGE
   const openLettrage = (txn) => { setLettrageTarget(txn); setLettrageDialog(true); setLookupQuery(''); };
@@ -206,6 +210,7 @@ export default function BankingPage() {
                             <Button variant="ghost" size="sm" onClick={() => startEdit(txn)} className="h-6 w-6 p-0 text-slate-400" title="Editer" data-testid={`edit-txn-${txn.id}`}><Pencil size={11} /></Button>
                             {txn.matched ? <Button variant="ghost" size="sm" onClick={() => unlettrage(txn.id)} className="text-orange-500 h-6 w-6 p-0" title="Delettrer"><Unlink size={11} /></Button>
                               : <Button variant="ghost" size="sm" onClick={() => openLettrage(txn)} className="text-[#0055FF] h-6 w-6 p-0" title="Lettrer" data-testid={`lettrage-${txn.id}`}><Link2 size={11} /></Button>}
+                            <Button variant="ghost" size="sm" onClick={() => deleteTxn(txn.id)} className="h-6 w-6 p-0 text-red-400" title="Supprimer" data-testid={`delete-txn-${txn.id}`}><Trash2 size={11} /></Button>
                           </div>
                         </TableCell>
                       </TableRow>
