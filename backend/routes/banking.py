@@ -3,6 +3,7 @@ from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime, timezone
 import uuid
+from auto_entries import generate_bank_entry, _delete_auto_entries
 
 
 class StatementInput(BaseModel):
@@ -81,6 +82,12 @@ def create_banking_router(db):
                 {"$set": {"matched": True, "matched_to": owner["id"], "match_type": "owner_payment",
                           "counterparty_name": txn_doc.get("counterparty_name") or owner["name"]}}
             )
+            try:
+                fresh = await db.bank_transactions.find_one({"id": txn_doc["id"]}, {"_id": 0})
+                if fresh:
+                    await generate_bank_entry(db, fresh)
+            except Exception as e:
+                print(f"[auto-entry] bank auto-vcs failed: {e}")
 
     # ---- BANK STATEMENTS ----
     @router.get("/statements")
@@ -180,6 +187,10 @@ def create_banking_router(db):
 
     @router.delete("/transactions/{txn_id}")
     async def delete_transaction(txn_id: str):
+        try:
+            await _delete_auto_entries(db, "bank_txn", txn_id)
+        except Exception:
+            pass
         result = await db.bank_transactions.delete_one({"id": txn_id})
         if result.deleted_count == 0:
             raise HTTPException(404, "Transaction non trouvee")
@@ -195,10 +206,20 @@ def create_banking_router(db):
             {"id": data.transaction_id},
             {"$set": {"matched": True, "matched_to": data.match_to_id, "match_type": data.match_type}}
         )
+        try:
+            fresh = await db.bank_transactions.find_one({"id": data.transaction_id}, {"_id": 0})
+            if fresh:
+                await generate_bank_entry(db, fresh)
+        except Exception as e:
+            print(f"[auto-entry] bank lettrage failed: {e}")
         return {"message": "Lettrage effectue", "transaction_id": data.transaction_id}
 
     @router.post("/unlettrage/{txn_id}")
     async def unlettrage(txn_id: str):
+        try:
+            await _delete_auto_entries(db, "bank_txn", txn_id)
+        except Exception:
+            pass
         result = await db.bank_transactions.update_one(
             {"id": txn_id},
             {"$set": {"matched": False, "matched_to": "", "match_type": ""}}

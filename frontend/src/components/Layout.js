@@ -5,7 +5,7 @@ import api from '@/lib/api';
 import {
   LayoutDashboard, Users, Building2, UserCheck, BookOpen, FileText,
   Receipt, Gauge, Landmark, FolderOpen, LogOut, ChevronLeft, ChevronRight,
-  Menu, Shield, Home, Truck, Calendar, BookMarked, Megaphone, BarChart3, Bell
+  Menu, Shield, Home, Truck, Calendar, BookMarked, Megaphone, BarChart3, Bell, Wallet
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -28,6 +28,7 @@ const sections = [
   ]},
   { title: 'Finance', items: [
     { to: '/invoices', icon: Receipt, label: 'Facturation' },
+    { to: '/expenses', icon: Wallet, label: 'Depenses' },
     { to: '/fund-calls', icon: Megaphone, label: 'Appels de fonds' },
     { to: '/banking', icon: Landmark, label: 'Banque' },
     { to: '/meters', icon: Gauge, label: 'Compteurs' },

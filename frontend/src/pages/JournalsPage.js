@@ -14,9 +14,11 @@ import { Plus, Trash2, Eye, Paperclip, Download } from 'lucide-react';
 const API = process.env.REACT_APP_BACKEND_URL;
 
 const JOURNAL_TYPES = [
-  { value: 'OD', label: 'Operations Diverses' },
-  { value: 'AV', label: 'Avances' },
-  { value: 'AP', label: 'Appels' },
+  { value: 'OD', label: 'Operations Diverses', desc: 'Ecritures manuelles' },
+  { value: 'AC', label: 'Achats', desc: 'Factures fournisseurs' },
+  { value: 'VE', label: 'Ventes', desc: 'Appels de fonds proprietaires' },
+  { value: 'FI', label: 'Financier', desc: 'Mouvements bancaires' },
+  { value: 'AN', label: 'A-Nouveau', desc: 'Ouverture exercice' },
 ];
 
 export default function JournalsPage() {
@@ -126,7 +128,10 @@ export default function JournalsPage() {
                 ) : entries.map(e => (
                   <TableRow key={e.id} className="hover:bg-slate-50/50">
                     <TableCell className="font-mono text-sm">{e.date}</TableCell>
-                    <TableCell>{e.reference}</TableCell>
+                    <TableCell className="font-mono text-xs">
+                      {e.reference}
+                      {e.auto_generated && <Badge variant="outline" className="ml-2 text-[10px] bg-blue-50 border-blue-200 text-blue-700" data-testid={`auto-badge-${e.id}`}>Auto</Badge>}
+                    </TableCell>
                     <TableCell className="font-medium">{e.description}</TableCell>
                     <TableCell className="text-right font-mono">{e.total_debit?.toFixed(2)}</TableCell>
                     <TableCell className="text-right font-mono">{e.total_credit?.toFixed(2)}</TableCell>
@@ -136,7 +141,7 @@ export default function JournalsPage() {
                         <Button variant="ghost" size="sm" onClick={() => setAttachDialogEntry(e)} data-testid={`entry-attach-${e.id}`} title="Pieces jointes">
                           <Paperclip size={14} />{(e.attachments?.length || 0) > 0 && <span className="ml-1 text-xs">{e.attachments.length}</span>}
                         </Button>
-                        <Button variant="ghost" size="sm" onClick={() => handleDelete(e.id)} className="text-red-500"><Trash2 size={14} /></Button>
+                        {!e.auto_generated && <Button variant="ghost" size="sm" onClick={() => handleDelete(e.id)} className="text-red-500"><Trash2 size={14} /></Button>}
                       </div>
                     </TableCell>
                   </TableRow>

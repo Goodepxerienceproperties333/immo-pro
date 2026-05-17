@@ -1,0 +1,60 @@
+{
+  "summary": "Iter16 backend testing complete. All 16 tests pass covering AC/VE/FI auto entries (create/update/delete cleanup), manual-delete protection (400 on auto-generated), /api/fiscal/expenses shape+filters, and full regularization flow (dry_run + persist + delete) including reserve-not-extourned invariant. RBAC owner -> 403 confirmed on /expenses and /regularize. Regression: iter14 (8/8) + iter15 (16/16) still pass.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter16_auto_entries.py",
+    "/app/test_reports/pytest/pytest_iter16.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "auto_entries.generate_sale_entry prorates the reserve across owners by the ratio reserve_total/full_total of each owner's total (line 138). This works only if the reserve line in fund_call.lines uses the SAME distribution key as the provisions line. If reserve uses a different key (as ReserveFund.distribution_key_id allows), the resulting VE entry will misattribute reserve per-owner amounts vs the actual fund_call.distribution. Recommend either: (a) record reserve_distribution separately on fund_call, OR (b) re-run distribution using the reserve key here. Functional impact: per-owner 40010XXX balances on the journal will differ from the actual reserve appel rows, even though the entry stays balanced.",
+    "auto_entries.generate_purchase_entry falls back to 'fournisseur 440000' when supplier has no tier account. But 440000 has NO copropriete scope and NO third_party_id, meaning the supplier sub-ledger (balance-tiers/suppliers) will miss this invoice. Recommend: always call assign_supplier_account when supplier doc is missing or auto-create a placeholder supplier so a 44000XXX is reserved per ACP. Today only suppliers explicitly created via /api/suppliers get a tier account.",
+    "routes/fiscal.py regularize_fiscal_year: total_real is computed from invoices.total_amount (line 199-206) but manual OD class-6 entries are ALSO summed (line 211-219). If an invoice's AC auto-entry is replayed and an admin re-categorizes via OD, both sources will double-count. Real-expenses by_owner _distribute is rebuilt from the invoice account_number + key only — manual OD entries are added to by_nature_key[(acc,'')] but NOT distributed to real_by_owner per owner (their amount goes only into total_real not into _distribute loop). Wait — looking again, line 273 loops over ALL by_nature_key including manual OD (with empty key_id), so they ARE distributed via default tantiemes. Fine. But the summary 'total_real_expenses' will include manual OD even if the invoice's auto AC entry already counted it, causing double-count whenever an OD entry's debit reproduces an invoice line. Recommend: when summing manual OD class-6, exclude those linked to an invoice (auto_generated=True && source_type='invoice').",
+    "routes/fiscal.py /expenses endpoint only returns invoices (line 453). The endpoint name and description mention 'factures + ecritures OD classe 6' but OD entries with class-6 lines are NOT included in the response — only invoices are. This is a divergence from the regularize endpoint which DOES include manual OD. Either expand /expenses to include OD entries OR rename to /invoice-expenses for clarity.",
+    "auto_entries.generate_bank_entry uses txn.get('account_number') or '550000' (line 212). When a manual transaction has no account_number set and no statement linkage, the entry posts to 550000 which is the parent collective banque account — bypassing the per-bank 550xxx sub-account. Recommend: at least try to inherit from txn.statement_id -> statements.account_number when txn.account_number is empty.",
+    "routes/accounting.py DELETE entry 400-blocks only when entry.auto_generated is True (line 188). It does NOT block entries with source_type='regularization' if some legacy entry was inserted without auto_generated=True. The regularize endpoint correctly sets auto_generated=True so this is OK today, but if anyone backfills regul entries via a script omitting that flag, they'd be deletable. Consider a defense-in-depth check on source_type too.",
+    "GET /api/fiscal/expenses lacks any RBAC decorator/middleware visible in fiscal.py — verified by test that owner gets 403, meaning the project-wide auth middleware on /api/fiscal applies the gate. Good, but worth noting it's enforced by middleware not route-level — any change to middleware path matching could expose this without test failure unless the RBAC test is rerun."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter16_auto_entries.py"
+  ],
+  "success_rate": {"backend": "100% (16/16) + regression 24/24", "frontend": "not tested (backend only request)"},
+  "test_credentials": "admin@copro.be / admin123 (superadmin). Test owner TEST_iter16_owner_*@example.com auto-created via /api/auth/register with role=owner.",
+  "seed_data_creation": "Creates per test class: 1 invoice (TEST_iter16_INV_*), 1 fund_call (TEST_iter16_FC_*), 2 bank transactions, 1 protection-test invoice (TEST_iter16_PROT_*), 1 fiscal year TEST_iter16_REG_* + 1 invoice + 1 fund_call inside it, 1 owner user. Cleaned up via class-scoped teardown (DELETE invoice/fund-call/regularize cascades auto-entries; explicit DELETE for txns, fiscal year deletion not performed but FY is named TEST_*).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iter16 covers: (a) auto entries AC/VE/FI in /app/backend/auto_entries.py with cleanup tied to source_type+source_id, (b) /api/fiscal/expenses filterable endpoint, (c) /api/fiscal/years/{id}/regularize POST(dry_run/persist) + DELETE in /app/backend/routes/fiscal.py, (d) accounting entries 400 if auto_generated. Test file: /app/backend/tests/test_iter16_auto_entries.py. Owner registration requires field 'name' in /api/auth/register payload. /api/owners ignores copropriete_id query param (returns all). The FY teardown in TestRegularization leaves a leftover TEST_iter16_REG_* fiscal year because /api/fiscal/years has no DELETE — that's pre-existing. Reserve invariant (40010/701000 NOT extourned) is asserted by inspecting EXT- entry lines. Auto-lettrage via VCS (POST /api/banking/auto-lettrage-vcs) NOT covered explicitly — only manual /api/banking/lettrage; consider adding to next iter.",
+  "tests_executed": {
+    "total": 16,
+    "passed": 16,
+    "failed": 0,
+    "list": [
+      "TestAutoEntryAC::test_create_invoice_creates_AC_entry",
+      "TestAutoEntryAC::test_update_invoice_recreates_AC",
+      "TestAutoEntryAC::test_delete_invoice_removes_AC",
+      "TestAutoEntryVE::test_create_fund_call_creates_VE_entry",
+      "TestAutoEntryVE::test_delete_fund_call_removes_VE",
+      "TestAutoEntryFI::test_lettrage_creates_FI_entry",
+      "TestAutoEntryFI::test_unlettrage_removes_FI",
+      "TestAutoEntryFI::test_delete_txn_removes_FI",
+      "TestAutoEntryProtection::test_cannot_delete_auto_entry_manually",
+      "TestFiscalExpenses::test_expenses_endpoint_shape",
+      "TestFiscalExpenses::test_expenses_account_filter",
+      "TestRegularization::test_dry_run_returns_summary",
+      "TestRegularization::test_persist_creates_two_OD_entries",
+      "TestRegularization::test_delete_regularize_removes_entries_and_resets",
+      "TestRBAC::test_owner_cannot_list_expenses",
+      "TestRBAC::test_owner_cannot_regularize"
+    ]
+  },
+  "regression": "test_iter14_regenerate_from_budget.py 8/8 PASS; test_iter15_tier_accounts.py 16/16 PASS. No regression introduced.",
+  "rca_of_the_issue": "N/A - all features under test passed. See critical_code_review_comments for non-blocking design/risk observations on auto_entries and regularize that the main agent may wish to address before production."
+}

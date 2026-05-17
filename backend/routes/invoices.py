@@ -5,6 +5,7 @@ from typing import Optional, List
 from datetime import datetime, timezone
 from pathlib import Path
 import uuid
+from auto_entries import generate_purchase_entry, _delete_auto_entries
 
 INVOICE_ATTACHMENTS_DIR = Path("/app/uploads/invoice_attachments")
 INVOICE_ATTACHMENTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -133,7 +134,12 @@ def create_invoices_router(db):
             "created_at": datetime.now(timezone.utc).isoformat()
         }
         await db.invoices.insert_one(doc)
-        return {k: v for k, v in doc.items() if k != "_id"}
+        clean = {k: v for k, v in doc.items() if k != "_id"}
+        try:
+            await generate_purchase_entry(db, clean)
+        except Exception as e:
+            print(f"[auto-entry] purchase failed: {e}")
+        return clean
 
     @router.get("/invoices/{invoice_id}")
     async def get_invoice(invoice_id: str):
@@ -154,7 +160,12 @@ def create_invoices_router(db):
         result = await db.invoices.update_one({"id": invoice_id}, {"$set": update})
         if result.matched_count == 0:
             raise HTTPException(404, "Facture non trouvee")
-        return await db.invoices.find_one({"id": invoice_id}, {"_id": 0})
+        inv = await db.invoices.find_one({"id": invoice_id}, {"_id": 0})
+        try:
+            await generate_purchase_entry(db, inv)
+        except Exception as e:
+            print(f"[auto-entry] purchase update failed: {e}")
+        return inv
 
     @router.delete("/invoices/{invoice_id}")
     async def delete_invoice(invoice_id: str):
@@ -167,6 +178,10 @@ def create_invoices_router(db):
                         Path(p).unlink()
                 except Exception:
                     pass
+            try:
+                await _delete_auto_entries(db, "invoice", invoice_id)
+            except Exception:
+                pass
         result = await db.invoices.delete_one({"id": invoice_id})
         if result.deleted_count == 0:
             raise HTTPException(404, "Facture non trouvee")

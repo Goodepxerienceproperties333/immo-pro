@@ -3,6 +3,7 @@ from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime, timezone, timedelta
 import uuid
+from auto_entries import generate_sale_entry, _delete_auto_entries
 
 
 class FundCallInput(BaseModel):
@@ -129,7 +130,12 @@ def create_fund_calls_router(db):
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
         await db.fund_calls.insert_one(doc)
-        return {k: v for k, v in doc.items() if k != "_id"}
+        clean = {k: v for k, v in doc.items() if k != "_id"}
+        try:
+            await generate_sale_entry(db, clean)
+        except Exception as e:
+            print(f"[auto-entry] sale create failed: {e}")
+        return clean
 
     @router.get("/{call_id}")
     async def get_fund_call(call_id: str):
@@ -200,6 +206,10 @@ def create_fund_calls_router(db):
 
     @router.delete("/{call_id}")
     async def delete_fund_call(call_id: str):
+        try:
+            await _delete_auto_entries(db, "fund_call", call_id)
+        except Exception:
+            pass
         result = await db.fund_calls.delete_one({"id": call_id})
         if result.deleted_count == 0:
             raise HTTPException(404, "Appel non trouve")
@@ -387,6 +397,10 @@ def create_fund_calls_router(db):
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
             await db.fund_calls.insert_one(doc)
+            try:
+                await generate_sale_entry(db, doc)
+            except Exception as e:
+                print(f"[auto-entry] sale bulk failed: {e}")
             created_ids.append(doc["id"])
 
         return {"calls": results, "summary": summary, "persisted": True, "created_ids": created_ids}
@@ -419,6 +433,11 @@ def create_fund_calls_router(db):
                 deletable_ids.append(c["id"])
         if deletable_ids:
             await db.fund_calls.delete_many({"id": {"$in": deletable_ids}})
+            for did in deletable_ids:
+                try:
+                    await _delete_auto_entries(db, "fund_call", did)
+                except Exception:
+                    pass
         result = await _generate_from_budget(data, persist=True)
         result["deleted_count"] = len(deletable_ids)
         result["preserved_count"] = preserved

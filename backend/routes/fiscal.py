@@ -166,6 +166,376 @@ def create_fiscal_router(db):
             raise HTTPException(404, "Exercice non trouve")
         return {"message": "Exercice reouvert"}
 
+    @router.post("/years/{year_id}/regularize")
+    async def regularize_fiscal_year(year_id: str, dry_run: Optional[bool] = False):
+        """Cloture comptable avec regularisation par cle de repartition (belge).
+        Workflow:
+          1) Calculer Total frais reels (factures classe 6) vs Budget
+          2) Extourner les ecritures VE de provisions (compte 700000) pour annuler
+             les provisions appelees
+          3) Affecter les frais reels par cle de repartition au niveau de chaque
+             proprietaire (Dr 40000XXX par proprio, Cr 700000)
+          4) La difference entre provisions et frais reels reste sur le compte 40000XXX
+             (debiteur = proprio doit; crediteur = proprio a recevoir)
+        Le fonds de reserve (compte 700010/40010) n'est PAS extourne (reste au bilan)."""
+        fy = await db.fiscal_years.find_one({"id": year_id}, {"_id": 0})
+        if not fy:
+            raise HTTPException(404, "Exercice non trouve")
+        if fy.get("status") == "closed":
+            raise HTTPException(400, "Exercice deja cloture")
+        copro_id = fy.get("copropriete_id", "")
+        if not copro_id:
+            raise HTTPException(400, "Exercice sans copropriete")
+
+        start, end = fy["start_date"], fy["end_date"]
+
+        # 1) Budget approved for this FY
+        budget = await db.budgets.find_one(
+            {"fiscal_year_id": year_id, "status": "approved"}, {"_id": 0}
+        )
+
+        # 2) Total real expenses (class 6) booked via AC + manual OD
+        inv_q = {"date": {"$gte": start, "$lte": end}, "copropriete_id": copro_id}
+        invoices = await db.invoices.find(inv_q, {"_id": 0}).to_list(50000)
+        # Group by (account_number, distribution_key_id)
+        from collections import defaultdict
+        by_nature_key = defaultdict(float)  # (account, key_id) -> amount
+        for inv in invoices:
+            acc = inv.get("account_number", "") or "600000"
+            key_id = inv.get("distribution_key_id", "") or ""
+            by_nature_key[(acc, key_id)] += inv.get("total_amount", 0)
+        # Also include manual OD entries with class-6 lines
+        je_q = {"date": {"$gte": start, "$lte": end}, "copropriete_id": copro_id,
+                "journal_type": "OD"}
+        manual = await db.journal_entries.find(je_q, {"_id": 0}).to_list(50000)
+        for e in manual:
+            for line in e.get("lines", []):
+                acc = line.get("account_number", "")
+                if not acc.startswith("6"):
+                    continue
+                net = line.get("debit", 0) - line.get("credit", 0)
+                if abs(net) < 0.01:
+                    continue
+                by_nature_key[(acc, "")] += net
+        total_real = round(sum(by_nature_key.values()), 2)
+
+        # 3) Total provisions called (700000) - exclude reserve
+        ve_q = {"date": {"$gte": start, "$lte": end}, "copropriete_id": copro_id,
+                "journal_type": "VE"}
+        ve_entries = await db.journal_entries.find(ve_q, {"_id": 0}).to_list(50000)
+        provisions_called_by_owner = defaultdict(float)  # owner_id -> amount
+        provisions_called_total = 0.0
+        for e in ve_entries:
+            for line in e.get("lines", []):
+                acc = line.get("account_number", "")
+                if acc.startswith("40000"):  # provisions only, not reserve (40010)
+                    amt = line.get("debit", 0) - line.get("credit", 0)
+                    if amt > 0 and line.get("third_party_id"):
+                        provisions_called_by_owner[line["third_party_id"]] += amt
+                        provisions_called_total += amt
+        provisions_called_total = round(provisions_called_total, 2)
+
+        # 4) Resolve owner accounts and distribution keys
+        owner_ids = list(provisions_called_by_owner.keys())
+        owners = await db.owners.find({"id": {"$in": owner_ids}}, {"_id": 0}).to_list(10000)
+        from tier_accounts import assign_owner_accounts, get_owner_accounts
+        for o in owners:
+            await assign_owner_accounts(db, o, copro_id)
+        owners = await db.owners.find({"id": {"$in": owner_ids}}, {"_id": 0}).to_list(10000)
+        owners_map = {o["id"]: o for o in owners}
+        lots = await db.lots.find({"copropriete_id": copro_id}, {"_id": 0}).to_list(10000)
+        keys = await db.distribution_keys.find({"copropriete_id": copro_id}, {"_id": 0}).to_list(1000)
+        keys_map = {k["id"]: k for k in keys}
+
+        def _distribute(amount: float, key_id: str) -> dict:
+            dist = defaultdict(float)
+            if key_id and key_id in keys_map:
+                key = keys_map[key_id]
+                total_shares = sum(l["share"] for l in key.get("lots", []))
+                for kl in key.get("lots", []):
+                    lot = next((l for l in lots if l["id"] == kl["lot_id"]), None)
+                    if not lot or not lot.get("owner_id"):
+                        continue
+                    ratio = kl["share"] / total_shares if total_shares > 0 else 0
+                    dist[lot["owner_id"]] += amount * ratio
+            else:
+                total_quotity = sum(l.get("quotity", 0) for l in lots if l.get("owner_id"))
+                for lot in lots:
+                    if not lot.get("owner_id"):
+                        continue
+                    ratio = lot.get("quotity", 0) / total_quotity if total_quotity > 0 else 0
+                    dist[lot["owner_id"]] += amount * ratio
+            return dist
+
+        # 5) Compute real expense allocation per owner using each nature's key
+        real_by_owner = defaultdict(float)  # owner_id -> amount of real expenses
+        by_nature_key_detail = []
+        for (acc, key_id), amount in by_nature_key.items():
+            d = _distribute(amount, key_id)
+            kn = keys_map.get(key_id, {}).get("name", "Tantiemes")
+            by_nature_key_detail.append({"account": acc, "key_id": key_id, "key_name": kn, "amount": round(amount, 2)})
+            for oid, v in d.items():
+                real_by_owner[oid] += v
+
+        # 6) Per-owner regularization
+        per_owner = []
+        for oid in set(list(provisions_called_by_owner.keys()) + list(real_by_owner.keys())):
+            owner = owners_map.get(oid) or await db.owners.find_one({"id": oid}, {"_id": 0})
+            if not owner:
+                continue
+            owner = await assign_owner_accounts(db, owner, copro_id)
+            accs = get_owner_accounts(owner, copro_id)
+            called = round(provisions_called_by_owner.get(oid, 0), 2)
+            real = round(real_by_owner.get(oid, 0), 2)
+            regul = round(real - called, 2)  # positive = doit payer plus, negative = trop paye
+            per_owner.append({
+                "owner_id": oid,
+                "owner_name": owner.get("name", ""),
+                "vcs_code": owner.get("vcs_code", ""),
+                "account_provisions": accs.get("provisions", ""),
+                "provisions_called": called,
+                "real_expenses": real,
+                "regularization": regul,
+                "status": "debiteur" if regul > 0.01 else ("crediteur" if regul < -0.01 else "solde"),
+            })
+        per_owner.sort(key=lambda x: x["owner_name"])
+
+        summary = {
+            "fiscal_year": fy["name"],
+            "budget_total": budget.get("total", 0) if budget else 0,
+            "total_real_expenses": total_real,
+            "total_provisions_called": provisions_called_total,
+            "difference_budget_vs_real": round((budget.get("total", 0) if budget else 0) - total_real, 2),
+            "owners_debiteurs": sum(1 for p in per_owner if p["status"] == "debiteur"),
+            "owners_crediteurs": sum(1 for p in per_owner if p["status"] == "crediteur"),
+        }
+
+        if dry_run:
+            return {"persisted": False, "summary": summary,
+                    "per_owner": per_owner, "by_nature_key": by_nature_key_detail}
+
+        # 7) Persist: extourne provisions + affecte frais reels
+        # ----- 7a) Extourne (annule) les VE provisions -----
+        extourne_lines = []
+        sum_extourne = 0.0
+        for oid, amt in provisions_called_by_owner.items():
+            owner = owners_map.get(oid)
+            if not owner:
+                continue
+            accs = get_owner_accounts(owner, copro_id)
+            if not accs.get("provisions") or amt <= 0:
+                continue
+            # Reverse: credit owner, debit 700000
+            extourne_lines.append({
+                "account_number": accs["provisions"],
+                "account_name": f"Prov. charges - {owner.get('last_name','')}",
+                "debit": 0.0, "credit": round(amt, 2),
+                "third_party_id": oid, "third_party_name": owner.get("name", ""),
+            })
+            sum_extourne += amt
+        if extourne_lines:
+            extourne_lines.append({
+                "account_number": "700000",
+                "account_name": "Provisions appelees pour charges (extourne)",
+                "debit": round(sum_extourne, 2), "credit": 0.0,
+                "third_party_id": None, "third_party_name": "",
+            })
+            extourne_entry = {
+                "id": str(uuid.uuid4()),
+                "journal_type": "OD",
+                "date": end,
+                "reference": f"EXT-{fy['name']}",
+                "description": f"Extourne provisions exercice {fy['name']}",
+                "lines": extourne_lines,
+                "total_debit": round(sum_extourne, 2),
+                "total_credit": round(sum_extourne, 2),
+                "copropriete_id": copro_id,
+                "auto_generated": True,
+                "source_type": "regularization",
+                "source_id": year_id,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            await db.journal_entries.insert_one(extourne_entry)
+
+        # ----- 7b) Affectation frais reels par proprietaire -----
+        affect_lines = []
+        sum_affect = 0.0
+        for p in per_owner:
+            if p["real_expenses"] <= 0 or not p["account_provisions"]:
+                continue
+            affect_lines.append({
+                "account_number": p["account_provisions"],
+                "account_name": f"Prov. charges - {p['owner_name']}",
+                "debit": p["real_expenses"], "credit": 0.0,
+                "third_party_id": p["owner_id"], "third_party_name": p["owner_name"],
+            })
+            sum_affect += p["real_expenses"]
+        if affect_lines:
+            affect_lines.append({
+                "account_number": "700000",
+                "account_name": "Affectation frais reels",
+                "debit": 0.0, "credit": round(sum_affect, 2),
+                "third_party_id": None, "third_party_name": "",
+            })
+            affect_entry = {
+                "id": str(uuid.uuid4()),
+                "journal_type": "OD",
+                "date": end,
+                "reference": f"AFF-{fy['name']}",
+                "description": f"Affectation frais reels exercice {fy['name']}",
+                "lines": affect_lines,
+                "total_debit": round(sum_affect, 2),
+                "total_credit": round(sum_affect, 2),
+                "copropriete_id": copro_id,
+                "auto_generated": True,
+                "source_type": "regularization",
+                "source_id": year_id,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            await db.journal_entries.insert_one(affect_entry)
+
+        # 8) Mark FY as regularized (not closed yet - user must do final close after)
+        await db.fiscal_years.update_one(
+            {"id": year_id},
+            {"$set": {
+                "regularized_at": datetime.now(timezone.utc).isoformat(),
+                "regularization_summary": summary,
+            }}
+        )
+
+        return {"persisted": True, "summary": summary,
+                "per_owner": per_owner, "by_nature_key": by_nature_key_detail,
+                "extourne_total": round(sum_extourne, 2),
+                "affectation_total": round(sum_affect, 2)}
+
+    @router.delete("/years/{year_id}/regularize")
+    async def revert_regularization(year_id: str):
+        """Annule la regularisation (utile en cas d'erreur)."""
+        await db.journal_entries.delete_many({"source_type": "regularization", "source_id": year_id})
+        await db.fiscal_years.update_one(
+            {"id": year_id}, {"$unset": {"regularized_at": "", "regularization_summary": ""}}
+        )
+        return {"message": "Regularisation annulee"}
+
+    @router.get("/expenses")
+    async def list_expenses(copropriete_id: Optional[str] = None,
+                            fiscal_year_id: Optional[str] = None,
+                            date_from: Optional[str] = None,
+                            date_to: Optional[str] = None,
+                            account_number: Optional[str] = None,
+                            distribution_key_id: Optional[str] = None,
+                            bank_account: Optional[str] = None):
+        """Liste les depenses (factures + ecritures OD classe 6) filtrables.
+        - account_number: nature de depense (compte PCMN classe 6)
+        - distribution_key_id: cle de repartition
+        - bank_account: compte bancaire de paiement (filtre via lettrage)
+        """
+        if fiscal_year_id and not (date_from and date_to):
+            fy = await db.fiscal_years.find_one({"id": fiscal_year_id}, {"_id": 0})
+            if fy:
+                date_from, date_to = fy["start_date"], fy["end_date"]
+                copropriete_id = copropriete_id or fy.get("copropriete_id")
+
+        # 1) Invoices (frais reels comptabilises via AC)
+        inv_q = {}
+        if copropriete_id:
+            inv_q["copropriete_id"] = copropriete_id
+        if date_from or date_to:
+            inv_q["date"] = {}
+            if date_from:
+                inv_q["date"]["$gte"] = date_from
+            if date_to:
+                inv_q["date"]["$lte"] = date_to
+        if account_number:
+            inv_q["account_number"] = account_number
+        if distribution_key_id:
+            inv_q["distribution_key_id"] = distribution_key_id
+        invoices = await db.invoices.find(inv_q, {"_id": 0}).sort("date", 1).to_list(50000)
+
+        # 2) Bank txns matched to filter by bank_account
+        if bank_account:
+            bank_matches = await db.bank_transactions.find(
+                {"matched": True, "match_type": "invoice",
+                 "account_number": bank_account,
+                 **({"copropriete_id": copropriete_id} if copropriete_id else {})},
+                {"_id": 0, "matched_to": 1}
+            ).to_list(10000)
+            paid_ids = {b["matched_to"] for b in bank_matches}
+            invoices = [i for i in invoices if i["id"] in paid_ids]
+
+        # 3) Resolve names for dist keys
+        keys = await db.distribution_keys.find(
+            {"copropriete_id": copropriete_id} if copropriete_id else {}, {"_id": 0}
+        ).to_list(1000)
+        keys_map = {k["id"]: k["name"] for k in keys}
+
+        # 4) Resolve PCMN names + bank accounts
+        accs = await db.pcmn_accounts.find(
+            {"class_num": 6, **({"copropriete_id": copropriete_id} if copropriete_id else {})},
+            {"_id": 0, "number": 1, "name": 1}
+        ).to_list(1000)
+        acc_names = {a["number"]: a["name"] for a in accs}
+
+        # Resolve payment info per invoice
+        all_inv_ids = [i["id"] for i in invoices]
+        bank_q = {"matched": True, "match_type": "invoice", "matched_to": {"$in": all_inv_ids}}
+        if copropriete_id:
+            bank_q["copropriete_id"] = copropriete_id
+        bank_txns = await db.bank_transactions.find(bank_q, {"_id": 0}).to_list(50000)
+        paid_map = {}  # inv_id -> {amount, date, account}
+        for t in bank_txns:
+            paid_map[t["matched_to"]] = {
+                "amount": abs(t.get("amount", 0)),
+                "date": t.get("date", ""),
+                "bank_account": t.get("account_number", ""),
+            }
+
+        rows = []
+        for inv in invoices:
+            acc = inv.get("account_number", "")
+            key_id = inv.get("distribution_key_id", "")
+            rows.append({
+                "id": inv["id"],
+                "date": inv.get("date", ""),
+                "number": inv.get("number", ""),
+                "supplier": inv.get("supplier", ""),
+                "description": inv.get("description", ""),
+                "account_number": acc,
+                "account_name": acc_names.get(acc, ""),
+                "distribution_key_id": key_id,
+                "distribution_key_name": keys_map.get(key_id, "—"),
+                "vat_amount": inv.get("vat_amount", 0),
+                "total_amount": inv.get("total_amount", 0),
+                "status": inv.get("status", "unpaid"),
+                "paid": inv["id"] in paid_map,
+                "paid_info": paid_map.get(inv["id"]),
+                "attachments_count": len(inv.get("attachments", []) or []),
+            })
+
+        totals = {
+            "by_account": {},
+            "by_key": {},
+            "by_bank": {},
+            "total": round(sum(r["total_amount"] for r in rows), 2),
+            "count": len(rows),
+        }
+        for r in rows:
+            acc = r["account_number"] or "—"
+            totals["by_account"][acc] = round(totals["by_account"].get(acc, 0) + r["total_amount"], 2)
+            kn = r["distribution_key_name"]
+            totals["by_key"][kn] = round(totals["by_key"].get(kn, 0) + r["total_amount"], 2)
+            if r["paid"] and r["paid_info"]:
+                ba = r["paid_info"]["bank_account"] or "—"
+                totals["by_bank"][ba] = round(totals["by_bank"].get(ba, 0) + r["paid_info"]["amount"], 2)
+
+        # List available filter values
+        filters = {
+            "accounts": sorted({r["account_number"] for r in rows if r["account_number"]}),
+            "keys": sorted({r["distribution_key_name"] for r in rows if r["distribution_key_name"] and r["distribution_key_name"] != "—"}),
+            "banks": sorted({r["paid_info"]["bank_account"] for r in rows if r.get("paid_info") and r["paid_info"]["bank_account"]}),
+        }
+        return {"expenses": rows, "totals": totals, "filters": filters}
+
     # ---- BUDGETS ----
     @router.get("/budgets")
     async def list_budgets(fiscal_year_id: Optional[str] = None, copropriete_id: Optional[str] = None):

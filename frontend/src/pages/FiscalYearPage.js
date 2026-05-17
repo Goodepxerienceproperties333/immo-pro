@@ -9,8 +9,9 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { toast } from 'sonner';
-import { Plus, Trash2, Lock, Unlock, Calendar, CheckCircle2, RotateCcw, Sparkles, Send } from 'lucide-react';
+import { Plus, Trash2, Lock, Unlock, Calendar, CheckCircle2, RotateCcw, Sparkles, Send, Calculator } from 'lucide-react';
 import BudgetWizard from '@/components/BudgetWizard';
+import RegularizationDialog from '@/components/RegularizationDialog';
 
 export default function FiscalYearPage() {
   const [tab, setTab] = useState('years');
@@ -27,6 +28,7 @@ export default function FiscalYearPage() {
   const [prevExp, setPrevExp] = useState(null);
   const [wizardBudget, setWizardBudget] = useState(null);
   const [wizardMode, setWizardMode] = useState('create');
+  const [regulFy, setRegulFy] = useState(null);
 
   const load = useCallback(async () => {
     const [y, b, a, dk] = await Promise.all([
@@ -189,7 +191,10 @@ export default function FiscalYearPage() {
                     <TableCell className="font-mono">{y.result_net !== undefined ? `${y.result_net} EUR` : '-'}</TableCell>
                     <TableCell><div className="flex gap-1">
                       {y.status === 'open'
-                        ? <Button variant="ghost" size="sm" onClick={() => closeYear(y.id)} className="text-orange-600" title="Cloturer"><Lock size={14} /></Button>
+                        ? <>
+                            <Button variant="ghost" size="sm" onClick={() => setRegulFy(y)} className="text-orange-600" title="Regulariser cloture" data-testid={`regularize-${y.id}`}><Calculator size={14} /></Button>
+                            <Button variant="ghost" size="sm" onClick={() => closeYear(y.id)} className="text-orange-600" title="Cloturer"><Lock size={14} /></Button>
+                          </>
                         : <Button variant="ghost" size="sm" onClick={() => reopenYear(y.id)} title="Reouvrir"><Unlock size={14} /></Button>}
                     </div></TableCell>
                   </TableRow>
@@ -384,6 +389,13 @@ export default function FiscalYearPage() {
           onDone={() => { setWizardBudget(null); load(); }}
         />
       )}
+
+      <RegularizationDialog
+        fiscalYearId={regulFy?.id}
+        open={!!regulFy}
+        onClose={() => setRegulFy(null)}
+        onDone={() => { setRegulFy(null); load(); }}
+      />
     </div>
   );
 }

@@ -185,6 +185,8 @@ def create_accounting_router(db):
     async def delete_entry(entry_id: str):
         # Also remove attachment files from disk
         entry = await db.journal_entries.find_one({"id": entry_id}, {"_id": 0})
+        if entry and entry.get("auto_generated"):
+            raise HTTPException(400, "Ecriture auto-generee - supprimez la source (facture, appel, banque)")
         if entry:
             for att in entry.get("attachments", []) or []:
                 try:
