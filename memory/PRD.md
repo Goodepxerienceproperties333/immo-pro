@@ -12,6 +12,27 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 ## Implemented
 
+### Iter13 (Feb 2026) - Workflow Budget -> Appels de fonds
+- **Budget enrichi** (`fiscal.py`)
+  - Champs `status` (draft/approved), `approved_at`, `approved_by`
+  - `distribution_key_id` par ligne (chaque nature de depense a sa propre cle)
+  - Edition/suppression bloquees si approved (revoke d'abord obligatoire)
+  - POST /api/fiscal/budgets/{id}/approve + /revoke
+- **Recapitulatif N-1** (`GET /api/fiscal/previous-year-expenses?fiscal_year_id=`)
+  - Agregation invoices.total_amount + journal_entries class-6 net (hors entries liees a fund_call)
+  - Groupement par (compte PCMN, distribution_key)
+  - Bouton "Pre-remplir depuis N-1" dans le dialog budget
+- **Assistant d'appels de fonds 4 etapes** (`fund_calls.py` + `BudgetWizard.js`)
+  - Etape 1 - Frequence: 1/2/3/4/6/12 appels (annuel a mensuel)
+  - Etape 2 - Calendrier: date 1er appel + due_offset_days, calendrier auto des N dates
+  - Etape 3 - Fonds de reserve oui/non + montant + cle dediee (applique au call 1 uniquement)
+  - Etape 4 - Recap: tableau N appels, montant, reserve, nb proprietaires + details proprietaire du 1er appel
+- **Endpoints** :
+  - POST /api/fund-calls/preview-from-budget (sans persister) : 400 si budget draft
+  - POST /api/fund-calls/generate-from-budget (persiste N fund_calls avec status pending)
+- **Multi-clés distribution** : chaque ligne du budget distribue son quart selon SA cle, sommation par proprietaire
+- Declenchement auto du wizard a l'approbation du budget
+
 ### Iter12 (Feb 2026) - finalisation P1/P2
 - **Bilan & Compte de Resultats PCMN belge strict** (`reports.py` lignes 130-401)
   - Rubriques I-VIII actif / I-VII passif officielles, calcul automatique du resultat de l'exercice injecte dans III bis
@@ -82,6 +103,7 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 - iter10: 28/28 RBAC + 59/59 regression
 - iter11: 30/30 owner portal + 84/87 regression
 - **iter12: 20/20 new features (Bilan/Resultat rubriques, Excel exports, reminders, AI invoice, attachments, RBAC) + 29/30 regression**
+- **iter13: 15/15 Budget workflow (N-1 expenses, approve/revoke, edit-lock, preview/generate-from-budget, reserve on call#1, multi-key distribution, RBAC, frequency)**
 
 ## Backlog P1
 - Gestion AG (ordre du jour, votes, PV, convocations)
