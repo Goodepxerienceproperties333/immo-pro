@@ -1,0 +1,36 @@
+{
+  "summary": "Iter10: P0 RBAC path-based middleware. Created /app/backend/tests/test_iter10_rbac.py covering 28 tests across 6 classes: Owner read-access (4), Owner write-forbidden (5), Owner admin-paths forbidden incl. GET /api/admin/users (3), Gestionnaire read+write (4) on /coproprietes, /owners, /invoices, /lots, Gestionnaire admin-paths forbidden incl. DELETE /coproprietes acceptable (4), Superadmin full-access regression on coproprietes/admin-users/demo-seed/owners/banking/reports (6), Known-issues regression (2). Result: 28/28 PASS. Regression iter9 auth_middleware + iter7 chinese-walls: 59/59 PASS. Both iter9 minor issues now FIXED (auth/me returns 'id', demo/seed always returns 'counts').",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter10_rbac.py",
+    "/app/test_reports/pytest/iter10.xml",
+    "/app/test_reports/pytest/iter10_regression.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py auth_middleware still has 7 inline `from fastapi.responses import JSONResponse` imports inside branches (lines 85, 90, 95, 98, 111, 122, 128). Move to top-level import for clarity (cosmetic, no functional impact).",
+    "ADMIN_ONLY_PATHS check uses `path == p.rstrip('/') or path.startswith(p)` — for p='/api/users', this also matches anything beginning with '/api/users' incl. accidental future path '/api/users-stats'. Use a stricter prefix check (e.g. exact match OR startswith(p + '/')) to avoid scope creep.",
+    "Middleware does an extra DB query (db.users.find_one) on EVERY authenticated /api/* request to load role. Consider caching the role in the JWT payload at login/refresh time to avoid the round-trip (perf at scale).",
+    "RBAC_EXEMPT_PATHS contains '/api/auth/me' and '/api/auth/logout'. /api/auth/logout is already in AUTH_EXEMPT_PATHS so the RBAC entry is redundant (dead config — minor).",
+    "/api/admin/demo/seed double-protection (middleware admin-only + route-level check) is fine but the route-level check duplicates logic; could rely solely on middleware now.",
+    "DELETE /api/coproprietes/{id} for gestionnaire: route correctly rejects with 403 'syndic only' at route level — middleware allows manager (consistent with the design requested). Verified both layers active."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter10_rbac.py (NEW – 28 tests, 6 classes)"
+  ],
+  "success_rate": {"backend": "100% (28/28 iter10 + 43/43 iter9 + 16/16 iter7)", "frontend": "n/a (skipped per request)"},
+  "test_credentials": "admin@copro.be / admin123 (superadmin) – source /app/memory/test_credentials.md",
+  "seed_data_creation": "2 transient users created per run via POST /api/admin/users with TEST_iter10_owner_<ts>_<uuid>@example.com and TEST_iter10_gestionnaire_<ts>_<uuid>@example.com. Both DELETED via DELETE /api/admin/users/{id} in module teardown fixture. 1 owner-row TEST_iter10 may be inserted when manager creates owner (not cleaned up — acceptable, easily identifiable). Demo seed data created (idempotent — already_exists branch on 2nd call).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "RBAC fully verified. Matrix: (1) owner role → GET /api/* OK, POST/PUT/PATCH/DELETE → 403 'lecture seule', /api/admin/* and /api/users → 403 (any verb). (2) gestionnaire → GET+write OK on business endpoints, /api/admin/* and /api/users → 403. (3) superadmin/syndic → everything. Exempt paths: /api/auth/{login,register,refresh,logout} + OPTIONS preflight (no auth needed). RBAC_EXEMPT_PATHS: /api/auth/me + /api/auth/logout (auth required but no role check). Both iter9 minor issues are FIXED: /api/auth/me now returns 'id' (no '_id' leak), /api/admin/demo/seed always returns 'counts' even when already_exists=true. To run: `cd /app && REACT_APP_BACKEND_URL=https://immo-pcmn.preview.emergentagent.com python -m pytest backend/tests/test_iter10_rbac.py -v`. Cleanup is automatic via fixture teardown.",
+  "rca of the issue": "N/A — no bug, this iteration validates a feature addition (RBAC). All 28 new tests pass on first run. Edge case verified: DELETE /api/coproprietes/{id} for gestionnaire returns 403 from the route-level 'syndic only' check (not from middleware) — double-layer protection works as designed."
+}

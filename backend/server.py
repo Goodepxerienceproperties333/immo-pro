@@ -45,6 +45,22 @@ AUTH_EXEMPT_PATHS = {
     "/api/auth/logout",
 }
 
+# RBAC: paths that require admin role (superadmin/syndic) for any write/destructive action.
+ADMIN_ONLY_PATHS = (
+    "/api/users",         # user management
+    "/api/admin/",        # admin tools (demo seed, etc.)
+)
+
+# Paths exempted from RBAC role check beyond authentication (e.g. self-service endpoints
+# that any authenticated user can read).
+RBAC_EXEMPT_PATHS = {
+    "/api/auth/me",
+    "/api/auth/logout",
+}
+
+# Write methods that require at least 'manager' role (superadmin/syndic/gestionnaire).
+WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
     path = request.url.path
@@ -55,7 +71,7 @@ async def auth_middleware(request: Request, call_next):
     # Only protect /api routes
     if not path.startswith("/api"):
         return await call_next(request)
-    # Exempt list
+    # Exempt list (auth flow)
     if path in AUTH_EXEMPT_PATHS:
         return await call_next(request)
 
@@ -73,7 +89,6 @@ async def auth_middleware(request: Request, call_next):
         if payload.get("type") != "access":
             from fastapi.responses import JSONResponse
             return JSONResponse(status_code=401, content={"detail": "Invalid token type"})
-        # Stash user_id for downstream handlers (avoid an extra DB call in middleware)
         request.state.user_id = payload.get("sub")
         request.state.user_email = payload.get("email")
     except jwt.ExpiredSignatureError:
@@ -82,6 +97,36 @@ async def auth_middleware(request: Request, call_next):
     except jwt.InvalidTokenError:
         from fastapi.responses import JSONResponse
         return JSONResponse(status_code=401, content={"detail": "Invalid token"})
+
+    # ---- RBAC: load user role and enforce role-based access ----
+    # Fetch role from DB (cached in request.state so handlers can reuse)
+    try:
+        user_doc = await db.users.find_one(
+            {"_id": ObjectId(request.state.user_id)},
+            {"_id": 0, "role": 1, "copropriete_ids": 1, "email": 1}
+        )
+    except Exception:
+        user_doc = None
+    if not user_doc:
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=401, content={"detail": "User not found"})
+    role = user_doc.get("role", "owner")
+    request.state.user_role = role
+    request.state.user_copropriete_ids = user_doc.get("copropriete_ids", [])
+
+    # Skip RBAC for self-service endpoints (any authenticated user)
+    if path not in RBAC_EXEMPT_PATHS:
+        # Admin-only path families: any verb requires admin role (superadmin/syndic)
+        if any(path == p.rstrip("/") or path.startswith(p) for p in ADMIN_ONLY_PATHS):
+            if not is_admin_role(role):
+                from fastapi.responses import JSONResponse
+                return JSONResponse(status_code=403, content={"detail": "Reserve aux syndics / superadmins"})
+        # Write operations on any other /api path require manager+ role.
+        # Owners (proprietaires) get read-only access via 403 on writes.
+        elif method in WRITE_METHODS:
+            if not can_manage(role):
+                from fastapi.responses import JSONResponse
+                return JSONResponse(status_code=403, content={"detail": "Acces en lecture seule pour les proprietaires"})
 
     return await call_next(request)
 
