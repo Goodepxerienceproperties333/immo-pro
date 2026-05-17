@@ -10,6 +10,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
 import { Plus, Trash2, Eye, Paperclip, Download, Pencil } from 'lucide-react';
+import AccountSearchSelect from '@/components/AccountSearchSelect';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
@@ -207,11 +208,14 @@ export default function JournalsPage() {
                   <tbody>
                     {form.lines.map((line, i) => (
                       <tr key={i} className="border-t border-slate-100">
-                        <td className="p-1">
-                          <select className="w-full border rounded px-2 py-1 text-sm" value={line.account_number} onChange={e => updateLine(i, 'account_number', e.target.value)}>
-                            <option value="">Choisir...</option>
-                            {accounts.map(a => <option key={a.number} value={a.number}>{a.number} - {a.name}</option>)}
-                          </select>
+                        <td className="p-1 min-w-[280px]">
+                          <AccountSearchSelect
+                            accounts={accounts}
+                            value={line.account_number}
+                            onChange={v => updateLine(i, 'account_number', v)}
+                            placeholder="Choisir un compte..."
+                            testId={`journal-line-${i}-account`}
+                          />
                         </td>
                         <td className="p-1 text-xs text-slate-500">{line.account_name}</td>
                         <td className="p-1"><Input type="number" step="0.01" className="text-right text-sm h-8" value={line.debit} onChange={e => updateLine(i, 'debit', e.target.value)} /></td>

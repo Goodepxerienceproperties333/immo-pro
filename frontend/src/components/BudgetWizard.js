@@ -31,29 +31,51 @@ export default function BudgetWizard({ budget, distKeys = [], onClose, onDone, m
   const [reserveAmount, setReserveAmount] = useState(0);
   const [reserveKeyId, setReserveKeyId] = useState('');
   const [reserveLabel, setReserveLabel] = useState('Fonds de reserve');
+  // Schedule independant pour reserve (frequency=0 = injection sur appel #1 provisions, sinon serie propre)
+  const [reserveFreq, setReserveFreq] = useState(0);
+  const [reserveStartDate, setReserveStartDate] = useState('');
+  const [reserveDueOffset, setReserveDueOffset] = useState(30);
+
   const [roulEnabled, setRoulEnabled] = useState(false);
   const [roulMode, setRoulMode] = useState('create'); // create | increase
   const [roulAmount, setRoulAmount] = useState(0);
   const [roulKeyId, setRoulKeyId] = useState('');
   const [roulLabel, setRoulLabel] = useState('Fonds de roulement');
+  const [roulFreq, setRoulFreq] = useState(0);
+  const [roulStartDate, setRoulStartDate] = useState('');
+  const [roulDueOffset, setRoulDueOffset] = useState(30);
+
   const [preview, setPreview] = useState(null);
   const [loading, setLoading] = useState(false);
 
   const interval = FREQ_OPTIONS.find(o => o.v === frequency)?.interval || 3;
 
+  const buildPayload = () => ({
+    budget_id: budget.id,
+    frequency,
+    start_date: startDate,
+    due_offset_days: Number(dueOffset),
+    reserve_fund: {
+      enabled: reserveEnabled, amount: Number(reserveAmount) || 0,
+      distribution_key_id: reserveKeyId || '', label: reserveLabel,
+      frequency: Number(reserveFreq) || 0,
+      start_date: reserveStartDate || '',
+      due_offset_days: Number(reserveDueOffset) || 30,
+    },
+    roulement_fund: {
+      enabled: roulEnabled, amount: Number(roulAmount) || 0,
+      distribution_key_id: roulKeyId || '', label: roulLabel, mode: roulMode,
+      frequency: Number(roulFreq) || 0,
+      start_date: roulStartDate || '',
+      due_offset_days: Number(roulDueOffset) || 30,
+    },
+    copropriete_id: budget.copropriete_id || '',
+  });
+
   const previewCalls = async () => {
     setLoading(true);
     try {
-      const payload = {
-        budget_id: budget.id,
-        frequency,
-        start_date: startDate,
-        due_offset_days: Number(dueOffset),
-        reserve_fund: { enabled: reserveEnabled, amount: Number(reserveAmount) || 0, distribution_key_id: reserveKeyId || '', label: reserveLabel },
-        roulement_fund: { enabled: roulEnabled, amount: Number(roulAmount) || 0, distribution_key_id: roulKeyId || '', label: roulLabel, mode: roulMode },
-        copropriete_id: budget.copropriete_id || '',
-      };
-      const { data } = await api.post('/fund-calls/preview-from-budget', payload);
+      const { data } = await api.post('/fund-calls/preview-from-budget', buildPayload());
       setPreview(data);
     } catch (err) { toast.error(err.response?.data?.detail || 'Erreur preview'); }
     finally { setLoading(false); }
@@ -65,17 +87,8 @@ export default function BudgetWizard({ budget, distKeys = [], onClose, onDone, m
   const confirmLaunch = async () => {
     setLoading(true);
     try {
-      const payload = {
-        budget_id: budget.id,
-        frequency,
-        start_date: startDate,
-        due_offset_days: Number(dueOffset),
-        reserve_fund: { enabled: reserveEnabled, amount: Number(reserveAmount) || 0, distribution_key_id: reserveKeyId || '', label: reserveLabel },
-        roulement_fund: { enabled: roulEnabled, amount: Number(roulAmount) || 0, distribution_key_id: roulKeyId || '', label: roulLabel, mode: roulMode },
-        copropriete_id: budget.copropriete_id || '',
-      };
       const url = mode === 'regenerate' ? '/fund-calls/regenerate-from-budget' : '/fund-calls/generate-from-budget';
-      const { data } = await api.post(url, payload);
+      const { data } = await api.post(url, buildPayload());
       if (mode === 'regenerate') {
         toast.success(`${data.created_ids?.length || 0} appels regeneres - ${data.deleted_count || 0} non echus remplaces, ${data.preserved_count || 0} preserves (paiements recus)`);
       } else {
@@ -202,24 +215,57 @@ export default function BudgetWizard({ budget, distKeys = [], onClose, onDone, m
                   <Switch checked={reserveEnabled} onCheckedChange={setReserveEnabled} data-testid="wizard-reserve-toggle" />
                 </div>
                 {reserveEnabled && (
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-3 border-t">
-                    <div>
-                      <label className="form-label">Libelle</label>
-                      <Input value={reserveLabel} onChange={e => setReserveLabel(e.target.value)} data-testid="wizard-reserve-label" />
+                  <div className="space-y-3 pt-3 border-t">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                      <div>
+                        <label className="form-label">Libelle</label>
+                        <Input value={reserveLabel} onChange={e => setReserveLabel(e.target.value)} data-testid="wizard-reserve-label" />
+                      </div>
+                      <div>
+                        <label className="form-label">Montant total (EUR) *</label>
+                        <Input type="number" step="0.01" value={reserveAmount} onChange={e => setReserveAmount(e.target.value)} data-testid="wizard-reserve-amount" />
+                      </div>
+                      <div>
+                        <label className="form-label">Cle de repartition</label>
+                        <Select value={reserveKeyId || 'default'} onValueChange={v => setReserveKeyId(v === 'default' ? '' : v)}>
+                          <SelectTrigger data-testid="wizard-reserve-key"><SelectValue placeholder="Tantiemes (defaut)" /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="default">Tantiemes (defaut)</SelectItem>
+                            {distKeys.map(k => <SelectItem key={k.id} value={k.id}>{k.name}</SelectItem>)}
+                          </SelectContent>
+                        </Select>
+                      </div>
                     </div>
-                    <div>
-                      <label className="form-label">Montant (EUR) *</label>
-                      <Input type="number" step="0.01" value={reserveAmount} onChange={e => setReserveAmount(e.target.value)} data-testid="wizard-reserve-amount" />
-                    </div>
-                    <div>
-                      <label className="form-label">Cle de repartition</label>
-                      <Select value={reserveKeyId || 'default'} onValueChange={v => setReserveKeyId(v === 'default' ? '' : v)}>
-                        <SelectTrigger data-testid="wizard-reserve-key"><SelectValue placeholder="Tantiemes (defaut)" /></SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="default">Tantiemes (defaut)</SelectItem>
-                          {distKeys.map(k => <SelectItem key={k.id} value={k.id}>{k.name}</SelectItem>)}
-                        </SelectContent>
-                      </Select>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                      <div>
+                        <label className="form-label flex items-center gap-2">Frequence
+                          <span className="text-[10px] text-slate-400">(0 = injecte au 1er appel provisions)</span>
+                        </label>
+                        <Select value={String(reserveFreq)} onValueChange={v => setReserveFreq(Number(v))}>
+                          <SelectTrigger data-testid="wizard-reserve-freq"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="0">Injecte au 1er appel provisions</SelectItem>
+                            <SelectItem value="1">Unique (annuel)</SelectItem>
+                            <SelectItem value="2">Semestriel (2 appels)</SelectItem>
+                            <SelectItem value="3">Quadrimestriel (3 appels)</SelectItem>
+                            <SelectItem value="4">Trimestriel (4 appels)</SelectItem>
+                            <SelectItem value="6">Bi-mensuel (6 appels)</SelectItem>
+                            <SelectItem value="12">Mensuel (12 appels)</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      {reserveFreq > 0 && (
+                        <>
+                          <div>
+                            <label className="form-label">Date du 1er appel</label>
+                            <Input type="date" value={reserveStartDate || startDate} onChange={e => setReserveStartDate(e.target.value)} data-testid="wizard-reserve-start" />
+                          </div>
+                          <div>
+                            <label className="form-label">Echeance (+ jours)</label>
+                            <Input type="number" value={reserveDueOffset} onChange={e => setReserveDueOffset(e.target.value)} data-testid="wizard-reserve-due-offset" />
+                          </div>
+                        </>
+                      )}
                     </div>
                   </div>
                 )}
@@ -292,6 +338,37 @@ export default function BudgetWizard({ budget, distKeys = [], onClose, onDone, m
                           </SelectContent>
                         </Select>
                       </div>
+                    </div>
+                    <div className="grid grid-cols-3 gap-3">
+                      <div>
+                        <label className="text-xs text-slate-600 mb-1 block flex items-center gap-2">Frequence
+                          <span className="text-[10px] text-slate-400">(0 = injecte au 1er appel)</span>
+                        </label>
+                        <Select value={String(roulFreq)} onValueChange={v => setRoulFreq(Number(v))}>
+                          <SelectTrigger data-testid="wizard-roul-freq"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="0">Injecte au 1er appel provisions</SelectItem>
+                            <SelectItem value="1">Unique (annuel)</SelectItem>
+                            <SelectItem value="2">Semestriel (2 appels)</SelectItem>
+                            <SelectItem value="3">Quadrimestriel (3 appels)</SelectItem>
+                            <SelectItem value="4">Trimestriel (4 appels)</SelectItem>
+                            <SelectItem value="6">Bi-mensuel (6 appels)</SelectItem>
+                            <SelectItem value="12">Mensuel (12 appels)</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      {roulFreq > 0 && (
+                        <>
+                          <div>
+                            <label className="text-xs text-slate-600 mb-1 block">Date du 1er appel</label>
+                            <Input type="date" value={roulStartDate || startDate} onChange={e => setRoulStartDate(e.target.value)} data-testid="wizard-roul-start" />
+                          </div>
+                          <div>
+                            <label className="text-xs text-slate-600 mb-1 block">Echeance (+ jours)</label>
+                            <Input type="number" value={roulDueOffset} onChange={e => setRoulDueOffset(e.target.value)} data-testid="wizard-roul-due-offset" />
+                          </div>
+                        </>
+                      )}
                     </div>
                   </div>
                 )}

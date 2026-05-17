@@ -9,6 +9,7 @@ from tier_accounts import assign_supplier_account
 class SupplierInput(BaseModel):
     name: str
     vat_number: Optional[str] = ""
+    bce_number: Optional[str] = ""
     address: Optional[str] = ""
     postal_code: Optional[str] = ""
     city: Optional[str] = ""
@@ -32,6 +33,7 @@ def create_suppliers_router(db):
             q["$or"] = [
                 {"name": {"$regex": search, "$options": "i"}},
                 {"vat_number": {"$regex": search, "$options": "i"}},
+                {"bce_number": {"$regex": search, "$options": "i"}},
             ]
         suppliers = await db.suppliers.find(q, {"_id": 0}).sort("name", 1).to_list(1000)
         return suppliers

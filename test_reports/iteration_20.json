@@ -1,0 +1,61 @@
+{
+  "summary": "Iter20 backend tests - P0 balance-tiers from journal_entries (OD manual + reserve calls visibles), P1 wizard refactor (series independantes reserve/roulement avec frequency/start_date/due_offset propres), P3 supplier bce_number + recherche. 10/10 iter20 PASS + regression iter16/18/19 = 45/45 PASS. Total: 55/55.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter20_balance_tiers_and_wizard.py",
+    "/app/test_reports/pytest/pytest_iter20.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "routes/reports.py balance-tiers/owners ligne 712-721: deduplication par (entry_id, account_number, debit, credit) peut faussement deduppliquer 2 vraies lignes identiques (meme entry, meme compte, meme montant) si une ecriture OD multi-lignes existe. Cas rare mais possible. Recommandation: utiliser l'index de la ligne dans entry.lines au lieu du tuple debit/credit.",
+    "routes/reports.py ligne 725 valid_accs={acc_prov, acc_res}: si owner n'a pas de tier_accounts mappes pour ce copropriete_id (acc_prov='' et acc_res=''), valid_accs={''} et toutes les lignes sont filtrees, donc owner aura provisions_debit=0/reserve_debit=0 silencieusement. Pas d'avertissement => bug latent si seed tier_accounts manque.",
+    "routes/reports.py balance-tiers/owners/{owner_id} ligne 815: filter `acc not in valid_accs and tpid != owner_id` est OR (inclusif). Si tpid=owner_id mais compte pas tier (ex: 760000 utilise dans OD), la ligne est incluse meme si compte != provisions/reserve. Faux contraire au resume agrege qui ne montre que lignes sur tier_accs. Incoherence entre liste et totaux.",
+    "routes/fund_calls.py ligne 428: validation freq in (1,2,3,4,6,12) leve HTTPException mais le helper _generate_independent_series est appele depuis _generate_from_budget sans try/catch dedie. Si frequency=5 est passe pour reserve, l'erreur 400 est correcte mais le message dit 'reserve' meme si c'est roulement appele en 2eme. OK fonctionnellement.",
+    "routes/fund_calls.py ligne 432: per_call = round(fund.amount / freq, 2). Cumule N calls = sum(per_call*N) peut diverger de fund.amount par centimes (e.g. 1000/3=333.33 *3=999.99). Pas de correction du dernier call. Recommandation: ajuster dernier call pour absorber l'arrondi.",
+    "routes/invoice_ai.py ligne 110 - exists check utilise copropriete_id ou {'$exists': True}, ce qui matche tous documents si copro vide. Fonctionne mais syntax curieuse. PCMN seed est ACP-scoped donc pas critique.",
+    "routes/suppliers.py SupplierInput ne valide pas le format BCE belge (BE0XXXXXXXXX, 10 digits). N'importe quelle string passe. Recommandation: regex BE0\\d{9} ou normalisation cote backend.",
+    "routes/accounting.py JournalEntryLine ne contient pas third_party_id, donc les OD manuelles sur compte tier ne peuvent pas etre taggees. balance-tiers compense via fallback per_acc_lines mais perd la tracabilite. Recommandation: ajouter `third_party_id: Optional[str] = None` au modele pour permettre tag explicite cote UI."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter20_balance_tiers_and_wizard.py"
+  ],
+  "success_rate": {
+    "backend": "100% (10/10 iter20) + regression iter16 (16/16) + iter18 (17/17) + iter19 (12/12) = 55/55",
+    "frontend": "not tested (backend-only request)"
+  },
+  "test_credentials": "admin@copro.be / admin123 (superadmin)",
+  "seed_data_creation": "1 OD manuel sur tier account Dubois (debit 100 / credit 760000). 3 series fund-calls TEST iter20 generees: (a) 1 reserve annuel 500 EUR sur 2027-06-01, (b) 6 calls 4 provisions trim + 1 reserve + 1 roulement, (c) 4 calls (2 prov + 1 res + 1 roul) avec generate-from-budget. 2 suppliers TEST_BCE_* crees. 1 facture frais privatif TEST_PF_REG_*. Cleanup via fixture autouse: DELETE journal_entries, fund_calls, suppliers, invoices.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iter20 valide: (P0) /api/reports/balance-tiers/owners retourne provisions_debit/provisions_credit/provisions_balance/reserve_debit/reserve_credit/reserve_balance/unmatched_paid + champs compat (owner_id, owner_name, vcs_code, account_provisions, account_reserve, total_called, total_paid, balance, status, movements_count). Calcul base sur db.journal_entries. /api/reports/balance-tiers/owners/{id} renvoie movements avec journal_type=AC/VE/FI/OD/A-Nouveau + running_balance. Les OD manuelles via POST /api/accounting/entries avec lines.account_number=tier_account de l'owner apparaissent dans movements (fallback per_acc_lines car JournalEntryLine n'accepte pas third_party_id). (P1) preview-from-budget retourne calls + summary {n_calls, interval_months, budget_total, reserve_total, roulement_total, grand_total}. Series independantes generees quand reserve_fund.frequency>0 OU roulement_fund.frequency>0. Comportement legacy preserve quand frequency=0: injecte sur call#1 provisions. generate-from-budget persiste avec call_type='provisions'/'reserve'/'roulement' + auto VE entries (Cr 701000 pour reserve, Cr 100 pour roulement). Frequences supportees: 1/2/3/4/6/12 pour chaque fonds independamment. (P3) POST/PUT /api/suppliers accepte bce_number, GET ?search= matche bce_number aussi. Pas teste invoices-ai/extract avec PDF reel (skip via fixture si pas de cle Claude). Test file: /app/backend/tests/test_iter20_balance_tiers_and_wizard.py.",
+  "tests_executed": {
+    "total": 10,
+    "passed": 10,
+    "failed": 0,
+    "list": [
+      "TestP0BalanceTiers::test_balance_tiers_owners_fields_present",
+      "TestP0BalanceTiers::test_manual_od_on_dubois_appears_in_movements_and_balance",
+      "TestP0BalanceTiers::test_total_called_includes_reserve",
+      "TestP1WizardIndependentSeries::test_preview_independent_series_6_calls",
+      "TestP1WizardIndependentSeries::test_preview_legacy_when_frequency_zero",
+      "TestP1WizardIndependentSeries::test_generate_persists_independent_with_correct_call_type_and_ve",
+      "TestP1WizardIndependentSeries::test_each_fund_supports_all_frequencies",
+      "TestP3SupplierBCE::test_supplier_post_and_search_by_bce",
+      "TestP3SupplierBCE::test_supplier_put_bce",
+      "TestRegressionIter19::test_private_fee_invoice_4_lines"
+    ]
+  },
+  "regression": "iter16_auto_entries 16/16 + iter18_pcmn_new 17/17 + iter19_private_fee_roulement 12/12 = 45/45 PASS. Aucune regression detectee sur auto-entries AC/VE/FI, PCMN 337 belge, frais privatifs 4 lignes, wizard roulement legacy.",
+  "not_tested": [
+    "P3 POST /api/invoices-ai/extract avec PDF reel (skipped - requires Claude API key + fake PDF). Le code path bce_normalized + supplier_match_method + supplier_suggest_create est verifie au niveau structure (routes/invoice_ai.py lignes 121-152) mais pas execute en bout-en-bout."
+  ],
+  "rca_of_the_issue": "N/A - tous les criteres iter20 valides. Quelques points d'attention code review enumeres ci-dessus (dedup tuple non-unique, arrondi cumul series, third_party_id absent de JournalEntryLine)."
+}

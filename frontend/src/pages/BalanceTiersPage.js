@@ -77,7 +77,9 @@ export default function BalanceTiersPage() {
                 <Table>
                   <TableHeader><TableRow>
                     <TableHead>Proprietaire</TableHead><TableHead>VCS</TableHead>
-                    <TableHead className="text-xs">Comptes (40000 / 40010)</TableHead>
+                    <TableHead className="text-xs">Comptes</TableHead>
+                    <TableHead className="text-right text-xs" title="Solde compte Provisions 40000XXX">Solde Prov.</TableHead>
+                    <TableHead className="text-right text-xs" title="Solde compte Reserve 40010XXX">Solde Reserve</TableHead>
                     <TableHead className="text-right">Appele</TableHead><TableHead className="text-right">Paye</TableHead>
                     <TableHead className="text-right">Solde</TableHead><TableHead>Statut</TableHead><TableHead className="w-16"></TableHead>
                   </TableRow></TableHeader>
@@ -89,6 +91,8 @@ export default function BalanceTiersPage() {
                         <TableCell className="font-mono text-[11px] text-slate-500">
                           {o.account_provisions || '—'} <span className="text-slate-300">/</span> {o.account_reserve || '—'}
                         </TableCell>
+                        <TableCell className={`text-right font-mono text-xs ${(o.provisions_balance||0) > 0.01 ? 'text-red-600' : (o.provisions_balance||0) < -0.01 ? 'text-green-600' : 'text-slate-400'}`}>{(o.provisions_balance||0).toFixed(2)}</TableCell>
+                        <TableCell className={`text-right font-mono text-xs ${(o.reserve_balance||0) > 0.01 ? 'text-red-600' : (o.reserve_balance||0) < -0.01 ? 'text-green-600' : 'text-slate-400'}`}>{(o.reserve_balance||0).toFixed(2)}</TableCell>
                         <TableCell className="text-right font-mono">{o.total_called.toFixed(2)}</TableCell>
                         <TableCell className="text-right font-mono">{o.total_paid.toFixed(2)}</TableCell>
                         <TableCell className={`text-right font-mono font-bold ${o.balance > 0 ? 'text-red-700' : o.balance < 0 ? 'text-green-700' : 'text-slate-500'}`}>{o.balance.toFixed(2)}</TableCell>

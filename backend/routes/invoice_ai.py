@@ -55,6 +55,7 @@ async def _extract_invoice_with_ai(file_path: str, mime_type: str, known_pcmn: l
                 '"description": "<short description of service/goods>", '
                 '"suggested_pcmn_account": "<6-digit account from this list, best match>", '
                 '"vat_number": "<supplier VAT BE0xxx.xxx.xxx or empty>", '
+                '"bce_number": "<supplier BCE/CBE/KBO number, e.g. 0123.456.789 or BE0123456789 or empty>", '
                 '"iban": "<supplier IBAN or empty>", '
                 '"communication": "<structured comm or empty>"'
                 "}\n\n"
@@ -110,16 +111,45 @@ def create_invoice_ai_router(db):
             if not exists:
                 result["suggested_pcmn_account"] = ""
 
-        # Match supplier in DB by name fuzzy
+        # Normalize BCE/VAT numbers (strip dots, spaces; uppercase prefix)
+        def _norm_bce(v: str) -> str:
+            if not v:
+                return ""
+            digits = "".join(c for c in v if c.isdigit())
+            return digits[-10:] if len(digits) >= 9 else digits
+
+        bce_norm = _norm_bce(result.get("bce_number", "") or result.get("vat_number", ""))
+        result["bce_normalized"] = bce_norm
+
+        # Match supplier : 1) BCE/VAT 2) Nom
         supplier_match = None
-        if result.get("supplier_name"):
+        match_method = None
+        if bce_norm:
+            cursor = db.suppliers.find({"$or": [
+                {"bce_number": {"$exists": True, "$ne": ""}},
+                {"vat_number": {"$exists": True, "$ne": ""}},
+            ]}, {"_id": 0})
+            async for s in cursor:
+                sb = _norm_bce(s.get("bce_number", "") or s.get("vat_number", ""))
+                if sb and sb == bce_norm:
+                    supplier_match = s
+                    match_method = "bce"
+                    break
+        if not supplier_match and result.get("supplier_name"):
             supplier_match = await db.suppliers.find_one(
                 {"name": {"$regex": result["supplier_name"], "$options": "i"}}, {"_id": 0}
             )
+            if supplier_match:
+                match_method = "name"
+
+        # Suggestion creation : si pas de match ET on a un nom
+        suggest_create = (not supplier_match) and bool(result.get("supplier_name"))
 
         return {
             "extracted": result,
             "supplier_match": supplier_match,
+            "supplier_match_method": match_method,
+            "supplier_suggest_create": suggest_create,
             "filename": file.filename,
             "stored_temp_path": str(file_path),
         }

@@ -641,22 +641,57 @@ def create_reports_router(db):
     # ---- BALANCE DE TIERS PROPRIETAIRES ----
     @router.get("/balance-tiers/owners")
     async def balance_tiers_owners(copropriete_id: Optional[str] = None):
-        """Balance de tiers proprietaires, scopee par ACP (chinese wall).
-        Debiteur = le proprietaire doit payer a la copropriete.
-        Crediteur = la copropriete doit rembourser le proprietaire."""
-        # Only owners who have lots in this ACP
-        lots_q = _apply_copro({}, copropriete_id)
-        lots = await db.lots.find(lots_q, {"_id": 0}).to_list(10000)
+        """Balance de tiers proprietaires (basee sur le grand livre).
+
+        Calcule pour chaque proprietaire le solde des comptes :
+          - 40000XXX Provisions (debit = appels & charges privatives, credit = paiements)
+          - 40010XXX Fonds de reserve (debit = appels reserve, credit = paiements)
+
+        Inclut TOUS les journal_entries (AC/VE/FI/OD/A-Nouveau) - donc les
+        Operations Diverses manuelles apparaissent aussi.
+        Les paiements bancaires non encore lettres mais reconnus par VCS sont
+        comptes en credit additionnel (ils generent un FI automatique au matching).
+        """
+        if not copropriete_id:
+            return {"owners": [], "total_debiteurs": 0, "total_crediteurs": 0}
+
+        lots = await db.lots.find({"copropriete_id": copropriete_id}, {"_id": 0}).to_list(10000)
         owner_ids = list({l.get("owner_id") for l in lots if l.get("owner_id")})
         owners = await db.owners.find({"id": {"$in": owner_ids}}, {"_id": 0}).sort("name", 1).to_list(1000) if owner_ids else []
 
-        fc_q = _apply_copro({}, copropriete_id)
-        fund_calls = await db.fund_calls.find(fc_q, {"_id": 0}).to_list(10000)
+        # Charge journal entries ACP-scoped (un seul fetch)
+        entries = await db.journal_entries.find(
+            {"copropriete_id": copropriete_id}, {"_id": 0}
+        ).to_list(100000)
+        # Aggregate Dr/Cr per account_number x third_party_id (or third_party falls back to scan all owners)
+        # Pour les comptes tiers les lignes ont third_party_id = owner_id
+        per_owner_lines = {}  # owner_id -> [line + entry_meta]
+        per_acc_lines = {}  # account_number -> [line + entry_meta]  (fallback if no third_party)
+        for e in entries:
+            for ln in e.get("lines", []) or []:
+                meta = {
+                    "date": e.get("date", ""),
+                    "journal_type": e.get("journal_type", ""),
+                    "description": e.get("description", ""),
+                    "reference": e.get("reference", ""),
+                    "entry_id": e.get("id", ""),
+                    "account_number": ln.get("account_number", ""),
+                    "account_name": ln.get("account_name", ""),
+                    "debit": float(ln.get("debit", 0) or 0),
+                    "credit": float(ln.get("credit", 0) or 0),
+                }
+                tpid = ln.get("third_party_id")
+                if tpid:
+                    per_owner_lines.setdefault(tpid, []).append(meta)
+                else:
+                    per_acc_lines.setdefault(ln.get("account_number", ""), []).append(meta)
 
-        txn_q = _apply_copro({}, copropriete_id)
-        all_bank_txns = await db.bank_transactions.find(txn_q, {"_id": 0}).to_list(100000)
+        # Charge bank txns ACP-scoped pour les VCS-detected non lettres
+        all_bank_txns = await db.bank_transactions.find(
+            {"copropriete_id": copropriete_id}, {"_id": 0}
+        ).to_list(100000)
 
-        # Build VCS lookup map (owners are global, but we only consider those in this ACP)
+        # VCS lookup
         vcs_to_owner = {}
         for owner in owners:
             if owner.get("vcs_digits"):
@@ -667,46 +702,82 @@ def create_reports_router(db):
         result = []
         for owner in owners:
             oid = owner["id"]
-            total_called = 0
-            calls_detail = []
-            for fc in fund_calls:
-                for d in fc.get("distribution", []):
-                    if d.get("owner_id") == oid:
-                        total_called += d.get("amount", 0)
-                        calls_detail.append({"date": fc["date"], "description": fc["name"], "amount": d["amount"], "type": "appel"})
-
-            total_paid = 0
-            payments_detail = []
-            for txn in all_bank_txns:
-                resolved_owner = None
-                if txn.get("matched") and txn.get("match_type") == "owner_payment" and txn.get("matched_to") == oid:
-                    resolved_owner = oid
-                elif not txn.get("matched"):
-                    comm = txn.get("communication", "")
-                    if comm:
-                        clean = comm.replace("+", "").replace("/", "").replace(" ", "")
-                        if vcs_to_owner.get(clean) == oid or vcs_to_owner.get(comm) == oid:
-                            resolved_owner = oid
-
-                if resolved_owner == oid:
-                    total_paid += abs(txn.get("amount", 0))
-                    payments_detail.append({"date": txn["date"], "description": txn.get("counterparty_name", "") or txn.get("communication", ""), "amount": abs(txn["amount"]), "type": "paiement"})
-
-            balance = round(total_called - total_paid, 2)
-            movements = sorted(calls_detail + payments_detail, key=lambda x: x["date"])
             tier_acc = (owner.get("tier_accounts") or {}).get(copropriete_id or "", {}) or {}
+            acc_prov = tier_acc.get("provisions", "")
+            acc_res = tier_acc.get("reserve", "")
+
+            # 1) Lines explicitly tagged with third_party_id = owner_id
+            owner_lines = list(per_owner_lines.get(oid, []))
+            # 2) Lines on the owner's accounts without third_party_id tag
+            seen_keys = set((m["entry_id"], m["account_number"], m["debit"], m["credit"]) for m in owner_lines)
+            for acc in (acc_prov, acc_res):
+                if not acc:
+                    continue
+                for m in per_acc_lines.get(acc, []):
+                    key = (m["entry_id"], m["account_number"], m["debit"], m["credit"])
+                    if key in seen_keys:
+                        continue
+                    owner_lines.append(m)
+                    seen_keys.add(key)
+
+            # Filtrer pour ne garder que les lignes sur 40000XXX ou 40010XXX de cet owner
+            valid_accs = {acc_prov, acc_res}
+            owner_lines = [m for m in owner_lines if m["account_number"] in valid_accs]
+
+            prov_debit = sum(m["debit"] for m in owner_lines if m["account_number"] == acc_prov)
+            prov_credit = sum(m["credit"] for m in owner_lines if m["account_number"] == acc_prov)
+            res_debit = sum(m["debit"] for m in owner_lines if m["account_number"] == acc_res)
+            res_credit = sum(m["credit"] for m in owner_lines if m["account_number"] == acc_res)
+
+            # Unmatched bank txns recognized via VCS -> credit additionnel
+            unmatched_paid = 0
+            unmatched_movements = []
+            for txn in all_bank_txns:
+                if txn.get("matched"):
+                    continue
+                comm = txn.get("communication", "") or ""
+                if not comm:
+                    continue
+                clean = comm.replace("+", "").replace("/", "").replace(" ", "")
+                if vcs_to_owner.get(clean) == oid or vcs_to_owner.get(comm) == oid:
+                    amt = abs(float(txn.get("amount", 0) or 0))
+                    unmatched_paid += amt
+                    unmatched_movements.append({
+                        "date": txn.get("date", ""),
+                        "journal_type": "BANK-UNMATCHED",
+                        "description": f"Paiement non lettre: {txn.get('counterparty_name','') or comm}",
+                        "reference": txn.get("id", ""),
+                        "entry_id": "",
+                        "account_number": acc_prov,
+                        "account_name": "Banque (a lettrer)",
+                        "debit": 0.0,
+                        "credit": amt,
+                    })
+
+            total_called = round(prov_debit + res_debit, 2)
+            total_paid = round(prov_credit + res_credit + unmatched_paid, 2)
+            balance = round(total_called - total_paid, 2)
+
+            movements = sorted(owner_lines + unmatched_movements, key=lambda x: x["date"])
 
             result.append({
                 "owner_id": oid,
                 "owner_name": owner["name"],
                 "vcs_code": owner.get("vcs_code", ""),
-                "account_provisions": tier_acc.get("provisions", ""),
-                "account_reserve": tier_acc.get("reserve", ""),
-                "total_called": round(total_called, 2),
-                "total_paid": round(total_paid, 2),
+                "account_provisions": acc_prov,
+                "account_reserve": acc_res,
+                "provisions_debit": round(prov_debit, 2),
+                "provisions_credit": round(prov_credit, 2),
+                "provisions_balance": round(prov_debit - prov_credit, 2),
+                "reserve_debit": round(res_debit, 2),
+                "reserve_credit": round(res_credit, 2),
+                "reserve_balance": round(res_debit - res_credit, 2),
+                "unmatched_paid": round(unmatched_paid, 2),
+                "total_called": total_called,
+                "total_paid": total_paid,
                 "balance": balance,
                 "status": "debiteur" if balance > 0.01 else ("crediteur" if balance < -0.01 else "solde"),
-                "movements": movements,
+                "movements_count": len(movements),
             })
 
         total_debiteurs = round(sum(r["balance"] for r in result if r["balance"] > 0), 2)
@@ -715,49 +786,75 @@ def create_reports_router(db):
 
     @router.get("/balance-tiers/owners/{owner_id}")
     async def situation_compte_owner(owner_id: str, copropriete_id: Optional[str] = None):
-        """Situation de compte d'un proprietaire scopee par ACP."""
+        """Situation de compte d'un proprietaire (basee sur le grand livre).
+        Aggrege TOUTES les ecritures (AC/VE/FI/OD/A-Nouveau) sur les comptes
+        tiers 40000XXX (provisions) + 40010XXX (reserve), plus les paiements
+        bancaires non lettres reconnus par VCS."""
         owner = await db.owners.find_one({"id": owner_id}, {"_id": 0})
         if not owner:
             raise HTTPException(404, "Proprietaire non trouve")
 
+        tier_acc = (owner.get("tier_accounts") or {}).get(copropriete_id or "", {}) or {}
+        acc_prov = tier_acc.get("provisions", "")
+        acc_res = tier_acc.get("reserve", "")
+        valid_accs = {a for a in (acc_prov, acc_res) if a}
+
         movements = []
 
-        # Fund calls scoped
-        fc_q = _apply_copro({}, copropriete_id)
-        fund_calls = await db.fund_calls.find(fc_q, {"_id": 0}).to_list(10000)
-        for fc in fund_calls:
-            for d in fc.get("distribution", []):
-                if d.get("owner_id") == owner_id:
-                    movements.append({"date": fc["date"], "description": f"Appel: {fc['name']}", "debit": d["amount"], "credit": 0, "type": "appel", "reference": fc.get("id", "")})
+        # 1) Lignes du grand livre
+        entry_q = {}
+        if copropriete_id:
+            entry_q["copropriete_id"] = copropriete_id
+        entries = await db.journal_entries.find(entry_q, {"_id": 0}).to_list(100000)
+        seen_lines = set()
+        for e in entries:
+            for ln in e.get("lines", []) or []:
+                acc = ln.get("account_number", "")
+                tpid = ln.get("third_party_id")
+                # Match si compte tiers de l'owner OU explicitement tagge owner
+                if acc not in valid_accs and tpid != owner_id:
+                    continue
+                # Eviter doublons (meme line)
+                key = (e.get("id"), acc, ln.get("debit", 0), ln.get("credit", 0), tpid)
+                if key in seen_lines:
+                    continue
+                seen_lines.add(key)
+                movements.append({
+                    "date": e.get("date", ""),
+                    "description": f"[{e.get('journal_type','?')}] {e.get('description','')}".strip(),
+                    "debit": float(ln.get("debit", 0) or 0),
+                    "credit": float(ln.get("credit", 0) or 0),
+                    "type": e.get("journal_type", "OD").lower(),
+                    "reference": e.get("reference", "") or e.get("id", ""),
+                    "account_number": acc,
+                    "journal_type": e.get("journal_type", ""),
+                })
 
-        # Invoice distributions scoped
-        inv_q = _apply_copro({}, copropriete_id)
-        invoices = await db.invoices.find(inv_q, {"_id": 0}).to_list(10000)
-        lot_q = _apply_copro({"owner_id": owner_id}, copropriete_id)
-        owner_lots = await db.lots.find(lot_q, {"_id": 0}).to_list(100)
-        lot_ids = [l["id"] for l in owner_lots]
-        for inv in invoices:
-            for dl in inv.get("distribution_lines", []):
-                if dl.get("lot_id") in lot_ids:
-                    movements.append({"date": inv["date"], "description": f"Charge: {inv.get('supplier', '')} - {inv.get('description', '')}", "debit": dl["amount"], "credit": 0, "type": "charge", "reference": inv.get("number", "")})
-
-        # Bank transactions scoped
-        txn_q = _apply_copro({}, copropriete_id)
+        # 2) Paiements bancaires reconnus par VCS mais non encore lettres
+        txn_q = {}
+        if copropriete_id:
+            txn_q["copropriete_id"] = copropriete_id
         all_bank_txns = await db.bank_transactions.find(txn_q, {"_id": 0}).to_list(100000)
         for txn in all_bank_txns:
-            is_owner_payment = False
-            if txn.get("matched") and txn.get("match_type") == "owner_payment" and txn.get("matched_to") == owner_id:
-                is_owner_payment = True
-            elif not txn.get("matched"):
-                comm = txn.get("communication", "")
-                if comm and owner.get("vcs_digits"):
-                    clean = comm.replace("+", "").replace("/", "").replace(" ", "")
-                    if clean == owner.get("vcs_digits") or comm == owner.get("vcs_code"):
-                        is_owner_payment = True
-            if is_owner_payment:
-                movements.append({"date": txn["date"], "description": f"Paiement recu: {txn.get('communication', '') or txn.get('counterparty_name', '')}", "debit": 0, "credit": abs(txn["amount"]), "type": "paiement", "reference": txn.get("id", "")})
+            if txn.get("matched"):
+                continue
+            comm = txn.get("communication", "") or ""
+            if not comm:
+                continue
+            clean = comm.replace("+", "").replace("/", "").replace(" ", "")
+            if clean == owner.get("vcs_digits") or comm == owner.get("vcs_code"):
+                movements.append({
+                    "date": txn.get("date", ""),
+                    "description": f"Paiement non lettre: {txn.get('counterparty_name','') or comm}",
+                    "debit": 0,
+                    "credit": abs(float(txn.get("amount", 0) or 0)),
+                    "type": "paiement-unmatched",
+                    "reference": txn.get("id", ""),
+                    "account_number": acc_prov,
+                    "journal_type": "BANK",
+                })
 
-        movements.sort(key=lambda x: x["date"])
+        movements.sort(key=lambda x: (x["date"], x.get("reference", "")))
         running = 0
         for m in movements:
             running += m["debit"] - m["credit"]
@@ -766,9 +863,19 @@ def create_reports_router(db):
         total_debit = round(sum(m["debit"] for m in movements), 2)
         total_credit = round(sum(m["credit"] for m in movements), 2)
 
+        # Detail par compte
+        prov_movs = [m for m in movements if m.get("account_number") == acc_prov]
+        res_movs = [m for m in movements if m.get("account_number") == acc_res]
+
         return {
             "owner": owner,
+            "account_provisions": acc_prov,
+            "account_reserve": acc_res,
             "movements": movements,
+            "provisions_debit": round(sum(m["debit"] for m in prov_movs), 2),
+            "provisions_credit": round(sum(m["credit"] for m in prov_movs), 2),
+            "reserve_debit": round(sum(m["debit"] for m in res_movs), 2),
+            "reserve_credit": round(sum(m["credit"] for m in res_movs), 2),
             "total_debit": total_debit,
             "total_credit": total_credit,
             "balance": round(total_debit - total_credit, 2),

@@ -23,6 +23,11 @@ class ReserveFund(BaseModel):
     amount: float = 0.0
     distribution_key_id: Optional[str] = ""
     label: Optional[str] = "Fonds de reserve"
+    # Si frequency/start_date sont fournis, le fonds genere sa PROPRE serie d'appels
+    # (call_type='reserve'). Sinon, ajoute au 1er appel des provisions (legacy).
+    frequency: Optional[int] = 0  # 0 = legacy injection, 1/2/3/4/6/12 = serie propre
+    start_date: Optional[str] = ""
+    due_offset_days: Optional[int] = 30
 
 
 class RoulementFund(BaseModel):
@@ -30,8 +35,11 @@ class RoulementFund(BaseModel):
     amount: float = 0.0
     distribution_key_id: Optional[str] = ""
     label: Optional[str] = "Fonds de roulement"
-    # mode = "create" pour creation initiale, "increase" pour augmentation
     mode: Optional[str] = "create"
+    # idem ReserveFund
+    frequency: Optional[int] = 0
+    start_date: Optional[str] = ""
+    due_offset_days: Optional[int] = 30
 
 
 class GenerateFromBudgetInput(BaseModel):
@@ -320,9 +328,13 @@ def create_fund_calls_router(db):
                     owner_agg[oid]["amount"] += d["amount"]
                     owner_agg[oid]["share"] += d["share"]
 
-            # Reserve fund on call #1 only
+            # Reserve fund injecte sur appel #1 SEULEMENT si fonds reserve sans frequency propre.
+            # Si frequency reserve definie, le fonds genere sa propre serie d'appels (plus bas).
             reserve_added = 0.0
-            if i == 0 and data.reserve_fund and data.reserve_fund.enabled and data.reserve_fund.amount > 0:
+            reserve_has_own_schedule = bool(data.reserve_fund and data.reserve_fund.enabled
+                                             and data.reserve_fund.amount > 0
+                                             and (data.reserve_fund.frequency or 0) > 0)
+            if i == 0 and data.reserve_fund and data.reserve_fund.enabled and data.reserve_fund.amount > 0 and not reserve_has_own_schedule:
                 reserve_amount = float(data.reserve_fund.amount)
                 reserve_dist = _distribute_amount(reserve_amount, data.reserve_fund.distribution_key_id or "")
                 line_details.append({
@@ -340,9 +352,12 @@ def create_fund_calls_router(db):
                     owner_agg[oid]["amount"] += d["amount"]
                     owner_agg[oid]["share"] += d["share"]
 
-            # Fonds de roulement on call #1 only
+            # Fonds de roulement injecte sur appel #1 SEULEMENT si pas de frequency propre.
             roulement_added = 0.0
-            if i == 0 and data.roulement_fund and data.roulement_fund.enabled and data.roulement_fund.amount > 0:
+            roul_has_own_schedule = bool(data.roulement_fund and data.roulement_fund.enabled
+                                          and data.roulement_fund.amount > 0
+                                          and (data.roulement_fund.frequency or 0) > 0)
+            if i == 0 and data.roulement_fund and data.roulement_fund.enabled and data.roulement_fund.amount > 0 and not roul_has_own_schedule:
                 roul_amount = float(data.roulement_fund.amount)
                 roul_dist = _distribute_amount(roul_amount, data.roulement_fund.distribution_key_id or "")
                 lbl = data.roulement_fund.label or "Fonds de roulement"
@@ -400,6 +415,75 @@ def create_fund_calls_router(db):
                 "copropriete_id": copro_id,
             })
 
+        # --- Series independantes pour Reserve / Roulement avec frequency propre ---
+        def _generate_independent_series(fund, fund_kind: str, account_tag: str):
+            """Genere N appels independants pour un fonds (reserve ou roulement).
+            fund_kind = 'reserve' ou 'roulement'.
+            account_tag = 'RESERVE' ou 'ROULEMENT'.
+            """
+            if not fund or not fund.enabled or fund.amount <= 0 or (fund.frequency or 0) <= 0:
+                return []
+            freq = int(fund.frequency)
+            if freq not in (1, 2, 3, 4, 6, 12):
+                raise HTTPException(400, f"Frequence {fund_kind} invalide : {freq}")
+            sdate = fund.start_date or data.start_date
+            offset = int(fund.due_offset_days or 30)
+            interval = 12 // freq
+            per_call = round(fund.amount / freq, 2)
+            label_arr = ["Annuel", "Semestriel", "Quadrimestriel", "Trimestriel", "Bi-mensuel", "Mensuel"]
+            freq_label = label_arr[{1: 0, 2: 1, 3: 2, 4: 3, 6: 4, 12: 5}[freq]]
+            base_label = fund.label or ("Fonds de reserve" if fund_kind == "reserve" else "Fonds de roulement")
+            series = []
+            for i in range(freq):
+                cd = _add_months(sdate, i * interval)
+                dd = (datetime.strptime(cd, "%Y-%m-%d") + timedelta(days=offset)).strftime("%Y-%m-%d")
+                dist = _distribute_amount(per_call, fund.distribution_key_id or "")
+                distribution = []
+                for oid, d in dist.items():
+                    owner = owners_map.get(oid)
+                    if not owner:
+                        continue
+                    distribution.append({
+                        "owner_id": oid,
+                        "owner_name": owner.get("name", ""),
+                        "vcs_code": owner.get("vcs_code", ""),
+                        "share": round(d["share"], 4),
+                        "amount": round(d["amount"], 2),
+                        "paid": False,
+                        "paid_date": "",
+                    })
+                distribution.sort(key=lambda x: x["owner_name"])
+                line_tag = {"account_number": account_tag,
+                            "account_name": base_label,
+                            "distribution_key_id": fund.distribution_key_id or "",
+                            "distribution_key_name": keys_map.get(fund.distribution_key_id or "", {}).get("name", "Tantiemes"),
+                            "amount": per_call}
+                if fund_kind == "reserve":
+                    line_tag["is_reserve"] = True
+                else:
+                    line_tag["is_roulement"] = True
+                    line_tag["roulement_mode"] = (fund.mode or "create") if hasattr(fund, 'mode') else "create"
+                call_doc = {
+                    "name": f"{base_label} - {freq_label} {i + 1}/{freq} - {fy_name}".strip(" -"),
+                    "date": cd,
+                    "due_date": dd,
+                    "total_amount": per_call,
+                    "reserve_amount": per_call if fund_kind == "reserve" else 0.0,
+                    "roulement_amount": per_call if fund_kind == "roulement" else 0.0,
+                    "roulement_mode": (fund.mode or "create") if (fund_kind == "roulement" and hasattr(fund, 'mode')) else "",
+                    "lines": [line_tag],
+                    "distribution": distribution,
+                    "fiscal_year_id": budget["fiscal_year_id"],
+                    "call_type": fund_kind,
+                    "budget_id": budget["id"],
+                    "copropriete_id": copro_id,
+                }
+                series.append(call_doc)
+            return series
+
+        results.extend(_generate_independent_series(data.reserve_fund, "reserve", "RESERVE"))
+        results.extend(_generate_independent_series(data.roulement_fund, "roulement", "ROULEMENT"))
+
         summary = {
             "n_calls": n_calls,
             "interval_months": interval_months,
@@ -426,7 +510,7 @@ def create_fund_calls_router(db):
                 "reserve_amount": c["reserve_amount"],
                 "roulement_amount": c.get("roulement_amount", 0),
                 "roulement_mode": c.get("roulement_mode", ""),
-                "call_type": "provisions",
+                "call_type": c.get("call_type", "provisions"),
                 "lines": c["lines"],
                 "distribution": c["distribution"],
                 "status": "pending",

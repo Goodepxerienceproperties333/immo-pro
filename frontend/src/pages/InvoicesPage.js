@@ -10,6 +10,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
 import { Plus, Trash2, Key, Receipt, Sparkles, Paperclip, Download, X, Pencil, AlertTriangle } from 'lucide-react';
+import AccountSearchSelect from '@/components/AccountSearchSelect';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
@@ -26,6 +27,7 @@ export default function InvoicesPage() {
   const [invForm, setInvForm] = useState({ number: '', date: '', due_date: '', supplier: '', description: '', total_amount: 0, vat_amount: 0, account_number: '', expense_category_id: '', distribution_key_id: '', status: 'unpaid', is_private_fee: false, private_fee_owner_id: '' });
   const [owners, setOwners] = useState([]);
   const [ownerSearch, setOwnerSearch] = useState('');
+  const [suggestCreateSupplier, setSuggestCreateSupplier] = useState(null); // {name, vat, bce, iban}
   const [keyForm, setKeyForm] = useState({ name: '', description: '', key_type: 'quotity', lots: [] });
   const [aiExtracting, setAiExtracting] = useState(false);
   const [aiHint, setAiHint] = useState('');
@@ -111,10 +113,23 @@ export default function InvoicesPage() {
         }));
         const parts = [];
         if (ext.vat_number) parts.push(`TVA fourn.: ${ext.vat_number}`);
+        if (ext.bce_number) parts.push(`BCE: ${ext.bce_number}`);
         if (ext.iban) parts.push(`IBAN: ${ext.iban}`);
         if (ext.vat_rate) parts.push(`Taux TVA: ${ext.vat_rate}%`);
-        if (data.supplier_match) parts.push(`Fournisseur reconnu dans la base.`);
-        else if (ext.supplier_name) parts.push(`Nouveau fournisseur: ${ext.supplier_name}`);
+        if (data.supplier_match) {
+          const m = data.supplier_match_method === 'bce' ? 'par BCE' : 'par nom';
+          parts.push(`Fournisseur reconnu (${m}): ${data.supplier_match.name}`);
+          setSuggestCreateSupplier(null);
+        } else if (data.supplier_suggest_create) {
+          setSuggestCreateSupplier({
+            name: ext.supplier_name || '',
+            vat_number: ext.vat_number || '',
+            bce_number: ext.bce_number || '',
+            iban: ext.iban || '',
+            bic: ext.bic || '',
+          });
+          parts.push(`Nouveau fournisseur a creer: ${ext.supplier_name}`);
+        }
         setAiHint(parts.join(' - '));
         toast.success('Donnees extraites par IA - verifiez avant enregistrement.');
       }
@@ -330,6 +345,27 @@ export default function InvoicesPage() {
                 <Sparkles size={12} className="inline mr-1" /> {aiHint}
               </div>
             )}
+            {suggestCreateSupplier && (
+              <div className="text-xs px-3 py-2 rounded bg-amber-50 border border-amber-200 text-amber-900 flex items-center justify-between gap-3" data-testid="suggest-create-supplier">
+                <div>
+                  <Sparkles size={12} className="inline mr-1 text-amber-700" />
+                  <b>Fournisseur introuvable dans la base globale du syndic.</b>
+                  <span className="ml-1">Voulez-vous creer la fiche pour <b>{suggestCreateSupplier.name}</b>
+                  {suggestCreateSupplier.bce_number && ` (BCE ${suggestCreateSupplier.bce_number})`} ?</span>
+                </div>
+                <div className="flex gap-2 shrink-0">
+                  <Button type="button" size="sm" variant="outline" onClick={() => setSuggestCreateSupplier(null)} data-testid="suggest-supplier-dismiss">Ignorer</Button>
+                  <Button type="button" size="sm" className="bg-amber-600 hover:bg-amber-700 text-white" onClick={async () => {
+                    try {
+                      const copro = localStorage.getItem('copropriete_id') || '';
+                      const { data } = await api.post('/suppliers', { ...suggestCreateSupplier, copropriete_id: copro });
+                      toast.success(`Fiche fournisseur creee : ${data.name}`);
+                      setSuggestCreateSupplier(null);
+                    } catch (err) { toast.error(err.response?.data?.detail || 'Erreur creation'); }
+                  }} data-testid="suggest-supplier-create">Creer la fiche</Button>
+                </div>
+              </div>
+            )}
             {pendingPdf && (
               <div className="text-xs px-3 py-2 rounded bg-blue-50 border border-blue-200 text-blue-800 flex items-center justify-between">
                 <span><Paperclip size={12} className="inline mr-1" /> PDF a attacher: <b>{pendingPdf.filename}</b></span>
@@ -445,10 +481,15 @@ export default function InvoicesPage() {
                 <p className="text-[10px] text-slate-400 mt-1">Pre-rempli le compte PCMN</p>
               </div>
               <div><label className="form-label">Compte PCMN</label>
-                <Select value={invForm.account_number} onValueChange={v => setInvForm({...invForm, account_number: v})}>
-                  <SelectTrigger><SelectValue placeholder="Selectionner un compte" /></SelectTrigger>
-                  <SelectContent>{accounts.map(a => <SelectItem key={a.number} value={a.number}>{a.number} - {a.name}</SelectItem>)}</SelectContent>
-                </Select>
+                <AccountSearchSelect
+                  accounts={accounts}
+                  value={invForm.account_number}
+                  onChange={v => setInvForm({...invForm, account_number: v})}
+                  placeholder="Rechercher un compte..."
+                  classFilter={6}
+                  allowClear
+                  testId="inv-account-search"
+                />
               </div>
               <div><label className="form-label">Cle de repartition</label>
                 <Select value={invForm.distribution_key_id} onValueChange={v => setInvForm({...invForm, distribution_key_id: v})}>
