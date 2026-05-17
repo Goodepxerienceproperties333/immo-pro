@@ -12,6 +12,12 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 ## Implemented
 
+### Iter14 (Feb 2026) - Affichage et regeneration
+- **FundCallsPage enrichi** : affiche `lines` (detail par nature avec compte+libelle+cle+montant), `reserve_amount` (badge violet "dont reserve X EUR"), badge "Issu du budget X" (bleu) pour les appels generes par wizard
+- **POST /api/fund-calls/regenerate-from-budget** : supprime les appels futurs UNPAID lies au budget puis regenere selon nouveau planning. Les appels avec >=1 paiement recu sont PRESERVES (history protection). Retourne deleted_count + preserved_count.
+- **Bouton "Regenerer non-echus"** sur les cartes budget approuve (FiscalYearPage) -> ouvre le wizard en mode regenerate
+- Workflow complet : approve -> wizard -> revoke -> modifier -> re-approve -> "Regenerer non-echus" -> ajustement intelligent sans casser l'historique
+
 ### Iter13 (Feb 2026) - Workflow Budget -> Appels de fonds
 - **Budget enrichi** (`fiscal.py`)
   - Champs `status` (draft/approved), `approved_at`, `approved_by`
@@ -104,6 +110,7 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 - iter11: 30/30 owner portal + 84/87 regression
 - **iter12: 20/20 new features (Bilan/Resultat rubriques, Excel exports, reminders, AI invoice, attachments, RBAC) + 29/30 regression**
 - **iter13: 15/15 Budget workflow (N-1 expenses, approve/revoke, edit-lock, preview/generate-from-budget, reserve on call#1, multi-key distribution, RBAC, frequency)**
+- **iter14: 8/8 regenerate-from-budget (history protection, scope filter, idempotence, RBAC) + 15/15 iter13 regression**
 
 ## Backlog P1
 - Gestion AG (ordre du jour, votes, PV, convocations)
