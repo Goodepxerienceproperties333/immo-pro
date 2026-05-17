@@ -12,6 +12,24 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 ## Implemented
 
+### Iter16 (Feb 2026) - Auto-écritures + Clôture + Page Dépenses
+- **Module `auto_entries.py`** : 3 helpers
+  - `generate_purchase_entry` -> AC journal (Dr 6xxxxx + Cr 44000XXX) sur POST/PUT facture
+  - `generate_sale_entry` -> VE journal (Dr 40000XXX par owner + Cr 700000, Dr 40010XXX + Cr 701000 pour réserve) sur POST fund_call et generate-from-budget
+  - `generate_bank_entry` -> FI journal (Dr/Cr 550xxx + 40000XXX/44000XXX) sur lettrage manuel + auto-VCS
+- **Cleanup automatique** des auto entries quand la source est supprimée (invoice, fund_call, bank_txn). DELETE manuel des auto entries -> 400.
+- **Journaux séparés**: tabs Operations Diverses / Achats / Ventes / Financier / A-Nouveau dans JournalsPage avec badge "Auto" sur les écritures générées.
+- **Page Dépenses** (`ExpensesPage.js` + GET /api/fiscal/expenses) : filtres exercice, nature (compte 6xx), clé de répartition, compte bancaire, dates. Agrégations Top 3 par nature/clé/banque + total + count. Indicateur PJ (paperclip).
+- **Clôture annuelle - Régularisation** (`/api/fiscal/years/{id}/regularize`)
+  - Mode `dry_run=true` : preview sans persister
+  - Calcule budget vs frais réels vs provisions appelées
+  - Extourne automatiquement les provisions (Dr 700000 / Cr 40000XXX)
+  - Affecte les frais réels par clé de répartition (Dr 40000XXX / Cr 700000)
+  - Fonds de réserve (40010XXX/701000) PAS extourné (reste au bilan)
+  - DELETE pour rollback la régularisation
+  - Dialog `RegularizationDialog` 2 étapes: preview détaillé + confirm
+  - Bouton Calculator orange sur les exercices ouverts
+
 ### Iter15 (Feb 2026) - Comptes tiers automatiques + bug balance
 - **Module `tier_accounts.py`** : helper d'assignation automatique de comptes PCMN par tiers
   - Propriétaire = 2 comptes par ACP: `40000XXX` (provisions charges) + `40010XXX` (fonds réserve)
@@ -124,6 +142,7 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 - **iter13: 15/15 Budget workflow (N-1 expenses, approve/revoke, edit-lock, preview/generate-from-budget, reserve on call#1, multi-key distribution, RBAC, frequency)**
 - **iter14: 8/8 regenerate-from-budget (history protection, scope filter, idempotence, RBAC) + 15/15 iter13 regression**
 - **iter15: 16/16 tier accounts auto (assignment, migration idempotence, case-insensitive supplier matching, orphan handling, RBAC) + 8/8 iter14 regression**
+- **iter16: 16/16 auto-entries AC/VE/FI + cleanup + manual delete protection + expenses endpoint + regularize dry-run/persist/delete + reserve-not-extourned + RBAC + 24/24 iter14+iter15 regression**
 
 ## Backlog P1
 - Gestion AG (ordre du jour, votes, PV, convocations)
