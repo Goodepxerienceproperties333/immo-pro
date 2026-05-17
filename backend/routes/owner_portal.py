@@ -301,4 +301,101 @@ def create_owner_portal_router(db):
             "status": "debiteur" if balance > 0.01 else ("crediteur" if balance < -0.01 else "solde"),
         }
 
+    @router.get("/decompte/pdf")
+    async def my_decompte_pdf(request: Request, copropriete_id: str, fiscal_year_id: Optional[str] = None,
+                              date_from: Optional[str] = None, date_to: Optional[str] = None):
+        """Generate the owner's annual statement PDF (for any of his ACPs)."""
+        from datetime import datetime, timezone
+        from fastapi.responses import StreamingResponse
+        import io
+        from pdf_decompte import build_decompte_pdf
+
+        owner = await _resolve_owner(db, request)
+        owner_id = owner["id"]
+
+        # Ensure owner has lots in this ACP
+        owner_lots = await db.lots.find(
+            {"copropriete_id": copropriete_id,
+             "$or": [{"owner_id": owner_id}, {"owner_ids": owner_id}]},
+            {"_id": 0}
+        ).to_list(100)
+        if not owner_lots:
+            raise HTTPException(403, "Vous n'avez aucun lot dans cette copropriete")
+
+        copro = await db.coproprietes.find_one({"id": copropriete_id}, {"_id": 0})
+        if not copro:
+            raise HTTPException(404, "Copropriete non trouvee")
+
+        # Fiscal year
+        fy = None
+        if fiscal_year_id:
+            fy = await db.fiscal_years.find_one({"id": fiscal_year_id, "copropriete_id": copropriete_id}, {"_id": 0})
+        if not fy:
+            today = datetime.now(timezone.utc)
+            fy = {
+                "name": f"Exercice {today.year}",
+                "start_date": date_from or f"{today.year}-01-01",
+                "end_date": date_to or f"{today.year}-12-31",
+            }
+
+        all_lots = await db.lots.find({"copropriete_id": copropriete_id}, {"_id": 0}).to_list(1000)
+        invoices = await db.invoices.find(
+            {"copropriete_id": copropriete_id, "date": {"$gte": fy["start_date"], "$lte": fy["end_date"]}},
+            {"_id": 0}
+        ).sort("date", 1).to_list(10000)
+        dks = await db.distribution_keys.find({"copropriete_id": copropriete_id}, {"_id": 0}).to_list(1000)
+        fcs = await db.fund_calls.find(
+            {"copropriete_id": copropriete_id, "date": {"$gte": fy["start_date"], "$lte": fy["end_date"]}},
+            {"_id": 0}
+        ).sort("date", 1).to_list(10000)
+
+        # Payments
+        all_txns = await db.bank_transactions.find(
+            {"copropriete_id": copropriete_id, "date": {"$gte": fy["start_date"], "$lte": fy["end_date"]}},
+            {"_id": 0}
+        ).sort("date", 1).to_list(100000)
+        vcs_digits = owner.get("vcs_digits", "")
+        payments = []
+        for t in all_txns:
+            is_owner = False
+            if t.get("matched") and t.get("match_type") == "owner_payment" and t.get("matched_to") == owner_id:
+                is_owner = True
+            elif not t.get("matched") and vcs_digits:
+                comm = (t.get("communication") or "").replace("+", "").replace("/", "").replace(" ", "")
+                if comm == vcs_digits:
+                    is_owner = True
+            if is_owner:
+                payments.append(t)
+
+        pdf_bytes = build_decompte_pdf(
+            owner=owner, copropriete=copro, fiscal_year=fy,
+            owner_lots=owner_lots, all_lots=all_lots,
+            invoices=invoices, distribution_keys=dks,
+            fund_calls=fcs, payments=payments,
+        )
+
+        filename = f"decompte_{owner['name'].replace(' ', '_')}_{fy.get('name','').replace(' ', '_')}.pdf"
+        return StreamingResponse(
+            io.BytesIO(pdf_bytes),
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    @router.get("/fiscal-years/{copropriete_id}")
+    async def my_fiscal_years(copropriete_id: str, request: Request):
+        """List fiscal years of an ACP where the owner has lots."""
+        owner = await _resolve_owner(db, request)
+        owner_id = owner["id"]
+        # Verify access
+        n = await db.lots.count_documents({
+            "copropriete_id": copropriete_id,
+            "$or": [{"owner_id": owner_id}, {"owner_ids": owner_id}]
+        })
+        if n == 0:
+            raise HTTPException(403, "Acces refuse")
+        years = await db.fiscal_years.find(
+            {"copropriete_id": copropriete_id}, {"_id": 0}
+        ).sort("start_date", -1).to_list(50)
+        return years
+
     return router

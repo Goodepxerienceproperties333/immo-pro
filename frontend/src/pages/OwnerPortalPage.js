@@ -197,7 +197,7 @@ export default function OwnerPortalPage() {
                     </CardHeader>
                     <CardContent className="pt-2">
                       <p className="text-xs text-slate-600 mb-2">{c.address}, {c.postal_code} {c.city}</p>
-                      <div className="space-y-1">
+                      <div className="space-y-1 mb-3">
                         <div className="text-[11px] uppercase tracking-wider text-slate-400">Vos lots ({c.my_lots.length})</div>
                         {c.my_lots.map(l => (
                           <div key={l.id} className="text-xs flex items-center justify-between border-l-2 border-[#0055FF]/30 pl-2 py-0.5">
@@ -206,6 +206,15 @@ export default function OwnerPortalPage() {
                           </div>
                         ))}
                       </div>
+                      <a
+                        href={`${process.env.REACT_APP_BACKEND_URL}/api/owner/decompte/pdf?copropriete_id=${c.id}`}
+                        target="_blank" rel="noreferrer"
+                        className="inline-flex items-center gap-1.5 text-xs text-[#0055FF] hover:bg-blue-50 px-3 py-1.5 rounded-md border border-[#0055FF]/20"
+                        data-testid={`download-decompte-${c.id}`}
+                      >
+                        <ArrowDownToLine size={12} />
+                        Telecharger mon decompte annuel (PDF)
+                      </a>
                     </CardContent>
                   </Card>
                 ))}

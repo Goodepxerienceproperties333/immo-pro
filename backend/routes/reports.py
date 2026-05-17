@@ -256,86 +256,113 @@ def create_reports_router(db):
 
     # ---- PDF DECOMPTE ----
     @router.get("/decompte/pdf/{owner_id}")
-    async def decompte_pdf(owner_id: str, date_from: Optional[str] = "2024-01-01", date_to: Optional[str] = "2024-12-31", copropriete_id: Optional[str] = None):
-        from reportlab.lib.pagesizes import A4
-        from reportlab.lib import colors
-        from reportlab.lib.units import mm
-        from reportlab.platypus import SimpleDocTemplate, Table as RLTable, TableStyle, Paragraph, Spacer
-        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    async def decompte_pdf(owner_id: str, fiscal_year_id: Optional[str] = None,
+                           date_from: Optional[str] = None, date_to: Optional[str] = None,
+                           copropriete_id: Optional[str] = None):
+        from pdf_decompte import build_decompte_pdf
 
         owner = await db.owners.find_one({"id": owner_id}, {"_id": 0})
         if not owner:
             raise HTTPException(404, "Proprietaire non trouve")
 
-        # Lots / invoices / all lots scoped by ACP
-        owner_lots_q = _apply_copro({"owner_id": owner_id}, copropriete_id)
-        lots = await db.lots.find(owner_lots_q, {"_id": 0}).to_list(100)
-        inv_q = _apply_copro({"date": {"$gte": date_from, "$lte": date_to}}, copropriete_id)
-        invoices = await db.invoices.find(inv_q, {"_id": 0}).to_list(10000)
-        all_lots_q = _apply_copro({}, copropriete_id)
-        all_lots = await db.lots.find(all_lots_q, {"_id": 0}).to_list(1000)
-        total_quotity = sum(l.get("quotity", 0) for l in all_lots)
-        owner_quotity = sum(l.get("quotity", 0) for l in lots)
-        share = owner_quotity / total_quotity if total_quotity > 0 else 0
+        # Resolve fiscal year (or build a virtual one from date_from/date_to)
+        fy = None
+        if fiscal_year_id:
+            fy = await db.fiscal_years.find_one({"id": fiscal_year_id}, {"_id": 0})
+        if not fy:
+            # Build virtual fy from explicit dates or default current year
+            today = datetime.now(timezone.utc)
+            fy = {
+                "name": f"Exercice {today.year}",
+                "start_date": date_from or f"{today.year}-01-01",
+                "end_date": date_to or f"{today.year}-12-31",
+            }
+            if copropriete_id:
+                # Try to find a real fiscal year covering this period
+                real_fy = await db.fiscal_years.find_one(
+                    {"copropriete_id": copropriete_id,
+                     "start_date": {"$lte": fy["end_date"]},
+                     "end_date": {"$gte": fy["start_date"]}},
+                    {"_id": 0}
+                )
+                if real_fy:
+                    fy = real_fy
 
-        charges = []
-        total_charges = 0
-        for inv in invoices:
-            dist_lines = inv.get("distribution_lines", [])
-            owner_lot_ids = [l["id"] for l in lots]
-            matched = False
-            for dl in dist_lines:
-                if dl.get("lot_id") in owner_lot_ids:
-                    charges.append([inv["date"], f"{inv.get('supplier', '')} - {inv.get('description', '')}", inv.get("number", ""), f"{dl.get('amount', 0):.2f} EUR"])
-                    total_charges += dl.get("amount", 0)
-                    matched = True
-            if not matched and share > 0:
-                amt = round(inv.get("total_amount", 0) * share, 2)
-                charges.append([inv["date"], f"{inv.get('supplier', '')} - {inv.get('description', '')}", inv.get("number", ""), f"{amt:.2f} EUR"])
-                total_charges += amt
+        # Resolve ACP (required)
+        copro_id_use = copropriete_id or fy.get("copropriete_id", "")
+        if not copro_id_use:
+            # Pick first ACP where owner has lots
+            sample_lot = await db.lots.find_one(
+                {"$or": [{"owner_id": owner_id}, {"owner_ids": owner_id}]},
+                {"_id": 0}
+            )
+            if sample_lot:
+                copro_id_use = sample_lot.get("copropriete_id", "")
+        if not copro_id_use:
+            raise HTTPException(400, "Aucune copropriete identifiee pour ce proprietaire")
+        copro = await db.coproprietes.find_one({"id": copro_id_use}, {"_id": 0})
+        if not copro:
+            raise HTTPException(404, "Copropriete non trouvee")
 
-        buf = io.BytesIO()
-        doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=20*mm, bottomMargin=20*mm, leftMargin=15*mm, rightMargin=15*mm)
-        styles = getSampleStyleSheet()
-        title_style = ParagraphStyle("CustomTitle", parent=styles["Title"], fontSize=16, spaceAfter=6)
-        subtitle_style = ParagraphStyle("CustomSubtitle", parent=styles["Normal"], fontSize=10, textColor=colors.grey)
-        elements = []
+        # Owner's lots in this ACP
+        owner_lots = await db.lots.find(
+            {"copropriete_id": copro_id_use,
+             "$or": [{"owner_id": owner_id}, {"owner_ids": owner_id}]},
+            {"_id": 0}
+        ).to_list(100)
+        all_lots = await db.lots.find({"copropriete_id": copro_id_use}, {"_id": 0}).to_list(1000)
 
-        elements.append(Paragraph("Decompte Annuel de Charges", title_style))
-        elements.append(Paragraph(f"Periode: {date_from} au {date_to}", subtitle_style))
-        elements.append(Spacer(1, 10*mm))
-        elements.append(Paragraph(f"<b>Proprietaire:</b> {owner['name']}", styles["Normal"]))
-        if owner.get("vcs_code"):
-            elements.append(Paragraph(f"<b>Communication VCS:</b> {owner['vcs_code']}", styles["Normal"]))
-        lot_str = ", ".join([f"Lot {l['number']} ({l.get('quotity', 0)} tantiemes)" for l in lots])
-        elements.append(Paragraph(f"<b>Lots:</b> {lot_str}", styles["Normal"]))
-        elements.append(Paragraph(f"<b>Quote-part:</b> {share*100:.2f}%", styles["Normal"]))
-        elements.append(Spacer(1, 8*mm))
+        # Invoices in period
+        invoices = await db.invoices.find(
+            {"copropriete_id": copro_id_use,
+             "date": {"$gte": fy["start_date"], "$lte": fy["end_date"]}},
+            {"_id": 0}
+        ).sort("date", 1).to_list(10000)
 
-        if charges:
-            data = [["Date", "Description", "Facture", "Montant"]] + charges
-            data.append(["", "", "<b>TOTAL</b>", f"<b>{total_charges:.2f} EUR</b>"])
-            t = RLTable(data, colWidths=[25*mm, 90*mm, 25*mm, 30*mm])
-            t.setStyle(TableStyle([
-                ("BACKGROUND", (0, 0), (-1, 0), colors.Color(0, 0.33, 1)),
-                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-                ("FONTSIZE", (0, 0), (-1, -1), 8),
-                ("FONTSIZE", (0, 0), (-1, 0), 9),
-                ("ALIGN", (3, 0), (3, -1), "RIGHT"),
-                ("GRID", (0, 0), (-1, -1), 0.5, colors.Color(0.8, 0.8, 0.8)),
-                ("BACKGROUND", (0, -1), (-1, -1), colors.Color(0.95, 0.95, 0.95)),
-                ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
-                ("TOPPADDING", (0, 0), (-1, -1), 4),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-            ]))
-            elements.append(t)
-        else:
-            elements.append(Paragraph("Aucune charge pour cette periode.", styles["Normal"]))
+        # Distribution keys
+        distribution_keys = await db.distribution_keys.find(
+            {"copropriete_id": copro_id_use}, {"_id": 0}
+        ).to_list(1000)
 
-        doc.build(elements)
-        buf.seek(0)
-        filename = f"decompte_{owner['name'].replace(' ', '_')}_{date_from}_{date_to}.pdf"
-        return StreamingResponse(buf, media_type="application/pdf", headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+        # Fund calls in period
+        fund_calls = await db.fund_calls.find(
+            {"copropriete_id": copro_id_use,
+             "date": {"$gte": fy["start_date"], "$lte": fy["end_date"]}},
+            {"_id": 0}
+        ).sort("date", 1).to_list(10000)
+
+        # Payments (bank transactions matched to this owner OR communication = VCS)
+        owner_vcs_digits = owner.get("vcs_digits", "")
+        all_txns = await db.bank_transactions.find(
+            {"copropriete_id": copro_id_use,
+             "date": {"$gte": fy["start_date"], "$lte": fy["end_date"]}},
+            {"_id": 0}
+        ).sort("date", 1).to_list(100000)
+        payments = []
+        for t in all_txns:
+            is_owner = False
+            if t.get("matched") and t.get("match_type") == "owner_payment" and t.get("matched_to") == owner_id:
+                is_owner = True
+            elif not t.get("matched") and owner_vcs_digits:
+                comm = (t.get("communication") or "").replace("+", "").replace("/", "").replace(" ", "")
+                if comm == owner_vcs_digits:
+                    is_owner = True
+            if is_owner:
+                payments.append(t)
+
+        pdf_bytes = build_decompte_pdf(
+            owner=owner, copropriete=copro, fiscal_year=fy,
+            owner_lots=owner_lots, all_lots=all_lots,
+            invoices=invoices, distribution_keys=distribution_keys,
+            fund_calls=fund_calls, payments=payments,
+        )
+
+        filename = f"decompte_{owner['name'].replace(' ', '_')}_{fy.get('name','').replace(' ', '_')}.pdf"
+        return StreamingResponse(
+            io.BytesIO(pdf_bytes),
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
 
     # ---- BALANCE DE TIERS PROPRIETAIRES ----
     @router.get("/balance-tiers/owners")

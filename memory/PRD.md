@@ -78,11 +78,22 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 - iter11: 30/30 owner portal + 84/87 regression (3 iter10 obsoletes by design)
 
 ## Backlog P1
-- Decomptes annuels PDF reportlab complets
-- Bilan/Compte de Resultats logique PCMN belge stricte
+- Bilan/Compte de Resultats logique PCMN belge stricte (endpoints existants a affiner)
 - Export Excel rapports + balance de tiers
 - Rappels paiement automatises
 - Gestion AG (ordre du jour, votes, PV, convocations)
+
+### Decomptes annuels PDF (Iter12)
+- Module `pdf_decompte.py` dedie (reportlab)
+- Structure complete: en-tete ACP -> identite proprietaire (VCS, lots, quote-part) ->
+  charges groupees par cle de repartition avec sous-totaux -> appels de fonds avec statut ->
+  paiements recus -> recapitulatif solde A VERSER/A REMBOURSER
+- Disclaimer legal art. 577-3 Code civil belge
+- Format Belgian EUR (1.234,56)
+- Disponible via 2 endpoints:
+  - `/api/reports/decompte/pdf/{owner_id}` (syndic/admin pour n'importe quel owner)
+  - `/api/owner/decompte/pdf?copropriete_id=X` (owner connecte pour ses propres ACPs)
+- Bouton "Telecharger mon decompte annuel (PDF)" sur la carte ACP du portail proprietaire
 
 ## Backlog P2
 - Auto-extraction IA factures fournisseurs (Claude)
