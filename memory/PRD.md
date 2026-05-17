@@ -12,6 +12,25 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 ## Implemented
 
+### Iter17 (Feb 2026) - Natures de depense + edition cles + edit auto entries
+- **Module "Nature de depense"** (`expense_categories.py` + `ExpenseCategoriesPage.js`)
+  - Relation 1:1 stricte avec un compte PCMN classe 6 (validation 409 + 400)
+  - Lookup par nom du compte via Popover + Command shadcn
+  - Affiche invoice_count + invoice_total
+  - CRUD complet, DELETE refusé si factures liées
+- **Facture liee a une nature**: champ `expense_category_id` sur InvoiceInput. POST/PUT auto-derivent `account_number` depuis la categorie selectionnee. Page Invoices: select nature -> auto-fill compte PCMN
+- **Edition cle de repartition avec warning**:
+  - GET /api/distribution-keys/{id}/usage retourne invoices/budgets/fund_calls liés
+  - PUT sans force=true -> 409 si invoices liées; PUT?force=true -> detach invoices + update
+  - Dialog d'edition avec banner ambre warning + liste des factures liées + auto-confirmation force
+- **Edition des ecritures auto AC/VE/FI**:
+  - PUT autorisé même sur auto_generated; marque `manually_edited=true` + `manually_edited_at`
+  - DELETE autorisé uniquement si `manually_edited=true` (sinon 400)
+  - `_delete_auto_entries` skip les entries `manually_edited` (préservation lors d'un update de source)
+  - Badges UI: "Auto" bleu si pas modifié, "Modifie" orange si edité
+- **PDF decompte 3 niveaux**: Cle de repartition -> Nature de depense (libellé) -> Compte PCMN (numéro). Sous-totaux par cle + par nature.
+- **Bouton modifier** sur ExpensesPage: deep-link `/invoices?edit={id}` ouvre directement le dialog d'edition
+
 ### Iter16 (Feb 2026) - Auto-écritures + Clôture + Page Dépenses
 - **Module `auto_entries.py`** : 3 helpers
   - `generate_purchase_entry` -> AC journal (Dr 6xxxxx + Cr 44000XXX) sur POST/PUT facture
@@ -143,6 +162,7 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 - **iter14: 8/8 regenerate-from-budget (history protection, scope filter, idempotence, RBAC) + 15/15 iter13 regression**
 - **iter15: 16/16 tier accounts auto (assignment, migration idempotence, case-insensitive supplier matching, orphan handling, RBAC) + 8/8 iter14 regression**
 - **iter16: 16/16 auto-entries AC/VE/FI + cleanup + manual delete protection + expenses endpoint + regularize dry-run/persist/delete + reserve-not-extourned + RBAC + 24/24 iter14+iter15 regression**
+- **iter17: 19/19 expense categories 1:1 + invoice account derivation + dist-key usage/force-detach + auto-entry edit policy + PDF 3 niveaux + 16/16 iter16 regression**
 
 ## Backlog P1
 - Gestion AG (ordre du jour, votes, PV, convocations)
