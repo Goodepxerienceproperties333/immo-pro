@@ -36,6 +36,55 @@ app.add_middleware(
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+# Auth middleware: ALL /api/* routes require a valid access_token cookie or Bearer header,
+# EXCEPT login, register, refresh, logout (auth flow itself), and OPTIONS preflight.
+AUTH_EXEMPT_PATHS = {
+    "/api/auth/login",
+    "/api/auth/register",
+    "/api/auth/refresh",
+    "/api/auth/logout",
+}
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    path = request.url.path
+    method = request.method.upper()
+    # Skip CORS preflight
+    if method == "OPTIONS":
+        return await call_next(request)
+    # Only protect /api routes
+    if not path.startswith("/api"):
+        return await call_next(request)
+    # Exempt list
+    if path in AUTH_EXEMPT_PATHS:
+        return await call_next(request)
+
+    # Verify access token (cookie or Authorization Bearer)
+    token = request.cookies.get("access_token")
+    if not token:
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            token = auth_header[7:]
+    if not token:
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
+    try:
+        payload = jwt.decode(token, get_jwt_secret(), algorithms=[JWT_ALGORITHM])
+        if payload.get("type") != "access":
+            from fastapi.responses import JSONResponse
+            return JSONResponse(status_code=401, content={"detail": "Invalid token type"})
+        # Stash user_id for downstream handlers (avoid an extra DB call in middleware)
+        request.state.user_id = payload.get("sub")
+        request.state.user_email = payload.get("email")
+    except jwt.ExpiredSignatureError:
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=401, content={"detail": "Token expired"})
+    except jwt.InvalidTokenError:
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=401, content={"detail": "Invalid token"})
+
+    return await call_next(request)
+
 JWT_ALGORITHM = "HS256"
 ROLES = ["superadmin", "syndic", "gestionnaire", "owner"]
 
