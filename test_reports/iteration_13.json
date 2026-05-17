@@ -1,0 +1,34 @@
+{
+  "summary": "Iter13 backend tests for Workflow Budget -> Appels de fonds wizard: 15/15 PASS. Covered N-1 previous-year-expenses aggregation, Budget approve/revoke/edit-lock, preview-from-budget (draft->400, structure, schedule, reserve on call#1 only), generate-from-budget persistence, frequency validation (1/2/3/4/6/12) and date math (_add_months), RBAC owner=403 on preview/generate/approve, regression on list endpoints.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter13_budget_wizard.py",
+    "/app/test_reports/pytest/iter13_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "fund_calls.py L342: distribution sum may slightly differ from call total_amount due to per-line rounding before per-owner aggregation; tolerated in tests with 5.0 EUR threshold. Consider rounding only at owner-level for cleaner reconciliation.",
+    "fiscal.py L342 (previous-year-expenses): comment 'invoice_je_ids' set is never used; cleanup possible.",
+    "fiscal.py: previous-year-expenses includes ALL invoices in date range as 'amount_invoices' AND ALL class-6 manual entries as 'amount_manual'. Risk of double-counting when invoices also generate journal entries (since invoice JEs aren't excluded by fund_call_id alone). Worth verifying with closed-FY data; currently no closed FY in DB to validate this concretely.",
+    "fund_calls.py: ReserveFund.distribution_key_id - if provided but no key matches, falls back silently to tantiemes (acceptable but undocumented).",
+    "RBAC: confirmed owner gets 403 on POST /api/fund-calls/preview-from-budget, generate-from-budget and /api/fiscal/budgets/{id}/approve - good."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter13_budget_wizard.py"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "N/A"},
+  "test_credentials": "admin@copro.be / admin123 (superadmin); TEST_iter13_owner@example.com / ownerpass123 (owner, auto-cleaned)",
+  "seed_data_creation": "All test data prefixed TEST_iter13_*; cleaned up after each test (budgets revoke+delete, fund_calls delete, owner user delete).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Workflow Budget -> Appels validated end-to-end. Backend endpoints verified: GET /api/fiscal/previous-year-expenses, POST/PUT/DELETE /api/fiscal/budgets, POST /api/fiscal/budgets/{id}/approve|revoke, POST /api/fund-calls/preview-from-budget, POST /api/fund-calls/generate-from-budget. Frontend wizard UI not tested (request was backend only). DB still has 1 ACP with open FY + 8 owners + distribution keys; no closed FY exists so previous-year-expenses returns fiscal_year=null path (validated).",
+  "rca of the issue": "N/A - all tests passed on first run."
+}

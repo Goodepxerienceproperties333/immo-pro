@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime, timezone
@@ -186,6 +186,9 @@ def create_fiscal_router(db):
             "name": data.name or "Budget",
             "lines": [l.model_dump() for l in data.lines],
             "total": round(total, 2),
+            "status": "draft",
+            "approved_at": None,
+            "approved_by": None,
             "copropriete_id": data.copropriete_id or "",
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
@@ -201,6 +204,11 @@ def create_fiscal_router(db):
 
     @router.put("/budgets/{budget_id}")
     async def update_budget(budget_id: str, data: BudgetInput):
+        existing = await db.budgets.find_one({"id": budget_id}, {"_id": 0})
+        if not existing:
+            raise HTTPException(404, "Budget non trouve")
+        if existing.get("status") == "approved":
+            raise HTTPException(400, "Budget approuve - modification interdite. Revoquez d'abord l'approbation.")
         total = sum(l.amount for l in data.lines)
         update = {
             "fiscal_year_id": data.fiscal_year_id,
@@ -208,17 +216,185 @@ def create_fiscal_router(db):
             "lines": [l.model_dump() for l in data.lines],
             "total": round(total, 2),
         }
-        result = await db.budgets.update_one({"id": budget_id}, {"$set": update})
-        if result.matched_count == 0:
-            raise HTTPException(404, "Budget non trouve")
+        await db.budgets.update_one({"id": budget_id}, {"$set": update})
         return await db.budgets.find_one({"id": budget_id}, {"_id": 0})
 
     @router.delete("/budgets/{budget_id}")
     async def delete_budget(budget_id: str):
-        result = await db.budgets.delete_one({"id": budget_id})
-        if result.deleted_count == 0:
+        existing = await db.budgets.find_one({"id": budget_id}, {"_id": 0})
+        if not existing:
             raise HTTPException(404, "Budget non trouve")
+        if existing.get("status") == "approved":
+            raise HTTPException(400, "Budget approuve - suppression interdite.")
+        await db.budgets.delete_one({"id": budget_id})
         return {"message": "Budget supprime"}
+
+    @router.post("/budgets/{budget_id}/approve")
+    async def approve_budget(request: Request, budget_id: str):
+        existing = await db.budgets.find_one({"id": budget_id}, {"_id": 0})
+        if not existing:
+            raise HTTPException(404, "Budget non trouve")
+        if existing.get("status") == "approved":
+            raise HTTPException(400, "Budget deja approuve")
+        if not existing.get("lines"):
+            raise HTTPException(400, "Budget vide - ajoutez des lignes avant d'approuver")
+        user_email = getattr(request.state, "user_email", "")
+        await db.budgets.update_one(
+            {"id": budget_id},
+            {"$set": {
+                "status": "approved",
+                "approved_at": datetime.now(timezone.utc).isoformat(),
+                "approved_by": user_email,
+            }}
+        )
+        return await db.budgets.find_one({"id": budget_id}, {"_id": 0})
+
+    @router.post("/budgets/{budget_id}/revoke")
+    async def revoke_budget(budget_id: str):
+        existing = await db.budgets.find_one({"id": budget_id}, {"_id": 0})
+        if not existing:
+            raise HTTPException(404, "Budget non trouve")
+        await db.budgets.update_one(
+            {"id": budget_id},
+            {"$set": {"status": "draft", "approved_at": None, "approved_by": None}}
+        )
+        return await db.budgets.find_one({"id": budget_id}, {"_id": 0})
+
+    # ---- N-1 PREVIOUS YEAR EXPENSES (helper for budget preparation) ----
+    @router.get("/previous-year-expenses")
+    async def previous_year_expenses(fiscal_year_id: Optional[str] = None,
+                                     copropriete_id: Optional[str] = None):
+        """Aggregate previous year actual expenses grouped by (account, distribution_key).
+        Combines invoices.distribution_lines AND journal_entries class 6 to give a
+        comprehensive view of what was spent and how it was distributed.
+        Returns rows the gestionnaire can directly reuse as budget lines for year N.
+        """
+        # Resolve previous fiscal year
+        target_fy = None
+        if fiscal_year_id:
+            current_fy = await db.fiscal_years.find_one({"id": fiscal_year_id}, {"_id": 0})
+            if current_fy:
+                copropriete_id = copropriete_id or current_fy.get("copropriete_id", "")
+                # Find the FY that ends strictly before current.start_date in this ACP
+                prev_q = {
+                    "end_date": {"$lt": current_fy["start_date"]},
+                }
+                if copropriete_id:
+                    prev_q["copropriete_id"] = copropriete_id
+                target_fy = await db.fiscal_years.find_one(
+                    prev_q, {"_id": 0}, sort=[("end_date", -1)]
+                )
+        if not target_fy:
+            # Fallback: pick most recent closed FY in this ACP
+            q = {"status": "closed"}
+            if copropriete_id:
+                q["copropriete_id"] = copropriete_id
+            target_fy = await db.fiscal_years.find_one(
+                q, {"_id": 0}, sort=[("end_date", -1)]
+            )
+        if not target_fy:
+            return {"fiscal_year": None, "lines": [], "total": 0.0}
+
+        start, end = target_fy["start_date"], target_fy["end_date"]
+        copro_id = target_fy.get("copropriete_id", "") or copropriete_id or ""
+
+        # 1) Invoices (distribution_lines) - groupe par (account, dist_key)
+        inv_q = {"date": {"$gte": start, "$lte": end}}
+        if copro_id:
+            inv_q["copropriete_id"] = copro_id
+        invoices = await db.invoices.find(inv_q, {"_id": 0}).to_list(100000)
+
+        # 2) Journal entries class 6 (manual OD with expense accounts)
+        je_q = {"date": {"$gte": start, "$lte": end}}
+        if copro_id:
+            je_q["copropriete_id"] = copro_id
+        entries = await db.journal_entries.find(je_q, {"_id": 0}).to_list(100000)
+
+        # Aggregate: keyed by (account_number, distribution_key_id)
+        agg = {}  # {(acc, key_id): {account_name, key_name, amount, sources: {invoices, manual}}}
+
+        # Pre-fetch distribution keys for naming
+        dk_q = {"copropriete_id": copro_id} if copro_id else {}
+        keys = await db.distribution_keys.find(dk_q, {"_id": 0}).to_list(1000)
+        key_name_map = {k["id"]: k["name"] for k in keys}
+
+        for inv in invoices:
+            acc = inv.get("account_number", "") or ""
+            key_id = inv.get("distribution_key_id", "") or ""
+            if not acc or not acc.startswith("6"):
+                # Try inferring from journal entry tied to invoice? Skip for now.
+                continue
+            k = (acc, key_id)
+            if k not in agg:
+                agg[k] = {
+                    "account_number": acc,
+                    "account_name": "",
+                    "distribution_key_id": key_id,
+                    "distribution_key_name": key_name_map.get(key_id, ""),
+                    "amount_invoices": 0.0,
+                    "amount_manual": 0.0,
+                    "invoice_count": 0,
+                }
+            agg[k]["amount_invoices"] += inv.get("total_amount", 0)
+            agg[k]["invoice_count"] += 1
+
+        # Add manual journal entries (class 6 only, exclude those tied to invoices)
+        invoice_je_ids = set()  # We don't store inv->je link consistently; just include all class-6 OD
+        for e in entries:
+            # Only count OD/AC entries (manual or invoice posting). For simplicity, count all,
+            # but only the amount that goes to class-6 accounts.
+            for line in e.get("lines", []):
+                acc = line.get("account_number", "")
+                if not acc.startswith("6"):
+                    continue
+                net = line.get("debit", 0) - line.get("credit", 0)
+                if abs(net) < 0.01:
+                    continue
+                # If this entry has a `fund_call_id` skip (those are appels, not depenses)
+                if e.get("fund_call_id"):
+                    continue
+                k = (acc, "")
+                if k not in agg:
+                    agg[k] = {
+                        "account_number": acc,
+                        "account_name": line.get("account_name", ""),
+                        "distribution_key_id": "",
+                        "distribution_key_name": "",
+                        "amount_invoices": 0.0,
+                        "amount_manual": 0.0,
+                        "invoice_count": 0,
+                    }
+                if not agg[k]["account_name"]:
+                    agg[k]["account_name"] = line.get("account_name", "")
+                agg[k]["amount_manual"] += net
+
+        # Enrich missing account_name from PCMN
+        accs_missing = [v["account_number"] for v in agg.values() if not v["account_name"]]
+        if accs_missing:
+            pcmn_q = {"number": {"$in": accs_missing}}
+            if copro_id:
+                pcmn_q["copropriete_id"] = copro_id
+            pcmns = await db.pcmn_accounts.find(pcmn_q, {"_id": 0}).to_list(1000)
+            pcmn_map = {p["number"]: p["name"] for p in pcmns}
+            for v in agg.values():
+                if not v["account_name"]:
+                    v["account_name"] = pcmn_map.get(v["account_number"], "")
+
+        lines = []
+        for v in agg.values():
+            total = round(v["amount_invoices"] + v["amount_manual"], 2)
+            if abs(total) < 0.01:
+                continue
+            v["amount_invoices"] = round(v["amount_invoices"], 2)
+            v["amount_manual"] = round(v["amount_manual"], 2)
+            v["amount_total"] = total
+            lines.append(v)
+        lines.sort(key=lambda x: (x["account_number"], x.get("distribution_key_name", "")))
+        return {
+            "fiscal_year": target_fy,
+            "lines": lines,
+            "total": round(sum(l["amount_total"] for l in lines), 2),
+        }
 
     # ---- BUDGET VS ACTUAL ----
     @router.get("/budget-comparison/{fiscal_year_id}")

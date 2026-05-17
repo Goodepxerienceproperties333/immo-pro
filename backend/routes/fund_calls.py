@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional, List
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import uuid
 
 
@@ -15,6 +15,39 @@ class FundCallInput(BaseModel):
     call_type: Optional[str] = "provisions"  # provisions, reserve, special
     distribution_key_id: Optional[str] = ""
     copropriete_id: Optional[str] = ""
+
+
+class ReserveFund(BaseModel):
+    enabled: bool = False
+    amount: float = 0.0
+    distribution_key_id: Optional[str] = ""
+    label: Optional[str] = "Fonds de reserve"
+
+
+class GenerateFromBudgetInput(BaseModel):
+    budget_id: str
+    frequency: int  # 1, 2, 3, 4, 12 (yearly, semestrial, quadrimestrial, quarterly, monthly)
+    start_date: str  # ISO date of the first call
+    due_offset_days: Optional[int] = 30  # due date offset from call date
+    reserve_fund: Optional[ReserveFund] = None
+    copropriete_id: Optional[str] = ""
+
+
+def _add_months(iso_date: str, months: int) -> str:
+    d = datetime.strptime(iso_date, "%Y-%m-%d")
+    m = d.month - 1 + months
+    y = d.year + m // 12
+    m = m % 12 + 1
+    # clamp day to last day of new month
+    try:
+        nd = d.replace(year=y, month=m)
+    except ValueError:
+        # day overflow (e.g. 31 Jan -> 28 Feb)
+        if m == 12:
+            nd = datetime(y + 1, 1, 1) - timedelta(days=1)
+        else:
+            nd = datetime(y, m + 1, 1) - timedelta(days=1)
+    return nd.strftime("%Y-%m-%d")
 
 
 def create_fund_calls_router(db):
@@ -171,5 +204,191 @@ def create_fund_calls_router(db):
         if result.deleted_count == 0:
             raise HTTPException(404, "Appel non trouve")
         return {"message": "Appel de fonds supprime"}
+
+    # ---- BULK GENERATION FROM APPROVED BUDGET ----
+    @router.post("/preview-from-budget")
+    async def preview_from_budget(data: GenerateFromBudgetInput):
+        """Preview N fund calls computed from a budget, WITHOUT persisting.
+        Used by the frontend wizard to show recap before confirmation."""
+        return await _generate_from_budget(data, persist=False)
+
+    @router.post("/generate-from-budget")
+    async def generate_from_budget_endpoint(data: GenerateFromBudgetInput):
+        """Create N fund calls in DB from an approved budget. Calls are persisted
+        with status='pending'. Reserve fund (if enabled) is added to call #1 only."""
+        return await _generate_from_budget(data, persist=True)
+
+    async def _generate_from_budget(data: GenerateFromBudgetInput, persist: bool):
+        budget = await db.budgets.find_one({"id": data.budget_id}, {"_id": 0})
+        if not budget:
+            raise HTTPException(404, "Budget non trouve")
+        if budget.get("status") != "approved":
+            raise HTTPException(400, "Budget non approuve - approuvez-le d'abord")
+        copro_id = data.copropriete_id or budget.get("copropriete_id", "")
+        if not copro_id:
+            raise HTTPException(400, "copropriete_id manquant")
+        if data.frequency not in (1, 2, 3, 4, 6, 12):
+            raise HTTPException(400, "Frequence autorisee: 1, 2, 3, 4, 6, 12 appels par an")
+
+        fy = await db.fiscal_years.find_one({"id": budget["fiscal_year_id"]}, {"_id": 0})
+        fy_name = fy.get("name", "") if fy else ""
+
+        # Pre-fetch lots, owners and distribution keys
+        lots = await db.lots.find({"copropriete_id": copro_id}, {"_id": 0}).to_list(10000)
+        owners_map = {o["id"]: o for o in await db.owners.find({}, {"_id": 0}).to_list(10000)}
+        keys = await db.distribution_keys.find({"copropriete_id": copro_id}, {"_id": 0}).to_list(1000)
+        keys_map = {k["id"]: k for k in keys}
+
+        def _distribute_amount(amount: float, key_id: str) -> list:
+            """Distribute amount on owners according to the given distribution key.
+            Fallback to quotities if key not found."""
+            dist = {}  # owner_id -> {amount, lot_ids, share, owner}
+            if key_id and key_id in keys_map:
+                key = keys_map[key_id]
+                total_shares = sum(l["share"] for l in key.get("lots", []))
+                for kl in key.get("lots", []):
+                    lot = next((l for l in lots if l["id"] == kl["lot_id"]), None)
+                    if not lot or not lot.get("owner_id"):
+                        continue
+                    owner_id = lot["owner_id"]
+                    share_ratio = kl["share"] / total_shares if total_shares > 0 else 0
+                    dist.setdefault(owner_id, {"amount": 0.0, "share": 0.0})
+                    dist[owner_id]["amount"] += amount * share_ratio
+                    dist[owner_id]["share"] += kl["share"]
+            else:
+                total_quotity = sum(l.get("quotity", 0) for l in lots if l.get("owner_id"))
+                for lot in lots:
+                    if not lot.get("owner_id"):
+                        continue
+                    owner_id = lot["owner_id"]
+                    share_ratio = lot.get("quotity", 0) / total_quotity if total_quotity > 0 else 0
+                    dist.setdefault(owner_id, {"amount": 0.0, "share": 0.0})
+                    dist[owner_id]["amount"] += amount * share_ratio
+                    dist[owner_id]["share"] += lot.get("quotity", 0)
+            return dist
+
+        # Compute schedule
+        interval_months = 12 // data.frequency
+        n_calls = data.frequency
+        budget_lines = budget.get("lines", [])
+        budget_total = round(sum(l.get("amount", 0) for l in budget_lines), 2)
+        # Per call portion of each budget line
+        results = []
+        for i in range(n_calls):
+            call_date = _add_months(data.start_date, i * interval_months)
+            due_date = (datetime.strptime(call_date, "%Y-%m-%d")
+                        + timedelta(days=data.due_offset_days or 30)).strftime("%Y-%m-%d")
+            # Aggregate distribution by owner combining all budget lines
+            owner_agg = {}  # owner_id -> {amount, breakdown_by_line[]}
+            call_total = 0.0
+            line_details = []
+            for bl in budget_lines:
+                bl_per_call = round(bl.get("amount", 0) / n_calls, 2)
+                if abs(bl_per_call) < 0.01:
+                    continue
+                line_dist = _distribute_amount(bl_per_call, bl.get("distribution_key_id", ""))
+                line_details.append({
+                    "account_number": bl.get("account_number", ""),
+                    "account_name": bl.get("account_name", ""),
+                    "distribution_key_id": bl.get("distribution_key_id", ""),
+                    "distribution_key_name": keys_map.get(bl.get("distribution_key_id", ""), {}).get("name", "Tantiemes"),
+                    "amount": bl_per_call,
+                })
+                call_total += bl_per_call
+                for oid, d in line_dist.items():
+                    owner_agg.setdefault(oid, {"amount": 0.0, "share": 0.0})
+                    owner_agg[oid]["amount"] += d["amount"]
+                    owner_agg[oid]["share"] += d["share"]
+
+            # Reserve fund on call #1 only
+            reserve_added = 0.0
+            if i == 0 and data.reserve_fund and data.reserve_fund.enabled and data.reserve_fund.amount > 0:
+                reserve_amount = float(data.reserve_fund.amount)
+                reserve_dist = _distribute_amount(reserve_amount, data.reserve_fund.distribution_key_id or "")
+                line_details.append({
+                    "account_number": "RESERVE",
+                    "account_name": data.reserve_fund.label or "Fonds de reserve",
+                    "distribution_key_id": data.reserve_fund.distribution_key_id or "",
+                    "distribution_key_name": keys_map.get(data.reserve_fund.distribution_key_id or "", {}).get("name", "Tantiemes"),
+                    "amount": reserve_amount,
+                    "is_reserve": True,
+                })
+                call_total += reserve_amount
+                reserve_added = reserve_amount
+                for oid, d in reserve_dist.items():
+                    owner_agg.setdefault(oid, {"amount": 0.0, "share": 0.0})
+                    owner_agg[oid]["amount"] += d["amount"]
+                    owner_agg[oid]["share"] += d["share"]
+
+            distribution = []
+            for oid, d in owner_agg.items():
+                owner = owners_map.get(oid)
+                if not owner:
+                    continue
+                distribution.append({
+                    "owner_id": oid,
+                    "owner_name": owner.get("name", ""),
+                    "vcs_code": owner.get("vcs_code", ""),
+                    "share": round(d["share"], 4),
+                    "amount": round(d["amount"], 2),
+                    "paid": False,
+                    "paid_date": "",
+                })
+            distribution.sort(key=lambda x: x["owner_name"])
+
+            call_label = ["Annuel", "Semestriel", "Quadrimestriel", "Trimestriel", "Bi-mensuel", "Mensuel"][
+                {1: 0, 2: 1, 3: 2, 4: 3, 6: 4, 12: 5}[n_calls]
+            ]
+            name = f"{call_label} {i + 1}/{n_calls} - {fy_name}".strip(" -")
+
+            results.append({
+                "name": name,
+                "date": call_date,
+                "due_date": due_date,
+                "total_amount": round(call_total, 2),
+                "reserve_amount": round(reserve_added, 2),
+                "lines": line_details,
+                "distribution": distribution,
+                "fiscal_year_id": budget["fiscal_year_id"],
+                "call_type": "provisions",
+                "budget_id": budget["id"],
+                "copropriete_id": copro_id,
+            })
+
+        summary = {
+            "n_calls": n_calls,
+            "interval_months": interval_months,
+            "budget_total": budget_total,
+            "reserve_total": round(data.reserve_fund.amount if (data.reserve_fund and data.reserve_fund.enabled) else 0.0, 2),
+            "grand_total": round(sum(c["total_amount"] for c in results), 2),
+        }
+
+        if not persist:
+            return {"calls": results, "summary": summary, "persisted": False}
+
+        # Persist
+        created_ids = []
+        for c in results:
+            doc = {
+                "id": str(uuid.uuid4()),
+                "name": c["name"],
+                "date": c["date"],
+                "due_date": c["due_date"],
+                "fiscal_year_id": c["fiscal_year_id"],
+                "description": f"Appel auto. issu du budget {budget.get('name','')}",
+                "total_amount": c["total_amount"],
+                "reserve_amount": c["reserve_amount"],
+                "call_type": "provisions",
+                "lines": c["lines"],
+                "distribution": c["distribution"],
+                "status": "pending",
+                "budget_id": budget["id"],
+                "copropriete_id": copro_id,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            await db.fund_calls.insert_one(doc)
+            created_ids.append(doc["id"])
+
+        return {"calls": results, "summary": summary, "persisted": True, "created_ids": created_ids}
 
     return router
