@@ -94,6 +94,26 @@ export default function Layout() {
         <button onClick={handleLogout} data-testid="logout-btn" className="sidebar-link w-full text-slate-400 hover:text-red-400">
           <LogOut size={16} strokeWidth={1.5} />{!collapsed && <span className="text-[13px]">Deconnexion</span>}
         </button>
+        {!collapsed && (
+          <div className="mt-3 px-1 py-2 rounded-md bg-slate-900 border border-slate-800 flex items-center gap-2">
+            <svg width="20" height="14" viewBox="0 0 20 14" className="flex-shrink-0">
+              <rect width="6.67" height="14" fill="#000" />
+              <rect x="6.67" width="6.67" height="14" fill="#FFD700" />
+              <rect x="13.33" width="6.67" height="14" fill="#FF0000" />
+            </svg>
+            <svg width="20" height="14" viewBox="0 0 20 14" className="flex-shrink-0">
+              <rect width="6.67" height="14" fill="#002395" />
+              <rect x="6.67" width="6.67" height="14" fill="#FFF" />
+              <rect x="13.33" width="6.67" height="14" fill="#ED2939" />
+            </svg>
+            <div className="text-[9px] text-slate-500 leading-tight">Donnees hebergees<br/>en <span className="text-slate-300 font-medium">Belgique/France</span><br/>Conforme RGPD</div>
+          </div>
+        )}
+        {collapsed && (
+          <div className="mt-2 flex justify-center" title="Donnees hebergees en UE - Conforme RGPD">
+            <svg width="16" height="12" viewBox="0 0 512 341"><rect width="512" height="341" fill="#003399"/><g transform="translate(256,170.5)">{[...Array(12)].map((_,i)=><polygon key={i} points="0,-120 4,-108 -7,-98 7,-98 -4,-108" fill="#FFCC00" transform={`rotate(${i*30})`}/>)}</g></svg>
+          </div>
+        )}
       </div>
     </div>
   );
