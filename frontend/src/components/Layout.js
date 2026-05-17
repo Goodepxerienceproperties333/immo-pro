@@ -50,7 +50,7 @@ export default function Layout() {
   useEffect(() => { api.get('/coproprietes').then(r => setCoproprietes(r.data)).catch(() => {}); }, []);
 
   const handleLogout = async () => { await logout(); navigate('/login'); };
-  const getRoleLabel = (role) => ({ superadmin: 'Super Admin', admin: 'Super Admin', syndic: 'Syndic' }[role] || 'Proprietaire');
+  const getRoleLabel = (role) => ({ superadmin: 'Syndic', admin: 'Syndic', syndic: 'Syndic', gestionnaire: 'Gestionnaire' }[role] || 'Proprietaire');
 
   const SidebarContent = () => (
     <div className="flex flex-col h-full">
@@ -77,7 +77,7 @@ export default function Layout() {
               </div>
             </div>
           ))}
-          {isManager && (
+          {isAdmin && (
             <div className="mb-2">
               {!collapsed && <div className="px-3 py-1 mt-1 text-[10px] uppercase tracking-[0.2em] text-slate-500 font-semibold">Admin</div>}
               <NavLink to="/admin/users" onClick={() => setMobileOpen(false)}

@@ -12,8 +12,8 @@ import { toast } from 'sonner';
 import { Plus, Pencil, Trash2, Shield, Search } from 'lucide-react';
 
 const ROLES = [
-  { value: 'superadmin', label: 'Super Admin', color: 'bg-red-50 text-red-700 border-red-200' },
-  { value: 'syndic', label: 'Syndic / Gestionnaire', color: 'bg-blue-50 text-blue-700 border-blue-200' },
+  { value: 'syndic', label: 'Syndic', color: 'bg-red-50 text-red-700 border-red-200' },
+  { value: 'gestionnaire', label: 'Gestionnaire', color: 'bg-blue-50 text-blue-700 border-blue-200' },
   { value: 'owner', label: 'Proprietaire', color: 'bg-green-50 text-green-700 border-green-200' },
 ];
 

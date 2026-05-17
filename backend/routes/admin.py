@@ -25,10 +25,10 @@ def create_admin_router(db):
     router = APIRouter(prefix="/api/admin")
 
     async def _get_admin_user(request):
-        from server import get_current_user, is_admin_role, can_manage
+        from server import get_current_user, is_admin_role
         user = await get_current_user(request)
-        if not can_manage(user.get("role", "")):
-            raise HTTPException(403, "Acces refuse")
+        if not is_admin_role(user.get("role", "")):
+            raise HTTPException(403, "Seul le syndic peut gerer les utilisateurs")
         return user
 
     @router.get("/users")
@@ -67,7 +67,7 @@ def create_admin_router(db):
             "email": email,
             "password_hash": hash_password(data.password),
             "name": data.name,
-            "role": data.role if data.role in ("superadmin", "syndic", "owner") else "owner",
+            "role": data.role if data.role in ("superadmin", "syndic", "gestionnaire", "owner") else "owner",
             "copropriete_ids": data.copropriete_ids or [],
             "created_at": datetime.now(timezone.utc).isoformat()
         }
@@ -116,8 +116,6 @@ def create_admin_router(db):
     async def delete_user(user_id: str, request: Request):
         admin = await _get_admin_user(request)
         from server import is_admin_role
-        if not is_admin_role(admin.get("role", "")):
-            raise HTTPException(403, "Seul le super admin peut supprimer des utilisateurs")
         if str(admin["_id"]) == user_id:
             raise HTTPException(400, "Vous ne pouvez pas vous supprimer vous-meme")
         result = await db.users.delete_one({"_id": ObjectId(user_id)})

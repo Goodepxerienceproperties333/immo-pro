@@ -37,7 +37,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 logger = logging.getLogger(__name__)
 
 JWT_ALGORITHM = "HS256"
-ROLES = ["superadmin", "syndic", "owner"]
+ROLES = ["superadmin", "syndic", "gestionnaire", "owner"]
 
 def get_jwt_secret():
     return os.environ["JWT_SECRET"]
@@ -57,10 +57,12 @@ def create_refresh_token(user_id: str) -> str:
     return jwt.encode(payload, get_jwt_secret(), algorithm=JWT_ALGORITHM)
 
 def is_admin_role(role: str) -> bool:
-    return role in ("superadmin", "admin")
+    """Syndic et superadmin: acces total + gestion utilisateurs."""
+    return role in ("superadmin", "admin", "syndic")
 
 def can_manage(role: str) -> bool:
-    return role in ("superadmin", "admin", "syndic")
+    """Syndic, gestionnaire: peuvent gerer les donnees des coproprietes."""
+    return role in ("superadmin", "admin", "syndic", "gestionnaire")
 
 async def get_current_user(request: Request) -> dict:
     token = request.cookies.get("access_token")
