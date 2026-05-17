@@ -12,6 +12,11 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 ## Implemented
 
+### Iter21 (Feb 2026) - Bug fix : resolution IBAN -> compte PCMN bancaire dans FI auto-entry
+- **Probleme** : `generate_bank_entry()` utilisait directement `txn['account_number']` (qui est un IBAN ex `BE68539007547034`) comme numero de compte PCMN dans l'ecriture FI. Resultat : les ecritures bancaires utilisaient un IBAN au lieu d'un vrai compte PCMN classe 5, ce qui faussait le bilan (le compte 550 generique apparaissait au passif au lieu des comptes specifiques 55103400 / 55076900).
+- **Fix** (`auto_entries.py`) : avant de generer l'ecriture, on resout l'IBAN -> `pcmn_number` en consultant `copro.bank_accounts`. Si l'IBAN est inconnu, fallback sur 550000. Le `account_name` utilise aussi le `label` du bank_account (ex "Compte courant").
+- Resultat : 63/63 tests PASS (8 nouveaux + 55 regression). Le bilan affiche maintenant correctement les comptes bancaires specifiques avec leur solde reel a l'actif (classe 5).
+
 ### Iter20 (Feb 2026) - Bugfix balance tiers + Wizard 3 fonds independants + Recherche compte + BCE fournisseur
 - **P0 Bug balance tiers refactor** (`routes/reports.py`):
   - Balance owners maintenant calculee depuis `journal_entries` (au lieu de fund_calls). Les **OD manuelles** sur les comptes tiers 40000XXX/40010XXX apparaissent enfin (bug Dubois corrige)
