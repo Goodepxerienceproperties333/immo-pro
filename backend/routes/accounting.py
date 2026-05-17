@@ -80,10 +80,12 @@ def create_accounting_router(db):
 
     # ---- JOURNAL ENTRIES ----
     @router.get("/entries")
-    async def list_entries(journal_type: Optional[str] = None, date_from: Optional[str] = None, date_to: Optional[str] = None):
+    async def list_entries(journal_type: Optional[str] = None, date_from: Optional[str] = None, date_to: Optional[str] = None, copropriete_id: Optional[str] = None):
         query = {}
         if journal_type:
             query["journal_type"] = journal_type
+        if copropriete_id:
+            query["copropriete_id"] = copropriete_id
         if date_from:
             query["date"] = {"$gte": date_from}
         if date_to:

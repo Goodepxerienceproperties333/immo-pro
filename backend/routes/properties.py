@@ -136,10 +136,14 @@ def create_properties_router(db):
         quotity: Optional[float] = 0.0
         owner_id: Optional[str] = ""
         owner_ids: Optional[List[str]] = []
+        copropriete_id: Optional[str] = ""
 
     @router.get("/lots")
-    async def list_lots():
-        lots = await db.lots.find({}, {"_id": 0}).sort("number", 1).to_list(1000)
+    async def list_lots(copropriete_id: Optional[str] = None):
+        q = {}
+        if copropriete_id:
+            q["copropriete_id"] = copropriete_id
+        lots = await db.lots.find(q, {"_id": 0}).sort("number", 1).to_list(1000)
         return lots
 
     @router.post("/lots")
@@ -155,6 +159,7 @@ def create_properties_router(db):
             "quotity": data.quotity,
             "owner_id": ids[0] if ids else "",
             "owner_ids": ids,
+            "copropriete_id": data.copropriete_id,
             "created_at": datetime.now(timezone.utc).isoformat()
         }
         await db.lots.insert_one(doc)
@@ -191,10 +196,14 @@ def create_properties_router(db):
         lease_start: Optional[str] = ""
         lease_end: Optional[str] = ""
         rent_amount: Optional[float] = 0.0
+        copropriete_id: Optional[str] = ""
 
     @router.get("/tenants")
-    async def list_tenants():
-        tenants = await db.tenants.find({}, {"_id": 0}).sort("name", 1).to_list(1000)
+    async def list_tenants(copropriete_id: Optional[str] = None):
+        q = {}
+        if copropriete_id:
+            q["copropriete_id"] = copropriete_id
+        tenants = await db.tenants.find(q, {"_id": 0}).sort("name", 1).to_list(1000)
         return tenants
 
     @router.post("/tenants")
@@ -208,6 +217,7 @@ def create_properties_router(db):
             "lease_start": data.lease_start,
             "lease_end": data.lease_end,
             "rent_amount": data.rent_amount,
+            "copropriete_id": data.copropriete_id,
             "created_at": datetime.now(timezone.utc).isoformat()
         }
         await db.tenants.insert_one(doc)

@@ -55,10 +55,12 @@ def create_documents_router(db):
 
     # ---- DOCUMENTS ----
     @router.get("")
-    async def list_documents(category_id: Optional[str] = None):
+    async def list_documents(category_id: Optional[str] = None, copropriete_id: Optional[str] = None):
         query = {}
         if category_id:
             query["category_id"] = category_id
+        if copropriete_id:
+            query["copropriete_id"] = copropriete_id
         docs = await db.documents.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
         return docs
 

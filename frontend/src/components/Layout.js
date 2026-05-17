@@ -131,11 +131,21 @@ export default function Layout() {
       <div className="flex-1 flex flex-col overflow-hidden">
         <header className="bg-white border-b border-slate-200 sticky top-0 z-30 h-12 flex items-center px-4 lg:px-6 gap-4">
           <Button variant="ghost" size="sm" className="lg:hidden" onClick={() => setMobileOpen(true)} data-testid="mobile-menu-btn"><Menu size={20} /></Button>
-          {coproprietes.length > 0 && (
-            <Select value={selectedCopro || 'all'} onValueChange={(v) => setSelectedCopro(v === 'all' ? '' : v)}>
-              <SelectTrigger className="w-[200px] h-8 text-xs" data-testid="copro-selector"><Home size={12} className="mr-1 text-slate-400 flex-shrink-0" /><SelectValue placeholder="Toutes" /></SelectTrigger>
-              <SelectContent><SelectItem value="all">Toutes les coproprietes</SelectItem>{coproprietes.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}</SelectContent>
-            </Select>
+          {/* Copropriete context */}
+          {selectedCopro && coproprietes.length > 0 ? (
+            <div className="flex items-center gap-2">
+              <Button variant="ghost" size="sm" onClick={() => setSelectedCopro('')} className="h-8 px-2 text-slate-400 hover:text-slate-700"><Home size={14} /></Button>
+              <Select value={selectedCopro} onValueChange={(v) => setSelectedCopro(v)}>
+                <SelectTrigger className="w-[220px] h-8 text-xs border-[#0055FF]/30" data-testid="copro-selector">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {coproprietes.filter(c => c.status !== 'archived').map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+          ) : (
+            <span className="text-xs text-slate-400">Toutes les coproprietes</span>
           )}
           <div className="flex-1" />
           <span className="text-[11px] text-slate-500 hidden sm:block">{getRoleLabel(user?.role)}</span>

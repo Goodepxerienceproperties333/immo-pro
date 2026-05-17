@@ -20,10 +20,12 @@ def create_fund_calls_router(db):
     router = APIRouter(prefix="/api/fund-calls")
 
     @router.get("")
-    async def list_fund_calls(fiscal_year_id: Optional[str] = None):
+    async def list_fund_calls(fiscal_year_id: Optional[str] = None, copropriete_id: Optional[str] = None):
         q = {}
         if fiscal_year_id:
             q["fiscal_year_id"] = fiscal_year_id
+        if copropriete_id:
+            q["copropriete_id"] = copropriete_id
         calls = await db.fund_calls.find(q, {"_id": 0}).sort("date", -1).to_list(1000)
         return calls
 

@@ -80,8 +80,11 @@ def create_banking_router(db):
 
     # ---- BANK STATEMENTS ----
     @router.get("/statements")
-    async def list_statements():
-        statements = await db.bank_statements.find({}, {"_id": 0}).sort("date", -1).to_list(1000)
+    async def list_statements(copropriete_id: Optional[str] = None):
+        q = {}
+        if copropriete_id:
+            q["copropriete_id"] = copropriete_id
+        statements = await db.bank_statements.find(q, {"_id": 0}).sort("date", -1).to_list(1000)
         return statements
 
     @router.post("/statements")

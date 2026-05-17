@@ -36,8 +36,11 @@ def create_invoices_router(db):
 
     # ---- DISTRIBUTION KEYS ----
     @router.get("/distribution-keys")
-    async def list_dist_keys():
-        keys = await db.distribution_keys.find({}, {"_id": 0}).sort("name", 1).to_list(1000)
+    async def list_dist_keys(copropriete_id: Optional[str] = None):
+        q = {}
+        if copropriete_id:
+            q["copropriete_id"] = copropriete_id
+        keys = await db.distribution_keys.find(q, {"_id": 0}).sort("name", 1).to_list(1000)
         return keys
 
     @router.post("/distribution-keys")
@@ -73,10 +76,12 @@ def create_invoices_router(db):
 
     # ---- INVOICES ----
     @router.get("/invoices")
-    async def list_invoices(status: Optional[str] = None):
+    async def list_invoices(status: Optional[str] = None, copropriete_id: Optional[str] = None):
         query = {}
         if status:
             query["status"] = status
+        if copropriete_id:
+            query["copropriete_id"] = copropriete_id
         invoices = await db.invoices.find(query, {"_id": 0}).sort("date", -1).to_list(1000)
         return invoices
 

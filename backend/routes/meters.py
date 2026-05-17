@@ -22,10 +22,12 @@ def create_meters_router(db):
     router = APIRouter(prefix="/api/meters")
 
     @router.get("")
-    async def list_meters(meter_type: Optional[str] = None):
+    async def list_meters(meter_type: Optional[str] = None, copropriete_id: Optional[str] = None):
         query = {}
         if meter_type:
             query["meter_type"] = meter_type
+        if copropriete_id:
+            query["copropriete_id"] = copropriete_id
         meters = await db.meters.find(query, {"_id": 0}).sort("name", 1).to_list(1000)
         return meters
 
