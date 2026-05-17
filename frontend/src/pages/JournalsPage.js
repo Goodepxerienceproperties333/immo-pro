@@ -9,7 +9,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { Plus, Trash2, Eye } from 'lucide-react';
+import { Plus, Trash2, Eye, Paperclip, Download } from 'lucide-react';
+
+const API = process.env.REACT_APP_BACKEND_URL;
 
 const JOURNAL_TYPES = [
   { value: 'OD', label: 'Operations Diverses' },
@@ -23,7 +25,9 @@ export default function JournalsPage() {
   const [journalType, setJournalType] = useState('OD');
   const [dialogOpen, setDialogOpen] = useState(false);
   const [viewEntry, setViewEntry] = useState(null);
+  const [attachDialogEntry, setAttachDialogEntry] = useState(null);
   const [form, setForm] = useState({ journal_type: 'OD', date: '', reference: '', description: '', lines: [{ account_number: '', account_name: '', debit: 0, credit: 0 }, { account_number: '', account_name: '', debit: 0, credit: 0 }] });
+  const [pendingAttachment, setPendingAttachment] = useState(null);
 
   const load = useCallback(async () => {
     const [e, a] = await Promise.all([api.get('/accounting/entries', { params: { journal_type: journalType } }), api.get('/accounting/pcmn')]);
@@ -35,6 +39,7 @@ export default function JournalsPage() {
 
   const openCreate = () => {
     setForm({ journal_type: journalType, date: new Date().toISOString().split('T')[0], reference: '', description: '', lines: [{ account_number: '', account_name: '', debit: 0, credit: 0 }, { account_number: '', account_name: '', debit: 0, credit: 0 }] });
+    setPendingAttachment(null);
     setDialogOpen(true);
   };
 
@@ -58,11 +63,36 @@ export default function JournalsPage() {
     if (!isBalanced) { toast.error('Ecriture non equilibree'); return; }
     try {
       const payload = { ...form, lines: form.lines.map(l => ({ ...l, debit: Number(l.debit), credit: Number(l.credit) })) };
-      await api.post('/accounting/entries', payload);
+      const { data: created } = await api.post('/accounting/entries', payload);
+      if (pendingAttachment && created?.id) {
+        try {
+          const fd = new FormData();
+          fd.append('file', pendingAttachment);
+          await api.post(`/accounting/entries/${created.id}/attachments`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+        } catch (e) { console.warn(e); }
+      }
       toast.success('Ecriture creee');
       setDialogOpen(false);
       load();
     } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); }
+  };
+
+  const uploadEntryAttachment = async (entryId, file) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    try {
+      await api.post(`/accounting/entries/${entryId}/attachments`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      toast.success('Piece jointe ajoutee');
+      const { data } = await api.get(`/accounting/entries/${entryId}`);
+      setAttachDialogEntry(data); load();
+    } catch (err) { toast.error(err.response?.data?.detail || 'Echec'); }
+  };
+
+  const deleteEntryAttachment = async (entryId, attachmentId) => {
+    if (!window.confirm('Supprimer cette piece jointe ?')) return;
+    await api.delete(`/accounting/entries/${entryId}/attachments/${attachmentId}`);
+    const { data } = await api.get(`/accounting/entries/${entryId}`);
+    setAttachDialogEntry(data); load();
   };
 
   const handleDelete = async (id) => {
@@ -103,6 +133,9 @@ export default function JournalsPage() {
                     <TableCell>
                       <div className="flex gap-1">
                         <Button variant="ghost" size="sm" onClick={() => setViewEntry(e)}><Eye size={14} /></Button>
+                        <Button variant="ghost" size="sm" onClick={() => setAttachDialogEntry(e)} data-testid={`entry-attach-${e.id}`} title="Pieces jointes">
+                          <Paperclip size={14} />{(e.attachments?.length || 0) > 0 && <span className="ml-1 text-xs">{e.attachments.length}</span>}
+                        </Button>
                         <Button variant="ghost" size="sm" onClick={() => handleDelete(e.id)} className="text-red-500"><Trash2 size={14} /></Button>
                       </div>
                     </TableCell>
@@ -168,6 +201,24 @@ export default function JournalsPage() {
               {!isBalanced && <p className="text-red-500 text-xs mt-1">Ecart: {Math.abs(totalDebit - totalCredit).toFixed(2)} EUR</p>}
             </div>
 
+            <div className="border-t pt-3">
+              <label className="form-label mb-1">Piece justificative (PDF / Image)</label>
+              <div className="flex items-center gap-3">
+                <input id="entry-attach-input" type="file" accept="application/pdf,image/*" className="hidden"
+                  onChange={(e) => setPendingAttachment(e.target.files?.[0] || null)} />
+                <Button type="button" variant="outline" size="sm" onClick={() => document.getElementById('entry-attach-input').click()} data-testid="entry-attach-pick">
+                  <Paperclip size={14} className="mr-2" /> Choisir un fichier
+                </Button>
+                {pendingAttachment && (
+                  <span className="text-xs text-slate-600 flex items-center gap-2">
+                    {pendingAttachment.name}
+                    <button type="button" className="text-red-500" onClick={() => setPendingAttachment(null)}><Trash2 size={12} /></button>
+                  </span>
+                )}
+              </div>
+              <p className="text-[11px] text-slate-400 mt-1">Optionnel - documente l'ecriture (justificatif, contrat, devis...)</p>
+            </div>
+
             <div className="flex gap-3 justify-end">
               <Button variant="outline" onClick={() => setDialogOpen(false)}>Annuler</Button>
               <Button onClick={handleSave} disabled={!isBalanced} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="entry-save-btn">Enregistrer</Button>
@@ -205,6 +256,36 @@ export default function JournalsPage() {
               </div>
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+      {/* Attachments Dialog (per existing entry) */}
+      <Dialog open={!!attachDialogEntry} onOpenChange={() => setAttachDialogEntry(null)}>
+        <DialogContent className="max-w-lg" data-testid="entry-attach-dialog">
+          <DialogHeader><DialogTitle style={{fontFamily:'Chivo,sans-serif'}}>Pieces jointes - {attachDialogEntry?.reference || attachDialogEntry?.description}</DialogTitle></DialogHeader>
+          <div className="space-y-3 mt-2">
+            <div className="border-2 border-dashed rounded p-4 text-center">
+              <input type="file" accept="application/pdf,image/*" className="hidden" id="att-input-entry"
+                onChange={(e) => { const f = e.target.files?.[0]; if (f && attachDialogEntry) uploadEntryAttachment(attachDialogEntry.id, f); e.target.value=''; }} />
+              <Button variant="outline" onClick={() => document.getElementById('att-input-entry').click()} data-testid="upload-attachment-entry-btn">
+                <Paperclip size={14} className="mr-2" /> Ajouter un PDF / Image
+              </Button>
+            </div>
+            <div className="space-y-1 max-h-64 overflow-y-auto">
+              {(attachDialogEntry?.attachments || []).length === 0 ? (
+                <div className="text-sm text-slate-400 text-center py-3">Aucune piece jointe</div>
+              ) : attachDialogEntry.attachments.map((a) => (
+                <div key={a.id} className="flex items-center justify-between border rounded px-2 py-1.5 text-sm">
+                  <span className="truncate flex items-center gap-2"><Paperclip size={12} />{a.filename}</span>
+                  <div className="flex gap-1">
+                    <a href={`${API}/api/accounting/entries/${attachDialogEntry.id}/attachments/${a.id}/download`} target="_blank" rel="noreferrer">
+                      <Button variant="ghost" size="sm"><Download size={14} /></Button>
+                    </a>
+                    <Button variant="ghost" size="sm" className="text-red-500" onClick={() => deleteEntryAttachment(attachDialogEntry.id, a.id)}><Trash2 size={14} /></Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
     </div>

@@ -8,7 +8,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { Plus, Trash2, Key, Receipt } from 'lucide-react';
+import { Plus, Trash2, Key, Receipt, Sparkles, Paperclip, Download, X } from 'lucide-react';
+
+const API = process.env.REACT_APP_BACKEND_URL;
 
 export default function InvoicesPage() {
   const [tab, setTab] = useState('invoices');
@@ -20,6 +22,10 @@ export default function InvoicesPage() {
   const [keyDialog, setKeyDialog] = useState(false);
   const [invForm, setInvForm] = useState({ number: '', date: '', due_date: '', supplier: '', description: '', total_amount: 0, vat_amount: 0, account_number: '', distribution_key_id: '', status: 'unpaid' });
   const [keyForm, setKeyForm] = useState({ name: '', description: '', key_type: 'quotity', lots: [] });
+  const [aiExtracting, setAiExtracting] = useState(false);
+  const [aiHint, setAiHint] = useState('');
+  const [pendingPdf, setPendingPdf] = useState(null); // {file, filename} captured for later attach
+  const [attachDialogInv, setAttachDialogInv] = useState(null); // invoice being managed
 
   const load = useCallback(async () => {
     const [inv, dk, acc, lt] = await Promise.all([
@@ -34,20 +40,88 @@ export default function InvoicesPage() {
   // Invoice handlers
   const openCreateInvoice = () => {
     setInvForm({ number: `F-${Date.now().toString().slice(-6)}`, date: new Date().toISOString().split('T')[0], due_date: '', supplier: '', description: '', total_amount: 0, vat_amount: 0, account_number: '', distribution_key_id: '', status: 'unpaid' });
+    setAiHint(''); setPendingPdf(null);
     setInvoiceDialog(true);
+  };
+
+  const aiExtractFromPdf = async (file) => {
+    setAiExtracting(true);
+    setAiHint('');
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const copro = localStorage.getItem('copropriete_id') || '';
+      if (copro) fd.append('copropriete_id', copro);
+      const { data } = await api.post('/invoices-ai/extract', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      const ext = data.extracted || {};
+      if (!ext || Object.keys(ext).length === 0) {
+        setAiHint('Aucune donnee extraite, completez manuellement.');
+      } else {
+        setInvForm(f => ({
+          ...f,
+          number: ext.number || f.number,
+          date: ext.date || f.date,
+          due_date: ext.due_date || f.due_date,
+          supplier: ext.supplier_name || f.supplier,
+          description: ext.description || f.description,
+          total_amount: ext.total_amount || f.total_amount,
+          vat_amount: ext.vat_amount || f.vat_amount,
+          account_number: ext.suggested_pcmn_account || f.account_number,
+        }));
+        const parts = [];
+        if (ext.vat_number) parts.push(`TVA fourn.: ${ext.vat_number}`);
+        if (ext.iban) parts.push(`IBAN: ${ext.iban}`);
+        if (ext.vat_rate) parts.push(`Taux TVA: ${ext.vat_rate}%`);
+        if (data.supplier_match) parts.push(`Fournisseur reconnu dans la base.`);
+        else if (ext.supplier_name) parts.push(`Nouveau fournisseur: ${ext.supplier_name}`);
+        setAiHint(parts.join(' - '));
+        toast.success('Donnees extraites par IA - verifiez avant enregistrement.');
+      }
+      setPendingPdf({ file, filename: file.name });
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Echec extraction IA');
+    } finally { setAiExtracting(false); }
   };
 
   const saveInvoice = async () => {
     try {
-      await api.post('/invoices', { ...invForm, total_amount: Number(invForm.total_amount), vat_amount: Number(invForm.vat_amount) });
+      const { data: created } = await api.post('/invoices', { ...invForm, total_amount: Number(invForm.total_amount), vat_amount: Number(invForm.vat_amount) });
+      // If we have a pending PDF from AI extraction, attach it to the new invoice
+      if (pendingPdf && pendingPdf.file && created?.id) {
+        try {
+          const fd = new FormData();
+          fd.append('file', pendingPdf.file);
+          await api.post(`/invoices/${created.id}/attachments`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+        } catch (e) { console.warn('Attachment failed', e); }
+      }
       toast.success('Facture creee');
-      setInvoiceDialog(false); load();
+      setInvoiceDialog(false); setPendingPdf(null); load();
     } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); }
   };
 
   const deleteInvoice = async (id) => {
     if (!window.confirm('Supprimer cette facture ?')) return;
     await api.delete(`/invoices/${id}`); toast.success('Facture supprimee'); load();
+  };
+
+  const uploadInvoiceAttachment = async (invoiceId, file) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    try {
+      await api.post(`/invoices/${invoiceId}/attachments`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      toast.success('Piece jointe ajoutee');
+      const { data } = await api.get(`/invoices/${invoiceId}`);
+      setAttachDialogInv(data); load();
+    } catch (err) { toast.error(err.response?.data?.detail || 'Echec upload'); }
+  };
+
+  const deleteInvoiceAttachment = async (invoiceId, attachmentId) => {
+    if (!window.confirm('Supprimer cette piece jointe ?')) return;
+    try {
+      await api.delete(`/invoices/${invoiceId}/attachments/${attachmentId}`);
+      const { data } = await api.get(`/invoices/${invoiceId}`);
+      setAttachDialogInv(data); load();
+    } catch { toast.error('Erreur'); }
   };
 
   // Distribution key handlers
@@ -85,7 +159,19 @@ export default function InvoicesPage() {
         </TabsList>
 
         <TabsContent value="invoices" className="mt-0">
-          <div className="flex justify-end mb-4">
+          <div className="flex justify-end gap-2 mb-4">
+            <label className="inline-flex">
+              <Button type="button" variant="outline" className="border-purple-300 text-purple-700 hover:bg-purple-50" data-testid="ai-extract-btn"
+                onClick={() => document.getElementById('ai-pdf-input').click()} disabled={aiExtracting}>
+                <Sparkles size={16} className="mr-2" /> {aiExtracting ? 'Extraction IA...' : 'Importer facture PDF (IA)'}
+              </Button>
+              <input id="ai-pdf-input" type="file" accept="application/pdf" className="hidden" onChange={(e) => {
+                const f = e.target.files?.[0]; if (!f) return;
+                openCreateInvoice();
+                aiExtractFromPdf(f);
+                e.target.value = '';
+              }} />
+            </label>
             <Button onClick={openCreateInvoice} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="create-invoice-btn"><Plus size={16} className="mr-2" /> Nouvelle facture</Button>
           </div>
           <div className="bg-white rounded-md border border-slate-200 overflow-hidden">
@@ -112,7 +198,12 @@ export default function InvoicesPage() {
                       </Badge>
                     </TableCell>
                     <TableCell>
-                      <Button variant="ghost" size="sm" onClick={() => deleteInvoice(inv.id)} className="text-red-500"><Trash2 size={14} /></Button>
+                      <div className="flex gap-1 items-center">
+                        <Button variant="ghost" size="sm" onClick={() => setAttachDialogInv(inv)} data-testid={`inv-attach-${inv.id}`} title="Pieces jointes">
+                          <Paperclip size={14} />{(inv.attachments?.length || 0) > 0 && <span className="ml-1 text-xs">{inv.attachments.length}</span>}
+                        </Button>
+                        <Button variant="ghost" size="sm" onClick={() => deleteInvoice(inv.id)} className="text-red-500"><Trash2 size={14} /></Button>
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -154,6 +245,17 @@ export default function InvoicesPage() {
         <DialogContent className="max-w-2xl" data-testid="invoice-dialog">
           <DialogHeader><DialogTitle style={{fontFamily:'Chivo,sans-serif'}}>Nouvelle facture</DialogTitle></DialogHeader>
           <div className="space-y-4 mt-2">
+            {aiHint && (
+              <div className="text-xs px-3 py-2 rounded bg-purple-50 border border-purple-200 text-purple-800" data-testid="ai-hint">
+                <Sparkles size={12} className="inline mr-1" /> {aiHint}
+              </div>
+            )}
+            {pendingPdf && (
+              <div className="text-xs px-3 py-2 rounded bg-blue-50 border border-blue-200 text-blue-800 flex items-center justify-between">
+                <span><Paperclip size={12} className="inline mr-1" /> PDF a attacher: <b>{pendingPdf.filename}</b></span>
+                <button type="button" onClick={() => setPendingPdf(null)} className="text-blue-600 hover:text-blue-800"><X size={14} /></button>
+              </div>
+            )}
             <div className="grid grid-cols-3 gap-4">
               <div><label className="form-label">Numero *</label><Input value={invForm.number} onChange={e => setInvForm({...invForm, number: e.target.value})} data-testid="inv-number" /></div>
               <div><label className="form-label">Date *</label><Input type="date" value={invForm.date} onChange={e => setInvForm({...invForm, date: e.target.value})} /></div>
@@ -242,6 +344,37 @@ export default function InvoicesPage() {
             <div className="flex gap-3 justify-end">
               <Button variant="outline" onClick={() => setKeyDialog(false)}>Annuler</Button>
               <Button onClick={saveKey} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="key-save-btn">Creer</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+      {/* Attachments Dialog */}
+      <Dialog open={!!attachDialogInv} onOpenChange={() => setAttachDialogInv(null)}>
+        <DialogContent className="max-w-lg" data-testid="invoice-attach-dialog">
+          <DialogHeader><DialogTitle style={{fontFamily:'Chivo,sans-serif'}}>Pieces jointes - {attachDialogInv?.number}</DialogTitle></DialogHeader>
+          <div className="space-y-3 mt-2">
+            <div className="border-2 border-dashed rounded p-4 text-center">
+              <input type="file" accept="application/pdf,image/*" className="hidden" id="att-input-inv"
+                onChange={(e) => { const f = e.target.files?.[0]; if (f && attachDialogInv) uploadInvoiceAttachment(attachDialogInv.id, f); e.target.value=''; }} />
+              <Button variant="outline" onClick={() => document.getElementById('att-input-inv').click()} data-testid="upload-attachment-inv-btn">
+                <Paperclip size={14} className="mr-2" /> Ajouter un PDF / Image
+              </Button>
+              <div className="text-xs text-slate-500 mt-1">PDF, PNG ou JPG</div>
+            </div>
+            <div className="space-y-1 max-h-64 overflow-y-auto">
+              {(attachDialogInv?.attachments || []).length === 0 ? (
+                <div className="text-sm text-slate-400 text-center py-3">Aucune piece jointe</div>
+              ) : attachDialogInv.attachments.map((a) => (
+                <div key={a.id} className="flex items-center justify-between border rounded px-2 py-1.5 text-sm">
+                  <span className="truncate flex items-center gap-2"><Paperclip size={12} />{a.filename}</span>
+                  <div className="flex gap-1">
+                    <a href={`${API}/api/invoices/${attachDialogInv.id}/attachments/${a.id}/download`} target="_blank" rel="noreferrer">
+                      <Button variant="ghost" size="sm"><Download size={14} /></Button>
+                    </a>
+                    <Button variant="ghost" size="sm" className="text-red-500" onClick={() => deleteInvoiceAttachment(attachDialogInv.id, a.id)}><Trash2 size={14} /></Button>
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
         </DialogContent>

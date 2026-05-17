@@ -223,8 +223,10 @@ def create_exports_router(db):
         q = {"copropriete_id": copropriete_id} if copropriete_id else {}
         if date_from or date_to:
             q["date"] = {}
-            if date_from: q["date"]["$gte"] = date_from
-            if date_to: q["date"]["$lte"] = date_to
+            if date_from:
+                q["date"]["$gte"] = date_from
+            if date_to:
+                q["date"]["$lte"] = date_to
         entries = await db.journal_entries.find(q, {"_id": 0}).sort("date", 1).to_list(100000)
 
         wb = Workbook()

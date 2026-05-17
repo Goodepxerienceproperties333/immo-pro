@@ -391,6 +391,8 @@ from routes.reports import create_reports_router
 from routes.fund_calls import create_fund_calls_router
 from routes.demo_seed import create_demo_router
 from routes.owner_portal import create_owner_portal_router
+from routes.exports import create_exports_router, create_reminders_router
+from routes.invoice_ai import create_invoice_ai_router
 
 app.include_router(create_properties_router(db))
 app.include_router(create_accounting_router(db))
@@ -406,3 +408,6 @@ app.include_router(create_reports_router(db))
 app.include_router(create_fund_calls_router(db))
 app.include_router(create_demo_router(db))
 app.include_router(create_owner_portal_router(db))
+app.include_router(create_exports_router(db))
+app.include_router(create_reminders_router(db))
+app.include_router(create_invoice_ai_router(db))

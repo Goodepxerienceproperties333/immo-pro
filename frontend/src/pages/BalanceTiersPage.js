@@ -7,7 +7,9 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { toast } from 'sonner';
-import { Users, Truck, Eye, ArrowUpRight, ArrowDownRight } from 'lucide-react';
+import { Users, Truck, Eye, ArrowUpRight, ArrowDownRight, Download } from 'lucide-react';
+
+const API = process.env.REACT_APP_BACKEND_URL;
 
 export default function BalanceTiersPage() {
   const [tab, setTab] = useState('owners');
@@ -38,7 +40,13 @@ export default function BalanceTiersPage() {
 
   return (
     <div data-testid="balance-tiers-page">
-      <div className="page-header"><h1 className="page-title">Balance de Tiers</h1><p className="page-subtitle">Situation de compte des proprietaires et fournisseurs</p></div>
+      <div className="page-header flex items-start justify-between">
+        <div><h1 className="page-title">Balance de Tiers</h1><p className="page-subtitle">Situation de compte des proprietaires et fournisseurs</p></div>
+        <Button variant="outline" size="sm" data-testid="export-balance-tiers-xlsx"
+          onClick={() => { const c = localStorage.getItem('copropriete_id') || ''; window.open(`${API}/api/exports/balance-tiers/owners.xlsx${c ? '?copropriete_id=' + c : ''}`, '_blank'); }}>
+          <Download size={14} className="mr-1" /> Export Excel
+        </Button>
+      </div>
 
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList className="mb-4" data-testid="tiers-tabs">

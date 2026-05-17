@@ -1,8 +1,14 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, UploadFile, File
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime, timezone
+from pathlib import Path
 import uuid
+import os
+
+ATTACHMENTS_DIR = Path("/app/uploads/journal_attachments")
+ATTACHMENTS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 class JournalEntryLine(BaseModel):
@@ -177,10 +183,88 @@ def create_accounting_router(db):
 
     @router.delete("/entries/{entry_id}")
     async def delete_entry(entry_id: str):
+        # Also remove attachment files from disk
+        entry = await db.journal_entries.find_one({"id": entry_id}, {"_id": 0})
+        if entry:
+            for att in entry.get("attachments", []) or []:
+                try:
+                    p = att.get("stored_path")
+                    if p and Path(p).exists():
+                        Path(p).unlink()
+                except Exception:
+                    pass
         result = await db.journal_entries.delete_one({"id": entry_id})
         if result.deleted_count == 0:
             raise HTTPException(404, "Ecriture non trouvee")
         return {"message": "Ecriture supprimee"}
+
+    # ---- ATTACHMENTS for journal entries ----
+    @router.post("/entries/{entry_id}/attachments")
+    async def upload_entry_attachment(entry_id: str, file: UploadFile = File(...)):
+        """Attach a PDF document to a journal entry (Operations Diverses or any entry)."""
+        entry = await db.journal_entries.find_one({"id": entry_id}, {"_id": 0})
+        if not entry:
+            raise HTTPException(404, "Ecriture non trouvee")
+        ext = Path(file.filename or "file").suffix.lower()
+        if ext not in (".pdf", ".png", ".jpg", ".jpeg"):
+            raise HTTPException(400, "Format autorise: PDF, PNG, JPG")
+        att_id = str(uuid.uuid4())
+        stored_name = f"{att_id}{ext}"
+        stored_path = ATTACHMENTS_DIR / stored_name
+        content = await file.read()
+        with open(stored_path, "wb") as f:
+            f.write(content)
+        attachment = {
+            "id": att_id,
+            "filename": file.filename,
+            "stored_path": str(stored_path),
+            "mime_type": file.content_type or "application/octet-stream",
+            "size": len(content),
+            "uploaded_at": datetime.now(timezone.utc).isoformat(),
+        }
+        await db.journal_entries.update_one(
+            {"id": entry_id},
+            {"$push": {"attachments": attachment}}
+        )
+        return attachment
+
+    @router.get("/entries/{entry_id}/attachments/{attachment_id}/download")
+    async def download_entry_attachment(entry_id: str, attachment_id: str):
+        entry = await db.journal_entries.find_one({"id": entry_id}, {"_id": 0})
+        if not entry:
+            raise HTTPException(404, "Ecriture non trouvee")
+        for att in entry.get("attachments", []) or []:
+            if att.get("id") == attachment_id:
+                path = att.get("stored_path", "")
+                if not path or not Path(path).exists():
+                    raise HTTPException(404, "Fichier introuvable sur le disque")
+                return FileResponse(path, media_type=att.get("mime_type", "application/pdf"),
+                                    filename=att.get("filename", "attachment.pdf"))
+        raise HTTPException(404, "Piece jointe non trouvee")
+
+    @router.delete("/entries/{entry_id}/attachments/{attachment_id}")
+    async def delete_entry_attachment(entry_id: str, attachment_id: str):
+        entry = await db.journal_entries.find_one({"id": entry_id}, {"_id": 0})
+        if not entry:
+            raise HTTPException(404, "Ecriture non trouvee")
+        target = None
+        for att in entry.get("attachments", []) or []:
+            if att.get("id") == attachment_id:
+                target = att
+                break
+        if not target:
+            raise HTTPException(404, "Piece jointe non trouvee")
+        try:
+            p = target.get("stored_path")
+            if p and Path(p).exists():
+                Path(p).unlink()
+        except Exception:
+            pass
+        await db.journal_entries.update_one(
+            {"id": entry_id},
+            {"$pull": {"attachments": {"id": attachment_id}}}
+        )
+        return {"message": "Piece jointe supprimee"}
 
     # ---- BALANCE / BILAN ----
     @router.get("/balance")

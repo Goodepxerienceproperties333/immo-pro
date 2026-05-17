@@ -23,6 +23,7 @@ import DocumentsPage from "@/pages/DocumentsPage";
 import AdminUsersPage from "@/pages/AdminUsersPage";
 import CoproprietesPage from "@/pages/CoproprietesPage";
 import OwnerPortalPage from "@/pages/OwnerPortalPage";
+import RemindersPage from "@/pages/RemindersPage";
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
@@ -59,6 +60,7 @@ function AppRoutes() {
         <Route path="banking" element={<BankingPage />} />
         <Route path="reports" element={<ReportsPage />} />
         <Route path="balance-tiers" element={<BalanceTiersPage />} />
+        <Route path="reminders" element={<RemindersPage />} />
         <Route path="documents" element={<DocumentsPage />} />
         <Route path="admin/users" element={<AdminUsersPage />} />
       </Route>

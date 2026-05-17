@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, Fragment } from 'react';
 import api from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -30,6 +30,18 @@ export default function ReportsPage() {
   const loadDecomptes = async () => { setLoading(true); try { const params = {}; if (dateFrom) params.date_from = dateFrom; if (dateTo) params.date_to = dateTo; const { data } = await api.get('/reports/decompte', { params }); setDecomptes(data); } catch { toast.error('Erreur'); } finally { setLoading(false); } };
 
   const downloadPdf = (ownerId) => { window.open(`${API}/api/reports/decompte/pdf/${ownerId}?date_from=${dateFrom || '2024-01-01'}&date_to=${dateTo || '2024-12-31'}`, '_blank'); };
+  const copro = typeof window !== 'undefined' ? localStorage.getItem('copropriete_id') || '' : '';
+  const xlsxParam = copro ? `?copropriete_id=${copro}` : '';
+  const exportBilanXlsx = () => window.open(`${API}/api/exports/bilan.xlsx${xlsxParam}${dateTo ? (xlsxParam ? '&' : '?') + 'date_to=' + dateTo : ''}`, '_blank');
+  const exportBalanceTiersXlsx = () => window.open(`${API}/api/exports/balance-tiers/owners.xlsx${xlsxParam}`, '_blank');
+  const exportGrandLivreXlsx = () => {
+    const params = new URLSearchParams();
+    if (copro) params.set('copropriete_id', copro);
+    if (dateFrom) params.set('date_from', dateFrom);
+    if (dateTo) params.set('date_to', dateTo);
+    const qs = params.toString();
+    window.open(`${API}/api/exports/grand-livre.xlsx${qs ? '?' + qs : ''}`, '_blank');
+  };
 
   const DateFilters = ({ onLoad, label }) => (
     <Card className="border-slate-200 mb-6"><CardContent className="p-4"><div className="flex flex-wrap gap-4 items-end">
@@ -47,39 +59,76 @@ export default function ReportsPage() {
 
         <TabsContent value="balance" className="mt-0">
           <DateFilters onLoad={loadBalance} label="Charger balance" />
-          {balance && (<div className="bg-white rounded-md border border-slate-200 overflow-hidden">
+          {balance && (<>
+            <div className="flex justify-end mb-2"><Button onClick={exportGrandLivreXlsx} variant="outline" size="sm" data-testid="export-balance-xlsx"><Download size={14} className="mr-1" /> Export Grand Livre Excel</Button></div>
+            <div className="bg-white rounded-md border border-slate-200 overflow-hidden">
             <Table><TableHeader><TableRow><TableHead>Compte</TableHead><TableHead>Libelle</TableHead><TableHead className="text-right">Total Debit</TableHead><TableHead className="text-right">Total Credit</TableHead><TableHead className="text-right">Solde Debit</TableHead><TableHead className="text-right">Solde Credit</TableHead></TableRow></TableHeader>
               <TableBody>
                 {balance.accounts.map((a, i) => (<TableRow key={i} className="hover:bg-slate-50/50"><TableCell className="font-mono text-sm">{a.account_number}</TableCell><TableCell className="text-sm">{a.account_name}</TableCell><TableCell className="text-right font-mono">{a.total_debit.toFixed(2)}</TableCell><TableCell className="text-right font-mono">{a.total_credit.toFixed(2)}</TableCell><TableCell className="text-right font-mono">{a.solde_debit > 0 ? a.solde_debit.toFixed(2) : ''}</TableCell><TableCell className="text-right font-mono">{a.solde_credit > 0 ? a.solde_credit.toFixed(2) : ''}</TableCell></TableRow>))}
                 <TableRow className="bg-slate-50 font-bold"><TableCell colSpan={2}>TOTAUX</TableCell><TableCell className="text-right font-mono">{balance.totals.total_debit.toFixed(2)}</TableCell><TableCell className="text-right font-mono">{balance.totals.total_credit.toFixed(2)}</TableCell><TableCell className="text-right font-mono">{balance.totals.solde_debit.toFixed(2)}</TableCell><TableCell className="text-right font-mono">{balance.totals.solde_credit.toFixed(2)}</TableCell></TableRow>
               </TableBody>
             </Table>
-          </div>)}
+          </div></>)}
         </TabsContent>
 
         <TabsContent value="bilan" className="mt-0">
           <DateFilters onLoad={loadBilan} label="Charger bilan" />
-          {bilan && (<div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {bilan && (<>
+            <div className="flex justify-end mb-2"><Button onClick={exportBilanXlsx} variant="outline" size="sm" data-testid="export-bilan-xlsx"><Download size={14} className="mr-1" /> Export Bilan Excel</Button></div>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <Card className="border-slate-200"><CardHeader className="bg-blue-50 rounded-t-md"><CardTitle className="text-base" style={{fontFamily:'Chivo,sans-serif'}}>ACTIF</CardTitle></CardHeader><CardContent className="p-0">
-              <Table><TableBody>{bilan.actif.map((a, i) => (<TableRow key={i}><TableCell className="font-mono text-sm">{a.account_number}</TableCell><TableCell>{a.account_name}</TableCell><TableCell className="text-right font-mono">{a.amount.toFixed(2)}</TableCell></TableRow>))}<TableRow className="bg-blue-50 font-bold"><TableCell colSpan={2}>TOTAL ACTIF</TableCell><TableCell className="text-right font-mono">{bilan.total_actif.toFixed(2)} EUR</TableCell></TableRow></TableBody></Table>
+              <Table><TableBody>
+                {bilan.actif.map((r, i) => (
+                  <Fragment key={`a-${i}`}>
+                    <TableRow className="bg-slate-50/70"><TableCell colSpan={2} className="font-semibold text-xs uppercase text-slate-700">{r.label}</TableCell><TableCell className="text-right font-mono font-semibold">{r.total.toFixed(2)}</TableCell></TableRow>
+                    {(r.accounts || []).map((a, j) => (<TableRow key={`a-${i}-${j}`}><TableCell className="font-mono text-sm pl-6">{a.account_number}</TableCell><TableCell className="text-sm">{a.account_name}</TableCell><TableCell className="text-right font-mono text-sm">{a.amount.toFixed(2)}</TableCell></TableRow>))}
+                  </Fragment>
+                ))}
+                <TableRow className="bg-blue-50 font-bold border-t-2 border-blue-200"><TableCell colSpan={2}>TOTAL ACTIF</TableCell><TableCell className="text-right font-mono">{bilan.total_actif.toFixed(2)} EUR</TableCell></TableRow>
+              </TableBody></Table>
             </CardContent></Card>
             <Card className="border-slate-200"><CardHeader className="bg-green-50 rounded-t-md"><CardTitle className="text-base" style={{fontFamily:'Chivo,sans-serif'}}>PASSIF</CardTitle></CardHeader><CardContent className="p-0">
-              <Table><TableBody>{bilan.passif.map((p, i) => (<TableRow key={i}><TableCell className="font-mono text-sm">{p.account_number}</TableCell><TableCell>{p.account_name}</TableCell><TableCell className="text-right font-mono">{p.amount.toFixed(2)}</TableCell></TableRow>))}<TableRow className="bg-green-50 font-bold"><TableCell colSpan={2}>TOTAL PASSIF</TableCell><TableCell className="text-right font-mono">{bilan.total_passif.toFixed(2)} EUR</TableCell></TableRow></TableBody></Table>
+              <Table><TableBody>
+                {bilan.passif.map((r, i) => (
+                  <Fragment key={`p-${i}`}>
+                    <TableRow className="bg-slate-50/70"><TableCell colSpan={2} className="font-semibold text-xs uppercase text-slate-700">{r.label}</TableCell><TableCell className="text-right font-mono font-semibold">{r.total.toFixed(2)}</TableCell></TableRow>
+                    {(r.accounts || []).map((a, j) => (<TableRow key={`p-${i}-${j}`}><TableCell className="font-mono text-sm pl-6">{a.account_number}</TableCell><TableCell className="text-sm">{a.account_name}</TableCell><TableCell className="text-right font-mono text-sm">{a.amount.toFixed(2)}</TableCell></TableRow>))}
+                  </Fragment>
+                ))}
+                <TableRow className="bg-green-50 font-bold border-t-2 border-green-200"><TableCell colSpan={2}>TOTAL PASSIF</TableCell><TableCell className="text-right font-mono">{bilan.total_passif.toFixed(2)} EUR</TableCell></TableRow>
+              </TableBody></Table>
             </CardContent></Card>
-          </div>)}
+            {!bilan.equilibre && <div className="col-span-full text-center text-xs text-red-600">Ecart bilan: {bilan.ecart?.toFixed(2)} EUR (non equilibre)</div>}
+          </div></>)}
         </TabsContent>
 
         <TabsContent value="resultat" className="mt-0">
           <DateFilters onLoad={loadResultat} label="Charger resultat" />
           {resultat && (<div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <Card className="border-slate-200"><CardHeader className="bg-red-50 rounded-t-md"><CardTitle className="text-base" style={{fontFamily:'Chivo,sans-serif'}}>CHARGES (Classe 6)</CardTitle></CardHeader><CardContent className="p-0">
-              <Table><TableBody>{resultat.charges.map((c, i) => (<TableRow key={i}><TableCell className="font-mono text-sm">{c.account_number}</TableCell><TableCell className="text-sm">{c.account_name}</TableCell><TableCell className="text-right font-mono">{c.amount.toFixed(2)}</TableCell></TableRow>))}<TableRow className="bg-red-50 font-bold"><TableCell colSpan={2}>TOTAL CHARGES</TableCell><TableCell className="text-right font-mono">{resultat.total_charges.toFixed(2)} EUR</TableCell></TableRow></TableBody></Table>
+              <Table><TableBody>
+                {resultat.charges.map((r, i) => (
+                  <Fragment key={`c-${i}`}>
+                    <TableRow className="bg-slate-50/70"><TableCell colSpan={2} className="font-semibold text-xs uppercase text-slate-700">{r.label}</TableCell><TableCell className="text-right font-mono font-semibold">{r.total.toFixed(2)}</TableCell></TableRow>
+                    {(r.accounts || []).map((a, j) => (<TableRow key={`c-${i}-${j}`}><TableCell className="font-mono text-sm pl-6">{a.account_number}</TableCell><TableCell className="text-sm">{a.account_name}</TableCell><TableCell className="text-right font-mono text-sm">{a.amount.toFixed(2)}</TableCell></TableRow>))}
+                  </Fragment>
+                ))}
+                <TableRow className="bg-red-50 font-bold border-t-2 border-red-200"><TableCell colSpan={2}>TOTAL CHARGES</TableCell><TableCell className="text-right font-mono">{resultat.total_charges.toFixed(2)} EUR</TableCell></TableRow>
+              </TableBody></Table>
             </CardContent></Card>
             <Card className="border-slate-200"><CardHeader className="bg-green-50 rounded-t-md"><CardTitle className="text-base" style={{fontFamily:'Chivo,sans-serif'}}>PRODUITS (Classe 7)</CardTitle></CardHeader><CardContent className="p-0">
-              <Table><TableBody>{resultat.produits.map((p, i) => (<TableRow key={i}><TableCell className="font-mono text-sm">{p.account_number}</TableCell><TableCell className="text-sm">{p.account_name}</TableCell><TableCell className="text-right font-mono">{p.amount.toFixed(2)}</TableCell></TableRow>))}<TableRow className="bg-green-50 font-bold"><TableCell colSpan={2}>TOTAL PRODUITS</TableCell><TableCell className="text-right font-mono">{resultat.total_produits.toFixed(2)} EUR</TableCell></TableRow></TableBody></Table>
+              <Table><TableBody>
+                {resultat.produits.map((r, i) => (
+                  <Fragment key={`pr-${i}`}>
+                    <TableRow className="bg-slate-50/70"><TableCell colSpan={2} className="font-semibold text-xs uppercase text-slate-700">{r.label}</TableCell><TableCell className="text-right font-mono font-semibold">{r.total.toFixed(2)}</TableCell></TableRow>
+                    {(r.accounts || []).map((a, j) => (<TableRow key={`pr-${i}-${j}`}><TableCell className="font-mono text-sm pl-6">{a.account_number}</TableCell><TableCell className="text-sm">{a.account_name}</TableCell><TableCell className="text-right font-mono text-sm">{a.amount.toFixed(2)}</TableCell></TableRow>))}
+                  </Fragment>
+                ))}
+                <TableRow className="bg-green-50 font-bold border-t-2 border-green-200"><TableCell colSpan={2}>TOTAL PRODUITS</TableCell><TableCell className="text-right font-mono">{resultat.total_produits.toFixed(2)} EUR</TableCell></TableRow>
+              </TableBody></Table>
             </CardContent></Card>
             <Card className={`border-2 col-span-full ${resultat.resultat >= 0 ? 'border-green-300 bg-green-50' : 'border-red-300 bg-red-50'}`}><CardContent className="p-6 text-center">
-              <div className="text-sm text-slate-600 mb-1">Resultat de l'exercice</div>
+              <div className="text-sm text-slate-600 mb-1">Resultat de l'exercice ({resultat.resultat_label})</div>
               <div className={`text-3xl font-black tracking-tight ${resultat.resultat >= 0 ? 'text-green-700' : 'text-red-700'}`} style={{fontFamily:'Chivo,sans-serif'}}>{resultat.resultat.toFixed(2)} EUR</div>
             </CardContent></Card>
           </div>)}

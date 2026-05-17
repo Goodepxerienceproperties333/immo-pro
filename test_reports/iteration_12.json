@@ -1,0 +1,38 @@
+{
+  "summary": "Iter12 backend testing: Bilan/Resultat rubriques, Excel exports, late-payments reminders, Invoice AI extract, NEW Attachments on journal entries + invoices, RBAC + regression. Created /app/backend/tests/test_iter12_features.py (20 tests, 7 classes). Result: 20/20 PASS. Regression iter11 = 29/30 PASS (1 skipped, no failures). No backend bugs found in the iter12 scope.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/invoices", "issue": "Pydantic schema requires BOTH legacy fields (number, date, supplier, total_amount) AND the newer fields (invoice_number, invoice_date, supplier_id, amount_ttc). Initial test sent only the new field names and got 422. Recommend deprecating legacy fields or making them computed/aliased to reduce coupling for new clients."},
+      {"endpoint": "/api/exports/bilan.xlsx", "issue": "exports.py:133-135 imports routes.reports._apply_copro and create_reports_router but never actually uses them — dead imports. Cleanup recommended."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter12_features.py",
+    "/app/test_reports/pytest/iter12.xml",
+    "/app/test_reports/pytest/iter12_regression.xml"
+  ],
+  "action_items": [
+    "Optional: cleanup dead imports in /app/backend/routes/exports.py (lines 133-135) — _apply_copro and create_reports_router are imported but never used inside export_bilan.",
+    "Optional: harmonise the Invoice pydantic model so that legacy aliases (number/date/supplier/total_amount) are no longer mandatory when invoice_number/invoice_date/supplier_id/amount_ttc are present (or vice versa). Currently both sets are required, which is confusing for API consumers and was the only test fix needed.",
+    "Optional: in iter11 stale tests (test_iter10_rbac.py - 3 obsolete) still pending cleanup from previous iteration."
+  ],
+  "critical_code_review_comments": [
+    "routes/exports.py export_balance_tiers_owners(): O(owners x fund_calls x distribution) + O(owners x txns) nested loops will degrade for big copros. Recommend pre-aggregating fund_calls into a {owner_id: amount} dict once before the loop. Same pattern reused in /reminders/late-payments and /reminders/owner/{id}/letter.",
+    "routes/exports.py reminder PDF letter uses fc.due_date OR fc.date as fallback for unpaid_items — but list_late_payments only uses due_date. The same unpaid item can show with different days_late between the list view and the letter PDF (inconsistent UX). Recommend single source of truth.",
+    "routes/exports.py: no RBAC enforced at route level — relies entirely on the global path-prefix whitelist in server.py. If middleware regression occurs, exports become wide-open to owners. Defense-in-depth: add an explicit role check.",
+    "routes/accounting.py attachments: ATTACHMENTS_DIR must be on a persistent volume. If it lives in a container ephemeral path, attachments are lost on pod restart. Verify path is /app/uploads or mounted.",
+    "routes/accounting.py upload_entry_attachment + invoices.py upload_invoice_attachment: file size is unbounded — server reads file.read() fully into memory. Add max size guard (e.g. 25 MB) and stream to disk to prevent OOM/DoS on large uploads.",
+    "Attachments: filename stored as-is from the uploaded client (file.filename). Could contain path traversal characters or scripts if later rendered in HTML. The stored_name uses uuid+ext which is safe, but ensure the API never echoes the raw filename into any HTML context without escaping.",
+    "Attachments: download_entry_attachment / download_invoice_attachment do not validate that the stored_path is inside ATTACHMENTS_DIR. If an attacker can write to the DB (or via SSRF), they could request reading arbitrary files. Recommend a Path.resolve() containment check before FileResponse."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter12_features.py (NEW)"],
+  "success_rate": {"backend": "100% (20/20 iter12 + 29/30 iter11 regression - 1 skipped, 0 failures)", "frontend": "n/a (skipped per request)"},
+  "test_credentials": "Superadmin: admin@copro.be / admin123. Owner created/cleaned during test: TEST_iter12_owner@example.com / ownerpass123.",
+  "seed_data_creation": "Tests create+delete: 1 owner user (TEST_iter12_owner@example.com), 1 journal entry (TEST-ITER12-OD) with 2 attachments (PDF+PNG), 1 invoice (TEST-ITER12-INV) with 1 PDF attachment. All cleaned up in test teardown via API DELETE. No DB pollution.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "iter12 covers Bilan/Resultat rubriques, Excel exports (balance-tiers/owners, bilan, grand-livre), reminders (late-payments list + per-owner PDF letter), invoice-AI extract (returns 200 with {} extracted if no LLM key – expected fallback), and the NEW attachments feature on journal entries AND invoices. Both attachment routes accept PDF/PNG/JPG only, reject .exe/.txt with 400, persist via $push into entity.attachments[], support GET download (PDF magic bytes verified), DELETE removes file from disk + pulls from array, and entry/invoice DELETE cleans up attachments. RBAC verified for role=owner. iter11 regression all green. Existing test_iter9_auth_middleware.py uses os.environ.get('REACT_APP_BACKEND_URL').rstrip() directly and will fail to collect under pytest unless REACT_APP_BACKEND_URL is exported first — minor pre-existing issue, not introduced by iter12.",
+  "rca of the issue": "No bugs found in iter12 scope. Only test-side fix: POST /api/invoices requires both legacy (number/date/supplier/total_amount) and modern (invoice_number/invoice_date/supplier_id/amount_ttc) fields together — payload was updated accordingly. Could be cleaned up in the Invoice pydantic model as a future enhancement."
+}
