@@ -10,7 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { Plus, Pencil, Trash2, Home, Search, Archive, RotateCcw, Landmark, PlusCircle, X } from 'lucide-react';
+import { Plus, Pencil, Trash2, Home, Search, Archive, RotateCcw, Landmark, PlusCircle, X, Eraser } from 'lucide-react';
 
 const emptyBank = { iban: '', bic: '', account_type: 'vue', is_default: false, label: '' };
 const emptyLot = { number: '', description: '', lot_type: 'apartment', floor: 0, area: 0, quotity: 0 };
@@ -111,6 +111,27 @@ export default function CoproprietesPage() {
   const handleDelete = async (id) => { if (!window.confirm('Supprimer cette copropriete ?')) return; try { await api.delete(`/coproprietes/${id}`); toast.success('Supprimee'); load(); } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); } };
   const handleArchive = async (id) => { try { await api.post(`/coproprietes/${id}/archive`); toast.success('Archivee'); load(); } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); } };
   const handleUnarchive = async (id) => { try { await api.post(`/coproprietes/${id}/unarchive`); toast.success('Reactivee'); load(); } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); } };
+  const handleResetData = async (c) => {
+    const msg = `Vider TOUTES les donnees comptables de "${c.name}" ?\n\n` +
+                `Seront SUPPRIMES : factures, ecritures, appels de fonds, transactions bancaires,\n` +
+                `budgets, exercices, regularisations, natures de depense, documents uploades.\n\n` +
+                `Seront GARDES : lots, proprietaires, fournisseurs, PCMN, cles de repartition, banques.\n\n` +
+                `Tape "VIDER" pour confirmer :`;
+    const confirm = window.prompt(msg);
+    if (confirm !== 'VIDER') {
+      if (confirm !== null) toast.error('Reset annule (confirmation incorrecte)');
+      return;
+    }
+    try {
+      const { data } = await api.post(`/coproprietes/${c.id}/reset-financial-data`);
+      const s = data.stats || {};
+      const total = (s.invoices||0) + (s.journal_entries||0) + (s.fund_calls||0) +
+                    (s.bank_transactions||0) + (s.budgets||0) + (s.fiscal_years||0) +
+                    (s.expense_categories||0) + (s.documents||0) + (s.regularizations||0);
+      toast.success(`ACP videe : ${total} elements supprimes (${s.deleted_files||0} fichier(s) disque)`);
+      load();
+    } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); }
+  };
 
   const getDefaultIban = (c) => (c.bank_accounts || []).find(b => b.is_default)?.iban || (c.bank_accounts || [])[0]?.iban || c.bank_account || '-';
 
@@ -127,7 +148,7 @@ export default function CoproprietesPage() {
       <div className="bg-white rounded-md border border-slate-200 overflow-hidden">
         <Table>
           <TableHeader><TableRow>
-            <TableHead>Ref</TableHead><TableHead>Nom</TableHead><TableHead>BCE</TableHead><TableHead>Ville</TableHead><TableHead>Compte defaut</TableHead><TableHead>Statut</TableHead><TableHead className="w-24">Actions</TableHead>
+            <TableHead>Ref</TableHead><TableHead>Nom</TableHead><TableHead>BCE</TableHead><TableHead>Ville</TableHead><TableHead>Compte defaut</TableHead><TableHead>Statut</TableHead><TableHead className="w-32">Actions</TableHead>
           </TableRow></TableHeader>
           <TableBody>
             {filtered.length === 0 ? <TableRow><TableCell colSpan={7} className="text-center py-8 text-slate-400">Aucune copropriete</TableCell></TableRow> : filtered.map(c => (
@@ -139,10 +160,11 @@ export default function CoproprietesPage() {
                 <TableCell className="font-mono text-xs">{getDefaultIban(c)}</TableCell>
                 <TableCell><Badge variant="outline" className={c.status === 'archived' ? 'bg-slate-100 text-slate-500' : 'bg-green-50 text-green-700 border-green-200'}>{c.status === 'archived' ? 'Archive' : 'Active'}</Badge></TableCell>
                 <TableCell><div className="flex gap-0">
-                  {isManager && <Button variant="ghost" size="sm" onClick={() => openEdit(c)}><Pencil size={13} /></Button>}
-                  {isManager && c.status !== 'archived' && <Button variant="ghost" size="sm" onClick={() => handleArchive(c.id)} className="text-orange-500"><Archive size={13} /></Button>}
-                  {isManager && c.status === 'archived' && <Button variant="ghost" size="sm" onClick={() => handleUnarchive(c.id)} className="text-green-600"><RotateCcw size={13} /></Button>}
-                  {isAdmin && <Button variant="ghost" size="sm" onClick={() => handleDelete(c.id)} className="text-red-500"><Trash2 size={13} /></Button>}
+                  {isManager && <Button variant="ghost" size="sm" onClick={() => openEdit(c)} title="Modifier"><Pencil size={13} /></Button>}
+                  {isManager && <Button variant="ghost" size="sm" onClick={() => handleResetData(c)} className="text-amber-600 hover:text-amber-700" title="Vider les donnees comptables (test)" data-testid={`reset-data-${c.id}`}><Eraser size={13} /></Button>}
+                  {isManager && c.status !== 'archived' && <Button variant="ghost" size="sm" onClick={() => handleArchive(c.id)} className="text-orange-500" title="Archiver"><Archive size={13} /></Button>}
+                  {isManager && c.status === 'archived' && <Button variant="ghost" size="sm" onClick={() => handleUnarchive(c.id)} className="text-green-600" title="Reactiver"><RotateCcw size={13} /></Button>}
+                  {isAdmin && <Button variant="ghost" size="sm" onClick={() => handleDelete(c.id)} className="text-red-500" title="Supprimer (cascade)"><Trash2 size={13} /></Button>}
                 </div></TableCell>
               </TableRow>
             ))}

@@ -238,4 +238,75 @@ def create_coproprietes_router(db):
             raise HTTPException(404, "Copropriete non trouvee")
         return {"message": "Copropriete reactivee"}
 
+    @router.post("/{copro_id}/reset-financial-data")
+    async def reset_financial_data(copro_id: str, request: Request):
+        """Vide TOUTES les donnees comptables/financieres d'une ACP pour repartir
+        de zero, en gardant :
+        - L'ACP (config, banques, BCE, IBAN)
+        - Les lots et quotites
+        - Les proprietaires (nom, email, VCS, comptes tiers 40000XXX/40010XXX)
+        - Les fournisseurs (nom, comptes tiers 44000XXX)
+        - Le PCMN de l'ACP
+        - Les cles de repartition
+
+        Supprime :
+        - Factures + pieces jointes
+        - Ecritures comptables + pieces jointes
+        - Appels de fonds
+        - Transactions bancaires
+        - Budgets, exercices fiscaux, regularisations
+        - Natures de depense
+        - Documents uploades
+
+        Accessible aux syndic/superadmin/gestionnaire.
+        """
+        await _get_manager(request)
+
+        copro = await db.coproprietes.find_one({"id": copro_id}, {"_id": 0, "name": 1})
+        if not copro:
+            raise HTTPException(404, "Copropriete non trouvee")
+
+        from pathlib import Path
+        deleted_files = 0
+        # Cleanup pieces jointes disque (factures + journal entries)
+        for coll, dirname in [("invoices", "invoice_attachments"),
+                              ("journal_entries", "journal_attachments")]:
+            cursor = db[coll].find(
+                {"copropriete_id": copro_id, "attachments": {"$exists": True, "$ne": []}},
+                {"_id": 0, "attachments": 1}
+            )
+            async for doc in cursor:
+                for att in doc.get("attachments", []) or []:
+                    fp = Path(f"/app/uploads/{dirname}") / (att.get("stored_filename") or "")
+                    if fp.exists() and fp.is_file():
+                        try:
+                            fp.unlink()
+                            deleted_files += 1
+                        except Exception:
+                            pass
+        # Cleanup documents uploades
+        cursor = db.documents.find({"copropriete_id": copro_id}, {"_id": 0, "stored_filename": 1})
+        async for doc in cursor:
+            sf = doc.get("stored_filename") or ""
+            for sub in ["/app/uploads/documents", "/app/uploads"]:
+                fp = Path(sub) / sf
+                if fp.exists() and fp.is_file():
+                    try:
+                        fp.unlink()
+                        deleted_files += 1
+                    except Exception:
+                        pass
+
+        collections_to_clear = [
+            "invoices", "journal_entries", "fund_calls", "bank_transactions",
+            "budgets", "fiscal_years", "regularizations", "expense_categories",
+            "documents",
+        ]
+        stats = {"name": copro.get("name", ""), "deleted_files": deleted_files}
+        for coll in collections_to_clear:
+            res = await db[coll].delete_many({"copropriete_id": copro_id})
+            stats[coll] = res.deleted_count
+
+        return {"status": "ok", "copropriete": copro.get("name", ""), "stats": stats}
+
     return router
