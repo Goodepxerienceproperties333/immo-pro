@@ -213,7 +213,8 @@ async def register(data: RegisterInput, response: Response):
 
 @auth_router.get("/me")
 async def get_me(request: Request):
-    return await get_current_user(request)
+    user = await get_current_user(request)
+    return user_response(user)
 
 @auth_router.post("/logout")
 async def logout(response: Response):

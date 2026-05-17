@@ -29,12 +29,26 @@ def create_demo_router(db):
         await _admin(request)
         existing = await db.coproprietes.find_one({"name": "Demo - Residence Les Tilleuls"}, {"_id": 0})
         if existing:
+            copro_id = existing["id"]
+            counts = {
+                "owners": await db.owners.count_documents({}),  # owners are global
+                "lots": await db.lots.count_documents({"copropriete_id": copro_id}),
+                "suppliers": await db.suppliers.count_documents({}),  # suppliers are global
+                "invoices": await db.invoices.count_documents({"copropriete_id": copro_id}),
+                "fund_calls": await db.fund_calls.count_documents({"copropriete_id": copro_id}),
+                "transactions": await db.bank_transactions.count_documents({"copropriete_id": copro_id}),
+                "journal_entries": await db.journal_entries.count_documents({"copropriete_id": copro_id}),
+                "categories": await db.document_categories.count_documents({"copropriete_id": copro_id}),
+                "distribution_keys": await db.distribution_keys.count_documents({"copropriete_id": copro_id}),
+                "pcmn_accounts": await db.pcmn_accounts.count_documents({"copropriete_id": copro_id}),
+            }
             return {
                 "message": "Donnees de demo deja presentes",
-                "copropriete_id": existing["id"],
+                "copropriete_id": copro_id,
                 "reference": existing.get("reference"),
                 "name": existing["name"],
                 "already_exists": True,
+                "counts": counts,
             }
         now = datetime.now(timezone.utc)
         iso = now.isoformat()
