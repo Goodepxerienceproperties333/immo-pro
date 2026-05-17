@@ -59,6 +59,26 @@ def create_properties_router(db):
         await db.owners.insert_one(doc)
         return {k: v for k, v in doc.items() if k != "_id"}
 
+    @router.get("/owners/check-duplicate")
+    async def check_duplicate_owner(email: Optional[str] = None, phone: Optional[str] = None):
+        """Check if email or phone already exists across all coproprietes."""
+        duplicates = []
+        if email and email.strip():
+            found = await db.owners.find(
+                {"$or": [{"email": email.strip()}, {"email2": email.strip()}]},
+                {"_id": 0, "name": 1, "email": 1, "phone": 1, "copropriete_id": 1}
+            ).to_list(10)
+            for f in found:
+                duplicates.append({"field": "email", "value": email, "owner_name": f.get("name", ""), "copropriete_id": f.get("copropriete_id", "")})
+        if phone and phone.strip():
+            found = await db.owners.find(
+                {"$or": [{"phone": phone.strip()}, {"phone2": phone.strip()}]},
+                {"_id": 0, "name": 1, "email": 1, "phone": 1, "copropriete_id": 1}
+            ).to_list(10)
+            for f in found:
+                duplicates.append({"field": "phone", "value": phone, "owner_name": f.get("name", ""), "copropriete_id": f.get("copropriete_id", "")})
+        return {"duplicates": duplicates, "has_duplicates": len(duplicates) > 0}
+
     @router.get("/owners/lookup-vcs")
     async def lookup_vcs(vcs: str = ""):
         if not vcs:

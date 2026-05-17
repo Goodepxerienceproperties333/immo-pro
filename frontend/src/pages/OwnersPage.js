@@ -4,8 +4,9 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { Plus, Pencil, Trash2, Search } from 'lucide-react';
+import { Plus, Pencil, Trash2, Search, AlertTriangle } from 'lucide-react';
 
 const emptyForm = { first_name: '', last_name: '', address: '', postal_code: '', city: '', country: 'Belgique', email: '', email2: '', phone: '', phone2: '' };
 
@@ -15,6 +16,7 @@ export default function OwnersPage() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState(emptyForm);
+  const [duplicates, setDuplicates] = useState([]);
 
   const load = useCallback(async () => { const { data } = await api.get('/owners'); setOwners(data); }, []);
   useEffect(() => { load(); }, [load]);
@@ -24,8 +26,20 @@ export default function OwnersPage() {
     return (o.name || '').toLowerCase().includes(s) || (o.last_name || '').toLowerCase().includes(s) || (o.first_name || '').toLowerCase().includes(s) || (o.email || '').toLowerCase().includes(s) || (o.vcs_code || '').includes(s);
   });
 
-  const openCreate = () => { setEditing(null); setForm(emptyForm); setDialogOpen(true); };
-  const openEdit = (o) => { setEditing(o); setForm({ first_name: o.first_name || '', last_name: o.last_name || o.name || '', address: o.address || '', postal_code: o.postal_code || '', city: o.city || '', country: o.country || 'Belgique', email: o.email || '', email2: o.email2 || '', phone: o.phone || '', phone2: o.phone2 || '' }); setDialogOpen(true); };
+  const openCreate = () => { setEditing(null); setForm(emptyForm); setDuplicates([]); setDialogOpen(true); };
+  const openEdit = (o) => { setEditing(o); setForm({ first_name: o.first_name || '', last_name: o.last_name || o.name || '', address: o.address || '', postal_code: o.postal_code || '', city: o.city || '', country: o.country || 'Belgique', email: o.email || '', email2: o.email2 || '', phone: o.phone || '', phone2: o.phone2 || '' }); setDuplicates([]); setDialogOpen(true); };
+
+  // Duplicate detection
+  const checkDuplicate = async (field, value) => {
+    if (!value || value.length < 3 || editing) return;
+    try {
+      const params = {};
+      params[field] = value;
+      const { data } = await api.get('/owners/check-duplicate', { params });
+      if (data.has_duplicates) setDuplicates(data.duplicates);
+      else setDuplicates(prev => prev.filter(d => d.field !== field));
+    } catch {}
+  };
 
   const handleSave = async () => {
     try {
@@ -90,13 +104,24 @@ export default function OwnersPage() {
               {F('country', 'Pays')}
             </div>
             <div className="grid grid-cols-2 gap-4">
-              {F('email', 'Email')}
-              {F('email2', 'Email 2')}
+              <div><label className="form-label">Email</label><Input value={form.email} onChange={e => setForm({...form, email: e.target.value})} onBlur={e => checkDuplicate('email', e.target.value)} data-testid="owner-email-input" /></div>
+              <div><label className="form-label">Email 2</label><Input value={form.email2} onChange={e => setForm({...form, email2: e.target.value})} data-testid="owner-email2-input" /></div>
             </div>
             <div className="grid grid-cols-2 gap-4">
-              {F('phone', 'GSM')}
-              {F('phone2', 'GSM 2')}
+              <div><label className="form-label">GSM</label><Input value={form.phone} onChange={e => setForm({...form, phone: e.target.value})} onBlur={e => checkDuplicate('phone', e.target.value)} data-testid="owner-phone-input" /></div>
+              <div><label className="form-label">GSM 2</label><Input value={form.phone2} onChange={e => setForm({...form, phone2: e.target.value})} data-testid="owner-phone2-input" /></div>
             </div>
+            {duplicates.length > 0 && (
+              <div className="bg-yellow-50 border border-yellow-200 rounded-md p-3 flex items-start gap-2">
+                <AlertTriangle size={16} className="text-yellow-600 flex-shrink-0 mt-0.5" />
+                <div className="text-sm">
+                  <div className="font-semibold text-yellow-800">Doublon detecte !</div>
+                  {duplicates.map((d, i) => (
+                    <div key={i} className="text-yellow-700">{d.field === 'email' ? 'Email' : 'GSM'} "{d.value}" existe deja pour <strong>{d.owner_name}</strong></div>
+                  ))}
+                </div>
+              </div>
+            )}
             <div className="flex gap-3 justify-end">
               <Button variant="outline" onClick={() => setDialogOpen(false)} data-testid="owner-cancel-btn">Annuler</Button>
               <Button onClick={handleSave} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="owner-save-btn">{editing ? 'Modifier' : 'Creer'}</Button>

@@ -1,0 +1,40 @@
+{
+  "summary": "Iteration 6: Belgian ACP enhancements (BCE, multi-bank accounts vue/epargne, auto-PCMN, chronological ref ACP-YYYYMM-NNN), owner duplicate detection (email/phone across all ACP), and role hierarchy (syndic=admin, gestionnaire=data-only). Created /app/backend/tests/test_iter6_features.py with 13 test cases. Backend: 13/13 new + full regression 123/124 passed (1 skipped balance-tiers from iter5). Frontend: verified ACP form (BCE, IBAN, BIC, account_type, is_default, PCMN auto preview, quarterly_closing, default_provisions), ACP list with reference + default account, owner duplicate amber alert, admin/users accessible to superadmin.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Owner & ACP dialogs", "issues": ["React a11y warning: DialogContent missing Description/aria-describedby (non-blocking, console warning only)"]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter6_features.py",
+    "/app/test_reports/pytest/iter6.xml",
+    "/app/test_reports/pytest/iter6_all.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "routes/coproprietes.py _create_pcmn_accounts: both vue and epargne use parent '550000' - minor inconsistency, vue should likely parent to '551000'. Non-blocking but inaccurate PCMN tree hierarchy.",
+    "routes/coproprietes.py _generate_reference uses count_documents on month prefix - works but is not atomic; two simultaneous POSTs could generate same reference. Acceptable for low-volume manual creation.",
+    "routes/coproprietes.py PUT update_copropriete recomputes PCMN numbers and inserts accounts but does not remove PCMN entries for bank accounts that were deleted - stale PCMN chart entries can accumulate.",
+    "routes/properties.py /owners/check-duplicate has no auth dependency declared - relies on the absence of get_current_user. Adding cookie auth would prevent enumeration of owner emails by anonymous callers.",
+    "routes/properties.py /owners/check-duplicate may return the same owner twice if matched on both email and phone in the same call (separate entries). Frontend handles list rendering so non-blocking.",
+    "server.py is_admin_role includes 'admin' and 'syndic'+'superadmin' - documentation/PRD says only syndic+superadmin; 'admin' legacy role kept for compatibility - clarify in docs.",
+    "CoproprietesPage 'Ajouter compte' button lacks data-testid; IBAN/BIC inputs inside bank account rows lack data-testid (only top-level inputs have them) - hampers targeted UI testing.",
+    "OwnerInput duplicate check fires onBlur only on email/phone - good UX, but no debouncing; rapid blur events trigger multiple requests."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter6_features.py (created)"
+  ],
+  "success_rate": {"backend": "100% (13/13 new, 123/124 full regression - the 1 skip carried over from iter5)", "frontend": "100% (ACP form fields, list, archive flow visible; owner duplicate alert; admin/users access verified)"},
+  "test_credentials": "admin@copro.be / admin123 (cookie session). Created TEST_Gestionnaire users via /api/admin/users for role testing.",
+  "seed_data_creation": "Test created several TEST_ACP_Iter6_<ts> ACPs, TEST_DupOwner owners, TEST_Gestionnaire users (gest<ts>@test.be / Gest12345!). No cleanup performed (TEST_ prefix isolates from real data).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "ACP create endpoint: POST /api/coproprietes returns reference ACP-YYYYMM-NNN, bank_accounts each enriched with pcmn_number (551<last3 IBAN>00 for vue, 550<last3>00 for epargne). Default account: if none flagged, first 'vue' becomes default. Archive: POST /{id}/archive/unarchive set status active/archived; list filters via ?show_archived=true. Owner duplicate: GET /api/owners/check-duplicate?email=X&phone=Y returns {duplicates:[{field,value,owner_name,copropriete_id}], has_duplicates:bool}; queries email AND email2, phone AND phone2. Role gate: is_admin_role = superadmin|admin|syndic (controls /api/admin/*); can_manage adds gestionnaire (data CRUD ok). Frontend testids: coproprietes-page, create-copro-btn, copro-dialog, copro-name-input, copro-bce-input, copro-save-btn, copro-row-{id}, toggle-archived; owners-page, create-owner-btn, owner-dialog, owner-email-input (onBlur triggers duplicate check), owner-phone-input (onBlur), owner-cancel-btn, owner-save-btn. Duplicate alert text in French: 'Doublon detecte !'.",
+  "rca_of_the_issue": "N/A - no issues found."
+}
