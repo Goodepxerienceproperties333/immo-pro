@@ -108,50 +108,222 @@ def create_reports_router(db):
         }
         return {"accounts": result, "totals": totals}
 
-    # ---- BILAN (Balance Sheet) ----
+    # ---- BILAN (Balance Sheet) - Structure PCMN belge officielle ----
+    # ACTIF (debiteur net):
+    #   I.   Frais d'etablissement / Immobilisations incorporelles (classe 20-21)
+    #   II.  Immobilisations corporelles (classe 22-27): terrains, batiments, mobilier
+    #   III. Immobilisations financieres (classe 28)
+    #   IV.  Stocks (classe 3)
+    #   V.   Creances <= 1 an (classe 40, 41, 416)
+    #   VI.  Placements de tresorerie (classe 50-53)
+    #   VII. Valeurs disponibles (classe 54-58): banques, caisse
+    #   VIII.Comptes de regularisation (classe 49 actif)
+    # PASSIF (crediteur net):
+    #   I.   Capital / Fonds (classe 10): capital syndic, fonds reserve
+    #   II.  Reserves (classe 13): fonds de roulement, reserves obligatoires
+    #   III. Resultat reporte (classe 14)
+    #   IV.  Subsides en capital (classe 15)
+    #   V.   Dettes > 1 an (classe 17)
+    #   VI.  Dettes <= 1 an: fournisseurs (44), fiscales/sociales (45), autres (48)
+    #   VII. Comptes de regularisation (classe 49 passif)
+
     @router.get("/bilan")
-    async def bilan(date_to: Optional[str] = None, copropriete_id: Optional[str] = None):
+    async def bilan(date_to: Optional[str] = None, copropriete_id: Optional[str] = None,
+                    fiscal_year_id: Optional[str] = None):
+        """Bilan PCMN belge structure (Actif / Passif par rubriques)."""
+        # Optionally resolve fiscal year
+        fy = None
+        if fiscal_year_id:
+            fy = await db.fiscal_years.find_one({"id": fiscal_year_id}, {"_id": 0})
+            if fy and not date_to:
+                date_to = fy["end_date"]
+
         q = _apply_copro({}, copropriete_id)
         if date_to:
             q["date"] = {"$lte": date_to}
 
         entries = await db.journal_entries.find(q, {"_id": 0}).to_list(100000)
+        # Compute net balance per account (classes 1-5 only)
         balances = {}
         for entry in entries:
             for line in entry.get("lines", []):
                 acc = line["account_number"]
-                if acc[0] not in ("1", "2", "3", "4", "5"):
+                if not acc or acc[0] not in ("1", "2", "3", "4", "5"):
                     continue
                 if acc not in balances:
-                    balances[acc] = {"account_number": acc, "account_name": line.get("account_name", ""), "debit": 0, "credit": 0}
+                    balances[acc] = {
+                        "account_number": acc,
+                        "account_name": line.get("account_name", ""),
+                        "debit": 0.0, "credit": 0.0,
+                    }
                 balances[acc]["debit"] += line.get("debit", 0)
                 balances[acc]["credit"] += line.get("credit", 0)
 
-        actif = []
-        passif = []
-        for acc in sorted(balances.keys()):
-            b = balances[acc]
-            solde = round(b["debit"] - b["credit"], 2)
-            item = {"account_number": acc, "account_name": b["account_name"], "amount": abs(solde)}
-            if acc[0] in ("2", "3", "5") or (acc[0] == "4" and acc.startswith("40")):
-                actif.append({**item, "amount": solde if solde > 0 else 0})
-            else:
-                passif.append({**item, "amount": -solde if solde < 0 else 0})
+        def _rub(label, accounts):
+            return {
+                "label": label,
+                "total": round(sum(a["amount"] for a in accounts), 2),
+                "accounts": [a for a in accounts if a["amount"] > 0.01],
+            }
 
-        actif = [a for a in actif if a["amount"] != 0]
-        passif = [p for p in passif if p["amount"] != 0]
-
-        return {
-            "actif": actif,
-            "passif": passif,
-            "total_actif": round(sum(a["amount"] for a in actif), 2),
-            "total_passif": round(sum(p["amount"] for p in passif), 2),
-            "date": date_to or datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        # Classify into Belgian PCMN rubriques (default: net debit -> actif, net credit -> passif)
+        actif_buckets = {
+            "I_immo_incorporelles": [],
+            "II_immo_corporelles": [],
+            "III_immo_financieres": [],
+            "IV_stocks": [],
+            "V_creances": [],
+            "VI_placements": [],
+            "VII_disponibilites": [],
+            "VIII_regul_actif": [],
+        }
+        passif_buckets = {
+            "I_capital": [],
+            "II_reserves": [],
+            "III_resultat_reporte": [],
+            "IV_subsides": [],
+            "V_dettes_long": [],
+            "VI_dettes_court": [],
+            "VII_regul_passif": [],
         }
 
-    # ---- COMPTE DE RESULTATS (Income Statement) ----
+        for acc, b in balances.items():
+            solde = round(b["debit"] - b["credit"], 2)
+            item = {"account_number": acc, "account_name": b["account_name"], "amount": abs(solde)}
+            # ACTIF (solde debiteur)
+            if solde > 0.01:
+                if acc.startswith(("20", "21")):
+                    actif_buckets["I_immo_incorporelles"].append(item)
+                elif acc.startswith(("22", "23", "24", "25", "26", "27")):
+                    actif_buckets["II_immo_corporelles"].append(item)
+                elif acc.startswith("28"):
+                    actif_buckets["III_immo_financieres"].append(item)
+                elif acc.startswith("3"):
+                    actif_buckets["IV_stocks"].append(item)
+                elif acc.startswith("40") or acc.startswith("41") or acc.startswith("416"):
+                    actif_buckets["V_creances"].append(item)
+                elif acc.startswith(("50", "51", "52", "53")):
+                    actif_buckets["VI_placements"].append(item)
+                elif acc.startswith(("54", "55", "57", "58")):
+                    actif_buckets["VII_disponibilites"].append(item)
+                elif acc.startswith("49"):
+                    actif_buckets["VIII_regul_actif"].append(item)
+                else:
+                    actif_buckets["V_creances"].append(item)  # default for class 4 debit
+            # PASSIF (solde crediteur)
+            elif solde < -0.01:
+                if acc.startswith("10"):
+                    passif_buckets["I_capital"].append(item)
+                elif acc.startswith("13"):
+                    passif_buckets["II_reserves"].append(item)
+                elif acc.startswith("14"):
+                    passif_buckets["III_resultat_reporte"].append(item)
+                elif acc.startswith("15"):
+                    passif_buckets["IV_subsides"].append(item)
+                elif acc.startswith("17"):
+                    passif_buckets["V_dettes_long"].append(item)
+                elif acc.startswith(("44", "45", "46", "48")):
+                    passif_buckets["VI_dettes_court"].append(item)
+                elif acc.startswith("49"):
+                    passif_buckets["VII_regul_passif"].append(item)
+                else:
+                    passif_buckets["VI_dettes_court"].append(item)
+
+        # Compute current period result (classes 6 & 7) and inject in passif (III bis: resultat exercice)
+        date_from = fy["start_date"] if fy else None
+        q_res = _apply_copro({}, copropriete_id)
+        if date_from or date_to:
+            q_res["date"] = {}
+            if date_from:
+                q_res["date"]["$gte"] = date_from
+            if date_to:
+                q_res["date"]["$lte"] = date_to
+        entries_res = await db.journal_entries.find(q_res, {"_id": 0}).to_list(100000)
+        total_charges = 0.0
+        total_produits = 0.0
+        for entry in entries_res:
+            for line in entry.get("lines", []):
+                acc = line["account_number"]
+                if acc.startswith("6"):
+                    total_charges += line.get("debit", 0) - line.get("credit", 0)
+                elif acc.startswith("7"):
+                    total_produits += line.get("credit", 0) - line.get("debit", 0)
+        result_exercise = round(total_produits - total_charges, 2)
+        if abs(result_exercise) > 0.01:
+            passif_buckets["III_resultat_reporte"].append({
+                "account_number": "RESULTAT",
+                "account_name": "Resultat de l'exercice" + (" (perte)" if result_exercise < 0 else " (benefice)"),
+                "amount": abs(result_exercise),
+            })
+
+        rubr_actif = [
+            ("I. Immobilisations incorporelles", "I_immo_incorporelles"),
+            ("II. Immobilisations corporelles", "II_immo_corporelles"),
+            ("III. Immobilisations financieres", "III_immo_financieres"),
+            ("IV. Stocks", "IV_stocks"),
+            ("V. Creances", "V_creances"),
+            ("VI. Placements de tresorerie", "VI_placements"),
+            ("VII. Valeurs disponibles", "VII_disponibilites"),
+            ("VIII. Comptes de regularisation", "VIII_regul_actif"),
+        ]
+        rubr_passif = [
+            ("I. Capital / Fonds propre", "I_capital"),
+            ("II. Reserves", "II_reserves"),
+            ("III. Resultat reporte", "III_resultat_reporte"),
+            ("IV. Subsides en capital", "IV_subsides"),
+            ("V. Dettes a plus d'un an", "V_dettes_long"),
+            ("VI. Dettes a un an au plus", "VI_dettes_court"),
+            ("VII. Comptes de regularisation", "VII_regul_passif"),
+        ]
+
+        actif_rubr = [_rub(lbl, actif_buckets[k]) for lbl, k in rubr_actif]
+        passif_rubr = [_rub(lbl, passif_buckets[k]) for lbl, k in rubr_passif]
+
+        total_actif = round(sum(r["total"] for r in actif_rubr), 2)
+        total_passif = round(sum(r["total"] for r in passif_rubr), 2)
+
+        return {
+            "actif": actif_rubr,
+            "passif": passif_rubr,
+            "total_actif": total_actif,
+            "total_passif": total_passif,
+            "equilibre": abs(total_actif - total_passif) < 0.01,
+            "ecart": round(total_actif - total_passif, 2),
+            "date": date_to or datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+            "fiscal_year": fy.get("name") if fy else None,
+        }
+
+    # ---- COMPTE DE RESULTATS (Income Statement) - Structure PCMN belge ----
+    # CHARGES (classe 6):
+    #   I.   60 Approvisionnements & marchandises (rare en copro)
+    #   II.  61 Services et biens divers (entretien, fournitures, syndic honoraires)
+    #   III. 62 Remunerations, charges sociales (concierge, etc.)
+    #   IV.  63 Amortissements, reductions de valeur
+    #   V.   64 Autres charges d'exploitation
+    #   VI.  65 Charges financieres
+    #   VII. 66 Charges exceptionnelles
+    #   VIII.67 Impots sur le resultat
+    # PRODUITS (classe 7):
+    #   I.   70 Chiffre d'affaires (provisions/cotisations encaissees)
+    #   II.  71 Variation des stocks
+    #   III. 72 Production immobilisee
+    #   IV.  74 Autres produits d'exploitation
+    #   V.   75 Produits financiers (interets epargne)
+    #   VI.  76 Produits exceptionnels
     @router.get("/resultat")
-    async def compte_resultat(date_from: Optional[str] = None, date_to: Optional[str] = None, copropriete_id: Optional[str] = None):
+    async def compte_resultat(date_from: Optional[str] = None, date_to: Optional[str] = None,
+                              copropriete_id: Optional[str] = None,
+                              fiscal_year_id: Optional[str] = None):
+        """Compte de Resultats PCMN belge structure (rubriques 60-67 / 70-76)."""
+        fy = None
+        if fiscal_year_id:
+            fy = await db.fiscal_years.find_one({"id": fiscal_year_id}, {"_id": 0})
+            if fy:
+                if not date_from:
+                    date_from = fy["start_date"]
+                if not date_to:
+                    date_to = fy["end_date"]
+
         q = _apply_copro({}, copropriete_id)
         if date_from or date_to:
             q["date"] = {}
@@ -161,35 +333,71 @@ def create_reports_router(db):
                 q["date"]["$lte"] = date_to
 
         entries = await db.journal_entries.find(q, {"_id": 0}).to_list(100000)
-        charges = {}
-        produits = {}
+        accounts = {}
         for entry in entries:
             for line in entry.get("lines", []):
                 acc = line["account_number"]
-                amount_d = line.get("debit", 0)
-                amount_c = line.get("credit", 0)
-                item = {"account_number": acc, "account_name": line.get("account_name", "")}
-                if acc.startswith("6"):
-                    if acc not in charges:
-                        charges[acc] = {**item, "amount": 0}
-                    charges[acc]["amount"] += amount_d - amount_c
-                elif acc.startswith("7"):
-                    if acc not in produits:
-                        produits[acc] = {**item, "amount": 0}
-                    produits[acc]["amount"] += amount_c - amount_d
+                if not acc or acc[0] not in ("6", "7"):
+                    continue
+                if acc not in accounts:
+                    accounts[acc] = {"account_number": acc, "account_name": line.get("account_name", ""),
+                                     "debit": 0.0, "credit": 0.0}
+                accounts[acc]["debit"] += line.get("debit", 0)
+                accounts[acc]["credit"] += line.get("credit", 0)
 
-        charges_list = [{"account_number": k, "account_name": v["account_name"], "amount": round(v["amount"], 2)} for k, v in sorted(charges.items()) if abs(v["amount"]) > 0.01]
-        produits_list = [{"account_number": k, "account_name": v["account_name"], "amount": round(v["amount"], 2)} for k, v in sorted(produits.items()) if abs(v["amount"]) > 0.01]
+        # Group by 2-digit rubrique
+        ch_rubr_def = [
+            ("60. Approvisionnements et marchandises", ["60"]),
+            ("61. Services et biens divers", ["61"]),
+            ("62. Remunerations et charges sociales", ["62"]),
+            ("63. Amortissements et reductions de valeur", ["63"]),
+            ("64. Autres charges d'exploitation", ["64"]),
+            ("65. Charges financieres", ["65"]),
+            ("66. Charges exceptionnelles", ["66"]),
+            ("67. Impots sur le resultat", ["67"]),
+        ]
+        pr_rubr_def = [
+            ("70. Chiffre d'affaires (provisions encaissees)", ["70"]),
+            ("71. Variation des stocks", ["71"]),
+            ("72. Production immobilisee", ["72"]),
+            ("74. Autres produits d'exploitation", ["74"]),
+            ("75. Produits financiers", ["75"]),
+            ("76. Produits exceptionnels", ["76"]),
+        ]
 
-        total_charges = round(sum(c["amount"] for c in charges_list), 2)
-        total_produits = round(sum(p["amount"] for p in produits_list), 2)
+        def _build(rubr_def, is_charge):
+            out = []
+            for label, prefixes in rubr_def:
+                items = []
+                tot = 0.0
+                for acc, b in accounts.items():
+                    if any(acc.startswith(p) for p in prefixes):
+                        amt = (b["debit"] - b["credit"]) if is_charge else (b["credit"] - b["debit"])
+                        if abs(amt) < 0.01:
+                            continue
+                        items.append({"account_number": acc, "account_name": b["account_name"],
+                                      "amount": round(amt, 2)})
+                        tot += amt
+                out.append({"label": label, "total": round(tot, 2),
+                            "accounts": sorted(items, key=lambda x: x["account_number"])})
+            return out
+
+        charges_rubr = _build(ch_rubr_def, True)
+        produits_rubr = _build(pr_rubr_def, False)
+
+        total_charges = round(sum(r["total"] for r in charges_rubr), 2)
+        total_produits = round(sum(r["total"] for r in produits_rubr), 2)
+        resultat = round(total_produits - total_charges, 2)
 
         return {
-            "charges": charges_list,
-            "produits": produits_list,
+            "charges": charges_rubr,
+            "produits": produits_rubr,
             "total_charges": total_charges,
             "total_produits": total_produits,
-            "resultat": round(total_produits - total_charges, 2),
+            "resultat": resultat,
+            "resultat_label": "Benefice" if resultat > 0.01 else ("Perte" if resultat < -0.01 else "Equilibre"),
+            "period": {"from": date_from, "to": date_to},
+            "fiscal_year": fy.get("name") if fy else None,
         }
 
     # ---- DECOMPTE ANNUEL PAR PROPRIETAIRE ----

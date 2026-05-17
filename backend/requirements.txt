@@ -124,3 +124,4 @@ websockets==16.0
 yarl==1.23.0
 zipp==3.23.1
 pypdf==6.11.0
+openpyxl==3.1.5
