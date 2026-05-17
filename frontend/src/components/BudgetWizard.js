@@ -8,7 +8,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
 import { toast } from 'sonner';
-import { ChevronLeft, ChevronRight, Send, CheckCircle2, Calendar, Wallet, ShieldCheck, ClipboardList } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Send, CheckCircle2, Calendar, Wallet, ShieldCheck, Banknote, ClipboardList } from 'lucide-react';
 
 const FREQ_OPTIONS = [
   { v: 1, l: 'Unique (annuel)', interval: 12 },
@@ -31,6 +31,11 @@ export default function BudgetWizard({ budget, distKeys = [], onClose, onDone, m
   const [reserveAmount, setReserveAmount] = useState(0);
   const [reserveKeyId, setReserveKeyId] = useState('');
   const [reserveLabel, setReserveLabel] = useState('Fonds de reserve');
+  const [roulEnabled, setRoulEnabled] = useState(false);
+  const [roulMode, setRoulMode] = useState('create'); // create | increase
+  const [roulAmount, setRoulAmount] = useState(0);
+  const [roulKeyId, setRoulKeyId] = useState('');
+  const [roulLabel, setRoulLabel] = useState('Fonds de roulement');
   const [preview, setPreview] = useState(null);
   const [loading, setLoading] = useState(false);
 
@@ -45,6 +50,7 @@ export default function BudgetWizard({ budget, distKeys = [], onClose, onDone, m
         start_date: startDate,
         due_offset_days: Number(dueOffset),
         reserve_fund: { enabled: reserveEnabled, amount: Number(reserveAmount) || 0, distribution_key_id: reserveKeyId || '', label: reserveLabel },
+        roulement_fund: { enabled: roulEnabled, amount: Number(roulAmount) || 0, distribution_key_id: roulKeyId || '', label: roulLabel, mode: roulMode },
         copropriete_id: budget.copropriete_id || '',
       };
       const { data } = await api.post('/fund-calls/preview-from-budget', payload);
@@ -53,8 +59,8 @@ export default function BudgetWizard({ budget, distKeys = [], onClose, onDone, m
     finally { setLoading(false); }
   };
 
-  // Auto-preview when reaching step 4
-  useEffect(() => { if (step === 4) previewCalls(); /* eslint-disable-next-line */ }, [step]);
+  // Auto-preview when reaching step 5 (recap)
+  useEffect(() => { if (step === 5) previewCalls(); /* eslint-disable-next-line */ }, [step]);
 
   const confirmLaunch = async () => {
     setLoading(true);
@@ -65,6 +71,7 @@ export default function BudgetWizard({ budget, distKeys = [], onClose, onDone, m
         start_date: startDate,
         due_offset_days: Number(dueOffset),
         reserve_fund: { enabled: reserveEnabled, amount: Number(reserveAmount) || 0, distribution_key_id: reserveKeyId || '', label: reserveLabel },
+        roulement_fund: { enabled: roulEnabled, amount: Number(roulAmount) || 0, distribution_key_id: roulKeyId || '', label: roulLabel, mode: roulMode },
         copropriete_id: budget.copropriete_id || '',
       };
       const url = mode === 'regenerate' ? '/fund-calls/regenerate-from-budget' : '/fund-calls/generate-from-budget';
@@ -82,14 +89,16 @@ export default function BudgetWizard({ budget, distKeys = [], onClose, onDone, m
   const STEPS = [
     { n: 1, icon: Calendar, label: 'Frequence' },
     { n: 2, icon: Wallet, label: 'Calendrier' },
-    { n: 3, icon: ShieldCheck, label: 'Fonds de reserve' },
-    { n: 4, icon: ClipboardList, label: 'Recapitulatif' },
+    { n: 3, icon: ShieldCheck, label: 'Fonds reserve' },
+    { n: 4, icon: Banknote, label: 'Fonds roulement' },
+    { n: 5, icon: ClipboardList, label: 'Recapitulatif' },
   ];
 
   const canNext = () => {
     if (step === 1) return frequency > 0;
     if (step === 2) return !!startDate && dueOffset >= 0;
     if (step === 3) return !reserveEnabled || (reserveAmount >= 0);
+    if (step === 4) return !roulEnabled || (roulAmount >= 0);
     return true;
   };
 
@@ -219,16 +228,89 @@ export default function BudgetWizard({ budget, distKeys = [], onClose, onDone, m
           </div>
         )}
 
-        {/* Step 4: Recap */}
+        {/* Step 4: Roulement fund */}
         {step === 4 && (
+          <div className="space-y-3">
+            <p className="text-sm text-slate-600">Y a-t-il un appel pour le <b>fonds de roulement</b> ?
+              <span className="text-xs text-slate-400 ml-1">(Tresorerie permanente de l'ACP - compte 100)</span>
+            </p>
+            <Card className="border-2 border-amber-200">
+              <CardContent className="p-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="font-semibold text-sm flex items-center gap-2">
+                      <Banknote size={16} className="text-amber-600" />Fonds de roulement
+                    </div>
+                    <div className="text-xs text-slate-500 mt-1">Ajoute au 1er appel uniquement, comptabilise Cr 100 (capital).</div>
+                  </div>
+                  <Switch checked={roulEnabled} onCheckedChange={setRoulEnabled} data-testid="wizard-roul-toggle" />
+                </div>
+                {roulEnabled && (
+                  <div className="mt-4 space-y-3">
+                    <div>
+                      <label className="text-xs text-slate-600 mb-1 block font-medium">Mode</label>
+                      <div className="flex gap-2">
+                        <Button
+                          type="button"
+                          variant={roulMode === 'create' ? 'default' : 'outline'}
+                          size="sm"
+                          onClick={() => setRoulMode('create')}
+                          className={roulMode === 'create' ? 'bg-amber-600 hover:bg-amber-700' : ''}
+                          data-testid="wizard-roul-mode-create"
+                        >Creation initiale</Button>
+                        <Button
+                          type="button"
+                          variant={roulMode === 'increase' ? 'default' : 'outline'}
+                          size="sm"
+                          onClick={() => setRoulMode('increase')}
+                          className={roulMode === 'increase' ? 'bg-amber-600 hover:bg-amber-700' : ''}
+                          data-testid="wizard-roul-mode-increase"
+                        >Augmentation</Button>
+                      </div>
+                      <div className="text-[11px] text-slate-500 mt-1">
+                        {roulMode === 'create'
+                          ? 'Cas n°1 : nouvelle ACP ou aucun fonds de roulement encore constitue.'
+                          : 'Cas n°2 : augmentation du fonds existant (ex: nouveau proprietaire, ou ajustement).'}
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-3 gap-3">
+                      <div>
+                        <label className="text-xs text-slate-600 mb-1 block">Libelle</label>
+                        <Input value={roulLabel} onChange={e => setRoulLabel(e.target.value)} data-testid="wizard-roul-label" />
+                      </div>
+                      <div>
+                        <label className="text-xs text-slate-600 mb-1 block">Montant total EUR</label>
+                        <Input type="number" step="0.01" value={roulAmount} onChange={e => setRoulAmount(e.target.value)} data-testid="wizard-roul-amount" />
+                      </div>
+                      <div>
+                        <label className="text-xs text-slate-600 mb-1 block">Cle de repartition</label>
+                        <Select value={roulKeyId || 'default'} onValueChange={v => setRoulKeyId(v === 'default' ? '' : v)}>
+                          <SelectTrigger data-testid="wizard-roul-key"><SelectValue placeholder="Tantiemes (defaut)" /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="default">Tantiemes (defaut)</SelectItem>
+                            {distKeys.map(k => <SelectItem key={k.id} value={k.id}>{k.name}</SelectItem>)}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+        )}
+
+        {/* Step 5: Recap */}
+        {step === 5 && (
           <div className="space-y-3">
             {loading && <div className="text-center py-8 text-slate-500">Calcul en cours...</div>}
             {preview && !loading && (
               <>
-                <div className="grid grid-cols-4 gap-3">
+                <div className="grid grid-cols-5 gap-3">
                   <Card><CardContent className="p-3"><div className="text-xs text-slate-500">Nombre d'appels</div><div className="text-xl font-black mt-1" style={{ fontFamily: 'Chivo,sans-serif' }}>{preview.summary.n_calls}</div></CardContent></Card>
                   <Card><CardContent className="p-3"><div className="text-xs text-slate-500">Budget annuel</div><div className="text-xl font-black mt-1 font-mono">{preview.summary.budget_total.toFixed(2)}</div></CardContent></Card>
                   <Card><CardContent className="p-3"><div className="text-xs text-slate-500">Fonds reserve</div><div className="text-xl font-black mt-1 font-mono">{preview.summary.reserve_total.toFixed(2)}</div></CardContent></Card>
+                  <Card><CardContent className="p-3"><div className="text-xs text-slate-500">Fonds roulement</div><div className="text-xl font-black mt-1 font-mono">{(preview.summary.roulement_total || 0).toFixed(2)}</div></CardContent></Card>
                   <Card className="border-[#0055FF] bg-blue-50"><CardContent className="p-3"><div className="text-xs text-slate-500">Total appele</div><div className="text-xl font-black mt-1 font-mono text-[#0055FF]">{preview.summary.grand_total.toFixed(2)}</div></CardContent></Card>
                 </div>
 
@@ -240,6 +322,7 @@ export default function BudgetWizard({ budget, distKeys = [], onClose, onDone, m
                       <th className="p-2 text-left">Echeance</th>
                       <th className="p-2 text-right">Montant</th>
                       <th className="p-2 text-right">Dont reserve</th>
+                      <th className="p-2 text-right">Dont roulement</th>
                       <th className="p-2 text-center">Proprietaires</th>
                     </tr></thead>
                     <tbody>
@@ -250,6 +333,7 @@ export default function BudgetWizard({ budget, distKeys = [], onClose, onDone, m
                           <td className="p-2 font-mono text-xs">{c.due_date}</td>
                           <td className="p-2 text-right font-mono font-semibold">{c.total_amount.toFixed(2)}</td>
                           <td className="p-2 text-right font-mono text-xs text-purple-700">{c.reserve_amount > 0 ? c.reserve_amount.toFixed(2) : '-'}</td>
+                          <td className="p-2 text-right font-mono text-xs text-amber-700">{(c.roulement_amount || 0) > 0 ? c.roulement_amount.toFixed(2) : '-'}</td>
                           <td className="p-2 text-center"><Badge variant="outline">{c.distribution.length}</Badge></td>
                         </tr>
                       ))}
@@ -284,7 +368,7 @@ export default function BudgetWizard({ budget, distKeys = [], onClose, onDone, m
           <Button variant="ghost" onClick={() => step > 1 ? setStep(step - 1) : onClose?.()} data-testid="wizard-back-btn">
             <ChevronLeft size={16} className="mr-1" />{step > 1 ? 'Precedent' : 'Annuler'}
           </Button>
-          {step < 4 ? (
+          {step < 5 ? (
             <Button onClick={() => setStep(step + 1)} disabled={!canNext()} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="wizard-next-btn">
               Suivant <ChevronRight size={16} className="ml-1" />
             </Button>

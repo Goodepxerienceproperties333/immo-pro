@@ -1,0 +1,58 @@
+{
+  "summary": "Iter19 backend tests - Frais privatifs (4-line AC auto-entry) et Wizard budget Fonds de roulement (credit 100 sur VE call#1). 12/12 PASS + regression iter16+iter18 33/33 PASS. Tous les criteres demandes valides.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter19_private_fee_roulement.py",
+    "/app/test_reports/pytest/pytest_iter19.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "auto_entries.py generate_purchase_entry (private fee branch): si owner_doc est introuvable (404 sur owner), la fonction retourne None sans creer d'ecriture, mais la facture est deja persistee. Le test 'test_create_private_fee_invalid_owner_404' fonctionne car la validation 404 est faite en amont dans routes/invoices.py POST. MAIS dans PUT /invoices/{id}, si on passe owner_id valide a la creation puis on UPDATE avec un mauvais owner_id, la route renvoie 404 AVANT update : OK. Cependant la ligne 73 ne re-verifie pas le owner et fait un find_one supplementaire - micro-duplication.",
+    "routes/invoices.py PUT : passage from private_fee -> normal: distribution_lines n'est PAS recalcule meme si distribution_key_id fourni. Code lignes 220-234 : update ne contient pas distribution_lines sauf si is_private_fee=true. Un toggle inverse (privatif -> normal) garde donc distribution_lines=[] vide. Bug fonctionnel : utilisateur doit re-PUT explicitement avec une cle pour regenerer les lignes. A corriger ou documenter.",
+    "auto_entries.py generate_sale_entry ligne 248: compte '100' (Fonds de roulement general) est utilise en credit, mais PCMN classe 1 = capitaux propres. Verifier que '100' (et non '100000' ou '1') correspond bien au compte present dans le seed PCMN belge. Sinon l'ecriture VE referencera un compte inexistant. Test 'test_generate_persists_and_ve_has_account_100' a valide la presence du compte 100 en credit, donc OK fonctionnellement.",
+    "routes/fund_calls.py _generate_from_budget : pas de validation sur roulement_fund.mode (accepte n'importe quelle string). Pydantic Optional[str] sans Literal. Suggerer Literal['create','increase'] pour eviter typos.",
+    "routes/fund_calls.py ligne 394: 'roulement_mode' est leak dans summary meme si roulement_fund non enabled (valeur vide ''). OK mais incoherent avec reserve qui n'a pas equivalent. Eviter le bruit.",
+    "auto_entries.py generate_sale_entry: round() utilise sur owner_prov = total - reserve - roulement peut introduire un ecart de centime cumule. _balanced() tolere 0.01, OK pour les cas testes 1000/1200. Pour gros montants verifier."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter19_private_fee_roulement.py"
+  ],
+  "success_rate": {
+    "backend": "100% (12/12 iter19) + regression iter16 (16/16) + iter18 (17/17) = 45/45",
+    "frontend": "not tested (backend-only request)"
+  },
+  "test_credentials": "admin@copro.be / admin123 (superadmin)",
+  "seed_data_creation": "Factures TEST_PF_*, TEST_NORM2PF_*, TEST_NORM_REG_* + 2 series d'appels de fonds (4+2=6) crees sur les dates 2026-01-01 et 2027-01-01. Cleanup par fixture autouse (DELETE invoices + fund-calls). 1 ACP ephemere TEST_iter19_reset_* creee et supprimee pour le test reset-financial-data.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iter19 valide: (1) POST /api/invoices avec is_private_fee=true force account=643, distribution_key_id='', distribution_lines=[], cree ecriture AC 4 lignes (Dr 643 + Cr 44000XXX + Dr 40000XXX owner + Cr 643) avec total_debit=total_credit=2x amount. (2) POST /invoices is_private_fee=true sans owner -> 400 'Un proprietaire doit etre selectionne'. (3) Avec owner_id invalide -> 404 'Proprietaire non trouve'. (4) PUT /invoices passage normal->privatif clear distribution_lines et regenere 4 lignes. (5) POST /api/fund-calls/preview-from-budget avec roulement_fund.enabled=true retourne summary.roulement_total + calls[0].roulement_amount + line is_roulement=true. (6) generate-from-budget persiste, ecriture VE call#1 contient credit 100 et debits 40000XXX prorate. (7) Reserve + Roulement coexistent: grand_total=budget+reserve+roulement, call#1 a 3 categories, calls 2..n provisions only. (8) Regression: invoice normale = AC 2 lignes, fund-calls sans roulement = total = budget_total. (9) Regressions PCMN toggle-active (requires body {active:bool}), PDF depenses (requires date_from+date_to), POST reset-financial-data OK. Endpoints clarifies: budgets = /api/fiscal/budgets, journal entries = /api/accounting/entries (PAS /api/journal-entries). Test file: /app/backend/tests/test_iter19_private_fee_roulement.py. Demo ACP: 6748ca1a-216d-4002-8417-799287238736.",
+  "tests_executed": {
+    "total": 12,
+    "passed": 12,
+    "failed": 0,
+    "list": [
+      "TestPrivateFeeInvoice::test_create_private_fee_invoice_4lines",
+      "TestPrivateFeeInvoice::test_create_private_fee_missing_owner_400",
+      "TestPrivateFeeInvoice::test_create_private_fee_invalid_owner_404",
+      "TestPrivateFeeInvoice::test_update_normal_to_private_fee_regenerates_entry",
+      "TestPrivateFeeInvoice::test_create_normal_invoice_regression_2lines",
+      "TestRoulementBudgetWizard::test_preview_roulement_only",
+      "TestRoulementBudgetWizard::test_preview_reserve_plus_roulement_sums",
+      "TestRoulementBudgetWizard::test_generate_persists_and_ve_has_account_100",
+      "TestRoulementBudgetWizard::test_generate_without_roulement_regression",
+      "TestOtherRegression::test_pcmn_toggle_active",
+      "TestOtherRegression::test_pdf_depenses",
+      "TestOtherRegression::test_reset_financial_data"
+    ]
+  },
+  "regression": "iter16_auto_entries 16/16 PASS + iter18_pcmn_new 17/17 PASS = aucune regression sur AC/VE/FI auto-entries, PCMN belge 337 comptes, migration idempotente, CRUD PCMN custom, PDF depenses, decompte PDF.",
+  "rca_of_the_issue": "N/A - tous les criteres iter19 valides. Points d'attention code review: (a) PUT /invoices passage privatif->normal ne recalcule pas distribution_lines (bug mineur fonctionnel). (b) RoulementFund.mode sans Literal, accepte typos. (c) compte 100 (Fonds de roulement general) bien present dans PCMN demo, ecriture VE balance OK."
+}

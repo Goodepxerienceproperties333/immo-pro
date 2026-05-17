@@ -25,12 +25,22 @@ class ReserveFund(BaseModel):
     label: Optional[str] = "Fonds de reserve"
 
 
+class RoulementFund(BaseModel):
+    enabled: bool = False
+    amount: float = 0.0
+    distribution_key_id: Optional[str] = ""
+    label: Optional[str] = "Fonds de roulement"
+    # mode = "create" pour creation initiale, "increase" pour augmentation
+    mode: Optional[str] = "create"
+
+
 class GenerateFromBudgetInput(BaseModel):
     budget_id: str
     frequency: int  # 1, 2, 3, 4, 12 (yearly, semestrial, quadrimestrial, quarterly, monthly)
     start_date: str  # ISO date of the first call
     due_offset_days: Optional[int] = 30  # due date offset from call date
     reserve_fund: Optional[ReserveFund] = None
+    roulement_fund: Optional[RoulementFund] = None
     copropriete_id: Optional[str] = ""
 
 
@@ -330,6 +340,29 @@ def create_fund_calls_router(db):
                     owner_agg[oid]["amount"] += d["amount"]
                     owner_agg[oid]["share"] += d["share"]
 
+            # Fonds de roulement on call #1 only
+            roulement_added = 0.0
+            if i == 0 and data.roulement_fund and data.roulement_fund.enabled and data.roulement_fund.amount > 0:
+                roul_amount = float(data.roulement_fund.amount)
+                roul_dist = _distribute_amount(roul_amount, data.roulement_fund.distribution_key_id or "")
+                lbl = data.roulement_fund.label or "Fonds de roulement"
+                mode_lbl = "(creation)" if (data.roulement_fund.mode or "create") == "create" else "(augmentation)"
+                line_details.append({
+                    "account_number": "ROULEMENT",
+                    "account_name": f"{lbl} {mode_lbl}",
+                    "distribution_key_id": data.roulement_fund.distribution_key_id or "",
+                    "distribution_key_name": keys_map.get(data.roulement_fund.distribution_key_id or "", {}).get("name", "Tantiemes"),
+                    "amount": roul_amount,
+                    "is_roulement": True,
+                    "roulement_mode": data.roulement_fund.mode or "create",
+                })
+                call_total += roul_amount
+                roulement_added = roul_amount
+                for oid, d in roul_dist.items():
+                    owner_agg.setdefault(oid, {"amount": 0.0, "share": 0.0})
+                    owner_agg[oid]["amount"] += d["amount"]
+                    owner_agg[oid]["share"] += d["share"]
+
             distribution = []
             for oid, d in owner_agg.items():
                 owner = owners_map.get(oid)
@@ -357,6 +390,8 @@ def create_fund_calls_router(db):
                 "due_date": due_date,
                 "total_amount": round(call_total, 2),
                 "reserve_amount": round(reserve_added, 2),
+                "roulement_amount": round(roulement_added, 2),
+                "roulement_mode": (data.roulement_fund.mode if (data.roulement_fund and data.roulement_fund.enabled) else "") or "",
                 "lines": line_details,
                 "distribution": distribution,
                 "fiscal_year_id": budget["fiscal_year_id"],
@@ -370,6 +405,7 @@ def create_fund_calls_router(db):
             "interval_months": interval_months,
             "budget_total": budget_total,
             "reserve_total": round(data.reserve_fund.amount if (data.reserve_fund and data.reserve_fund.enabled) else 0.0, 2),
+            "roulement_total": round(data.roulement_fund.amount if (data.roulement_fund and data.roulement_fund.enabled) else 0.0, 2),
             "grand_total": round(sum(c["total_amount"] for c in results), 2),
         }
 
@@ -388,6 +424,8 @@ def create_fund_calls_router(db):
                 "description": f"Appel auto. issu du budget {budget.get('name','')}",
                 "total_amount": c["total_amount"],
                 "reserve_amount": c["reserve_amount"],
+                "roulement_amount": c.get("roulement_amount", 0),
+                "roulement_mode": c.get("roulement_mode", ""),
                 "call_type": "provisions",
                 "lines": c["lines"],
                 "distribution": c["distribution"],

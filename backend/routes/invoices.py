@@ -38,6 +38,11 @@ class InvoiceInput(BaseModel):
     distribution_key_id: Optional[str] = ""
     status: Optional[str] = "unpaid"
     copropriete_id: Optional[str] = ""
+    # Frais privatifs: la facture est imputee a UN seul proprietaire
+    # via le compte 643. Si is_private_fee=true, distribution_key_id est ignore
+    # et account_number force a 643.
+    is_private_fee: Optional[bool] = False
+    private_fee_owner_id: Optional[str] = ""
 
 
 def create_invoices_router(db):
@@ -135,9 +140,17 @@ def create_invoices_router(db):
             cat = await db.expense_categories.find_one({"id": data.expense_category_id}, {"_id": 0})
             if cat and cat.get("account_number"):
                 account_number = cat["account_number"]
-        # Compute distribution lines if key provided
+        # Frais privatif: force compte 643, ignore distribution_key
+        if data.is_private_fee:
+            if not data.private_fee_owner_id:
+                raise HTTPException(400, "Un proprietaire doit etre selectionne pour un frais privatif")
+            owner = await db.owners.find_one({"id": data.private_fee_owner_id}, {"_id": 0})
+            if not owner:
+                raise HTTPException(404, "Proprietaire non trouve")
+            account_number = "643"
+        # Compute distribution lines if key provided (skipped for private fees)
         distribution_lines = []
-        if data.distribution_key_id:
+        if data.distribution_key_id and not data.is_private_fee:
             key = await db.distribution_keys.find_one({"id": data.distribution_key_id}, {"_id": 0})
             if key:
                 total_shares = sum(l["share"] for l in key["lots"]) if key["lots"] else 1
@@ -167,10 +180,12 @@ def create_invoices_router(db):
             "vat_amount": data.vat_amount,
             "account_number": account_number,
             "expense_category_id": data.expense_category_id or "",
-            "distribution_key_id": data.distribution_key_id,
+            "distribution_key_id": "" if data.is_private_fee else data.distribution_key_id,
             "distribution_lines": distribution_lines,
             "status": data.status,
             "copropriete_id": data.copropriete_id or "",
+            "is_private_fee": bool(data.is_private_fee),
+            "private_fee_owner_id": data.private_fee_owner_id or "",
             "created_at": datetime.now(timezone.utc).isoformat()
         }
         await db.invoices.insert_one(doc)
@@ -195,15 +210,27 @@ def create_invoices_router(db):
             cat = await db.expense_categories.find_one({"id": data.expense_category_id}, {"_id": 0})
             if cat and cat.get("account_number"):
                 account_number = cat["account_number"]
+        if data.is_private_fee:
+            if not data.private_fee_owner_id:
+                raise HTTPException(400, "Un proprietaire doit etre selectionne pour un frais privatif")
+            owner = await db.owners.find_one({"id": data.private_fee_owner_id}, {"_id": 0})
+            if not owner:
+                raise HTTPException(404, "Proprietaire non trouve")
+            account_number = "643"
         update = {
             "number": data.number, "date": data.date, "due_date": data.due_date,
             "supplier": data.supplier, "description": data.description,
             "total_amount": data.total_amount, "vat_amount": data.vat_amount,
             "account_number": account_number,
             "expense_category_id": data.expense_category_id or "",
-            "distribution_key_id": data.distribution_key_id,
-            "status": data.status
+            "distribution_key_id": "" if data.is_private_fee else data.distribution_key_id,
+            "status": data.status,
+            "is_private_fee": bool(data.is_private_fee),
+            "private_fee_owner_id": data.private_fee_owner_id or "",
         }
+        # If switching to private fee, clear distribution_lines
+        if data.is_private_fee:
+            update["distribution_lines"] = []
         result = await db.invoices.update_one({"id": invoice_id}, {"$set": update})
         if result.matched_count == 0:
             raise HTTPException(404, "Facture non trouvee")

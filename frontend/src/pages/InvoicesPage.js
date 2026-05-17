@@ -23,7 +23,9 @@ export default function InvoicesPage() {
   const [lots, setLots] = useState([]);
   const [invoiceDialog, setInvoiceDialog] = useState(false);
   const [keyDialog, setKeyDialog] = useState(false);
-  const [invForm, setInvForm] = useState({ number: '', date: '', due_date: '', supplier: '', description: '', total_amount: 0, vat_amount: 0, account_number: '', expense_category_id: '', distribution_key_id: '', status: 'unpaid' });
+  const [invForm, setInvForm] = useState({ number: '', date: '', due_date: '', supplier: '', description: '', total_amount: 0, vat_amount: 0, account_number: '', expense_category_id: '', distribution_key_id: '', status: 'unpaid', is_private_fee: false, private_fee_owner_id: '' });
+  const [owners, setOwners] = useState([]);
+  const [ownerSearch, setOwnerSearch] = useState('');
   const [keyForm, setKeyForm] = useState({ name: '', description: '', key_type: 'quotity', lots: [] });
   const [aiExtracting, setAiExtracting] = useState(false);
   const [aiHint, setAiHint] = useState('');
@@ -31,13 +33,13 @@ export default function InvoicesPage() {
   const [attachDialogInv, setAttachDialogInv] = useState(null); // invoice being managed
 
   const load = useCallback(async () => {
-    const [inv, dk, acc, lt, cat] = await Promise.all([
+    const [inv, dk, acc, lt, cat, ow] = await Promise.all([
       api.get('/invoices'), api.get('/distribution-keys'),
       api.get('/accounting/pcmn', { params: { class_num: 6 } }), api.get('/lots'),
-      api.get('/expense-categories'),
+      api.get('/expense-categories'), api.get('/owners'),
     ]);
     setInvoices(inv.data); setDistKeys(dk.data); setAccounts(acc.data); setLots(lt.data);
-    setCategories(cat.data);
+    setCategories(cat.data); setOwners(ow.data);
   }, []);
 
   useEffect(() => { load(); }, [load]);
@@ -61,8 +63,8 @@ export default function InvoicesPage() {
   // Invoice handlers
   const openCreateInvoice = () => {
     setEditingInvoice(null);
-    setInvForm({ number: `F-${Date.now().toString().slice(-6)}`, date: new Date().toISOString().split('T')[0], due_date: '', supplier: '', description: '', total_amount: 0, vat_amount: 0, account_number: '', expense_category_id: '', distribution_key_id: '', status: 'unpaid' });
-    setAiHint(''); setPendingPdf(null);
+    setInvForm({ number: `F-${Date.now().toString().slice(-6)}`, date: new Date().toISOString().split('T')[0], due_date: '', supplier: '', description: '', total_amount: 0, vat_amount: 0, account_number: '', expense_category_id: '', distribution_key_id: '', status: 'unpaid', is_private_fee: false, private_fee_owner_id: '' });
+    setAiHint(''); setPendingPdf(null); setOwnerSearch('');
     setInvoiceDialog(true);
   };
 
@@ -76,8 +78,10 @@ export default function InvoicesPage() {
       expense_category_id: inv.expense_category_id || '',
       distribution_key_id: inv.distribution_key_id || '',
       status: inv.status || 'unpaid',
+      is_private_fee: !!inv.is_private_fee,
+      private_fee_owner_id: inv.private_fee_owner_id || '',
     });
-    setAiHint(''); setPendingPdf(null);
+    setAiHint(''); setPendingPdf(null); setOwnerSearch('');
     setInvoiceDialog(true);
   };
 
@@ -364,7 +368,68 @@ export default function InvoicesPage() {
                 </Select>
               </div>
             </div>
-            <div className="grid grid-cols-3 gap-4">
+            <div className="rounded-md border border-amber-200 bg-amber-50/50 p-3">
+              <label className="flex items-center gap-2 cursor-pointer text-sm font-medium text-amber-900">
+                <input
+                  type="checkbox"
+                  checked={!!invForm.is_private_fee}
+                  onChange={e => setInvForm(f => ({ ...f, is_private_fee: e.target.checked, distribution_key_id: e.target.checked ? '' : f.distribution_key_id }))}
+                  className="rounded border-amber-400 text-amber-600 focus:ring-amber-500"
+                  data-testid="inv-private-fee"
+                />
+                Frais privatif (a charge d'un seul proprietaire)
+              </label>
+              {invForm.is_private_fee && (
+                <div className="mt-3 space-y-1">
+                  <label className="form-label text-xs">Proprietaire concerne *</label>
+                  <Input
+                    placeholder="Rechercher par nom, prenom ou email..."
+                    value={ownerSearch}
+                    onChange={e => setOwnerSearch(e.target.value)}
+                    data-testid="private-fee-owner-search"
+                  />
+                  <div className="max-h-40 overflow-auto border border-amber-200 rounded bg-white">
+                    {owners
+                      .filter(o => {
+                        const q = ownerSearch.toLowerCase();
+                        if (!q) return true;
+                        return (o.name||'').toLowerCase().includes(q) ||
+                               (o.email||'').toLowerCase().includes(q) ||
+                               (o.vcs_code||'').toLowerCase().includes(q);
+                      })
+                      .slice(0, 12)
+                      .map(o => {
+                        const isSel = o.id === invForm.private_fee_owner_id;
+                        return (
+                          <button
+                            type="button"
+                            key={o.id}
+                            onClick={() => setInvForm(f => ({ ...f, private_fee_owner_id: o.id }))}
+                            className={`w-full text-left px-3 py-1.5 text-xs border-b last:border-b-0 border-slate-100 hover:bg-amber-50 ${isSel ? 'bg-amber-100 font-medium' : ''}`}
+                            data-testid={`private-fee-owner-${o.id}`}
+                          >
+                            <div className="flex items-center justify-between">
+                              <span>{o.name}</span>
+                              <span className="text-slate-400 font-mono text-[10px]">{o.vcs_code || ''}</span>
+                            </div>
+                            {o.email && <div className="text-slate-400 text-[10px]">{o.email}</div>}
+                          </button>
+                        );
+                      })}
+                    {owners.length === 0 && (
+                      <div className="px-3 py-2 text-xs text-slate-400">Aucun proprietaire en base</div>
+                    )}
+                  </div>
+                  {invForm.private_fee_owner_id && (
+                    <p className="text-[10px] text-amber-700">
+                      Selectionne : <b>{owners.find(o => o.id === invForm.private_fee_owner_id)?.name || '-'}</b>.
+                      Comptabilisation auto : Dr 643 / Cr Fournisseur + Dr 40000XXX (owner) / Cr 643.
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+            <div className={`grid grid-cols-3 gap-4 ${invForm.is_private_fee ? 'opacity-50 pointer-events-none' : ''}`}>
               <div><label className="form-label">Nature de depense</label>
                 <Select value={invForm.expense_category_id || 'none'} onValueChange={v => {
                   if (v === 'none') { setInvForm(f => ({...f, expense_category_id: ''})); return; }

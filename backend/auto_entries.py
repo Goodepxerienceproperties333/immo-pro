@@ -65,6 +65,65 @@ async def generate_purchase_entry(db, invoice: dict) -> dict | None:
     pcmn_names = {p["number"]: p["name"] for p in pcmns}
 
     await _delete_auto_entries(db, "invoice", invoice["id"])
+
+    # ---- FRAIS PRIVATIF : ecriture 4 lignes ----
+    # Dr 643 Frais privatif    | Cr 44000XXX Fournisseur
+    # Dr 40000XXX Proprietaire | Cr 643 (imputation)
+    # Resultat : 643 net = 0, supplier credite, owner debite.
+    if invoice.get("is_private_fee") and invoice.get("private_fee_owner_id"):
+        owner_id = invoice["private_fee_owner_id"]
+        owner_doc = await db.owners.find_one({"id": owner_id}, {"_id": 0})
+        if owner_doc:
+            owner_doc = await assign_owner_accounts(db, owner_doc, copro_id)
+            owner_accs = get_owner_accounts(owner_doc, copro_id)
+            owner_prov = owner_accs.get("provisions", "")
+            owner_name = owner_doc.get("name", "")
+            # Re-fetch PCMN names including 643
+            pcmn_q2 = {"number": {"$in": ["643", supplier_acc, owner_prov]}, "copropriete_id": copro_id}
+            pcmns2 = await db.pcmn_accounts.find(pcmn_q2, {"_id": 0}).to_list(10)
+            pcmn_names2 = {p["number"]: p["name"] for p in pcmns2}
+            lines = [
+                {"account_number": "643",
+                 "account_name": pcmn_names2.get("643", "Frais privatifs"),
+                 "debit": amount, "credit": 0.0,
+                 "third_party_id": None, "third_party_name": ""},
+                {"account_number": supplier_acc,
+                 "account_name": pcmn_names2.get(supplier_acc, f"Fourn. - {supplier_name}"),
+                 "debit": 0.0, "credit": amount,
+                 "third_party_id": (supplier_doc or {}).get("id"),
+                 "third_party_name": supplier_name},
+                {"account_number": owner_prov or "400000",
+                 "account_name": pcmn_names2.get(owner_prov, f"Prov. - {owner_name}"),
+                 "debit": amount, "credit": 0.0,
+                 "third_party_id": owner_id,
+                 "third_party_name": owner_name},
+                {"account_number": "643",
+                 "account_name": pcmn_names2.get("643", "Frais privatifs"),
+                 "debit": 0.0, "credit": amount,
+                 "third_party_id": owner_id,
+                 "third_party_name": f"Imputation - {owner_name}"},
+            ]
+            if not _balanced(lines):
+                return None
+            doc = {
+                "id": str(uuid.uuid4()),
+                "journal_type": "AC",
+                "date": invoice.get("date") or datetime.now(timezone.utc).date().isoformat(),
+                "reference": f"FA-{invoice.get('number','')}",
+                "description": f"Frais privatif {owner_name} - {invoice.get('supplier','')} - {invoice.get('description','')}".strip(" -"),
+                "lines": lines,
+                "total_debit": amount * 2,
+                "total_credit": amount * 2,
+                "copropriete_id": copro_id,
+                "auto_generated": True,
+                "source_type": "invoice",
+                "source_id": invoice["id"],
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            await db.journal_entries.insert_one(doc)
+            return {k: v for k, v in doc.items() if k != "_id"}
+
+    # ---- ECRITURE STANDARD : 2 lignes ----
     lines = [
         {"account_number": expense_acc,
          "account_name": pcmn_names.get(expense_acc, ""),
@@ -117,18 +176,16 @@ async def generate_sale_entry(db, fund_call: dict) -> dict | None:
         owners_map[o["id"]] = o
 
     reserve_total = float(fund_call.get("reserve_amount", 0) or 0)
+    roulement_total = float(fund_call.get("roulement_amount", 0) or 0)
     full_total = float(fund_call.get("total_amount", 0) or 0)
     if full_total <= 0:
         return None
-    provisions_total = full_total - reserve_total
 
-    # Compute per-owner reserve share: if reserve_amount > 0, the reserve line in
-    # fund_call.lines was distributed using its own key — we approximate by
-    # proportional split of total per owner. For exact reserve per owner, we'd
-    # need to re-run distribution. For now, prorate.
+    # Compute per-owner reserve/roulement share: prorate.
     lines = []
     sum_dr_prov = 0.0
     sum_dr_res = 0.0
+    sum_dr_roul = 0.0
     for d in distribution:
         oid = d.get("owner_id")
         owner = owners_map.get(oid)
@@ -136,9 +193,10 @@ async def generate_sale_entry(db, fund_call: dict) -> dict | None:
             continue
         accs = get_owner_accounts(owner, copro_id)
         owner_total = float(d.get("amount", 0) or 0)
-        # Prorate reserve vs provisions per owner
+        # Prorate reserve + roulement vs provisions per owner
         owner_reserve = round(owner_total * (reserve_total / full_total), 2) if reserve_total > 0 else 0
-        owner_prov = round(owner_total - owner_reserve, 2)
+        owner_roul = round(owner_total * (roulement_total / full_total), 2) if roulement_total > 0 else 0
+        owner_prov = round(owner_total - owner_reserve - owner_roul, 2)
         if owner_prov > 0.001 and accs.get("provisions"):
             lines.append({
                 "account_number": accs["provisions"],
@@ -157,9 +215,20 @@ async def generate_sale_entry(db, fund_call: dict) -> dict | None:
                 "third_party_name": owner.get("name", ""),
             })
             sum_dr_res += owner_reserve
+        if owner_roul > 0.001 and accs.get("provisions"):
+            # Fonds de roulement: meme compte tier owner 40000XXX
+            lines.append({
+                "account_number": accs["provisions"],
+                "account_name": f"Fonds roulement - {owner.get('last_name') or owner.get('name')}",
+                "debit": owner_roul, "credit": 0.0,
+                "third_party_id": oid,
+                "third_party_name": owner.get("name", ""),
+            })
+            sum_dr_roul += owner_roul
 
     sum_dr_prov = round(sum_dr_prov, 2)
     sum_dr_res = round(sum_dr_res, 2)
+    sum_dr_roul = round(sum_dr_roul, 2)
     if sum_dr_prov > 0:
         lines.append({
             "account_number": "700000",
@@ -174,6 +243,13 @@ async def generate_sale_entry(db, fund_call: dict) -> dict | None:
             "debit": 0.0, "credit": sum_dr_res,
             "third_party_id": None, "third_party_name": "",
         })
+    if sum_dr_roul > 0:
+        lines.append({
+            "account_number": "100",
+            "account_name": "Fonds de roulement general",
+            "debit": 0.0, "credit": sum_dr_roul,
+            "third_party_id": None, "third_party_name": "",
+        })
 
     if not lines or not _balanced(lines):
         return None
@@ -186,8 +262,8 @@ async def generate_sale_entry(db, fund_call: dict) -> dict | None:
         "reference": f"AF-{fund_call.get('name','')[:20]}",
         "description": f"Appel: {fund_call.get('name','')}",
         "lines": lines,
-        "total_debit": round(sum_dr_prov + sum_dr_res, 2),
-        "total_credit": round(sum_dr_prov + sum_dr_res, 2),
+        "total_debit": round(sum_dr_prov + sum_dr_res + sum_dr_roul, 2),
+        "total_credit": round(sum_dr_prov + sum_dr_res + sum_dr_roul, 2),
         "copropriete_id": copro_id,
         "auto_generated": True,
         "source_type": "fund_call",
