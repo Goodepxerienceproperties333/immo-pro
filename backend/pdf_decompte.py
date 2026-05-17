@@ -191,7 +191,7 @@ def build_decompte_pdf(
                 # Niveau 2 : Nature de depense / compte PCMN
                 header = f"<b>Nature :</b> {nature_label} <font color='#94a3b8'>(compte {acc_label})</font>" if nature_label else f"<b>Compte :</b> {acc_label}"
                 elements.append(Paragraph(header, ParagraphStyle(name="nature", parent=body, leftIndent=10, fontSize=8, textColor=DARK_GREY)))
-                rows = [["Date", "Fournisseur", "Description", "N° facture", "Total facture", "Votre part"]]
+                rows = [["Date valeur", "Fournisseur", "Libelle", "Ref. interne", "Montant TVAC", "Votre quote-part"]]
                 subtotal = 0.0
                 for inv, owner_amt in items:
                     rows.append([

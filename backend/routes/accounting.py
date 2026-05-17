@@ -31,15 +31,24 @@ class JournalEntryInput(BaseModel):
 class PCMNAccountInput(BaseModel):
     number: str
     name: str
-    class_num: int
+    class_num: Optional[int] = None  # auto-derived from first digit if absent
     parent: Optional[str] = None
-    type: Optional[str] = "balance"
+    type: Optional[str] = None  # auto-derived (balance for 1-5, result for 6-7)
     copropriete_id: Optional[str] = ""
-    active: Optional[bool] = False
+    active: Optional[bool] = True  # custom accounts default to active
 
 
 class PCMNToggleInput(BaseModel):
     active: bool
+
+
+class PCMNUpdateInput(BaseModel):
+    name: Optional[str] = None
+    class_num: Optional[int] = None
+    parent: Optional[str] = None
+    type: Optional[str] = None
+    active: Optional[bool] = None
+    copropriete_id: Optional[str] = ""
 
 
 def create_accounting_router(db):
@@ -66,34 +75,43 @@ def create_accounting_router(db):
 
     @router.post("/pcmn")
     async def create_pcmn_account(data: PCMNAccountInput):
+        if not data.number or not data.number.isdigit():
+            raise HTTPException(400, "Le numero de compte doit etre numerique")
         q = {"number": data.number}
         if data.copropriete_id:
             q["copropriete_id"] = data.copropriete_id
         existing = await db.pcmn_accounts.find_one(q)
         if existing:
             raise HTTPException(400, "Ce numero de compte existe deja dans cette ACP")
+        class_num = data.class_num if data.class_num else int(data.number[0])
+        typ = data.type or ("balance" if class_num <= 5 else "result")
         doc = {
             "number": data.number,
             "name": data.name,
-            "class_num": data.class_num,
+            "class_num": class_num,
             "parent": data.parent,
-            "type": data.type,
+            "type": typ,
             "copropriete_id": data.copropriete_id or "",
-            "active": data.active if data.active is not None else False,
+            "active": data.active if data.active is not None else True,
+            "is_custom": True,
+            "created_at": datetime.now(timezone.utc).isoformat(),
         }
         await db.pcmn_accounts.insert_one(doc)
         return {k: v for k, v in doc.items() if k != "_id"}
 
     @router.put("/pcmn/{number}")
-    async def update_pcmn_account(number: str, data: PCMNAccountInput):
+    async def update_pcmn_account(number: str, data: PCMNUpdateInput):
         q = {"number": number}
         if data.copropriete_id:
             q["copropriete_id"] = data.copropriete_id
-        result = await db.pcmn_accounts.update_one(
-            q,
-            {"$set": {"name": data.name, "class_num": data.class_num, "parent": data.parent,
-                      "type": data.type, "active": data.active if data.active is not None else False}}
-        )
+        update_doc = {}
+        for fld in ("name", "class_num", "parent", "type", "active"):
+            val = getattr(data, fld)
+            if val is not None:
+                update_doc[fld] = val
+        if not update_doc:
+            raise HTTPException(400, "Rien a modifier")
+        result = await db.pcmn_accounts.update_one(q, {"$set": update_doc})
         if result.matched_count == 0:
             raise HTTPException(404, "Compte non trouve")
         return await db.pcmn_accounts.find_one(q, {"_id": 0})
@@ -109,14 +127,37 @@ def create_accounting_router(db):
         return await db.pcmn_accounts.find_one(q, {"_id": 0})
 
     @router.delete("/pcmn/{number}")
-    async def delete_pcmn_account(number: str, copropriete_id: Optional[str] = None):
+    async def delete_pcmn_account(number: str, copropriete_id: Optional[str] = None, force: Optional[bool] = False):
         q = {"number": number}
         if copropriete_id:
             q["copropriete_id"] = copropriete_id
-        result = await db.pcmn_accounts.delete_one(q)
-        if result.deleted_count == 0:
+        # Trouver le compte pour verifier son statut
+        acc = await db.pcmn_accounts.find_one(q, {"_id": 0})
+        if not acc:
             raise HTTPException(404, "Compte non trouve")
-        return {"message": "Compte supprime"}
+        # Protections
+        if acc.get("is_tier_account"):
+            raise HTTPException(400, "Ce compte tiers (auto) ne peut etre supprime. Supprimez le tiers concerne.")
+        if not force and not acc.get("is_custom"):
+            raise HTTPException(400, "Ce compte fait partie du PCMN officiel. Utilisez ?force=true pour supprimer quand meme.")
+        # Verifier qu'il n'est pas utilise
+        copro_filter = {"copropriete_id": copropriete_id} if copropriete_id else {}
+        used_entries = await db.journal_entries.count_documents(
+            {**copro_filter, "lines.account_number": number}
+        )
+        used_invoices = await db.invoices.count_documents(
+            {**copro_filter, "$or": [{"account_number": number}, {"lines.account_number": number}]}
+        )
+        used_cats = await db.expense_categories.count_documents(
+            {**copro_filter, "account_number": number}
+        )
+        if used_entries + used_invoices + used_cats > 0:
+            raise HTTPException(
+                409,
+                f"Compte utilise: {used_entries} ecriture(s), {used_invoices} facture(s), {used_cats} nature(s) de depense"
+            )
+        await db.pcmn_accounts.delete_one(q)
+        return {"message": "Compte supprime", "number": number}
 
     # ---- JOURNAL ENTRIES ----
     @router.get("/entries")

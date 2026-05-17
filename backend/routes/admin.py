@@ -153,4 +153,43 @@ def create_admin_router(db):
             stats["acps"].append({"id": cid, "name": copro.get("name", "")})
         return stats
 
+    @router.post("/migrate/pcmn-import")
+    async def migrate_pcmn_import(request: Request, copropriete_id: Optional[str] = None):
+        """Import (idempotent) le PCMN complet (327 comptes + 10 compat) dans toutes les ACPs (ou une seule).
+        Ajoute uniquement les comptes manquants. Ne supprime ni ne modifie l'existant.
+        Les comptes ajoutes sont inactifs par defaut (sauf 614000/615000)."""
+        from pcmn_data import PCMN_ALL_ACCOUNTS
+        await _get_admin_user(request)
+        DEFAULT_ACTIVE = {"614000", "615000"}
+        copro_q = {"id": copropriete_id} if copropriete_id else {}
+        coproprietes = await db.coproprietes.find(copro_q, {"_id": 0, "id": 1, "name": 1}).to_list(1000)
+        stats = {"acps": [], "total_added": 0, "total_existing": 0}
+        for copro in coproprietes:
+            cid = copro["id"]
+            existing_nums = set()
+            async for d in db.pcmn_accounts.find(
+                {"copropriete_id": cid}, {"_id": 0, "number": 1}
+            ):
+                existing_nums.add(d["number"])
+            to_insert = []
+            for acc in PCMN_ALL_ACCOUNTS:
+                if acc["number"] in existing_nums:
+                    continue
+                to_insert.append({
+                    **acc,
+                    "copropriete_id": cid,
+                    "active": acc["number"] in DEFAULT_ACTIVE,
+                    "is_custom": False,
+                })
+            if to_insert:
+                await db.pcmn_accounts.insert_many(to_insert)
+            stats["acps"].append({
+                "id": cid, "name": copro.get("name", ""),
+                "added": len(to_insert),
+                "existing": len(existing_nums),
+            })
+            stats["total_added"] += len(to_insert)
+            stats["total_existing"] += len(existing_nums)
+        return stats
+
     return router

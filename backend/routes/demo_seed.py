@@ -85,11 +85,12 @@ def create_demo_router(db):
         await db.coproprietes.insert_one(copro)
 
         # 2. Seed PCMN for this ACP
-        from pcmn_data import PCMN_ACCOUNTS
-        active_set = {"614000", "615000", "611100", "612100", "612300", "613100", "617000"}
+        from pcmn_data import PCMN_ALL_ACCOUNTS
+        active_set = {"614000", "615000", "61300", "61050", "6120", "6121", "6140"}
         pcmn_docs = []
-        for acc in PCMN_ACCOUNTS:
-            pcmn_docs.append({**acc, "copropriete_id": copro_id, "active": acc["number"] in active_set})
+        for acc in PCMN_ALL_ACCOUNTS:
+            pcmn_docs.append({**acc, "copropriete_id": copro_id,
+                              "active": acc["number"] in active_set, "is_custom": False})
         # Add the 2 bank PCMN
         pcmn_docs.append({"number": "55103400", "name": "Banque compte courant 7034", "class_num": 5,
                           "parent": "550000", "type": "balance", "copropriete_id": copro_id, "active": True})

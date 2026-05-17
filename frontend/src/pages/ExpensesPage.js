@@ -7,12 +7,14 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { useNavigate } from 'react-router-dom';
-import { Receipt, X, Paperclip, Filter, Pencil } from 'lucide-react';
+import { Receipt, X, Paperclip, Filter, Pencil, Download } from 'lucide-react';
+import { useAuth } from '@/contexts/AuthContext';
 
 const ALL = '__all__';
 
 export default function ExpensesPage() {
   const navigate = useNavigate();
+  const { selectedCopro } = useAuth();
   const [years, setYears] = useState([]);
   const [data, setData] = useState(null);
   const [filters, setFilters] = useState({ fiscal_year_id: '', account_number: '', distribution_key_id: '', bank_account: '', date_from: '', date_to: '' });
@@ -46,11 +48,38 @@ export default function ExpensesPage() {
   const clearFilters = () => setFilters({ fiscal_year_id: '', account_number: '', distribution_key_id: '', bank_account: '', date_from: '', date_to: '' });
   const setField = (k, v) => setFilters(f => ({ ...f, [k]: v === ALL ? '' : v }));
 
+  const downloadPdf = async () => {
+    if (!selectedCopro) { alert('Selectionnez une copropriete'); return; }
+    const now = new Date();
+    const y = now.getFullYear();
+    const df = filters.date_from || `${y}-01-01`;
+    const dt = filters.date_to || `${y}-12-31`;
+    const params = { copropriete_id: selectedCopro, date_from: df, date_to: dt };
+    if (filters.distribution_key_id) params.distribution_key_id = filters.distribution_key_id;
+    if (filters.account_number) params.account_number = filters.account_number;
+    try {
+      const res = await api.get('/reports/depenses/pdf', { params, responseType: 'blob' });
+      const url = URL.createObjectURL(res.data);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `liste_depenses_${df}_au_${dt}.pdf`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      alert('Erreur generation PDF: ' + (e.response?.data?.detail || e.message));
+    }
+  };
+
   return (
     <div data-testid="expenses-page">
-      <div className="page-header">
-        <h1 className="page-title"><Receipt size={24} className="inline mr-2" />Depenses de l'exercice</h1>
-        <p className="page-subtitle">Toutes les depenses comptabilisees, filtrables par nature, cle de repartition et compte bancaire</p>
+      <div className="page-header flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+        <div>
+          <h1 className="page-title"><Receipt size={24} className="inline mr-2" />Depenses de l'exercice</h1>
+          <p className="page-subtitle">Toutes les depenses comptabilisees, filtrables par nature, cle de repartition et compte bancaire</p>
+        </div>
+        <Button variant="outline" onClick={downloadPdf} data-testid="expenses-pdf-btn">
+          <Download size={16} className="mr-2" />Liste des depenses (PDF)
+        </Button>
       </div>
 
       {/* Filters */}

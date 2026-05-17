@@ -58,14 +58,15 @@ def create_coproprietes_router(db):
     DEFAULT_ACTIVE_ACCOUNTS = {"614000", "615000"}  # Honoraires syndic + Frais de gestion (admin)
 
     async def _seed_pcmn_for_acp(copro_id: str):
-        """Seed the full PCMN (Belgian 95-account plan) for a newly-created ACP."""
-        from pcmn_data import PCMN_ACCOUNTS
+        """Seed le PCMN belge complet (327 comptes officiels + 10 comptes compat) pour une nouvelle ACP."""
+        from pcmn_data import PCMN_ALL_ACCOUNTS
         docs = []
-        for acc in PCMN_ACCOUNTS:
+        for acc in PCMN_ALL_ACCOUNTS:
             docs.append({
                 **acc,
                 "copropriete_id": copro_id,
                 "active": acc["number"] in DEFAULT_ACTIVE_ACCOUNTS,
+                "is_custom": False,
             })
         if docs:
             await db.pcmn_accounts.insert_many(docs)

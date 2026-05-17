@@ -584,6 +584,60 @@ def create_reports_router(db):
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
 
+    # ---- LISTE DES DEPENSES PDF ----
+    @router.get("/depenses/pdf")
+    async def liste_depenses_pdf(
+        copropriete_id: str,
+        date_from: str,
+        date_to: str,
+        distribution_key_id: Optional[str] = None,
+        account_number: Optional[str] = None,
+    ):
+        """Genere le PDF 'Liste des depenses' au format Syndic belge.
+        Hierarchie: Cle de repartition -> Nature -> Compte -> lignes.
+        Colonnes: Date valeur, Libelle, Fournisseur, Ref. interne, Montant, Part proprietaire, Part occupant.
+        """
+        from pdf_liste_depenses import build_liste_depenses_pdf
+
+        copro = await db.coproprietes.find_one({"id": copropriete_id}, {"_id": 0})
+        if not copro:
+            raise HTTPException(404, "Copropriete non trouvee")
+
+        # Build invoice query
+        inv_q = {"copropriete_id": copropriete_id,
+                 "date": {"$gte": date_from, "$lte": date_to}}
+        if distribution_key_id:
+            inv_q["distribution_key_id"] = distribution_key_id
+        if account_number:
+            inv_q["account_number"] = account_number
+        invoices = await db.invoices.find(inv_q, {"_id": 0}).sort("date", 1).to_list(100000)
+
+        distribution_keys = await db.distribution_keys.find(
+            {"copropriete_id": copropriete_id}, {"_id": 0}
+        ).to_list(1000)
+        pcmn = await db.pcmn_accounts.find(
+            {"copropriete_id": copropriete_id}, {"_id": 0}
+        ).to_list(10000)
+        pcmn_map = {a["number"]: a.get("name", "") for a in pcmn}
+        cats = await db.expense_categories.find(
+            {"copropriete_id": copropriete_id}, {"_id": 0}
+        ).to_list(1000)
+
+        pdf_bytes = build_liste_depenses_pdf(
+            copropriete=copro,
+            date_from=date_from, date_to=date_to,
+            invoices=invoices,
+            distribution_keys=distribution_keys,
+            pcmn_map=pcmn_map,
+            expense_categories=cats,
+        )
+        filename = f"liste_depenses_{date_from}_au_{date_to}.pdf"
+        return StreamingResponse(
+            io.BytesIO(pdf_bytes),
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
     # ---- BALANCE DE TIERS PROPRIETAIRES ----
     @router.get("/balance-tiers/owners")
     async def balance_tiers_owners(copropriete_id: Optional[str] = None):
