@@ -77,6 +77,7 @@ export default function BalanceTiersPage() {
                 <Table>
                   <TableHeader><TableRow>
                     <TableHead>Proprietaire</TableHead><TableHead>VCS</TableHead>
+                    <TableHead className="text-xs">Comptes (40000 / 40010)</TableHead>
                     <TableHead className="text-right">Appele</TableHead><TableHead className="text-right">Paye</TableHead>
                     <TableHead className="text-right">Solde</TableHead><TableHead>Statut</TableHead><TableHead className="w-16"></TableHead>
                   </TableRow></TableHeader>
@@ -85,6 +86,9 @@ export default function BalanceTiersPage() {
                       <TableRow key={o.owner_id} className="hover:bg-slate-50/50">
                         <TableCell className="font-medium">{o.owner_name}</TableCell>
                         <TableCell className="font-mono text-xs text-[#0055FF]">{o.vcs_code}</TableCell>
+                        <TableCell className="font-mono text-[11px] text-slate-500">
+                          {o.account_provisions || '—'} <span className="text-slate-300">/</span> {o.account_reserve || '—'}
+                        </TableCell>
                         <TableCell className="text-right font-mono">{o.total_called.toFixed(2)}</TableCell>
                         <TableCell className="text-right font-mono">{o.total_paid.toFixed(2)}</TableCell>
                         <TableCell className={`text-right font-mono font-bold ${o.balance > 0 ? 'text-red-700' : o.balance < 0 ? 'text-green-700' : 'text-slate-500'}`}>{o.balance.toFixed(2)}</TableCell>
@@ -115,14 +119,18 @@ export default function BalanceTiersPage() {
               <div className="bg-white rounded-md border border-slate-200 overflow-hidden">
                 <Table>
                   <TableHeader><TableRow>
-                    <TableHead>Fournisseur</TableHead><TableHead>N TVA</TableHead>
+                    <TableHead>Fournisseur</TableHead><TableHead>Compte</TableHead><TableHead>N TVA</TableHead>
                     <TableHead className="text-right">Facture</TableHead><TableHead className="text-right">Paye</TableHead>
                     <TableHead className="text-right">Solde</TableHead><TableHead>Statut</TableHead><TableHead className="w-16"></TableHead>
                   </TableRow></TableHeader>
                   <TableBody>
-                    {suppliersData.suppliers.map(s => (
-                      <TableRow key={s.supplier_id} className="hover:bg-slate-50/50">
-                        <TableCell className="font-medium">{s.supplier_name}</TableCell>
+                    {suppliersData.suppliers.map((s, i) => (
+                      <TableRow key={s.supplier_id || `orphan-${i}`} className="hover:bg-slate-50/50">
+                        <TableCell className="font-medium">
+                          {s.supplier_name}
+                          {s.orphan && <Badge variant="outline" className="ml-2 text-[10px] bg-amber-50 text-amber-700 border-amber-200">Orphelin</Badge>}
+                        </TableCell>
+                        <TableCell className="font-mono text-[11px] text-slate-500">{s.tier_account || '—'}</TableCell>
                         <TableCell className="font-mono text-xs">{s.vat_number || '-'}</TableCell>
                         <TableCell className="text-right font-mono">{s.total_invoiced.toFixed(2)}</TableCell>
                         <TableCell className="text-right font-mono">{s.total_paid.toFixed(2)}</TableCell>
@@ -132,7 +140,7 @@ export default function BalanceTiersPage() {
                             {s.status === 'crediteur' ? 'A payer' : s.status === 'debiteur' ? 'Trop-paye' : 'Solde'}
                           </Badge>
                         </TableCell>
-                        <TableCell><Button variant="ghost" size="sm" onClick={() => viewSupplierDetail(s.supplier_id)} data-testid={`view-supplier-${s.supplier_id}`}><Eye size={14} /></Button></TableCell>
+                        <TableCell>{s.supplier_id ? <Button variant="ghost" size="sm" onClick={() => viewSupplierDetail(s.supplier_id)} data-testid={`view-supplier-${s.supplier_id}`}><Eye size={14} /></Button> : null}</TableCell>
                       </TableRow>
                     ))}
                   </TableBody>

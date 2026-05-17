@@ -256,6 +256,15 @@ export default function InvoicesPage() {
                 <button type="button" onClick={() => setPendingPdf(null)} className="text-blue-600 hover:text-blue-800"><X size={14} /></button>
               </div>
             )}
+            {!pendingPdf && (
+              <div className="text-xs">
+                <input id="manual-pdf-input" type="file" accept="application/pdf,image/*" className="hidden"
+                  onChange={(e) => { const f = e.target.files?.[0]; if (f) setPendingPdf({ file: f, filename: f.name }); e.target.value = ''; }} />
+                <button type="button" className="text-slate-500 hover:text-[#0055FF] underline" onClick={() => document.getElementById('manual-pdf-input').click()} data-testid="manual-attach-btn">
+                  <Paperclip size={11} className="inline mr-1" /> Joindre la facture PDF / image (optionnel)
+                </button>
+              </div>
+            )}
             <div className="grid grid-cols-3 gap-4">
               <div><label className="form-label">Numero *</label><Input value={invForm.number} onChange={e => setInvForm({...invForm, number: e.target.value})} data-testid="inv-number" /></div>
               <div><label className="form-label">Date *</label><Input type="date" value={invForm.date} onChange={e => setInvForm({...invForm, date: e.target.value})} /></div>

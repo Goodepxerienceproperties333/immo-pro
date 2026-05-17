@@ -1,0 +1,59 @@
+{
+  "summary": "Iter15 backend testing complete. All 16 new tests pass covering tier accounts auto-assignment, migration idempotence, case-insensitive supplier matching, orphan supplier handling, RBAC, and regression. Iter14 regression still 8/8 passing.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter15_tier_accounts.py",
+    "/app/test_reports/pytest/pytest_iter15.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "tier_accounts._next_seq scans ALL pcmn_accounts matching prefix in an ACP every time a new owner/supplier is created. For ACPs with hundreds of owners, this is O(N) per insert and not concurrency-safe (two simultaneous owner creations could pick the same seq, causing a race). Consider a counter collection or a unique-index retry loop.",
+    "routes/admin.py migrate_tier_accounts: the 'suppliers_processed' counter increments only for invoices whose supplier name exactly matches an existing supplier doc (case-sensitive equality via db.suppliers.find_one({name: sname})). Yet balance-tiers/suppliers uses case-insensitive regex matching. This is inconsistent: a supplier doc 'VIVAQUA' will NOT be migrated when invoices reference 'Vivaqua'. Recommend using case-insensitive lookup in admin.py line 148 too (e.g. {'name': {'$regex': f'^{re.escape(sname)}$', '$options': 'i'}}).",
+    "routes/admin.py migrate_tier_accounts has NO RBAC restriction beyond '_get_admin_user' which accepts both superadmin AND syndic via is_admin_role. The problem statement says 'superadmin' for migration; if business intent is superadmin-only, line 131 should check role explicitly. Current impl accepts syndic too. (Owner is correctly rejected -> 403, validated by test).",
+    "routes/properties.py update_owner not visible in the snippet provided but referenced in playbook - couldn't verify it also calls assign_owner_accounts when copropriete_id changes. Worth a quick scan.",
+    "tier_accounts.py: _ensure_account checks {number, copropriete_id} but pcmn_accounts has no unique index on (number, copropriete_id). Concurrent inserts can create duplicates. Recommend a Mongo unique compound index.",
+    "balance-tiers/suppliers builds a regex with '|'.join of all supplier display names - if any name contains regex special chars they are escaped, OK; but with many suppliers the regex could become very large. Acceptable for typical ACP sizes."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter15_tier_accounts.py"
+  ],
+  "success_rate": {"backend": "100% (16/16)", "frontend": "not tested (backend only request)"},
+  "test_credentials": "admin@copro.be / admin123 (superadmin); transient owner TEST_iter15_rbac_*@example.com auto-created+deleted",
+  "seed_data_creation": "Per test, creates TEST_iter15_OwnerA/B owners, TEST_iter15_SupA/_CASE suppliers, TEST_iter15_Orphan/_regress invoices, and a TEST_iter15_rbac owner user. All resources tracked and deleted in module-scoped cleanup fixture.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iter15 covers tier accounts (40000XXX provisions, 40010XXX reserve, 44000XXX suppliers). Test file at /app/backend/tests/test_iter15_tier_accounts.py. Key endpoints validated: POST /api/admin/migrate/tier-accounts (idempotent), POST /api/owners (auto-assigns 2 tier accts when copropriete_id given), POST /api/suppliers (auto-assigns 1 tier acct when copropriete_id given), GET /api/reports/balance-tiers/owners (returns account_provisions/account_reserve), GET /api/reports/balance-tiers/suppliers (orphan flag + case-insensitive match). PCMN list endpoint is /api/accounting/pcmn (NOT /api/pcmn-accounts). Existing DB has 8 owners x 2 + 5 suppliers = 21+ tier accounts plus those created/cleaned per test. RBAC: owner -> 403 on migrate (confirmed); BUT migrate currently allows BOTH superadmin and syndic since it uses _get_admin_user -> is_admin_role; if spec requires superadmin-only, add explicit check.",
+  "tests_executed": {
+    "total": 16,
+    "passed": 16,
+    "failed": 0,
+    "list": [
+      "TestMigration::test_migrate_endpoint_returns_expected_shape",
+      "TestMigration::test_migrate_is_idempotent",
+      "TestMigration::test_migrated_accounts_have_correct_attributes",
+      "TestOwnerTierAccounts::test_create_owner_auto_assigns_tier_accounts",
+      "TestOwnerTierAccounts::test_owner_assign_is_idempotent",
+      "TestSupplierTierAccounts::test_create_supplier_auto_assigns_tier_account",
+      "TestSupplierTierAccounts::test_supplier_sequence_no_gap",
+      "TestBalanceTiersOwners::test_balance_tiers_owners_includes_tier_accounts",
+      "TestBalanceTiersOwners::test_balance_tiers_owners_response_fields",
+      "TestBalanceTiersSuppliers::test_orphan_supplier_appears_with_orphan_flag",
+      "TestBalanceTiersSuppliers::test_case_insensitive_match_supplier",
+      "TestRBAC::test_owner_cannot_call_migrate",
+      "TestRegression::test_owners_list",
+      "TestRegression::test_suppliers_list",
+      "TestRegression::test_balance_report",
+      "TestRegression::test_invoices_crud"
+    ]
+  },
+  "regression_iter14": "8/8 tests still pass in test_iter14_regenerate_from_budget.py - no regression introduced.",
+  "rca_of_the_issue": "N/A - all features under test passed. Note: a code-review concern (migration uses case-sensitive supplier lookup whereas balance-tiers uses case-insensitive) could create a subtle bug where suppliers referenced with different casing in invoices vs the Supplier doc are NOT migrated; they would still appear in balance-tiers correctly (because that endpoint does its own case-insensitive lookup), so user-facing impact is hidden until someone audits PCMN tier accounts."
+}

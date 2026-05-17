@@ -4,6 +4,7 @@ from typing import Optional, List
 from bson import ObjectId
 from datetime import datetime, timezone
 import uuid
+from tier_accounts import assign_owner_accounts
 
 
 def create_properties_router(db):
@@ -57,6 +58,9 @@ def create_properties_router(db):
             "created_at": datetime.now(timezone.utc).isoformat()
         }
         await db.owners.insert_one(doc)
+        if data.copropriete_id:
+            await assign_owner_accounts(db, doc, data.copropriete_id)
+            doc = await db.owners.find_one({"id": doc["id"]}, {"_id": 0})
         return {k: v for k, v in doc.items() if k != "_id"}
 
     @router.get("/owners/check-duplicate")
@@ -104,7 +108,7 @@ def create_properties_router(db):
         return owner
 
     @router.put("/owners/{owner_id}")
-    async def update_owner(owner_id: str, data: OwnerInput):
+    async def update_owner(owner_id: str, data: OwnerInput, request: Request):
         full_name = data.name or f"{data.last_name} {data.first_name}".strip()
         result = await db.owners.update_one(
             {"id": owner_id},
@@ -117,7 +121,12 @@ def create_properties_router(db):
         )
         if result.matched_count == 0:
             raise HTTPException(404, "Proprietaire non trouve")
-        return await db.owners.find_one({"id": owner_id}, {"_id": 0})
+        owner = await db.owners.find_one({"id": owner_id}, {"_id": 0})
+        copro_id = data.copropriete_id or getattr(request.state, "copropriete_id", "") or owner.get("copropriete_id", "")
+        if copro_id:
+            await assign_owner_accounts(db, owner, copro_id)
+            owner = await db.owners.find_one({"id": owner_id}, {"_id": 0})
+        return owner
 
     @router.delete("/owners/{owner_id}")
     async def delete_owner(owner_id: str):

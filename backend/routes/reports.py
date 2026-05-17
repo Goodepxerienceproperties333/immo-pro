@@ -628,11 +628,14 @@ def create_reports_router(db):
 
             balance = round(total_called - total_paid, 2)
             movements = sorted(calls_detail + payments_detail, key=lambda x: x["date"])
+            tier_acc = (owner.get("tier_accounts") or {}).get(copropriete_id or "", {}) or {}
 
             result.append({
                 "owner_id": oid,
                 "owner_name": owner["name"],
                 "vcs_code": owner.get("vcs_code", ""),
+                "account_provisions": tier_acc.get("provisions", ""),
+                "account_reserve": tier_acc.get("reserve", ""),
                 "total_called": round(total_called, 2),
                 "total_paid": round(total_paid, 2),
                 "balance": balance,
@@ -709,40 +712,69 @@ def create_reports_router(db):
     # ---- BALANCE DE TIERS FOURNISSEURS ----
     @router.get("/balance-tiers/suppliers")
     async def balance_tiers_suppliers(copropriete_id: Optional[str] = None):
-        """Balance de tiers fournisseurs scopee par ACP (les factures et paiements sont scopes)."""
+        """Balance de tiers fournisseurs scopee par ACP (les factures et paiements sont scopes).
+        Affiche aussi les fournisseurs orphelins (nom present sur des factures mais pas de fiche fournisseur)."""
         inv_q = _apply_copro({}, copropriete_id)
         invoices = await db.invoices.find(inv_q, {"_id": 0}).to_list(10000)
-        # Only suppliers referenced by invoices in this ACP
-        supplier_names_in_acp = {inv.get("supplier", "") for inv in invoices if inv.get("supplier")}
-        suppliers = await db.suppliers.find({"name": {"$in": list(supplier_names_in_acp)}}, {"_id": 0}).sort("name", 1).to_list(1000) if supplier_names_in_acp else []
+
+        # Group invoices by case-insensitive supplier name
+        from collections import defaultdict
+        inv_by_supplier = defaultdict(list)  # lower_name -> [invoice]
+        canonical_name = {}  # lower_name -> first observed display name
+        for inv in invoices:
+            raw = (inv.get("supplier", "") or "").strip()
+            if not raw:
+                continue
+            key = raw.lower()
+            inv_by_supplier[key].append(inv)
+            if key not in canonical_name:
+                canonical_name[key] = raw
+
+        # Fetch supplier docs by case-insensitive regex on each name
+        suppliers_map = {}  # lower_name -> supplier doc
+        if canonical_name:
+            import re
+            names_pattern = "|".join(re.escape(n) for n in canonical_name.values())
+            if names_pattern:
+                cursor = db.suppliers.find(
+                    {"name": {"$regex": f"^({names_pattern})$", "$options": "i"}},
+                    {"_id": 0}
+                )
+                async for s in cursor:
+                    suppliers_map[s["name"].lower()] = s
 
         txn_q = _apply_copro({"matched": True, "match_type": "invoice"}, copropriete_id)
         bank_txns = await db.bank_transactions.find(txn_q, {"_id": 0}).to_list(10000)
-
-        # Map invoice_id -> supplier
-        inv_map = {inv["id"]: inv for inv in invoices}
+        inv_id_map = {inv["id"]: inv for inv in invoices}
 
         result = []
-        for supplier in suppliers:
-            sname = supplier["name"]
-            total_invoiced = sum(inv.get("total_amount", 0) for inv in invoices if inv.get("supplier", "") == sname)
-            total_paid = 0
+        for key, invs in inv_by_supplier.items():
+            display_name = canonical_name[key]
+            supplier = suppliers_map.get(key)
+            total_invoiced = sum(inv.get("total_amount", 0) for inv in invs)
+            total_paid = 0.0
+            inv_ids = {inv["id"] for inv in invs}
             for txn in bank_txns:
-                matched_inv = inv_map.get(txn.get("matched_to", ""))
-                if matched_inv and matched_inv.get("supplier", "") == sname:
+                matched_inv = inv_id_map.get(txn.get("matched_to", ""))
+                if matched_inv and matched_inv["id"] in inv_ids:
                     total_paid += abs(txn.get("amount", 0))
-
             balance = round(total_invoiced - total_paid, 2)
+            tier_acc = ""
+            if supplier and copropriete_id:
+                tier_acc = ((supplier.get("tier_accounts") or {}).get(copropriete_id, {}) or {}).get("main", "")
             result.append({
-                "supplier_id": supplier["id"],
-                "supplier_name": sname,
-                "vat_number": supplier.get("vat_number", ""),
+                "supplier_id": supplier["id"] if supplier else "",
+                "supplier_name": supplier["name"] if supplier else display_name,
+                "vat_number": supplier.get("vat_number", "") if supplier else "",
+                "tier_account": tier_acc,
+                "orphan": supplier is None,
+                "invoice_count": len(invs),
                 "total_invoiced": round(total_invoiced, 2),
                 "total_paid": round(total_paid, 2),
                 "balance": balance,
                 "status": "crediteur" if balance > 0.01 else ("debiteur" if balance < -0.01 else "solde"),
             })
-
+        result.sort(key=lambda r: r["supplier_name"].lower())
         total_a_payer = round(sum(r["balance"] for r in result if r["balance"] > 0), 2)
         return {"suppliers": result, "total_a_payer": total_a_payer}
 

@@ -123,4 +123,34 @@ def create_admin_router(db):
             raise HTTPException(404, "Utilisateur non trouve")
         return {"message": "Utilisateur supprime"}
 
+    @router.post("/migrate/tier-accounts")
+    async def migrate_tier_accounts(request: Request, copropriete_id: Optional[str] = None):
+        """Backfill 40000XXX/40010XXX accounts for all owners and 44000XXX for all
+        suppliers across all coproprietes (or a single one). Idempotent."""
+        from tier_accounts import assign_owner_accounts, assign_supplier_account
+        await _get_admin_user(request)
+        stats = {"owners_processed": 0, "suppliers_processed": 0, "acps": []}
+        copro_q = {"id": copropriete_id} if copropriete_id else {}
+        coproprietes = await db.coproprietes.find(copro_q, {"_id": 0, "id": 1, "name": 1}).to_list(1000)
+        for copro in coproprietes:
+            cid = copro["id"]
+            # Process owners: any owner that has a lot in this ACP must have accounts here
+            owner_ids = await db.lots.distinct("owner_id", {"copropriete_id": cid})
+            owners = await db.owners.find({"id": {"$in": owner_ids}}, {"_id": 0}).to_list(10000)
+            for o in owners:
+                await assign_owner_accounts(db, o, cid)
+                stats["owners_processed"] += 1
+            # Process suppliers: any supplier referenced by an invoice in this ACP
+            supplier_names = await db.invoices.distinct("supplier", {"copropriete_id": cid})
+            for sname in supplier_names:
+                if not sname:
+                    continue
+                s = await db.suppliers.find_one({"name": sname}, {"_id": 0})
+                if not s:
+                    continue
+                await assign_supplier_account(db, s, cid)
+                stats["suppliers_processed"] += 1
+            stats["acps"].append({"id": cid, "name": copro.get("name", "")})
+        return stats
+
     return router
