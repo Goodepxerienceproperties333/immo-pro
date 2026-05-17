@@ -39,4 +39,46 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+// Response interceptor: try silent refresh on 401, otherwise redirect to login.
+let isRefreshing = false;
+let refreshQueue = [];
+
+api.interceptors.response.use(
+  (response) => response,
+  async (error) => {
+    const original = error.config || {};
+    const status = error.response?.status;
+    const isAuthEndpoint = (original.url || '').includes('/auth/');
+    if (status === 401 && !original._retry && !isAuthEndpoint) {
+      original._retry = true;
+      if (isRefreshing) {
+        // Queue until refresh completes
+        return new Promise((resolve, reject) => {
+          refreshQueue.push({ resolve, reject, original });
+        }).then((cfg) => api(cfg)).catch((e) => Promise.reject(e));
+      }
+      isRefreshing = true;
+      try {
+        await axios.post(`${API}/api/auth/refresh`, {}, { withCredentials: true });
+        // Replay queued requests
+        refreshQueue.forEach(({ resolve, original: cfg }) => resolve(cfg));
+        refreshQueue = [];
+        return api(original);
+      } catch (refreshErr) {
+        refreshQueue.forEach(({ reject }) => reject(refreshErr));
+        refreshQueue = [];
+        try {
+          if (!window.location.pathname.startsWith('/login')) {
+            window.location.href = '/login';
+          }
+        } catch {}
+        return Promise.reject(refreshErr);
+      } finally {
+        isRefreshing = false;
+      }
+    }
+    return Promise.reject(error);
+  }
+);
+
 export default api;
