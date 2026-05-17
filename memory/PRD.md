@@ -12,6 +12,24 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 ## Implemented
 
+### Iter19 (Feb 2026) - Frais privatifs + Wizard Fonds de roulement
+- **Frais privatifs sur facture** (`routes/invoices.py` + `auto_entries.py` + `pages/InvoicesPage.js`):
+  - Nouveau champ `is_private_fee` + `private_fee_owner_id` sur InvoiceInput
+  - Quand active : `account_number` force a 643, `distribution_key_id` ignore, `distribution_lines=[]`
+  - UI : checkbox ambree "Frais privatif" + champ de recherche proprietaire (filtre par nom/email/VCS)
+  - **Ecriture AC auto-generee 4 lignes** (modele Finlead) :
+    - Dr 643 (Frais privatifs) montant / Cr 44000XXX (Fournisseur) montant
+    - Dr 40000XXX (Proprietaire) montant / Cr 643 (Imputation) montant
+    - Resultat : compte 643 net = 0, fournisseur credite, owner tiers debite
+  - Validations : 400 si owner manquant, 404 si owner invalide
+- **Wizard Budget - Etape 4 "Fonds de roulement"** (`components/BudgetWizard.js` + `routes/fund_calls.py` + `auto_entries.py`):
+  - Nouvelle etape inseree entre "Fonds de reserve" et "Recapitulatif" (5 etapes au total)
+  - Choix Mode : **Creation initiale** ou **Augmentation**
+  - Champs : libelle, montant total, cle de repartition (Tantiemes par defaut)
+  - Le montant est ajoute UNIQUEMENT au 1er appel (comme la reserve)
+  - **Ecriture VE auto-generee** : prorate par proprietaire avec Dr 40000XXX + Cr 100 (Fonds de roulement general, classe 1)
+  - Recap a 5 cartes (Nbre appels, Budget, Reserve, **Roulement**, Total) + colonne "Dont roulement" dans le tableau d'appels
+
 ### Iter18 (Feb 2026) - PCMN belge officiel (327 + compat) + CRUD custom + PDF Liste des depenses
 - **PCMN renouvele**: `pcmn_data.py` contient maintenant les **327 comptes officiels** fournis par l'utilisateur (CSV Finlead) + **10 comptes de compatibilite** (`PCMN_COMPAT_ACCOUNTS`) pour preserver les automatismes existants (tier_accounts 40000XXX/40010XXX/44000XXX, banques 550xxx/551xxx, fallback auto-entries 614000/615000/700000/701000). Export `PCMN_ALL_ACCOUNTS = 337` comptes au total.
 - **Hierarchie complete** Classes 1 a 7 (Bilan + Resultat) avec parents auto-detectes par prefixe.
@@ -189,6 +207,7 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 - **iter16: 16/16 auto-entries AC/VE/FI + cleanup + manual delete protection + expenses endpoint + regularize dry-run/persist/delete + reserve-not-extourned + RBAC + 24/24 iter14+iter15 regression**
 - **iter17: 19/19 expense categories 1:1 + invoice account derivation + dist-key usage/force-detach + auto-entry edit policy + PDF 3 niveaux + 16/16 iter16 regression**
 - **iter18: 17/17 nouveau PCMN belge officiel 327 + 10 compat = 337/ACP, CRUD custom (is_custom flag, protection deletion 3-niveaux, auto-derivation class/type), migration pcmn-import idempotente, PDF Liste des depenses (Cle->Nature->Compte hierarchique, sous-totaux + totaux generaux) + 16/16 regression iter16 auto-entries**
+- **iter19: 12/12 frais privatifs (AC 4 lignes 643/44000/40000/643 + UI search owner + validation 400/404) + wizard Fonds de roulement (etape 4 Create/Increase + VE credit 100 prorate par owner) + 33/33 regression iter16+iter18**
 
 ## Backlog P1
 - Gestion AG (ordre du jour, votes, PV, convocations)
