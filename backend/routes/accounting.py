@@ -19,6 +19,7 @@ class JournalEntryInput(BaseModel):
     reference: Optional[str] = ""
     description: str
     lines: List[JournalEntryLine]
+    copropriete_id: Optional[str] = ""
 
 
 class PCMNAccountInput(BaseModel):
@@ -108,6 +109,7 @@ def create_accounting_router(db):
             "lines": [l.model_dump() for l in data.lines],
             "total_debit": round(total_debit, 2),
             "total_credit": round(total_credit, 2),
+            "copropriete_id": data.copropriete_id or "",
             "created_at": datetime.now(timezone.utc).isoformat()
         }
         await db.journal_entries.insert_one(doc)
@@ -149,9 +151,12 @@ def create_accounting_router(db):
 
     # ---- BALANCE / BILAN ----
     @router.get("/balance")
-    async def get_balance():
-        """Get trial balance (balance des comptes)."""
-        entries = await db.journal_entries.find({}, {"_id": 0}).to_list(10000)
+    async def get_balance(copropriete_id: Optional[str] = None):
+        """Get trial balance (balance des comptes) scoped by ACP."""
+        q = {}
+        if copropriete_id:
+            q["copropriete_id"] = copropriete_id
+        entries = await db.journal_entries.find(q, {"_id": 0}).to_list(10000)
         balances = {}
         for entry in entries:
             for line in entry.get("lines", []):

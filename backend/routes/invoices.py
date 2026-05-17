@@ -16,6 +16,7 @@ class DistKeyInput(BaseModel):
     description: Optional[str] = ""
     key_type: Optional[str] = "quotity"  # quotity, equal, custom
     lots: Optional[List[DistKeyLot]] = []
+    copropriete_id: Optional[str] = ""
 
 
 class InvoiceInput(BaseModel):
@@ -29,6 +30,7 @@ class InvoiceInput(BaseModel):
     account_number: Optional[str] = ""
     distribution_key_id: Optional[str] = ""
     status: Optional[str] = "unpaid"
+    copropriete_id: Optional[str] = ""
 
 
 def create_invoices_router(db):
@@ -51,6 +53,7 @@ def create_invoices_router(db):
             "description": data.description,
             "key_type": data.key_type,
             "lots": [l.model_dump() for l in data.lots],
+            "copropriete_id": data.copropriete_id or "",
             "created_at": datetime.now(timezone.utc).isoformat()
         }
         await db.distribution_keys.insert_one(doc)
@@ -121,6 +124,7 @@ def create_invoices_router(db):
             "distribution_key_id": data.distribution_key_id,
             "distribution_lines": distribution_lines,
             "status": data.status,
+            "copropriete_id": data.copropriete_id or "",
             "created_at": datetime.now(timezone.utc).isoformat()
         }
         await db.invoices.insert_one(doc)

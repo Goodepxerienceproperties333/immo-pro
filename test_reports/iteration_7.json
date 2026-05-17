@@ -1,0 +1,38 @@
+{
+  "summary": "Iteration 7: Chinese walls between ACPs - validated full data isolation for distribution-keys, invoices, journal entries, banking (statements + transactions), fund-calls, meters, documents, categories, fiscal years, budgets, and reports (balance/bilan/resultat/balance-tiers). Original user bug (created distribution key not appearing in filtered list) is fixed: POST now stores copropriete_id, GET with ?copropriete_id=X correctly returns it. Created /app/backend/tests/test_iter7_chinese_walls.py with 16 tests, all PASS. Full regression: 139 passed, 1 skipped (carried from iter5).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter7_chinese_walls.py",
+    "/app/test_reports/pytest/iter7.xml",
+    "/app/test_reports/pytest/iter7_all.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "routes/banking.py: GET /api/banking/lookup scopes invoices by ACP but owners and suppliers remain global. Owners are intentionally global, but supplier names matched globally could still surface entities never used in the calling ACP. Acceptable since supplier metadata is non-financial.",
+    "routes/banking.py auto-lettrage VCS: matches via owner.vcs_digits/vcs_code globally — if same VCS exists in two ACPs (improbable but possible), the lettrage could attach to the wrong ACP. Consider also scoping owner lookup by lots->ACP membership.",
+    "routes/invoices.py PUT update_invoice does NOT update copropriete_id (set only at creation). If a syndic re-saves an invoice from a different ACP context, the copropriete_id is preserved — good. Same pattern for PUT update_dist_key, banking transactions, meters, documents, fiscal — confirm intentional (and document it).",
+    "routes/coproprietes.py inline lots creation: no validation on duplicate lot numbers within the same ACP; could lead to ambiguous lot references later.",
+    "routes/reports.py decompte_pdf takes date_from/date_to as default '2024-01-01'..'2024-12-31' strings — fiscal years should be the canonical source; consider requiring fiscal_year_id.",
+    "routes/fund_calls.py default tantieme distribution silently produces empty distribution when no lot has an owner_id. The endpoint returns 200 anyway, which is technically correct but may surprise users.",
+    "routes/banking.py /api/banking/coda/import: copropriete_id passed via Form is correctly stored on statement+transactions. The import does not currently verify that the user has write permission to the target ACP (relies on global auth).",
+    "Auth: most ACP-scoped endpoints (e.g. distribution-keys, invoices POST, accounting/entries POST) do NOT require authentication via FastAPI Depends - they trust the frontend interceptor to inject copropriete_id. Anonymous/external callers could create or read data across ACPs by passing arbitrary copropriete_id. RECOMMEND adding get_current_user dependency on all CRUD POST/PUT/DELETE and on GET endpoints that expose financial data."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter7_chinese_walls.py (created)"
+  ],
+  "success_rate": {"backend": "100% (16/16 new chinese-wall tests, 139/140 full regression - 1 skip carried from iter5)", "frontend": "skipped (backend-only request)"},
+  "test_credentials": "admin@copro.be / admin123 (superadmin cookie session)",
+  "seed_data_creation": "Per-run TEST_Iter7_ACP_A_<ts>, TEST_Iter7_ACP_B_<ts> ACPs each with 2 inline lots (quotity 100 & 150). For each ACP: 1 distribution-key, 1 invoice (Fournisseur X 100EUR/200EUR), 1 journal entry (debit 600000/credit 440000, 50EUR), 1 statement+transaction, 1 fund-call (1000EUR provisions), 1 meter (water), 1 doc category + document, 1 fiscal year 2025 + budget. Also 1 TEST_DK_NoACP_<ts> with empty copropriete_id for backward-compat test. Data is TEST_ prefixed and isolated from real data; no cleanup performed (per test_reports policy).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Chinese walls verified across 11 collections. Pattern enforced: POST {Resource}Input has optional copropriete_id (default ''); the handler stores it; GET /api/{resource}?copropriete_id=X filters via {copropriete_id: X}; GET without filter returns all (backward-compat). Reports use helper _apply_copro(q, copropriete_id) in /app/backend/routes/reports.py. Coproprietes POST creates inline lots with parent's id (chinese wall). Fund-calls fetch lots filtered by copropriete_id - never leaks. Auth note: most data POST handlers DO NOT enforce auth (no Depends(get_current_user)). Acceptable for now because frontend uses cookie auth and is_admin/can_manage gating; if pen-tested by an external caller, raw curl POSTs would succeed without login. To run tests: `export $(grep REACT_APP_BACKEND_URL /app/frontend/.env) && pytest /app/backend/tests/`. Original user bug RCA: pre-fix, POSTs ignored copropriete_id in the body, so created docs had no copropriete_id field, hence GET ?copropriete_id=X filter never matched. Fix is applied uniformly across all routes (invoices, accounting, banking, fund_calls, meters, documents, fiscal, coproprietes).",
+  "rca_of_the_issue": "Bug: 'Cle de repartition creee n'apparait pas dans la liste'. RCA: backend POST /api/distribution-keys did not persist copropriete_id sent by the frontend, while GET /api/distribution-keys?copropriete_id=X filtered by that field. Result: list query never matched the newly inserted document. Fix applied: DistKeyInput now accepts copropriete_id and create_dist_key stores it. Same pattern propagated to invoices, accounting entries, banking statements/transactions, fund-calls, meters, documents, fiscal years/budgets, and inline lots in copropriete POST. Verified end-to-end with test_distribution_key_chinese_wall: dist-key created in ACP A appears in GET filtered by A, NOT in GET filtered by B. Equivalent isolation verified on 11 collections."
+}

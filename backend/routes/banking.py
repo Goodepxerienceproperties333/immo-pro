@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, UploadFile, File
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Request
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime, timezone
@@ -11,6 +11,7 @@ class StatementInput(BaseModel):
     account_number: Optional[str] = ""
     opening_balance: Optional[float] = 0.0
     closing_balance: Optional[float] = 0.0
+    copropriete_id: Optional[str] = ""
 
 
 class TransactionInput(BaseModel):
@@ -22,11 +23,13 @@ class TransactionInput(BaseModel):
     communication: Optional[str] = ""
     transaction_type: Optional[str] = "credit"  # credit or debit
     account_number: Optional[str] = ""
+    copropriete_id: Optional[str] = ""
 
 
 class BatchTransactionInput(BaseModel):
     statement_id: str
     transactions: List[TransactionInput]
+    copropriete_id: Optional[str] = ""
 
 
 class LettrageInput(BaseModel):
@@ -46,6 +49,7 @@ class InlineLineInput(BaseModel):
 
 class AddLinesInput(BaseModel):
     lines: List[InlineLineInput]
+    copropriete_id: Optional[str] = ""
 
 
 def create_banking_router(db):
@@ -96,6 +100,7 @@ def create_banking_router(db):
             "account_number": data.account_number,
             "opening_balance": data.opening_balance,
             "closing_balance": data.closing_balance,
+            "copropriete_id": data.copropriete_id or "",
             "created_at": datetime.now(timezone.utc).isoformat()
         }
         await db.bank_statements.insert_one(doc)
@@ -120,12 +125,14 @@ def create_banking_router(db):
 
     # ---- TRANSACTIONS ----
     @router.get("/transactions")
-    async def list_transactions(statement_id: Optional[str] = None, matched: Optional[bool] = None):
+    async def list_transactions(statement_id: Optional[str] = None, matched: Optional[bool] = None, copropriete_id: Optional[str] = None):
         query = {}
         if statement_id:
             query["statement_id"] = statement_id
         if matched is not None:
             query["matched"] = matched
+        if copropriete_id:
+            query["copropriete_id"] = copropriete_id
         txns = await db.bank_transactions.find(query, {"_id": 0}).sort("date", -1).to_list(1000)
         return txns
 
@@ -144,6 +151,7 @@ def create_banking_router(db):
             "matched": False,
             "matched_to": "",
             "match_type": "",
+            "copropriete_id": data.copropriete_id or "",
             "created_at": datetime.now(timezone.utc).isoformat()
         }
         await db.bank_transactions.insert_one(doc)
@@ -194,7 +202,7 @@ def create_banking_router(db):
 
     # ---- CODA IMPORT ----
     @router.post("/coda/import")
-    async def import_coda(file: UploadFile = File(...)):
+    async def import_coda(file: UploadFile = File(...), copropriete_id: Optional[str] = Form("")):
         from coda_parser import parse_coda_file
 
         content = await file.read()
@@ -220,6 +228,7 @@ def create_banking_router(db):
             "closing_balance": new_bal.get("balance", 0),
             "source": "CODA",
             "filename": file.filename,
+            "copropriete_id": copropriete_id or "",
             "created_at": datetime.now(timezone.utc).isoformat()
         }
         await db.bank_statements.insert_one(statement)
@@ -240,6 +249,7 @@ def create_banking_router(db):
                 "matched": False,
                 "matched_to": "",
                 "match_type": "",
+                "copropriete_id": copropriete_id or "",
                 "created_at": datetime.now(timezone.utc).isoformat()
             }
             transactions.append(txn)
@@ -264,6 +274,8 @@ def create_banking_router(db):
         stmt = await db.bank_statements.find_one({"id": stmt_id}, {"_id": 0})
         if not stmt:
             raise HTTPException(404, "Extrait non trouve")
+        # Inherit ACP from the parent statement (or from payload)
+        copro_id = stmt.get("copropriete_id") or (data.copropriete_id or "")
         txns = []
         for line in data.lines:
             if abs(line.amount) < 0.001:
@@ -281,6 +293,7 @@ def create_banking_router(db):
                 "matched": False,
                 "matched_to": "",
                 "match_type": "",
+                "copropriete_id": copro_id,
                 "created_at": datetime.now(timezone.utc).isoformat()
             }
             txns.append(txn)
@@ -310,8 +323,8 @@ def create_banking_router(db):
 
     # ---- GLOBAL LOOKUP (owners, suppliers, invoices by any text) ----
     @router.get("/lookup")
-    async def global_lookup(q: str = ""):
-        """Search across owners, suppliers, invoices by name/VCS/number."""
+    async def global_lookup(q: str = "", copropriete_id: Optional[str] = None):
+        """Search across owners, suppliers (global), invoices (scoped by ACP)."""
         if not q or len(q) < 2:
             return {"owners": [], "suppliers": [], "invoices": []}
         clean = q.replace("+", "").replace("/", "").replace(" ", "")
@@ -333,14 +346,26 @@ def create_banking_router(db):
             {"number": {"$regex": q, "$options": "i"}},
             {"supplier": {"$regex": q, "$options": "i"}},
         ]}
+        if copropriete_id:
+            inv_q = {"$and": [inv_q, {"copropriete_id": copropriete_id}]}
         invoices_data = await db.invoices.find(inv_q, {"_id": 0}).to_list(10)
         return {"owners": owners, "suppliers": suppliers, "invoices": invoices_data}
 
     # ---- AUTO-LETTRAGE existing unmatched txns ----
     @router.post("/auto-lettrage-vcs")
-    async def auto_lettrage_all_vcs():
-        """Scan all unmatched transactions and try to auto-match by VCS."""
-        unmatched = await db.bank_transactions.find({"matched": False}, {"_id": 0}).to_list(10000)
+    async def auto_lettrage_all_vcs(request: Request):
+        """Scan all unmatched transactions and try to auto-match by VCS (scoped by ACP)."""
+        copropriete_id = request.query_params.get("copropriete_id") or request.headers.get("x-copropriete-id") or ""
+        try:
+            body = await request.json()
+            if isinstance(body, dict) and not copropriete_id:
+                copropriete_id = body.get("copropriete_id", "") or ""
+        except Exception:
+            pass
+        q = {"matched": False}
+        if copropriete_id:
+            q["copropriete_id"] = copropriete_id
+        unmatched = await db.bank_transactions.find(q, {"_id": 0}).to_list(10000)
         matched_count = 0
         for txn in unmatched:
             comm = txn.get("communication", "")
@@ -376,6 +401,7 @@ def create_banking_router(db):
         stmt = await db.bank_statements.find_one({"id": data.statement_id}, {"_id": 0})
         if not stmt:
             raise HTTPException(404, "Extrait non trouve")
+        copro_id = stmt.get("copropriete_id") or (data.copropriete_id or "")
         txns = []
         for t in data.transactions:
             txn = {
@@ -391,6 +417,7 @@ def create_banking_router(db):
                 "matched": False,
                 "matched_to": "",
                 "match_type": "",
+                "copropriete_id": copro_id,
                 "created_at": datetime.now(timezone.utc).isoformat()
             }
             txns.append(txn)

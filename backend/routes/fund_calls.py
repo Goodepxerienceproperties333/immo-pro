@@ -14,6 +14,7 @@ class FundCallInput(BaseModel):
     total_amount: float
     call_type: Optional[str] = "provisions"  # provisions, reserve, special
     distribution_key_id: Optional[str] = ""
+    copropriete_id: Optional[str] = ""
 
 
 def create_fund_calls_router(db):
@@ -31,8 +32,11 @@ def create_fund_calls_router(db):
 
     @router.post("")
     async def create_fund_call(data: FundCallInput):
-        lots = await db.lots.find({}, {"_id": 0}).to_list(1000)
-        owners = await db.owners.find({}, {"_id": 0}).to_list(1000)
+        copro_id = data.copropriete_id or ""
+        # Chinese wall: only fetch lots from this ACP
+        lots_q = {"copropriete_id": copro_id} if copro_id else {}
+        lots = await db.lots.find(lots_q, {"_id": 0}).to_list(1000)
+        owners = await db.owners.find({}, {"_id": 0}).to_list(1000)  # owners are global
         owners_map = {o["id"]: o for o in owners}
 
         # Compute distribution
@@ -88,6 +92,7 @@ def create_fund_calls_router(db):
             "distribution_key_id": data.distribution_key_id,
             "distribution": distribution,
             "status": "pending",
+            "copropriete_id": copro_id,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
         await db.fund_calls.insert_one(doc)
@@ -154,6 +159,7 @@ def create_fund_calls_router(db):
             "total_debit": fc["total_amount"],
             "total_credit": fc["total_amount"],
             "fund_call_id": call_id,
+            "copropriete_id": fc.get("copropriete_id", ""),
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
         await db.journal_entries.insert_one(entry)

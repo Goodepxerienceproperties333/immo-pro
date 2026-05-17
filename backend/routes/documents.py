@@ -8,6 +8,7 @@ import uuid
 class CategoryInput(BaseModel):
     name: str
     description: Optional[str] = ""
+    copropriete_id: Optional[str] = ""
 
 
 class DocumentInput(BaseModel):
@@ -15,6 +16,7 @@ class DocumentInput(BaseModel):
     description: Optional[str] = ""
     category_id: Optional[str] = ""
     content: Optional[str] = ""  # text content or reference
+    copropriete_id: Optional[str] = ""
 
 
 def create_documents_router(db):
@@ -22,8 +24,11 @@ def create_documents_router(db):
 
     # ---- CATEGORIES ----
     @router.get("/categories")
-    async def list_categories():
-        cats = await db.document_categories.find({}, {"_id": 0}).sort("name", 1).to_list(100)
+    async def list_categories(copropriete_id: Optional[str] = None):
+        q = {}
+        if copropriete_id:
+            q["copropriete_id"] = copropriete_id
+        cats = await db.document_categories.find(q, {"_id": 0}).sort("name", 1).to_list(100)
         return cats
 
     @router.post("/categories")
@@ -32,6 +37,7 @@ def create_documents_router(db):
             "id": str(uuid.uuid4()),
             "name": data.name,
             "description": data.description,
+            "copropriete_id": data.copropriete_id or "",
             "created_at": datetime.now(timezone.utc).isoformat()
         }
         await db.document_categories.insert_one(doc)
@@ -72,6 +78,7 @@ def create_documents_router(db):
             "description": data.description,
             "category_id": data.category_id,
             "content": data.content,
+            "copropriete_id": data.copropriete_id or "",
             "created_at": datetime.now(timezone.utc).isoformat()
         }
         await db.documents.insert_one(doc)

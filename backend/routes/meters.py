@@ -11,6 +11,7 @@ class MeterInput(BaseModel):
     unit: Optional[str] = ""
     lot_id: Optional[str] = ""
     serial_number: Optional[str] = ""
+    copropriete_id: Optional[str] = ""
 
 
 class ReadingInput(BaseModel):
@@ -43,6 +44,7 @@ def create_meters_router(db):
             "unit": unit,
             "lot_id": data.lot_id,
             "serial_number": data.serial_number,
+            "copropriete_id": data.copropriete_id or "",
             "created_at": datetime.now(timezone.utc).isoformat()
         }
         await db.meters.insert_one(doc)

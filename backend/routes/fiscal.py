@@ -9,6 +9,7 @@ class FiscalYearInput(BaseModel):
     name: str
     start_date: str
     end_date: str
+    copropriete_id: Optional[str] = ""
 
 
 class BudgetLineInput(BaseModel):
@@ -22,6 +23,7 @@ class BudgetInput(BaseModel):
     fiscal_year_id: str
     name: Optional[str] = ""
     lines: List[BudgetLineInput]
+    copropriete_id: Optional[str] = ""
 
 
 def create_fiscal_router(db):
@@ -29,8 +31,11 @@ def create_fiscal_router(db):
 
     # ---- FISCAL YEARS ----
     @router.get("/years")
-    async def list_fiscal_years():
-        years = await db.fiscal_years.find({}, {"_id": 0}).sort("start_date", -1).to_list(100)
+    async def list_fiscal_years(copropriete_id: Optional[str] = None):
+        q = {}
+        if copropriete_id:
+            q["copropriete_id"] = copropriete_id
+        years = await db.fiscal_years.find(q, {"_id": 0}).sort("start_date", -1).to_list(100)
         return years
 
     @router.post("/years")
@@ -41,6 +46,7 @@ def create_fiscal_router(db):
             "start_date": data.start_date,
             "end_date": data.end_date,
             "status": "open",
+            "copropriete_id": data.copropriete_id or "",
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
         await db.fiscal_years.insert_one(doc)
@@ -65,10 +71,12 @@ def create_fiscal_router(db):
         if fy["status"] == "closed":
             raise HTTPException(400, "Exercice deja cloture")
 
-        # Compute closing balances for balance-sheet accounts (classes 1-5)
-        entries = await db.journal_entries.find(
-            {"date": {"$gte": fy["start_date"], "$lte": fy["end_date"]}}, {"_id": 0}
-        ).to_list(100000)
+        # Chinese wall: scope by ACP of the fiscal year
+        copro_id = fy.get("copropriete_id", "")
+        je_q = {"date": {"$gte": fy["start_date"], "$lte": fy["end_date"]}}
+        if copro_id:
+            je_q["copropriete_id"] = copro_id
+        entries = await db.journal_entries.find(je_q, {"_id": 0}).to_list(100000)
 
         balances = {}
         for entry in entries:
@@ -127,6 +135,7 @@ def create_fiscal_router(db):
                 "total_debit": round(total_d, 2),
                 "total_credit": round(total_c, 2),
                 "fiscal_year_id": year_id,
+                "copropriete_id": copro_id,
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
             await db.journal_entries.insert_one(a_nouveau_entry)
@@ -159,10 +168,12 @@ def create_fiscal_router(db):
 
     # ---- BUDGETS ----
     @router.get("/budgets")
-    async def list_budgets(fiscal_year_id: Optional[str] = None):
+    async def list_budgets(fiscal_year_id: Optional[str] = None, copropriete_id: Optional[str] = None):
         q = {}
         if fiscal_year_id:
             q["fiscal_year_id"] = fiscal_year_id
+        if copropriete_id:
+            q["copropriete_id"] = copropriete_id
         budgets = await db.budgets.find(q, {"_id": 0}).sort("created_at", -1).to_list(100)
         return budgets
 
@@ -175,6 +186,7 @@ def create_fiscal_router(db):
             "name": data.name or "Budget",
             "lines": [l.model_dump() for l in data.lines],
             "total": round(total, 2),
+            "copropriete_id": data.copropriete_id or "",
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
         await db.budgets.insert_one(doc)
@@ -219,9 +231,12 @@ def create_fiscal_router(db):
         budget = await db.budgets.find_one({"fiscal_year_id": fiscal_year_id}, {"_id": 0})
         budget_lines = {l["account_number"]: l for l in (budget or {}).get("lines", [])}
 
-        entries = await db.journal_entries.find(
-            {"date": {"$gte": fy["start_date"], "$lte": fy["end_date"]}}, {"_id": 0}
-        ).to_list(100000)
+        # Chinese wall: scope entries by fiscal year's ACP
+        copro_id = fy.get("copropriete_id", "")
+        je_q = {"date": {"$gte": fy["start_date"], "$lte": fy["end_date"]}}
+        if copro_id:
+            je_q["copropriete_id"] = copro_id
+        entries = await db.journal_entries.find(je_q, {"_id": 0}).to_list(100000)
 
         actuals = {}
         for entry in entries:

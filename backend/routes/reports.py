@@ -6,6 +6,13 @@ import uuid
 import io
 
 
+def _apply_copro(q: dict, copropriete_id: Optional[str]) -> dict:
+    """Add copropriete_id filter to a Mongo query when provided (chinese wall)."""
+    if copropriete_id:
+        q["copropriete_id"] = copropriete_id
+    return q
+
+
 def create_reports_router(db):
     router = APIRouter(prefix="/api/reports")
 
@@ -16,8 +23,9 @@ def create_reports_router(db):
         date_to: Optional[str] = None,
         account_from: Optional[str] = None,
         account_to: Optional[str] = None,
+        copropriete_id: Optional[str] = None,
     ):
-        q = {}
+        q = _apply_copro({}, copropriete_id)
         if date_from or date_to:
             q["date"] = {}
             if date_from:
@@ -64,8 +72,8 @@ def create_reports_router(db):
 
     # ---- BALANCE DES COMPTES (Trial Balance) ----
     @router.get("/balance")
-    async def trial_balance(date_from: Optional[str] = None, date_to: Optional[str] = None):
-        q = {}
+    async def trial_balance(date_from: Optional[str] = None, date_to: Optional[str] = None, copropriete_id: Optional[str] = None):
+        q = _apply_copro({}, copropriete_id)
         if date_from or date_to:
             q["date"] = {}
             if date_from:
@@ -102,8 +110,8 @@ def create_reports_router(db):
 
     # ---- BILAN (Balance Sheet) ----
     @router.get("/bilan")
-    async def bilan(date_to: Optional[str] = None):
-        q = {}
+    async def bilan(date_to: Optional[str] = None, copropriete_id: Optional[str] = None):
+        q = _apply_copro({}, copropriete_id)
         if date_to:
             q["date"] = {"$lte": date_to}
 
@@ -143,8 +151,8 @@ def create_reports_router(db):
 
     # ---- COMPTE DE RESULTATS (Income Statement) ----
     @router.get("/resultat")
-    async def compte_resultat(date_from: Optional[str] = None, date_to: Optional[str] = None):
-        q = {}
+    async def compte_resultat(date_from: Optional[str] = None, date_to: Optional[str] = None, copropriete_id: Optional[str] = None):
+        q = _apply_copro({}, copropriete_id)
         if date_from or date_to:
             q["date"] = {}
             if date_from:
@@ -184,18 +192,23 @@ def create_reports_router(db):
             "resultat": round(total_produits - total_charges, 2),
         }
 
-    # ---- DECOMPTE ANNUEL PAR PROPRIETAIRE (Annual settlement per owner) ----
+    # ---- DECOMPTE ANNUEL PAR PROPRIETAIRE ----
     @router.get("/decompte")
-    async def decompte_annuel(fiscal_year_id: Optional[str] = None, date_from: Optional[str] = None, date_to: Optional[str] = None):
+    async def decompte_annuel(fiscal_year_id: Optional[str] = None, date_from: Optional[str] = None, date_to: Optional[str] = None, copropriete_id: Optional[str] = None):
         if fiscal_year_id:
             fy = await db.fiscal_years.find_one({"id": fiscal_year_id}, {"_id": 0})
             if fy:
                 date_from = fy["start_date"]
                 date_to = fy["end_date"]
 
-        owners = await db.owners.find({}, {"_id": 0}).sort("name", 1).to_list(1000)
-        lots = await db.lots.find({}, {"_id": 0}).to_list(1000)
-        invoices = await db.invoices.find({"date": {"$gte": date_from or "2000-01-01", "$lte": date_to or "2099-12-31"}}, {"_id": 0}).to_list(10000)
+        # Owners are global, but lots/invoices are ACP-scoped (chinese wall)
+        lots_q = _apply_copro({}, copropriete_id)
+        lots = await db.lots.find(lots_q, {"_id": 0}).to_list(1000)
+        owner_ids_in_acp = list({l.get("owner_id") for l in lots if l.get("owner_id")})
+        owners = await db.owners.find({"id": {"$in": owner_ids_in_acp}}, {"_id": 0}).sort("name", 1).to_list(1000) if owner_ids_in_acp else []
+
+        inv_q = _apply_copro({"date": {"$gte": date_from or "2000-01-01", "$lte": date_to or "2099-12-31"}}, copropriete_id)
+        invoices = await db.invoices.find(inv_q, {"_id": 0}).to_list(10000)
 
         total_quotity = sum(l.get("quotity", 0) for l in lots)
 
@@ -243,7 +256,7 @@ def create_reports_router(db):
 
     # ---- PDF DECOMPTE ----
     @router.get("/decompte/pdf/{owner_id}")
-    async def decompte_pdf(owner_id: str, date_from: Optional[str] = "2024-01-01", date_to: Optional[str] = "2024-12-31"):
+    async def decompte_pdf(owner_id: str, date_from: Optional[str] = "2024-01-01", date_to: Optional[str] = "2024-12-31", copropriete_id: Optional[str] = None):
         from reportlab.lib.pagesizes import A4
         from reportlab.lib import colors
         from reportlab.lib.units import mm
@@ -254,9 +267,13 @@ def create_reports_router(db):
         if not owner:
             raise HTTPException(404, "Proprietaire non trouve")
 
-        lots = await db.lots.find({"owner_id": owner_id}, {"_id": 0}).to_list(100)
-        invoices = await db.invoices.find({"date": {"$gte": date_from, "$lte": date_to}}, {"_id": 0}).to_list(10000)
-        all_lots = await db.lots.find({}, {"_id": 0}).to_list(1000)
+        # Lots / invoices / all lots scoped by ACP
+        owner_lots_q = _apply_copro({"owner_id": owner_id}, copropriete_id)
+        lots = await db.lots.find(owner_lots_q, {"_id": 0}).to_list(100)
+        inv_q = _apply_copro({"date": {"$gte": date_from, "$lte": date_to}}, copropriete_id)
+        invoices = await db.invoices.find(inv_q, {"_id": 0}).to_list(10000)
+        all_lots_q = _apply_copro({}, copropriete_id)
+        all_lots = await db.lots.find(all_lots_q, {"_id": 0}).to_list(1000)
         total_quotity = sum(l.get("quotity", 0) for l in all_lots)
         owner_quotity = sum(l.get("quotity", 0) for l in lots)
         share = owner_quotity / total_quotity if total_quotity > 0 else 0
@@ -322,16 +339,23 @@ def create_reports_router(db):
 
     # ---- BALANCE DE TIERS PROPRIETAIRES ----
     @router.get("/balance-tiers/owners")
-    async def balance_tiers_owners():
-        """Balance de tiers: situation de compte de chaque proprietaire.
+    async def balance_tiers_owners(copropriete_id: Optional[str] = None):
+        """Balance de tiers proprietaires, scopee par ACP (chinese wall).
         Debiteur = le proprietaire doit payer a la copropriete.
         Crediteur = la copropriete doit rembourser le proprietaire."""
-        owners = await db.owners.find({}, {"_id": 0}).sort("name", 1).to_list(1000)
-        fund_calls = await db.fund_calls.find({}, {"_id": 0}).to_list(10000)
-        # Get ALL bank transactions (matched to owner + unmatched with VCS)
-        all_bank_txns = await db.bank_transactions.find({}, {"_id": 0}).to_list(100000)
+        # Only owners who have lots in this ACP
+        lots_q = _apply_copro({}, copropriete_id)
+        lots = await db.lots.find(lots_q, {"_id": 0}).to_list(10000)
+        owner_ids = list({l.get("owner_id") for l in lots if l.get("owner_id")})
+        owners = await db.owners.find({"id": {"$in": owner_ids}}, {"_id": 0}).sort("name", 1).to_list(1000) if owner_ids else []
 
-        # Build VCS lookup map
+        fc_q = _apply_copro({}, copropriete_id)
+        fund_calls = await db.fund_calls.find(fc_q, {"_id": 0}).to_list(10000)
+
+        txn_q = _apply_copro({}, copropriete_id)
+        all_bank_txns = await db.bank_transactions.find(txn_q, {"_id": 0}).to_list(100000)
+
+        # Build VCS lookup map (owners are global, but we only consider those in this ACP)
         vcs_to_owner = {}
         for owner in owners:
             if owner.get("vcs_digits"):
@@ -386,32 +410,36 @@ def create_reports_router(db):
         return {"owners": result, "total_debiteurs": total_debiteurs, "total_crediteurs": total_crediteurs}
 
     @router.get("/balance-tiers/owners/{owner_id}")
-    async def situation_compte_owner(owner_id: str):
-        """Situation de compte detaillee d'un proprietaire."""
+    async def situation_compte_owner(owner_id: str, copropriete_id: Optional[str] = None):
+        """Situation de compte d'un proprietaire scopee par ACP."""
         owner = await db.owners.find_one({"id": owner_id}, {"_id": 0})
         if not owner:
             raise HTTPException(404, "Proprietaire non trouve")
 
         movements = []
 
-        # Fund calls
-        fund_calls = await db.fund_calls.find({}, {"_id": 0}).to_list(10000)
+        # Fund calls scoped
+        fc_q = _apply_copro({}, copropriete_id)
+        fund_calls = await db.fund_calls.find(fc_q, {"_id": 0}).to_list(10000)
         for fc in fund_calls:
             for d in fc.get("distribution", []):
                 if d.get("owner_id") == owner_id:
                     movements.append({"date": fc["date"], "description": f"Appel: {fc['name']}", "debit": d["amount"], "credit": 0, "type": "appel", "reference": fc.get("id", "")})
 
-        # Invoice distributions
-        invoices = await db.invoices.find({}, {"_id": 0}).to_list(10000)
-        owner_lots = await db.lots.find({"owner_id": owner_id}, {"_id": 0}).to_list(100)
+        # Invoice distributions scoped
+        inv_q = _apply_copro({}, copropriete_id)
+        invoices = await db.invoices.find(inv_q, {"_id": 0}).to_list(10000)
+        lot_q = _apply_copro({"owner_id": owner_id}, copropriete_id)
+        owner_lots = await db.lots.find(lot_q, {"_id": 0}).to_list(100)
         lot_ids = [l["id"] for l in owner_lots]
         for inv in invoices:
             for dl in inv.get("distribution_lines", []):
                 if dl.get("lot_id") in lot_ids:
                     movements.append({"date": inv["date"], "description": f"Charge: {inv.get('supplier', '')} - {inv.get('description', '')}", "debit": dl["amount"], "credit": 0, "type": "charge", "reference": inv.get("number", "")})
 
-        # Bank transactions (payments received - matched + VCS resolved)
-        all_bank_txns = await db.bank_transactions.find({}, {"_id": 0}).to_list(100000)
+        # Bank transactions scoped
+        txn_q = _apply_copro({}, copropriete_id)
+        all_bank_txns = await db.bank_transactions.find(txn_q, {"_id": 0}).to_list(100000)
         for txn in all_bank_txns:
             is_owner_payment = False
             if txn.get("matched") and txn.get("match_type") == "owner_payment" and txn.get("matched_to") == owner_id:
@@ -445,13 +473,16 @@ def create_reports_router(db):
 
     # ---- BALANCE DE TIERS FOURNISSEURS ----
     @router.get("/balance-tiers/suppliers")
-    async def balance_tiers_suppliers():
-        """Balance de tiers fournisseurs.
-        Crediteur = on doit payer le fournisseur.
-        Debiteur = on a paye le fournisseur (ou trop-paye)."""
-        suppliers = await db.suppliers.find({}, {"_id": 0}).sort("name", 1).to_list(1000)
-        invoices = await db.invoices.find({}, {"_id": 0}).to_list(10000)
-        bank_txns = await db.bank_transactions.find({"matched": True, "match_type": "invoice"}, {"_id": 0}).to_list(10000)
+    async def balance_tiers_suppliers(copropriete_id: Optional[str] = None):
+        """Balance de tiers fournisseurs scopee par ACP (les factures et paiements sont scopes)."""
+        inv_q = _apply_copro({}, copropriete_id)
+        invoices = await db.invoices.find(inv_q, {"_id": 0}).to_list(10000)
+        # Only suppliers referenced by invoices in this ACP
+        supplier_names_in_acp = {inv.get("supplier", "") for inv in invoices if inv.get("supplier")}
+        suppliers = await db.suppliers.find({"name": {"$in": list(supplier_names_in_acp)}}, {"_id": 0}).sort("name", 1).to_list(1000) if supplier_names_in_acp else []
+
+        txn_q = _apply_copro({"matched": True, "match_type": "invoice"}, copropriete_id)
+        bank_txns = await db.bank_transactions.find(txn_q, {"_id": 0}).to_list(10000)
 
         # Map invoice_id -> supplier
         inv_map = {inv["id"]: inv for inv in invoices}
@@ -459,9 +490,7 @@ def create_reports_router(db):
         result = []
         for supplier in suppliers:
             sname = supplier["name"]
-            # Total facture (ce qu'on doit)
             total_invoiced = sum(inv.get("total_amount", 0) for inv in invoices if inv.get("supplier", "") == sname)
-            # Total paye (ce qu'on a paye)
             total_paid = 0
             for txn in bank_txns:
                 matched_inv = inv_map.get(txn.get("matched_to", ""))
@@ -483,8 +512,8 @@ def create_reports_router(db):
         return {"suppliers": result, "total_a_payer": total_a_payer}
 
     @router.get("/balance-tiers/suppliers/{supplier_id}")
-    async def situation_compte_supplier(supplier_id: str):
-        """Situation de compte detaillee d'un fournisseur."""
+    async def situation_compte_supplier(supplier_id: str, copropriete_id: Optional[str] = None):
+        """Situation de compte fournisseur scopee par ACP."""
         supplier = await db.suppliers.find_one({"id": supplier_id}, {"_id": 0})
         if not supplier:
             raise HTTPException(404, "Fournisseur non trouve")
@@ -492,11 +521,13 @@ def create_reports_router(db):
         sname = supplier["name"]
         movements = []
 
-        invoices = await db.invoices.find({"supplier": sname}, {"_id": 0}).to_list(10000)
+        inv_q = _apply_copro({"supplier": sname}, copropriete_id)
+        invoices = await db.invoices.find(inv_q, {"_id": 0}).to_list(10000)
         for inv in invoices:
             movements.append({"date": inv["date"], "description": f"Facture {inv.get('number', '')}: {inv.get('description', '')}", "debit": 0, "credit": inv.get("total_amount", 0), "type": "facture", "reference": inv.get("number", "")})
 
-        bank_txns = await db.bank_transactions.find({"matched": True, "match_type": "invoice"}, {"_id": 0}).to_list(10000)
+        txn_q = _apply_copro({"matched": True, "match_type": "invoice"}, copropriete_id)
+        bank_txns = await db.bank_transactions.find(txn_q, {"_id": 0}).to_list(10000)
         inv_map = {inv["id"]: inv for inv in invoices}
         for txn in bank_txns:
             matched_inv = inv_map.get(txn.get("matched_to", ""))

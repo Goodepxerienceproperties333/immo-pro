@@ -48,7 +48,14 @@ export default function BankingPage() {
 
   const handleCodaImport = async (e) => {
     const file = e.target.files[0]; if (!file) return; setCodaUploading(true);
-    try { const fd = new FormData(); fd.append('file', file); const { data } = await api.post('/banking/coda/import', fd, { headers: { 'Content-Type': 'multipart/form-data' } }); toast.success(data.message); load(); }
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const coproId = localStorage.getItem('selectedCopro');
+      if (coproId) fd.append('copropriete_id', coproId);
+      const { data } = await api.post('/banking/coda/import', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      toast.success(data.message); load();
+    }
     catch (err) { toast.error(err.response?.data?.detail || 'Erreur CODA'); }
     finally { setCodaUploading(false); if (codaRef.current) codaRef.current.value = ''; }
   };
