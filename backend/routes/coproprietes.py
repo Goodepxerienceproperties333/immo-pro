@@ -20,6 +20,7 @@ class LotInlineInput(BaseModel):
     floor: Optional[int] = 0
     area: Optional[float] = 0.0
     quotity: Optional[float] = 0.0
+    owner_ids: Optional[List[str]] = []
 
 
 class CoproprieteInput(BaseModel):
@@ -166,8 +167,8 @@ def create_coproprietes_router(db):
                     "floor": lot.floor or 0,
                     "area": lot.area or 0.0,
                     "quotity": lot.quotity or 0.0,
-                    "owner_id": "",
-                    "owner_ids": [],
+                    "owner_id": (lot.owner_ids or [""])[0],
+                    "owner_ids": lot.owner_ids or [],
                     "copropriete_id": doc["id"],
                     "created_at": now_iso,
                 })

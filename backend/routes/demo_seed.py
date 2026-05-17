@@ -25,11 +25,20 @@ def create_demo_router(db):
 
     @router.post("/seed")
     async def seed_demo(request: Request):
-        """Create a complete demo ACP with owners, lots, invoices, fund calls, bank statements."""
+        """Create a complete demo ACP. Idempotent: if 'Demo - Residence Les Tilleuls' exists, return it."""
         await _admin(request)
+        existing = await db.coproprietes.find_one({"name": "Demo - Residence Les Tilleuls"}, {"_id": 0})
+        if existing:
+            return {
+                "message": "Donnees de demo deja presentes",
+                "copropriete_id": existing["id"],
+                "reference": existing.get("reference"),
+                "name": existing["name"],
+                "already_exists": True,
+            }
         now = datetime.now(timezone.utc)
         iso = now.isoformat()
-        today = now.strftime("%Y-%m-%d")
+        today = now.strftime("%Y-%m-%d")  # noqa: F841
 
         # 1. Create ACP
         from routes.coproprietes import create_coproprietes_router  # noqa

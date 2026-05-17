@@ -1,44 +1,88 @@
 # CoproManager PRD
 
-## Implemented (Feb 2026)
-- Auth JWT cookie (superadmin/syndic/owner), multi-coproprietes archivables
-- Sidebar conditionnelle: cachee sur dashboard global, visible uniquement avec ACP selectionnee
-- Proprietaires globaux: nom, prenom, adresse, email 1+2, GSM 1+2, VCS auto mod-97
-- Lots avec multi-proprietaires (owner_ids array)
-- Creation de lots a la volee depuis la creation d'ACP
-- Locataires, Fournisseurs (TVA, IBAN, BIC)
-- PCMN complet 95 comptes belges, Exercices avec cloture/a-nouveau, Budgets + comparaison
-- Journaux (OD/AV/AP/AN), Grand Livre, Balance des comptes, Bilan, Compte de resultats
-- Facturation avec cles de repartition, Appels de fonds avec suivi paiements
-- Balance de tiers proprietaires/fournisseurs
-- Banque: saisie en ligne, edition, lookup contrepartie (VCS+nom+fournisseurs), auto-lettrage VCS, import CODA
-- Decomptes annuels PDF, Documents par categories
-- Deploiement Scaleway (docker-compose, nginx, webhook auto-deploy)
+## Architecture
+Multi-ACP avec **chinese walls stricts** sur les données comptables/financières.
+Collections globales: `users`, `owners`, `suppliers`.
+Collections scopees par ACP: tout le reste incluant le **PCMN par ACP**.
 
-## Chinese Walls (Feb 2026)
-Cloisonnement strict des donnees comptables/financieres entre ACP:
-- Frontend axios interceptor injecte automatiquement copropriete_id dans body POST/PUT/PATCH et query GET
-- Header X-Copropriete-Id sur toutes requetes
-- Tous les Input models acceptent copropriete_id
-- Tous les POST stockent copropriete_id
-- Tous les GET listes/rapports filtrent par copropriete_id (helper _apply_copro dans reports.py)
-- Collections scopees: lots, tenants, distribution_keys, invoices, journal_entries, bank_statements, bank_transactions, fund_calls, meters, documents, document_categories, fiscal_years, budgets
-- Collections globales: users, owners, suppliers, pcmn_accounts (intentionnel)
-- Cross-queries internes (ex: fund_calls -> lots) sont aussi scopees
-- Tests: 16/16 chinese-wall + 139/140 regression OK
+## Implemented (Feb 2026)
+
+### Core
+- Auth JWT cookie (superadmin/syndic/owner)
+- Dashboard global sans sidebar, sidebar visible uniquement quand ACP selectionnee
+- Multi-coproprietes archivables, references auto ACP-YYYYMM-NNN
+- Detection doublons proprietaires/fournisseurs
+
+### Comptabilite (PCMN par ACP)
+- **PCMN scope par ACP** (95 comptes belges seedes a la creation)
+- 2 comptes actifs par defaut: **614000 Honoraires syndic** + **615000 Frais de gestion**
+- Toggle active/inactive sur chaque compte
+- Banques auto-generent leur compte PCMN 550xxx (epargne) / 551xxx (vue)
+- Exercices fiscaux avec cloture + a-nouveau
+- Journaux (OD/AV/AP/AC/AN), Grand Livre, Balance, Bilan, Compte de Resultats
+- Budgets + comparaison
+
+### Banque
+- CODA import, saisie en ligne, edition + suppression transactions
+- VCS mod-97, auto-lettrage automatique
+- Lookup contrepartie (proprietaires globaux + factures locales)
+
+### Facturation
+- Cles de repartition par ACP avec quotites
+- Factures avec ventilation par cle de repartition
+- Appels de fonds avec distribution automatique
+- Balance de tiers debiteurs/crediteurs
+
+### Documents
+- **Upload PDF/images** avec stockage disque
+- **Auto-classification IA via Claude Sonnet 4.5** (extraction PDF text -> JSON metadata)
+- 10 categories par defaut creees a la creation d'une ACP:
+  ROI, Acte de base, Statuts, PV d'AG, Contrats, Polices d'assurance,
+  Factures fournisseurs, Decomptes, Rapports techniques, Autres
+- Download/delete documents
+
+### Wizard ACP (3 etapes)
+- Step 1: Identite + adresse + comptes bancaires
+- Step 2: Lots avec autocomplete proprietaires par nom/email/VCS
+- Step 3: Options + recapitulatif + creation
+
+### Demo
+- Bouton "Generer ACP de demo" (Syndic uniquement)
+- Cree: 1 ACP, 8 owners, 8 lots, 5 suppliers, 10 invoices, 2 fund calls,
+  12 bank transactions, 16 journal entries, 2 distribution keys,
+  97 PCMN accounts, 10 doc categories
+- Idempotent (skip si deja existant)
+
+### Deploiement
+- Scaleway docker-compose + nginx + webhook GitHub
+- GDPR compliant (EU hosting Paris)
 
 ## Backlog P0
-- Portail proprietaire restreint (vue par ACP: balances, documents, appels de fonds, sans admin)
-- Auth middleware sur toutes les routes (verification systematique)
+- Portail proprietaire restreint (vue par ACP: balances, documents, appels)
+- Auth middleware systematique sur toutes routes
 
 ## Backlog P1
-- Decomptes annuels PDF complets via reportlab (cle de repartition + cloture exercice)
-- Bilan & Compte de Resultats: completer endpoints reports.py (logique PCMN belge stricte)
+- Decomptes annuels PDF reportlab complets (cle repartition + cloture)
+- Bilan & Compte de Resultats: logique PCMN belge stricte
 - Export Excel rapports + balance de tiers
 - Rappels paiement automatises
-- Gestion AG (assemblees generales): ordre du jour, votes, PV
+- Gestion AG (ordre du jour, votes, PV, convocations)
+- Bordereaux SEPA pain.001
+- Module gros entretien fonds de reserve
 
-## Notes techniques
-- Auth cookie: POST /api/auth/login depose un cookie, withCredentials=true dans axios
-- Owners restent globaux (anti-doublon entre ACPs) mais filtres en aval par lots/factures de l'ACP courante dans les rapports
-- Auto-lettrage VCS: amelioration possible = scoper owner lookup par appartenance via lots->ACP
+## Test coverage
+- iter7: 16/16 chinese walls + 139/140 regression
+- iter8: 18/18 nouvelles features + 157/158 regression
+- Aucun bug critique/mineur
+
+## Files of reference
+- `/app/backend/routes/coproprietes.py`: wizard backend + PCMN seed + cascade delete
+- `/app/backend/routes/accounting.py`: PCMN CRUD scopé + toggle-active
+- `/app/backend/routes/documents.py`: upload + Claude classification + categories par defaut
+- `/app/backend/routes/demo_seed.py`: bouton demo idempotent
+- `/app/backend/routes/reports.py`: tous reports scopes par ACP
+- `/app/frontend/src/pages/CoproprietesPage.js`: wizard 3 etapes
+- `/app/frontend/src/pages/LotsPage.js`: autocomplete proprietaires
+- `/app/frontend/src/pages/DocumentsPage.js`: upload + Claude AI
+- `/app/frontend/src/pages/DashboardPage.js`: bouton seed demo
+- `/app/frontend/src/lib/api.js`: chinese-wall interceptor avec liste globale (owners, suppliers, users)

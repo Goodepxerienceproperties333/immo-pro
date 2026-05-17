@@ -19,21 +19,25 @@ const emptyForm = { name: '', bce: '', address: '', postal_code: '', city: '', c
 export default function CoproprietesPage() {
   const { isAdmin, isManager } = useAuth();
   const [coproprietes, setCoproprietes] = useState([]);
+  const [owners, setOwners] = useState([]);
   const [search, setSearch] = useState('');
   const [showArchived, setShowArchived] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState(emptyForm);
+  const [step, setStep] = useState(1);
+  const [ownerSearchByLot, setOwnerSearchByLot] = useState({});  // {lotIdx: 'query'}
 
   const load = useCallback(async () => {
     const { data } = await api.get('/coproprietes', { params: { show_archived: showArchived } });
     setCoproprietes(data);
   }, [showArchived]);
   useEffect(() => { load(); }, [load]);
+  useEffect(() => { api.get('/owners').then(r => setOwners(r.data)).catch(() => {}); }, [dialogOpen]);
 
   const filtered = coproprietes.filter(c => c.name.toLowerCase().includes(search.toLowerCase()) || (c.reference || '').toLowerCase().includes(search.toLowerCase()) || (c.bce || '').includes(search));
 
-  const openCreate = () => { setEditing(null); setForm({...emptyForm, bank_accounts: [], lots: []}); setDialogOpen(true); };
+  const openCreate = () => { setEditing(null); setForm({...emptyForm, bank_accounts: [], lots: []}); setStep(1); setDialogOpen(true); };
   const openEdit = (c) => {
     setEditing(c);
     setForm({
@@ -42,16 +46,43 @@ export default function CoproprietesPage() {
       bank_accounts: c.bank_accounts || [], quarterly_closing: c.quarterly_closing !== false,
       default_provisions: c.default_provisions !== false, lots: [],
     });
+    setStep(1);
     setDialogOpen(true);
   };
 
   // Lots on the fly (only used at creation time)
-  const addLot = () => setForm({ ...form, lots: [...(form.lots || []), { ...emptyLot }] });
+  const addLot = () => setForm({ ...form, lots: [...(form.lots || []), { ...emptyLot, owner_ids: [] }] });
   const removeLot = (i) => setForm({ ...form, lots: form.lots.filter((_, idx) => idx !== i) });
   const updateLot = (i, field, value) => {
     const ls = [...form.lots];
     ls[i] = { ...ls[i], [field]: value };
     setForm({ ...form, lots: ls });
+  };
+  const addOwnerToLot = (i, ownerId) => {
+    const ls = [...form.lots];
+    const current = ls[i].owner_ids || [];
+    if (!current.includes(ownerId)) {
+      ls[i] = { ...ls[i], owner_ids: [...current, ownerId] };
+      setForm({ ...form, lots: ls });
+    }
+    setOwnerSearchByLot({ ...ownerSearchByLot, [i]: '' });
+  };
+  const removeOwnerFromLot = (i, ownerId) => {
+    const ls = [...form.lots];
+    ls[i] = { ...ls[i], owner_ids: (ls[i].owner_ids || []).filter(x => x !== ownerId) };
+    setForm({ ...form, lots: ls });
+  };
+  const getOwnerSuggestions = (i) => {
+    const q = (ownerSearchByLot[i] || '').trim().toLowerCase();
+    if (!q) return [];
+    const taken = form.lots[i].owner_ids || [];
+    return owners.filter(o =>
+      !taken.includes(o.id) && (
+        (o.name || '').toLowerCase().includes(q) ||
+        (o.email || '').toLowerCase().includes(q) ||
+        (o.vcs_code || '').includes(q)
+      )
+    ).slice(0, 6);
   };
 
   // Bank accounts management
@@ -123,10 +154,34 @@ export default function CoproprietesPage() {
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto" data-testid="copro-dialog">
           <DialogHeader>
-            <DialogTitle style={{fontFamily:'Chivo,sans-serif'}}>{editing ? 'Modifier ACP' : 'Nouvelle ACP'}</DialogTitle>
+            <DialogTitle style={{fontFamily:'Chivo,sans-serif'}}>{editing ? 'Modifier ACP' : 'Assistant de creation ACP'}</DialogTitle>
             {editing?.reference && <p className="font-mono text-sm text-[#0055FF]">Ref: {editing.reference}</p>}
           </DialogHeader>
+
+          {/* Wizard step indicator (only for creation, not edit) */}
+          {!editing && (
+            <div className="flex items-center justify-between mb-4 mt-2 px-2">
+              {[
+                { n: 1, label: 'Identite & banques' },
+                { n: 2, label: 'Lots & proprietaires' },
+                { n: 3, label: 'Options & validation' },
+              ].map((s, idx, arr) => (
+                <div key={s.n} className="flex items-center flex-1">
+                  <div className={`flex items-center gap-2 ${step === s.n ? 'text-[#0055FF]' : step > s.n ? 'text-green-600' : 'text-slate-400'}`}>
+                    <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold border-2 ${step === s.n ? 'bg-[#0055FF] text-white border-[#0055FF]' : step > s.n ? 'bg-green-500 text-white border-green-500' : 'bg-white border-slate-300'}`} data-testid={`step-indicator-${s.n}`}>
+                      {step > s.n ? '✓' : s.n}
+                    </div>
+                    <span className="text-xs font-medium hidden sm:inline">{s.label}</span>
+                  </div>
+                  {idx < arr.length - 1 && <div className={`flex-1 h-px mx-2 ${step > s.n ? 'bg-green-500' : 'bg-slate-200'}`} />}
+                </div>
+              ))}
+            </div>
+          )}
+
           <div className="space-y-5 mt-2">
+            {/* STEP 1: Identification + adresse + banques (always shown in edit mode) */}
+            {(editing || step === 1) && <>
             {/* Identification */}
             <div>
               <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Identification</div>
@@ -183,18 +238,22 @@ export default function CoproprietesPage() {
                 </div>
               )}
             </div>
+            </>}
 
-            {/* Lots (only at creation) */}
-            {!editing && (
+            {/* STEP 2: Lots with owner autocomplete */}
+            {!editing && step === 2 && (
               <div>
                 <div className="flex items-center justify-between mb-2">
-                  <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Lots (optionnel)</div>
+                  <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Lots et proprietaires</div>
                   <Button variant="outline" size="sm" onClick={addLot} data-testid="add-lot-btn"><PlusCircle size={14} className="mr-1" /> Ajouter lot</Button>
+                </div>
+                <div className="bg-blue-50/40 border border-blue-100 text-xs text-blue-700 p-2 rounded mb-3">
+                  Astuce: les proprietaires sont globaux. S'ils n'existent pas encore, allez d'abord dans <strong>Proprietaires</strong> pour les creer (ils seront alors disponibles dans la recherche).
                 </div>
                 {(form.lots || []).length === 0 ? (
                   <p className="text-sm text-slate-400 text-center py-3 border rounded-md">Aucun lot - vous pourrez en ajouter plus tard via le menu Lots</p>
                 ) : (
-                  <div className="space-y-2">
+                  <div className="space-y-3">
                     {form.lots.map((lot, i) => (
                       <div key={i} className="border rounded-md p-3 bg-slate-50/50 relative" data-testid={`lot-row-${i}`}>
                         <button onClick={() => removeLot(i)} className="absolute top-2 right-2 text-red-400 hover:text-red-600"><X size={14} /></button>
@@ -215,7 +274,45 @@ export default function CoproprietesPage() {
                             </Select>
                           </div>
                           <div><label className="form-label">Etage</label><Input type="number" value={lot.floor} onChange={e => updateLot(i, 'floor', parseInt(e.target.value || '0'))} /></div>
-                          <div><label className="form-label">Quotite (/10000)</label><Input type="number" step="0.01" value={lot.quotity} onChange={e => updateLot(i, 'quotity', parseFloat(e.target.value || '0'))} placeholder="125.50" /></div>
+                          <div><label className="form-label">Quotite</label><Input type="number" step="0.01" value={lot.quotity} onChange={e => updateLot(i, 'quotity', parseFloat(e.target.value || '0'))} placeholder="125.50" /></div>
+                        </div>
+
+                        {/* Owner autocomplete per lot */}
+                        <div className="mt-2 pt-2 border-t border-slate-200/70">
+                          <label className="form-label">Proprietaires <span className="text-slate-400 font-normal">(recherche par nom)</span></label>
+                          {(lot.owner_ids || []).length > 0 && (
+                            <div className="flex flex-wrap gap-1.5 mb-2">
+                              {lot.owner_ids.map(oid => {
+                                const o = owners.find(x => x.id === oid);
+                                return (
+                                  <Badge key={oid} variant="outline" className="bg-[#0055FF]/10 border-[#0055FF]/30 text-slate-700 gap-1 pl-2 pr-1 py-0.5" data-testid={`lot-${i}-owner-${oid}`}>
+                                    <span className="text-[11px]">{o?.name || '(inconnu)'}</span>
+                                    <button onClick={() => removeOwnerFromLot(i, oid)} className="text-slate-400 hover:text-red-500"><X size={10} /></button>
+                                  </Badge>
+                                );
+                              })}
+                            </div>
+                          )}
+                          <div className="relative">
+                            <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                            <Input
+                              value={ownerSearchByLot[i] || ''}
+                              onChange={e => setOwnerSearchByLot({...ownerSearchByLot, [i]: e.target.value})}
+                              placeholder="Tapez nom, email, VCS..."
+                              className="pl-8 h-8 text-sm"
+                              data-testid={`lot-${i}-owner-search`}
+                            />
+                            {getOwnerSuggestions(i).length > 0 && (
+                              <div className="absolute z-50 left-0 right-0 mt-1 bg-white border border-slate-200 rounded-md shadow-lg max-h-40 overflow-y-auto">
+                                {getOwnerSuggestions(i).map(o => (
+                                  <button key={o.id} onClick={() => addOwnerToLot(i, o.id)} className="w-full text-left px-2 py-1.5 hover:bg-[#0055FF]/5 border-b last:border-b-0 border-slate-100 text-xs flex items-center justify-between" data-testid={`lot-${i}-suggestion-${o.id}`}>
+                                    <span className="font-medium">{o.name}</span>
+                                    {o.vcs_code && <span className="font-mono text-[9px] text-[#0055FF]">{o.vcs_code}</span>}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </div>
                         </div>
                       </div>
                     ))}
@@ -226,6 +323,9 @@ export default function CoproprietesPage() {
                 )}
               </div>
             )}
+
+            {/* STEP 3: Options + description + summary */}
+            {(editing || step === 3) && <>
             <div>
               <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Options</div>
               <div className="flex gap-6">
@@ -243,9 +343,34 @@ export default function CoproprietesPage() {
             {/* Description */}
             <div><label className="form-label">Notes / Description</label><Textarea value={form.description} onChange={e => setForm({...form, description: e.target.value})} rows={2} /></div>
 
-            <div className="flex gap-3 justify-end pt-2 border-t">
-              <Button variant="outline" onClick={() => setDialogOpen(false)}>Annuler</Button>
-              <Button onClick={handleSave} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="copro-save-btn">{editing ? 'Modifier' : 'Creer l\'ACP'}</Button>
+            {/* Summary recap (only in wizard mode) */}
+            {!editing && (
+              <div className="bg-slate-50 border border-slate-200 rounded-md p-3 text-xs">
+                <div className="font-semibold text-slate-700 mb-1">Recapitulatif</div>
+                <ul className="space-y-0.5 text-slate-600">
+                  <li><strong>Nom:</strong> {form.name || '(non defini)'}</li>
+                  <li><strong>Adresse:</strong> {form.address}, {form.postal_code} {form.city}</li>
+                  <li><strong>Comptes bancaires:</strong> {form.bank_accounts.length}</li>
+                  <li><strong>Lots:</strong> {(form.lots || []).filter(l => l.number?.trim()).length} (total quotites: {form.lots.reduce((s, l) => s + (parseFloat(l.quotity) || 0), 0).toFixed(2)})</li>
+                  <li><strong>Total proprietaires affectes:</strong> {new Set(form.lots.flatMap(l => l.owner_ids || [])).size}</li>
+                </ul>
+                <div className="mt-2 text-blue-700">A la creation: 95 comptes PCMN belges + 10 categories documents seront automatiquement seedes.</div>
+              </div>
+            )}
+            </>}
+
+            {/* Navigation buttons */}
+            <div className="flex gap-3 justify-between pt-2 border-t">
+              {!editing && step > 1 ? (
+                <Button variant="outline" onClick={() => setStep(step - 1)} data-testid="wizard-prev-btn">Precedent</Button>
+              ) : <Button variant="outline" onClick={() => setDialogOpen(false)}>Annuler</Button>}
+              <div className="flex gap-2">
+                {!editing && step < 3 ? (
+                  <Button onClick={() => setStep(step + 1)} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="wizard-next-btn" disabled={step === 1 && !form.name.trim()}>Suivant</Button>
+                ) : (
+                  <Button onClick={handleSave} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="copro-save-btn">{editing ? 'Modifier' : 'Creer l\'ACP'}</Button>
+                )}
+              </div>
             </div>
           </div>
         </DialogContent>
