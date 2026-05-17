@@ -357,8 +357,8 @@ PCMN_COMPAT_ACCOUNTS = [
     {"number": "550200", "name": "Banque - Fonds de reserve (compat)", "class_num": 5, "parent": "550", "type": "balance"},
     {"number": "614000", "name": "Honoraires syndic (synthese)", "class_num": 6, "parent": "6130", "type": "result"},
     {"number": "615000", "name": "Frais de gestion (synthese)", "class_num": 6, "parent": "616", "type": "result"},
-    {"number": "700000", "name": "Provisions pour charges communes (synthese)", "class_num": 7, "parent": "701", "type": "result"},
-    {"number": "701000", "name": "Provisions fonds de reserve (synthese)", "class_num": 7, "parent": "700", "type": "result"},
+    {"number": "700000", "name": "Provisions pour charges communes (synthese)", "class_num": 7, "parent": "70", "type": "result"},
+    {"number": "701000", "name": "Provisions fonds de reserve (synthese)", "class_num": 7, "parent": "701", "type": "result"},
 ]
 
 # Le seed complet utilise par l'application (327 + 10 compat = 337 comptes)

@@ -12,6 +12,31 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 ## Implemented
 
+### Iter18 (Feb 2026) - PCMN belge officiel (327 + compat) + CRUD custom + PDF Liste des depenses
+- **PCMN renouvele**: `pcmn_data.py` contient maintenant les **327 comptes officiels** fournis par l'utilisateur (CSV Finlead) + **10 comptes de compatibilite** (`PCMN_COMPAT_ACCOUNTS`) pour preserver les automatismes existants (tier_accounts 40000XXX/40010XXX/44000XXX, banques 550xxx/551xxx, fallback auto-entries 614000/615000/700000/701000). Export `PCMN_ALL_ACCOUNTS = 337` comptes au total.
+- **Hierarchie complete** Classes 1 a 7 (Bilan + Resultat) avec parents auto-detectes par prefixe.
+- **Seed par defaut**: nouvelle ACP -> 337 comptes (614000 & 615000 actifs, le reste inactif). `demo_seed.py` et `coproprietes.py` ont ete migres.
+- **CRUD PCMN renforce** (`routes/accounting.py`):
+  - POST `/api/accounting/pcmn` : creation custom (is_custom=true), auto-derivation class_num (1er chiffre) + type (1-5 balance, 6-7 result), active=true par defaut, 400 si numero non-numerique ou doublon.
+  - PUT `/api/accounting/pcmn/{number}` : modification partielle via `PCMNUpdateInput` (name/class_num/parent/type/active).
+  - PATCH `/api/accounting/pcmn/{number}/toggle-active` (inchange).
+  - DELETE `/api/accounting/pcmn/{number}` : 3 niveaux de protection - (1) is_tier_account => refus, (2) is_custom=false sans `force=true` => 400, (3) compte utilise dans journal_entries / invoices / expense_categories => 409 avec compte exact.
+- **Migration superadmin idempotente**: POST `/api/admin/migrate/pcmn-import?copropriete_id=opt` ajoute uniquement les comptes manquants sans toucher l'existant. Retourne stats {added, existing} par ACP.
+- **Page Plan Comptable enrichie** (`pages/AccountingPage.js`):
+  - Filtres : recherche, classes 1-7 (tabs), actifs uniquement, customs uniquement
+  - Toggle actif inline (Switch shadcn)
+  - Badges statut : "Tiers auto" (violet), "Custom" (ambre), "Officiel" (gris)
+  - Boutons Edit + Delete (delete grise si tier auto)
+  - Bouton "Importer PCMN complet" pour superadmin
+  - Dialog creation/edition avec auto-derivation class+type a la saisie du numero
+- **PDF "Liste des depenses"** (`pdf_liste_depenses.py` + GET `/api/reports/depenses/pdf`):
+  - Format landscape A4, colonnes : Date valeur, Libelle, Fournisseur, Ref. interne, Montant, Part proprietaire, Part occupant
+  - Hierarchie : Cle de repartition (titre bleu) -> Nature (gras gris) -> Compte PCMN (italique) -> lignes
+  - Sous-totaux par nature + par cle + ligne "Totaux generaux immeuble" finale
+  - En-tete avec ACP + periode + "Fait le" + IPI/BCE
+  - Bouton "Liste des depenses (PDF)" dans `ExpensesPage.js`
+- **PDF Decompte aligne**: colonnes renommees pour matcher la nomenclature Syndic ("Date valeur", "Ref. interne", "Montant TVAC", "Votre quote-part")
+
 ### Iter17 (Feb 2026) - Natures de depense + edition cles + edit auto entries
 - **Module "Nature de depense"** (`expense_categories.py` + `ExpenseCategoriesPage.js`)
   - Relation 1:1 stricte avec un compte PCMN classe 6 (validation 409 + 400)
@@ -163,6 +188,7 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 - **iter15: 16/16 tier accounts auto (assignment, migration idempotence, case-insensitive supplier matching, orphan handling, RBAC) + 8/8 iter14 regression**
 - **iter16: 16/16 auto-entries AC/VE/FI + cleanup + manual delete protection + expenses endpoint + regularize dry-run/persist/delete + reserve-not-extourned + RBAC + 24/24 iter14+iter15 regression**
 - **iter17: 19/19 expense categories 1:1 + invoice account derivation + dist-key usage/force-detach + auto-entry edit policy + PDF 3 niveaux + 16/16 iter16 regression**
+- **iter18: 17/17 nouveau PCMN belge officiel 327 + 10 compat = 337/ACP, CRUD custom (is_custom flag, protection deletion 3-niveaux, auto-derivation class/type), migration pcmn-import idempotente, PDF Liste des depenses (Cle->Nature->Compte hierarchique, sous-totaux + totaux generaux) + 16/16 regression iter16 auto-entries**
 
 ## Backlog P1
 - Gestion AG (ordre du jour, votes, PV, convocations)
