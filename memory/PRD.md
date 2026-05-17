@@ -12,6 +12,30 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 ## Implemented
 
+### Iter20 (Feb 2026) - Bugfix balance tiers + Wizard 3 fonds independants + Recherche compte + BCE fournisseur
+- **P0 Bug balance tiers refactor** (`routes/reports.py`):
+  - Balance owners maintenant calculee depuis `journal_entries` (au lieu de fund_calls). Les **OD manuelles** sur les comptes tiers 40000XXX/40010XXX apparaissent enfin (bug Dubois corrige)
+  - Separation explicite **provisions_balance** (40000) vs **reserve_balance** (40010) avec champs detailles (debit/credit) + total agrege
+  - Champ `unmatched_paid` pour les paiements bancaires reconnus par VCS mais non encore lettres
+  - UI BalanceTiersPage : nouvelles colonnes "Solde Prov." et "Solde Reserve"
+  - Endpoint detail `/balance-tiers/owners/{id}` aggrege depuis journal_entries avec `journal_type` par ligne (visible OD/AC/VE/FI/A-Nouveau)
+- **P1 Wizard 3 fonds independants** (`routes/fund_calls.py` + `BudgetWizard.js`):
+  - `ReserveFund` et `RoulementFund` acceptent `frequency` (0=injection legacy, 1/2/3/4/6/12=serie propre) + `start_date` + `due_offset_days` propres
+  - Si `frequency > 0` : helper `_generate_independent_series` cree N appels separes avec `call_type='reserve'` ou `'roulement'`
+  - UI : selecteurs Frequence (Unique/Annuel/Semestriel/Quadrimestriel/Trimestriel/Bi-mensuel/Mensuel) + date debut + echeance dans chaque etape
+  - Mode `0` preserve = compatibilite tests anterieurs (injection sur appel #1 provisions)
+- **P2 Composant AccountSearchSelect** (`components/AccountSearchSelect.js`):
+  - Selecteur de compte avec recherche par numero ET par nom (max 50 resultats)
+  - Filtre par classe(s) PCMN configurable
+  - Bouton clear, navigation clavier, dropdown avec autofocus
+  - Integre dans InvoicesPage (compte PCMN classe 6) et JournalsPage (toutes classes pour OD)
+- **P3 Extraction BCE fournisseur** (`routes/invoice_ai.py` + `routes/suppliers.py`):
+  - Schema AI etendu : extraction du `bce_number` en plus du `vat_number`
+  - Matching priorise BCE > VAT (normalises sur 10 chiffres) puis fallback nom fuzzy
+  - Champs retour API : `bce_normalized`, `supplier_match_method` (bce|name|null), `supplier_suggest_create`
+  - Si pas de match + nom present : banner ambree dans le dialog facture "Creer la fiche fournisseur" avec bouton one-click qui POST /api/suppliers
+  - `SupplierInput` accepte `bce_number`, recherche fournisseurs cherche aussi par BCE
+
 ### Iter19 (Feb 2026) - Frais privatifs + Wizard Fonds de roulement
 - **Frais privatifs sur facture** (`routes/invoices.py` + `auto_entries.py` + `pages/InvoicesPage.js`):
   - Nouveau champ `is_private_fee` + `private_fee_owner_id` sur InvoiceInput
@@ -208,6 +232,7 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 - **iter17: 19/19 expense categories 1:1 + invoice account derivation + dist-key usage/force-detach + auto-entry edit policy + PDF 3 niveaux + 16/16 iter16 regression**
 - **iter18: 17/17 nouveau PCMN belge officiel 327 + 10 compat = 337/ACP, CRUD custom (is_custom flag, protection deletion 3-niveaux, auto-derivation class/type), migration pcmn-import idempotente, PDF Liste des depenses (Cle->Nature->Compte hierarchique, sous-totaux + totaux generaux) + 16/16 regression iter16 auto-entries**
 - **iter19: 12/12 frais privatifs (AC 4 lignes 643/44000/40000/643 + UI search owner + validation 400/404) + wizard Fonds de roulement (etape 4 Create/Increase + VE credit 100 prorate par owner) + 33/33 regression iter16+iter18**
+- **iter20: 10/10 (P0 balance tiers from journal_entries - OD Dubois visible + reserve_balance separe / P1 wizard 3 series independantes provisions+reserve+roulement avec frequency/start/due par fonds / P2 AccountSearchSelect composant reutilisable / P3 BCE fournisseur extraction + matching priorise + suggest creation fiche) + 45/45 regression iter16+18+19 = 55/55**
 
 ## Backlog P1
 - Gestion AG (ordre du jour, votes, PV, convocations)
