@@ -129,18 +129,11 @@ def create_exports_router(db):
     async def export_bilan(copropriete_id: Optional[str] = None, date_to: Optional[str] = None,
                            fiscal_year_id: Optional[str] = None):
         """Export Bilan en Excel avec structure PCMN belge."""
-        # Reuse bilan endpoint by calling it directly via helper
-        from routes.reports import _apply_copro  # noqa: F401
-        # Re-implement minimal reuse via HTTP call would be cleaner; but inline OK
-        from routes.reports import create_reports_router  # noqa: F401
-        # Simpler: hit the function logic manually
-        # We just compute basic actif/passif from journal_entries
         q = {"copropriete_id": copropriete_id} if copropriete_id else {}
         if date_to:
             q["date"] = {"$lte": date_to}
-        fy = None
         if fiscal_year_id:
-            fy = await db.fiscal_years.find_one({"id": fiscal_year_id}, {"_id": 0})
+            await db.fiscal_years.find_one({"id": fiscal_year_id}, {"_id": 0})
 
         entries = await db.journal_entries.find(q, {"_id": 0}).to_list(100000)
         balances = {}
