@@ -13,7 +13,8 @@ import { toast } from 'sonner';
 import { Plus, Pencil, Trash2, Home, Search, Archive, RotateCcw, Landmark, PlusCircle, X } from 'lucide-react';
 
 const emptyBank = { iban: '', bic: '', account_type: 'vue', is_default: false, label: '' };
-const emptyForm = { name: '', bce: '', address: '', postal_code: '', city: '', country: 'Belgique', description: '', bank_accounts: [], quarterly_closing: true, default_provisions: true };
+const emptyLot = { number: '', description: '', lot_type: 'apartment', floor: 0, area: 0, quotity: 0 };
+const emptyForm = { name: '', bce: '', address: '', postal_code: '', city: '', country: 'Belgique', description: '', bank_accounts: [], quarterly_closing: true, default_provisions: true, lots: [] };
 
 export default function CoproprietesPage() {
   const { isAdmin, isManager } = useAuth();
@@ -32,16 +33,25 @@ export default function CoproprietesPage() {
 
   const filtered = coproprietes.filter(c => c.name.toLowerCase().includes(search.toLowerCase()) || (c.reference || '').toLowerCase().includes(search.toLowerCase()) || (c.bce || '').includes(search));
 
-  const openCreate = () => { setEditing(null); setForm({...emptyForm, bank_accounts: []}); setDialogOpen(true); };
+  const openCreate = () => { setEditing(null); setForm({...emptyForm, bank_accounts: [], lots: []}); setDialogOpen(true); };
   const openEdit = (c) => {
     setEditing(c);
     setForm({
       name: c.name || '', bce: c.bce || '', address: c.address || '', postal_code: c.postal_code || '',
       city: c.city || '', country: c.country || 'Belgique', description: c.description || '',
       bank_accounts: c.bank_accounts || [], quarterly_closing: c.quarterly_closing !== false,
-      default_provisions: c.default_provisions !== false,
+      default_provisions: c.default_provisions !== false, lots: [],
     });
     setDialogOpen(true);
+  };
+
+  // Lots on the fly (only used at creation time)
+  const addLot = () => setForm({ ...form, lots: [...(form.lots || []), { ...emptyLot }] });
+  const removeLot = (i) => setForm({ ...form, lots: form.lots.filter((_, idx) => idx !== i) });
+  const updateLot = (i, field, value) => {
+    const ls = [...form.lots];
+    ls[i] = { ...ls[i], [field]: value };
+    setForm({ ...form, lots: ls });
   };
 
   // Bank accounts management
@@ -59,7 +69,11 @@ export default function CoproprietesPage() {
   const handleSave = async () => {
     try {
       if (editing) { await api.put(`/coproprietes/${editing.id}`, form); toast.success('Copropriete modifiee'); }
-      else { await api.post('/coproprietes', form); toast.success('Copropriete creee'); }
+      else {
+        await api.post('/coproprietes', form);
+        const nLots = (form.lots || []).filter(l => l.number && l.number.trim()).length;
+        toast.success(nLots > 0 ? `ACP creee avec ${nLots} lot(s)` : 'Copropriete creee');
+      }
       setDialogOpen(false); load();
     } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); }
   };
@@ -170,7 +184,48 @@ export default function CoproprietesPage() {
               )}
             </div>
 
-            {/* Options */}
+            {/* Lots (only at creation) */}
+            {!editing && (
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Lots (optionnel)</div>
+                  <Button variant="outline" size="sm" onClick={addLot} data-testid="add-lot-btn"><PlusCircle size={14} className="mr-1" /> Ajouter lot</Button>
+                </div>
+                {(form.lots || []).length === 0 ? (
+                  <p className="text-sm text-slate-400 text-center py-3 border rounded-md">Aucun lot - vous pourrez en ajouter plus tard via le menu Lots</p>
+                ) : (
+                  <div className="space-y-2">
+                    {form.lots.map((lot, i) => (
+                      <div key={i} className="border rounded-md p-3 bg-slate-50/50 relative" data-testid={`lot-row-${i}`}>
+                        <button onClick={() => removeLot(i)} className="absolute top-2 right-2 text-red-400 hover:text-red-600"><X size={14} /></button>
+                        <div className="grid grid-cols-6 gap-3">
+                          <div><label className="form-label">N* *</label><Input value={lot.number} onChange={e => updateLot(i, 'number', e.target.value)} placeholder="A1" data-testid={`lot-number-${i}`} /></div>
+                          <div className="col-span-2"><label className="form-label">Description</label><Input value={lot.description} onChange={e => updateLot(i, 'description', e.target.value)} placeholder="Appartement 2 ch" /></div>
+                          <div><label className="form-label">Type</label>
+                            <Select value={lot.lot_type} onValueChange={v => updateLot(i, 'lot_type', v)}>
+                              <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="apartment">Appartement</SelectItem>
+                                <SelectItem value="parking">Parking</SelectItem>
+                                <SelectItem value="cave">Cave</SelectItem>
+                                <SelectItem value="commerce">Commerce</SelectItem>
+                                <SelectItem value="bureau">Bureau</SelectItem>
+                                <SelectItem value="autre">Autre</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          <div><label className="form-label">Etage</label><Input type="number" value={lot.floor} onChange={e => updateLot(i, 'floor', parseInt(e.target.value || '0'))} /></div>
+                          <div><label className="form-label">Quotite (/10000)</label><Input type="number" step="0.01" value={lot.quotity} onChange={e => updateLot(i, 'quotity', parseFloat(e.target.value || '0'))} placeholder="125.50" /></div>
+                        </div>
+                      </div>
+                    ))}
+                    <div className="text-[11px] text-slate-500 px-1">
+                      Total quotites: <span className="font-mono font-semibold text-slate-700">{form.lots.reduce((s, l) => s + (parseFloat(l.quotity) || 0), 0).toFixed(2)}</span> / 10000
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
             <div>
               <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Options</div>
               <div className="flex gap-6">

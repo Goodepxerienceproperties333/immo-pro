@@ -13,6 +13,15 @@ class BankAccountInput(BaseModel):
     label: Optional[str] = ""
 
 
+class LotInlineInput(BaseModel):
+    number: str
+    description: Optional[str] = ""
+    lot_type: Optional[str] = "apartment"
+    floor: Optional[int] = 0
+    area: Optional[float] = 0.0
+    quotity: Optional[float] = 0.0
+
+
 class CoproprieteInput(BaseModel):
     name: str
     bce: Optional[str] = ""
@@ -24,6 +33,7 @@ class CoproprieteInput(BaseModel):
     bank_accounts: Optional[List[BankAccountInput]] = []
     quarterly_closing: Optional[bool] = True
     default_provisions: Optional[bool] = True
+    lots: Optional[List[LotInlineInput]] = []
 
 
 def create_coproprietes_router(db):
@@ -113,6 +123,28 @@ def create_coproprietes_router(db):
         }
         await db.coproprietes.insert_one(doc)
         await _create_pcmn_accounts(bank_accounts)
+        # Create lots on the fly (if provided during ACP creation)
+        if data.lots:
+            now_iso = datetime.now(timezone.utc).isoformat()
+            lot_docs = []
+            for lot in data.lots:
+                if not lot.number or not lot.number.strip():
+                    continue
+                lot_docs.append({
+                    "id": str(uuid.uuid4()),
+                    "number": lot.number.strip(),
+                    "description": lot.description or "",
+                    "lot_type": lot.lot_type or "apartment",
+                    "floor": lot.floor or 0,
+                    "area": lot.area or 0.0,
+                    "quotity": lot.quotity or 0.0,
+                    "owner_id": "",
+                    "owner_ids": [],
+                    "copropriete_id": doc["id"],
+                    "created_at": now_iso,
+                })
+            if lot_docs:
+                await db.lots.insert_many(lot_docs)
         return {k: v for k, v in doc.items() if k != "_id"}
 
     @router.put("/{copro_id}")
