@@ -391,4 +391,37 @@ def create_fund_calls_router(db):
 
         return {"calls": results, "summary": summary, "persisted": True, "created_ids": created_ids}
 
+    @router.post("/regenerate-from-budget")
+    async def regenerate_from_budget(data: GenerateFromBudgetInput):
+        """Delete future unpaid fund calls linked to this budget, then regenerate
+        the schedule starting at data.start_date.
+
+        Definition of 'non echu' (deletable): existing call with `date >= start_date`
+        AND no `paid` flag set on ANY distribution row. Calls with at least one
+        recorded payment are PRESERVED (history protection).
+        """
+        budget = await db.budgets.find_one({"id": data.budget_id}, {"_id": 0})
+        if not budget:
+            raise HTTPException(404, "Budget non trouve")
+        if budget.get("status") != "approved":
+            raise HTTPException(400, "Budget non approuve")
+        existing = await db.fund_calls.find(
+            {"budget_id": data.budget_id, "date": {"$gte": data.start_date}},
+            {"_id": 0}
+        ).to_list(1000)
+        deletable_ids = []
+        preserved = 0
+        for c in existing:
+            has_paid = any(d.get("paid") for d in c.get("distribution", []))
+            if has_paid:
+                preserved += 1
+            else:
+                deletable_ids.append(c["id"])
+        if deletable_ids:
+            await db.fund_calls.delete_many({"id": {"$in": deletable_ids}})
+        result = await _generate_from_budget(data, persist=True)
+        result["deleted_count"] = len(deletable_ids)
+        result["preserved_count"] = preserved
+        return result
+
     return router

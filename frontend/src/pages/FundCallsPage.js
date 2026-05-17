@@ -8,21 +8,24 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { Plus, Trash2, Check, Eye, Megaphone, FileText } from 'lucide-react';
+import { Plus, Trash2, Check, Megaphone, FileText, Sparkles, ShieldCheck } from 'lucide-react';
 
 export default function FundCallsPage() {
   const [calls, setCalls] = useState([]);
   const [years, setYears] = useState([]);
   const [distKeys, setDistKeys] = useState([]);
+  const [budgets, setBudgets] = useState([]);
   const [selectedCall, setSelectedCall] = useState(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [form, setForm] = useState({ name: '', date: '', due_date: '', fiscal_year_id: '', description: '', total_amount: 0, call_type: 'provisions', distribution_key_id: '' });
 
   const load = useCallback(async () => {
-    const [c, y, dk] = await Promise.all([api.get('/fund-calls'), api.get('/fiscal/years'), api.get('/distribution-keys')]);
-    setCalls(c.data); setYears(y.data); setDistKeys(dk.data);
+    const [c, y, dk, b] = await Promise.all([api.get('/fund-calls'), api.get('/fiscal/years'), api.get('/distribution-keys'), api.get('/fiscal/budgets')]);
+    setCalls(c.data); setYears(y.data); setDistKeys(dk.data); setBudgets(b.data);
   }, []);
   useEffect(() => { load(); }, [load]);
+
+  const budgetName = (id) => budgets.find(b => b.id === id)?.name || '';
 
   const openCreate = () => {
     const now = new Date().toISOString().split('T')[0];
@@ -71,7 +74,7 @@ export default function FundCallsPage() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="space-y-3">
           {calls.length === 0 ? <p className="text-sm text-slate-400 text-center py-8">Aucun appel de fonds</p> : calls.map(c => (
-            <Card key={c.id} className={`cursor-pointer transition-all border ${selectedCall?.id === c.id ? 'border-[#0055FF] shadow-md' : 'border-slate-200 hover:border-slate-300'}`} onClick={() => viewCall(c.id)}>
+            <Card key={c.id} className={`cursor-pointer transition-all border ${selectedCall?.id === c.id ? 'border-[#0055FF] shadow-md' : 'border-slate-200 hover:border-slate-300'}`} onClick={() => viewCall(c.id)} data-testid={`call-card-${c.id}`}>
               <CardContent className="p-4">
                 <div className="flex items-center justify-between mb-1">
                   <span className="font-semibold text-sm">{c.name}</span>
@@ -79,6 +82,16 @@ export default function FundCallsPage() {
                 </div>
                 <div className="text-xs text-slate-500">{c.date} - {c.call_type}</div>
                 <div className="font-mono font-bold text-sm mt-1">{c.total_amount?.toFixed(2)} EUR</div>
+                {c.reserve_amount > 0 && (
+                  <div className="text-[11px] text-purple-700 flex items-center gap-1 mt-1" data-testid={`call-reserve-${c.id}`}>
+                    <ShieldCheck size={10} /> dont reserve {c.reserve_amount.toFixed(2)} EUR
+                  </div>
+                )}
+                {c.budget_id && (
+                  <Badge variant="outline" className="mt-2 text-[10px] bg-blue-50 border-blue-200 text-blue-700" data-testid={`call-budget-badge-${c.id}`}>
+                    <Sparkles size={9} className="mr-1" /> Issu du budget {budgetName(c.budget_id) || '—'}
+                  </Badge>
+                )}
                 <div className="flex gap-1 mt-2">
                   <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); generateEntries(c.id); }} title="Generer ecritures"><FileText size={12} /></Button>
                   <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); deleteCall(c.id); }} className="text-red-400"><Trash2 size={12} /></Button>
@@ -92,20 +105,55 @@ export default function FundCallsPage() {
           {selectedCall ? (
             <Card className="border-slate-200">
               <CardHeader className="pb-3">
-                <CardTitle className="text-lg" style={{fontFamily:'Chivo,sans-serif'}}>{selectedCall.name}</CardTitle>
+                <CardTitle className="text-lg flex items-center gap-2" style={{fontFamily:'Chivo,sans-serif'}}>
+                  {selectedCall.name}
+                  {selectedCall.budget_id && (
+                    <Badge variant="outline" className="text-xs bg-blue-50 border-blue-200 text-blue-700">
+                      <Sparkles size={10} className="mr-1" /> Budget: {budgetName(selectedCall.budget_id) || '—'}
+                    </Badge>
+                  )}
+                </CardTitle>
                 <div className="text-xs text-slate-500">{selectedCall.date} - Echeance: {selectedCall.due_date || '-'} - {selectedCall.description}</div>
               </CardHeader>
               <CardContent>
+                {selectedCall.lines && selectedCall.lines.length > 0 && (
+                  <div className="mb-4 border rounded-md overflow-hidden" data-testid="call-lines-table">
+                    <div className="bg-slate-50 px-3 py-1.5 text-xs uppercase tracking-wide text-slate-600 font-semibold border-b">Detail par nature de depense</div>
+                    <table className="w-full text-sm">
+                      <thead><tr className="text-xs text-slate-500">
+                        <th className="p-2 text-left">Compte</th>
+                        <th className="p-2 text-left">Libelle</th>
+                        <th className="p-2 text-left">Cle de repartition</th>
+                        <th className="p-2 text-right">Montant</th>
+                      </tr></thead>
+                      <tbody>
+                        {selectedCall.lines.map((ln, i) => (
+                          <tr key={i} className={`border-t border-slate-100 ${ln.is_reserve ? 'bg-purple-50/40' : ''}`}>
+                            <td className="p-2 font-mono text-xs">{ln.is_reserve ? <Badge variant="outline" className="text-[10px] bg-purple-100 border-purple-300 text-purple-700"><ShieldCheck size={9} className="mr-1" />RESERVE</Badge> : ln.account_number}</td>
+                            <td className="p-2 text-xs">{ln.account_name}</td>
+                            <td className="p-2 text-xs text-slate-600">{ln.distribution_key_name || 'Tantiemes'}</td>
+                            <td className="p-2 text-right font-mono">{ln.amount.toFixed(2)} EUR</td>
+                          </tr>
+                        ))}
+                        <tr className="border-t-2 bg-slate-50 font-bold text-sm">
+                          <td colSpan={3} className="p-2 text-right">TOTAL APPEL</td>
+                          <td className="p-2 text-right font-mono">{selectedCall.total_amount.toFixed(2)} EUR</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                )}
                 <Table>
                   <TableHeader><TableRow>
-                    <TableHead>Lot</TableHead><TableHead>Proprietaire</TableHead><TableHead>VCS</TableHead>
+                    {(selectedCall.distribution || []).some(d => d.lot_number) && <TableHead>Lot</TableHead>}
+                    <TableHead>Proprietaire</TableHead><TableHead>VCS</TableHead>
                     <TableHead className="text-right">Quote-part</TableHead><TableHead className="text-right">Montant</TableHead>
                     <TableHead>Statut</TableHead><TableHead className="w-20"></TableHead>
                   </TableRow></TableHeader>
                   <TableBody>
                     {(selectedCall.distribution || []).map((d, i) => (
                       <TableRow key={i} className="hover:bg-slate-50/50">
-                        <TableCell className="font-mono text-sm">{d.lot_number}</TableCell>
+                        {(selectedCall.distribution || []).some(x => x.lot_number) && <TableCell className="font-mono text-sm">{d.lot_number || '-'}</TableCell>}
                         <TableCell className="font-medium">{d.owner_name}</TableCell>
                         <TableCell className="font-mono text-xs text-[#0055FF]">{d.vcs_code}</TableCell>
                         <TableCell className="text-right font-mono text-sm">{d.share}</TableCell>

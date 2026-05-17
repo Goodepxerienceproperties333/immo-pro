@@ -26,6 +26,7 @@ export default function FiscalYearPage() {
   const [budgetForm, setBudgetForm] = useState({ fiscal_year_id: '', name: '', lines: [] });
   const [prevExp, setPrevExp] = useState(null);
   const [wizardBudget, setWizardBudget] = useState(null);
+  const [wizardMode, setWizardMode] = useState('create');
 
   const load = useCallback(async () => {
     const [y, b, a, dk] = await Promise.all([
@@ -134,6 +135,7 @@ export default function FiscalYearPage() {
       const { data } = await api.post(`/fiscal/budgets/${b.id}/approve`);
       toast.success('Budget approuve');
       load();
+      setWizardMode('create');
       setWizardBudget(data);
     } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); }
   };
@@ -222,8 +224,9 @@ export default function FiscalYearPage() {
                     <div className="flex gap-2 flex-wrap">
                       {!approved && <Button size="sm" variant="outline" onClick={() => openEditBudget(b)} data-testid={`edit-budget-${b.id}`}>Modifier</Button>}
                       {!approved && b.lines?.length > 0 && <Button size="sm" className="bg-green-600 hover:bg-green-700 text-white" onClick={() => approveBudget(b)} data-testid={`approve-budget-${b.id}`}><CheckCircle2 size={14} className="mr-1" />Approuver</Button>}
-                      {approved && <Button size="sm" variant="outline" onClick={() => setWizardBudget(b)} data-testid={`wizard-budget-${b.id}`}><Send size={14} className="mr-1" />Lancer appels</Button>}
-                      {approved && <Button size="sm" variant="outline" onClick={() => revokeBudget(b)} title="Revoquer"><RotateCcw size={14} /></Button>}
+                      {approved && <Button size="sm" variant="outline" onClick={() => { setWizardMode('create'); setWizardBudget(b); }} data-testid={`wizard-budget-${b.id}`}><Send size={14} className="mr-1" />Lancer appels</Button>}
+                      {approved && <Button size="sm" variant="outline" className="border-amber-300 text-amber-700 hover:bg-amber-50" onClick={() => { setWizardMode('regenerate'); setWizardBudget(b); }} data-testid={`regenerate-budget-${b.id}`}><RotateCcw size={14} className="mr-1" />Regenerer non-echus</Button>}
+                      {approved && <Button size="sm" variant="ghost" onClick={() => revokeBudget(b)} title="Revoquer approbation"><Unlock size={14} /></Button>}
                       {!approved && <Button size="sm" variant="ghost" className="text-red-500" onClick={() => deleteBudget(b)}><Trash2 size={14} /></Button>}
                     </div>
                   </CardContent>
@@ -376,6 +379,7 @@ export default function FiscalYearPage() {
         <BudgetWizard
           budget={wizardBudget}
           distKeys={distKeys}
+          mode={wizardMode}
           onClose={() => setWizardBudget(null)}
           onDone={() => { setWizardBudget(null); load(); }}
         />

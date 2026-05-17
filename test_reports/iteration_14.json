@@ -1,0 +1,49 @@
+{
+  "summary": "Iter14 backend testing complete. Validated POST /api/fund-calls/regenerate-from-budget endpoint with 8 new tests (all pass) + regression on iter13 (15/15 still pass).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter14_regenerate_from_budget.py",
+    "/app/test_reports/pytest/pytest_iter14.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "fund_calls.py is 428 lines - approaching the 700 line threshold but still manageable; consider splitting wizard logic (_generate_from_budget, ~170 LOC) into its own helper module if more endpoints are added.",
+    "regenerate_from_budget uses date string comparison via {$gte: start_date} - works because dates are stored in ISO YYYY-MM-DD lexical order. OK but worth a comment in code.",
+    "_generate_from_budget builds the per-call distribution by iterating budget_lines via list comprehension `next((l for l in lots if l['id'] == kl['lot_id']), None)` (O(n*m)) - acceptable for typical sizes but could become slow for ACPs with hundreds of lots and many keys; consider pre-indexing lots_by_id once.",
+    "Reserve fund label fallback to 'Tantiemes' even when no distribution key is given - cosmetic only, no functional impact."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter14_regenerate_from_budget.py"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "not tested (backend only request)"},
+  "test_credentials": "admin@copro.be / admin123 (superadmin); TEST_iter14_owner@example.com / ownerpass123 (owner, auto-created+deleted)",
+  "seed_data_creation": "Test fixtures auto-create and cleanup: TEST_iter14_owner user, TEST_iter14_RegenBudget approved budget, TEST_iter14_RegressGen approved budget, plus all transient fund_calls linked to these budgets. All cleaned up after tests via module/class teardown.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iter14 endpoint /api/fund-calls/regenerate-from-budget fully covered. Test file at /app/backend/tests/test_iter14_regenerate_from_budget.py covers: 404 (missing budget), 400 (draft budget), response shape (calls/summary/persisted/created_ids/deleted_count/preserved_count), preservation of paid calls (mark-paid on owner -> preserved=1, deleted=3), date-window logic (calls before start_date untouched), idempotence (2 successive runs delete what previous run created), RBAC 403 for owners, regression on generate-from-budget that lines+reserve_amount+budget_id are persisted. Re-run with `pytest backend/tests/test_iter14_regenerate_from_budget.py -v`.",
+  "tests_executed": {
+    "total": 8,
+    "passed": 8,
+    "failed": 0,
+    "list": [
+      "TestRegenerateErrors::test_404_budget_inexistant",
+      "TestRegenerateErrors::test_400_budget_non_approuve",
+      "TestRegenerateFlow::test_regenerate_response_shape",
+      "TestRegenerateFlow::test_preserve_paid_call",
+      "TestRegenerateFlow::test_calls_before_start_date_untouched",
+      "TestRegenerateFlow::test_idempotence",
+      "TestRBAC::test_owner_cannot_regenerate",
+      "TestRegressionGenerate::test_generate_includes_lines_reserve_budget_id"
+    ]
+  },
+  "regression_iter13": "15/15 tests still pass in test_iter13_budget_wizard.py - no regression introduced.",
+  "rca_of_the_issue": "N/A - all features under test passed."
+}

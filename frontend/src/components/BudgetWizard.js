@@ -19,7 +19,7 @@ const FREQ_OPTIONS = [
   { v: 12, l: 'Mensuel (12 appels)', interval: 1 },
 ];
 
-export default function BudgetWizard({ budget, distKeys = [], onClose, onDone }) {
+export default function BudgetWizard({ budget, distKeys = [], onClose, onDone, mode = 'create' }) {
   const [step, setStep] = useState(1);
   const [frequency, setFrequency] = useState(4);
   const [startDate, setStartDate] = useState(() => {
@@ -67,8 +67,13 @@ export default function BudgetWizard({ budget, distKeys = [], onClose, onDone })
         reserve_fund: { enabled: reserveEnabled, amount: Number(reserveAmount) || 0, distribution_key_id: reserveKeyId || '', label: reserveLabel },
         copropriete_id: budget.copropriete_id || '',
       };
-      const { data } = await api.post('/fund-calls/generate-from-budget', payload);
-      toast.success(`${data.created_ids?.length || 0} appels generes avec succes`);
+      const url = mode === 'regenerate' ? '/fund-calls/regenerate-from-budget' : '/fund-calls/generate-from-budget';
+      const { data } = await api.post(url, payload);
+      if (mode === 'regenerate') {
+        toast.success(`${data.created_ids?.length || 0} appels regeneres - ${data.deleted_count || 0} non echus remplaces, ${data.preserved_count || 0} preserves (paiements recus)`);
+      } else {
+        toast.success(`${data.created_ids?.length || 0} appels generes avec succes`);
+      }
       onDone?.();
     } catch (err) { toast.error(err.response?.data?.detail || 'Erreur generation'); }
     finally { setLoading(false); }
@@ -93,9 +98,14 @@ export default function BudgetWizard({ budget, distKeys = [], onClose, onDone })
       <DialogContent className="max-w-4xl" data-testid="budget-wizard">
         <DialogHeader>
           <DialogTitle style={{ fontFamily: 'Chivo,sans-serif' }}>
-            Assistant - Appels de fonds sur budget approuve
+            {mode === 'regenerate' ? 'Regenerer les appels non echus' : 'Assistant - Appels de fonds sur budget approuve'}
           </DialogTitle>
         </DialogHeader>
+        {mode === 'regenerate' && (
+          <div className="bg-amber-50 border border-amber-200 rounded p-2 text-xs text-amber-800 mb-2" data-testid="regen-warning">
+            Les appels deja en partie payes seront PRESERVES. Seuls les appels futurs sans paiement seront remplaces.
+          </div>
+        )}
 
         {/* Stepper */}
         <div className="flex items-center justify-between border-b pb-3 mb-4">
