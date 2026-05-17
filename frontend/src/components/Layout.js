@@ -15,7 +15,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 const sections = [
   { title: 'Gestion', items: [
     { to: '/', icon: LayoutDashboard, label: 'Tableau de bord', end: true },
-    { to: '/coproprietes', icon: Home, label: 'Coproprietes' },
     { to: '/owners', icon: Users, label: 'Proprietaires' },
     { to: '/lots', icon: Building2, label: 'Lots' },
     { to: '/tenants', icon: UserCheck, label: 'Locataires' },
@@ -51,6 +50,8 @@ export default function Layout() {
 
   const handleLogout = async () => { await logout(); navigate('/login'); };
   const getRoleLabel = (role) => ({ superadmin: 'Syndic', admin: 'Syndic', syndic: 'Syndic', gestionnaire: 'Gestionnaire' }[role] || 'Proprietaire');
+  const selectedCoproData = coproprietes.find(c => c.id === selectedCopro);
+  const hasCopro = !!selectedCopro;
 
   const SidebarContent = () => (
     <div className="flex flex-col h-full">
@@ -59,6 +60,14 @@ export default function Layout() {
         {!collapsed && <span className="text-white font-bold text-lg tracking-tight" style={{fontFamily:'Chivo,sans-serif'}}>CoproManager</span>}
       </div>
       <Separator className="bg-slate-800" />
+      {/* ACP name */}
+      {!collapsed && selectedCoproData && (
+        <div className="px-4 py-2 bg-[#0055FF]/10 border-b border-slate-800">
+          <div className="text-[10px] uppercase tracking-wider text-slate-500">Copropriete</div>
+          <div className="text-sm text-white font-semibold truncate">{selectedCoproData.name}</div>
+          {selectedCoproData.reference && <div className="text-[10px] text-slate-400 font-mono">{selectedCoproData.reference}</div>}
+        </div>
+      )}
       <ScrollArea className="flex-1 px-2 py-2">
         <nav>
           {sections.map((section, si) => (
@@ -96,28 +105,42 @@ export default function Layout() {
         </button>
         {!collapsed && (
           <div className="mt-3 px-1 py-2 rounded-md bg-slate-900 border border-slate-800 flex items-center gap-2">
-            <svg width="20" height="14" viewBox="0 0 20 14" className="flex-shrink-0">
-              <rect width="6.67" height="14" fill="#000" />
-              <rect x="6.67" width="6.67" height="14" fill="#FFD700" />
-              <rect x="13.33" width="6.67" height="14" fill="#FF0000" />
-            </svg>
-            <svg width="20" height="14" viewBox="0 0 20 14" className="flex-shrink-0">
-              <rect width="6.67" height="14" fill="#002395" />
-              <rect x="6.67" width="6.67" height="14" fill="#FFF" />
-              <rect x="13.33" width="6.67" height="14" fill="#ED2939" />
-            </svg>
+            <svg width="20" height="14" viewBox="0 0 20 14" className="flex-shrink-0"><rect width="6.67" height="14" fill="#000" /><rect x="6.67" width="6.67" height="14" fill="#FFD700" /><rect x="13.33" width="6.67" height="14" fill="#FF0000" /></svg>
+            <svg width="20" height="14" viewBox="0 0 20 14" className="flex-shrink-0"><rect width="6.67" height="14" fill="#002395" /><rect x="6.67" width="6.67" height="14" fill="#FFF" /><rect x="13.33" width="6.67" height="14" fill="#ED2939" /></svg>
             <div className="text-[9px] text-slate-500 leading-tight">Donnees hebergees<br/>en <span className="text-slate-300 font-medium">Belgique/France</span><br/>Conforme RGPD</div>
-          </div>
-        )}
-        {collapsed && (
-          <div className="mt-2 flex justify-center" title="Donnees hebergees en UE - Conforme RGPD">
-            <svg width="16" height="12" viewBox="0 0 512 341"><rect width="512" height="341" fill="#003399"/><g transform="translate(256,170.5)">{[...Array(12)].map((_,i)=><polygon key={i} points="0,-120 4,-108 -7,-98 7,-98 -4,-108" fill="#FFCC00" transform={`rotate(${i*30})`}/>)}</g></svg>
           </div>
         )}
       </div>
     </div>
   );
 
+  // ===== NO ACP SELECTED: Full-width layout without sidebar =====
+  if (!hasCopro) {
+    return (
+      <div className="flex flex-col h-screen overflow-hidden bg-[#FAFAFA]">
+        <header className="bg-slate-950 sticky top-0 z-30 h-14 flex items-center px-6 gap-4">
+          <div className="w-8 h-8 rounded bg-[#0055FF] flex items-center justify-center text-white font-bold text-sm">CP</div>
+          <span className="text-white font-bold text-lg tracking-tight" style={{fontFamily:'Chivo,sans-serif'}}>CoproManager</span>
+          <div className="flex-1" />
+          {isAdmin && (
+            <NavLink to="/admin/users" className="text-slate-400 hover:text-white text-xs flex items-center gap-1.5 transition-colors" data-testid="nav-admin-users-top">
+              <Shield size={14} /> Utilisateurs
+            </NavLink>
+          )}
+          <NavLink to="/coproprietes" className="text-slate-400 hover:text-white text-xs flex items-center gap-1.5 transition-colors" data-testid="nav-coproprietes-top">
+            <Home size={14} /> Gerer les ACP
+          </NavLink>
+          <Separator orientation="vertical" className="h-6 bg-slate-700" />
+          <span className="text-[11px] text-slate-400">{getRoleLabel(user?.role)}</span>
+          <div className="w-7 h-7 rounded-full bg-slate-700 flex items-center justify-center text-xs font-semibold text-white">{(user?.name || 'U')[0].toUpperCase()}</div>
+          <button onClick={handleLogout} className="text-slate-400 hover:text-red-400 transition-colors" data-testid="logout-btn-top"><LogOut size={16} /></button>
+        </header>
+        <main className="flex-1 overflow-auto p-6"><div className="max-w-[1400px] mx-auto"><Outlet /></div></main>
+      </div>
+    );
+  }
+
+  // ===== ACP SELECTED: Sidebar + content =====
   return (
     <div className="flex h-screen overflow-hidden bg-[#FAFAFA]">
       {mobileOpen && <div className="fixed inset-0 bg-black/50 z-40 lg:hidden" onClick={() => setMobileOpen(false)} />}
@@ -131,22 +154,11 @@ export default function Layout() {
       <div className="flex-1 flex flex-col overflow-hidden">
         <header className="bg-white border-b border-slate-200 sticky top-0 z-30 h-12 flex items-center px-4 lg:px-6 gap-4">
           <Button variant="ghost" size="sm" className="lg:hidden" onClick={() => setMobileOpen(true)} data-testid="mobile-menu-btn"><Menu size={20} /></Button>
-          {/* Copropriete context */}
-          {selectedCopro && coproprietes.length > 0 ? (
-            <div className="flex items-center gap-2">
-              <Button variant="ghost" size="sm" onClick={() => setSelectedCopro('')} className="h-8 px-2 text-slate-400 hover:text-slate-700"><Home size={14} /></Button>
-              <Select value={selectedCopro} onValueChange={(v) => setSelectedCopro(v)}>
-                <SelectTrigger className="w-[220px] h-8 text-xs border-[#0055FF]/30" data-testid="copro-selector">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {coproprietes.filter(c => c.status !== 'archived').map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
-                </SelectContent>
-              </Select>
-            </div>
-          ) : (
-            <span className="text-xs text-slate-400">Toutes les coproprietes</span>
-          )}
+          <Button variant="ghost" size="sm" onClick={() => { setSelectedCopro(''); navigate('/'); }} className="h-8 px-2 text-slate-400 hover:text-slate-700" data-testid="back-to-home" title="Retour aux coproprietes"><Home size={14} /></Button>
+          <Select value={selectedCopro} onValueChange={(v) => setSelectedCopro(v)}>
+            <SelectTrigger className="w-[220px] h-8 text-xs border-[#0055FF]/30" data-testid="copro-selector"><SelectValue /></SelectTrigger>
+            <SelectContent>{coproprietes.filter(c => c.status !== 'archived').map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}</SelectContent>
+          </Select>
           <div className="flex-1" />
           <span className="text-[11px] text-slate-500 hidden sm:block">{getRoleLabel(user?.role)}</span>
           <div className="w-7 h-7 rounded-full bg-slate-200 flex items-center justify-center text-xs font-semibold text-slate-600">{(user?.name || 'U')[0].toUpperCase()}</div>
