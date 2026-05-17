@@ -27,15 +27,20 @@ export default function BankingPage() {
   const [lookupQuery, setLookupQuery] = useState('');
   const codaRef = useRef(null);
   const [stmtForm, setStmtForm] = useState({ number: '', date: '', account_number: '', opening_balance: 0, closing_balance: 0 });
+  const [bankAccounts, setBankAccounts] = useState([]);
   const [inlineLines, setInlineLines] = useState([]);
   const [editForm, setEditForm] = useState({});
 
   const load = useCallback(async () => {
-    const [s, t, o, inv, sup] = await Promise.all([
+    const copro = localStorage.getItem('copropriete_id') || '';
+    const promises = [
       api.get('/banking/statements'), api.get('/banking/transactions'),
       api.get('/owners'), api.get('/invoices'), api.get('/suppliers')
-    ]);
+    ];
+    if (copro) promises.push(api.get(`/coproprietes/${copro}`));
+    const [s, t, o, inv, sup, c] = await Promise.all(promises);
     setStatements(s.data); setTransactions(t.data); setOwners(o.data); setInvoices(inv.data); setSuppliers(sup.data);
+    setBankAccounts(c?.data?.bank_accounts || []);
   }, []);
   useEffect(() => { load(); }, [load]);
 
@@ -106,7 +111,11 @@ export default function BankingPage() {
         <div className="flex gap-2">
           <input type="file" ref={codaRef} accept=".cod,.coda,.txt" onChange={handleCodaImport} className="hidden" />
           <Button onClick={() => codaRef.current?.click()} variant="outline" disabled={codaUploading} data-testid="coda-import-btn"><Upload size={16} className="mr-2" /> {codaUploading ? 'Import...' : 'Import CODA'}</Button>
-          <Button onClick={() => { setStmtForm({ number: '', date: new Date().toISOString().split('T')[0], account_number: '', opening_balance: 0, closing_balance: 0 }); setStmtDialog(true); }} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="create-stmt-btn"><Plus size={16} className="mr-2" /> Nouvel extrait</Button>
+          <Button onClick={() => {
+            const def = bankAccounts.find(b => b.is_default) || bankAccounts[0];
+            setStmtForm({ number: '', date: new Date().toISOString().split('T')[0], account_number: def?.iban || '', opening_balance: 0, closing_balance: 0 });
+            setStmtDialog(true);
+          }} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="create-stmt-btn"><Plus size={16} className="mr-2" /> Nouvel extrait</Button>
         </div>
       </div>
 
@@ -229,7 +238,27 @@ export default function BankingPage() {
       <Dialog open={stmtDialog} onOpenChange={setStmtDialog}><DialogContent data-testid="stmt-dialog"><DialogHeader><DialogTitle style={{fontFamily:'Chivo,sans-serif'}}>Nouvel extrait</DialogTitle></DialogHeader>
         <div className="space-y-4 mt-2">
           <div className="grid grid-cols-2 gap-4"><div><label className="form-label">Numero *</label><Input value={stmtForm.number} onChange={e => setStmtForm({...stmtForm, number: e.target.value})} /></div><div><label className="form-label">Date *</label><Input type="date" value={stmtForm.date} onChange={e => setStmtForm({...stmtForm, date: e.target.value})} /></div></div>
-          <div><label className="form-label">Compte bancaire</label><Input value={stmtForm.account_number} onChange={e => setStmtForm({...stmtForm, account_number: e.target.value})} placeholder="BE00 0000 0000 0000" /></div>
+          <div><label className="form-label">Compte bancaire *</label>
+            {bankAccounts.length > 0 ? (
+              <Select value={stmtForm.account_number} onValueChange={v => setStmtForm({...stmtForm, account_number: v})}>
+                <SelectTrigger data-testid="stmt-account-select"><SelectValue placeholder="Selectionner un compte bancaire" /></SelectTrigger>
+                <SelectContent>
+                  {bankAccounts.map(b => (
+                    <SelectItem key={b.iban} value={b.iban} data-testid={`stmt-account-${b.iban}`}>
+                      <span className="font-mono text-xs mr-2">{b.iban}</span>
+                      <span className="text-slate-700">{b.label || b.account_type}</span>
+                      {b.is_default && <span className="ml-2 text-[10px] bg-blue-100 text-blue-700 px-1 rounded">defaut</span>}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            ) : (
+              <>
+                <Input value={stmtForm.account_number} onChange={e => setStmtForm({...stmtForm, account_number: e.target.value})} placeholder="BE00 0000 0000 0000" />
+                <p className="text-[11px] text-amber-600 mt-1">Aucun compte bancaire configure sur cette ACP. Configurez-en un dans Coproprietes.</p>
+              </>
+            )}
+          </div>
           <div className="grid grid-cols-2 gap-4"><div><label className="form-label">Solde ouverture</label><Input type="number" step="0.01" value={stmtForm.opening_balance} onChange={e => setStmtForm({...stmtForm, opening_balance: e.target.value})} /></div><div><label className="form-label">Solde fermeture</label><Input type="number" step="0.01" value={stmtForm.closing_balance} onChange={e => setStmtForm({...stmtForm, closing_balance: e.target.value})} /></div></div>
           <div className="flex gap-3 justify-end"><Button variant="outline" onClick={() => setStmtDialog(false)}>Annuler</Button><Button onClick={saveStmt} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="stmt-save-btn">Creer</Button></div>
         </div>
