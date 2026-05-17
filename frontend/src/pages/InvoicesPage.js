@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import api from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -8,19 +9,21 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { Plus, Trash2, Key, Receipt, Sparkles, Paperclip, Download, X } from 'lucide-react';
+import { Plus, Trash2, Key, Receipt, Sparkles, Paperclip, Download, X, Pencil, AlertTriangle } from 'lucide-react';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
 export default function InvoicesPage() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [tab, setTab] = useState('invoices');
   const [invoices, setInvoices] = useState([]);
   const [distKeys, setDistKeys] = useState([]);
   const [accounts, setAccounts] = useState([]);
+  const [categories, setCategories] = useState([]);
   const [lots, setLots] = useState([]);
   const [invoiceDialog, setInvoiceDialog] = useState(false);
   const [keyDialog, setKeyDialog] = useState(false);
-  const [invForm, setInvForm] = useState({ number: '', date: '', due_date: '', supplier: '', description: '', total_amount: 0, vat_amount: 0, account_number: '', distribution_key_id: '', status: 'unpaid' });
+  const [invForm, setInvForm] = useState({ number: '', date: '', due_date: '', supplier: '', description: '', total_amount: 0, vat_amount: 0, account_number: '', expense_category_id: '', distribution_key_id: '', status: 'unpaid' });
   const [keyForm, setKeyForm] = useState({ name: '', description: '', key_type: 'quotity', lots: [] });
   const [aiExtracting, setAiExtracting] = useState(false);
   const [aiHint, setAiHint] = useState('');
@@ -28,18 +31,52 @@ export default function InvoicesPage() {
   const [attachDialogInv, setAttachDialogInv] = useState(null); // invoice being managed
 
   const load = useCallback(async () => {
-    const [inv, dk, acc, lt] = await Promise.all([
+    const [inv, dk, acc, lt, cat] = await Promise.all([
       api.get('/invoices'), api.get('/distribution-keys'),
-      api.get('/accounting/pcmn', { params: { class_num: 6 } }), api.get('/lots')
+      api.get('/accounting/pcmn', { params: { class_num: 6 } }), api.get('/lots'),
+      api.get('/expense-categories'),
     ]);
     setInvoices(inv.data); setDistKeys(dk.data); setAccounts(acc.data); setLots(lt.data);
+    setCategories(cat.data);
   }, []);
 
   useEffect(() => { load(); }, [load]);
 
+  // Open edit dialog if ?edit=<invoice_id> in URL (deep-link from Expenses page)
+  useEffect(() => {
+    const editId = searchParams.get('edit');
+    if (editId && invoices.length > 0) {
+      const inv = invoices.find(i => i.id === editId);
+      if (inv) {
+        openEditInvoice(inv);
+        searchParams.delete('edit');
+        setSearchParams(searchParams, { replace: true });
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [invoices, searchParams]);
+
+  const [editingInvoice, setEditingInvoice] = useState(null);
+
   // Invoice handlers
   const openCreateInvoice = () => {
-    setInvForm({ number: `F-${Date.now().toString().slice(-6)}`, date: new Date().toISOString().split('T')[0], due_date: '', supplier: '', description: '', total_amount: 0, vat_amount: 0, account_number: '', distribution_key_id: '', status: 'unpaid' });
+    setEditingInvoice(null);
+    setInvForm({ number: `F-${Date.now().toString().slice(-6)}`, date: new Date().toISOString().split('T')[0], due_date: '', supplier: '', description: '', total_amount: 0, vat_amount: 0, account_number: '', expense_category_id: '', distribution_key_id: '', status: 'unpaid' });
+    setAiHint(''); setPendingPdf(null);
+    setInvoiceDialog(true);
+  };
+
+  const openEditInvoice = (inv) => {
+    setEditingInvoice(inv);
+    setInvForm({
+      number: inv.number || '', date: inv.date || '', due_date: inv.due_date || '',
+      supplier: inv.supplier || '', description: inv.description || '',
+      total_amount: inv.total_amount || 0, vat_amount: inv.vat_amount || 0,
+      account_number: inv.account_number || '',
+      expense_category_id: inv.expense_category_id || '',
+      distribution_key_id: inv.distribution_key_id || '',
+      status: inv.status || 'unpaid',
+    });
     setAiHint(''); setPendingPdf(null);
     setInvoiceDialog(true);
   };
@@ -85,17 +122,26 @@ export default function InvoicesPage() {
 
   const saveInvoice = async () => {
     try {
-      const { data: created } = await api.post('/invoices', { ...invForm, total_amount: Number(invForm.total_amount), vat_amount: Number(invForm.vat_amount) });
-      // If we have a pending PDF from AI extraction, attach it to the new invoice
-      if (pendingPdf && pendingPdf.file && created?.id) {
+      const payload = { ...invForm, total_amount: Number(invForm.total_amount), vat_amount: Number(invForm.vat_amount) };
+      let invoiceId;
+      if (editingInvoice) {
+        await api.put(`/invoices/${editingInvoice.id}`, payload);
+        invoiceId = editingInvoice.id;
+        toast.success('Facture modifiee');
+      } else {
+        const { data: created } = await api.post('/invoices', payload);
+        invoiceId = created?.id;
+        toast.success('Facture creee');
+      }
+      // If we have a pending PDF, attach it to the invoice
+      if (pendingPdf && pendingPdf.file && invoiceId) {
         try {
           const fd = new FormData();
           fd.append('file', pendingPdf.file);
-          await api.post(`/invoices/${created.id}/attachments`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+          await api.post(`/invoices/${invoiceId}/attachments`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
         } catch (e) { console.warn('Attachment failed', e); }
       }
-      toast.success('Facture creee');
-      setInvoiceDialog(false); setPendingPdf(null); load();
+      setInvoiceDialog(false); setPendingPdf(null); setEditingInvoice(null); load();
     } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); }
   };
 
@@ -125,22 +171,48 @@ export default function InvoicesPage() {
   };
 
   // Distribution key handlers
-  const openCreateKey = () => {
-    setKeyForm({ name: '', description: '', key_type: 'quotity', lots: lots.map(l => ({ lot_id: l.id, lot_number: l.number, share: l.quotity || 0 })) });
-    setKeyDialog(true);
-  };
-
   const updateKeyLot = (i, field, value) => {
     const newLots = [...keyForm.lots];
     newLots[i] = { ...newLots[i], [field]: Number(value) };
     setKeyForm({ ...keyForm, lots: newLots });
   };
 
-  const saveKey = async () => {
+  const [editingKey, setEditingKey] = useState(null);
+  const [keyUsage, setKeyUsage] = useState(null);
+
+  const openCreateKey = () => {
+    setEditingKey(null); setKeyUsage(null);
+    setKeyForm({ name: '', description: '', key_type: 'quotity', lots: lots.map(l => ({ lot_id: l.id, lot_number: l.lot_number, share: l.quotity || 0 })) });
+    setKeyDialog(true);
+  };
+  const openEditKey = async (k) => {
+    setEditingKey(k);
+    setKeyForm({ name: k.name, description: k.description || '', key_type: k.key_type, lots: (k.lots || []).map(l => ({ ...l })) });
     try {
-      await api.post('/distribution-keys', keyForm);
-      toast.success('Cle creee'); setKeyDialog(false); load();
-    } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); }
+      const { data } = await api.get(`/distribution-keys/${k.id}/usage`);
+      setKeyUsage(data);
+    } catch { setKeyUsage(null); }
+    setKeyDialog(true);
+  };
+  const saveKey = async (force = false) => {
+    try {
+      if (editingKey) {
+        await api.put(`/distribution-keys/${editingKey.id}`, keyForm, { params: force ? { force: true } : {} });
+        toast.success(force && keyUsage?.invoices?.length > 0 ? `Cle modifiee - ${keyUsage.invoices.length} facture(s) detachee(s)` : 'Cle modifiee');
+      } else {
+        await api.post('/distribution-keys', keyForm);
+        toast.success('Cle creee');
+      }
+      setKeyDialog(false); setEditingKey(null); setKeyUsage(null); load();
+    } catch (err) {
+      if (err.response?.status === 409) {
+        if (window.confirm(`${err.response.data.detail}\n\nDETACHER les factures et continuer ?`)) {
+          await saveKey(true);
+        }
+      } else {
+        toast.error(err.response?.data?.detail || 'Erreur');
+      }
+    }
   };
 
   const deleteKey = async (id) => {
@@ -199,6 +271,7 @@ export default function InvoicesPage() {
                     </TableCell>
                     <TableCell>
                       <div className="flex gap-1 items-center">
+                        <Button variant="ghost" size="sm" onClick={() => openEditInvoice(inv)} data-testid={`edit-invoice-${inv.id}`} title="Modifier"><Pencil size={14} /></Button>
                         <Button variant="ghost" size="sm" onClick={() => setAttachDialogInv(inv)} data-testid={`inv-attach-${inv.id}`} title="Pieces jointes">
                           <Paperclip size={14} />{(inv.attachments?.length || 0) > 0 && <span className="ml-1 text-xs">{inv.attachments.length}</span>}
                         </Button>
@@ -231,7 +304,10 @@ export default function InvoicesPage() {
                     <TableCell>{k.description}</TableCell>
                     <TableCell><Badge variant="outline">{k.key_type}</Badge></TableCell>
                     <TableCell className="text-sm">{k.lots?.length || 0} lots</TableCell>
-                    <TableCell><Button variant="ghost" size="sm" onClick={() => deleteKey(k.id)} className="text-red-500"><Trash2 size={14} /></Button></TableCell>
+                    <TableCell><div className="flex gap-1">
+                      <Button variant="ghost" size="sm" onClick={() => openEditKey(k)} data-testid={`edit-key-${k.id}`}><Pencil size={14} /></Button>
+                      <Button variant="ghost" size="sm" onClick={() => deleteKey(k.id)} className="text-red-500"><Trash2 size={14} /></Button>
+                    </div></TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -241,9 +317,9 @@ export default function InvoicesPage() {
       </Tabs>
 
       {/* Invoice Dialog */}
-      <Dialog open={invoiceDialog} onOpenChange={setInvoiceDialog}>
+      <Dialog open={invoiceDialog} onOpenChange={(open) => { if (!open) { setEditingInvoice(null); setPendingPdf(null); } setInvoiceDialog(open); }}>
         <DialogContent className="max-w-2xl" data-testid="invoice-dialog">
-          <DialogHeader><DialogTitle style={{fontFamily:'Chivo,sans-serif'}}>Nouvelle facture</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle style={{fontFamily:'Chivo,sans-serif'}}>{editingInvoice ? 'Modifier la facture' : 'Nouvelle facture'}</DialogTitle></DialogHeader>
           <div className="space-y-4 mt-2">
             {aiHint && (
               <div className="text-xs px-3 py-2 rounded bg-purple-50 border border-purple-200 text-purple-800" data-testid="ai-hint">
@@ -288,7 +364,21 @@ export default function InvoicesPage() {
                 </Select>
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-3 gap-4">
+              <div><label className="form-label">Nature de depense</label>
+                <Select value={invForm.expense_category_id || 'none'} onValueChange={v => {
+                  if (v === 'none') { setInvForm(f => ({...f, expense_category_id: ''})); return; }
+                  const cat = categories.find(c => c.id === v);
+                  setInvForm(f => ({...f, expense_category_id: v, account_number: cat?.account_number || f.account_number}));
+                }}>
+                  <SelectTrigger data-testid="invoice-category-select"><SelectValue placeholder="Aucune" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">— Aucune —</SelectItem>
+                    {categories.map(c => <SelectItem key={c.id} value={c.id}>{c.name} <span className="text-slate-400 ml-2 font-mono text-xs">({c.account_number})</span></SelectItem>)}
+                  </SelectContent>
+                </Select>
+                <p className="text-[10px] text-slate-400 mt-1">Pre-rempli le compte PCMN</p>
+              </div>
               <div><label className="form-label">Compte PCMN</label>
                 <Select value={invForm.account_number} onValueChange={v => setInvForm({...invForm, account_number: v})}>
                   <SelectTrigger><SelectValue placeholder="Selectionner un compte" /></SelectTrigger>
@@ -314,10 +404,32 @@ export default function InvoicesPage() {
       </Dialog>
 
       {/* Distribution Key Dialog */}
-      <Dialog open={keyDialog} onOpenChange={setKeyDialog}>
+      <Dialog open={keyDialog} onOpenChange={(open) => { if (!open) { setEditingKey(null); setKeyUsage(null); } setKeyDialog(open); }}>
         <DialogContent className="max-w-2xl" data-testid="key-dialog">
-          <DialogHeader><DialogTitle style={{fontFamily:'Chivo,sans-serif'}}>Nouvelle cle de repartition</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle style={{fontFamily:'Chivo,sans-serif'}}>{editingKey ? 'Modifier la cle' : 'Nouvelle cle de repartition'}</DialogTitle></DialogHeader>
           <div className="space-y-4 mt-2">
+            {editingKey && keyUsage && keyUsage.total > 0 && (
+              <div className="bg-amber-50 border border-amber-200 rounded p-3 text-xs" data-testid="key-usage-warning">
+                <div className="flex items-start gap-2 mb-1 text-amber-900 font-semibold">
+                  <AlertTriangle size={14} className="mt-0.5 flex-shrink-0" />
+                  Cle utilisee par {keyUsage.invoices.length} facture(s), {keyUsage.budgets.length} budget(s), {keyUsage.fund_calls.length} appel(s)
+                </div>
+                <p className="text-amber-800 ml-6">
+                  La modification entrainera leur <b>desindexation</b> de la cle. Pensez a reaffecter une cle apres sauvegarde.
+                </p>
+                {keyUsage.invoices.length > 0 && (
+                  <details className="ml-6 mt-2 text-amber-900">
+                    <summary className="cursor-pointer">Voir les factures liees ({keyUsage.invoices.length})</summary>
+                    <ul className="mt-1 space-y-0.5 text-[11px]">
+                      {keyUsage.invoices.slice(0, 8).map(i => (
+                        <li key={i.id} className="font-mono">{i.date} - {i.number} - {i.supplier} ({i.total_amount} EUR)</li>
+                      ))}
+                      {keyUsage.invoices.length > 8 && <li>... et {keyUsage.invoices.length - 8} autres</li>}
+                    </ul>
+                  </details>
+                )}
+              </div>
+            )}
             <div className="grid grid-cols-2 gap-4">
               <div><label className="form-label">Nom *</label><Input value={keyForm.name} onChange={e => setKeyForm({...keyForm, name: e.target.value})} data-testid="key-name" /></div>
               <div><label className="form-label">Type</label>
@@ -352,7 +464,7 @@ export default function InvoicesPage() {
             )}
             <div className="flex gap-3 justify-end">
               <Button variant="outline" onClick={() => setKeyDialog(false)}>Annuler</Button>
-              <Button onClick={saveKey} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="key-save-btn">Creer</Button>
+              <Button onClick={() => saveKey(false)} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="key-save-btn">{editingKey ? 'Modifier' : 'Creer'}</Button>
             </div>
           </div>
         </DialogContent>

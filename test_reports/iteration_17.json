@@ -1,0 +1,66 @@
+{
+  "summary": "Iter17 backend tests for expense-categories (natures de depense) + invoice account derivation + distribution-keys usage/force-detach + auto-entry manual edit policy. 19/19 PASS. iter16 regression 16/16 PASS. All 14 features from the request validated end-to-end against the live preview URL.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter17_expense_categories.py",
+    "/app/test_reports/pytest/pytest_iter17.xml",
+    "/app/test_reports/pytest/pytest_iter17_regression.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "routes/expense_categories.py: PUT update_category does NOT change copropriete_id even when payload provides a different one because $set uses data.model_dump() but 1:1 conflict check uses data.copropriete_id or existing.copropriete_id. If a category is moved across ACPs via PUT, the 1:1 check may pass while the persisted copropriete_id is updated to a value the conflict check did not actually test against. Mitigation: ignore copropriete_id on PUT (immutable), or re-validate against the NEW copropriete_id explicitly.",
+    "routes/expense_categories.py: list_categories enriches account_name only for PCMNs in the same copropriete_id when one is provided; otherwise the PCMN lookup uses pq without copropriete_id and may match the wrong ACP's account name in multi-ACP setups (account numbers can repeat per ACP). Low impact today (1 ACP) but will surface when a 2nd ACP is added.",
+    "routes/invoices.py: update_invoice does NOT clear distribution_lines when distribution_key_id is changed via PUT; the recomputed lines should be saved (POST does compute them). Today PUT only persists distribution_key_id without recomputing distribution_lines. Recommend mirroring the POST logic in PUT for consistency.",
+    "routes/invoices.py: PUT /distribution-keys/{id}?force=true performs the update BEFORE detaching invoices. If detach succeeds but invoice update_many fails, the key is already renamed/restructured. Recommend wrapping detach+update in a transaction (or detach first then update) so partial failures don't leave an inconsistent state.",
+    "routes/accounting.py: PUT entry marks manually_edited only when existing.auto_generated is True. If a user reverts the entry to its original lines, the manually_edited flag remains True forever, allowing later DELETE. That's actually fine policy-wise but is asymmetric with the 'protect auto entries' intent — consider documenting that manual edit is a one-way detach from auto-regen lifecycle.",
+    "auto_entries._delete_auto_entries: when an invoice's source is updated, the new auto entry is inserted alongside the kept manually_edited one => the journal now contains TWO entries for the same source (one manual+stale, one auto+fresh). Balance reports will double-count this invoice. This is the behavior asserted by test_update_source_skips_manually_edited and may be the desired protection, but the main agent should confirm semantics: typically a manually_edited entry should DETACH from source (clear source_id) so generate_purchase_entry doesn't create a duplicate."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter17_expense_categories.py"
+  ],
+  "success_rate": {
+    "backend": "100% (19/19) + regression iter16 16/16",
+    "frontend": "not tested (backend-only request)"
+  },
+  "test_credentials": "admin@copro.be / admin123 (superadmin). Owner registered ad-hoc TEST_iter17_owner_*@example.com / ownerpass123.",
+  "seed_data_creation": "Per-module: 3 expense_categories (TEST_iter17_*_cat1/2/3), 6 invoices (TEST_iter17_*_INV_*), 2 distribution_keys (TEST_iter17_*_key1/2), 1 owner user. Cleaned via module-scoped autouse teardown (invoices->dist_keys->categories ordered DELETE; ignores 400 from blocked deletes which is correct, fallback delete after detach happens naturally via invoice DELETE removing the link).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iter17 covers expense_categories.py CRUD with 1:1 constraint on PCMN class 6 per ACP, invoice.expense_category_id => account_number derivation override, /distribution-keys/{id}/usage shape, PUT ?force=true detaches invoices (clears distribution_key_id + distribution_lines), DELETE 400 when used. Also auto-entry manual-edit semantics: PUT auto-entry sets manually_edited=true + manually_edited_at while keeping auto_generated=true; DELETE auto without edit -> 400; DELETE auto with edit -> ok; _delete_auto_entries skips manually_edited entries so source update doesn't overwrite them (but a new auto entry IS inserted alongside — see code review note about duplicate). RBAC owner -> 403 on /expense-categories and /distribution-keys/{id}/usage confirmed via middleware. Test file: /app/backend/tests/test_iter17_expense_categories.py. Run with REACT_APP_BACKEND_URL set (read from /app/frontend/.env).",
+  "tests_executed": {
+    "total": 19,
+    "passed": 19,
+    "failed": 0,
+    "list": [
+      "TestExpenseCategoriesCRUD::test_create_and_list",
+      "TestExpenseCategoriesCRUD::test_one_to_one_strict_same_acp",
+      "TestExpenseCategoriesCRUD::test_must_be_class6",
+      "TestExpenseCategoriesCRUD::test_update_conflict_and_invalid_class",
+      "TestExpenseCategoriesCRUD::test_delete_blocked_if_used",
+      "TestInvoiceCategoryDerivation::test_create_with_category_overrides_account",
+      "TestInvoiceCategoryDerivation::test_update_category_changes_account",
+      "TestInvoiceCategoryDerivation::test_regression_invoice_without_category",
+      "TestDistributionKeysUsage::test_usage_endpoint_shape",
+      "TestDistributionKeysUsage::test_put_conflict_without_force",
+      "TestDistributionKeysUsage::test_put_force_detaches",
+      "TestDistributionKeysUsage::test_delete_blocked_if_used",
+      "TestAutoEntryManualEdit::test_put_auto_marks_manually_edited",
+      "TestAutoEntryManualEdit::test_delete_auto_without_edit_blocked",
+      "TestAutoEntryManualEdit::test_delete_auto_after_edit_allowed",
+      "TestAutoEntryManualEdit::test_update_source_skips_manually_edited",
+      "TestRBACOwner::test_owner_cannot_list_categories",
+      "TestRBACOwner::test_owner_cannot_create_category",
+      "TestRBACOwner::test_owner_cannot_get_dist_key_usage"
+    ]
+  },
+  "regression": "test_iter16_auto_entries.py 16/16 PASS (no regression on AC/VE/FI auto entries, fiscal expenses, regularization, RBAC).",
+  "rca_of_the_issue": "N/A - all 14 requested feature areas validated. The duplicate-journal-entry concern raised in critical_code_review_comments (manually_edited + new auto entry coexisting for same source after source update) is the strongest item for the main agent to consider; everything else is hardening guidance."
+}

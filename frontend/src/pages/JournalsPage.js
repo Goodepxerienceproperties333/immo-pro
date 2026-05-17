@@ -9,7 +9,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { Plus, Trash2, Eye, Paperclip, Download } from 'lucide-react';
+import { Plus, Trash2, Eye, Paperclip, Download, Pencil } from 'lucide-react';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
@@ -39,8 +39,22 @@ export default function JournalsPage() {
 
   useEffect(() => { load(); }, [load]);
 
+  const [editingEntry, setEditingEntry] = useState(null);
+
   const openCreate = () => {
+    setEditingEntry(null);
     setForm({ journal_type: journalType, date: new Date().toISOString().split('T')[0], reference: '', description: '', lines: [{ account_number: '', account_name: '', debit: 0, credit: 0 }, { account_number: '', account_name: '', debit: 0, credit: 0 }] });
+    setPendingAttachment(null);
+    setDialogOpen(true);
+  };
+
+  const openEdit = (entry) => {
+    setEditingEntry(entry);
+    setForm({
+      journal_type: entry.journal_type, date: entry.date, reference: entry.reference || '',
+      description: entry.description || '',
+      lines: (entry.lines || []).map(l => ({ account_number: l.account_number, account_name: l.account_name, debit: l.debit, credit: l.credit })),
+    });
     setPendingAttachment(null);
     setDialogOpen(true);
   };
@@ -65,16 +79,24 @@ export default function JournalsPage() {
     if (!isBalanced) { toast.error('Ecriture non equilibree'); return; }
     try {
       const payload = { ...form, lines: form.lines.map(l => ({ ...l, debit: Number(l.debit), credit: Number(l.credit) })) };
-      const { data: created } = await api.post('/accounting/entries', payload);
-      if (pendingAttachment && created?.id) {
+      let entryId;
+      if (editingEntry) {
+        await api.put(`/accounting/entries/${editingEntry.id}`, payload);
+        entryId = editingEntry.id;
+        toast.success(editingEntry.auto_generated ? 'Ecriture modifiee (marquee manuel)' : 'Ecriture modifiee');
+      } else {
+        const { data: created } = await api.post('/accounting/entries', payload);
+        entryId = created?.id;
+        toast.success('Ecriture creee');
+      }
+      if (pendingAttachment && entryId) {
         try {
           const fd = new FormData();
           fd.append('file', pendingAttachment);
-          await api.post(`/accounting/entries/${created.id}/attachments`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+          await api.post(`/accounting/entries/${entryId}/attachments`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
         } catch (e) { console.warn(e); }
       }
-      toast.success('Ecriture creee');
-      setDialogOpen(false);
+      setDialogOpen(false); setEditingEntry(null);
       load();
     } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); }
   };
@@ -130,7 +152,8 @@ export default function JournalsPage() {
                     <TableCell className="font-mono text-sm">{e.date}</TableCell>
                     <TableCell className="font-mono text-xs">
                       {e.reference}
-                      {e.auto_generated && <Badge variant="outline" className="ml-2 text-[10px] bg-blue-50 border-blue-200 text-blue-700" data-testid={`auto-badge-${e.id}`}>Auto</Badge>}
+                      {e.auto_generated && !e.manually_edited && <Badge variant="outline" className="ml-2 text-[10px] bg-blue-50 border-blue-200 text-blue-700" data-testid={`auto-badge-${e.id}`}>Auto</Badge>}
+                      {e.manually_edited && <Badge variant="outline" className="ml-2 text-[10px] bg-orange-50 border-orange-200 text-orange-700" data-testid={`manual-edit-badge-${e.id}`}>Modifie</Badge>}
                     </TableCell>
                     <TableCell className="font-medium">{e.description}</TableCell>
                     <TableCell className="text-right font-mono">{e.total_debit?.toFixed(2)}</TableCell>
@@ -138,10 +161,11 @@ export default function JournalsPage() {
                     <TableCell>
                       <div className="flex gap-1">
                         <Button variant="ghost" size="sm" onClick={() => setViewEntry(e)}><Eye size={14} /></Button>
+                        <Button variant="ghost" size="sm" onClick={() => openEdit(e)} data-testid={`edit-entry-${e.id}`} title="Modifier"><Pencil size={14} /></Button>
                         <Button variant="ghost" size="sm" onClick={() => setAttachDialogEntry(e)} data-testid={`entry-attach-${e.id}`} title="Pieces jointes">
                           <Paperclip size={14} />{(e.attachments?.length || 0) > 0 && <span className="ml-1 text-xs">{e.attachments.length}</span>}
                         </Button>
-                        {!e.auto_generated && <Button variant="ghost" size="sm" onClick={() => handleDelete(e.id)} className="text-red-500"><Trash2 size={14} /></Button>}
+                        {(!e.auto_generated || e.manually_edited) && <Button variant="ghost" size="sm" onClick={() => handleDelete(e.id)} className="text-red-500"><Trash2 size={14} /></Button>}
                       </div>
                     </TableCell>
                   </TableRow>
@@ -153,9 +177,12 @@ export default function JournalsPage() {
       </Tabs>
 
       {/* Create Dialog */}
-      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+      <Dialog open={dialogOpen} onOpenChange={(open) => { if (!open) setEditingEntry(null); setDialogOpen(open); }}>
         <DialogContent className="max-w-3xl" data-testid="entry-dialog">
-          <DialogHeader><DialogTitle style={{fontFamily:'Chivo,sans-serif'}}>Nouvelle ecriture comptable</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle style={{fontFamily:'Chivo,sans-serif'}}>
+            {editingEntry ? `Modifier ecriture ${editingEntry.reference || ''}` : 'Nouvelle ecriture comptable'}
+            {editingEntry?.auto_generated && <Badge variant="outline" className="ml-2 text-[10px] bg-orange-50 border-orange-200 text-orange-700">Auto -&gt; sera marquee comme modifiee</Badge>}
+          </DialogTitle></DialogHeader>
           <div className="space-y-4 mt-2">
             <div className="grid grid-cols-3 gap-4">
               <div><label className="form-label">Date *</label><Input type="date" value={form.date} onChange={e => setForm({...form, date: e.target.value})} data-testid="entry-date" /></div>

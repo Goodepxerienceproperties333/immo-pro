@@ -50,6 +50,7 @@ def build_decompte_pdf(
     distribution_keys: list,
     fund_calls: list,
     payments: list,  # bank_transactions matched to owner
+    expense_accounts_map: dict = None,  # {account_number: nature_name}
 ) -> bytes:
     """Render full PDF and return bytes."""
     buf = io.BytesIO()
@@ -154,61 +155,87 @@ def build_decompte_pdf(
     elements.append(Spacer(1, 8 * mm))
 
     # ---- CHARGES BY DISTRIBUTION KEY ----
-    elements.append(Paragraph("1. Charges reparties par cle de repartition", h2))
+    elements.append(Paragraph("1. Charges reparties par cle de repartition et nature de depense", h2))
 
     dk_by_id = {dk["id"]: dk for dk in distribution_keys}
-    # Group invoices by distribution_key_id (or 'none' if no key)
-    grouped = defaultdict(list)
+    # Group: distribution_key_id -> account_number -> [(invoice, owner_amt)]
+    grouped = defaultdict(lambda: defaultdict(list))
     for inv in invoices:
-        # Compute owner amount for this invoice
         dlines = inv.get("distribution_lines", [])
         owner_amt = 0.0
         if dlines:
             for dl in dlines:
                 if dl.get("lot_id") in owner_lot_ids:
                     owner_amt += dl.get("amount", 0)
-        # Skip invoices that don't affect this owner
         if owner_amt <= 0:
             continue
         key_id = inv.get("distribution_key_id", "") or "_none"
-        grouped[key_id].append((inv, owner_amt))
+        acc = inv.get("account_number", "") or "_other"
+        grouped[key_id][acc].append((inv, owner_amt))
+
+    # Build account_name lookup (from PCMN + categories if provided)
+    acc_names = expense_accounts_map or {}
 
     total_owner_charges = 0.0
     if not grouped:
         elements.append(Paragraph("<i>Aucune charge n'affecte vos lots sur cette periode.</i>", body))
     else:
-        for key_id, items in grouped.items():
+        for key_id, by_acc in grouped.items():
             dk_name = dk_by_id.get(key_id, {}).get("name", "Sans cle de repartition")
-            elements.append(Paragraph(f"<b>{dk_name}</b>", body))
-            rows = [["Date", "Fournisseur", "Description", "N° facture", "Total facture", "Votre part"]]
-            subtotal = 0.0
-            for inv, owner_amt in items:
-                rows.append([
-                    inv.get("date", ""),
-                    inv.get("supplier", "")[:30],
-                    inv.get("description", "")[:40],
-                    inv.get("number", ""),
-                    _eur_be(inv.get("total_amount", 0)),
-                    _eur_be(owner_amt),
-                ])
-                subtotal += owner_amt
-            rows.append(["", "", "", "", "Sous-total", _eur_be(subtotal)])
-            tbl = Table(rows, colWidths=[22 * mm, 35 * mm, 50 * mm, 22 * mm, 25 * mm, 25 * mm])
-            tbl.setStyle(TableStyle([
-                ("BACKGROUND", (0, 0), (-1, 0), BRAND_BLUE),
-                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-                ("FONTSIZE", (0, 0), (-1, -1), 8),
-                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                ("ALIGN", (4, 0), (5, -1), "RIGHT"),
-                ("GRID", (0, 0), (-1, -1), 0.3, MID_GREY),
-                ("BACKGROUND", (0, -1), (-1, -1), LIGHT_GREY),
-                ("FONTNAME", (4, -1), (5, -1), "Helvetica-Bold"),
-                ("TOPPADDING", (0, 0), (-1, -1), 3),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            # Niveau 1 : Cle
+            elements.append(Paragraph(f"<b>Cle : {dk_name}</b>", body))
+            key_subtotal = 0.0
+            for acc, items in by_acc.items():
+                acc_label = acc if acc != "_other" else "Autres"
+                nature_label = acc_names.get(acc, "")
+                # Niveau 2 : Nature de depense / compte PCMN
+                header = f"<b>Nature :</b> {nature_label} <font color='#94a3b8'>(compte {acc_label})</font>" if nature_label else f"<b>Compte :</b> {acc_label}"
+                elements.append(Paragraph(header, ParagraphStyle(name="nature", parent=body, leftIndent=10, fontSize=8, textColor=DARK_GREY)))
+                rows = [["Date", "Fournisseur", "Description", "N° facture", "Total facture", "Votre part"]]
+                subtotal = 0.0
+                for inv, owner_amt in items:
+                    rows.append([
+                        inv.get("date", ""),
+                        inv.get("supplier", "")[:30],
+                        inv.get("description", "")[:40],
+                        inv.get("number", ""),
+                        _eur_be(inv.get("total_amount", 0)),
+                        _eur_be(owner_amt),
+                    ])
+                    subtotal += owner_amt
+                rows.append(["", "", "", "", "Sous-total nature", _eur_be(subtotal)])
+                tbl = Table(rows, colWidths=[20 * mm, 33 * mm, 47 * mm, 22 * mm, 27 * mm, 27 * mm])
+                tbl.setStyle(TableStyle([
+                    ("BACKGROUND", (0, 0), (-1, 0), BRAND_BLUE),
+                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                    ("FONTSIZE", (0, 0), (-1, -1), 8),
+                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                    ("ALIGN", (4, 0), (5, -1), "RIGHT"),
+                    ("GRID", (0, 0), (-1, -1), 0.3, MID_GREY),
+                    ("BACKGROUND", (0, -1), (-1, -1), LIGHT_GREY),
+                    ("FONTNAME", (4, -1), (5, -1), "Helvetica-Bold"),
+                    ("TOPPADDING", (0, 0), (-1, -1), 3),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+                ]))
+                elements.append(tbl)
+                elements.append(Spacer(1, 2 * mm))
+                key_subtotal += subtotal
+            # Sous-total par cle (niveau 1)
+            key_total_tbl = Table(
+                [["", "", "", "", f"Sous-total cle '{dk_name}'", _eur_be(key_subtotal)]],
+                colWidths=[20 * mm, 33 * mm, 47 * mm, 22 * mm, 27 * mm, 27 * mm],
+            )
+            key_total_tbl.setStyle(TableStyle([
+                ("BACKGROUND", (4, 0), (5, 0), MID_GREY),
+                ("FONTNAME", (4, 0), (5, 0), "Helvetica-Bold"),
+                ("FONTSIZE", (4, 0), (5, 0), 8),
+                ("ALIGN", (4, 0), (5, 0), "RIGHT"),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
             ]))
-            elements.append(tbl)
+            elements.append(key_total_tbl)
             elements.append(Spacer(1, 4 * mm))
-            total_owner_charges += subtotal
+            total_owner_charges += key_subtotal
 
         # Grand total charges
         grand_total = Table(

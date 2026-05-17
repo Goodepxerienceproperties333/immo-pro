@@ -6,11 +6,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
-import { Receipt, X, Paperclip, Filter } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Receipt, X, Paperclip, Filter, Pencil } from 'lucide-react';
 
 const ALL = '__all__';
 
 export default function ExpensesPage() {
+  const navigate = useNavigate();
   const [years, setYears] = useState([]);
   const [data, setData] = useState(null);
   const [filters, setFilters] = useState({ fiscal_year_id: '', account_number: '', distribution_key_id: '', bank_account: '', date_from: '', date_to: '' });
@@ -163,10 +165,11 @@ export default function ExpensesPage() {
             <TableHead className="text-right w-24">Montant</TableHead>
             <TableHead className="w-20">Statut</TableHead>
             <TableHead className="w-12 text-center">PJ</TableHead>
+            <TableHead className="w-16"></TableHead>
           </TableRow></TableHeader>
           <TableBody>
-            {loading && <TableRow><TableCell colSpan={9} className="text-center py-8 text-slate-400">Chargement...</TableCell></TableRow>}
-            {!loading && data && data.expenses.length === 0 && <TableRow><TableCell colSpan={9} className="text-center py-12 text-slate-400">Aucune depense</TableCell></TableRow>}
+            {loading && <TableRow><TableCell colSpan={10} className="text-center py-8 text-slate-400">Chargement...</TableCell></TableRow>}
+            {!loading && data && data.expenses.length === 0 && <TableRow><TableCell colSpan={10} className="text-center py-12 text-slate-400">Aucune depense</TableCell></TableRow>}
             {!loading && data && data.expenses.map((r, i) => (
               <TableRow key={r.id} className="hover:bg-slate-50/50" data-testid={`expense-row-${i}`}>
                 <TableCell className="font-mono text-xs">{r.date}</TableCell>
@@ -182,13 +185,16 @@ export default function ExpensesPage() {
                 <TableCell className="text-center text-slate-400">
                   {r.attachments_count > 0 && <Paperclip size={12} className="inline" />}{r.attachments_count > 0 && <span className="text-[10px] ml-0.5">{r.attachments_count}</span>}
                 </TableCell>
+                <TableCell className="text-right">
+                  <Button variant="ghost" size="sm" onClick={() => navigate(`/invoices?edit=${r.id}`)} title="Corriger" data-testid={`edit-expense-${r.id}`}><Pencil size={12} /></Button>
+                </TableCell>
               </TableRow>
             ))}
             {data && data.expenses.length > 0 && (
               <TableRow className="bg-slate-50 font-bold">
                 <TableCell colSpan={6} className="text-right">TOTAL</TableCell>
                 <TableCell className="text-right font-mono">{data.totals.total.toFixed(2)} EUR</TableCell>
-                <TableCell colSpan={2}></TableCell>
+                <TableCell colSpan={3}></TableCell>
               </TableRow>
             )}
           </TableBody>

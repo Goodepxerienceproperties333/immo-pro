@@ -34,6 +34,7 @@ class InvoiceInput(BaseModel):
     total_amount: float
     vat_amount: Optional[float] = 0.0
     account_number: Optional[str] = ""
+    expense_category_id: Optional[str] = ""
     distribution_key_id: Optional[str] = ""
     status: Optional[str] = "unpaid"
     copropriete_id: Optional[str] = ""
@@ -65,19 +66,51 @@ def create_invoices_router(db):
         await db.distribution_keys.insert_one(doc)
         return {k: v for k, v in doc.items() if k != "_id"}
 
+    @router.get("/distribution-keys/{key_id}/usage")
+    async def dist_key_usage(key_id: str):
+        """Return list of resources linked to this distribution key."""
+        invoices = await db.invoices.find({"distribution_key_id": key_id}, {"_id": 0, "id": 1, "number": 1, "date": 1, "supplier": 1, "total_amount": 1}).to_list(10000)
+        budgets = await db.budgets.find({"lines.distribution_key_id": key_id}, {"_id": 0, "id": 1, "name": 1, "status": 1}).to_list(1000)
+        fund_calls = await db.fund_calls.find({"distribution_key_id": key_id}, {"_id": 0, "id": 1, "name": 1, "date": 1, "total_amount": 1}).to_list(1000)
+        return {
+            "invoices": invoices,
+            "budgets": budgets,
+            "fund_calls": fund_calls,
+            "total": len(invoices) + len(budgets) + len(fund_calls),
+        }
+
     @router.put("/distribution-keys/{key_id}")
-    async def update_dist_key(key_id: str, data: DistKeyInput):
+    async def update_dist_key(key_id: str, data: DistKeyInput, force: Optional[bool] = False):
+        """Update a key. If `force=true`, detach all invoices using this key first.
+        Otherwise returns 409 if invoices are linked."""
+        existing = await db.distribution_keys.find_one({"id": key_id}, {"_id": 0})
+        if not existing:
+            raise HTTPException(404, "Cle non trouvee")
+        linked_inv = await db.invoices.count_documents({"distribution_key_id": key_id})
+        if linked_inv > 0 and not force:
+            raise HTTPException(
+                409,
+                f"{linked_inv} facture(s) utilisent cette cle. Detachez-les avant ou utilisez ?force=true",
+            )
         update = {
             "name": data.name, "description": data.description,
             "key_type": data.key_type, "lots": [l.model_dump() for l in data.lots]
         }
-        result = await db.distribution_keys.update_one({"id": key_id}, {"$set": update})
-        if result.matched_count == 0:
-            raise HTTPException(404, "Cle non trouvee")
-        return await db.distribution_keys.find_one({"id": key_id}, {"_id": 0})
+        await db.distribution_keys.update_one({"id": key_id}, {"$set": update})
+        if force and linked_inv > 0:
+            # Detach: set distribution_key_id="" and clear distribution_lines
+            await db.invoices.update_many(
+                {"distribution_key_id": key_id},
+                {"$set": {"distribution_key_id": "", "distribution_lines": []}}
+            )
+        return {"updated": True, "detached_invoices": linked_inv if force else 0,
+                "key": await db.distribution_keys.find_one({"id": key_id}, {"_id": 0})}
 
     @router.delete("/distribution-keys/{key_id}")
     async def delete_dist_key(key_id: str):
+        linked_inv = await db.invoices.count_documents({"distribution_key_id": key_id})
+        if linked_inv > 0:
+            raise HTTPException(400, f"{linked_inv} facture(s) liees - detachez-les d'abord")
         result = await db.distribution_keys.delete_one({"id": key_id})
         if result.deleted_count == 0:
             raise HTTPException(404, "Cle non trouvee")
@@ -96,6 +129,12 @@ def create_invoices_router(db):
 
     @router.post("/invoices")
     async def create_invoice(data: InvoiceInput):
+        # If expense_category_id provided, derive/override account_number
+        account_number = data.account_number
+        if data.expense_category_id:
+            cat = await db.expense_categories.find_one({"id": data.expense_category_id}, {"_id": 0})
+            if cat and cat.get("account_number"):
+                account_number = cat["account_number"]
         # Compute distribution lines if key provided
         distribution_lines = []
         if data.distribution_key_id:
@@ -126,7 +165,8 @@ def create_invoices_router(db):
             "description": data.description,
             "total_amount": data.total_amount,
             "vat_amount": data.vat_amount,
-            "account_number": data.account_number,
+            "account_number": account_number,
+            "expense_category_id": data.expense_category_id or "",
             "distribution_key_id": data.distribution_key_id,
             "distribution_lines": distribution_lines,
             "status": data.status,
@@ -150,11 +190,18 @@ def create_invoices_router(db):
 
     @router.put("/invoices/{invoice_id}")
     async def update_invoice(invoice_id: str, data: InvoiceInput):
+        account_number = data.account_number
+        if data.expense_category_id:
+            cat = await db.expense_categories.find_one({"id": data.expense_category_id}, {"_id": 0})
+            if cat and cat.get("account_number"):
+                account_number = cat["account_number"]
         update = {
             "number": data.number, "date": data.date, "due_date": data.due_date,
             "supplier": data.supplier, "description": data.description,
             "total_amount": data.total_amount, "vat_amount": data.vat_amount,
-            "account_number": data.account_number, "distribution_key_id": data.distribution_key_id,
+            "account_number": account_number,
+            "expense_category_id": data.expense_category_id or "",
+            "distribution_key_id": data.distribution_key_id,
             "status": data.status
         }
         result = await db.invoices.update_one({"id": invoice_id}, {"$set": update})

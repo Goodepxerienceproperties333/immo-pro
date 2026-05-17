@@ -558,11 +558,23 @@ def create_reports_router(db):
             if is_owner:
                 payments.append(t)
 
+        # Build natures map (account_number -> nature_name + PCMN name fallback)
+        cats = await db.expense_categories.find(
+            {"copropriete_id": copro["id"]} if copro.get("id") else {}, {"_id": 0}
+        ).to_list(1000)
+        pcmn_acc = await db.pcmn_accounts.find(
+            {"class_num": 6, "copropriete_id": copro.get("id", "")}, {"_id": 0}
+        ).to_list(1000)
+        nature_map = {a["number"]: a.get("name", "") for a in pcmn_acc}
+        for c in cats:
+            nature_map[c["account_number"]] = c["name"]
+
         pdf_bytes = build_decompte_pdf(
             owner=owner, copropriete=copro, fiscal_year=fy,
             owner_lots=owner_lots, all_lots=all_lots,
             invoices=invoices, distribution_keys=distribution_keys,
             fund_calls=fund_calls, payments=payments,
+            expense_accounts_map=nature_map,
         )
 
         filename = f"decompte_{owner['name'].replace(' ', '_')}_{fy.get('name','').replace(' ', '_')}.pdf"

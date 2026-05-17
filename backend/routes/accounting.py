@@ -163,10 +163,13 @@ def create_accounting_router(db):
 
     @router.put("/entries/{entry_id}")
     async def update_entry(entry_id: str, data: JournalEntryInput):
+        existing = await db.journal_entries.find_one({"id": entry_id}, {"_id": 0})
+        if not existing:
+            raise HTTPException(404, "Ecriture non trouvee")
         total_debit = sum(l.debit for l in data.lines)
         total_credit = sum(l.credit for l in data.lines)
         if abs(total_debit - total_credit) > 0.01:
-            raise HTTPException(400, f"Ecriture non equilibree")
+            raise HTTPException(400, "Ecriture non equilibree")
         update = {
             "journal_type": data.journal_type,
             "date": data.date,
@@ -176,17 +179,19 @@ def create_accounting_router(db):
             "total_debit": round(total_debit, 2),
             "total_credit": round(total_credit, 2),
         }
-        result = await db.journal_entries.update_one({"id": entry_id}, {"$set": update})
-        if result.matched_count == 0:
-            raise HTTPException(404, "Ecriture non trouvee")
+        # Mark as manually edited if originally auto-generated
+        if existing.get("auto_generated"):
+            update["manually_edited"] = True
+            update["manually_edited_at"] = datetime.now(timezone.utc).isoformat()
+        await db.journal_entries.update_one({"id": entry_id}, {"$set": update})
         return await db.journal_entries.find_one({"id": entry_id}, {"_id": 0})
 
     @router.delete("/entries/{entry_id}")
     async def delete_entry(entry_id: str):
         # Also remove attachment files from disk
         entry = await db.journal_entries.find_one({"id": entry_id}, {"_id": 0})
-        if entry and entry.get("auto_generated"):
-            raise HTTPException(400, "Ecriture auto-generee - supprimez la source (facture, appel, banque)")
+        if entry and entry.get("auto_generated") and not entry.get("manually_edited"):
+            raise HTTPException(400, "Ecriture auto-generee - supprimez la source (facture, appel, banque) ou modifiez-la d'abord pour la detacher")
         if entry:
             for att in entry.get("attachments", []) or []:
                 try:

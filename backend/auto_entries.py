@@ -19,9 +19,11 @@ from tier_accounts import (
 
 
 async def _delete_auto_entries(db, source_type: str, source_id: str):
-    """Remove any previously auto-generated entries for this source."""
+    """Remove any previously auto-generated entries for this source.
+    Skips entries that have been manually edited (preservation)."""
     await db.journal_entries.delete_many({
         "auto_generated": True,
+        "manually_edited": {"$ne": True},
         "source_type": source_type,
         "source_id": source_id,
     })
