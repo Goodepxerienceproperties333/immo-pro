@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { Building2, LogIn, UserPlus } from 'lucide-react';
+import { Building2, LogIn, UserPlus, Eye, EyeOff } from 'lucide-react';
 
 function formatError(detail) {
   if (detail == null) return "Une erreur est survenue.";
@@ -20,6 +20,7 @@ export default function LoginPage() {
   const [name, setName] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -94,14 +95,27 @@ export default function LoginPage() {
             </div>
             <div>
               <label className="form-label">Mot de passe</label>
-              <Input
-                data-testid="login-password-input"
-                type="password"
-                value={password}
-                onChange={e => setPassword(e.target.value)}
-                placeholder="Votre mot de passe"
-                required
-              />
+              <div className="relative">
+                <Input
+                  data-testid="login-password-input"
+                  type={showPassword ? "text" : "password"}
+                  value={password}
+                  onChange={e => setPassword(e.target.value)}
+                  placeholder="Votre mot de passe"
+                  className="pr-10"
+                  required
+                />
+                <button
+                  type="button"
+                  data-testid="login-toggle-password"
+                  onClick={() => setShowPassword(s => !s)}
+                  className="absolute inset-y-0 right-0 px-3 flex items-center text-slate-500 hover:text-slate-900"
+                  aria-label={showPassword ? "Masquer le mot de passe" : "Afficher le mot de passe"}
+                  tabIndex={-1}
+                >
+                  {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
             </div>
             <Button
               type="submit"
