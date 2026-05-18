@@ -309,4 +309,70 @@ def create_coproprietes_router(db):
 
         return {"status": "ok", "copropriete": copro.get("name", ""), "stats": stats}
 
+    @router.post("/{copro_id}/cleanup-orphan-entries")
+    async def cleanup_orphan_entries(copro_id: str, request: Request):
+        """Nettoie les ecritures auto-generees orphelines (source supprimee).
+        Verifie chaque ecriture auto_generated=true et supprime celles dont :
+        - source_type='invoice' mais l'invoice n'existe plus
+        - source_type='fund_call' mais le fund_call n'existe plus
+        - source_type='bank_txn' mais la bank_transaction n'existe plus
+
+        Retourne le nombre d'ecritures supprimees par categorie.
+        Reserve aux syndic/gestionnaire/admin.
+        """
+        await _get_manager(request)
+        copro = await db.coproprietes.find_one({"id": copro_id}, {"_id": 0, "name": 1})
+        if not copro:
+            raise HTTPException(404, "Copropriete non trouvee")
+
+        # Recupere toutes les ecritures auto de l'ACP
+        auto_entries = await db.journal_entries.find(
+            {"copropriete_id": copro_id, "auto_generated": True},
+            {"_id": 0, "id": 1, "source_type": 1, "source_id": 1, "journal_type": 1}
+        ).to_list(100000)
+
+        # Ids reels
+        invoice_ids = set()
+        async for d in db.invoices.find({"copropriete_id": copro_id}, {"_id": 0, "id": 1}):
+            invoice_ids.add(d["id"])
+        fund_call_ids = set()
+        async for d in db.fund_calls.find({"copropriete_id": copro_id}, {"_id": 0, "id": 1}):
+            fund_call_ids.add(d["id"])
+        txn_ids = set()
+        async for d in db.bank_transactions.find({"copropriete_id": copro_id}, {"_id": 0, "id": 1}):
+            txn_ids.add(d["id"])
+
+        stats = {"invoice": 0, "fund_call": 0, "bank_txn": 0, "other": 0}
+        to_delete = []
+        for e in auto_entries:
+            st = e.get("source_type", "")
+            sid = e.get("source_id", "")
+            if not sid:
+                continue
+            orphan = False
+            if st == "invoice" and sid not in invoice_ids:
+                orphan = True
+                stats["invoice"] += 1
+            elif st == "fund_call" and sid not in fund_call_ids:
+                orphan = True
+                stats["fund_call"] += 1
+            elif st == "bank_txn" and sid not in txn_ids:
+                orphan = True
+                stats["bank_txn"] += 1
+            elif st not in ("invoice", "fund_call", "bank_txn"):
+                pass  # ne touche pas aux ecritures sans source connue
+            if orphan:
+                to_delete.append(e["id"])
+
+        if to_delete:
+            await db.journal_entries.delete_many({"id": {"$in": to_delete}})
+
+        total = sum(stats.values())
+        return {
+            "status": "ok",
+            "copropriete": copro.get("name", ""),
+            "total_deleted": total,
+            "stats": stats,
+        }
+
     return router

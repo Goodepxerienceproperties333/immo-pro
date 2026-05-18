@@ -10,7 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { Plus, Pencil, Trash2, Home, Search, Archive, RotateCcw, Landmark, PlusCircle, X, Eraser } from 'lucide-react';
+import { Plus, Pencil, Trash2, Home, Search, Archive, RotateCcw, Landmark, PlusCircle, X, Eraser, Wand2 } from 'lucide-react';
 
 const emptyBank = { iban: '', bic: '', account_type: 'vue', is_default: false, label: '' };
 const emptyLot = { number: '', description: '', lot_type: 'apartment', floor: 0, area: 0, quotity: 0 };
@@ -111,8 +111,16 @@ export default function CoproprietesPage() {
   const handleDelete = async (id) => { if (!window.confirm('Supprimer cette copropriete ?')) return; try { await api.delete(`/coproprietes/${id}`); toast.success('Supprimee'); load(); } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); } };
   const handleArchive = async (id) => { try { await api.post(`/coproprietes/${id}/archive`); toast.success('Archivee'); load(); } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); } };
   const handleUnarchive = async (id) => { try { await api.post(`/coproprietes/${id}/unarchive`); toast.success('Reactivee'); load(); } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); } };
+  const handleCleanupOrphans = async (c) => {
+    if (!window.confirm(`Nettoyer les ecritures orphelines de "${c.name}" ?\n\nSupprime les ecritures auto-generees dont la source (facture, appel, transaction bancaire) a ete supprimee. Resynchronise le grand livre, le bilan et la balance des tiers.`)) return;
+    try {
+      const { data } = await api.post(`/coproprietes/${c.id}/cleanup-orphan-entries`);
+      const s = data.stats || {};
+      toast.success(`${data.total_deleted} ecriture(s) orpheline(s) supprimee(s) (factures: ${s.invoice||0}, appels: ${s.fund_call||0}, banque: ${s.bank_txn||0})`);
+    } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); }
+  };
   const handleResetData = async (c) => {
-    const msg = `Vider TOUTES les donnees comptables de "${c.name}" ?\n\n` +
+    const msg = `Vider TOUTES les donnees comptables de "${c.name}" ?\n\n`
                 `Seront SUPPRIMES : factures, ecritures, appels de fonds, transactions bancaires,\n` +
                 `budgets, exercices, regularisations, natures de depense, documents uploades.\n\n` +
                 `Seront GARDES : lots, proprietaires, fournisseurs, PCMN, cles de repartition, banques.\n\n` +
@@ -148,7 +156,7 @@ export default function CoproprietesPage() {
       <div className="bg-white rounded-md border border-slate-200 overflow-hidden">
         <Table>
           <TableHeader><TableRow>
-            <TableHead>Ref</TableHead><TableHead>Nom</TableHead><TableHead>BCE</TableHead><TableHead>Ville</TableHead><TableHead>Compte defaut</TableHead><TableHead>Statut</TableHead><TableHead className="w-32">Actions</TableHead>
+            <TableHead>Ref</TableHead><TableHead>Nom</TableHead><TableHead>BCE</TableHead><TableHead>Ville</TableHead><TableHead>Compte defaut</TableHead><TableHead>Statut</TableHead><TableHead className="w-40">Actions</TableHead>
           </TableRow></TableHeader>
           <TableBody>
             {filtered.length === 0 ? <TableRow><TableCell colSpan={7} className="text-center py-8 text-slate-400">Aucune copropriete</TableCell></TableRow> : filtered.map(c => (
@@ -161,6 +169,7 @@ export default function CoproprietesPage() {
                 <TableCell><Badge variant="outline" className={c.status === 'archived' ? 'bg-slate-100 text-slate-500' : 'bg-green-50 text-green-700 border-green-200'}>{c.status === 'archived' ? 'Archive' : 'Active'}</Badge></TableCell>
                 <TableCell><div className="flex gap-0">
                   {isManager && <Button variant="ghost" size="sm" onClick={() => openEdit(c)} title="Modifier"><Pencil size={13} /></Button>}
+                  {isManager && <Button variant="ghost" size="sm" onClick={() => handleCleanupOrphans(c)} className="text-blue-600 hover:text-blue-700" title="Nettoyer les ecritures orphelines (re-synchroniser bilan/grand livre)" data-testid={`cleanup-orphans-${c.id}`}><Wand2 size={13} /></Button>}
                   {isManager && <Button variant="ghost" size="sm" onClick={() => handleResetData(c)} className="text-amber-600 hover:text-amber-700" title="Vider les donnees comptables (test)" data-testid={`reset-data-${c.id}`}><Eraser size={13} /></Button>}
                   {isManager && c.status !== 'archived' && <Button variant="ghost" size="sm" onClick={() => handleArchive(c.id)} className="text-orange-500" title="Archiver"><Archive size={13} /></Button>}
                   {isManager && c.status === 'archived' && <Button variant="ghost" size="sm" onClick={() => handleUnarchive(c.id)} className="text-green-600" title="Reactiver"><RotateCcw size={13} /></Button>}

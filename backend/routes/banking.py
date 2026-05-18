@@ -124,11 +124,18 @@ def create_banking_router(db):
 
     @router.delete("/statements/{stmt_id}")
     async def delete_statement(stmt_id: str):
+        # Recupere les txns du statement pour supprimer leurs ecritures auto
+        txns = await db.bank_transactions.find({"statement_id": stmt_id}, {"_id": 0, "id": 1}).to_list(10000)
+        for t in txns:
+            try:
+                await _delete_auto_entries(db, "bank_txn", t["id"])
+            except Exception:
+                pass
         await db.bank_transactions.delete_many({"statement_id": stmt_id})
         result = await db.bank_statements.delete_one({"id": stmt_id})
         if result.deleted_count == 0:
             raise HTTPException(404, "Extrait non trouve")
-        return {"message": "Extrait supprime"}
+        return {"message": "Extrait supprime", "txns_deleted": len(txns)}
 
     # ---- TRANSACTIONS ----
     @router.get("/transactions")

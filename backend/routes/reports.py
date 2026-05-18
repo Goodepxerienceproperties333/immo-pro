@@ -885,65 +885,121 @@ def create_reports_router(db):
     # ---- BALANCE DE TIERS FOURNISSEURS ----
     @router.get("/balance-tiers/suppliers")
     async def balance_tiers_suppliers(copropriete_id: Optional[str] = None):
-        """Balance de tiers fournisseurs scopee par ACP (les factures et paiements sont scopes).
-        Affiche aussi les fournisseurs orphelins (nom present sur des factures mais pas de fiche fournisseur)."""
-        inv_q = _apply_copro({}, copropriete_id)
-        invoices = await db.invoices.find(inv_q, {"_id": 0}).to_list(10000)
+        """Balance de tiers fournisseurs basee sur le grand livre.
 
-        # Group invoices by case-insensitive supplier name
+        Pour chaque fournisseur (fiche supplier ou nom non-reference), on aggrege
+        toutes les ecritures journal_entries (AC, FI, OD, A-Nouveau) sur son compte
+        tier 44000XXX. Resultat :
+          - credit = factures recues + OD credit
+          - debit = paiements emis + OD debit
+          - balance = credit - debit (positif = a payer, negatif = trop paye)
+
+        Affiche aussi les fournisseurs sans fiche (nom present uniquement sur les
+        factures) - marques 'orphan=true'.
+        """
+        if not copropriete_id:
+            return {"suppliers": [], "total_a_payer": 0}
+
+        # Charge fournisseurs
+        suppliers = await db.suppliers.find({}, {"_id": 0}).to_list(10000)
+        # Charge journal entries de l'ACP
+        entries = await db.journal_entries.find(
+            {"copropriete_id": copropriete_id}, {"_id": 0}
+        ).to_list(100000)
+        # Charge factures pour les fournisseurs orphelins
+        invoices = await db.invoices.find(
+            {"copropriete_id": copropriete_id}, {"_id": 0}
+        ).to_list(10000)
+
+        # Map supplier -> tier account
+        supplier_by_id = {}
+        tier_to_supplier = {}  # 44000XXX -> supplier
+        for s in suppliers:
+            supplier_by_id[s["id"]] = s
+            tier_acc = ((s.get("tier_accounts") or {}).get(copropriete_id, {}) or {}).get("main", "")
+            if tier_acc:
+                tier_to_supplier[tier_acc] = s
+
+        # Aggregate by supplier_id (third_party_id) OR by 44000XXX account
+        per_supplier = {}  # supplier_id -> {debit, credit, name, tier, invoices_count}
+        for e in entries:
+            for ln in e.get("lines", []) or []:
+                acc = ln.get("account_number", "")
+                tpid = ln.get("third_party_id")
+                # Compte tier fournisseur reconnu via 44000XXX
+                if not acc.startswith("44000") and not acc.startswith("440000"):
+                    # Tolerance : autre compte fournisseur ? On ne capture que 4400x
+                    if tpid and tpid in supplier_by_id and not acc.startswith("44"):
+                        continue
+                    elif not (tpid and tpid in supplier_by_id):
+                        continue
+                # Determine supplier identity
+                sup = None
+                if tpid and tpid in supplier_by_id:
+                    sup = supplier_by_id[tpid]
+                elif acc in tier_to_supplier:
+                    sup = tier_to_supplier[acc]
+                if not sup:
+                    continue
+                sid = sup["id"]
+                tier_acc = ((sup.get("tier_accounts") or {}).get(copropriete_id, {}) or {}).get("main", acc)
+                d = per_supplier.setdefault(sid, {
+                    "supplier_id": sid,
+                    "supplier_name": sup.get("name", ""),
+                    "vat_number": sup.get("vat_number", "") or sup.get("bce_number", ""),
+                    "tier_account": tier_acc,
+                    "orphan": False,
+                    "debit": 0.0, "credit": 0.0,
+                    "invoice_count": 0,
+                })
+                d["debit"] += float(ln.get("debit", 0) or 0)
+                d["credit"] += float(ln.get("credit", 0) or 0)
+
+        # Compte les factures par fournisseur
         from collections import defaultdict
-        inv_by_supplier = defaultdict(list)  # lower_name -> [invoice]
-        canonical_name = {}  # lower_name -> first observed display name
+        invs_by_name = defaultdict(list)
         for inv in invoices:
-            raw = (inv.get("supplier", "") or "").strip()
-            if not raw:
+            name = (inv.get("supplier", "") or "").strip().lower()
+            if name:
+                invs_by_name[name].append(inv)
+
+        # Marque le nb de factures pour les fournisseurs presents dans per_supplier
+        for sid, d in per_supplier.items():
+            sname_l = d["supplier_name"].strip().lower()
+            d["invoice_count"] = len(invs_by_name.get(sname_l, []))
+
+        # Identifier les fournisseurs "orphelins" (nom present dans factures mais aucune ecriture aggregee)
+        known_names = {d["supplier_name"].strip().lower() for d in per_supplier.values()}
+        for name_l, invs in invs_by_name.items():
+            if name_l in known_names:
                 continue
-            key = raw.lower()
-            inv_by_supplier[key].append(inv)
-            if key not in canonical_name:
-                canonical_name[key] = raw
-
-        # Fetch supplier docs by case-insensitive regex on each name
-        suppliers_map = {}  # lower_name -> supplier doc
-        if canonical_name:
-            import re
-            names_pattern = "|".join(re.escape(n) for n in canonical_name.values())
-            if names_pattern:
-                cursor = db.suppliers.find(
-                    {"name": {"$regex": f"^({names_pattern})$", "$options": "i"}},
-                    {"_id": 0}
-                )
-                async for s in cursor:
-                    suppliers_map[s["name"].lower()] = s
-
-        txn_q = _apply_copro({"matched": True, "match_type": "invoice"}, copropriete_id)
-        bank_txns = await db.bank_transactions.find(txn_q, {"_id": 0}).to_list(10000)
-        inv_id_map = {inv["id"]: inv for inv in invoices}
+            display = invs[0].get("supplier", "")
+            invoiced = sum(inv.get("total_amount", 0) for inv in invs)
+            # Pour les orphelins on tombe en mode fallback : Cr = factures, debit = 0
+            # (pas d'ecriture donc pas de tier - balance = total facture impaye)
+            per_supplier[f"orphan-{name_l}"] = {
+                "supplier_id": "",
+                "supplier_name": display,
+                "vat_number": "",
+                "tier_account": "",
+                "orphan": True,
+                "debit": 0.0,
+                "credit": float(invoiced),
+                "invoice_count": len(invs),
+            }
 
         result = []
-        for key, invs in inv_by_supplier.items():
-            display_name = canonical_name[key]
-            supplier = suppliers_map.get(key)
-            total_invoiced = sum(inv.get("total_amount", 0) for inv in invs)
-            total_paid = 0.0
-            inv_ids = {inv["id"] for inv in invs}
-            for txn in bank_txns:
-                matched_inv = inv_id_map.get(txn.get("matched_to", ""))
-                if matched_inv and matched_inv["id"] in inv_ids:
-                    total_paid += abs(txn.get("amount", 0))
-            balance = round(total_invoiced - total_paid, 2)
-            tier_acc = ""
-            if supplier and copropriete_id:
-                tier_acc = ((supplier.get("tier_accounts") or {}).get(copropriete_id, {}) or {}).get("main", "")
+        for d in per_supplier.values():
+            balance = round(d["credit"] - d["debit"], 2)
             result.append({
-                "supplier_id": supplier["id"] if supplier else "",
-                "supplier_name": supplier["name"] if supplier else display_name,
-                "vat_number": supplier.get("vat_number", "") if supplier else "",
-                "tier_account": tier_acc,
-                "orphan": supplier is None,
-                "invoice_count": len(invs),
-                "total_invoiced": round(total_invoiced, 2),
-                "total_paid": round(total_paid, 2),
+                "supplier_id": d["supplier_id"],
+                "supplier_name": d["supplier_name"],
+                "vat_number": d["vat_number"],
+                "tier_account": d["tier_account"],
+                "orphan": d["orphan"],
+                "invoice_count": d["invoice_count"],
+                "total_invoiced": round(d["credit"], 2),
+                "total_paid": round(d["debit"], 2),
                 "balance": balance,
                 "status": "crediteur" if balance > 0.01 else ("debiteur" if balance < -0.01 else "solde"),
             })
@@ -953,28 +1009,45 @@ def create_reports_router(db):
 
     @router.get("/balance-tiers/suppliers/{supplier_id}")
     async def situation_compte_supplier(supplier_id: str, copropriete_id: Optional[str] = None):
-        """Situation de compte fournisseur scopee par ACP."""
+        """Situation de compte fournisseur basee sur le grand livre.
+        Aggrege toutes les ecritures (AC/FI/OD/A-Nouveau) sur 44000XXX du fournisseur."""
         supplier = await db.suppliers.find_one({"id": supplier_id}, {"_id": 0})
         if not supplier:
             raise HTTPException(404, "Fournisseur non trouve")
 
-        sname = supplier["name"]
+        tier_acc = ""
+        if copropriete_id:
+            tier_acc = ((supplier.get("tier_accounts") or {}).get(copropriete_id, {}) or {}).get("main", "")
+
         movements = []
+        entry_q = {}
+        if copropriete_id:
+            entry_q["copropriete_id"] = copropriete_id
+        entries = await db.journal_entries.find(entry_q, {"_id": 0}).to_list(100000)
+        seen = set()
+        for e in entries:
+            for ln in e.get("lines", []) or []:
+                acc = ln.get("account_number", "")
+                tpid = ln.get("third_party_id")
+                match = (tpid == supplier_id) or (tier_acc and acc == tier_acc)
+                if not match:
+                    continue
+                key = (e.get("id"), acc, ln.get("debit", 0), ln.get("credit", 0), tpid)
+                if key in seen:
+                    continue
+                seen.add(key)
+                movements.append({
+                    "date": e.get("date", ""),
+                    "description": f"[{e.get('journal_type','?')}] {e.get('description','')}".strip(),
+                    "debit": float(ln.get("debit", 0) or 0),
+                    "credit": float(ln.get("credit", 0) or 0),
+                    "type": e.get("journal_type", "OD").lower(),
+                    "reference": e.get("reference", "") or e.get("id", ""),
+                    "account_number": acc,
+                    "journal_type": e.get("journal_type", ""),
+                })
 
-        inv_q = _apply_copro({"supplier": sname}, copropriete_id)
-        invoices = await db.invoices.find(inv_q, {"_id": 0}).to_list(10000)
-        for inv in invoices:
-            movements.append({"date": inv["date"], "description": f"Facture {inv.get('number', '')}: {inv.get('description', '')}", "debit": 0, "credit": inv.get("total_amount", 0), "type": "facture", "reference": inv.get("number", "")})
-
-        txn_q = _apply_copro({"matched": True, "match_type": "invoice"}, copropriete_id)
-        bank_txns = await db.bank_transactions.find(txn_q, {"_id": 0}).to_list(10000)
-        inv_map = {inv["id"]: inv for inv in invoices}
-        for txn in bank_txns:
-            matched_inv = inv_map.get(txn.get("matched_to", ""))
-            if matched_inv:
-                movements.append({"date": txn["date"], "description": f"Paiement: {txn.get('communication', '') or txn.get('counterparty_name', '')}", "debit": abs(txn["amount"]), "credit": 0, "type": "paiement", "reference": txn.get("id", "")})
-
-        movements.sort(key=lambda x: x["date"])
+        movements.sort(key=lambda x: (x["date"], x.get("reference", "")))
         running = 0
         for m in movements:
             running += m["credit"] - m["debit"]
@@ -985,6 +1058,7 @@ def create_reports_router(db):
 
         return {
             "supplier": supplier,
+            "tier_account": tier_acc,
             "movements": movements,
             "total_debit": total_debit,
             "total_credit": total_credit,

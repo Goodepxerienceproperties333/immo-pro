@@ -1,0 +1,35 @@
+{
+  "summary": "iter22 backend testing PASSED. Sync between deletions and grand livre verified. DELETE /banking/statements cascades to FI auto-entries. /cleanup-orphan-entries returns correct shape + idempotent + detects invoice/fund_call/bank_txn orphans. /balance-tiers/suppliers and /{id} computed from journal_entries (44000XXX). Alex BENOIT balance = 314.60 crediteur confirmed. Manual OD Dr on 44000012 decreases balance by 100. All iter19/20/21 regressions pass.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter22_orphan_cleanup_balance_tiers.py",
+    "/app/test_reports/pytest/pytest_iter22.xml",
+    "/app/test_reports/pytest/pytest_iter22_regression.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "coproprietes.py cascade DELETE (line 218-222) does NOT include some collections like 'suppliers' nor 'expense_categories' nor 'regularizations' nor 'fiscal_years' nor 'budgets' - if these are intentionally global, OK. Otherwise data may remain orphaned after ACP delete.",
+    "cleanup-orphan-entries: 'other' category in stats is never incremented (line 362 has 'pass'). Either remove from stats or implement detection (e.g., source_type missing while auto_generated=true).",
+    "balance-tiers/suppliers (line 930-935) filter logic is confusing: dual-condition with continue branches; recommend a single clean predicate. The 4400/440000 prefix match is inconsistent (44000 vs 440000) - keep one canonical prefix.",
+    "/api/banking/statements DELETE silently swallows exceptions in _delete_auto_entries loop (line 132-133 'except Exception: pass') - log the error for observability.",
+    "Files size: reports.py is 1070 lines, approaching the >700 line threshold; consider splitting balance-tiers handlers into a sub-module."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter22_orphan_cleanup_balance_tiers.py (new)"
+  ],
+  "success_rate": {"backend": "100% (10/10 iter22 + 30/30 regression iter19-21)", "frontend": "not tested (backend-only request)"},
+  "test_credentials": "admin@copro.be / admin123",
+  "seed_data_creation": "Test fixtures auto-cleanup. Test-created data uses TEST_ITER22 prefix. Pre-existing ACP demo (6748ca1a) data preserved.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iter22 cascade-delete and grand-livre-based balance suppliers fully verified. ACP demo Alex BENOIT (44000012) balance = 314.60 crediteur (no payment yet). Endpoint paths confirmed: POST /api/banking/transactions (not /statements/{id}/transactions), GET /api/accounting/entries (not /journal-entries). Lettrage payload : {transaction_id, match_to_id, match_type}. cleanup-orphan-entries returns {status,total_deleted,stats:{invoice,fund_call,bank_txn,other}}.",
+  "rca of the issue": "n/a - all fixes verified working"
+}
