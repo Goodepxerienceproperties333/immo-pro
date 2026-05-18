@@ -12,6 +12,18 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 ## Implemented
 
+### Iter26 (Feb 2026) - Fix comptable critique : Fonds de reserve en classe 1 (160), pas classe 7 (701000)
+- **Probleme** : Les appels de fonds de reserve creditaient le compte **701000** (classe 7 - produits), ce qui traitait l'augmentation de reserve comme un revenu. **FAUX** en compta belge copropriete : un fonds de reserve est une augmentation de PASSIF (classe 1), pas un produit. Idem fonds de roulement (deja correct sur 100).
+- **Fix `auto_entries.generate_sale_entry`** (lignes 240-252) :
+  - Provisions classiques : Dr 40000XXX / Cr 700000 (classe 7) - inchange
+  - Fonds de reserve : Dr 40010XXX / **Cr 160** (Fonds de reserve, classe 1) - etait 701000
+  - Fonds de roulement : Dr 40000XXX / **Cr 100** (Fonds de roulement, classe 1) - inchange
+- **Fix `routes/fund_calls.py` ligne 199** : endpoint legacy `generate-entries` avec `call_type=reserve` -> account_map = ('401000', '160').
+- **Endpoint de migration `POST /api/coproprietes/{id}/migrate-reserve-to-classe1`** (admin/syndic) : remappe les lignes auto-generated 701000 -> 160 dans les VE source_type=fund_call non manually_edited. Idempotent. Owner -> 403.
+- **Bilan corrige** (`routes/reports.py`) : classe 16 (Fonds de reserve copropriete) range en section **II. Reserves** du passif, plus en VI. Dettes court. Demo Tilleuls : Capital 14999.99 (100), **Reserves 5234.08 (160)**, dettes court 187.86.
+- Migration ACP Demo : 4 entries VE auto reserve remappees (4 lignes changees). Nouveaux fund_calls genres deja en 160.
+- Resultat : **9/9 PASS** tests iter26 + 29/31 regression iter25/iter20/iter16 (2 echecs pre-existants).
+
 ### Iter25 (Feb 2026) - Finalisation Bilan PCMN bancaire + regenerate-bank-entries
 - **Endpoint `POST /api/coproprietes/{id}/regenerate-bank-entries`** (`routes/coproprietes.py`) : regenere les ecritures FI auto pour TOUTES les transactions matched d'une ACP. Utile apres correction d'un IBAN / pcmn_number dans `copro.bank_accounts`. Reserve admin/syndic/gestionnaire (owner -> 403). Reponse `{status, copropriete, transactions_processed, regenerated, errors}`.
 - **Migration historique** : script bash ad-hoc pour assigner un `account_number` (IBAN) par defaut aux bank_transactions historiques qui avaient `account_number=''`, puis regeneration des FI -> les comptes 55103400 (compte courant) et 55076900 / 551079 (epargne) apparaissent enfin correctement au Bilan a l'actif (avec leurs soldes reels), au lieu de tomber sur le 550000 generique.
@@ -275,6 +287,7 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 - **iter19: 12/12 frais privatifs (AC 4 lignes 643/44000/40000/643 + UI search owner + validation 400/404) + wizard Fonds de roulement (etape 4 Create/Increase + VE credit 100 prorate par owner) + 33/33 regression iter16+iter18**
 - **iter20: 10/10 (P0 balance tiers from journal_entries - OD Dubois visible + reserve_balance separe / P1 wizard 3 series independantes provisions+reserve+roulement avec frequency/start/due par fonds / P2 AccountSearchSelect composant reutilisable / P3 BCE fournisseur extraction + matching priorise + suggest creation fiche) + 45/45 regression iter16+18+19 = 55/55**
 - **iter25: 5/5 nouveaux (Bilan ACP Demo expose PCMN 55103400 + 551079 reels / regenerate-bank-entries shape correcte + admin-only / cleanup-orphan-entries idempotent / signe debit/credit verifie / DELETE statement cascade FI auto) + 44/46 regression iter21-iter24 (2 echecs = drift Alex BENOIT pre-existing, hors scope)**
+- **iter26: 9/9 nouveaux (Fonds reserve credit 160 classe 1 / Fonds roulement credit 100 classe 1 / migrate-reserve-to-classe1 idempotent + RBAC / legacy generate-entries call_type=reserve credit 160 / Bilan ACP Demo 160 en II.Reserves + 100 en I.Capital / aucune 701000 auto-generee restante) + 29/31 regression iter25/iter20/iter16**
 
 ## Backlog P1
 - Gestion AG (ordre du jour, votes, PV, convocations)

@@ -214,7 +214,8 @@ def create_reports_router(db):
             elif solde < -0.01:
                 if acc.startswith("10"):
                     passif_buckets["I_capital"].append(item)
-                elif acc.startswith("13"):
+                elif acc.startswith("13") or acc.startswith("16"):
+                    # 13 = Reserves, 16 = Fonds de reserve copropriete (convention syndic belge)
                     passif_buckets["II_reserves"].append(item)
                 elif acc.startswith("14"):
                     passif_buckets["III_resultat_reporte"].append(item)
