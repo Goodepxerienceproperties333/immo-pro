@@ -217,11 +217,15 @@ def create_banking_router(db):
 
     @router.post("/transactions")
     async def create_transaction(data: TransactionInput):
+        # Force amount sign based on transaction_type
+        stored_amount = abs(float(data.amount))
+        if data.transaction_type == "debit":
+            stored_amount = -stored_amount
         doc = {
             "id": str(uuid.uuid4()),
             "statement_id": data.statement_id,
             "date": data.date,
-            "amount": data.amount,
+            "amount": stored_amount,
             "counterparty_name": data.counterparty_name,
             "counterparty_account": data.counterparty_account,
             "communication": data.communication,
@@ -240,8 +244,11 @@ def create_banking_router(db):
 
     @router.put("/transactions/{txn_id}")
     async def update_transaction(txn_id: str, data: TransactionInput):
+        stored_amount = abs(float(data.amount))
+        if data.transaction_type == "debit":
+            stored_amount = -stored_amount
         update = {
-            "date": data.date, "amount": data.amount,
+            "date": data.date, "amount": stored_amount,
             "counterparty_name": data.counterparty_name,
             "counterparty_account": data.counterparty_account,
             "communication": data.communication,
@@ -380,16 +387,20 @@ def create_banking_router(db):
         for line in data.lines:
             if abs(line.amount) < 0.001:
                 continue
+            # Si transaction_type='debit', stocker amount NEGATIF pour coherence affichage
+            stored_amount = abs(float(line.amount))
+            if line.transaction_type == "debit":
+                stored_amount = -stored_amount
             txn = {
                 "id": str(uuid.uuid4()),
                 "statement_id": stmt_id,
                 "date": line.date,
-                "amount": line.amount,
+                "amount": stored_amount,
                 "counterparty_name": line.counterparty_name,
                 "counterparty_account": line.counterparty_account,
                 "communication": line.communication,
                 "transaction_type": line.transaction_type,
-                "account_number": "",
+                "account_number": stmt.get("account_number", ""),
                 "matched": False,
                 "matched_to": "",
                 "match_type": "",

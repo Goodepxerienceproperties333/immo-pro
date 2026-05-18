@@ -18,6 +18,7 @@ export default function BankingPage() {
   const [transactions, setTransactions] = useState([]);
   const [selectedStmt, setSelectedStmt] = useState(null);
   const [stmtDialog, setStmtDialog] = useState(false);
+  const [editingStmtId, setEditingStmtId] = useState(null);
   const [codaUploading, setCodaUploading] = useState(false);
   const [lettrageDialog, setLettrageDialog] = useState(false);
   const [lettrageTarget, setLettrageTarget] = useState(null);
@@ -66,7 +67,28 @@ export default function BankingPage() {
     finally { setCodaUploading(false); if (codaRef.current) codaRef.current.value = ''; }
   };
 
-  const saveStmt = async () => { try { await api.post('/banking/statements', { ...stmtForm, opening_balance: Number(stmtForm.opening_balance), closing_balance: Number(stmtForm.closing_balance) }); toast.success('Extrait cree'); setStmtDialog(false); load(); } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); } };
+  const saveStmt = async () => {
+    try {
+      const payload = { ...stmtForm, opening_balance: Number(stmtForm.opening_balance), closing_balance: Number(stmtForm.closing_balance) };
+      if (editingStmtId) {
+        await api.put(`/banking/statements/${editingStmtId}`, payload);
+        toast.success('Extrait modifie');
+        // Recharge le selected pour mettre a jour le bandeau equilibre
+        const refreshed = await api.get(`/banking/statements/${editingStmtId}`);
+        if (refreshed.data && selectedStmt?.id === editingStmtId) {
+          setSelectedStmt({ ...selectedStmt, ...refreshed.data });
+        }
+      } else {
+        await api.post('/banking/statements', payload);
+        toast.success('Extrait cree');
+      }
+      setEditingStmtId(null);
+      setStmtDialog(false);
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur');
+    }
+  };
   const deleteStmt = async (id) => { if (!window.confirm('Supprimer cet extrait ?')) return; await api.delete(`/banking/statements/${id}`); toast.success('Supprime'); load(); if (selectedStmt?.id === id) { setSelectedStmt(null); setTransactions([]); } };
 
   // INLINE LINES
@@ -158,7 +180,20 @@ export default function BankingPage() {
                   </div>
                   <div className="flex gap-2 shrink-0">
                     {selectedStmt.status !== 'posted' && (
-                      <Button size="sm" variant="outline" onClick={addInlineLine} data-testid="add-inline-line"><PlusCircle size={14} className="mr-1" /> Ajouter lignes</Button>
+                      <>
+                        <Button size="sm" variant="outline" onClick={() => {
+                          setStmtForm({
+                            number: selectedStmt.number || '',
+                            date: selectedStmt.date || '',
+                            account_number: selectedStmt.account_number || '',
+                            opening_balance: selectedStmt.opening_balance || 0,
+                            closing_balance: selectedStmt.closing_balance || 0,
+                          });
+                          setEditingStmtId(selectedStmt.id);
+                          setStmtDialog(true);
+                        }} data-testid="edit-stmt-btn"><Pencil size={14} className="mr-1" /> Modifier</Button>
+                        <Button size="sm" variant="outline" onClick={addInlineLine} data-testid="add-inline-line"><PlusCircle size={14} className="mr-1" /> Ajouter lignes</Button>
+                      </>
                     )}
                     {(() => {
                       // Compute balance check inline
@@ -316,7 +351,7 @@ export default function BankingPage() {
       </div>
 
       {/* Statement Dialog */}
-      <Dialog open={stmtDialog} onOpenChange={setStmtDialog}><DialogContent data-testid="stmt-dialog"><DialogHeader><DialogTitle style={{fontFamily:'Chivo,sans-serif'}}>Nouvel extrait</DialogTitle></DialogHeader>
+      <Dialog open={stmtDialog} onOpenChange={(o) => { setStmtDialog(o); if (!o) setEditingStmtId(null); }}><DialogContent data-testid="stmt-dialog"><DialogHeader><DialogTitle style={{fontFamily:'Chivo,sans-serif'}}>{editingStmtId ? 'Modifier l\'extrait' : 'Nouvel extrait'}</DialogTitle></DialogHeader>
         <div className="space-y-4 mt-2">
           <div className="grid grid-cols-2 gap-4"><div><label className="form-label">Numero *</label><Input value={stmtForm.number} onChange={e => setStmtForm({...stmtForm, number: e.target.value})} /></div><div><label className="form-label">Date *</label><Input type="date" value={stmtForm.date} onChange={e => setStmtForm({...stmtForm, date: e.target.value})} /></div></div>
           <div><label className="form-label">Compte bancaire *</label>
@@ -378,7 +413,7 @@ export default function BankingPage() {
               <Input type="number" step="0.01" value={stmtForm.closing_balance} onChange={e => setStmtForm({...stmtForm, closing_balance: e.target.value})} data-testid="stmt-closing-balance" />
             </div>
           </div>
-          <div className="flex gap-3 justify-end"><Button variant="outline" onClick={() => setStmtDialog(false)}>Annuler</Button><Button onClick={saveStmt} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="stmt-save-btn">Creer</Button></div>
+          <div className="flex gap-3 justify-end"><Button variant="outline" onClick={() => { setStmtDialog(false); setEditingStmtId(null); }}>Annuler</Button><Button onClick={saveStmt} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="stmt-save-btn">{editingStmtId ? 'Enregistrer' : 'Creer'}</Button></div>
         </div>
       </DialogContent></Dialog>
 

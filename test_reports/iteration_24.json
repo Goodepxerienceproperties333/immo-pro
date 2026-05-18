@@ -1,0 +1,45 @@
+{
+  "summary": "iter24 backend testing PASSED 11/11 + 33/35 regression. All 3 banking bugs verified fixed: (1) PUT /api/banking/statements/{id} edits a statement and persists number/date/account_number/opening_balance/closing_balance; no backend restriction on posted statements (frontend handles lock). (2) Transaction sign: POST/PUT /api/banking/transactions with transaction_type='debit' now stores amount as NEGATIVE (abs then negate). Verified flip credit->debit inverts sign (300 -> -300) and back. (3) POST /api/banking/statements/{id}/add-lines now inherits account_number from parent statement IBAN (not '') AND applies negative sign on debit lines. computed_closing in GET /statements/{id} still works correctly with signed amounts because formula uses (sign * abs(amount)). Regression iter21 (IBAN BE68539007547034 -> PCMN 55103400 via lettrage owner_payment), iter22 (cleanup-orphan-entries returns status/stats/total_deleted), iter23 (post/unpost workflow 400-when-unbalanced, 200-balanced, 400-already-posted) ALL PASS.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "PUT /api/banking/statements/{id}", "issue": "No status guard: a 'posted' statement CAN be modified via PUT (no 400). Per spec this is intentional - the frontend BankingPage handles the lock by hiding the edit button. Documented behavior per the review_request."},
+      {"endpoint": "PUT /api/banking/statements/{id}", "issue": "Uses StatementInput which requires number+date as mandatory - partial updates not supported. Consider StatementUpdateInput with all optional fields for resilience."},
+      {"endpoint": "POST/PUT /api/banking/transactions", "issue": "Sending amount=-150 with transaction_type='debit' still results in stored amount=-150 (abs() then negate). Correct behavior, but client must be aware. PUT also accepts client-sent already-negative amounts and normalizes them."},
+      {"endpoint": "GET /api/banking/statements/{id} computed_closing", "issue": "Formula still uses (1 if credit else -1) * abs(amount). Works correctly because debit txns have transaction_type='debit' AND negative amount - both sides yield same result. Could be simplified to sum(amount) directly once all data is sign-coherent (suggestion only, not a bug)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter24_banking_signed_amounts.py",
+    "/app/test_reports/pytest/pytest_iter24.xml",
+    "/app/test_reports/pytest/pytest_iter24_regression.xml"
+  ],
+  "action_items": [
+    "(Optional) Consider refactoring computed_closing in GET /statements/{id} and post_statement to use sum(amount) directly (debits already negative) to align with the new signed-amount convention and simplify code.",
+    "(Optional) Introduce StatementUpdateInput with optional fields for partial PUT support.",
+    "(Pre-existing iter22 data drift, NOT iter24) Alex BENOIT supplier balance is 614.60 in demo ACP instead of 314.60 hardcoded in test_iter22 - re-seed ACP demo or update hardcoded expectation."
+  ],
+  "critical_code_review_comments": [
+    "banking.py POST /transactions (line 218-243) & PUT /transactions/{id} (line 245-265): stored_amount logic is correct (abs then negate if debit) but duplicated. Could be extracted to a helper _signed_amount(amount, ttype).",
+    "banking.py add_lines_to_statement (line 378-416): now correctly uses stmt.get('account_number','') for inheritance. However, batch endpoint POST /transactions/batch (line 508-537) still uses t.amount RAW (no sign normalization) and t.account_number RAW (no statement IBAN inheritance) - inconsistency with add-lines and POST /transactions. Frontend should be checked but the batch endpoint is a latent bug if used.",
+    "banking.py CODA import (line 311-375): creates transactions with account_number='' (line 355) - same bug pattern as the fixed add-lines. CODA-imported debit txns will not auto-resolve to a PCMN via IBAN. Recommend setting account_number=statement['account_number'] for CODA imports too.",
+    "banking.py computed_closing (line 125-128) and post_statement balance check (line 146-149) duplicate the sum formula - extract to helper _statement_balance(txns).",
+    "banking.py is 540 lines, well within 700 threshold; no split needed.",
+    "auto_entries.generate_bank_entry uses abs(amount) (line 292) - safe for both old positive-only and new signed convention. is_credit (line 310) prefers transaction_type field but falls back to amount sign - consistent with the new convention."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter24_banking_signed_amounts.py (new, 11 tests)"
+  ],
+  "success_rate": {"backend": "100% (11/11 iter24) + 33/35 regression (2 pre-existing iter22 data drift, NOT iter24-related)", "frontend": "not tested (backend-only request)"},
+  "test_credentials": "admin@copro.be / admin123",
+  "seed_data_creation": "All test data prefixed with TEST_ITER24_ and cleaned up in finally blocks (statements + their txns cascade-delete via DELETE /statements/{id}). No persistent seed data.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iter24 banking signed-amount + statement-edit + add-lines IBAN inheritance fully verified. Convention: debit txns are now stored with NEGATIVE amount via POST/PUT /api/banking/transactions and POST /add-lines. computed_closing formula in GET /statements/{id} still uses (sign * abs) which yields the same result with signed amounts (since transaction_type and sign are coherent). Latent bugs (not in current scope but worth noting): (a) POST /api/banking/transactions/batch does NOT normalize sign nor inherit IBAN; (b) CODA import sets account_number='' on imported txns. Pre-existing iter22 data drift on Alex BENOIT balance (614.60 vs 314.60 hardcoded) persists from iter23 - re-seed demo or update test expectation. Test artifacts: /app/test_reports/pytest/pytest_iter24.xml (11 passed) and pytest_iter24_regression.xml (33/35).",
+  "rca of the issue": "n/a - all iter24 features verified working. The 3 bugs from the brief are fully fixed: (1) PUT /statements/{id} endpoint exists and persists fields; (2) transaction_type='debit' stores amount as negative on both POST and PUT (incl. flip credit<->debit); (3) add-lines correctly inherits stmt.account_number=IBAN for each created txn. The 2 regression failures (iter22 Alex BENOIT 614.60 vs 314.60) are unrelated data drift carried over from prior iterations."
+}
