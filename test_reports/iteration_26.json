@@ -1,0 +1,44 @@
+{
+  "summary": "iter26 backend testing PASSED 9/9 + 29/31 regression. Fonds de reserve credit correctement migre de 701000 (classe 7) vers 160 (classe 1) conformement au PCMN belge copropriete. Tests valides : (1) POST /api/coproprietes/{id}/migrate-reserve-to-classe1 retourne {status, copropriete, entries_scanned, entries_updated, lines_changed} - admin OK, owner -> 403, idempotent (2eme appel: entries_updated=0, lines_changed=0), 404 sur copro inconnue. (2) Apres migration sur ACP Demo, AUCUNE entree VE auto-generated source_type=fund_call ne contient encore 701000 cote credit. 160 present (4 entries reserve), 100 present (1 entry roulement), 700000 present pour provisions (non-regression). (3) POST /api/fund-calls/generate-from-budget avec reserve_fund.frequency=2 et roulement_fund injecte sur call #1 genere des VE auto-entries qui creditent 160 (reserve) et 100 (roulement), zero 701000. (4) Endpoint legacy POST /api/fund-calls/{id}/generate-entries avec call_type=reserve genere ligne credit 160 (account_map iter26 ligne 199). (5) GET /api/reports/bilan : compte 160 expose au PASSIF section VI (Dettes a un an au plus) avec solde 4000.08 EUR, compte 100 au PASSIF section I (Capital/Fonds propre) avec solde 14999.99 EUR. Aucun des deux a l'ACTIF. Regression iter25 (5/5), iter20 (10/10), iter16 (10/12 - les 2 echecs sont pre-existants et documentes depuis iter25, sans lien avec iter26).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/coproprietes/{id}/migrate-reserve-to-classe1", "issue": "Idempotent (2eme appel renvoie entries_updated=0/lines_changed=0). RBAC owner -> 403, admin -> 200. 404 sur copropriete inconnue. Shape conforme : {status, copropriete, entries_scanned, entries_updated, lines_changed}."},
+      {"endpoint": "POST /api/fund-calls (via generate-from-budget) + auto_entries.generate_sale_entry", "issue": "Reserve credit 160 (classe 1), roulement credit 100 (classe 1), provisions credit 700000 (classe 7) - conforme PCMN belge. Plus aucun 701000 genere automatiquement."},
+      {"endpoint": "POST /api/fund-calls/{id}/generate-entries (legacy, call_type=reserve)", "issue": "account_map[reserve] = (401000, 160) verifie : ligne credit 160 generee, pas 701000."},
+      {"endpoint": "GET /api/reports/bilan", "issue": "160 expose au passif (4000.08 EUR), 100 au passif (14999.99 EUR). Note de code review : 160 est range section VI (Dettes a un an au plus) ; un fonds de reserve serait plus naturel en section II (Reserves) - a discuter avec l'expert metier. Non bloquant."},
+      {"endpoint": "test_iter16::test_create_fund_call_creates_VE_entry et test_persist_creates_two_OD_entries", "issue": "Pre-existing (deja documente iter25). Non lie a iter26 - probablement seed demo qui a evolue."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter26_reserve_classe1.py",
+    "/app/test_reports/pytest/pytest_iter26.xml",
+    "/app/test_reports/pytest/pytest_iter26_regression.xml"
+  ],
+  "action_items": [
+    "(Optionnel, code review) Bilan : decider si compte 160 (Fonds de reserve) doit etre classe en section 'II. Reserves' du passif plutot que 'VI. Dettes a un an au plus'. Verifier le mapping dans /app/backend/routes/reports.py pour le code 160 - implications metier (lecture du bilan par syndic). Non bloquant pour iter26.",
+    "(Pre-existing) test_iter16 VE auto-entry et regularization OD - investigation hors-scope iter26.",
+    "(Pre-existing iter25) test_iter17 manque load_dotenv()."
+  ],
+  "critical_code_review_comments": [
+    "auto_entries.generate_sale_entry (lignes 242-255) : correction propre - reserve credit 160 ('Fonds de reserve'), roulement credit 100 ('Fonds de roulement'). Le code documente clairement la raison comptable (PCMN belge, augmentation de passif != produit). Bon.",
+    "routes/fund_calls.py ligne 199 : account_map['reserve'] = ('401000', '160') correct (etait 701000). account_map['special'] reste sur 710000 - intentionnel ? Si appels speciaux sont des reserves ils devraient aussi etre passif. A clarifier mais hors-scope iter26.",
+    "routes/coproprietes.py migrate-reserve-to-classe1 : implementation defensive correcte - filtre auto_generated=True + source_type=fund_call + journal_type=VE + non manually_edited, ne touche que les lignes account_number=='701000'. Idempotent par nature (le 2eme passage ne trouve plus 701000). RBAC via _get_manager (admin/syndic) bien applique.",
+    "Migration ne met pas a jour total_debit/total_credit (inchanges car le credit reste sur le meme montant juste re-numerote) - OK.",
+    "Aucune fuite ObjectId _id dans les reponses testees ; pas de fichiers >700 lignes ajoutes ; .env non touche."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter26_reserve_classe1.py (nouveau, 9 tests)"
+  ],
+  "success_rate": {
+    "backend": "iter26 new: 100% (9/9); regression iter25+iter20+iter16: 93.5% (29/31, 2 echecs pre-existants depuis iter25)",
+    "frontend": "non teste (backend-only)"
+  },
+  "test_credentials": "admin@copro.be / admin123 ; owner: evrard.gerald@outlook.be / owner123 ; X-Copropriete-Id: 6748ca1a-216d-4002-8417-799287238736",
+  "seed_data_creation": "Donnees creees temporairement par test_reserve_call_credits_160 (start_date 2099) et test_legacy_endpoint_credits_160_for_reserve - toutes supprimees via DELETE /api/fund-calls/{id} en finally (cascade _delete_auto_entries).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "iter26 : migration 701000 -> 160 verifiee de bout-en-bout. Convention iter26 (a preserver) : (1) Reserve credit toujours 160, jamais 701000. (2) Roulement credit toujours 100. (3) Provisions classiques credit toujours 700000. (4) Migration endpoint idempotent et reservee admin/syndic. (5) Bilan place 160 en VI passif et 100 en I passif - eventuellement a re-classer 160 en section II Reserves selon decision metier. Pre-existing failures iter16 (test_create_fund_call_creates_VE_entry, test_persist_creates_two_OD_entries) toujours non resolues - investiguer separement. Tests iter26 nettoient automatiquement leurs donnees via finally/DELETE cascade.",
+  "rca of the issue": "Modele comptable iter25 incorrect : credit reserve sur 701000 (classe 7 - produits) traitait les appels reserve comme un revenu, ce qui est faux en comptabilite belge copropriete. iter26 corrige en routant le credit vers 160 (classe 1 - fonds de reserve, passif). Fix applique en 3 points : (a) auto_entries.generate_sale_entry credit 160 pour reserve_total et 100 pour roulement_total (et 700000 pour provisions). (b) routes/fund_calls.py account_map[reserve] passe de ('401000','701000') a ('401000','160'). (c) Endpoint de migration POST /api/coproprietes/{id}/migrate-reserve-to-classe1 ajoute pour corriger les ecritures historiques deja en base (entries auto-generated, non manually-edited). Verifie en production sur ACP Demo : migration deja jouee, 4 entries reserve auto creditent 160, 1 entry roulement credite 100, aucune 701000 restante."
+}

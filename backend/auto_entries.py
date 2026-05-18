@@ -157,8 +157,11 @@ async def generate_purchase_entry(db, invoice: dict) -> dict | None:
 
 
 async def generate_sale_entry(db, fund_call: dict) -> dict | None:
-    """VE: Dr 40000XXX per owner (or 40010XXX for reserve part) + Cr 700000/701000.
-    Uses fund_call.distribution to know per-owner amounts.
+    """VE: Dr 40000XXX per owner + Cr 700000 (provisions).
+    Reserve part: Dr 40010XXX per owner + Cr 160 (Fonds de reserve, classe 1).
+    Roulement part: Dr 40000XXX per owner + Cr 100 (Fonds de roulement, classe 1).
+    Reserve et Roulement sont des augmentations de PASSIF (classe 1), pas
+    des produits (classe 7) - conforme PCMN belge copropriete.
     """
     copro_id = fund_call.get("copropriete_id", "")
     if not copro_id:
@@ -238,15 +241,15 @@ async def generate_sale_entry(db, fund_call: dict) -> dict | None:
         })
     if sum_dr_res > 0:
         lines.append({
-            "account_number": "701000",
-            "account_name": "Appels fonds de reserve",
+            "account_number": "160",
+            "account_name": "Fonds de reserve",
             "debit": 0.0, "credit": sum_dr_res,
             "third_party_id": None, "third_party_name": "",
         })
     if sum_dr_roul > 0:
         lines.append({
             "account_number": "100",
-            "account_name": "Fonds de roulement general",
+            "account_name": "Fonds de roulement",
             "debit": 0.0, "credit": sum_dr_roul,
             "third_party_id": None, "third_party_name": "",
         })

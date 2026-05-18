@@ -367,8 +367,8 @@ class TestP1WizardIndependentSeries:
                           and e.get("source_type") == "fund_call"), None)
             assert res_e, "VE not found for reserve fund_call"
             credits_701 = [l for l in res_e["lines"]
-                           if l["account_number"] == "701000" and l["credit"] > 0]
-            assert credits_701, f"VE reserve missing Cr 701000: {res_e['lines']}"
+                           if l["account_number"] == "160" and l["credit"] > 0]
+            assert credits_701, f"VE reserve missing Cr 160 (Fonds de reserve classe 1): {res_e['lines']}"
         if roul_fc_id:
             roul_e = next((e for e in entries
                            if e.get("source_id") == roul_fc_id

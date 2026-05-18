@@ -401,4 +401,45 @@ def create_coproprietes_router(db):
                 "transactions_processed": len(txns),
                 "regenerated": regenerated, "errors": errors}
 
+    @router.post("/{copro_id}/migrate-reserve-to-classe1")
+    async def migrate_reserve_to_classe1(copro_id: str, request: Request):
+        """Migre les ecritures VE auto-generees pour Fonds de reserve :
+        remplace le credit 701000 (classe 7 - faux) par 160 (classe 1 - correct PCMN).
+        Idempotent. Ne touche QUE les lignes auto_generated=True, source_type=fund_call,
+        non manually_edited, avec compte 701000. Reserve admin/syndic."""
+        await _get_manager(request)
+        copro = await db.coproprietes.find_one({"id": copro_id}, {"_id": 0, "name": 1})
+        if not copro:
+            raise HTTPException(404, "Copropriete non trouvee")
+        entries = await db.journal_entries.find({
+            "copropriete_id": copro_id,
+            "auto_generated": True,
+            "source_type": "fund_call",
+            "journal_type": "VE",
+        }, {"_id": 0}).to_list(100000)
+        updated = 0
+        lines_changed = 0
+        for e in entries:
+            if e.get("manually_edited"):
+                continue
+            new_lines = []
+            touched = False
+            for ln in e.get("lines", []):
+                if ln.get("account_number") == "701000":
+                    ln = {**ln, "account_number": "160",
+                          "account_name": "Fonds de reserve"}
+                    touched = True
+                    lines_changed += 1
+                new_lines.append(ln)
+            if touched:
+                await db.journal_entries.update_one(
+                    {"id": e["id"]},
+                    {"$set": {"lines": new_lines}}
+                )
+                updated += 1
+        return {"status": "ok", "copropriete": copro.get("name", ""),
+                "entries_scanned": len(entries),
+                "entries_updated": updated,
+                "lines_changed": lines_changed}
+
     return router

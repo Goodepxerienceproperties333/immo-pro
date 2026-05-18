@@ -380,7 +380,7 @@ class TestRegularization:
         for line in ext["lines"]:
             acc = line["account_number"]
             assert not acc.startswith("40010"), "reserve account in extourne!"
-            assert acc != "701000", "reserve credit account 701000 in extourne!"
+            assert acc != "160", "reserve credit account 160 in extourne (must stay)!"
         # FY marked regularized
         fy = admin_client.get(f"{API}/fiscal/years",
                               params={"copropriete_id": copro_id}, timeout=20).json()
