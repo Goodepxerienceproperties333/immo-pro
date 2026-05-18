@@ -12,6 +12,13 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 ## Implemented
 
+### Iter24 (Feb 2026) - 3 bugs banking : edition statement + signe debit/credit + IBAN add-lines
+- **Bug fix #1 - PUT /api/banking/statements/{id}** : nouvel endpoint pour modifier un extrait apres creation. Bouton "Modifier" frontend disponible sur les extraits draft (corrige typos solde initial/final).
+- **Bug fix #2 - Signe debit/credit** : POST + PUT /api/banking/transactions normalisent maintenant le `amount` selon `transaction_type` (debit -> amount negatif, credit -> amount positif). Avant : un debit s'affichait en +montant dans la table car le code frontend testait `amount >= 0` sans regarder le type. Migration auto effectuee sur les 8 txns existants (Alex BENOIT 300 -> -300).
+- **Bug fix #3 - add-lines IBAN** : `POST /api/banking/statements/{id}/add-lines` heritait `account_number=''` au lieu de l'IBAN du statement parent. Resultat : les ecritures FI auto-generees avaient un IBAN vide et tombaient sur le compte 550000 generique. Fix : utilise maintenant `stmt.account_number`.
+- **Frontend** : bouton "Modifier" (Pencil) cote `Comptabiliser` sur la card du statement selectionne en draft. Dialog reutilise le state existant, distingue creation/edition via `editingStmtId`.
+- Resultat : **11/11 PASS** + 33/35 regression (les 2 echecs = data drift Alex BENOIT 614.60 au lieu de hardcoded 314.60, pas un bug).
+
 ### Iter23 (Feb 2026) - Banking statements : dropdown PCMN + auto-fill + workflow draft/posted
 - **Bug fix critique** (`BankingPage.js`) : `localStorage.getItem('copropriete_id')` -> `useAuth().selectedCopro` (la cle reelle). Resultat : les `bank_accounts` de l'ACP sont enfin charges -> dropdown plus jamais vide.
 - **Dropdown extraits enrichi** : chaque compte bancaire affiche IBAN + label + badge **PCMN** (ex `PCMN 55103400`) + badge `defaut`. Permet de savoir exactement vers quel compte comptable l'extrait sera impute.
