@@ -12,6 +12,19 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 ## Implemented
 
+### Iter23 (Feb 2026) - Banking statements : dropdown PCMN + auto-fill + workflow draft/posted
+- **Bug fix critique** (`BankingPage.js`) : `localStorage.getItem('copropriete_id')` -> `useAuth().selectedCopro` (la cle reelle). Resultat : les `bank_accounts` de l'ACP sont enfin charges -> dropdown plus jamais vide.
+- **Dropdown extraits enrichi** : chaque compte bancaire affiche IBAN + label + badge **PCMN** (ex `PCMN 55103400`) + badge `defaut`. Permet de savoir exactement vers quel compte comptable l'extrait sera impute.
+- **Auto-fill solde ouverture** : a la selection du compte, le `opening_balance` est rempli automatiquement avec le `closing_balance` du dernier extrait du **meme IBAN**. Banner d'info montre "Dernier solde (date) : XXX,XX" ou "Aucun extrait precedent".
+- **Workflow draft / posted** :
+  - POST `/api/banking/statements` cree avec `status='draft'`
+  - GET `/api/banking/statements/{id}` retourne `computed_closing` (= opening + sum(credit) - sum(debit)), `balance_diff` (= computed - closing), `is_balanced` (boolean, tolerance 0.01)
+  - POST `/api/banking/statements/{id}/post` : refuse 400 si non equilibre avec message clair `"Solde ouverture (1000.00) + mouvements (100.00) = 1100.00, mais solde fermeture saisi = 1500.00. Difference : -400.00"`. Succes -> status='posted' + posted_at.
+  - POST `/api/banking/statements/{id}/unpost` : repasse en draft pour correction
+  - PUT `/api/banking/statements/{id}` : modifier opening/closing/dates
+- **UI bandeau equilibre** : carte couleur (vert si OK, ambre si desequilibre) qui montre en temps reel `opening + mvts = computed vs. closing saisi` avec la diff. Bouton "Comptabiliser" desactive tant que la balance n'est pas equilibree.
+- Resultat : **17/17 tests PASS** + 40/40 regression iter22.
+
 ### Iter22 (Feb 2026) - Synchronisation suppression + ecritures orphelines + balance suppliers depuis grand livre
 - **Bug fix DELETE statement** (`routes/banking.py`) : `DELETE /api/banking/statements/{id}` supprime maintenant aussi les auto-entries FI des transactions du statement (via `_delete_auto_entries`). Avant : les ecritures FI orphelines polluaient le bilan apres suppression d'un extrait.
 - **Endpoint nettoyage** (`routes/coproprietes.py`) : `POST /api/coproprietes/{id}/cleanup-orphan-entries` detecte et supprime les ecritures auto-generees dont la source n'existe plus (invoice/fund_call/bank_txn). Idempotent. Retourne stats detaillees par type.
