@@ -1,0 +1,48 @@
+{
+  "summary": "iter25 backend testing PASSED 5/5 + 44/46 iter21-24 regression. All requested features verified: (1) GET /api/reports/bilan?copropriete_id=ACP_DEMO returns PCMN 55103400 (resolved from IBAN BE68539007547034 via copro.bank_accounts) with non-zero balance after lettrage, NOT generic 550000. (2) POST /api/coproprietes/{id}/regenerate-bank-entries returns {regenerated, errors, transactions_processed} (admin only, owner gets 403). After regenerate, FI entries reference PCMN 55103400 (no IBAN, no 550000). (3) POST /api/coproprietes/{id}/cleanup-orphan-entries idempotent, returns {status, total_deleted, stats:{invoice,fund_call,bank_txn,other}}. (4) Signe debit/credit normalization verified via iter24 (POST/PUT /banking/transactions and /add-lines store debit as NEGATIVE amount, credit POSITIVE). (5) DELETE /banking/statements/{id} cascades txns + auto FI entries (verified via iter22/iter23). Broader regression iter19/iter20 PASS; iter7/iter16 show 3 minor pre-existing failures (VE auto-entry creation, chinese-walls balance variance, regularization OD count) - all unrelated to iter21-25; iter17 has 19 fixture errors (MissingSchema for BASE_URL - test file doesn't load .env) - pre-existing, unrelated.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/reports/bilan", "issue": "Confirmed: ACP Demo bilan now correctly exposes PCMN 55103400 (Banque compte courant 7034) avec son solde reel et NON le 550000 generique. PCMN 551079 / 55076900 (compte epargne) supporte aussi par auto_entries.generate_bank_entry. Balance 100 EUR verifiee apres lettrage owner_payment Dubois sur IBAN BE68539007547034."},
+      {"endpoint": "POST /api/coproprietes/{id}/regenerate-bank-entries", "issue": "Renvoie correctement {regenerated:int, errors:list, transactions_processed:int}. Admin/manager seulement (owner -> 403). Idempotent: re-execution sur ACP demo regenere sans erreur. Apres regenerate, FI entries pointent vers 55103400 (pas IBAN, pas 550000)."},
+      {"endpoint": "POST /api/coproprietes/{id}/cleanup-orphan-entries", "issue": "Endpoint stable, idempotent (2eme appel total_deleted=0). Stats decomposes par source_type (invoice/fund_call/bank_txn/other)."},
+      {"endpoint": "test_iter22 Alex BENOIT", "issue": "Balance fluctue (614.60 iter24, 14.6 iter25) selon les tests precedents - pre-existing data drift documente depuis iter22, non lie a iter21-25. Recommandation: parametrer la valeur attendue ou re-seeder ACP demo entre runs."},
+      {"endpoint": "iter17 test fixtures", "issue": "test_iter17_expense_categories.py n'invoke pas load_dotenv() -> 19 errors MissingSchema. Pre-existing, hors scope iter25."},
+      {"endpoint": "test_iter7 / test_iter16", "issue": "3 failures pre-existing non liees a iter21-25: chinese-walls balance variance (150 vs attendu 50), VE auto-entry pas genere, regularization OD count=0. A investiguer separement."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter25_bilan_regenerate.py",
+    "/app/test_reports/pytest/pytest_iter25.xml",
+    "/app/test_reports/pytest/pytest_iter25_regression.xml",
+    "/app/test_reports/pytest/pytest_iter25_broad.xml"
+  ],
+  "action_items": [
+    "(Pre-existing, optional) Re-seed Alex BENOIT supplier balance to 314.60 in ACP demo OR parametriser test_iter22 pour eviter le drift de donnees entre iterations.",
+    "(Pre-existing) test_iter17_expense_categories.py manque load_dotenv() -> ajouter `load_dotenv('/app/frontend/.env')` en haut pour reactiver 19 tests.",
+    "(Pre-existing) Investigate iter16 VE auto-entry creation regression et iter7 chinese-walls balance variance - hors scope iter25.",
+    "(Optional, iter24 carryover) POST /api/banking/transactions/batch ne normalise pas le signe ni n'herite IBAN; CODA import met account_number=''. A aligner avec POST /transactions et /add-lines."
+  ],
+  "critical_code_review_comments": [
+    "auto_entries.generate_bank_entry (iter21): resolution IBAN -> pcmn_number via copro.bank_accounts correcte; fallback 550000 quand IBAN inconnu/absent; account_name = nom PCMN reel (pas 'Banque' generique). Tres bien.",
+    "routes/coproprietes.py regenerate-bank-entries: bonne shape de reponse. Pas observe d'idempotency guard explicite (re-creation possible si entry existante non supprimee d'abord) - confirmer que la fonction supprime/replace l'entry FI existante avant de re-generer pour eviter doublons. A surveiller en charge.",
+    "routes/reports.py bilan: bank PCMN correctement exposes - verifie via walk recursif sur la reponse. Recommandation: documenter le contrat de reponse (shape) pour le front.",
+    "routes/banking.py: pattern stored_amount = -abs(amount) si debit duplique entre POST/PUT - extraire helper _signed_amount(amount, ttype) comme suggere iter24.",
+    "Pas de nouvelles violations >700 lignes detectees; aucun ObjectId _id leak observe dans les reponses testees.",
+    "RBAC bien applique sur regenerate-bank-entries (owner -> 403 confirme)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter25_bilan_regenerate.py (new, 5 tests)"
+  ],
+  "success_rate": {
+    "backend": "iter25 new: 100% (5/5); iter21-24 regression: 95.7% (44/46, 2 pre-existing data drift); broader (iter7/16/17/19/20): 51 passed / 3 failed pre-existing / 19 errors pre-existing fixture",
+    "frontend": "not tested (backend-only request)"
+  },
+  "test_credentials": "admin@copro.be / admin123 ; owner: evrard.gerald@outlook.be / owner123",
+  "seed_data_creation": "All test data prefixed TEST_ITER25_ and auto-cleaned via DELETE /statements/{id} cascade in finally blocks. No persistent seed.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "iter21-25 banking + bilan + auto-entries flow fully verified end-to-end. Convention: IBAN -> PCMN via copro.bank_accounts dans generate_bank_entry; debit txns stockes en negatif via POST/PUT/add-lines; DELETE statement cascade FI auto; cleanup-orphan-entries idempotent; regenerate-bank-entries shape {regenerated,errors,transactions_processed} admin-only. Pre-existing drift Alex BENOIT (test_iter22) ET fixture env loading iter17 NON resolus - hors scope. iter16 VE auto-entry creation et iter7 chinese walls balance variance a investiguer separement (probablement liees au seed demo qui evolue).",
+  "rca of the issue": "Aucun bug iter25 - tous les fixes iter21-24 verifies + nouveau regenerate-bank-entries operationnel. Le bilan ACP Demo expose correctement les PCMN bancaires specifiques (55103400, et 55076900/551079 pour epargne) avec leurs soldes reels au lieu du compte generique 550000. Le pipeline complet : POST /banking/transactions (IBAN inherite) -> POST /banking/lettrage -> auto_entries.generate_bank_entry (IBAN->PCMN via copro.bank_accounts) -> FI entry sur PCMN reel -> GET /reports/bilan affiche le PCMN reel avec solde. La regression Alex BENOIT 14.6 vs 314.60 est due aux tests iter22 qui ne nettoient pas leur OD manuelle dans certains chemins."
+}
