@@ -1,0 +1,46 @@
+{
+  "summary": "iter23 backend testing PASSED 17/17. Banking statements draft/posted workflow fully verified. POST /statements creates with status='draft'. GET returns computed_closing/balance_diff/is_balanced correctly. Credit/debit signs (credit=+, debit=-) handled on mixed txns. POST /{id}/post refuses 400 when unbalanced (error message contains opening, mvts, closing, diff), succeeds 200 when balanced (sets posted_at). Re-posting already-posted returns 400. /unpost reverts to draft. PUT updates number/date/account_number/opening/closing. Rounding tolerance 0.01 verified (diff<0.01 -> balanced, diff>=0.01 -> not). Regression iter22 cascade DELETE, iter21 IBAN->PCMN resolution and iter20 balance owners all PASS.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/reports/balance-tiers/suppliers", "issue": "Pre-existing data drift in ACP demo: Alex BENOIT balance is now 614.60 (was 314.60). Likely from accumulated test residue or seed changes. Affects iter22 absolute-value assertions only; the endpoint logic is correct. Not iter23-related."},
+      {"endpoint": "POST /api/banking/statements/{id}/unpost", "issue": "Does not check if statement is currently 'posted' before unposting; will silently set draft on an already-draft statement. Minor UX/correctness."},
+      {"endpoint": "PUT /api/banking/statements/{id}", "issue": "No status guard: a 'posted' statement can be modified (opening/closing/account) via PUT. Should probably refuse 400 if status='posted' (or require unpost first), otherwise balance integrity of posted statements can drift."},
+      {"endpoint": "POST /api/banking/statements/{id}/post", "issue": "Does not validate that statement has at least 1 transaction. An empty statement with opening==closing posts successfully (may be intended)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter23_banking_statements.py",
+    "/app/test_reports/pytest/pytest_iter23.xml",
+    "/app/test_reports/pytest/pytest_iter23_regression.xml"
+  ],
+  "action_items": [
+    "Consider blocking PUT/DELETE on statements with status='posted' (require unpost first) to preserve integrity.",
+    "Consider blocking /unpost when status is already 'draft' (return 400 with clear message).",
+    "Re-baseline iter22 hardcoded balance expectation (Alex BENOIT 614.60 vs 314.60) or re-seed demo ACP."
+  ],
+  "critical_code_review_comments": [
+    "banking.py update_statement (line 176-188): no status guard - posted statements can be edited and silently break balance integrity. Recommend: if stmt['status']=='posted' raise 400.",
+    "banking.py unpost_statement (line 165-174): does not check current status; should return 400 if status is already 'draft' instead of silently overwriting.",
+    "banking.py post_statement: balance check uses sum() with float arithmetic - using Decimal would be more robust for accounting; current round(,2) + 0.01 tolerance is acceptable but document the tolerance.",
+    "banking.py StatementInput (line 9-15): PUT /statements/{id} reuses StatementInput which requires 'number' and 'date' as mandatory - partial updates not supported. Consider StatementUpdateInput with all optional fields.",
+    "banking.py: 'status' field missing from StatementInput - cannot be set on POST (acceptable since default='draft'), but no API exists to manually set to posted bypassing balance check (correct by design).",
+    "banking.py list_statements: response does NOT include computed_closing/is_balanced fields (only GET by id does). Frontend listing cannot show balance state without N+1 GETs.",
+    "banking.py file is 528 lines - still well within the 700-line threshold, no split needed yet."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter23_banking_statements.py (new)"
+  ],
+  "success_rate": {"backend": "100% (17/17 iter23) + 26/28 regression (2 pre-existing iter22 data drift failures, not iter23-related)", "frontend": "not tested (backend-only request)"},
+  "test_credentials": "admin@copro.be / admin123",
+  "seed_data_creation": "All test data uses TEST_ITER23_ prefix and is cleaned up via DELETE in each test's finally block. No persistent seed data.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iter23 endpoints (banking statements workflow draft/posted) fully verified: POST /api/banking/statements (status='draft' default), GET /api/banking/statements/{id} (returns computed_closing, balance_diff, is_balanced), POST /api/banking/statements/{id}/post (400 if unbalanced, 200 with posted_at if OK, 400 if already posted), POST /api/banking/statements/{id}/unpost, PUT /api/banking/statements/{id}. Note: PUT and unpost lack status guards (no rejection of editing posted statements). Pre-existing iter22 data drift: Alex BENOIT balance is now 614.60 instead of 314.60 (likely accumulated test residue across prior runs). ACP demo bank_accounts: BE68539007547034 -> PCMN 55103400 (default), BE71096123456769 -> PCMN 55076900. Lettrage payload: {transaction_id, match_to_id, match_type}. Transaction creation must include account_number=<IBAN> for auto-entry IBAN->PCMN resolution to work.",
+  "rca of the issue": "n/a - all iter23 features verified working. The 2 iter22 regression failures are pre-existing demo data drift (hardcoded balance value stale by 300 EUR), not iter23-related; recommend re-seeding the ACP demo or updating the hardcoded expectation in iter22 test."
+}

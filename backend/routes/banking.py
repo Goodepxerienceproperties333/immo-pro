@@ -108,6 +108,7 @@ def create_banking_router(db):
             "opening_balance": data.opening_balance,
             "closing_balance": data.closing_balance,
             "copropriete_id": data.copropriete_id or "",
+            "status": "draft",  # draft | posted
             "created_at": datetime.now(timezone.utc).isoformat()
         }
         await db.bank_statements.insert_one(doc)
@@ -120,7 +121,71 @@ def create_banking_router(db):
             raise HTTPException(404, "Extrait non trouve")
         txns = await db.bank_transactions.find({"statement_id": stmt_id}, {"_id": 0}).sort("date", 1).to_list(1000)
         stmt["transactions"] = txns
+        # Calcul de l'equilibre
+        mvts_sum = sum(
+            (1 if t.get("transaction_type") == "credit" else -1) * abs(float(t.get("amount", 0) or 0))
+            for t in txns
+        )
+        computed_closing = round(float(stmt.get("opening_balance", 0) or 0) + mvts_sum, 2)
+        actual_closing = round(float(stmt.get("closing_balance", 0) or 0), 2)
+        stmt["computed_closing"] = computed_closing
+        stmt["balance_diff"] = round(computed_closing - actual_closing, 2)
+        stmt["is_balanced"] = abs(stmt["balance_diff"]) < 0.01
         return stmt
+
+    @router.post("/statements/{stmt_id}/post")
+    async def post_statement(stmt_id: str):
+        """Comptabilise l'extrait : valide l'equilibre opening + mouvements = closing,
+        passe le statut a 'posted'. Refuse 400 si non equilibre."""
+        stmt = await db.bank_statements.find_one({"id": stmt_id}, {"_id": 0})
+        if not stmt:
+            raise HTTPException(404, "Extrait non trouve")
+        if stmt.get("status") == "posted":
+            raise HTTPException(400, "Extrait deja comptabilise")
+        txns = await db.bank_transactions.find({"statement_id": stmt_id}, {"_id": 0}).to_list(10000)
+        mvts_sum = sum(
+            (1 if t.get("transaction_type") == "credit" else -1) * abs(float(t.get("amount", 0) or 0))
+            for t in txns
+        )
+        opening = round(float(stmt.get("opening_balance", 0) or 0), 2)
+        closing = round(float(stmt.get("closing_balance", 0) or 0), 2)
+        computed = round(opening + mvts_sum, 2)
+        diff = round(computed - closing, 2)
+        if abs(diff) >= 0.01:
+            raise HTTPException(
+                400,
+                f"Extrait non equilibre. Solde ouverture ({opening:.2f}) + mouvements ({mvts_sum:.2f}) = {computed:.2f}, mais solde fermeture saisi = {closing:.2f}. Difference : {diff:.2f}"
+            )
+        await db.bank_statements.update_one(
+            {"id": stmt_id},
+            {"$set": {"status": "posted", "posted_at": datetime.now(timezone.utc).isoformat()}}
+        )
+        return {"status": "ok", "message": "Extrait comptabilise", "computed_closing": computed, "transactions_count": len(txns)}
+
+    @router.post("/statements/{stmt_id}/unpost")
+    async def unpost_statement(stmt_id: str):
+        """Repasse l'extrait en draft (permet correction)."""
+        result = await db.bank_statements.update_one(
+            {"id": stmt_id},
+            {"$set": {"status": "draft", "posted_at": None}}
+        )
+        if result.matched_count == 0:
+            raise HTTPException(404, "Extrait non trouve")
+        return {"status": "ok", "message": "Extrait repasse en brouillon"}
+
+    @router.put("/statements/{stmt_id}")
+    async def update_statement(stmt_id: str, data: StatementInput):
+        update = {
+            "number": data.number,
+            "date": data.date,
+            "account_number": data.account_number,
+            "opening_balance": data.opening_balance,
+            "closing_balance": data.closing_balance,
+        }
+        result = await db.bank_statements.update_one({"id": stmt_id}, {"$set": update})
+        if result.matched_count == 0:
+            raise HTTPException(404, "Extrait non trouve")
+        return await db.bank_statements.find_one({"id": stmt_id}, {"_id": 0})
 
     @router.delete("/statements/{stmt_id}")
     async def delete_statement(stmt_id: str):

@@ -9,9 +9,11 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { toast } from 'sonner';
-import { Plus, Trash2, Upload, Link2, Unlink, Search, Landmark, PlusCircle, Save, Pencil, X } from 'lucide-react';
+import { Plus, Trash2, Upload, Link2, Unlink, Search, Landmark, PlusCircle, Save, Pencil, X, CheckCircle2, AlertTriangle } from 'lucide-react';
+import { useAuth } from '@/contexts/AuthContext';
 
 export default function BankingPage() {
+  const { selectedCopro } = useAuth();
   const [statements, setStatements] = useState([]);
   const [transactions, setTransactions] = useState([]);
   const [selectedStmt, setSelectedStmt] = useState(null);
@@ -32,16 +34,15 @@ export default function BankingPage() {
   const [editForm, setEditForm] = useState({});
 
   const load = useCallback(async () => {
-    const copro = localStorage.getItem('copropriete_id') || '';
     const promises = [
       api.get('/banking/statements'), api.get('/banking/transactions'),
       api.get('/owners'), api.get('/invoices'), api.get('/suppliers')
     ];
-    if (copro) promises.push(api.get(`/coproprietes/${copro}`));
+    if (selectedCopro) promises.push(api.get(`/coproprietes/${selectedCopro}`));
     const [s, t, o, inv, sup, c] = await Promise.all(promises);
     setStatements(s.data); setTransactions(t.data); setOwners(o.data); setInvoices(inv.data); setSuppliers(sup.data);
     setBankAccounts(c?.data?.bank_accounts || []);
-  }, []);
+  }, [selectedCopro]);
   useEffect(() => { load(); }, [load]);
 
   const loadStmtTxns = async (stmt) => {
@@ -129,7 +130,10 @@ export default function BankingPage() {
                 <div className="flex items-center justify-between"><span className="font-mono font-semibold">N {s.number}</span><Button variant="ghost" size="sm" onClick={e => { e.stopPropagation(); deleteStmt(s.id); }} className="text-red-400 h-5 w-5 p-0"><Trash2 size={10} /></Button></div>
                 <div className="text-xs text-slate-500">{s.date}</div>
                 <div className="flex justify-between mt-1 text-[10px] font-mono"><span>O:{s.opening_balance?.toFixed(2)}</span><span>F:{s.closing_balance?.toFixed(2)}</span></div>
-                {s.source === 'CODA' && <Badge className="mt-1 text-[9px]" variant="outline">CODA</Badge>}
+                <div className="flex gap-1 mt-1 flex-wrap">
+                  {s.status === 'posted' && <Badge className="text-[9px] bg-green-100 text-green-700 border-green-300">Comptabilise</Badge>}
+                  {s.source === 'CODA' && <Badge className="text-[9px]" variant="outline">CODA</Badge>}
+                </div>
               </CardContent>
             </Card>
           ))}
@@ -139,12 +143,89 @@ export default function BankingPage() {
         <div className="lg:col-span-3">
           {selectedStmt ? (
             <Card className="border-slate-200">
-              <CardHeader className="pb-2 flex flex-row items-center justify-between">
-                <div>
-                  <CardTitle className="text-base" style={{fontFamily:'Chivo,sans-serif'}}>Extrait N {selectedStmt.number} - {selectedStmt.date}</CardTitle>
-                  <p className="text-xs text-slate-500">O: {selectedStmt.opening_balance?.toFixed(2)} - F: {selectedStmt.closing_balance?.toFixed(2)} EUR</p>
+              <CardHeader className="pb-2">
+                <div className="flex flex-row items-start justify-between gap-3">
+                  <div className="flex-1">
+                    <CardTitle className="text-base flex items-center gap-2" style={{fontFamily:'Chivo,sans-serif'}}>
+                      Extrait N {selectedStmt.number} - {selectedStmt.date}
+                      {selectedStmt.status === 'posted' ? (
+                        <Badge className="bg-green-100 text-green-700 border-green-300"><CheckCircle2 size={11} className="mr-1" />Comptabilise</Badge>
+                      ) : (
+                        <Badge variant="outline" className="bg-slate-50 text-slate-500">Brouillon</Badge>
+                      )}
+                    </CardTitle>
+                    <p className="text-xs text-slate-500 mt-1 font-mono">{selectedStmt.account_number}</p>
+                  </div>
+                  <div className="flex gap-2 shrink-0">
+                    {selectedStmt.status !== 'posted' && (
+                      <Button size="sm" variant="outline" onClick={addInlineLine} data-testid="add-inline-line"><PlusCircle size={14} className="mr-1" /> Ajouter lignes</Button>
+                    )}
+                    {(() => {
+                      // Compute balance check inline
+                      const opening = Number(selectedStmt.opening_balance || 0);
+                      const closing = Number(selectedStmt.closing_balance || 0);
+                      const mvts = transactions.reduce((s, t) => s + (t.transaction_type === 'credit' ? 1 : -1) * Math.abs(Number(t.amount || 0)), 0);
+                      const computed = Math.round((opening + mvts) * 100) / 100;
+                      const diff = Math.round((computed - closing) * 100) / 100;
+                      const balanced = Math.abs(diff) < 0.01;
+                      if (selectedStmt.status === 'posted') return (
+                        <Button size="sm" variant="outline" onClick={async () => {
+                          if (!window.confirm('Repasser cet extrait en brouillon ?')) return;
+                          try {
+                            await api.post(`/banking/statements/${selectedStmt.id}/unpost`);
+                            toast.success('Extrait repasse en brouillon');
+                            loadStmtTxns({ ...selectedStmt, status: 'draft' });
+                            load();
+                          } catch (e) { toast.error(e.response?.data?.detail || 'Erreur'); }
+                        }} data-testid="unpost-stmt-btn">Repasser brouillon</Button>
+                      );
+                      return (
+                        <Button
+                          size="sm"
+                          onClick={async () => {
+                            try {
+                              await api.post(`/banking/statements/${selectedStmt.id}/post`);
+                              toast.success('Extrait comptabilise');
+                              loadStmtTxns({ ...selectedStmt, status: 'posted' });
+                              load();
+                            } catch (e) { toast.error(e.response?.data?.detail || 'Erreur'); }
+                          }}
+                          disabled={!balanced || transactions.length === 0}
+                          className={balanced && transactions.length > 0 ? "bg-green-600 hover:bg-green-700 text-white" : ""}
+                          data-testid="post-stmt-btn"
+                          title={!balanced ? `Difference: ${diff.toFixed(2)} EUR. Ajustez les mouvements ou le solde de fermeture.` : "Comptabiliser l'extrait"}
+                        >
+                          <CheckCircle2 size={14} className="mr-1" />
+                          Comptabiliser
+                        </Button>
+                      );
+                    })()}
+                  </div>
                 </div>
-                <Button size="sm" variant="outline" onClick={addInlineLine} data-testid="add-inline-line"><PlusCircle size={14} className="mr-1" /> Ajouter lignes</Button>
+                {/* Bandeau equilibre */}
+                {(() => {
+                  const opening = Number(selectedStmt.opening_balance || 0);
+                  const closing = Number(selectedStmt.closing_balance || 0);
+                  const mvts = transactions.reduce((s, t) => s + (t.transaction_type === 'credit' ? 1 : -1) * Math.abs(Number(t.amount || 0)), 0);
+                  const computed = Math.round((opening + mvts) * 100) / 100;
+                  const diff = Math.round((computed - closing) * 100) / 100;
+                  const balanced = Math.abs(diff) < 0.01;
+                  return (
+                    <div className={`mt-3 p-2 rounded text-xs flex items-center justify-between gap-4 ${balanced ? 'bg-green-50 border border-green-200' : 'bg-amber-50 border border-amber-200'}`} data-testid="balance-check-banner">
+                      <div className="flex gap-4">
+                        <span>Solde ouverture : <b className="font-mono">{opening.toFixed(2)}</b></span>
+                        <span>+ Mouvements : <b className={`font-mono ${mvts >= 0 ? 'text-green-700' : 'text-red-700'}`}>{mvts >= 0 ? '+' : ''}{mvts.toFixed(2)}</b></span>
+                        <span>= Solde calcule : <b className="font-mono">{computed.toFixed(2)}</b></span>
+                        <span>vs. saisi : <b className="font-mono">{closing.toFixed(2)}</b></span>
+                      </div>
+                      {balanced ? (
+                        <span className="text-green-700 flex items-center gap-1"><CheckCircle2 size={12} /> Equilibre</span>
+                      ) : (
+                        <span className="text-amber-700 flex items-center gap-1"><AlertTriangle size={12} /> Difference : <b className="font-mono">{diff > 0 ? '+' : ''}{diff.toFixed(2)}</b></span>
+                      )}
+                    </div>
+                  );
+                })()}
               </CardHeader>
               <CardContent className="p-0">
                 {/* Inline entry */}
@@ -240,14 +321,28 @@ export default function BankingPage() {
           <div className="grid grid-cols-2 gap-4"><div><label className="form-label">Numero *</label><Input value={stmtForm.number} onChange={e => setStmtForm({...stmtForm, number: e.target.value})} /></div><div><label className="form-label">Date *</label><Input type="date" value={stmtForm.date} onChange={e => setStmtForm({...stmtForm, date: e.target.value})} /></div></div>
           <div><label className="form-label">Compte bancaire *</label>
             {bankAccounts.length > 0 ? (
-              <Select value={stmtForm.account_number} onValueChange={v => setStmtForm({...stmtForm, account_number: v})}>
+              <Select value={stmtForm.account_number} onValueChange={v => {
+                // Auto-fill opening balance from last statement closing for this IBAN
+                const lastForIban = statements
+                  .filter(st => st.account_number === v)
+                  .sort((a, b) => (b.date || '').localeCompare(a.date || ''))[0];
+                const auto = lastForIban ? Number(lastForIban.closing_balance || 0) : 0;
+                setStmtForm(f => ({...f, account_number: v, opening_balance: auto}));
+              }}>
                 <SelectTrigger data-testid="stmt-account-select"><SelectValue placeholder="Selectionner un compte bancaire" /></SelectTrigger>
                 <SelectContent>
                   {bankAccounts.map(b => (
                     <SelectItem key={b.iban} value={b.iban} data-testid={`stmt-account-${b.iban}`}>
-                      <span className="font-mono text-xs mr-2">{b.iban}</span>
-                      <span className="text-slate-700">{b.label || b.account_type}</span>
-                      {b.is_default && <span className="ml-2 text-[10px] bg-blue-100 text-blue-700 px-1 rounded">defaut</span>}
+                      <div className="flex items-center justify-between gap-3 w-full">
+                        <div>
+                          <span className="font-mono text-xs">{b.iban}</span>
+                          {b.label && <span className="ml-2 text-slate-700">{b.label}</span>}
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          {b.pcmn_number && <span className="text-[10px] font-mono bg-green-100 text-green-800 px-1.5 py-0.5 rounded">PCMN {b.pcmn_number}</span>}
+                          {b.is_default && <span className="text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded">defaut</span>}
+                        </div>
+                      </div>
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -258,8 +353,31 @@ export default function BankingPage() {
                 <p className="text-[11px] text-amber-600 mt-1">Aucun compte bancaire configure sur cette ACP. Configurez-en un dans Coproprietes.</p>
               </>
             )}
+            {/* Mention du compte PCMN selectionne + dernier solde */}
+            {stmtForm.account_number && (() => {
+              const ba = bankAccounts.find(b => b.iban === stmtForm.account_number);
+              const lastForIban = statements
+                .filter(st => st.account_number === stmtForm.account_number)
+                .sort((a, b) => (b.date || '').localeCompare(a.date || ''))[0];
+              return (
+                <div className="text-[11px] text-slate-500 mt-1.5 space-x-3">
+                  {ba?.pcmn_number && <span>Compte PCMN : <b className="font-mono text-slate-700">{ba.pcmn_number}</b></span>}
+                  {lastForIban && <span>Dernier solde ({lastForIban.date}) : <b className="font-mono text-slate-700">{Number(lastForIban.closing_balance||0).toFixed(2)}</b></span>}
+                  {!lastForIban && <span className="text-blue-600">Aucun extrait precedent - solde d'ouverture initialise a 0</span>}
+                </div>
+              );
+            })()}
           </div>
-          <div className="grid grid-cols-2 gap-4"><div><label className="form-label">Solde ouverture</label><Input type="number" step="0.01" value={stmtForm.opening_balance} onChange={e => setStmtForm({...stmtForm, opening_balance: e.target.value})} /></div><div><label className="form-label">Solde fermeture</label><Input type="number" step="0.01" value={stmtForm.closing_balance} onChange={e => setStmtForm({...stmtForm, closing_balance: e.target.value})} /></div></div>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="form-label">Solde ouverture</label>
+              <Input type="number" step="0.01" value={stmtForm.opening_balance} onChange={e => setStmtForm({...stmtForm, opening_balance: e.target.value})} data-testid="stmt-opening-balance" />
+            </div>
+            <div>
+              <label className="form-label">Solde fermeture</label>
+              <Input type="number" step="0.01" value={stmtForm.closing_balance} onChange={e => setStmtForm({...stmtForm, closing_balance: e.target.value})} data-testid="stmt-closing-balance" />
+            </div>
+          </div>
           <div className="flex gap-3 justify-end"><Button variant="outline" onClick={() => setStmtDialog(false)}>Annuler</Button><Button onClick={saveStmt} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="stmt-save-btn">Creer</Button></div>
         </div>
       </DialogContent></Dialog>
