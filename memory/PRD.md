@@ -12,6 +12,16 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 ## Implemented
 
+### Iter22 (Feb 2026) - Synchronisation suppression + ecritures orphelines + balance suppliers depuis grand livre
+- **Bug fix DELETE statement** (`routes/banking.py`) : `DELETE /api/banking/statements/{id}` supprime maintenant aussi les auto-entries FI des transactions du statement (via `_delete_auto_entries`). Avant : les ecritures FI orphelines polluaient le bilan apres suppression d'un extrait.
+- **Endpoint nettoyage** (`routes/coproprietes.py`) : `POST /api/coproprietes/{id}/cleanup-orphan-entries` detecte et supprime les ecritures auto-generees dont la source n'existe plus (invoice/fund_call/bank_txn). Idempotent. Retourne stats detaillees par type.
+- **Bouton frontend** (`CoproprietesPage.js`) : icone baguette magique bleue (Wand2) a cote du bouton reset, declenche le cleanup avec confirmation.
+- **Balance tiers fournisseurs refactor** (`routes/reports.py`) : 
+  - GET `/api/reports/balance-tiers/suppliers` et `/{id}` calculent maintenant depuis `journal_entries` (44000XXX) au lieu de fund_calls/bank_txns matchees
+  - Resultat : les OD manuelles sur compte fournisseur sont prises en compte, balance synchronisee avec le grand livre
+  - Affichage des fournisseurs orphelins (nom dans facture mais pas de fiche) preserve
+  - Exemple validation : Alex BENOIT 314.60 crediteur sans paiement, balance retombe a 214.60 apres OD Dr 44000012 100.00
+
 ### Iter21 (Feb 2026) - Bug fix : resolution IBAN -> compte PCMN bancaire dans FI auto-entry
 - **Probleme** : `generate_bank_entry()` utilisait directement `txn['account_number']` (qui est un IBAN ex `BE68539007547034`) comme numero de compte PCMN dans l'ecriture FI. Resultat : les ecritures bancaires utilisaient un IBAN au lieu d'un vrai compte PCMN classe 5, ce qui faussait le bilan (le compte 550 generique apparaissait au passif au lieu des comptes specifiques 55103400 / 55076900).
 - **Fix** (`auto_entries.py`) : avant de generer l'ecriture, on resout l'IBAN -> `pcmn_number` en consultant `copro.bank_accounts`. Si l'IBAN est inconnu, fallback sur 550000. Le `account_name` utilise aussi le `label` du bank_account (ex "Compte courant").
