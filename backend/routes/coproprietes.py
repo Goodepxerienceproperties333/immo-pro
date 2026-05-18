@@ -375,4 +375,30 @@ def create_coproprietes_router(db):
             "stats": stats,
         }
 
+    @router.post("/{copro_id}/regenerate-bank-entries")
+    async def regenerate_bank_entries(copro_id: str, request: Request):
+        """Re-genere les ecritures FI auto pour TOUTES les transactions matchees
+        d'une ACP. Utile apres correction d'un IBAN/compte bancaire/PCMN.
+        Reserve syndic/gestionnaire/admin."""
+        await _get_manager(request)
+        copro = await db.coproprietes.find_one({"id": copro_id}, {"_id": 0, "name": 1})
+        if not copro:
+            raise HTTPException(404, "Copropriete non trouvee")
+        from auto_entries import generate_bank_entry
+        txns = await db.bank_transactions.find(
+            {"copropriete_id": copro_id, "matched": True}, {"_id": 0}
+        ).to_list(100000)
+        regenerated = 0
+        errors = 0
+        for t in txns:
+            try:
+                res = await generate_bank_entry(db, t)
+                if res:
+                    regenerated += 1
+            except Exception:
+                errors += 1
+        return {"status": "ok", "copropriete": copro.get("name", ""),
+                "transactions_processed": len(txns),
+                "regenerated": regenerated, "errors": errors}
+
     return router
