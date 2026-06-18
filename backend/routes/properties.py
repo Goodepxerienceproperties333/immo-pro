@@ -196,6 +196,288 @@ def create_properties_router(db):
             raise HTTPException(404, "Lot non trouve")
         return {"message": "Lot supprime"}
 
+    # ---- MUTATION (vente / changement de proprietaire) ----
+    class LotMutationInput(BaseModel):
+        new_owner_id: str
+        sale_date: str  # ISO YYYY-MM-DD
+        sale_price: Optional[float] = 0.0
+        note: Optional[str] = ""
+
+    @router.post("/lots/{lot_id}/mutate")
+    async def mutate_lot(lot_id: str, data: LotMutationInput):
+        """Mutation d'un lot (vente entre proprietaires). Calcule et passe l'OD
+        comptable de transfert :
+        - Fonds de roulement : transfert de la quote-part du lot du vendeur vers l'acquereur
+          (calculee sur les quotities du lot vs total des quotities de l'ACP, sur le solde
+          actuel du compte 100).
+        - Provisions pour charges : prorata sur les appels deja emis dont la periode
+          chevauche sale_date. La part posterieure a sale_date est creditee au vendeur
+          et debitee a l'acquereur.
+        Met a jour lot.owner_id = new_owner_id et conserve l'historique dans lot.mutations[].
+        """
+        lot = await db.lots.find_one({"id": lot_id}, {"_id": 0})
+        if not lot:
+            raise HTTPException(404, "Lot non trouve")
+        copro_id = lot.get("copropriete_id", "")
+        if not copro_id:
+            raise HTTPException(400, "Lot sans copropriete")
+        old_owner_id = lot.get("owner_id", "")
+        if not old_owner_id:
+            raise HTTPException(400, "Lot sans proprietaire actuel - impossible de muter")
+        if data.new_owner_id == old_owner_id:
+            raise HTTPException(400, "L'acquereur doit etre different du proprietaire actuel")
+
+        old_owner = await db.owners.find_one({"id": old_owner_id}, {"_id": 0})
+        new_owner = await db.owners.find_one({"id": data.new_owner_id}, {"_id": 0})
+        if not old_owner:
+            raise HTTPException(404, "Proprietaire actuel introuvable")
+        if not new_owner:
+            raise HTTPException(404, "Acquereur introuvable")
+
+        # Assure les comptes tiers existent dans cette ACP
+        old_owner = await assign_owner_accounts(db, old_owner, copro_id)
+        new_owner = await assign_owner_accounts(db, new_owner, copro_id)
+        old_acc = (old_owner.get("tier_accounts", {}) or {}).get(copro_id, {}).get("provisions")
+        new_acc = (new_owner.get("tier_accounts", {}) or {}).get(copro_id, {}).get("provisions")
+        if not old_acc or not new_acc:
+            raise HTTPException(500, "Impossible de resoudre les comptes tiers")
+
+        # ---- 1) Quote-part fonds de roulement (compte 100) ----
+        # Solde actuel du compte 100 cote credit (passif) pour cette ACP
+        roul_pipeline = [
+            {"$match": {"copropriete_id": copro_id}},
+            {"$unwind": "$lines"},
+            {"$match": {"lines.account_number": "100"}},
+            {"$group": {"_id": None,
+                        "credit": {"$sum": "$lines.credit"},
+                        "debit": {"$sum": "$lines.debit"}}},
+        ]
+        agg = await db.journal_entries.aggregate(roul_pipeline).to_list(1)
+        fonds_roul_total = round((agg[0]["credit"] - agg[0]["debit"]) if agg else 0.0, 2)
+        # Quotites totales de l'ACP
+        all_lots = await db.lots.find({"copropriete_id": copro_id}, {"_id": 0, "quotity": 1}).to_list(10000)
+        total_quotity = round(sum(float(l.get("quotity", 0) or 0) for l in all_lots), 6)
+        lot_quotity = float(lot.get("quotity", 0) or 0)
+        if total_quotity > 0 and lot_quotity > 0 and fonds_roul_total > 0:
+            roulement_quota = round(fonds_roul_total * (lot_quotity / total_quotity), 2)
+        else:
+            roulement_quota = 0.0
+
+        # ---- 2) Prorata provisions sur appels emis chevauchant sale_date ----
+        sale_date = data.sale_date
+        try:
+            sale_dt = datetime.strptime(sale_date, "%Y-%m-%d").date()
+        except Exception:
+            raise HTTPException(400, "sale_date doit etre au format YYYY-MM-DD")
+
+        # On considere les fund_calls de type 'provisions' (pas reserve/roulement)
+        # dont la periode [date, due_date OU prochaine echeance] chevauche sale_date
+        # et qui ont une ligne pour old_owner_id dans la distribution
+        calls = await db.fund_calls.find(
+            {"copropriete_id": copro_id}, {"_id": 0}
+        ).sort("date", 1).to_list(10000)
+        # Filtrer : calls de provisions deja emis
+        calls = [c for c in calls if (c.get("call_type") or "provisions") == "provisions"]
+
+        prorata_total = 0.0
+        prorata_details = []
+        for c in calls:
+            try:
+                c_start = datetime.strptime(c.get("date", ""), "%Y-%m-%d").date()
+            except Exception:
+                continue
+            # Periode = [c_start, c_end] ou c_end = due_date du call (ou +90j defaut)
+            due = c.get("due_date") or c.get("date")
+            try:
+                c_end = datetime.strptime(due, "%Y-%m-%d").date()
+            except Exception:
+                continue
+            if c_end <= c_start:
+                # securite : si due_date <= date, on suppose une periode de 90 jours
+                from datetime import timedelta as _td
+                c_end = c_start + _td(days=90)
+            if not (c_start <= sale_dt <= c_end):
+                continue
+            # Montant appele pour le vendeur sur ce call
+            dist = c.get("distribution") or []
+            owner_line = next((d for d in dist if d.get("owner_id") == old_owner_id), None)
+            if not owner_line:
+                continue
+            amount_owner = float(owner_line.get("amount", 0) or 0)
+            if amount_owner <= 0:
+                continue
+            # Prorata: portion APRES sale_date (jour de la vente inclus pour l'acquereur)
+            total_days = (c_end - c_start).days + 1
+            days_after = (c_end - sale_dt).days + 1
+            if total_days <= 0:
+                continue
+            prorata = round(amount_owner * (days_after / total_days), 2)
+            if prorata < 0.01:
+                continue
+            prorata_total += prorata
+            prorata_details.append({
+                "fund_call_id": c.get("id"),
+                "fund_call_name": c.get("name", ""),
+                "period_start": c_start.isoformat(),
+                "period_end": c_end.isoformat(),
+                "owner_amount": amount_owner,
+                "prorata": prorata,
+                "days_after": days_after,
+                "total_days": total_days,
+            })
+        prorata_total = round(prorata_total, 2)
+
+        # ---- 3) Generation de l'ecriture OD ----
+        total_transfer = round(roulement_quota + prorata_total, 2)
+        entry_id = None
+        if total_transfer > 0.001:
+            lines = [
+                {
+                    "account_number": new_acc,
+                    "account_name": f"Mutation - {new_owner.get('last_name') or new_owner.get('name')}",
+                    "debit": total_transfer, "credit": 0.0,
+                    "third_party_id": data.new_owner_id,
+                    "third_party_name": new_owner.get("name", ""),
+                },
+                {
+                    "account_number": old_acc,
+                    "account_name": f"Mutation - {old_owner.get('last_name') or old_owner.get('name')}",
+                    "debit": 0.0, "credit": total_transfer,
+                    "third_party_id": old_owner_id,
+                    "third_party_name": old_owner.get("name", ""),
+                },
+            ]
+            entry = {
+                "id": str(uuid.uuid4()),
+                "journal_type": "OD",
+                "date": sale_date,
+                "reference": f"MUT-{lot.get('number','')[:20]}",
+                "description": (
+                    f"Mutation lot {lot.get('number','')}: {old_owner.get('name','')} -> {new_owner.get('name','')} "
+                    f"(roulement {roulement_quota:.2f} EUR + prorata provisions {prorata_total:.2f} EUR)"
+                ),
+                "lines": lines,
+                "total_debit": total_transfer,
+                "total_credit": total_transfer,
+                "copropriete_id": copro_id,
+                "auto_generated": False,
+                "manually_edited": True,
+                "source_type": "lot_mutation",
+                "source_id": lot_id,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            await db.journal_entries.insert_one(entry)
+            entry_id = entry["id"]
+
+        # ---- 4) Maj du lot + historique ----
+        mutation_record = {
+            "date": sale_date,
+            "old_owner_id": old_owner_id,
+            "old_owner_name": old_owner.get("name", ""),
+            "new_owner_id": data.new_owner_id,
+            "new_owner_name": new_owner.get("name", ""),
+            "roulement_quota": roulement_quota,
+            "prorata_provisions": prorata_total,
+            "total_transfer": total_transfer,
+            "sale_price": float(data.sale_price or 0),
+            "note": data.note or "",
+            "journal_entry_id": entry_id,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "prorata_details": prorata_details,
+        }
+        await db.lots.update_one(
+            {"id": lot_id},
+            {"$set": {"owner_id": data.new_owner_id,
+                      "owner_ids": [data.new_owner_id]},
+             "$push": {"mutations": mutation_record}}
+        )
+        updated = await db.lots.find_one({"id": lot_id}, {"_id": 0})
+        return {
+            "lot": updated,
+            "mutation": mutation_record,
+        }
+
+    @router.post("/lots/{lot_id}/mutate-preview")
+    async def mutate_lot_preview(lot_id: str, data: LotMutationInput):
+        """Preview du calcul de mutation sans rien ecrire en base."""
+        # Reuse the same logic but avoid persistence. We implement a small variant:
+        lot = await db.lots.find_one({"id": lot_id}, {"_id": 0})
+        if not lot:
+            raise HTTPException(404, "Lot non trouve")
+        copro_id = lot.get("copropriete_id", "")
+        old_owner_id = lot.get("owner_id", "")
+        if not (copro_id and old_owner_id):
+            raise HTTPException(400, "Lot incomplet")
+
+        try:
+            sale_dt = datetime.strptime(data.sale_date, "%Y-%m-%d").date()
+        except Exception:
+            raise HTTPException(400, "sale_date doit etre au format YYYY-MM-DD")
+
+        # Fonds de roulement
+        roul_pipeline = [
+            {"$match": {"copropriete_id": copro_id}},
+            {"$unwind": "$lines"},
+            {"$match": {"lines.account_number": "100"}},
+            {"$group": {"_id": None,
+                        "credit": {"$sum": "$lines.credit"},
+                        "debit": {"$sum": "$lines.debit"}}},
+        ]
+        agg = await db.journal_entries.aggregate(roul_pipeline).to_list(1)
+        fonds_roul_total = round((agg[0]["credit"] - agg[0]["debit"]) if agg else 0.0, 2)
+        all_lots = await db.lots.find({"copropriete_id": copro_id}, {"_id": 0, "quotity": 1}).to_list(10000)
+        total_quotity = round(sum(float(l.get("quotity", 0) or 0) for l in all_lots), 6)
+        lot_quotity = float(lot.get("quotity", 0) or 0)
+        roulement_quota = round(fonds_roul_total * (lot_quotity / total_quotity), 2) if (total_quotity > 0 and lot_quotity > 0 and fonds_roul_total > 0) else 0.0
+
+        # Prorata provisions
+        calls = await db.fund_calls.find({"copropriete_id": copro_id}, {"_id": 0}).sort("date", 1).to_list(10000)
+        calls = [c for c in calls if (c.get("call_type") or "provisions") == "provisions"]
+        prorata_total = 0.0
+        prorata_details = []
+        from datetime import timedelta as _td
+        for c in calls:
+            try:
+                c_start = datetime.strptime(c.get("date", ""), "%Y-%m-%d").date()
+                c_end = datetime.strptime(c.get("due_date") or c.get("date"), "%Y-%m-%d").date()
+            except Exception:
+                continue
+            if c_end <= c_start:
+                c_end = c_start + _td(days=90)
+            if not (c_start <= sale_dt <= c_end):
+                continue
+            owner_line = next((d for d in (c.get("distribution") or []) if d.get("owner_id") == old_owner_id), None)
+            if not owner_line:
+                continue
+            amount_owner = float(owner_line.get("amount", 0) or 0)
+            if amount_owner <= 0:
+                continue
+            total_days = (c_end - c_start).days + 1
+            days_after = (c_end - sale_dt).days + 1
+            prorata = round(amount_owner * (days_after / total_days), 2)
+            if prorata >= 0.01:
+                prorata_total += prorata
+                prorata_details.append({
+                    "fund_call_id": c.get("id"),
+                    "fund_call_name": c.get("name", ""),
+                    "period_start": c_start.isoformat(),
+                    "period_end": c_end.isoformat(),
+                    "owner_amount": amount_owner,
+                    "prorata": prorata,
+                    "days_after": days_after,
+                    "total_days": total_days,
+                })
+        prorata_total = round(prorata_total, 2)
+        return {
+            "fonds_roulement_total": fonds_roul_total,
+            "lot_quotity": lot_quotity,
+            "total_quotity": total_quotity,
+            "roulement_quota": roulement_quota,
+            "prorata_provisions": prorata_total,
+            "prorata_details": prorata_details,
+            "total_transfer": round(roulement_quota + prorata_total, 2),
+        }
+
     # ---- TENANTS ----
     class TenantInput(BaseModel):
         name: str

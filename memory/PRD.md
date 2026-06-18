@@ -12,6 +12,22 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 ## Implemented
 
+### Iter28 (Feb 2026) - Mutation lot (vente) + Owner picker inline create
+- **Lots : selecteur proprietaire avec creation inline** (`LotsPage.js`) : nouveau composant `OwnerPicker` reutilisable. Recherche par nom/email/VCS, ajout en tags, bouton "Creer ce proprietaire" qui ouvre un mini-form (nom/prenom/email/tel) quand aucun resultat -> `POST /api/owners` + selection automatique. Utilise sur creation/edition de lot ET sur mutation.
+- **Endpoint mutation** `POST /api/lots/{lot_id}/mutate` + `POST /api/lots/{lot_id}/mutate-preview` (`routes/properties.py`) :
+  - Input: `{new_owner_id, sale_date (ISO YYYY-MM-DD), sale_price?, note?}`
+  - **Quote-part fonds de roulement** = solde compte 100 (passif ACP) x (lot.quotity / total quotity ACP). Calcule via `db.journal_entries.aggregate` pivot sur compte 100.
+  - **Prorata provisions** : pour chaque fund_call de type "provisions" deja emis dont la periode `[date, due_date]` chevauche `sale_date`, calcule `montant_vendeur x (jours_apres_vente / total_jours)`. Le vendeur est credite du prorata, l'acquereur debite. Pas d'impact sur les appels futurs (entierement a l'acquereur via l'attribution du lot).
+  - **Generation OD** (`MUT-{lot_number}`, manually_edited=true) : Dr compte_acquereur / Cr compte_vendeur du `total_transfer = roulement_quota + prorata_provisions`.
+  - **Mise a jour** `lot.owner_id` + push dans `lot.mutations[]` : `{date, old_owner_id, new_owner_id, roulement_quota, prorata_provisions, total_transfer, sale_price, note, journal_entry_id, prorata_details, created_at}`
+  - **Fonds de reserve PAS impacte** (conforme exigence metier).
+- **UI Mutation** (`MutationDialog` dans LotsPage) : bouton icone ArrowRightLeft sur chaque lot (desactive si pas d'owner), dialog avec :
+  - Acquereur (OwnerPicker + create inline)
+  - Date vente + prix (info) + note
+  - Apercu live des calculs (auto-refresh sur changement) avec detail prorata expandable
+  - Historique des mutations precedentes
+- Verifie sur ACP Demo : mutation lot A001 (Martin -> Dubois, 15/04/2026) -> Roulement 1505.91 EUR + Prorata 61.78 EUR (sur appel Trimestriel 2/4, 12j/26j sur Martin 133.86 EUR) = **Total 1567.69 EUR**. OD MUT-A001 generee, equilibree.
+
 ### Iter27 (Feb 2026) - Fix critique chinese walls : Dashboard scope ACP
 - **Bug** : `GET /api/dashboard/stats` agregait owners/lots/factures/encaissements/recent_entries **toutes ACPs confondues**. Apres creation d'une nouvelle ACP, le tableau de bord affichait encore les factures/proprietaires/ecritures des autres ACPs -> fuite massive cross-tenant.
 - **Fix `server.py` `dashboard_stats`** :
