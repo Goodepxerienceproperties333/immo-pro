@@ -12,6 +12,17 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 ## Implemented
 
+### Iter27 (Feb 2026) - Fix critique chinese walls : Dashboard scope ACP
+- **Bug** : `GET /api/dashboard/stats` agregait owners/lots/factures/encaissements/recent_entries **toutes ACPs confondues**. Apres creation d'une nouvelle ACP, le tableau de bord affichait encore les factures/proprietaires/ecritures des autres ACPs -> fuite massive cross-tenant.
+- **Fix `server.py` `dashboard_stats`** :
+  - Accepte `?copropriete_id=...` ET lit aussi le header `X-Copropriete-Id` (envoye par l'interceptor frontend)
+  - Filtre OBLIGATOIRE `copropriete_id` sur invoices/lots/tenants/journal_entries
+  - Owners = uniquement les owners qui ont au moins un lot dans cette ACP (via `db.lots.distinct('owner_id', {copropriete_id: ...})`)
+  - **403** si l'utilisateur n'est pas membre de l'ACP (admin/superadmin bypass)
+  - Sans ACP scope: counters a 0 (pas de leak) + `coproprietes_count` borne aux ACPs accessibles a l'utilisateur
+  - Ajoute `coproprietes_count` (visible utilisateur) et `copropriete_id` dans la reponse
+- **Verifie** : ACP Demo Tilleuls -> 8 owners/8 lots/3 invoices/594.60 EUR. Nouvelle ACP "Test" -> 0/5/0/0 + 0 ecriture (au lieu des 5 fuyantes auparavant).
+
 ### Iter26 (Feb 2026) - Fix comptable critique : Fonds de reserve en classe 1 (160), pas classe 7 (701000)
 - **Probleme** : Les appels de fonds de reserve creditaient le compte **701000** (classe 7 - produits), ce qui traitait l'augmentation de reserve comme un revenu. **FAUX** en compta belge copropriete : un fonds de reserve est une augmentation de PASSIF (classe 1), pas un produit. Idem fonds de roulement (deja correct sur 100).
 - **Fix `auto_entries.generate_sale_entry`** (lignes 240-252) :

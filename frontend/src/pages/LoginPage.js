@@ -1,47 +1,89 @@
 import { useState } from 'react';
+import axios from 'axios';
 import { useAuth } from '@/contexts/AuthContext';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { Building2, LogIn, UserPlus, Eye, EyeOff } from 'lucide-react';
+import { Building2, LogIn, UserPlus, Eye, EyeOff, KeyRound } from 'lucide-react';
+
+const API = process.env.REACT_APP_BACKEND_URL;
 
 function formatError(detail) {
-  if (detail == null) return "Une erreur est survenue.";
-  if (typeof detail === "string") return detail;
-  if (Array.isArray(detail)) return detail.map(e => e?.msg || JSON.stringify(e)).join(" ");
+  if (detail == null) return 'Une erreur est survenue.';
+  if (typeof detail === 'string') return detail;
+  if (Array.isArray(detail)) return detail.map(e => e?.msg || JSON.stringify(e)).join(' ');
   if (detail?.msg) return detail.msg;
+  if (detail?.message) return detail.message;
   return String(detail);
 }
 
 export default function LoginPage() {
   const { login, register } = useAuth();
-  const [isRegister, setIsRegister] = useState(false);
+  const [mode, setMode] = useState('login'); // 'login' | 'register' | 'first-set'
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [password2, setPassword2] = useState('');
   const [name, setName] = useState('');
   const [error, setError] = useState('');
+  const [info, setInfo] = useState('');
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    setError('');
-    setLoading(true);
+    setError(''); setInfo(''); setLoading(true);
     try {
-      if (isRegister) {
+      if (mode === 'register') {
         await register(email, password, name);
+      } else if (mode === 'first-set') {
+        if (password !== password2) {
+          setError('Les deux mots de passe ne correspondent pas.');
+          setLoading(false); return;
+        }
+        if ((password || '').length < 6) {
+          setError('Mot de passe trop court (6 caracteres minimum).');
+          setLoading(false); return;
+        }
+        const { data } = await axios.post(
+          `${API}/api/auth/first-set-password`,
+          { email, new_password: password },
+          { withCredentials: true }
+        );
+        // Force a full reload so AuthContext re-fetches /api/auth/me with the new cookies
+        window.location.href = data?.role === 'owner' ? '/portal' : '/';
       } else {
         await login(email, password);
       }
     } catch (err) {
-      setError(formatError(err.response?.data?.detail) || err.message);
+      const detail = err.response?.data?.detail;
+      // First-connection required: auto-switch to "first-set" mode
+      if (err.response?.status === 403 && detail?.code === 'PASSWORD_SETUP_REQUIRED') {
+        setMode('first-set');
+        setPassword(''); setPassword2('');
+        setInfo("Premiere connexion : merci de definir votre mot de passe pour " + email);
+      } else {
+        setError(formatError(detail) || err.message);
+      }
     } finally {
       setLoading(false);
     }
   };
 
+  const switchTo = (target) => {
+    setMode(target);
+    setError(''); setInfo('');
+    setPassword(''); setPassword2(''); setName('');
+  };
+
+  const isRegister = mode === 'register';
+  const isFirstSet = mode === 'first-set';
+
+  let titleText = 'Connexion';
+  let subtitleText = 'Connectez-vous a votre espace';
+  if (isRegister) { titleText = 'Creer un compte'; subtitleText = 'Remplissez les informations ci-dessous'; }
+  if (isFirstSet) { titleText = 'Definir mon mot de passe'; subtitleText = '1ere connexion : choisissez votre mot de passe'; }
+
   return (
     <div className="min-h-screen flex">
-      {/* Left panel - form */}
       <div className="w-full lg:w-1/2 flex items-center justify-center p-8">
         <div className="w-full max-w-md">
           <div className="flex items-center gap-3 mb-8">
@@ -56,13 +98,14 @@ export default function LoginPage() {
             </div>
           </div>
 
-          <h2 className="text-xl font-bold text-slate-900 mb-1" style={{fontFamily:'Chivo,sans-serif'}}>
-            {isRegister ? 'Creer un compte' : 'Connexion'}
-          </h2>
-          <p className="text-sm text-slate-500 mb-6">
-            {isRegister ? 'Remplissez les informations ci-dessous' : 'Connectez-vous a votre espace'}
-          </p>
+          <h2 className="text-xl font-bold text-slate-900 mb-1" style={{fontFamily:'Chivo,sans-serif'}}>{titleText}</h2>
+          <p className="text-sm text-slate-500 mb-6">{subtitleText}</p>
 
+          {info && (
+            <div className="bg-blue-50 text-blue-800 text-sm px-4 py-3 rounded-md mb-4 border border-blue-200" data-testid="auth-info">
+              {info}
+            </div>
+          )}
           {error && (
             <div className="bg-red-50 text-red-700 text-sm px-4 py-3 rounded-md mb-4 border border-red-200" data-testid="auth-error">
               {error}
@@ -73,13 +116,7 @@ export default function LoginPage() {
             {isRegister && (
               <div>
                 <label className="form-label">Nom</label>
-                <Input
-                  data-testid="register-name-input"
-                  value={name}
-                  onChange={e => setName(e.target.value)}
-                  placeholder="Votre nom"
-                  required
-                />
+                <Input data-testid="register-name-input" value={name} onChange={e => setName(e.target.value)} placeholder="Votre nom" required />
               </div>
             )}
             <div>
@@ -90,18 +127,19 @@ export default function LoginPage() {
                 value={email}
                 onChange={e => setEmail(e.target.value)}
                 placeholder="email@exemple.be"
+                disabled={isFirstSet}
                 required
               />
             </div>
             <div>
-              <label className="form-label">Mot de passe</label>
+              <label className="form-label">{isFirstSet ? 'Nouveau mot de passe' : 'Mot de passe'}</label>
               <div className="relative">
                 <Input
                   data-testid="login-password-input"
-                  type={showPassword ? "text" : "password"}
+                  type={showPassword ? 'text' : 'password'}
                   value={password}
                   onChange={e => setPassword(e.target.value)}
-                  placeholder="Votre mot de passe"
+                  placeholder={isFirstSet ? 'Au moins 6 caracteres' : 'Votre mot de passe'}
                   className="pr-10"
                   required
                 />
@@ -110,13 +148,26 @@ export default function LoginPage() {
                   data-testid="login-toggle-password"
                   onClick={() => setShowPassword(s => !s)}
                   className="absolute inset-y-0 right-0 px-3 flex items-center text-slate-500 hover:text-slate-900"
-                  aria-label={showPassword ? "Masquer le mot de passe" : "Afficher le mot de passe"}
+                  aria-label={showPassword ? 'Masquer le mot de passe' : 'Afficher le mot de passe'}
                   tabIndex={-1}
                 >
                   {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
                 </button>
               </div>
             </div>
+            {isFirstSet && (
+              <div>
+                <label className="form-label">Confirmer le mot de passe</label>
+                <Input
+                  data-testid="login-password-confirm-input"
+                  type={showPassword ? 'text' : 'password'}
+                  value={password2}
+                  onChange={e => setPassword2(e.target.value)}
+                  placeholder="Re-saisissez le mot de passe"
+                  required
+                />
+              </div>
+            )}
             <Button
               type="submit"
               data-testid="login-submit-btn"
@@ -130,25 +181,46 @@ export default function LoginPage() {
                 </span>
               ) : isRegister ? (
                 <span className="flex items-center gap-2"><UserPlus size={16} /> Creer le compte</span>
+              ) : isFirstSet ? (
+                <span className="flex items-center gap-2"><KeyRound size={16} /> Definir et se connecter</span>
               ) : (
                 <span className="flex items-center gap-2"><LogIn size={16} /> Se connecter</span>
               )}
             </Button>
           </form>
 
-          <div className="mt-6 text-center">
-            <button
-              onClick={() => { setIsRegister(!isRegister); setError(''); }}
-              className="text-sm text-[#0055FF] hover:underline"
-              data-testid="toggle-auth-mode"
-            >
-              {isRegister ? 'Deja un compte ? Se connecter' : 'Pas de compte ? Creer un compte'}
-            </button>
+          <div className="mt-6 text-center space-y-2">
+            {!isFirstSet && (
+              <button
+                onClick={() => switchTo(isRegister ? 'login' : 'register')}
+                className="text-sm text-[#0055FF] hover:underline block w-full"
+                data-testid="toggle-auth-mode"
+              >
+                {isRegister ? 'Deja un compte ? Se connecter' : 'Pas de compte ? Creer un compte'}
+              </button>
+            )}
+            {mode === 'login' && (
+              <button
+                onClick={() => switchTo('first-set')}
+                className="text-sm text-slate-600 hover:text-[#0055FF] hover:underline block w-full"
+                data-testid="toggle-first-set"
+              >
+                1ere connexion ? Definir mon mot de passe
+              </button>
+            )}
+            {isFirstSet && (
+              <button
+                onClick={() => switchTo('login')}
+                className="text-sm text-slate-600 hover:text-[#0055FF] hover:underline block w-full"
+                data-testid="back-to-login"
+              >
+                Retour a la connexion
+              </button>
+            )}
           </div>
         </div>
       </div>
 
-      {/* Right panel - hero image */}
       <div
         className="hidden lg:block lg:w-1/2 bg-cover bg-center relative"
         style={{backgroundImage: 'url(https://static.prod-images.emergentagent.com/jobs/ac7212f5-7097-4143-9040-c86e8f3b4207/images/44f29d66e326ce8d9c843c10ae9d5d76da988703cdae641f58ec60defdc6aad7.png)'}}

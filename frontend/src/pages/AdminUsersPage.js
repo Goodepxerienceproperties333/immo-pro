@@ -24,7 +24,7 @@ export default function AdminUsersPage() {
   const [search, setSearch] = useState('');
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState(null);
-  const [form, setForm] = useState({ email: '', password: '', name: '', role: 'owner', copropriete_ids: [] });
+  const [form, setForm] = useState({ email: '', password: '', name: '', role: 'owner', copropriete_ids: [], must_change_password: false });
 
   const load = useCallback(async () => {
     const [u, c] = await Promise.all([api.get('/admin/users'), api.get('/coproprietes')]);
@@ -38,8 +38,8 @@ export default function AdminUsersPage() {
     u.name.toLowerCase().includes(search.toLowerCase()) || u.email.toLowerCase().includes(search.toLowerCase())
   );
 
-  const openCreate = () => { setEditing(null); setForm({ email: '', password: '', name: '', role: 'owner', copropriete_ids: [] }); setDialogOpen(true); };
-  const openEdit = (u) => { setEditing(u); setForm({ email: u.email, password: '', name: u.name, role: u.role, copropriete_ids: u.copropriete_ids || [] }); setDialogOpen(true); };
+  const openCreate = () => { setEditing(null); setForm({ email: '', password: '', name: '', role: 'owner', copropriete_ids: [], must_change_password: false }); setDialogOpen(true); };
+  const openEdit = (u) => { setEditing(u); setForm({ email: u.email, password: '', name: u.name, role: u.role, copropriete_ids: u.copropriete_ids || [], must_change_password: false }); setDialogOpen(true); };
 
   const toggleCopro = (coproId) => {
     setForm(prev => {
@@ -55,11 +55,22 @@ export default function AdminUsersPage() {
       if (editing) {
         const payload = { name: form.name, role: form.role, copropriete_ids: form.copropriete_ids };
         if (form.password) payload.password = form.password;
+        if (form.must_change_password) payload.must_change_password = true;
         await api.put(`/admin/users/${editing.id}`, payload);
         toast.success('Utilisateur modifie');
       } else {
-        await api.post('/admin/users', form);
-        toast.success('Utilisateur cree');
+        const payload = { ...form };
+        // When "must_change_password" is on, password becomes optional (defined on 1st login)
+        if (form.must_change_password) {
+          delete payload.password;
+        } else if (!form.password) {
+          toast.error('Saisissez un mot de passe ou cochez "definir lors de la 1ere connexion".');
+          return;
+        }
+        await api.post('/admin/users', payload);
+        toast.success(form.must_change_password
+          ? 'Utilisateur cree. Il devra definir son mot de passe a la 1ere connexion.'
+          : 'Utilisateur cree');
       }
       setDialogOpen(false);
       load();
@@ -143,9 +154,24 @@ export default function AdminUsersPage() {
           <div className="space-y-4 mt-2">
             <div><label className="form-label">Nom *</label><Input value={form.name} onChange={e => setForm({...form, name: e.target.value})} data-testid="user-name-input" /></div>
             <div><label className="form-label">Email *</label><Input type="email" value={form.email} onChange={e => setForm({...form, email: e.target.value})} disabled={!!editing} data-testid="user-email-input" /></div>
-            <div><label className="form-label">{editing ? 'Nouveau mot de passe (laisser vide pour garder)' : 'Mot de passe *'}</label>
-              <Input type="password" value={form.password} onChange={e => setForm({...form, password: e.target.value})} data-testid="user-password-input" />
+            <div><label className="form-label">{editing ? 'Nouveau mot de passe (laisser vide pour garder)' : (form.must_change_password ? 'Mot de passe (sera defini par l\'utilisateur)' : 'Mot de passe *')}</label>
+              <Input
+                type="password"
+                value={form.password}
+                onChange={e => setForm({...form, password: e.target.value})}
+                disabled={!editing && form.must_change_password}
+                placeholder={!editing && form.must_change_password ? 'L\'utilisateur le definira lors de sa 1ere connexion' : ''}
+                data-testid="user-password-input"
+              />
             </div>
+            <label className="flex items-center gap-2 cursor-pointer text-sm text-slate-700">
+              <Checkbox
+                checked={form.must_change_password}
+                onCheckedChange={(v) => setForm({...form, must_change_password: !!v, password: v ? '' : form.password})}
+                data-testid="user-must-change-password"
+              />
+              <span>{editing ? 'Forcer la redefinition du mot de passe a la prochaine connexion' : 'Mot de passe a definir lors de la 1ere connexion'}</span>
+            </label>
             <div><label className="form-label">Role</label>
               <Select value={form.role} onValueChange={v => setForm({...form, role: v})}>
                 <SelectTrigger data-testid="user-role-select"><SelectValue /></SelectTrigger>

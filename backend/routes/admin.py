@@ -8,10 +8,11 @@ import uuid
 
 class UserCreateInput(BaseModel):
     email: str
-    password: str
+    password: Optional[str] = None
     name: str
     role: str  # superadmin, syndic, owner
     copropriete_ids: Optional[List[str]] = []
+    must_change_password: Optional[bool] = False
 
 
 class UserUpdateInput(BaseModel):
@@ -19,6 +20,7 @@ class UserUpdateInput(BaseModel):
     role: Optional[str] = None
     copropriete_ids: Optional[List[str]] = None
     password: Optional[str] = None
+    must_change_password: Optional[bool] = None
 
 
 def create_admin_router(db):
@@ -63,12 +65,21 @@ def create_admin_router(db):
         existing = await db.users.find_one({"email": email})
         if existing:
             raise HTTPException(400, "Cet email existe deja")
+        # Password setup-on-first-login flow
+        must_change = bool(data.must_change_password) or not (data.password and data.password.strip())
+        if must_change:
+            # Random unguessable placeholder (login impossible until first-set-password)
+            placeholder = uuid.uuid4().hex + uuid.uuid4().hex
+            pwd_hash = hash_password(placeholder)
+        else:
+            pwd_hash = hash_password(data.password)
         doc = {
             "email": email,
-            "password_hash": hash_password(data.password),
+            "password_hash": pwd_hash,
             "name": data.name,
             "role": data.role if data.role in ("superadmin", "syndic", "gestionnaire", "owner") else "owner",
             "copropriete_ids": data.copropriete_ids or [],
+            "must_change_password": must_change,
             "created_at": datetime.now(timezone.utc).isoformat()
         }
         result = await db.users.insert_one(doc)
@@ -78,6 +89,7 @@ def create_admin_router(db):
             "name": data.name,
             "role": doc["role"],
             "copropriete_ids": doc["copropriete_ids"],
+            "must_change_password": must_change,
         }
 
     @router.put("/users/{user_id}")
@@ -101,6 +113,13 @@ def create_admin_router(db):
             update["copropriete_ids"] = data.copropriete_ids
         if data.password:
             update["password_hash"] = hash_password(data.password)
+            update["must_change_password"] = False
+        if data.must_change_password is not None:
+            update["must_change_password"] = bool(data.must_change_password)
+            if data.must_change_password:
+                # When (re)activating, blank-out the password so login is impossible
+                placeholder = uuid.uuid4().hex + uuid.uuid4().hex
+                update["password_hash"] = hash_password(placeholder)
         if update:
             await db.users.update_one({"_id": ObjectId(user_id)}, {"$set": update})
         updated = await db.users.find_one({"_id": ObjectId(user_id)})

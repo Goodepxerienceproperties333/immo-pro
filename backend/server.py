@@ -43,6 +43,8 @@ AUTH_EXEMPT_PATHS = {
     "/api/auth/register",
     "/api/auth/refresh",
     "/api/auth/logout",
+    "/api/auth/first-set-password",
+    "/api/auth/check-must-change-password",
 }
 
 # RBAC: paths that require admin role (superadmin/syndic) for any write/destructive action.
@@ -244,8 +246,62 @@ def user_response(user_doc):
 async def login(data: LoginInput, response: Response):
     email = data.email.lower().strip()
     user = await db.users.find_one({"email": email})
-    if not user or not verify_password(data.password, user["password_hash"]):
+    if not user:
         raise HTTPException(status_code=401, detail="Identifiants invalides")
+    # Block login if the user must define their password first
+    if user.get("must_change_password"):
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "PASSWORD_SETUP_REQUIRED",
+                    "message": "Vous devez definir votre mot de passe lors de la premiere connexion."}
+        )
+    if not verify_password(data.password, user["password_hash"]):
+        raise HTTPException(status_code=401, detail="Identifiants invalides")
+    user_id = str(user["_id"])
+    access_token = create_access_token(user_id, email)
+    refresh_token = create_refresh_token(user_id)
+    response.set_cookie(key="access_token", value=access_token, httponly=True, secure=False, samesite="lax", max_age=7200, path="/")
+    response.set_cookie(key="refresh_token", value=refresh_token, httponly=True, secure=False, samesite="lax", max_age=604800, path="/")
+    return user_response(user)
+
+
+class FirstSetPasswordInput(BaseModel):
+    email: str
+    new_password: str
+
+
+@auth_router.post("/check-must-change-password")
+async def check_must_change_password(data: dict):
+    """Public endpoint: tells whether the given email must set its password
+    on first connection. Used by the frontend to show the proper UI."""
+    email = (data.get("email") or "").lower().strip()
+    if not email:
+        return {"must_change_password": False, "exists": False}
+    user = await db.users.find_one({"email": email}, {"_id": 0, "must_change_password": 1})
+    if not user:
+        return {"must_change_password": False, "exists": False}
+    return {"must_change_password": bool(user.get("must_change_password", False)),
+            "exists": True}
+
+
+@auth_router.post("/first-set-password")
+async def first_set_password(data: FirstSetPasswordInput, response: Response):
+    """Public endpoint: lets a user with must_change_password=True
+    define their password for the first time and authenticates them."""
+    email = data.email.lower().strip()
+    if not data.new_password or len(data.new_password) < 6:
+        raise HTTPException(400, "Le mot de passe doit contenir au moins 6 caracteres")
+    user = await db.users.find_one({"email": email})
+    if not user:
+        raise HTTPException(404, "Utilisateur non trouve")
+    if not user.get("must_change_password"):
+        raise HTTPException(400, "Ce compte a deja un mot de passe defini. Utilisez la connexion classique.")
+    await db.users.update_one(
+        {"_id": user["_id"]},
+        {"$set": {"password_hash": hash_password(data.new_password),
+                  "must_change_password": False,
+                  "password_set_at": datetime.now(timezone.utc).isoformat()}}
+    )
     user_id = str(user["_id"])
     access_token = create_access_token(user_id, email)
     refresh_token = create_refresh_token(user_id)
@@ -306,18 +362,62 @@ async def refresh(request: Request, response: Response):
 
 # Dashboard
 @app.get("/api/dashboard/stats")
-async def dashboard_stats(request: Request):
-    await get_current_user(request)
-    owners_count = await db.owners.count_documents({})
-    lots_count = await db.lots.count_documents({})
-    tenants_count = await db.tenants.count_documents({})
-    invoices_count = await db.invoices.count_documents({})
-    unpaid = await db.invoices.count_documents({"status": "unpaid"})
-    pipeline = [{"$match": {"status": {"$in": ["paid", "unpaid"]}}}, {"$group": {"_id": None, "total": {"$sum": "$total_amount"}}}]
-    agg = await db.invoices.aggregate(pipeline).to_list(1)
-    total_charges = agg[0]["total"] if agg else 0
-    recent_entries = await db.journal_entries.find({}, {"_id": 0}).sort("created_at", -1).to_list(5)
+async def dashboard_stats(request: Request, copropriete_id: Optional[str] = None):
+    """Stats du dashboard, OBLIGATOIREMENT scopees a une ACP pour respecter
+    les chinese walls. Sans copropriete_id (ex: dashboard d'accueil
+    multi-ACP), renvoie uniquement le nombre global de coproprietes
+    accessibles et zero pour le reste (pas de fuite cross-ACP)."""
+    user = await get_current_user(request)
+
+    # Resolve scope from header X-Copropriete-Id if not provided
+    if not copropriete_id:
+        copropriete_id = request.headers.get("X-Copropriete-Id") or None
+
+    # Verify user has access to this ACP (admin/superadmin bypass)
+    role = user.get("role", "")
+    user_copro_ids = user.get("copropriete_ids", []) or []
+    is_super = role in ("superadmin", "admin")
+    if copropriete_id and not is_super and copropriete_id not in user_copro_ids:
+        raise HTTPException(403, "Acces refuse a cette copropriete")
+
+    # Build query strictly scoped to the ACP
+    if copropriete_id:
+        q = {"copropriete_id": copropriete_id}
+        # Owners scope: an owner appears in this ACP if at least one of his lots is in this ACP
+        lot_owner_ids = await db.lots.distinct("owner_id", {"copropriete_id": copropriete_id})
+        owners_count = await db.owners.count_documents({"id": {"$in": lot_owner_ids}})
+        lots_count = await db.lots.count_documents(q)
+        tenants_count = await db.tenants.count_documents(q)
+        invoices_count = await db.invoices.count_documents(q)
+        unpaid = await db.invoices.count_documents({**q, "status": "unpaid"})
+        pipeline = [
+            {"$match": {**q, "status": {"$in": ["paid", "unpaid"]}}},
+            {"$group": {"_id": None, "total": {"$sum": "$total_amount"}}},
+        ]
+        agg = await db.invoices.aggregate(pipeline).to_list(1)
+        total_charges = agg[0]["total"] if agg else 0
+        recent_entries = await db.journal_entries.find(
+            q, {"_id": 0}
+        ).sort("created_at", -1).to_list(5)
+    else:
+        # No ACP scoped : only safe global counters (no leakage)
+        owners_count = 0
+        lots_count = 0
+        tenants_count = 0
+        invoices_count = 0
+        unpaid = 0
+        total_charges = 0
+        recent_entries = []
+
+    # Coproprietes count visible to the user (multi-ACP landing)
+    if is_super:
+        copro_count = await db.coproprietes.count_documents({})
+    else:
+        copro_count = await db.coproprietes.count_documents({"id": {"$in": user_copro_ids}})
+
     return {
+        "copropriete_id": copropriete_id or "",
+        "coproprietes_count": copro_count,
         "owners_count": owners_count,
         "lots_count": lots_count,
         "tenants_count": tenants_count,
