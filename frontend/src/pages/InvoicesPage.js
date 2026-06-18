@@ -201,7 +201,7 @@ export default function InvoicesPage() {
 
   const openCreateKey = () => {
     setEditingKey(null); setKeyUsage(null);
-    setKeyForm({ name: '', description: '', key_type: 'quotity', lots: lots.map(l => ({ lot_id: l.id, lot_number: l.lot_number, share: l.quotity || 0 })) });
+    setKeyForm({ name: '', description: '', key_type: 'quotity', lots: lots.map(l => ({ lot_id: l.id, lot_number: l.number, share: l.quotity || 0 })) });
     setKeyDialog(true);
   };
   const openEditKey = async (k) => {
