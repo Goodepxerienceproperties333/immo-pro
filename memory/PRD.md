@@ -12,6 +12,23 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 ## Implemented
 
+### Iter32 (Feb 2026) - Cles de repartition : total + controle de coherence
+- **Liste des cles** (`InvoicesPage.js`) : ajout de 2 nouvelles colonnes
+  - **"Total quotites"** : somme live des quote-parts (e.g. 1000.00)
+  - **"Coherence"** : badge code couleur :
+    - `OK` (vert) si total = 1 / 100 / 1000 / 10000 (rounds typiques copro belge)
+    - `Custom` (bleu) si total > 0 mais non-rond (ex : releves d'eau)
+    - `Lots a 0` (ambre) si au moins un lot a une quote-part nulle
+- **Dialog edit** : zone repartition entierement repensee
+  - **3 boutons d'aide** : "Reprendre tantiemes lots" (lit `lots.quotity` par numero), "Repartir egalement (=1000)" (1000/n par lot), "Normaliser /1000" (rescale au total 1000)
+  - **Tableau** : colonne supplementaire "% du total" calculee live, surlignage ambre des lots a 0
+  - **Pied de tableau** : ligne TOTAL en bold (toujours visible, sticky header)
+  - **Badge de coherence** sous le tableau : meme logique que la liste
+- **Fix bug clé de répartition** : `lot_number` désormais lu sur `l.number` (et non `l.lot_number`) pour POST `/api/distribution-keys`. Toutes les anciennes clés s'affichent correctement, les nouvelles se créent en HTTP 200.
+
+### Iter31 (Feb 2026) - Bug fix création de clé de répartition (lot_number)
+- `lots.X.lot_number: Field required` -> remplacement de `l.lot_number` par `l.number` dans `openCreateKey` (InvoicesPage ligne 204). Le dialog affiche maintenant "Lot A-101" au lieu de "Lot" anonyme.
+
 ### Iter30 (Feb 2026) - Annulation mutation + PDF Situation de compte + Robustesse erreurs Pydantic
 
 #### Annulation de mutation

@@ -43,7 +43,7 @@ export default function BalanceTiersPage() {
       <div className="page-header flex items-start justify-between">
         <div><h1 className="page-title">Balance de Tiers</h1><p className="page-subtitle">Situation de compte des proprietaires et fournisseurs</p></div>
         <Button variant="outline" size="sm" data-testid="export-balance-tiers-xlsx"
-          onClick={() => { const c = localStorage.getItem('copropriete_id') || ''; window.open(`${API}/api/exports/balance-tiers/owners.xlsx${c ? '?copropriete_id=' + c : ''}`, '_blank'); }}>
+          onClick={() => { const c = localStorage.getItem('selectedCopro') || localStorage.getItem('copropriete_id') || ''; window.open(`${API}/api/exports/balance-tiers/owners.xlsx${c && c !== 'all' ? '?copropriete_id=' + c : ''}`, '_blank'); }}>
           <Download size={14} className="mr-1" /> Export Excel
         </Button>
       </div>
@@ -115,8 +115,8 @@ export default function BalanceTiersPage() {
                               variant="ghost"
                               size="sm"
                               onClick={() => {
-                                const c = localStorage.getItem('copropriete_id') || '';
-                                if (!c) { toast.error('Selectionnez une ACP'); return; }
+                                const c = localStorage.getItem('selectedCopro') || localStorage.getItem('copropriete_id') || '';
+                                if (!c || c === 'all') { toast.error('Selectionnez une ACP specifique en haut de page'); return; }
                                 window.open(`${API}/api/reports/situation-compte/${o.owner_id}/pdf?copropriete_id=${c}`, '_blank');
                               }}
                               data-testid={`pdf-situation-${o.owner_id}`}

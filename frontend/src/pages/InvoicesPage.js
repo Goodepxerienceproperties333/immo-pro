@@ -312,23 +312,41 @@ export default function InvoicesPage() {
             <Table>
               <TableHeader><TableRow>
                 <TableHead>Nom</TableHead><TableHead>Description</TableHead><TableHead>Type</TableHead>
-                <TableHead>Lots</TableHead><TableHead className="w-20">Actions</TableHead>
+                <TableHead>Lots</TableHead>
+                <TableHead className="text-right">Total quotites</TableHead>
+                <TableHead>Coherence</TableHead>
+                <TableHead className="w-20">Actions</TableHead>
               </TableRow></TableHeader>
               <TableBody>
                 {distKeys.length === 0 ? (
-                  <TableRow><TableCell colSpan={5} className="text-center py-8 text-slate-400">Aucune cle</TableCell></TableRow>
-                ) : distKeys.map(k => (
-                  <TableRow key={k.id} className="hover:bg-slate-50/50">
-                    <TableCell className="font-medium">{k.name}</TableCell>
-                    <TableCell>{k.description}</TableCell>
-                    <TableCell><Badge variant="outline">{k.key_type}</Badge></TableCell>
-                    <TableCell className="text-sm">{k.lots?.length || 0} lots</TableCell>
-                    <TableCell><div className="flex gap-1">
-                      <Button variant="ghost" size="sm" onClick={() => openEditKey(k)} data-testid={`edit-key-${k.id}`}><Pencil size={14} /></Button>
-                      <Button variant="ghost" size="sm" onClick={() => deleteKey(k.id)} className="text-red-500"><Trash2 size={14} /></Button>
-                    </div></TableCell>
-                  </TableRow>
-                ))}
+                  <TableRow><TableCell colSpan={7} className="text-center py-8 text-slate-400">Aucune cle</TableCell></TableRow>
+                ) : distKeys.map(k => {
+                  const total = (k.lots || []).reduce((s, l) => s + (Number(l.share) || 0), 0);
+                  const hasZero = (k.lots || []).some(l => !Number(l.share));
+                  // "ronds" frequents en copro belge : 1000 / 10000 / 100 / 1
+                  const isRound = [1, 100, 1000, 10000].some(t => Math.abs(total - t) < 0.005);
+                  let coherenceColor = 'bg-slate-50 text-slate-500 border-slate-200';
+                  let coherenceLabel = `${total.toFixed(2)}`;
+                  if (hasZero) { coherenceColor = 'bg-amber-50 text-amber-700 border-amber-200'; coherenceLabel = 'Lots a 0'; }
+                  else if (isRound) { coherenceColor = 'bg-green-50 text-green-700 border-green-200'; coherenceLabel = 'OK'; }
+                  else if (total > 0) { coherenceColor = 'bg-blue-50 text-blue-700 border-blue-200'; coherenceLabel = 'Custom'; }
+                  return (
+                    <TableRow key={k.id} className="hover:bg-slate-50/50">
+                      <TableCell className="font-medium">{k.name}</TableCell>
+                      <TableCell>{k.description}</TableCell>
+                      <TableCell><Badge variant="outline">{k.key_type}</Badge></TableCell>
+                      <TableCell className="text-sm">{k.lots?.length || 0} lots</TableCell>
+                      <TableCell className="text-right font-mono text-sm" data-testid={`key-total-${k.id}`}>{total.toFixed(2)}</TableCell>
+                      <TableCell>
+                        <Badge variant="outline" className={coherenceColor}>{coherenceLabel}</Badge>
+                      </TableCell>
+                      <TableCell><div className="flex gap-1">
+                        <Button variant="ghost" size="sm" onClick={() => openEditKey(k)} data-testid={`edit-key-${k.id}`}><Pencil size={14} /></Button>
+                        <Button variant="ghost" size="sm" onClick={() => deleteKey(k.id)} className="text-red-500"><Trash2 size={14} /></Button>
+                      </div></TableCell>
+                    </TableRow>
+                  );
+                })}
               </TableBody>
             </Table>
           </div>
@@ -550,24 +568,77 @@ export default function InvoicesPage() {
               </div>
             </div>
             <div><label className="form-label">Description</label><Input value={keyForm.description} onChange={e => setKeyForm({...keyForm, description: e.target.value})} /></div>
-            {keyForm.lots.length > 0 && (
-              <div>
-                <label className="form-label mb-2">Repartition par lot</label>
-                <div className="border rounded-md overflow-hidden max-h-60 overflow-y-auto">
-                  <table className="w-full text-sm">
-                    <thead><tr className="bg-slate-50 text-xs text-slate-600"><th className="p-2 text-left">Lot</th><th className="p-2 text-right">Quote-part</th></tr></thead>
-                    <tbody>
-                      {keyForm.lots.map((l, i) => (
-                        <tr key={i} className="border-t border-slate-100">
-                          <td className="p-2">Lot {l.lot_number}</td>
-                          <td className="p-2"><Input type="number" step="0.01" className="w-24 ml-auto text-right h-7 text-sm" value={l.share} onChange={e => updateKeyLot(i, 'share', e.target.value)} /></td>
+            {keyForm.lots.length > 0 && (() => {
+              const totalShare = keyForm.lots.reduce((s, l) => s + (Number(l.share) || 0), 0);
+              const lotsAtZero = keyForm.lots.filter(l => !Number(l.share)).length;
+              const isRound = [1, 100, 1000, 10000].some(t => Math.abs(totalShare - t) < 0.005);
+              let badgeColor = 'bg-slate-100 text-slate-700 border-slate-300';
+              let badgeLabel = `Total : ${totalShare.toFixed(2)}`;
+              if (lotsAtZero > 0) { badgeColor = 'bg-amber-50 text-amber-700 border-amber-300'; badgeLabel = `${lotsAtZero} lot(s) a 0 - Total ${totalShare.toFixed(2)}`; }
+              else if (isRound) { badgeColor = 'bg-green-50 text-green-700 border-green-300'; badgeLabel = `Total : ${totalShare.toFixed(2)} - coherent`; }
+              else if (totalShare > 0) { badgeColor = 'bg-blue-50 text-blue-700 border-blue-300'; badgeLabel = `Total : ${totalShare.toFixed(2)}`; }
+
+              const fillEqual = () => {
+                const n = keyForm.lots.length || 1;
+                const share = +(1000 / n).toFixed(4);
+                setKeyForm({...keyForm, lots: keyForm.lots.map(l => ({ ...l, share }))});
+              };
+              const fillFromQuotities = () => {
+                const byNumber = Object.fromEntries((lots || []).map(x => [x.number, x.quotity || 0]));
+                setKeyForm({...keyForm, lots: keyForm.lots.map(l => ({ ...l, share: byNumber[l.lot_number] || 0 }))});
+              };
+              const normalize1000 = () => {
+                if (totalShare <= 0) return;
+                const factor = 1000 / totalShare;
+                setKeyForm({...keyForm, lots: keyForm.lots.map(l => ({ ...l, share: +((Number(l.share) || 0) * factor).toFixed(4) }))});
+              };
+
+              return (
+                <div>
+                  <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+                    <label className="form-label mb-0">Repartition par lot</label>
+                    <div className="flex gap-1.5">
+                      <Button type="button" size="sm" variant="outline" className="text-[11px] h-7" onClick={fillFromQuotities} data-testid="key-fill-from-quotities">Reprendre tantiemes lots</Button>
+                      <Button type="button" size="sm" variant="outline" className="text-[11px] h-7" onClick={fillEqual} data-testid="key-fill-equal">Repartir egalement (=1000)</Button>
+                      <Button type="button" size="sm" variant="outline" className="text-[11px] h-7" onClick={normalize1000} disabled={totalShare <= 0} data-testid="key-normalize-1000">Normaliser /1000</Button>
+                    </div>
+                  </div>
+                  <div className="border rounded-md overflow-hidden max-h-60 overflow-y-auto">
+                    <table className="w-full text-sm">
+                      <thead className="bg-slate-50 text-xs text-slate-600 sticky top-0">
+                        <tr><th className="p-2 text-left">Lot</th><th className="p-2 text-right">Quote-part</th><th className="p-2 text-right w-20">% du total</th></tr>
+                      </thead>
+                      <tbody>
+                        {keyForm.lots.map((l, i) => {
+                          const share = Number(l.share) || 0;
+                          const pct = totalShare > 0 ? (share / totalShare * 100) : 0;
+                          return (
+                            <tr key={i} className={`border-t border-slate-100 ${!share ? 'bg-amber-50/40' : ''}`}>
+                              <td className="p-2">Lot {l.lot_number}</td>
+                              <td className="p-2"><Input type="number" step="0.01" min="0" className={`w-24 ml-auto text-right h-7 text-sm ${!share ? 'border-amber-300' : ''}`} value={l.share} onChange={e => updateKeyLot(i, 'share', e.target.value)} data-testid={`key-lot-share-${i}`} /></td>
+                              <td className="p-2 text-right font-mono text-xs text-slate-500">{pct.toFixed(2)}%</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                      <tfoot>
+                        <tr className="bg-slate-50 border-t-2 border-slate-300 text-xs font-semibold">
+                          <td className="p-2">Total</td>
+                          <td className="p-2 text-right font-mono" data-testid="key-form-total">{totalShare.toFixed(2)}</td>
+                          <td className="p-2 text-right font-mono">{totalShare > 0 ? '100.00%' : '0%'}</td>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </tfoot>
+                    </table>
+                  </div>
+                  <div className="mt-2 flex items-center justify-between gap-2 text-xs">
+                    <Badge variant="outline" className={badgeColor} data-testid="key-form-coherence">{badgeLabel}</Badge>
+                    {lotsAtZero === 0 && !isRound && totalShare > 0 && (
+                      <span className="text-slate-400 italic text-[11px]">Total libre : OK pour releves conso. Pour tantiemes, utilisez le bouton Normaliser /1000.</span>
+                    )}
+                  </div>
                 </div>
-              </div>
-            )}
+              );
+            })()}
             <div className="flex gap-3 justify-end">
               <Button variant="outline" onClick={() => setKeyDialog(false)}>Annuler</Button>
               <Button onClick={() => saveKey(false)} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="key-save-btn">{editingKey ? 'Modifier' : 'Creer'}</Button>
