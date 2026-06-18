@@ -12,6 +12,16 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 ## Implemented
 
+### Iter29 (Feb 2026) - Bug fix mutation : solde crediteur du vendeur enfin visible
+- **Bug rapporte** : apres mutation d'un lot, le vendeur disparaissait de la Balance Tiers proprietaires bien que son compte 40000XXX soit crediteur du transfert (1567.69 EUR dans le test Demo).
+- **Cause** : `routes/reports.py::balance_tiers_owners` filtrait les owners par `db.lots` -> un proprietaire sans lot dans l'ACP n'apparaissait plus, alors qu'il garde un solde residuel apres la vente.
+- **Fix** :
+  - Etend la liste des owners scannes avec **tous les third_party_id** trouves dans `journal_entries` de l'ACP (via `db.journal_entries.distinct("lines.third_party_id", ...)`)
+  - Ajoute un flag `is_former_owner` (true = ne possede plus aucun lot dans l'ACP)
+  - Filtre les ex-proprietaires a solde nul + 0 mouvement pour eviter le bruit
+  - UI BalanceTiersPage : badge ambre **"Ex-prop."** a cote du nom
+- Verifie : apres mutation Martin -> Dubois, Martin apparait avec balance **-195.64 EUR (crediteur)** (provisions 702.76 Dr - 1567.69 Cr = -864.93 + reserve 669.29 inchangee). Badge Ex-prop. affiche. Dubois cumule bien sa propre balance + 1567.69 debit.
+
 ### Iter28 (Feb 2026) - Mutation lot (vente) + Owner picker inline create
 - **Lots : selecteur proprietaire avec creation inline** (`LotsPage.js`) : nouveau composant `OwnerPicker` reutilisable. Recherche par nom/email/VCS, ajout en tags, bouton "Creer ce proprietaire" qui ouvre un mini-form (nom/prenom/email/tel) quand aucun resultat -> `POST /api/owners` + selection automatique. Utilise sur creation/edition de lot ET sur mutation.
 - **Endpoint mutation** `POST /api/lots/{lot_id}/mutate` + `POST /api/lots/{lot_id}/mutate-preview` (`routes/properties.py`) :

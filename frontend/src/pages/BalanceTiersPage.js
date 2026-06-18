@@ -86,7 +86,14 @@ export default function BalanceTiersPage() {
                   <TableBody>
                     {ownersData.owners.map(o => (
                       <TableRow key={o.owner_id} className="hover:bg-slate-50/50">
-                        <TableCell className="font-medium">{o.owner_name}</TableCell>
+                        <TableCell className="font-medium">
+                          {o.owner_name}
+                          {o.is_former_owner && (
+                            <Badge variant="outline" className="ml-2 bg-amber-50 border-amber-200 text-amber-700 text-[10px]" title="Ancien proprietaire avec solde residuel apres mutation">
+                              Ex-prop.
+                            </Badge>
+                          )}
+                        </TableCell>
                         <TableCell className="font-mono text-xs text-[#0055FF]">{o.vcs_code}</TableCell>
                         <TableCell className="font-mono text-[11px] text-slate-500">
                           {o.account_provisions || '—'} <span className="text-slate-300">/</span> {o.account_reserve || '—'}

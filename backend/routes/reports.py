@@ -657,8 +657,23 @@ def create_reports_router(db):
             return {"owners": [], "total_debiteurs": 0, "total_crediteurs": 0}
 
         lots = await db.lots.find({"copropriete_id": copropriete_id}, {"_id": 0}).to_list(10000)
-        owner_ids = list({l.get("owner_id") for l in lots if l.get("owner_id")})
+        owner_ids = set(l.get("owner_id") for l in lots if l.get("owner_id"))
+
+        # Aussi inclure les anciens proprietaires (vendus) qui ont encore un
+        # mouvement / solde sur leurs comptes tiers dans cette ACP.
+        # On scanne les journal_entries pour trouver tous les third_party_id et
+        # tous les comptes 40000XXX/40010XXX rencontres, puis on retrouve les owners
+        # qui ont ces comptes en tier_accounts[copropriete_id].
+        third_party_ids_in_je = await db.journal_entries.distinct(
+            "lines.third_party_id", {"copropriete_id": copropriete_id}
+        )
+        for tpid in third_party_ids_in_je:
+            if tpid:
+                owner_ids.add(tpid)
+        owner_ids = list(owner_ids)
         owners = await db.owners.find({"id": {"$in": owner_ids}}, {"_id": 0}).sort("name", 1).to_list(1000) if owner_ids else []
+        # Set of owners that still hold at least one lot in this ACP
+        current_owner_ids = set(l.get("owner_id") for l in lots if l.get("owner_id"))
 
         # Charge journal entries ACP-scoped (un seul fetch)
         entries = await db.journal_entries.find(
@@ -779,7 +794,11 @@ def create_reports_router(db):
                 "balance": balance,
                 "status": "debiteur" if balance > 0.01 else ("crediteur" if balance < -0.01 else "solde"),
                 "movements_count": len(movements),
+                "is_former_owner": oid not in current_owner_ids,
             })
+
+        # Hide ex-proprietaires that have a zero balance and no movement
+        result = [r for r in result if not (r.get("is_former_owner") and abs(r["balance"]) < 0.01 and r["movements_count"] == 0)]
 
         total_debiteurs = round(sum(r["balance"] for r in result if r["balance"] > 0), 2)
         total_crediteurs = round(sum(abs(r["balance"]) for r in result if r["balance"] < 0), 2)
