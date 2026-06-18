@@ -164,7 +164,6 @@ function OwnerPicker({ owners, selectedIds, onChange, multi = true, onOwnerCreat
 function MutationDialog({ lot, owners, ownersRefresh, onClose, onDone }) {
   const [newOwnerIds, setNewOwnerIds] = useState([]);
   const [saleDate, setSaleDate] = useState(new Date().toISOString().slice(0, 10));
-  const [salePrice, setSalePrice] = useState('');
   const [note, setNote] = useState('');
   const [preview, setPreview] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -192,13 +191,26 @@ function MutationDialog({ lot, owners, ownersRefresh, onClose, onDone }) {
       await api.post(`/lots/${lot.id}/mutate`, {
         new_owner_id: newOwnerId,
         sale_date: saleDate,
-        sale_price: Number(salePrice) || 0,
         note,
       });
       toast.success('Mutation enregistree');
       onDone();
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Erreur mutation');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleCancelMutation = async (mutationId) => {
+    if (!window.confirm('Annuler cette mutation ? Le proprietaire precedent sera restaure et l\'ecriture comptable supprimee.')) return;
+    setBusy(true);
+    try {
+      await api.delete(`/lots/${lot.id}/mutate/${mutationId}`);
+      toast.success('Mutation annulee');
+      onDone();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur annulation');
     } finally {
       setBusy(false);
     }
@@ -233,15 +245,9 @@ function MutationDialog({ lot, owners, ownersRefresh, onClose, onDone }) {
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="form-label">Date de la vente *</label>
-              <Input type="date" value={saleDate} onChange={e => setSaleDate(e.target.value)} data-testid="mutation-sale-date" />
-            </div>
-            <div>
-              <label className="form-label">Prix de vente (info, non comptable)</label>
-              <Input type="number" step="0.01" value={salePrice} onChange={e => setSalePrice(e.target.value)} placeholder="EUR" data-testid="mutation-sale-price" />
-            </div>
+          <div>
+            <label className="form-label">Date de la vente *</label>
+            <Input type="date" value={saleDate} onChange={e => setSaleDate(e.target.value)} data-testid="mutation-sale-date" />
           </div>
 
           <div>
@@ -308,17 +314,38 @@ function MutationDialog({ lot, owners, ownersRefresh, onClose, onDone }) {
 
           {/* History */}
           {lot?.mutations && lot.mutations.length > 0 && (
-            <details className="mt-4 text-xs text-slate-600">
+            <details className="mt-4 text-xs text-slate-600" open>
               <summary className="cursor-pointer text-slate-500 hover:text-slate-900 font-semibold">Historique des mutations ({lot.mutations.length})</summary>
               <div className="mt-2 space-y-2">
-                {lot.mutations.slice().reverse().map((m, i) => (
-                  <div key={i} className="border border-slate-200 rounded p-2 bg-white">
-                    <div className="font-medium text-slate-900">{m.date} : {m.old_owner_name} -&gt; {m.new_owner_name}</div>
-                    <div className="text-[11px]">Roulement {m.roulement_quota?.toFixed(2)} EUR + Prorata {m.prorata_provisions?.toFixed(2)} EUR = <b>{m.total_transfer?.toFixed(2)} EUR</b>{m.sale_price ? ` | Prix: ${m.sale_price.toFixed(2)} EUR` : ''}</div>
-                    {m.note && <div className="text-[11px] italic text-slate-500">{m.note}</div>}
-                  </div>
-                ))}
+                {lot.mutations.slice().reverse().map((m, i) => {
+                  const isLast = i === 0; // reversed, so the first item is the most recent
+                  return (
+                    <div key={m.id || i} className="border border-slate-200 rounded p-2 bg-white">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex-1">
+                          <div className="font-medium text-slate-900">{m.date} : {m.old_owner_name} -&gt; {m.new_owner_name}</div>
+                          <div className="text-[11px]">Roulement {m.roulement_quota?.toFixed(2)} EUR + Prorata {m.prorata_provisions?.toFixed(2)} EUR = <b>{m.total_transfer?.toFixed(2)} EUR</b></div>
+                          {m.note && <div className="text-[11px] italic text-slate-500">{m.note}</div>}
+                        </div>
+                        {isLast && (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="text-red-600 border-red-200 hover:bg-red-50 h-7 text-[11px]"
+                            onClick={() => handleCancelMutation(m.id || 'last')}
+                            data-testid={`cancel-mutation-${m.id || 'last'}`}
+                            disabled={busy}
+                          >
+                            Annuler
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
+              <div className="text-[10px] italic text-slate-400 mt-1">Seule la mutation la plus recente peut etre annulee.</div>
             </details>
           )}
         </div>

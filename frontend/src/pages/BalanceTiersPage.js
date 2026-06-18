@@ -7,7 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { toast } from 'sonner';
-import { Users, Truck, Eye, ArrowUpRight, ArrowDownRight, Download } from 'lucide-react';
+import { Users, Truck, Eye, ArrowUpRight, ArrowDownRight, Download, FileText } from 'lucide-react';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
@@ -108,7 +108,25 @@ export default function BalanceTiersPage() {
                             {o.status === 'debiteur' ? 'Debiteur' : o.status === 'crediteur' ? 'Crediteur' : 'Solde'}
                           </Badge>
                         </TableCell>
-                        <TableCell><Button variant="ghost" size="sm" onClick={() => viewOwnerDetail(o.owner_id)} data-testid={`view-owner-${o.owner_id}`}><Eye size={14} /></Button></TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-1">
+                            <Button variant="ghost" size="sm" onClick={() => viewOwnerDetail(o.owner_id)} data-testid={`view-owner-${o.owner_id}`} title="Detail"><Eye size={14} /></Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => {
+                                const c = localStorage.getItem('copropriete_id') || '';
+                                if (!c) { toast.error('Selectionnez une ACP'); return; }
+                                window.open(`${API}/api/reports/situation-compte/${o.owner_id}/pdf?copropriete_id=${c}`, '_blank');
+                              }}
+                              data-testid={`pdf-situation-${o.owner_id}`}
+                              title="Situation de compte PDF (envoi email/postal)"
+                              className="text-[#0055FF] hover:text-[#0040CC]"
+                            >
+                              <FileText size={14} />
+                            </Button>
+                          </div>
+                        </TableCell>
                       </TableRow>
                     ))}
                   </TableBody>

@@ -371,6 +371,7 @@ def create_properties_router(db):
 
         # ---- 4) Maj du lot + historique ----
         mutation_record = {
+            "id": str(uuid.uuid4()),
             "date": sale_date,
             "old_owner_id": old_owner_id,
             "old_owner_name": old_owner.get("name", ""),
@@ -395,6 +396,49 @@ def create_properties_router(db):
         return {
             "lot": updated,
             "mutation": mutation_record,
+        }
+
+    @router.delete("/lots/{lot_id}/mutate/{mutation_id}")
+    async def cancel_mutation(lot_id: str, mutation_id: str):
+        """Annule la DERNIERE mutation d'un lot : restaure l'ancien proprietaire,
+        supprime l'ecriture OD de mutation et retire l'entree d'historique.
+        Refuse si la mutation visee n'est pas la plus recente."""
+        lot = await db.lots.find_one({"id": lot_id}, {"_id": 0})
+        if not lot:
+            raise HTTPException(404, "Lot non trouve")
+        mutations = lot.get("mutations") or []
+        if not mutations:
+            raise HTTPException(400, "Ce lot n'a aucune mutation a annuler")
+        last = mutations[-1]
+        # Accept "last" as a shortcut for the most recent mutation, or accept
+        # the id if it matches. Older mutations created before the `id` field
+        # was added won't have one, so we also accept a match-by-position when
+        # the id is missing.
+        if mutation_id != "last" and last.get("id") and last.get("id") != mutation_id:
+            raise HTTPException(
+                400,
+                "Seule la derniere mutation peut etre annulee (les mutations anterieures sont figees)."
+            )
+        # Restore previous owner
+        old_owner_id = last.get("old_owner_id")
+        if not old_owner_id:
+            raise HTTPException(400, "Mutation sans old_owner_id - impossible de restaurer")
+        # Delete OD entry if any
+        entry_id = last.get("journal_entry_id")
+        if entry_id:
+            await db.journal_entries.delete_one({"id": entry_id})
+        # Pop the last mutation + restore owner
+        await db.lots.update_one(
+            {"id": lot_id},
+            {"$set": {"owner_id": old_owner_id, "owner_ids": [old_owner_id]},
+             "$pop": {"mutations": 1}}
+        )
+        updated = await db.lots.find_one({"id": lot_id}, {"_id": 0})
+        return {
+            "status": "ok",
+            "message": "Mutation annulee, proprietaire precedent restaure",
+            "lot": updated,
+            "cancelled_mutation": last,
         }
 
     @router.post("/lots/{lot_id}/mutate-preview")

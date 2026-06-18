@@ -12,6 +12,30 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 ## Implemented
 
+### Iter30 (Feb 2026) - Annulation mutation + PDF Situation de compte + Robustesse erreurs Pydantic
+
+#### Annulation de mutation
+- **`DELETE /api/lots/{lot_id}/mutate/{mutation_id}`** (`routes/properties.py`) : annule la **derniere** mutation d'un lot, restaure `lot.owner_id`, supprime l'OD comptable liee, retire l'entree d'historique. Refuse si la mutation visee n'est pas la plus recente.
+- **Accepte `mutation_id="last"`** comme raccourci pour les anciennes mutations creees avant l'ajout du champ `id` (retrocompat).
+- **UI** : bouton rouge **"Annuler"** uniquement sur la mutation la plus recente dans l'historique du dialog Mutation (`LotsPage.js`), avec confirmation. Mention "Seule la mutation la plus recente peut etre annulee."
+- Le champ "Prix de vente" a ete retire du formulaire et de l'affichage historique sur demande utilisateur.
+
+#### PDF Situation de compte
+- **Nouveau module `/app/backend/pdf_situation_compte.py`** : genere un PDF A4 professionnel envoyable par email/postal :
+  - En-tete syndic + ACP en 2 colonnes encadrees
+  - Bloc destinataire (nom, adresse, VCS, comptes provisions/reserve)
+  - Tableau des mouvements (date, journal, ref, libelle, cpt, debit, credit, solde progressif)
+  - Ligne TOTAUX + solde final code couleur (rouge debiteur / vert crediteur)
+  - Bloc "Coordonnees de paiement" avec IBAN, BIC, communication structuree (VCS) si solde debiteur
+- **`GET /api/reports/situation-compte/{owner_id}/pdf`** : parametres `copropriete_id` (required), `start_date` / `end_date` (optionnels) pour la periode. Inclut un solde a nouveau si une date de debut est donnee. Retourne `application/pdf` en attachment (`situation-{owner_name}-{date}.pdf`).
+- **UI BalanceTiersPage** : bouton FileText `[data-testid="pdf-situation-{owner_id}"]` a cote de l'oeil "Detail" pour chaque proprietaire -> ouvre le PDF dans un nouvel onglet.
+
+#### Robustesse erreurs Pydantic
+- **Bug rapporte** : `Uncaught runtime error: Objects are not valid as a React child (found: object with keys {type, loc, msg, input, url})` lors de la creation d'une cle de repartition avec donnees incompletes.
+- **Cause** : FastAPI renvoie 422 avec `detail` = ARRAY d'objets Pydantic. Le code `toast.error(err.response.data.detail || 'Erreur')` (present dans **>20 fichiers**) passe l'array a sonner qui essaie de le render -> crash React.
+- **Fix dans `lib/api.js`** : nouvel intercepteur de reponse axios qui **normalise systematiquement** `error.response.data.detail` en string formattee. Si array Pydantic -> `"name: Field required | due_date: Must be ISO format"`. Si objet -> `JSON.stringify`. Si string -> inchange.
+- Avantage : zero modification des >20 pages qui utilisent ce pattern, le fix est global.
+
 ### Iter29 (Feb 2026) - Bug fix mutation : solde crediteur du vendeur enfin visible
 - **Bug rapporte** : apres mutation d'un lot, le vendeur disparaissait de la Balance Tiers proprietaires bien que son compte 40000XXX soit crediteur du transfert (1567.69 EUR dans le test Demo).
 - **Cause** : `routes/reports.py::balance_tiers_owners` filtrait les owners par `db.lots` -> un proprietaire sans lot dans l'ACP n'apparaissait plus, alors qu'il garde un solde residuel apres la vente.

@@ -46,6 +46,25 @@ let refreshQueue = [];
 api.interceptors.response.use(
   (response) => response,
   async (error) => {
+    // Normalize Pydantic / FastAPI validation errors so `detail` is ALWAYS a string.
+    // FastAPI returns 422 as { detail: [{ type, loc, msg, input, url }, ...] }
+    // which breaks any naive `toast.error(err.response.data.detail)` (React: "Objects
+    // are not valid as a React child").
+    try {
+      if (error?.response?.data?.detail) {
+        const d = error.response.data.detail;
+        if (Array.isArray(d)) {
+          error.response.data.detail = d.map(e => {
+            if (typeof e === 'string') return e;
+            const loc = Array.isArray(e?.loc) ? e.loc.filter(x => x !== 'body').join('.') : '';
+            const msg = e?.msg || JSON.stringify(e);
+            return loc ? `${loc}: ${msg}` : msg;
+          }).join(' | ');
+        } else if (typeof d === 'object') {
+          error.response.data.detail = d.message || d.msg || JSON.stringify(d);
+        }
+      }
+    } catch {}
     const original = error.config || {};
     const status = error.response?.status;
     const isAuthEndpoint = (original.url || '').includes('/auth/');
@@ -80,5 +99,30 @@ api.interceptors.response.use(
     return Promise.reject(error);
   }
 );
+
+/**
+ * Robust formatter for FastAPI / Pydantic error responses.
+ * FastAPI Pydantic validation errors come back as an ARRAY of objects:
+ *   { type, loc, msg, input, url }
+ * Rendering them directly in JSX throws "Objects are not valid as a React child".
+ * This helper always returns a string.
+ */
+export function extractApiError(err, fallback = 'Une erreur est survenue.') {
+  const d = err?.response?.data?.detail;
+  if (d == null) return err?.message || fallback;
+  if (typeof d === 'string') return d;
+  if (Array.isArray(d)) {
+    return d.map(e => {
+      if (typeof e === 'string') return e;
+      const loc = Array.isArray(e?.loc) ? e.loc.join('.') : '';
+      const msg = e?.msg || JSON.stringify(e);
+      return loc ? `${loc}: ${msg}` : msg;
+    }).join(' | ');
+  }
+  if (typeof d === 'object') {
+    return d.message || d.msg || JSON.stringify(d);
+  }
+  return String(d);
+}
 
 export default api;
