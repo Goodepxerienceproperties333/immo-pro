@@ -100,7 +100,7 @@ async def generate_purchase_entry(db, invoice: dict) -> dict | None:
                 {"account_number": "643",
                  "account_name": pcmn_names2.get("643", "Frais privatifs"),
                  "debit": 0.0, "credit": amount,
-                 "third_party_id": owner_id,
+                 "third_party_id": None,
                  "third_party_name": f"Imputation - {owner_name}"},
             ]
             if not _balanced(lines):

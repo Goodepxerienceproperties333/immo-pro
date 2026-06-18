@@ -12,6 +12,16 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 ## Implemented
 
+### Iter33 (Feb 2026) - Bug fix critique : frais privatif laissait le proprietaire a solde 0
+- **Bug rapporte** : apres affectation d'un frais privatif (facture Finlead avec `is_private_fee=true`), le proprietaire apparaissait debiteur ET creditee du meme montant -> solde 0 au lieu de debiteur du montant des frais.
+- **Cause** : dans `auto_entries.py` (ligne 100-104), la **4eme ligne** de l'ecriture AC (Cr 643 - contrepartie de l'imputation) recevait `third_party_id = owner_id`. La balance tiers et le PDF situation incluaient donc cette ligne dans les mouvements du proprietaire, annulant son debit.
+- **Modele Finlead correct** (4 lignes) :
+  1. Dr 643 (charge privative) / Cr 44000XXX (fournisseur) - `tpid=supplier`
+  2. Dr 40000XXX (proprietaire) / Cr 643 (imputation) - **`tpid=owner` SEULEMENT sur le Dr 40000XXX**, pas sur le Cr 643
+- **Fix** : retire `third_party_id=owner_id` de la 4eme ligne (Cr 643 imputation), garde seulement le `third_party_name` informatif.
+- **Migration historique** : 2 ecritures auto-generees retroactivement corrigees (lignes 643 Cr ont leur tpid passe a `None`).
+- **Verifie** : Dubois Jean sur ACP Test passe de balance 0 a **balance 30.00 EUR debiteur** apres migration. Le PDF n'affichera plus que la ligne 40000003 Dr 30€ (et solde 30€).
+
 ### Iter32 (Feb 2026) - Cles de repartition : total + controle de coherence
 - **Liste des cles** (`InvoicesPage.js`) : ajout de 2 nouvelles colonnes
   - **"Total quotites"** : somme live des quote-parts (e.g. 1000.00)
