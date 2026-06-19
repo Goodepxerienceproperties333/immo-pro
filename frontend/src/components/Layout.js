@@ -270,6 +270,9 @@ export default function Layout() {
           <div className="w-8 h-8 rounded bg-[#0055FF] flex items-center justify-center text-white font-bold text-sm">CP</div>
           <span className="text-white font-bold text-lg tracking-tight" style={{fontFamily:'Chivo,sans-serif'}}>CoproManager</span>
           <div className="flex-1" />
+          <NavLink to="/" end className="text-slate-400 hover:text-white text-xs flex items-center gap-1.5 transition-colors" data-testid="nav-dashboard-top">
+            <LayoutDashboard size={14} /> Tableau de bord
+          </NavLink>
           {isSuperadmin && (
             <NavLink to="/admin" className="text-amber-400 hover:text-amber-300 text-xs flex items-center gap-1.5 transition-colors font-semibold" data-testid="nav-admin-top">
               <Shield size={14} /> Admin
