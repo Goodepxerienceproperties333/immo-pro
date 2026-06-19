@@ -180,22 +180,61 @@ def create_banking_router(db):
                 400,
                 f"Extrait non equilibre. Solde ouverture ({opening:.2f}) + mouvements ({mvts_sum:.2f}) = {computed:.2f}, mais solde fermeture saisi = {closing:.2f}. Difference : {diff:.2f}"
             )
+        # GENERATION DES ECRITURES COMPTABLES (FI) : une ecriture par transaction.
+        # - Si lettree -> Dr/Cr counterpart correspondant (owner/supplier/invoice)
+        # - Sinon -> Dr/Cr 499000 compte d'attente (visible dans bilan, neutralise)
+        from auto_entries import generate_bank_entry
+        fi_created = 0
+        fi_errors = []
+        for t in txns:
+            try:
+                result = await generate_bank_entry(db, t)
+                if result:
+                    fi_created += 1
+            except Exception as e:
+                fi_errors.append({"txn_id": t.get("id"), "error": str(e)})
         await db.bank_statements.update_one(
             {"id": stmt_id},
             {"$set": {"status": "posted", "posted_at": datetime.now(timezone.utc).isoformat()}}
         )
-        return {"status": "ok", "message": "Extrait comptabilise", "computed_closing": computed, "transactions_count": len(txns)}
+        return {
+            "status": "ok",
+            "message": f"Extrait comptabilise. {fi_created} ecriture(s) financiere(s) creee(s).",
+            "computed_closing": computed,
+            "transactions_count": len(txns),
+            "fi_entries_created": fi_created,
+            "fi_errors": fi_errors,
+        }
 
     @router.post("/statements/{stmt_id}/unpost")
     async def unpost_statement(stmt_id: str):
-        """Repasse l'extrait en draft (permet correction)."""
-        result = await db.bank_statements.update_one(
+        """Repasse l'extrait en draft (permet correction).
+        Supprime egalement toutes les ecritures FI auto-generees pour les
+        transactions de cet extrait (sera regenere a la prochaine comptabilisation)."""
+        from auto_entries import _delete_auto_entries
+        stmt = await db.bank_statements.find_one({"id": stmt_id}, {"_id": 0})
+        if not stmt:
+            raise HTTPException(404, "Extrait non trouve")
+        txns = await db.bank_transactions.find({"statement_id": stmt_id}, {"_id": 0}).to_list(10000)
+        deleted = 0
+        for t in txns:
+            try:
+                # Count first then delete (atomicity is OK here since post is single-threaded for the stmt)
+                cnt = await db.journal_entries.count_documents({
+                    "auto_generated": True,
+                    "manually_edited": {"$ne": True},
+                    "source_type": "bank_txn",
+                    "source_id": t["id"],
+                })
+                await _delete_auto_entries(db, "bank_txn", t["id"])
+                deleted += cnt
+            except Exception as e:
+                print(f"[unpost] delete FI entry failed for txn {t.get('id')}: {e}")
+        await db.bank_statements.update_one(
             {"id": stmt_id},
             {"$set": {"status": "draft", "posted_at": None}}
         )
-        if result.matched_count == 0:
-            raise HTTPException(404, "Extrait non trouve")
-        return {"status": "ok", "message": "Extrait repasse en brouillon"}
+        return {"status": "ok", "message": f"Extrait repasse en brouillon. {deleted} ecriture(s) FI supprimee(s)."}
 
     @router.put("/statements/{stmt_id}")
     async def update_statement(stmt_id: str, data: StatementInput):
@@ -363,6 +402,19 @@ def create_banking_router(db):
                 {"$set": {"status": "unpaid"},
                  "$unset": {"paid_at": "", "paid_by_transaction_id": ""}}
             )
+        # Re-genere l'ecriture FI en mode "compte d'attente 499000" si l'extrait est comptabilise
+        # (sinon le compte bancaire disparait du bilan apres delettrage).
+        try:
+            if prev and prev.get("statement_id"):
+                stmt = await db.bank_statements.find_one(
+                    {"id": prev["statement_id"]}, {"_id": 0, "status": 1}
+                )
+                if stmt and stmt.get("status") == "posted":
+                    fresh = await db.bank_transactions.find_one({"id": txn_id}, {"_id": 0})
+                    if fresh:
+                        await generate_bank_entry(db, fresh)
+        except Exception as e:
+            print(f"[unlettrage] regen FI failed: {e}")
         return {"message": "Lettrage annule"}
 
     @router.post("/unlettrage-by-invoice/{invoice_id}")

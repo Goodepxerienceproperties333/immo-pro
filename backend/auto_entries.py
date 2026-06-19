@@ -356,8 +356,8 @@ async def generate_bank_entry(db, txn: dict) -> dict | None:
     copro_id = txn.get("copropriete_id", "")
     if not copro_id:
         return None
-    if not txn.get("matched"):
-        return None
+    # NOTE : on ne return PAS quand non matched - on utilise un compte d'attente
+    # plus loin pour que le compte bancaire apparaisse quand meme au bilan.
     amount = abs(float(txn.get("amount", 0) or 0))
     if amount <= 0:
         return None
@@ -418,8 +418,30 @@ async def generate_bank_entry(db, txn: dict) -> dict | None:
             counterpart_name = supplier.get("name", "")
             third_party_id = supplier["id"]
 
+    # Fallback : transaction non lettree -> compte d'attente 499000
+    # Permet au compte bancaire d'apparaitre dans le bilan meme avant le lettrage.
     if not counterpart_acc:
-        return None
+        counterpart_acc = "499000"
+        counterpart_name = (
+            f"Encaissement non identifie - {txn.get('communication','')[:40]}"
+            if is_credit else
+            f"Decaissement non identifie - {txn.get('communication','')[:40]}"
+        )
+        # S'assurer que le compte 499000 existe dans le pcmn de cette ACP
+        existing = await db.pcmn_accounts.find_one(
+            {"number": "499000", "copropriete_id": copro_id}, {"_id": 0}
+        )
+        if not existing:
+            await db.pcmn_accounts.insert_one({
+                "number": "499000",
+                "name": "Encaissements / Decaissements non identifies",
+                "class_num": 4,
+                "parent": "499",
+                "type": "balance",
+                "copropriete_id": copro_id,
+                "active": True,
+                "is_custom": True,
+            })
 
     pcmn_q = {"number": {"$in": [bank_acc, counterpart_acc]}, "copropriete_id": copro_id}
     pcmns = await db.pcmn_accounts.find(pcmn_q, {"_id": 0}).to_list(10)

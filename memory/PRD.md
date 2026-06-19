@@ -12,6 +12,26 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 ## Implemented
 
+### Iter51 (Feb 2026) - Bilan dynamique : compte bancaire + paiements visibles via compte d'attente 499000
+
+#### Probleme
+Quand l'utilisateur "Comptabilise" un extrait bancaire avec des transactions NON lettrees (ex: 5x1000 EUR avec communications VCS non reconnues), AUCUNE ecriture FI n'etait creee. Resultat : le compte bancaire et les 5000 EUR encaisses n'apparaissaient PAS dans le bilan.
+Cause racine : `generate_bank_entry` (auto_entries.py L359-360) faisait un early-return si `txn.matched == False`. Et `post_statement` ne generait aucune ecriture - il se contentait de passer le statut a "posted".
+
+#### Fix
+- `auto_entries.generate_bank_entry` : suppression de l'early-return sur transactions non matched. Si aucun counterpart resolu, fallback sur le compte d'attente PCMN `499000 "Encaissements / Decaissements non identifies"` (auto-cree dans le pcmn de l'ACP si manquant).
+- `routes/banking.post_statement` : apres validation de l'equilibre, boucle sur les transactions et appelle `generate_bank_entry` pour chacune (matched ou pas). Retourne `fi_entries_created` + `fi_errors`.
+- `routes/banking.unpost_statement` : supprime TOUTES les ecritures FI auto-generees liees aux transactions de l'extrait avant de repasser draft.
+- `routes/banking.unlettrage/{txn_id}` : si l'extrait est `posted`, regenere l'ecriture FI en mode "compte d'attente 499000" apres le delettrage (sinon le compte bancaire disparait du bilan).
+
+#### Verification
+Test ACP (5x1000 EUR comptabilises) :
+- Bilan AVANT : 0 EUR sur compte bancaire (bug)
+- Bilan APRES : ACTIF Banque 55143100 = 5000 EUR + PASSIF Compte d'attente 499000 = 5000 EUR
+- Cycle lettrage manuel txn -> owner : FI passe de Dr Banque / Cr 499000 a Dr Banque / Cr 40000005 (proprietaire) automatiquement.
+- Cycle delettrage : FI revient automatiquement a Dr Banque / Cr 499000.
+- Equilibre Actif=Passif preserve a chaque etape.
+
 ### Iter50 (Feb 2026) - Lockdown Gestion utilisateurs + Self-profile + Budget revoke cascade + Edit ACP
 
 #### Verrouillage de la gestion utilisateurs au superadmin SEUL
