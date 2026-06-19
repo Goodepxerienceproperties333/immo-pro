@@ -12,6 +12,28 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 ## Implemented
 
+### Iter41 (Feb 2026) - Bilan allege (UI + PDF)
+
+#### UI ReportsPage > Bilan
+- Rubriques vides (total=0) **masquees** automatiquement.
+- Badge equilibre/desequilibre en haut (vert/rouge).
+- Paddings reduits (py-1 / py-1.5), fonts plus sobres (text-[11px] tracking-wide
+  pour les rubriques, text-sm pour les comptes, font-mono text-[11px] text-slate-400
+  pour les numeros de compte).
+- Headers ACTIF/PASSIF plus discrets (py-2, text-sm), bordures 2px sur totals.
+- Bouton Excel deplace en haut a droite, plus petit (variant=ghost).
+
+#### PDF Bilan allege (`pdf_bilan.py`)
+- Filtrage des rubriques vides cote PDF aussi (gain : moins de pages, meilleure lisibilite).
+- Compte agrege owner : libelle sans numero (juste le nom).
+- Couleurs grises plus claires (#94A3B8 pour les numeros au lieu de #64748B).
+- Borders/grille allegees : 0.4 box + 0.2 lignes legeres.
+- Paddings reduits (1pt sur les lignes detail, 3pt sur les rubriques).
+- Header/Total : 5pt padding (au lieu de 6pt).
+- Resultat : PDF plus compact (~4KB stable).
+
+
+
 ### Iter40 (Feb 2026) - Bilan equilibre garanti
 
 #### Fix critique : Bilan toujours equilibre quel que soit le filtre

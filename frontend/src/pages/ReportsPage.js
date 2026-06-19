@@ -175,31 +175,35 @@ export default function ReportsPage() {
             </Button>
           </div>
           {bilan && (<>
-            <div className="flex justify-end mb-2"><Button onClick={exportBilanXlsx} variant="outline" size="sm" data-testid="export-bilan-xlsx"><Download size={14} className="mr-1" /> Export Bilan Excel</Button></div>
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <Card className="border-slate-200"><CardHeader className="bg-blue-50 rounded-t-md"><CardTitle className="text-base" style={{fontFamily:'Chivo,sans-serif'}}>ACTIF</CardTitle></CardHeader><CardContent className="p-0">
+            <div className="flex justify-between items-center mb-3">
+              <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${bilan.equilibre ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                {bilan.equilibre ? '● Bilan equilibre' : `● Ecart : ${bilan.ecart?.toFixed(2)} EUR`}
+              </span>
+              <Button onClick={exportBilanXlsx} variant="ghost" size="sm" data-testid="export-bilan-xlsx" className="text-xs"><Download size={12} className="mr-1" /> Excel</Button>
+            </div>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <Card className="border-slate-200 shadow-sm"><CardHeader className="bg-blue-50/70 rounded-t-md py-2 px-4"><CardTitle className="text-sm font-semibold text-blue-900" style={{fontFamily:'Chivo,sans-serif'}}>ACTIF</CardTitle></CardHeader><CardContent className="p-0">
               <Table><TableBody>
-                {bilan.actif.map((r, i) => (
+                {bilan.actif.filter(r => r.total > 0.01).map((r, i) => (
                   <Fragment key={`a-${i}`}>
-                    <TableRow className="bg-slate-50/70"><TableCell colSpan={2} className="font-semibold text-xs uppercase text-slate-700">{r.label}</TableCell><TableCell className="text-right font-mono font-semibold">{r.total.toFixed(2)}</TableCell></TableRow>
-                    {(r.accounts || []).map((a, j) => (<TableRow key={`a-${i}-${j}`}><TableCell className="font-mono text-sm pl-6">{a.account_number}</TableCell><TableCell className="text-sm">{a.account_name}</TableCell><TableCell className="text-right font-mono text-sm">{a.amount.toFixed(2)}</TableCell></TableRow>))}
+                    <TableRow className="bg-slate-50/60 border-b border-slate-100"><TableCell colSpan={2} className="font-semibold text-[11px] uppercase tracking-wide text-slate-600 py-1.5">{r.label}</TableCell><TableCell className="text-right font-mono text-sm font-semibold py-1.5 text-slate-900">{r.total.toFixed(2)}</TableCell></TableRow>
+                    {(r.accounts || []).map((a, j) => (<TableRow key={`a-${i}-${j}`} className="hover:bg-slate-50/40 border-b border-slate-50"><TableCell className="font-mono text-[11px] text-slate-400 pl-6 py-1 w-24">{a.account_number}</TableCell><TableCell className="text-sm py-1">{a.account_name}</TableCell><TableCell className="text-right font-mono text-sm py-1 text-slate-700">{a.amount.toFixed(2)}</TableCell></TableRow>))}
                   </Fragment>
                 ))}
-                <TableRow className="bg-blue-50 font-bold border-t-2 border-blue-200"><TableCell colSpan={2}>TOTAL ACTIF</TableCell><TableCell className="text-right font-mono">{bilan.total_actif.toFixed(2)} EUR</TableCell></TableRow>
+                <TableRow className="bg-blue-100/70 font-bold border-t-2 border-blue-300"><TableCell colSpan={2} className="text-sm">TOTAL ACTIF</TableCell><TableCell className="text-right font-mono text-sm">{bilan.total_actif.toFixed(2)} EUR</TableCell></TableRow>
               </TableBody></Table>
             </CardContent></Card>
-            <Card className="border-slate-200"><CardHeader className="bg-green-50 rounded-t-md"><CardTitle className="text-base" style={{fontFamily:'Chivo,sans-serif'}}>PASSIF</CardTitle></CardHeader><CardContent className="p-0">
+            <Card className="border-slate-200 shadow-sm"><CardHeader className="bg-green-50/70 rounded-t-md py-2 px-4"><CardTitle className="text-sm font-semibold text-green-900" style={{fontFamily:'Chivo,sans-serif'}}>PASSIF</CardTitle></CardHeader><CardContent className="p-0">
               <Table><TableBody>
-                {bilan.passif.map((r, i) => (
+                {bilan.passif.filter(r => r.total > 0.01).map((r, i) => (
                   <Fragment key={`p-${i}`}>
-                    <TableRow className="bg-slate-50/70"><TableCell colSpan={2} className="font-semibold text-xs uppercase text-slate-700">{r.label}</TableCell><TableCell className="text-right font-mono font-semibold">{r.total.toFixed(2)}</TableCell></TableRow>
-                    {(r.accounts || []).map((a, j) => (<TableRow key={`p-${i}-${j}`}><TableCell className="font-mono text-sm pl-6">{a.account_number}</TableCell><TableCell className="text-sm">{a.account_name}</TableCell><TableCell className="text-right font-mono text-sm">{a.amount.toFixed(2)}</TableCell></TableRow>))}
+                    <TableRow className="bg-slate-50/60 border-b border-slate-100"><TableCell colSpan={2} className="font-semibold text-[11px] uppercase tracking-wide text-slate-600 py-1.5">{r.label}</TableCell><TableCell className="text-right font-mono text-sm font-semibold py-1.5 text-slate-900">{r.total.toFixed(2)}</TableCell></TableRow>
+                    {(r.accounts || []).map((a, j) => (<TableRow key={`p-${i}-${j}`} className="hover:bg-slate-50/40 border-b border-slate-50"><TableCell className="font-mono text-[11px] text-slate-400 pl-6 py-1 w-24">{a.account_number}</TableCell><TableCell className="text-sm py-1">{a.account_name}</TableCell><TableCell className="text-right font-mono text-sm py-1 text-slate-700">{a.amount.toFixed(2)}</TableCell></TableRow>))}
                   </Fragment>
                 ))}
-                <TableRow className="bg-green-50 font-bold border-t-2 border-green-200"><TableCell colSpan={2}>TOTAL PASSIF</TableCell><TableCell className="text-right font-mono">{bilan.total_passif.toFixed(2)} EUR</TableCell></TableRow>
+                <TableRow className="bg-green-100/70 font-bold border-t-2 border-green-300"><TableCell colSpan={2} className="text-sm">TOTAL PASSIF</TableCell><TableCell className="text-right font-mono text-sm">{bilan.total_passif.toFixed(2)} EUR</TableCell></TableRow>
               </TableBody></Table>
             </CardContent></Card>
-            {!bilan.equilibre && <div className="col-span-full text-center text-xs text-red-600">Ecart bilan: {bilan.ecart?.toFixed(2)} EUR (non equilibre)</div>}
           </div></>)}
         </TabsContent>
 

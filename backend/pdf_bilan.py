@@ -49,7 +49,9 @@ def _fmt_date(s):
 
 
 def _column_table(rubriques, side_label, total):
-    """Construit le tableau ACTIF ou PASSIF detaille."""
+    """Construit le tableau ACTIF ou PASSIF detaille - layout aere."""
+    # Filtre les rubriques vides (total = 0) pour alleger l'affichage
+    rubriques = [r for r in rubriques if r.get("total", 0) > 0.005]
     rows = []
     # Header de la colonne
     rows.append([
@@ -64,15 +66,19 @@ def _column_table(rubriques, side_label, total):
         ])
         # Detail des comptes
         for a in r.get("accounts", []):
-            num = a.get("account_number", "")
+            num = a.get("account_number", "") or ""
             name = a.get("account_name", "") or ""
             amt = a.get("amount", 0)
+            # Si pas de numero (compte agrege owner), afficher juste le nom
+            if num:
+                label_html = (
+                    f"<font color='#94A3B8' size='7' name='Courier'>{num}</font> "
+                    f"<font size='8.5'>{name}</font>"
+                )
+            else:
+                label_html = f"<font size='8.5'>{name}</font>"
             rows.append([
-                Paragraph(
-                    f"<font color='#64748B' size='8' name='Courier'>{num}</font> "
-                    f"<font size='9'>{name}</font>",
-                    _acc_style(),
-                ),
+                Paragraph(label_html, _acc_style()),
                 Paragraph(_fmt_eur(amt), _acc_right()),
             ])
     # TOTAL
@@ -86,29 +92,30 @@ def _column_table(rubriques, side_label, total):
         ("BACKGROUND", (0, 0), (-1, 0), HEADER_BG),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
         ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-        ("TOPPADDING", (0, 0), (-1, 0), 6),
-        ("BOTTOMPADDING", (0, 0), (-1, 0), 6),
+        ("TOPPADDING", (0, 0), (-1, 0), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, 0), 5),
         # Total
         ("BACKGROUND", (0, -1), (-1, -1), HEADER_BG),
         ("TEXTCOLOR", (0, -1), (-1, -1), colors.white),
-        ("LINEABOVE", (0, -1), (-1, -1), 1.2, SLATE_900),
-        ("TOPPADDING", (0, -1), (-1, -1), 6),
-        ("BOTTOMPADDING", (0, -1), (-1, -1), 6),
-        # Grille
-        ("BOX", (0, 0), (-1, -1), 0.6, SLATE_300),
+        ("LINEABOVE", (0, -1), (-1, -1), 1, SLATE_900),
+        ("TOPPADDING", (0, -1), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, -1), (-1, -1), 5),
+        # Grille legere
+        ("BOX", (0, 0), (-1, -1), 0.4, SLATE_300),
+        ("LINEBELOW", (0, 1), (-1, -2), 0.2, SLATE_100),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 6),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 6),
-        ("TOPPADDING", (0, 1), (-1, -2), 2),
-        ("BOTTOMPADDING", (0, 1), (-1, -2), 2),
+        ("LEFTPADDING", (0, 0), (-1, -1), 5),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+        ("TOPPADDING", (0, 1), (-1, -2), 1),
+        ("BOTTOMPADDING", (0, 1), (-1, -2), 1),
         ("ALIGN", (1, 0), (1, -1), "RIGHT"),
     ]
     # Rubrique rows (label gras) - identifier les indexes de rubriques
     idx = 1
     for r in rubriques:
         style.append(("BACKGROUND", (0, idx), (-1, idx), RUBRIQUE_BG))
-        style.append(("TOPPADDING", (0, idx), (-1, idx), 5))
-        style.append(("BOTTOMPADDING", (0, idx), (-1, idx), 5))
+        style.append(("TOPPADDING", (0, idx), (-1, idx), 3))
+        style.append(("BOTTOMPADDING", (0, idx), (-1, idx), 3))
         idx += 1 + len(r.get("accounts", []))
     tbl.setStyle(TableStyle(style))
     return tbl
