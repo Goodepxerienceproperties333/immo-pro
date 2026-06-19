@@ -12,6 +12,20 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 ## Implemented
 
+### Iter40 (Feb 2026) - Bilan equilibre garanti
+
+#### Fix critique : Bilan toujours equilibre quel que soit le filtre
+- Avant : `result_exercise` calcule sur la PERIODE [fy.start_date → date_to]
+  alors que les balances classes 1-5 sont **cumulees** jusqu'a date_to.
+  -> Desequilibre si charges/produits anterieurs a fy.start_date impactent le bilan.
+- Apres : `result_exercise` = TOUTES les ecritures 6/7 jusqu'a date_to (sans start_date).
+  Mathematiquement equivalent au solde net des classes 1-5 (par double-entree).
+  -> Bilan TOUJOURS equilibre, meme avec filtre exercice fiscal.
+- Verifie sur 3 scenarios : sans filtre, avec exercice, mode "apres repartition" -
+  Ecart = 0.00 EUR systematiquement.
+
+
+
 ### Iter39 (Feb 2026) - Bilan : fusion proprietaires + Migration 550000 -> 55143100
 
 #### Fusion comptes proprietaires dans le bilan

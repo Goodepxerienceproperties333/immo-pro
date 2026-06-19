@@ -322,14 +322,12 @@ def create_reports_router(db):
 
         # Compute current period result (classes 6 & 7) and inject in 499 (avant repartition)
         # ou re-imputer sur les comptes 4000XX des owners (apres repartition).
-        date_from = fy["start_date"] if fy else None
+        # IMPORTANT : pour que le bilan soit equilibre, on prend toutes les ecritures
+        # 6/7 jusqu'a date_to (sans start_date). Par double-entree, le solde net des
+        # comptes 1-5 (= bilan) = -(solde net 6-7) = resultat de l'exercice cumule.
         q_res = _apply_copro({}, copropriete_id)
-        if date_from or date_to:
-            q_res["date"] = {}
-            if date_from:
-                q_res["date"]["$gte"] = date_from
-            if date_to:
-                q_res["date"]["$lte"] = date_to
+        if date_to:
+            q_res["date"] = {"$lte": date_to}
         entries_res = await db.journal_entries.find(q_res, {"_id": 0}).to_list(100000)
         total_charges = 0.0
         total_produits = 0.0
