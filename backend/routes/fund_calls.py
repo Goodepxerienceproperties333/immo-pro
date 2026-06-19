@@ -233,6 +233,41 @@ def create_fund_calls_router(db):
             raise HTTPException(404, "Appel non trouve")
         return {"message": "Appel de fonds supprime"}
 
+    @router.post("/regenerate-entries")
+    async def regenerate_fund_call_entries(request: Request, copropriete_id: Optional[str] = None):
+        """Regenere les ecritures comptables auto-generees (VE) de TOUS les appels
+        de fonds d'une ACP. Utile apres une mise a jour du moteur de generation
+        (ex: ajout du libelle differencie par type d'appel).
+
+        Pour chaque fund_call de l'ACP, supprime l'ancienne ecriture VE auto-generee
+        et en regenere une nouvelle. Les ecritures `manually_edited=true` sont
+        preservees (jamais touchees - cf. auto_entries._delete_auto_entries).
+        """
+        if not copropriete_id:
+            copropriete_id = request.headers.get("X-Copropriete-Id") or None
+        if not copropriete_id or copropriete_id == "all":
+            raise HTTPException(400, "copropriete_id requis - chinese walls strict")
+        calls = await db.fund_calls.find(
+            {"copropriete_id": copropriete_id}, {"_id": 0}
+        ).to_list(10000)
+        regenerated = 0
+        errors = []
+        for c in calls:
+            try:
+                res = await generate_sale_entry(db, c)
+                if res:
+                    regenerated += 1
+            except Exception as e:
+                errors.append({"call_id": c.get("id"), "name": c.get("name"), "error": str(e)})
+        return {
+            "status": "ok",
+            "scanned": len(calls),
+            "regenerated": regenerated,
+            "errors": errors,
+            "copropriete_id": copropriete_id,
+            "message": f"{regenerated}/{len(calls)} ecriture(s) comptable(s) regeneree(s) avec libelle correct.",
+        }
+
     @router.post("/delete-all")
     async def delete_all_fund_calls(request: Request, copropriete_id: Optional[str] = None):
         """Supprime TOUS les appels de fonds d'une ACP + leurs ecritures auto-generees.

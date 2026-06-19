@@ -8,7 +8,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { Plus, Trash2, Check, Megaphone, FileText, Sparkles, ShieldCheck, Wallet, Banknote, AlertTriangle } from 'lucide-react';
+import { Plus, Trash2, Check, Megaphone, FileText, Sparkles, ShieldCheck, Wallet, Banknote, AlertTriangle, RefreshCcw } from 'lucide-react';
 import { fmtDate } from '@/lib/dateFmt';
 
 // Configuration des 4 types d'appels de fonds (label + couleurs + icone + description)
@@ -121,11 +121,35 @@ export default function FundCallsPage() {
     }
   };
 
+  const regenerateEntries = async () => {
+    const copro = localStorage.getItem('selectedCopro') || localStorage.getItem('copropriete_id') || '';
+    if (!copro || copro === 'all') { toast.error('Selectionnez une ACP'); return; }
+    if (!window.confirm(`Regenerer les ecritures comptables des ${calls.length} appel(s) de fonds ? Les libelles seront mis a jour selon le type d'appel.`)) return;
+    try {
+      const { data } = await api.post(`/fund-calls/regenerate-entries?copropriete_id=${copro}`);
+      toast.success(data.message || 'Ecritures regenerees');
+      if (selectedCall) viewCall(selectedCall.id);
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur');
+    }
+  };
+
   return (
     <div data-testid="fund-calls-page">
       <div className="page-header flex items-center justify-between">
         <div><h1 className="page-title"><Megaphone size={24} className="inline mr-2" />Appels de Fonds</h1><p className="page-subtitle">Appels de provisions et fonds de reserve</p></div>
         <div className="flex gap-2">
+          {calls.length > 0 && (
+            <Button
+              onClick={regenerateEntries}
+              variant="outline"
+              className="border-blue-200 text-blue-700 hover:bg-blue-50"
+              data-testid="regenerate-entries-btn"
+              title="Met a jour les libelles des ecritures comptables selon le type d'appel"
+            >
+              <RefreshCcw size={16} className="mr-2" /> Regenerer ecritures
+            </Button>
+          )}
           {calls.length > 0 && (
             <Button
               onClick={deleteAllCalls}

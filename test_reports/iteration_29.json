@@ -1,0 +1,27 @@
+{
+  "summary": "Tested new endpoints POST /api/fund-calls/regenerate-entries and POST /api/fund-calls/delete-all, plus the FundCallsPage UI buttons. 10/10 backend pytest tests passed (chinese-wall enforcement, regenerate with correct VE description prefixes per call_type, delete-all + cleanup of auto journal entries, Demo ACP integrity). Frontend verified: both buttons present with correct data-testid, regenerate flow works end-to-end ('6/6 ecriture(s) comptable(s) regeneree(s) avec libelle correct.' toast), call-type badges render correctly (Provisions, Fonds de roulement, Fonds de reserve). No bugs found.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter29_fund_calls_regenerate_delete_all.py",
+    "/app/test_reports/pytest/pytest_iter29.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "fund_calls.py delete-all/regenerate-entries: chinese-wall correctly enforced (rejects missing and 'all' values, header fallback supported).",
+    "auto_entries.py L298: _delete_auto_entries is called inside generate_sale_entry before insert, so regenerate is idempotent (no duplicate VE entries). Confirmed via repeated calls.",
+    "Frontend FundCallsPage uses window.confirm before destructive ops; both buttons are conditionally rendered only when calls.length > 0 (correct).",
+    "Minor: regenerate-entries endpoint counts as 'regenerated' only when generate_sale_entry returns a non-null entry (e.g., for a call with 0 lines it would silently skip). Acceptable since errors[] is also returned.",
+    "Minor consistency: legacy endpoint POST /fund-calls/{id}/generate-entries still uses old static description 'Appel de fonds: {name}' (journal_type AP, not VE). Different from the auto-VE flow but kept for back-compat."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter29_fund_calls_regenerate_delete_all.py"
+  ],
+  "success_rate": {"backend": "100% (10/10)", "frontend": "100%"},
+  "test_credentials": "admin@copro.be / admin123",
+  "seed_data_creation": "Created 4 TEST_iter29_* fund calls (one per call_type) on ACP Test (252c2888-...) - all cleaned up via delete-all in same test class. ACP Demo (6748ca1a-...) preserved with its 6 calls.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "ACP Demo VE entries now have correct prefixes (Appel de provisions / Appel fonds de reserve / Appel fonds de roulement). ACP Test ends up empty after the suite (delete-all clears it). If you need to regenerate VE entries again, hit POST /api/fund-calls/regenerate-entries?copropriete_id={id}.",
+  "rca of the issue": "N/A - feature works as designed; no bug to fix."
+}
