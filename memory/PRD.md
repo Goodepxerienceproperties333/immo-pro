@@ -12,6 +12,38 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 ## Implemented
 
+### Iter50 (Feb 2026) - Lockdown Gestion utilisateurs + Self-profile + Budget revoke cascade + Edit ACP
+
+#### Verrouillage de la gestion utilisateurs au superadmin SEUL
+- Le role `syndic` (qui a "acces total" via `is_admin_role()`) pouvait creer/modifier/supprimer d'autres utilisateurs. Risque : un syndic pouvait creer un autre superadmin.
+- Nouveau helper `is_superadmin_only(role) -> bool` (server.py L178) : retourne True uniquement pour `superadmin`/`admin`.
+- Tous les endpoints `/api/admin/users` (GET, POST, PUT, DELETE) appellent desormais `_get_superadmin_only`. Test : un user `owner` recoit 403 "Seul un super administrateur peut gerer les acces a la plateforme".
+- AuthContext frontend : ajout du flag `isSuperadmin` (= superadmin uniquement).
+- Layout sidebar : le lien "Utilisateurs" (data-testid='nav-admin-users') est conditionne par `isSuperadmin`. Cache pour les syndics.
+- AdminUsersPage : banner "Acces reserve au super administrateur" pour les non-superadmin avec lien vers `/profile`.
+
+#### Nouvelle page "Mon profil" (/profile)
+- Endpoint `PUT /api/auth/me` : tout utilisateur authentifie peut modifier SON nom + mot de passe.
+- Validations : new_password >= 6 chars, current_password requis pour changement, verify_password, re-fetch du hash depuis DB (puisque `get_current_user` le pop).
+- Page `ProfilePage.js` avec 3 cartes : Identite/role read-only (badge couleur selon role), Nom modifiable, Mot de passe avec confirmation + auto-logout post-change.
+- Lien sidebar "Mon profil" visible pour TOUS les utilisateurs authentifies (data-testid='nav-profile').
+
+#### Devalidation budget = contrepassation cascade
+- `POST /api/fiscal/budgets/{id}/revoke` ne se contentait plus de remettre le statut en `draft`.
+- Desormais : supprime TOUS les fund_calls lies (provisions, reserve, roulement, special) ET leurs ecritures comptables VE auto-generees (via `_delete_auto_entries`).
+- Protection : si au moins UN appel a recu un paiement, retourne 400 avec message explicite. Le UI propose `force=true` pour passer outre.
+- `force=true` : delettre les bank_transactions liees (matched_fund_call_id) puis cascade complete.
+- UI `FiscalYearPage.revokeBudget` : dialog confirm enrichi (mentionne provisions/reserve/roulement) + retry automatique avec force si 400 sur paiements.
+- Retour API : `{deleted_fund_calls, preserved_paid_calls, unlettred_transactions, message}`.
+
+#### Edition d'une ACP plus visible
+- Le bouton "Modifier" dans CoproprietesPage etait un `ghost` icon-only difficile a reperer.
+- Refonte : `outline` bleu (#0055FF) avec icone `Pencil` + texte "Modifier" + data-testid `edit-copro-{id}`. Le dialog s'ouvre pre-rempli (name, BCE, address, bank_accounts, defaults provisions). Endpoint PUT /api/coproprietes/{id} (existant) preserve `pcmn_number` des comptes bancaires.
+
+#### Tests
+- iter_30 : 17/17 backend pytest PASS + 100% frontend PASS.
+- Couverture : RBAC complet (401/403/200), validation mot de passe (5 cas), revoke cascade sur ACP temporaire, edit ACP avec preservation pcmn_number, sidebar et banners.
+
 ### Iter49 (Feb 2026) - Libelle PAR LIGNE dans la situation de compte + Bypass syndic + Bulk delete + Regenerate
 
 #### Fix critique : libelle par ligne (provisions/reserve/roulement)
