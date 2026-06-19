@@ -1,0 +1,33 @@
+{
+  "summary": "iter31: Tested new feature 'Repartition occupant/proprietaire' for decompte locataire annuel future. Backend: 13/13 pytest passed covering: (a) ExpenseCategory POST/PUT with default_occupant_pct + default_proprietaire_pct - 60/40 accepted, 70/40 (sum=110) rejected with 400 + 'doit etre 100' message, GET returns both fields, update persists, sum!=100 on update rejected; (b) Invoice POST with expense_category_id auto-inherits cat % (60->occupant_amount=60.0, proprietaire_amount=40.0 on total=100), explicit occupant_pct=20 override -> uses 20, proprietaire auto=80, occupant_amount=40 on total=200; (c) Invoice PUT without occupant_pct preserves existing value (25 stays 25), with new value updates; (d) Journal Entry OD: charge line on 612300 (with cat 60/40) auto-inherits 60/40, charge line on account WITHOUT cat defaults to 0%/100%, explicit occupant_pct=30 only (proprietaire_pct=None) auto-completes to 70 via _enrich_lines helper, both provided sum=80 (50+30) rejected with 400, PUT recalculates correctly. Frontend: Login as superadmin OK; ExpenseCategoriesPage create dialog shows cat-occupant-pct + cat-proprietaire-pct inputs, typing 60 in occupant auto-fills 40 in proprietaire (OK); InvoicesPage create dialog shows invoice-occupant-section + inv-occupant-pct + inv-proprietaire-pct, typing 30 in occupant auto-fills 70, 'Part occupant' live amount text present; JournalsPage OD new-entry dialog shows %Occ. + %Prop. column headers, and journal-line-{i}-occupant/proprio inputs are conditionally rendered ONLY when account_number starts with 6 or 7 (charge) - confirmed by code review (isCharge ternary at line 269/278 of JournalsPage.js) and matches the requirement 'Affichees uniquement quand account_number commence par 6 ou 7'.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter31_occupant_proprietaire.py",
+    "/app/test_reports/pytest/pytest_iter31.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "ExpenseCategoryInput: validation 'sum=100' done BEFORE PCMN account check on POST. Good - rejects bad pct first. PUT also validates correctly.",
+    "InvoiceInput.occupant_pct/proprietaire_pct typed Optional[float]=None correctly distinguishes 'not provided' (inherit) from 'explicitly 0' (use 0). create_invoice: data.occupant_pct is not None -> use it; else inherit from category default; else 0%. update_invoice has correct 3-tier fallback: payload > existing > category > 0%.",
+    "Invoice create/update: proprietaire_pct is always RECALCULATED as 100-occupant (server-side ignores any client-provided proprietaire_pct value). This means client sending occupant=50 + proprietaire=30 silently becomes 50/50 - by design (single source of truth) but worth noting if frontend ever sends mismatched values.",
+    "_enrich_lines_with_occupant_pct: clean helper. Handles 3 cases: both None (inherit from cat if class 6/7, else None), one provided (auto-complete the other), both provided (validate sum=100). Correctly leaves non-charge lines (4xx/5xx) with occupant_pct=None.",
+    "_enrich_lines_with_occupant_pct minor edge case: if occupant_pct=100 with proprietaire_pct=None, occ+prop=100+0=100 so the if-branch is skipped and proprietaire_pct stays None. Not a bug but inconsistent: when occupant=0 alone, proprietaire stays None too. Future invariant 'sum=100 always' could be enforced by always auto-completing when one is None. Non-blocking for current scope.",
+    "ExpenseCategoriesPage / InvoicesPage / JournalsPage: all 3 implement two-way auto-complete client-side via setOccupant/setProprio with onChange. Math: +(100-v).toFixed(2). Clean.",
+    "JournalsPage: data-testid pattern 'journal-line-{i}-occupant' and '-proprio' is rendered only when isCharge=account_number starts with '6' or '7'. This matches the spec exactly. Non-charge lines show '—' span - clear UX."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter31_occupant_proprietaire.py"
+  ],
+  "success_rate": {"backend": "100% (13/13)", "frontend": "100% (all testids present, autocomplete working on cat + invoice, OD columns visible, conditional rendering verified)"},
+  "test_credentials": "admin@copro.be / admin123 (superadmin)",
+  "seed_data_creation": "Created and cleaned up: TEST_iter31_cat_* expense category on account 612300 (60/40), multiple TEST_iter31 invoices using this category (auto-deleted via fixture teardown), multiple TEST_iter31 journal entries (auto-deleted via autouse cleanup fixture). 612300 remains as a regular PCMN account on Demo ACP (was unused per agent note).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "iter31 feature (repartition occupant/proprietaire) is fully working end-to-end. The % values are currently STORED only - not yet used for any accounting/decompte logic (future decompte locataire annuel). 3 frontend pages updated: ExpenseCategoriesPage (cat-occupant-pct/cat-proprietaire-pct), InvoicesPage (invoice-occupant-section + inv-occupant-pct/inv-proprietaire-pct + live amount preview), JournalsPage (conditional journal-line-{i}-occupant/proprio on OD charge lines). Backend: validation 'sum=100' on ExpenseCategory POST/PUT + on OD line when both provided; auto-completion on one-side-provided; auto-inherit from category in invoices and OD; PUT preserves existing on invoice when occupant_pct not in payload. Reference test file: /app/backend/tests/test_iter31_occupant_proprietaire.py.",
+  "rca of the issue": "N/A - no bugs found."
+}

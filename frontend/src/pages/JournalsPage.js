@@ -26,6 +26,7 @@ const JOURNAL_TYPES = [
 export default function JournalsPage() {
   const [entries, setEntries] = useState([]);
   const [accounts, setAccounts] = useState([]);
+  const [categories, setCategories] = useState([]);
   const [journalType, setJournalType] = useState('OD');
   const [dialogOpen, setDialogOpen] = useState(false);
   const [viewEntry, setViewEntry] = useState(null);
@@ -34,9 +35,14 @@ export default function JournalsPage() {
   const [pendingAttachment, setPendingAttachment] = useState(null);
 
   const load = useCallback(async () => {
-    const [e, a] = await Promise.all([api.get('/accounting/entries', { params: { journal_type: journalType } }), api.get('/accounting/pcmn')]);
+    const [e, a, c] = await Promise.all([
+      api.get('/accounting/entries', { params: { journal_type: journalType } }),
+      api.get('/accounting/pcmn'),
+      api.get('/expense-categories').catch(() => ({ data: [] })),
+    ]);
     setEntries(e.data);
     setAccounts(a.data);
+    setCategories(c.data);
   }, [journalType]);
 
   useEffect(() => { load(); }, [load]);
@@ -55,7 +61,14 @@ export default function JournalsPage() {
     setForm({
       journal_type: entry.journal_type, date: entry.date, reference: entry.reference || '',
       description: entry.description || '',
-      lines: (entry.lines || []).map(l => ({ account_number: l.account_number, account_name: l.account_name, debit: l.debit, credit: l.credit })),
+      lines: (entry.lines || []).map(l => ({
+        account_number: l.account_number,
+        account_name: l.account_name,
+        debit: l.debit,
+        credit: l.credit,
+        occupant_pct: l.occupant_pct,
+        proprietaire_pct: l.proprietaire_pct,
+      })),
     });
     setPendingAttachment(null);
     setDialogOpen(true);
@@ -69,6 +82,32 @@ export default function JournalsPage() {
     if (field === 'account_number') {
       const acc = accounts.find(a => a.number === value);
       if (acc) lines[i].account_name = acc.name;
+      // Auto-pre-rempli les % occupant/proprio depuis la categorie de depense du compte
+      const cat = (categories || []).find(c => c.account_number === value);
+      if (cat && cat.default_occupant_pct != null) {
+        lines[i].occupant_pct = Number(cat.default_occupant_pct);
+        lines[i].proprietaire_pct = +(100 - Number(cat.default_occupant_pct)).toFixed(2);
+      } else if (value && (value.startsWith('6') || value.startsWith('7'))) {
+        // Compte de charge sans categorie -> 0% occupant par defaut
+        if (lines[i].occupant_pct == null) {
+          lines[i].occupant_pct = 0;
+          lines[i].proprietaire_pct = 100;
+        }
+      } else {
+        // Compte non-charge : pas de repartition
+        lines[i].occupant_pct = null;
+        lines[i].proprietaire_pct = null;
+      }
+    }
+    if (field === 'occupant_pct') {
+      const v = Math.max(0, Math.min(100, parseFloat(value) || 0));
+      lines[i].occupant_pct = v;
+      lines[i].proprietaire_pct = +(100 - v).toFixed(2);
+    }
+    if (field === 'proprietaire_pct') {
+      const v = Math.max(0, Math.min(100, parseFloat(value) || 0));
+      lines[i].proprietaire_pct = v;
+      lines[i].occupant_pct = +(100 - v).toFixed(2);
     }
     setForm({ ...form, lines });
   };
@@ -204,10 +243,15 @@ export default function JournalsPage() {
                 <table className="w-full text-sm">
                   <thead><tr className="bg-slate-50 text-xs text-slate-600 uppercase">
                     <th className="p-2 text-left">Compte</th><th className="p-2 text-left">Libelle</th>
-                    <th className="p-2 text-right">Debit</th><th className="p-2 text-right">Credit</th><th className="p-2 w-10"></th>
+                    <th className="p-2 text-right">Debit</th><th className="p-2 text-right">Credit</th>
+                    <th className="p-2 text-right" title="Pourcentage occupant (decompte locataire)">%Occ.</th>
+                    <th className="p-2 text-right" title="Pourcentage proprietaire">%Prop.</th>
+                    <th className="p-2 w-10"></th>
                   </tr></thead>
                   <tbody>
-                    {form.lines.map((line, i) => (
+                    {form.lines.map((line, i) => {
+                      const isCharge = line.account_number && (line.account_number.startsWith('6') || line.account_number.startsWith('7'));
+                      return (
                       <tr key={i} className="border-t border-slate-100">
                         <td className="p-1 min-w-[280px]">
                           <AccountSearchSelect
@@ -221,9 +265,27 @@ export default function JournalsPage() {
                         <td className="p-1 text-xs text-slate-500">{line.account_name}</td>
                         <td className="p-1"><Input type="number" step="0.01" className="text-right text-sm h-8" value={line.debit} onChange={e => updateLine(i, 'debit', e.target.value)} /></td>
                         <td className="p-1"><Input type="number" step="0.01" className="text-right text-sm h-8" value={line.credit} onChange={e => updateLine(i, 'credit', e.target.value)} /></td>
+                        <td className="p-1 w-20">
+                          {isCharge ? (
+                            <Input type="number" min={0} max={100} step={1} className="text-right text-sm h-8 bg-amber-50/40"
+                              value={line.occupant_pct ?? 0}
+                              onChange={e => updateLine(i, 'occupant_pct', e.target.value)}
+                              data-testid={`journal-line-${i}-occupant`}
+                            />
+                          ) : <span className="text-slate-300 text-xs">—</span>}
+                        </td>
+                        <td className="p-1 w-20">
+                          {isCharge ? (
+                            <Input type="number" min={0} max={100} step={1} className="text-right text-sm h-8 bg-blue-50/40"
+                              value={line.proprietaire_pct ?? 100}
+                              onChange={e => updateLine(i, 'proprietaire_pct', e.target.value)}
+                              data-testid={`journal-line-${i}-proprio`}
+                            />
+                          ) : <span className="text-slate-300 text-xs">—</span>}
+                        </td>
                         <td className="p-1">{form.lines.length > 2 && <button onClick={() => removeLine(i)} className="text-red-400 hover:text-red-600"><Trash2 size={12} /></button>}</td>
                       </tr>
-                    ))}
+                    );})}
                   </tbody>
                   <tfoot><tr className="border-t-2 border-slate-200 bg-slate-50 font-semibold text-sm">
                     <td colSpan={2} className="p-2">
@@ -231,7 +293,7 @@ export default function JournalsPage() {
                     </td>
                     <td className="p-2 text-right font-mono">{totalDebit.toFixed(2)}</td>
                     <td className="p-2 text-right font-mono">{totalCredit.toFixed(2)}</td>
-                    <td></td>
+                    <td colSpan={3}></td>
                   </tr></tfoot>
                 </table>
               </div>

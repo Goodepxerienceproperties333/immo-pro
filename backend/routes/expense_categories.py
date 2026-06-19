@@ -16,6 +16,10 @@ class ExpenseCategoryInput(BaseModel):
     account_number: str  # PCMN class 6 (one-to-one)
     description: Optional[str] = ""
     copropriete_id: Optional[str] = ""
+    # Repartition occupant/proprietaire pour le decompte locataire annuel.
+    # Somme = 100. Defaut : 0% occupant, 100% proprio (charge restant a charge du proprio).
+    default_occupant_pct: Optional[float] = 0.0
+    default_proprietaire_pct: Optional[float] = 100.0
 
 
 def create_expense_categories_router(db):
@@ -58,6 +62,11 @@ def create_expense_categories_router(db):
     async def create_category(data: ExpenseCategoryInput):
         if not data.account_number:
             raise HTTPException(400, "Compte PCMN obligatoire")
+        # Validation : occupant_pct + proprietaire_pct = 100
+        occ = float(data.default_occupant_pct or 0)
+        prop = float(data.default_proprietaire_pct or 0)
+        if abs((occ + prop) - 100) > 0.01:
+            raise HTTPException(400, f"La somme % occupant ({occ}) + % proprietaire ({prop}) doit etre 100 (recu {occ + prop})")
         # Enforce 1:1 - reject if account_number already used in this ACP
         existing = await db.expense_categories.find_one({
             "account_number": data.account_number,
@@ -95,6 +104,11 @@ def create_expense_categories_router(db):
         existing = await db.expense_categories.find_one({"id": cat_id}, {"_id": 0})
         if not existing:
             raise HTTPException(404, "Nature non trouvee")
+        # Validation : occupant_pct + proprietaire_pct = 100
+        occ = float(data.default_occupant_pct or 0)
+        prop = float(data.default_proprietaire_pct or 0)
+        if abs((occ + prop) - 100) > 0.01:
+            raise HTTPException(400, f"La somme % occupant ({occ}) + % proprietaire ({prop}) doit etre 100 (recu {occ + prop})")
         # If account changed: enforce 1:1
         if data.account_number != existing.get("account_number"):
             dup = await db.expense_categories.find_one({

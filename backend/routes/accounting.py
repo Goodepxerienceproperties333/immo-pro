@@ -17,6 +17,11 @@ class JournalEntryLine(BaseModel):
     debit: Optional[float] = 0.0
     credit: Optional[float] = 0.0
     description: Optional[str] = ""
+    # Repartition occupant/proprietaire (pour decompte locataire).
+    # None = ignore (sera complete par defaut au moment de la creation si la ligne
+    # est une charge 6xxx avec une categorie associee). Somme attendue : 100.
+    occupant_pct: Optional[float] = None
+    proprietaire_pct: Optional[float] = None
 
 
 class JournalEntryInput(BaseModel):
@@ -196,6 +201,45 @@ def create_accounting_router(db):
         entries = await db.journal_entries.find(query, {"_id": 0}).sort("date", -1).to_list(2000)
         return entries
 
+    async def _enrich_lines_with_occupant_pct(lines: list, copro_id: str) -> list:
+        """Pour chaque ligne d'OD qui a un compte de classe 6 (charge) sans pct fourni,
+        pre-rempli les % occupant/proprietaire depuis la nature de depense associee
+        au compte (defaut 0% occupant / 100% proprio si non mappee).
+        Valide aussi la somme = 100 quand au moins un est fourni.
+        """
+        for ln in lines:
+            occ = ln.get("occupant_pct")
+            prop = ln.get("proprietaire_pct")
+            if occ is None and prop is None:
+                # Heriter de la categorie de depense si compte classe 6
+                acc_num = ln.get("account_number", "") or ""
+                if acc_num.startswith(("6", "7")):
+                    cat = await db.expense_categories.find_one(
+                        {"account_number": acc_num, "copropriete_id": copro_id}, {"_id": 0}
+                    )
+                    if cat and cat.get("default_occupant_pct") is not None:
+                        ln["occupant_pct"] = float(cat.get("default_occupant_pct") or 0)
+                        ln["proprietaire_pct"] = round(100 - ln["occupant_pct"], 2)
+                    else:
+                        ln["occupant_pct"] = 0.0
+                        ln["proprietaire_pct"] = 100.0
+                # Autres comptes : pas de repartition (laisser None)
+            elif occ is not None or prop is not None:
+                occ = float(occ or 0)
+                prop = float(prop or 0)
+                if abs((occ + prop) - 100) > 0.01:
+                    # Auto-corriger en complement si une seule valeur fournie est coherente
+                    if ln.get("occupant_pct") is not None and ln.get("proprietaire_pct") is None:
+                        ln["proprietaire_pct"] = round(100 - occ, 2)
+                    elif ln.get("proprietaire_pct") is not None and ln.get("occupant_pct") is None:
+                        ln["occupant_pct"] = round(100 - prop, 2)
+                    else:
+                        raise HTTPException(
+                            400,
+                            f"Ligne {ln.get('account_number','?')} : % occupant ({occ}) + % proprietaire ({prop}) doit etre 100."
+                        )
+        return lines
+
     @router.post("/entries")
     async def create_entry(data: JournalEntryInput, request: Request):
         copro_id = (data.copropriete_id or "").strip() or (request.headers.get("X-Copropriete-Id") or "").strip()
@@ -219,13 +263,16 @@ def create_accounting_router(db):
                     f"Comptes PCMN absents de cette ACP : {sorted(missing)}. "
                     "Chaque ACP dispose de son propre plan comptable - aucun melange autorise."
                 )
+        # Enrichir chaque ligne avec la repartition occupant/proprietaire
+        raw_lines = [l.model_dump() for l in data.lines]
+        raw_lines = await _enrich_lines_with_occupant_pct(raw_lines, copro_id)
         doc = {
             "id": str(uuid.uuid4()),
             "journal_type": data.journal_type,
             "date": data.date,
             "reference": data.reference,
             "description": data.description,
-            "lines": [l.model_dump() for l in data.lines],
+            "lines": raw_lines,
             "total_debit": round(total_debit, 2),
             "total_credit": round(total_credit, 2),
             "copropriete_id": copro_id,
@@ -246,16 +293,20 @@ def create_accounting_router(db):
         existing = await db.journal_entries.find_one({"id": entry_id}, {"_id": 0})
         if not existing:
             raise HTTPException(404, "Ecriture non trouvee")
+        copro_id = existing.get("copropriete_id", "") or (data.copropriete_id or "")
         total_debit = sum(l.debit for l in data.lines)
         total_credit = sum(l.credit for l in data.lines)
         if abs(total_debit - total_credit) > 0.01:
             raise HTTPException(400, "Ecriture non equilibree")
+        # Enrichir avec la repartition occupant/proprietaire (cf. create_entry)
+        raw_lines = [l.model_dump() for l in data.lines]
+        raw_lines = await _enrich_lines_with_occupant_pct(raw_lines, copro_id)
         update = {
             "journal_type": data.journal_type,
             "date": data.date,
             "reference": data.reference,
             "description": data.description,
-            "lines": [l.model_dump() for l in data.lines],
+            "lines": raw_lines,
             "total_debit": round(total_debit, 2),
             "total_credit": round(total_credit, 2),
         }

@@ -43,6 +43,11 @@ class InvoiceInput(BaseModel):
     # et account_number force a 643.
     is_private_fee: Optional[bool] = False
     private_fee_owner_id: Optional[str] = ""
+    # Repartition occupant/proprietaire (pour decompte locataire).
+    # Defaut : herite de la catégorie de dépense si non fourni.
+    # Somme doit etre 100.
+    occupant_pct: Optional[float] = None  # None = inherit from category
+    proprietaire_pct: Optional[float] = None
 
 
 def create_invoices_router(db):
@@ -170,10 +175,17 @@ def create_invoices_router(db):
     async def create_invoice(data: InvoiceInput):
         # If expense_category_id provided, derive/override account_number
         account_number = data.account_number
+        cat_default_occupant = None
         if data.expense_category_id:
             cat = await db.expense_categories.find_one({"id": data.expense_category_id}, {"_id": 0})
             if cat and cat.get("account_number"):
                 account_number = cat["account_number"]
+            if cat:
+                cat_default_occupant = float(cat.get("default_occupant_pct") or 0)
+        # Resoudre occupant_pct : valeur fournie ou heritee de la categorie, sinon 0%
+        occupant_pct = data.occupant_pct if data.occupant_pct is not None else (cat_default_occupant or 0.0)
+        occupant_pct = max(0.0, min(100.0, float(occupant_pct)))
+        proprietaire_pct = round(100.0 - occupant_pct, 2)
         # Frais privatif: force compte 643, ignore distribution_key
         if data.is_private_fee:
             if not data.private_fee_owner_id:
@@ -234,6 +246,11 @@ def create_invoices_router(db):
             "copropriete_id": data.copropriete_id or "",
             "is_private_fee": bool(data.is_private_fee),
             "private_fee_owner_id": data.private_fee_owner_id or "",
+            # Repartition occupant/proprietaire pour decompte locataire
+            "occupant_pct": occupant_pct,
+            "proprietaire_pct": proprietaire_pct,
+            "occupant_amount": round(data.total_amount * occupant_pct / 100, 2),
+            "proprietaire_amount": round(data.total_amount * proprietaire_pct / 100, 2),
             "created_at": datetime.now(timezone.utc).isoformat()
         }
         await db.invoices.insert_one(doc)
@@ -254,10 +271,24 @@ def create_invoices_router(db):
     @router.put("/invoices/{invoice_id}")
     async def update_invoice(invoice_id: str, data: InvoiceInput):
         account_number = data.account_number
+        cat_default_occupant = None
         if data.expense_category_id:
             cat = await db.expense_categories.find_one({"id": data.expense_category_id}, {"_id": 0})
             if cat and cat.get("account_number"):
                 account_number = cat["account_number"]
+            if cat:
+                cat_default_occupant = float(cat.get("default_occupant_pct") or 0)
+        # Si occupant_pct fourni : on l'utilise. Sinon : on garde l'existant
+        # (et si pas d'existant : on prend la categorie ou 0%)
+        existing = await db.invoices.find_one({"id": invoice_id}, {"_id": 0})
+        if data.occupant_pct is not None:
+            occupant_pct = float(data.occupant_pct)
+        elif existing and existing.get("occupant_pct") is not None:
+            occupant_pct = float(existing.get("occupant_pct") or 0)
+        else:
+            occupant_pct = cat_default_occupant or 0.0
+        occupant_pct = max(0.0, min(100.0, occupant_pct))
+        proprietaire_pct = round(100.0 - occupant_pct, 2)
         if data.is_private_fee:
             if not data.private_fee_owner_id:
                 raise HTTPException(400, "Un proprietaire doit etre selectionne pour un frais privatif")
@@ -275,6 +306,10 @@ def create_invoices_router(db):
             "status": data.status,
             "is_private_fee": bool(data.is_private_fee),
             "private_fee_owner_id": data.private_fee_owner_id or "",
+            "occupant_pct": occupant_pct,
+            "proprietaire_pct": proprietaire_pct,
+            "occupant_amount": round(data.total_amount * occupant_pct / 100, 2),
+            "proprietaire_amount": round(data.total_amount * proprietaire_pct / 100, 2),
         }
         # If switching to private fee, clear distribution_lines
         if data.is_private_fee:

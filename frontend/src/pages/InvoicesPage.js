@@ -26,7 +26,7 @@ export default function InvoicesPage() {
   const [lots, setLots] = useState([]);
   const [invoiceDialog, setInvoiceDialog] = useState(false);
   const [keyDialog, setKeyDialog] = useState(false);
-  const [invForm, setInvForm] = useState({ number: '', date: '', due_date: '', supplier: '', description: '', total_amount: 0, vat_amount: 0, account_number: '', expense_category_id: '', distribution_key_id: '', status: 'unpaid', is_private_fee: false, private_fee_owner_id: '' });
+  const [invForm, setInvForm] = useState({ number: '', date: '', due_date: '', supplier: '', description: '', total_amount: 0, vat_amount: 0, account_number: '', expense_category_id: '', distribution_key_id: '', status: 'unpaid', is_private_fee: false, private_fee_owner_id: '', occupant_pct: 0, proprietaire_pct: 100 });
   const [owners, setOwners] = useState([]);
   const [ownerSearch, setOwnerSearch] = useState('');
   const [suggestCreateSupplier, setSuggestCreateSupplier] = useState(null); // {name, vat, bce, iban}
@@ -69,7 +69,7 @@ export default function InvoicesPage() {
   // Invoice handlers
   const openCreateInvoice = () => {
     setEditingInvoice(null);
-    setInvForm({ number: `F-${Date.now().toString().slice(-6)}`, date: new Date().toISOString().split('T')[0], due_date: '', supplier: '', description: '', total_amount: 0, vat_amount: 0, account_number: '', expense_category_id: '', distribution_key_id: '', status: 'unpaid', is_private_fee: false, private_fee_owner_id: '' });
+    setInvForm({ number: `F-${Date.now().toString().slice(-6)}`, date: new Date().toISOString().split('T')[0], due_date: '', supplier: '', description: '', total_amount: 0, vat_amount: 0, account_number: '', expense_category_id: '', distribution_key_id: '', status: 'unpaid', is_private_fee: false, private_fee_owner_id: '', occupant_pct: 0, proprietaire_pct: 100 });
     setAiHint(''); setPendingPdf(null); setOwnerSearch('');
     setInvoiceDialog(true);
   };
@@ -86,6 +86,8 @@ export default function InvoicesPage() {
       status: inv.status || 'unpaid',
       is_private_fee: !!inv.is_private_fee,
       private_fee_owner_id: inv.private_fee_owner_id || '',
+      occupant_pct: inv.occupant_pct ?? 0,
+      proprietaire_pct: inv.proprietaire_pct ?? 100,
     });
     setAiHint(''); setPendingPdf(null); setOwnerSearch('');
     setInvoiceDialog(true);
@@ -564,7 +566,15 @@ export default function InvoicesPage() {
                     if (v === '__create__') { setNewCatDialog(true); return; }
                     if (v === 'none') { setInvForm(f => ({...f, expense_category_id: ''})); return; }
                     const cat = categories.find(c => c.id === v);
-                    setInvForm(f => ({...f, expense_category_id: v, account_number: cat?.account_number || f.account_number}));
+                    // Auto-pre-rempli les % occupant/proprietaire depuis la categorie selectionnee
+                    const occ = cat?.default_occupant_pct ?? null;
+                    setInvForm(f => ({
+                      ...f,
+                      expense_category_id: v,
+                      account_number: cat?.account_number || f.account_number,
+                      occupant_pct: occ != null ? Number(occ) : f.occupant_pct,
+                      proprietaire_pct: occ != null ? +(100 - Number(occ)).toFixed(2) : f.proprietaire_pct,
+                    }));
                   }}
                 >
                   <SelectTrigger data-testid="invoice-category-select"><SelectValue placeholder="Aucune" /></SelectTrigger>
@@ -574,7 +584,7 @@ export default function InvoicesPage() {
                     <SelectItem value="__create__" className="text-[#0055FF] font-semibold">+ Creer une nature de depense...</SelectItem>
                   </SelectContent>
                 </Select>
-                <p className="text-[10px] text-slate-400 mt-1">Pre-rempli le compte PCMN</p>
+                <p className="text-[10px] text-slate-400 mt-1">Pre-rempli le compte PCMN + repartition occupant/proprio</p>
               </div>
               <div><label className="form-label">Compte PCMN</label>
                 <AccountSearchSelect
@@ -597,6 +607,47 @@ export default function InvoicesPage() {
                 </Select>
               </div>
             </div>
+
+            {/* Repartition occupant / proprietaire (decompte locataire) */}
+            <div className="rounded-md border border-amber-200 bg-amber-50/40 p-3 space-y-2" data-testid="invoice-occupant-section">
+              <div className="text-xs font-semibold uppercase tracking-wide text-amber-700">
+                Repartition occupant / proprietaire (decompte locataire)
+              </div>
+              <div className="grid grid-cols-4 gap-3 items-end">
+                <div>
+                  <label className="form-label text-xs">% Occupant</label>
+                  <Input type="number" min={0} max={100} step={1}
+                    value={invForm.occupant_pct}
+                    onChange={e => {
+                      const v = Math.max(0, Math.min(100, parseFloat(e.target.value) || 0));
+                      setInvForm(f => ({ ...f, occupant_pct: v, proprietaire_pct: +(100 - v).toFixed(2) }));
+                    }}
+                    data-testid="inv-occupant-pct"
+                  />
+                </div>
+                <div>
+                  <label className="form-label text-xs">% Proprietaire</label>
+                  <Input type="number" min={0} max={100} step={1}
+                    value={invForm.proprietaire_pct}
+                    onChange={e => {
+                      const v = Math.max(0, Math.min(100, parseFloat(e.target.value) || 0));
+                      setInvForm(f => ({ ...f, proprietaire_pct: v, occupant_pct: +(100 - v).toFixed(2) }));
+                    }}
+                    data-testid="inv-proprietaire-pct"
+                  />
+                </div>
+                <div className="text-xs">
+                  <div className="text-slate-500 uppercase tracking-wide text-[10px]">Part occupant</div>
+                  <div className="font-mono font-semibold text-amber-700">{((Number(invForm.total_amount) || 0) * (Number(invForm.occupant_pct) || 0) / 100).toFixed(2)} EUR</div>
+                </div>
+                <div className="text-xs">
+                  <div className="text-slate-500 uppercase tracking-wide text-[10px]">Part proprietaire</div>
+                  <div className="font-mono font-semibold text-blue-700">{((Number(invForm.total_amount) || 0) * (Number(invForm.proprietaire_pct) || 0) / 100).toFixed(2)} EUR</div>
+                </div>
+              </div>
+              <p className="text-[11px] text-slate-500">Total doit etre 100%. Pre-rempli depuis la nature de depense si selectionnee.</p>
+            </div>
+
             <div className="flex gap-3 justify-end">
               <Button variant="outline" onClick={() => setInvoiceDialog(false)}>Annuler</Button>
               <Button onClick={saveInvoice} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="inv-save-btn">Enregistrer</Button>

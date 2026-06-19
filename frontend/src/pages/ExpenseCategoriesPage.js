@@ -15,7 +15,7 @@ export default function ExpenseCategoriesPage() {
   const [pcmnAccounts, setPcmnAccounts] = useState([]);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState(null);
-  const [form, setForm] = useState({ name: '', account_number: '', description: '' });
+  const [form, setForm] = useState({ name: '', account_number: '', description: '', default_occupant_pct: 0, default_proprietaire_pct: 100 });
   const [search, setSearch] = useState('');
   const [accountPopoverOpen, setAccountPopoverOpen] = useState(false);
 
@@ -30,13 +30,28 @@ export default function ExpenseCategoriesPage() {
 
   const openCreate = () => {
     setEditing(null);
-    setForm({ name: '', account_number: '', description: '' });
+    setForm({ name: '', account_number: '', description: '', default_occupant_pct: 0, default_proprietaire_pct: 100 });
     setDialogOpen(true);
   };
   const openEdit = (c) => {
     setEditing(c);
-    setForm({ name: c.name, account_number: c.account_number, description: c.description || '' });
+    setForm({
+      name: c.name,
+      account_number: c.account_number,
+      description: c.description || '',
+      default_occupant_pct: c.default_occupant_pct ?? 0,
+      default_proprietaire_pct: c.default_proprietaire_pct ?? 100,
+    });
     setDialogOpen(true);
+  };
+  // Auto-complete entre occupant_pct et proprietaire_pct (somme = 100)
+  const setOccupant = (val) => {
+    const v = Math.max(0, Math.min(100, parseFloat(val) || 0));
+    setForm(f => ({ ...f, default_occupant_pct: v, default_proprietaire_pct: +(100 - v).toFixed(2) }));
+  };
+  const setProprietaire = (val) => {
+    const v = Math.max(0, Math.min(100, parseFloat(val) || 0));
+    setForm(f => ({ ...f, default_proprietaire_pct: v, default_occupant_pct: +(100 - v).toFixed(2) }));
   };
   const save = async () => {
     if (!form.name || !form.account_number) { toast.error('Nom et compte obligatoires'); return; }
@@ -153,6 +168,38 @@ export default function ExpenseCategoriesPage() {
               <label className="form-label">Description (optionnel)</label>
               <Input value={form.description} onChange={e => setForm({...form, description: e.target.value})} placeholder="Notes internes" />
             </div>
+
+            {/* Repartition par defaut occupant / proprietaire */}
+            <div className="rounded-md border border-amber-200 bg-amber-50/40 p-3 space-y-2">
+              <div className="text-xs font-semibold uppercase tracking-wide text-amber-700 flex items-center gap-1.5">
+                Repartition par defaut occupant / proprietaire
+              </div>
+              <p className="text-[11px] text-slate-600">
+                Pour le decompte locataire annuel. La somme doit etre 100%. Sera utilise par defaut quand vous comptabilisez une facture de ce compte.
+              </p>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="form-label text-xs">% Occupant (locataire)</label>
+                  <Input type="number" min={0} max={100} step={1}
+                    value={form.default_occupant_pct}
+                    onChange={e => setOccupant(e.target.value)}
+                    data-testid="cat-occupant-pct"
+                  />
+                </div>
+                <div>
+                  <label className="form-label text-xs">% Proprietaire</label>
+                  <Input type="number" min={0} max={100} step={1}
+                    value={form.default_proprietaire_pct}
+                    onChange={e => setProprietaire(e.target.value)}
+                    data-testid="cat-proprietaire-pct"
+                  />
+                </div>
+              </div>
+              <div className="text-[11px] text-slate-500">
+                Exemples : <strong>Chauffage commun</strong> = 100% occupant ; <strong>Toiture</strong> = 100% proprietaire ; <strong>Salaire concierge</strong> = 50/50
+              </div>
+            </div>
+
             <div className="flex gap-3 justify-end">
               <Button variant="outline" onClick={() => setDialogOpen(false)}>Annuler</Button>
               <Button onClick={save} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="save-category-btn">Enregistrer</Button>
