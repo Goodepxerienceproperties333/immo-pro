@@ -12,6 +12,33 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 ## Implemented
 
+### Iter53 (Feb 2026) - Repartition occupant/proprietaire sur factures + OD (preparation decompte locataire)
+
+#### Objectif
+Preparer la generation future du **decompte locataire annuel** : chaque charge (facture ou OD) peut porter une repartition explicite entre la part **occupant** (locataire) et la part **proprietaire**. Conserve les % a la source pour calculer plus tard la quote-part refacturable au locataire.
+
+#### Modeles enrichis
+- `ExpenseCategory` : nouveaux champs `default_occupant_pct` + `default_proprietaire_pct` (somme = 100, valide cote backend en POST/PUT).
+- `Invoice` : nouveaux champs `occupant_pct`, `proprietaire_pct`, `occupant_amount`, `proprietaire_amount`. Si `occupant_pct` non fourni : herite automatiquement de la nature de depense (`expense_category.default_occupant_pct`), sinon 0%.
+- `JournalEntryLine` (OD) : nouveaux champs `occupant_pct` + `proprietaire_pct` (Optional). Helper `_enrich_lines_with_occupant_pct` qui :
+  - Pour les lignes de classe 6/7 (charges) : auto-herite du default de la nature de depense liee au compte (0%/100% si aucune mapping).
+  - Pour les lignes non-charge (banques, tiers, fonds propres) : laisse None (pas de repartition applicable).
+  - Si l'un des 2 est fourni : auto-complete l'autre. Si les 2 sont fournis et somme != 100 : 400.
+
+#### UI (3 pages mises a jour)
+- **ExpenseCategoriesPage** : nouveau bloc "Repartition par defaut" avec 2 champs % (data-testid `cat-occupant-pct` / `cat-proprietaire-pct`). Auto-complete : `setOccupant` met a jour proprietaire = 100-v et inversement.
+- **InvoicesPage** : nouvelle section ambree "Repartition occupant/proprietaire" (data-testid `invoice-occupant-section`). 2 champs auto-complete + affichage temps reel des **montants calcules** (Part occupant / Part proprietaire). Pre-remplissage automatique lors de la selection d'une nature de depense.
+- **JournalsPage** : 2 nouvelles colonnes %Occ / %Prop dans le tableau d'edition des lignes OD. Affichees UNIQUEMENT pour les lignes de classe 6/7 (charges) - les autres lignes (banque, tiers) affichent un tiret. Pre-rempli automatiquement quand on choisit un compte rattache a une nature de depense.
+
+#### Defaults / heritage
+1. Nature de depense (defaut configurable au niveau de la categorie - ex. "Chauffage commun" = 100% occupant, "Toiture" = 100% proprio).
+2. Si pas de defaut sur la categorie : 0% occupant / 100% proprietaire (charge a 100% pour le proprio).
+3. Surchargeable au cas par cas dans chaque facture / OD.
+
+#### Tests
+- iter_31 : 13/13 backend pytest PASS + 100% frontend valide.
+- Fichier de regression permanent : `/app/backend/tests/test_iter31_occupant_proprietaire.py`.
+
 ### Iter52 (Feb 2026) - Auto-VCS robuste + Balance des tiers en temps reel
 
 #### Auto-lettrage VCS plus robuste (auto-comptabilisation des paiements)
