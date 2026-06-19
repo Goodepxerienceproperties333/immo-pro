@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import api from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -9,13 +10,14 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { toast } from 'sonner';
-import { Plus, Trash2, Upload, Link2, Unlink, Search, Landmark, PlusCircle, Save, Pencil, X, CheckCircle2, AlertTriangle } from 'lucide-react';
+import { Plus, Trash2, Upload, Link2, Unlink, Search, Landmark, PlusCircle, Save, Pencil, X, CheckCircle2, AlertTriangle, Eye } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import CounterpartySearchSelect from '@/components/CounterpartySearchSelect';
 import { fmtDate } from '@/lib/dateFmt';
 
 export default function BankingPage() {
   const { selectedCopro } = useAuth();
+  const navigate = useNavigate();
   const [statements, setStatements] = useState([]);
   const [transactions, setTransactions] = useState([]);
   const [selectedStmt, setSelectedStmt] = useState(null);
@@ -148,6 +150,15 @@ export default function BankingPage() {
       <div className="page-header flex items-center justify-between flex-wrap gap-3">
         <div><h1 className="page-title">Interface Bancaire</h1><p className="page-subtitle">Extraits de compte, encodage et lettrage</p></div>
         <div className="flex gap-2">
+          <Button
+            onClick={() => navigate('/reports?tab=bilan')}
+            variant="outline"
+            className="text-[#0055FF] border-[#0055FF]/30 hover:bg-[#0055FF]/10"
+            data-testid="view-bilan-btn"
+            title="Ouvrir le bilan de la copropriete"
+          >
+            <Eye size={16} className="mr-2" /> Voir le bilan
+          </Button>
           <input type="file" ref={codaRef} accept=".cod,.coda,.txt" onChange={handleCodaImport} className="hidden" />
           <Button onClick={() => codaRef.current?.click()} variant="outline" disabled={codaUploading} data-testid="coda-import-btn"><Upload size={16} className="mr-2" /> {codaUploading ? 'Import...' : 'Import CODA'}</Button>
           <Button onClick={() => {

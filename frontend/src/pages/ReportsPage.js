@@ -1,4 +1,5 @@
 import { useState, useEffect, Fragment } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import api from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -11,9 +12,12 @@ import { BarChart3, Download, FileText } from 'lucide-react';
 import { fmtDate } from '@/lib/dateFmt';
 
 const API = process.env.REACT_APP_BACKEND_URL;
+const VALID_TABS = ['balance', 'bilan', 'resultat', 'decomptes'];
 
 export default function ReportsPage() {
-  const [tab, setTab] = useState('balance');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const initialTab = VALID_TABS.includes(searchParams.get('tab')) ? searchParams.get('tab') : 'balance';
+  const [tab, setTab] = useState(initialTab);
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [balance, setBalance] = useState(null);
@@ -120,7 +124,7 @@ export default function ReportsPage() {
   return (
     <div data-testid="reports-page">
       <div className="page-header"><h1 className="page-title"><BarChart3 size={24} className="inline mr-2" />Rapports Financiers</h1><p className="page-subtitle">Bilan, compte de resultats, balance et decomptes</p></div>
-      <Tabs value={tab} onValueChange={setTab}>
+      <Tabs value={tab} onValueChange={(v) => { setTab(v); setSearchParams(v === 'balance' ? {} : { tab: v }, { replace: true }); }}>
         <TabsList className="mb-4"><TabsTrigger value="balance">Balance</TabsTrigger><TabsTrigger value="bilan">Bilan</TabsTrigger><TabsTrigger value="resultat">Resultat</TabsTrigger><TabsTrigger value="decomptes">Decomptes</TabsTrigger></TabsList>
 
         <TabsContent value="balance" className="mt-0">
