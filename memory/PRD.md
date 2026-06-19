@@ -12,6 +12,19 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 ## Implemented
 
+### Iter46 (Feb 2026) - Carte Sante toujours visible + retry
+
+#### UI Dashboard : carte sante robuste
+- Avant : `{health && (...)}` masquait totalement la carte si l'API echouait ou pendant le chargement.
+- Apres : carte TOUJOURS rendue quand une ACP est selectionnee, avec 3 etats :
+  - **Loading** : spinner + "Calcul de la sante comptable..."
+  - **Erreur** : message rouge + bouton "Reessayer" (`data-testid="health-retry"`)
+  - **Succes** : score, tiles, anomalies
+- Logs explicites dans la console pour debug en cas d'erreur reseau.
+- `loadHealth()` factorise en `useCallback` + dependance `[selectedCopro]` pour reload automatique au changement d'ACP.
+
+
+
 ### Iter45 (Feb 2026) - Cloture exercice : OD permanentes + Fix bilan boni/mali
 
 #### Bouton "Cloturer l'exercice" avec OD permanentes

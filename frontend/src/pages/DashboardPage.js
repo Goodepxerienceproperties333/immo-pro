@@ -13,7 +13,20 @@ export default function DashboardPage() {
   const [coproprietes, setCoproprietes] = useState([]);
   const [stats, setStats] = useState(null);
   const [health, setHealth] = useState(null);
+  const [healthError, setHealthError] = useState('');
   const [loading, setLoading] = useState(true);
+
+  const loadHealth = useCallback(() => {
+    if (!selectedCopro) { setHealth(null); setHealthError(''); return; }
+    setHealth(null); setHealthError('');
+    api.get('/dashboard/health-audit', { params: { copropriete_id: selectedCopro } })
+      .then(r => setHealth(r.data))
+      .catch(err => {
+        setHealth(null);
+        setHealthError(err.response?.data?.detail || err.message || 'Erreur de chargement de la sante');
+        console.error('[Sante comptable] error:', err);
+      });
+  }, [selectedCopro]);
   const [seeding, setSeeding] = useState(false);
 
   const reload = useCallback(() => {
@@ -27,12 +40,8 @@ export default function DashboardPage() {
     setLoading(true);
     const params = selectedCopro ? { copropriete_id: selectedCopro } : {};
     api.get('/dashboard/stats', { params }).then(r => { setStats(r.data); setLoading(false); }).catch(() => setLoading(false));
-    if (selectedCopro) {
-      api.get('/dashboard/health-audit', { params }).then(r => setHealth(r.data)).catch(() => setHealth(null));
-    } else {
-      setHealth(null);
-    }
-  }, [selectedCopro]);
+    loadHealth();
+  }, [selectedCopro, loadHealth]);
 
   const getDefaultIban = (c) => (c.bank_accounts || []).find(b => b.is_default)?.iban || (c.bank_accounts || [])[0]?.iban || '-';
   const selectedCoproData = coproprietes.find(c => c.id === selectedCopro);
@@ -171,10 +180,24 @@ export default function DashboardPage() {
         ))}
       </div>
 
-      {/* SANTE COMPTABLE */}
-      {health && (
-        <Card className="border-slate-200 mb-6" data-testid="health-audit-card">
-          <CardContent className="p-5">
+      {/* SANTE COMPTABLE - toujours visible quand une ACP est selectionnee */}
+      <Card className="border-slate-200 mb-6" data-testid="health-audit-card">
+        <CardContent className="p-5">
+          {!health && !healthError && (
+            <div className="flex items-center gap-3 text-sm text-slate-500">
+              <Loader2 size={16} className="animate-spin" />
+              Calcul de la sante comptable...
+            </div>
+          )}
+          {!health && healthError && (
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-sm text-red-600">
+                <span className="font-semibold">Sante comptable indisponible :</span> {healthError}
+              </div>
+              <Button onClick={loadHealth} size="sm" variant="outline" data-testid="health-retry">Reessayer</Button>
+            </div>
+          )}
+          {health && (<>
             <div className="flex items-start justify-between mb-3 gap-4">
               <div className="flex-1">
                 <div className="flex items-center gap-3 mb-1">
@@ -197,7 +220,6 @@ export default function DashboardPage() {
                 }`} style={{fontFamily:'Chivo,sans-serif'}} data-testid="health-score">{health.score}<span className="text-base text-slate-400">/100</span></div>
               </div>
             </div>
-            {/* Mini bars stats */}
             <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 mb-3">
               {[
                 { label: 'Fact > 60j', val: health.stats.invoices_overdue, color: 'text-red-600 bg-red-50 border-red-200' },
@@ -229,9 +251,9 @@ export default function DashboardPage() {
                 </div>
               </details>
             )}
-          </CardContent>
-        </Card>
-      )}
+          </>)}
+        </CardContent>
+      </Card>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <Card className="border-slate-200">
