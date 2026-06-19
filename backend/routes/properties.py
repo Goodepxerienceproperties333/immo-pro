@@ -27,10 +27,25 @@ def create_properties_router(db):
 
     @router.get("/owners")
     async def list_owners(request: Request, copropriete_id: Optional[str] = None):
-        q = {}
+        """Liste des proprietaires.
+
+        - Sans `copropriete_id` : tous les owners (cas global / multi-ACP)
+        - Avec `copropriete_id` : uniquement les owners ayant au moins un lot
+          dans cette ACP (chinese walls). On regarde `lots.owner_id` ET
+          `lots.owner_ids[]` pour supporter la copropriete partagee.
+        """
+        # Aussi accepter le header X-Copropriete-Id pour homogeneiser
+        if not copropriete_id:
+            copropriete_id = request.headers.get("X-Copropriete-Id") or None
         if copropriete_id:
-            q["copropriete_id"] = copropriete_id
-        owners = await db.owners.find(q, {"_id": 0}).sort("last_name", 1).to_list(1000)
+            owner_ids_single = await db.lots.distinct("owner_id", {"copropriete_id": copropriete_id})
+            owner_ids_multi = await db.lots.distinct("owner_ids", {"copropriete_id": copropriete_id})
+            allowed = {oid for oid in (owner_ids_single or []) if oid} | {oid for oid in (owner_ids_multi or []) if oid}
+            if not allowed:
+                return []
+            owners = await db.owners.find({"id": {"$in": list(allowed)}}, {"_id": 0}).sort("last_name", 1).to_list(2000)
+        else:
+            owners = await db.owners.find({}, {"_id": 0}).sort("last_name", 1).to_list(2000)
         return owners
 
     @router.post("/owners")

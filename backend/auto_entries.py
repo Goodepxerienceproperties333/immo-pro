@@ -45,19 +45,35 @@ async def generate_purchase_entry(db, invoice: dict) -> dict | None:
         return None
     expense_acc = invoice.get("account_number", "") or "600000"
     supplier_name = (invoice.get("supplier") or "").strip()
-    # Resolve/ensure supplier account
+    # Resolve/ensure supplier + dedicated 44000XXX account in this ACP.
+    # Chinese walls strict: NEVER fallback on "440000" (master) which would mix ACPs.
     supplier_acc = ""
     supplier_doc = None
     if supplier_name:
-        import re
+        import re, uuid
+        from datetime import datetime, timezone
         supplier_doc = await db.suppliers.find_one(
             {"name": {"$regex": f"^{re.escape(supplier_name)}$", "$options": "i"}}, {"_id": 0}
         )
-        if supplier_doc:
-            supplier_doc = await assign_supplier_account(db, supplier_doc, copro_id)
-            supplier_acc = get_supplier_account(supplier_doc, copro_id)
+        if not supplier_doc:
+            # Auto-create a global supplier record so we never use 440000 master
+            supplier_doc = {
+                "id": str(uuid.uuid4()),
+                "name": supplier_name,
+                "tier_accounts": {},
+                "auto_created": True,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            await db.suppliers.insert_one(dict(supplier_doc))
+        supplier_doc = await assign_supplier_account(db, supplier_doc, copro_id)
+        supplier_acc = get_supplier_account(supplier_doc, copro_id)
     if not supplier_acc:
-        supplier_acc = "440000"  # fallback collective
+        # As a LAST resort (no supplier name at all), create an ACP-scoped misc account
+        # but never the master 440000 (would leak across ACPs).
+        from tier_accounts import _next_seq, _format_seq, _ensure_account
+        seq = await _next_seq(db, copro_id, "44000")
+        supplier_acc = _format_seq("44000", seq, width=3)
+        await _ensure_account(db, copro_id, supplier_acc, "Fournisseur divers", 4)
 
     # Pre-fetch PCMN names
     pcmn_q = {"number": {"$in": [expense_acc, supplier_acc]}, "copropriete_id": copro_id}

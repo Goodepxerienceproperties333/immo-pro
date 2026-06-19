@@ -12,6 +12,56 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 ## Implemented
 
+### Iter35 (Feb 2026) - Chinese walls verrouillage strict TOUS endpoints critiques + Reference interne facture + Filtres invoices
+
+#### Verrouillage chinese walls strict (regle non-modifiable)
+- **`GET /api/banking/statements`** : sans `copropriete_id` (param ou header X-Copropriete-Id) -> **liste vide** au lieu de retourner tous les ACPs.
+- **`POST /api/banking/statements`** : `copropriete_id` **obligatoire** + verification que l'IBAN appartient bien aux `bank_accounts` de l'ACP (refuse sinon).
+- **`GET /api/banking/transactions`** : si pas de `statement_id`, exige `copropriete_id` (sinon liste vide). Si statement_id fourni, verification que le statement appartient bien a l'ACP de la requete.
+- **`GET /api/invoices`** : `copropriete_id` obligatoire (liste vide sinon).
+- **`GET /api/accounting/entries`** : `copropriete_id` obligatoire (liste vide sinon).
+- **`POST /api/accounting/entries`** : `copropriete_id` obligatoire ET tous les comptes utilises (`lines.account_number`) doivent exister dans le PCMN de cette ACP. Refus 400 sinon ("Chaque ACP dispose de son propre plan comptable - aucun melange autorise").
+- **`GET /api/reports/decompte/pdf/{owner_id}`** : `copropriete_id` obligatoire (avant : fallback sur le premier lot du proprietaire, ce qui pouvait selectionner une AUTRE ACP). Si `fiscal_year_id` est fourni, son `copropriete_id` DOIT matcher.
+- **`GET /api/owners`** scope-able : `?copropriete_id=X` -> filtre via `lots.owner_id` ET `lots.owner_ids[]`.
+
+#### Migration historique
+- **3 journal_entries orphelines** (sans copropriete_id) supprimees.
+- **1 bank_transaction + 1 bank_statement** orphelins supprimes.
+- **3 ecritures avec compte master 440000** remappees vers un compte 44000XXX dedie a leur ACP (avec creation auto du compte pcmn si absent) + creation auto des fiches fournisseur manquantes pour eviter le master a l'avenir.
+- **`auto_entries.generate_purchase_entry`** : ne fait plus jamais fallback sur 440000. Si pas de supplier, cree un compte 44000XXX "Fournisseur divers" dedie a l'ACP.
+
+#### Reference interne facture (FA-AAAA-NNNN)
+- **Auto-generee** a la creation : prefixe FA + annee de la date + sequence 4 chiffres, **scopee par ACP** (chaque ACP a sa propre numerotation). Migration appliquee sur 7 factures existantes.
+- Affichee en premiere colonne du tableau (font monospace bleu) et dans le dialog d'edition (read-only). Le champ "Numero" devient "N facture fournisseur" pour eviter la confusion.
+
+#### Filtres factures
+- Bandeau filtres complet : **dates (du/au), fournisseur (Select avec liste deduplique des fournisseurs effectivement presents), reference/description (input texte), statut (Select)**. Reset disponible. Filtre applique cote client sur la liste deja scopee ACP.
+- Le backend `GET /api/invoices` accepte aussi `?supplier=&reference=&start_date=&end_date=&min_amount=&max_amount=` pour les exports/scripts.
+
+#### Filtres balance tiers (recap iter34)
+- `?start_date=&end_date=` sur `GET /api/reports/balance-tiers/owners` + FilterBar dans BalanceTiersPage avec 7 presets.
+
+### Iter34 (Feb 2026) - Filtres période + recherche sur Balance Tiers + scope ACP OwnersPage + nature de depense inline
+
+#### Backend
+- **`GET /api/reports/balance-tiers/owners`** accepte desormais `?start_date=&end_date=` (ISO YYYY-MM-DD) et filtre les `journal_entries` ET `bank_transactions` sur cette periode -> soldes calcules sur la fenetre demandee uniquement.
+- **`GET /api/owners`** : si `?copropriete_id=X` (ou header `X-Copropriete-Id`), retourne uniquement les proprietaires ayant au moins un lot dans X (cherche dans `lots.owner_id` ET `lots.owner_ids[]`). Sans param : tous les owners (cas global).
+
+#### Frontend - BalanceTiersPage
+- **FilterBar reutilisable** : dates Du/Au + recherche texte (nom/VCS/BCE) + 7 presets rapides (Auj, Ce mois, Mois -1, Trim, Annee, N-1, Tout) + bouton Reset. Memorise dans `localStorage.balance-tiers-filters`.
+- Banner ambre indiquant que les soldes sont calcules sur la periode.
+- Filtre texte applique cote client sur la liste owners ET suppliers.
+
+#### Frontend - OwnersPage
+- Charge `/owners?copropriete_id={selectedCopro}` -> n'affiche que les proprietaires de l'ACP active.
+- Toggle "Afficher tous les proprietaires (toutes ACPs)" pour le mode global.
+- Reagit aux changements d'ACP via `window.addEventListener('storage')` et evenement custom `copropriete-changed`.
+- Badge count "(ACP active)" si scope ACP applique.
+
+#### Frontend - InvoicesPage : nature de depense inline
+- Option `+ Creer une nature de depense...` dans le `Select` -> ouvre un mini-dialog (nom + compte PCMN classe 6 via AccountSearchSelect + description) qui POST `/api/expense-categories` puis selectionne automatiquement la nouvelle nature et pre-remplit le compte de la ligne.
+- Plus besoin de quitter la facture pour creer une nature manquante.
+
 ### Iter33 (Feb 2026) - Bug fix critique : frais privatif laissait le proprietaire a solde 0
 - **Bug rapporte** : apres affectation d'un frais privatif (facture Finlead avec `is_private_fee=true`), le proprietaire apparaissait debiteur ET creditee du meme montant -> solde 0 au lieu de debiteur du montant des frais.
 - **Cause** : dans `auto_entries.py` (ligne 100-104), la **4eme ligne** de l'ecriture AC (Cr 643 - contrepartie de l'imputation) recevait `third_party_id = owner_id`. La balance tiers et le PDF situation incluaient donc cette ligne dans les mouvements du proprietaire, annulant son debit.

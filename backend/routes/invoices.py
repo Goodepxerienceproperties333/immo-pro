@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, UploadFile, File
+from fastapi import APIRouter, HTTPException, UploadFile, File, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from typing import Optional, List
@@ -123,13 +123,47 @@ def create_invoices_router(db):
 
     # ---- INVOICES ----
     @router.get("/invoices")
-    async def list_invoices(status: Optional[str] = None, copropriete_id: Optional[str] = None):
-        query = {}
+    async def list_invoices(
+        request: Request,
+        status: Optional[str] = None,
+        copropriete_id: Optional[str] = None,
+        supplier: Optional[str] = None,
+        reference: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        min_amount: Optional[float] = None,
+        max_amount: Optional[float] = None,
+    ):
+        """Chinese walls STRICT : `copropriete_id` requis (param ou header
+        X-Copropriete-Id). Sans scope ACP -> liste vide.
+        Filtres optionnels : status, supplier (regex insensible), reference
+        (regex insensible), start_date/end_date (ISO YYYY-MM-DD), min/max amount."""
+        if not copropriete_id:
+            copropriete_id = request.headers.get("X-Copropriete-Id") or None
+        if not copropriete_id or copropriete_id == "all":
+            return []
+        query = {"copropriete_id": copropriete_id}
         if status:
             query["status"] = status
-        if copropriete_id:
-            query["copropriete_id"] = copropriete_id
-        invoices = await db.invoices.find(query, {"_id": 0}).sort("date", -1).to_list(1000)
+        if supplier:
+            import re as _re
+            query["supplier"] = {"$regex": _re.escape(supplier), "$options": "i"}
+        if reference:
+            import re as _re2
+            query["number"] = {"$regex": _re2.escape(reference), "$options": "i"}
+        if start_date or end_date:
+            query["date"] = {}
+            if start_date:
+                query["date"]["$gte"] = start_date
+            if end_date:
+                query["date"]["$lte"] = end_date
+        if min_amount is not None or max_amount is not None:
+            query["total_amount"] = {}
+            if min_amount is not None:
+                query["total_amount"]["$gte"] = float(min_amount)
+            if max_amount is not None:
+                query["total_amount"]["$lte"] = float(max_amount)
+        invoices = await db.invoices.find(query, {"_id": 0}).sort("date", -1).to_list(2000)
         return invoices
 
     @router.post("/invoices")
@@ -169,9 +203,23 @@ def create_invoices_router(db):
                         "amount": round(data.total_amount * share_ratio, 2)
                     })
 
+        # Generer une reference interne auto-incrementee par ACP (FA-YYYY-NNNN)
+        year = (data.date or datetime.now(timezone.utc).date().isoformat())[:4]
+        prefix = f"FA-{year}-"
+        cnt = await db.invoices.count_documents({
+            "copropriete_id": data.copropriete_id or "",
+            "internal_reference": {"$regex": f"^{prefix}"}
+        })
+        internal_reference = f"{prefix}{(cnt + 1):04d}"
+        # Eviter doublon en cas de concurrence
+        while await db.invoices.find_one({"copropriete_id": data.copropriete_id or "", "internal_reference": internal_reference}, {"_id": 0, "id": 1}):
+            cnt += 1
+            internal_reference = f"{prefix}{(cnt + 1):04d}"
+
         doc = {
             "id": str(uuid.uuid4()),
             "number": data.number,
+            "internal_reference": internal_reference,
             "date": data.date,
             "due_date": data.due_date,
             "supplier": data.supplier,

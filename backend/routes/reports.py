@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from typing import Optional
 from datetime import datetime, timezone
@@ -465,50 +465,61 @@ def create_reports_router(db):
 
     # ---- PDF DECOMPTE ----
     @router.get("/decompte/pdf/{owner_id}")
-    async def decompte_pdf(owner_id: str, fiscal_year_id: Optional[str] = None,
-                           date_from: Optional[str] = None, date_to: Optional[str] = None,
-                           copropriete_id: Optional[str] = None):
+    async def decompte_pdf(
+        owner_id: str,
+        request: Request,
+        fiscal_year_id: Optional[str] = None,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+        copropriete_id: Optional[str] = None,
+    ):
+        """Genere le PDF Decompte annuel pour un proprietaire. Chinese walls
+        STRICT : `copropriete_id` (param ou header X-Copropriete-Id) requis,
+        sinon 400. Si fiscal_year_id, son `copropriete_id` doit matcher."""
         from pdf_decompte import build_decompte_pdf
 
         owner = await db.owners.find_one({"id": owner_id}, {"_id": 0})
         if not owner:
             raise HTTPException(404, "Proprietaire non trouve")
 
-        # Resolve fiscal year (or build a virtual one from date_from/date_to)
+        # Resolve ACP from param OR header ONLY (no implicit fallback to "first lot")
+        if not copropriete_id:
+            copropriete_id = request.headers.get("X-Copropriete-Id") or None
+        if not copropriete_id or copropriete_id == "all":
+            raise HTTPException(
+                400,
+                "copropriete_id requis - les decomptes sont strictement scopes a une ACP. "
+                "Selectionnez une copropriete avant de generer le PDF."
+            )
+
+        # Resolve fiscal year - if provided, MUST match the ACP
         fy = None
         if fiscal_year_id:
             fy = await db.fiscal_years.find_one({"id": fiscal_year_id}, {"_id": 0})
+            if fy and fy.get("copropriete_id") and fy["copropriete_id"] != copropriete_id:
+                raise HTTPException(
+                    400,
+                    f"L'exercice {fy.get('name','')} appartient a une autre ACP. "
+                    "Chinese walls strict : aucun melange autorise."
+                )
         if not fy:
-            # Build virtual fy from explicit dates or default current year
             today = datetime.now(timezone.utc)
             fy = {
                 "name": f"Exercice {today.year}",
                 "start_date": date_from or f"{today.year}-01-01",
                 "end_date": date_to or f"{today.year}-12-31",
             }
-            if copropriete_id:
-                # Try to find a real fiscal year covering this period
-                real_fy = await db.fiscal_years.find_one(
-                    {"copropriete_id": copropriete_id,
-                     "start_date": {"$lte": fy["end_date"]},
-                     "end_date": {"$gte": fy["start_date"]}},
-                    {"_id": 0}
-                )
-                if real_fy:
-                    fy = real_fy
-
-        # Resolve ACP (required)
-        copro_id_use = copropriete_id or fy.get("copropriete_id", "")
-        if not copro_id_use:
-            # Pick first ACP where owner has lots
-            sample_lot = await db.lots.find_one(
-                {"$or": [{"owner_id": owner_id}, {"owner_ids": owner_id}]},
+            # Best-effort lookup of real fiscal year covering this period IN THIS ACP
+            real_fy = await db.fiscal_years.find_one(
+                {"copropriete_id": copropriete_id,
+                 "start_date": {"$lte": fy["end_date"]},
+                 "end_date": {"$gte": fy["start_date"]}},
                 {"_id": 0}
             )
-            if sample_lot:
-                copro_id_use = sample_lot.get("copropriete_id", "")
-        if not copro_id_use:
-            raise HTTPException(400, "Aucune copropriete identifiee pour ce proprietaire")
+            if real_fy:
+                fy = real_fy
+
+        copro_id_use = copropriete_id
         copro = await db.coproprietes.find_one({"id": copro_id_use}, {"_id": 0})
         if not copro:
             raise HTTPException(404, "Copropriete non trouvee")
@@ -641,7 +652,11 @@ def create_reports_router(db):
 
     # ---- BALANCE DE TIERS PROPRIETAIRES ----
     @router.get("/balance-tiers/owners")
-    async def balance_tiers_owners(copropriete_id: Optional[str] = None):
+    async def balance_tiers_owners(
+        copropriete_id: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+    ):
         """Balance de tiers proprietaires (basee sur le grand livre).
 
         Calcule pour chaque proprietaire le solde des comptes :
@@ -652,6 +667,7 @@ def create_reports_router(db):
         Operations Diverses manuelles apparaissent aussi.
         Les paiements bancaires non encore lettres mais reconnus par VCS sont
         comptes en credit additionnel (ils generent un FI automatique au matching).
+        Filtre optionnel par periode `start_date` / `end_date` (inclusif, ISO YYYY-MM-DD).
         """
         if not copropriete_id:
             return {"owners": [], "total_debiteurs": 0, "total_crediteurs": 0}
@@ -675,10 +691,15 @@ def create_reports_router(db):
         # Set of owners that still hold at least one lot in this ACP
         current_owner_ids = set(l.get("owner_id") for l in lots if l.get("owner_id"))
 
-        # Charge journal entries ACP-scoped (un seul fetch)
-        entries = await db.journal_entries.find(
-            {"copropriete_id": copropriete_id}, {"_id": 0}
-        ).to_list(100000)
+        # Charge journal entries ACP-scoped (un seul fetch) + filtre periode
+        je_q = {"copropriete_id": copropriete_id}
+        if start_date or end_date:
+            je_q["date"] = {}
+            if start_date:
+                je_q["date"]["$gte"] = start_date
+            if end_date:
+                je_q["date"]["$lte"] = end_date
+        entries = await db.journal_entries.find(je_q, {"_id": 0}).to_list(100000)
         # Aggregate Dr/Cr per account_number x third_party_id (or third_party falls back to scan all owners)
         # Pour les comptes tiers les lignes ont third_party_id = owner_id
         per_owner_lines = {}  # owner_id -> [line + entry_meta]
@@ -702,10 +723,15 @@ def create_reports_router(db):
                 else:
                     per_acc_lines.setdefault(ln.get("account_number", ""), []).append(meta)
 
-        # Charge bank txns ACP-scoped pour les VCS-detected non lettres
-        all_bank_txns = await db.bank_transactions.find(
-            {"copropriete_id": copropriete_id}, {"_id": 0}
-        ).to_list(100000)
+        # Charge bank txns ACP-scoped + filtre periode (pour VCS non lettres)
+        bt_q = {"copropriete_id": copropriete_id}
+        if start_date or end_date:
+            bt_q["date"] = {}
+            if start_date:
+                bt_q["date"]["$gte"] = start_date
+            if end_date:
+                bt_q["date"]["$lte"] = end_date
+        all_bank_txns = await db.bank_transactions.find(bt_q, {"_id": 0}).to_list(100000)
 
         # VCS lookup
         vcs_to_owner = {}

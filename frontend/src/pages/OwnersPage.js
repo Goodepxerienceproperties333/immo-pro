@@ -18,8 +18,26 @@ export default function OwnersPage() {
   const [form, setForm] = useState(emptyForm);
   const [duplicates, setDuplicates] = useState([]);
 
-  const load = useCallback(async () => { const { data } = await api.get('/owners'); setOwners(data); }, []);
+  const [selectedCopro, setSelectedCopro] = useState(typeof window !== 'undefined' ? localStorage.getItem('selectedCopro') || '' : '');
+  const [showAll, setShowAll] = useState(false);
+  const load = useCallback(async () => {
+    const params = {};
+    if (!showAll && selectedCopro && selectedCopro !== 'all') params.copropriete_id = selectedCopro;
+    const { data } = await api.get('/owners', { params });
+    setOwners(data);
+  }, [selectedCopro, showAll]);
   useEffect(() => { load(); }, [load]);
+
+  // React to ACP change in the header selector (custom event or storage)
+  useEffect(() => {
+    const handler = () => setSelectedCopro(localStorage.getItem('selectedCopro') || '');
+    window.addEventListener('storage', handler);
+    window.addEventListener('copropriete-changed', handler);
+    return () => {
+      window.removeEventListener('storage', handler);
+      window.removeEventListener('copropriete-changed', handler);
+    };
+  }, []);
 
   const filtered = owners.filter(o => {
     const s = search.toLowerCase();
@@ -58,9 +76,20 @@ export default function OwnersPage() {
         <div><h1 className="page-title">Proprietaires</h1><p className="page-subtitle">Gestion des coproprietaires</p></div>
         <Button onClick={openCreate} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="create-owner-btn"><Plus size={16} className="mr-2" /> Nouveau</Button>
       </div>
-      <div className="mb-4 relative max-w-sm">
-        <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-        <Input placeholder="Rechercher nom, email, VCS..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9" data-testid="owners-search" />
+      <div className="mb-4 flex items-center gap-3 flex-wrap">
+        <div className="relative max-w-sm flex-1">
+          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <Input placeholder="Rechercher nom, email, VCS..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9" data-testid="owners-search" />
+        </div>
+        {selectedCopro && selectedCopro !== 'all' && (
+          <label className="flex items-center gap-2 text-xs text-slate-600 cursor-pointer" data-testid="owners-show-all-toggle">
+            <input type="checkbox" checked={showAll} onChange={e => setShowAll(e.target.checked)} className="rounded" />
+            <span>Afficher tous les proprietaires (toutes ACPs)</span>
+          </label>
+        )}
+        <Badge variant="outline" className="text-[11px] bg-slate-50">
+          {filtered.length} proprietaire{filtered.length > 1 ? 's' : ''}{!showAll && selectedCopro && selectedCopro !== 'all' ? ' (ACP active)' : ''}
+        </Badge>
       </div>
       <div className="bg-white rounded-md border border-slate-200 overflow-hidden">
         <Table>

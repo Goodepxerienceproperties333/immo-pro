@@ -91,23 +91,47 @@ def create_banking_router(db):
 
     # ---- BANK STATEMENTS ----
     @router.get("/statements")
-    async def list_statements(copropriete_id: Optional[str] = None):
-        q = {}
-        if copropriete_id:
-            q["copropriete_id"] = copropriete_id
-        statements = await db.bank_statements.find(q, {"_id": 0}).sort("date", -1).to_list(1000)
+    async def list_statements(request: Request, copropriete_id: Optional[str] = None):
+        """Chinese wall STRICT : aucune liste cross-ACP possible. Si aucun
+        copropriete_id n'est fourni (ni via param ni via header X-Copropriete-Id),
+        on retourne une liste vide pour eviter toute fuite."""
+        if not copropriete_id:
+            copropriete_id = request.headers.get("X-Copropriete-Id") or None
+        if not copropriete_id or copropriete_id == "all":
+            return []
+        statements = await db.bank_statements.find(
+            {"copropriete_id": copropriete_id}, {"_id": 0}
+        ).sort("date", -1).to_list(1000)
         return statements
 
     @router.post("/statements")
-    async def create_statement(data: StatementInput):
+    async def create_statement(data: StatementInput, request: Request):
+        # Resolve ACP : payload OR header
+        copro_id = (data.copropriete_id or "").strip() or (request.headers.get("X-Copropriete-Id") or "").strip()
+        if not copro_id or copro_id == "all":
+            raise HTTPException(400, "copropriete_id requis - chinese walls strict")
+        # Verify ACP exists
+        copro = await db.coproprietes.find_one({"id": copro_id}, {"_id": 0, "id": 1, "bank_accounts": 1})
+        if not copro:
+            raise HTTPException(404, "Copropriete non trouvee")
+        # If an account_number (IBAN) is provided, it MUST belong to this ACP's bank_accounts
+        iban = (data.account_number or "").strip()
+        if iban:
+            allowed_ibans = {(b.get("iban") or "").replace(" ", "") for b in (copro.get("bank_accounts") or [])}
+            if allowed_ibans and iban.replace(" ", "") not in allowed_ibans:
+                raise HTTPException(
+                    400,
+                    f"L'IBAN {iban} n'est pas configure dans les comptes bancaires de cette ACP. "
+                    "Ajoutez-le dans la fiche ACP avant d'importer."
+                )
         doc = {
             "id": str(uuid.uuid4()),
             "number": data.number,
             "date": data.date,
-            "account_number": data.account_number,
+            "account_number": iban,
             "opening_balance": data.opening_balance,
             "closing_balance": data.closing_balance,
-            "copropriete_id": data.copropriete_id or "",
+            "copropriete_id": copro_id,
             "status": "draft",  # draft | posted
             "created_at": datetime.now(timezone.utc).isoformat()
         }
@@ -204,13 +228,31 @@ def create_banking_router(db):
 
     # ---- TRANSACTIONS ----
     @router.get("/transactions")
-    async def list_transactions(statement_id: Optional[str] = None, matched: Optional[bool] = None, copropriete_id: Optional[str] = None):
+    async def list_transactions(
+        request: Request,
+        statement_id: Optional[str] = None,
+        matched: Optional[bool] = None,
+        copropriete_id: Optional[str] = None,
+    ):
+        """Chinese wall STRICT : `copropriete_id` requis (param ou header
+        X-Copropriete-Id) sauf si on liste par `statement_id`."""
+        if not copropriete_id:
+            copropriete_id = request.headers.get("X-Copropriete-Id") or None
+        if not statement_id and (not copropriete_id or copropriete_id == "all"):
+            return []
         query = {}
         if statement_id:
             query["statement_id"] = statement_id
+            # Verify the statement belongs to the resolved ACP (defense in depth)
+            if copropriete_id and copropriete_id != "all":
+                stmt = await db.bank_statements.find_one(
+                    {"id": statement_id, "copropriete_id": copropriete_id}, {"_id": 0, "id": 1}
+                )
+                if not stmt:
+                    return []
         if matched is not None:
             query["matched"] = matched
-        if copropriete_id:
+        if copropriete_id and copropriete_id != "all":
             query["copropriete_id"] = copropriete_id
         txns = await db.bank_transactions.find(query, {"_id": 0}).sort("date", -1).to_list(1000)
         return txns

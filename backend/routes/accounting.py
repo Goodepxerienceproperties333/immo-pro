@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, UploadFile, File
+from fastapi import APIRouter, HTTPException, UploadFile, File, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from typing import Optional, List
@@ -161,25 +161,64 @@ def create_accounting_router(db):
 
     # ---- JOURNAL ENTRIES ----
     @router.get("/entries")
-    async def list_entries(journal_type: Optional[str] = None, date_from: Optional[str] = None, date_to: Optional[str] = None, copropriete_id: Optional[str] = None):
-        query = {}
+    async def list_entries(
+        request: Request,
+        journal_type: Optional[str] = None,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+        copropriete_id: Optional[str] = None,
+        search: Optional[str] = None,
+        reference: Optional[str] = None,
+        account_number: Optional[str] = None,
+    ):
+        """Chinese walls STRICT : `copropriete_id` requis (param ou header
+        X-Copropriete-Id). Sans scope ACP -> liste vide."""
+        if not copropriete_id:
+            copropriete_id = request.headers.get("X-Copropriete-Id") or None
+        if not copropriete_id or copropriete_id == "all":
+            return []
+        query = {"copropriete_id": copropriete_id}
         if journal_type:
             query["journal_type"] = journal_type
-        if copropriete_id:
-            query["copropriete_id"] = copropriete_id
         if date_from:
             query["date"] = {"$gte": date_from}
         if date_to:
             query.setdefault("date", {})["$lte"] = date_to
-        entries = await db.journal_entries.find(query, {"_id": 0}).sort("date", -1).to_list(1000)
+        if reference:
+            import re as _re
+            query["reference"] = {"$regex": _re.escape(reference), "$options": "i"}
+        if search:
+            import re as _re2
+            rgx = {"$regex": _re2.escape(search), "$options": "i"}
+            query["$or"] = [{"description": rgx}, {"reference": rgx}, {"lines.account_name": rgx}, {"lines.third_party_name": rgx}]
+        if account_number:
+            query["lines.account_number"] = account_number
+        entries = await db.journal_entries.find(query, {"_id": 0}).sort("date", -1).to_list(2000)
         return entries
 
     @router.post("/entries")
-    async def create_entry(data: JournalEntryInput):
+    async def create_entry(data: JournalEntryInput, request: Request):
+        copro_id = (data.copropriete_id or "").strip() or (request.headers.get("X-Copropriete-Id") or "").strip()
+        if not copro_id or copro_id == "all":
+            raise HTTPException(400, "copropriete_id requis - chinese walls strict")
         total_debit = sum(l.debit for l in data.lines)
         total_credit = sum(l.credit for l in data.lines)
         if abs(total_debit - total_credit) > 0.01:
             raise HTTPException(400, f"Ecriture non equilibree: Debit={total_debit:.2f}, Credit={total_credit:.2f}")
+        # Verify each account_number actually belongs to the ACP's PCMN (no leak)
+        accs_used = {l.account_number for l in data.lines if l.account_number}
+        if accs_used:
+            existing = await db.pcmn_accounts.find(
+                {"copropriete_id": copro_id, "number": {"$in": list(accs_used)}}, {"_id": 0, "number": 1}
+            ).to_list(2000)
+            existing_set = {p["number"] for p in existing}
+            missing = accs_used - existing_set
+            if missing:
+                raise HTTPException(
+                    400,
+                    f"Comptes PCMN absents de cette ACP : {sorted(missing)}. "
+                    "Chaque ACP dispose de son propre plan comptable - aucun melange autorise."
+                )
         doc = {
             "id": str(uuid.uuid4()),
             "journal_type": data.journal_type,
@@ -189,7 +228,7 @@ def create_accounting_router(db):
             "lines": [l.model_dump() for l in data.lines],
             "total_debit": round(total_debit, 2),
             "total_credit": round(total_credit, 2),
-            "copropriete_id": data.copropriete_id or "",
+            "copropriete_id": copro_id,
             "created_at": datetime.now(timezone.utc).isoformat()
         }
         await db.journal_entries.insert_one(doc)

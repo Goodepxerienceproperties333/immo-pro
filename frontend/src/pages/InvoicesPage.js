@@ -9,7 +9,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { Plus, Trash2, Key, Receipt, Sparkles, Paperclip, Download, X, Pencil, AlertTriangle } from 'lucide-react';
+import { Plus, Trash2, Key, Receipt, Sparkles, Paperclip, Download, X, Pencil, AlertTriangle, Filter } from 'lucide-react';
 import AccountSearchSelect from '@/components/AccountSearchSelect';
 
 const API = process.env.REACT_APP_BACKEND_URL;
@@ -18,6 +18,7 @@ export default function InvoicesPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [tab, setTab] = useState('invoices');
   const [invoices, setInvoices] = useState([]);
+  const [invFilters, setInvFilters] = useState({ startDate: '', endDate: '', supplier: '', reference: '', status: '' });
   const [distKeys, setDistKeys] = useState([]);
   const [accounts, setAccounts] = useState([]);
   const [categories, setCategories] = useState([]);
@@ -33,6 +34,8 @@ export default function InvoicesPage() {
   const [aiHint, setAiHint] = useState('');
   const [pendingPdf, setPendingPdf] = useState(null); // {file, filename} captured for later attach
   const [attachDialogInv, setAttachDialogInv] = useState(null); // invoice being managed
+  const [newCatDialog, setNewCatDialog] = useState(false);
+  const [newCatForm, setNewCatForm] = useState({ name: '', account_number: '', description: '' });
 
   const load = useCallback(async () => {
     const [inv, dk, acc, lt, cat, ow] = await Promise.all([
@@ -265,18 +268,77 @@ export default function InvoicesPage() {
             </label>
             <Button onClick={openCreateInvoice} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="create-invoice-btn"><Plus size={16} className="mr-2" /> Nouvelle facture</Button>
           </div>
+
+          {/* ---- Filter bar invoices ---- */}
+          <div className="mb-3 p-3 bg-slate-50 border border-slate-200 rounded-md flex flex-wrap items-end gap-2" data-testid="invoices-filter-bar">
+            <div className="flex items-center gap-1.5">
+              <Filter size={14} className="text-slate-500" />
+              <span className="text-xs font-semibold text-slate-600 uppercase tracking-wider">Filtres</span>
+            </div>
+            <div>
+              <label className="block text-[10px] uppercase tracking-wider text-slate-500 mb-1">Du</label>
+              <Input type="date" value={invFilters.startDate} onChange={e => setInvFilters({...invFilters, startDate: e.target.value})} className="h-8 text-xs w-36" data-testid="inv-filter-start" />
+            </div>
+            <div>
+              <label className="block text-[10px] uppercase tracking-wider text-slate-500 mb-1">Au</label>
+              <Input type="date" value={invFilters.endDate} onChange={e => setInvFilters({...invFilters, endDate: e.target.value})} className="h-8 text-xs w-36" data-testid="inv-filter-end" />
+            </div>
+            <div className="flex-1 min-w-[140px]">
+              <label className="block text-[10px] uppercase tracking-wider text-slate-500 mb-1">Fournisseur</label>
+              <Select value={invFilters.supplier || '__all__'} onValueChange={v => setInvFilters({...invFilters, supplier: v === '__all__' ? '' : v})}>
+                <SelectTrigger className="h-8 text-xs" data-testid="inv-filter-supplier"><SelectValue placeholder="Tous" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__all__">Tous</SelectItem>
+                  {[...new Set(invoices.map(i => (i.supplier || '').trim()).filter(Boolean))].sort().map(s => (
+                    <SelectItem key={s} value={s}>{s}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex-1 min-w-[140px]">
+              <label className="block text-[10px] uppercase tracking-wider text-slate-500 mb-1">Reference / description</label>
+              <Input value={invFilters.reference} onChange={e => setInvFilters({...invFilters, reference: e.target.value})} placeholder="Numero..." className="h-8 text-xs" data-testid="inv-filter-ref" />
+            </div>
+            <div>
+              <label className="block text-[10px] uppercase tracking-wider text-slate-500 mb-1">Statut</label>
+              <Select value={invFilters.status || '__all__'} onValueChange={v => setInvFilters({...invFilters, status: v === '__all__' ? '' : v})}>
+                <SelectTrigger className="h-8 text-xs w-28" data-testid="inv-filter-status"><SelectValue placeholder="Tous" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__all__">Tous</SelectItem>
+                  <SelectItem value="unpaid">Impayee</SelectItem>
+                  <SelectItem value="paid">Payee</SelectItem>
+                  <SelectItem value="draft">Brouillon</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            {(invFilters.startDate || invFilters.endDate || invFilters.supplier || invFilters.reference || invFilters.status) && (
+              <Button size="sm" variant="ghost" className="h-8 text-red-600" onClick={() => setInvFilters({ startDate: '', endDate: '', supplier: '', reference: '', status: '' })} data-testid="inv-filter-reset">
+                Reset
+              </Button>
+            )}
+          </div>
+
           <div className="bg-white rounded-md border border-slate-200 overflow-hidden">
             <Table>
               <TableHeader><TableRow>
-                <TableHead>N</TableHead><TableHead>Date</TableHead><TableHead>Fournisseur</TableHead>
+                <TableHead>Ref. interne</TableHead><TableHead>N fournisseur</TableHead><TableHead>Date</TableHead><TableHead>Fournisseur</TableHead>
                 <TableHead>Description</TableHead><TableHead className="text-right">Montant</TableHead>
                 <TableHead>Cle</TableHead><TableHead>Statut</TableHead><TableHead className="w-20">Actions</TableHead>
               </TableRow></TableHeader>
               <TableBody>
-                {invoices.length === 0 ? (
-                  <TableRow><TableCell colSpan={8} className="text-center py-8 text-slate-400">Aucune facture</TableCell></TableRow>
-                ) : invoices.map(inv => (
+                {(() => {
+                  const filtered = invoices.filter(inv => {
+                    if (invFilters.startDate && (inv.date || '') < invFilters.startDate) return false;
+                    if (invFilters.endDate && (inv.date || '') > invFilters.endDate) return false;
+                    if (invFilters.supplier && inv.supplier !== invFilters.supplier) return false;
+                    if (invFilters.reference && !(inv.number || '').toLowerCase().includes(invFilters.reference.toLowerCase()) && !(inv.description || '').toLowerCase().includes(invFilters.reference.toLowerCase())) return false;
+                    if (invFilters.status && inv.status !== invFilters.status) return false;
+                    return true;
+                  });
+                  if (filtered.length === 0) return <TableRow><TableCell colSpan={9} className="text-center py-8 text-slate-400">Aucune facture</TableCell></TableRow>;
+                  return filtered.map(inv => (
                   <TableRow key={inv.id} className="hover:bg-slate-50/50">
+                    <TableCell className="font-mono text-xs text-[#0055FF] font-semibold">{inv.internal_reference || '-'}</TableCell>
                     <TableCell className="font-mono text-sm">{inv.number}</TableCell>
                     <TableCell>{inv.date}</TableCell>
                     <TableCell className="font-medium">{inv.supplier}</TableCell>
@@ -298,7 +360,8 @@ export default function InvoicesPage() {
                       </div>
                     </TableCell>
                   </TableRow>
-                ))}
+                ));
+                })()}
               </TableBody>
             </Table>
           </div>
@@ -400,7 +463,16 @@ export default function InvoicesPage() {
               </div>
             )}
             <div className="grid grid-cols-3 gap-4">
-              <div><label className="form-label">Numero *</label><Input value={invForm.number} onChange={e => setInvForm({...invForm, number: e.target.value})} data-testid="inv-number" /></div>
+              <div>
+                <label className="form-label">N facture fournisseur *</label>
+                <Input value={invForm.number} onChange={e => setInvForm({...invForm, number: e.target.value})} placeholder="Ex: V-260114" data-testid="inv-number" />
+                {editingInvoice?.internal_reference && (
+                  <p className="text-[10px] text-slate-500 mt-1">Ref. interne : <span className="font-mono text-[#0055FF] font-semibold">{editingInvoice.internal_reference}</span></p>
+                )}
+                {!editingInvoice && (
+                  <p className="text-[10px] text-slate-400 mt-1">Une reference interne <span className="font-mono">FA-AAAA-NNNN</span> sera auto-generee a la creation.</p>
+                )}
+              </div>
               <div><label className="form-label">Date *</label><Input type="date" value={invForm.date} onChange={e => setInvForm({...invForm, date: e.target.value})} /></div>
               <div><label className="form-label">Echeance</label><Input type="date" value={invForm.due_date} onChange={e => setInvForm({...invForm, due_date: e.target.value})} /></div>
             </div>
@@ -485,15 +557,20 @@ export default function InvoicesPage() {
             </div>
             <div className={`grid grid-cols-3 gap-4 ${invForm.is_private_fee ? 'opacity-50 pointer-events-none' : ''}`}>
               <div><label className="form-label">Nature de depense</label>
-                <Select value={invForm.expense_category_id || 'none'} onValueChange={v => {
-                  if (v === 'none') { setInvForm(f => ({...f, expense_category_id: ''})); return; }
-                  const cat = categories.find(c => c.id === v);
-                  setInvForm(f => ({...f, expense_category_id: v, account_number: cat?.account_number || f.account_number}));
-                }}>
+                <Select
+                  value={invForm.expense_category_id || 'none'}
+                  onValueChange={v => {
+                    if (v === '__create__') { setNewCatDialog(true); return; }
+                    if (v === 'none') { setInvForm(f => ({...f, expense_category_id: ''})); return; }
+                    const cat = categories.find(c => c.id === v);
+                    setInvForm(f => ({...f, expense_category_id: v, account_number: cat?.account_number || f.account_number}));
+                  }}
+                >
                   <SelectTrigger data-testid="invoice-category-select"><SelectValue placeholder="Aucune" /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="none">— Aucune —</SelectItem>
                     {categories.map(c => <SelectItem key={c.id} value={c.id}>{c.name} <span className="text-slate-400 ml-2 font-mono text-xs">({c.account_number})</span></SelectItem>)}
+                    <SelectItem value="__create__" className="text-[#0055FF] font-semibold">+ Creer une nature de depense...</SelectItem>
                   </SelectContent>
                 </Select>
                 <p className="text-[10px] text-slate-400 mt-1">Pre-rempli le compte PCMN</p>
@@ -673,6 +750,72 @@ export default function InvoicesPage() {
                   </div>
                 </div>
               ))}
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Create Expense Category inline dialog */}
+      <Dialog open={newCatDialog} onOpenChange={setNewCatDialog}>
+        <DialogContent className="max-w-md" data-testid="new-category-dialog">
+          <DialogHeader>
+            <DialogTitle style={{fontFamily:'Chivo,sans-serif'}}>Nouvelle nature de depense</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 mt-2">
+            <div>
+              <label className="form-label">Nom *</label>
+              <Input
+                value={newCatForm.name}
+                onChange={e => setNewCatForm({...newCatForm, name: e.target.value})}
+                placeholder="Ex: Entretien chaudiere"
+                data-testid="new-cat-name"
+              />
+            </div>
+            <div>
+              <label className="form-label">Compte PCMN (classe 6) *</label>
+              <AccountSearchSelect
+                accounts={accounts.filter(a => (a.number || '').startsWith('6'))}
+                value={newCatForm.account_number}
+                onChange={v => setNewCatForm({...newCatForm, account_number: v})}
+                placeholder="6XXX..."
+                testId="new-cat-account"
+              />
+              <p className="text-[10px] text-slate-400 mt-1">Un compte PCMN ne peut etre lie qu&apos;a une seule nature.</p>
+            </div>
+            <div>
+              <label className="form-label">Description</label>
+              <Input
+                value={newCatForm.description}
+                onChange={e => setNewCatForm({...newCatForm, description: e.target.value})}
+                placeholder="Optionnel"
+                data-testid="new-cat-description"
+              />
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="outline" onClick={() => setNewCatDialog(false)}>Annuler</Button>
+              <Button
+                className="bg-[#0055FF] hover:bg-[#0040CC]"
+                disabled={!newCatForm.name.trim() || !newCatForm.account_number.trim()}
+                onClick={async () => {
+                  try {
+                    const { data } = await api.post('/expense-categories', {
+                      name: newCatForm.name.trim(),
+                      account_number: newCatForm.account_number.trim(),
+                      description: newCatForm.description.trim(),
+                    });
+                    toast.success('Nature de depense creee');
+                    setCategories(prev => [...prev, data].sort((a, b) => (a.name || '').localeCompare(b.name || '')));
+                    setInvForm(f => ({...f, expense_category_id: data.id, account_number: data.account_number}));
+                    setNewCatForm({ name: '', account_number: '', description: '' });
+                    setNewCatDialog(false);
+                  } catch (err) {
+                    toast.error(err.response?.data?.detail || 'Erreur creation');
+                  }
+                }}
+                data-testid="new-cat-submit"
+              >
+                Creer et selectionner
+              </Button>
             </div>
           </div>
         </DialogContent>
