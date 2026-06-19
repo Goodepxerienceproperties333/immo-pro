@@ -217,18 +217,53 @@ def build_decompte_pdf(
     # Aggregate by account globally for the "Recap locataire" summary
     occupant_summary_by_acc = {}  # acc -> {occ_amt, label}
 
+    # Pre-compute "tantiemes par defaut" fallback (sum of all lot quotities in ACP)
+    default_total_quotity = sum(float(l.get("quotity", 0) or 0) for l in all_lots) or 1.0
+
+    # Special pseudo distribution_key for invoices without explicit key
+    NO_KEY = "_default_tantiemes"
+    if NO_KEY not in dk_index:
+        dk_index[NO_KEY] = {
+            "name": "Tantiemes (par defaut)",
+            "lots": {l["id"]: float(l.get("quotity", 0) or 0) for l in all_lots},
+            "total": default_total_quotity,
+        }
+
     for inv in invoices:
-        key_id = inv.get("distribution_key_id", "") or "_none"
+        raw_key = inv.get("distribution_key_id", "") or ""
         acc = inv.get("account_number", "") or "_other"
         occ_pct = float(inv.get("occupant_pct", 0) or 0)
         inv_total = float(inv.get("total_amount", 0) or 0)
 
         # Compute owner share per lot for this invoice
         lot_share = {}
-        for dl in inv.get("distribution_lines", []) or []:
-            lid = dl.get("lot_id")
-            if lid in owner_lot_ids:
-                lot_share[lid] = lot_share.get(lid, 0.0) + float(dl.get("amount", 0) or 0)
+        explicit_lines = inv.get("distribution_lines", []) or []
+        has_explicit = any(
+            (dl.get("lot_id") and float(dl.get("amount", 0) or 0) > 0.001)
+            for dl in explicit_lines
+        )
+
+        if has_explicit:
+            # Use explicit distribution_lines
+            key_id = raw_key or "_none"
+            for dl in explicit_lines:
+                lid = dl.get("lot_id")
+                if lid in owner_lot_ids:
+                    lot_share[lid] = lot_share.get(lid, 0.0) + float(dl.get("amount", 0) or 0)
+        else:
+            # Fallback : split inv_total by tantiemes
+            # Use the configured distribution key if present, else default tantiemes
+            key_id = raw_key if (raw_key and raw_key in dk_index) else NO_KEY
+            dk_info = dk_index.get(key_id, dk_index[NO_KEY])
+            lots_map = dk_info.get("lots") or {}
+            total_q = dk_info.get("total") or default_total_quotity
+            if total_q <= 0:
+                continue  # cannot split
+            for lid in owner_lot_ids:
+                q = lots_map.get(lid)
+                if not q:  # not in the key -> skip
+                    continue
+                lot_share[lid] = round(inv_total * q / total_q, 2)
 
         for lot_id, amt_owner in lot_share.items():
             if abs(amt_owner) < 0.001 and abs(inv_total) < 0.001:
@@ -254,6 +289,7 @@ def build_decompte_pdf(
                 "owner_amt": amt_owner,
                 "owner_occ": amt_occ,
                 "owner_prop": amt_prop,
+                "auto_split": not has_explicit,  # flag for UI hint
             })
 
             # Dedup total_to_distribute per (lot, key, acc, invoice)
@@ -408,7 +444,12 @@ def build_decompte_pdf(
                     continue
 
                 dk_meta = dk_by_id.get(key_id, {})
-                dk_name = dk_meta.get("name", "Tantiemes") if key_id != "_none" else "Tantiemes"
+                if key_id == "_default_tantiemes":
+                    dk_name = "Tantiemes (par defaut)"
+                elif key_id == "_none":
+                    dk_name = "Tantiemes"
+                else:
+                    dk_name = dk_meta.get("name", "Tantiemes")
                 dk_idx = dk_index.get(key_id, {})
                 dk_total_q = dk_idx.get("total", 0)
                 # Lot quotity in this key (fallback to lot.quotity if not configured)
@@ -480,6 +521,10 @@ def build_decompte_pdf(
                             parts.append(f"<font color='{SLATE_500.hexval()}'>- {descr}</font>")
                         if ref:
                             parts.append(f"<font color='{SLATE_500.hexval()}' size='7'>({ref})</font>")
+                        if iv.get("auto_split"):
+                            parts.append(
+                                f"<font color='#D97706' size='7'><i>repartition auto (tantiemes)</i></font>"
+                            )
                         inv_label = " ".join(parts)
                         inv_indent_style = ParagraphStyle(
                             "inv_in", parent=designation_style,
