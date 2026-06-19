@@ -12,6 +12,26 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 ## Implemented
 
+### Iter59 (Feb 2026) - Fix bug : Superadmin peut creer un gestionnaire via /team
+
+#### Bug rapporte
+Connecte en tant que superadmin (gerald@gep.be), l'utilisateur ouvre `/team`, clique sur "Ajouter un gestionnaire", remplit le formulaire et obtient l'erreur 400 :
+> "Le superadmin doit creer les gestionnaires via le syndic concerne. Connectez-vous en tant que ce syndic ou utilisez /api/admin/users."
+
+Cas d'usage reel : Gerald est superadmin de la plateforme **ET** syndic de sa propre agence (Good Experience Properties). Il a besoin de gerer ses gestionnaires comme n'importe quel syndic.
+
+#### Fix `/app/backend/routes/team.py`
+- `_get_syndic()` retourne desormais `(user, effective_syndic_id, is_superadmin_global)`.
+- Pour un superadmin : `effective_syndic_id = son propre user.id` (il agit comme syndic de sa propre agence) + flag `is_superadmin_global=True` (permet d'attribuer n'importe quelle ACP et de voir toutes les equipes via `?scope_param=all`).
+- `_validate_acps_belong_to_syndic(syndic_id, copro_ids, is_super)` : si superadmin, verifie juste que les ACPs existent ; si syndic sans `copropriete_ids` (all-access), autorise tout ; sinon scope strict.
+- POST/PUT/DELETE `/api/team/members` : retiree la garde "Le superadmin doit creer...". Le superadmin peut maintenant creer, editer et supprimer ses propres gestionnaires.
+
+#### Verification
+- curl POST `/api/team/members` en superadmin -> 200 + gestionnaire cree avec `parent_syndic_id = superadmin.id`
+- E2E playwright : login gerald -> /team -> "Ajouter un gestionnaire" -> "Marie Dupont" cree, toast "Gestionnaire cree" + ligne visible dans le tableau
+
+
+
 ### Iter58 (Feb 2026) - Refonte PDF Decompte selon le modele FINLEAD (Lot -> Cle -> Compte) + Section dediee locataire
 
 #### Demande utilisateur

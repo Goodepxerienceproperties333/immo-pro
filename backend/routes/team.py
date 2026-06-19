@@ -39,32 +39,56 @@ def create_team_router(db):
     router = APIRouter(prefix="/api/team")
 
     async def _get_syndic(request):
-        """Le membre courant doit etre syndic OU superadmin. Si gestionnaire :
-        on remonte au syndic parent. Retourne (current_user, effective_syndic_id)."""
+        """Retourne (current_user, effective_syndic_id, is_superadmin_global).
+
+        - syndic : scope = son propre id (gere SA team)
+        - gestionnaire : scope = son syndic parent (lecture seule en pratique)
+        - superadmin / admin : scope = son propre id (peut gerer SA propre team
+          de gestionnaires en tant que syndic de sa propre agence). Le flag
+          `is_superadmin_global=True` lui permet, en plus, de voir TOUTES les
+          equipes via `?scope=all` ou d'attribuer n'importe quelle ACP.
+        """
         from server import get_current_user
         user = await get_current_user(request)
         role = user.get("role", "")
         if role in ("superadmin", "admin"):
-            # Le superadmin peut acceder a TOUTES les equipes (vue plateforme)
-            return user, None  # None = pas de scope syndic
+            # Le superadmin agit comme syndic de SA propre agence par defaut.
+            # Il peut aussi consulter la vue globale via le parametre `scope=all`.
+            return user, user.get("id"), True
         if role == "syndic":
-            return user, user.get("id")
+            return user, user.get("id"), False
         if role == "gestionnaire":
             parent = user.get("parent_syndic_id")
             if not parent:
                 raise HTTPException(403, "Compte gestionnaire orphelin (pas de syndic parent)")
-            return user, parent
+            return user, parent, False
         raise HTTPException(403, "Acces reserve aux syndics et leur equipe")
 
-    async def _validate_acps_belong_to_syndic(syndic_id: str, copro_ids: List[str]):
+    async def _validate_acps_belong_to_syndic(syndic_id: str, copro_ids: List[str],
+                                                is_superadmin_global: bool = False):
         """Verifie que les ACPs demandees sont bien dans le perimetre du syndic.
-        Le syndic ne peut attribuer a son gestionnaire que des ACPs qu'il gere."""
+        Le syndic ne peut attribuer a son gestionnaire que des ACPs qu'il gere.
+        Un superadmin peut attribuer N'IMPORTE QUELLE ACP existante."""
+        if not copro_ids:
+            return
+        if is_superadmin_global:
+            # Verifie juste que les ACPs existent
+            existing = await db.coproprietes.find({"id": {"$in": list(copro_ids)}}).to_list(1000)
+            existing_ids = {c["id"] for c in existing}
+            invalid = [c for c in copro_ids if c not in existing_ids]
+            if invalid:
+                raise HTTPException(400, f"ACP(s) introuvable(s) : {', '.join(invalid)}")
+            return
         if not syndic_id:
-            return  # superadmin : pas de scope
+            return
         syndic = await db.users.find_one({"_id": ObjectId(syndic_id)})
         if not syndic:
             raise HTTPException(403, "Syndic introuvable")
         syndic_acps = set(syndic.get("copropriete_ids") or [])
+        # Si le syndic n'a pas de copropriete_ids assignees, on autorise tout
+        # (cas du syndic "all-access" type admin de cabinet)
+        if not syndic_acps:
+            return
         invalid = [c for c in (copro_ids or []) if c not in syndic_acps]
         if invalid:
             raise HTTPException(
@@ -74,12 +98,15 @@ def create_team_router(db):
             )
 
     @router.get("/members")
-    async def list_members(request: Request):
-        """Liste les membres de l'equipe du syndic courant (gestionnaires uniquement).
-        Si superadmin : liste TOUS les gestionnaires de la plateforme."""
-        user, scope = await _get_syndic(request)
+    async def list_members(request: Request, scope_param: Optional[str] = None):
+        """Liste les membres de l'equipe du syndic courant.
+        - syndic / gestionnaire : sa propre equipe
+        - superadmin : sa propre equipe par defaut. `?scope_param=all` -> tous les gestionnaires."""
+        user, scope, is_super = await _get_syndic(request)
         q = {"role": "gestionnaire"}
-        if scope:
+        if is_super and scope_param == "all":
+            pass  # superadmin global : voit tout
+        elif scope:
             q["parent_syndic_id"] = scope
         members = await db.users.find(q).sort("name", 1).to_list(500)
         return [{
@@ -97,15 +124,11 @@ def create_team_router(db):
 
     @router.post("/members")
     async def create_member(data: TeamMemberInput, request: Request):
-        """Cree un gestionnaire rattache au syndic courant."""
+        """Cree un gestionnaire rattache au syndic courant (ou au superadmin)."""
         from server import hash_password
-        user, scope = await _get_syndic(request)
+        user, scope, is_super = await _get_syndic(request)
         if not scope:
-            raise HTTPException(
-                400,
-                "Le superadmin doit creer les gestionnaires via le syndic concerne. "
-                "Connectez-vous en tant que ce syndic ou utilisez /api/admin/users."
-            )
+            raise HTTPException(400, "Impossible de determiner le syndic parent")
         email = data.email.lower().strip()
         if not email:
             raise HTTPException(400, "Email requis")
@@ -114,7 +137,7 @@ def create_team_router(db):
         if existing:
             raise HTTPException(400, f"L'email {email} existe deja")
         # Verifie que les ACPs sont dans le perimetre du syndic
-        await _validate_acps_belong_to_syndic(scope, data.copropriete_ids or [])
+        await _validate_acps_belong_to_syndic(scope, data.copropriete_ids or [], is_super)
         # Permissions
         perms = None
         if data.role_template_id:
@@ -149,7 +172,7 @@ def create_team_router(db):
     async def update_member(member_id: str, data: TeamMemberUpdate, request: Request):
         """Modifie un gestionnaire de l'equipe du syndic courant."""
         from server import hash_password
-        user, scope = await _get_syndic(request)
+        user, scope, is_super = await _get_syndic(request)
         try:
             obj_id = ObjectId(member_id)
         except Exception:
@@ -159,14 +182,14 @@ def create_team_router(db):
             raise HTTPException(404, "Membre introuvable")
         if m.get("role") != "gestionnaire":
             raise HTTPException(400, "Cet endpoint ne gere que les gestionnaires")
-        # Verifie l'ownership
-        if scope and m.get("parent_syndic_id") != scope:
+        # Verifie l'ownership (superadmin global peut tout editer)
+        if not is_super and scope and m.get("parent_syndic_id") != scope:
             raise HTTPException(403, "Ce gestionnaire n'appartient pas a votre equipe")
         update = {}
         if data.name is not None:
             update["name"] = data.name
         if data.copropriete_ids is not None:
-            await _validate_acps_belong_to_syndic(scope, data.copropriete_ids)
+            await _validate_acps_belong_to_syndic(scope, data.copropriete_ids, is_super)
             update["copropriete_ids"] = data.copropriete_ids
         if data.password:
             update["password_hash"] = hash_password(data.password)
@@ -193,7 +216,7 @@ def create_team_router(db):
 
     @router.delete("/members/{member_id}")
     async def delete_member(member_id: str, request: Request):
-        user, scope = await _get_syndic(request)
+        user, scope, is_super = await _get_syndic(request)
         try:
             obj_id = ObjectId(member_id)
         except Exception:
@@ -203,7 +226,7 @@ def create_team_router(db):
             raise HTTPException(404, "Membre introuvable")
         if m.get("role") != "gestionnaire":
             raise HTTPException(400, "Cet endpoint ne supprime que des gestionnaires")
-        if scope and m.get("parent_syndic_id") != scope:
+        if not is_super and scope and m.get("parent_syndic_id") != scope:
             raise HTTPException(403, "Ce gestionnaire n'appartient pas a votre equipe")
         await db.users.delete_one({"_id": obj_id})
         return {"status": "ok"}
