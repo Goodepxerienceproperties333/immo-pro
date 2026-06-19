@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime, timezone, timedelta
@@ -232,6 +232,33 @@ def create_fund_calls_router(db):
         if result.deleted_count == 0:
             raise HTTPException(404, "Appel non trouve")
         return {"message": "Appel de fonds supprime"}
+
+    @router.post("/delete-all")
+    async def delete_all_fund_calls(request: Request, copropriete_id: Optional[str] = None):
+        """Supprime TOUS les appels de fonds d'une ACP + leurs ecritures auto-generees.
+        Chinese walls strict : copropriete_id requis (param ou header)."""
+        if not copropriete_id:
+            copropriete_id = request.headers.get("X-Copropriete-Id") or None
+        if not copropriete_id or copropriete_id == "all":
+            raise HTTPException(400, "copropriete_id requis - chinese walls strict")
+        calls = await db.fund_calls.find(
+            {"copropriete_id": copropriete_id}, {"_id": 0, "id": 1, "name": 1}
+        ).to_list(10000)
+        deleted_calls = 0
+        for c in calls:
+            try:
+                await _delete_auto_entries(db, "fund_call", c["id"])
+            except Exception:
+                pass
+        res = await db.fund_calls.delete_many({"copropriete_id": copropriete_id})
+        deleted_calls = res.deleted_count
+        return {
+            "status": "ok",
+            "deleted_calls": deleted_calls,
+            "scanned": len(calls),
+            "copropriete_id": copropriete_id,
+            "message": f"{deleted_calls} appel(s) de fonds supprime(s) avec leurs ecritures auto.",
+        }
 
     # ---- BULK GENERATION FROM APPROVED BUDGET ----
     @router.post("/preview-from-budget")
