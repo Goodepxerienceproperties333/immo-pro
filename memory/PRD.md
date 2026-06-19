@@ -12,6 +12,27 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 ## Implemented
 
+### Iter54 (Feb 2026) - Contrepartie EXPLICITE prime sur l'auto-VCS
+
+#### Probleme reel observe
+Sur le terrain, un utilisateur peut saisir une transaction avec un **mauvais VCS** (typo, copier-coller errone), tout en ayant **explicitement selectionne le bon proprietaire** via le widget CounterpartySearchSelect. L'ancienne logique ignorait cette selection explicite et reposait uniquement sur le VCS de la communication. Resultat constate sur l'ACP Test : "Peeters Luc" saisi avec VCS de Lefevre -> l'auto-VCS lettrait sur Lefevre (ex-prop) -> Peeters restait debiteur a 5200 EUR + Lefevre apparaissait artificiellement comme crediteur.
+
+#### Fix
+1. **Modele etendu** `TransactionInput` + `InlineLineInput` : nouveaux champs `counterparty_id` + `counterparty_type` ('owner'|'supplier').
+2. **Nouveau helper backend** `_try_explicit_match_then_vcs(txn)` :
+   - PRIORITE 1 : si `counterparty_id` + `counterparty_type` fournis (selection explicite UI) -> lettrage direct, `matched=True`, ecriture FI generee contre cet ID.
+   - PRIORITE 2 (fallback) : auto-VCS classique (regex 12 chiffres VCS belge).
+3. Remplacement de `_try_auto_lettrage_vcs` par `_try_explicit_match_then_vcs` dans tous les flux : `POST /transactions`, `PUT /transactions/{id}`, `add-lines`, `post_statement`.
+4. **PUT /transactions/{id}** : si l'utilisateur (re)selectionne explicitement une contrepartie -> reset le matched existant et FORCE le re-match avec le nouveau ID.
+5. **Frontend BankingPage** : `CounterpartySearchSelect.onSelect` propage maintenant `item.id` + `type` dans le state (inline lines + edit form). Stockes en BDD et envoyes au backend.
+
+#### Verification
+ACP Test apres re-saisie correcte des transactions :
+- Balance des tiers : 5 proprietaires, chacun a 3200 EUR (4200 debit - 1000 paye)
+- Total debiteurs : 21000 EUR (5x4200)
+- Total crediteurs : 0 EUR (plus aucun ex-prop avec faux credit)
+- Tous les FI generes pointent sur les bons comptes 40000XXX
+
 ### Iter53 (Feb 2026) - Repartition occupant/proprietaire sur factures + OD (preparation decompte locataire)
 
 #### Objectif

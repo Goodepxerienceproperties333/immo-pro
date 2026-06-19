@@ -94,7 +94,7 @@ export default function BankingPage() {
   const deleteStmt = async (id) => { if (!window.confirm('Supprimer cet extrait ?')) return; await api.delete(`/banking/statements/${id}`); toast.success('Supprime'); load(); if (selectedStmt?.id === id) { setSelectedStmt(null); setTransactions([]); } };
 
   // INLINE LINES
-  const addInlineLine = () => setInlineLines([...inlineLines, { date: new Date().toISOString().split('T')[0], amount: 0, counterparty_name: '', counterparty_account: '', communication: '', transaction_type: 'credit' }]);
+  const addInlineLine = () => setInlineLines([...inlineLines, { date: new Date().toISOString().split('T')[0], amount: 0, counterparty_name: '', counterparty_account: '', communication: '', transaction_type: 'credit', counterparty_id: '', counterparty_type: '' }]);
   const updateLine = (i, f, v) => { const l = [...inlineLines]; l[i] = { ...l[i], [f]: v }; setInlineLines(l); };
   const removeLine = (i) => setInlineLines(inlineLines.filter((_, idx) => idx !== i));
 
@@ -112,7 +112,19 @@ export default function BankingPage() {
   };
 
   // EDIT EXISTING TXN
-  const startEdit = (txn) => { setEditingTxn(txn.id); setEditForm({ date: txn.date, amount: txn.amount, counterparty_name: txn.counterparty_name || '', counterparty_account: txn.counterparty_account || '', communication: txn.communication || '', transaction_type: txn.transaction_type || 'credit' }); };
+  const startEdit = (txn) => {
+    setEditingTxn(txn.id);
+    setEditForm({
+      date: txn.date,
+      amount: txn.amount,
+      counterparty_name: txn.counterparty_name || '',
+      counterparty_account: txn.counterparty_account || '',
+      communication: txn.communication || '',
+      transaction_type: txn.transaction_type || 'credit',
+      counterparty_id: txn.counterparty_id || '',
+      counterparty_type: txn.counterparty_type || '',
+    });
+  };
   const cancelEdit = () => { setEditingTxn(null); };
   const saveEdit = async () => {
     try { await api.put(`/banking/transactions/${editingTxn}`, { ...editForm, amount: Number(editForm.amount) }); toast.success('Transaction modifiee'); setEditingTxn(null); loadStmtTxns(selectedStmt); } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); }
@@ -286,6 +298,11 @@ export default function BankingPage() {
                                 value={line.counterparty_name}
                                 onChange={(v) => updateLine(i, 'counterparty_name', v)}
                                 onSelect={({ item, type }) => {
+                                  // Enregistre l'ID + type pour que le backend utilise
+                                  // cette contrepartie EXPLICITE en priorite sur le VCS.
+                                  updateLine(i, 'counterparty_id', item.id);
+                                  updateLine(i, 'counterparty_type', type);
+                                  updateLine(i, 'counterparty_name', item.name);
                                   // Pour un encaissement proprietaire, auto-pre-remplir la communication
                                   // (VCS si vide + mention "Votre paiement au JJ/MM/AAAA")
                                   if (type === 'owner') {
@@ -341,9 +358,13 @@ export default function BankingPage() {
                             value={editForm.counterparty_name}
                             onChange={(v) => setEditForm({...editForm, counterparty_name: v})}
                             onSelect={({ item, type }) => {
-                              if (type === 'owner' && item.vcs_code && !editForm.communication) {
-                                setEditForm(f => ({...f, counterparty_name: item.name, communication: item.vcs_code}));
-                              }
+                              setEditForm(f => ({
+                                ...f,
+                                counterparty_id: item.id,
+                                counterparty_type: type,
+                                counterparty_name: item.name,
+                                communication: (f.communication && f.communication.trim()) ? f.communication : (item.vcs_code || f.communication),
+                              }));
                             }}
                             placeholder="Nom contrepartie"
                             testId={`edit-counterparty-${txn.id}`}

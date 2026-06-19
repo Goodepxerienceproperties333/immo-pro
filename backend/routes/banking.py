@@ -25,6 +25,10 @@ class TransactionInput(BaseModel):
     transaction_type: Optional[str] = "credit"  # credit or debit
     account_number: Optional[str] = ""
     copropriete_id: Optional[str] = ""
+    # ID + type de contrepartie selectionnes EXPLICITEMENT par l'utilisateur via le
+    # widget CounterpartySearchSelect. Si fournis, priment sur l'auto-match VCS.
+    counterparty_id: Optional[str] = ""
+    counterparty_type: Optional[str] = ""  # 'owner' | 'supplier'
 
 
 class BatchTransactionInput(BaseModel):
@@ -46,6 +50,8 @@ class InlineLineInput(BaseModel):
     counterparty_account: Optional[str] = ""
     communication: Optional[str] = ""
     transaction_type: Optional[str] = "credit"
+    counterparty_id: Optional[str] = ""
+    counterparty_type: Optional[str] = ""
 
 
 class AddLinesInput(BaseModel):
@@ -55,6 +61,36 @@ class AddLinesInput(BaseModel):
 
 def create_banking_router(db):
     router = APIRouter(prefix="/api/banking")
+
+    async def _try_explicit_match_then_vcs(txn_doc):
+        """Match d'une transaction :
+        1) PRIORITE : si l'utilisateur a explicitement selectionne une contrepartie
+           via le widget CounterpartySearchSelect (counterparty_id + counterparty_type
+           non vides), utilise cet ID directement (override VCS).
+        2) FALLBACK : tentative d'auto-lettrage par VCS (regex sur 12 chiffres VCS belge).
+        """
+        cp_id = (txn_doc.get("counterparty_id") or "").strip()
+        cp_type = (txn_doc.get("counterparty_type") or "").strip()
+        if cp_id and cp_type in ("owner", "supplier"):
+            match_type = "owner_payment" if cp_type == "owner" else "supplier_payment"
+            # Verifie que l'ID existe (eviter de pointer sur du vide)
+            coll = db.owners if cp_type == "owner" else db.suppliers
+            target = await coll.find_one({"id": cp_id}, {"_id": 0})
+            if target:
+                await db.bank_transactions.update_one(
+                    {"id": txn_doc["id"]},
+                    {"$set": {"matched": True, "matched_to": cp_id, "match_type": match_type,
+                              "counterparty_name": txn_doc.get("counterparty_name") or target.get("name", "")}}
+                )
+                try:
+                    fresh = await db.bank_transactions.find_one({"id": txn_doc["id"]}, {"_id": 0})
+                    if fresh:
+                        await generate_bank_entry(db, fresh)
+                except Exception as e:
+                    print(f"[explicit-match] FI generation failed: {e}")
+                return  # Pas de fallback VCS - l'explicite prime
+        # Sinon fallback VCS classique
+        await _try_auto_lettrage_vcs(txn_doc)
 
     async def _try_auto_lettrage_vcs(txn_doc):
         """Try to auto-match a transaction by VCS communication.
@@ -191,14 +227,13 @@ def create_banking_router(db):
         # - Si lettree -> Dr/Cr counterpart correspondant (owner/supplier/invoice)
         # - Sinon -> Dr/Cr 499000 compte d'attente (visible dans bilan, neutralise)
         from auto_entries import generate_bank_entry
-        # ETAPE 1 : tentative d'auto-lettrage par VCS pour les transactions non encore lettrees
-        # Permet d'eviter aux non-comptables d'avoir a lettrer manuellement chaque paiement.
+        # ETAPE 1 : tentative de match - contrepartie explicite (UI) en priorite, fallback VCS.
         for t in txns:
             if not t.get("matched"):
                 try:
-                    await _try_auto_lettrage_vcs(t)
+                    await _try_explicit_match_then_vcs(t)
                 except Exception as e:
-                    print(f"[post-stmt] auto-vcs failed for txn {t.get('id')}: {e}")
+                    print(f"[post-stmt] match failed for txn {t.get('id')}: {e}")
         # Re-fetch des txns apres auto-lettrage pour avoir l'etat le plus a jour
         txns = await db.bank_transactions.find({"statement_id": stmt_id}, {"_id": 0}).to_list(10000)
         # ETAPE 2 : generation des ecritures FI pour TOUTES les transactions
@@ -360,10 +395,13 @@ def create_banking_router(db):
             "matched_to": "",
             "match_type": "",
             "copropriete_id": data.copropriete_id or "",
+            "counterparty_id": data.counterparty_id or "",
+            "counterparty_type": data.counterparty_type or "",
             "created_at": datetime.now(timezone.utc).isoformat()
         }
         await db.bank_transactions.insert_one(doc)
-        await _try_auto_lettrage_vcs(doc)
+        # PRIORITE 1: contrepartie explicite (via UI). PRIORITE 2: auto-VCS.
+        await _try_explicit_match_then_vcs(doc)
         # Si l'extrait est deja comptabilise, generer/regenerer l'ecriture FI maintenant
         await _refresh_fi_if_posted(doc["id"])
         updated = await db.bank_transactions.find_one({"id": doc["id"]}, {"_id": 0})
@@ -382,13 +420,21 @@ def create_banking_router(db):
             "transaction_type": data.transaction_type,
             "account_number": data.account_number,
         }
+        # Si l'utilisateur a explicitement (re)selectionne une contrepartie via le
+        # widget, on enregistre l'ID + on FORCE le re-match (reset l'ancien lettrage).
+        if data.counterparty_id and data.counterparty_type:
+            update["counterparty_id"] = data.counterparty_id
+            update["counterparty_type"] = data.counterparty_type
+            update["matched"] = False  # force re-match avec le nouveau ID
+            update["matched_to"] = ""
+            update["match_type"] = ""
         result = await db.bank_transactions.update_one({"id": txn_id}, {"$set": update})
         if result.matched_count == 0:
             raise HTTPException(404, "Transaction non trouvee")
         updated = await db.bank_transactions.find_one({"id": txn_id}, {"_id": 0})
         if updated and not updated.get("matched"):
-            # Tentative d'auto-lettrage VCS si une nouvelle communication a ete saisie
-            await _try_auto_lettrage_vcs(updated)
+            # PRIORITE 1: contrepartie explicite. PRIORITE 2: auto-VCS.
+            await _try_explicit_match_then_vcs(updated)
             updated = await db.bank_transactions.find_one({"id": txn_id}, {"_id": 0})
         # Regenere l'ecriture FI si l'extrait est comptabilise (montant/date/lettrage
         # peuvent avoir change -> balance des tiers et bilan doivent suivre)
@@ -592,14 +638,16 @@ def create_banking_router(db):
                 "matched_to": "",
                 "match_type": "",
                 "copropriete_id": copro_id,
+                "counterparty_id": line.counterparty_id or "",
+                "counterparty_type": line.counterparty_type or "",
                 "created_at": datetime.now(timezone.utc).isoformat()
             }
             txns.append(txn)
         if txns:
             await db.bank_transactions.insert_many(txns)
-            # Auto-lettrage VCS for each new transaction
+            # PRIORITE 1: contrepartie explicite (UI). PRIORITE 2: auto-VCS.
             for txn in txns:
-                await _try_auto_lettrage_vcs(txn)
+                await _try_explicit_match_then_vcs(txn)
         return {"message": f"{len(txns)} lignes ajoutees", "count": len(txns)}
 
     # ---- SEARCH (for owner payments) ----
