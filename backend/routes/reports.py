@@ -1221,9 +1221,14 @@ def create_reports_router(db):
                 if key in seen_lines:
                     continue
                 seen_lines.add(key)
+                # Utiliser le libelle de la LIGNE en priorite (pour distinguer
+                # provisions/reserve/roulement au sein d'une meme ecriture VE).
+                line_desc = (ln.get("line_description") or "").strip()
+                entry_desc = (e.get("description", "") or "").strip()
+                final_desc = line_desc or entry_desc
                 movements.append({
                     "date": e.get("date", ""),
-                    "description": f"[{e.get('journal_type','?')}] {e.get('description','')}".strip(),
+                    "description": f"[{e.get('journal_type','?')}] {final_desc}".strip(),
                     "debit": float(ln.get("debit", 0) or 0),
                     "credit": float(ln.get("credit", 0) or 0),
                     "type": e.get("journal_type", "OD").lower(),
@@ -1343,9 +1348,12 @@ def create_reports_router(db):
                 if position == "before":
                     opening += d - c
                 elif position == "in":
+                    # Libelle ligne en priorite (distinction provisions/reserve/roulement)
+                    line_desc = (ln.get("line_description") or "").strip()
+                    entry_desc = (e.get("description", "") or "").strip()
                     movements.append({
                         "date": date_str,
-                        "description": e.get("description", ""),
+                        "description": line_desc or entry_desc,
                         "reference": e.get("reference", "") or "",
                         "account_number": acc,
                         "account_name": ln.get("account_name", ""),

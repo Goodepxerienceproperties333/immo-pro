@@ -223,6 +223,22 @@ async def generate_sale_entry(db, fund_call: dict) -> dict | None:
         return None
 
     # Compute per-owner reserve/roulement share: prorate.
+    # Libelles differencies par ligne selon ce qu'elle represente
+    _type_labels_call = {
+        "provisions": "Appel de provisions",
+        "reserve": "Appel fonds de reserve",
+        "roulement": "Appel fonds de roulement",
+        "special": "Appel special",
+    }
+    fc_name_for_lines = fund_call.get("name", "")
+    call_type_for_default = fund_call.get("call_type", "")
+    # Si l'appel global est de type "provisions" mais contient des lignes reserve/roulement
+    # injectees (mode legacy), chaque ligne aura son propre libelle.
+    label_prov = f"{_type_labels_call.get('provisions')} - {fc_name_for_lines}".rstrip(" -")
+    label_res = f"{_type_labels_call.get('reserve')} - {fc_name_for_lines}".rstrip(" -")
+    label_roul = f"{_type_labels_call.get('roulement')} - {fc_name_for_lines}".rstrip(" -")
+    label_default = f"{_type_labels_call.get(call_type_for_default, 'Appel de fonds')} - {fc_name_for_lines}".rstrip(" -")
+
     lines = []
     sum_dr_prov = 0.0
     sum_dr_res = 0.0
@@ -245,6 +261,7 @@ async def generate_sale_entry(db, fund_call: dict) -> dict | None:
                 "debit": owner_prov, "credit": 0.0,
                 "third_party_id": oid,
                 "third_party_name": owner.get("name", ""),
+                "line_description": label_prov if call_type_for_default in ("", "provisions") else label_default,
             })
             sum_dr_prov += owner_prov
         if owner_reserve > 0.001 and accs.get("reserve"):
@@ -254,6 +271,7 @@ async def generate_sale_entry(db, fund_call: dict) -> dict | None:
                 "debit": owner_reserve, "credit": 0.0,
                 "third_party_id": oid,
                 "third_party_name": owner.get("name", ""),
+                "line_description": label_res,
             })
             sum_dr_res += owner_reserve
         if owner_roul > 0.001 and accs.get("provisions"):
@@ -264,6 +282,7 @@ async def generate_sale_entry(db, fund_call: dict) -> dict | None:
                 "debit": owner_roul, "credit": 0.0,
                 "third_party_id": oid,
                 "third_party_name": owner.get("name", ""),
+                "line_description": label_roul,
             })
             sum_dr_roul += owner_roul
 

@@ -59,8 +59,11 @@ def _humanize_label(description, reference, journal_type):
         label_prefix = "Operation : "
     elif journal_type == "AN":
         label_prefix = "Solde reporte : "
-    # If desc already starts with the same notion, do not double-prefix
-    if label_prefix and not desc.lower().startswith(label_prefix.lower().rstrip(": ").lower()):
+    # Si la description commence deja par "Appel " (provisions/reserve/roulement/...)
+    # on ne re-prefixe pas pour eviter "Appel de fonds : Appel de provisions - ..."
+    if label_prefix == "Appel de fonds : " and desc.lower().startswith("appel "):
+        full = desc
+    elif label_prefix and not desc.lower().startswith(label_prefix.lower().rstrip(": ").lower()):
         full = f"{label_prefix}{desc}" if desc else label_prefix.rstrip(": ")
     else:
         full = desc or label_prefix.rstrip(": ")

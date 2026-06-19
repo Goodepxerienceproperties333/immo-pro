@@ -12,6 +12,42 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 ## Implemented
 
+### Iter49 (Feb 2026) - Libelle PAR LIGNE dans la situation de compte + Bypass syndic + Bulk delete + Regenerate
+
+#### Fix critique : libelle par ligne (provisions/reserve/roulement)
+- Bug : dans la situation de compte d'un proprietaire, lorsqu'un appel de fonds avait un mode mixte (provisions + reserve + roulement dans la meme ecriture VE), TOUTES les lignes affichaient le meme libelle "Appel de provisions" car la description etait au niveau de l'ECRITURE. Resultat : impossible de distinguer visuellement les contributions par type.
+- Fix `auto_entries.generate_sale_entry` : chaque ligne d'une ecriture VE recoit desormais un champ `line_description` differencie :
+  - Provisions => "Appel de provisions - <nom>"
+  - Reserve => "Appel fonds de reserve - <nom>"
+  - Roulement => "Appel fonds de roulement - <nom>"
+- Fix `routes/reports.py::balance_tiers_owner_detail` (UI) et `situation_compte_pdf` : `ln.get('line_description') or e.get('description','')` -> chaque mouvement affiche le bon libelle.
+- Fix `pdf_situation_compte._humanize_label` : evite la redondance "Appel de fonds : Appel de provisions" en detectant si la description commence deja par "Appel ".
+
+#### Bypass syndic dans Dashboard
+- Bug "Sante comptable indisponible : Acces refuse a cette copropriete" sur le dashboard pour les utilisateurs `syndic`.
+- Cause : `GET /api/dashboard/health-audit` et `/stats` n'autorisaient le bypass que pour `superadmin`/`admin`, alors que la fonction helper `is_admin_role()` (server.py L176) inclut bien `syndic` ("Syndic et superadmin: acces total").
+- Fix : utilisation de `is_admin_role(role)` au lieu de la liste hardcodee. Les syndics avec `copropriete_ids: []` peuvent maintenant acceder a toutes les ACPs.
+
+#### Nouveau endpoint : POST /api/fund-calls/regenerate-entries
+- `POST /api/fund-calls/regenerate-entries?copropriete_id=X` regenere les ecritures comptables VE auto-generees de tous les appels de fonds d'une ACP avec le bon libelle differencie par type.
+- Chinese walls : 400 si copropriete_id absent ou "all".
+- Preserve `manually_edited=true` (jamais touchees).
+- UI : bouton bleu "Regenerer ecritures" dans `FundCallsPage` [data-testid='regenerate-entries-btn'].
+
+#### Bouton "Supprimer TOUS les appels"
+- `POST /api/fund-calls/delete-all?copropriete_id=X` (deja existant, confirme operationnel).
+- UI : bouton rouge "Supprimer tous les appels" [data-testid='delete-all-calls-btn'] avec confirmation.
+
+#### Verification
+- Demo ACP : 6/6 ecritures regenerees. Situation de compte De Smet Catherine affiche correctement :
+  - "Appel de provisions - Trimestriel 1/4..." (40000007)
+  - "Appel fonds de reserve - Fonds de reserve - Annuel 1/1..." (40010007)
+  - "Appel fonds de roulement - Fonds de roulement - Annuel 1/1..." (40000007)
+- PDF Situation : libelles propres sans double-prefixe.
+- Testing agent iteration_29 : 10/10 backend PASS + 100% frontend PASS.
+
+
+
 ### Iter48 (Feb 2026) - Description claire des appels (PDF + ecritures)
 
 #### Fix : description differenciee selon call_type
