@@ -12,6 +12,31 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 ## Implemented
 
+### Iter45 (Feb 2026) - Cloture exercice : OD permanentes + Fix bilan boni/mali
+
+#### Bouton "Cloturer l'exercice" avec OD permanentes
+- Endpoint `POST /api/fiscal/years/{id}/close` etendu :
+  - **OD-1 "Annulation provisions"** : Dr 7400 (somme appels) / Cr 4000XX par owner selon quotites
+  - **OD-2 "Imputation charges"** : Dr 4000XX par owner / Cr 6XXX (sommes charges)
+  - Apres ces 2 OD : classes 6/7 a zero, resultat reparti sur comptes 4000XX
+  - Generation AN (a-nouveau) au 01/01/N+1 sur les nouveaux soldes
+  - Flag `is_regularization: True` sur les OD pour les distinguer
+- UI FiscalYearPage : confirmation explicite des 4 etapes (OD-1, OD-2, AN, verrouillage)
+
+#### Fix critique : Bilan boni/mali correct
+- Bug : apres cloture, le bilan "avant repartition" affichait un MALI alors que le budget
+  excedait largement les charges (boni reel attendu).
+- Cause : les OD de regularisation/extourne (refs `EXT-`, `OD-REG-`) etaient incluses
+  dans le calcul du bilan "avant repartition", inversant le solde 7-6.
+- Fix : exclusion des ecritures `is_regularization=True` OU `reference startsWith
+  "OD-REG-"|"EXT-"` du bilan en mode `before_distribution` (= vue brute avant cloture).
+  En mode `after_distribution`, ces ecritures SONT incluses (puisqu'elles realisent
+  la repartition).
+- Verifie : compte 499 affiche maintenant correctement **21 063,75 EUR CREDITEUR**
+  au passif (boni a repartir). Bilan equilibre 31 267,70 EUR.
+
+
+
 ### Iter44 (Feb 2026) - Repartition boni/mali + Audit Sante dashboard
 
 #### Formule de repartition documentee

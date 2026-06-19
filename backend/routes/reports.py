@@ -166,10 +166,15 @@ def create_reports_router(db):
         q = _apply_copro({}, copropriete_id)
         if date_to:
             q["date"] = {"$lte": date_to}
-        # IMPORTANT : exclure les ecritures "A nouveau" (AN). Elles dupliquent les soldes
-        # car le bilan calcule deja a partir des ecritures originales (factures/paiements).
-        # Les AN sont des ecritures de REOUVERTURE pour l'exercice SUIVANT, pas du courant.
         q["journal_type"] = {"$ne": "AN"}
+        if view_mode != "after_distribution":
+            # Exclure les ecritures de regularisation/cloture :
+            # - flag is_regularization=True (OD nouvelles)
+            # - prefixes references : OD-REG-, EXT- (extourne provisions cloture)
+            q["$and"] = [
+                {"is_regularization": {"$ne": True}},
+                {"reference": {"$not": {"$regex": "^(OD-REG-|EXT-)"}}},
+            ]
 
         entries = await db.journal_entries.find(q, {"_id": 0}).to_list(100000)
         # Compute net balance per account (classes 1-5 only)
@@ -344,7 +349,12 @@ def create_reports_router(db):
         q_res = _apply_copro({}, copropriete_id)
         if date_to:
             q_res["date"] = {"$lte": date_to}
-        q_res["journal_type"] = {"$ne": "AN"}  # exclure A-nouveau (idem que ci-dessus)
+        q_res["journal_type"] = {"$ne": "AN"}
+        if view_mode != "after_distribution":
+            q_res["$and"] = [
+                {"is_regularization": {"$ne": True}},
+                {"reference": {"$not": {"$regex": "^(OD-REG-|EXT-)"}}},
+            ]
         entries_res = await db.journal_entries.find(q_res, {"_id": 0}).to_list(100000)
         total_charges = 0.0
         total_produits = 0.0

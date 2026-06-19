@@ -53,9 +53,22 @@ export default function FiscalYearPage() {
     catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); }
   };
   const closeYear = async (id) => {
-    if (!window.confirm('Cloturer cet exercice ? Les ecritures seront verrouillees.')) return;
-    try { const { data } = await api.post(`/fiscal/years/${id}/close`); toast.success(`${data.message} - Resultat: ${data.result_net} EUR`); load(); }
-    catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); }
+    if (!window.confirm(
+      'Cloturer cet exercice ?\n\n' +
+      'Cette action irreversible va :\n' +
+      '  1. Generer une OD "Annulation provisions" (Dr 7400 / Cr 4000XX par quotites)\n' +
+      '  2. Generer une OD "Imputation charges" (Dr 4000XX par quotites / Cr 6XXX)\n' +
+      '  3. Reporter les soldes (AN) au 01/01 de l\'exercice suivant\n' +
+      '  4. Verrouiller les ecritures de cet exercice\n\n' +
+      'Continuer ?'
+    )) return;
+    try {
+      const { data } = await api.post(`/fiscal/years/${id}/close`);
+      toast.success(`${data.message} - Resultat: ${data.result_net} EUR`);
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur de cloture');
+    }
   };
   const reopenYear = async (id) => {
     try { await api.post(`/fiscal/years/${id}/reopen`); toast.success('Exercice reouvert'); load(); }

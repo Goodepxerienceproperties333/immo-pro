@@ -113,6 +113,135 @@ def create_fiscal_router(db):
         total_produits = sum(b["credit"] - b["debit"] for a, b in balances_periode.items() if a.startswith("7"))
         result_net = total_produits - total_charges
 
+        # ---- REGULARISATION : 2 OD permanentes (formule comptable belge stricte) ----
+        # OD-1 ANNULATION PROVISIONS : Dr 7400 (somme appels) / Cr 4000XX par owner (quotites)
+        # OD-2 IMPUTATION CHARGES    : Dr 4000XX par owner (quotites) / Cr 6XXX (sommes charges)
+        # Apres ces 2 OD : classes 6/7 a zero, resultat reparti sur comptes 4000XX.
+        lots_acp = await db.lots.find({"copropriete_id": copro_id}, {"_id": 0}).to_list(10000)
+        owners_acp = await db.owners.find({}, {"_id": 0}).to_list(10000)
+        owner_quotities = {}
+        total_quotities = 0.0
+        for lot in lots_acp:
+            quo = float(lot.get("quotity", 0) or 0)
+            oid = lot.get("owner_id")
+            if oid and quo > 0:
+                owner_quotities[oid] = owner_quotities.get(oid, 0.0) + quo
+                total_quotities += quo
+        owner_by_id = {o["id"]: o for o in owners_acp}
+
+        def _owner_account(oid: str) -> tuple:
+            o = owner_by_id.get(oid)
+            if not o:
+                return "", ""
+            accs = ((o.get("tier_accounts") or {}).get(copro_id, {}) or {})
+            return accs.get("provisions", ""), o.get("name", "")
+
+        end_dt_iso = fy["end_date"]
+        # OD-1 : Annulation des provisions appelees
+        if abs(total_produits) > 0.01 and total_quotities > 0:
+            ad_lines = []
+            # Aggreger les comptes classe 7 (produits = appels)
+            prod_accs = {a: b for a, b in balances_periode.items() if a.startswith("7")}
+            for acc, b in prod_accs.items():
+                net = b["credit"] - b["debit"]
+                if abs(net) > 0.01:
+                    ad_lines.append({
+                        "account_number": acc, "account_name": "Annulation produits",
+                        "debit": round(net, 2), "credit": 0,
+                    })
+            # Credit 4000XX par owner selon quotites
+            for oid, quo in owner_quotities.items():
+                acc_p, name = _owner_account(oid)
+                if not acc_p:
+                    continue
+                amt = round(total_produits * (quo / total_quotities), 2)
+                if amt > 0.01:
+                    ad_lines.append({
+                        "account_number": acc_p, "account_name": name,
+                        "debit": 0, "credit": amt,
+                        "third_party_id": oid, "third_party_name": name,
+                    })
+            if ad_lines:
+                td = sum(l["debit"] for l in ad_lines)
+                tc = sum(l["credit"] for l in ad_lines)
+                # Egalise s'il y a un cent d'arrondi
+                diff = round(td - tc, 2)
+                if abs(diff) >= 0.01 and ad_lines:
+                    ad_lines[-1]["credit"] = round(ad_lines[-1]["credit"] + diff, 2)
+                    tc = sum(l["credit"] for l in ad_lines)
+                await db.journal_entries.insert_one({
+                    "id": str(uuid.uuid4()),
+                    "journal_type": "OD",
+                    "date": end_dt_iso,
+                    "reference": f"OD-REG-PROV-{fy['name']}",
+                    "description": f"Annulation provisions appelees - cloture {fy['name']}",
+                    "lines": ad_lines,
+                    "total_debit": round(td, 2),
+                    "total_credit": round(tc, 2),
+                    "fiscal_year_id": year_id,
+                    "copropriete_id": copro_id,
+                    "is_regularization": True,
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                })
+
+        # OD-2 : Imputation des charges reelles aux owners
+        if abs(total_charges) > 0.01 and total_quotities > 0:
+            ic_lines = []
+            # Debit 4000XX par owner
+            for oid, quo in owner_quotities.items():
+                acc_p, name = _owner_account(oid)
+                if not acc_p:
+                    continue
+                amt = round(total_charges * (quo / total_quotities), 2)
+                if amt > 0.01:
+                    ic_lines.append({
+                        "account_number": acc_p, "account_name": name,
+                        "debit": amt, "credit": 0,
+                        "third_party_id": oid, "third_party_name": name,
+                    })
+            # Credit comptes 6XXX (annule les charges)
+            chrg_accs = {a: b for a, b in balances_periode.items() if a.startswith("6")}
+            for acc, b in chrg_accs.items():
+                net = b["debit"] - b["credit"]
+                if abs(net) > 0.01:
+                    ic_lines.append({
+                        "account_number": acc, "account_name": "Imputation charges aux owners",
+                        "debit": 0, "credit": round(net, 2),
+                    })
+            if ic_lines:
+                td = sum(l["debit"] for l in ic_lines)
+                tc = sum(l["credit"] for l in ic_lines)
+                diff = round(td - tc, 2)
+                if abs(diff) >= 0.01 and ic_lines:
+                    ic_lines[-1]["credit"] = round(ic_lines[-1]["credit"] + diff, 2)
+                    tc = sum(l["credit"] for l in ic_lines)
+                await db.journal_entries.insert_one({
+                    "id": str(uuid.uuid4()),
+                    "journal_type": "OD",
+                    "date": end_dt_iso,
+                    "reference": f"OD-REG-CHRG-{fy['name']}",
+                    "description": f"Imputation charges aux proprietaires - cloture {fy['name']}",
+                    "lines": ic_lines,
+                    "total_debit": round(td, 2),
+                    "total_credit": round(tc, 2),
+                    "fiscal_year_id": year_id,
+                    "copropriete_id": copro_id,
+                    "is_regularization": True,
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                })
+
+        # Recharge balances apres les 2 OD de regularisation pour generer l'AN
+        # (les comptes 6/7 sont maintenant a zero)
+        entries = await db.journal_entries.find(je_q, {"_id": 0}).to_list(100000)
+        balances = {}
+        for entry in entries:
+            for line in entry.get("lines", []):
+                acc = line["account_number"]
+                if acc not in balances:
+                    balances[acc] = {"debit": 0, "credit": 0, "name": line.get("account_name", "")}
+                balances[acc]["debit"] += line.get("debit", 0)
+                balances[acc]["credit"] += line.get("credit", 0)
+
         # Generate a-nouveau entries for balance sheet accounts (classes 1-5)
         a_nouveau_lines = []
         for acc, bal in sorted(balances.items()):
