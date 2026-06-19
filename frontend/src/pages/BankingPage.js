@@ -493,113 +493,161 @@ export default function BankingPage() {
         </div>
       </DialogContent></Dialog>
 
-      {/* Lettrage Dialog */}
-      <Dialog open={lettrageDialog} onOpenChange={setLettrageDialog}><DialogContent className="max-w-2xl" data-testid="lettrage-dialog"><DialogHeader><DialogTitle style={{fontFamily:'Chivo,sans-serif'}}>Lettrage - {lettrageTarget?.amount?.toFixed(2)} EUR</DialogTitle></DialogHeader>
-        <div className="space-y-4 mt-2">
-          <p className="text-sm text-slate-600">{lettrageTarget?.counterparty_name} | {lettrageTarget?.communication}</p>
-          <Tabs defaultValue="owners"><TabsList><TabsTrigger value="owners">Proprietaires</TabsTrigger><TabsTrigger value="invoices">Factures</TabsTrigger><TabsTrigger value="suppliers">Fournisseurs</TabsTrigger></TabsList>
-            <TabsContent value="owners" className="mt-3">
-              <Input placeholder="Rechercher nom, VCS..." value={lookupQuery} onChange={e => setLookupQuery(e.target.value)} className="mb-2" />
-              <div className="space-y-1 max-h-48 overflow-y-auto">
-                {owners.filter(o => !lookupQuery || (o.name || '').toLowerCase().includes(lookupQuery.toLowerCase()) || (o.vcs_code || '').includes(lookupQuery)).map(o => (
-                  <div key={o.id} className="flex items-center justify-between border rounded p-2 hover:bg-slate-50 text-sm">
-                    <div><span className="font-medium">{o.name}</span>{o.vcs_code && <span className="ml-2 font-mono text-xs text-[#0055FF]">{o.vcs_code}</span>}</div>
-                    <Button size="sm" variant="outline" onClick={() => doLettrage(o.id, 'owner_payment')}>Lettrer</Button>
-                  </div>
-                ))}
+      {/* Lettrage Dialog - layout pro avec hierarchie claire */}
+      <Dialog open={lettrageDialog} onOpenChange={setLettrageDialog}>
+        <DialogContent className="max-w-3xl p-0 overflow-hidden" data-testid="lettrage-dialog">
+          {/* Header transaction */}
+          <div className="bg-gradient-to-r from-[#0055FF] to-[#0040CC] px-6 py-4 text-white">
+            <DialogHeader className="space-y-1">
+              <DialogTitle className="text-white text-base flex items-center justify-between gap-3" style={{fontFamily:'Chivo,sans-serif'}}>
+                <span>Lettrage de la transaction</span>
+                <span className="font-mono text-xl">{Number(lettrageTarget?.amount || 0).toFixed(2)} EUR</span>
+              </DialogTitle>
+            </DialogHeader>
+            {lettrageTarget && (
+              <div className="text-[12px] text-white/85 mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-0.5">
+                {lettrageTarget.date && <span><b>{fmtDate(lettrageTarget.date)}</b></span>}
+                {lettrageTarget.counterparty_name && <span>{lettrageTarget.counterparty_name}</span>}
+                {lettrageTarget.communication && (
+                  <span className="font-mono text-[11px] bg-white/15 px-2 py-0.5 rounded">{lettrageTarget.communication}</span>
+                )}
               </div>
-            </TabsContent>
-            <TabsContent value="invoices" className="mt-3">
-              <Input
-                placeholder="Filtrer par fournisseur, numero..."
-                value={lookupQuery}
-                onChange={e => setLookupQuery(e.target.value)}
-                className="mb-2"
-                data-testid="lettrage-invoice-search"
-              />
-              <div className="text-[11px] text-slate-500 mb-2 flex items-center gap-3">
-                <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-full bg-red-100 border border-red-300" /> A lettrer</span>
-                <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-full bg-green-100 border border-green-300" /> Deja lettree</span>
-              </div>
-              <div className="space-y-1 max-h-72 overflow-y-auto">
-                {(() => {
-                  const cpName = (lettrageTarget?.counterparty_name || '').toLowerCase().trim();
-                  const q = (lookupQuery || '').toLowerCase().trim();
-                  const list = invoices.filter(inv => {
-                    if (q) {
-                      return (inv.supplier || '').toLowerCase().includes(q)
-                          || (inv.number || '').toLowerCase().includes(q)
-                          || (inv.description || '').toLowerCase().includes(q);
-                    }
-                    // Sans filtre : pre-filtrer par supplier name si la txn matche un nom de fournisseur
-                    if (cpName) {
-                      return (inv.supplier || '').toLowerCase().includes(cpName)
-                          || cpName.includes((inv.supplier || '').toLowerCase());
-                    }
-                    return true;
-                  }).sort((a, b) => {
-                    // Unpaid en premier
-                    const aPaid = a.status === 'paid' ? 1 : 0;
-                    const bPaid = b.status === 'paid' ? 1 : 0;
-                    if (aPaid !== bPaid) return aPaid - bPaid;
-                    return (b.date || '').localeCompare(a.date || '');
-                  });
-                  if (list.length === 0) return <p className="text-sm text-slate-400 text-center py-4">Aucune facture trouvee</p>;
-                  return list.map(inv => {
-                    const isPaid = inv.status === 'paid';
-                    const bg = isPaid ? 'bg-green-50 border-green-300' : 'bg-red-50 border-red-300';
-                    return (
-                      <div key={inv.id} className={`flex items-center justify-between border-l-4 rounded p-2 text-sm ${bg}`} data-testid={`lettrage-invoice-row-${inv.id}`}>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2">
-                            <span className="font-mono text-xs font-semibold">{inv.number || '—'}</span>
-                            <span className="font-medium text-slate-900 truncate">{inv.supplier || ''}</span>
-                            {isPaid && <span className="text-[10px] bg-green-200 text-green-800 px-1.5 py-0.5 rounded-full font-semibold">PAYE</span>}
-                            {!isPaid && <span className="text-[10px] bg-red-200 text-red-800 px-1.5 py-0.5 rounded-full font-semibold">A PAYER</span>}
-                          </div>
-                          <div className="text-[11px] text-slate-500 mt-0.5 flex gap-2">
-                            <span>{fmtDate(inv.date)}</span>
-                            <span className="font-mono font-semibold text-slate-700">{Number(inv.total_amount || 0).toFixed(2)} EUR</span>
-                            {inv.description && <span className="truncate">— {inv.description}</span>}
-                          </div>
-                        </div>
-                        <div className="shrink-0 ml-2">
-                          {isPaid ? (
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => unlettrageByInvoice(inv.id)}
-                              className="text-orange-600 border-orange-300 hover:bg-orange-50 h-7 text-xs"
-                              data-testid={`unlettrage-invoice-${inv.id}`}
-                            ><Unlink size={11} className="mr-1" /> Delettrer</Button>
-                          ) : (
-                            <Button
-                              size="sm"
-                              onClick={() => doLettrage(inv.id, 'invoice')}
-                              className="bg-[#0055FF] hover:bg-[#0040CC] text-white h-7 text-xs"
-                              data-testid={`lettrage-invoice-${inv.id}`}
-                            ><Link2 size={11} className="mr-1" /> Lettrer</Button>
-                          )}
-                        </div>
+            )}
+          </div>
+
+          <div className="px-6 py-4">
+            <Tabs defaultValue="owners">
+              <TabsList className="grid grid-cols-3 mb-4">
+                <TabsTrigger value="owners" data-testid="lettrage-tab-owners">Proprietaires</TabsTrigger>
+                <TabsTrigger value="invoices" data-testid="lettrage-tab-invoices">Factures</TabsTrigger>
+                <TabsTrigger value="suppliers" data-testid="lettrage-tab-suppliers">Fournisseurs</TabsTrigger>
+              </TabsList>
+
+              <TabsContent value="owners" className="mt-0">
+                <Input placeholder="Rechercher par nom ou VCS..." value={lookupQuery} onChange={e => setLookupQuery(e.target.value)} className="mb-3" />
+                <div className="space-y-1.5 max-h-72 overflow-y-auto pr-1">
+                  {owners.filter(o => !lookupQuery || (o.name || '').toLowerCase().includes(lookupQuery.toLowerCase()) || (o.vcs_code || '').includes(lookupQuery)).map(o => (
+                    <div key={o.id} className="flex items-center justify-between gap-3 border border-slate-200 rounded-md px-3 py-2.5 hover:border-[#0055FF]/40 hover:bg-slate-50 transition-colors">
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-medium text-slate-900 truncate">{o.name}</div>
+                        {o.vcs_code && <div className="text-[11px] font-mono text-[#0055FF] mt-0.5">{o.vcs_code}</div>}
                       </div>
-                    );
-                  });
-                })()}
-              </div>
-            </TabsContent>
-            <TabsContent value="suppliers" className="mt-3">
-              <div className="space-y-1 max-h-48 overflow-y-auto">
-                {suppliers.map(s => (
-                  <div key={s.id} className="flex items-center justify-between border rounded p-2 hover:bg-slate-50 text-sm">
-                    <div><span className="font-medium">{s.name}</span>{s.vat_number && <span className="ml-2 text-xs text-slate-400">{s.vat_number}</span>}</div>
-                    <Button size="sm" variant="outline" onClick={() => doLettrage(s.id, 'supplier_payment')}>Lettrer</Button>
-                  </div>
-                ))}
-              </div>
-            </TabsContent>
-          </Tabs>
-        </div>
-      </DialogContent></Dialog>
+                      <Button size="sm" onClick={() => doLettrage(o.id, 'owner_payment')} className="bg-[#0055FF] hover:bg-[#0040CC] text-white h-7 text-xs shrink-0">
+                        <Link2 size={11} className="mr-1" /> Lettrer
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              </TabsContent>
+
+              <TabsContent value="invoices" className="mt-0">
+                <Input
+                  placeholder="Filtrer par fournisseur, numero ou description..."
+                  value={lookupQuery}
+                  onChange={e => setLookupQuery(e.target.value)}
+                  className="mb-3"
+                  data-testid="lettrage-invoice-search"
+                />
+                <div className="text-[11px] text-slate-500 mb-3 flex items-center gap-4">
+                  <span className="flex items-center gap-1.5"><span className="inline-block w-2.5 h-2.5 rounded-full bg-red-400" /> A lettrer</span>
+                  <span className="flex items-center gap-1.5"><span className="inline-block w-2.5 h-2.5 rounded-full bg-green-400" /> Deja lettree</span>
+                </div>
+                <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
+                  {(() => {
+                    const cpName = (lettrageTarget?.counterparty_name || '').toLowerCase().trim();
+                    const q = (lookupQuery || '').toLowerCase().trim();
+                    const list = invoices.filter(inv => {
+                      if (q) {
+                        return (inv.supplier || '').toLowerCase().includes(q)
+                            || (inv.number || '').toLowerCase().includes(q)
+                            || (inv.description || '').toLowerCase().includes(q);
+                      }
+                      if (cpName) {
+                        return (inv.supplier || '').toLowerCase().includes(cpName)
+                            || cpName.includes((inv.supplier || '').toLowerCase());
+                      }
+                      return true;
+                    }).sort((a, b) => {
+                      const aPaid = a.status === 'paid' ? 1 : 0;
+                      const bPaid = b.status === 'paid' ? 1 : 0;
+                      if (aPaid !== bPaid) return aPaid - bPaid;
+                      return (b.date || '').localeCompare(a.date || '');
+                    });
+                    if (list.length === 0) return <p className="text-sm text-slate-400 text-center py-8">Aucune facture trouvee</p>;
+                    return list.map(inv => {
+                      const isPaid = inv.status === 'paid';
+                      const borderClr = isPaid ? 'border-l-green-400 bg-green-50/40' : 'border-l-red-400 bg-red-50/30';
+                      return (
+                        <div
+                          key={inv.id}
+                          className={`border border-slate-200 border-l-4 ${borderClr} rounded-md px-3 py-2.5 transition-shadow hover:shadow-sm`}
+                          data-testid={`lettrage-invoice-row-${inv.id}`}
+                        >
+                          {/* Ligne 1 : numero + fournisseur + badge statut + montant aligned right */}
+                          <div className="flex items-start justify-between gap-3 mb-1">
+                            <div className="flex-1 min-w-0 flex items-center gap-2 flex-wrap">
+                              <span className="font-mono text-xs font-semibold text-slate-700">{inv.number || '—'}</span>
+                              <span className="text-sm font-medium text-slate-900 truncate">{inv.supplier || ''}</span>
+                              {isPaid
+                                ? <span className="text-[10px] bg-green-100 text-green-800 px-2 py-0.5 rounded-full font-semibold border border-green-300">PAYE</span>
+                                : <span className="text-[10px] bg-red-100 text-red-800 px-2 py-0.5 rounded-full font-semibold border border-red-300">A PAYER</span>}
+                            </div>
+                            <div className="text-right shrink-0">
+                              <div className="font-mono font-semibold text-slate-900 text-sm leading-tight">{Number(inv.total_amount || 0).toFixed(2)} <span className="text-[10px] text-slate-500">EUR</span></div>
+                              <div className="text-[10px] text-slate-500 mt-0.5">{fmtDate(inv.date)}</div>
+                            </div>
+                          </div>
+                          {/* Ligne 2 : description + bouton aligned right */}
+                          <div className="flex items-end justify-between gap-3">
+                            <p className="text-[11px] text-slate-600 line-clamp-2 leading-snug flex-1 min-w-0">
+                              {inv.description || <span className="text-slate-400 italic">Aucune description</span>}
+                            </p>
+                            <div className="shrink-0">
+                              {isPaid ? (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => unlettrageByInvoice(inv.id)}
+                                  className="text-orange-600 border-orange-300 hover:bg-orange-50 h-7 text-xs"
+                                  data-testid={`unlettrage-invoice-${inv.id}`}
+                                ><Unlink size={11} className="mr-1" /> Delettrer</Button>
+                              ) : (
+                                <Button
+                                  size="sm"
+                                  onClick={() => doLettrage(inv.id, 'invoice')}
+                                  className="bg-[#0055FF] hover:bg-[#0040CC] text-white h-7 text-xs"
+                                  data-testid={`lettrage-invoice-${inv.id}`}
+                                ><Link2 size={11} className="mr-1" /> Lettrer</Button>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    });
+                  })()}
+                </div>
+              </TabsContent>
+
+              <TabsContent value="suppliers" className="mt-0">
+                <Input placeholder="Rechercher par nom ou TVA..." value={lookupQuery} onChange={e => setLookupQuery(e.target.value)} className="mb-3" />
+                <div className="space-y-1.5 max-h-72 overflow-y-auto pr-1">
+                  {suppliers.filter(s => !lookupQuery || (s.name || '').toLowerCase().includes(lookupQuery.toLowerCase()) || (s.vat_number || '').includes(lookupQuery)).map(s => (
+                    <div key={s.id} className="flex items-center justify-between gap-3 border border-slate-200 rounded-md px-3 py-2.5 hover:border-[#0055FF]/40 hover:bg-slate-50 transition-colors">
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-medium text-slate-900 truncate">{s.name}</div>
+                        {s.vat_number && <div className="text-[11px] font-mono text-slate-500 mt-0.5">{s.vat_number}</div>}
+                      </div>
+                      <Button size="sm" onClick={() => doLettrage(s.id, 'supplier_payment')} className="bg-[#0055FF] hover:bg-[#0040CC] text-white h-7 text-xs shrink-0">
+                        <Link2 size={11} className="mr-1" /> Lettrer
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              </TabsContent>
+            </Tabs>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

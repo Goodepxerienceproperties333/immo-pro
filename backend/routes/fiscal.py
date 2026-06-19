@@ -740,6 +740,11 @@ def create_fiscal_router(db):
                 "paid": inv["id"] in paid_map,
                 "paid_info": paid_map.get(inv["id"]),
                 "attachments_count": len(inv.get("attachments", []) or []),
+                # Repartition occupant/proprietaire (decompte locataire)
+                "occupant_pct": inv.get("occupant_pct", 0) or 0,
+                "proprietaire_pct": inv.get("proprietaire_pct", 100) if inv.get("proprietaire_pct") is not None else 100,
+                "occupant_amount": inv.get("occupant_amount", 0) or 0,
+                "proprietaire_amount": inv.get("proprietaire_amount", 0) or inv.get("total_amount", 0),
             })
 
         totals = {
