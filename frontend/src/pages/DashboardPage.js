@@ -12,6 +12,7 @@ export default function DashboardPage() {
   const { selectedCopro, setSelectedCopro, isAdmin } = useAuth();
   const [coproprietes, setCoproprietes] = useState([]);
   const [stats, setStats] = useState(null);
+  const [health, setHealth] = useState(null);
   const [loading, setLoading] = useState(true);
   const [seeding, setSeeding] = useState(false);
 
@@ -26,6 +27,11 @@ export default function DashboardPage() {
     setLoading(true);
     const params = selectedCopro ? { copropriete_id: selectedCopro } : {};
     api.get('/dashboard/stats', { params }).then(r => { setStats(r.data); setLoading(false); }).catch(() => setLoading(false));
+    if (selectedCopro) {
+      api.get('/dashboard/health-audit', { params }).then(r => setHealth(r.data)).catch(() => setHealth(null));
+    } else {
+      setHealth(null);
+    }
   }, [selectedCopro]);
 
   const getDefaultIban = (c) => (c.bank_accounts || []).find(b => b.is_default)?.iban || (c.bank_accounts || [])[0]?.iban || '-';
@@ -151,7 +157,7 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4 mb-8">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
         {kpis.map((kpi, i) => (
           <Card key={i} className="border-slate-200">
             <CardContent className="p-4">
@@ -164,6 +170,68 @@ export default function DashboardPage() {
           </Card>
         ))}
       </div>
+
+      {/* SANTE COMPTABLE */}
+      {health && (
+        <Card className="border-slate-200 mb-6" data-testid="health-audit-card">
+          <CardContent className="p-5">
+            <div className="flex items-start justify-between mb-3 gap-4">
+              <div className="flex-1">
+                <div className="flex items-center gap-3 mb-1">
+                  <h3 className="text-base font-semibold text-slate-900" style={{fontFamily:'Chivo,sans-serif'}}>Sante comptable</h3>
+                  <span className={`text-[10px] uppercase tracking-wider font-bold px-2 py-0.5 rounded-full ${
+                    health.score >= 90 ? 'bg-green-100 text-green-700' :
+                    health.score >= 75 ? 'bg-blue-100 text-blue-700' :
+                    health.score >= 50 ? 'bg-orange-100 text-orange-700' :
+                    'bg-red-100 text-red-700'
+                  }`} data-testid="health-label">{health.health_label}</span>
+                </div>
+                <p className="text-xs text-slate-500">Detection automatique d&apos;anomalies sur l&apos;ACP - seuil {health.days_threshold}j</p>
+              </div>
+              <div className="text-right">
+                <div className={`text-3xl font-bold tracking-tight ${
+                  health.score >= 90 ? 'text-green-600' :
+                  health.score >= 75 ? 'text-blue-600' :
+                  health.score >= 50 ? 'text-orange-600' :
+                  'text-red-600'
+                }`} style={{fontFamily:'Chivo,sans-serif'}} data-testid="health-score">{health.score}<span className="text-base text-slate-400">/100</span></div>
+              </div>
+            </div>
+            {/* Mini bars stats */}
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 mb-3">
+              {[
+                { label: 'Fact > 60j', val: health.stats.invoices_overdue, color: 'text-red-600 bg-red-50 border-red-200' },
+                { label: 'Doublons', val: health.stats.duplicates, color: 'text-orange-600 bg-orange-50 border-orange-200' },
+                { label: 'Orphelins', val: health.stats.orphans, color: 'text-amber-600 bg-amber-50 border-amber-200' },
+                { label: 'Desequilibres', val: health.stats.unbalanced, color: 'text-red-600 bg-red-50 border-red-200' },
+                { label: 'Owners retard', val: health.stats.owners_late, color: 'text-red-600 bg-red-50 border-red-200' },
+              ].map((s, i) => (
+                <div key={i} className={`text-center border rounded-md py-1.5 ${s.val > 0 ? s.color : 'text-slate-400 bg-slate-50 border-slate-200'}`}>
+                  <div className="text-lg font-bold leading-none">{s.val}</div>
+                  <div className="text-[10px] uppercase tracking-wider mt-0.5">{s.label}</div>
+                </div>
+              ))}
+            </div>
+            {health.anomalies.length > 0 && (
+              <details className="mt-2">
+                <summary className="text-xs font-semibold text-slate-600 cursor-pointer hover:text-slate-900 select-none" data-testid="health-anomalies-toggle">
+                  Voir les {health.anomalies.length} anomalie(s) detectee(s)
+                </summary>
+                <div className="mt-2 space-y-2">
+                  {health.anomalies.map((a, i) => (
+                    <div key={i} className={`text-xs border-l-4 pl-3 py-1 ${
+                      a.severity === 'high' ? 'border-red-500 bg-red-50/30' : 'border-orange-400 bg-orange-50/30'
+                    }`}>
+                      <div className="font-semibold text-slate-700">{a.title}</div>
+                      <div className="text-slate-500">Categorie : <span className="font-mono">{a.category}</span></div>
+                    </div>
+                  ))}
+                </div>
+              </details>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <Card className="border-slate-200">

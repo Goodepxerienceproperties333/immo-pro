@@ -260,13 +260,25 @@ def create_reports_router(db):
             "VII_regul_passif": [],
         }
 
+        def _clean_account_name(acc, name):
+            """Nettoie les libelles redondants : 'Fourn. - X' -> 'X' quand le contexte
+            (440xxx) suffit a identifier qu'on parle d'un fournisseur."""
+            if name and acc and acc.startswith("440"):
+                if name.startswith("Fourn. - "):
+                    return name[len("Fourn. - "):]
+                if name.startswith("Fourn.- "):
+                    return name[len("Fourn.- "):]
+                if name.startswith("Fourn. "):
+                    return name[len("Fourn. "):]
+            return name
+
         def _classify_account(acc, solde, balances_dict):
             """Classe un compte dans le bon bucket selon son numero et son solde."""
             is_aggregated_owner = balances_dict[acc].get("is_owner_aggregated", False)
             # Pour les comptes agreges proprietaires : on affiche juste le nom (pas de numero)
             item = {
                 "account_number": "" if is_aggregated_owner else acc,
-                "account_name": balances_dict[acc]["account_name"],
+                "account_name": _clean_account_name(acc, balances_dict[acc]["account_name"]),
                 "amount": abs(solde),
             }
             if solde > 0.01:
@@ -366,31 +378,29 @@ def create_reports_router(db):
                     share = round(result_exercise * (quo / total_quotities), 2)
                     distributed_per_owner[oid] = share
 
-            # Ajuste les soldes 4000XX (provisions) dans le bilan en consequence.
-            owners_for_acp = await db.owners.find({}, {"_id": 0}).to_list(10000)
-            owner_acc_prov = {}
-            for o in owners_for_acp:
-                acc_obj = ((o.get("tier_accounts") or {}).get(copropriete_id, {}) or {})
-                acc_p = acc_obj.get("provisions")
-                if acc_p and o["id"] in distributed_per_owner:
-                    owner_acc_prov[acc_p] = distributed_per_owner[o["id"]]
-            for acc_p, delta in owner_acc_prov.items():
-                if acc_p not in balances:
-                    # Trouver le nom du compte
-                    pcmn = await db.pcmn_accounts.find_one(
-                        {"number": acc_p, "copropriete_id": copropriete_id}, {"_id": 0}
-                    )
-                    balances[acc_p] = {
-                        "account_number": acc_p,
-                        "account_name": (pcmn or {}).get("name", f"Compte {acc_p}"),
-                        "debit": 0.0, "credit": 0.0,
-                    }
-                # Boni (delta > 0) -> credit (owner crediteur = on lui doit)
-                # Mali (delta < 0) -> debit (owner debiteur = il doit)
-                if delta > 0:
-                    balances[acc_p]["credit"] += delta
+            # Ajuste les soldes des owners agreges (OWNER_xxx) directement.
+            # En mode "apres repartition" : boni (delta > 0) crédite le compte owner,
+            # mali (delta < 0) le débite. Comme la fusion a deja eu lieu, on cible
+            # les entrees OWNER_<id> dans balances (pas les comptes 4000XX qui n'existent plus).
+            for oid, delta in distributed_per_owner.items():
+                virt_acc = f"OWNER_{oid}"
+                if virt_acc in balances:
+                    if delta > 0:
+                        balances[virt_acc]["credit"] += delta
+                    else:
+                        balances[virt_acc]["debit"] += abs(delta)
                 else:
-                    balances[acc_p]["debit"] += abs(delta)
+                    # Owner sans solde initial : creer une entree fraiche
+                    owner_doc = next((o for o in owners_for_acp if o["id"] == oid), None)
+                    if not owner_doc:
+                        continue
+                    balances[virt_acc] = {
+                        "account_number": virt_acc,
+                        "account_name": owner_doc.get("name", ""),
+                        "debit": abs(delta) if delta < 0 else 0.0,
+                        "credit": delta if delta > 0 else 0.0,
+                        "is_owner_aggregated": True,
+                    }
 
             # Reset buckets et re-classer suite a modification balances
             actif_buckets = {k: [] for k in actif_buckets}

@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from typing import Optional, List
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import uuid
 
 
@@ -73,10 +73,23 @@ def create_fiscal_router(db):
 
         # Chinese wall: scope by ACP of the fiscal year
         copro_id = fy.get("copropriete_id", "")
-        je_q = {"date": {"$gte": fy["start_date"], "$lte": fy["end_date"]}}
+        # IMPORTANT : l'A-nouveau doit refleter le solde REEL au moment de la cloture,
+        # donc on prend TOUTES les ecritures jusqu'a la fin de l'exercice (cumul),
+        # PAS uniquement celles de la periode. Et on exclut les AN precedentes
+        # pour eviter le double comptage.
+        je_q = {"date": {"$lte": fy["end_date"]}, "journal_type": {"$ne": "AN"}}
         if copro_id:
             je_q["copropriete_id"] = copro_id
         entries = await db.journal_entries.find(je_q, {"_id": 0}).to_list(100000)
+
+        # Pour le resultat de l'exercice : limiter aux ecritures de la PERIODE (classes 6/7)
+        je_q_periode = {
+            "date": {"$gte": fy["start_date"], "$lte": fy["end_date"]},
+            "journal_type": {"$ne": "AN"},
+        }
+        if copro_id:
+            je_q_periode["copropriete_id"] = copro_id
+        entries_periode = await db.journal_entries.find(je_q_periode, {"_id": 0}).to_list(100000)
 
         balances = {}
         for entry in entries:
@@ -87,9 +100,17 @@ def create_fiscal_router(db):
                 balances[acc]["debit"] += line.get("debit", 0)
                 balances[acc]["credit"] += line.get("credit", 0)
 
-        # Compute result (class 6 - class 7)
-        total_charges = sum(b["debit"] - b["credit"] for a, b in balances.items() if a.startswith("6"))
-        total_produits = sum(b["credit"] - b["debit"] for a, b in balances.items() if a.startswith("7"))
+        # Compute result (class 6 - class 7) sur la PERIODE de l'exercice
+        balances_periode = {}
+        for entry in entries_periode:
+            for line in entry.get("lines", []):
+                acc = line["account_number"]
+                if acc not in balances_periode:
+                    balances_periode[acc] = {"debit": 0, "credit": 0}
+                balances_periode[acc]["debit"] += line.get("debit", 0)
+                balances_periode[acc]["credit"] += line.get("credit", 0)
+        total_charges = sum(b["debit"] - b["credit"] for a, b in balances_periode.items() if a.startswith("6"))
+        total_produits = sum(b["credit"] - b["debit"] for a, b in balances_periode.items() if a.startswith("7"))
         result_net = total_produits - total_charges
 
         # Generate a-nouveau entries for balance sheet accounts (classes 1-5)
@@ -125,12 +146,18 @@ def create_fiscal_router(db):
         if a_nouveau_lines:
             total_d = sum(l["debit"] for l in a_nouveau_lines)
             total_c = sum(l["credit"] for l in a_nouveau_lines)
+            # Date AN = 01/01/N+1 (lendemain de la cloture), pas le 31/12 (qui doublerait)
+            try:
+                end_dt = datetime.strptime(fy["end_date"], "%Y-%m-%d")
+                an_date = (end_dt + timedelta(days=1)).strftime("%Y-%m-%d")
+            except Exception:
+                an_date = fy["end_date"]
             a_nouveau_entry = {
                 "id": str(uuid.uuid4()),
                 "journal_type": "AN",
-                "date": fy["end_date"],
+                "date": an_date,
                 "reference": f"AN-{fy['name']}",
-                "description": f"A-nouveau cloture exercice {fy['name']}",
+                "description": f"A-nouveau ouverture exercice suivant {fy['name']}",
                 "lines": a_nouveau_lines,
                 "total_debit": round(total_d, 2),
                 "total_credit": round(total_c, 2),

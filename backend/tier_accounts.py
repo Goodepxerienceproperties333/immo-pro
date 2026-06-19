@@ -89,7 +89,7 @@ async def assign_supplier_account(db, supplier: dict, copro_id: Optional[str] = 
     seq = await _next_seq(db, target_copro, "44000")
     num = _format_seq("44000", seq, width=3)
     name = (supplier.get("name") or "Fournisseur")[:40]
-    await _ensure_account(db, target_copro, num, f"Fourn. - {name}".strip(), 4)
+    await _ensure_account(db, target_copro, num, name.strip(), 4)
     accounts_map[target_copro] = {"main": num}
     await db.suppliers.update_one({"id": supplier["id"]}, {"$set": {"tier_accounts": accounts_map}})
     supplier["tier_accounts"] = accounts_map

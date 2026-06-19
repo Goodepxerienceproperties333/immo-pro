@@ -12,6 +12,31 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 ## Implemented
 
+### Iter43 (Feb 2026) - AN au 01/01/N+1 + Audit Sante + nettoyage libelles
+
+#### Fix : AN datees au 01/01/N+1 (etat post-paiement)
+- Avant : AN au 31/12/N + soldes calcules sur la PERIODE (excluait paiements posterieurs)
+- Apres : AN au **01/01/N+1** (lendemain de la cloture, date d'ouverture exercice suivant)
+  + soldes calcules en CUMUL jusqu'a end_date (= reflete tous les paiements effectues).
+  Les AN precedentes sont exclues pour eviter le double comptage.
+
+#### Nouveau : module audit comptable (`/app/backend/health_audit.py`)
+Detection automatique des anomalies + score de sante /100 :
+- Factures impayees > X jours (60j par defaut)
+- Doublons potentiels (meme fournisseur + meme montant + dates < 7j)
+- Comptes tier orphelins (soldes 400/440 sans owner/supplier link)
+- Ecritures non equilibrees (debit != credit)
+- Coproprietaires en retard de paiement
+Score = 100 - penalites par anomalie. Labels : Excellent/Bon/Moyen/Critique.
+
+#### Nettoyage libelles "Fourn. -" dans le bilan
+- Bilan : `_clean_account_name()` supprime le prefixe "Fourn. - " des comptes 440xxx
+  (contexte rubrique "VI.B Fournisseurs" suffit a identifier).
+- Generation auto : `tier_accounts.py` et `auto_entries.py` ne mettent plus de prefixe
+  pour les NOUVEAUX comptes (juste le nom du fournisseur).
+
+
+
 ### Iter42 (Feb 2026) - Fix critique : exclusion ecritures AN du bilan
 
 #### Bug : ecritures "A nouveau" (AN) doublaient les soldes

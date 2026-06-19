@@ -427,6 +427,23 @@ async def dashboard_stats(request: Request, copropriete_id: Optional[str] = None
         "recent_entries": recent_entries
     }
 
+@app.get("/api/dashboard/health-audit")
+async def dashboard_health_audit(request: Request, copropriete_id: Optional[str] = None,
+                                  days_threshold: int = 60):
+    """Audit sante comptable de l'ACP. Detection des anomalies (factures impayees,
+    doublons, comptes orphelins, ecritures desequilibrees, owners en retard) avec
+    score sur 100."""
+    from health_audit import compute_health_audit
+    user = await get_current_user(request)
+    if not copropriete_id:
+        copropriete_id = request.headers.get("X-Copropriete-Id") or None
+    if not copropriete_id or copropriete_id == "all":
+        raise HTTPException(400, "copropriete_id requis - chinese walls strict")
+    role = user.get("role", "")
+    if role not in ("superadmin", "admin") and copropriete_id not in (user.get("copropriete_ids") or []):
+        raise HTTPException(403, "Acces refuse a cette copropriete")
+    return await compute_health_audit(db, copropriete_id, days_threshold=days_threshold)
+
 # Admin seed
 async def seed_admin():
     admin_email = os.environ.get("ADMIN_EMAIL", "admin@copro.be")
