@@ -3,12 +3,13 @@ import { useSearchParams } from 'react-router-dom';
 import api from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { toast } from 'sonner';
-import { BarChart3, Download, FileText } from 'lucide-react';
+import { BarChart3, Download, FileText, Eye, X } from 'lucide-react';
 import { fmtDate } from '@/lib/dateFmt';
 
 const API = process.env.REACT_APP_BACKEND_URL;
@@ -28,6 +29,11 @@ export default function ReportsPage() {
   const [fiscalYearId, setFiscalYearId] = useState('');
   const [viewMode, setViewMode] = useState('before_distribution');
   const [loading, setLoading] = useState(false);
+  // Preview Decompte state
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewUrl, setPreviewUrl] = useState('');
+  const [previewOwner, setPreviewOwner] = useState(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
 
   useEffect(() => {
     api.get('/fiscal/years').then(r => setYears(r.data || [])).catch(() => {});
@@ -99,6 +105,48 @@ export default function ReportsPage() {
         toast.error(err.response?.data?.detail || 'Erreur de generation du PDF');
       }
     }
+  };
+
+  const openPreview = async (ownerId, ownerName) => {
+    setPreviewLoading(true);
+    setPreviewOwner({ id: ownerId, name: ownerName });
+    setPreviewOpen(true);
+    try {
+      const params = { preview: 'true' };
+      if (dateFrom) params.date_from = dateFrom;
+      if (dateTo) params.date_to = dateTo;
+      const res = await api.get(`/reports/decompte/pdf/${ownerId}`, { params, responseType: 'blob' });
+      const url = window.URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
+      setPreviewUrl(url);
+    } catch (err) {
+      try {
+        const text = await err.response?.data?.text?.();
+        const msg = text ? JSON.parse(text).detail : (err.response?.data?.detail || 'Erreur de previsualisation');
+        toast.error(msg);
+      } catch {
+        toast.error('Erreur de previsualisation du decompte');
+      }
+      setPreviewOpen(false);
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
+  const closePreview = () => {
+    if (previewUrl) window.URL.revokeObjectURL(previewUrl);
+    setPreviewUrl('');
+    setPreviewOwner(null);
+    setPreviewOpen(false);
+  };
+
+  const downloadFromPreview = () => {
+    if (!previewUrl || !previewOwner) return;
+    const a = document.createElement('a');
+    a.href = previewUrl;
+    a.download = `decompte_apercu_${previewOwner.name.replace(/\s+/g, '_')}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
   };
   const copro = typeof window !== 'undefined' ? localStorage.getItem('copropriete_id') || '' : '';
   const xlsxParam = copro ? `?copropriete_id=${copro}` : '';
@@ -265,6 +313,16 @@ export default function ReportsPage() {
                   </div>
                   <div className="flex items-center gap-3">
                     <span className="font-mono font-bold text-lg">{d.total_charges.toFixed(2)} EUR</span>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => openPreview(d.owner_id, d.owner_name)}
+                      className="text-[#0055FF] border-[#0055FF]/30 hover:bg-[#0055FF]/10"
+                      data-testid={`preview-decompte-${d.owner_id}`}
+                      title="Apercu du decompte (avec filigrane) sans cloturer l'exercice"
+                    >
+                      <Eye size={14} className="mr-1" /> Apercu
+                    </Button>
                     <Button variant="outline" size="sm" onClick={() => downloadPdf(d.owner_id)} data-testid={`download-pdf-${d.owner_id}`}><Download size={14} className="mr-1" /> PDF</Button>
                   </div>
                 </div>
@@ -280,6 +338,65 @@ export default function ReportsPage() {
           </div>)}
         </TabsContent>
       </Tabs>
+
+      {/* Preview Decompte Dialog */}
+      <Dialog open={previewOpen} onOpenChange={(o) => { if (!o) closePreview(); }}>
+        <DialogContent className="max-w-5xl w-[95vw] h-[90vh] p-0 overflow-hidden flex flex-col" data-testid="preview-decompte-dialog">
+          <DialogHeader className="px-6 py-3 border-b border-slate-200 bg-gradient-to-r from-[#0055FF] to-[#0040CC] text-white shrink-0">
+            <DialogTitle className="flex items-center justify-between text-white" style={{fontFamily:'Chivo,sans-serif'}}>
+              <div className="flex items-center gap-2">
+                <Eye size={18} />
+                <span>Apercu du decompte annuel</span>
+                {previewOwner && <span className="font-mono text-sm opacity-90 ml-2">- {previewOwner.name}</span>}
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={downloadFromPreview}
+                  disabled={!previewUrl || previewLoading}
+                  className="bg-white text-[#0055FF] hover:bg-slate-100"
+                  data-testid="preview-download-btn"
+                >
+                  <Download size={14} className="mr-1" /> Telecharger
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={closePreview}
+                  className="text-white hover:bg-white/10"
+                  data-testid="preview-close-btn"
+                >
+                  <X size={16} />
+                </Button>
+              </div>
+            </DialogTitle>
+          </DialogHeader>
+          <div className="flex-1 overflow-hidden bg-slate-100">
+            {previewLoading ? (
+              <div className="flex items-center justify-center h-full text-slate-500">
+                <div className="text-center">
+                  <div className="animate-spin h-10 w-10 border-4 border-[#0055FF] border-t-transparent rounded-full mx-auto mb-3" />
+                  Generation de l&apos;apercu...
+                </div>
+              </div>
+            ) : previewUrl ? (
+              <iframe
+                src={previewUrl}
+                title="Apercu decompte"
+                className="w-full h-full border-0"
+                data-testid="preview-iframe"
+              />
+            ) : (
+              <div className="flex items-center justify-center h-full text-slate-400">Aucun apercu disponible</div>
+            )}
+          </div>
+          <div className="px-6 py-2 border-t border-slate-200 bg-amber-50 text-amber-800 text-xs shrink-0">
+            <b>Mode apercu</b> - ce decompte porte un filigrane &quot;APERCU - NON DEFINITIF&quot;.
+            Pour generer la version definitive (sans filigrane), cloturez d&apos;abord l&apos;exercice fiscal puis cliquez sur &quot;PDF&quot;.
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

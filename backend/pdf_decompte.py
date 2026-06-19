@@ -66,14 +66,20 @@ def build_decompte_pdf(
     fund_calls: list,
     payments: list,
     expense_accounts_map: dict = None,
+    preview: bool = False,
 ) -> bytes:
-    """Genere le PDF Decompte annuel pour un proprietaire."""
+    """Genere le PDF Decompte annuel pour un proprietaire.
+
+    Si `preview=True`, un filigrane diagonal "APERCU - NON DEFINITIF" est
+    superpose sur chaque page (couleur rouge transparente, en travers).
+    """
     buf = BytesIO()
     doc = SimpleDocTemplate(
         buf, pagesize=A4,
         leftMargin=15 * mm, rightMargin=15 * mm,
         topMargin=15 * mm, bottomMargin=18 * mm,
-        title=f"Decompte annuel - {owner.get('name','')} - {fiscal_year.get('name','')}",
+        title=f"Decompte annuel - {owner.get('name','')} - {fiscal_year.get('name','')}"
+              + (" (APERCU)" if preview else ""),
     )
 
     styles = getSampleStyleSheet()
@@ -200,7 +206,8 @@ def build_decompte_pdf(
         }
 
     def _zero_stats():
-        return {"total_dist": 0.0, "owner_amt": 0.0, "owner_occ": 0.0, "owner_prop": 0.0}
+        return {"total_dist": 0.0, "owner_amt": 0.0,
+                "owner_occ": 0.0, "owner_prop": 0.0, "invoices": []}
 
     # per_lot_data: lot_id -> { key_id -> { 'accounts': {acc -> stats}, '_invoices_seen': set } }
     per_lot_data = {}
@@ -236,6 +243,18 @@ def build_decompte_pdf(
             acc_bucket["owner_amt"] += amt_owner
             acc_bucket["owner_occ"] += amt_occ
             acc_bucket["owner_prop"] += amt_prop
+
+            # Store invoice detail for line-by-line breakdown under each account
+            acc_bucket["invoices"].append({
+                "date": inv.get("date", ""),
+                "supplier": inv.get("supplier", "") or "",
+                "description": inv.get("description", "") or "",
+                "reference": inv.get("reference", "") or inv.get("invoice_number", "") or "",
+                "total_amount": inv_total,
+                "owner_amt": amt_owner,
+                "owner_occ": amt_occ,
+                "owner_prop": amt_prop,
+            })
 
             # Dedup total_to_distribute per (lot, key, acc, invoice)
             inv_id = inv.get("id") or inv.get("internal_ref", "")
@@ -435,13 +454,48 @@ def build_decompte_pdf(
                     a = accounts[acc]
                     nature_label = acc_names.get(acc, "") or ("Autres charges" if acc == "_other" else acc)
                     acc_display = f"{acc} - {nature_label}" if acc != "_other" else nature_label
+                    # Account aggregated row (bold-ish, slate)
                     rows.append([
-                        Paragraph(acc_display, designation_indent_style),
+                        Paragraph(f"<b>{acc_display}</b>", designation_indent_style),
                         Paragraph(quot_str, ParagraphStyle("q", parent=designation_style, alignment=2, textColor=SLATE_500)),
                         Paragraph(_fmt_eur(a["total_dist"]), ParagraphStyle("q", parent=designation_style, alignment=2, textColor=SLATE_500)),
-                        Paragraph(_fmt_eur(a["owner_prop"]), ParagraphStyle("q", parent=designation_style, alignment=2, textColor=colors.HexColor("#1E40AF"))),
-                        Paragraph(_fmt_eur(a["owner_occ"]), ParagraphStyle("q", parent=designation_style, alignment=2, textColor=colors.HexColor("#92400E"))),
+                        Paragraph(f"<b>{_fmt_eur(a['owner_prop'])}</b>", ParagraphStyle("q", parent=designation_style, alignment=2, textColor=colors.HexColor("#1E40AF"))),
+                        Paragraph(f"<b>{_fmt_eur(a['owner_occ'])}</b>", ParagraphStyle("q", parent=designation_style, alignment=2, textColor=colors.HexColor("#92400E"))),
                     ])
+                    acc_row_idx = len(rows) - 1
+                    styles_ops.append(("BACKGROUND", (0, acc_row_idx), (-1, acc_row_idx), colors.HexColor("#F8FAFC")))
+
+                    # Invoice-level detail lines (sorted by date)
+                    sorted_invs = sorted(a.get("invoices", []),
+                                         key=lambda iv: (iv.get("date") or ""))
+                    for iv in sorted_invs:
+                        date_str = _fmt_date(iv.get("date", ""))
+                        supplier = iv.get("supplier", "") or "-"
+                        descr = iv.get("description", "") or ""
+                        ref = iv.get("reference", "") or ""
+                        # First column: "JJ/MM/AAAA - Supplier — description (ref FA-...)"
+                        parts = [f"<font color='{SLATE_500.hexval()}'>{date_str}</font>"]
+                        parts.append(supplier)
+                        if descr:
+                            parts.append(f"<font color='{SLATE_500.hexval()}'>- {descr}</font>")
+                        if ref:
+                            parts.append(f"<font color='{SLATE_500.hexval()}' size='7'>({ref})</font>")
+                        inv_label = " ".join(parts)
+                        inv_indent_style = ParagraphStyle(
+                            "inv_in", parent=designation_style,
+                            leftIndent=24, fontSize=7.5, leading=9.5,
+                        )
+                        rows.append([
+                            Paragraph(inv_label, inv_indent_style),
+                            "",  # quotites not relevant per-invoice
+                            Paragraph(_fmt_eur(iv["total_amount"]),
+                                      ParagraphStyle("q", parent=designation_style, alignment=2, fontSize=7.5, textColor=SLATE_500)),
+                            Paragraph(_fmt_eur(iv["owner_prop"]) if iv["owner_prop"] > 0.001 else "-",
+                                      ParagraphStyle("q", parent=designation_style, alignment=2, fontSize=7.5, textColor=colors.HexColor("#1E40AF"))),
+                            Paragraph(_fmt_eur(iv["owner_occ"]) if iv["owner_occ"] > 0.001 else "-",
+                                      ParagraphStyle("q", parent=designation_style, alignment=2, fontSize=7.5, textColor=colors.HexColor("#92400E"))),
+                        ])
+
                     # Track occupant summary label
                     if a["owner_occ"] > 0.001 and acc in occupant_summary_by_acc:
                         occupant_summary_by_acc[acc]["label"] = nature_label
@@ -748,6 +802,34 @@ def build_decompte_pdf(
         small,
     ))
 
-    doc.build(elems)
+    doc.build(elems, onFirstPage=_make_watermark(preview),
+              onLaterPages=_make_watermark(preview))
     buf.seek(0)
     return buf.read()
+
+
+def _make_watermark(preview: bool):
+    """Return a canvas callback that draws an APERCU watermark when preview=True."""
+    if not preview:
+        return lambda canvas, doc: None
+
+    def _draw(canvas, doc):
+        canvas.saveState()
+        canvas.translate(105 * mm, 148 * mm)  # center A4
+        canvas.rotate(45)
+        canvas.setFont("Helvetica-Bold", 70)
+        canvas.setFillColorRGB(0.85, 0.10, 0.10, alpha=0.18)
+        canvas.drawCentredString(0, 0, "APERCU")
+        canvas.setFont("Helvetica-Bold", 18)
+        canvas.setFillColorRGB(0.85, 0.10, 0.10, alpha=0.35)
+        canvas.drawCentredString(0, -45, "NON DEFINITIF")
+        canvas.restoreState()
+        # Banner top-right
+        canvas.saveState()
+        canvas.setFont("Helvetica-Bold", 9)
+        canvas.setFillColorRGB(0.85, 0.10, 0.10)
+        canvas.drawRightString(200 * mm, 287 * mm,
+                               "APERCU - Document non definitif")
+        canvas.restoreState()
+
+    return _draw

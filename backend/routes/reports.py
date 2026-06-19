@@ -715,6 +715,7 @@ def create_reports_router(db):
         date_from: Optional[str] = None,
         date_to: Optional[str] = None,
         copropriete_id: Optional[str] = None,
+        preview: bool = False,
     ):
         """Genere le PDF Decompte annuel pour un proprietaire. Chinese walls
         STRICT : `copropriete_id` (param ou header X-Copropriete-Id) requis,
@@ -762,16 +763,18 @@ def create_reports_router(db):
             if real_fy:
                 fy = real_fy
 
-        # Verrou : on ne peut generer un decompte annuel QUE si l'exercice est CLOTURE.
-        # Avant cloture, les chiffres sont encore en mouvement et le decompte n'a pas
-        # de valeur juridique. Utiliser la situation de compte pour un releve a date.
+        # Verrou : on ne peut generer un decompte annuel DEFINITIF QUE si l'exercice
+        # est CLOTURE. Avant cloture, les chiffres sont encore en mouvement et le
+        # decompte n'a pas de valeur juridique. Utiliser la situation de compte pour
+        # un releve a date. En mode `preview=true`, on permet la generation avec un
+        # filigrane "APERCU - NON DEFINITIF" sur le PDF.
         fy_status = fy.get("status", "")
-        if fy_status != "closed":
+        if fy_status != "closed" and not preview:
             raise HTTPException(
                 400,
                 f"L'exercice '{fy.get('name','')}' n'est pas cloture (statut: {fy_status or 'inconnu'}). "
-                "Le decompte annuel est genere uniquement apres cloture de l'exercice. "
-                "Pour un releve a date, utilisez la situation de compte."
+                "Le decompte annuel definitif est genere uniquement apres cloture de l'exercice. "
+                "Pour une previsualisation, utilisez le mode `preview=true`."
             )
 
         copro_id_use = copropriete_id
@@ -842,13 +845,16 @@ def create_reports_router(db):
             invoices=invoices, distribution_keys=distribution_keys,
             fund_calls=fund_calls, payments=payments,
             expense_accounts_map=nature_map,
+            preview=preview,
         )
 
         filename = f"decompte_{owner['name'].replace(' ', '_')}_{fy.get('name','').replace(' ', '_')}.pdf"
+        # In preview mode, render inline (so browsers display in iframe instead of downloading)
+        disposition = 'inline' if preview else 'attachment'
         return StreamingResponse(
             io.BytesIO(pdf_bytes),
             media_type="application/pdf",
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            headers={"Content-Disposition": f'{disposition}; filename="{filename}"'},
         )
 
     # ---- LISTE DES DEPENSES PDF ----
