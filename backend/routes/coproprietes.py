@@ -97,15 +97,20 @@ def create_coproprietes_router(db):
 
     @router.get("")
     async def list_coproprietes(request: Request, show_archived: Optional[bool] = False):
-        from server import get_current_user, is_admin_role
+        from server import get_current_user
         user = await get_current_user(request)
+        role = user.get("role", "")
         q = {} if show_archived else {"status": {"$ne": "archived"}}
-        if is_admin_role(user.get("role", "")):
+        # Superadmin : voit tout
+        if role in ("superadmin", "admin"):
             copros = await db.coproprietes.find(q, {"_id": 0}).sort("reference", -1).to_list(1000)
         else:
-            user_copro_ids = user.get("copropriete_ids", [])
-            if user_copro_ids:
-                q["id"] = {"$in": user_copro_ids}
+            # Syndic / gestionnaire / owner : ne voient QUE leurs ACPs (copropriete_ids)
+            user_copro_ids = user.get("copropriete_ids", []) or []
+            if not user_copro_ids:
+                # Pas d'ACPs assignees -> liste vide. Le syndic doit creer ses propres ACPs.
+                return []
+            q["id"] = {"$in": user_copro_ids}
             copros = await db.coproprietes.find(q, {"_id": 0}).sort("reference", -1).to_list(1000)
         return copros
 
@@ -142,6 +147,16 @@ def create_coproprietes_router(db):
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
         await db.coproprietes.insert_one(doc)
+        # Auto-rattacher l'ACP au syndic createur (sauf superadmin global qui n'a pas
+        # besoin d'etre dans copropriete_ids pour voir tout).
+        role = user.get("role", "")
+        if role not in ("superadmin", "admin"):
+            user_id_obj = user.get("_id")
+            if user_id_obj:
+                await db.users.update_one(
+                    {"_id": user_id_obj},
+                    {"$addToSet": {"copropriete_ids": doc["id"]}}
+                )
         # Seed full PCMN plan for this ACP + bank account PCMN entries
         await _seed_pcmn_for_acp(doc["id"])
         await _create_pcmn_accounts(bank_accounts, doc["id"])

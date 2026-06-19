@@ -116,6 +116,27 @@ async def auth_middleware(request: Request, call_next):
     request.state.user_role = role
     request.state.user_copropriete_ids = user_doc.get("copropriete_ids", [])
 
+    # ---- CHINESE WALL GLOBAL : isolation stricte entre syndics ----
+    # Si la requete porte un copropriete_id (param OU header X-Copropriete-Id),
+    # verifier que l'utilisateur (non-superadmin) a bien acces a cette ACP.
+    # Le superadmin/admin voient tout (gestion plateforme).
+    if role not in ("superadmin", "admin") and path not in RBAC_EXEMPT_PATHS:
+        try:
+            copro_q = request.query_params.get("copropriete_id")
+        except Exception:
+            copro_q = None
+        copro_h = request.headers.get("X-Copropriete-Id")
+        requested_copro = copro_q or copro_h
+        # "all" est une convention superadmin -> ignorer pour non-superadmin
+        if requested_copro and requested_copro not in ("all", "", "None"):
+            user_copros = request.state.user_copropriete_ids or []
+            if requested_copro not in user_copros:
+                from fastapi.responses import JSONResponse
+                return JSONResponse(
+                    status_code=403,
+                    content={"detail": "Acces refuse a cette copropriete (chinese wall : vous ne gerez pas cette ACP)"}
+                )
+
     # Skip RBAC for self-service endpoints (any authenticated user)
     if path not in RBAC_EXEMPT_PATHS:
         # Admin-only path families: any verb requires admin role (superadmin/syndic)
@@ -412,10 +433,10 @@ async def dashboard_stats(request: Request, copropriete_id: Optional[str] = None
     if not copropriete_id:
         copropriete_id = request.headers.get("X-Copropriete-Id") or None
 
-    # Verify user has access to this ACP (superadmin/admin/syndic bypass)
+    # Verify user has access to this ACP (only platform superadmin bypasses chinese walls)
     role = user.get("role", "")
     user_copro_ids = user.get("copropriete_ids", []) or []
-    is_super = is_admin_role(role)
+    is_super = is_superadmin_only(role)
     if copropriete_id and not is_super and copropriete_id not in user_copro_ids:
         raise HTTPException(403, "Acces refuse a cette copropriete")
 

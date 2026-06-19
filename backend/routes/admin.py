@@ -70,9 +70,19 @@ def create_admin_router(db):
 
     @router.post("/users")
     async def create_user(data: UserCreateInput, request: Request):
-        # Seul le superadmin peut creer des utilisateurs (= gerer les acces a la plateforme)
+        # Seul le superadmin peut creer des comptes syndic (pas d'autres roles)
         await _get_superadmin_only(request)
         from server import hash_password
+        # ENFORCE : le superadmin ne cree QUE des syndics. Les gestionnaires
+        # sont crees par leur syndic dans /api/team/members. Les owners par
+        # le syndic via /api/owners (ou inscription).
+        if data.role not in ("syndic",):
+            raise HTTPException(
+                400,
+                "Le superadmin ne cree que des comptes syndic. "
+                "Les gestionnaires sont crees par chaque syndic via /team, "
+                "et les proprietaires via la gestion des proprietaires de l'ACP."
+            )
         email = data.email.lower().strip()
         existing = await db.users.find_one({"email": email})
         if existing:
@@ -85,26 +95,19 @@ def create_admin_router(db):
             pwd_hash = hash_password(placeholder)
         else:
             pwd_hash = hash_password(data.password)
-        # Hybride : on resout les permissions depuis role_template_id + ajustements
-        perms = None
-        if data.role_template_id:
-            tpl = await db.role_templates.find_one({"id": data.role_template_id})
-            if not tpl:
-                raise HTTPException(400, "Profil (role_template_id) introuvable")
-            perms = list(tpl.get("permissions") or [])
-        # Override / ajustements explicites passes en plus
-        if data.permissions is not None:
-            perms = list(data.permissions)
+        # Pas de role_template ni permissions sur un syndic (acces total a son perimetre).
+        # Pas d'ACPs assignees ici : le syndic les creera lui-meme.
         doc = {
             "email": email,
             "password_hash": pwd_hash,
             "name": data.name,
-            "role": data.role if data.role in ("superadmin", "syndic", "gestionnaire", "owner") else "owner",
-            "copropriete_ids": data.copropriete_ids or [],
+            "role": "syndic",
+            "copropriete_ids": [],
             "must_change_password": must_change,
-            "role_template_id": data.role_template_id,
-            "permissions": perms,
-            "created_at": datetime.now(timezone.utc).isoformat()
+            "role_template_id": None,
+            "permissions": None,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_by": str(request.state.user.get("_id", "")) if hasattr(request, "state") and hasattr(request.state, "user") else None,
         }
         result = await db.users.insert_one(doc)
         return {
@@ -114,8 +117,8 @@ def create_admin_router(db):
             "role": doc["role"],
             "copropriete_ids": doc["copropriete_ids"],
             "must_change_password": must_change,
-            "role_template_id": doc["role_template_id"],
-            "permissions": doc["permissions"],
+            "role_template_id": None,
+            "permissions": None,
         }
 
     @router.put("/users/{user_id}")
@@ -125,23 +128,32 @@ def create_admin_router(db):
         target = await db.users.find_one({"_id": ObjectId(user_id)})
         if not target:
             raise HTTPException(404, "Utilisateur non trouve")
+        # ENFORCE : le superadmin ne peut pas changer le role d'un user ici, ni
+        # ses copropriete_ids (les ACPs sont gerees par le syndic lui-meme).
+        # Il peut juste : modifier le nom, reinitialiser le mot de passe, ou
+        # forcer un changement de mdp au prochain login.
+        if data.role is not None and data.role != target.get("role"):
+            raise HTTPException(
+                400,
+                "Le role d'un utilisateur ne se change pas depuis ici. "
+                "Le superadmin gere uniquement les comptes syndic principaux."
+            )
+        if data.copropriete_ids is not None:
+            raise HTTPException(
+                400,
+                "Les ACPs ne s'attribuent pas depuis cette interface. "
+                "Le syndic gere lui-meme ses coproprietes (creation/modification) "
+                "et leur affectation a son equipe."
+            )
+        if data.role_template_id is not None or data.permissions is not None:
+            raise HTTPException(
+                400,
+                "Les profils et permissions sont geres par le syndic dans /team. "
+                "Cette interface ne sert qu'a creer les comptes syndic principaux."
+            )
         update = {}
         if data.name is not None:
             update["name"] = data.name
-        if data.role is not None:
-            update["role"] = data.role
-        if data.copropriete_ids is not None:
-            update["copropriete_ids"] = data.copropriete_ids
-        if data.role_template_id is not None:
-            update["role_template_id"] = data.role_template_id or None
-            # Si on change le template ET qu'aucun permissions explicit n'est passe,
-            # on reset les permissions au profil du template
-            if data.permissions is None and data.role_template_id:
-                tpl = await db.role_templates.find_one({"id": data.role_template_id})
-                if tpl:
-                    update["permissions"] = list(tpl.get("permissions") or [])
-        if data.permissions is not None:
-            update["permissions"] = list(data.permissions)
         if data.password:
             update["password_hash"] = hash_password(data.password)
             update["must_change_password"] = False
@@ -152,6 +164,7 @@ def create_admin_router(db):
                 placeholder = uuid.uuid4().hex + uuid.uuid4().hex
                 update["password_hash"] = hash_password(placeholder)
         if update:
+            update["updated_at"] = datetime.now(timezone.utc).isoformat()
             await db.users.update_one({"_id": ObjectId(user_id)}, {"$set": update})
         updated = await db.users.find_one({"_id": ObjectId(user_id)})
         return {
