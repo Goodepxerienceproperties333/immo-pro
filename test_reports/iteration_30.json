@@ -1,0 +1,34 @@
+{
+  "summary": "iter30: Tested 4 new features end-to-end. Backend: 17/17 pytest passed covering (a) admin-users access control (superadmin-only for GET/POST/PUT/DELETE - non-auth=401, owner=403, super=200/list of 4 users); (b) PUT /api/auth/me self-profile update (name OK, password change with all validations: missing current=400, wrong current=400, short new=400, empty payload=400, no auth=401, new-pwd login works, re-login with old fails); (c) POST /api/fiscal/budgets/{id}/revoke on temp ACP cascades cleanly (status->draft, deleted_fund_calls field returned); (d) PUT /api/coproprietes/{id} edit preserves pcmn_number for bank_accounts on Demo ACP. Frontend: login as superadmin OK, sidebar shows nav-admin-users + nav-profile, ProfilePage exposes all 9 expected data-testids with email correctly displayed (admin@copro.be), AdminUsersPage lists exactly 4 users, edit-copro-{id} button visible with text 'Modifier' and opens dialog pre-filled with name='Test', BCE, address, etc. As syndic (non-superadmin): nav-admin-users HIDDEN, nav-profile visible, /admin/users page renders with the access-restricted banner, /profile fully accessible with Syndic badge.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Edit ACP dialog (and other Dialogs)", "issues": ["React a11y warning: 'Missing Description or aria-describedby={undefined} for {DialogContent}' on multiple dialogs - non-blocking but should add DialogDescription for screen readers"]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter30_superadmin_profile_revoke.py",
+    "/app/test_reports/pytest/pytest_iter30.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Backend role helpers are well separated: is_admin_role (data access) vs is_superadmin_only (platform user mgmt). All /api/admin/users CRUD routes correctly call _get_superadmin_only.",
+    "PUT /api/auth/me correctly re-fetches password_hash from DB (since get_current_user pops it). Validation order is correct: length>=6, current_password required, verify_password, then hash.",
+    "Budget revoke endpoint properly cascades via _delete_auto_entries(db, 'fund_call', c['id']) for every linked call then bulk-deletes fund_calls; force=true also un-letters bank_transactions. Returns updated budget + counters.",
+    "Layout.js: 'Utilisateurs' link is conditioned by isSuperadmin in BOTH layouts (sidebar AND top header for no-ACP). 'Mon profil' is unconditional. AdminUsersPage banner correctly rendered for non-superadmin via the !isSuperadmin branch.",
+    "Minor a11y: Several DialogContent (Edit ACP, others) miss DialogDescription/aria-describedby - emits console warnings.",
+    "ProfilePage uses sonner toasts and forces re-login after password change (logout()), which matches the banner displayed in UI."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter30_superadmin_profile_revoke.py"
+  ],
+  "success_rate": {"backend": "100% (17/17)", "frontend": "100% (all expected data-testids present, RBAC enforced, dialog opens with pre-filled values)"},
+  "test_credentials": "admin@copro.be / admin123 (superadmin). Test owner/syndic users created via POST /api/admin/users and cleaned up.",
+  "seed_data_creation": "Created and cleaned up: TEST_iter30_owner_* user, TEST_iter30_syndic_* user, TEST_iter30_acp_* temp ACP (with FY2099 + budget). Demo ACP description was temporarily modified for the edit test then restored. No persistent test data left behind.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "iter30 features (superadmin-only user mgmt, /auth/me self-profile, budget revoke cascade, ACP edit) all working. The DialogContent a11y warnings are pre-existing across the app and unrelated to this iteration. Demo budget ce572730-1749-4673-8570-28906c17e510 NOT touched (only listed). Demo ACP description preserved (write then restore).",
+  "rca of the issue": "N/A - no bugs found."
+}

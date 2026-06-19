@@ -21,6 +21,7 @@ import ReportsPage from "@/pages/ReportsPage";
 import BalanceTiersPage from "@/pages/BalanceTiersPage";
 import DocumentsPage from "@/pages/DocumentsPage";
 import AdminUsersPage from "@/pages/AdminUsersPage";
+import ProfilePage from "@/pages/ProfilePage";
 import CoproprietesPage from "@/pages/CoproprietesPage";
 import OwnerPortalPage from "@/pages/OwnerPortalPage";
 import RemindersPage from "@/pages/RemindersPage";
@@ -67,6 +68,7 @@ function AppRoutes() {
         <Route path="expense-categories" element={<ExpenseCategoriesPage />} />
         <Route path="documents" element={<DocumentsPage />} />
         <Route path="admin/users" element={<AdminUsersPage />} />
+        <Route path="profile" element={<ProfilePage />} />
       </Route>
     </Routes>
   );

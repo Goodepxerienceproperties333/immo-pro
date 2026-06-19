@@ -50,12 +50,13 @@ export function AuthProvider({ children }) {
     setUser(false);
   };
 
+  const isSuperadmin = user && (user.role === 'superadmin' || user.role === 'admin');
   const isAdmin = user && (user.role === 'superadmin' || user.role === 'admin' || user.role === 'syndic');
   const isManager = user && (user.role === 'superadmin' || user.role === 'admin' || user.role === 'syndic' || user.role === 'gestionnaire');
   const isOwner = user && user.role === 'owner';
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, register, logout, selectedCopro, setSelectedCopro, isAdmin, isManager, isOwner }}>
+    <AuthContext.Provider value={{ user, loading, login, register, logout, selectedCopro, setSelectedCopro, isAdmin, isSuperadmin, isManager, isOwner }}>
       {children}
     </AuthContext.Provider>
   );

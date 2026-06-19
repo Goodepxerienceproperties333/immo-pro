@@ -157,10 +157,28 @@ export default function FiscalYearPage() {
     } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); }
   };
 
-  const revokeBudget = async (b) => {
-    if (!window.confirm("Revoquer l'approbation ? Le budget redevient modifiable mais les appels deja generes restent.")) return;
-    try { await api.post(`/fiscal/budgets/${b.id}/revoke`); toast.success('Approbation revoquee'); load(); }
-    catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); }
+  const revokeBudget = async (b, force = false) => {
+    const msg = force
+      ? `FORCER la devalidation ? TOUS les appels lies a "${b.name}" (provisions, reserve, roulement, special) seront contrepasses, MEME ceux deja payes. Les paiements bancaires seront delettres.`
+      : `Devalider le budget "${b.name}" ? TOUS les appels de fonds lies (provisions, reserve, roulement) seront contrepasses ainsi que leurs ecritures comptables.`;
+    if (!window.confirm(msg)) return;
+    try {
+      const url = `/fiscal/budgets/${b.id}/revoke${force ? '?force=true' : ''}`;
+      const { data } = await api.post(url);
+      const cnt = data.deleted_fund_calls || 0;
+      toast.success(data.message || `Budget devalide (${cnt} appel(s) contrepasse(s))`);
+      load();
+    } catch (err) {
+      const detail = err.response?.data?.detail || 'Erreur';
+      // Si le backend bloque a cause d'appels payes : proposer le force
+      if (typeof detail === 'string' && detail.includes('paiement')) {
+        if (window.confirm(`${detail}\n\nVoulez-vous FORCER la contrepassation malgre les paiements ?`)) {
+          return revokeBudget(b, true);
+        }
+      } else {
+        toast.error(detail);
+      }
+    }
   };
 
   const deleteBudget = async (b) => {

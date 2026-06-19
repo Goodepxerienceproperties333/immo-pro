@@ -5,7 +5,7 @@ import api from '@/lib/api';
 import {
   LayoutDashboard, Users, Building2, UserCheck, BookOpen, FileText,
   Receipt, Gauge, Landmark, FolderOpen, LogOut, ChevronLeft, ChevronRight,
-  Menu, Shield, Home, Truck, Calendar, BookMarked, Megaphone, BarChart3, Bell, Wallet, Tag
+  Menu, Shield, Home, Truck, Calendar, BookMarked, Megaphone, BarChart3, Bell, Wallet, Tag, UserCog
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -43,7 +43,7 @@ const sections = [
 ];
 
 export default function Layout() {
-  const { user, logout, selectedCopro, setSelectedCopro, isAdmin, isManager } = useAuth();
+  const { user, logout, selectedCopro, setSelectedCopro, isAdmin, isManager, isSuperadmin } = useAuth();
   const navigate = useNavigate();
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -89,7 +89,7 @@ export default function Layout() {
               </div>
             </div>
           ))}
-          {isAdmin && (
+          {isSuperadmin && (
             <div className="mb-2">
               {!collapsed && <div className="px-3 py-1 mt-1 text-[10px] uppercase tracking-[0.2em] text-slate-500 font-semibold">Admin</div>}
               <NavLink to="/admin/users" onClick={() => setMobileOpen(false)}
@@ -98,6 +98,14 @@ export default function Layout() {
               ><Shield size={16} strokeWidth={1.5} />{!collapsed && <span className="text-[13px]">Utilisateurs</span>}</NavLink>
             </div>
           )}
+          {/* "Mon profil" accessible a TOUS les utilisateurs authentifies */}
+          <div className="mb-2">
+            {!collapsed && <div className="px-3 py-1 mt-1 text-[10px] uppercase tracking-[0.2em] text-slate-500 font-semibold">Compte</div>}
+            <NavLink to="/profile" onClick={() => setMobileOpen(false)}
+              className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''} ${collapsed ? 'justify-center px-2' : ''}`}
+              data-testid="nav-profile"
+            ><UserCog size={16} strokeWidth={1.5} />{!collapsed && <span className="text-[13px]">Mon profil</span>}</NavLink>
+          </div>
         </nav>
       </ScrollArea>
       <Separator className="bg-slate-800" />
@@ -125,11 +133,14 @@ export default function Layout() {
           <div className="w-8 h-8 rounded bg-[#0055FF] flex items-center justify-center text-white font-bold text-sm">CP</div>
           <span className="text-white font-bold text-lg tracking-tight" style={{fontFamily:'Chivo,sans-serif'}}>CoproManager</span>
           <div className="flex-1" />
-          {isAdmin && (
+          {isSuperadmin && (
             <NavLink to="/admin/users" className="text-slate-400 hover:text-white text-xs flex items-center gap-1.5 transition-colors" data-testid="nav-admin-users-top">
               <Shield size={14} /> Utilisateurs
             </NavLink>
           )}
+          <NavLink to="/profile" className="text-slate-400 hover:text-white text-xs flex items-center gap-1.5 transition-colors" data-testid="nav-profile-top">
+            <UserCog size={14} /> Mon profil
+          </NavLink>
           <NavLink to="/coproprietes" className="text-slate-400 hover:text-white text-xs flex items-center gap-1.5 transition-colors" data-testid="nav-coproprietes-top">
             <Home size={14} /> Gerer les ACP
           </NavLink>

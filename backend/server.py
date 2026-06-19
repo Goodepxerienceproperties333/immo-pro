@@ -172,8 +172,12 @@ def create_refresh_token(user_id: str) -> str:
     return jwt.encode(payload, get_jwt_secret(), algorithm=JWT_ALGORITHM)
 
 def is_admin_role(role: str) -> bool:
-    """Syndic et superadmin: acces total + gestion utilisateurs."""
+    """Syndic et superadmin: acces total aux donnees + gestion utilisateurs PROPRES."""
     return role in ("superadmin", "admin", "syndic")
+
+def is_superadmin_only(role: str) -> bool:
+    """SEUL le superadmin (plateforme) peut gerer les ACCES (creer/modifier/supprimer d'autres utilisateurs)."""
+    return role in ("superadmin", "admin")
 
 def can_manage(role: str) -> bool:
     """Syndic, gestionnaire: peuvent gerer les donnees des coproprietes."""
@@ -228,6 +232,11 @@ class RegisterInput(BaseModel):
     email: str
     password: str
     name: str
+
+class MeUpdateInput(BaseModel):
+    name: Optional[str] = None
+    current_password: Optional[str] = None
+    new_password: Optional[str] = None
 
 # Auth Router
 auth_router = APIRouter(prefix="/api/auth")
@@ -335,6 +344,36 @@ async def register(data: RegisterInput, response: Response):
 async def get_me(request: Request):
     user = await get_current_user(request)
     return user_response(user)
+
+@auth_router.put("/me")
+async def update_me(data: MeUpdateInput, request: Request):
+    """Self-service profile update : tout utilisateur peut modifier SON propre profil
+    (nom + mot de passe). Ne touche PAS au role ni aux copropriete_ids."""
+    user = await get_current_user(request)
+    update = {}
+    if data.name and data.name.strip():
+        update["name"] = data.name.strip()
+    # Password change requires current_password validation
+    if data.new_password:
+        if len(data.new_password) < 6:
+            raise HTTPException(400, "Le nouveau mot de passe doit contenir au moins 6 caracteres")
+        if not data.current_password:
+            raise HTTPException(400, "Mot de passe actuel requis pour changer le mot de passe")
+        current_hash = user.get("password_hash") or ""
+        if not current_hash:
+            # Re-fetch from DB (user dict from get_current_user has password_hash popped)
+            full = await db.users.find_one({"_id": ObjectId(user["_id"])})
+            current_hash = (full or {}).get("password_hash", "")
+        if not verify_password(data.current_password, current_hash):
+            raise HTTPException(400, "Mot de passe actuel incorrect")
+        update["password_hash"] = hash_password(data.new_password)
+        update["must_change_password"] = False
+        update["password_set_at"] = datetime.now(timezone.utc).isoformat()
+    if not update:
+        raise HTTPException(400, "Aucun champ a modifier")
+    await db.users.update_one({"_id": ObjectId(user["_id"])}, {"$set": update})
+    updated = await db.users.find_one({"_id": ObjectId(user["_id"])})
+    return user_response(updated)
 
 @auth_router.post("/logout")
 async def logout(response: Response):

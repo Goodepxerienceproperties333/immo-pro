@@ -778,15 +778,82 @@ def create_fiscal_router(db):
         return await db.budgets.find_one({"id": budget_id}, {"_id": 0})
 
     @router.post("/budgets/{budget_id}/revoke")
-    async def revoke_budget(budget_id: str):
+    async def revoke_budget(budget_id: str, force: Optional[bool] = False):
+        """Devalider un budget approuve.
+        Contrepasse (supprime) TOUS les appels de fonds lies a ce budget,
+        quel que soit leur type (provisions, reserve, roulement, special) ainsi
+        que les ecritures comptables auto-generees (VE) correspondantes.
+
+        Protection historique :
+        - Si au moins UN appel a recu un paiement et que `force` n'est pas True : 400.
+        - Si `force=True` : supprime quand meme. Les paiements bancaires lies
+          deviennent "non lettres" mais ne sont pas supprimes (audit trail).
+        """
+        from auto_entries import _delete_auto_entries
         existing = await db.budgets.find_one({"id": budget_id}, {"_id": 0})
         if not existing:
             raise HTTPException(404, "Budget non trouve")
+
+        # Recupere tous les appels lies a ce budget
+        linked_calls = await db.fund_calls.find(
+            {"budget_id": budget_id}, {"_id": 0}
+        ).to_list(10000)
+        paid_calls = [
+            c for c in linked_calls
+            if any(d.get("paid") for d in c.get("distribution", []))
+        ]
+        if paid_calls and not force:
+            paid_names = [c.get("name", "?") for c in paid_calls]
+            raise HTTPException(
+                400,
+                "Impossible de devalider : "
+                f"{len(paid_calls)} appel(s) de fonds ont deja recu des paiements "
+                f"({', '.join(paid_names[:3])}{'...' if len(paid_names) > 3 else ''}). "
+                "Annulez d'abord les paiements ou utilisez `force=true` pour forcer "
+                "la contrepassation (les paiements bancaires seront delettres)."
+            )
+
+        # Si force=true et appels payes, delettre d'abord les transactions bancaires
+        unlettre_count = 0
+        if force and paid_calls:
+            for c in paid_calls:
+                # Trouver les bank_transactions matchees a cet appel
+                # (via paid_by_fund_call ou via communication VCS - on se contente
+                # de marquer comme non matched et reset matched_owner/matched_invoice)
+                await db.bank_transactions.update_many(
+                    {"matched_fund_call_id": c["id"]},
+                    {"$set": {"matched": False, "matched_fund_call_id": None}}
+                )
+                unlettre_count += 1
+
+        # Contrepassation : supprime les ecritures VE auto-generees + les appels
+        for c in linked_calls:
+            try:
+                await _delete_auto_entries(db, "fund_call", c["id"])
+            except Exception as e:
+                print(f"[budget-revoke] delete auto entries failed for fund_call {c['id']}: {e}")
+        deleted_calls = 0
+        if linked_calls:
+            res = await db.fund_calls.delete_many({"budget_id": budget_id})
+            deleted_calls = res.deleted_count
+
+        # Repasse le budget en draft
         await db.budgets.update_one(
             {"id": budget_id},
             {"$set": {"status": "draft", "approved_at": None, "approved_by": None}}
         )
-        return await db.budgets.find_one({"id": budget_id}, {"_id": 0})
+
+        updated = await db.budgets.find_one({"id": budget_id}, {"_id": 0})
+        return {
+            **updated,
+            "deleted_fund_calls": deleted_calls,
+            "preserved_paid_calls": 0 if force else len(paid_calls),
+            "unlettred_transactions": unlettre_count,
+            "message": (
+                f"Budget devalide. {deleted_calls} appel(s) de fonds contrepasse(s) "
+                "(provisions, reserve, roulement, special) avec leurs ecritures auto."
+            ),
+        }
 
     # ---- N-1 PREVIOUS YEAR EXPENSES (helper for budget preparation) ----
     @router.get("/previous-year-expenses")

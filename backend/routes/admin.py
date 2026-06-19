@@ -27,21 +27,28 @@ def create_admin_router(db):
     router = APIRouter(prefix="/api/admin")
 
     async def _get_admin_user(request):
+        """Pour les endpoints generaux d'admin (migrations, etc.) : syndic ou superadmin."""
         from server import get_current_user, is_admin_role
         user = await get_current_user(request)
         if not is_admin_role(user.get("role", "")):
-            raise HTTPException(403, "Seul le syndic peut gerer les utilisateurs")
+            raise HTTPException(403, "Acces reserve a l'administration")
+        return user
+
+    async def _get_superadmin_only(request):
+        """Pour la GESTION DES UTILISATEURS : SEUL le superadmin (gestionnaire de la plateforme)
+        peut creer/modifier/supprimer/lister les autres utilisateurs.
+        Un syndic n'a acces qu'a SON propre profil via /api/auth/me."""
+        from server import get_current_user, is_superadmin_only
+        user = await get_current_user(request)
+        if not is_superadmin_only(user.get("role", "")):
+            raise HTTPException(403, "Seul un super administrateur peut gerer les acces a la plateforme")
         return user
 
     @router.get("/users")
     async def list_users(request: Request):
-        user = await _get_admin_user(request)
-        from server import is_admin_role
-        query = {}
-        # Syndics can only see users in their coproprietes
-        if not is_admin_role(user.get("role", "")):
-            query["copropriete_ids"] = {"$in": user.get("copropriete_ids", [])}
-        users = await db.users.find(query).sort("name", 1).to_list(1000)
+        # Seul le superadmin peut voir la liste des utilisateurs
+        await _get_superadmin_only(request)
+        users = await db.users.find({}).sort("name", 1).to_list(1000)
         result = []
         for u in users:
             result.append({
@@ -50,17 +57,16 @@ def create_admin_router(db):
                 "name": u["name"],
                 "role": u.get("role", "owner"),
                 "copropriete_ids": u.get("copropriete_ids", []),
+                "must_change_password": u.get("must_change_password", False),
                 "created_at": u.get("created_at", ""),
             })
         return result
 
     @router.post("/users")
     async def create_user(data: UserCreateInput, request: Request):
-        user = await _get_admin_user(request)
-        from server import is_admin_role, hash_password
-        # Only superadmin can create superadmin/syndic
-        if data.role in ("superadmin", "admin") and not is_admin_role(user.get("role", "")):
-            raise HTTPException(403, "Seul le super admin peut creer des syndics")
+        # Seul le superadmin peut creer des utilisateurs (= gerer les acces a la plateforme)
+        await _get_superadmin_only(request)
+        from server import hash_password
         email = data.email.lower().strip()
         existing = await db.users.find_one({"email": email})
         if existing:
@@ -94,20 +100,15 @@ def create_admin_router(db):
 
     @router.put("/users/{user_id}")
     async def update_user(user_id: str, data: UserUpdateInput, request: Request):
-        admin = await _get_admin_user(request)
-        from server import is_admin_role, hash_password
+        await _get_superadmin_only(request)
+        from server import hash_password
         target = await db.users.find_one({"_id": ObjectId(user_id)})
         if not target:
             raise HTTPException(404, "Utilisateur non trouve")
-        # Syndics cannot change superadmin users
-        if not is_admin_role(admin.get("role", "")) and target.get("role") in ("superadmin", "admin"):
-            raise HTTPException(403, "Vous ne pouvez pas modifier un super administrateur")
         update = {}
         if data.name is not None:
             update["name"] = data.name
         if data.role is not None:
-            if data.role in ("superadmin", "admin") and not is_admin_role(admin.get("role", "")):
-                raise HTTPException(403, "Seul le super admin peut attribuer ce role")
             update["role"] = data.role
         if data.copropriete_ids is not None:
             update["copropriete_ids"] = data.copropriete_ids
@@ -133,8 +134,7 @@ def create_admin_router(db):
 
     @router.delete("/users/{user_id}")
     async def delete_user(user_id: str, request: Request):
-        admin = await _get_admin_user(request)
-        from server import is_admin_role
+        admin = await _get_superadmin_only(request)
         if str(admin["_id"]) == user_id:
             raise HTTPException(400, "Vous ne pouvez pas vous supprimer vous-meme")
         result = await db.users.delete_one({"_id": ObjectId(user_id)})

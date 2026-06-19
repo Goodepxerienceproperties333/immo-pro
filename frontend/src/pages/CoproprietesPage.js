@@ -168,7 +168,7 @@ export default function CoproprietesPage() {
                 <TableCell className="font-mono text-xs">{getDefaultIban(c)}</TableCell>
                 <TableCell><Badge variant="outline" className={c.status === 'archived' ? 'bg-slate-100 text-slate-500' : 'bg-green-50 text-green-700 border-green-200'}>{c.status === 'archived' ? 'Archive' : 'Active'}</Badge></TableCell>
                 <TableCell><div className="flex gap-0">
-                  {isManager && <Button variant="ghost" size="sm" onClick={() => openEdit(c)} title="Modifier"><Pencil size={13} /></Button>}
+                  {isManager && <Button variant="outline" size="sm" onClick={() => openEdit(c)} title="Modifier l'ACP (nom, adresse, banques, parametres)" data-testid={`edit-copro-${c.id}`} className="text-[#0055FF] border-[#0055FF]/30 hover:bg-[#0055FF]/10 mr-1"><Pencil size={13} className="mr-1" /> Modifier</Button>}
                   {isManager && <Button variant="ghost" size="sm" onClick={() => handleCleanupOrphans(c)} className="text-blue-600 hover:text-blue-700" title="Nettoyer les ecritures orphelines (re-synchroniser bilan/grand livre)" data-testid={`cleanup-orphans-${c.id}`}><Wand2 size={13} /></Button>}
                   {isManager && <Button variant="ghost" size="sm" onClick={() => handleResetData(c)} className="text-amber-600 hover:text-amber-700" title="Vider les donnees comptables (test)" data-testid={`reset-data-${c.id}`}><Eraser size={13} /></Button>}
                   {isManager && c.status !== 'archived' && <Button variant="ghost" size="sm" onClick={() => handleArchive(c.id)} className="text-orange-500" title="Archiver"><Archive size={13} /></Button>}

@@ -12,13 +12,14 @@ import { toast } from 'sonner';
 import { Plus, Pencil, Trash2, Shield, Search } from 'lucide-react';
 
 const ROLES = [
+  { value: 'superadmin', label: 'Super Administrateur', color: 'bg-purple-100 text-purple-800 border-purple-300' },
   { value: 'syndic', label: 'Syndic', color: 'bg-red-50 text-red-700 border-red-200' },
   { value: 'gestionnaire', label: 'Gestionnaire', color: 'bg-blue-50 text-blue-700 border-blue-200' },
   { value: 'owner', label: 'Proprietaire', color: 'bg-green-50 text-green-700 border-green-200' },
 ];
 
 export default function AdminUsersPage() {
-  const { isAdmin, user } = useAuth();
+  const { isSuperadmin, user } = useAuth();
   const [users, setUsers] = useState([]);
   const [coproprietes, setCoproprietes] = useState([]);
   const [search, setSearch] = useState('');
@@ -27,12 +28,33 @@ export default function AdminUsersPage() {
   const [form, setForm] = useState({ email: '', password: '', name: '', role: 'owner', copropriete_ids: [], must_change_password: false });
 
   const load = useCallback(async () => {
+    if (!isSuperadmin) return;
     const [u, c] = await Promise.all([api.get('/admin/users'), api.get('/coproprietes')]);
     setUsers(u.data);
     setCoproprietes(c.data);
-  }, []);
+  }, [isSuperadmin]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Acces refuse pour les non-superadmin (syndic, owner, etc.)
+  if (!isSuperadmin) {
+    return (
+      <div data-testid="admin-users-page" className="max-w-2xl mx-auto mt-8">
+        <div className="bg-amber-50 border border-amber-200 rounded-md p-6 text-center">
+          <Shield size={40} className="mx-auto text-amber-600 mb-3" />
+          <h2 className="text-lg font-semibold text-slate-900 mb-2" style={{fontFamily:'Chivo,sans-serif'}}>
+            Acces reserve au super administrateur
+          </h2>
+          <p className="text-sm text-slate-600 mb-3">
+            Seul le super administrateur de la plateforme peut creer, modifier ou supprimer les utilisateurs.
+          </p>
+          <p className="text-sm text-slate-600">
+            Pour modifier vos propres informations (nom, mot de passe), rendez-vous sur la page <a href="/profile" className="text-[#0055FF] hover:underline font-medium">Mon profil</a>.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   const filtered = users.filter(u =>
     u.name.toLowerCase().includes(search.toLowerCase()) || u.email.toLowerCase().includes(search.toLowerCase())
@@ -91,7 +113,7 @@ export default function AdminUsersPage() {
   };
 
   const getRoleBadge = (role) => {
-    const r = ROLES.find(x => x.value === role) || ROLES[2];
+    const r = ROLES.find(x => x.value === role) || ROLES[ROLES.length - 1];
     return <Badge variant="outline" className={r.color}>{r.label}</Badge>;
   };
 
@@ -105,7 +127,7 @@ export default function AdminUsersPage() {
       <div className="page-header flex items-center justify-between">
         <div>
           <h1 className="page-title"><Shield size={24} className="inline mr-2" />Gestion des utilisateurs</h1>
-          <p className="page-subtitle">Administration des comptes et droits d'acces</p>
+          <p className="page-subtitle">Administration des comptes et droits d&apos;acces</p>
         </div>
         <Button onClick={openCreate} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="create-user-btn">
           <Plus size={16} className="mr-2" /> Nouvel utilisateur
@@ -135,7 +157,7 @@ export default function AdminUsersPage() {
                 <TableCell>
                   <div className="flex gap-1">
                     <Button variant="ghost" size="sm" onClick={() => openEdit(u)} data-testid={`edit-user-${u.id}`}><Pencil size={14} /></Button>
-                    {isAdmin && u.id !== user?.id && (
+                    {isSuperadmin && u.id !== user?.id && (
                       <Button variant="ghost" size="sm" onClick={() => handleDelete(u.id)} className="text-red-500" data-testid={`delete-user-${u.id}`}><Trash2 size={14} /></Button>
                     )}
                   </div>
@@ -176,7 +198,7 @@ export default function AdminUsersPage() {
               <Select value={form.role} onValueChange={v => setForm({...form, role: v})}>
                 <SelectTrigger data-testid="user-role-select"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  {ROLES.filter(r => isAdmin || r.value !== 'superadmin').map(r => (
+                  {ROLES.filter(r => isSuperadmin || r.value !== 'superadmin').map(r => (
                     <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
                   ))}
                 </SelectContent>
