@@ -26,6 +26,19 @@ def _require_copro(copropriete_id: Optional[str], request) -> str:
     return copropriete_id
 
 
+def _exclude_reversals(q: dict) -> dict:
+    """Exclude reversal pairs (contre-passations + ecritures extournees) from queries.
+
+    Pour les balances/grand livre/decomptes : une ecriture qui a ete contre-passee
+    (`reversed=True`) ainsi que sa contre-passation (`is_reversal=True`) ne doivent
+    pas apparaitre dans les soldes "operationnels" : elles s'annulent comptablement.
+    Les listings de journaux peuvent les afficher en mode "audit" via un flag UI.
+    """
+    q["is_reversal"] = {"$ne": True}
+    q["reversed"] = {"$ne": True}
+    return q
+
+
 def create_reports_router(db):
     router = APIRouter(prefix="/api/reports")
 
@@ -167,6 +180,11 @@ def create_reports_router(db):
         if date_to:
             q["date"] = {"$lte": date_to}
         q["journal_type"] = {"$ne": "AN"}
+        # SECURISATION : toujours exclure les ecritures EXTOURNEES (reversed=True)
+        # et leurs CONTRE-PASSATIONS (is_reversal=True). Ces paires s'annulent au bilan
+        # mais leur presence introduit du bruit + des doublons quand la cloture a ete
+        # relancee apres une reouverture.
+        _exclude_reversals(q)
         if view_mode != "after_distribution":
             # Exclure les ecritures de regularisation/cloture :
             # - flag is_regularization=True (OD nouvelles)
@@ -953,6 +971,9 @@ def create_reports_router(db):
         current_owner_ids = set(l.get("owner_id") for l in lots if l.get("owner_id"))
 
         # Charge journal entries ACP-scoped (un seul fetch) + filtre periode
+        # SECURISATION : exclure les contre-passations et leurs ecritures
+        # extournees -> elles s'annulent au bilan, ne doivent pas figurer
+        # dans les balances tiers operationnelles.
         je_q = {"copropriete_id": copropriete_id}
         if start_date or end_date:
             je_q["date"] = {}
@@ -960,12 +981,14 @@ def create_reports_router(db):
                 je_q["date"]["$gte"] = start_date
             if end_date:
                 je_q["date"]["$lte"] = end_date
+        _exclude_reversals(je_q)
         entries = await db.journal_entries.find(je_q, {"_id": 0}).to_list(100000)
 
         # Pour le SOLDE CUMULATIF : entries de toutes les dates jusqu'a end_date (inclus anterieurs)
         je_q_cumul = {"copropriete_id": copropriete_id}
         if end_date:
             je_q_cumul["date"] = {"$lte": end_date}
+        _exclude_reversals(je_q_cumul)
         entries_cumul = await db.journal_entries.find(je_q_cumul, {"_id": 0}).to_list(100000)
         # Agregation cumulatif par owner_id x compte
         cumul_per_owner = {}  # oid -> {prov_debit, prov_credit, res_debit, res_credit}
@@ -1192,9 +1215,19 @@ def create_reports_router(db):
         copropriete_id: Optional[str] = None,
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
+        show_all: bool = False,
     ):
         """Situation de compte d'un proprietaire (basee sur le grand livre).
-        Chinese walls strict. Filtre periode optionnel."""
+        Chinese walls strict. Filtre periode optionnel.
+
+        Par defaut, masque les ecritures techniques de cloture "Annulation provisions
+        appelees" : elles annulent comptablement les appels au moment de l'imputation
+        des frais reels. Pour le proprietaire, c'est confus. On affiche uniquement :
+          - les appels de fonds (VE)
+          - les paiements (FI / banque)
+          - l'imputation des frais reels a la cloture (OD-REG-CHRG)
+          - le report a-nouveau (AN)
+        Passer `show_all=true` pour voir aussi les annulations (mode comptable expert)."""
         copropriete_id = _require_copro(copropriete_id, request)
         owner = await db.owners.find_one({"id": owner_id}, {"_id": 0})
         if not owner:
@@ -1208,11 +1241,13 @@ def create_reports_router(db):
         movements = []
 
         # 1) Lignes du grand livre (avec filtre periode)
+        # SECURISATION : exclure contre-passations + ecritures extournees
         entry_q = {"copropriete_id": copropriete_id}
         if start_date or end_date:
             entry_q["date"] = {}
             if start_date: entry_q["date"]["$gte"] = start_date
             if end_date: entry_q["date"]["$lte"] = end_date
+        _exclude_reversals(entry_q)
         entries = await db.journal_entries.find(entry_q, {"_id": 0}).to_list(100000)
         seen_lines = set()
         for e in entries:
@@ -1232,6 +1267,15 @@ def create_reports_router(db):
                 line_desc = (ln.get("line_description") or "").strip()
                 entry_desc = (e.get("description", "") or "").strip()
                 final_desc = line_desc or entry_desc
+                # Masquer la ligne "Annulation provisions appelees" de la vue copro
+                # (sauf si show_all=true).
+                is_provisions_cancel = (
+                    "annulation provisions" in (entry_desc or "").lower()
+                    or "annulation provisions" in (final_desc or "").lower()
+                    or (e.get("reference", "") or "").startswith("OD-REG-PROV")
+                )
+                if is_provisions_cancel and not show_all:
+                    continue
                 movements.append({
                     "date": e.get("date", ""),
                     "description": f"[{e.get('journal_type','?')}] {final_desc}".strip(),
@@ -1273,10 +1317,36 @@ def create_reports_router(db):
             running += m["debit"] - m["credit"]
             m["running_balance"] = round(running, 2)
 
+        # Soldes affiches = somme des mouvements VISIBLES
         total_debit = round(sum(m["debit"] for m in movements), 2)
         total_credit = round(sum(m["credit"] for m in movements), 2)
 
-        # Detail par compte
+        # Solde COMPTABLE REEL : recharge toutes les ecritures (y compris annulations
+        # masquees) pour rester aligne avec le bilan.
+        all_debit = 0.0
+        all_credit = 0.0
+        hidden_count = 0
+        if not show_all:
+            for e in entries:
+                for ln in e.get("lines", []) or []:
+                    acc = ln.get("account_number", "")
+                    tpid = ln.get("third_party_id")
+                    if acc not in valid_accs and tpid != owner_id:
+                        continue
+                    all_debit += float(ln.get("debit", 0) or 0)
+                    all_credit += float(ln.get("credit", 0) or 0)
+                    # Detect hidden ones for transparency
+                    entry_desc = (e.get("description", "") or "").lower()
+                    line_desc = (ln.get("line_description") or "").lower()
+                    if ("annulation provisions" in entry_desc
+                            or "annulation provisions" in line_desc
+                            or (e.get("reference", "") or "").startswith("OD-REG-PROV")):
+                        hidden_count += 1
+            real_balance = round(all_debit - all_credit, 2)
+        else:
+            real_balance = round(total_debit - total_credit, 2)
+
+        # Detail par compte (sur les mouvements VISIBLES)
         prov_movs = [m for m in movements if m.get("account_number") == acc_prov]
         res_movs = [m for m in movements if m.get("account_number") == acc_res]
 
@@ -1285,14 +1355,17 @@ def create_reports_router(db):
             "account_provisions": acc_prov,
             "account_reserve": acc_res,
             "movements": movements,
+            "hidden_lines_count": hidden_count,
             "provisions_debit": round(sum(m["debit"] for m in prov_movs), 2),
             "provisions_credit": round(sum(m["credit"] for m in prov_movs), 2),
             "reserve_debit": round(sum(m["debit"] for m in res_movs), 2),
             "reserve_credit": round(sum(m["credit"] for m in res_movs), 2),
             "total_debit": total_debit,
             "total_credit": total_credit,
-            "balance": round(total_debit - total_credit, 2),
-            "status": "debiteur" if total_debit > total_credit + 0.01 else ("crediteur" if total_credit > total_debit + 0.01 else "solde"),
+            # `balance` reflete le solde COMPTABLE REEL (aligne avec le bilan)
+            # meme si des lignes techniques sont masquees dans le listing visuel.
+            "balance": real_balance,
+            "status": "debiteur" if real_balance > 0.01 else ("crediteur" if real_balance < -0.01 else "solde"),
         }
 
     @router.get("/situation-compte/{owner_id}/pdf")
@@ -1471,11 +1544,13 @@ def create_reports_router(db):
         # Charge fournisseurs
         suppliers = await db.suppliers.find({}, {"_id": 0}).to_list(10000)
         # Charge journal entries de l'ACP + filtre periode
+        # SECURISATION : exclure contre-passations + ecritures extournees
         je_q = {"copropriete_id": copropriete_id}
         if start_date or end_date:
             je_q["date"] = {}
             if start_date: je_q["date"]["$gte"] = start_date
             if end_date: je_q["date"]["$lte"] = end_date
+        _exclude_reversals(je_q)
         entries = await db.journal_entries.find(je_q, {"_id": 0}).to_list(100000)
 
         # Pour le SOLDE on charge TOUTES les ecritures jusqu'a end_date (sans start_date)
@@ -1483,6 +1558,7 @@ def create_reports_router(db):
         je_q_cumul = {"copropriete_id": copropriete_id}
         if end_date:
             je_q_cumul["date"] = {"$lte": end_date}
+        _exclude_reversals(je_q_cumul)
         entries_cumul = await db.journal_entries.find(je_q_cumul, {"_id": 0}).to_list(100000)
         # Charge factures pour les fournisseurs orphelins
         inv_q = {"copropriete_id": copropriete_id}
@@ -1646,6 +1722,8 @@ def create_reports_router(db):
         entry_q = {}
         if copropriete_id:
             entry_q["copropriete_id"] = copropriete_id
+        # SECURISATION : exclure contre-passations + ecritures extournees
+        _exclude_reversals(entry_q)
         entries = await db.journal_entries.find(entry_q, {"_id": 0}).to_list(100000)
         seen = set()
         for e in entries:
