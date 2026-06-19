@@ -373,10 +373,10 @@ async def dashboard_stats(request: Request, copropriete_id: Optional[str] = None
     if not copropriete_id:
         copropriete_id = request.headers.get("X-Copropriete-Id") or None
 
-    # Verify user has access to this ACP (admin/superadmin bypass)
+    # Verify user has access to this ACP (superadmin/admin/syndic bypass)
     role = user.get("role", "")
     user_copro_ids = user.get("copropriete_ids", []) or []
-    is_super = role in ("superadmin", "admin")
+    is_super = is_admin_role(role)
     if copropriete_id and not is_super and copropriete_id not in user_copro_ids:
         raise HTTPException(403, "Acces refuse a cette copropriete")
 
@@ -440,7 +440,7 @@ async def dashboard_health_audit(request: Request, copropriete_id: Optional[str]
     if not copropriete_id or copropriete_id == "all":
         raise HTTPException(400, "copropriete_id requis - chinese walls strict")
     role = user.get("role", "")
-    if role not in ("superadmin", "admin") and copropriete_id not in (user.get("copropriete_ids") or []):
+    if role not in ("superadmin", "admin", "syndic") and copropriete_id not in (user.get("copropriete_ids") or []):
         raise HTTPException(403, "Acces refuse a cette copropriete")
     return await compute_health_audit(db, copropriete_id, days_threshold=days_threshold)
 
