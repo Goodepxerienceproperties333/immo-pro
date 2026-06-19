@@ -33,17 +33,18 @@ export default function JournalsPage() {
   const [attachDialogEntry, setAttachDialogEntry] = useState(null);
   const [form, setForm] = useState({ journal_type: 'OD', date: '', reference: '', description: '', lines: [{ account_number: '', account_name: '', debit: 0, credit: 0 }, { account_number: '', account_name: '', debit: 0, credit: 0 }] });
   const [pendingAttachment, setPendingAttachment] = useState(null);
+  const [includeReversals, setIncludeReversals] = useState(false);
 
   const load = useCallback(async () => {
     const [e, a, c] = await Promise.all([
-      api.get('/accounting/entries', { params: { journal_type: journalType } }),
+      api.get('/accounting/entries', { params: { journal_type: journalType, include_reversals: includeReversals } }),
       api.get('/accounting/pcmn'),
       api.get('/expense-categories').catch(() => ({ data: [] })),
     ]);
     setEntries(e.data);
     setAccounts(a.data);
     setCategories(c.data);
-  }, [journalType]);
+  }, [journalType, includeReversals]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -175,9 +176,20 @@ export default function JournalsPage() {
       </div>
 
       <Tabs value={journalType} onValueChange={setJournalType}>
-        <TabsList className="mb-4" data-testid="journal-type-tabs">
-          {JOURNAL_TYPES.map(j => <TabsTrigger key={j.value} value={j.value}>{j.label}</TabsTrigger>)}
-        </TabsList>
+        <div className="flex items-center justify-between mb-4">
+          <TabsList data-testid="journal-type-tabs">
+            {JOURNAL_TYPES.map(j => <TabsTrigger key={j.value} value={j.value}>{j.label}</TabsTrigger>)}
+          </TabsList>
+          <label className="flex items-center gap-2 text-xs text-slate-600 cursor-pointer select-none" data-testid="include-reversals-toggle">
+            <input
+              type="checkbox"
+              checked={includeReversals}
+              onChange={e => setIncludeReversals(e.target.checked)}
+              className="h-4 w-4 accent-[#0055FF]"
+            />
+            <span>Inclure les contre-passations</span>
+          </label>
+        </div>
         <TabsContent value={journalType} className="mt-0">
           <div className="bg-white rounded-md border border-slate-200 overflow-hidden">
             <Table>
@@ -189,12 +201,14 @@ export default function JournalsPage() {
                 {entries.length === 0 ? (
                   <TableRow><TableCell colSpan={6} className="text-center py-8 text-slate-400">Aucune ecriture</TableCell></TableRow>
                 ) : entries.map(e => (
-                  <TableRow key={e.id} className="hover:bg-slate-50/50">
+                  <TableRow key={e.id} className={`hover:bg-slate-50/50 ${e.reversed ? 'bg-red-50/30 line-through opacity-70' : ''} ${e.is_reversal ? 'bg-amber-50/40' : ''}`}>
                     <TableCell className="font-mono text-sm">{fmtDate(e.date)}</TableCell>
                     <TableCell className="font-mono text-xs">
                       {e.reference}
                       {e.auto_generated && !e.manually_edited && <Badge variant="outline" className="ml-2 text-[10px] bg-blue-50 border-blue-200 text-blue-700" data-testid={`auto-badge-${e.id}`}>Auto</Badge>}
                       {e.manually_edited && <Badge variant="outline" className="ml-2 text-[10px] bg-orange-50 border-orange-200 text-orange-700" data-testid={`manual-edit-badge-${e.id}`}>Modifie</Badge>}
+                      {e.is_reversal && <Badge variant="outline" className="ml-2 text-[10px] bg-amber-100 border-amber-300 text-amber-800" data-testid={`reversal-badge-${e.id}`}>Contre-passation</Badge>}
+                      {e.reversed && <Badge variant="outline" className="ml-2 text-[10px] bg-red-100 border-red-300 text-red-700" data-testid={`reversed-badge-${e.id}`}>Extournee</Badge>}
                     </TableCell>
                     <TableCell className="font-medium">{e.description}</TableCell>
                     <TableCell className="text-right font-mono">{e.total_debit?.toFixed(2)}</TableCell>
@@ -202,11 +216,11 @@ export default function JournalsPage() {
                     <TableCell>
                       <div className="flex gap-1">
                         <Button variant="ghost" size="sm" onClick={() => setViewEntry(e)}><Eye size={14} /></Button>
-                        <Button variant="ghost" size="sm" onClick={() => openEdit(e)} data-testid={`edit-entry-${e.id}`} title="Modifier"><Pencil size={14} /></Button>
+                        {!e.is_reversal && !e.reversed && <Button variant="ghost" size="sm" onClick={() => openEdit(e)} data-testid={`edit-entry-${e.id}`} title="Modifier"><Pencil size={14} /></Button>}
                         <Button variant="ghost" size="sm" onClick={() => setAttachDialogEntry(e)} data-testid={`entry-attach-${e.id}`} title="Pieces jointes">
                           <Paperclip size={14} />{(e.attachments?.length || 0) > 0 && <span className="ml-1 text-xs">{e.attachments.length}</span>}
                         </Button>
-                        {(!e.auto_generated || e.manually_edited) && <Button variant="ghost" size="sm" onClick={() => handleDelete(e.id)} className="text-red-500"><Trash2 size={14} /></Button>}
+                        {(!e.auto_generated || e.manually_edited) && !e.is_reversal && !e.reversed && <Button variant="ghost" size="sm" onClick={() => handleDelete(e.id)} className="text-red-500"><Trash2 size={14} /></Button>}
                       </div>
                     </TableCell>
                   </TableRow>

@@ -180,6 +180,8 @@ def build_decompte_pdf(
     # Group invoices by distribution_key -> account -> [(inv, owner_amount)]
     grouped = defaultdict(lambda: defaultdict(list))
     total_owner_charges = 0.0
+    total_occupant_share = 0.0
+    total_proprio_share = 0.0
     for inv in invoices:
         owner_amt = 0.0
         for dl in inv.get("distribution_lines", []) or []:
@@ -187,10 +189,17 @@ def build_decompte_pdf(
                 owner_amt += float(dl.get("amount", 0) or 0)
         if owner_amt <= 0.001:
             continue
+        # Calcul des parts occupant/proprietaire pour ce proprietaire
+        occ_pct = float(inv.get("occupant_pct", 0) or 0)
+        prop_pct = float(inv.get("proprietaire_pct", 100) or 100)
+        owner_occ = round(owner_amt * occ_pct / 100, 2)
+        owner_prop = round(owner_amt - owner_occ, 2)
         key_id = inv.get("distribution_key_id", "") or "_none"
         acc = inv.get("account_number", "") or "_other"
-        grouped[key_id][acc].append((inv, owner_amt))
+        grouped[key_id][acc].append((inv, owner_amt, owner_occ, owner_prop))
         total_owner_charges += owner_amt
+        total_occupant_share += owner_occ
+        total_proprio_share += owner_prop
 
     # Owner share of fund calls + payments
     total_called = 0.0
@@ -278,49 +287,61 @@ def build_decompte_pdf(
 
             for acc, items in by_acc.items():
                 nature_label = acc_names.get(acc, "") or (acc if acc != "_other" else "Autres charges")
-                rows = [["Date", "Fournisseur", "Description", "Total facture", "Votre part"]]
+                # Compte PCMN visible : "[614000] Nettoyage"
+                section_title = f"<b>[{acc}] {nature_label}</b>" if acc != "_other" else f"<b>{nature_label}</b>"
+                rows = [["Date", "Fournisseur", "Description", "Total fact.", "Votre part", "Occupant", "Proprio"]]
                 # Style pour libelles wrappables
                 cell_style = ParagraphStyle(
-                    "cell", parent=body, fontSize=8.5, leading=10.5, wordWrap="CJK",
+                    "cell", parent=body, fontSize=7.5, leading=9.5, wordWrap="CJK",
                 )
                 subtotal = 0.0
-                for inv, owner_amt in items:
+                subtotal_occ = 0.0
+                subtotal_prop = 0.0
+                for inv, owner_amt, owner_occ, owner_prop in items:
                     rows.append([
                         _fmt_date(inv.get("date", "")),
                         Paragraph(inv.get("supplier", "") or "", cell_style),
                         Paragraph(inv.get("description", "") or "", cell_style),
                         _fmt_eur(inv.get("total_amount", 0)),
                         _fmt_eur(owner_amt),
+                        _fmt_eur(owner_occ) if owner_occ > 0.001 else "—",
+                        _fmt_eur(owner_prop) if owner_prop > 0.001 else "—",
                     ])
                     subtotal += owner_amt
-                rows.append(["", "", "", "Sous-total", _fmt_eur(subtotal)])
+                    subtotal_occ += owner_occ
+                    subtotal_prop += owner_prop
+                rows.append(["", "", "", "Sous-total", _fmt_eur(subtotal),
+                             _fmt_eur(subtotal_occ), _fmt_eur(subtotal_prop)])
 
                 # Section title
                 elems.append(Spacer(1, 1 * mm))
                 elems.append(Paragraph(
-                    f"<b>{nature_label}</b>",
+                    section_title,
                     ParagraphStyle("nat", parent=body, fontSize=9.5, textColor=SLATE_900,
                                    leftIndent=4),
                 ))
-                tbl = Table(rows, colWidths=[22 * mm, 40 * mm, 50 * mm, 30 * mm, 28 * mm])
+                tbl = Table(rows, colWidths=[18 * mm, 32 * mm, 38 * mm, 24 * mm, 22 * mm, 18 * mm, 18 * mm])
                 tbl.setStyle(TableStyle([
                     ("BACKGROUND", (0, 0), (-1, 0), SLATE_100),
                     ("TEXTCOLOR", (0, 0), (-1, 0), SLATE_900),
                     ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                    ("FONTSIZE", (0, 0), (-1, -1), 8.5),
-                    ("ALIGN", (3, 0), (4, -1), "RIGHT"),
+                    ("FONTSIZE", (0, 0), (-1, -1), 7.5),
+                    ("ALIGN", (3, 0), (6, -1), "RIGHT"),
                     ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
                     ("ROWBACKGROUNDS", (0, 1), (-1, -2),
                      [colors.white, SLATE_50]),
                     ("LINEBELOW", (0, 0), (-1, 0), 0.5, SLATE_300),
                     ("LINEABOVE", (0, -1), (-1, -1), 0.5, SLATE_300),
-                    ("BACKGROUND", (3, -1), (4, -1), SLATE_100),
-                    ("FONTNAME", (3, -1), (4, -1), "Helvetica-Bold"),
+                    ("BACKGROUND", (3, -1), (6, -1), SLATE_100),
+                    ("FONTNAME", (3, -1), (6, -1), "Helvetica-Bold"),
                     ("TEXTCOLOR", (4, -1), (4, -1), BRAND),
-                    ("TOPPADDING", (0, 0), (-1, -1), 4),
-                    ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-                    ("LEFTPADDING", (0, 0), (-1, -1), 5),
-                    ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+                    # Mise en valeur colonnes occupant/proprio
+                    ("TEXTCOLOR", (5, 0), (5, -1), colors.HexColor("#92400E")),  # ambre
+                    ("TEXTCOLOR", (6, 0), (6, -1), colors.HexColor("#1E40AF")),  # bleu
+                    ("TOPPADDING", (0, 0), (-1, -1), 3),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 4),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 4),
                 ]))
                 elems.append(tbl)
                 key_subtotal += subtotal
@@ -362,6 +383,44 @@ def build_decompte_pdf(
             ("RIGHTPADDING", (0, 0), (-1, -1), 10),
         ]))
         elems.append(grand_tbl)
+
+        # ---- RECAP OCCUPANT vs PROPRIETAIRE (decompte locataire) ----
+        if total_occupant_share > 0.001:
+            elems.append(Spacer(1, 4 * mm))
+            occ_pct_global = (total_occupant_share / total_owner_charges * 100) if total_owner_charges > 0 else 0
+            prop_pct_global = 100 - occ_pct_global
+            recap_rows = [
+                [Paragraph("<b>Repartition de vos charges</b>", body), "", ""],
+                [
+                    Paragraph(f"<b>Part a charge de l'OCCUPANT</b><br/><font size='7' color='{SLATE_500.hexval()}'>(refacturable au locataire le cas echeant)</font>", body),
+                    Paragraph(f"<font color='{colors.HexColor('#92400E').hexval()}'><b>{_fmt_eur(total_occupant_share)}</b></font>", right),
+                    Paragraph(f"<font color='{SLATE_500.hexval()}' size='8'>{occ_pct_global:.0f}%</font>", right),
+                ],
+                [
+                    Paragraph(f"<b>Part a charge du PROPRIETAIRE</b><br/><font size='7' color='{SLATE_500.hexval()}'>(definitivement a votre charge)</font>", body),
+                    Paragraph(f"<font color='{colors.HexColor('#1E40AF').hexval()}'><b>{_fmt_eur(total_proprio_share)}</b></font>", right),
+                    Paragraph(f"<font color='{SLATE_500.hexval()}' size='8'>{prop_pct_global:.0f}%</font>", right),
+                ],
+            ]
+            recap_tbl = Table(recap_rows, colWidths=[110 * mm, 45 * mm, 15 * mm])
+            recap_tbl.setStyle(TableStyle([
+                ("SPAN", (0, 0), (-1, 0)),
+                ("BACKGROUND", (0, 0), (-1, 0), SLATE_100),
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("FONTSIZE", (0, 0), (-1, 0), 10),
+                ("ALIGN", (0, 0), (-1, 0), "LEFT"),
+                ("BACKGROUND", (0, 1), (-1, 1), colors.HexColor("#FEF3C7")),  # ambre tres clair
+                ("BACKGROUND", (0, 2), (-1, 2), colors.HexColor("#DBEAFE")),  # bleu tres clair
+                ("BOX", (0, 0), (-1, -1), 0.7, SLATE_300),
+                ("INNERGRID", (0, 0), (-1, -1), 0.3, SLATE_300),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("ALIGN", (1, 0), (2, -1), "RIGHT"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 8),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+                ("TOPPADDING", (0, 0), (-1, -1), 6),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+            ]))
+            elems.append(recap_tbl)
 
     elems.append(Spacer(1, 8 * mm))
 

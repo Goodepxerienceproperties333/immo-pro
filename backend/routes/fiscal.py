@@ -315,12 +315,84 @@ def create_fiscal_router(db):
 
     @router.post("/years/{year_id}/reopen")
     async def reopen_fiscal_year(year_id: str):
-        result = await db.fiscal_years.update_one(
-            {"id": year_id}, {"$set": {"status": "open", "closed_at": None}}
-        )
-        if result.matched_count == 0:
+        """Reouvre un exercice CLOTURE.
+        Contre-passe (extourne) :
+          - les OD de regularisation (`is_regularization=True`)
+          - l'ecriture AN (A-nouveau) generee a la cloture
+        Les ecritures ORIGINALES sont conservees mais marquees `reversed=True`.
+        Les ecritures de contre-passation sont marquees `is_reversal=True` et
+        portent un `reverses_entry_id` pointant vers l'originale.
+        Le solde des comptes redevient identique a celui d'avant la cloture.
+        """
+        fy = await db.fiscal_years.find_one({"id": year_id}, {"_id": 0})
+        if not fy:
             raise HTTPException(404, "Exercice non trouve")
-        return {"message": "Exercice reouvert"}
+        if fy.get("status") != "closed":
+            raise HTTPException(400, "Cet exercice n'est pas cloture")
+
+        # Recupere les ecritures de cloture a extourner :
+        # 1) OD de regularisation
+        # 2) AN (A-nouveau)
+        # On exclut celles deja reversees pour eviter les doubles passes
+        closing_entries = await db.journal_entries.find({
+            "fiscal_year_id": year_id,
+            "$or": [
+                {"is_regularization": True},
+                {"journal_type": "AN"},
+            ],
+            "reversed": {"$ne": True},
+            "is_reversal": {"$ne": True},
+        }, {"_id": 0}).to_list(10000)
+
+        reversal_count = 0
+        for orig in closing_entries:
+            # Construit l'ecriture de contre-passation : inverse Dr<->Cr ligne par ligne
+            rev_lines = []
+            for ln in orig.get("lines", []):
+                rev_lines.append({
+                    **{k: v for k, v in ln.items() if k not in ("debit", "credit")},
+                    "debit": float(ln.get("credit", 0) or 0),
+                    "credit": float(ln.get("debit", 0) or 0),
+                })
+            rev_id = str(uuid.uuid4())
+            rev_doc = {
+                "id": rev_id,
+                "journal_type": orig.get("journal_type", "OD"),
+                "date": datetime.now(timezone.utc).date().isoformat(),
+                "reference": f"EXT-{orig.get('reference','')}",
+                "description": f"Contre-passation : {orig.get('description','')}",
+                "lines": rev_lines,
+                "total_debit": round(sum(l["debit"] for l in rev_lines), 2),
+                "total_credit": round(sum(l["credit"] for l in rev_lines), 2),
+                "fiscal_year_id": year_id,
+                "copropriete_id": orig.get("copropriete_id", ""),
+                "is_reversal": True,
+                "reverses_entry_id": orig.get("id"),
+                "is_regularization": bool(orig.get("is_regularization")),
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            await db.journal_entries.insert_one(rev_doc)
+            # Marque l'originale comme reversee
+            await db.journal_entries.update_one(
+                {"id": orig["id"]},
+                {"$set": {
+                    "reversed": True,
+                    "reversed_at": datetime.now(timezone.utc).isoformat(),
+                    "reversed_by_entry_id": rev_id,
+                }},
+            )
+            reversal_count += 1
+
+        # Reouverture
+        await db.fiscal_years.update_one(
+            {"id": year_id},
+            {"$set": {"status": "open", "closed_at": None, "result_net": None}}
+        )
+        return {
+            "message": f"Exercice {fy.get('name','?')} reouvert. {reversal_count} ecriture(s) de cloture extournee(s).",
+            "reversed_entries": reversal_count,
+            "fiscal_year": fy.get("name", ""),
+        }
 
     @router.post("/years/{year_id}/regularize")
     async def regularize_fiscal_year(year_id: str, dry_run: Optional[bool] = False):

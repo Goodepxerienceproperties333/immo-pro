@@ -175,9 +175,15 @@ def create_accounting_router(db):
         search: Optional[str] = None,
         reference: Optional[str] = None,
         account_number: Optional[str] = None,
+        include_reversals: Optional[bool] = False,
     ):
         """Chinese walls STRICT : `copropriete_id` requis (param ou header
-        X-Copropriete-Id). Sans scope ACP -> liste vide."""
+        X-Copropriete-Id). Sans scope ACP -> liste vide.
+
+        Par defaut, masque les ecritures contre-passees ET les contre-passations
+        (vue 'active' uniquement). Avec `include_reversals=true` : retourne
+        TOUTES les ecritures, marquees par les champs `reversed` / `is_reversal`.
+        """
         if not copropriete_id:
             copropriete_id = request.headers.get("X-Copropriete-Id") or None
         if not copropriete_id or copropriete_id == "all":
@@ -198,7 +204,11 @@ def create_accounting_router(db):
             query["$or"] = [{"description": rgx}, {"reference": rgx}, {"lines.account_name": rgx}, {"lines.third_party_name": rgx}]
         if account_number:
             query["lines.account_number"] = account_number
-        entries = await db.journal_entries.find(query, {"_id": 0}).sort("date", -1).to_list(2000)
+        # Filtre contre-passations
+        if not include_reversals:
+            query["reversed"] = {"$ne": True}
+            query["is_reversal"] = {"$ne": True}
+        entries = await db.journal_entries.find(query, {"_id": 0}).sort("date", -1).to_list(5000)
         return entries
 
     async def _enrich_lines_with_occupant_pct(lines: list, copro_id: str) -> list:

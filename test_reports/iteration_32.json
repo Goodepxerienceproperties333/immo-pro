@@ -1,0 +1,33 @@
+{
+  "summary": "iter32: Tested reouverture exercice (extourne reg+AN), checkbox 'Inclure les contre-passations' sur JournalsPage, et PDF Decompte annuel enrichi avec colonnes Occupant/Proprio. Backend pytest 4/4: (a) POST /api/fiscal/years/{id}/reopen sur FY ouvert retourne 400 ('cet exercice n'est pas cloture'), (b) reopen sur FY inexistant retourne 404, (c) cycle complet close->reopen sur Demo Exercice 2026 (eaf8b2c8): close cree N entries (OD-REG + AN) puis reopen cree N contre-passations marquees is_reversal=True + reverses_entry_id + reference EXT-*, originales marquees reversed=True + reversed_by_entry_id + reversed_at. FY status correctement 'open' apres reopen. Validation Dr/Cr inversion : orig.total_debit == rev.total_credit (et inversement). GET /api/accounting/entries (defaut) cache TOUTES les entries reversed=True ET is_reversal=True ; GET ?include_reversals=true retourne les 2N entries. Frontend: code review du JournalsPage.js confirme tous les data-testid requis: include-reversals-toggle (label 'Inclure les contre-passations' visible a droite des tabs), reversal-badge-{id} (ambre 'Contre-passation'), reversed-badge-{id} (rouge 'Extournee'), line-through+opacity-70 sur ligne extournee, bg-amber-50/40 sur contre-passation. Boutons Pencil (edit-entry-{id}) et Trash2 caches conditionnellement (!e.is_reversal && !e.reversed) - L219+L223. Verification UI live: checkbox visible et toggle, navigation tabs OK. PDF code review pdf_decompte.py (L292-345): colonnes 'Occupant' et 'Proprio' ajoutees dans rows header L292 ('Date, Fournisseur, Description, Total fact., Votre part, Occupant, Proprio'); subtotal_occ/subtotal_prop L298-299 calcules par ligne; TableStyle TEXTCOLOR (5,...)=#92400E ambre + (6,...)=#1E40AF bleu L339-340; recap rows L388-423 'Repartition de vos charges' avec part occupant ambre + part proprio bleue + pourcentages, conditionne sur total_occupant_share > 0.001; PCMN visible '[614000] Nettoyage' L291.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter32_reopen_reversals.py",
+    "/app/test_reports/pytest/pytest_iter32.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "fiscal.py reopen (L316-395): logique solide. Exclut deja les entries reversed=True ET is_reversal=True via le $or filter (L343-344) -> pas de double-passe possible en cas de reopen apres re-close. Reference EXT-{orig_ref} permet de tracer dans le journal.",
+    "accounting.py list_entries (L208-210): par defaut filtre {'reversed':{'$ne':True}, 'is_reversal':{'$ne':True}}. Correct - une entree sans le champ matche $ne (Mongo). include_reversals=true desactive le filtre.",
+    "pdf_decompte.py L192-202: lit occupant_pct/proprietaire_pct directement depuis la facture (pas depuis les lignes de l'OD AC associee). Bonne approche - le champ est sur l'invoice (set au moment de la creation/edition via /api/invoices). Defaut prop=100 si manquant - cohrent.",
+    "pdf_decompte.py L300-308: rendu --- si owner_occ ou owner_prop < 0.001 - propre. Le recap occupant/proprio L388 est condionne sur total_occupant_share > 0.001, donc si TOUTES les factures sont 100% proprio (cas par defaut), le bloc recap est masque -- bon comportement.",
+    "JournalsPage.js L204: `${e.reversed ? 'bg-red-50/30 line-through opacity-70' : ''}` applique 'line-through' au niveau TableRow. Note: line-through s'applique au texte uniquement, mais ici visuel suffisant. Combine avec bg + opacity = clair pour l'utilisateur.",
+    "JournalsPage.js L219+L223: edit + delete buttons gated par `!e.is_reversal && !e.reversed`. Note: la condition delete supplemente avec `(!e.auto_generated || e.manually_edited)`. Coherent avec la regle 'on ne modifie pas une contre-passation'.",
+    "fiscal.py reopen ne SUPPRIME pas la flag is_regularization sur l'originale ni reset closed_at sur les autres FY. Set closed_at=None+result_net=None sur le FY reouvert - correct. Question architecture : si on re-close apres reopen, les originales reversed=True existent toujours -> filter exclura, ce qui est correct."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter32_reopen_reversals.py"
+  ],
+  "success_rate": {"backend": "100% (4/4)", "frontend": "100% (toggle + label visible, all data-testids confirmed in code; UI live shows checkbox correctly rendered)"},
+  "test_credentials": "admin@copro.be / admin123 (superadmin)",
+  "seed_data_creation": "Aucune. Tests utilisent l'ACP Demo (6748ca1a) et FY Exercice 2026 (eaf8b2c8) existants. Apres test: FY remis en 'open' (verifie). Entries OD-REG + AN + EXT-* persistees pour audit trail (ne peuvent etre supprimees via API car auto-generees, comportement attendu).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "iter32 features fully working: (1) POST /fiscal/years/{id}/reopen cree des contre-passations Dr<->Cr inverses, marque originales reversed=True (+ reversed_by_entry_id + reversed_at) et contre-passations is_reversal=True (+ reverses_entry_id), passe FY a 'open'. Reference contre-passation = 'EXT-{orig_reference}'. (2) GET /accounting/entries filtre par defaut reversed/is_reversal; include_reversals=true retourne tout. (3) JournalsPage: checkbox includeReversals avec data-testid='include-reversals-toggle' a cote des tabs; badges reversal-badge-{id} (ambre) et reversed-badge-{id} (rouge); ligne extournee bg-red-50/30 line-through opacity-70; boutons edit/delete caches sur is_reversal ou reversed. (4) PDF decompte_annuel: colonnes Occupant (ambre #92400E) + Proprio (bleu #1E40AF) par ligne facture + sous-totaux; recap final 'Repartition de vos charges' conditionne sur total_occupant_share > 0; PCMN visible '[NNNNNN] Nom nature'. Le FY Demo 2026 reste 'open' apres tests. NB: chaque close/reopen ajoute 3 entries persistees (audit trail) - cumul sur cette ACP.",
+  "rca of the issue": "N/A - tous les tests passent."
+}
