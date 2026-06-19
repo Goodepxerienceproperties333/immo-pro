@@ -79,11 +79,26 @@ export default function ReportsPage() {
     }
   };
   const loadResultat = async () => { setLoading(true); try { const params = {}; if (dateFrom) params.date_from = dateFrom; if (dateTo) params.date_to = dateTo; const { data } = await api.get('/reports/resultat', { params }); setResultat(data); } catch { toast.error('Erreur'); } finally { setLoading(false); } };
-  const loadDecomptes = async () => { setLoading(true); try { const params = {}; if (dateFrom) params.date_from = dateFrom; if (dateTo) params.date_to = dateTo; const { data } = await api.get('/reports/decompte', { params }); setDecomptes(data); } catch { toast.error('Erreur'); } finally { setLoading(false); } };
+  const loadDecomptes = async () => {
+    setLoading(true);
+    try {
+      const params = {};
+      if (fiscalYearId) params.fiscal_year_id = fiscalYearId;
+      if (dateFrom) params.date_from = dateFrom;
+      if (dateTo) params.date_to = dateTo;
+      const { data } = await api.get('/reports/decompte', { params });
+      setDecomptes(data);
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const downloadPdf = async (ownerId) => {
     try {
       const params = {};
+      if (fiscalYearId) params.fiscal_year_id = fiscalYearId;
       if (dateFrom) params.date_from = dateFrom;
       if (dateTo) params.date_to = dateTo;
       const res = await api.get(`/reports/decompte/pdf/${ownerId}`, { params, responseType: 'blob' });
@@ -113,6 +128,7 @@ export default function ReportsPage() {
     setPreviewOpen(true);
     try {
       const params = { preview: 'true' };
+      if (fiscalYearId) params.fiscal_year_id = fiscalYearId;
       if (dateFrom) params.date_from = dateFrom;
       if (dateTo) params.date_to = dateTo;
       const res = await api.get(`/reports/decompte/pdf/${ownerId}`, { params, responseType: 'blob' });
@@ -293,12 +309,45 @@ export default function ReportsPage() {
 
         <TabsContent value="decomptes" className="mt-0">
           <DateFilters onLoad={loadDecomptes} label="Generer decomptes" />
+          <div className="flex flex-wrap items-end gap-3 mb-3">
+            <div>
+              <label className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold block mb-1">Exercice fiscal</label>
+              <select
+                className="border border-slate-200 rounded-md px-3 py-2 text-sm bg-white min-w-[260px]"
+                value={fiscalYearId}
+                onChange={e => {
+                  const v = e.target.value;
+                  setFiscalYearId(v);
+                  // Auto-fill date range from selected FY for consistency
+                  if (v) {
+                    const fy = years.find(y => y.id === v);
+                    if (fy) {
+                      setDateFrom(fy.start_date || '');
+                      setDateTo(fy.end_date || '');
+                    }
+                  }
+                }}
+                data-testid="decompte-fiscal-year-select"
+              >
+                <option value="">— Periode libre (dates ci-dessus) —</option>
+                {years.map(y => (
+                  <option key={y.id} value={y.id}>
+                    {y.name} ({y.status === 'closed' ? 'cloture' : 'ouvert'}) - {fmtDate(y.start_date)} au {fmtDate(y.end_date)}
+                  </option>
+                ))}
+              </select>
+              {fiscalYearId && years.find(y => y.id === fiscalYearId)?.status !== 'closed' && (
+                <p className="text-[11px] text-amber-600 mt-1">
+                  Exercice non cloture - utilisez le bouton <b>Apercu</b> (filigrane) pour visualiser le decompte provisoire.
+                </p>
+              )}
+            </div>
+          </div>
           <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-md text-sm text-amber-800 flex items-start gap-2" data-testid="decompte-warning">
             <FileText size={16} className="mt-0.5 shrink-0" />
             <div>
-              <b>Important :</b> le decompte annuel n'est genere qu'apres <b>cloture de l'exercice</b>.
-              Avant cloture, les chiffres ne sont pas definitifs. Pour un releve a date,
-              utilisez la <i>Situation de compte</i> dans la Balance des tiers.
+              <b>Important :</b> le decompte annuel definitif (sans filigrane) n'est genere qu'apres <b>cloture de l'exercice</b>.
+              Avant cloture, utilisez le bouton <b>Apercu</b>. Pour un releve a date, utilisez la <i>Situation de compte</i>.
             </div>
           </div>
           {decomptes && (<div className="space-y-4">
