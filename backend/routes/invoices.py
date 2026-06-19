@@ -136,13 +136,19 @@ def create_invoices_router(db):
         reference: Optional[str] = None,
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
         min_amount: Optional[float] = None,
         max_amount: Optional[float] = None,
     ):
         """Chinese walls STRICT : `copropriete_id` requis (param ou header
         X-Copropriete-Id). Sans scope ACP -> liste vide.
         Filtres optionnels : status, supplier (regex insensible), reference
-        (regex insensible), start_date/end_date (ISO YYYY-MM-DD), min/max amount."""
+        (regex insensible), start_date/end_date (ISO YYYY-MM-DD), min/max amount.
+        Note: `date_from` et `date_to` sont des alias pour `start_date`/`end_date`."""
+        # Alias compat
+        start_date = start_date or date_from
+        end_date = end_date or date_to
         if not copropriete_id:
             copropriete_id = request.headers.get("X-Copropriete-Id") or None
         if not copropriete_id or copropriete_id == "all":

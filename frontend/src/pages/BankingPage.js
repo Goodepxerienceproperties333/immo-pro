@@ -11,6 +11,7 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { toast } from 'sonner';
 import { Plus, Trash2, Upload, Link2, Unlink, Search, Landmark, PlusCircle, Save, Pencil, X, CheckCircle2, AlertTriangle, Eye } from 'lucide-react';
+import { useFiscalYearParams } from '@/hooks/useFiscalYearParams';
 import { useAuth } from '@/contexts/AuthContext';
 import CounterpartySearchSelect from '@/components/CounterpartySearchSelect';
 import { fmtDate } from '@/lib/dateFmt';
@@ -18,6 +19,7 @@ import { fmtDate } from '@/lib/dateFmt';
 export default function BankingPage() {
   const { selectedCopro } = useAuth();
   const navigate = useNavigate();
+  const fyParams = useFiscalYearParams();
   const [statements, setStatements] = useState([]);
   const [transactions, setTransactions] = useState([]);
   const [selectedStmt, setSelectedStmt] = useState(null);
@@ -40,14 +42,17 @@ export default function BankingPage() {
 
   const load = useCallback(async () => {
     const promises = [
-      api.get('/banking/statements'), api.get('/banking/transactions'),
-      api.get('/owners'), api.get('/invoices'), api.get('/suppliers')
+      api.get('/banking/statements', { params: fyParams }),
+      api.get('/banking/transactions', { params: fyParams }),
+      api.get('/owners'),
+      api.get('/invoices', { params: fyParams }),
+      api.get('/suppliers')
     ];
     if (selectedCopro) promises.push(api.get(`/coproprietes/${selectedCopro}`));
     const [s, t, o, inv, sup, c] = await Promise.all(promises);
     setStatements(s.data); setTransactions(t.data); setOwners(o.data); setInvoices(inv.data); setSuppliers(sup.data);
     setBankAccounts(c?.data?.bank_accounts || []);
-  }, [selectedCopro]);
+  }, [selectedCopro, fyParams.date_from, fyParams.date_to]);
   useEffect(() => { load(); }, [load]);
 
   const loadStmtTxns = async (stmt) => {

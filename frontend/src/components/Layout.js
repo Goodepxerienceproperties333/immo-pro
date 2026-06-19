@@ -43,7 +43,7 @@ const sections = [
 ];
 
 export default function Layout() {
-  const { user, logout, selectedCopro, setSelectedCopro, isAdmin, isManager, isSuperadmin } = useAuth();
+  const { user, logout, selectedCopro, setSelectedCopro, fiscalYears, selectedFiscalYearId, setSelectedFiscalYearId, isAdmin, isManager, isSuperadmin } = useAuth();
   const navigate = useNavigate();
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -183,6 +183,21 @@ export default function Layout() {
             <SelectTrigger className="w-[220px] h-8 text-xs border-[#0055FF]/30" data-testid="copro-selector"><SelectValue /></SelectTrigger>
             <SelectContent>{coproprietes.filter(c => c.status !== 'archived').map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}</SelectContent>
           </Select>
+          {selectedCopro && fiscalYears && fiscalYears.length > 0 && (
+            <Select value={selectedFiscalYearId || '__all__'} onValueChange={(v) => setSelectedFiscalYearId(v === '__all__' ? '' : v)}>
+              <SelectTrigger className="w-[200px] h-8 text-xs border-emerald-300 bg-emerald-50/50 text-emerald-900" data-testid="fiscal-year-selector" title="Filtre par exercice comptable (applique a tous les ecrans)">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__all__" data-testid="fy-option-all">— Tous les exercices —</SelectItem>
+                {[...fiscalYears].sort((a, b) => (b.start_date || '').localeCompare(a.start_date || '')).map(y => (
+                  <SelectItem key={y.id} value={y.id} data-testid={`fy-option-${y.id}`}>
+                    {y.name} {y.status === 'closed' ? '(cloture)' : ''}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
           <div className="flex-1" />
           <span className="text-[11px] text-slate-500 hidden sm:block">{getRoleLabel(user?.role)}</span>
           <div className="w-7 h-7 rounded-full bg-slate-200 flex items-center justify-center text-xs font-semibold text-slate-600">{(user?.name || 'U')[0].toUpperCase()}</div>

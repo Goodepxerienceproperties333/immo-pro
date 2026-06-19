@@ -212,16 +212,25 @@ def create_banking_router(db):
 
     # ---- BANK STATEMENTS ----
     @router.get("/statements")
-    async def list_statements(request: Request, copropriete_id: Optional[str] = None):
+    async def list_statements(request: Request, copropriete_id: Optional[str] = None,
+                              date_from: Optional[str] = None, date_to: Optional[str] = None):
         """Chinese wall STRICT : aucune liste cross-ACP possible. Si aucun
         copropriete_id n'est fourni (ni via param ni via header X-Copropriete-Id),
-        on retourne une liste vide pour eviter toute fuite."""
+        on retourne une liste vide pour eviter toute fuite.
+        Filtre periode optionnel via date_from/date_to (inclusif, ISO YYYY-MM-DD)."""
         if not copropriete_id:
             copropriete_id = request.headers.get("X-Copropriete-Id") or None
         if not copropriete_id or copropriete_id == "all":
             return []
+        q = {"copropriete_id": copropriete_id}
+        if date_from or date_to:
+            q["date"] = {}
+            if date_from:
+                q["date"]["$gte"] = date_from
+            if date_to:
+                q["date"]["$lte"] = date_to
         statements = await db.bank_statements.find(
-            {"copropriete_id": copropriete_id}, {"_id": 0}
+            q, {"_id": 0}
         ).sort("date", -1).to_list(1000)
         return statements
 
@@ -482,9 +491,12 @@ def create_banking_router(db):
         statement_id: Optional[str] = None,
         matched: Optional[bool] = None,
         copropriete_id: Optional[str] = None,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
     ):
         """Chinese wall STRICT : `copropriete_id` requis (param ou header
-        X-Copropriete-Id) sauf si on liste par `statement_id`."""
+        X-Copropriete-Id) sauf si on liste par `statement_id`.
+        Filtre periode optionnel via date_from/date_to (inclusif, ISO YYYY-MM-DD)."""
         if not copropriete_id:
             copropriete_id = request.headers.get("X-Copropriete-Id") or None
         if not statement_id and (not copropriete_id or copropriete_id == "all"):
@@ -503,6 +515,12 @@ def create_banking_router(db):
             query["matched"] = matched
         if copropriete_id and copropriete_id != "all":
             query["copropriete_id"] = copropriete_id
+        if date_from or date_to:
+            query["date"] = {}
+            if date_from:
+                query["date"]["$gte"] = date_from
+            if date_to:
+                query["date"]["$lte"] = date_to
         txns = await db.bank_transactions.find(query, {"_id": 0}).sort("date", -1).to_list(1000)
         return txns
 

@@ -12,6 +12,7 @@ import { toast } from 'sonner';
 import { Plus, Trash2, Eye, Paperclip, Download, Pencil } from 'lucide-react';
 import AccountSearchSelect from '@/components/AccountSearchSelect';
 import { fmtDate } from '@/lib/dateFmt';
+import { useFiscalYearParams } from '@/hooks/useFiscalYearParams';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
@@ -34,17 +35,18 @@ export default function JournalsPage() {
   const [form, setForm] = useState({ journal_type: 'OD', date: '', reference: '', description: '', lines: [{ account_number: '', account_name: '', debit: 0, credit: 0 }, { account_number: '', account_name: '', debit: 0, credit: 0 }] });
   const [pendingAttachment, setPendingAttachment] = useState(null);
   const [includeReversals, setIncludeReversals] = useState(false);
+  const fyParams = useFiscalYearParams();
 
   const load = useCallback(async () => {
     const [e, a, c] = await Promise.all([
-      api.get('/accounting/entries', { params: { journal_type: journalType, include_reversals: includeReversals } }),
+      api.get('/accounting/entries', { params: { journal_type: journalType, include_reversals: includeReversals, ...fyParams } }),
       api.get('/accounting/pcmn'),
       api.get('/expense-categories').catch(() => ({ data: [] })),
     ]);
     setEntries(e.data);
     setAccounts(a.data);
     setCategories(c.data);
-  }, [journalType, includeReversals]);
+  }, [journalType, includeReversals, fyParams.date_from, fyParams.date_to]);
 
   useEffect(() => { load(); }, [load]);
 

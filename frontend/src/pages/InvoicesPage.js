@@ -12,6 +12,7 @@ import { toast } from 'sonner';
 import { Plus, Trash2, Key, Receipt, Sparkles, Paperclip, Download, X, Pencil, AlertTriangle, Filter } from 'lucide-react';
 import AccountSearchSelect from '@/components/AccountSearchSelect';
 import { fmtDate } from '@/lib/dateFmt';
+import { useFiscalYearParams } from '@/hooks/useFiscalYearParams';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
@@ -37,16 +38,17 @@ export default function InvoicesPage() {
   const [attachDialogInv, setAttachDialogInv] = useState(null); // invoice being managed
   const [newCatDialog, setNewCatDialog] = useState(false);
   const [newCatForm, setNewCatForm] = useState({ name: '', account_number: '', description: '' });
+  const fyParams = useFiscalYearParams();
 
   const load = useCallback(async () => {
     const [inv, dk, acc, lt, cat, ow] = await Promise.all([
-      api.get('/invoices'), api.get('/distribution-keys'),
+      api.get('/invoices', { params: fyParams }), api.get('/distribution-keys'),
       api.get('/accounting/pcmn', { params: { class_num: 6 } }), api.get('/lots'),
       api.get('/expense-categories'), api.get('/owners'),
     ]);
     setInvoices(inv.data); setDistKeys(dk.data); setAccounts(acc.data); setLots(lt.data);
     setCategories(cat.data); setOwners(ow.data);
-  }, []);
+  }, [fyParams.date_from, fyParams.date_to]);
 
   useEffect(() => { load(); }, [load]);
 

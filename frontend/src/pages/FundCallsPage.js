@@ -10,6 +10,7 @@ import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
 import { Plus, Trash2, Check, Megaphone, FileText, Sparkles, ShieldCheck, Wallet, Banknote, AlertTriangle, RefreshCcw } from 'lucide-react';
 import { fmtDate } from '@/lib/dateFmt';
+import { useFiscalYearParams } from '@/hooks/useFiscalYearParams';
 
 // Configuration des 4 types d'appels de fonds (label + couleurs + icone + description)
 const CALL_TYPES = {
@@ -61,11 +62,17 @@ export default function FundCallsPage() {
   const [selectedCall, setSelectedCall] = useState(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [form, setForm] = useState({ name: '', date: '', due_date: '', fiscal_year_id: '', description: '', total_amount: 0, call_type: 'provisions', distribution_key_id: '' });
+  const fyParams = useFiscalYearParams();
 
   const load = useCallback(async () => {
-    const [c, y, dk, b] = await Promise.all([api.get('/fund-calls'), api.get('/fiscal/years'), api.get('/distribution-keys'), api.get('/fiscal/budgets')]);
+    const [c, y, dk, b] = await Promise.all([
+      api.get('/fund-calls', { params: fyParams }),
+      api.get('/fiscal/years'),
+      api.get('/distribution-keys'),
+      api.get('/fiscal/budgets'),
+    ]);
     setCalls(c.data); setYears(y.data); setDistKeys(dk.data); setBudgets(b.data);
-  }, []);
+  }, [fyParams.date_from, fyParams.date_to]);
   useEffect(() => { load(); }, [load]);
 
   const budgetName = (id) => budgets.find(b => b.id === id)?.name || '';
