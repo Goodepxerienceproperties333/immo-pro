@@ -296,12 +296,21 @@ async def generate_sale_entry(db, fund_call: dict) -> dict | None:
         return None
 
     await _delete_auto_entries(db, "fund_call", fund_call["id"])
+    # Description claire en fonction du type d'appel (provisions/reserve/roulement/special)
+    _type_labels = {
+        "provisions": "Appel de provisions",
+        "reserve": "Appel fonds de reserve",
+        "roulement": "Appel fonds de roulement",
+        "special": "Appel special",
+    }
+    type_label = _type_labels.get(fund_call.get("call_type", ""), "Appel de fonds")
+    fc_name = fund_call.get("name", "")
     doc = {
         "id": str(uuid.uuid4()),
         "journal_type": "VE",
         "date": fund_call.get("date") or datetime.now(timezone.utc).date().isoformat(),
-        "reference": f"AF-{fund_call.get('name','')[:20]}",
-        "description": f"Appel: {fund_call.get('name','')}",
+        "reference": f"AF-{fc_name[:20]}",
+        "description": f"{type_label} - {fc_name}" if fc_name else type_label,
         "lines": lines,
         "total_debit": round(sum_dr_prov + sum_dr_res + sum_dr_roul, 2),
         "total_credit": round(sum_dr_prov + sum_dr_res + sum_dr_roul, 2),

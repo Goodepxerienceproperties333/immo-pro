@@ -12,6 +12,22 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 ## Implemented
 
+### Iter48 (Feb 2026) - Description claire des appels (PDF + ecritures)
+
+#### Fix : description differenciee selon call_type
+- Avant : toute ecriture d'appel avait description "Appel: <nom>" - sans difference visible entre provisions/reserve/roulement/special. Le PDF Situation affichait donc "Appel de fonds : Trimestriel 1/4" meme pour un appel de **Fonds de reserve** ou **Fonds de roulement** (confusion).
+- Apres : `generate_fund_call_entries` genere desormais la description suivant le type :
+  - provisions → `"Appel de provisions - <nom>"`
+  - reserve → `"Appel fonds de reserve - <nom>"`
+  - roulement → `"Appel fonds de roulement - <nom>"`
+  - special → `"Appel special - <nom>"`
+- Le label apparait correctement dans :
+  - PDF Situation de compte (`_humanize_label` preserve la description)
+  - PDF Decompte annuel (label par type deja en place)
+  - Balance des tiers (mouvements de l'owner affiches avec description complete)
+
+
+
 ### Iter47 (Feb 2026) - Appels de fonds clarifies
 
 #### UI clarification des types d'appels
