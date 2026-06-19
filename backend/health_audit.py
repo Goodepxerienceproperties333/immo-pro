@@ -186,10 +186,49 @@ async def compute_health_audit(db, copropriete_id: str, days_threshold: int = 60
             "count": len(unbalanced),
         })
 
-    # 5) COPROPRIETAIRES EN RETARD > X jours (basé sur dernier appel non paye)
+    # 5) COPROPRIETAIRES EN RETARD > X jours
+    # Critere : appel non marque "paid" ET dont la date d'echeance depasse X jours
+    # ET dont le solde COMPTABLE du compte tier est DEBITEUR (l'owner doit reellement
+    # de l'argent). Si le copropriétaire a soldé via virement bancaire (FI), son solde
+    # est crediteur et il ne doit PAS apparaitre en retard, meme si le flag `paid`
+    # du fund_call n'a pas ete coche.
     fund_calls = await db.fund_calls.find(
         {"copropriete_id": copropriete_id}, {"_id": 0},
     ).to_list(10000)
+
+    # Pre-calcul du solde COMPTABLE de chaque proprietaire (somme par tier_account)
+    # Exclusion stricte : contre-passations + ecritures extournees + AN futurs
+    owners_acp = await db.owners.find({}, {"_id": 0}).to_list(10000)
+    owner_balance = {}  # owner_id -> solde net du compte tier (positif = debiteur)
+    owner_tier_accs = {}  # owner_id -> set des comptes tier
+    for o in owners_acp:
+        accs = (o.get("tier_accounts") or {}).get(copropriete_id, {}) or {}
+        all_accs = set()
+        for k in ("provisions", "reserve", "main"):
+            if accs.get(k):
+                all_accs.add(accs[k])
+        if all_accs:
+            owner_tier_accs[o["id"]] = all_accs
+            owner_balance[o["id"]] = 0.0
+
+    # Charge les ecritures hors AN et hors reversals
+    je_balance = await db.journal_entries.find({
+        "copropriete_id": copropriete_id,
+        "journal_type": {"$ne": "AN"},
+        "is_reversal": {"$ne": True},
+        "reversed": {"$ne": True},
+    }, {"_id": 0, "lines": 1}).to_list(100000)
+    for e in je_balance:
+        for ln in e.get("lines", []) or []:
+            acc = ln.get("account_number", "")
+            tpid = ln.get("third_party_id")
+            d = float(ln.get("debit", 0) or 0)
+            c = float(ln.get("credit", 0) or 0)
+            for oid, accs in owner_tier_accs.items():
+                if acc in accs or tpid == oid:
+                    owner_balance[oid] = owner_balance.get(oid, 0.0) + (d - c)
+                    break
+
     late_owners = {}
     for fc in fund_calls:
         for ds in (fc.get("distribution") or []):
@@ -204,11 +243,16 @@ async def compute_health_audit(db, copropriete_id: str, days_threshold: int = 60
                     oid = ds.get("owner_id")
                     if not oid:
                         continue
+                    # Exclusion : si le solde comptable n'est PAS debiteur, c'est paye
+                    # (ou en avance). Tolerance 1 centime pour les arrondis.
+                    if owner_balance.get(oid, 0.0) <= 0.01:
+                        continue
                     if oid not in late_owners:
                         late_owners[oid] = {
                             "owner_id": oid,
                             "owner_name": ds.get("owner_name", ""),
                             "total_due": 0.0, "calls": [], "max_age": 0,
+                            "tier_balance": round(owner_balance.get(oid, 0.0), 2),
                         }
                     late_owners[oid]["total_due"] += float(ds.get("amount", 0) or 0)
                     late_owners[oid]["max_age"] = max(late_owners[oid]["max_age"], age)

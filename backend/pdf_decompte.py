@@ -309,7 +309,14 @@ def build_decompte_pdf(
                 e["amount"] += amt_occ
 
     # Owner share of fund calls + payments
+    # Distinguer les 3 types d'appels :
+    #   - provisions : consommees par les charges (boni/mali)
+    #   - reserve : alimente le fonds de reserve (definitif, ne se rembourse pas)
+    #   - roulement : alimente le fonds de roulement (definitif)
     total_called = 0.0
+    total_called_provisions = 0.0
+    total_called_reserve = 0.0
+    total_called_roulement = 0.0
     fund_calls_owner = []
     for fc in fund_calls:
         share = next((d for d in fc.get("distribution", []) if d.get("owner_id") == owner["id"]), None)
@@ -317,19 +324,48 @@ def build_decompte_pdf(
             continue
         amt = float(share.get("amount", 0) or 0)
         total_called += amt
+        # Repartition de l'appel pour ce proprietaire en 3 parts
+        fc_total = float(fc.get("total_amount", 0) or 0) or 1.0
+        fc_reserve = float(fc.get("reserve_amount", 0) or 0)
+        fc_roulement = float(fc.get("roulement_amount", 0) or 0)
+        fc_provisions = max(0.0, fc_total - fc_reserve - fc_roulement)
+        # Quote-part de l'owner dans chacune des 3 parts proportionnellement
+        owner_ratio = (amt / fc_total) if fc_total > 0 else 0.0
+        share_reserve = round(fc_reserve * owner_ratio, 2)
+        share_roulement = round(fc_roulement * owner_ratio, 2)
+        share_provisions = round(amt - share_reserve - share_roulement, 2)
+        total_called_provisions += share_provisions
+        total_called_reserve += share_reserve
+        total_called_roulement += share_roulement
         fund_calls_owner.append({
             "date": fc.get("date", ""),
             "name": fc.get("name", ""),
             "call_type": fc.get("call_type", "provisions"),
             "due_date": fc.get("due_date", ""),
             "amount": amt,
+            "provisions": share_provisions,
+            "reserve": share_reserve,
+            "roulement": share_roulement,
             "paid": share.get("paid", False),
             "paid_date": share.get("paid_date", ""),
         })
 
     total_payments = sum(abs(float(p.get("amount", 0) or 0)) for p in payments)
-    # Solde = Charges - Paiements (positif = doit payer)
-    balance = round(total_owner_charges - total_payments, 2)
+
+    # ---- CALCUL DU SOLDE COMPTABLE CORRECT ----
+    # Total IMPUTE DEFINITIVEMENT au proprietaire pour cet exercice :
+    #   = Charges reelles reparties (compte 6xx)
+    #     + Quote-part fonds de reserve appelee (compte 13X - non remboursable)
+    #     + Quote-part fonds de roulement appelee (compte 13X - non remboursable)
+    # Le BONI/MALI sur provisions = provisions appelees - charges reelles.
+    # Solde net pour le proprietaire = Versements - Total impute definitivement
+    #   > 0  : EN VOTRE FAVEUR (excedent versement, remboursable ou reportable)
+    #   < 0  : RESTE A REGLER (somme due au syndic)
+    total_imputed = round(
+        total_owner_charges + total_called_reserve + total_called_roulement, 2
+    )
+    boni_provisions = round(total_called_provisions - total_owner_charges, 2)
+    balance = round(total_imputed - total_payments, 2)
 
     # ---- SUMMARY CARD ----
     sold_color = RED if balance > 0.01 else (GREEN if balance < -0.01 else SLATE_500)
@@ -679,40 +715,88 @@ def build_decompte_pdf(
         ))
         elems.append(Spacer(1, 6 * mm))
 
-    # ---- 3. APPELS DE FONDS ----
-    elems.append(Paragraph("3. Vos appels de fonds", h2))
+    # ---- 3. APPELS DE FONDS DE RESERVE / ROULEMENT ----
+    # Les appels de provisions sont absorbes par les charges reelles (section 1).
+    # Seuls les appels de fonds de reserve et fonds de roulement sont affiches ici,
+    # car ils representent des contributions DEFINITIVES (non remboursables)
+    # alimentant les fonds permanents de la copropriete.
+    fund_calls_capital = [
+        fc for fc in fund_calls_owner
+        if (fc.get("reserve", 0) or 0) > 0.001
+        or (fc.get("roulement", 0) or 0) > 0.001
+    ]
+    elems.append(Paragraph("3. Vos appels de fonds de reserve et de roulement", h2))
     elems.append(Paragraph(
-        "Les appels que le syndic vous a adresses pendant la periode.",
+        "Contributions definitives aux fonds permanents de la copropriete "
+        "(non remboursables). Les appels de provisions pour charges sont quant "
+        "a eux directement consommes par vos charges reelles (cf. section 1).",
         sub_style,
     ))
     elems.append(Spacer(1, 2 * mm))
 
-    if not fund_calls_owner:
+    if not fund_calls_capital:
         elems.append(Paragraph(
-            "<i>Aucun appel de fonds sur cette periode.</i>", body))
+            "<i>Aucun appel de fonds de reserve ou de roulement sur cette periode.</i>", body))
     else:
-        type_label = {
-            "provisions": "Provisions",
-            "reserve": "Fonds de reserve",
-            "roulement": "Fonds de roulement",
-            "special": "Appel special",
-        }
+        total_reserve = sum((fc.get("reserve", 0) or 0) for fc in fund_calls_capital)
+        total_roulement = sum((fc.get("roulement", 0) or 0) for fc in fund_calls_capital)
+        total_capital = total_reserve + total_roulement
         fc_rows = [["Date", "Libelle", "Type", "Echeance", "Montant", "Statut"]]
         fc_cell = ParagraphStyle(
             "fc", parent=body, fontSize=8.5, leading=10.5, wordWrap="CJK",
         )
-        for fc in fund_calls_owner:
-            fc_rows.append([
-                _fmt_date(fc["date"]),
-                Paragraph(fc["name"] or "", fc_cell),
-                type_label.get(fc["call_type"], fc["call_type"]),
-                _fmt_date(fc["due_date"]),
-                _fmt_eur(fc["amount"]),
-                ("Paye " + _fmt_date(fc["paid_date"])) if fc["paid"] else "A payer",
-            ])
-        fc_rows.append(["", "", "", "TOTAL APPELE", _fmt_eur(total_called), ""])
+        fc_type_style = ParagraphStyle(
+            "fct", parent=fc_cell, alignment=0,
+        )
+        for fc in fund_calls_capital:
+            reserve = fc.get("reserve", 0) or 0
+            roulement = fc.get("roulement", 0) or 0
+            statut = ("Paye " + _fmt_date(fc["paid_date"])) if fc["paid"] else "A payer"
+            # Une ligne par type pour clarte
+            if reserve > 0.001:
+                fc_rows.append([
+                    _fmt_date(fc["date"]),
+                    Paragraph(fc["name"] or "", fc_cell),
+                    Paragraph(
+                        "<font color='#1E40AF'><b>Fonds de reserve</b></font>",
+                        fc_type_style,
+                    ),
+                    _fmt_date(fc["due_date"]),
+                    _fmt_eur(reserve),
+                    statut,
+                ])
+            if roulement > 0.001:
+                fc_rows.append([
+                    _fmt_date(fc["date"]),
+                    Paragraph(fc["name"] or "", fc_cell),
+                    Paragraph(
+                        "<font color='#92400E'><b>Fonds de roulement</b></font>",
+                        fc_type_style,
+                    ),
+                    _fmt_date(fc["due_date"]),
+                    _fmt_eur(roulement),
+                    statut,
+                ])
+        # Sous-totaux par type
+        fc_rows.append([
+            "", "",
+            Paragraph(
+                "<font color='#1E40AF'><b>Sous-total reserve</b></font>",
+                fc_type_style,
+            ),
+            "", _fmt_eur(total_reserve), "",
+        ])
+        fc_rows.append([
+            "", "",
+            Paragraph(
+                "<font color='#92400E'><b>Sous-total roulement</b></font>",
+                fc_type_style,
+            ),
+            "", _fmt_eur(total_roulement), "",
+        ])
+        fc_rows.append(["", "", "", "TOTAL", _fmt_eur(total_capital), ""])
 
-        fc_tbl = Table(fc_rows, colWidths=[20 * mm, 50 * mm, 25 * mm, 22 * mm, 28 * mm, 25 * mm])
+        fc_tbl = Table(fc_rows, colWidths=[20 * mm, 50 * mm, 36 * mm, 22 * mm, 26 * mm, 20 * mm])
         fc_tbl.setStyle(TableStyle([
             ("BACKGROUND", (0, 0), (-1, 0), BRAND),
             ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
@@ -721,8 +805,11 @@ def build_decompte_pdf(
             ("ALIGN", (4, 0), (4, -1), "RIGHT"),
             ("ALIGN", (5, 0), (5, -1), "CENTER"),
             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-            ("ROWBACKGROUNDS", (0, 1), (-1, -2),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -4),
              [colors.white, SLATE_50]),
+            # 2 sous-totaux + 1 total = 3 lignes a styliser
+            ("BACKGROUND", (0, -3), (-1, -2), colors.HexColor("#F8FAFC")),
+            ("LINEABOVE", (0, -3), (-1, -3), 0.5, SLATE_300),
             ("BACKGROUND", (0, -1), (-1, -1), SLATE_100),
             ("FONTNAME", (3, -1), (4, -1), "Helvetica-Bold"),
             ("TEXTCOLOR", (4, -1), (4, -1), BRAND),
