@@ -57,24 +57,31 @@ def create_banking_router(db):
     router = APIRouter(prefix="/api/banking")
 
     async def _try_auto_lettrage_vcs(txn_doc):
-        """Try to auto-match a transaction by VCS communication."""
+        """Try to auto-match a transaction by VCS communication.
+        Extrait le code VCS (12 chiffres) de la communication peu importe le suffixe
+        ('+++100/7407/40231+++ - Votre paiement au 19/06/2026' -> '100740740231').
+        """
+        import re as _re
         comm = txn_doc.get("communication", "")
         if not comm or len(comm) < 3:
             return
-        clean = comm.replace("+", "").replace("/", "").replace(" ", "").strip()
-        if not clean:
+        # Recherche un pattern VCS belge : +++ddd/dddd/ddddd+++ OU 12 chiffres consecutifs
+        vcs_clean = ""
+        m = _re.search(r"(\d{3})[\s/]*(\d{4})[\s/]*(\d{5})", comm)
+        if m:
+            vcs_clean = m.group(1) + m.group(2) + m.group(3)
+        else:
+            # Fallback : strip non-digit, prend les 12 premiers chiffres
+            digits = _re.sub(r"\D", "", comm)
+            if len(digits) >= 12:
+                vcs_clean = digits[:12]
+        if not vcs_clean or len(vcs_clean) != 12:
             return
-        owner = await db.owners.find_one(
-            {"$or": [
-                {"vcs_digits": clean},
-                {"vcs_digits": {"$regex": clean, "$options": "i"}},
-            ]},
-            {"_id": 0}
-        )
+        owner = await db.owners.find_one({"vcs_digits": vcs_clean}, {"_id": 0})
         if not owner:
+            # Fallback : match par vcs_code exact
             owner = await db.owners.find_one(
-                {"vcs_code": {"$regex": comm.replace("+", "\\+"), "$options": "i"}},
-                {"_id": 0}
+                {"vcs_code": {"$regex": _re.escape(vcs_clean)}}, {"_id": 0}
             )
         if owner:
             await db.bank_transactions.update_one(
@@ -184,10 +191,29 @@ def create_banking_router(db):
         # - Si lettree -> Dr/Cr counterpart correspondant (owner/supplier/invoice)
         # - Sinon -> Dr/Cr 499000 compte d'attente (visible dans bilan, neutralise)
         from auto_entries import generate_bank_entry
+        # ETAPE 1 : tentative d'auto-lettrage par VCS pour les transactions non encore lettrees
+        # Permet d'eviter aux non-comptables d'avoir a lettrer manuellement chaque paiement.
+        for t in txns:
+            if not t.get("matched"):
+                try:
+                    await _try_auto_lettrage_vcs(t)
+                except Exception as e:
+                    print(f"[post-stmt] auto-vcs failed for txn {t.get('id')}: {e}")
+        # Re-fetch des txns apres auto-lettrage pour avoir l'etat le plus a jour
+        txns = await db.bank_transactions.find({"statement_id": stmt_id}, {"_id": 0}).to_list(10000)
+        # ETAPE 2 : generation des ecritures FI pour TOUTES les transactions
         fi_created = 0
         fi_errors = []
         for t in txns:
             try:
+                # Si la txn a deja une ecriture FI (creee a l'auto-lettrage VCS), on skip
+                # (sinon on aurait un doublon supprime puis recreer)
+                existing_fi = await db.journal_entries.count_documents({
+                    "source_type": "bank_txn", "source_id": t["id"], "auto_generated": True
+                })
+                if existing_fi > 0:
+                    fi_created += 1
+                    continue
                 result = await generate_bank_entry(db, t)
                 if result:
                     fi_created += 1
