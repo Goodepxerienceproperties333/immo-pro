@@ -334,8 +334,16 @@ async def generate_bank_entry(db, txn: dict) -> dict | None:
     if amount <= 0:
         return None
     # Resoud IBAN -> compte PCMN via la config de l'ACP
+    # IBAN peut etre stocke sur la txn (legacy) OU sur le statement parent (cas standard)
     iban = (txn.get("account_number") or "").replace(" ", "").upper()
-    bank_acc = "550000"  # fallback compte banque generique
+    if not iban and txn.get("statement_id"):
+        stmt = await db.bank_statements.find_one(
+            {"id": txn["statement_id"]},
+            {"_id": 0, "account_number": 1, "iban": 1},
+        )
+        if stmt:
+            iban = (stmt.get("account_number") or stmt.get("iban") or "").replace(" ", "").upper()
+    bank_acc = "550000"  # fallback compte banque generique (ne devrait JAMAIS arriver si IBAN configure)
     bank_label = "Banque"
     if iban:
         copro = await db.coproprietes.find_one({"id": copro_id}, {"_id": 0, "bank_accounts": 1})

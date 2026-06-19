@@ -145,8 +145,14 @@ def create_reports_router(db):
 
     @router.get("/bilan")
     async def bilan(request: Request, date_to: Optional[str] = None, copropriete_id: Optional[str] = None,
-                    fiscal_year_id: Optional[str] = None):
-        """Bilan PCMN belge structure (Actif / Passif par rubriques). Chinese walls strict."""
+                    fiscal_year_id: Optional[str] = None,
+                    view_mode: Optional[str] = "before_distribution"):
+        """Bilan PCMN belge structure (Actif / Passif par rubriques). Chinese walls strict.
+        view_mode :
+          - 'before_distribution' (defaut) : le boni/mali apparait sur le compte 499.
+          - 'after_distribution' : le 499 est reparti sur les comptes 4000XX des proprietaires
+            (par quotites globales + cles speciales eventuelles par compte).
+        """
         copropriete_id = _require_copro(copropriete_id, request)
         # Optionally resolve fiscal year
         fy = None
@@ -178,6 +184,46 @@ def create_reports_router(db):
                 balances[acc]["debit"] += line.get("debit", 0)
                 balances[acc]["credit"] += line.get("credit", 0)
 
+        # ---- FUSION comptes 400/401 du meme proprietaire ----
+        # Le syndic veut voir UNE seule ligne par proprietaire (nom + solde total)
+        # au lieu de "Prov. charges - Dubois" + "Fonds reserve - Dubois" separes.
+        owners_acp = await db.owners.find({}, {"_id": 0}).to_list(10000)
+        owner_acc_map = {}  # acc_number -> {owner_id, owner_name}
+        for o in owners_acp:
+            tier_accs = ((o.get("tier_accounts") or {}).get(copropriete_id, {}) or {})
+            for key in ("provisions", "reserve"):
+                acc_n = tier_accs.get(key)
+                if acc_n:
+                    owner_acc_map[acc_n] = {
+                        "owner_id": o["id"], "owner_name": o.get("name", "")}
+
+        # Aggreger par owner_id
+        merged = {}  # owner_id -> {debit, credit, name}
+        keep_balances = {}  # comptes non-owners
+        for acc, b in balances.items():
+            if acc in owner_acc_map:
+                oid = owner_acc_map[acc]["owner_id"]
+                onm = owner_acc_map[acc]["owner_name"]
+                m = merged.setdefault(oid, {
+                    "owner_id": oid, "owner_name": onm,
+                    "debit": 0.0, "credit": 0.0,
+                })
+                m["debit"] += b["debit"]
+                m["credit"] += b["credit"]
+            else:
+                keep_balances[acc] = b
+        # Remplacer balances : 1 entree synthetique par owner + comptes restants
+        balances = keep_balances
+        for oid, m in merged.items():
+            virt_acc = f"OWNER_{oid}"
+            balances[virt_acc] = {
+                "account_number": virt_acc,
+                "account_name": m["owner_name"],
+                "debit": m["debit"],
+                "credit": m["credit"],
+                "is_owner_aggregated": True,
+            }
+
         def _rub(label, accounts):
             return {
                 "label": label,
@@ -191,7 +237,9 @@ def create_reports_router(db):
             "II_immo_corporelles": [],
             "III_immo_financieres": [],
             "IV_stocks": [],
-            "V_creances": [],
+            "V_creances_coproprietaires": [],
+            "V_creances_fournisseurs_acompte": [],
+            "V_creances_autres": [],
             "VI_placements": [],
             "VII_disponibilites": [],
             "VIII_regul_actif": [],
@@ -202,16 +250,26 @@ def create_reports_router(db):
             "III_resultat_reporte": [],
             "IV_subsides": [],
             "V_dettes_long": [],
-            "VI_dettes_court": [],
+            "VI_dettes_coproprietaires": [],
+            "VI_dettes_fournisseurs": [],
+            "VI_dettes_autres": [],
             "VII_regul_passif": [],
         }
 
-        for acc, b in balances.items():
-            solde = round(b["debit"] - b["credit"], 2)
-            item = {"account_number": acc, "account_name": b["account_name"], "amount": abs(solde)}
-            # ACTIF (solde debiteur)
+        def _classify_account(acc, solde, balances_dict):
+            """Classe un compte dans le bon bucket selon son numero et son solde."""
+            is_aggregated_owner = balances_dict[acc].get("is_owner_aggregated", False)
+            # Pour les comptes agreges proprietaires : on affiche juste le nom (pas de numero)
+            item = {
+                "account_number": "" if is_aggregated_owner else acc,
+                "account_name": balances_dict[acc]["account_name"],
+                "amount": abs(solde),
+            }
             if solde > 0.01:
-                if acc.startswith(("20", "21")):
+                # ACTIF (solde debiteur)
+                if is_aggregated_owner:
+                    actif_buckets["V_creances_coproprietaires"].append(item)
+                elif acc.startswith(("20", "21")):
                     actif_buckets["I_immo_incorporelles"].append(item)
                 elif acc.startswith(("22", "23", "24", "25", "26", "27")):
                     actif_buckets["II_immo_corporelles"].append(item)
@@ -219,8 +277,12 @@ def create_reports_router(db):
                     actif_buckets["III_immo_financieres"].append(item)
                 elif acc.startswith("3"):
                     actif_buckets["IV_stocks"].append(item)
-                elif acc.startswith("40") or acc.startswith("41") or acc.startswith("416"):
-                    actif_buckets["V_creances"].append(item)
+                elif acc.startswith("400") or acc.startswith("401") or acc.startswith("416"):
+                    actif_buckets["V_creances_coproprietaires"].append(item)
+                elif acc.startswith("440"):
+                    actif_buckets["V_creances_fournisseurs_acompte"].append(item)
+                elif acc.startswith("4") and not acc.startswith("49"):
+                    actif_buckets["V_creances_autres"].append(item)
                 elif acc.startswith(("50", "51", "52", "53")):
                     actif_buckets["VI_placements"].append(item)
                 elif acc.startswith(("54", "55", "57", "58")):
@@ -228,13 +290,14 @@ def create_reports_router(db):
                 elif acc.startswith("49"):
                     actif_buckets["VIII_regul_actif"].append(item)
                 else:
-                    actif_buckets["V_creances"].append(item)  # default for class 4 debit
-            # PASSIF (solde crediteur)
+                    actif_buckets["V_creances_autres"].append(item)
             elif solde < -0.01:
-                if acc.startswith("10"):
+                # PASSIF (solde crediteur)
+                if is_aggregated_owner:
+                    passif_buckets["VI_dettes_coproprietaires"].append(item)
+                elif acc.startswith("10"):
                     passif_buckets["I_capital"].append(item)
                 elif acc.startswith("13") or acc.startswith("16"):
-                    # 13 = Reserves, 16 = Fonds de reserve copropriete (convention syndic belge)
                     passif_buckets["II_reserves"].append(item)
                 elif acc.startswith("14"):
                     passif_buckets["III_resultat_reporte"].append(item)
@@ -242,14 +305,23 @@ def create_reports_router(db):
                     passif_buckets["IV_subsides"].append(item)
                 elif acc.startswith("17"):
                     passif_buckets["V_dettes_long"].append(item)
+                elif acc.startswith("400") or acc.startswith("401"):
+                    passif_buckets["VI_dettes_coproprietaires"].append(item)
+                elif acc.startswith("440"):
+                    passif_buckets["VI_dettes_fournisseurs"].append(item)
                 elif acc.startswith(("44", "45", "46", "48")):
-                    passif_buckets["VI_dettes_court"].append(item)
+                    passif_buckets["VI_dettes_autres"].append(item)
                 elif acc.startswith("49"):
                     passif_buckets["VII_regul_passif"].append(item)
                 else:
-                    passif_buckets["VI_dettes_court"].append(item)
+                    passif_buckets["VI_dettes_autres"].append(item)
 
-        # Compute current period result (classes 6 & 7) and inject in passif (III bis: resultat exercice)
+        for acc, b in balances.items():
+            solde = round(b["debit"] - b["credit"], 2)
+            _classify_account(acc, solde, balances)
+
+        # Compute current period result (classes 6 & 7) and inject in 499 (avant repartition)
+        # ou re-imputer sur les comptes 4000XX des owners (apres repartition).
         date_from = fy["start_date"] if fy else None
         q_res = _apply_copro({}, copropriete_id)
         if date_from or date_to:
@@ -268,23 +340,91 @@ def create_reports_router(db):
                     total_charges += line.get("debit", 0) - line.get("credit", 0)
                 elif acc.startswith("7"):
                     total_produits += line.get("credit", 0) - line.get("debit", 0)
+        # Resultat = produits - charges. Positif = benefice (boni). Negatif = perte (mali).
         result_exercise = round(total_produits - total_charges, 2)
-        if abs(result_exercise) > 0.01:
-            passif_buckets["III_resultat_reporte"].append({
-                "account_number": "RESULTAT",
-                "account_name": "Resultat de l'exercice" + (" (perte)" if result_exercise < 0 else " (benefice)"),
-                "amount": abs(result_exercise),
-            })
+
+        # ---- Mode "apres repartition" : repartir le 499 sur les owners ----
+        distributed_per_owner = {}  # owner_id -> delta (positif si owner doit recevoir, negatif si owner doit payer)
+        if view_mode == "after_distribution" and abs(result_exercise) > 0.01:
+            # Charge owners + leurs lots pour calcul des quotites
+            lots_for_acp = await db.lots.find(
+                {"copropriete_id": copropriete_id}, {"_id": 0}
+            ).to_list(10000)
+            owner_quotities = {}
+            total_quotities = 0.0
+            for lot in lots_for_acp:
+                quo = float(lot.get("quotity", 0) or 0)
+                oid = lot.get("owner_id")
+                if oid and quo > 0:
+                    owner_quotities[oid] = owner_quotities.get(oid, 0.0) + quo
+                    total_quotities += quo
+            if total_quotities > 0:
+                for oid, quo in owner_quotities.items():
+                    share = round(result_exercise * (quo / total_quotities), 2)
+                    distributed_per_owner[oid] = share
+
+            # Ajuste les soldes 4000XX (provisions) dans le bilan en consequence.
+            owners_for_acp = await db.owners.find({}, {"_id": 0}).to_list(10000)
+            owner_acc_prov = {}
+            for o in owners_for_acp:
+                acc_obj = ((o.get("tier_accounts") or {}).get(copropriete_id, {}) or {})
+                acc_p = acc_obj.get("provisions")
+                if acc_p and o["id"] in distributed_per_owner:
+                    owner_acc_prov[acc_p] = distributed_per_owner[o["id"]]
+            for acc_p, delta in owner_acc_prov.items():
+                if acc_p not in balances:
+                    # Trouver le nom du compte
+                    pcmn = await db.pcmn_accounts.find_one(
+                        {"number": acc_p, "copropriete_id": copropriete_id}, {"_id": 0}
+                    )
+                    balances[acc_p] = {
+                        "account_number": acc_p,
+                        "account_name": (pcmn or {}).get("name", f"Compte {acc_p}"),
+                        "debit": 0.0, "credit": 0.0,
+                    }
+                # Boni (delta > 0) -> credit (owner crediteur = on lui doit)
+                # Mali (delta < 0) -> debit (owner debiteur = il doit)
+                if delta > 0:
+                    balances[acc_p]["credit"] += delta
+                else:
+                    balances[acc_p]["debit"] += abs(delta)
+
+            # Reset buckets et re-classer suite a modification balances
+            actif_buckets = {k: [] for k in actif_buckets}
+            passif_buckets = {k: [] for k in passif_buckets}
+            for acc, b in balances.items():
+                solde = round(b["debit"] - b["credit"], 2)
+                _classify_account(acc, solde, balances)
+            # En mode "apres repartition", le 499 est neutralise (solde = 0), donc PAS d'ajout
+
+        elif abs(result_exercise) > 0.01:
+            # Mode AVANT REPARTITION : place le boni/mali sur compte 499
+            if result_exercise > 0:
+                # Benefice -> 499 CREDITEUR (au Passif)
+                passif_buckets["VII_regul_passif"].append({
+                    "account_number": "499",
+                    "account_name": "Compte de regularisation - Boni a repartir",
+                    "amount": abs(result_exercise),
+                })
+            else:
+                # Perte -> 499 DEBITEUR (a l'Actif)
+                actif_buckets["VIII_regul_actif"].append({
+                    "account_number": "499",
+                    "account_name": "Compte de regularisation - Mali a repartir",
+                    "amount": abs(result_exercise),
+                })
 
         rubr_actif = [
             ("I. Immobilisations incorporelles", "I_immo_incorporelles"),
             ("II. Immobilisations corporelles", "II_immo_corporelles"),
             ("III. Immobilisations financieres", "III_immo_financieres"),
             ("IV. Stocks", "IV_stocks"),
-            ("V. Creances", "V_creances"),
+            ("V.A Coproprietaires debiteurs (cl. 400)", "V_creances_coproprietaires"),
+            ("V.B Fournisseurs - acomptes / avoirs (cl. 440 D)", "V_creances_fournisseurs_acompte"),
+            ("V.C Autres creances", "V_creances_autres"),
             ("VI. Placements de tresorerie", "VI_placements"),
             ("VII. Valeurs disponibles", "VII_disponibilites"),
-            ("VIII. Comptes de regularisation", "VIII_regul_actif"),
+            ("VIII. Comptes de regularisation (mali)", "VIII_regul_actif"),
         ]
         rubr_passif = [
             ("I. Capital / Fonds propre", "I_capital"),
@@ -292,8 +432,10 @@ def create_reports_router(db):
             ("III. Resultat reporte", "III_resultat_reporte"),
             ("IV. Subsides en capital", "IV_subsides"),
             ("V. Dettes a plus d'un an", "V_dettes_long"),
-            ("VI. Dettes a un an au plus", "VI_dettes_court"),
-            ("VII. Comptes de regularisation", "VII_regul_passif"),
+            ("VI.A Coproprietaires crediteurs (cl. 400)", "VI_dettes_coproprietaires"),
+            ("VI.B Fournisseurs (cl. 440)", "VI_dettes_fournisseurs"),
+            ("VI.C Autres dettes court terme", "VI_dettes_autres"),
+            ("VII. Comptes de regularisation (boni)", "VII_regul_passif"),
         ]
 
         actif_rubr = [_rub(lbl, actif_buckets[k]) for lbl, k in rubr_actif]

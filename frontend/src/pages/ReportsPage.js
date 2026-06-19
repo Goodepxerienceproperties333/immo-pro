@@ -1,4 +1,4 @@
-import { useState, Fragment } from 'react';
+import { useState, useEffect, Fragment } from 'react';
 import api from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -22,15 +22,31 @@ export default function ReportsPage() {
   const [decomptes, setDecomptes] = useState(null);
   const [years, setYears] = useState([]);
   const [fiscalYearId, setFiscalYearId] = useState('');
+  const [viewMode, setViewMode] = useState('before_distribution');
   const [loading, setLoading] = useState(false);
 
-  useState(() => { api.get('/fiscal/years').then(r => setYears(r.data)).catch(() => {}); });
+  useEffect(() => {
+    api.get('/fiscal/years').then(r => setYears(r.data || [])).catch(() => {});
+  }, []);
 
   const loadBalance = async () => { setLoading(true); try { const params = {}; if (dateFrom) params.date_from = dateFrom; if (dateTo) params.date_to = dateTo; const { data } = await api.get('/reports/balance', { params }); setBalance(data); } catch { toast.error('Erreur'); } finally { setLoading(false); } };
-  const loadBilan = async () => { setLoading(true); try { const params = {}; if (dateTo) params.date_to = dateTo; if (fiscalYearId) params.fiscal_year_id = fiscalYearId; const { data } = await api.get('/reports/bilan', { params }); setBilan(data); } catch { toast.error('Erreur'); } finally { setLoading(false); } };
+  const loadBilan = async () => {
+    setLoading(true);
+    try {
+      const params = { view_mode: viewMode };
+      if (dateTo) params.date_to = dateTo;
+      if (fiscalYearId) params.fiscal_year_id = fiscalYearId;
+      const { data } = await api.get('/reports/bilan', { params });
+      setBilan(data);
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur de chargement du bilan');
+    } finally {
+      setLoading(false);
+    }
+  };
   const downloadBilanPdf = async () => {
     try {
-      const params = {};
+      const params = { view_mode: viewMode };
       if (dateTo) params.date_to = dateTo;
       if (fiscalYearId) params.fiscal_year_id = fiscalYearId;
       const res = await api.get('/reports/bilan/pdf', { params, responseType: 'blob' });
@@ -123,7 +139,7 @@ export default function ReportsPage() {
 
         <TabsContent value="bilan" className="mt-0">
           <DateFilters onLoad={loadBilan} label="Charger bilan" />
-          <div className="flex items-end gap-2 mb-3">
+          <div className="flex flex-wrap items-end gap-3 mb-3">
             <div>
               <label className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold block mb-1">Exercice fiscal</label>
               <select
@@ -134,6 +150,18 @@ export default function ReportsPage() {
               >
                 <option value="">— Tous (situation a date) —</option>
                 {years.map(y => <option key={y.id} value={y.id}>{y.name} ({y.status === 'closed' ? 'cloture' : 'ouvert'})</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold block mb-1">Vue du bilan</label>
+              <select
+                className="border border-slate-200 rounded-md px-3 py-2 text-sm bg-white min-w-[260px]"
+                value={viewMode}
+                onChange={e => setViewMode(e.target.value)}
+                data-testid="bilan-view-mode"
+              >
+                <option value="before_distribution">Avant repartition (compte 499 visible)</option>
+                <option value="after_distribution">Apres repartition (499 reparti aux proprietaires)</option>
               </select>
             </div>
             <Button

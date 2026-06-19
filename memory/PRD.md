@@ -12,6 +12,60 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 ## Implemented
 
+### Iter39 (Feb 2026) - Bilan : fusion proprietaires + Migration 550000 -> 55143100
+
+#### Fusion comptes proprietaires dans le bilan
+- Avant : ligne separee pour chaque compte 400 (provisions) et 401 (reserve) avec libelle technique
+  "Prov. charges - Dubois" + "Fonds reserve - Dubois" (illisible).
+- Apres : **1 seule ligne par proprietaire** avec son nom + solde total agrege
+  (provisions + reserve). Le numero de compte est masque pour les lignes aggregees.
+- Implementation : map owner_id -> {owner_name, debit_total, credit_total} via
+  `owners.tier_accounts[copropriete_id].{provisions,reserve}`, puis injection dans
+  `balances` avec `is_owner_aggregated=True`.
+
+#### Bug fix : compte banque fallback 550000 -> PCMN reel
+- `generate_bank_entry` (auto_entries.py) recuperait l'IBAN sur `txn.account_number`
+  mais celui-ci etait vide sur de nombreuses txn (l'IBAN est sur le STATEMENT parent).
+  Resultat : fallback `550000` au lieu du compte PCMN configure (ex 55143100).
+- Fix : si `txn.account_number` vide, charge le statement via `txn.statement_id` et lit
+  `stmt.account_number || stmt.iban`.
+- **Nouveau endpoint admin** : `POST /api/banking/migrate-fallback-bank-account/{copropriete_id}`
+  qui remappe en lot les lignes legacy `550000` -> compte PCMN configure (compte par defaut
+  ou 1er disponible). Permet de nettoyer les ecritures historiques en 1 clic.
+
+
+
+### Iter38 (Feb 2026) - Bilan avant/apres repartition + Layout PDF + Split 400/440
+
+#### Bilan PCMN : compte de regularisation 499 (boni/mali)
+- Endpoint `GET /api/reports/bilan` accepte desormais `view_mode` :
+  - **`before_distribution`** (defaut) : resultat de l'exercice place sur compte **499** :
+    - Boni (benefice) → CREDITEUR au Passif "VII. Comptes de regularisation (boni)"
+    - Mali (perte) → DEBITEUR a l'Actif "VIII. Comptes de regularisation (mali)"
+  - **`after_distribution`** : le 499 est reparti sur les comptes 4000XX provisions
+    des proprietaires au prorata des quotites de lots. Le 499 est neutralise (= 0).
+- Bilan toujours equilibre par construction (Actif = Passif = sum classe 1-5 + resultat).
+
+#### Split 400 (coproprietaires) / 440 (fournisseurs)
+- Avant : melange dans "V. Creances" (actif) et "VI. Dettes a un an" (passif)
+- Apres :
+  - Actif : V.A Coproprietaires debiteurs (400), V.B Fournisseurs acomptes (440 D), V.C Autres
+  - Passif : VI.A Coproprietaires crediteurs (400), VI.B Fournisseurs (440), VI.C Autres dettes
+- Lisibilite syndic : voir d'un coup d'oeil qui doit / qui est du.
+
+#### Fix layout PDF Bilan
+- `colWidths` inner table reduits 88/35mm → 58/32mm pour eviter le debordement
+  du texte sur la colonne montant (superposition observee).
+- Largeurs cohrentes avec `side_by_side` table (93/93mm).
+
+#### Fix Frontend "impossible de recharger le bilan"
+- Bug `useState(() => api.get(...))` au lieu de `useEffect(() => ..., [])` → exercices
+  jamais charges, selecteur vide.
+- Ajout du toggle UI "Avant repartition / Apres repartition" (data-testid='bilan-view-mode')
+  qui envoie le `view_mode` au backend.
+
+
+
 ### Iter37 (Feb 2026) - UX + PDF non-comptable + Lettrage manuel + Dates EU + Solde cumulatif tier
 
 #### PDFs (lisibilite non-comptable)

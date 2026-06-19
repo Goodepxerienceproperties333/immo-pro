@@ -80,7 +80,7 @@ def _column_table(rubriques, side_label, total):
         Paragraph(f"<b>TOTAL {side_label.upper()}</b>", _tot_style()),
         Paragraph(f"<b>{_fmt_eur(total)}</b>", _tot_right()),
     ])
-    tbl = Table(rows, colWidths=[88 * mm, 35 * mm])
+    tbl = Table(rows, colWidths=[58 * mm, 32 * mm])
     style = [
         # Header
         ("BACKGROUND", (0, 0), (-1, 0), HEADER_BG),

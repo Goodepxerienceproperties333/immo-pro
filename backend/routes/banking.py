@@ -620,4 +620,60 @@ def create_banking_router(db):
             await db.bank_transactions.insert_many(txns)
         return {"message": f"{len(txns)} transactions creees", "count": len(txns)}
 
+    @router.post("/migrate-fallback-bank-account/{copropriete_id}")
+    async def migrate_fallback_bank_account(copropriete_id: str):
+        """One-shot : remappe les lignes de journal_entries qui pointent sur 550000
+        (compte banque fallback) vers le compte PCMN configure sur l'IBAN par defaut
+        de l'ACP (ex 55143100). Repare les ecritures historiques."""
+        copro = await db.coproprietes.find_one({"id": copropriete_id}, {"_id": 0})
+        if not copro:
+            raise HTTPException(404, "Copropriete non trouvee")
+        # Trouver le compte PCMN du compte bancaire par defaut
+        target_acc = None
+        target_label = None
+        for ba in (copro.get("bank_accounts") or []):
+            if ba.get("is_default") and ba.get("pcmn_number"):
+                target_acc = ba["pcmn_number"]
+                target_label = ba.get("label") or "Banque"
+                break
+        if not target_acc:
+            # fallback : 1er bank_account avec pcmn_number
+            for ba in (copro.get("bank_accounts") or []):
+                if ba.get("pcmn_number"):
+                    target_acc = ba["pcmn_number"]
+                    target_label = ba.get("label") or "Banque"
+                    break
+        if not target_acc:
+            raise HTTPException(400,
+                "Aucun compte PCMN bancaire configure dans bank_accounts de cette ACP")
+        # Recupere les entries de cette ACP qui contiennent une ligne 550000
+        entries = await db.journal_entries.find(
+            {"copropriete_id": copropriete_id, "lines.account_number": "550000"},
+            {"_id": 0},
+        ).to_list(10000)
+        updated = 0
+        for e in entries:
+            new_lines = []
+            changed = False
+            for ln in e.get("lines", []):
+                if ln.get("account_number") == "550000":
+                    ln = dict(ln)
+                    ln["account_number"] = target_acc
+                    ln["account_name"] = target_label
+                    changed = True
+                new_lines.append(ln)
+            if changed:
+                await db.journal_entries.update_one(
+                    {"id": e["id"]},
+                    {"$set": {"lines": new_lines}},
+                )
+                updated += 1
+        return {
+            "message": f"{updated} ecriture(s) migree(s) de 550000 vers {target_acc}",
+            "from": "550000",
+            "to": target_acc,
+            "label": target_label,
+            "updated": updated,
+        }
+
     return router
