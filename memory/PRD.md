@@ -12,6 +12,37 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 ## Implemented
 
+### Iter56 (Feb 2026) - Auto-match par NOM + Solde d'ouverture auto-rempli
+
+#### Auto-lettrage : 4 niveaux de fallback
+Probleme : `_try_auto_lettrage_vcs` ne tentait QUE la VCS. Pour les transactions sans VCS (manuelles, anciens formats), aucun match -> compte d'attente 499.
+Fix : nouvelle cascade dans cet ordre :
+1. **VCS** (regex `(\d{3})[\s/]*(\d{4})[\s/]*(\d{5})` -> 12 chiffres VCS belge)
+2. **Nom owner exact** (counterparty_name match case-insensitive contre owner.name)
+3. **Nom owner partiel** (last_name OU permutations First/Last)
+4. **Nom supplier exact** (uniquement pour les paiements sortants debit)
+5. **Numero de facture** dans counterparty_name OU communication (cherche dans les factures impayees de l'ACP, lettre + marque la facture comme paid)
+
+Validation : `counterparty_name="De Smet Catherine"` + communication vide -> auto-matched a l'owner De Smet via le niveau 2.
+
+#### Solde d'ouverture auto-rempli (nouvel endpoint)
+Demande : "Lors de la creation d'un extrait le solde precedent du compte bancaire doit apparaitre dans 'solde d'ouverture'"
+
+Backend :
+- Nouvel endpoint `GET /api/banking/statements/previous-closing?account_number=IBAN&copropriete_id=X` retourne `{balance, source, previous_statement_*}`.
+- `source` peut etre : `posted` (figeable), `draft_computed` (calcule depuis les mouvements du draft precedent), ou `none` (premier extrait).
+- `POST /api/banking/statements` : si `opening_balance` est 0 (ou non fourni) ET un IBAN est specifie, auto-rempli depuis le dernier extrait. Stocke `opening_balance_source` pour audit.
+
+Frontend (BankingPage) :
+- Quand l'utilisateur selectionne un IBAN dans le dialog "Nouvel extrait", appel API `/previous-closing` -> solde d'ouverture pre-rempli automatiquement.
+- Affichage de la **source** sous le selecteur : vert = posted ("Solde repris de l'extrait #X du JJ/MM"), ambre = draft (warning), bleu = aucun extrait precedent.
+- L'utilisateur peut surcharger manuellement.
+
+Verification :
+- IBAN Test : extrait precedent posted -> auto-fill 25237.70 EUR
+- IBAN Demo : extrait precedent draft -> calcul live 200 EUR + warning
+- IBAN inconnu : 0 EUR, source `none`
+
 ### Iter55 (Feb 2026) - Numero de facture dans le libelle lors du lettrage
 
 #### Demande

@@ -409,13 +409,25 @@ export default function BankingPage() {
           <div className="grid grid-cols-2 gap-4"><div><label className="form-label">Numero *</label><Input value={stmtForm.number} onChange={e => setStmtForm({...stmtForm, number: e.target.value})} /></div><div><label className="form-label">Date *</label><Input type="date" value={stmtForm.date} onChange={e => setStmtForm({...stmtForm, date: e.target.value})} /></div></div>
           <div><label className="form-label">Compte bancaire *</label>
             {bankAccounts.length > 0 ? (
-              <Select value={stmtForm.account_number} onValueChange={v => {
-                // Auto-fill opening balance from last statement closing for this IBAN
-                const lastForIban = statements
-                  .filter(st => st.account_number === v)
-                  .sort((a, b) => (b.date || '').localeCompare(a.date || ''))[0];
-                const auto = lastForIban ? Number(lastForIban.closing_balance || 0) : 0;
-                setStmtForm(f => ({...f, account_number: v, opening_balance: auto}));
+              <Select value={stmtForm.account_number} onValueChange={async (v) => {
+                setStmtForm(f => ({...f, account_number: v}));
+                // Auto-fill opening balance via API (gere posted+draft+computed)
+                try {
+                  const { data } = await api.get('/banking/statements/previous-closing', {
+                    params: { account_number: v },
+                  });
+                  setStmtForm(f => ({
+                    ...f,
+                    account_number: v,
+                    opening_balance: Number(data.balance || 0),
+                    _opening_source: data.source,
+                    _previous_stmt: data.previous_statement_number || data.previous_statement_id || '',
+                    _previous_date: data.previous_statement_date || '',
+                  }));
+                } catch {
+                  // Fallback : 0
+                  setStmtForm(f => ({...f, account_number: v, opening_balance: 0}));
+                }
               }}>
                 <SelectTrigger data-testid="stmt-account-select"><SelectValue placeholder="Selectionner un compte bancaire" /></SelectTrigger>
                 <SelectContent>
@@ -444,14 +456,25 @@ export default function BankingPage() {
             {/* Mention du compte PCMN selectionne + dernier solde */}
             {stmtForm.account_number && (() => {
               const ba = bankAccounts.find(b => b.iban === stmtForm.account_number);
-              const lastForIban = statements
-                .filter(st => st.account_number === stmtForm.account_number)
-                .sort((a, b) => (b.date || '').localeCompare(a.date || ''))[0];
+              const src = stmtForm._opening_source;
+              const prevNum = stmtForm._previous_stmt;
+              const prevDate = stmtForm._previous_date;
               return (
-                <div className="text-[11px] text-slate-500 mt-1.5 space-x-3">
+                <div className="text-[11px] text-slate-500 mt-1.5 space-x-3 flex flex-wrap gap-x-3">
                   {ba?.pcmn_number && <span>Compte PCMN : <b className="font-mono text-slate-700">{ba.pcmn_number}</b></span>}
-                  {lastForIban && <span>Dernier solde ({fmtDate(lastForIban.date)}) : <b className="font-mono text-slate-700">{Number(lastForIban.closing_balance||0).toFixed(2)}</b></span>}
-                  {!lastForIban && <span className="text-blue-600">Aucun extrait precedent - solde d'ouverture initialise a 0</span>}
+                  {src === 'posted' && prevDate && (
+                    <span className="text-green-700">
+                      Solde repris de l&apos;extrait <b className="font-mono">{prevNum}</b> du {fmtDate(prevDate)} (comptabilise)
+                    </span>
+                  )}
+                  {src === 'draft_computed' && prevDate && (
+                    <span className="text-amber-600">
+                      Solde calcule depuis l&apos;extrait brouillon du {fmtDate(prevDate)} (mouvements non figes)
+                    </span>
+                  )}
+                  {src === 'none' && (
+                    <span className="text-blue-600">Aucun extrait precedent - solde d&apos;ouverture initialise a 0</span>
+                  )}
                 </div>
               );
             })()}

@@ -96,29 +96,55 @@ def create_banking_router(db):
         """Try to auto-match a transaction by VCS communication.
         Extrait le code VCS (12 chiffres) de la communication peu importe le suffixe
         ('+++100/7407/40231+++ - Votre paiement au 19/06/2026' -> '100740740231').
+
+        Si echec VCS, tente un fallback par NOM (counterparty_name -> owner.name
+        case-insensitive) puis par numero de facture (counterparty_name or
+        communication contient le numero d'une facture impayee).
         """
         import re as _re
         comm = txn_doc.get("communication", "")
-        if not comm or len(comm) < 3:
-            return
-        # Recherche un pattern VCS belge : +++ddd/dddd/ddddd+++ OU 12 chiffres consecutifs
+        cp_name = (txn_doc.get("counterparty_name") or "").strip()
+        # 1) Tentative VCS sur communication
         vcs_clean = ""
-        m = _re.search(r"(\d{3})[\s/]*(\d{4})[\s/]*(\d{5})", comm)
-        if m:
-            vcs_clean = m.group(1) + m.group(2) + m.group(3)
-        else:
-            # Fallback : strip non-digit, prend les 12 premiers chiffres
-            digits = _re.sub(r"\D", "", comm)
-            if len(digits) >= 12:
-                vcs_clean = digits[:12]
-        if not vcs_clean or len(vcs_clean) != 12:
-            return
-        owner = await db.owners.find_one({"vcs_digits": vcs_clean}, {"_id": 0})
-        if not owner:
-            # Fallback : match par vcs_code exact
+        if comm and len(comm) >= 3:
+            m = _re.search(r"(\d{3})[\s/]*(\d{4})[\s/]*(\d{5})", comm)
+            if m:
+                vcs_clean = m.group(1) + m.group(2) + m.group(3)
+            else:
+                digits = _re.sub(r"\D", "", comm)
+                if len(digits) >= 12:
+                    vcs_clean = digits[:12]
+        owner = None
+        if vcs_clean and len(vcs_clean) == 12:
+            owner = await db.owners.find_one({"vcs_digits": vcs_clean}, {"_id": 0})
+            if not owner:
+                owner = await db.owners.find_one(
+                    {"vcs_code": {"$regex": _re.escape(vcs_clean)}}, {"_id": 0}
+                )
+        # 2) Fallback : match par counterparty_name exact (case-insensitive)
+        if not owner and cp_name and len(cp_name) >= 3:
+            esc = _re.escape(cp_name)
             owner = await db.owners.find_one(
-                {"vcs_code": {"$regex": _re.escape(vcs_clean)}}, {"_id": 0}
+                {"name": {"$regex": f"^{esc}$", "$options": "i"}}, {"_id": 0}
             )
+        # 3) Fallback : nom partiel "Last First" ou "First Last"
+        if not owner and cp_name and " " in cp_name:
+            parts = [p for p in cp_name.split() if p]
+            if len(parts) >= 2:
+                # Tente toutes les permutations du nom
+                possible = [parts[0], parts[-1], " ".join(parts[:2]), " ".join(parts[-2:])]
+                for p in possible:
+                    if len(p) < 3:
+                        continue
+                    owner = await db.owners.find_one(
+                        {"$or": [
+                            {"last_name": {"$regex": f"^{_re.escape(p)}$", "$options": "i"}},
+                            {"name": {"$regex": _re.escape(p), "$options": "i"}},
+                        ]},
+                        {"_id": 0}
+                    )
+                    if owner:
+                        break
         if owner:
             await db.bank_transactions.update_one(
                 {"id": txn_doc["id"]},
@@ -131,6 +157,58 @@ def create_banking_router(db):
                     await generate_bank_entry(db, fresh)
             except Exception as e:
                 print(f"[auto-entry] bank auto-vcs failed: {e}")
+            return
+        # 4) Fallback supplier : counterparty_name correspond a un fournisseur
+        supplier = None
+        if cp_name and len(cp_name) >= 3:
+            esc = _re.escape(cp_name)
+            supplier = await db.suppliers.find_one(
+                {"name": {"$regex": f"^{esc}$", "$options": "i"}}, {"_id": 0}
+            )
+        if supplier:
+            # Pour les paiements sortants (debit) seulement -> payment to supplier
+            if float(txn_doc.get("amount", 0) or 0) < 0 or txn_doc.get("transaction_type") == "debit":
+                await db.bank_transactions.update_one(
+                    {"id": txn_doc["id"]},
+                    {"$set": {"matched": True, "matched_to": supplier["id"], "match_type": "supplier_payment",
+                              "counterparty_name": txn_doc.get("counterparty_name") or supplier["name"]}}
+                )
+                try:
+                    fresh = await db.bank_transactions.find_one({"id": txn_doc["id"]}, {"_id": 0})
+                    if fresh:
+                        await generate_bank_entry(db, fresh)
+                except Exception as e:
+                    print(f"[auto-entry] supplier match failed: {e}")
+                return
+        # 5) Fallback ULTIME : numero de facture dans counterparty_name ou communication
+        #    Cherche une facture impayee de cette ACP dont le numero apparait dans le texte
+        copro_id = txn_doc.get("copropriete_id") or ""
+        if copro_id:
+            search_text = f"{cp_name} {comm}".strip()
+            if search_text:
+                unpaid = await db.invoices.find(
+                    {"copropriete_id": copro_id, "status": "unpaid"}, {"_id": 0}
+                ).to_list(500)
+                for inv in unpaid:
+                    inv_num = (inv.get("number") or "").strip()
+                    if inv_num and len(inv_num) >= 3 and inv_num in search_text:
+                        await db.bank_transactions.update_one(
+                            {"id": txn_doc["id"]},
+                            {"$set": {"matched": True, "matched_to": inv["id"], "match_type": "invoice"}}
+                        )
+                        try:
+                            fresh = await db.bank_transactions.find_one({"id": txn_doc["id"]}, {"_id": 0})
+                            if fresh:
+                                await generate_bank_entry(db, fresh)
+                                # Mark invoice as paid
+                                await db.invoices.update_one(
+                                    {"id": inv["id"]},
+                                    {"$set": {"status": "paid", "paid_at": fresh.get("date"),
+                                              "paid_by_transaction_id": txn_doc["id"]}}
+                                )
+                        except Exception as e:
+                            print(f"[auto-entry] invoice match failed: {e}")
+                        return
 
     # ---- BANK STATEMENTS ----
     @router.get("/statements")
@@ -146,6 +224,55 @@ def create_banking_router(db):
             {"copropriete_id": copropriete_id}, {"_id": 0}
         ).sort("date", -1).to_list(1000)
         return statements
+
+    @router.get("/statements/previous-closing")
+    async def get_previous_closing_balance(
+        request: Request,
+        account_number: Optional[str] = None,
+        copropriete_id: Optional[str] = None,
+    ):
+        """Retourne le solde de cloture du DERNIER extrait pour un IBAN donne dans une ACP.
+        Utilise pour pre-remplir le 'solde d'ouverture' a la creation d'un nouvel extrait.
+        Si aucun extrait precedent : retourne {balance: 0.0, source: 'none'}.
+        Si extrait precedent draft : utilise computed_closing (opening + sum mouvements)
+        car le closing_balance n'est figeable qu'a la comptabilisation."""
+        copro_id = (copropriete_id or "").strip() or (request.headers.get("X-Copropriete-Id") or "").strip()
+        if not copro_id or copro_id == "all":
+            raise HTTPException(400, "copropriete_id requis - chinese walls strict")
+        iban_q = (account_number or "").replace(" ", "").upper()
+        query = {"copropriete_id": copro_id}
+        if iban_q:
+            query["account_number"] = {"$regex": f"^{iban_q}$", "$options": "i"}
+        # Dernier extrait par date (puis created_at en tiebreaker)
+        last_stmt = await db.bank_statements.find_one(
+            query, {"_id": 0}, sort=[("date", -1), ("created_at", -1)]
+        )
+        if not last_stmt:
+            return {"balance": 0.0, "source": "none", "message": "Aucun extrait precedent pour ce compte."}
+        # Si l'extrait est posted, on a confiance dans closing_balance saisi
+        # Sinon on calcule depuis les mouvements
+        if last_stmt.get("status") == "posted":
+            return {
+                "balance": float(last_stmt.get("closing_balance", 0) or 0),
+                "source": "posted",
+                "previous_statement_id": last_stmt.get("id"),
+                "previous_statement_date": last_stmt.get("date"),
+                "previous_statement_number": last_stmt.get("number") or "",
+            }
+        # Draft : calcul live
+        txns = await db.bank_transactions.find(
+            {"statement_id": last_stmt["id"]}, {"_id": 0, "amount": 1}
+        ).to_list(10000)
+        mvts_sum = sum(float(t.get("amount", 0) or 0) for t in txns)
+        computed = round(float(last_stmt.get("opening_balance", 0) or 0) + mvts_sum, 2)
+        return {
+            "balance": computed,
+            "source": "draft_computed",
+            "previous_statement_id": last_stmt.get("id"),
+            "previous_statement_date": last_stmt.get("date"),
+            "previous_statement_number": last_stmt.get("number") or "",
+            "warning": "Extrait precedent encore en brouillon - solde calcule depuis les mouvements.",
+        }
 
     @router.post("/statements")
     async def create_statement(data: StatementInput, request: Request):
@@ -167,12 +294,34 @@ def create_banking_router(db):
                     f"L'IBAN {iban} n'est pas configure dans les comptes bancaires de cette ACP. "
                     "Ajoutez-le dans la fiche ACP avant d'importer."
                 )
+        # AUTO-FILL solde d'ouverture : si non fourni (ou 0), reprend le closing du
+        # dernier extrait du meme IBAN. Garantit la continuite des soldes.
+        opening_balance = float(data.opening_balance or 0)
+        opening_source = "user"
+        if abs(opening_balance) < 0.001 and iban:
+            iban_q = iban.replace(" ", "").upper()
+            last_stmt = await db.bank_statements.find_one(
+                {"copropriete_id": copro_id, "account_number": {"$regex": f"^{iban_q}$", "$options": "i"}},
+                {"_id": 0}, sort=[("date", -1), ("created_at", -1)]
+            )
+            if last_stmt:
+                if last_stmt.get("status") == "posted":
+                    opening_balance = float(last_stmt.get("closing_balance", 0) or 0)
+                    opening_source = "previous_posted"
+                else:
+                    txns = await db.bank_transactions.find(
+                        {"statement_id": last_stmt["id"]}, {"_id": 0, "amount": 1}
+                    ).to_list(10000)
+                    mvts_sum = sum(float(t.get("amount", 0) or 0) for t in txns)
+                    opening_balance = round(float(last_stmt.get("opening_balance", 0) or 0) + mvts_sum, 2)
+                    opening_source = "previous_draft_computed"
         doc = {
             "id": str(uuid.uuid4()),
             "number": data.number,
             "date": data.date,
             "account_number": iban,
-            "opening_balance": data.opening_balance,
+            "opening_balance": opening_balance,
+            "opening_balance_source": opening_source,
             "closing_balance": data.closing_balance,
             "copropriete_id": copro_id,
             "status": "draft",  # draft | posted
