@@ -137,23 +137,36 @@ export default function CoproprietesPage() {
     } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); }
   };
   const handleResetData = async (c) => {
-    const msg = `Vider TOUTES les donnees comptables de "${c.name}" ?\n\n`
-                `Seront SUPPRIMES : factures, ecritures, appels de fonds, transactions bancaires,\n` +
-                `budgets, exercices, regularisations, natures de depense, documents uploades.\n\n` +
-                `Seront GARDES : lots, proprietaires, fournisseurs, PCMN, cles de repartition, banques.\n\n` +
-                `Tape "VIDER" pour confirmer :`;
-    const confirm = window.prompt(msg);
-    if (confirm !== 'VIDER') {
-      if (confirm !== null) toast.error('Reset annule (confirmation incorrecte)');
-      return;
-    }
+    const msg = `⚠ VIDER TOUTES les donnees comptables de "${c.name}" ?\n\n`
+                + `Seront DEFINITIVEMENT supprimes :\n`
+                + ` • Factures fournisseurs + pieces jointes\n`
+                + ` • Ecritures comptables (journaux) + pieces jointes\n`
+                + ` • Appels de fonds + ecritures liees\n`
+                + ` • Transactions bancaires + extraits\n`
+                + ` • Budgets et exercices fiscaux (cloture comprise)\n`
+                + ` • Regularisations, natures de depense, documents\n\n`
+                + `Seront CONSERVES (structure de l'ACP) :\n`
+                + ` • Lots et quotites\n`
+                + ` • Proprietaires + fournisseurs (collections globales)\n`
+                + ` • PCMN (plan comptable de l'ACP)\n`
+                + ` • Cles de repartition\n`
+                + ` • Comptes bancaires configures\n\n`
+                + `Cette action est IRREVERSIBLE. Confirmer ?`;
+    if (!window.confirm(msg)) return;
     try {
       const { data } = await api.post(`/coproprietes/${c.id}/reset-financial-data`);
       const s = data.stats || {};
       const total = (s.invoices||0) + (s.journal_entries||0) + (s.fund_calls||0) +
-                    (s.bank_transactions||0) + (s.budgets||0) + (s.fiscal_years||0) +
-                    (s.expense_categories||0) + (s.documents||0) + (s.regularizations||0);
-      toast.success(`ACP videe : ${total} elements supprimes (${s.deleted_files||0} fichier(s) disque)`);
+                    (s.bank_transactions||0) + (s.bank_statements||0) + (s.budgets||0) +
+                    (s.fiscal_years||0) + (s.expense_categories||0) + (s.documents||0) +
+                    (s.regularizations||0);
+      toast.success(
+        `ACP "${c.name}" videe : ${total} elements supprimes ` +
+        `(${s.fiscal_years||0} exercice(s), ${s.invoices||0} facture(s), ` +
+        `${s.journal_entries||0} ecriture(s), ${s.bank_transactions||0} txn bancaires, ` +
+        `${s.deleted_files||0} fichier(s) disque)`,
+        { duration: 6000 }
+      );
       load();
     } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); }
   };
@@ -187,7 +200,7 @@ export default function CoproprietesPage() {
                 <TableCell><div className="flex gap-0">
                   {isManager && <Button variant="outline" size="sm" onClick={() => openEdit(c)} title="Modifier l'ACP (nom, adresse, banques, parametres)" data-testid={`edit-copro-${c.id}`} className="text-[#0055FF] border-[#0055FF]/30 hover:bg-[#0055FF]/10 mr-1"><Pencil size={13} className="mr-1" /> Modifier</Button>}
                   {isManager && <Button variant="ghost" size="sm" onClick={() => handleCleanupOrphans(c)} className="text-blue-600 hover:text-blue-700" title="Nettoyer les ecritures orphelines (re-synchroniser bilan/grand livre)" data-testid={`cleanup-orphans-${c.id}`}><Wand2 size={13} /></Button>}
-                  {isManager && <Button variant="ghost" size="sm" onClick={() => handleResetData(c)} className="text-amber-600 hover:text-amber-700" title="Vider les donnees comptables (test)" data-testid={`reset-data-${c.id}`}><Eraser size={13} /></Button>}
+                  {isManager && <Button variant="outline" size="sm" onClick={() => handleResetData(c)} className="text-amber-700 border-amber-300 hover:bg-amber-50 mr-1" title="Vider TOUTES les donnees comptables (factures, ecritures, exercices, budgets...)" data-testid={`reset-data-${c.id}`}><Eraser size={13} className="mr-1" /> Vider</Button>}
                   {isManager && c.status !== 'archived' && <Button variant="ghost" size="sm" onClick={() => handleArchive(c.id)} className="text-orange-500" title="Archiver"><Archive size={13} /></Button>}
                   {isManager && c.status === 'archived' && <Button variant="ghost" size="sm" onClick={() => handleUnarchive(c.id)} className="text-green-600" title="Reactiver"><RotateCcw size={13} /></Button>}
                   {isAdmin && <Button variant="ghost" size="sm" onClick={() => handleDelete(c.id)} className="text-red-500" title="Supprimer (cascade)"><Trash2 size={13} /></Button>}
