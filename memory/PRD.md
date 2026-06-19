@@ -12,6 +12,31 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 ## Implemented
 
+### Iter44 (Feb 2026) - Repartition boni/mali + Audit Sante dashboard
+
+#### Formule de repartition documentee
+- Mode "apres repartition" : `delta[i] = result_exercise * (quotite[i] / total_quotites)`
+- Bilan equilibre garanti dans les 2 modes (test : 11 862 → 10 374,62 EUR apres repartition).
+- TODO ulterieur : Option A stricte (`appels_recus[i] - charges_imputees[i]`) necessite
+  que les appels de fonds soient inscrits sur les comptes 4000XX en double-entree
+  permanente. A coupler avec un bouton "Cloturer l'exercice" qui materialise les OD.
+
+#### Audit sante comptable - endpoint + UI dashboard
+- **Endpoint** : `GET /api/dashboard/health-audit?copropriete_id=...&days_threshold=60`
+  Retourne `{score, health_label, stats, anomalies}` :
+  - factures impayees > 60j
+  - doublons potentiels (meme fournisseur + montant + dates < 7j)
+  - comptes tier orphelins (400/440 sans owner/supplier link)
+  - ecritures non equilibrees
+  - proprietaires en retard de paiement
+- **UI Dashboard** : Carte "Sante comptable" avec score colore (vert/bleu/orange/rouge),
+  5 mini-tiles (Fact>60j, Doublons, Orphelins, Desequilibres, Owners retard),
+  details d'anomalies dans un `<details>` pliable.
+  Verifie : ACP Test affiche Score 75/100 "Bon" avec 1 facture en retard + 5 owners
+  en retard.
+
+
+
 ### Iter43 (Feb 2026) - AN au 01/01/N+1 + Audit Sante + nettoyage libelles
 
 #### Fix : AN datees au 01/01/N+1 (etat post-paiement)

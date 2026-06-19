@@ -358,13 +358,20 @@ def create_reports_router(db):
         # Resultat = produits - charges. Positif = benefice (boni). Negatif = perte (mali).
         result_exercise = round(total_produits - total_charges, 2)
 
-        # ---- Mode "apres repartition" : repartir le 499 sur les owners ----
-        distributed_per_owner = {}  # owner_id -> delta (positif si owner doit recevoir, negatif si owner doit payer)
+        # ---- Mode "apres repartition" : repartition du boni/mali sur owners ----
+        # Formule garantissant l'equilibre du bilan :
+        #   delta[i] = result_exercise * (quotite[i] / total_quotites)
+        # (= meme formule que Option B, mais documentee)
+        # NOTE : la formule "Option A" stricte (appels_recus[i] - charges_imputees[i])
+        # necessite que les appels soient inscrits sur les comptes 4000XX en double-entree,
+        # ce qui n'est pas le cas dans le modele actuel. A migrer dans une iteration ulterieure
+        # avec materialisation OD permanente a la cloture d'exercice.
+        distributed_per_owner = {}
         if view_mode == "after_distribution" and abs(result_exercise) > 0.01:
-            # Charge owners + leurs lots pour calcul des quotites
             lots_for_acp = await db.lots.find(
                 {"copropriete_id": copropriete_id}, {"_id": 0}
             ).to_list(10000)
+            owners_for_acp = await db.owners.find({}, {"_id": 0}).to_list(10000)
             owner_quotities = {}
             total_quotities = 0.0
             for lot in lots_for_acp:
@@ -378,10 +385,6 @@ def create_reports_router(db):
                     share = round(result_exercise * (quo / total_quotities), 2)
                     distributed_per_owner[oid] = share
 
-            # Ajuste les soldes des owners agreges (OWNER_xxx) directement.
-            # En mode "apres repartition" : boni (delta > 0) crédite le compte owner,
-            # mali (delta < 0) le débite. Comme la fusion a deja eu lieu, on cible
-            # les entrees OWNER_<id> dans balances (pas les comptes 4000XX qui n'existent plus).
             for oid, delta in distributed_per_owner.items():
                 virt_acc = f"OWNER_{oid}"
                 if virt_acc in balances:
@@ -390,7 +393,6 @@ def create_reports_router(db):
                     else:
                         balances[virt_acc]["debit"] += abs(delta)
                 else:
-                    # Owner sans solde initial : creer une entree fraiche
                     owner_doc = next((o for o in owners_for_acp if o["id"] == oid), None)
                     if not owner_doc:
                         continue
