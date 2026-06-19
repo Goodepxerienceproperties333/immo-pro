@@ -243,8 +243,18 @@ export default function Layout() {
             <div className="flex-1" />
             <span className="text-[11px] text-amber-700 font-semibold uppercase tracking-wider">Administration plateforme</span>
             <Separator orientation="vertical" className="h-5 bg-slate-200" />
-            <span className="text-xs text-slate-600">{user?.name}</span>
-            <div className="w-7 h-7 rounded-full bg-gradient-to-br from-amber-500 to-red-600 text-white flex items-center justify-center text-xs font-semibold">{(user?.name || 'U')[0].toUpperCase()}</div>
+            <NavLink
+              to="/profile"
+              className="flex items-center gap-2 px-2 py-1 rounded hover:bg-slate-100 transition-colors group"
+              title="Mon profil"
+              data-testid="user-info-top-admin"
+            >
+              <div className="w-7 h-7 rounded-full bg-gradient-to-br from-amber-500 to-red-600 text-white flex items-center justify-center text-xs font-semibold">{(user?.name || 'U')[0].toUpperCase()}</div>
+              <div className="hidden md:flex flex-col items-start leading-tight">
+                <span className="text-xs font-semibold text-slate-800 group-hover:text-amber-700" data-testid="user-name-display-admin">{user?.name || 'Utilisateur'}</span>
+                <span className="text-[10px] text-slate-500">{getRoleLabel(user?.role)}</span>
+              </div>
+            </NavLink>
           </header>
           <div className="flex-1 overflow-auto p-5 md:p-6"><Outlet /></div>
         </main>
@@ -277,8 +287,18 @@ export default function Layout() {
             <Home size={14} /> Gerer les ACP
           </NavLink>
           <Separator orientation="vertical" className="h-6 bg-slate-700" />
-          <span className="text-[11px] text-slate-400">{getRoleLabel(user?.role)}</span>
-          <div className="w-7 h-7 rounded-full bg-slate-700 flex items-center justify-center text-xs font-semibold text-white">{(user?.name || 'U')[0].toUpperCase()}</div>
+          <NavLink
+            to="/profile"
+            className="flex items-center gap-2 px-2 py-1 rounded hover:bg-slate-800 transition-colors group"
+            title="Mon profil"
+            data-testid="user-info-top-noacp"
+          >
+            <div className="w-7 h-7 rounded-full bg-gradient-to-br from-[#0055FF] to-[#0040CC] flex items-center justify-center text-xs font-semibold text-white">{(user?.name || 'U')[0].toUpperCase()}</div>
+            <div className="hidden md:flex flex-col items-start leading-tight">
+              <span className="text-xs font-semibold text-white group-hover:text-blue-200" data-testid="user-name-display-noacp">{user?.name || 'Utilisateur'}</span>
+              <span className="text-[10px] text-slate-400">{getRoleLabel(user?.role)}</span>
+            </div>
+          </NavLink>
           <button onClick={handleLogout} className="text-slate-400 hover:text-red-400 transition-colors" data-testid="logout-btn-top"><LogOut size={16} /></button>
         </header>
         <main className="flex-1 overflow-auto p-6"><div className="max-w-[1400px] mx-auto"><Outlet /></div></main>
@@ -298,9 +318,19 @@ export default function Layout() {
         </button>
       </aside>
       <div className="flex-1 flex flex-col overflow-hidden">
-        <header className="bg-white border-b border-slate-200 sticky top-0 z-30 h-12 flex items-center px-4 lg:px-6 gap-4">
+        <header className="bg-white border-b border-slate-200 sticky top-0 z-30 h-12 flex items-center px-4 lg:px-6 gap-3">
           <Button variant="ghost" size="sm" className="lg:hidden" onClick={() => setMobileOpen(true)} data-testid="mobile-menu-btn"><Menu size={20} /></Button>
-          <Button variant="ghost" size="sm" onClick={() => { setSelectedCopro(''); navigate('/'); }} className="h-8 px-2 text-slate-400 hover:text-slate-700" data-testid="back-to-home" title="Retour aux coproprietes"><Home size={14} /></Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => { setSelectedCopro(''); navigate('/'); }}
+            className="h-8 px-2.5 text-[#0055FF] border-[#0055FF]/30 hover:bg-[#0055FF]/5 gap-1.5"
+            data-testid="back-to-home"
+            title="Retour a l'apercu de toutes les ACPs"
+          >
+            <Home size={14} />
+            <span className="hidden sm:inline text-xs font-medium">Retour ACPs</span>
+          </Button>
           <Select value={selectedCopro} onValueChange={(v) => setSelectedCopro(v)}>
             <SelectTrigger className="w-[220px] h-8 text-xs border-[#0055FF]/30" data-testid="copro-selector"><SelectValue /></SelectTrigger>
             <SelectContent>{coproprietes.filter(c => c.status !== 'archived').map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}</SelectContent>
@@ -321,8 +351,18 @@ export default function Layout() {
             </Select>
           )}
           <div className="flex-1" />
-          <span className="text-[11px] text-slate-500 hidden sm:block">{getRoleLabel(user?.role)}</span>
-          <div className="w-7 h-7 rounded-full bg-slate-200 flex items-center justify-center text-xs font-semibold text-slate-600">{(user?.name || 'U')[0].toUpperCase()}</div>
+          <NavLink
+            to="/profile"
+            className="flex items-center gap-2 px-2 py-1 rounded hover:bg-slate-100 transition-colors group"
+            title="Mon profil"
+            data-testid="user-info-top"
+          >
+            <div className="w-7 h-7 rounded-full bg-gradient-to-br from-[#0055FF] to-[#0040CC] flex items-center justify-center text-xs font-semibold text-white">{(user?.name || 'U')[0].toUpperCase()}</div>
+            <div className="hidden md:flex flex-col items-start leading-tight">
+              <span className="text-xs font-semibold text-slate-800 group-hover:text-[#0055FF]" data-testid="user-name-display">{user?.name || 'Utilisateur'}</span>
+              <span className="text-[10px] text-slate-500">{getRoleLabel(user?.role)}</span>
+            </div>
+          </NavLink>
         </header>
         <main className="flex-1 overflow-auto p-4 lg:p-6"><div className="max-w-[1600px] mx-auto"><Outlet /></div></main>
       </div>

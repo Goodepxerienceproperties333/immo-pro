@@ -279,9 +279,12 @@ def create_coproprietes_router(db):
         - Natures de depense
         - Documents uploades
 
-        Accessible aux syndic/superadmin/gestionnaire.
+        Reserve au SUPERADMIN uniquement (operation destructive).
         """
-        await _get_manager(request)
+        from server import get_current_user, is_superadmin_only
+        user = await get_current_user(request)
+        if not is_superadmin_only(user.get("role", "")):
+            raise HTTPException(403, "Operation reservee au super administrateur")
 
         copro = await db.coproprietes.find_one({"id": copro_id}, {"_id": 0, "name": 1})
         if not copro:
@@ -339,9 +342,12 @@ def create_coproprietes_router(db):
         - source_type='bank_txn' mais la bank_transaction n'existe plus
 
         Retourne le nombre d'ecritures supprimees par categorie.
-        Reserve aux syndic/gestionnaire/admin.
+        Reserve au SUPERADMIN uniquement (operation potentiellement destructive).
         """
-        await _get_manager(request)
+        from server import get_current_user, is_superadmin_only
+        user = await get_current_user(request)
+        if not is_superadmin_only(user.get("role", "")):
+            raise HTTPException(403, "Operation reservee au super administrateur")
         copro = await db.coproprietes.find_one({"id": copro_id}, {"_id": 0, "name": 1})
         if not copro:
             raise HTTPException(404, "Copropriete non trouvee")
