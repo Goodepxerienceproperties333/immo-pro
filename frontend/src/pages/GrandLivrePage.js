@@ -7,6 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
 import { Search, BookOpen } from 'lucide-react';
+import { fmtDate } from '@/lib/dateFmt';
 
 export default function GrandLivrePage() {
   const [dateFrom, setDateFrom] = useState('');
@@ -67,7 +68,7 @@ export default function GrandLivrePage() {
                   <TableBody>
                     {account.movements.map((m, i) => (
                       <TableRow key={i} className="hover:bg-slate-50/50">
-                        <TableCell className="font-mono text-xs">{m.date}</TableCell>
+                        <TableCell className="font-mono text-xs">{fmtDate(m.date)}</TableCell>
                         <TableCell><Badge variant="outline" className="text-[10px]">{m.journal}</Badge></TableCell>
                         <TableCell className="text-xs">{m.reference}</TableCell>
                         <TableCell className="text-sm">{m.description}</TableCell>

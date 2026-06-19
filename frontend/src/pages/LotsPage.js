@@ -8,6 +8,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
 import { Plus, Pencil, Trash2, Search, X, ArrowRightLeft, UserPlus } from 'lucide-react';
+import { fmtDate } from '@/lib/dateFmt';
 
 const LOT_TYPES = [
   { value: 'apartment', label: 'Appartement' },
@@ -323,7 +324,7 @@ function MutationDialog({ lot, owners, ownersRefresh, onClose, onDone }) {
                     <div key={m.id || i} className="border border-slate-200 rounded p-2 bg-white">
                       <div className="flex items-start justify-between gap-2">
                         <div className="flex-1">
-                          <div className="font-medium text-slate-900">{m.date} : {m.old_owner_name} -&gt; {m.new_owner_name}</div>
+                          <div className="font-medium text-slate-900">{fmtDate(m.date)} : {m.old_owner_name} -&gt; {m.new_owner_name}</div>
                           <div className="text-[11px]">Roulement {m.roulement_quota?.toFixed(2)} EUR + Prorata {m.prorata_provisions?.toFixed(2)} EUR = <b>{m.total_transfer?.toFixed(2)} EUR</b></div>
                           {m.note && <div className="text-[11px] italic text-slate-500">{m.note}</div>}
                         </div>

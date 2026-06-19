@@ -6,6 +6,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
 import { Users, Building2, UserCheck, Receipt, AlertCircle, TrendingUp, Home, ArrowLeft, Landmark, FileText, Megaphone, Sparkles, Loader2 } from 'lucide-react';
+import { fmtDate } from '@/lib/dateFmt';
 
 export default function DashboardPage() {
   const { selectedCopro, setSelectedCopro, isAdmin } = useAuth();
@@ -172,7 +173,7 @@ export default function DashboardPage() {
               <div className="space-y-3">
                 {stats.recent_entries.map((entry, i) => (
                   <div key={i} className="flex items-center justify-between py-2 border-b border-slate-100 last:border-0">
-                    <div><span className="text-sm font-medium text-slate-700">{entry.description}</span><div className="text-xs text-slate-400">{entry.date} - {entry.journal_type}</div></div>
+                    <div><span className="text-sm font-medium text-slate-700">{entry.description}</span><div className="text-xs text-slate-400">{fmtDate(entry.date)} - {entry.journal_type}</div></div>
                     <span className="text-sm font-semibold text-slate-900">{entry.total_debit?.toFixed(2)} EUR</span>
                   </div>
                 ))}

@@ -9,6 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { toast } from 'sonner';
 import { Users, Truck, Eye, ArrowUpRight, ArrowDownRight, Download, FileText, Filter, X } from 'lucide-react';
+import { fmtDate } from '@/lib/dateFmt';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
@@ -173,8 +174,8 @@ export default function BalanceTiersPage() {
         />
         {(filters.startDate || filters.endDate) && (
           <div className="mb-3 text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-1.5 inline-block">
-            Soldes calcules <b>uniquement sur la periode</b> {filters.startDate || '…'} a {filters.endDate || '…'}.
-            Decoche &quot;Tout&quot; pour la situation complete a date.
+            Colonnes <b>Facture / Paye</b> = mouvements sur la periode {filters.startDate || '…'} a {filters.endDate || '…'}.
+            Colonne <b>Solde</b> = solde cumulatif du compte tier jusqu&apos;au {filters.endDate || 'jour courant'}.
           </div>
         )}
 
@@ -277,6 +278,8 @@ export default function BalanceTiersPage() {
                   <TableHeader><TableRow>
                     <TableHead>Fournisseur</TableHead><TableHead>Compte</TableHead><TableHead>N TVA</TableHead>
                     <TableHead className="text-right">Facture</TableHead><TableHead className="text-right">Paye</TableHead>
+                    <TableHead className="text-right text-slate-500" title="Debit du compte tier dans le grand livre">D. compte</TableHead>
+                    <TableHead className="text-right text-slate-500" title="Credit du compte tier dans le grand livre">C. compte</TableHead>
                     <TableHead className="text-right">Solde</TableHead><TableHead>Statut</TableHead><TableHead className="w-16"></TableHead>
                   </TableRow></TableHeader>
                   <TableBody>
@@ -290,6 +293,8 @@ export default function BalanceTiersPage() {
                         <TableCell className="font-mono text-xs">{s.vat_number || '-'}</TableCell>
                         <TableCell className="text-right font-mono">{s.total_invoiced.toFixed(2)}</TableCell>
                         <TableCell className="text-right font-mono">{s.total_paid.toFixed(2)}</TableCell>
+                        <TableCell className="text-right font-mono text-xs text-slate-500" data-testid={`sup-acc-debit-${s.supplier_id || i}`}>{(s.account_debit ?? s.total_paid ?? 0).toFixed(2)}</TableCell>
+                        <TableCell className="text-right font-mono text-xs text-slate-500" data-testid={`sup-acc-credit-${s.supplier_id || i}`}>{(s.account_credit ?? s.total_invoiced ?? 0).toFixed(2)}</TableCell>
                         <TableCell className={`text-right font-mono font-bold ${s.balance > 0 ? 'text-orange-700' : s.balance < 0 ? 'text-green-700' : 'text-slate-500'}`}>{s.balance.toFixed(2)}</TableCell>
                         <TableCell>
                           <Badge variant="outline" className={s.status === 'crediteur' ? 'bg-orange-50 text-orange-700 border-orange-200' : s.status === 'debiteur' ? 'bg-green-50 text-green-700 border-green-200' : 'bg-slate-50 text-slate-500'}>
@@ -339,7 +344,7 @@ export default function BalanceTiersPage() {
                 <TableBody>
                   {(detail?.movements || []).map((m, i) => (
                     <TableRow key={i} className="hover:bg-slate-50/50">
-                      <TableCell className="font-mono text-xs">{m.date}</TableCell>
+                      <TableCell className="font-mono text-xs">{fmtDate(m.date)}</TableCell>
                       <TableCell className="text-sm">{m.description}</TableCell>
                       <TableCell className="text-xs text-slate-400">{m.reference}</TableCell>
                       <TableCell className="text-right font-mono text-sm">{m.debit > 0 ? m.debit.toFixed(2) : ''}</TableCell>

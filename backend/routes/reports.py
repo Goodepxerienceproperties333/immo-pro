@@ -313,6 +313,56 @@ def create_reports_router(db):
             "fiscal_year": fy.get("name") if fy else None,
         }
 
+    # ---- PDF BILAN (par exercice) ----
+    @router.get("/bilan/pdf")
+    async def bilan_pdf(
+        request: Request,
+        copropriete_id: Optional[str] = None,
+        fiscal_year_id: Optional[str] = None,
+        date_to: Optional[str] = None,
+    ):
+        """Genere le PDF Bilan filtree par exercice (ou date_to libre).
+        Chinese walls strict : copropriete_id requis."""
+        from pdf_bilan import build_bilan_pdf
+        copropriete_id = _require_copro(copropriete_id, request)
+        copro = await db.coproprietes.find_one({"id": copropriete_id}, {"_id": 0})
+        if not copro:
+            raise HTTPException(404, "Copropriete non trouvee")
+        # Resolve fiscal year (must belong to the ACP)
+        fy = None
+        if fiscal_year_id:
+            fy = await db.fiscal_years.find_one(
+                {"id": fiscal_year_id, "copropriete_id": copropriete_id},
+                {"_id": 0},
+            )
+            if not fy:
+                raise HTTPException(404, "Exercice non trouve pour cette ACP")
+        # Re-utilise le calcul du bilan via l'endpoint interne
+        data = await bilan(
+            request=request, date_to=date_to, copropriete_id=copropriete_id,
+            fiscal_year_id=fiscal_year_id,
+        )
+        # Syndic info (si lie a la copro)
+        syndic = None
+        syndic_id = copro.get("syndic_id")
+        if syndic_id:
+            syndic = await db.syndics.find_one({"id": syndic_id}, {"_id": 0})
+        pdf_bytes = build_bilan_pdf(
+            copropriete=copro,
+            syndic=syndic,
+            fiscal_year=fy,
+            bilan_data=data,
+            date_to=date_to or (fy.get("end_date") if fy else ""),
+        )
+        safe_name = (copro.get("name", "acp") or "acp").replace(" ", "_").replace("/", "_")
+        suffix = (date_to or (fy.get("end_date") if fy else datetime.now(timezone.utc).date().isoformat()))
+        filename = f"bilan-{safe_name}-{suffix}.pdf"
+        return StreamingResponse(
+            io.BytesIO(pdf_bytes),
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
     # ---- COMPTE DE RESULTATS (Income Statement) - Structure PCMN belge ----
     # CHARGES (classe 6):
     #   I.   60 Approvisionnements & marchandises (rare en copro)
@@ -738,6 +788,30 @@ def create_reports_router(db):
             if end_date:
                 je_q["date"]["$lte"] = end_date
         entries = await db.journal_entries.find(je_q, {"_id": 0}).to_list(100000)
+
+        # Pour le SOLDE CUMULATIF : entries de toutes les dates jusqu'a end_date (inclus anterieurs)
+        je_q_cumul = {"copropriete_id": copropriete_id}
+        if end_date:
+            je_q_cumul["date"] = {"$lte": end_date}
+        entries_cumul = await db.journal_entries.find(je_q_cumul, {"_id": 0}).to_list(100000)
+        # Agregation cumulatif par owner_id x compte
+        cumul_per_owner = {}  # oid -> {prov_debit, prov_credit, res_debit, res_credit}
+        cumul_per_acc = {}   # account_number -> {debit, credit}
+        for e in entries_cumul:
+            for ln in e.get("lines", []) or []:
+                tpid = ln.get("third_party_id")
+                acc = ln.get("account_number", "")
+                d_val = float(ln.get("debit", 0) or 0)
+                c_val = float(ln.get("credit", 0) or 0)
+                if tpid:
+                    cumul_per_owner.setdefault(tpid, {"by_acc": {}})
+                    cumul_per_owner[tpid]["by_acc"].setdefault(acc, {"debit": 0.0, "credit": 0.0})
+                    cumul_per_owner[tpid]["by_acc"][acc]["debit"] += d_val
+                    cumul_per_owner[tpid]["by_acc"][acc]["credit"] += c_val
+                else:
+                    cumul_per_acc.setdefault(acc, {"debit": 0.0, "credit": 0.0})
+                    cumul_per_acc[acc]["debit"] += d_val
+                    cumul_per_acc[acc]["credit"] += c_val
         # Aggregate Dr/Cr per account_number x third_party_id (or third_party falls back to scan all owners)
         # Pour les comptes tiers les lignes ont third_party_id = owner_id
         per_owner_lines = {}  # owner_id -> [line + entry_meta]
@@ -836,7 +910,24 @@ def create_reports_router(db):
 
             total_called = round(prov_debit + res_debit, 2)
             total_paid = round(prov_credit + res_credit + unmatched_paid, 2)
-            balance = round(total_called - total_paid, 2)
+            # Balance CUMULATIF du compte tier (toutes ecritures jusqu'a end_date)
+            owner_cumul_accs = (cumul_per_owner.get(oid) or {"by_acc": {}}).get("by_acc", {})
+            prov_d_cumul = owner_cumul_accs.get(acc_prov, {}).get("debit", 0.0)
+            prov_c_cumul = owner_cumul_accs.get(acc_prov, {}).get("credit", 0.0)
+            res_d_cumul = owner_cumul_accs.get(acc_res, {}).get("debit", 0.0)
+            res_c_cumul = owner_cumul_accs.get(acc_res, {}).get("credit", 0.0)
+            # Fallback : ecritures sans third_party_id mais sur les comptes de l'owner
+            if acc_prov and acc_prov in cumul_per_acc:
+                prov_d_cumul += cumul_per_acc[acc_prov]["debit"]
+                prov_c_cumul += cumul_per_acc[acc_prov]["credit"]
+                cumul_per_acc[acc_prov] = {"debit": 0.0, "credit": 0.0}
+            if acc_res and acc_res in cumul_per_acc:
+                res_d_cumul += cumul_per_acc[acc_res]["debit"]
+                res_c_cumul += cumul_per_acc[acc_res]["credit"]
+                cumul_per_acc[acc_res] = {"debit": 0.0, "credit": 0.0}
+            cumul_called = prov_d_cumul + res_d_cumul
+            cumul_paid = prov_c_cumul + res_c_cumul + unmatched_paid
+            balance = round(cumul_called - cumul_paid, 2)
 
             movements = sorted(owner_lines + unmatched_movements, key=lambda x: x["date"])
 
@@ -848,10 +939,11 @@ def create_reports_router(db):
                 "account_reserve": acc_res,
                 "provisions_debit": round(prov_debit, 2),
                 "provisions_credit": round(prov_credit, 2),
-                "provisions_balance": round(prov_debit - prov_credit, 2),
+                # provisions_balance / reserve_balance = soldes CUMULATIFS du compte tier
+                "provisions_balance": round(prov_d_cumul - prov_c_cumul, 2),
                 "reserve_debit": round(res_debit, 2),
                 "reserve_credit": round(res_credit, 2),
-                "reserve_balance": round(res_debit - res_credit, 2),
+                "reserve_balance": round(res_d_cumul - res_c_cumul, 2),
                 "unmatched_paid": round(unmatched_paid, 2),
                 "total_called": total_called,
                 "total_paid": total_paid,
@@ -1204,6 +1296,13 @@ def create_reports_router(db):
             if start_date: je_q["date"]["$gte"] = start_date
             if end_date: je_q["date"]["$lte"] = end_date
         entries = await db.journal_entries.find(je_q, {"_id": 0}).to_list(100000)
+
+        # Pour le SOLDE on charge TOUTES les ecritures jusqu'a end_date (sans start_date)
+        # car le solde du compte tier est CUMULATIF (anterieurs inclus).
+        je_q_cumul = {"copropriete_id": copropriete_id}
+        if end_date:
+            je_q_cumul["date"] = {"$lte": end_date}
+        entries_cumul = await db.journal_entries.find(je_q_cumul, {"_id": 0}).to_list(100000)
         # Charge factures pour les fournisseurs orphelins
         inv_q = {"copropriete_id": copropriete_id}
         if start_date or end_date:
@@ -1251,10 +1350,43 @@ def create_reports_router(db):
                     "tier_account": tier_acc,
                     "orphan": False,
                     "debit": 0.0, "credit": 0.0,
+                    "cumul_debit": 0.0, "cumul_credit": 0.0,
                     "invoice_count": 0,
                 })
                 d["debit"] += float(ln.get("debit", 0) or 0)
                 d["credit"] += float(ln.get("credit", 0) or 0)
+
+        # SOLDE CUMULATIF : aggregation sur entries_cumul (toutes ecritures jusqu'a end_date)
+        for e in entries_cumul:
+            for ln in e.get("lines", []) or []:
+                acc = ln.get("account_number", "")
+                tpid = ln.get("third_party_id")
+                if not acc.startswith("44000") and not acc.startswith("440000"):
+                    if tpid and tpid in supplier_by_id and not acc.startswith("44"):
+                        continue
+                    elif not (tpid and tpid in supplier_by_id):
+                        continue
+                sup = None
+                if tpid and tpid in supplier_by_id:
+                    sup = supplier_by_id[tpid]
+                elif acc in tier_to_supplier:
+                    sup = tier_to_supplier[acc]
+                if not sup:
+                    continue
+                sid = sup["id"]
+                tier_acc = ((sup.get("tier_accounts") or {}).get(copropriete_id, {}) or {}).get("main", acc)
+                d = per_supplier.setdefault(sid, {
+                    "supplier_id": sid,
+                    "supplier_name": sup.get("name", ""),
+                    "vat_number": sup.get("vat_number", "") or sup.get("bce_number", ""),
+                    "tier_account": tier_acc,
+                    "orphan": False,
+                    "debit": 0.0, "credit": 0.0,
+                    "cumul_debit": 0.0, "cumul_credit": 0.0,
+                    "invoice_count": 0,
+                })
+                d["cumul_debit"] += float(ln.get("debit", 0) or 0)
+                d["cumul_credit"] += float(ln.get("credit", 0) or 0)
 
         # Compte les factures par fournisseur
         from collections import defaultdict
@@ -1291,7 +1423,10 @@ def create_reports_router(db):
 
         result = []
         for d in per_supplier.values():
-            balance = round(d["credit"] - d["debit"], 2)
+            # Solde CUMULATIF (toutes ecritures jusqu'a end_date)
+            cumul_credit = d.get("cumul_credit", 0.0) or d["credit"]
+            cumul_debit = d.get("cumul_debit", 0.0) or d["debit"]
+            balance = round(cumul_credit - cumul_debit, 2)
             result.append({
                 "supplier_id": d["supplier_id"],
                 "supplier_name": d["supplier_name"],
@@ -1299,8 +1434,14 @@ def create_reports_router(db):
                 "tier_account": d["tier_account"],
                 "orphan": d["orphan"],
                 "invoice_count": d["invoice_count"],
+                # Facture/Paye = mouvements de la PERIODE
                 "total_invoiced": round(d["credit"], 2),
                 "total_paid": round(d["debit"], 2),
+                # Compte = mouvements cumulatifs du compte tier (grand livre)
+                "account_debit": round(cumul_debit, 2),
+                "account_credit": round(cumul_credit, 2),
+                "account_balance": balance,
+                # Solde affiche = solde CUMULATIF du compte tier
                 "balance": balance,
                 "status": "crediteur" if balance > 0.01 else ("debiteur" if balance < -0.01 else "solde"),
             })

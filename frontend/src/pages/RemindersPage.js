@@ -7,6 +7,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
 import { Bell, Download, AlertTriangle } from 'lucide-react';
+import { fmtDate } from '@/lib/dateFmt';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
@@ -99,7 +100,7 @@ export default function RemindersPage() {
                     <TableCell className="font-medium">{r.owner_name}</TableCell>
                     <TableCell className="font-mono text-xs text-[#0055FF]">{r.vcs_code}</TableCell>
                     <TableCell>{r.fund_call_name}</TableCell>
-                    <TableCell className="font-mono">{r.due_date}</TableCell>
+                    <TableCell className="font-mono">{fmtDate(r.due_date)}</TableCell>
                     <TableCell className="text-right font-mono">{r.days_late} j</TableCell>
                     <TableCell className="text-right font-mono font-semibold">{r.amount.toFixed(2)} EUR</TableCell>
                     <TableCell>

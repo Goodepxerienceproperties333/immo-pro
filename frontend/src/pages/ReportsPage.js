@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { toast } from 'sonner';
 import { BarChart3, Download, FileText } from 'lucide-react';
+import { fmtDate } from '@/lib/dateFmt';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
@@ -20,12 +21,37 @@ export default function ReportsPage() {
   const [resultat, setResultat] = useState(null);
   const [decomptes, setDecomptes] = useState(null);
   const [years, setYears] = useState([]);
+  const [fiscalYearId, setFiscalYearId] = useState('');
   const [loading, setLoading] = useState(false);
 
   useState(() => { api.get('/fiscal/years').then(r => setYears(r.data)).catch(() => {}); });
 
   const loadBalance = async () => { setLoading(true); try { const params = {}; if (dateFrom) params.date_from = dateFrom; if (dateTo) params.date_to = dateTo; const { data } = await api.get('/reports/balance', { params }); setBalance(data); } catch { toast.error('Erreur'); } finally { setLoading(false); } };
-  const loadBilan = async () => { setLoading(true); try { const params = {}; if (dateTo) params.date_to = dateTo; const { data } = await api.get('/reports/bilan', { params }); setBilan(data); } catch { toast.error('Erreur'); } finally { setLoading(false); } };
+  const loadBilan = async () => { setLoading(true); try { const params = {}; if (dateTo) params.date_to = dateTo; if (fiscalYearId) params.fiscal_year_id = fiscalYearId; const { data } = await api.get('/reports/bilan', { params }); setBilan(data); } catch { toast.error('Erreur'); } finally { setLoading(false); } };
+  const downloadBilanPdf = async () => {
+    try {
+      const params = {};
+      if (dateTo) params.date_to = dateTo;
+      if (fiscalYearId) params.fiscal_year_id = fiscalYearId;
+      const res = await api.get('/reports/bilan/pdf', { params, responseType: 'blob' });
+      const url = window.URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `bilan_${fiscalYearId || (dateTo || 'date')}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      try {
+        const text = await err.response?.data?.text?.();
+        const msg = text ? JSON.parse(text).detail : (err.response?.data?.detail || 'Erreur de generation du PDF');
+        toast.error(msg);
+      } catch {
+        toast.error('Erreur de generation du PDF');
+      }
+    }
+  };
   const loadResultat = async () => { setLoading(true); try { const params = {}; if (dateFrom) params.date_from = dateFrom; if (dateTo) params.date_to = dateTo; const { data } = await api.get('/reports/resultat', { params }); setResultat(data); } catch { toast.error('Erreur'); } finally { setLoading(false); } };
   const loadDecomptes = async () => { setLoading(true); try { const params = {}; if (dateFrom) params.date_from = dateFrom; if (dateTo) params.date_to = dateTo; const { data } = await api.get('/reports/decompte', { params }); setDecomptes(data); } catch { toast.error('Erreur'); } finally { setLoading(false); } };
 
@@ -97,6 +123,29 @@ export default function ReportsPage() {
 
         <TabsContent value="bilan" className="mt-0">
           <DateFilters onLoad={loadBilan} label="Charger bilan" />
+          <div className="flex items-end gap-2 mb-3">
+            <div>
+              <label className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold block mb-1">Exercice fiscal</label>
+              <select
+                className="border border-slate-200 rounded-md px-3 py-2 text-sm bg-white min-w-[220px]"
+                value={fiscalYearId}
+                onChange={e => setFiscalYearId(e.target.value)}
+                data-testid="bilan-fiscal-year-select"
+              >
+                <option value="">— Tous (situation a date) —</option>
+                {years.map(y => <option key={y.id} value={y.id}>{y.name} ({y.status === 'closed' ? 'cloture' : 'ouvert'})</option>)}
+              </select>
+            </div>
+            <Button
+              variant="default"
+              size="sm"
+              onClick={downloadBilanPdf}
+              className="bg-[#0055FF] hover:bg-[#0040CC] text-white"
+              data-testid="download-bilan-pdf"
+            >
+              <FileText size={14} className="mr-1" /> PDF Bilan
+            </Button>
+          </div>
           {bilan && (<>
             <div className="flex justify-end mb-2"><Button onClick={exportBilanXlsx} variant="outline" size="sm" data-testid="export-bilan-xlsx"><Download size={14} className="mr-1" /> Export Bilan Excel</Button></div>
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -186,7 +235,7 @@ export default function ReportsPage() {
                 {d.charges.length > 0 && (
                   <div className="border rounded overflow-hidden">
                     <table className="w-full text-xs"><thead><tr className="bg-slate-50"><th className="p-2 text-left">Date</th><th className="p-2 text-left">Description</th><th className="p-2">Facture</th><th className="p-2 text-right">Montant</th></tr></thead>
-                      <tbody>{d.charges.map((c, i) => (<tr key={i} className="border-t border-slate-100"><td className="p-2 font-mono">{c.date}</td><td className="p-2">{c.description}</td><td className="p-2 font-mono">{c.invoice_number}</td><td className="p-2 text-right font-mono">{c.amount.toFixed(2)}</td></tr>))}</tbody>
+                      <tbody>{d.charges.map((c, i) => (<tr key={i} className="border-t border-slate-100"><td className="p-2 font-mono">{fmtDate(c.date)}</td><td className="p-2">{c.description}</td><td className="p-2 font-mono">{c.invoice_number}</td><td className="p-2 text-right font-mono">{c.amount.toFixed(2)}</td></tr>))}</tbody>
                     </table>
                   </div>
                 )}

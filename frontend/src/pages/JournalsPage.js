@@ -11,6 +11,7 @@ import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
 import { Plus, Trash2, Eye, Paperclip, Download, Pencil } from 'lucide-react';
 import AccountSearchSelect from '@/components/AccountSearchSelect';
+import { fmtDate } from '@/lib/dateFmt';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
@@ -150,7 +151,7 @@ export default function JournalsPage() {
                   <TableRow><TableCell colSpan={6} className="text-center py-8 text-slate-400">Aucune ecriture</TableCell></TableRow>
                 ) : entries.map(e => (
                   <TableRow key={e.id} className="hover:bg-slate-50/50">
-                    <TableCell className="font-mono text-sm">{e.date}</TableCell>
+                    <TableCell className="font-mono text-sm">{fmtDate(e.date)}</TableCell>
                     <TableCell className="font-mono text-xs">
                       {e.reference}
                       {e.auto_generated && !e.manually_edited && <Badge variant="outline" className="ml-2 text-[10px] bg-blue-50 border-blue-200 text-blue-700" data-testid={`auto-badge-${e.id}`}>Auto</Badge>}
@@ -270,7 +271,7 @@ export default function JournalsPage() {
           {viewEntry && (
             <div className="space-y-4 mt-2">
               <div className="grid grid-cols-3 gap-4 text-sm">
-                <div><span className="text-slate-500">Date:</span> <span className="font-medium">{viewEntry.date}</span></div>
+                <div><span className="text-slate-500">Date:</span> <span className="font-medium">{fmtDate(viewEntry.date)}</span></div>
                 <div><span className="text-slate-500">Ref:</span> <span className="font-medium">{viewEntry.reference}</span></div>
                 <div><span className="text-slate-500">Journal:</span> <Badge variant="outline">{viewEntry.journal_type}</Badge></div>
               </div>

@@ -9,6 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
 import { Plus, Trash2, Check, Megaphone, FileText, Sparkles, ShieldCheck } from 'lucide-react';
+import { fmtDate } from '@/lib/dateFmt';
 
 export default function FundCallsPage() {
   const [calls, setCalls] = useState([]);
@@ -106,7 +107,7 @@ export default function FundCallsPage() {
                   <span className="font-semibold text-sm">{c.name}</span>
                   <Badge variant="outline" className={c.status === 'completed' ? 'bg-green-50 text-green-700' : c.status === 'partial' ? 'bg-yellow-50 text-yellow-700' : 'bg-slate-50 text-slate-600'}>{c.status === 'completed' ? 'Complet' : c.status === 'partial' ? 'Partiel' : 'En attente'}</Badge>
                 </div>
-                <div className="text-xs text-slate-500">{c.date} - {c.call_type}</div>
+                <div className="text-xs text-slate-500">{fmtDate(c.date)} - {c.call_type}</div>
                 <div className="font-mono font-bold text-sm mt-1">{c.total_amount?.toFixed(2)} EUR</div>
                 {c.reserve_amount > 0 && (
                   <div className="text-[11px] text-purple-700 flex items-center gap-1 mt-1" data-testid={`call-reserve-${c.id}`}>
@@ -139,7 +140,7 @@ export default function FundCallsPage() {
                     </Badge>
                   )}
                 </CardTitle>
-                <div className="text-xs text-slate-500">{selectedCall.date} - Echeance: {selectedCall.due_date || '-'} - {selectedCall.description}</div>
+                <div className="text-xs text-slate-500">{fmtDate(selectedCall.date)} - Echeance: {selectedCall.due_date || '-'} - {selectedCall.description}</div>
               </CardHeader>
               <CardContent>
                 {selectedCall.lines && selectedCall.lines.length > 0 && (
@@ -185,7 +186,7 @@ export default function FundCallsPage() {
                         <TableCell className="text-right font-mono text-sm">{d.share}</TableCell>
                         <TableCell className="text-right font-mono font-semibold">{d.amount.toFixed(2)} EUR</TableCell>
                         <TableCell>
-                          {d.paid ? <Badge className="bg-green-50 text-green-700 border-green-200" variant="outline">Paye {d.paid_date}</Badge> : <Badge variant="outline" className="text-slate-400">Impaye</Badge>}
+                          {d.paid ? <Badge className="bg-green-50 text-green-700 border-green-200" variant="outline">Paye {fmtDate(d.paid_date)}</Badge> : <Badge variant="outline" className="text-slate-400">Impaye</Badge>}
                         </TableCell>
                         <TableCell>
                           {!d.paid && <Button variant="ghost" size="sm" onClick={() => markPaid(selectedCall.id, d.owner_id)} className="text-green-600" title="Marquer paye" data-testid={`mark-paid-${d.owner_id}`}><Check size={14} /></Button>}

@@ -13,6 +13,7 @@ import { Plus, Trash2, Lock, Unlock, Calendar, CheckCircle2, RotateCcw, Sparkles
 import BudgetWizard from '@/components/BudgetWizard';
 import RegularizationDialog from '@/components/RegularizationDialog';
 import AccountSearchSelect from '@/components/AccountSearchSelect';
+import { fmtDate } from '@/lib/dateFmt';
 
 export default function FiscalYearPage() {
   const [tab, setTab] = useState('years');
@@ -186,8 +187,8 @@ export default function FiscalYearPage() {
                 {years.length === 0 ? <TableRow><TableCell colSpan={6} className="text-center py-8 text-slate-400">Aucun exercice</TableCell></TableRow> : years.map(y => (
                   <TableRow key={y.id} className="hover:bg-slate-50/50">
                     <TableCell className="font-medium">{y.name}</TableCell>
-                    <TableCell className="font-mono text-sm">{y.start_date}</TableCell>
-                    <TableCell className="font-mono text-sm">{y.end_date}</TableCell>
+                    <TableCell className="font-mono text-sm">{fmtDate(y.start_date)}</TableCell>
+                    <TableCell className="font-mono text-sm">{fmtDate(y.end_date)}</TableCell>
                     <TableCell><Badge variant="outline" className={y.status === 'open' ? 'bg-green-50 text-green-700 border-green-200' : 'bg-slate-100 text-slate-600'}>{y.status === 'open' ? 'Ouvert' : 'Cloture'}</Badge></TableCell>
                     <TableCell className="font-mono">{y.result_net !== undefined ? `${y.result_net} EUR` : '-'}</TableCell>
                     <TableCell><div className="flex gap-1">

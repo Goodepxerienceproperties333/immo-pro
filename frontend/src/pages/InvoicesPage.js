@@ -11,6 +11,7 @@ import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
 import { Plus, Trash2, Key, Receipt, Sparkles, Paperclip, Download, X, Pencil, AlertTriangle, Filter } from 'lucide-react';
 import AccountSearchSelect from '@/components/AccountSearchSelect';
+import { fmtDate } from '@/lib/dateFmt';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
@@ -340,7 +341,7 @@ export default function InvoicesPage() {
                   <TableRow key={inv.id} className="hover:bg-slate-50/50">
                     <TableCell className="font-mono text-xs text-[#0055FF] font-semibold">{inv.internal_reference || '-'}</TableCell>
                     <TableCell className="font-mono text-sm">{inv.number}</TableCell>
-                    <TableCell>{inv.date}</TableCell>
+                    <TableCell>{fmtDate(inv.date)}</TableCell>
                     <TableCell className="font-medium">{inv.supplier}</TableCell>
                     <TableCell className="max-w-[200px] truncate">{inv.description}</TableCell>
                     <TableCell className="text-right font-mono">{inv.total_amount?.toFixed(2)} EUR</TableCell>
@@ -623,7 +624,7 @@ export default function InvoicesPage() {
                     <summary className="cursor-pointer">Voir les factures liees ({keyUsage.invoices.length})</summary>
                     <ul className="mt-1 space-y-0.5 text-[11px]">
                       {keyUsage.invoices.slice(0, 8).map(i => (
-                        <li key={i.id} className="font-mono">{i.date} - {i.number} - {i.supplier} ({i.total_amount} EUR)</li>
+                        <li key={i.id} className="font-mono">{fmtDate(i.date)} - {i.number} - {i.supplier} ({i.total_amount} EUR)</li>
                       ))}
                       {keyUsage.invoices.length > 8 && <li>... et {keyUsage.invoices.length - 8} autres</li>}
                     </ul>

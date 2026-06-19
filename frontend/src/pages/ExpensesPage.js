@@ -9,6 +9,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { useNavigate } from 'react-router-dom';
 import { Receipt, X, Paperclip, Filter, Pencil, Download } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
+import { fmtDate } from '@/lib/dateFmt';
 
 const ALL = '__all__';
 
@@ -201,7 +202,7 @@ export default function ExpensesPage() {
             {!loading && data && data.expenses.length === 0 && <TableRow><TableCell colSpan={10} className="text-center py-12 text-slate-400">Aucune depense</TableCell></TableRow>}
             {!loading && data && data.expenses.map((r, i) => (
               <TableRow key={r.id} className="hover:bg-slate-50/50" data-testid={`expense-row-${i}`}>
-                <TableCell className="font-mono text-xs">{r.date}</TableCell>
+                <TableCell className="font-mono text-xs">{fmtDate(r.date)}</TableCell>
                 <TableCell className="font-mono text-xs">{r.number}</TableCell>
                 <TableCell className="font-medium text-sm">{r.supplier}</TableCell>
                 <TableCell className="max-w-[200px] truncate text-xs text-slate-600">{r.description}</TableCell>
@@ -209,7 +210,7 @@ export default function ExpensesPage() {
                 <TableCell className="text-xs">{r.distribution_key_name}</TableCell>
                 <TableCell className="text-right font-mono font-semibold">{r.total_amount.toFixed(2)}</TableCell>
                 <TableCell>
-                  {r.paid ? <Badge className="bg-green-50 text-green-700 border-green-200 text-[10px]" variant="outline">Paye {r.paid_info?.date}</Badge> : <Badge variant="outline" className="text-slate-400 text-[10px]">Impaye</Badge>}
+                  {r.paid ? <Badge className="bg-green-50 text-green-700 border-green-200 text-[10px]" variant="outline">Paye {fmtDate(r.paid_info?.date)}</Badge> : <Badge variant="outline" className="text-slate-400 text-[10px]">Impaye</Badge>}
                 </TableCell>
                 <TableCell className="text-center text-slate-400">
                   {r.attachments_count > 0 && <Paperclip size={12} className="inline" />}{r.attachments_count > 0 && <span className="text-[10px] ml-0.5">{r.attachments_count}</span>}

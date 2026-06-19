@@ -9,6 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
 import { toast } from 'sonner';
 import { ChevronLeft, ChevronRight, Send, CheckCircle2, Calendar, Wallet, ShieldCheck, Banknote, ClipboardList } from 'lucide-react';
+import { fmtDate } from '@/lib/dateFmt';
 
 const FREQ_OPTIONS = [
   { v: 1, l: 'Unique (annuel)', interval: 12 },
@@ -406,8 +407,8 @@ export default function BudgetWizard({ budget, distKeys = [], onClose, onDone, m
                       {preview.calls.map((c, i) => (
                         <tr key={i} className="border-t border-slate-100">
                           <td className="p-2 font-medium">{c.name}</td>
-                          <td className="p-2 font-mono text-xs">{c.date}</td>
-                          <td className="p-2 font-mono text-xs">{c.due_date}</td>
+                          <td className="p-2 font-mono text-xs">{fmtDate(c.date)}</td>
+                          <td className="p-2 font-mono text-xs">{fmtDate(c.due_date)}</td>
                           <td className="p-2 text-right font-mono font-semibold">{c.total_amount.toFixed(2)}</td>
                           <td className="p-2 text-right font-mono text-xs text-purple-700">{c.reserve_amount > 0 ? c.reserve_amount.toFixed(2) : '-'}</td>
                           <td className="p-2 text-right font-mono text-xs text-amber-700">{(c.roulement_amount || 0) > 0 ? c.roulement_amount.toFixed(2) : '-'}</td>

@@ -9,6 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { toast } from 'sonner';
 import { Plus, Trash2, Droplets, Flame, Zap, Activity } from 'lucide-react';
+import { fmtDate } from '@/lib/dateFmt';
 
 const METER_TYPES = [
   { value: 'water', label: 'Eau', icon: Droplets, color: '#0284C7' },
@@ -137,7 +138,7 @@ export default function MetersPage() {
                       <TableRow><TableCell colSpan={4} className="text-center py-8 text-slate-400">Aucun releve</TableCell></TableRow>
                     ) : readings.map(r => (
                       <TableRow key={r.id}>
-                        <TableCell className="font-mono text-sm">{r.date}</TableCell>
+                        <TableCell className="font-mono text-sm">{fmtDate(r.date)}</TableCell>
                         <TableCell className="text-right font-mono">{r.value}</TableCell>
                         <TableCell className="text-right">
                           {r.consumption > 0 && <Badge variant="outline" className="font-mono">{r.consumption} {selectedMeter.unit}</Badge>}

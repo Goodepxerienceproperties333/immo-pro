@@ -12,6 +12,73 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 ## Implemented
 
+### Iter37 (Feb 2026) - UX + PDF non-comptable + Lettrage manuel + Dates EU + Solde cumulatif tier
+
+#### PDFs (lisibilite non-comptable)
+- **PDF Decompte annuel** entierement refondu (`/app/backend/pdf_decompte.py`) :
+  carte recap (charges/appels/paiements/solde colore), detail charges par cle + par nature,
+  paragraphs wrap (anti-superposition), bloc paiement avec IBAN+VCS, no jargon comptable.
+- **PDF Situation de compte** : label "Total facture pendant la periode" -> "Total des appels"
+  + Paragraph wrap dans la colonne "Operation" pour eviter le debordement long-libelle.
+- **NOUVEAU PDF Balance des Tiers** (`/app/backend/pdf_balance_tiers.py`) : synthese
+  proprietaires + fournisseurs en A4 paysage, totaux debiteurs/crediteurs en cards,
+  endpoint `GET /api/reports/balance-tiers/pdf?copropriete_id=...` (400 si absent).
+- **NOUVEAU PDF Bilan par exercice** (`/app/backend/pdf_bilan.py`) : structure
+  "Bilan apres repartition" (ACTIF/PASSIF cote a cote, rubriques colorees, equilibre OK/KO),
+  endpoint `GET /api/reports/bilan/pdf?copropriete_id=...&fiscal_year_id=...&date_to=...`.
+  Selecteur d'exercice + bouton "PDF Bilan" dans `ReportsPage > Bilan`.
+
+#### Comptabilite
+- **Frais privatifs** : separation de l'ecriture en 2 (au lieu d'une seule doublee) :
+  1. AC `Dr 643 / Cr 44000XXX fournisseur` (facture)
+  2. OD `Dr 40000XXX proprietaire / Cr 643` (refacturation)
+  Net 643 = 0, fournisseur credite, proprietaire debite, source_id partage pour cleanup auto.
+- **Verrou exercice cloture** : `GET /api/reports/decompte/pdf/{owner_id}` ET
+  `GET /api/owner/decompte/pdf` retournent 400 si `fiscal_year.status != "closed"`.
+  Message clair en francais + bandeau warning dans `ReportsPage > Decomptes`.
+
+#### Bug fix critique : Solde du compte tier CUMULATIF
+- Avant : balance fournisseurs/proprietaires calculee uniquement sur la periode filtree
+  (ex: Clean & Co montrait `-1000.00` au lieu du vrai solde `-237.70` car une facture
+  d'aout 2023 etait exclue par le filtre 2026).
+- Apres : `GET /api/reports/balance-tiers/suppliers` et `/owners` calculent maintenant :
+  - `total_invoiced` / `total_paid` = mouvements sur la PERIODE
+  - `balance` / `account_debit` / `account_credit` = solde CUMULATIF du compte tier
+    (toutes ecritures jusqu'a `end_date`).
+  Nouvelles colonnes "D. compte" et "C. compte" affichees dans BalanceTiersPage Fournisseurs.
+
+#### UX banking
+- **`CounterpartySearchSelect`** : nouveau composant autocomplete proprietaires +
+  fournisseurs (dropdown au focus, filtre client instantane, sections coloriees bleu/orange).
+  Utilise dans ajout ET edition des lignes d'extrait.
+- **Libelle auto encaissement** : selection proprietaire genere automatiquement
+  `"VCS - Votre paiement au JJ/MM/AAAA"` dans la communication si elle est vide.
+- **Colonnes contrepartie wrappees** (break-word) - plus de troncature.
+- **Lettrage manuel par facture** : onglet "Factures" du dialog lettrage refondu :
+  - Affiche TOUTES les factures (pas seulement impayees), pre-filtre par nom contrepartie
+  - Border ROUGE + badge "A PAYER" pour non lettrees / VERT + "PAYE" pour lettrees
+  - Bouton "Lettrer" (bleu) pour rouges / "Delettrer" (orange) pour vertes
+  - **`POST /api/banking/unlettrage-by-invoice/{invoice_id}`** : nouvel endpoint qui
+    delettre toutes les txns liees a une facture + remet la facture en `unpaid`.
+- **Synchronisation status facture** : `POST /api/banking/lettrage` (match_type=invoice)
+  passe la facture en `paid` + `paid_at` + `paid_by_transaction_id`. Le delettrage
+  inverse correctement.
+
+#### UX budget
+- Dialog "Modifier le budget" refait : largeur adaptive `w-[95vw] max-w-5xl`,
+  grille `grid-cols-12` lisible (6 compte / 3 cle / 2 montant / 1 action),
+  integration `AccountSearchSelect` (recherche par numero OU libelle).
+
+#### Dates au format europeen JJ/MM/AAAA partout
+- **Utilitaire `/app/frontend/src/lib/dateFmt.js`** (`fmtDate`, `fmtDateTime`).
+- **14 fichiers** modifies par script `/tmp/apply_date_fmt.py` :
+  BalanceTiersPage, FiscalYearPage, DashboardPage, ExpensesPage, LotsPage,
+  InvoicesPage, BankingPage, FundCallsPage, GrandLivrePage, MetersPage,
+  ReportsPage, RemindersPage, JournalsPage, BudgetWizard.
+- Inputs `type="date"` preserves (value brute YYYY-MM-DD).
+
+
+
 ### Iter36 (Feb 2026) - Nettoyage complet base + Verrouillage strict chinese walls (regle non-modifiable)
 
 #### Etape 1 - Nettoyage des donnees de test

@@ -12,6 +12,7 @@ import { toast } from 'sonner';
 import { Plus, Trash2, Upload, Link2, Unlink, Search, Landmark, PlusCircle, Save, Pencil, X, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import CounterpartySearchSelect from '@/components/CounterpartySearchSelect';
+import { fmtDate } from '@/lib/dateFmt';
 
 export default function BankingPage() {
   const { selectedCopro } = useAuth();
@@ -153,7 +154,7 @@ export default function BankingPage() {
             <Card key={s.id} className={`cursor-pointer transition-all border text-sm ${selectedStmt?.id === s.id ? 'border-[#0055FF] shadow-md' : 'border-slate-200 hover:border-slate-300'}`} onClick={() => loadStmtTxns(s)} data-testid={`stmt-card-${s.id}`}>
               <CardContent className="p-3">
                 <div className="flex items-center justify-between"><span className="font-mono font-semibold">N {s.number}</span><Button variant="ghost" size="sm" onClick={e => { e.stopPropagation(); deleteStmt(s.id); }} className="text-red-400 h-5 w-5 p-0"><Trash2 size={10} /></Button></div>
-                <div className="text-xs text-slate-500">{s.date}</div>
+                <div className="text-xs text-slate-500">{fmtDate(s.date)}</div>
                 <div className="flex justify-between mt-1 text-[10px] font-mono"><span>O:{s.opening_balance?.toFixed(2)}</span><span>F:{s.closing_balance?.toFixed(2)}</span></div>
                 <div className="flex gap-1 mt-1 flex-wrap">
                   {s.status === 'posted' && <Badge className="text-[9px] bg-green-100 text-green-700 border-green-300">Comptabilise</Badge>}
@@ -172,7 +173,7 @@ export default function BankingPage() {
                 <div className="flex flex-row items-start justify-between gap-3">
                   <div className="flex-1">
                     <CardTitle className="text-base flex items-center gap-2" style={{fontFamily:'Chivo,sans-serif'}}>
-                      Extrait N {selectedStmt.number} - {selectedStmt.date}
+                      Extrait N {selectedStmt.number} - {fmtDate(selectedStmt.date)}
                       {selectedStmt.status === 'posted' ? (
                         <Badge className="bg-green-100 text-green-700 border-green-300"><CheckCircle2 size={11} className="mr-1" />Comptabilise</Badge>
                       ) : (
@@ -356,7 +357,7 @@ export default function BankingPage() {
                       </TableRow>
                     ) : (
                       <TableRow key={txn.id} className="hover:bg-slate-50/50">
-                        <TableCell className="font-mono text-xs">{txn.date}</TableCell>
+                        <TableCell className="font-mono text-xs">{fmtDate(txn.date)}</TableCell>
                         <TableCell className="text-sm break-words" style={{wordBreak: 'break-word'}}>{txn.counterparty_name}</TableCell>
                         <TableCell className="text-sm break-words" style={{wordBreak: 'break-word'}}>{txn.communication}</TableCell>
                         <TableCell className={`text-right font-mono font-semibold ${txn.amount >= 0 ? 'text-green-700' : 'text-red-700'}`}>{txn.amount >= 0 ? '+' : ''}{txn.amount?.toFixed(2)}</TableCell>
@@ -428,7 +429,7 @@ export default function BankingPage() {
               return (
                 <div className="text-[11px] text-slate-500 mt-1.5 space-x-3">
                   {ba?.pcmn_number && <span>Compte PCMN : <b className="font-mono text-slate-700">{ba.pcmn_number}</b></span>}
-                  {lastForIban && <span>Dernier solde ({lastForIban.date}) : <b className="font-mono text-slate-700">{Number(lastForIban.closing_balance||0).toFixed(2)}</b></span>}
+                  {lastForIban && <span>Dernier solde ({fmtDate(lastForIban.date)}) : <b className="font-mono text-slate-700">{Number(lastForIban.closing_balance||0).toFixed(2)}</b></span>}
                   {!lastForIban && <span className="text-blue-600">Aucun extrait precedent - solde d'ouverture initialise a 0</span>}
                 </div>
               );
@@ -513,7 +514,7 @@ export default function BankingPage() {
                             {!isPaid && <span className="text-[10px] bg-red-200 text-red-800 px-1.5 py-0.5 rounded-full font-semibold">A PAYER</span>}
                           </div>
                           <div className="text-[11px] text-slate-500 mt-0.5 flex gap-2">
-                            <span>{inv.date}</span>
+                            <span>{fmtDate(inv.date)}</span>
                             <span className="font-mono font-semibold text-slate-700">{Number(inv.total_amount || 0).toFixed(2)} EUR</span>
                             {inv.description && <span className="truncate">— {inv.description}</span>}
                           </div>
