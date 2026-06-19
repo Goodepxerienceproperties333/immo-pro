@@ -12,6 +12,27 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 ## Implemented
 
+### Iter55 (Feb 2026) - Numero de facture dans le libelle lors du lettrage
+
+#### Demande
+Lors du lettrage d'une transaction bancaire a une facture (match_type='invoice'), le libelle de l'ecriture FI generee doit explicitement mentionner le **numero de facture** (pour traçabilite, lecture rapide dans les journaux et grand livre, et exports comptables).
+
+#### Avant le fix
+- Description : `"<nom contrepartie> - <communication>"` (souvent vide ou peu informatif)
+- Ligne tier : pas de line_description
+
+#### Apres le fix
+- Description ecriture : `"Paiement facture 2026/007 - Pierre Dardenne"`
+- Ligne tier (compte 44000XXX fournisseur) : `line_description = "Paiement facture 2026/007 - Pierre Dardenne"` -> apparait directement dans la balance des tiers et la situation de compte.
+- Champ `invoice_number` stocke sur le journal_entry pour les reporting futurs.
+
+#### Implementation
+- `auto_entries.generate_bank_entry` : extraction `invoice_number` de l'invoice lors du match_type=='invoice'. Construction d'une `description` et d'une `line_description` enrichies.
+- Fallback si supplier non trouve en base : on garde le nom de la facture comme contrepart_name (avant : la ligne etait abandonnee).
+
+#### Verification
+Test ACP Demo : facture #2026/007 (Pierre Dardenne, 265 EUR) lettree -> description = "Paiement facture 2026/007 - Pierre Dardenne" verifie en BDD.
+
 ### Iter54 (Feb 2026) - Contrepartie EXPLICITE prime sur l'auto-VCS
 
 #### Probleme reel observe

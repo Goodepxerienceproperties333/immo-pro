@@ -389,6 +389,7 @@ async def generate_bank_entry(db, txn: dict) -> dict | None:
     counterpart_acc = ""
     counterpart_name = ""
     third_party_id = None
+    invoice_number = ""  # libelle enrichi pour les lettrages factures
     if match_type == "owner_payment":
         owner = await db.owners.find_one({"id": txn.get("matched_to")}, {"_id": 0})
         if owner:
@@ -399,6 +400,7 @@ async def generate_bank_entry(db, txn: dict) -> dict | None:
     elif match_type == "invoice":
         inv = await db.invoices.find_one({"id": txn.get("matched_to")}, {"_id": 0})
         if inv:
+            invoice_number = (inv.get("number") or "").strip()
             sname = (inv.get("supplier") or "").strip()
             if sname:
                 import re
@@ -408,8 +410,11 @@ async def generate_bank_entry(db, txn: dict) -> dict | None:
                 if supplier:
                     supplier = await assign_supplier_account(db, supplier, copro_id)
                     counterpart_acc = get_supplier_account(supplier, copro_id)
-                    counterpart_name = supplier.get("name", "")
+                    counterpart_name = supplier.get("name", "") or sname
                     third_party_id = supplier["id"]
+                else:
+                    # Pas de supplier en base : on garde le nom de la facture mais sans tier_id
+                    counterpart_name = sname
     elif match_type == "supplier_payment":
         supplier = await db.suppliers.find_one({"id": txn.get("matched_to")}, {"_id": 0})
         if supplier:
@@ -447,22 +452,40 @@ async def generate_bank_entry(db, txn: dict) -> dict | None:
     pcmns = await db.pcmn_accounts.find(pcmn_q, {"_id": 0}).to_list(10)
     pcmn_names = {p["number"]: p["name"] for p in pcmns}
 
+    # Libelle ligne tier : enrichi avec le numero de facture quand applicable
+    tier_line_desc = ""
+    if invoice_number:
+        tier_line_desc = f"Paiement facture {invoice_number}"
+        if counterpart_name:
+            tier_line_desc += f" - {counterpart_name}"
+    elif counterpart_name:
+        tier_line_desc = counterpart_name
+
     if is_credit:
         # Money in: Dr bank + Cr counterpart (owner pays / refund)
         lines = [
             {"account_number": bank_acc, "account_name": pcmn_names.get(bank_acc, bank_label),
              "debit": amount, "credit": 0.0, "third_party_id": None, "third_party_name": ""},
             {"account_number": counterpart_acc, "account_name": pcmn_names.get(counterpart_acc, counterpart_name),
-             "debit": 0.0, "credit": amount, "third_party_id": third_party_id, "third_party_name": counterpart_name},
+             "debit": 0.0, "credit": amount, "third_party_id": third_party_id, "third_party_name": counterpart_name,
+             "line_description": tier_line_desc},
         ]
     else:
         # Money out: Dr counterpart + Cr bank (supplier paid / refund owner)
         lines = [
             {"account_number": counterpart_acc, "account_name": pcmn_names.get(counterpart_acc, counterpart_name),
-             "debit": amount, "credit": 0.0, "third_party_id": third_party_id, "third_party_name": counterpart_name},
+             "debit": amount, "credit": 0.0, "third_party_id": third_party_id, "third_party_name": counterpart_name,
+             "line_description": tier_line_desc},
             {"account_number": bank_acc, "account_name": pcmn_names.get(bank_acc, bank_label),
              "debit": 0.0, "credit": amount, "third_party_id": None, "third_party_name": ""},
         ]
+
+    # Libelle global de l'ecriture : prefixe la facture si applicable
+    if invoice_number:
+        full_desc = f"Paiement facture {invoice_number} - {counterpart_name or txn.get('counterparty_name','')}"
+        full_desc = full_desc.rstrip(" -")
+    else:
+        full_desc = f"{txn.get('counterparty_name','') or counterpart_name} - {txn.get('communication','')}".strip(" -")
 
     await _delete_auto_entries(db, "bank_txn", txn["id"])
     doc = {
@@ -470,7 +493,7 @@ async def generate_bank_entry(db, txn: dict) -> dict | None:
         "journal_type": "FI",
         "date": txn.get("date") or datetime.now(timezone.utc).date().isoformat(),
         "reference": f"FI-{txn['id'][:8]}",
-        "description": f"{txn.get('counterparty_name','') or counterpart_name} - {txn.get('communication','')}".strip(" -"),
+        "description": full_desc,
         "lines": lines,
         "total_debit": amount,
         "total_credit": amount,
@@ -478,6 +501,7 @@ async def generate_bank_entry(db, txn: dict) -> dict | None:
         "auto_generated": True,
         "source_type": "bank_txn",
         "source_id": txn["id"],
+        "invoice_number": invoice_number or None,  # backref pour reporting
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.journal_entries.insert_one(doc)
