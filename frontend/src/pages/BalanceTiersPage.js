@@ -241,10 +241,13 @@ export default function BalanceTiersPage() {
                               onClick={() => {
                                 const c = localStorage.getItem('selectedCopro') || localStorage.getItem('copropriete_id') || '';
                                 if (!c || c === 'all') { toast.error('Selectionnez une ACP specifique en haut de page'); return; }
-                                window.open(`${API}/api/reports/situation-compte/${o.owner_id}/pdf?copropriete_id=${c}`, '_blank');
+                                const params = new URLSearchParams({ copropriete_id: c });
+                                if (filters.startDate) params.set('start_date', filters.startDate);
+                                if (filters.endDate) params.set('end_date', filters.endDate);
+                                window.open(`${API}/api/reports/situation-compte/${o.owner_id}/pdf?${params.toString()}`, '_blank');
                               }}
                               data-testid={`pdf-situation-${o.owner_id}`}
-                              title="Situation de compte PDF (envoi email/postal)"
+                              title={(filters.startDate || filters.endDate) ? `Situation de compte PDF (periode ${filters.startDate || '…'} - ${filters.endDate || '…'})` : "Situation de compte PDF (envoi email/postal)"}
                               className="text-[#0055FF] hover:text-[#0040CC]"
                             >
                               <FileText size={14} />
