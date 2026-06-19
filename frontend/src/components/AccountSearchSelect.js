@@ -64,22 +64,22 @@ export default function AccountSearchSelect({
   };
 
   return (
-    <div className="relative" ref={ref}>
+    <div className="relative min-w-0 w-full" ref={ref}>
       <div
         onClick={() => !disabled && setOpen(o => !o)}
-        className={`flex items-center gap-2 border border-slate-200 rounded-md px-3 py-2 bg-white cursor-pointer hover:border-slate-300 transition ${disabled ? 'opacity-50 pointer-events-none' : ''}`}
+        className={`flex items-center gap-2 border border-slate-200 rounded-md px-3 py-2 bg-white cursor-pointer hover:border-slate-300 transition w-full min-w-0 ${disabled ? 'opacity-50 pointer-events-none' : ''}`}
         data-testid={testId}
       >
         <Search size={14} className="text-slate-400 shrink-0" />
-        <span className={`flex-1 text-sm truncate ${selected ? 'font-mono' : 'text-slate-400'}`}>
+        <span className={`flex-1 min-w-0 text-sm truncate ${selected ? 'font-mono' : 'text-slate-400'}`}>
           {selected ? displayValue : placeholder}
         </span>
         {allowClear && selected && (
-          <button onClick={handleClear} className="text-slate-400 hover:text-red-500" data-testid={`${testId}-clear`}>
+          <button onClick={handleClear} className="text-slate-400 hover:text-red-500 shrink-0" data-testid={`${testId}-clear`}>
             <X size={14} />
           </button>
         )}
-        <ChevronDown size={14} className={`text-slate-400 transition ${open ? 'rotate-180' : ''}`} />
+        <ChevronDown size={14} className={`text-slate-400 shrink-0 transition ${open ? 'rotate-180' : ''}`} />
       </div>
 
       {open && !disabled && (
