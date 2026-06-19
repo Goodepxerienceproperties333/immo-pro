@@ -8,8 +8,50 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { Plus, Trash2, Check, Megaphone, FileText, Sparkles, ShieldCheck } from 'lucide-react';
+import { Plus, Trash2, Check, Megaphone, FileText, Sparkles, ShieldCheck, Wallet, Banknote, AlertTriangle } from 'lucide-react';
 import { fmtDate } from '@/lib/dateFmt';
+
+// Configuration des 4 types d'appels de fonds (label + couleurs + icone + description)
+const CALL_TYPES = {
+  provisions: {
+    label: 'Provisions',
+    short: 'Prov.',
+    icon: Banknote,
+    color: 'bg-blue-100 text-blue-800 border-blue-300',
+    chipBg: 'bg-blue-50',
+    accent: 'text-blue-700',
+    desc: 'Avances trimestrielles/annuelles sur charges courantes',
+  },
+  reserve: {
+    label: 'Fonds de reserve',
+    short: 'Reserve',
+    icon: ShieldCheck,
+    color: 'bg-purple-100 text-purple-800 border-purple-300',
+    chipBg: 'bg-purple-50',
+    accent: 'text-purple-700',
+    desc: 'Epargne pour gros travaux a venir (toiture, facade, ascenseur)',
+  },
+  roulement: {
+    label: 'Fonds de roulement',
+    short: 'Roulement',
+    icon: Wallet,
+    color: 'bg-emerald-100 text-emerald-800 border-emerald-300',
+    chipBg: 'bg-emerald-50',
+    accent: 'text-emerald-700',
+    desc: "Tresorerie minimum permanente de l'ACP (avance initiale)",
+  },
+  special: {
+    label: 'Appel special',
+    short: 'Special',
+    icon: AlertTriangle,
+    color: 'bg-orange-100 text-orange-800 border-orange-300',
+    chipBg: 'bg-orange-50',
+    accent: 'text-orange-700',
+    desc: 'Depense exceptionnelle hors budget (sinistre, urgence)',
+  },
+};
+
+const getCallTypeMeta = (t) => CALL_TYPES[t] || CALL_TYPES.provisions;
 
 export default function FundCallsPage() {
   const [calls, setCalls] = useState([]);
@@ -100,16 +142,25 @@ export default function FundCallsPage() {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="space-y-3">
-          {calls.length === 0 ? <p className="text-sm text-slate-400 text-center py-8">Aucun appel de fonds</p> : calls.map(c => (
-            <Card key={c.id} className={`cursor-pointer transition-all border ${selectedCall?.id === c.id ? 'border-[#0055FF] shadow-md' : 'border-slate-200 hover:border-slate-300'}`} onClick={() => viewCall(c.id)} data-testid={`call-card-${c.id}`}>
+          {calls.length === 0 ? <p className="text-sm text-slate-400 text-center py-8">Aucun appel de fonds</p> : calls.map(c => {
+            const meta = getCallTypeMeta(c.call_type);
+            const TypeIcon = meta.icon;
+            return (
+            <Card key={c.id} className={`cursor-pointer transition-all border-l-4 ${selectedCall?.id === c.id ? 'border-l-[#0055FF] shadow-md border border-[#0055FF]' : `border-l-current ${meta.accent} border-slate-200 hover:border-slate-300`}`} onClick={() => viewCall(c.id)} data-testid={`call-card-${c.id}`}>
               <CardContent className="p-4">
                 <div className="flex items-center justify-between mb-1">
                   <span className="font-semibold text-sm">{c.name}</span>
                   <Badge variant="outline" className={c.status === 'completed' ? 'bg-green-50 text-green-700' : c.status === 'partial' ? 'bg-yellow-50 text-yellow-700' : 'bg-slate-50 text-slate-600'}>{c.status === 'completed' ? 'Complet' : c.status === 'partial' ? 'Partiel' : 'En attente'}</Badge>
                 </div>
-                <div className="text-xs text-slate-500">{fmtDate(c.date)} - {c.call_type}</div>
-                <div className="font-mono font-bold text-sm mt-1">{c.total_amount?.toFixed(2)} EUR</div>
-                {c.reserve_amount > 0 && (
+                <div className="flex items-center gap-2 mt-1 mb-2">
+                  <Badge className={`${meta.color} text-[10px] font-semibold border`} data-testid={`call-type-badge-${c.id}`}>
+                    <TypeIcon size={10} className="mr-1" />
+                    {meta.label}
+                  </Badge>
+                  <span className="text-[11px] text-slate-400">{fmtDate(c.date)}</span>
+                </div>
+                <div className="font-mono font-bold text-base text-slate-900">{c.total_amount?.toFixed(2)} EUR</div>
+                {c.reserve_amount > 0 && c.call_type !== 'reserve' && (
                   <div className="text-[11px] text-purple-700 flex items-center gap-1 mt-1" data-testid={`call-reserve-${c.id}`}>
                     <ShieldCheck size={10} /> dont reserve {c.reserve_amount.toFixed(2)} EUR
                   </div>
@@ -125,22 +176,32 @@ export default function FundCallsPage() {
                 </div>
               </CardContent>
             </Card>
-          ))}
+          );})}
         </div>
 
         <div className="lg:col-span-2">
-          {selectedCall ? (
+          {selectedCall ? (() => {
+            const callMeta = getCallTypeMeta(selectedCall.call_type);
+            const CallIcon = callMeta.icon;
+            return (
             <Card className="border-slate-200">
               <CardHeader className="pb-3">
                 <CardTitle className="text-lg flex items-center gap-2" style={{fontFamily:'Chivo,sans-serif'}}>
                   {selectedCall.name}
+                  <Badge className={`${callMeta.color} text-[11px] font-semibold border`}>
+                    <CallIcon size={11} className="mr-1" /> {callMeta.label}
+                  </Badge>
                   {selectedCall.budget_id && (
                     <Badge variant="outline" className="text-xs bg-blue-50 border-blue-200 text-blue-700">
                       <Sparkles size={10} className="mr-1" /> Budget: {budgetName(selectedCall.budget_id) || '—'}
                     </Badge>
                   )}
                 </CardTitle>
-                <div className="text-xs text-slate-500">{fmtDate(selectedCall.date)} - Echeance: {selectedCall.due_date || '-'} - {selectedCall.description}</div>
+                <div className="text-xs text-slate-500">{fmtDate(selectedCall.date)} - Echeance: {fmtDate(selectedCall.due_date) || '-'} - {selectedCall.description}</div>
+                {/* Bandeau pedagogique selon le type */}
+                <div className={`${callMeta.chipBg} border-l-4 border-current ${callMeta.accent} px-3 py-2 mt-3 rounded-r text-xs leading-relaxed`}>
+                  <span className="font-semibold">{callMeta.label}</span> — {callMeta.desc}
+                </div>
               </CardHeader>
               <CardContent>
                 {selectedCall.lines && selectedCall.lines.length > 0 && (
@@ -197,7 +258,7 @@ export default function FundCallsPage() {
                 </Table>
               </CardContent>
             </Card>
-          ) : (
+          );})() : (
             <div className="flex items-center justify-center h-64 text-slate-400 text-sm">Selectionnez un appel pour voir le detail</div>
           )}
         </div>
@@ -213,15 +274,29 @@ export default function FundCallsPage() {
               <div><label className="form-label">Echeance</label><Input type="date" value={form.due_date} onChange={e => setForm({...form, due_date: e.target.value})} /></div>
             </div>
             <div className="grid grid-cols-2 gap-4">
-              <div><label className="form-label">Type</label>
+              <div><label className="form-label">Type d&apos;appel</label>
                 <Select value={form.call_type} onValueChange={v => setForm({...form, call_type: v})}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectTrigger data-testid="call-type-select"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="provisions">Provisions charges</SelectItem>
-                    <SelectItem value="reserve">Fonds de reserve</SelectItem>
-                    <SelectItem value="special">Appel special</SelectItem>
+                    <SelectItem value="provisions">
+                      <span className="inline-flex items-center gap-2"><Banknote size={12} className="text-blue-600" /> Provisions sur charges</span>
+                    </SelectItem>
+                    <SelectItem value="reserve">
+                      <span className="inline-flex items-center gap-2"><ShieldCheck size={12} className="text-purple-600" /> Fonds de reserve (gros travaux)</span>
+                    </SelectItem>
+                    <SelectItem value="roulement">
+                      <span className="inline-flex items-center gap-2"><Wallet size={12} className="text-emerald-600" /> Fonds de roulement (tresorerie permanente)</span>
+                    </SelectItem>
+                    <SelectItem value="special">
+                      <span className="inline-flex items-center gap-2"><AlertTriangle size={12} className="text-orange-600" /> Appel special (hors budget)</span>
+                    </SelectItem>
                   </SelectContent>
                 </Select>
+                {form.call_type && (
+                  <p className="text-[11px] text-slate-500 mt-1.5 leading-snug" data-testid="call-type-help">
+                    {getCallTypeMeta(form.call_type).desc}
+                  </p>
+                )}
               </div>
               <div><label className="form-label">Montant total *</label><Input type="number" step="0.01" value={form.total_amount} onChange={e => setForm({...form, total_amount: e.target.value})} data-testid="call-amount" /></div>
             </div>

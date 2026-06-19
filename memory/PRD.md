@@ -12,6 +12,24 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 ## Implemented
 
+### Iter47 (Feb 2026) - Appels de fonds clarifies
+
+#### UI clarification des types d'appels
+Nouveau systeme visuel pour distinguer les 4 types d'appels :
+- **Provisions** (bleu, icone Banknote) : avances trimestrielles/annuelles sur charges
+- **Fonds de reserve** (violet, ShieldCheck) : gros travaux a venir (toiture, ascenseur)
+- **Fonds de roulement** (vert emeraude, Wallet) : tresorerie permanente
+- **Appel special** (orange, AlertTriangle) : depense exceptionnelle hors budget
+
+#### Changements
+- Cards d'appels : badge colore + border gauche teintee + montant en evidence
+- Dialog "Nouvel appel" : Select avec icones + tooltip pedagogique sous chaque option
+- Panneau detail : badge type + bandeau pedagogique colore expliquant l'usage
+- Ajout de "Fonds de roulement" dans le Select (manquant precedemment)
+- Description claire de chaque type pour eviter la confusion entre reserve / roulement
+
+
+
 ### Iter46 (Feb 2026) - Carte Sante toujours visible + retry
 
 #### UI Dashboard : carte sante robuste
