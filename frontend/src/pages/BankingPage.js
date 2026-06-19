@@ -123,10 +123,12 @@ export default function BankingPage() {
 
   // LETTRAGE
   const openLettrage = (txn) => { setLettrageTarget(txn); setLettrageDialog(true); setLookupQuery(''); };
-  const doLettrage = async (id, type) => { try { await api.post('/banking/lettrage', { transaction_id: lettrageTarget.id, match_to_id: id, match_type: type }); toast.success('Lettre'); setLettrageDialog(false); if (selectedStmt) loadStmtTxns(selectedStmt); else load(); } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); } };
-  const unlettrage = async (id) => { await api.post(`/banking/unlettrage/${id}`); toast.success('Delettrage'); if (selectedStmt) loadStmtTxns(selectedStmt); else load(); };
+  const doLettrage = async (id, type) => { try { await api.post('/banking/lettrage', { transaction_id: lettrageTarget.id, match_to_id: id, match_type: type }); toast.success('Lettre'); setLettrageDialog(false); if (selectedStmt) loadStmtTxns(selectedStmt); else load(); load(); } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); } };
+  const unlettrage = async (id) => { await api.post(`/banking/unlettrage/${id}`); toast.success('Delettrage'); if (selectedStmt) loadStmtTxns(selectedStmt); else load(); load(); };
+  const unlettrageByInvoice = async (invId) => { try { await api.post(`/banking/unlettrage-by-invoice/${invId}`); toast.success('Facture delettree'); if (selectedStmt) loadStmtTxns(selectedStmt); load(); } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); } };
+  // unpaidInv (legacy) supprime - l'onglet factures affiche maintenant toutes les factures avec coloration.
 
-  const unpaidInv = invoices.filter(i => i.status === 'unpaid');
+  // unpaidInv (legacy) supprime - l'onglet factures affiche maintenant toutes les factures avec coloration.
 
   return (
     <div data-testid="banking-page">
@@ -283,9 +285,16 @@ export default function BankingPage() {
                                 value={line.counterparty_name}
                                 onChange={(v) => updateLine(i, 'counterparty_name', v)}
                                 onSelect={({ item, type }) => {
-                                  // Auto-fill VCS communication when an owner is picked (only if comm is empty)
-                                  if (type === 'owner' && item.vcs_code && !line.communication) {
-                                    updateLine(i, 'communication', item.vcs_code);
+                                  // Pour un encaissement proprietaire, auto-pre-remplir la communication
+                                  // (VCS si vide + mention "Votre paiement au JJ/MM/AAAA")
+                                  if (type === 'owner') {
+                                    const dateLabel = line.date ? new Date(line.date).toLocaleDateString('fr-BE') : '';
+                                    const paymentLabel = dateLabel ? `Votre paiement au ${dateLabel}` : 'Votre paiement';
+                                    const vcs = item.vcs_code || '';
+                                    const newComm = (line.communication || '').trim()
+                                      ? line.communication
+                                      : (vcs ? `${vcs} - ${paymentLabel}` : paymentLabel);
+                                    updateLine(i, 'communication', newComm);
                                   }
                                 }}
                                 placeholder="Nom contrepartie"
@@ -315,8 +324,8 @@ export default function BankingPage() {
                 {/* Transaction table */}
                 <Table>
                   <TableHeader><TableRow>
-                    <TableHead className="w-24">Date</TableHead><TableHead>Contrepartie</TableHead><TableHead>Communication</TableHead>
-                    <TableHead className="text-right w-28">Montant</TableHead><TableHead className="w-24">Lettrage</TableHead><TableHead className="w-20"></TableHead>
+                    <TableHead className="w-24">Date</TableHead><TableHead className="min-w-[200px]">Contrepartie</TableHead><TableHead className="min-w-[200px]">Communication</TableHead>
+                    <TableHead className="text-right w-28">Montant</TableHead><TableHead className="w-24">Lettrage</TableHead><TableHead className="w-24"></TableHead>
                   </TableRow></TableHeader>
                   <TableBody>
                     {transactions.length === 0 ? (
@@ -324,7 +333,21 @@ export default function BankingPage() {
                     ) : transactions.map(txn => editingTxn === txn.id ? (
                       <TableRow key={txn.id} className="bg-yellow-50/50">
                         <TableCell><Input type="date" className="h-7 text-xs" value={editForm.date} onChange={e => setEditForm({...editForm, date: e.target.value})} /></TableCell>
-                        <TableCell><Input className="h-7 text-xs" value={editForm.counterparty_name} onChange={e => setEditForm({...editForm, counterparty_name: e.target.value})} /></TableCell>
+                        <TableCell>
+                          <CounterpartySearchSelect
+                            owners={owners}
+                            suppliers={suppliers}
+                            value={editForm.counterparty_name}
+                            onChange={(v) => setEditForm({...editForm, counterparty_name: v})}
+                            onSelect={({ item, type }) => {
+                              if (type === 'owner' && item.vcs_code && !editForm.communication) {
+                                setEditForm(f => ({...f, counterparty_name: item.name, communication: item.vcs_code}));
+                              }
+                            }}
+                            placeholder="Nom contrepartie"
+                            testId={`edit-counterparty-${txn.id}`}
+                          />
+                        </TableCell>
                         <TableCell><Input className="h-7 text-xs" value={editForm.communication} onChange={e => setEditForm({...editForm, communication: e.target.value})} /></TableCell>
                         <TableCell><Input type="number" step="0.01" className="h-7 text-xs text-right" value={editForm.amount} onChange={e => setEditForm({...editForm, amount: e.target.value})} /></TableCell>
                         <TableCell colSpan={2}>
@@ -334,8 +357,8 @@ export default function BankingPage() {
                     ) : (
                       <TableRow key={txn.id} className="hover:bg-slate-50/50">
                         <TableCell className="font-mono text-xs">{txn.date}</TableCell>
-                        <TableCell className="text-sm">{txn.counterparty_name}</TableCell>
-                        <TableCell className="text-sm max-w-[180px] truncate">{txn.communication}</TableCell>
+                        <TableCell className="text-sm break-words" style={{wordBreak: 'break-word'}}>{txn.counterparty_name}</TableCell>
+                        <TableCell className="text-sm break-words" style={{wordBreak: 'break-word'}}>{txn.communication}</TableCell>
                         <TableCell className={`text-right font-mono font-semibold ${txn.amount >= 0 ? 'text-green-700' : 'text-red-700'}`}>{txn.amount >= 0 ? '+' : ''}{txn.amount?.toFixed(2)}</TableCell>
                         <TableCell>{txn.matched ? <Badge className="bg-green-50 text-green-700 border-green-200 text-[10px]" variant="outline">{txn.match_type === 'owner_payment' ? 'Proprio' : txn.match_type === 'supplier_payment' ? 'Fourn.' : 'Fact.'}</Badge> : <Badge variant="outline" className="text-slate-400 text-[10px]">-</Badge>}</TableCell>
                         <TableCell>
@@ -442,13 +465,81 @@ export default function BankingPage() {
               </div>
             </TabsContent>
             <TabsContent value="invoices" className="mt-3">
-              <div className="space-y-1 max-h-48 overflow-y-auto">
-                {unpaidInv.length === 0 ? <p className="text-sm text-slate-400">Aucune impayee</p> : unpaidInv.map(inv => (
-                  <div key={inv.id} className="flex items-center justify-between border rounded p-2 hover:bg-slate-50 text-sm">
-                    <div><span className="font-mono">{inv.number}</span> - {inv.supplier} <span className="text-slate-500">{inv.total_amount?.toFixed(2)} EUR</span></div>
-                    <Button size="sm" variant="outline" onClick={() => doLettrage(inv.id, 'invoice')}>Lettrer</Button>
-                  </div>
-                ))}
+              <Input
+                placeholder="Filtrer par fournisseur, numero..."
+                value={lookupQuery}
+                onChange={e => setLookupQuery(e.target.value)}
+                className="mb-2"
+                data-testid="lettrage-invoice-search"
+              />
+              <div className="text-[11px] text-slate-500 mb-2 flex items-center gap-3">
+                <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-full bg-red-100 border border-red-300" /> A lettrer</span>
+                <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-full bg-green-100 border border-green-300" /> Deja lettree</span>
+              </div>
+              <div className="space-y-1 max-h-72 overflow-y-auto">
+                {(() => {
+                  const cpName = (lettrageTarget?.counterparty_name || '').toLowerCase().trim();
+                  const q = (lookupQuery || '').toLowerCase().trim();
+                  const list = invoices.filter(inv => {
+                    if (q) {
+                      return (inv.supplier || '').toLowerCase().includes(q)
+                          || (inv.number || '').toLowerCase().includes(q)
+                          || (inv.description || '').toLowerCase().includes(q);
+                    }
+                    // Sans filtre : pre-filtrer par supplier name si la txn matche un nom de fournisseur
+                    if (cpName) {
+                      return (inv.supplier || '').toLowerCase().includes(cpName)
+                          || cpName.includes((inv.supplier || '').toLowerCase());
+                    }
+                    return true;
+                  }).sort((a, b) => {
+                    // Unpaid en premier
+                    const aPaid = a.status === 'paid' ? 1 : 0;
+                    const bPaid = b.status === 'paid' ? 1 : 0;
+                    if (aPaid !== bPaid) return aPaid - bPaid;
+                    return (b.date || '').localeCompare(a.date || '');
+                  });
+                  if (list.length === 0) return <p className="text-sm text-slate-400 text-center py-4">Aucune facture trouvee</p>;
+                  return list.map(inv => {
+                    const isPaid = inv.status === 'paid';
+                    const bg = isPaid ? 'bg-green-50 border-green-300' : 'bg-red-50 border-red-300';
+                    return (
+                      <div key={inv.id} className={`flex items-center justify-between border-l-4 rounded p-2 text-sm ${bg}`} data-testid={`lettrage-invoice-row-${inv.id}`}>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono text-xs font-semibold">{inv.number || '—'}</span>
+                            <span className="font-medium text-slate-900 truncate">{inv.supplier || ''}</span>
+                            {isPaid && <span className="text-[10px] bg-green-200 text-green-800 px-1.5 py-0.5 rounded-full font-semibold">PAYE</span>}
+                            {!isPaid && <span className="text-[10px] bg-red-200 text-red-800 px-1.5 py-0.5 rounded-full font-semibold">A PAYER</span>}
+                          </div>
+                          <div className="text-[11px] text-slate-500 mt-0.5 flex gap-2">
+                            <span>{inv.date}</span>
+                            <span className="font-mono font-semibold text-slate-700">{Number(inv.total_amount || 0).toFixed(2)} EUR</span>
+                            {inv.description && <span className="truncate">— {inv.description}</span>}
+                          </div>
+                        </div>
+                        <div className="shrink-0 ml-2">
+                          {isPaid ? (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => unlettrageByInvoice(inv.id)}
+                              className="text-orange-600 border-orange-300 hover:bg-orange-50 h-7 text-xs"
+                              data-testid={`unlettrage-invoice-${inv.id}`}
+                            ><Unlink size={11} className="mr-1" /> Delettrer</Button>
+                          ) : (
+                            <Button
+                              size="sm"
+                              onClick={() => doLettrage(inv.id, 'invoice')}
+                              className="bg-[#0055FF] hover:bg-[#0040CC] text-white h-7 text-xs"
+                              data-testid={`lettrage-invoice-${inv.id}`}
+                            ><Link2 size={11} className="mr-1" /> Lettrer</Button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  });
+                })()}
               </div>
             </TabsContent>
             <TabsContent value="suppliers" className="mt-3">

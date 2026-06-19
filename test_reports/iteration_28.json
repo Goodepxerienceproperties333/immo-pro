@@ -1,0 +1,46 @@
+{
+  "summary": "iter28 backend testing: 5/5 PASSED on the new lettrage/unlettrage features. Tests valides: (1) POST /api/banking/lettrage avec match_type='invoice' marque la facture status='paid' + paid_at (ISO) + paid_by_transaction_id, ET cree automatiquement une ecriture FI dans journal_entries (verifie via GET /api/accounting/entries?journal_type=FI, source_type='bank_txn'). (2) POST /api/banking/unlettrage/{txn_id} : la facture revient a status='unpaid', paid_at + paid_by_transaction_id sont $unset, l'ecriture FI auto est supprimee, et la txn est demarquee (matched=False, match_type=''). 404 sur txn inconnue. (3) POST /api/banking/unlettrage-by-invoice/{invoice_id} : 404 si aucune txn liee, sinon delettre TOUTES les txns liees (count retourne) et remet la facture en 'unpaid'. Test multi-txns avec 2 paiements partiels sur meme facture verifie. Frontend valide visuellement (Banking page sur ACP Demo): (a) Dialog 'Ajouter lignes' > champ Contrepartie au focus affiche dropdown avec PROPRIETAIRES (8) en bleu + FOURNISSEURS (18) en orange. data-testid='counterparty-0', 'counterparty-0-owner-{id}', 'counterparty-0-supplier-{id}' tous presents. (b) Cliquer un proprietaire (Dubois Jean) pre-remplit le nom ET auto-genere la communication '+++100/7407/40231+++ - Votre paiement au 19/06/2026' - le nouveau libelle 'Votre paiement au DATE' fonctionne CORRECTEMENT. Inconsistance mineure detectee dans la version 'edit row' qui n'applique PAS encore le 'Votre paiement au DATE' (juste VCS code).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {
+        "flow": "BankingPage - edit row CounterpartySearchSelect (Modifier crayon)",
+        "issue": "Asymetrie : dans 'Ajouter lignes' (line 287-298), selectionner un proprietaire genere '{VCS} - Votre paiement au JJ/MM/AAAA'. Dans 'edit row' (line 343-346), seul {VCS} est applique - pas le libelle 'Votre paiement au DATE'. Comportement inconsistant cote utilisateur. Le code n'applique que item.vcs_code dans la communication et seulement si elle etait vide.",
+        "affected_selectors": ["[data-testid^='edit-counterparty-']"]
+      }
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter28_lettrage_invoice_status_sync.py",
+    "/app/test_reports/pytest/pytest_iter28.xml"
+  ],
+  "action_items": [
+    "(Mineur, cohérence UX) Dans BankingPage.js ligne 343-346, aligner le onSelect du CounterpartySearchSelect en mode edition sur le comportement de l'inline (ligne 287-298) : generer aussi 'Votre paiement au {date_fr}' avec fallback VCS, pas seulement le VCS. Le code actuel : `if (type === 'owner' && item.vcs_code && !editForm.communication) { setEditForm(f => ({...f, counterparty_name: item.name, communication: item.vcs_code})); }` ne pose pas le libelle francais."
+  ],
+  "critical_code_review_comments": [
+    "routes/banking.py 321-343 (lettrage) : OK - status='paid' + paid_at ISO + paid_by_transaction_id atomiquement. Appel generate_bank_entry en post-lettrage encapsule dans try/except (correct, ne bloque pas si supplier inconnu).",
+    "routes/banking.py 345-366 (unlettrage) : OK - lit l'etat AVANT le unset pour reconnaitre le match_type='invoice', puis $unset propre des champs paid_at/paid_by_transaction_id. _delete_auto_entries('bank_txn', txn_id) nettoie le FI auto.",
+    "routes/banking.py 368-392 (unlettrage_by_invoice) : OK - 404 si aucune txn, iteration sur cursor (limite 50), nettoie chaque FI puis remet facture unpaid. Counts retourne dans le payload. Bonne factorisation.",
+    "BankingPage.js 287-298 : le nouveau auto-libelle 'Votre paiement au {date_fr}' verifie line.date != null et fallback gracieux. La condition `(line.communication||'').trim() ? line.communication : ...` evite l'ecrasement d'une comm. utilisateur deja saisie. Correct.",
+    "BankingPage.js 343-346 (edit mode) : INCONSISTANT avec 287-298. Le libelle 'Votre paiement au DATE' n'est PAS pose en mode edition. Convient d'aligner pour eviter la surprise utilisateur.",
+    "CounterpartySearchSelect : sections 'PROPRIETAIRES (n)' bleue + 'FOURNISSEURS (n)' orange OK, data-testid prefixe correctement enfants (owner-{id}, supplier-{id}), filtre client par name/vcs_code/vat fonctionnel."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter28_lettrage_invoice_status_sync.py (nouveau, 5 tests)"
+  ],
+  "success_rate": {
+    "backend": "100% (5/5) sur les nouveautes lettrage/unlettrage iter28",
+    "frontend": "CounterpartySearchSelect + auto-libelle 'Votre paiement au DATE' valides en mode inline; edit mode non aligne (mineur)"
+  },
+  "test_credentials": "admin@copro.be / admin123 ; ACP_ID=6748ca1a-216d-4002-8417-799287238736 ; STATEMENT_ID=e02fc9d5-93ae-42be-bb69-48235f648e2b ; OWNER Dubois Jean=f01f889d-1057-4b15-91a1-ca3a869ccabe",
+  "seed_data_creation": "4 factures TEST_Lettrage creees + 4 transactions creees pendant les tests, toutes supprimees en teardown (try/finally). Restauration manuelle du lettrage Dubois Jean -> e657e00d... (impacte UI) effectuee via curl apres test de l'icone lettrage. Aucun residu en base.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "iter28 valide : (a) lettrage/unlettrage sync les champs status/paid_at/paid_by_transaction_id de la facture, (b) creation FI auto via generate_bank_entry, (c) endpoint unlettrage-by-invoice supporte le multi-txn. Pour tester UI: localStorage.setItem('selectedCopro','6748ca1a-216d-4002-8417-799287238736') avant Banking. Cliquer 'N 001' card, puis 'Ajouter lignes' pour faire apparaitre l'inline form avec counterparty-0. Mode edit: cliquer pencil (1er btn de la ligne) pour faire apparaitre edit-counterparty-{txnId}. Pour ouvrir le dialog Lettrage il faut cliquer l'icone link sur une txn NON matchee (sinon ca declenche unlettrage direct).",
+  "rca of the issue": "Aucun bug bloquant. Seule inconsistance UX detectee : BankingPage.js ligne 343-346 (edit mode) ne genere pas le nouveau libelle 'Votre paiement au {date_fr}' lors de la selection d'un proprietaire, alors que la version inline (line 287-298) le fait. Fix simple : reproduire la meme logique dans le onSelect du edit mode (avec editForm.date au lieu de line.date)."
+}

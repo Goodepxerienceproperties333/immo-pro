@@ -327,6 +327,13 @@ def create_banking_router(db):
             {"id": data.transaction_id},
             {"$set": {"matched": True, "matched_to": data.match_to_id, "match_type": data.match_type}}
         )
+        # Si lettrage vers une facture : marquer la facture comme payee
+        if data.match_type == "invoice":
+            await db.invoices.update_one(
+                {"id": data.match_to_id},
+                {"$set": {"status": "paid", "paid_at": datetime.now(timezone.utc).isoformat(),
+                          "paid_by_transaction_id": data.transaction_id}}
+            )
         try:
             fresh = await db.bank_transactions.find_one({"id": data.transaction_id}, {"_id": 0})
             if fresh:
@@ -337,6 +344,8 @@ def create_banking_router(db):
 
     @router.post("/unlettrage/{txn_id}")
     async def unlettrage(txn_id: str):
+        # Recupere la txn avant unset pour gerer le statut facture
+        prev = await db.bank_transactions.find_one({"id": txn_id}, {"_id": 0})
         try:
             await _delete_auto_entries(db, "bank_txn", txn_id)
         except Exception:
@@ -347,7 +356,40 @@ def create_banking_router(db):
         )
         if result.matched_count == 0:
             raise HTTPException(404, "Transaction non trouvee")
+        # Si on delettre une transaction qui pointait sur une facture : remettre la facture en unpaid
+        if prev and prev.get("match_type") == "invoice" and prev.get("matched_to"):
+            await db.invoices.update_one(
+                {"id": prev["matched_to"]},
+                {"$set": {"status": "unpaid"},
+                 "$unset": {"paid_at": "", "paid_by_transaction_id": ""}}
+            )
         return {"message": "Lettrage annule"}
+
+    @router.post("/unlettrage-by-invoice/{invoice_id}")
+    async def unlettrage_by_invoice(invoice_id: str):
+        """Delettre la (ou les) transaction(s) bancaire(s) lettree(s) a une facture."""
+        cursor = db.bank_transactions.find(
+            {"match_type": "invoice", "matched_to": invoice_id, "matched": True},
+            {"_id": 0},
+        )
+        txns = await cursor.to_list(50)
+        if not txns:
+            raise HTTPException(404, "Aucune transaction lettree a cette facture")
+        for t in txns:
+            try:
+                await _delete_auto_entries(db, "bank_txn", t["id"])
+            except Exception:
+                pass
+            await db.bank_transactions.update_one(
+                {"id": t["id"]},
+                {"$set": {"matched": False, "matched_to": "", "match_type": ""}}
+            )
+        await db.invoices.update_one(
+            {"id": invoice_id},
+            {"$set": {"status": "unpaid"},
+             "$unset": {"paid_at": "", "paid_by_transaction_id": ""}}
+        )
+        return {"message": f"{len(txns)} transaction(s) delettree(s)", "count": len(txns)}
 
     # ---- CODA IMPORT ----
     @router.post("/coda/import")

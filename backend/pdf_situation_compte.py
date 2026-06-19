@@ -200,7 +200,7 @@ def build_situation_compte_pdf(
     bg_summary = colors.HexColor("#FEF3F2") if running > 0.01 else (colors.HexColor("#F0FDF4") if running < -0.01 else colors.HexColor("#F8FAFC"))
 
     summary_rows = [
-        [Paragraph("<b>Total facture pendant la periode</b>", body),
+        [Paragraph("<b>Total des appels</b>", body),
          Paragraph(_fmt_eur(total_debit), ParagraphStyle("r", parent=body, alignment=2))],
         [Paragraph("<b>Total verse pendant la periode</b>", body),
          Paragraph(_fmt_eur(total_credit), ParagraphStyle("r", parent=body, alignment=2, textColor=colors.HexColor("#16A34A")))],
