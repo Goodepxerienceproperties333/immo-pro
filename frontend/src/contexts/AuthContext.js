@@ -128,6 +128,7 @@ export function AuthProvider({ children }) {
   return (
     <AuthContext.Provider value={{
       user, loading, login, register, logout,
+      refreshUser: checkAuth,
       selectedCopro, setSelectedCopro,
       fiscalYears, selectedFiscalYearId, setSelectedFiscalYearId, selectedFiscalYear,
       isAdmin, isSuperadmin, isManager, isOwner,

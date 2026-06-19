@@ -12,6 +12,7 @@ import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import OnboardingDialog from '@/components/OnboardingDialog';
 
 const sections = [
   { title: 'Gestion', items: [
@@ -257,6 +258,7 @@ export default function Layout() {
             </NavLink>
           </header>
           <div className="flex-1 overflow-auto p-5 md:p-6"><Outlet /></div>
+          <OnboardingDialog />
         </main>
       </div>
     );
@@ -305,6 +307,7 @@ export default function Layout() {
           <button onClick={handleLogout} className="text-slate-400 hover:text-red-400 transition-colors" data-testid="logout-btn-top"><LogOut size={16} /></button>
         </header>
         <main className="flex-1 overflow-auto p-6"><div className="max-w-[1400px] mx-auto"><Outlet /></div></main>
+        <OnboardingDialog />
       </div>
     );
   }
@@ -368,6 +371,7 @@ export default function Layout() {
           </NavLink>
         </header>
         <main className="flex-1 overflow-auto p-4 lg:p-6"><div className="max-w-[1600px] mx-auto"><Outlet /></div></main>
+        <OnboardingDialog />
       </div>
     </div>
   );

@@ -818,49 +818,93 @@ def create_banking_router(db):
         return {"message": f"{len(txns)} lignes ajoutees", "count": len(txns)}
 
     # ---- SEARCH (for owner payments) ----
+    async def _get_scope_for_filter(request):
+        """Retourne (is_super, allowed_copros, allowed_owner_ids).
+        - superadmin -> (True, None, None) = pas de filtre
+        - syndic -> (False, [copro_ids], {owner_ids_set})
+        """
+        from server import get_current_user, is_superadmin_only
+        user = await get_current_user(request)
+        role = user.get("role", "")
+        if is_superadmin_only(role):
+            return True, None, None
+        allowed_copros = user.get("copropriete_ids", []) or []
+        if not allowed_copros:
+            return False, [], set()
+        ids1 = await db.lots.distinct("owner_id", {"copropriete_id": {"$in": allowed_copros}})
+        ids2 = await db.lots.distinct("owner_ids", {"copropriete_id": {"$in": allowed_copros}})
+        allowed_owner_ids = {x for x in (ids1 or []) if x} | {x for x in (ids2 or []) if x}
+        return False, allowed_copros, allowed_owner_ids
+
+    def _supplier_visible(s: dict, allowed_copros) -> bool:
+        if allowed_copros is None:
+            return True
+        s_copros = set()
+        if s.get("copropriete_id"):
+            s_copros.add(s["copropriete_id"])
+        s_copros.update((s.get("tier_accounts") or {}).keys())
+        return any(c in allowed_copros for c in s_copros)
+
     @router.get("/search-owners")
-    async def search_owners_for_payment(q: Optional[str] = ""):
-        if not q:
-            owners = await db.owners.find({}, {"_id": 0}).to_list(50)
-        else:
-            owners = await db.owners.find(
-                {"$or": [
-                    {"name": {"$regex": q, "$options": "i"}},
-                    {"email": {"$regex": q, "$options": "i"}},
-                    {"vcs_code": {"$regex": q.replace("+", "\\+"), "$options": "i"}},
-                    {"vcs_digits": {"$regex": q.replace("+", "").replace("/", ""), "$options": "i"}},
-                ]},
-                {"_id": 0}
-            ).to_list(50)
+    async def search_owners_for_payment(request: Request, q: Optional[str] = ""):
+        is_super, allowed_copros, allowed_owner_ids = await _get_scope_for_filter(request)
+        base_q = {}
+        if q:
+            base_q = {"$or": [
+                {"name": {"$regex": q, "$options": "i"}},
+                {"email": {"$regex": q, "$options": "i"}},
+                {"vcs_code": {"$regex": q.replace("+", "\\+"), "$options": "i"}},
+                {"vcs_digits": {"$regex": q.replace("+", "").replace("/", ""), "$options": "i"}},
+            ]}
+        if not is_super:
+            if not allowed_owner_ids:
+                return []
+            if base_q:
+                base_q = {"$and": [base_q, {"id": {"$in": list(allowed_owner_ids)}}]}
+            else:
+                base_q = {"id": {"$in": list(allowed_owner_ids)}}
+        owners = await db.owners.find(base_q, {"_id": 0}).to_list(50)
         return owners
 
     # ---- GLOBAL LOOKUP (owners, suppliers, invoices by any text) ----
     @router.get("/lookup")
-    async def global_lookup(q: str = "", copropriete_id: Optional[str] = None):
+    async def global_lookup(request: Request, q: str = "", copropriete_id: Optional[str] = None):
         """Search across owners, suppliers (global), invoices (scoped by ACP)."""
         if not q or len(q) < 2:
             return {"owners": [], "suppliers": [], "invoices": []}
+        is_super, allowed_copros, allowed_owner_ids = await _get_scope_for_filter(request)
         clean = q.replace("+", "").replace("/", "").replace(" ", "")
-        owners = await db.owners.find(
-            {"$or": [
-                {"name": {"$regex": q, "$options": "i"}},
-                {"vcs_digits": {"$regex": clean, "$options": "i"}},
-                {"vcs_code": {"$regex": q.replace("+", "\\+"), "$options": "i"}},
-                {"email": {"$regex": q, "$options": "i"}},
-            ]}, {"_id": 0}
-        ).to_list(10)
-        suppliers = await db.suppliers.find(
+        own_q = {"$or": [
+            {"name": {"$regex": q, "$options": "i"}},
+            {"vcs_digits": {"$regex": clean, "$options": "i"}},
+            {"vcs_code": {"$regex": q.replace("+", "\\+"), "$options": "i"}},
+            {"email": {"$regex": q, "$options": "i"}},
+        ]}
+        if not is_super:
+            if not allowed_owner_ids:
+                owners = []
+            else:
+                own_q = {"$and": [own_q, {"id": {"$in": list(allowed_owner_ids)}}]}
+                owners = await db.owners.find(own_q, {"_id": 0}).to_list(10)
+        else:
+            owners = await db.owners.find(own_q, {"_id": 0}).to_list(10)
+        suppliers_raw = await db.suppliers.find(
             {"$or": [
                 {"name": {"$regex": q, "$options": "i"}},
                 {"vat_number": {"$regex": q, "$options": "i"}},
             ]}, {"_id": 0}
-        ).to_list(10)
+        ).to_list(50)
+        suppliers = [s for s in suppliers_raw if _supplier_visible(s, allowed_copros)][:10]
         inv_q = {"$or": [
             {"number": {"$regex": q, "$options": "i"}},
             {"supplier": {"$regex": q, "$options": "i"}},
         ]}
         if copropriete_id:
             inv_q = {"$and": [inv_q, {"copropriete_id": copropriete_id}]}
+        elif not is_super:
+            if not allowed_copros:
+                return {"owners": owners, "suppliers": suppliers, "invoices": []}
+            inv_q = {"$and": [inv_q, {"copropriete_id": {"$in": allowed_copros}}]}
         invoices_data = await db.invoices.find(inv_q, {"_id": 0}).to_list(10)
         return {"owners": owners, "suppliers": suppliers, "invoices": invoices_data}
 
@@ -891,20 +935,25 @@ def create_banking_router(db):
 
     # ---- VCS LOOKUP ----
     @router.get("/vcs-lookup")
-    async def vcs_lookup(communication: str = ""):
-        """Lookup owner by VCS structured communication."""
+    async def vcs_lookup(request: Request, communication: str = ""):
+        """Lookup owner by VCS structured communication.
+        Chinese wall : un syndic ne trouve QUE les owners de ses ACPs.
+        """
         if not communication:
             return {"owner": None}
         clean = communication.replace("+", "").replace("/", "").replace(" ", "").strip()
         if not clean:
             return {"owner": None}
-        owner = await db.owners.find_one(
-            {"$or": [
-                {"vcs_digits": {"$regex": clean, "$options": "i"}},
-                {"vcs_code": {"$regex": communication.replace("+", "\\+"), "$options": "i"}},
-            ]},
-            {"_id": 0}
-        )
+        is_super, allowed_copros, allowed_owner_ids = await _get_scope_for_filter(request)
+        q = {"$or": [
+            {"vcs_digits": {"$regex": clean, "$options": "i"}},
+            {"vcs_code": {"$regex": communication.replace("+", "\\+"), "$options": "i"}},
+        ]}
+        if not is_super:
+            if not allowed_owner_ids:
+                return {"owner": None}
+            q = {"$and": [q, {"id": {"$in": list(allowed_owner_ids)}}]}
+        owner = await db.owners.find_one(q, {"_id": 0})
         return {"owner": owner}
 
     # ---- BATCH TRANSACTIONS ----

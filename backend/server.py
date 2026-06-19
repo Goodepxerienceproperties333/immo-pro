@@ -270,7 +270,19 @@ def user_response(user_doc):
         "name": user_doc["name"],
         "role": user_doc["role"],
         "copropriete_ids": user_doc.get("copropriete_ids", []),
+        "onboarding_completed": bool(user_doc.get("onboarding_completed", False)),
     }
+
+@auth_router.post("/onboarding-complete")
+async def mark_onboarding_complete(request: Request):
+    """Marque le tutoriel de premiere connexion comme termine pour l'utilisateur courant."""
+    user = await get_current_user(request)
+    await db.users.update_one(
+        {"_id": ObjectId(user["_id"])},
+        {"$set": {"onboarding_completed": True,
+                  "onboarding_completed_at": datetime.now(timezone.utc).isoformat()}}
+    )
+    return {"status": "ok"}
 
 @auth_router.post("/login")
 async def login(data: LoginInput, response: Response):

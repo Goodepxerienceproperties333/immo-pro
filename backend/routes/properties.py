@@ -10,6 +10,46 @@ from tier_accounts import assign_owner_accounts
 def create_properties_router(db):
     router = APIRouter(prefix="/api")
 
+    async def _get_user_scope(request):
+        """Retourne (is_super_global, allowed_copro_ids).
+        - is_super_global=True pour superadmin/admin : acces total, allowed=None.
+        - Sinon allowed_copro_ids = liste des ACPs de l'utilisateur (peut etre []).
+        """
+        from server import get_current_user, is_superadmin_only
+        user = await get_current_user(request)
+        role = user.get("role", "")
+        if is_superadmin_only(role):
+            return True, None
+        return False, user.get("copropriete_ids", []) or []
+
+    async def _owner_in_scope(owner_id: str, allowed_copros) -> bool:
+        """True si l'owner a au moins un lot dans une ACP du scope (ou superadmin)."""
+        if allowed_copros is None:
+            return True
+        if not allowed_copros:
+            return False
+        c1 = await db.lots.count_documents({
+            "owner_id": owner_id,
+            "copropriete_id": {"$in": allowed_copros}
+        })
+        if c1 > 0:
+            return True
+        c2 = await db.lots.count_documents({
+            "owner_ids": owner_id,
+            "copropriete_id": {"$in": allowed_copros}
+        })
+        return c2 > 0
+
+    async def _allowed_owner_ids(allowed_copros):
+        """Retourne le set des owner_id presents dans les lots des ACPs du scope."""
+        if allowed_copros is None:
+            return None  # superadmin = pas de filtre
+        if not allowed_copros:
+            return set()
+        ids1 = await db.lots.distinct("owner_id", {"copropriete_id": {"$in": allowed_copros}})
+        ids2 = await db.lots.distinct("owner_ids", {"copropriete_id": {"$in": allowed_copros}})
+        return {x for x in (ids1 or []) if x} | {x for x in (ids2 or []) if x}
+
     # ---- OWNERS ----
     class OwnerInput(BaseModel):
         first_name: Optional[str] = ""
@@ -27,25 +67,36 @@ def create_properties_router(db):
 
     @router.get("/owners")
     async def list_owners(request: Request, copropriete_id: Optional[str] = None):
-        """Liste des proprietaires.
+        """Liste des proprietaires - chinese wall STRICT (RGPD).
 
-        - Sans `copropriete_id` : tous les owners (cas global / multi-ACP)
-        - Avec `copropriete_id` : uniquement les owners ayant au moins un lot
-          dans cette ACP (chinese walls). On regarde `lots.owner_id` ET
-          `lots.owner_ids[]` pour supporter la copropriete partagee.
+        - Superadmin/admin : voit tout.
+        - Syndic/gestionnaire : ne voit QUE les proprietaires ayant un lot dans
+          UNE DE SES ACPs (`user.copropriete_ids`).
+        - Avec `copropriete_id` : restreint a cette ACP (verifie deja par middleware).
         """
         # Aussi accepter le header X-Copropriete-Id pour homogeneiser
         if not copropriete_id:
             copropriete_id = request.headers.get("X-Copropriete-Id") or None
+        is_super, allowed_copros = await _get_user_scope(request)
         if copropriete_id:
+            # Cas ACP specifique : owners ayant un lot dans cette ACP
             owner_ids_single = await db.lots.distinct("owner_id", {"copropriete_id": copropriete_id})
             owner_ids_multi = await db.lots.distinct("owner_ids", {"copropriete_id": copropriete_id})
             allowed = {oid for oid in (owner_ids_single or []) if oid} | {oid for oid in (owner_ids_multi or []) if oid}
             if not allowed:
                 return []
             owners = await db.owners.find({"id": {"$in": list(allowed)}}, {"_id": 0}).sort("last_name", 1).to_list(2000)
-        else:
+        elif is_super:
+            # Superadmin sans param : tous les owners (vue plateforme)
             owners = await db.owners.find({}, {"_id": 0}).sort("last_name", 1).to_list(2000)
+        else:
+            # Syndic / gestionnaire sans param : owners de TOUTES SES ACPs
+            allowed_owner_ids = await _allowed_owner_ids(allowed_copros)
+            if not allowed_owner_ids:
+                return []
+            owners = await db.owners.find(
+                {"id": {"$in": list(allowed_owner_ids)}}, {"_id": 0}
+            ).sort("last_name", 1).to_list(2000)
         return owners
 
     @router.post("/owners")
@@ -79,29 +130,39 @@ def create_properties_router(db):
         return {k: v for k, v in doc.items() if k != "_id"}
 
     @router.get("/owners/check-duplicate")
-    async def check_duplicate_owner(email: Optional[str] = None, phone: Optional[str] = None):
-        """Check if email or phone already exists across all coproprietes."""
+    async def check_duplicate_owner(request: Request, email: Optional[str] = None, phone: Optional[str] = None):
+        """Check if email or phone already exists.
+        Pour un syndic : cherche UNIQUEMENT dans les owners de ses ACPs (RGPD).
+        Pour un superadmin : cherche dans tous les owners.
+        """
+        is_super, allowed_copros = await _get_user_scope(request)
+        allowed_owner_ids = await _allowed_owner_ids(allowed_copros) if not is_super else None
         duplicates = []
+        def _filter_owner(owner_id):
+            return is_super or (allowed_owner_ids is not None and owner_id in allowed_owner_ids)
         if email and email.strip():
             found = await db.owners.find(
                 {"$or": [{"email": email.strip()}, {"email2": email.strip()}]},
-                {"_id": 0, "name": 1, "email": 1, "phone": 1, "copropriete_id": 1}
-            ).to_list(10)
+                {"_id": 0, "id": 1, "name": 1, "email": 1, "phone": 1, "copropriete_id": 1}
+            ).to_list(50)
             for f in found:
-                duplicates.append({"field": "email", "value": email, "owner_name": f.get("name", ""), "copropriete_id": f.get("copropriete_id", "")})
+                if _filter_owner(f.get("id", "")):
+                    duplicates.append({"field": "email", "value": email, "owner_name": f.get("name", ""), "copropriete_id": f.get("copropriete_id", "")})
         if phone and phone.strip():
             found = await db.owners.find(
                 {"$or": [{"phone": phone.strip()}, {"phone2": phone.strip()}]},
-                {"_id": 0, "name": 1, "email": 1, "phone": 1, "copropriete_id": 1}
-            ).to_list(10)
+                {"_id": 0, "id": 1, "name": 1, "email": 1, "phone": 1, "copropriete_id": 1}
+            ).to_list(50)
             for f in found:
-                duplicates.append({"field": "phone", "value": phone, "owner_name": f.get("name", ""), "copropriete_id": f.get("copropriete_id", "")})
+                if _filter_owner(f.get("id", "")):
+                    duplicates.append({"field": "phone", "value": phone, "owner_name": f.get("name", ""), "copropriete_id": f.get("copropriete_id", "")})
         return {"duplicates": duplicates, "has_duplicates": len(duplicates) > 0}
 
     @router.get("/owners/lookup-vcs")
-    async def lookup_vcs(vcs: str = ""):
+    async def lookup_vcs(request: Request, vcs: str = ""):
         if not vcs:
             return []
+        is_super, allowed_copros = await _get_user_scope(request)
         clean = vcs.replace("+", "").replace("/", "").replace(" ", "").strip()
         results = await db.owners.find(
             {"$or": [
@@ -112,18 +173,29 @@ def create_properties_router(db):
                 {"first_name": {"$regex": vcs, "$options": "i"}},
             ]},
             {"_id": 0}
-        ).to_list(20)
-        return results
+        ).to_list(50)
+        if is_super:
+            return results[:20]
+        allowed_owner_ids = await _allowed_owner_ids(allowed_copros)
+        filtered = [o for o in results if allowed_owner_ids is not None and o.get("id") in allowed_owner_ids]
+        return filtered[:20]
 
     @router.get("/owners/{owner_id}")
-    async def get_owner(owner_id: str):
+    async def get_owner(owner_id: str, request: Request):
+        is_super, allowed_copros = await _get_user_scope(request)
         owner = await db.owners.find_one({"id": owner_id}, {"_id": 0})
         if not owner:
+            raise HTTPException(404, "Proprietaire non trouve")
+        if not is_super and not await _owner_in_scope(owner_id, allowed_copros):
+            # 404 plutot que 403 pour ne pas leaker l'existence (RGPD)
             raise HTTPException(404, "Proprietaire non trouve")
         return owner
 
     @router.put("/owners/{owner_id}")
     async def update_owner(owner_id: str, data: OwnerInput, request: Request):
+        is_super, allowed_copros = await _get_user_scope(request)
+        if not is_super and not await _owner_in_scope(owner_id, allowed_copros):
+            raise HTTPException(404, "Proprietaire non trouve")
         full_name = data.name or f"{data.last_name} {data.first_name}".strip()
         result = await db.owners.update_one(
             {"id": owner_id},
@@ -144,7 +216,10 @@ def create_properties_router(db):
         return owner
 
     @router.delete("/owners/{owner_id}")
-    async def delete_owner(owner_id: str):
+    async def delete_owner(owner_id: str, request: Request):
+        is_super, allowed_copros = await _get_user_scope(request)
+        if not is_super and not await _owner_in_scope(owner_id, allowed_copros):
+            raise HTTPException(404, "Proprietaire non trouve")
         result = await db.owners.delete_one({"id": owner_id})
         if result.deleted_count == 0:
             raise HTTPException(404, "Proprietaire non trouve")
@@ -163,15 +238,31 @@ def create_properties_router(db):
         copropriete_id: Optional[str] = ""
 
     @router.get("/lots")
-    async def list_lots(copropriete_id: Optional[str] = None):
+    async def list_lots(request: Request, copropriete_id: Optional[str] = None):
+        """Liste des lots - chinese wall STRICT.
+        - Superadmin : voit tout
+        - Syndic : ne voit que les lots de ses ACPs
+        """
+        is_super, allowed_copros = await _get_user_scope(request)
         q = {}
         if copropriete_id:
             q["copropriete_id"] = copropriete_id
-        lots = await db.lots.find(q, {"_id": 0}).sort("number", 1).to_list(1000)
+        elif not is_super:
+            if not allowed_copros:
+                return []
+            q["copropriete_id"] = {"$in": allowed_copros}
+        lots = await db.lots.find(q, {"_id": 0}).sort("number", 1).to_list(2000)
         return lots
 
     @router.post("/lots")
-    async def create_lot(data: LotInput):
+    async def create_lot(data: LotInput, request: Request):
+        is_super, allowed_copros = await _get_user_scope(request)
+        copro_id = data.copropriete_id or ""
+        if not is_super:
+            if not copro_id:
+                raise HTTPException(400, "Un lot doit etre rattache a une copropriete")
+            if copro_id not in (allowed_copros or []):
+                raise HTTPException(403, "Vous ne pouvez creer un lot que pour une de vos ACPs")
         ids = data.owner_ids if data.owner_ids else ([data.owner_id] if data.owner_id else [])
         doc = {
             "id": str(uuid.uuid4()),
@@ -183,14 +274,20 @@ def create_properties_router(db):
             "quotity": data.quotity,
             "owner_id": ids[0] if ids else "",
             "owner_ids": ids,
-            "copropriete_id": data.copropriete_id,
+            "copropriete_id": copro_id,
             "created_at": datetime.now(timezone.utc).isoformat()
         }
         await db.lots.insert_one(doc)
         return {k: v for k, v in doc.items() if k != "_id"}
 
     @router.put("/lots/{lot_id}")
-    async def update_lot(lot_id: str, data: LotInput):
+    async def update_lot(lot_id: str, data: LotInput, request: Request):
+        is_super, allowed_copros = await _get_user_scope(request)
+        existing = await db.lots.find_one({"id": lot_id}, {"_id": 0})
+        if not existing:
+            raise HTTPException(404, "Lot non trouve")
+        if not is_super and existing.get("copropriete_id", "") not in (allowed_copros or []):
+            raise HTTPException(404, "Lot non trouve")
         ids = data.owner_ids if data.owner_ids else ([data.owner_id] if data.owner_id else [])
         update = {
             "number": data.number, "description": data.description,
@@ -549,15 +646,31 @@ def create_properties_router(db):
         copropriete_id: Optional[str] = ""
 
     @router.get("/tenants")
-    async def list_tenants(copropriete_id: Optional[str] = None):
+    async def list_tenants(request: Request, copropriete_id: Optional[str] = None):
+        """Liste des locataires - chinese wall STRICT (RGPD).
+        - Superadmin : voit tout
+        - Syndic / gestionnaire : ne voit QUE les locataires de ses ACPs (via tenant.copropriete_id)
+        """
+        is_super, allowed_copros = await _get_user_scope(request)
         q = {}
         if copropriete_id:
             q["copropriete_id"] = copropriete_id
-        tenants = await db.tenants.find(q, {"_id": 0}).sort("name", 1).to_list(1000)
+        elif not is_super:
+            if not allowed_copros:
+                return []
+            q["copropriete_id"] = {"$in": allowed_copros}
+        tenants = await db.tenants.find(q, {"_id": 0}).sort("name", 1).to_list(2000)
         return tenants
 
     @router.post("/tenants")
-    async def create_tenant(data: TenantInput):
+    async def create_tenant(data: TenantInput, request: Request):
+        is_super, allowed_copros = await _get_user_scope(request)
+        copro_id = data.copropriete_id or ""
+        if not is_super:
+            if not copro_id:
+                raise HTTPException(400, "Un locataire doit etre rattache a une copropriete (chinese wall + RGPD)")
+            if copro_id not in (allowed_copros or []):
+                raise HTTPException(403, "Vous ne pouvez creer un locataire que pour une de vos ACPs")
         doc = {
             "id": str(uuid.uuid4()),
             "name": data.name,
@@ -567,14 +680,20 @@ def create_properties_router(db):
             "lease_start": data.lease_start,
             "lease_end": data.lease_end,
             "rent_amount": data.rent_amount,
-            "copropriete_id": data.copropriete_id,
+            "copropriete_id": copro_id,
             "created_at": datetime.now(timezone.utc).isoformat()
         }
         await db.tenants.insert_one(doc)
         return {k: v for k, v in doc.items() if k != "_id"}
 
     @router.put("/tenants/{tenant_id}")
-    async def update_tenant(tenant_id: str, data: TenantInput):
+    async def update_tenant(tenant_id: str, data: TenantInput, request: Request):
+        is_super, allowed_copros = await _get_user_scope(request)
+        existing = await db.tenants.find_one({"id": tenant_id}, {"_id": 0})
+        if not existing:
+            raise HTTPException(404, "Locataire non trouve")
+        if not is_super and existing.get("copropriete_id", "") not in (allowed_copros or []):
+            raise HTTPException(404, "Locataire non trouve")
         update = {
             "name": data.name, "email": data.email, "phone": data.phone,
             "lot_id": data.lot_id, "lease_start": data.lease_start,
@@ -586,7 +705,13 @@ def create_properties_router(db):
         return await db.tenants.find_one({"id": tenant_id}, {"_id": 0})
 
     @router.delete("/tenants/{tenant_id}")
-    async def delete_tenant(tenant_id: str):
+    async def delete_tenant(tenant_id: str, request: Request):
+        is_super, allowed_copros = await _get_user_scope(request)
+        existing = await db.tenants.find_one({"id": tenant_id}, {"_id": 0})
+        if not existing:
+            raise HTTPException(404, "Locataire non trouve")
+        if not is_super and existing.get("copropriete_id", "") not in (allowed_copros or []):
+            raise HTTPException(404, "Locataire non trouve")
         result = await db.tenants.delete_one({"id": tenant_id})
         if result.deleted_count == 0:
             raise HTTPException(404, "Locataire non trouve")
