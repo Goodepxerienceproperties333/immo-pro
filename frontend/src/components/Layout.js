@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react';
-import { Outlet, NavLink, useNavigate } from 'react-router-dom';
+import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import api from '@/lib/api';
 import {
   LayoutDashboard, Users, Building2, UserCheck, BookOpen, FileText,
   Receipt, Gauge, Landmark, FolderOpen, LogOut, ChevronLeft, ChevronRight,
-  Menu, Shield, Home, Truck, Calendar, BookMarked, Megaphone, BarChart3, Bell, Wallet, Tag, UserCog, Pencil
+  Menu, Shield, Home, Truck, Calendar, BookMarked, Megaphone, BarChart3, Bell, Wallet, Tag, UserCog, Pencil,
+  ShieldAlert, Unlock, ScrollText, IdCard
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -45,6 +46,7 @@ const sections = [
 export default function Layout() {
   const { user, logout, selectedCopro, setSelectedCopro, fiscalYears, selectedFiscalYearId, setSelectedFiscalYearId, isAdmin, isManager, isSuperadmin } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [coproprietes, setCoproprietes] = useState([]);
@@ -52,9 +54,71 @@ export default function Layout() {
   useEffect(() => { api.get('/coproprietes').then(r => setCoproprietes(r.data)).catch(() => {}); }, []);
 
   const handleLogout = async () => { await logout(); navigate('/login'); };
-  const getRoleLabel = (role) => ({ superadmin: 'Syndic', admin: 'Syndic', syndic: 'Syndic', gestionnaire: 'Gestionnaire' }[role] || 'Proprietaire');
+  const getRoleLabel = (role) => ({ superadmin: 'Super Admin', admin: 'Admin', syndic: 'Syndic', gestionnaire: 'Gestionnaire' }[role] || 'Proprietaire');
   const selectedCoproData = coproprietes.find(c => c.id === selectedCopro);
   const hasCopro = !!selectedCopro;
+
+  // MODE ADMIN PLATEFORME : superadmin sur une route /admin/* voit une interface
+  // dediee a l'administration de la plateforme (pas de selecteur ACP, pas de
+  // menu de gestion des coproprietes).
+  const isAdminRoute = location.pathname.startsWith('/admin');
+  const adminPlatformMode = isSuperadmin && isAdminRoute;
+
+  // Sidebar admin pure (mode plateforme)
+  const AdminSidebarContent = () => (
+    <div className="flex flex-col h-full">
+      <div className="p-4 flex items-center gap-3">
+        <div className="w-8 h-8 rounded bg-gradient-to-br from-amber-500 to-red-600 flex items-center justify-center text-white flex-shrink-0">
+          <ShieldAlert size={16} />
+        </div>
+        {!collapsed && <span className="text-white font-bold text-lg tracking-tight" style={{fontFamily:'Chivo,sans-serif'}}>Plateforme</span>}
+      </div>
+      <Separator className="bg-slate-800" />
+      <ScrollArea className="flex-1">
+        <div className="py-3 px-2">
+          {!collapsed && <div className="px-3 py-1 mt-1 text-[10px] uppercase tracking-[0.2em] text-amber-400 font-semibold">Administration</div>}
+          <NavLink to="/admin" end onClick={() => setMobileOpen(false)}
+            className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''} ${collapsed ? 'justify-center px-2' : ''}`}
+            data-testid="adm-nav-dashboard"
+          ><LayoutDashboard size={16} strokeWidth={1.5} />{!collapsed && <span className="text-[13px]">Tableau de bord</span>}</NavLink>
+          <NavLink to="/admin/users" onClick={() => setMobileOpen(false)}
+            className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''} ${collapsed ? 'justify-center px-2' : ''}`}
+            data-testid="adm-nav-users"
+          ><Users size={16} strokeWidth={1.5} />{!collapsed && <span className="text-[13px]">Utilisateurs</span>}</NavLink>
+          <NavLink to="/admin/role-templates" onClick={() => setMobileOpen(false)}
+            className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''} ${collapsed ? 'justify-center px-2' : ''}`}
+            data-testid="adm-nav-templates"
+          ><IdCard size={16} strokeWidth={1.5} />{!collapsed && <span className="text-[13px]">Profils utilisateurs</span>}</NavLink>
+          <NavLink to="/admin/unlock" onClick={() => setMobileOpen(false)}
+            className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''} ${collapsed ? 'justify-center px-2' : ''}`}
+            data-testid="adm-nav-unlock"
+          ><Unlock size={16} strokeWidth={1.5} />{!collapsed && <span className="text-[13px]">Outils deblocage</span>}</NavLink>
+          <NavLink to="/admin/audit" onClick={() => setMobileOpen(false)}
+            className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''} ${collapsed ? 'justify-center px-2' : ''}`}
+            data-testid="adm-nav-audit"
+          ><ScrollText size={16} strokeWidth={1.5} />{!collapsed && <span className="text-[13px]">Journal d&apos;audit</span>}</NavLink>
+        </div>
+      </ScrollArea>
+      {/* Bottom: switch to syndic mode */}
+      <div className="p-2 border-t border-slate-800">
+        <button
+          onClick={() => navigate('/')}
+          className="w-full sidebar-link justify-center text-blue-300 hover:text-blue-200 hover:bg-blue-900/30"
+          data-testid="switch-to-syndic-mode"
+          title="Basculer vers l'interface de gestion syndic (intervention sur une ACP)"
+        >
+          <Building2 size={16} strokeWidth={1.5} />
+          {!collapsed && <span className="text-[12px]">Mode syndic</span>}
+        </button>
+      </div>
+      <div className="p-2 border-t border-slate-800">
+        <button onClick={handleLogout} className="w-full sidebar-link justify-center text-red-400 hover:text-red-300" data-testid="logout-btn">
+          <LogOut size={16} strokeWidth={1.5} />
+          {!collapsed && <span className="text-[12px]">Deconnexion</span>}
+        </button>
+      </div>
+    </div>
+  );
 
   const SidebarContent = () => (
     <div className="flex flex-col h-full">
@@ -146,6 +210,41 @@ export default function Layout() {
       </div>
     </div>
   );
+
+  // ===== ADMIN PLATFORM MODE: dedicated layout (no ACP) =====
+  if (adminPlatformMode) {
+    return (
+      <div className="flex h-screen overflow-hidden bg-[#FAFAFA]">
+        {/* Mobile burger */}
+        <button onClick={() => setMobileOpen(true)} className="md:hidden fixed top-3 left-3 z-40 bg-slate-900 text-white p-2 rounded shadow"><Menu size={18} /></button>
+        {/* Sidebar admin */}
+        <aside className={`bg-slate-950 text-slate-100 hidden md:flex flex-col transition-all duration-200 ${collapsed ? 'w-16' : 'w-60'}`}>
+          <AdminSidebarContent />
+        </aside>
+        {/* Mobile drawer */}
+        {mobileOpen && (
+          <>
+            <div className="fixed inset-0 bg-black/40 z-40 md:hidden" onClick={() => setMobileOpen(false)} />
+            <aside className="fixed top-0 left-0 h-screen w-60 bg-slate-950 text-slate-100 z-50 md:hidden flex flex-col">
+              <AdminSidebarContent />
+            </aside>
+          </>
+        )}
+        {/* Main */}
+        <main className="flex-1 flex flex-col overflow-hidden">
+          <header className="bg-white border-b border-slate-200 px-5 h-12 flex items-center gap-3">
+            <button onClick={() => setCollapsed(c => !c)} className="hidden md:inline-flex items-center justify-center w-7 h-7 rounded hover:bg-slate-100 text-slate-500"><Menu size={16} /></button>
+            <div className="flex-1" />
+            <span className="text-[11px] text-amber-700 font-semibold uppercase tracking-wider">Administration plateforme</span>
+            <Separator orientation="vertical" className="h-5 bg-slate-200" />
+            <span className="text-xs text-slate-600">{user?.name}</span>
+            <div className="w-7 h-7 rounded-full bg-gradient-to-br from-amber-500 to-red-600 text-white flex items-center justify-center text-xs font-semibold">{(user?.name || 'U')[0].toUpperCase()}</div>
+          </header>
+          <div className="flex-1 overflow-auto p-5 md:p-6"><Outlet /></div>
+        </main>
+      </div>
+    );
+  }
 
   // ===== NO ACP SELECTED: Full-width layout without sidebar =====
   if (!hasCopro) {
