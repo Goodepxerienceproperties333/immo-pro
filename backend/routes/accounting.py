@@ -252,9 +252,12 @@ def create_accounting_router(db):
 
     @router.post("/entries")
     async def create_entry(data: JournalEntryInput, request: Request):
+        from fiscal_lock import ensure_period_open
         copro_id = (data.copropriete_id or "").strip() or (request.headers.get("X-Copropriete-Id") or "").strip()
         if not copro_id or copro_id == "all":
             raise HTTPException(400, "copropriete_id requis - chinese walls strict")
+        # Securisation comptable : la date doit etre dans un exercice OUVERT de l'ACP
+        await ensure_period_open(db, copro_id, data.date, context="ecriture")
         total_debit = sum(l.debit for l in data.lines)
         total_credit = sum(l.credit for l in data.lines)
         if abs(total_debit - total_credit) > 0.01:
@@ -300,9 +303,18 @@ def create_accounting_router(db):
 
     @router.put("/entries/{entry_id}")
     async def update_entry(entry_id: str, data: JournalEntryInput):
+        from fiscal_lock import ensure_entry_modifiable, ensure_period_open
         existing = await db.journal_entries.find_one({"id": entry_id}, {"_id": 0})
         if not existing:
             raise HTTPException(404, "Ecriture non trouvee")
+        # Securisation comptable : bloque si exercice cloture ou ecriture extournee
+        await ensure_entry_modifiable(db, existing)
+        # Verifier aussi la NOUVELLE date (cas ou l'utilisateur change la date vers
+        # un autre exercice qui serait cloture)
+        if data.date and data.date != existing.get("date"):
+            await ensure_period_open(
+                db, existing.get("copropriete_id", ""), data.date, context="ecriture"
+            )
         copro_id = existing.get("copropriete_id", "") or (data.copropriete_id or "")
         total_debit = sum(l.debit for l in data.lines)
         total_credit = sum(l.credit for l in data.lines)
