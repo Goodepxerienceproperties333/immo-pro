@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import api from '@/lib/api';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
@@ -18,6 +19,7 @@ const emptyForm = { name: '', bce: '', address: '', postal_code: '', city: '', c
 
 export default function CoproprietesPage() {
   const { isAdmin, isManager } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [coproprietes, setCoproprietes] = useState([]);
   const [owners, setOwners] = useState([]);
   const [search, setSearch] = useState('');
@@ -49,6 +51,21 @@ export default function CoproprietesPage() {
     setStep(1);
     setDialogOpen(true);
   };
+
+  // Auto-open edit dialog when ?edit={id} query param is present (deep link from sidebar)
+  useEffect(() => {
+    const editId = searchParams.get('edit');
+    if (editId && coproprietes.length > 0 && !dialogOpen) {
+      const c = coproprietes.find(x => x.id === editId);
+      if (c) {
+        openEdit(c);
+        // Clean URL so refresh doesn't re-open
+        searchParams.delete('edit');
+        setSearchParams(searchParams, { replace: true });
+      }
+    }
+    // eslint-disable-next-line
+  }, [coproprietes, searchParams]);
 
   // Lots on the fly (only used at creation time)
   const addLot = () => setForm({ ...form, lots: [...(form.lots || []), { ...emptyLot, owner_ids: [] }] });

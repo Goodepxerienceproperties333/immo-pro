@@ -5,7 +5,7 @@ import api from '@/lib/api';
 import {
   LayoutDashboard, Users, Building2, UserCheck, BookOpen, FileText,
   Receipt, Gauge, Landmark, FolderOpen, LogOut, ChevronLeft, ChevronRight,
-  Menu, Shield, Home, Truck, Calendar, BookMarked, Megaphone, BarChart3, Bell, Wallet, Tag, UserCog
+  Menu, Shield, Home, Truck, Calendar, BookMarked, Megaphone, BarChart3, Bell, Wallet, Tag, UserCog, Pencil
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -65,10 +65,20 @@ export default function Layout() {
       <Separator className="bg-slate-800" />
       {/* ACP name */}
       {!collapsed && selectedCoproData && (
-        <div className="px-4 py-2 bg-[#0055FF]/10 border-b border-slate-800">
-          <div className="text-[10px] uppercase tracking-wider text-slate-500">Copropriete</div>
-          <div className="text-sm text-white font-semibold truncate">{selectedCoproData.name}</div>
-          {selectedCoproData.reference && <div className="text-[10px] text-slate-400 font-mono">{selectedCoproData.reference}</div>}
+        <div className="px-4 py-2 bg-[#0055FF]/10 border-b border-slate-800 flex items-start gap-2">
+          <div className="flex-1 min-w-0">
+            <div className="text-[10px] uppercase tracking-wider text-slate-500">Copropriete</div>
+            <div className="text-sm text-white font-semibold truncate">{selectedCoproData.name}</div>
+            {selectedCoproData.reference && <div className="text-[10px] text-slate-400 font-mono">{selectedCoproData.reference}</div>}
+          </div>
+          <button
+            onClick={() => navigate(`/coproprietes?edit=${selectedCoproData.id}`)}
+            className="flex-shrink-0 p-1.5 rounded-md text-slate-300 hover:text-white hover:bg-white/10 transition-colors"
+            title="Editer cette copropriete (nom, adresse, banques, parametres)"
+            data-testid="sidebar-edit-acp"
+          >
+            <Pencil size={13} />
+          </button>
         </div>
       )}
       <ScrollArea className="flex-1 px-2 py-2">
