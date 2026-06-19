@@ -338,6 +338,14 @@ def create_owner_portal_router(db):
                 "end_date": date_to or f"{today.year}-12-31",
             }
 
+        # Verrou : decompte annuel uniquement apres cloture de l'exercice
+        if fy.get("status", "") != "closed":
+            raise HTTPException(
+                400,
+                f"L'exercice '{fy.get('name','')}' n'est pas cloture. "
+                "Le decompte annuel sera disponible apres la cloture par le syndic."
+            )
+
         all_lots = await db.lots.find({"copropriete_id": copropriete_id}, {"_id": 0}).to_list(1000)
         invoices = await db.invoices.find(
             {"copropriete_id": copropriete_id, "date": {"$gte": fy["start_date"], "$lte": fy["end_date"]}},

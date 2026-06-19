@@ -11,6 +11,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { toast } from 'sonner';
 import { Plus, Trash2, Upload, Link2, Unlink, Search, Landmark, PlusCircle, Save, Pencil, X, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
+import CounterpartySearchSelect from '@/components/CounterpartySearchSelect';
 
 export default function BankingPage() {
   const { selectedCopro } = useAuth();
@@ -276,13 +277,20 @@ export default function BankingPage() {
                             <td className="p-1"><Input type="number" step="0.01" className="h-7 text-xs text-right" value={line.amount} onChange={e => updateLine(i, 'amount', e.target.value)} /></td>
                             <td className="p-1"><select className="h-7 text-xs border rounded px-1 w-full" value={line.transaction_type} onChange={e => updateLine(i, 'transaction_type', e.target.value)}><option value="credit">+</option><option value="debit">-</option></select></td>
                             <td className="p-1 relative">
-                              <Input className="h-7 text-xs" value={line.counterparty_name} onChange={e => { updateLine(i, 'counterparty_name', e.target.value); doLookup(e.target.value, `cp-${i}`); }} placeholder="Nom contrepartie" />
-                              {lookupResults && lookupResults.lineIdx === `cp-${i}` && (lookupResults.owners.length > 0 || lookupResults.suppliers.length > 0) && (
-                                <div className="absolute top-8 left-0 z-20 bg-white border shadow-lg rounded-md p-2 text-xs w-64 max-h-40 overflow-y-auto">
-                                  {lookupResults.owners.map(o => <div key={o.id} className="p-1 hover:bg-blue-50 cursor-pointer rounded flex justify-between" onClick={() => { updateLine(i, 'counterparty_name', o.name); setLookupResults(null); }}><span>{o.name}</span><span className="font-mono text-[10px] text-[#0055FF]">{o.vcs_code}</span></div>)}
-                                  {lookupResults.suppliers.map(s => <div key={s.id} className="p-1 hover:bg-orange-50 cursor-pointer rounded flex justify-between" onClick={() => { updateLine(i, 'counterparty_name', s.name); setLookupResults(null); }}><span>{s.name}</span><span className="text-[10px] text-orange-500">Fournisseur</span></div>)}
-                                </div>
-                              )}
+                              <CounterpartySearchSelect
+                                owners={owners}
+                                suppliers={suppliers}
+                                value={line.counterparty_name}
+                                onChange={(v) => updateLine(i, 'counterparty_name', v)}
+                                onSelect={({ item, type }) => {
+                                  // Auto-fill VCS communication when an owner is picked (only if comm is empty)
+                                  if (type === 'owner' && item.vcs_code && !line.communication) {
+                                    updateLine(i, 'communication', item.vcs_code);
+                                  }
+                                }}
+                                placeholder="Nom contrepartie"
+                                testId={`counterparty-${i}`}
+                              />
                             </td>
                             <td className="p-1 relative">
                               <Input className="h-7 text-xs" value={line.communication} onChange={e => { updateLine(i, 'communication', e.target.value); doLookup(e.target.value, `cm-${i}`); }} placeholder="Communication libre ou VCS" />

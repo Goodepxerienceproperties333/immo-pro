@@ -247,10 +247,17 @@ def build_situation_compte_pdf(
     head = ["Date", "Operation", "A payer", "Verse", "Solde"]
     rows = [head]
 
+    # Style pour libelles wrappables dans la colonne Operation
+    op_style = ParagraphStyle(
+        "op", parent=body, fontSize=8.5, leading=10.5, wordWrap="CJK",
+    )
+
     running2 = float(opening_balance or 0.0)
     if abs(running2) > 0.001 and period_start:
         rows.append([
-            _fmt_date(period_start), "Solde reporte (debut periode)", "", "",
+            _fmt_date(period_start),
+            Paragraph("Solde reporte (debut periode)", op_style),
+            "", "",
             _fmt_eur(running2),
         ])
 
@@ -261,7 +268,7 @@ def build_situation_compte_pdf(
         label = _humanize_label(m.get("description", ""), m.get("reference", ""), m.get("journal_type", ""))
         rows.append([
             _fmt_date(m.get("date", "")),
-            label,
+            Paragraph(label, op_style),
             _fmt_eur(d) if d > 0 else "",
             _fmt_eur(c) if c > 0 else "",
             _fmt_eur(running2),
@@ -269,7 +276,8 @@ def build_situation_compte_pdf(
 
     # Total row (mini-recap inline)
     rows.append([
-        "", "TOTAL DE LA PERIODE",
+        "",
+        Paragraph("<b>TOTAL DE LA PERIODE</b>", op_style),
         _fmt_eur(total_debit), _fmt_eur(total_credit), _fmt_eur(running2),
     ])
 

@@ -1,0 +1,47 @@
+{
+  "summary": "iter27 backend testing: 11/11 PASSED. Frontend: ReportsPage decompte warning + Budget dialog refonte verifies VISUELLEMENT. CounterpartySearchSelect dans Banking NON teste end-to-end (aucun extrait bancaire dans Demo ACP au moment du test) mais code/data-testid valides. Tests valides : (1) frais privatif -> 2 ecritures distinctes AC (Dr 643 / Cr 44000XXX) + OD (Dr 40000XXX owner / Cr 643), totaux equilibres a 250, partagent source_type='invoice' + meme source_id. (2) GET /api/accounting/entries?journal_type=AC|OD isole correctement chaque journal. (3) DELETE facture nettoie les 2 ecritures (cleanup auto). (4) GET /api/reports/decompte/pdf/{owner_id} -> 400 si fy.status != 'closed' (message mentionne 'cloture'). 400 si copropriete_id absent ou 'all'. Fallback sans fiscal_year_id bloque aussi. (5) GET /api/owner/decompte/pdf -> meme verrou (404 owner sans fiche pour ACP Demo, RBAC propre). (6) GET /api/reports/balance-tiers/pdf -> 200 application/pdf, magic %PDF, >1500 bytes. 400 si copropriete_id absent/'all', 404 si ACP inconnue. Frontend: page Rapports onglet Decomptes affiche bien le warning amber [data-testid=decompte-warning] avec 'cloture de l'exercice'. Dialog 'Nouveau budget' s'ouvre avec header Compte/Cle/Montant et AccountSearchSelect au placeholder 'Rechercher par numero ou libelle...'.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Banking - CounterpartySearchSelect end-to-end", "issue": "Non testable dans cet env: aucun bank_statement n'existe sur ACP Demo apres login (page 'Aucun extrait'). Le composant CounterpartySearchSelect.js a ete revu manuellement : data-testid='counterparty-{i}', 'counterparty-{i}-owner-{id}', 'counterparty-{i}-supplier-{id}', sections bleue 'Proprietaires' et orange 'Fournisseurs', filtre client par name/vcs_code/vat_number. Logique correcte. A retester quand un extrait brouillon existe.", "affected_selectors": ["[data-testid^='counterparty-']"]}
+    ],
+    "design_issues": [
+      {"screen": "ReportsPage onglet Decomptes", "issues": ["Les inputs Du/Au utilisent input[type=date] natif du navigateur (format mm/dd/yyyy) au lieu d'un date picker shadcn - incoherence visuelle mineure avec le reste de l'app."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter27_private_fee_split_decompte_lock_balance_tiers.py",
+    "/app/test_reports/pytest/pytest_iter27.xml"
+  ],
+  "action_items": [
+    "(Optionnel) Remplacer input[type=date] dans ReportsPage.DateFilters par le composant Calendar shadcn pour l'homogeneite UX.",
+    "(Optionnel, code review) auto_entries.py lignes 116/146 : description AC contient '{supplier} - {description}' alors que OD contient '{supplier}' sans description; ok mais asymetrique. Pas bloquant.",
+    "(Non bloquant) iter16 deux tests pre-existants toujours rouges (heritage iter25/26)."
+  ],
+  "critical_code_review_comments": [
+    "auto_entries.py lignes 85-162 : split AC + OD bien concu. Les 2 docs partagent source_type='invoice' + source_id=invoice.id, ce qui garantit le cleanup en cascade via _delete_auto_entries(db, 'invoice', invoice_id). Net sur 643 = 0 (Dr AC 643 + Cr OD 643). Correct comptablement.",
+    "routes/reports.py lignes 548-558 (decompte_pdf) : verrou cloture explicite, message clair, distingue exercice inconnu vs non-closed. Bon UX.",
+    "routes/reports.py lignes 871-921 (balance_tiers_pdf) : nouveau endpoint, reuse balance_tiers_owners + balance_tiers_suppliers. Bonne factorisation. Chinese walls strict (400 si copropriete_id absent ou 'all'). 404 si ACP inconnue.",
+    "routes/owner_portal.py lignes 341-347 : meme verrou applique cote portail owner. Message dit 'sera disponible apres la cloture par le syndic' - bon.",
+    "CounterpartySearchSelect.js (162 lignes, < 700) : composant focalise, refs + click outside, data-testid prefix configurable. Filtre client uniquement (pas de network). Comportement clear + autocomplete clean. Pas de duplication apparente.",
+    "ReportsPage.js downloadPdf (lignes 32-56) : gestion correcte du blob d'erreur (read .text() puis JSON.parse pour extraire detail). Toast affiche le detail backend lors du 400. UX OK.",
+    "FiscalYearPage : dialog refactore avec grid-cols-12 lisible. AccountSearchSelect occupe 6 colonnes, key 3, montant 2, action 1. Pas de superposition observee."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter27_private_fee_split_decompte_lock_balance_tiers.py (nouveau, 11 tests)"
+  ],
+  "success_rate": {
+    "backend": "100% (11/11) sur les nouveautes iter27",
+    "frontend": "Decomptes warning OK; Budget dialog OK; Banking CounterpartySearchSelect non teste runtime (pas d'extrait dispo)"
+  },
+  "test_credentials": "admin@copro.be / admin123 ; ACP_ID=6748ca1a-216d-4002-8417-799287238736 ; OWNER_ID=f01f889d-1057-4b15-91a1-ca3a869ccabe (Dubois Jean)",
+  "seed_data_creation": "3 factures TEST_priv creees puis supprimees (cascade auto-entries). Aucun residu en base.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "iter27 valide : (a) frais privatif = 2 ecritures (AC + OD) partagent source_id pour cleanup, (b) decompte PDF necessite fy.status='closed' sur 3 endpoints (/api/reports/decompte/pdf/{id}, /api/owner/decompte/pdf, fallback sans fiscal_year_id), (c) /api/reports/balance-tiers/pdf renvoie un vrai PDF binaire. Conventions a preserver : compte 643 pour frais privatifs, OD prefix reference='OD-PRIV-{num}', AC prefix='FA-{num}'. Pour tester CounterpartySearchSelect runtime, il faut au prealable importer un CODA ou creer un extrait brouillon manuellement (bouton Nouvel extrait page Banking).",
+  "rca of the issue": "Aucun bug detecte sur iter27. Tests valident le nouveau comportement de split AC/OD pour frais privatif, le verrou de cloture sur les decomptes annuels (cote syndic et cote portail owner), et le nouveau endpoint PDF balance des tiers. Tests passent du premier coup sur API publique. Seul gap : CounterpartySearchSelect non testable runtime (aucun bank_statement existant dans Demo ACP)."
+}

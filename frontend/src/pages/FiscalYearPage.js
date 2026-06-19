@@ -12,6 +12,7 @@ import { toast } from 'sonner';
 import { Plus, Trash2, Lock, Unlock, Calendar, CheckCircle2, RotateCcw, Sparkles, Send, Calculator } from 'lucide-react';
 import BudgetWizard from '@/components/BudgetWizard';
 import RegularizationDialog from '@/components/RegularizationDialog';
+import AccountSearchSelect from '@/components/AccountSearchSelect';
 
 export default function FiscalYearPage() {
   const [tab, setTab] = useState('years');
@@ -295,7 +296,7 @@ export default function FiscalYearPage() {
 
       {/* Budget dialog */}
       <Dialog open={budgetDialog} onOpenChange={setBudgetDialog}>
-        <DialogContent className="max-w-4xl">
+        <DialogContent className="w-[95vw] max-w-5xl max-h-[92vh] overflow-y-auto">
           <DialogHeader><DialogTitle style={{fontFamily:'Chivo,sans-serif'}}>{editingBudget ? 'Modifier le budget' : 'Nouveau budget previsionnel'}</DialogTitle></DialogHeader>
           <div className="space-y-4 mt-2">
             <div className="grid grid-cols-2 gap-4">
@@ -324,51 +325,68 @@ export default function FiscalYearPage() {
               </Card>
             )}
 
-            <div className="border rounded-md overflow-hidden">
-              <table className="w-full text-sm">
-                <thead><tr className="bg-slate-50 text-xs text-slate-600 uppercase">
-                  <th className="p-2 text-left w-44">Compte (nature)</th>
-                  <th className="p-2 text-left">Libelle</th>
-                  <th className="p-2 text-left w-48">Cle de repartition</th>
-                  <th className="p-2 text-right w-32">Montant annuel (EUR)</th>
-                  <th className="p-2 w-10"></th>
-                </tr></thead>
-                <tbody>
-                  {budgetForm.lines.length === 0 && (
-                    <tr><td colSpan={5} className="p-4 text-center text-slate-400">Aucune ligne. Ajoutez-en ou pre-remplissez depuis N-1.</td></tr>
-                  )}
-                  {budgetForm.lines.map((l, i) => (
-                    <tr key={i} className="border-t border-slate-100">
-                      <td className="p-1">
-                        <select className="w-full border rounded px-2 py-1 text-xs font-mono" value={l.account_number} onChange={e => updateBudgetLine(i, 'account_number', e.target.value)} data-testid={`budget-line-acc-${i}`}>
-                          <option value="">--</option>
-                          {accounts.map(a => <option key={a.number} value={a.number}>{a.number} - {a.name}</option>)}
-                        </select>
-                      </td>
-                      <td className="p-1 text-xs text-slate-500">{l.account_name}</td>
-                      <td className="p-1">
-                        <select className="w-full border rounded px-2 py-1 text-xs" value={l.distribution_key_id || ''} onChange={e => updateBudgetLine(i, 'distribution_key_id', e.target.value)} data-testid={`budget-line-key-${i}`}>
-                          <option value="">Tantiemes (defaut)</option>
-                          {distKeys.map(k => <option key={k.id} value={k.id}>{k.name}</option>)}
-                        </select>
-                      </td>
-                      <td className="p-1">
-                        <Input type="number" step="0.01" className="text-right text-sm h-8 w-28 ml-auto" value={l.amount} onChange={e => updateBudgetLine(i, 'amount', e.target.value)} data-testid={`budget-line-amount-${i}`} />
-                      </td>
-                      <td className="p-1 text-center"><button onClick={() => removeBudgetLine(i)} className="text-red-400 hover:text-red-600"><Trash2 size={12} /></button></td>
-                    </tr>
-                  ))}
-                </tbody>
-                <tfoot>
-                  <tr className="border-t-2 bg-slate-50 font-bold">
-                    <td colSpan={3} className="p-2">
-                      <Button variant="ghost" size="sm" onClick={addBudgetLine} className="text-xs"><Plus size={12} className="mr-1" />Ajouter ligne</Button>
-                    </td>
-                    <td className="p-2 text-right font-mono">{totalBudget.toFixed(2)}</td>
-                    <td></td>
-                  </tr>
-                </tfoot>
-              </table>
+            <div className="border border-slate-200 rounded-md bg-white">
+              <div className="grid grid-cols-12 gap-3 bg-slate-50 px-3 py-2 text-[11px] uppercase tracking-wider text-slate-600 font-semibold border-b border-slate-200">
+                <div className="col-span-6">Compte / Nature de depense</div>
+                <div className="col-span-3">Cle de repartition</div>
+                <div className="col-span-2 text-right">Montant (EUR)</div>
+                <div className="col-span-1"></div>
+              </div>
+              {budgetForm.lines.length === 0 && (
+                <div className="p-6 text-center text-slate-400 text-sm">Aucune ligne. Ajoutez-en ou pre-remplissez depuis N-1.</div>
+              )}
+              <div className="divide-y divide-slate-100">
+                {budgetForm.lines.map((l, i) => (
+                  <div key={i} className="grid grid-cols-12 gap-3 px-3 py-2 items-center">
+                    <div className="col-span-6">
+                      <AccountSearchSelect
+                        accounts={accounts}
+                        value={l.account_number}
+                        onChange={(num) => updateBudgetLine(i, 'account_number', num)}
+                        placeholder="Rechercher par numero ou libelle..."
+                        testId={`budget-line-acc-${i}`}
+                      />
+                    </div>
+                    <div className="col-span-3">
+                      <select
+                        className="w-full border border-slate-200 rounded-md px-3 py-2 text-sm bg-white hover:border-slate-300 transition"
+                        value={l.distribution_key_id || ''}
+                        onChange={e => updateBudgetLine(i, 'distribution_key_id', e.target.value)}
+                        data-testid={`budget-line-key-${i}`}
+                      >
+                        <option value="">Tantiemes (defaut)</option>
+                        {distKeys.map(k => <option key={k.id} value={k.id}>{k.name}</option>)}
+                      </select>
+                    </div>
+                    <div className="col-span-2">
+                      <Input
+                        type="number"
+                        step="0.01"
+                        className="text-right text-sm h-10 bg-white"
+                        value={l.amount}
+                        onChange={e => updateBudgetLine(i, 'amount', e.target.value)}
+                        data-testid={`budget-line-amount-${i}`}
+                      />
+                    </div>
+                    <div className="col-span-1 text-center">
+                      <button
+                        onClick={() => removeBudgetLine(i)}
+                        className="text-red-400 hover:text-red-600 p-1"
+                        title="Supprimer la ligne"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="border-t-2 bg-slate-50 px-3 py-2 flex items-center justify-between">
+                <Button variant="ghost" size="sm" onClick={addBudgetLine} className="text-xs"><Plus size={12} className="mr-1" />Ajouter ligne</Button>
+                <div className="flex items-center gap-3">
+                  <span className="text-xs text-slate-500 uppercase tracking-wider">Total</span>
+                  <span className="font-mono font-bold text-base text-slate-900">{totalBudget.toFixed(2)} EUR</span>
+                </div>
+              </div>
             </div>
 
             <div className="flex gap-3 justify-end">

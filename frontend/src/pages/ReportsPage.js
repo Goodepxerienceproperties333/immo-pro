@@ -29,7 +29,31 @@ export default function ReportsPage() {
   const loadResultat = async () => { setLoading(true); try { const params = {}; if (dateFrom) params.date_from = dateFrom; if (dateTo) params.date_to = dateTo; const { data } = await api.get('/reports/resultat', { params }); setResultat(data); } catch { toast.error('Erreur'); } finally { setLoading(false); } };
   const loadDecomptes = async () => { setLoading(true); try { const params = {}; if (dateFrom) params.date_from = dateFrom; if (dateTo) params.date_to = dateTo; const { data } = await api.get('/reports/decompte', { params }); setDecomptes(data); } catch { toast.error('Erreur'); } finally { setLoading(false); } };
 
-  const downloadPdf = (ownerId) => { window.open(`${API}/api/reports/decompte/pdf/${ownerId}?date_from=${dateFrom || '2024-01-01'}&date_to=${dateTo || '2024-12-31'}`, '_blank'); };
+  const downloadPdf = async (ownerId) => {
+    try {
+      const params = {};
+      if (dateFrom) params.date_from = dateFrom;
+      if (dateTo) params.date_to = dateTo;
+      const res = await api.get(`/reports/decompte/pdf/${ownerId}`, { params, responseType: 'blob' });
+      const url = window.URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `decompte_${ownerId}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      // Backend returns 400 JSON if fiscal year not closed - need to read blob as text
+      try {
+        const text = await err.response?.data?.text?.();
+        const msg = text ? JSON.parse(text).detail : (err.response?.data?.detail || 'Erreur de generation du PDF');
+        toast.error(msg);
+      } catch {
+        toast.error(err.response?.data?.detail || 'Erreur de generation du PDF');
+      }
+    }
+  };
   const copro = typeof window !== 'undefined' ? localStorage.getItem('copropriete_id') || '' : '';
   const xlsxParam = copro ? `?copropriete_id=${copro}` : '';
   const exportBilanXlsx = () => window.open(`${API}/api/exports/bilan.xlsx${xlsxParam}${dateTo ? (xlsxParam ? '&' : '?') + 'date_to=' + dateTo : ''}`, '_blank');
@@ -136,6 +160,14 @@ export default function ReportsPage() {
 
         <TabsContent value="decomptes" className="mt-0">
           <DateFilters onLoad={loadDecomptes} label="Generer decomptes" />
+          <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-md text-sm text-amber-800 flex items-start gap-2" data-testid="decompte-warning">
+            <FileText size={16} className="mt-0.5 shrink-0" />
+            <div>
+              <b>Important :</b> le decompte annuel n'est genere qu'apres <b>cloture de l'exercice</b>.
+              Avant cloture, les chiffres ne sont pas definitifs. Pour un releve a date,
+              utilisez la <i>Situation de compte</i> dans la Balance des tiers.
+            </div>
+          </div>
           {decomptes && (<div className="space-y-4">
             <div className="text-sm text-slate-500 mb-2">Periode: {decomptes.period.from} au {decomptes.period.to} - {decomptes.decomptes.length} proprietaires</div>
             {decomptes.decomptes.map(d => (

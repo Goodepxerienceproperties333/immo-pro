@@ -82,23 +82,27 @@ async def generate_purchase_entry(db, invoice: dict) -> dict | None:
 
     await _delete_auto_entries(db, "invoice", invoice["id"])
 
-    # ---- FRAIS PRIVATIF : ecriture 4 lignes ----
-    # Dr 643 Frais privatif    | Cr 44000XXX Fournisseur
-    # Dr 40000XXX Proprietaire | Cr 643 (imputation)
-    # Resultat : 643 net = 0, supplier credite, owner debite.
+    # ---- FRAIS PRIVATIF : 2 ecritures separees ----
+    # Ecriture 1 (AC - Achats) : Facture fournisseur
+    #   Dr 643 Frais privatif  | Cr 44000XXX Fournisseur
+    # Ecriture 2 (OD - Operations Diverses) : Refacturation au proprietaire
+    #   Dr 40000XXX Proprietaire | Cr 643 Frais privatif (imputation)
+    # Net 643 = 0, fournisseur credite, proprietaire debite.
     if invoice.get("is_private_fee") and invoice.get("private_fee_owner_id"):
         owner_id = invoice["private_fee_owner_id"]
         owner_doc = await db.owners.find_one({"id": owner_id}, {"_id": 0})
         if owner_doc:
             owner_doc = await assign_owner_accounts(db, owner_doc, copro_id)
             owner_accs = get_owner_accounts(owner_doc, copro_id)
-            owner_prov = owner_accs.get("provisions", "")
+            owner_prov = owner_accs.get("provisions", "") or "400000"
             owner_name = owner_doc.get("name", "")
             # Re-fetch PCMN names including 643
             pcmn_q2 = {"number": {"$in": ["643", supplier_acc, owner_prov]}, "copropriete_id": copro_id}
             pcmns2 = await db.pcmn_accounts.find(pcmn_q2, {"_id": 0}).to_list(10)
             pcmn_names2 = {p["number"]: p["name"] for p in pcmns2}
-            lines = [
+
+            # --- Ecriture 1 : AC (Achats) ---
+            ac_lines = [
                 {"account_number": "643",
                  "account_name": pcmn_names2.get("643", "Frais privatifs"),
                  "debit": amount, "credit": 0.0,
@@ -108,7 +112,27 @@ async def generate_purchase_entry(db, invoice: dict) -> dict | None:
                  "debit": 0.0, "credit": amount,
                  "third_party_id": (supplier_doc or {}).get("id"),
                  "third_party_name": supplier_name},
-                {"account_number": owner_prov or "400000",
+            ]
+            ac_doc = {
+                "id": str(uuid.uuid4()),
+                "journal_type": "AC",
+                "date": invoice.get("date") or datetime.now(timezone.utc).date().isoformat(),
+                "reference": f"FA-{invoice.get('number','')}",
+                "description": f"Frais privatif {owner_name} - {invoice.get('supplier','')} - {invoice.get('description','')}".strip(" -"),
+                "lines": ac_lines,
+                "total_debit": amount,
+                "total_credit": amount,
+                "copropriete_id": copro_id,
+                "auto_generated": True,
+                "source_type": "invoice",
+                "source_id": invoice["id"],
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            await db.journal_entries.insert_one(ac_doc)
+
+            # --- Ecriture 2 : OD (Operations Diverses) - refacturation au proprietaire ---
+            od_lines = [
+                {"account_number": owner_prov,
                  "account_name": pcmn_names2.get(owner_prov, f"Prov. - {owner_name}"),
                  "debit": amount, "credit": 0.0,
                  "third_party_id": owner_id,
@@ -119,25 +143,23 @@ async def generate_purchase_entry(db, invoice: dict) -> dict | None:
                  "third_party_id": None,
                  "third_party_name": f"Imputation - {owner_name}"},
             ]
-            if not _balanced(lines):
-                return None
-            doc = {
+            od_doc = {
                 "id": str(uuid.uuid4()),
-                "journal_type": "AC",
+                "journal_type": "OD",
                 "date": invoice.get("date") or datetime.now(timezone.utc).date().isoformat(),
-                "reference": f"FA-{invoice.get('number','')}",
-                "description": f"Frais privatif {owner_name} - {invoice.get('supplier','')} - {invoice.get('description','')}".strip(" -"),
-                "lines": lines,
-                "total_debit": amount * 2,
-                "total_credit": amount * 2,
+                "reference": f"OD-PRIV-{invoice.get('number','')}",
+                "description": f"Refacturation frais privatif a {owner_name} - {invoice.get('supplier','')}".strip(" -"),
+                "lines": od_lines,
+                "total_debit": amount,
+                "total_credit": amount,
                 "copropriete_id": copro_id,
                 "auto_generated": True,
                 "source_type": "invoice",
                 "source_id": invoice["id"],
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
-            await db.journal_entries.insert_one(doc)
-            return {k: v for k, v in doc.items() if k != "_id"}
+            await db.journal_entries.insert_one(od_doc)
+            return {k: v for k, v in ac_doc.items() if k != "_id"}
 
     # ---- ECRITURE STANDARD : 2 lignes ----
     lines = [

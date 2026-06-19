@@ -64,11 +64,37 @@ export default function FundCallsPage() {
     if (selectedCall?.id === id) setSelectedCall(null); load();
   };
 
+  const deleteAllCalls = async () => {
+    const copro = localStorage.getItem('selectedCopro') || localStorage.getItem('copropriete_id') || '';
+    if (!copro || copro === 'all') { toast.error('Selectionnez une ACP'); return; }
+    if (!window.confirm(`Supprimer TOUS les appels de fonds de cette ACP (${calls.length}) ET leurs ecritures comptables ? Cette action est irreversible.`)) return;
+    try {
+      const { data } = await api.post(`/fund-calls/delete-all?copropriete_id=${copro}`);
+      toast.success(data.message || 'Appels supprimes');
+      setSelectedCall(null);
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur');
+    }
+  };
+
   return (
     <div data-testid="fund-calls-page">
       <div className="page-header flex items-center justify-between">
         <div><h1 className="page-title"><Megaphone size={24} className="inline mr-2" />Appels de Fonds</h1><p className="page-subtitle">Appels de provisions et fonds de reserve</p></div>
-        <Button onClick={openCreate} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="create-call-btn"><Plus size={16} className="mr-2" /> Nouvel appel</Button>
+        <div className="flex gap-2">
+          {calls.length > 0 && (
+            <Button
+              onClick={deleteAllCalls}
+              variant="outline"
+              className="border-red-200 text-red-600 hover:bg-red-50"
+              data-testid="delete-all-calls-btn"
+            >
+              <Trash2 size={16} className="mr-2" /> Supprimer tous les appels
+            </Button>
+          )}
+          <Button onClick={openCreate} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="create-call-btn"><Plus size={16} className="mr-2" /> Nouvel appel</Button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

@@ -545,6 +545,18 @@ def create_reports_router(db):
             if real_fy:
                 fy = real_fy
 
+        # Verrou : on ne peut generer un decompte annuel QUE si l'exercice est CLOTURE.
+        # Avant cloture, les chiffres sont encore en mouvement et le decompte n'a pas
+        # de valeur juridique. Utiliser la situation de compte pour un releve a date.
+        fy_status = fy.get("status", "")
+        if fy_status != "closed":
+            raise HTTPException(
+                400,
+                f"L'exercice '{fy.get('name','')}' n'est pas cloture (statut: {fy_status or 'inconnu'}). "
+                "Le decompte annuel est genere uniquement apres cloture de l'exercice. "
+                "Pour un releve a date, utilisez la situation de compte."
+            )
+
         copro_id_use = copropriete_id
         copro = await db.coproprietes.find_one({"id": copro_id_use}, {"_id": 0})
         if not copro:
@@ -855,6 +867,58 @@ def create_reports_router(db):
         total_debiteurs = round(sum(r["balance"] for r in result if r["balance"] > 0), 2)
         total_crediteurs = round(sum(abs(r["balance"]) for r in result if r["balance"] < 0), 2)
         return {"owners": result, "total_debiteurs": total_debiteurs, "total_crediteurs": total_crediteurs}
+
+    # ---- PDF SYNTHESE BALANCE DES TIERS (proprietaires + fournisseurs) ----
+    @router.get("/balance-tiers/pdf")
+    async def balance_tiers_pdf(
+        request: Request,
+        copropriete_id: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+    ):
+        """Genere un PDF synthese de la balance des tiers (proprietaires + fournisseurs).
+        Chinese walls strict : `copropriete_id` requis (param ou header)."""
+        from pdf_balance_tiers import build_balance_tiers_pdf
+
+        if not copropriete_id:
+            copropriete_id = request.headers.get("X-Copropriete-Id") if request else None
+        if not copropriete_id or copropriete_id == "all":
+            raise HTTPException(400, "copropriete_id requis - chinese walls strict")
+
+        copro = await db.coproprietes.find_one({"id": copropriete_id}, {"_id": 0})
+        if not copro:
+            raise HTTPException(404, "Copropriete non trouvee")
+
+        # Re-utilise les endpoints internes
+        owners_data = await balance_tiers_owners(
+            copropriete_id=copropriete_id, start_date=start_date, end_date=end_date,
+        )
+        suppliers_data = await balance_tiers_suppliers(
+            request=request, copropriete_id=copropriete_id,
+            start_date=start_date, end_date=end_date,
+        )
+        # Calcule total_debiteurs/crediteurs pour fournisseurs (positif = a payer)
+        sups = suppliers_data.get("suppliers", []) or []
+        sup_a_payer = round(sum(s["balance"] for s in sups if s["balance"] > 0), 2)
+        sup_acompte = round(sum(abs(s["balance"]) for s in sups if s["balance"] < 0), 2)
+        suppliers_data["total_crediteurs"] = sup_a_payer
+        suppliers_data["total_debiteurs"] = sup_acompte
+
+        pdf_bytes = build_balance_tiers_pdf(
+            copropriete=copro,
+            owners_data=owners_data,
+            suppliers_data=suppliers_data,
+            period_start=start_date or "",
+            period_end=end_date or "",
+        )
+        safe_name = (copro.get("name", "acp") or "acp").replace(" ", "_").replace("/", "_")
+        suffix = (end_date or datetime.now(timezone.utc).date().isoformat())
+        filename = f"balance-tiers-{safe_name}-{suffix}.pdf"
+        return StreamingResponse(
+            io.BytesIO(pdf_bytes),
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
 
     @router.get("/balance-tiers/owners/{owner_id}")
     async def situation_compte_owner(
