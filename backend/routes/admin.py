@@ -211,4 +211,182 @@ def create_admin_router(db):
             stats["total_existing"] += len(existing_nums)
         return stats
 
+    # ============================================================================
+    # OUTILS SUPERADMIN : DEBLOCAGE COMPTABLE + AUDIT LOG
+    # ============================================================================
+    # Seul le SUPERADMIN (gestionnaire de la plateforme) peut utiliser ces outils.
+    # Chaque action genere une trace dans la collection `audit_log` pour compliance.
+
+    async def _audit(user, action, target_type, target_id, details=None,
+                     copropriete_id=None):
+        """Enregistre une action superadmin dans audit_log."""
+        await db.audit_log.insert_one({
+            "id": str(uuid.uuid4()),
+            "user_id": user.get("id"),
+            "user_email": user.get("email"),
+            "action": action,  # ex: "unlock_entry", "force_reopen_fy", "user_create"
+            "target_type": target_type,  # ex: "journal_entry", "fiscal_year"
+            "target_id": target_id,
+            "copropriete_id": copropriete_id,
+            "details": details or {},
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+
+    @router.post("/unlock-entry/{entry_id}")
+    async def unlock_entry(entry_id: str, request: Request):
+        """Force la modification d'une ecriture comptable verrouillee.
+        - Si l'ecriture est dans un exercice cloture : bypass le verrou
+        - Si l'ecriture est `is_reversal=True` : permet de l'editer (cas exceptionnel)
+        - Marque l'ecriture comme 'unlocked_by_admin' + trace dans audit_log.
+
+        Body attendu (JSON) : `{ "patch": {...changes to apply...}, "reason": "..." }`
+        """
+        admin = await _get_superadmin_only(request)
+        body = await request.json()
+        patch = body.get("patch") or {}
+        reason = body.get("reason") or ""
+        if not patch:
+            raise HTTPException(400, "Aucune modification fournie (champ `patch` vide)")
+        if not reason or len(reason) < 5:
+            raise HTTPException(400, "Une justification est requise (minimum 5 caracteres)")
+        entry = await db.journal_entries.find_one({"id": entry_id}, {"_id": 0})
+        if not entry:
+            raise HTTPException(404, "Ecriture introuvable")
+        # Apply patch + flag unlock
+        patch["updated_at"] = datetime.now(timezone.utc).isoformat()
+        patch["unlocked_by_admin"] = True
+        patch["unlock_reason"] = reason
+        patch["unlock_admin_id"] = admin.get("id")
+        await db.journal_entries.update_one({"id": entry_id}, {"$set": patch})
+        await _audit(
+            admin, "unlock_entry", "journal_entry", entry_id,
+            details={"reason": reason, "patch_keys": list(patch.keys()),
+                     "original_date": entry.get("date"),
+                     "original_journal_type": entry.get("journal_type")},
+            copropriete_id=entry.get("copropriete_id"),
+        )
+        updated = await db.journal_entries.find_one({"id": entry_id}, {"_id": 0})
+        return {"status": "ok", "entry": updated}
+
+    @router.post("/force-reopen-fy/{fy_id}")
+    async def force_reopen_fy(fy_id: str, request: Request):
+        """Force la reouverture d'un exercice fiscal en cas d'urgence.
+        Contrairement au reopen normal qui contre-passe les OD de cloture,
+        ce mode FORCE l'exercice a 'open' sans contre-passation - utile uniquement
+        si le reopen normal echoue. Trace dans audit_log avec justification."""
+        admin = await _get_superadmin_only(request)
+        body = await request.json()
+        reason = body.get("reason") or ""
+        if not reason or len(reason) < 10:
+            raise HTTPException(400, "Justification detaillee requise (minimum 10 caracteres)")
+        fy = await db.fiscal_years.find_one({"id": fy_id}, {"_id": 0})
+        if not fy:
+            raise HTTPException(404, "Exercice introuvable")
+        await db.fiscal_years.update_one(
+            {"id": fy_id},
+            {"$set": {"status": "open",
+                      "forced_reopen_by_admin": True,
+                      "forced_reopen_reason": reason,
+                      "forced_reopen_at": datetime.now(timezone.utc).isoformat(),
+                      "forced_reopen_admin_id": admin.get("id")}}
+        )
+        await _audit(
+            admin, "force_reopen_fy", "fiscal_year", fy_id,
+            details={"reason": reason, "previous_status": fy.get("status"),
+                     "fy_name": fy.get("name")},
+            copropriete_id=fy.get("copropriete_id"),
+        )
+        return {"status": "ok", "fy_id": fy_id, "new_status": "open"}
+
+    @router.delete("/entries/{entry_id}/force")
+    async def force_delete_entry(entry_id: str, request: Request):
+        """Force la suppression d'une ecriture (meme si verrouillee ou liee
+        a une facture/appel). Action critique - trace systematiquement."""
+        admin = await _get_superadmin_only(request)
+        body = await request.json() if request.headers.get("content-length") else {}
+        reason = body.get("reason") or ""
+        if not reason or len(reason) < 10:
+            raise HTTPException(400, "Justification detaillee requise (minimum 10 caracteres)")
+        entry = await db.journal_entries.find_one({"id": entry_id}, {"_id": 0})
+        if not entry:
+            raise HTTPException(404, "Ecriture introuvable")
+        # Conserve une copie dans deleted_entries (audit trail)
+        await db.deleted_entries.insert_one({
+            **{k: v for k, v in entry.items() if k != "_id"},
+            "deleted_at": datetime.now(timezone.utc).isoformat(),
+            "deleted_by_admin_id": admin.get("id"),
+            "delete_reason": reason,
+        })
+        await db.journal_entries.delete_one({"id": entry_id})
+        await _audit(
+            admin, "force_delete_entry", "journal_entry", entry_id,
+            details={"reason": reason,
+                     "total_debit": entry.get("total_debit"),
+                     "journal_type": entry.get("journal_type"),
+                     "date": entry.get("date")},
+            copropriete_id=entry.get("copropriete_id"),
+        )
+        return {"status": "ok"}
+
+    @router.get("/audit-log")
+    async def get_audit_log(
+        request: Request,
+        limit: int = 100,
+        action: Optional[str] = None,
+        copropriete_id: Optional[str] = None,
+    ):
+        """Liste les actions superadmin (lecture seule)."""
+        await _get_superadmin_only(request)
+        q = {}
+        if action:
+            q["action"] = action
+        if copropriete_id:
+            q["copropriete_id"] = copropriete_id
+        logs = await db.audit_log.find(q, {"_id": 0}).sort("timestamp", -1).limit(limit).to_list(limit)
+        return logs
+
+    @router.get("/locked-entries-search")
+    async def search_locked_entries(
+        request: Request,
+        copropriete_id: Optional[str] = None,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+        journal_type: Optional[str] = None,
+        q: Optional[str] = None,
+    ):
+        """Recherche des ecritures dans des exercices clotures pour intervention.
+        Retourne les ecritures + le statut de leur FY (closed/open) + flags
+        (is_reversal, reversed) pour aider l'admin a localiser l'ecriture cible."""
+        await _get_superadmin_only(request)
+        query = {}
+        if copropriete_id:
+            query["copropriete_id"] = copropriete_id
+        if journal_type:
+            query["journal_type"] = journal_type
+        if date_from or date_to:
+            query["date"] = {}
+            if date_from:
+                query["date"]["$gte"] = date_from
+            if date_to:
+                query["date"]["$lte"] = date_to
+        if q:
+            query["$or"] = [
+                {"reference": {"$regex": q, "$options": "i"}},
+                {"description": {"$regex": q, "$options": "i"}},
+            ]
+        entries = await db.journal_entries.find(query, {"_id": 0}).sort("date", -1).limit(200).to_list(200)
+        # Enrich with FY status
+        fy_ids = {e.get("fiscal_year_id") for e in entries if e.get("fiscal_year_id")}
+        fys = {}
+        if fy_ids:
+            async for fy in db.fiscal_years.find(
+                {"id": {"$in": list(fy_ids)}}, {"_id": 0, "id": 1, "name": 1, "status": 1}
+            ):
+                fys[fy["id"]] = fy
+        for e in entries:
+            fy = fys.get(e.get("fiscal_year_id"))
+            e["fy_status"] = fy.get("status") if fy else "unknown"
+            e["fy_name"] = fy.get("name") if fy else ""
+        return entries
+
     return router

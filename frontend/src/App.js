@@ -21,6 +21,9 @@ import ReportsPage from "@/pages/ReportsPage";
 import BalanceTiersPage from "@/pages/BalanceTiersPage";
 import DocumentsPage from "@/pages/DocumentsPage";
 import AdminUsersPage from "@/pages/AdminUsersPage";
+import AdminDashboardPage from "@/pages/AdminDashboardPage";
+import AdminUnlockEntryPage from "@/pages/AdminUnlockEntryPage";
+import AdminAuditLogPage from "@/pages/AdminAuditLogPage";
 import ProfilePage from "@/pages/ProfilePage";
 import CoproprietesPage from "@/pages/CoproprietesPage";
 import OwnerPortalPage from "@/pages/OwnerPortalPage";
@@ -41,10 +44,13 @@ function AppRoutes() {
 
   // Owners go directly to their dedicated portal
   const isOwnerRole = user && user.role === 'owner';
+  // Superadmins land on the admin dashboard at /admin by default
+  const isSuperadminRole = user && (user.role === 'superadmin' || user.role === 'admin');
+  const defaultPath = isOwnerRole ? '/portal' : (isSuperadminRole ? '/admin' : '/');
 
   return (
     <Routes>
-      <Route path="/login" element={user ? <Navigate to={isOwnerRole ? "/portal" : "/"} replace /> : <LoginPage />} />
+      <Route path="/login" element={user ? <Navigate to={defaultPath} replace /> : <LoginPage />} />
       <Route path="/portal" element={<ProtectedRoute><OwnerPortalPage /></ProtectedRoute>} />
       <Route path="/" element={<ProtectedRoute>{isOwnerRole ? <Navigate to="/portal" replace /> : <Layout />}</ProtectedRoute>}>
         <Route index element={<DashboardPage />} />
@@ -68,6 +74,9 @@ function AppRoutes() {
         <Route path="expense-categories" element={<ExpenseCategoriesPage />} />
         <Route path="documents" element={<DocumentsPage />} />
         <Route path="admin/users" element={<AdminUsersPage />} />
+        <Route path="admin" element={<AdminDashboardPage />} />
+        <Route path="admin/unlock" element={<AdminUnlockEntryPage />} />
+        <Route path="admin/audit" element={<AdminAuditLogPage />} />
         <Route path="profile" element={<ProfilePage />} />
       </Route>
     </Routes>

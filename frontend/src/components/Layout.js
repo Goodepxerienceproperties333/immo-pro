@@ -101,11 +101,23 @@ export default function Layout() {
           ))}
           {isSuperadmin && (
             <div className="mb-2">
-              {!collapsed && <div className="px-3 py-1 mt-1 text-[10px] uppercase tracking-[0.2em] text-slate-500 font-semibold">Admin</div>}
+              {!collapsed && <div className="px-3 py-1 mt-1 text-[10px] uppercase tracking-[0.2em] text-amber-400 font-semibold">Plateforme</div>}
+              <NavLink to="/admin" onClick={() => setMobileOpen(false)}
+                className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''} ${collapsed ? 'justify-center px-2' : ''}`}
+                data-testid="nav-admin-dashboard"
+              ><Shield size={16} strokeWidth={1.5} />{!collapsed && <span className="text-[13px]">Tableau admin</span>}</NavLink>
               <NavLink to="/admin/users" onClick={() => setMobileOpen(false)}
                 className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''} ${collapsed ? 'justify-center px-2' : ''}`}
                 data-testid="nav-admin-users"
               ><Shield size={16} strokeWidth={1.5} />{!collapsed && <span className="text-[13px]">Utilisateurs</span>}</NavLink>
+              <NavLink to="/admin/unlock" onClick={() => setMobileOpen(false)}
+                className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''} ${collapsed ? 'justify-center px-2' : ''}`}
+                data-testid="nav-admin-unlock"
+              ><Shield size={16} strokeWidth={1.5} />{!collapsed && <span className="text-[13px]">Outils deblocage</span>}</NavLink>
+              <NavLink to="/admin/audit" onClick={() => setMobileOpen(false)}
+                className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''} ${collapsed ? 'justify-center px-2' : ''}`}
+                data-testid="nav-admin-audit"
+              ><Shield size={16} strokeWidth={1.5} />{!collapsed && <span className="text-[13px]">Journal d'audit</span>}</NavLink>
             </div>
           )}
           {/* "Mon profil" accessible a TOUS les utilisateurs authentifies */}
@@ -143,6 +155,11 @@ export default function Layout() {
           <div className="w-8 h-8 rounded bg-[#0055FF] flex items-center justify-center text-white font-bold text-sm">CP</div>
           <span className="text-white font-bold text-lg tracking-tight" style={{fontFamily:'Chivo,sans-serif'}}>CoproManager</span>
           <div className="flex-1" />
+          {isSuperadmin && (
+            <NavLink to="/admin" className="text-amber-400 hover:text-amber-300 text-xs flex items-center gap-1.5 transition-colors font-semibold" data-testid="nav-admin-top">
+              <Shield size={14} /> Admin
+            </NavLink>
+          )}
           {isSuperadmin && (
             <NavLink to="/admin/users" className="text-slate-400 hover:text-white text-xs flex items-center gap-1.5 transition-colors" data-testid="nav-admin-users-top">
               <Shield size={14} /> Utilisateurs
