@@ -187,6 +187,12 @@ export default function Layout() {
           {/* "Mon profil" accessible a TOUS les utilisateurs authentifies */}
           <div className="mb-2">
             {!collapsed && <div className="px-3 py-1 mt-1 text-[10px] uppercase tracking-[0.2em] text-slate-500 font-semibold">Compte</div>}
+            {(user?.role === 'syndic' || user?.role === 'admin' || user?.role === 'superadmin') && (
+              <NavLink to="/team" onClick={() => setMobileOpen(false)}
+                className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''} ${collapsed ? 'justify-center px-2' : ''}`}
+                data-testid="nav-team"
+              ><Users size={16} strokeWidth={1.5} />{!collapsed && <span className="text-[13px]">Mon equipe</span>}</NavLink>
+            )}
             <NavLink to="/profile" onClick={() => setMobileOpen(false)}
               className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''} ${collapsed ? 'justify-center px-2' : ''}`}
               data-testid="nav-profile"
