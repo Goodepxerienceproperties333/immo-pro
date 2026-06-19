@@ -9,7 +9,7 @@ import { Users, Building2, UserCheck, Receipt, AlertCircle, TrendingUp, Home, Ar
 import { fmtDate } from '@/lib/dateFmt';
 
 export default function DashboardPage() {
-  const { selectedCopro, setSelectedCopro, isAdmin } = useAuth();
+  const { selectedCopro, setSelectedCopro, isSuperadmin } = useAuth();
   const [coproprietes, setCoproprietes] = useState([]);
   const [stats, setStats] = useState(null);
   const [health, setHealth] = useState(null);
@@ -69,7 +69,7 @@ export default function DashboardPage() {
             <h1 className="page-title">Tableau de bord</h1>
             <p className="page-subtitle">Selectionnez une copropriete pour acceder a sa gestion</p>
           </div>
-          {isAdmin && (
+          {isSuperadmin && (
             <Button
               onClick={handleSeedDemo}
               disabled={seeding}

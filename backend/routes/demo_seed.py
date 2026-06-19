@@ -17,10 +17,10 @@ def create_demo_router(db):
     router = APIRouter(prefix="/api/admin/demo")
 
     async def _admin(request):
-        from server import get_current_user, is_admin_role
+        from server import get_current_user, is_superadmin_only
         user = await get_current_user(request)
-        if not is_admin_role(user.get("role", "")):
-            raise HTTPException(403, "Acces refuse")
+        if not is_superadmin_only(user.get("role", "")):
+            raise HTTPException(403, "Generation de demo reservee au super administrateur")
         return user
 
     @router.post("/seed")
