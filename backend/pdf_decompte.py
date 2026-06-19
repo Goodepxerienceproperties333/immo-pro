@@ -176,30 +176,82 @@ def build_decompte_pdf(
     elems.append(dest_tbl)
     elems.append(Spacer(1, 8 * mm))
 
-    # ---- COMPUTE TOTALS ----
-    # Group invoices by distribution_key -> account -> [(inv, owner_amount)]
-    grouped = defaultdict(lambda: defaultdict(list))
+    # ---- COMPUTE TOTALS (style Finlead : Lot -> Cle de repartition -> Compte) ----
+    # Build distribution key index : dk_id -> {lots: {lot_id: quotity}, total_quotity}
+    # Note: distribution_keys.lots use the field "share" (not "quotity")
+    dk_index = {}
+    for dk in distribution_keys:
+        items = dk.get("lots", []) or []
+        lots_map = {}
+        for it in items:
+            lot_id = it.get("lot_id")
+            # Try "share" first (real schema), fall back to "quotity" for safety
+            q = it.get("share")
+            if q is None:
+                q = it.get("quotity", 0)
+            try:
+                lots_map[lot_id] = float(q or 0)
+            except Exception:
+                lots_map[lot_id] = 0.0
+        dk_index[dk.get("id")] = {
+            "name": dk.get("name", ""),
+            "lots": lots_map,
+            "total": sum(lots_map.values()),
+        }
+
+    def _zero_stats():
+        return {"total_dist": 0.0, "owner_amt": 0.0, "owner_occ": 0.0, "owner_prop": 0.0}
+
+    # per_lot_data: lot_id -> { key_id -> { 'accounts': {acc -> stats}, '_invoices_seen': set } }
+    per_lot_data = {}
     total_owner_charges = 0.0
     total_occupant_share = 0.0
     total_proprio_share = 0.0
+    # Aggregate by account globally for the "Recap locataire" summary
+    occupant_summary_by_acc = {}  # acc -> {occ_amt, label}
+
     for inv in invoices:
-        owner_amt = 0.0
-        for dl in inv.get("distribution_lines", []) or []:
-            if dl.get("lot_id") in owner_lot_ids:
-                owner_amt += float(dl.get("amount", 0) or 0)
-        if owner_amt <= 0.001:
-            continue
-        # Calcul des parts occupant/proprietaire pour ce proprietaire
-        occ_pct = float(inv.get("occupant_pct", 0) or 0)
-        prop_pct = float(inv.get("proprietaire_pct", 100) or 100)
-        owner_occ = round(owner_amt * occ_pct / 100, 2)
-        owner_prop = round(owner_amt - owner_occ, 2)
         key_id = inv.get("distribution_key_id", "") or "_none"
         acc = inv.get("account_number", "") or "_other"
-        grouped[key_id][acc].append((inv, owner_amt, owner_occ, owner_prop))
-        total_owner_charges += owner_amt
-        total_occupant_share += owner_occ
-        total_proprio_share += owner_prop
+        occ_pct = float(inv.get("occupant_pct", 0) or 0)
+        inv_total = float(inv.get("total_amount", 0) or 0)
+
+        # Compute owner share per lot for this invoice
+        lot_share = {}
+        for dl in inv.get("distribution_lines", []) or []:
+            lid = dl.get("lot_id")
+            if lid in owner_lot_ids:
+                lot_share[lid] = lot_share.get(lid, 0.0) + float(dl.get("amount", 0) or 0)
+
+        for lot_id, amt_owner in lot_share.items():
+            if abs(amt_owner) < 0.001 and abs(inv_total) < 0.001:
+                continue
+            amt_occ = round(amt_owner * occ_pct / 100, 2)
+            amt_prop = round(amt_owner - amt_occ, 2)
+
+            lot_bucket = per_lot_data.setdefault(lot_id, {})
+            key_bucket = lot_bucket.setdefault(key_id, {"accounts": {}, "_invoices_seen": set()})
+            acc_bucket = key_bucket["accounts"].setdefault(acc, _zero_stats())
+
+            acc_bucket["owner_amt"] += amt_owner
+            acc_bucket["owner_occ"] += amt_occ
+            acc_bucket["owner_prop"] += amt_prop
+
+            # Dedup total_to_distribute per (lot, key, acc, invoice)
+            inv_id = inv.get("id") or inv.get("internal_ref", "")
+            seen_key = (acc, inv_id)
+            if seen_key not in key_bucket["_invoices_seen"]:
+                key_bucket["_invoices_seen"].add(seen_key)
+                acc_bucket["total_dist"] += inv_total
+
+            total_owner_charges += amt_owner
+            total_occupant_share += amt_occ
+            total_proprio_share += amt_prop
+
+            # Global occupant aggregation by account (for recap locataire)
+            if amt_occ > 0.001:
+                e = occupant_summary_by_acc.setdefault(acc, {"amount": 0.0, "label": ""})
+                e["amount"] += amt_occ
 
     # Owner share of fund calls + payments
     total_called = 0.0
@@ -260,172 +312,276 @@ def build_decompte_pdf(
     elems.append(summary_tbl)
     elems.append(Spacer(1, 8 * mm))
 
-    # ---- 1. DETAIL DES CHARGES ----
+    # ---- 1. DETAIL DES CHARGES (Lot -> Cle de repartition -> Compte) ----
     elems.append(Paragraph("1. Detail de vos charges", h2))
     elems.append(Paragraph(
-        "Voici les depenses de la copropriete et la part qui vous est repartie selon les cles applicables.",
+        "Les depenses de la copropriete sont reparties selon les cles applicables. "
+        "Pour chaque cle, le detail est donne par nature de depense, avec la part "
+        "refacturable a l'occupant (locataire) et la part definitive du proprietaire.",
         sub_style,
     ))
-    elems.append(Spacer(1, 2 * mm))
+    elems.append(Spacer(1, 3 * mm))
 
     dk_by_id = {dk["id"]: dk for dk in distribution_keys}
+    lot_by_id = {l["id"]: l for l in owner_lots}
     acc_names = expense_accounts_map or {}
 
-    if not grouped:
+    # 5-column structure (Finlead-style)
+    # Designation (90) | Quotites (28) | Montant a repartir (24) | Part proprietaire (19) | Part occupant (19)
+    col_widths = [90 * mm, 28 * mm, 24 * mm, 19 * mm, 19 * mm]
+
+    designation_style = ParagraphStyle(
+        "desig", parent=body, fontSize=8, leading=10, wordWrap="CJK",
+    )
+    designation_indent_style = ParagraphStyle(
+        "desig_in", parent=designation_style, leftIndent=12,
+        textColor=SLATE_500,
+    )
+
+    if not per_lot_data:
         elems.append(Paragraph(
             "<i>Aucune charge ne vous concerne sur cette periode.</i>", body))
     else:
-        for key_id, by_acc in grouped.items():
-            dk_name = dk_by_id.get(key_id, {}).get("name", "Tantiemes")
-            key_subtotal = 0.0
-            # Sub-header per cle
-            elems.append(Spacer(1, 2 * mm))
-            elems.append(Paragraph(
-                f"<b>Cle de repartition : {dk_name}</b>",
-                ParagraphStyle("dkname", parent=body, textColor=BRAND, fontSize=10),
-            ))
+        rows = []
+        styles_ops = []  # list of (row_index, op_tuple)
 
-            for acc, items in by_acc.items():
-                nature_label = acc_names.get(acc, "") or (acc if acc != "_other" else "Autres charges")
-                # Compte PCMN visible : "[614000] Nettoyage"
-                section_title = f"<b>[{acc}] {nature_label}</b>" if acc != "_other" else f"<b>{nature_label}</b>"
-                rows = [["Date", "Fournisseur", "Description", "Total fact.", "Votre part", "Occupant", "Proprio"]]
-                # Style pour libelles wrappables
-                cell_style = ParagraphStyle(
-                    "cell", parent=body, fontSize=7.5, leading=9.5, wordWrap="CJK",
-                )
-                subtotal = 0.0
-                subtotal_occ = 0.0
-                subtotal_prop = 0.0
-                for inv, owner_amt, owner_occ, owner_prop in items:
-                    rows.append([
-                        _fmt_date(inv.get("date", "")),
-                        Paragraph(inv.get("supplier", "") or "", cell_style),
-                        Paragraph(inv.get("description", "") or "", cell_style),
-                        _fmt_eur(inv.get("total_amount", 0)),
-                        _fmt_eur(owner_amt),
-                        _fmt_eur(owner_occ) if owner_occ > 0.001 else "—",
-                        _fmt_eur(owner_prop) if owner_prop > 0.001 else "—",
-                    ])
-                    subtotal += owner_amt
-                    subtotal_occ += owner_occ
-                    subtotal_prop += owner_prop
-                rows.append(["", "", "", "Sous-total", _fmt_eur(subtotal),
-                             _fmt_eur(subtotal_occ), _fmt_eur(subtotal_prop)])
+        # Header
+        rows.append([
+            Paragraph("<b>Designation</b>", designation_style),
+            Paragraph("<b>Quotites</b>", ParagraphStyle("h", parent=designation_style, alignment=2)),
+            Paragraph("<b>Montant<br/>a repartir</b>", ParagraphStyle("h", parent=designation_style, alignment=2)),
+            Paragraph("<b>Part<br/>proprietaire</b>", ParagraphStyle("h", parent=designation_style, alignment=2)),
+            Paragraph("<b>Part<br/>occupant</b>", ParagraphStyle("h", parent=designation_style, alignment=2)),
+        ])
+        header_idx = 0
 
-                # Section title
-                elems.append(Spacer(1, 1 * mm))
-                elems.append(Paragraph(
-                    section_title,
-                    ParagraphStyle("nat", parent=body, fontSize=9.5, textColor=SLATE_900,
-                                   leftIndent=4),
-                ))
-                tbl = Table(rows, colWidths=[18 * mm, 32 * mm, 38 * mm, 24 * mm, 22 * mm, 18 * mm, 18 * mm])
-                tbl.setStyle(TableStyle([
-                    ("BACKGROUND", (0, 0), (-1, 0), SLATE_100),
-                    ("TEXTCOLOR", (0, 0), (-1, 0), SLATE_900),
-                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                    ("FONTSIZE", (0, 0), (-1, -1), 7.5),
-                    ("ALIGN", (3, 0), (6, -1), "RIGHT"),
-                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                    ("ROWBACKGROUNDS", (0, 1), (-1, -2),
-                     [colors.white, SLATE_50]),
-                    ("LINEBELOW", (0, 0), (-1, 0), 0.5, SLATE_300),
-                    ("LINEABOVE", (0, -1), (-1, -1), 0.5, SLATE_300),
-                    ("BACKGROUND", (3, -1), (6, -1), SLATE_100),
-                    ("FONTNAME", (3, -1), (6, -1), "Helvetica-Bold"),
-                    ("TEXTCOLOR", (4, -1), (4, -1), BRAND),
-                    # Mise en valeur colonnes occupant/proprio
-                    ("TEXTCOLOR", (5, 0), (5, -1), colors.HexColor("#92400E")),  # ambre
-                    ("TEXTCOLOR", (6, 0), (6, -1), colors.HexColor("#1E40AF")),  # bleu
-                    ("TOPPADDING", (0, 0), (-1, -1), 3),
-                    ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
-                    ("LEFTPADDING", (0, 0), (-1, -1), 4),
-                    ("RIGHTPADDING", (0, 0), (-1, -1), 4),
-                ]))
-                elems.append(tbl)
-                key_subtotal += subtotal
+        # Iterate lots in numeric order
+        lot_grand_totals = []  # for "Totaux generaux" recap
 
-            # Subtotal per cle
-            sub_tbl = Table(
-                [[f"Total cle '{dk_name}'", _fmt_eur(key_subtotal)]],
-                colWidths=[142 * mm, 28 * mm],
+        for lot_id in sorted(per_lot_data.keys(),
+                             key=lambda lid: (lot_by_id.get(lid, {}).get("number", "") or "")):
+            by_key = per_lot_data[lot_id]
+            lot = lot_by_id.get(lot_id, {"number": "?", "description": ""})
+
+            # Lot header line
+            lot_label = (
+                f"<b>Lot: {lot.get('number','')}"
+                + (f" {lot.get('description','')}" if lot.get('description') else "")
+                + "</b> (Prorata: 365 / 365 jours)"
             )
-            sub_tbl.setStyle(TableStyle([
-                ("BACKGROUND", (0, 0), (-1, -1), SLATE_100),
-                ("ALIGN", (1, 0), (1, 0), "RIGHT"),
-                ("FONTNAME", (0, 0), (-1, -1), "Helvetica-Bold"),
-                ("FONTSIZE", (0, 0), (-1, -1), 9),
-                ("TEXTCOLOR", (1, 0), (1, 0), BRAND),
-                ("TOPPADDING", (0, 0), (-1, -1), 5),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-                ("LEFTPADDING", (0, 0), (-1, -1), 8),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 8),
-            ]))
-            elems.append(Spacer(1, 1 * mm))
-            elems.append(sub_tbl)
-            elems.append(Spacer(1, 3 * mm))
+            rows.append([Paragraph(lot_label, designation_style), "", "", "", ""])
+            lot_header_idx = len(rows) - 1
+            styles_ops.append(("SPAN", (0, lot_header_idx), (-1, lot_header_idx)))
+            styles_ops.append(("BACKGROUND", (0, lot_header_idx), (-1, lot_header_idx), SLATE_100))
+            styles_ops.append(("LINEABOVE", (0, lot_header_idx), (-1, lot_header_idx), 0.6, SLATE_300))
 
-        # Grand total
-        grand_tbl = Table(
-            [["TOTAL DE VOS CHARGES", _fmt_eur(total_owner_charges)]],
-            colWidths=[142 * mm, 28 * mm],
+            lot_total_dist = 0.0
+            lot_total_prop = 0.0
+            lot_total_occ = 0.0
+            lot_total_owner = 0.0
+
+            # For each key, sorted by name
+            for key_id in sorted(by_key.keys(),
+                                 key=lambda k: (dk_by_id.get(k, {}).get("name", "") or "")):
+                key_data = by_key[key_id]
+                accounts = key_data["accounts"]
+                if not accounts:
+                    continue
+
+                dk_meta = dk_by_id.get(key_id, {})
+                dk_name = dk_meta.get("name", "Tantiemes") if key_id != "_none" else "Tantiemes"
+                dk_idx = dk_index.get(key_id, {})
+                dk_total_q = dk_idx.get("total", 0)
+                # Lot quotity in this key (fallback to lot.quotity if not configured)
+                lot_q = dk_idx.get("lots", {}).get(lot_id)
+                if not lot_q:  # None or 0 -> try fallback
+                    fallback_q = float(lot.get("quotity", 0) or 0)
+                    if fallback_q:
+                        lot_q = fallback_q
+                if lot_q is None:
+                    lot_q = 0.0
+                if not dk_total_q:
+                    dk_total_q = sum(float(l.get("quotity", 0) or 0) for l in all_lots) or lot_q
+
+                quot_str = f"{lot_q:.2f} / {dk_total_q:.2f}".replace(",", " ")
+
+                # Key totals across accounts
+                key_total_dist = sum(a["total_dist"] for a in accounts.values())
+                key_total_amt = sum(a["owner_amt"] for a in accounts.values())
+                key_total_occ = sum(a["owner_occ"] for a in accounts.values())
+                key_total_prop = sum(a["owner_prop"] for a in accounts.values())
+
+                # Key header row (bold, with totals)
+                # Format: "0001 - Quotites (10000.000)"
+                code = dk_meta.get("code") or dk_meta.get("number") or ""
+                key_designation = (
+                    f"<b>{code + ' - ' if code else ''}{dk_name}"
+                    + (f" ({dk_total_q:.3f})" if dk_total_q else "")
+                    + "</b>"
+                )
+                rows.append([
+                    Paragraph(key_designation, designation_style),
+                    Paragraph(quot_str, ParagraphStyle("q", parent=designation_style, alignment=2)),
+                    Paragraph(_fmt_eur(key_total_dist), ParagraphStyle("q", parent=designation_style, alignment=2)),
+                    Paragraph(f"<b>{_fmt_eur(key_total_prop)}</b>", ParagraphStyle("q", parent=designation_style, alignment=2, textColor=colors.HexColor("#1E40AF"))),
+                    Paragraph(f"<b>{_fmt_eur(key_total_occ)}</b>", ParagraphStyle("q", parent=designation_style, alignment=2, textColor=colors.HexColor("#92400E"))),
+                ])
+                key_idx = len(rows) - 1
+                styles_ops.append(("BACKGROUND", (0, key_idx), (-1, key_idx), colors.HexColor("#EFF6FF")))
+                styles_ops.append(("LINEBELOW", (0, key_idx), (-1, key_idx), 0.3, SLATE_300))
+
+                # Detail rows per account
+                for acc in sorted(accounts.keys()):
+                    a = accounts[acc]
+                    nature_label = acc_names.get(acc, "") or ("Autres charges" if acc == "_other" else acc)
+                    acc_display = f"{acc} - {nature_label}" if acc != "_other" else nature_label
+                    rows.append([
+                        Paragraph(acc_display, designation_indent_style),
+                        Paragraph(quot_str, ParagraphStyle("q", parent=designation_style, alignment=2, textColor=SLATE_500)),
+                        Paragraph(_fmt_eur(a["total_dist"]), ParagraphStyle("q", parent=designation_style, alignment=2, textColor=SLATE_500)),
+                        Paragraph(_fmt_eur(a["owner_prop"]), ParagraphStyle("q", parent=designation_style, alignment=2, textColor=colors.HexColor("#1E40AF"))),
+                        Paragraph(_fmt_eur(a["owner_occ"]), ParagraphStyle("q", parent=designation_style, alignment=2, textColor=colors.HexColor("#92400E"))),
+                    ])
+                    # Track occupant summary label
+                    if a["owner_occ"] > 0.001 and acc in occupant_summary_by_acc:
+                        occupant_summary_by_acc[acc]["label"] = nature_label
+
+                lot_total_dist += key_total_dist
+                lot_total_owner += key_total_amt
+                lot_total_occ += key_total_occ
+                lot_total_prop += key_total_prop
+
+            # Lot subtotal row
+            lot_subtotal_label = f"<b>Total Lot {lot.get('number','')}</b>"
+            rows.append([
+                Paragraph(lot_subtotal_label, designation_style),
+                "",
+                Paragraph(f"<b>{_fmt_eur(lot_total_dist)}</b>", ParagraphStyle("q", parent=designation_style, alignment=2)),
+                Paragraph(f"<b>{_fmt_eur(lot_total_prop)}</b>", ParagraphStyle("q", parent=designation_style, alignment=2, textColor=colors.HexColor("#1E40AF"))),
+                Paragraph(f"<b>{_fmt_eur(lot_total_occ)}</b>", ParagraphStyle("q", parent=designation_style, alignment=2, textColor=colors.HexColor("#92400E"))),
+            ])
+            sub_idx = len(rows) - 1
+            styles_ops.append(("BACKGROUND", (0, sub_idx), (-1, sub_idx), SLATE_100))
+            styles_ops.append(("LINEABOVE", (0, sub_idx), (-1, sub_idx), 0.6, SLATE_500))
+            styles_ops.append(("LINEBELOW", (0, sub_idx), (-1, sub_idx), 0.6, SLATE_500))
+
+            lot_grand_totals.append((lot, lot_total_dist, lot_total_prop, lot_total_occ))
+
+        # Totaux generaux row
+        grand_dist = sum(t[1] for t in lot_grand_totals)
+        grand_prop = sum(t[2] for t in lot_grand_totals)
+        grand_occ = sum(t[3] for t in lot_grand_totals)
+
+        rows.append([
+            Paragraph("<b>Totaux generaux</b>", designation_style),
+            "",
+            Paragraph(f"<b>{_fmt_eur(grand_dist)}</b>", ParagraphStyle("q", parent=designation_style, alignment=2, textColor=colors.white)),
+            Paragraph(f"<b>{_fmt_eur(grand_prop)}</b>", ParagraphStyle("q", parent=designation_style, alignment=2, textColor=colors.white)),
+            Paragraph(f"<b>{_fmt_eur(grand_occ)}</b>", ParagraphStyle("q", parent=designation_style, alignment=2, textColor=colors.white)),
+        ])
+        grand_idx = len(rows) - 1
+        styles_ops.append(("BACKGROUND", (0, grand_idx), (-1, grand_idx), SLATE_900))
+        styles_ops.append(("TEXTCOLOR", (0, grand_idx), (-1, grand_idx), colors.white))
+
+        # Build the main table
+        main_tbl = Table(rows, colWidths=col_widths, repeatRows=1)
+        base_style = [
+            ("BACKGROUND", (0, header_idx), (-1, header_idx), BRAND),
+            ("TEXTCOLOR", (0, header_idx), (-1, header_idx), colors.white),
+            ("FONTNAME", (0, header_idx), (-1, header_idx), "Helvetica-Bold"),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 5),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+            ("TOPPADDING", (0, 0), (-1, -1), 3),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            ("BOX", (0, 0), (-1, -1), 0.4, SLATE_300),
+        ]
+        for op in styles_ops:
+            base_style.append(op)
+        main_tbl.setStyle(TableStyle(base_style))
+        elems.append(main_tbl)
+
+    elems.append(Spacer(1, 6 * mm))
+
+    # ---- 2. RECAPITULATIF CHARGES LOCATAIRE (SECTION DEDIEE) ----
+    if total_occupant_share > 0.001:
+        elems.append(Paragraph("2. Recapitulatif des charges locataire", h2))
+        elems.append(Paragraph(
+            "Synthese des charges refacturables a votre locataire (parts \"occupant\"), "
+            "detaillees par nature de depense. Ce recapitulatif vous permet d'etablir "
+            "le decompte annuel des charges locatives.",
+            sub_style,
+        ))
+        elems.append(Spacer(1, 3 * mm))
+
+        rec_rows = [[
+            Paragraph("<b>Nature de la depense</b>", designation_style),
+            Paragraph("<b>Compte</b>", ParagraphStyle("h", parent=designation_style, alignment=1)),
+            Paragraph("<b>Montant a refacturer<br/>au locataire</b>", ParagraphStyle("h", parent=designation_style, alignment=2)),
+        ]]
+        # Sort by amount desc
+        sorted_occ = sorted(
+            occupant_summary_by_acc.items(),
+            key=lambda kv: kv[1]["amount"],
+            reverse=True,
         )
-        grand_tbl.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, -1), SLATE_900),
-            ("TEXTCOLOR", (0, 0), (-1, -1), colors.white),
-            ("ALIGN", (1, 0), (1, 0), "RIGHT"),
-            ("FONTNAME", (0, 0), (-1, -1), "Helvetica-Bold"),
-            ("FONTSIZE", (0, 0), (-1, -1), 10),
-            ("TOPPADDING", (0, 0), (-1, -1), 8),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
-            ("LEFTPADDING", (0, 0), (-1, -1), 10),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+        for acc, info in sorted_occ:
+            if info["amount"] <= 0.001:
+                continue
+            label = info.get("label") or acc_names.get(acc, "") or (
+                "Autres charges" if acc == "_other" else acc
+            )
+            acc_display = acc if acc != "_other" else "—"
+            rec_rows.append([
+                Paragraph(label, designation_style),
+                Paragraph(
+                    f"<font name='Courier' size='8'>{acc_display}</font>",
+                    ParagraphStyle("c", parent=designation_style, alignment=1, textColor=SLATE_500),
+                ),
+                Paragraph(
+                    f"<b>{_fmt_eur(info['amount'])}</b>",
+                    ParagraphStyle("a", parent=designation_style, alignment=2, textColor=colors.HexColor("#92400E")),
+                ),
+            ])
+        rec_rows.append([
+            Paragraph("<b>TOTAL A REFACTURER AU LOCATAIRE</b>", designation_style),
+            "",
+            Paragraph(
+                f"<b><font size='11'>{_fmt_eur(total_occupant_share)}</font></b>",
+                ParagraphStyle("a", parent=designation_style, alignment=2, textColor=colors.white),
+            ),
+        ])
+
+        rec_tbl = Table(rec_rows, colWidths=[120 * mm, 25 * mm, 35 * mm])
+        rec_tbl.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#92400E")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#92400E")),
+            ("TEXTCOLOR", (0, -1), (-1, -1), colors.white),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -2),
+             [colors.white, colors.HexColor("#FEF3C7")]),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 6),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+            ("TOPPADDING", (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#92400E")),
+            ("INNERGRID", (0, 0), (-1, -1), 0.2, SLATE_300),
         ]))
-        elems.append(grand_tbl)
+        elems.append(rec_tbl)
+        # Quick note
+        elems.append(Spacer(1, 2 * mm))
+        elems.append(Paragraph(
+            "<font size='7.5' color='#64748B'><i>Repartition occupant/proprietaire definie "
+            "par nature de depense conformement aux usages locatifs belges (RD du 12/07/2024 "
+            "relatif aux charges locatives). A confronter, le cas echeant, avec les "
+            "stipulations particulieres du bail.</i></font>",
+            small,
+        ))
+        elems.append(Spacer(1, 6 * mm))
 
-        # ---- RECAP OCCUPANT vs PROPRIETAIRE (decompte locataire) ----
-        if total_occupant_share > 0.001:
-            elems.append(Spacer(1, 4 * mm))
-            occ_pct_global = (total_occupant_share / total_owner_charges * 100) if total_owner_charges > 0 else 0
-            prop_pct_global = 100 - occ_pct_global
-            recap_rows = [
-                [Paragraph("<b>Repartition de vos charges</b>", body), "", ""],
-                [
-                    Paragraph(f"<b>Part a charge de l'OCCUPANT</b><br/><font size='7' color='{SLATE_500.hexval()}'>(refacturable au locataire le cas echeant)</font>", body),
-                    Paragraph(f"<font color='{colors.HexColor('#92400E').hexval()}'><b>{_fmt_eur(total_occupant_share)}</b></font>", right),
-                    Paragraph(f"<font color='{SLATE_500.hexval()}' size='8'>{occ_pct_global:.0f}%</font>", right),
-                ],
-                [
-                    Paragraph(f"<b>Part a charge du PROPRIETAIRE</b><br/><font size='7' color='{SLATE_500.hexval()}'>(definitivement a votre charge)</font>", body),
-                    Paragraph(f"<font color='{colors.HexColor('#1E40AF').hexval()}'><b>{_fmt_eur(total_proprio_share)}</b></font>", right),
-                    Paragraph(f"<font color='{SLATE_500.hexval()}' size='8'>{prop_pct_global:.0f}%</font>", right),
-                ],
-            ]
-            recap_tbl = Table(recap_rows, colWidths=[110 * mm, 45 * mm, 15 * mm])
-            recap_tbl.setStyle(TableStyle([
-                ("SPAN", (0, 0), (-1, 0)),
-                ("BACKGROUND", (0, 0), (-1, 0), SLATE_100),
-                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                ("FONTSIZE", (0, 0), (-1, 0), 10),
-                ("ALIGN", (0, 0), (-1, 0), "LEFT"),
-                ("BACKGROUND", (0, 1), (-1, 1), colors.HexColor("#FEF3C7")),  # ambre tres clair
-                ("BACKGROUND", (0, 2), (-1, 2), colors.HexColor("#DBEAFE")),  # bleu tres clair
-                ("BOX", (0, 0), (-1, -1), 0.7, SLATE_300),
-                ("INNERGRID", (0, 0), (-1, -1), 0.3, SLATE_300),
-                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                ("ALIGN", (1, 0), (2, -1), "RIGHT"),
-                ("LEFTPADDING", (0, 0), (-1, -1), 8),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 8),
-                ("TOPPADDING", (0, 0), (-1, -1), 6),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
-            ]))
-            elems.append(recap_tbl)
-
-    elems.append(Spacer(1, 8 * mm))
-
-    # ---- 2. APPELS DE FONDS ----
-    elems.append(Paragraph("2. Vos appels de fonds", h2))
+    # ---- 3. APPELS DE FONDS ----
+    elems.append(Paragraph("3. Vos appels de fonds", h2))
     elems.append(Paragraph(
         "Les appels que le syndic vous a adresses pendant la periode.",
         sub_style,
@@ -481,9 +637,9 @@ def build_decompte_pdf(
 
     elems.append(Spacer(1, 8 * mm))
 
-    # ---- 3. PAIEMENTS ----
+    # ---- 4. PAIEMENTS ----
     if payments:
-        elems.append(Paragraph("3. Vos paiements", h2))
+        elems.append(Paragraph("4. Vos paiements", h2))
         elems.append(Paragraph(
             "Les versements recus par la copropriete et associes a votre compte.",
             sub_style,
@@ -523,7 +679,7 @@ def build_decompte_pdf(
         elems.append(pay_tbl)
         elems.append(Spacer(1, 8 * mm))
 
-    # ---- 4. MODALITES DE PAIEMENT ----
+    # ---- 5. MODALITES DE PAIEMENT ----
     iban = ""
     bic = ""
     for ba in copropriete.get("bank_accounts", []) or []:

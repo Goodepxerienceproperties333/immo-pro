@@ -12,6 +12,60 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 ## Implemented
 
+### Iter58 (Feb 2026) - Refonte PDF Decompte selon le modele FINLEAD (Lot -> Cle -> Compte) + Section dediee locataire
+
+#### Demande utilisateur
+"Décompte annuel doit etre completement restructure pour matcher l'exemple FINLEAD : groupement par Cle de repartition, puis Nature/Compte, avec separation claire Occupant vs Proprietaire. Les charges locataire ne doivent PAS etre cachees ; elles doivent etre listees mais correctement totalisees a part du proprietaire."
+
+Reference utilisateur : `Décompte copropriétaire 2025.10 - 2026.09.pdf` (FINLEAD).
+
+#### Refonte du PDF (`pdf_decompte.py`)
+
+**Section 1 : Detail des charges** - structure entierement repensee
+- Hierarchie : **Lot → Cle de repartition → Compte (nature)** (au lieu de la precedente Cle → Compte → Facture).
+- Tableau unique a **5 colonnes** (modele Finlead) :
+  - `Designation` | `Quotites` | `Montant a repartir` | `Part proprietaire` | `Part occupant`
+- Lignes :
+  - **En-tete Lot** (background slate, fusionne sur 5 colonnes) : "Lot: A-002 [description] (Prorata: 365 / 365 jours)"
+  - **En-tete Cle** (background bleu clair, en gras) : "[code] - [name] (total_quotities)" + ses totaux (montant a repartir, part prop, part occ pour ce proprietaire)
+  - **Lignes de detail Compte** indentees (slate_500) : "[account_number] - [account_name]" avec les chiffres
+  - **Sous-total par Lot** (background slate_100) : "Total Lot X"
+  - **Totaux generaux** (background noir) en fin de tableau
+- Couleurs colonnes : **Part proprietaire** = bleu #1E40AF, **Part occupant** = ambre #92400E.
+- Fix critique : les distribution_keys utilisent le champ **`share`** (pas `quotity`) — lecture corrigee dans `dk_index` builder.
+
+**Section 2 : Recapitulatif des charges locataire** (NOUVELLE section dediee — demande utilisateur 3b)
+- Affichee UNIQUEMENT si `total_occupant_share > 0.001`.
+- Tableau a 3 colonnes : `Nature de la depense` | `Compte` | `Montant a refacturer au locataire`.
+- Header + footer ambres (#92400E), lignes alternees clair/ambre tres clair.
+- TOTAL en gras "TOTAL A REFACTURER AU LOCATAIRE".
+- Note legale en bas : "Repartition occupant/proprietaire definie conformement aux usages locatifs belges (RD du 12/07/2024 relatif aux charges locatives). A confronter avec les stipulations particulieres du bail."
+
+**Renumerotation des sections :**
+- Section 1 = Detail des charges
+- Section 2 = Recapitulatif charges locataire (nouveau)
+- Section 3 = Vos appels de fonds (ex-Section 2)
+- Section 4 = Vos paiements (ex-Section 3)
+- Section 5 = Modalites de paiement
+
+#### Tests
+- Fichier `/app/backend/tests/test_iter33_decompte_finlead.py` : 7/7 PASS
+- Couverture :
+  - test_pdf_grouping_lot_key_account : hierarchie Lot → Cle → Compte
+  - test_pdf_quotites_displayed_correctly : "1200.00 / 2950.00" (au lieu de "0.00 / 0.00")
+  - test_pdf_recap_locataire_section_present_when_occupant : section visible si occupant_pct > 0
+  - test_pdf_recap_locataire_hidden_when_no_occupant : section masquee sinon
+  - test_pdf_columns_show_part_proprietaire_and_occupant : 5 colonnes Finlead
+  - test_pdf_section_numbering : numerotation 1-2-3-4
+  - test_pdf_multiple_distribution_keys : plusieurs cles dans un meme lot
+
+#### Bouton "Supprimer TOUS les appels" (Bulk Delete) — VERIFIE deja implemente
+- Endpoint `POST /api/fund-calls/delete-all?copropriete_id=X` deja operationnel (iter49).
+- Bouton UI `[data-testid="delete-all-calls-btn"]` deja en place dans `FundCallsPage.js` (L154-161).
+- Affiche uniquement quand `calls.length > 0`. Confirmation via window.confirm + message detaille.
+
+
+
 ### Iter57 (Feb 2026) - Reouverture extourne les regularisations + Vue Journaux avec contre-passations + Decompte enrichi
 
 #### 1. Reouverture d'exercice = CONTRE-PASSATION
