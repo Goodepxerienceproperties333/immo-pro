@@ -110,6 +110,25 @@ def create_admin_router(db):
             "created_by": str(request.state.user.get("_id", "")) if hasattr(request, "state") and hasattr(request.state, "user") else None,
         }
         result = await db.users.insert_one(doc)
+        # Envoi de l'invitation par email via Microsoft Graph (background, ne bloque pas)
+        try:
+            from graph_email import is_configured, send_html_email, build_invitation_email
+            import os, asyncio
+            if must_change and is_configured():
+                frontend_url = os.environ.get("FRONTEND_URL", "")
+                setup_url = f"{frontend_url}/login?invite={email}"
+                inviter = request.state.user if hasattr(request, "state") and hasattr(request.state, "user") else None
+                subject, html = build_invitation_email(
+                    recipient_name=data.name,
+                    role_label="Syndic",
+                    setup_url=setup_url,
+                    inviter_name=(inviter or {}).get("name"),
+                    inviter_email=(inviter or {}).get("email"),
+                )
+                asyncio.create_task(send_html_email([email], subject, html))
+        except Exception as e:
+            import logging
+            logging.warning(f"Envoi invitation echoue pour {email}: {e}")
         return {
             "id": str(result.inserted_id),
             "email": email,
@@ -119,7 +138,68 @@ def create_admin_router(db):
             "must_change_password": must_change,
             "role_template_id": None,
             "permissions": None,
+            "invitation_sent": must_change,
         }
+
+    @router.post("/users/{user_id}/resend-invitation")
+    async def resend_user_invitation(user_id: str, request: Request):
+        """Renvoie l'email d'invitation a un syndic dont le mot de passe n'est pas defini."""
+        await _get_superadmin_only(request)
+        from graph_email import is_configured, send_html_email, build_invitation_email
+        import os
+        if not is_configured():
+            raise HTTPException(503, "Service email non configure (MSGRAPH)")
+        target = await db.users.find_one({"_id": ObjectId(user_id)})
+        if not target:
+            raise HTTPException(404, "Utilisateur non trouve")
+        if not target.get("must_change_password"):
+            raise HTTPException(400, "Cet utilisateur a deja un mot de passe defini")
+        frontend_url = os.environ.get("FRONTEND_URL", "")
+        setup_url = f"{frontend_url}/login?invite={target['email']}"
+        role_label = "Syndic" if target.get("role") == "syndic" else target.get("role", "Utilisateur").capitalize()
+        subject, html = build_invitation_email(
+            recipient_name=target["name"],
+            role_label=role_label,
+            setup_url=setup_url,
+        )
+        try:
+            await send_html_email([target["email"]], subject, html)
+        except Exception as e:
+            raise HTTPException(500, f"Echec envoi : {e}")
+        return {"status": "ok", "email": target["email"]}
+
+    @router.get("/email-config")
+    async def get_email_config(request: Request):
+        """Verifie l'etat de la configuration MSGRAPH (test sans envoyer)."""
+        await _get_superadmin_only(request)
+        from graph_email import is_configured
+        import os
+        return {
+            "configured": is_configured(),
+            "sender_upn": os.environ.get("GRAPH_SENDER_UPN", ""),
+            "tenant_id_set": bool(os.environ.get("AZURE_TENANT_ID")),
+            "client_id_set": bool(os.environ.get("AZURE_CLIENT_ID")),
+            "client_secret_set": bool(os.environ.get("AZURE_CLIENT_SECRET")),
+        }
+
+    @router.post("/email-config/test")
+    async def test_email_config(request: Request):
+        """Envoie un email de test au superadmin connecte pour valider la config MSGRAPH."""
+        from server import get_current_user
+        user = await get_current_user(request)
+        if not user or user.get("role") not in ("superadmin", "admin"):
+            raise HTTPException(403, "Reserve au superadmin")
+        from graph_email import is_configured, send_html_email
+        if not is_configured():
+            raise HTTPException(503, "Service email non configure (MSGRAPH)")
+        if not user.get("email"):
+            raise HTTPException(400, "Email du superadmin introuvable")
+        html = "<html><body style='font-family:sans-serif'><h2>Test MSGRAPH OK</h2><p>Si vous recevez cet email, l'integration Microsoft Graph fonctionne correctement.</p></body></html>"
+        try:
+            await send_html_email([user["email"]], "[CoproManager] Test MSGRAPH", html)
+        except Exception as e:
+            raise HTTPException(500, f"Echec envoi : {e}")
+        return {"status": "ok", "sent_to": user["email"]}
 
     @router.put("/users/{user_id}")
     async def update_user(user_id: str, data: UserUpdateInput, request: Request):

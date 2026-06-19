@@ -8,7 +8,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { toast } from 'sonner';
-import { Plus, Pencil, Trash2, Shield, Search, Building, Info } from 'lucide-react';
+import { Plus, Pencil, Trash2, Shield, Search, Building, Info, Mail } from 'lucide-react';
 import { fmtDate } from '@/lib/dateFmt';
 
 // Seuls les syndics principaux sont creables par le superadmin.
@@ -119,6 +119,16 @@ export default function AdminUsersPage() {
     }
   };
 
+  const handleResendInvitation = async (u) => {
+    if (!window.confirm(`Renvoyer un email d'invitation a ${u.email} ?`)) return;
+    try {
+      await api.post(`/admin/users/${u.id}/resend-invitation`);
+      toast.success(`Invitation renvoyee a ${u.email}`);
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur lors de l\'envoi');
+    }
+  };
+
   const roleBadge = (role) => {
     if (role === 'superadmin') {
       return <Badge variant="outline" className="bg-purple-100 text-purple-800 border-purple-300">Super Administrateur</Badge>;
@@ -174,6 +184,9 @@ export default function AdminUsersPage() {
                 <TableCell className="text-xs text-slate-500">{fmtDate(u.created_at)}</TableCell>
                 <TableCell>
                   <div className="flex gap-1">
+                    {u.must_change_password && u.role !== 'superadmin' && (
+                      <Button variant="ghost" size="sm" onClick={() => handleResendInvitation(u)} className="text-blue-600 hover:text-blue-700" title="Renvoyer l'email d'invitation" data-testid={`resend-invite-${u.id}`}><Mail size={14} /></Button>
+                    )}
                     {u.role !== 'superadmin' && (
                       <Button variant="ghost" size="sm" onClick={() => openEdit(u)} data-testid={`edit-user-${u.id}`}><Pencil size={14} /></Button>
                     )}

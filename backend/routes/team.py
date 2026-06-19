@@ -162,11 +162,73 @@ def create_team_router(db):
             "created_by": user.get("id"),
         }
         result = await db.users.insert_one(doc)
+        # Envoi de l'invitation par email via MSGRAPH (non bloquant)
+        invitation_sent = False
+        try:
+            from graph_email import is_configured, send_html_email, build_invitation_email
+            import os, asyncio
+            if doc["must_change_password"] and is_configured():
+                frontend_url = os.environ.get("FRONTEND_URL", "")
+                setup_url = f"{frontend_url}/login?invite={email}"
+                role_label = "Gestionnaire"
+                if data.role_template_id:
+                    tpl = await db.role_templates.find_one({"id": data.role_template_id})
+                    if tpl and tpl.get("name"):
+                        role_label = f"Gestionnaire ({tpl['name']})"
+                subject, html = build_invitation_email(
+                    recipient_name=data.name,
+                    role_label=role_label,
+                    setup_url=setup_url,
+                    inviter_name=user.get("name"),
+                    inviter_email=user.get("email"),
+                )
+                asyncio.create_task(send_html_email([email], subject, html))
+                invitation_sent = True
+        except Exception as e:
+            import logging
+            logging.warning(f"Envoi invitation echoue pour gestionnaire {email}: {e}")
         return {"id": str(result.inserted_id), "email": email, "name": data.name,
                 "role": "gestionnaire", "parent_syndic_id": scope,
                 "copropriete_ids": doc["copropriete_ids"],
                 "role_template_id": doc["role_template_id"],
-                "permissions": doc["permissions"]}
+                "permissions": doc["permissions"],
+                "invitation_sent": invitation_sent}
+
+    @router.post("/members/{member_id}/resend-invitation")
+    async def resend_member_invitation(member_id: str, request: Request):
+        """Renvoie l'invitation a un gestionnaire qui n'a pas encore defini son mdp."""
+        from graph_email import is_configured, send_html_email, build_invitation_email
+        import os
+        user, scope, is_super = await _get_syndic(request)
+        if not is_configured():
+            raise HTTPException(503, "Service email non configure (MSGRAPH)")
+        try:
+            obj_id = ObjectId(member_id)
+        except Exception:
+            raise HTTPException(400, "ID invalide")
+        m = await db.users.find_one({"_id": obj_id})
+        if not m:
+            raise HTTPException(404, "Membre introuvable")
+        if m.get("role") != "gestionnaire":
+            raise HTTPException(400, "Cet endpoint ne gere que les gestionnaires")
+        if not is_super and scope and m.get("parent_syndic_id") != scope:
+            raise HTTPException(403, "Ce gestionnaire n'appartient pas a votre equipe")
+        if not m.get("must_change_password"):
+            raise HTTPException(400, "Ce gestionnaire a deja un mot de passe defini")
+        frontend_url = os.environ.get("FRONTEND_URL", "")
+        setup_url = f"{frontend_url}/login?invite={m['email']}"
+        subject, html = build_invitation_email(
+            recipient_name=m["name"],
+            role_label="Gestionnaire",
+            setup_url=setup_url,
+            inviter_name=user.get("name"),
+            inviter_email=user.get("email"),
+        )
+        try:
+            await send_html_email([m["email"]], subject, html)
+        except Exception as e:
+            raise HTTPException(500, f"Echec envoi : {e}")
+        return {"status": "ok", "email": m["email"]}
 
     @router.put("/members/{member_id}")
     async def update_member(member_id: str, data: TeamMemberUpdate, request: Request):

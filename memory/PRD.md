@@ -12,6 +12,50 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 ## Implemented
 
+### Iter63 (Feb 2026) - Integration Microsoft Graph pour invitations par email
+
+#### Configuration MSGRAPH (Azure AD App Registration)
+- 4 nouvelles variables dans `backend/.env` : `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, `GRAPH_SENDER_UPN`.
+- Expediteur : `welcome@goodexperienceproperties.be` (boite mail Microsoft 365 valide et licenciee).
+- Permission requise (deja consentie) : **Mail.Send (Application)** sur Microsoft Graph.
+- Flow OAuth2 : `client_credentials` (app-only, sans delegation utilisateur).
+
+#### Backend `graph_email.py`
+- MSAL `ConfidentialClientApplication` avec cache de jeton automatique (depuis 1.23).
+- `send_html_email(recipients, subject, html_body)` : POST `/v1.0/users/{sender}/sendMail` via httpx async (timeout 15s).
+- `build_invitation_email(...)` : template HTML branded CoproManager (gradient blue + cards + lien CTA).
+- `is_configured()` helper pour les checks de disponibilite.
+
+#### Auto-envoi a la creation
+- `POST /api/admin/users` (creation syndic par superadmin) : envoi auto si `must_change_password=true`.
+- `POST /api/team/members` (creation gestionnaire par syndic) : idem, avec inclusion du role_template_name dans le label.
+- Lien d'invitation : `${FRONTEND_URL}/login?invite=<email>`.
+- Envoi via `asyncio.create_task(...)` non bloquant (la creation user repond meme si email lent).
+
+#### Endpoints supplementaires
+- `POST /api/admin/users/{id}/resend-invitation` (superadmin) : renvoi pour un syndic.
+- `POST /api/team/members/{id}/resend-invitation` (syndic) : renvoi pour un gestionnaire.
+- `GET /api/admin/email-config` : etat de la config sans envoi.
+- `POST /api/admin/email-config/test` : envoi d'un email test au superadmin connecte.
+
+#### Frontend
+- `LoginPage.js` : detection du parametre URL `?invite=<email>` dans un `useEffect`, pre-remplissage du champ email + bascule directe en mode `first-set` + banner "Bienvenue, veuillez definir votre mot de passe".
+- `AdminUsersPage.js` : bouton `Mail` (Lucide) visible UNIQUEMENT pour les syndics avec `must_change_password=true` -> appelle `POST /admin/users/{id}/resend-invitation`.
+- `TeamMembersPage.js` : meme bouton dans la ligne du gestionnaire si `must_change_password=true`.
+
+#### Tests E2E
+- `GET /api/admin/email-config` -> `configured: true, sender_upn: welcome@goodexperienceproperties.be`.
+- `POST /api/admin/email-config/test` -> `{"status":"ok","sent_to":"gerald@gep.be"}` -> email recu.
+- `POST /api/admin/users` avec email test -> `invitation_sent: true` -> email d'invitation effectivement recu sur la boite test.
+- Lien d'invitation `/login?invite=test@example.com` -> page LoginPage en mode first-set avec email pre-rempli (verifie playwright).
+
+#### Piege rencontre
+- L'utilisateur a fourni 3 valeurs dans cet ordre : "102519da..." / "5b245644..." / secret.
+- Premier essai : tenant=102519da -> Azure renvoie `AADSTS90002 Tenant not found`.
+- Verification via `curl https://login.microsoftonline.com/<guid>/v2.0/.well-known/openid-configuration` -> identification que le bon Tenant ID est **5b245644-0340-4928-b1a9-d83441344aeb**. Inversion appliquee, ca fonctionne.
+
+
+
 ### Iter60 (Feb 2026) - Chinese wall syndic + Verrous fiscaux complets + Roles simplifies
 
 #### A. Chinese wall STRICT entre syndics

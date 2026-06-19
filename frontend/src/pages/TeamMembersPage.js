@@ -126,6 +126,16 @@ export default function TeamMembersPage() {
     }
   };
 
+  const resendInvitation = async (m) => {
+    if (!window.confirm(`Renvoyer un email d'invitation a ${m.email} ?`)) return;
+    try {
+      await api.post(`/team/members/${m.id}/resend-invitation`);
+      toast.success(`Invitation renvoyee a ${m.email}`);
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur lors de l\'envoi');
+    }
+  };
+
   const tplById = templates.reduce((acc, t) => { acc[t.id] = t; return acc; }, {});
   const acpById = copros.reduce((acc, c) => { acc[c.id] = c; return acc; }, {});
   const groupedCatalog = catalog.reduce((acc, p) => {
@@ -195,6 +205,11 @@ export default function TeamMembersPage() {
                       <td className="px-2 py-2 text-center text-xs text-slate-500">{fmtDate(m.created_at)}</td>
                       <td className="px-2 py-2 text-center">
                         <div className="flex justify-center gap-1">
+                          {m.must_change_password && (
+                            <Button size="sm" variant="outline" onClick={() => resendInvitation(m)} className="text-blue-700 border-blue-300 h-7 px-2" title="Renvoyer l'invitation par email" data-testid={`resend-member-${m.id}`}>
+                              <Mail size={12} />
+                            </Button>
+                          )}
                           <Button size="sm" variant="outline" onClick={() => openEdit(m)} data-testid={`edit-member-${m.id}`} className="h-7 px-2">
                             <Pencil size={12} />
                           </Button>

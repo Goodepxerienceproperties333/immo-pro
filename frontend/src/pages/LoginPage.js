@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import axios from 'axios';
 import { useAuth } from '@/contexts/AuthContext';
 import { Input } from '@/components/ui/input';
@@ -27,6 +27,17 @@ export default function LoginPage() {
   const [info, setInfo] = useState('');
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+
+  // Detect ?invite=<email> in URL -> jump directly to first-set mode
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const invite = params.get('invite');
+    if (invite) {
+      setEmail(invite.toLowerCase().trim());
+      setMode('first-set');
+      setInfo("Bienvenue ! Veuillez definir votre mot de passe pour activer votre compte.");
+    }
+  }, []);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
