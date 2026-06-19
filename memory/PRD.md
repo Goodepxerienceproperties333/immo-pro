@@ -12,6 +12,51 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 ## Implemented
 
+### Iter57 (Feb 2026) - Reouverture extourne les regularisations + Vue Journaux avec contre-passations + Decompte enrichi
+
+#### 1. Reouverture d'exercice = CONTRE-PASSATION
+Demande utilisateur : "lorsqu'on reouvre un exercice il faut extourner les regularisations de cloture. Toutes les suppressions sont des contre-passations, rien n'est definitivement supprime."
+
+Avant : `POST /fiscal/years/{id}/reopen` ne faisait que repasser le statut a 'open'. Les ecritures de cloture restaient figees -> les soldes etaient incorrects (double-passe).
+
+Apres : pour chaque OD de regularisation (`is_regularization=True`) ET ecriture AN, le systeme cree une **contre-passation** :
+- Reference : `EXT-{orig_reference}` (ex: `EXT-OD-REG-PROV`)
+- Lines : Dr/Cr inverses ligne par ligne
+- Flag `is_reversal=True` + `reverses_entry_id` pointant vers l'originale
+- L'originale est marquee `reversed=True` + `reversed_at` + `reversed_by_entry_id`
+- Filtre `$or [reversed, is_reversal]` exclut les deja-traitees pour eviter les doubles passes
+- Test : close 2026 -> 3 entries, reopen -> 3 contre-passations, status='open'
+
+#### 2. Vue journaux avec checkbox "Inclure les contre-passations"
+- Backend : `GET /api/accounting/entries?include_reversals=true|false` (defaut false = vue active uniquement, filtre `reversed=True` ET `is_reversal=True`).
+- Frontend JournalsPage : checkbox `include-reversals-toggle` a cote des tabs. Affichage conditionnel :
+  - Badge `Contre-passation` (ambre) sur les entries `is_reversal=True`
+  - Badge `Extournee` (rouge) sur les entries `reversed=True`
+  - Ligne extournee : `bg-red-50/30 line-through opacity-70`
+  - Boutons edit/delete caches sur les entries reversed ou de reversal (principe d'immutabilite audit).
+
+#### 3. PDF Decompte annuel enrichi
+Demande : "il faut un detail des depenses par cle - Nature - compte permettant aux proprietaires de lire un decompte clair... le detail des frais pris en charge par les occupants et le proprietaire avec une vue claire et lisible".
+
+Changements `pdf_decompte.py` :
+- **Compte PCMN explicite** devant le nom de nature : `[614000] Nettoyage`
+- **2 nouvelles colonnes** par ligne facture : Occupant (ambre #92400E) + Proprio (bleu #1E40AF)
+- **Sous-totaux par nature** : 3 colonnes Votre part / Occupant / Proprio
+- **Recap visuel global** "Repartition de vos charges" si total_occupant_share > 0 :
+  - Carte ambre = Part occupant (refacturable au locataire) + EUR + %
+  - Carte bleue = Part proprietaire (definitive)
+- Calcul : `owner_occ = owner_amt * occupant_pct / 100`, `owner_prop = owner_amt - owner_occ`
+
+#### Tests
+- iter_32 : 4/4 backend pytest PASS + 100% frontend.
+- Fichier permanent : `/app/backend/tests/test_iter32_reopen_reversals.py`.
+
+#### Architecture / Backlog principle
+Le principe "rien n'est definitivement supprime, tout est contre-passation" est partiellement implemente :
+- ✅ Reouverture d'exercice : contre-passation
+- ⚠️ Autres deletes (fund_calls, invoices, OD manuelles, bank txns) : DELETE encore present
+- Backlog : etendre le pattern a toutes les deletions comptables (refacto important - prevu pour iter futur).
+
 ### Iter56 (Feb 2026) - Auto-match par NOM + Solde d'ouverture auto-rempli
 
 #### Auto-lettrage : 4 niveaux de fallback
