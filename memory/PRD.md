@@ -12,6 +12,22 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 ## Implemented
 
+### Iter42 (Feb 2026) - Fix critique : exclusion ecritures AN du bilan
+
+#### Bug : ecritures "A nouveau" (AN) doublaient les soldes
+- Symptomes utilisateur :
+  - Facture Finlead PAYEE apparaissait au bilan (30 EUR fantome)
+  - "Fournisseurs divers" (44000004) sans aucune facture apparaissait avec 2000 EUR
+- Cause : les ecritures AN (cloture d'exercice) sont datees au 31/12/N alors qu'elles
+  representent l'OUVERTURE du 01/01/N+1. Elles dupliquent donc les soldes du bilan
+  (deja calcules a partir des ecritures originales).
+- Fix : dans `GET /api/reports/bilan`, exclusion `journal_type != 'AN'` dans les 2
+  requetes (balances 1-5 + resultat 6/7). Le bilan utilise uniquement les ecritures
+  ORIGINALES (factures, paiements, OD).
+- Verifie : Finlead disparu, 44000004 disparu, bilan reste equilibre (29 237,70 EUR).
+
+
+
 ### Iter41 (Feb 2026) - Bilan allege (UI + PDF)
 
 #### UI ReportsPage > Bilan
