@@ -12,6 +12,32 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 ## Implemented
 
+### Iter36 (Feb 2026) - Nettoyage complet base + Verrouillage strict chinese walls (regle non-modifiable)
+
+#### Etape 1 - Nettoyage des donnees de test
+- **2 ACPs de test** supprimees (TEST_Iter7_ACP_A_1779082500 + TEST_Iter7_ACP_B_1779082500) avec **cascade complete** sur 12 collections (invoices, journal_entries, fund_calls, bank_transactions, bank_statements, lots, budgets, distribution_keys, fiscal_years, pcmn_accounts, expense_categories, tenants).
+- Donnees de test residuelles dans ACP Demo nettoyees :
+  - Facture TEST-PRIV-001 supprimee
+  - journal_entries avec ref TEST_PAYER_*, TEST_ITER26_LEGACY, et toute ref contenant "TEST" supprimees
+  - bank_statement TEST_ITER22_* supprime
+  - Fournisseur SRL Test + factures associees supprimes
+- **9 comptes utilisateurs de test** supprimes (`test_iter1[67]_owner_*`)
+- Audit final : coproprietes 11, users 4 (admin + 3 reels).
+
+#### Etape 2 - Verrouillage strict chinese walls
+- **Nouvelle fonction `_require_copro(copropriete_id, request)`** dans `reports.py` : resout copropriete_id depuis param OU header X-Copropriete-Id, raise 400 si absent. Centralise la regle pour TOUS les endpoints.
+- **Endpoints verrouilles** (copropriete_id obligatoire, 400 sinon) :
+  - `GET /api/reports/grand-livre`
+  - `GET /api/reports/trial-balance`
+  - `GET /api/reports/bilan`
+  - `GET /api/reports/resultat`
+  - `GET /api/reports/decompte` (+ verification fiscal_year_id match ACP)
+  - `GET /api/reports/balance-tiers/owners/{id}` (+ filtre periode optionnel)
+  - `GET /api/reports/balance-tiers/suppliers` (+ filtre periode optionnel)
+  - `GET /api/fiscal/expenses`
+- Verification cross-ACP : si `fiscal_year_id` fourni mais son `copropriete_id` ne matche pas la requete -> 400.
+- **Teste** : 7/7 endpoints scope-less retournent 400 + 4/4 avec scope retournent 200.
+
 ### Iter35 (Feb 2026) - Chinese walls verrouillage strict TOUS endpoints critiques + Reference interne facture + Filtres invoices
 
 #### Verrouillage chinese walls strict (regle non-modifiable)

@@ -418,7 +418,8 @@ def create_fiscal_router(db):
         return {"message": "Regularisation annulee"}
 
     @router.get("/expenses")
-    async def list_expenses(copropriete_id: Optional[str] = None,
+    async def list_expenses(request: Request,
+                            copropriete_id: Optional[str] = None,
                             fiscal_year_id: Optional[str] = None,
                             date_from: Optional[str] = None,
                             date_to: Optional[str] = None,
@@ -426,15 +427,16 @@ def create_fiscal_router(db):
                             distribution_key_id: Optional[str] = None,
                             bank_account: Optional[str] = None):
         """Liste les depenses (factures + ecritures OD classe 6) filtrables.
-        - account_number: nature de depense (compte PCMN classe 6)
-        - distribution_key_id: cle de repartition
-        - bank_account: compte bancaire de paiement (filtre via lettrage)
-        """
+        Chinese walls STRICT : copropriete_id requis (param ou header)."""
+        if not copropriete_id:
+            copropriete_id = request.headers.get("X-Copropriete-Id") or None
         if fiscal_year_id and not (date_from and date_to):
             fy = await db.fiscal_years.find_one({"id": fiscal_year_id}, {"_id": 0})
             if fy:
                 date_from, date_to = fy["start_date"], fy["end_date"]
                 copropriete_id = copropriete_id or fy.get("copropriete_id")
+        if not copropriete_id or copropriete_id == "all":
+            raise HTTPException(400, "copropriete_id requis - chinese walls strict.")
 
         # 1) Invoices (frais reels comptabilises via AC)
         inv_q = {}

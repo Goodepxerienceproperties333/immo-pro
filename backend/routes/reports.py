@@ -13,18 +13,33 @@ def _apply_copro(q: dict, copropriete_id: Optional[str]) -> dict:
     return q
 
 
+def _require_copro(copropriete_id: Optional[str], request) -> str:
+    """Resolve & require copropriete_id from param OR header X-Copropriete-Id.
+    Raise 400 if missing. Chinese walls strict - regle non-modifiable."""
+    if not copropriete_id:
+        copropriete_id = request.headers.get("X-Copropriete-Id") if request else None
+    if not copropriete_id or copropriete_id == "all":
+        raise HTTPException(
+            400,
+            "copropriete_id requis - chinese walls strict : aucune ACP n'est selectionnee."
+        )
+    return copropriete_id
+
+
 def create_reports_router(db):
     router = APIRouter(prefix="/api/reports")
 
     # ---- GRAND LIVRE (General Ledger) ----
     @router.get("/grand-livre")
     async def grand_livre(
+        request: Request,
         date_from: Optional[str] = None,
         date_to: Optional[str] = None,
         account_from: Optional[str] = None,
         account_to: Optional[str] = None,
         copropriete_id: Optional[str] = None,
     ):
+        copropriete_id = _require_copro(copropriete_id, request)
         q = _apply_copro({}, copropriete_id)
         if date_from or date_to:
             q["date"] = {}
@@ -72,7 +87,8 @@ def create_reports_router(db):
 
     # ---- BALANCE DES COMPTES (Trial Balance) ----
     @router.get("/balance")
-    async def trial_balance(date_from: Optional[str] = None, date_to: Optional[str] = None, copropriete_id: Optional[str] = None):
+    async def trial_balance(request: Request, date_from: Optional[str] = None, date_to: Optional[str] = None, copropriete_id: Optional[str] = None):
+        copropriete_id = _require_copro(copropriete_id, request)
         q = _apply_copro({}, copropriete_id)
         if date_from or date_to:
             q["date"] = {}
@@ -128,13 +144,16 @@ def create_reports_router(db):
     #   VII. Comptes de regularisation (classe 49 passif)
 
     @router.get("/bilan")
-    async def bilan(date_to: Optional[str] = None, copropriete_id: Optional[str] = None,
+    async def bilan(request: Request, date_to: Optional[str] = None, copropriete_id: Optional[str] = None,
                     fiscal_year_id: Optional[str] = None):
-        """Bilan PCMN belge structure (Actif / Passif par rubriques)."""
+        """Bilan PCMN belge structure (Actif / Passif par rubriques). Chinese walls strict."""
+        copropriete_id = _require_copro(copropriete_id, request)
         # Optionally resolve fiscal year
         fy = None
         if fiscal_year_id:
             fy = await db.fiscal_years.find_one({"id": fiscal_year_id}, {"_id": 0})
+            if fy and fy.get("copropriete_id") and fy["copropriete_id"] != copropriete_id:
+                raise HTTPException(400, "Cet exercice appartient a une autre ACP.")
             if fy and not date_to:
                 date_to = fy["end_date"]
 
@@ -312,13 +331,16 @@ def create_reports_router(db):
     #   V.   75 Produits financiers (interets epargne)
     #   VI.  76 Produits exceptionnels
     @router.get("/resultat")
-    async def compte_resultat(date_from: Optional[str] = None, date_to: Optional[str] = None,
+    async def compte_resultat(request: Request, date_from: Optional[str] = None, date_to: Optional[str] = None,
                               copropriete_id: Optional[str] = None,
                               fiscal_year_id: Optional[str] = None):
-        """Compte de Resultats PCMN belge structure (rubriques 60-67 / 70-76)."""
+        """Compte de Resultats PCMN belge structure (rubriques 60-67 / 70-76). Chinese walls strict."""
+        copropriete_id = _require_copro(copropriete_id, request)
         fy = None
         if fiscal_year_id:
             fy = await db.fiscal_years.find_one({"id": fiscal_year_id}, {"_id": 0})
+            if fy and fy.get("copropriete_id") and fy["copropriete_id"] != copropriete_id:
+                raise HTTPException(400, "Cet exercice appartient a une autre ACP.")
             if fy:
                 if not date_from:
                     date_from = fy["start_date"]
@@ -403,9 +425,13 @@ def create_reports_router(db):
 
     # ---- DECOMPTE ANNUEL PAR PROPRIETAIRE ----
     @router.get("/decompte")
-    async def decompte_annuel(fiscal_year_id: Optional[str] = None, date_from: Optional[str] = None, date_to: Optional[str] = None, copropriete_id: Optional[str] = None):
+    async def decompte_annuel(request: Request, fiscal_year_id: Optional[str] = None, date_from: Optional[str] = None, date_to: Optional[str] = None, copropriete_id: Optional[str] = None):
+        """Decomptes annuels - chinese walls STRICT."""
+        copropriete_id = _require_copro(copropriete_id, request)
         if fiscal_year_id:
             fy = await db.fiscal_years.find_one({"id": fiscal_year_id}, {"_id": 0})
+            if fy and fy.get("copropriete_id") and fy["copropriete_id"] != copropriete_id:
+                raise HTTPException(400, "Cet exercice appartient a une autre ACP.")
             if fy:
                 date_from = fy["start_date"]
                 date_to = fy["end_date"]
@@ -831,11 +857,16 @@ def create_reports_router(db):
         return {"owners": result, "total_debiteurs": total_debiteurs, "total_crediteurs": total_crediteurs}
 
     @router.get("/balance-tiers/owners/{owner_id}")
-    async def situation_compte_owner(owner_id: str, copropriete_id: Optional[str] = None):
+    async def situation_compte_owner(
+        owner_id: str,
+        request: Request,
+        copropriete_id: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+    ):
         """Situation de compte d'un proprietaire (basee sur le grand livre).
-        Aggrege TOUTES les ecritures (AC/VE/FI/OD/A-Nouveau) sur les comptes
-        tiers 40000XXX (provisions) + 40010XXX (reserve), plus les paiements
-        bancaires non lettres reconnus par VCS."""
+        Chinese walls strict. Filtre periode optionnel."""
+        copropriete_id = _require_copro(copropriete_id, request)
         owner = await db.owners.find_one({"id": owner_id}, {"_id": 0})
         if not owner:
             raise HTTPException(404, "Proprietaire non trouve")
@@ -847,10 +878,12 @@ def create_reports_router(db):
 
         movements = []
 
-        # 1) Lignes du grand livre
-        entry_q = {}
-        if copropriete_id:
-            entry_q["copropriete_id"] = copropriete_id
+        # 1) Lignes du grand livre (avec filtre periode)
+        entry_q = {"copropriete_id": copropriete_id}
+        if start_date or end_date:
+            entry_q["date"] = {}
+            if start_date: entry_q["date"]["$gte"] = start_date
+            if end_date: entry_q["date"]["$lte"] = end_date
         entries = await db.journal_entries.find(entry_q, {"_id": 0}).to_list(100000)
         seen_lines = set()
         for e in entries:
@@ -1075,8 +1108,13 @@ def create_reports_router(db):
 
     # ---- BALANCE DE TIERS FOURNISSEURS ----
     @router.get("/balance-tiers/suppliers")
-    async def balance_tiers_suppliers(copropriete_id: Optional[str] = None):
-        """Balance de tiers fournisseurs basee sur le grand livre.
+    async def balance_tiers_suppliers(
+        request: Request,
+        copropriete_id: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+    ):
+        """Balance de tiers fournisseurs basee sur le grand livre. Chinese walls strict.
 
         Pour chaque fournisseur (fiche supplier ou nom non-reference), on aggrege
         toutes les ecritures journal_entries (AC, FI, OD, A-Nouveau) sur son compte
@@ -1089,18 +1127,26 @@ def create_reports_router(db):
         factures) - marques 'orphan=true'.
         """
         if not copropriete_id:
+            copropriete_id = request.headers.get("X-Copropriete-Id") if request else None
+        if not copropriete_id or copropriete_id == "all":
             return {"suppliers": [], "total_a_payer": 0}
 
         # Charge fournisseurs
         suppliers = await db.suppliers.find({}, {"_id": 0}).to_list(10000)
-        # Charge journal entries de l'ACP
-        entries = await db.journal_entries.find(
-            {"copropriete_id": copropriete_id}, {"_id": 0}
-        ).to_list(100000)
+        # Charge journal entries de l'ACP + filtre periode
+        je_q = {"copropriete_id": copropriete_id}
+        if start_date or end_date:
+            je_q["date"] = {}
+            if start_date: je_q["date"]["$gte"] = start_date
+            if end_date: je_q["date"]["$lte"] = end_date
+        entries = await db.journal_entries.find(je_q, {"_id": 0}).to_list(100000)
         # Charge factures pour les fournisseurs orphelins
-        invoices = await db.invoices.find(
-            {"copropriete_id": copropriete_id}, {"_id": 0}
-        ).to_list(10000)
+        inv_q = {"copropriete_id": copropriete_id}
+        if start_date or end_date:
+            inv_q["date"] = {}
+            if start_date: inv_q["date"]["$gte"] = start_date
+            if end_date: inv_q["date"]["$lte"] = end_date
+        invoices = await db.invoices.find(inv_q, {"_id": 0}).to_list(10000)
 
         # Map supplier -> tier account
         supplier_by_id = {}
