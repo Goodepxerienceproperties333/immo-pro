@@ -12,6 +12,24 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 ## Implemented
 
+### Iter52 (Feb 2026) - Auto-VCS robuste + Balance des tiers en temps reel
+
+#### Auto-lettrage VCS plus robuste (auto-comptabilisation des paiements)
+Probleme : la fonction `_try_auto_lettrage_vcs` faisait `comm.replace('+','').replace('/','').replace(' ','')` puis matchait l'ENTIERE chaine au `vcs_digits`. Pour une communication realiste `'+++100/7407/40231+++ - Votre paiement au 19/06/2026'`, le clean donnait `100740740231-Votrepaiementau19062026` qui ne matchait jamais `'100740740231'`.
+Fix : extraction VCS via regex `(\d{3})[\s/]*(\d{4})[\s/]*(\d{5})` pour isoler les 12 chiffres VCS belges peu importe le suffixe. Fallback : prendre les 12 premiers digits.
+Validation test ACP : 5/5 transactions auto-lettrees au post_statement sans intervention manuelle (De Smet, Dubois, Janssens, Lefevre, Martin Sophie).
+
+#### Auto-lettrage execute aussi a la comptabilisation
+`post_statement` lance d'abord l'auto-VCS sur toutes les txns non matched, PUIS genere les ecritures FI. Resultat : les transactions avec VCS valides sont directement comptabilisees au bon compte tier (40000XXX) sans avoir a lettrer manuellement.
+
+#### Modification de transaction = mise a jour automatique de la balance des tiers
+Probleme : si l'utilisateur modifiait une transaction (montant, date, communication) d'un extrait deja comptabilise, l'ecriture FI restait inchangee -> balance des tiers et bilan obsoletes.
+Fix : nouveau helper `_refresh_fi_if_posted(txn_id)` qui regenere l'ecriture FI (via `generate_bank_entry` qui supprime d'abord l'ancienne). Appele depuis :
+- `POST /api/banking/transactions` (creation)
+- `PUT /api/banking/transactions/{id}` (modification)
+- `POST /api/banking/unlettrage/{id}` (deja en place)
+Validation : modif amount 1000 -> 1500 sur txn De Smet -> balance prov passe de 3200 a 2700 EUR automatiquement.
+
 ### Iter51 (Feb 2026) - Bilan dynamique : compte bancaire + paiements visibles via compte d'attente 499000
 
 #### Probleme

@@ -322,6 +322,24 @@ def create_banking_router(db):
         txns = await db.bank_transactions.find(query, {"_id": 0}).sort("date", -1).to_list(1000)
         return txns
 
+    async def _refresh_fi_if_posted(txn_id):
+        """Si l'extrait parent est `posted`, regenere l'ecriture FI de cette txn
+        (Dr Banque / Cr counterpart si lettree, sinon Cr 499000). Permet aux balances
+        de tiers et au bilan de rester synchronises avec les modifications."""
+        try:
+            txn = await db.bank_transactions.find_one({"id": txn_id}, {"_id": 0})
+            if not txn or not txn.get("statement_id"):
+                return
+            stmt = await db.bank_statements.find_one(
+                {"id": txn["statement_id"]}, {"_id": 0, "status": 1}
+            )
+            if not stmt or stmt.get("status") != "posted":
+                return
+            # generate_bank_entry s'occupe de supprimer l'ancienne FI auto avant d'en creer une nouvelle
+            await generate_bank_entry(db, txn)
+        except Exception as e:
+            print(f"[_refresh_fi_if_posted] failed for txn {txn_id}: {e}")
+
     @router.post("/transactions")
     async def create_transaction(data: TransactionInput):
         # Force amount sign based on transaction_type
@@ -346,6 +364,8 @@ def create_banking_router(db):
         }
         await db.bank_transactions.insert_one(doc)
         await _try_auto_lettrage_vcs(doc)
+        # Si l'extrait est deja comptabilise, generer/regenerer l'ecriture FI maintenant
+        await _refresh_fi_if_posted(doc["id"])
         updated = await db.bank_transactions.find_one({"id": doc["id"]}, {"_id": 0})
         return updated or {k: v for k, v in doc.items() if k != "_id"}
 
@@ -367,8 +387,13 @@ def create_banking_router(db):
             raise HTTPException(404, "Transaction non trouvee")
         updated = await db.bank_transactions.find_one({"id": txn_id}, {"_id": 0})
         if updated and not updated.get("matched"):
+            # Tentative d'auto-lettrage VCS si une nouvelle communication a ete saisie
             await _try_auto_lettrage_vcs(updated)
             updated = await db.bank_transactions.find_one({"id": txn_id}, {"_id": 0})
+        # Regenere l'ecriture FI si l'extrait est comptabilise (montant/date/lettrage
+        # peuvent avoir change -> balance des tiers et bilan doivent suivre)
+        await _refresh_fi_if_posted(txn_id)
+        updated = await db.bank_transactions.find_one({"id": txn_id}, {"_id": 0})
         return updated
 
     @router.delete("/transactions/{txn_id}")
