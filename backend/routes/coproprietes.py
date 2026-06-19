@@ -299,8 +299,8 @@ def create_coproprietes_router(db):
 
         collections_to_clear = [
             "invoices", "journal_entries", "fund_calls", "bank_transactions",
-            "budgets", "fiscal_years", "regularizations", "expense_categories",
-            "documents",
+            "bank_statements", "budgets", "fiscal_years", "regularizations",
+            "expense_categories", "documents",
         ]
         stats = {"name": copro.get("name", ""), "deleted_files": deleted_files}
         for coll in collections_to_clear:
