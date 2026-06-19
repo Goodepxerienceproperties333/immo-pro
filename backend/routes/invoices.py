@@ -179,6 +179,9 @@ def create_invoices_router(db):
 
     @router.post("/invoices")
     async def create_invoice(data: InvoiceInput):
+        from fiscal_lock import ensure_period_open
+        # Verrou fiscal : la date de la facture doit etre dans une periode ouverte
+        await ensure_period_open(db, data.copropriete_id or "", data.date, context="facture")
         # If expense_category_id provided, derive/override account_number
         account_number = data.account_number
         cat_default_occupant = None
@@ -276,6 +279,12 @@ def create_invoices_router(db):
 
     @router.put("/invoices/{invoice_id}")
     async def update_invoice(invoice_id: str, data: InvoiceInput):
+        from fiscal_lock import ensure_period_open
+        existing_for_lock = await db.invoices.find_one({"id": invoice_id}, {"_id": 0})
+        if existing_for_lock:
+            # Verrou : la date d'origine ET la nouvelle doivent etre dans un exercice ouvert
+            await ensure_period_open(db, existing_for_lock.get("copropriete_id", ""), existing_for_lock.get("date"), context="facture")
+        await ensure_period_open(db, data.copropriete_id or (existing_for_lock or {}).get("copropriete_id", ""), data.date, context="facture")
         account_number = data.account_number
         cat_default_occupant = None
         if data.expense_category_id:
@@ -332,19 +341,23 @@ def create_invoices_router(db):
 
     @router.delete("/invoices/{invoice_id}")
     async def delete_invoice(invoice_id: str):
+        from fiscal_lock import ensure_period_open
         inv = await db.invoices.find_one({"id": invoice_id}, {"_id": 0})
-        if inv:
-            for att in inv.get("attachments", []) or []:
-                try:
-                    p = att.get("stored_path")
-                    if p and Path(p).exists():
-                        Path(p).unlink()
-                except Exception:
-                    pass
+        if not inv:
+            raise HTTPException(404, "Facture non trouvee")
+        # Verrou : refuse la suppression si la facture est dans un exercice cloture
+        await ensure_period_open(db, inv.get("copropriete_id", ""), inv.get("date"), context="facture")
+        for att in inv.get("attachments", []) or []:
             try:
-                await _delete_auto_entries(db, "invoice", invoice_id)
+                p = att.get("stored_path")
+                if p and Path(p).exists():
+                    Path(p).unlink()
             except Exception:
                 pass
+        try:
+            await _delete_auto_entries(db, "invoice", invoice_id)
+        except Exception:
+            pass
         result = await db.invoices.delete_one({"id": invoice_id})
         if result.deleted_count == 0:
             raise HTTPException(404, "Facture non trouvee")

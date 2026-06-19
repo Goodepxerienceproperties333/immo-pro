@@ -341,18 +341,23 @@ def create_accounting_router(db):
 
     @router.delete("/entries/{entry_id}")
     async def delete_entry(entry_id: str):
+        from fiscal_lock import ensure_entry_modifiable
         # Also remove attachment files from disk
         entry = await db.journal_entries.find_one({"id": entry_id}, {"_id": 0})
-        if entry and entry.get("auto_generated") and not entry.get("manually_edited"):
+        if not entry:
+            raise HTTPException(404, "Ecriture non trouvee")
+        if entry.get("auto_generated") and not entry.get("manually_edited"):
             raise HTTPException(400, "Ecriture auto-generee - supprimez la source (facture, appel, banque) ou modifiez-la d'abord pour la detacher")
-        if entry:
-            for att in entry.get("attachments", []) or []:
-                try:
-                    p = att.get("stored_path")
-                    if p and Path(p).exists():
-                        Path(p).unlink()
-                except Exception:
-                    pass
+        # Verrou fiscal : refuse la suppression si la date tombe dans un exercice cloture
+        # ou si l'ecriture est une contre-passation / deja contre-passee.
+        await ensure_entry_modifiable(db, entry)
+        for att in entry.get("attachments", []) or []:
+            try:
+                p = att.get("stored_path")
+                if p and Path(p).exists():
+                    Path(p).unlink()
+            except Exception:
+                pass
         result = await db.journal_entries.delete_one({"id": entry_id})
         if result.deleted_count == 0:
             raise HTTPException(404, "Ecriture non trouvee")

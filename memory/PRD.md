@@ -12,6 +12,77 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 ## Implemented
 
+### Iter60 (Feb 2026) - Chinese wall syndic + Verrous fiscaux complets + Roles simplifies
+
+#### A. Chinese wall STRICT entre syndics
+Bug observe : Benjamin (nouveau syndic) voyait l'ACP "Test" de Finlead. Pire encore : en forcant `?copropriete_id=X`, n'importe quel syndic pouvait lire tout le contenu d'une ACP qu'il ne gere pas (lots, factures, owners, banking, accounting, dashboard, reports...).
+
+Fixes :
+1. **Middleware global** (`server.py`) : si la requete contient `?copropriete_id=X` ou header `X-Copropriete-Id: X`, et que l'utilisateur n'est pas superadmin/admin, et que X n'est pas dans `user.copropriete_ids` -> 403 immediat sur **TOUS** les endpoints (path-agnostic).
+2. **`list_coproprietes`** : superadmin/admin voient tout, les autres (syndic/gestionnaire/owner) ne voient que leurs ACPs (`{"id": {"$in": user.copropriete_ids}}`). Si liste vide : retour [].
+3. **`dashboard/stats`** : `is_admin_role` (qui inclut syndic) -> `is_superadmin_only`. Sans param, un syndic voit `coproprietes_count = nb de SES ACPs` au lieu de count global.
+
+#### B. Auto-rattachement ACP au syndic createur
+Bug : quand un syndic creait une ACP, elle n'etait PAS ajoutee a son `user.copropriete_ids`. Resultat : il ne voyait pas sa propre ACP apres creation.
+Fix `routes/coproprietes.py::create_copropriete` :
+- Apres insert, si role != superadmin : `db.users.update_one({"_id": ObjectId(user["_id"])}, {"$addToSet": {"copropriete_ids": doc["id"]}})`
+- Pieg : `get_current_user` convertit `_id` en str -> il faut reconvertir en ObjectId pour matcher.
+- Import `from bson import ObjectId` ajoute.
+- Script ad-hoc execute pour rattacher retroactivement les ACPs orphelines aux syndics createurs (via `created_by` field).
+
+#### C. Roles simplifies : superadmin ne gere QUE les comptes syndic principaux
+Demande utilisateur : "Le superadmin ne gere que le compte principal. Le reste (ACPs + equipe) est du cote syndic."
+
+Backend `routes/admin.py` :
+- `POST /api/admin/users` : refuse 400 si `role != "syndic"`. Force `copropriete_ids = []`, ignore `role_template_id`/`permissions` (le syndic configure son equipe lui-meme).
+- `PUT /api/admin/users/{id}` : refuse de changer `role`, `copropriete_ids`, `role_template_id`, `permissions` depuis cette interface. Permet uniquement name, password reset, must_change_password.
+
+Frontend `AdminUsersPage.js` (refonte complete) :
+- Titre : "Comptes syndic" (au lieu de "Gestion des utilisateurs").
+- Formulaire : email + nom + mot de passe UNIQUEMENT. Plus de selecteur de role. Plus de checkboxes ACPs.
+- Banner d'explication "Le syndic gerera lui-meme ses ACPs et son equipe".
+- Filtre client : n'affiche que `syndic` + `superadmin` (les gestionnaires sont geres par leur syndic via /team).
+
+Frontend `DashboardPage.js` :
+- Bouton "Generer ACP de demo" : `isAdmin` -> `isSuperadmin` (les syndics ne le voient plus).
+Backend `routes/demo_seed.py` : `is_admin_role` -> `is_superadmin_only` (403 si syndic essaie).
+
+#### D. Verrous fiscaux complets (P0 finalise)
+Demande : "Toute saisie/modification sur exercice ferme refusee."
+
+Application de `fiscal_lock.ensure_period_open` :
+- **`routes/invoices.py`** :
+  - POST /invoices : verrouille selon `data.date`
+  - PUT /invoices/{id} : verrouille selon `existing.date` ET `data.date` (deux periodes)
+  - DELETE /invoices/{id} : verrouille selon `inv.date`
+- **`routes/fund_calls.py`** :
+  - POST / : verrouille selon `data.date`
+  - DELETE /{id} : verrouille selon `fc.date`
+- **`routes/accounting.py`** :
+  - DELETE /entries/{id} : appelle `ensure_entry_modifiable` (verifie aussi `is_reversal`/`reversed`)
+  - POST/PUT etaient deja verrouilles (iter precedent)
+
+Message d'erreur clair en francais :
+> "L'exercice 'Exercice 2026' (01/01/2026 au 31/12/2026) est cloture. Impossible de saisir/modifier une facture sur une periode verrouillee. Pour modifier, rouvrez d'abord l'exercice via Comptabilite > Exercices fiscaux > Reouvrir (les ecritures de cloture seront automatiquement contre-passees)."
+
+#### E. Bug fix compte Benjamin
+Le compte syndic Benjamin etait enregistre sous `bejamin@gep.be` (typo : un 'n' manquant). Correction directe en DB : email normalise a `benjamin@gep.be`, password reset a `Capibara`, copropriete_ids vide pour respect du chinese wall.
+
+#### Tests E2E
+- Login Benjamin (Capibara) -> 200 ✅
+- Benjamin GET /coproprietes -> ne voit que SES ACPs (1) ✅
+- Benjamin GET /api/lots?copropriete_id=<ACP_de_Finlead> -> 403 chinese wall ✅ (10 endpoints testes : lots, invoices, owners, banking, accounting, fund-calls, dashboard, reports, expense-categories)
+- Benjamin /dashboard/stats sans param -> tout a 0 (pas de fuite) ✅
+- Gerald (superadmin) /coproprietes -> voit tout ✅
+- Benjamin cree une ACP -> auto-rattachement OK ✅ (user.copropriete_ids incremente)
+- POST /api/invoices date 2026-06-01 (cloture) -> 400 verrou fiscal ✅
+- POST /api/invoices date 2027-03-15 (ouvert) -> 200 ✅
+- DELETE /api/invoices/<id-2026> -> 400 verrou fiscal ✅
+- POST /api/fund-calls date 2026-06-01 (cloture) -> 400 verrou fiscal ✅
+- Benjamin POST /api/admin/demo/seed -> 403 (reserve superadmin) ✅
+
+
+
 ### Iter59 (Feb 2026) - Fix bug : Superadmin peut creer un gestionnaire via /team
 
 #### Bug rapporte

@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime, timezone
+from bson import ObjectId
 import uuid
 
 
@@ -151,12 +152,17 @@ def create_coproprietes_router(db):
         # besoin d'etre dans copropriete_ids pour voir tout).
         role = user.get("role", "")
         if role not in ("superadmin", "admin"):
-            user_id_obj = user.get("_id")
-            if user_id_obj:
-                await db.users.update_one(
-                    {"_id": user_id_obj},
-                    {"$addToSet": {"copropriete_ids": doc["id"]}}
-                )
+            user_id_str = user.get("_id")
+            if user_id_str:
+                try:
+                    await db.users.update_one(
+                        {"_id": ObjectId(user_id_str)},
+                        {"$addToSet": {"copropriete_ids": doc["id"]}}
+                    )
+                except Exception as e:
+                    # Log mais ne casse pas la creation de l'ACP
+                    import logging
+                    logging.warning(f"Echec auto-rattachement ACP {doc['id']} au syndic {user_id_str}: {e}")
         # Seed full PCMN plan for this ACP + bank account PCMN entries
         await _seed_pcmn_for_acp(doc["id"])
         await _create_pcmn_accounts(bank_accounts, doc["id"])

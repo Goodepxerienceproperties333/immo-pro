@@ -97,7 +97,10 @@ def create_fund_calls_router(db):
 
     @router.post("")
     async def create_fund_call(data: FundCallInput):
+        from fiscal_lock import ensure_period_open
         copro_id = data.copropriete_id or ""
+        # Verrou fiscal : la date de l'appel doit etre dans une periode ouverte
+        await ensure_period_open(db, copro_id, data.date, context="appel de fonds")
         # Chinese wall: only fetch lots from this ACP
         lots_q = {"copropriete_id": copro_id} if copro_id else {}
         lots = await db.lots.find(lots_q, {"_id": 0}).to_list(1000)
@@ -237,6 +240,12 @@ def create_fund_calls_router(db):
 
     @router.delete("/{call_id}")
     async def delete_fund_call(call_id: str):
+        from fiscal_lock import ensure_period_open
+        fc = await db.fund_calls.find_one({"id": call_id}, {"_id": 0})
+        if not fc:
+            raise HTTPException(404, "Appel non trouve")
+        # Verrou : refuse la suppression si la date tombe dans un exercice cloture
+        await ensure_period_open(db, fc.get("copropriete_id", ""), fc.get("date"), context="appel de fonds")
         try:
             await _delete_auto_entries(db, "fund_call", call_id)
         except Exception:
