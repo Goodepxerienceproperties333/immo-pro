@@ -6,7 +6,7 @@ import {
   LayoutDashboard, Users, Building2, UserCheck, BookOpen, FileText,
   Receipt, Gauge, Landmark, FolderOpen, LogOut, ChevronLeft, ChevronRight,
   Menu, Shield, Home, Truck, Calendar, BookMarked, Megaphone, BarChart3, Bell, Wallet, Tag, UserCog, Pencil,
-  ShieldAlert, Unlock, ScrollText, IdCard
+  ShieldAlert, Unlock, ScrollText, IdCard, Activity
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -98,6 +98,10 @@ export default function Layout() {
             className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''} ${collapsed ? 'justify-center px-2' : ''}`}
             data-testid="adm-nav-audit"
           ><ScrollText size={16} strokeWidth={1.5} />{!collapsed && <span className="text-[13px]">Journal d&apos;audit</span>}</NavLink>
+          <NavLink to="/admin/login-history" onClick={() => setMobileOpen(false)}
+            className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''} ${collapsed ? 'justify-center px-2' : ''}`}
+            data-testid="adm-nav-login-history"
+          ><Activity size={16} strokeWidth={1.5} />{!collapsed && <span className="text-[13px]">Historique connexions</span>}</NavLink>
         </div>
       </ScrollArea>
       {/* Bottom: switch to syndic mode */}

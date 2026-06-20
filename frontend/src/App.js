@@ -24,6 +24,7 @@ import AdminUsersPage from "@/pages/AdminUsersPage";
 import AdminDashboardPage from "@/pages/AdminDashboardPage";
 import AdminUnlockEntryPage from "@/pages/AdminUnlockEntryPage";
 import AdminAuditLogPage from "@/pages/AdminAuditLogPage";
+import AdminLoginHistoryPage from "@/pages/AdminLoginHistoryPage";
 import AdminRoleTemplatesPage from "@/pages/AdminRoleTemplatesPage";
 import TeamMembersPage from "@/pages/TeamMembersPage";
 import ProfilePage from "@/pages/ProfilePage";
@@ -79,6 +80,7 @@ function AppRoutes() {
         <Route path="admin" element={<AdminDashboardPage />} />
         <Route path="admin/unlock" element={<AdminUnlockEntryPage />} />
         <Route path="admin/audit" element={<AdminAuditLogPage />} />
+        <Route path="admin/login-history" element={<AdminLoginHistoryPage />} />
         <Route path="admin/role-templates" element={<AdminRoleTemplatesPage />} />
         <Route path="team" element={<TeamMembersPage />} />
         <Route path="profile" element={<ProfilePage />} />

@@ -11,6 +11,7 @@ import os
 import logging
 import bcrypt
 import jwt
+import uuid
 from datetime import datetime, timezone, timedelta
 from pydantic import BaseModel
 from typing import Optional, List
@@ -285,10 +286,11 @@ async def mark_onboarding_complete(request: Request):
     return {"status": "ok"}
 
 @auth_router.post("/login")
-async def login(data: LoginInput, response: Response):
+async def login(data: LoginInput, request: Request, response: Response):
     email = data.email.lower().strip()
     user = await db.users.find_one({"email": email})
     if not user:
+        await _record_login_attempt(email, None, request, success=False, reason="user_not_found")
         raise HTTPException(status_code=401, detail="Identifiants invalides")
     # Block login if the user must define their password first
     if user.get("must_change_password"):
@@ -298,13 +300,54 @@ async def login(data: LoginInput, response: Response):
                     "message": "Vous devez definir votre mot de passe lors de la premiere connexion."}
         )
     if not verify_password(data.password, user["password_hash"]):
+        await _record_login_attempt(email, user, request, success=False, reason="bad_password")
         raise HTTPException(status_code=401, detail="Identifiants invalides")
     user_id = str(user["_id"])
     access_token = create_access_token(user_id, email)
     refresh_token = create_refresh_token(user_id)
     response.set_cookie(key="access_token", value=access_token, httponly=True, secure=False, samesite="lax", max_age=7200, path="/")
     response.set_cookie(key="refresh_token", value=refresh_token, httponly=True, secure=False, samesite="lax", max_age=604800, path="/")
+    # Trace the successful login (history visible by superadmin)
+    await _record_login_attempt(email, user, request, success=True)
+    # Update last_login_at on the user document
+    try:
+        await db.users.update_one(
+            {"_id": user["_id"]},
+            {"$set": {"last_login_at": datetime.now(timezone.utc).isoformat()}}
+        )
+    except Exception:
+        pass
     return user_response(user)
+
+
+async def _record_login_attempt(email: str, user: Optional[dict], request: Request, *, success: bool, reason: Optional[str] = None):
+    """Inserts a row in db.login_history for audit purposes.
+    Captures IP (X-Forwarded-For or client.host) + User-Agent (truncated).
+    Failures are also tracked (security audit)."""
+    try:
+        ip = (
+            request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+            or (request.client.host if request.client else "")
+            or ""
+        )
+        ua = (request.headers.get("user-agent") or "")[:300]
+        doc = {
+            "id": str(uuid.uuid4()),
+            "email": email,
+            "user_id": str(user["_id"]) if user else None,
+            "role": user.get("role") if user else None,
+            "user_name": user.get("name") if user else None,
+            "parent_syndic_id": user.get("parent_syndic_id") if user else None,
+            "ip": ip,
+            "user_agent": ua,
+            "success": bool(success),
+            "reason": reason,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        await db.login_history.insert_one(doc)
+    except Exception as e:
+        import logging
+        logging.warning(f"login_history insert failed: {e}")
 
 
 class FirstSetPasswordInput(BaseModel):

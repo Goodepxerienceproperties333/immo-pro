@@ -182,6 +182,80 @@ def create_admin_router(db):
             "client_secret_set": bool(os.environ.get("AZURE_CLIENT_SECRET")),
         }
 
+    # ============================================================
+    # LOGIN HISTORY (audit connexions par utilisateur)
+    # ============================================================
+    @router.get("/login-history/syndics-summary")
+    async def login_history_summary(request: Request):
+        """Pour chaque syndic, retourne : last_login, nb_connexions_30j, nb_connexions_7j,
+        nb_echecs_30j. Pour vue d'ensemble superadmin."""
+        await _get_superadmin_only(request)
+        from datetime import timedelta
+        now = datetime.now(timezone.utc)
+        cut_7 = (now - timedelta(days=7)).isoformat()
+        cut_30 = (now - timedelta(days=30)).isoformat()
+        # Tous les syndics (et gestionnaires) pour avoir une vue d'agence
+        users = await db.users.find(
+            {"role": {"$in": ["syndic", "superadmin", "gestionnaire"]}}
+        ).sort("name", 1).to_list(500)
+        results = []
+        for u in users:
+            uid = str(u["_id"])
+            last = await db.login_history.find_one(
+                {"user_id": uid, "success": True},
+                sort=[("created_at", -1)]
+            )
+            cnt_7 = await db.login_history.count_documents(
+                {"user_id": uid, "success": True, "created_at": {"$gte": cut_7}}
+            )
+            cnt_30 = await db.login_history.count_documents(
+                {"user_id": uid, "success": True, "created_at": {"$gte": cut_30}}
+            )
+            fail_30 = await db.login_history.count_documents(
+                {"user_id": uid, "success": False, "created_at": {"$gte": cut_30}}
+            )
+            results.append({
+                "user_id": uid,
+                "email": u.get("email"),
+                "name": u.get("name"),
+                "role": u.get("role"),
+                "parent_syndic_id": u.get("parent_syndic_id"),
+                "last_login_at": (last or {}).get("created_at"),
+                "last_login_ip": (last or {}).get("ip"),
+                "logins_last_7d": cnt_7,
+                "logins_last_30d": cnt_30,
+                "failed_last_30d": fail_30,
+                "copropriete_ids": u.get("copropriete_ids", []),
+            })
+        return results
+
+    @router.get("/login-history")
+    async def login_history(
+        request: Request,
+        user_id: Optional[str] = None,
+        email: Optional[str] = None,
+        success_only: Optional[bool] = None,
+        limit: int = 100,
+        skip: int = 0,
+    ):
+        """Liste paginee des connexions, filtrable par user_id, email, success."""
+        await _get_superadmin_only(request)
+        q = {}
+        if user_id:
+            q["user_id"] = user_id
+        if email:
+            q["email"] = email.lower().strip()
+        if success_only is True:
+            q["success"] = True
+        elif success_only is False:
+            q["success"] = False
+        limit = max(1, min(limit, 500))
+        skip = max(0, skip)
+        cursor = db.login_history.find(q, {"_id": 0}).sort("created_at", -1).skip(skip).limit(limit)
+        rows = await cursor.to_list(limit)
+        total = await db.login_history.count_documents(q)
+        return {"items": rows, "total": total, "limit": limit, "skip": skip}
+
     @router.post("/email-config/test")
     async def test_email_config(request: Request):
         """Envoie un email de test au superadmin connecte pour valider la config MSGRAPH."""
