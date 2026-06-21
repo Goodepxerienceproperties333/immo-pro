@@ -11,6 +11,53 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 ## Implemented
+### Iter72quater (Feb 2026) - Restauration des 4 proprietaires Optipro + Dedup suppliers ACP "import"
+
+**Bug rapporte** : sur ACP "import" (be6e826c), les 4 proprietaires Optipro
+(LENOTRE-MANSART / RUBENS-RENOIR / VELASQUEZ-GOYA / RAPHAEL-MICHEL ANGE) ont
+"disparu" de la Balance de Tiers + la liste des proprietaires de l'ACP.
+
+**Root cause analysis** :
+1. Le script `dedup_owners.py` de iter72ter avait supprime 704 doublons mais
+   garde 3 versions des 4 owners principaux (canonical + 2 dupes avec
+   `auxiliary_code=null` au lieu de "" -> queries de dedup les ont rate).
+2. Les 4 owners canoniques (aux C0960..C0963) avaient `copropriete_ids=[]`
+   ET aucun `lots.owner_id` rempli dans cette ACP -> invisibles via le
+   endpoint `list_owners` (qui resoud les owners via `lots.distinct("owner_id")`).
+3. Pareil cote suppliers : 22 codes F0XXX en 4 versions chacun (88 supplier docs)
+   -> balance-tiers split entre comptes Optipro (4400XXX) et CM (44000XXX).
+
+**Fix data (scripts permanents `/app/backend/scripts/`)** :
+
+`fix_owners_import_acp.py` :
+- Supprime les 4 doublons doubles-names ("LENOTRE-MANSART LENOTRE-MANSART"...).
+- Merge les 4 doublons mono-name (aux=null) dans le canonical via remap des
+  refs (journal_entries, lots, bank_txns, fund_calls).
+- Rattache les 4 appartements (`number='Lots Le Nôtre-Mansart'`, etc.) aux
+  4 owners canoniques via `owner_id` + `owner_ids`.
+- Ajoute ACP "import" dans `copropriete_ids` des 4 canoniques.
+
+`dedup_suppliers.py` :
+- Groupe par `auxiliary_code` upper-case.
+- Choisit canonical = supplier avec tier Optipro 4400XXX (6 chars), sinon fallback.
+- Merge `tier_accounts.{ACP}.aliases` avec les Optipro accs des dupes.
+- Remap JE lines (third_party_id + rewrite account 44000XXX -> 4400XXX si
+  ecart entre tier CM et tier Optipro).
+- Remap invoices, bank_transactions.
+- Delete les 66 supplier docs surnumeraires (22 x 3).
+
+**Result E2E (api `/api/reports/balance-tiers`)** :
+- Owners : 4 lignes uniques, Total deb 3682.05 EUR / Total cred 5940.52 EUR.
+- Suppliers : 10 lignes uniques (au lieu de 12 split), Total a payer 828.07 EUR.
+- 0 doublon, 0 owner orphelin, 0 supplier split entre 2 comptes tier.
+
+**Fichiers de reference** :
+- `/app/backend/scripts/fix_owners_import_acp.py` (nouveau)
+- `/app/backend/scripts/dedup_suppliers.py` (nouveau)
+- `/app/backend/routes/properties.py::list_owners` (logique inchangee)
+- `/app/backend/routes/reports.py::balance_tiers_owners` (logique inchangee)
+
+
 ### Iter72ter (Feb 2026) - Budget parser v2 (multi-pages) + Reprise comptable + Lettrage auto + Banking names
 
 #### Budget PDF parser - Refonte multi-pages + alignement colonnes par cluster
