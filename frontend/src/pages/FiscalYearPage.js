@@ -137,7 +137,9 @@ export default function FiscalYearPage() {
 
   const saveBudget = async () => {
     try {
-      const payload = { ...budgetForm, lines: budgetForm.lines.filter(l => l.account_number && l.amount > 0) };
+      // Filter : keep lines with account_number AND non-zero amount (allow negatives,
+      // e.g. boni/mali like compte 61210 with -605 EUR in section 0011).
+      const payload = { ...budgetForm, lines: budgetForm.lines.filter(l => l.account_number && Number(l.amount) !== 0) };
       if (!payload.lines.length) { toast.error('Ajoutez au moins une ligne'); return; }
       if (editingBudget) await api.put(`/fiscal/budgets/${editingBudget.id}`, payload);
       else await api.post('/fiscal/budgets', payload);

@@ -890,7 +890,9 @@ def create_fiscal_router(db):
             "fiscal_year_id": data.fiscal_year_id,
             "name": data.name or "Budget",
             "lines": [l.model_dump() for l in data.lines],
+            # Persist both field names for consistency with the import wizard
             "total": round(total, 2),
+            "total_amount": round(total, 2),
             "status": "draft",
             "approved_at": None,
             "approved_by": None,
@@ -919,7 +921,10 @@ def create_fiscal_router(db):
             "fiscal_year_id": data.fiscal_year_id,
             "name": data.name or "Budget",
             "lines": [l.model_dump() for l in data.lines],
+            # Persist both field names for consistency with the import wizard
+            # which writes `total_amount`. Older code may still read `total`.
             "total": round(total, 2),
+            "total_amount": round(total, 2),
         }
         await db.budgets.update_one({"id": budget_id}, {"$set": update})
         return await db.budgets.find_one({"id": budget_id}, {"_id": 0})
