@@ -684,7 +684,10 @@ def create_import_wizard_router(db):
         - Missing PCMN accounts (bank 55x/57x + counterparty) auto-created.
         - A journal entry of type 'FI' (Financier) is created for each
           transaction with double-entry.
-        - Bank_statement_lines also stored for later reconciliation.
+        - bank_statements + bank_transactions ALSO created (grouped per bank
+          + month) so the user can see the imported movements directly in
+          the Banking interface (/banking).
+        - bank_statement_lines kept too for traceability/audit.
         """
         from fiscal_lock import ensure_period_open
         session = await db.import_sessions.find_one({"id": session_id})
@@ -694,11 +697,17 @@ def create_import_wizard_router(db):
         await _require_acp_access(request, db, copro_id)
 
         bank_lookup: dict[str, str] = dict(data.bank_account_mapping or {})
-        async for ba in db.bank_accounts.find({"copropriete_id": copro_id}, {"_id": 0, "id": 1, "account_number": 1, "pcmn_account": 1}):
+        # Also build PCMN -> IBAN map (needed for the bank_statements.account_number)
+        pcmn_to_iban: dict[str, str] = {}
+        async for ba in db.bank_accounts.find({"copropriete_id": copro_id}, {"_id": 0, "id": 1, "account_number": 1, "pcmn_account": 1, "iban": 1}):
             for fld in ("account_number", "pcmn_account"):
                 v = (ba.get(fld) or "").strip()
                 if v and v not in bank_lookup:
                     bank_lookup[v] = ba["id"]
+            pcmn_v = (ba.get("pcmn_account") or "").strip()
+            iban_v = (ba.get("iban") or ba.get("account_number") or "").strip()
+            if pcmn_v and iban_v:
+                pcmn_to_iban[pcmn_v] = iban_v
 
         # Pre-pass: collect PCMN accounts needed
         accounts_needed: dict[str, str] = {}
@@ -712,6 +721,47 @@ def create_import_wizard_router(db):
             if cp:
                 accounts_needed[cp] = cl
         pcmn_created = await _ensure_pcmn_accounts(copro_id, accounts_needed)
+
+        # ---- Group transactions by (bank_pcmn, year-month) to build statements ----
+        # bank_pcmn -> month_key (YYYY-MM) -> {first_date, last_date, txns: [...]}
+        groups: dict[tuple[str, str], dict] = {}
+        for t in data.transactions:
+            bp = (t.get("bank_account") or "").strip()
+            date_v = (t.get("date_value") or "").strip()
+            if not bp or not date_v or len(date_v) < 7:
+                continue
+            month_key = date_v[:7]  # YYYY-MM
+            key = (bp, month_key)
+            g = groups.setdefault(key, {"first_date": date_v, "last_date": date_v, "label": (t.get("bank_account_label") or "").strip(), "txns": []})
+            if date_v < g["first_date"]:
+                g["first_date"] = date_v
+            if date_v > g["last_date"]:
+                g["last_date"] = date_v
+            g["txns"].append(t)
+
+        # Create one bank_statement per group, then transactions inside
+        # statement_by_key : (bank_pcmn, month_key) -> statement_id
+        statement_by_key: dict[tuple[str, str], str] = {}
+        stmts_inserted = 0
+        for (bp, month_key), g in groups.items():
+            stmt_id = str(uuid.uuid4())
+            stmt_doc = {
+                "id": stmt_id,
+                "number": f"IMP-{month_key}-{bp}",
+                "date": g["last_date"],
+                "account_number": pcmn_to_iban.get(bp, bp),
+                "opening_balance": 0.0,
+                "opening_balance_source": "import",
+                "closing_balance": 0.0,
+                "copropriete_id": copro_id,
+                "status": "draft",
+                "imported_label": g["label"] or f"Import journaux {month_key}",
+                "import_session_id": session_id,
+                "created_at": _now_iso(),
+            }
+            await db.bank_statements.insert_one(stmt_doc)
+            statement_by_key[(bp, month_key)] = stmt_id
+            stmts_inserted += 1
 
         inserted = 0
         je_inserted = 0
@@ -738,8 +788,6 @@ def create_import_wizard_router(db):
                 num_doc = (t.get("num_doc") or "").strip()
 
                 # ---- Create journal entry (Financier - FI) ----
-                # IN = money received (debit bank, credit counterparty/owner/etc.)
-                # OUT = money paid (credit bank, debit counterparty/supplier/etc.)
                 je_id = ""
                 if bank_pcmn and cp_pcmn and amount > 0 and direction in ("in", "out"):
                     je_id = str(uuid.uuid4())
@@ -772,6 +820,32 @@ def create_import_wizard_router(db):
                     })
                     je_inserted += 1
 
+                # ---- Create bank_transaction inside its monthly statement ----
+                stmt_id = statement_by_key.get((bank_pcmn, date_v[:7])) if bank_pcmn else ""
+                if stmt_id:
+                    # Signed amount : IN = positive, OUT = negative (CoproManager convention)
+                    signed_amount = amount if direction == "in" else (-amount if direction == "out" else amount)
+                    txn_doc = {
+                        "id": str(uuid.uuid4()),
+                        "statement_id": stmt_id,
+                        "copropriete_id": copro_id,
+                        "date": date_v,
+                        "amount": signed_amount,
+                        "counterparty_name": cp_label,
+                        "counterparty_account": "",  # IBAN of counterparty (unknown from journal)
+                        "communication": libelle,
+                        "transaction_type": "credit" if direction == "in" else "debit",
+                        "account_number": bank_pcmn,
+                        "matched": False,
+                        "matched_type": "",
+                        "matched_id": "",
+                        "auto_je_id": je_id,
+                        "import_session_id": session_id,
+                        "created_at": _now_iso(),
+                    }
+                    await db.bank_transactions.insert_one(txn_doc)
+
+                # ---- Bank statement line (audit copy) ----
                 doc = {
                     "id": str(uuid.uuid4()),
                     "copropriete_id": copro_id,
@@ -798,14 +872,25 @@ def create_import_wizard_router(db):
             except Exception as e:
                 errors.append({"row": idx, "error": str(e)})
 
+        # ---- Update statements' opening / closing balances based on inserted txns ----
+        for (bp, month_key), stmt_id in statement_by_key.items():
+            txns = await db.bank_transactions.find({"statement_id": stmt_id}, {"_id": 0, "amount": 1}).to_list(10000)
+            net = round(sum(float(t.get("amount", 0) or 0) for t in txns), 2)
+            await db.bank_statements.update_one(
+                {"id": stmt_id},
+                {"$set": {"closing_balance": net, "txn_count": len(txns)}},
+            )
+
         await _update_step(db, session_id, "journals", {
             "count": inserted,
+            "statements_created": stmts_inserted,
             "journal_entries": je_inserted,
             "pcmn_created": pcmn_created,
             "errors": errors,
         })
         return {
             "inserted": inserted,
+            "statements_created": stmts_inserted,
             "journal_entries": je_inserted,
             "pcmn_created": pcmn_created,
             "errors": errors,
@@ -1213,8 +1298,6 @@ def create_import_wizard_router(db):
             if not name:
                 continue
             existing = await db.distribution_keys.find_one({"copropriete_id": copro_id, "code": code} if code else {"copropriete_id": copro_id, "name": name})
-            if existing:
-                continue
             # Build lines : match each lot by number or label (case-insensitive)
             kl_lines = []
             for line in k.get("lines") or []:
@@ -1231,12 +1314,32 @@ def create_import_wizard_router(db):
                     "owner_label_raw": line.get("owner_label", ""),
                     "quotity": quotity,
                 })
+            total_q = float(k.get("total_quotities") or sum(l["quotity"] for l in kl_lines))
+            if existing:
+                # If the existing key has NO lines (was previously created from an
+                # empty parse), enrich it with the new lines + import_session_id.
+                # Otherwise we keep the existing one untouched to avoid clobbering
+                # user edits.
+                if not (existing.get("lines") or []):
+                    await db.distribution_keys.update_one(
+                        {"id": existing["id"]},
+                        {"$set": {
+                            "name": name,
+                            "type": k.get("type") or existing.get("type") or "tantiemes",
+                            "total_quotities": total_q,
+                            "lines": kl_lines,
+                            "import_session_id": session_id,
+                            "updated_at": _now_iso(),
+                        }},
+                    )
+                    inserted += 1
+                continue
             doc = {
                 "id": str(uuid.uuid4()),
                 "code": code,
                 "name": name,
                 "type": k.get("type") or "tantiemes",
-                "total_quotities": float(k.get("total_quotities") or sum(l["quotity"] for l in kl_lines)),
+                "total_quotities": total_q,
                 "lines": kl_lines,
                 "copropriete_id": copro_id,
                 "import_session_id": session_id,

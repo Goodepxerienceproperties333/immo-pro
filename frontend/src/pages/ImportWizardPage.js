@@ -1102,20 +1102,25 @@ function KeysPreview({ keys, setKeys }) {
               <thead className="bg-slate-50">
                 <tr>
                   <th className="px-1 py-1 text-left">Lot / Libelle</th>
-                  <th className="px-1 py-1 text-left w-24">Code</th>
+                  <th className="px-1 py-1 text-left w-56">Coproprietaire</th>
                   <th className="px-1 py-1 text-right w-24">Quotite</th>
                   <th className="w-6"></th>
                 </tr>
               </thead>
               <tbody>
                 {(k.lines || []).map((l, li) => (
-                  <tr key={li} className="border-t border-slate-100">
-                    <td className="px-1 py-0.5"><input value={l.lot_label} onChange={e => updLine(ki, li, 'lot_label', e.target.value)} className="w-full border-0 bg-transparent" /></td>
-                    <td className="px-1 py-0.5"><input value={l.lot_code} onChange={e => updLine(ki, li, 'lot_code', e.target.value)} className="w-24 border-0 bg-transparent font-mono" /></td>
+                  <tr key={li} className="border-t border-slate-100" data-testid={`key-${ki}-line-${li}`}>
+                    <td className="px-1 py-0.5"><input value={l.lot_label || ''} onChange={e => updLine(ki, li, 'lot_label', e.target.value)} className="w-full border-0 bg-transparent" /></td>
+                    <td className="px-1 py-0.5"><input value={l.owner_label || ''} onChange={e => updLine(ki, li, 'owner_label', e.target.value)} className="w-full border-0 bg-transparent font-mono text-[11px]" /></td>
                     <td className="px-1 py-0.5"><input type="number" step="0.01" value={l.quotity} onChange={e => updLine(ki, li, 'quotity', e.target.value)} className="w-24 border-0 bg-transparent text-right font-mono" /></td>
                     <td className="px-0 py-0.5"><button onClick={() => delLine(ki, li)} className="text-red-500 hover:text-red-700"><X size={11} /></button></td>
                   </tr>
                 ))}
+                {(k.lines || []).length === 0 && (
+                  <tr><td colSpan={4} className="px-2 py-3 text-center text-amber-700 text-[11px]">
+                    <AlertTriangle size={11} className="inline mr-1" /> Aucune ligne de detail extraite pour cette cle. Verifiez le PDF source.
+                  </td></tr>
+                )}
               </tbody>
             </table>
           </div>

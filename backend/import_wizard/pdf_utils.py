@@ -1215,73 +1215,100 @@ def parse_distribution_keys_pdf(raw: bytes) -> dict:
                     col_idx.setdefault("qt", i)
                 elif "lot" in h:
                     col_idx.setdefault("lot", i)
-            # Iterate data rows; the key code/label is somewhere in the row
+            # Iterate data rows; the key code/label is somewhere in the row.
+            # IMPORTANT : in Optipro/Sogis PDF, each key spans TWO rows :
+            #   Row N   = summary row : ['0001 - Charges communes', '-', '4', '168,00']
+            #   Row N+1 = detail row  : ['Lot1\nLot2\n...', 'C0960\nC0961\n...', '-\n-...', '39\n40...']
+            # We must couple them. Strategy : when we see a key-code row, register
+            # the key. When we see a NO-code row, attach its lines to the LAST key.
+            current_key = None  # tracks the most recently registered key dict
+            def get_cell(row_, name):
+                if name not in col_idx:
+                    return []
+                idx = col_idx[name]
+                if idx >= len(row_):
+                    return []
+                raw_cell = row_[idx] or ""
+                parts = [p.strip() for p in raw_cell.split("\n") if p.strip()]
+                return parts
             for row in table[1:]:
                 if not row or len(row) < 3:
                     continue
-                # Try to split each cell by `\n` similar to natures parser
-                def get_cell(name):
-                    if name not in col_idx:
-                        return []
-                    idx = col_idx[name]
-                    if idx >= len(row):
-                        return []
-                    raw_cell = row[idx] or ""
-                    parts = [p.strip() for p in raw_cell.split("\n") if p.strip()]
-                    return parts
-                libelles = get_cell("libelle")
-                owners = get_cell("owner") if "owner" in col_idx else []
-                lots = get_cell("lot") if "lot" in col_idx else []
-                qts = get_cell("qt")
-                # The first libelle is typically the KEY name (e.g. "0001 - Charges communes")
+                libelles = get_cell(row, "libelle")
+                owners = get_cell(row, "owner") if "owner" in col_idx else []
+                lots = get_cell(row, "lot") if "lot" in col_idx else []
+                qts = get_cell(row, "qt")
                 if not libelles:
                     continue
                 first_libelle = libelles[0]
                 code_match = re.match(r"^(\d{3,4})\s*[-–]\s*(.+)$", first_libelle)
-                # If no key code at the top of the row -> skip (not a new key, just a continuation)
-                if not code_match:
-                    continue
-                key_code = code_match.group(1)
-                key_name = code_match.group(2).strip()
-                if key_code in seen_codes:
-                    continue
-                seen_codes.add(key_code)
-                # Lines : remaining libelles paired with quotities and owners/lots
-                lines = []
-                total_qt = 0.0
-                for i in range(1, max(len(libelles), len(qts))):
-                    if i >= len(qts):
+                if code_match:
+                    # ---- Key SUMMARY row : open a new key ----
+                    key_code = code_match.group(1)
+                    key_name = code_match.group(2).strip()
+                    if key_code in seen_codes:
+                        current_key = None
                         continue
-                    qt_str = qts[i]
-                    qt = _to_float(qt_str)
-                    lot_label = libelles[i] if i < len(libelles) else ""
-                    owner_label = owners[i] if i < len(owners) else ""
-                    lot_code = lots[i] if i < len(lots) else ""
-                    if qt > 0 or lot_label:
-                        lines.append({
-                            "lot_label": lot_label,
-                            "lot_code": lot_code,
-                            "owner_label": owner_label,
-                            "quotity": qt,
-                        })
-                        total_qt += qt
-                # Last quotity in the row could be the total (e.g. 168.00 vs sum of 39+40+49+40)
-                if qts:
-                    last_qt = _to_float(qts[0])
-                    if abs(last_qt - total_qt) > 0.01 and last_qt > 0:
-                        # Use the explicit total if available
-                        explicit_total = last_qt
-                    else:
-                        explicit_total = total_qt
+                    seen_codes.add(key_code)
+                    # The summary row may already have lines (mixed format)
+                    inline_lines = []
+                    inline_total = 0.0
+                    for i in range(1, max(len(libelles), len(qts))):
+                        if i >= len(qts):
+                            continue
+                        qt = _to_float(qts[i])
+                        lot_label = libelles[i] if i < len(libelles) else ""
+                        owner_label = owners[i] if i < len(owners) else ""
+                        lot_code = lots[i] if i < len(lots) else ""
+                        if qt > 0 or lot_label:
+                            inline_lines.append({
+                                "lot_label": lot_label,
+                                "lot_code": lot_code,
+                                "owner_label": owner_label,
+                                "quotity": qt,
+                            })
+                            inline_total += qt
+                    # The TOTAL QUOTITES on the SUMMARY row is at qts[0]
+                    explicit_total = _to_float(qts[0]) if qts else 0.0
+                    current_key = {
+                        "code": key_code,
+                        "name": key_name,
+                        "type": "tantiemes",
+                        "lines": inline_lines,
+                        "total_quotities": round(explicit_total or inline_total, 6),
+                    }
+                    keys.append(current_key)
                 else:
-                    explicit_total = total_qt
-                keys.append({
-                    "code": key_code,
-                    "name": key_name,
-                    "type": "tantiemes",
-                    "lines": lines,
-                    "total_quotities": round(explicit_total, 6),
-                })
+                    # ---- DETAIL row : attach lines to the LAST opened key ----
+                    if current_key is None:
+                        continue
+                    detail_lines = []
+                    detail_total = 0.0
+                    n = max(len(libelles), len(qts), len(owners))
+                    for i in range(n):
+                        qt = _to_float(qts[i]) if i < len(qts) else 0.0
+                        lot_label = libelles[i] if i < len(libelles) else ""
+                        owner_label = owners[i] if i < len(owners) else ""
+                        lot_code = lots[i] if i < len(lots) else ""
+                        if qt > 0 or lot_label or owner_label:
+                            detail_lines.append({
+                                "lot_label": lot_label,
+                                "lot_code": lot_code,
+                                "owner_label": owner_label,
+                                "quotity": qt,
+                            })
+                            detail_total += qt
+                    if detail_lines:
+                        # If the key was registered with NO inline lines, use detail.
+                        # Otherwise APPEND (mixed format support).
+                        if not current_key["lines"]:
+                            current_key["lines"] = detail_lines
+                        else:
+                            current_key["lines"].extend(detail_lines)
+                        # Update total : prefer the explicit total from the summary
+                        # row if it's already set ; otherwise sum from details.
+                        if not current_key["total_quotities"]:
+                            current_key["total_quotities"] = round(detail_total, 6)
     # Fallback : if no key parsed from tables, attempt text-based extraction
     if not keys:
         text = info.get("full_text", "")
