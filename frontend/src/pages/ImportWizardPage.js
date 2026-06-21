@@ -606,8 +606,20 @@ function OpeningBalancePreview({ balance, setBalance }) {
       </div>
     );
   }
-  const totalA = balance.actif.reduce((s, a) => s + (parseFloat(a.amount) || 0), 0);
-  const totalP = balance.passif.reduce((s, p) => s + (parseFloat(p.amount) || 0), 0);
+  // Leaf accounts = sub-accounts + main accounts that have NO children (same rule
+  // as the backend commit_opening_balance endpoint, to avoid double-counting
+  // parent + children sums).
+  const leafOnly = (rows) => {
+    const subCodes = rows.filter(r => r.is_subaccount).map(r => String(r.account || ''));
+    return rows.filter(r => {
+      if (r.is_subaccount) return true;
+      const code = String(r.account || '');
+      const hasChildren = subCodes.some(sc => sc.startsWith(code) && sc.length > code.length);
+      return !hasChildren;
+    });
+  };
+  const totalA = leafOnly(balance.actif).reduce((s, a) => s + (parseFloat(a.amount) || 0), 0);
+  const totalP = leafOnly(balance.passif).reduce((s, p) => s + (parseFloat(p.amount) || 0), 0);
   const isBalanced = Math.abs(totalA - totalP) < 0.01;
 
   const updSide = (side, idx, field, value) => {
@@ -700,6 +712,8 @@ function OpeningBalancePreview({ balance, setBalance }) {
       <div className="text-[11px] text-slate-500 italic">
         Une seule ecriture comptable de type <strong>AN</strong> (A-Nouveau) sera creee au 1er jour de l&apos;exercice fiscal selectionne,
         avec toutes les lignes Actif en DEBIT et toutes les lignes Passif en CREDIT.
+        Les comptes principaux (ex. 410) qui regroupent des sous-comptes (ex. 4100960, 4100962) sont automatiquement
+        exclus du commit pour eviter le double comptage : seuls les comptes detailles (feuilles) sont retenus.
       </div>
     </div>
   );

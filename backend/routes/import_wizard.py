@@ -832,8 +832,29 @@ def create_import_wizard_router(db):
         copro_id = session["copropriete_id"]
         await _require_acp_access(request, db, copro_id)
 
-        actif = data.actif or []
-        passif = data.passif or []
+        actif_raw = data.actif or []
+        passif_raw = data.passif or []
+
+        # Filter to LEAF accounts only: skip parent accounts when they have
+        # sub-accounts (otherwise the parent + children would double-count).
+        # A leaf account = either is_subaccount=True OR a main account whose
+        # account_number prefix is not shared by any sub-account on the same side.
+        def _filter_leaves(rows: list) -> list:
+            sub_codes = [str(r.get("account") or "") for r in rows if r.get("is_subaccount")]
+            leaves = []
+            for r in rows:
+                if r.get("is_subaccount"):
+                    leaves.append(r)
+                    continue
+                code = str(r.get("account") or "")
+                # main account is a leaf only if no sub-account starts with this code
+                has_children = any(sc.startswith(code) and len(sc) > len(code) for sc in sub_codes)
+                if not has_children:
+                    leaves.append(r)
+            return leaves
+
+        actif = _filter_leaves(actif_raw)
+        passif = _filter_leaves(passif_raw)
         total_actif = round(sum(float(a.get("amount") or 0) for a in actif), 2)
         total_passif = round(sum(float(p.get("amount") or 0) for p in passif), 2)
         if abs(total_actif - total_passif) > 0.01:
@@ -841,7 +862,7 @@ def create_import_wizard_router(db):
         if total_actif == 0:
             raise HTTPException(400, "Bilan vide (aucun montant a importer)")
 
-        # Auto-create missing PCMN accounts
+        # Auto-create missing PCMN accounts (only for committed leaves)
         accounts_needed: dict[str, str] = {}
         for a in actif + passif:
             num = (a.get("account") or "").strip()

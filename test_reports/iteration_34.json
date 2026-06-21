@@ -1,0 +1,37 @@
+{
+  "summary": "Iter34 - Phase I OD d'ouverture (Bilan comptable) backend + bug dropdown Proprietaires UI. 3/3 pytest backend tests PASS, 2/2 frontend E2E flows PASS via Playwright.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "AdminDashboardPage", "issues": ["React hydration warning: <Badge> (div) nested inside <p.page-subtitle> on /admin - causes 'In HTML, <div> cannot be a descendant of <p>' console error. Not blocking but should wrap subtitle in <div> or render Badge outside <p>."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter34_opening_balance.py",
+    "/app/test_reports/pytest/pytest_iter34.xml"
+  ],
+  "action_items": [
+    "(optional) Fix React hydration warning in AdminDashboardPage line 57-58: Badge is rendered inside a <p class='page-subtitle'>. Wrap subtitle in <div> or move Badge outside <p>."
+  ],
+  "critical_code_review_comments": [
+    "import_wizard.py L842-854: _filter_leaves correctly excludes parent accounts when any sub-account starts with their code. Verified 550472 (no children) kept, 410/440 (have children) excluded.",
+    "import_wizard.py L860: balance check uses abs(diff) > 0.01 tolerance - correct for FP rounding.",
+    "import_wizard.py L884-888: when fiscal_year_id is empty/invalid, falls back to period_end_date+1y / 01-01 - covers the case where FY hasn't been created yet, OK.",
+    "Rollback DELETE /sessions/{id} correctly removes the AN journal_entry via import_session_id tagging."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter34_opening_balance.py (new test file - 3 pytest cases)"
+  ],
+  "success_rate": {"backend": "100% (3/3)", "frontend": "100% (Wizard 8 steps + dropdown bug fix verified E2E)"},
+  "test_credentials": "admin@copro.be / admin123 (superadmin)",
+  "seed_data_creation": "Test uses ACP id be6e826c-7e5b-4eda-9fc6-764a5c4d6d12 ('import'). Test creates an opening-balance AN entry and rolls it back in the same test (no DB residue). Existing TEST_DROPDOWN_E2E ACP NOT saved (dialog closed before submit, but if it was committed by accident main agent can verify via /coproprietes).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Phase I OD d'ouverture is fully working backend + frontend. /api/accounting/entries (not /api/journal-entries) is the correct endpoint to query AN entries. Wizard step icon 'opening_balance' uses lucide Scale (balance). Dropdown bug fix uses ownerFocusLot state + getOwnerSuggestions returning available.slice(0,50) when input is focused with empty query. PDF 'Bilan comptable au 31_12_2025.pdf' parses to actif=4 rows (incl 2 sub-accounts), passif=8 rows (incl 6 sub-accounts); leaf filter reduces to 3+6=9 lines totaling 11855.84.",
+  "rca of the issue": "N/A - all checks passed."
+}

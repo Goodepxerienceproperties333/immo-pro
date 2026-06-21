@@ -37,6 +37,7 @@ export default function CoproprietesPage() {
   const [importingOwners, setImportingOwners] = useState(false);
   const [step, setStep] = useState(1);
   const [ownerSearchByLot, setOwnerSearchByLot] = useState({});  // {lotIdx: 'query'}
+  const [ownerFocusLot, setOwnerFocusLot] = useState(null);  // lotIdx currently focused or null
 
   const load = useCallback(async () => {
     const { data } = await api.get('/coproprietes', { params: { show_archived: showArchived } });
@@ -99,15 +100,27 @@ export default function CoproprietesPage() {
   };
   const getOwnerSuggestions = (i) => {
     const q = (ownerSearchByLot[i] || '').trim().toLowerCase();
-    if (!q) return [];
     const taken = form.lots[i].owner_ids || [];
-    return owners.filter(o =>
-      !taken.includes(o.id) && (
-        (o.name || '').toLowerCase().includes(q) ||
-        (o.email || '').toLowerCase().includes(q) ||
-        (o.vcs_code || '').includes(q)
-      )
-    ).slice(0, 6);
+    const available = owners.filter(o => !taken.includes(o.id));
+    if (!q) {
+      // No query yet : if the input is focused, show top N available owners
+      // (so the user can BROWSE imported owners without typing). Otherwise hide.
+      if (ownerFocusLot === i) return available.slice(0, 50);
+      return [];
+    }
+    return available.filter(o =>
+      (o.name || '').toLowerCase().includes(q) ||
+      (o.email || '').toLowerCase().includes(q) ||
+      (o.vcs_code || '').includes(q)
+    ).slice(0, 12);
+  };
+
+  // Refetch owners on focus to ensure freshly-imported owners are visible
+  const refreshOwnersIfStale = async () => {
+    try {
+      const r = await api.get('/owners');
+      setOwners(r.data);
+    } catch { /* ignore */ }
   };
 
   // Bank accounts management
@@ -430,7 +443,7 @@ export default function CoproprietesPage() {
 
                         {/* Owner autocomplete per lot */}
                         <div className="mt-2 pt-2 border-t border-slate-200/70">
-                          <label className="form-label">Proprietaires <span className="text-slate-400 font-normal">(recherche par nom)</span></label>
+                          <label className="form-label">Proprietaires <span className="text-slate-400 font-normal">(cliquez pour voir la liste ou tapez pour filtrer)</span></label>
                           {(lot.owner_ids || []).length > 0 && (
                             <div className="flex flex-wrap gap-1.5 mb-2">
                               {lot.owner_ids.map(oid => {
@@ -458,16 +471,26 @@ export default function CoproprietesPage() {
                             <Input
                               value={ownerSearchByLot[i] || ''}
                               onChange={e => setOwnerSearchByLot({...ownerSearchByLot, [i]: e.target.value})}
-                              placeholder="Tapez nom, email, VCS..."
+                              onFocus={() => { setOwnerFocusLot(i); refreshOwnersIfStale(); }}
+                              onBlur={() => { setTimeout(() => setOwnerFocusLot(prev => prev === i ? null : prev), 180); }}
+                              placeholder="Cliquez pour voir la liste, ou tapez nom / email / VCS..."
                               className="pl-8 h-8 text-sm"
                               data-testid={`lot-${i}-owner-search`}
                             />
                             {getOwnerSuggestions(i).length > 0 && (
-                              <div className="absolute z-50 left-0 right-0 mt-1 bg-white border border-slate-200 rounded-md shadow-lg max-h-40 overflow-y-auto">
+                              <div className="absolute z-50 left-0 right-0 mt-1 bg-white border border-slate-200 rounded-md shadow-lg max-h-60 overflow-y-auto" data-testid={`lot-${i}-suggestions`}>
+                                {!(ownerSearchByLot[i] || '').trim() && (
+                                  <div className="px-2 py-1 bg-slate-50 border-b border-slate-100 text-[10px] text-slate-500 uppercase tracking-wide">
+                                    {getOwnerSuggestions(i).length} proprietaire(s) disponible(s) - tapez pour filtrer
+                                  </div>
+                                )}
                                 {getOwnerSuggestions(i).map(o => (
-                                  <button key={o.id} onClick={() => addOwnerToLot(i, o.id)} className="w-full text-left px-2 py-1.5 hover:bg-[#0055FF]/5 border-b last:border-b-0 border-slate-100 text-xs flex items-center justify-between" data-testid={`lot-${i}-suggestion-${o.id}`}>
+                                  <button key={o.id} type="button" onMouseDown={e => e.preventDefault()} onClick={() => { addOwnerToLot(i, o.id); setOwnerSearchByLot({...ownerSearchByLot, [i]: ''}); }} className="w-full text-left px-2 py-1.5 hover:bg-[#0055FF]/5 border-b last:border-b-0 border-slate-100 text-xs flex items-center justify-between" data-testid={`lot-${i}-suggestion-${o.id}`}>
                                     <span className="font-medium">{o.name}</span>
-                                    {o.vcs_code && <span className="font-mono text-[9px] text-[#0055FF]">{o.vcs_code}</span>}
+                                    <span className="flex items-center gap-2">
+                                      {o.auxiliary_code && <span className="font-mono text-[9px] bg-slate-100 px-1 rounded text-slate-600">{o.auxiliary_code}</span>}
+                                      {o.vcs_code && <span className="font-mono text-[9px] text-[#0055FF]">{o.vcs_code}</span>}
+                                    </span>
                                   </button>
                                 ))}
                               </div>
