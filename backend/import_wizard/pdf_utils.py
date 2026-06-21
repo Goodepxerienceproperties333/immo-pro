@@ -690,6 +690,132 @@ def parse_lots_pdf(raw: bytes) -> dict:
 
 
 # ============================================================
+# SUPPLIERS PDF parser (Optipro "Liste des fournisseurs")
+# ============================================================
+def parse_suppliers_pdf(raw: bytes) -> dict:
+    """Parse 'Liste des fournisseurs' PDF from Optipro.
+
+    Expected columns : AUXILIAIRE | NOM | PAR DEFAUT | COORDONNEES (email/phone) | ADRESSE
+
+    Anchor predicate : auxiliary code matching `^F\\d{4}$` in the leftmost
+    column (x0 < 80).
+
+    Returns:
+      { suppliers: [{ auxiliary_code, name, is_default, email, phone,
+                       address, postal_code, city, country }],
+        count }
+    """
+    import re
+    suppliers: list[dict] = []
+    seen_aux: set[str] = set()
+    email_re = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
+    phone_re = re.compile(r"\+?\d[\d\s.\-/]{6,20}\d")
+    aux_re = re.compile(r"^F\d{4}$")
+    # Belgian postal code pattern : 4 digits + city name (multi-word) + ", Country"
+    address_pc_re = re.compile(r"(.+?)\s+(\d{4})\s+(.+?)(?:\s*,\s*(\w+))?$")
+
+    label_map = {
+        "auxil": "aux",
+        "nom": "name",
+        "par": "default",       # PAR DEFAUT header (split on 2 lines : "PAR" then "DEFAUT")
+        "defaut": "default",
+        "coordo": "coord",
+        "adresse": "address",
+    }
+
+    with pdfplumber.open(io.BytesIO(raw)) as pdf:
+        for page in pdf.pages:
+            words = page.extract_words(keep_blank_chars=False, x_tolerance=2, y_tolerance=3) or []
+            if not words:
+                continue
+            # Header detection - limit to page top
+            header_candidates = [w for w in words if w["top"] < 130 and any(
+                k in _normalize_header(w["text"]) for k in label_map
+            )]
+            cols, header_y_max = _detect_column_boundaries(header_candidates, label_map)
+            if "aux" not in cols or "name" not in cols:
+                continue
+
+            def _is_anchor(w):
+                return bool(aux_re.match(w["text"])) and w["x0"] < 80
+
+            cols = _refine_columns_from_data(cols, words, header_y_max, _is_anchor)
+            bands = _group_into_rows_by_anchor(words, _is_anchor, header_y_max)
+
+            for _y0, _y1, band_words in bands:
+                cells: dict[str, list[dict]] = {k: [] for k in cols}
+                for w in band_words:
+                    px = w["x0"]
+                    for col_name, (xs_, xe_) in cols.items():
+                        if xs_ <= px < xe_:
+                            cells[col_name].append(w)
+                            break
+
+                def ctxt(name: str) -> str:
+                    ws = cells.get(name, [])
+                    if not ws:
+                        return ""
+                    by_y: dict[int, list[dict]] = {}
+                    for w in ws:
+                        k = int(w["top"] / 4)
+                        by_y.setdefault(k, []).append(w)
+                    parts = []
+                    for k in sorted(by_y.keys()):
+                        row_ws = sorted(by_y[k], key=lambda w: w["x0"])
+                        parts.append(" ".join(w["text"] for w in row_ws))
+                    return " ".join(parts).strip()
+
+                aux = ctxt("aux")
+                if not aux_re.match(aux):
+                    continue
+                if aux in seen_aux:
+                    continue
+                seen_aux.add(aux)
+
+                name = ctxt("name")
+                default_raw = ctxt("default").strip().lower()
+                coord_raw = ctxt("coord")
+                address_raw = ctxt("address")
+
+                # Parse coord field for email + phone
+                email_m = email_re.search(coord_raw)
+                email = email_m.group(0) if email_m else ""
+                coord_for_phone = coord_raw.replace(email, " ") if email else coord_raw
+                phone_m = phone_re.search(coord_for_phone)
+                phone = phone_m.group(0).strip() if phone_m else ""
+
+                # Parse address : try to extract postal_code + city
+                postal_code = ""
+                city = ""
+                country = ""
+                address_clean = address_raw.strip()
+                if address_clean and address_clean != "-":
+                    am = address_pc_re.match(address_clean)
+                    if am:
+                        street, postal_code, city_part, country_part = am.groups()
+                        address_clean = street.strip().rstrip(",").strip()
+                        city = (city_part or "").strip().rstrip(",").strip()
+                        country = (country_part or "").strip()
+                else:
+                    address_clean = ""
+
+                is_default = default_raw in ("oui", "yes", "true", "1")
+
+                suppliers.append({
+                    "auxiliary_code": aux,
+                    "name": name,
+                    "is_default": is_default,
+                    "email": email,
+                    "phone": phone,
+                    "address": address_clean,
+                    "postal_code": postal_code,
+                    "city": city,
+                    "country": country or "Belgique",
+                })
+    return {"suppliers": suppliers, "count": len(suppliers)}
+
+
+# ============================================================
 # BUDGET PDF parser
 # ============================================================
 def parse_budget_pdf(raw: bytes) -> dict:

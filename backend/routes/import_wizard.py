@@ -10,7 +10,7 @@ from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Form
 from pydantic import BaseModel
 
 from import_wizard.csv_utils import sniff_csv, parse_french_number, parse_date, split_optipro_code, normalize_header
-from import_wizard.pdf_utils import extract_pdf, parse_natures_pdf, parse_budget_pdf, parse_distribution_keys_pdf, parse_owners_pdf, parse_lots_pdf
+from import_wizard.pdf_utils import extract_pdf, parse_natures_pdf, parse_budget_pdf, parse_distribution_keys_pdf, parse_owners_pdf, parse_lots_pdf, parse_suppliers_pdf
 
 logger = logging.getLogger("import_wizard")
 
@@ -79,6 +79,10 @@ class CommitDistributionKeysInput(BaseModel):
     keys: List[dict]  # parsed keys with their lines
 
 
+class CommitSuppliersPdfInput(BaseModel):
+    suppliers: List[dict]  # parsed suppliers (from PDF) confirmed by user
+
+
 # ============================================================
 # Router
 # ============================================================
@@ -107,6 +111,8 @@ def create_import_wizard_router(db):
             return parse_owners_pdf(raw)
         if kind == "lots":
             return parse_lots_pdf(raw)
+        if kind == "suppliers":
+            return parse_suppliers_pdf(raw)
         return extract_pdf(raw)
 
     # ----- SESSIONS -----
@@ -221,6 +227,14 @@ def create_import_wizard_router(db):
             res = parse_owners_pdf(raw)
             res["filename"] = file.filename
             return res
+        if kind == "lots":
+            res = parse_lots_pdf(raw)
+            res["filename"] = file.filename
+            return res
+        if kind == "suppliers":
+            res = parse_suppliers_pdf(raw)
+            res["filename"] = file.filename
+            return res
         info = extract_pdf(raw)
         info["filename"] = file.filename
         return info
@@ -313,6 +327,49 @@ def create_import_wizard_router(db):
                     "bic": col("bic"),
                     "default_account": col("default_account"),
                     "notes": col("notes"),
+                    "copropriete_id": copro_id,
+                    "import_session_id": session_id,
+                    "created_at": _now_iso(),
+                }
+                await db.suppliers.insert_one(doc)
+                inserted += 1
+            except Exception as e:
+                errors.append({"row": idx, "error": str(e)})
+        await _update_step(db, session_id, "suppliers", {"count": inserted, "errors": errors})
+        return {"inserted": inserted, "errors": errors}
+
+    # ----- C-bis: SUPPLIERS via PDF (no mapping needed - already structured) -----
+    @router.post("/sessions/{session_id}/commit-suppliers-pdf")
+    async def commit_suppliers_pdf(session_id: str, data: CommitSuppliersPdfInput, request: Request):
+        session = await db.import_sessions.find_one({"id": session_id})
+        if not session:
+            raise HTTPException(404, "Session introuvable")
+        copro_id = session["copropriete_id"]
+        await _require_acp_access(request, db, copro_id)
+        inserted = 0
+        errors = []
+        for idx, s in enumerate(data.suppliers):
+            try:
+                name = (s.get("name") or "").strip()
+                if not name:
+                    continue
+                doc = {
+                    "id": str(uuid.uuid4()),
+                    "name": name,
+                    "auxiliary_code": (s.get("auxiliary_code") or "").strip(),
+                    "vat_number": "",
+                    "bce_number": "",
+                    "address": (s.get("address") or "").strip(),
+                    "postal_code": (s.get("postal_code") or "").strip(),
+                    "city": (s.get("city") or "").strip(),
+                    "country": (s.get("country") or "Belgique").strip(),
+                    "phone": (s.get("phone") or "").strip(),
+                    "email": (s.get("email") or "").strip(),
+                    "iban": "",
+                    "bic": "",
+                    "default_account": "",
+                    "is_default": bool(s.get("is_default")),
+                    "notes": "",
                     "copropriete_id": copro_id,
                     "import_session_id": session_id,
                     "created_at": _now_iso(),

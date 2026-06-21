@@ -12,6 +12,62 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 ## Implemented
 
+### Iter69 (Feb 2026) - Import PDF Fournisseurs + Wizard Optipro simplifie
+
+#### Demande user
+1. Le wizard de reprise Optipro/Sogis affichait encore "Proprietaires" et
+   "Lots" en etapes 1 et 3 alors que ces 2 imports sont desormais faits
+   dans l'Assistant de creation ACP (iter68). Etapes redondantes.
+2. L'etape "Fournisseurs" du wizard etait limitee au CSV. Il faut supporter
+   le PDF aussi (export Optipro "Liste des fournisseurs.pdf").
+
+#### Suppression des etapes redondantes (`frontend/src/pages/ImportWizardPage.js`)
+- STEPS passe de 7 a **5** :
+  Fournisseurs -> Natures depense -> Exercice fiscal -> Budget -> Cles de repartition.
+- Owners + Lots retires (commentaire explicatif laisse dans le code).
+- Cleanup des imports `Users`, `Home` (lucide) et de `TARGET_FIELDS.owners` / `.lots`.
+
+#### Nouveau parser `parse_suppliers_pdf` (`backend/import_wizard/pdf_utils.py`)
+Strategie identique a owners/lots :
+- Anchor `^F\d{4}$` avec `x0 < 80`.
+- Colonnes : `aux, name, default, coord, address`.
+- Header multi-rows "PAR DEFAUT" merge correctement.
+- Coord parsing : email + phone separes (regex).
+- Address parsing : `address_pc_re` extrait `<rue> <CP 4digits> <ville> , <pays>`.
+- `is_default` detecte la valeur "Oui" (vs "Non").
+- Test : 22 fournisseurs extraits du PDF de reference, avec F0001 SRL Finlead
+  correctement marque `is_default=True`.
+
+#### Endpoint backend
+- `POST /api/import-wizard/parse-pdf?kind=suppliers` (standalone, ACP non requise).
+- `POST /api/import-wizard/sessions/{id}/sniff-pdf?kind=suppliers` (session-bound).
+- **NOUVEAU** `POST /api/import-wizard/sessions/{id}/commit-suppliers-pdf` :
+  prend `{suppliers: [...]}` deja structures (pas de mapping requis).
+  Insere directement dans `db.suppliers` avec `import_session_id` (rollback OK).
+- Stocke `auxiliary_code` + `is_default` (preserve la reference legacy Optipro).
+
+#### Frontend - `kind: 'csv_or_pdf'` (nouvelle modalite)
+L'etape Fournisseurs supporte les 2 formats :
+- **2 boutons** [data-testid=`upload-csv-btn` / `upload-pdf-btn`] affiches
+  cote a cote dans la zone upload.
+- `uploadMode` state tracke le mode choisi pour le step en cours.
+- Si CSV : flow classique avec mapping de colonnes.
+- Si PDF : nouveau composant `SuppliersPdfPreview` affichant un tableau
+  editable (code aux., nom, email, telephone, adresse, CP, ville, defaut),
+  puis commit via `/commit-suppliers-pdf`.
+
+#### Tests E2E (playwright)
+- Login -> /import-wizard -> Etape 1/5 Fournisseurs avec 2 boutons CSV/PDF.
+- Click "Choisir PDF" + upload `Liste des fournisseurs.pdf` ->
+  22 lignes detectees, table editable affichee.
+- F0001 SRL Finlead : checkbox `Defaut` coche (correctement detecte).
+- Commit -> toast "22 fournisseur(s) importes" + step "Fournisseurs"
+  marque `22 importes` dans le stepper + passage auto a "Etape 2/5 :
+  Natures depense".
+- Rollback session -> 22 fournisseurs supprimes (chinese wall OK).
+
+
+
 ### Iter68 (Feb 2026) - Import PDF Owners + Lots dans l'Assistant ACP + Auto-affectation
 
 #### Probleme P0

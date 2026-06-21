@@ -35,7 +35,7 @@ const STEPS = [
   // NOTE: 'owners' and 'lots' are now imported in the ACP Creation Assistant
   // (Step 2 - PDF/CSV from Optipro). They are NOT part of this post-creation
   // migration wizard to avoid redundancy.
-  { key: 'suppliers', label: 'Fournisseurs',      icon: Truck,    optional: false, kind: 'csv' },
+  { key: 'suppliers', label: 'Fournisseurs',      icon: Truck,    optional: false, kind: 'csv_or_pdf' },
   { key: 'natures',   label: 'Natures depense',   icon: Tag,      optional: false, kind: 'pdf' },
   { key: 'fiscal_year', label: 'Exercice fiscal', icon: Calendar, optional: false, kind: 'form' },
   { key: 'budget',    label: 'Budget',            icon: Wallet,   optional: true,  kind: 'pdf' },
@@ -74,6 +74,10 @@ export default function ImportWizardPage() {
   const [naturesParsed, setNaturesParsed] = useState([]);
   const [budgetSections, setBudgetSections] = useState([]);
   const [keysParsed, setKeysParsed] = useState([]);
+  const [suppliersParsed, setSuppliersParsed] = useState([]);
+  // For 'csv_or_pdf' steps : tracks which mode the user picked for THIS step
+  // (resets on every step change / file reset).
+  const [uploadMode, setUploadMode] = useState(null);  // null | 'csv' | 'pdf'
   const [fyForm, setFyForm] = useState({ name: '', start_date: '', end_date: '', status: 'open' });
   const [committing, setCommitting] = useState(false);
 
@@ -113,14 +117,21 @@ export default function ImportWizardPage() {
     setNaturesParsed([]);
     setBudgetSections([]);
     setKeysParsed([]);
+    setSuppliersParsed([]);
     try {
       const fd = new FormData();
       fd.append('file', file);
-      const isPdf = step.kind === 'pdf';
+      // Resolve effective kind for the upload :
+      // - 'csv_or_pdf' steps : uploadMode dictates which path
+      // - 'csv' / 'pdf' steps : straight to the appropriate path
+      const effectiveKind = step.kind === 'csv_or_pdf'
+        ? (uploadMode || (file.name.toLowerCase().endsWith('.pdf') ? 'pdf' : 'csv'))
+        : step.kind;
+      const isPdf = effectiveKind === 'pdf';
       let r;
       if (isPdf) {
         // Map step.key -> backend kind
-        const kindMap = { natures: 'natures', budget: 'budget', distribution_keys: 'keys' };
+        const kindMap = { natures: 'natures', budget: 'budget', distribution_keys: 'keys', suppliers: 'suppliers' };
         fd.append('kind', kindMap[step.key] || 'generic');
         r = await api.post(`/import-wizard/sessions/${session.id}/sniff-pdf`, fd, {
           headers: { 'Content-Type': 'multipart/form-data' },
@@ -128,7 +139,8 @@ export default function ImportWizardPage() {
         if (step.key === 'natures') setNaturesParsed(r.data.natures || []);
         if (step.key === 'budget') setBudgetSections(r.data.sections || []);
         if (step.key === 'distribution_keys') setKeysParsed(r.data.keys || []);
-      } else if (step.kind === 'csv') {
+        if (step.key === 'suppliers') setSuppliersParsed(r.data.suppliers || []);
+      } else if (effectiveKind === 'csv') {
         r = await api.post(`/import-wizard/sessions/${session.id}/sniff-csv`, fd, {
           headers: { 'Content-Type': 'multipart/form-data' },
         });
@@ -147,7 +159,15 @@ export default function ImportWizardPage() {
     setCommitting(true);
     try {
       let r;
-      if (step.kind === 'csv') {
+      const effectiveKind = step.kind === 'csv_or_pdf'
+        ? (uploadMode || (suppliersParsed.length > 0 ? 'pdf' : 'csv'))
+        : step.kind;
+      if (step.key === 'suppliers' && effectiveKind === 'pdf') {
+        r = await api.post(`/import-wizard/sessions/${session.id}/commit-suppliers-pdf`, {
+          suppliers: suppliersParsed,
+        });
+        toast.success(`${r.data.inserted} fournisseur(s) importes`);
+      } else if (effectiveKind === 'csv') {
         r = await api.post(`/import-wizard/sessions/${session.id}/commit-${step.key}`, {
           mapping,
           rows: sniffResult?.rows || [],
@@ -190,6 +210,8 @@ export default function ImportWizardPage() {
         setNaturesParsed([]);
         setBudgetSections([]);
         setKeysParsed([]);
+        setSuppliersParsed([]);
+        setUploadMode(null);
       } else {
         // Final step : finish
         await api.post(`/import-wizard/sessions/${session.id}/finish`);
@@ -279,19 +301,43 @@ export default function ImportWizardPage() {
               <p className="text-sm text-slate-600 mb-3">
                 {step.kind === 'csv'
                   ? 'Chargez le fichier CSV exporte d\'Optipro/Sogis'
-                  : `Chargez le PDF (${step.label})`}
+                  : step.kind === 'csv_or_pdf'
+                    ? 'Chargez le fichier CSV ou PDF exporte d\'Optipro/Sogis'
+                    : `Chargez le PDF (${step.label})`}
               </p>
               <input
                 type="file"
                 id="file-input"
                 className="hidden"
-                accept={step.kind === 'csv' ? '.csv,.txt' : '.pdf'}
+                accept={step.kind === 'csv' ? '.csv,.txt' : step.kind === 'csv_or_pdf' ? '.csv,.txt,.pdf' : '.pdf'}
                 onChange={handleFileChange}
                 data-testid="file-input"
               />
-              <Button onClick={() => document.getElementById('file-input').click()} disabled={sniffing} className="bg-[#0055FF] hover:bg-[#0040CC]">
-                {sniffing ? <><Loader2 size={14} className="animate-spin mr-1" /> Analyse en cours...</> : <><Upload size={14} className="mr-1" /> Choisir le fichier</>}
-              </Button>
+              {step.kind === 'csv_or_pdf' ? (
+                <div className="flex justify-center gap-2">
+                  <Button
+                    onClick={() => { setUploadMode('csv'); setTimeout(() => document.getElementById('file-input').click(), 0); }}
+                    disabled={sniffing}
+                    variant="outline"
+                    className="border-blue-300 text-blue-700 hover:bg-blue-50"
+                    data-testid="upload-csv-btn"
+                  >
+                    <Upload size={14} className="mr-1" /> Choisir CSV
+                  </Button>
+                  <Button
+                    onClick={() => { setUploadMode('pdf'); setTimeout(() => document.getElementById('file-input').click(), 0); }}
+                    disabled={sniffing}
+                    className="bg-emerald-600 hover:bg-emerald-700"
+                    data-testid="upload-pdf-btn"
+                  >
+                    {sniffing ? <><Loader2 size={14} className="animate-spin mr-1" /> Analyse...</> : <><Upload size={14} className="mr-1" /> Choisir PDF</>}
+                  </Button>
+                </div>
+              ) : (
+                <Button onClick={() => document.getElementById('file-input').click()} disabled={sniffing} className="bg-[#0055FF] hover:bg-[#0040CC]">
+                  {sniffing ? <><Loader2 size={14} className="animate-spin mr-1" /> Analyse en cours...</> : <><Upload size={14} className="mr-1" /> Choisir le fichier</>}
+                </Button>
+              )}
             </div>
           )}
 
@@ -299,13 +345,17 @@ export default function ImportWizardPage() {
             <FiscalYearForm fyForm={fyForm} setFyForm={setFyForm} />
           )}
 
-          {sniffResult && step.kind === 'csv' && (
+          {sniffResult && (step.kind === 'csv' || (step.kind === 'csv_or_pdf' && uploadMode === 'csv')) && (
             <CsvMappingView
               sniff={sniffResult}
               targetFields={TARGET_FIELDS[step.key] || []}
               mapping={mapping}
               setMapping={setMapping}
             />
+          )}
+
+          {sniffResult && step.key === 'suppliers' && uploadMode === 'pdf' && (
+            <SuppliersPdfPreview suppliers={suppliersParsed} setSuppliers={setSuppliersParsed} />
           )}
 
           {sniffResult && step.key === 'natures' && (
@@ -324,11 +374,11 @@ export default function ImportWizardPage() {
 
       {/* Footer */}
       <div className="flex items-center justify-between mt-4">
-        <Button variant="outline" size="sm" disabled={stepIdx === 0} onClick={() => { setStepIdx(stepIdx - 1); setSniffResult(null); setMapping({}); setNaturesParsed([]); }} data-testid="prev-step">
+        <Button variant="outline" size="sm" disabled={stepIdx === 0} onClick={() => { setStepIdx(stepIdx - 1); setSniffResult(null); setMapping({}); setNaturesParsed([]); setSuppliersParsed([]); setUploadMode(null); }} data-testid="prev-step">
           <ChevronLeft size={14} className="mr-1" /> Etape precedente
         </Button>
         <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={() => { setSniffResult(null); setMapping({}); setNaturesParsed([]); }} data-testid="reset-step">
+          <Button variant="outline" size="sm" onClick={() => { setSniffResult(null); setMapping({}); setNaturesParsed([]); setSuppliersParsed([]); setUploadMode(null); }} data-testid="reset-step">
             <X size={14} className="mr-1" /> Annuler ce fichier
           </Button>
           {step.optional && stepIdx < STEPS.length - 1 && (
@@ -465,6 +515,63 @@ function NaturesPreview({ natures, setNatures }) {
 function updateNature(arr, setArr, idx, field, value) {
   const next = arr.map((n, i) => i === idx ? { ...n, [field]: value } : n);
   setArr(next);
+}
+
+// ============== SUPPLIERS PDF PREVIEW (Step C variant for PDF) ==============
+function SuppliersPdfPreview({ suppliers, setSuppliers }) {
+  if (!suppliers?.length) {
+    return (
+      <div className="text-center py-6 text-amber-600 text-sm">
+        <AlertTriangle size={24} className="inline mr-1" /> Aucun fournisseur extrait du PDF.
+      </div>
+    );
+  }
+  const update = (idx, field, value) => {
+    const next = suppliers.map((s, i) => i === idx ? { ...s, [field]: value } : s);
+    setSuppliers(next);
+  };
+  return (
+    <div className="space-y-3">
+      <div className="bg-blue-50 border border-blue-200 rounded p-3 text-xs text-blue-900">
+        <strong>Verifiez puis modifiez si necessaire</strong> les fournisseurs extraits du PDF. Chaque ligne peut etre editee, ou supprimee.
+      </div>
+      <div className="border border-slate-200 rounded overflow-x-auto max-h-96 overflow-y-auto">
+        <table className="w-full text-xs">
+          <thead className="bg-slate-50 sticky top-0">
+            <tr>
+              <th className="px-2 py-1 text-left">Code aux.</th>
+              <th className="px-2 py-1 text-left">Nom</th>
+              <th className="px-2 py-1 text-left">Email</th>
+              <th className="px-2 py-1 text-left">Telephone</th>
+              <th className="px-2 py-1 text-left">Adresse</th>
+              <th className="px-2 py-1 text-left">CP</th>
+              <th className="px-2 py-1 text-left">Ville</th>
+              <th className="px-2 py-1 text-center">Defaut</th>
+              <th className="px-2 py-1"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {suppliers.map((s, i) => (
+              <tr key={i} className="border-t border-slate-100" data-testid={`sup-row-${i}`}>
+                <td className="px-1 py-1 font-mono text-[10px] text-slate-500">{s.auxiliary_code || '-'}</td>
+                <td className="px-1 py-1"><input value={s.name || ''} onChange={e => update(i, 'name', e.target.value)} className="w-full border-0 bg-transparent" data-testid={`sup-name-${i}`} /></td>
+                <td className="px-1 py-1"><input value={s.email || ''} onChange={e => update(i, 'email', e.target.value)} className="w-full border-0 bg-transparent" /></td>
+                <td className="px-1 py-1"><input value={s.phone || ''} onChange={e => update(i, 'phone', e.target.value)} className="w-full border-0 bg-transparent" /></td>
+                <td className="px-1 py-1"><input value={s.address || ''} onChange={e => update(i, 'address', e.target.value)} className="w-full border-0 bg-transparent" /></td>
+                <td className="px-1 py-1"><input value={s.postal_code || ''} onChange={e => update(i, 'postal_code', e.target.value)} className="w-14 border-0 bg-transparent font-mono" /></td>
+                <td className="px-1 py-1"><input value={s.city || ''} onChange={e => update(i, 'city', e.target.value)} className="w-full border-0 bg-transparent" /></td>
+                <td className="px-1 py-1 text-center">
+                  <input type="checkbox" checked={!!s.is_default} onChange={e => update(i, 'is_default', e.target.checked)} />
+                </td>
+                <td className="px-1 py-1"><button onClick={() => setSuppliers(suppliers.filter((_, idx) => idx !== i))} className="text-red-500 hover:text-red-700" data-testid={`sup-del-${i}`}><X size={12} /></button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="text-xs text-slate-500">{suppliers.length} fournisseur(s) detecte(s)</div>
+    </div>
+  );
 }
 
 // ============== FISCAL YEAR FORM (Step E) ==============
