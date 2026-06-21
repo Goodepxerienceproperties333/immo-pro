@@ -25,16 +25,17 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import {
-  Upload, Users, Truck, Home, Tag, CheckCircle2, X, AlertTriangle,
+  Upload, Truck, Tag, CheckCircle2, X, AlertTriangle,
   ChevronRight, ChevronLeft, FileWarning, Loader2, RotateCcw,
   Calendar, Wallet, PieChart, Plus, Trash2
 } from 'lucide-react';
 import { toast } from 'sonner';
 
 const STEPS = [
-  { key: 'owners',    label: 'Proprietaires',     icon: Users,    optional: false, kind: 'csv' },
+  // NOTE: 'owners' and 'lots' are now imported in the ACP Creation Assistant
+  // (Step 2 - PDF/CSV from Optipro). They are NOT part of this post-creation
+  // migration wizard to avoid redundancy.
   { key: 'suppliers', label: 'Fournisseurs',      icon: Truck,    optional: false, kind: 'csv' },
-  { key: 'lots',      label: 'Lots',              icon: Home,     optional: false, kind: 'csv' },
   { key: 'natures',   label: 'Natures depense',   icon: Tag,      optional: false, kind: 'pdf' },
   { key: 'fiscal_year', label: 'Exercice fiscal', icon: Calendar, optional: false, kind: 'form' },
   { key: 'budget',    label: 'Budget',            icon: Wallet,   optional: true,  kind: 'pdf' },
@@ -43,17 +44,6 @@ const STEPS = [
 
 // Champs cibles attendus pour chaque étape (clé = nom du champ DB)
 const TARGET_FIELDS = {
-  owners: [
-    { key: 'last_name',   label: 'Nom *',                required: true },
-    { key: 'first_name',  label: 'Prenom',               required: false },
-    { key: 'address',     label: 'Adresse',              required: false },
-    { key: 'postal_code', label: 'Code postal',          required: false },
-    { key: 'city',        label: 'Ville',                required: false },
-    { key: 'country',     label: 'Pays',                 required: false },
-    { key: 'email',       label: 'Email',                required: false },
-    { key: 'phone',       label: 'Telephone',            required: false },
-    { key: 'iban',        label: 'IBAN',                 required: false },
-  ],
   suppliers: [
     { key: 'name',            label: 'Nom *',               required: true },
     { key: 'vat_number',      label: 'TVA',                  required: false },
@@ -65,15 +55,6 @@ const TARGET_FIELDS = {
     { key: 'phone',           label: 'Telephone',            required: false },
     { key: 'iban',            label: 'IBAN',                 required: false },
     { key: 'default_account', label: 'Compte par defaut',   required: false },
-  ],
-  lots: [
-    { key: 'number',      label: 'Numero *',         required: true },
-    { key: 'description', label: 'Description',      required: false },
-    { key: 'lot_type',    label: 'Type',              required: false },
-    { key: 'floor',       label: 'Etage',             required: false },
-    { key: 'area',        label: 'Surface (m2)',     required: false },
-    { key: 'quotity',     label: 'Quotite (1000es)', required: false },
-    { key: 'owner_name',  label: 'Proprietaire (nom)', required: false },
   ],
 };
 
