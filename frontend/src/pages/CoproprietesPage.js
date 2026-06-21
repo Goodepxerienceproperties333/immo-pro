@@ -11,7 +11,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { Plus, Pencil, Trash2, Home, Search, Archive, RotateCcw, Landmark, PlusCircle, X, Eraser, Wand2 } from 'lucide-react';
+import { Plus, Pencil, Trash2, Home, Search, Archive, RotateCcw, Landmark, PlusCircle, X, Eraser, Wand2, Upload, UserPlus } from 'lucide-react';
+import BulkCsvImportDialog from '@/components/BulkCsvImportDialog';
 
 const emptyBank = { iban: '', bic: '', account_type: 'vue', is_default: false, label: '' };
 const emptyLot = { number: '', description: '', lot_type: 'apartment', floor: 0, area: 0, quotity: 0 };
@@ -28,6 +29,9 @@ export default function CoproprietesPage() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState(emptyForm);
+  const [bulkLotsOpen, setBulkLotsOpen] = useState(false);
+  const [bulkOwnersOpen, setBulkOwnersOpen] = useState(false);
+  const [importingOwners, setImportingOwners] = useState(false);
   const [step, setStep] = useState(1);
   const [ownerSearchByLot, setOwnerSearchByLot] = useState({});  // {lotIdx: 'query'}
 
@@ -283,7 +287,7 @@ export default function CoproprietesPage() {
                 <Button variant="outline" size="sm" onClick={addBankAccount}><PlusCircle size={14} className="mr-1" /> Ajouter compte</Button>
               </div>
               {form.bank_accounts.length === 0 ? (
-                <p className="text-sm text-slate-400 text-center py-3 border rounded-md">Aucun compte - cliquez "Ajouter compte"</p>
+                <p className="text-sm text-slate-400 text-center py-3 border rounded-md">Aucun compte - cliquez &quot;Ajouter compte&quot;</p>
               ) : (
                 <div className="space-y-2">
                   {form.bank_accounts.map((ba, i) => (
@@ -319,10 +323,18 @@ export default function CoproprietesPage() {
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Lots et proprietaires</div>
-                  <Button variant="outline" size="sm" onClick={addLot} data-testid="add-lot-btn"><PlusCircle size={14} className="mr-1" /> Ajouter lot</Button>
+                  <div className="flex gap-2">
+                    <Button variant="outline" size="sm" onClick={() => setBulkOwnersOpen(true)} className="border-emerald-300 text-emerald-700 hover:bg-emerald-50" data-testid="import-owners-csv-btn">
+                      <UserPlus size={14} className="mr-1" /> Importer proprietaires (CSV)
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={() => setBulkLotsOpen(true)} className="border-blue-300 text-blue-700 hover:bg-blue-50" data-testid="import-lots-csv-btn">
+                      <Upload size={14} className="mr-1" /> Importer lots (CSV)
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={addLot} data-testid="add-lot-btn"><PlusCircle size={14} className="mr-1" /> Ajouter manuellement</Button>
+                  </div>
                 </div>
                 <div className="bg-blue-50/40 border border-blue-100 text-xs text-blue-700 p-2 rounded mb-3">
-                  Astuce: les proprietaires sont globaux. S'ils n'existent pas encore, allez d'abord dans <strong>Proprietaires</strong> pour les creer (ils seront alors disponibles dans la recherche).
+                  <strong>Reprise Optipro/Sogis ?</strong> Cliquez sur &laquo;Importer proprietaires (CSV)&raquo; puis &laquo;Importer lots (CSV)&raquo; pour charger des centaines de lignes en quelques clics. Les proprietaires importes seront automatiquement suggeres lors du matching avec les lots.
                 </div>
                 {(form.lots || []).length === 0 ? (
                   <p className="text-sm text-slate-400 text-center py-3 border rounded-md">Aucun lot - vous pourrez en ajouter plus tard via le menu Lots</p>
@@ -449,6 +461,91 @@ export default function CoproprietesPage() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* BULK IMPORT : LOTS via CSV */}
+      <BulkCsvImportDialog
+        open={bulkLotsOpen}
+        onClose={() => setBulkLotsOpen(false)}
+        title="Importer des lots depuis un CSV (Optipro / Sogis)"
+        targetFields={[
+          { key: 'number',      label: 'Numero du lot',  required: true, synonyms: ['lot', 'numero', 'n', 'reference'] },
+          { key: 'description', label: 'Description',                    synonyms: ['libelle', 'designation'] },
+          { key: 'lot_type',    label: 'Type',                            synonyms: ['type'] },
+          { key: 'floor',       label: 'Etage',                           synonyms: ['etage', 'niveau'] },
+          { key: 'area',        label: 'Surface',                         synonyms: ['surface', 'm2', 'metres'] },
+          { key: 'quotity',     label: 'Quotite (millemes)',              synonyms: ['quotite', 'milliemes', 'tantieme'] },
+          { key: 'owner_name',  label: 'Proprietaire (nom)',              synonyms: ['proprietaire', 'owner', 'copropriete', 'nom'] },
+        ]}
+        onImport={(rows) => {
+          // Append parsed lots to form.lots state
+          const newLots = rows.map(r => {
+            // Try to match an existing owner by name (case-insensitive)
+            const ownerName = (r.owner_name || '').toLowerCase().trim();
+            const matched = ownerName ? owners.find(o => (o.name || '').toLowerCase().trim() === ownerName) : null;
+            const lotType = (r.lot_type || '').toLowerCase();
+            const typeMap = { 'appartement': 'apartment', 'apartment': 'apartment', 'parking': 'parking', 'cave': 'cave', 'commerce': 'commerce', 'bureau': 'bureau' };
+            return {
+              number: r.number,
+              description: r.description || '',
+              lot_type: typeMap[lotType] || 'apartment',
+              floor: parseInt(r.floor) || 0,
+              area: parseFloat((r.area || '').toString().replace(',', '.')) || 0,
+              quotity: parseFloat((r.quotity || '').toString().replace(',', '.')) || 0,
+              owner_id: matched?.id || '',
+              owner_ids: matched ? [matched.id] : [],
+              _imported_owner_name: r.owner_name || '',  // kept for later display
+            };
+          });
+          setForm(f => ({ ...f, lots: [...(f.lots || []), ...newLots] }));
+          const matchedCount = newLots.filter(l => l.owner_id).length;
+          toast.success(`${newLots.length} lot(s) importes${matchedCount ? ` (${matchedCount} avec proprietaire pre-rattache)` : ''}`);
+        }}
+      />
+
+      {/* BULK IMPORT : OWNERS via CSV - inserted directly via API */}
+      <BulkCsvImportDialog
+        open={bulkOwnersOpen}
+        onClose={() => setBulkOwnersOpen(false)}
+        title="Importer des proprietaires depuis un CSV (Optipro / Sogis)"
+        targetFields={[
+          { key: 'last_name',   label: 'Nom *',         required: true, synonyms: ['nom', 'lastname'] },
+          { key: 'first_name',  label: 'Prenom',                         synonyms: ['prenom', 'firstname'] },
+          { key: 'address',     label: 'Adresse',                        synonyms: ['adresse', 'rue'] },
+          { key: 'postal_code', label: 'Code postal',                    synonyms: ['cp', 'codepostal', 'zip'] },
+          { key: 'city',        label: 'Ville',                          synonyms: ['ville', 'commune', 'localite'] },
+          { key: 'email',       label: 'Email',                          synonyms: ['email', 'mail', 'courriel'] },
+          { key: 'phone',       label: 'Telephone',                      synonyms: ['tel', 'telephone', 'gsm'] },
+          { key: 'iban',        label: 'IBAN',                           synonyms: ['iban', 'compte'] },
+        ]}
+        onImport={async (rows) => {
+          if (importingOwners) return;
+          setImportingOwners(true);
+          let ok = 0, ko = 0;
+          for (const r of rows) {
+            try {
+              const last = r.last_name || '';
+              const first = r.first_name || '';
+              const name = (last + ' ' + first).trim();
+              if (!last) { ko++; continue; }
+              await api.post('/owners', {
+                first_name: first, last_name: last, name,
+                address: r.address || '', postal_code: r.postal_code || '', city: r.city || '',
+                country: 'Belgique', email: r.email || '', phone: r.phone || '', iban: r.iban || '',
+              });
+              ok++;
+            } catch (_e) { ko++; }
+          }
+          toast.success(`${ok} proprietaire(s) crees${ko ? ` (${ko} echec(s))` : ''}`);
+          // Reload owners so the lot autocomplete sees them
+          try {
+            const r = await api.get('/owners');
+            setOwners(r.data || []);
+          } catch (_e) {
+            // ignore reload failure
+          }
+          setImportingOwners(false);
+        }}
+      />
     </div>
   );
 }
