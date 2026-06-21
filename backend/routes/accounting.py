@@ -431,6 +431,63 @@ def create_accounting_router(db):
         )
         return {"message": "Piece jointe supprimee"}
 
+    @router.put("/entries/{entry_id}/line-quick")
+    async def update_entry_line_quick(entry_id: str, data: dict):
+        """Quick edit for a SPECIFIC charge line (account 6XX) in a journal entry.
+        Used by /expenses page to allow editing bank fees, financial expenses,
+        and any other journal-based expense (FI/OD type).
+
+        Body : {
+          line_account: str (the account_number to find in lines),
+          new_account: str (optional - change account),
+          expense_category_id: str (optional),
+          distribution_key_id: str (optional),
+          occupant_pct: float (optional),
+          proprietaire_pct: float (optional),
+          description: str (optional),
+        }
+        """
+        from fiscal_lock import ensure_entry_modifiable
+        existing = await db.journal_entries.find_one({"id": entry_id}, {"_id": 0})
+        if not existing:
+            raise HTTPException(404, "Ecriture non trouvee")
+        await ensure_entry_modifiable(db, existing)
+        line_account = (data.get("line_account") or "").strip()
+        if not line_account:
+            raise HTTPException(400, "line_account requis")
+        lines = existing.get("lines", []) or []
+        target_idx = next((i for i, ln in enumerate(lines) if (ln.get("account_number") or "") == line_account), None)
+        if target_idx is None:
+            raise HTTPException(404, f"Aucune ligne avec compte {line_account}")
+        line = lines[target_idx]
+        # Apply patches (only if provided)
+        if "new_account" in data and data.get("new_account"):
+            line["account_number"] = data["new_account"].strip()
+            # Optionally update account_name
+            new_acc = await db.pcmn_accounts.find_one({"copropriete_id": existing.get("copropriete_id", ""), "number": data["new_account"]}, {"_id": 0, "name": 1})
+            if new_acc:
+                line["account_name"] = new_acc.get("name", "")
+        if "expense_category_id" in data:
+            line["expense_category_id"] = data.get("expense_category_id") or ""
+        if "distribution_key_id" in data:
+            line["distribution_key_id"] = data.get("distribution_key_id") or ""
+        if "occupant_pct" in data:
+            line["occupant_pct"] = float(data["occupant_pct"] or 0)
+        if "proprietaire_pct" in data:
+            line["proprietaire_pct"] = float(data["proprietaire_pct"] or 0)
+        if "description" in data:
+            line["description"] = (data.get("description") or "").strip()
+        lines[target_idx] = line
+        await db.journal_entries.update_one(
+            {"id": entry_id},
+            {"$set": {
+                "lines": lines,
+                "manually_edited": True,
+                "manually_edited_at": datetime.now(timezone.utc).isoformat(),
+            }},
+        )
+        return {"ok": True, "line_index": target_idx, "updated_fields": [k for k in ["new_account", "expense_category_id", "distribution_key_id", "occupant_pct", "proprietaire_pct", "description"] if k in data]}
+
     # ---- BALANCE / BILAN ----
     @router.get("/balance")
     async def get_balance(copropriete_id: Optional[str] = None):

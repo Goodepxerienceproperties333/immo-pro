@@ -653,6 +653,7 @@ def create_fiscal_router(db):
                             date_to: Optional[str] = None,
                             account_number: Optional[str] = None,
                             distribution_key_id: Optional[str] = None,
+                            expense_category_id: Optional[str] = None,
                             bank_account: Optional[str] = None):
         """Liste les depenses (factures + ecritures OD classe 6) filtrables.
         Chinese walls STRICT : copropriete_id requis (param ou header)."""
@@ -680,6 +681,8 @@ def create_fiscal_router(db):
             inv_q["account_number"] = account_number
         if distribution_key_id:
             inv_q["distribution_key_id"] = distribution_key_id
+        if expense_category_id:
+            inv_q["expense_category_id"] = expense_category_id
         invoices = await db.invoices.find(inv_q, {"_id": 0}).sort("date", 1).to_list(50000)
 
         # 2) Bank txns matched to filter by bank_account
@@ -813,34 +816,53 @@ def create_fiscal_router(db):
                     continue
                 if account_number and acc != account_number:
                     continue
+                # Line-level overrides (set via PUT /entries/{id}/line-quick)
+                ln_cat_id = ln.get("expense_category_id") or ""
+                ln_key_id = ln.get("distribution_key_id") or ""
+                # Resolve via account if no override
+                cat = cat_by_id.get(ln_cat_id) or cat_by_acc.get(acc) or {}
+                if expense_category_id and cat.get("id", "") != expense_category_id:
+                    continue
+                if distribution_key_id and ln_key_id != distribution_key_id:
+                    continue
                 # Signed amount : debit - credit (positive = expense, negative = product)
                 debit = float(ln.get("debit", 0) or 0)
                 credit = float(ln.get("credit", 0) or 0)
                 amount = debit - credit
                 if abs(amount) < 0.005:
                     continue
-                desc = (ln.get("line_description") or ln.get("description") or je.get("description", "") or "").strip()
+                desc = (ln.get("description") or je.get("description", "") or "").strip()
+                occ_pct = ln.get("occupant_pct")
+                prop_pct = ln.get("proprietaire_pct")
+                if occ_pct is None:
+                    occ_pct = 0
+                if prop_pct is None:
+                    prop_pct = 100
                 rows.append({
                     "id": je.get("id", ""),
                     "date": je.get("date", ""),
                     "number": je.get("reference", "") or "",
-                    "supplier": ln.get("counterparty_name", "") or ln.get("third_party_label", "") or "—",
+                    "supplier": ln.get("counterparty_name", "") or je.get("description", "")[:50] or "—",
                     "description": desc,
                     "account_number": acc,
-                    "account_name": charge_acc_names.get(acc, ""),
-                    "distribution_key_id": "",
-                    "distribution_key_name": "—",
+                    "account_name": charge_acc_names.get(acc, "") or ln.get("account_name", ""),
+                    "expense_category_id": cat.get("id", ""),
+                    "expense_category_name": cat.get("name", "") or charge_acc_names.get(acc, ""),
+                    "expense_category_code": cat.get("code", ""),
+                    "distribution_key_id": ln_key_id,
+                    "distribution_key_name": keys_map.get(ln_key_id, "—"),
                     "vat_amount": 0,
                     "total_amount": round(amount, 2),
                     "status": "comptabilise",
                     "paid": True,
                     "paid_info": None,
                     "attachments_count": 0,
-                    "occupant_pct": 0,
-                    "proprietaire_pct": 100,
-                    "occupant_amount": 0,
-                    "proprietaire_amount": round(amount, 2),
+                    "occupant_pct": float(occ_pct),
+                    "proprietaire_pct": float(prop_pct),
+                    "occupant_amount": round(amount * float(occ_pct) / 100, 2),
+                    "proprietaire_amount": round(amount * float(prop_pct) / 100, 2),
                     "source": "journal",
+                    "source_account": acc,  # used by the line-quick endpoint to identify the line
                     "journal_type": je.get("journal_type", ""),
                 })
 
