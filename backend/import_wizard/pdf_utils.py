@@ -167,6 +167,213 @@ def _extract_pct(s: str) -> float:
 
 
 # ============================================================
+# OWNERS PDF parser (Optipro "Liste des coproprietaires")
+# ============================================================
+# Expected columns : AUXILIAIRE | NOM | IDENTIFIANT | COORDONNEES (email/phone) | LOTS | QUOTITES | REFERENCE VCS
+_CIVILITY_RE = r"^(M\. et Mme|Mme\. et M\.|M et Mme|Mr et Mme|Mlle|Mme|M\.|Mr\.?|Mr)\s+"
+
+
+def parse_owners_pdf(raw: bytes) -> dict:
+    """Parse 'Liste des coproprietaires' PDF from Optipro.
+
+    Uses word-level extraction with y-coordinates to align cells row-by-row,
+    which is more robust than naive newline-split when some cells are empty.
+
+    Returns:
+      { owners: [{ auxiliary_code, civility, last_name, first_name, name,
+                   identifier, email, phone, vcs_code, vcs_digits }],
+        count }
+    """
+    import re
+    owners: list[dict] = []
+    seen_aux: set[str] = set()
+    email_re = re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
+    phone_re = re.compile(r"\+?\d[\d\s.\-/]{6,20}\d")
+    vcs_re = re.compile(r"\+{0,3}(\d{3}[/.-]\d{4}[/.-]\d{5})\+{0,3}")
+    aux_re = re.compile(r"^C\d{4}$")
+
+    import io
+    import pdfplumber
+    with pdfplumber.open(io.BytesIO(raw)) as pdf:
+        # First : try table extraction to find column x positions
+        for page in pdf.pages:
+            tables = page.extract_tables() or []
+            if not tables:
+                continue
+            # Get all words with positions
+            words = page.extract_words(keep_blank_chars=False, x_tolerance=2, y_tolerance=3) or []
+            if not words:
+                continue
+            # Identify header row (auxiliaire / nom / etc.) to deduce x boundaries.
+            # We intentionally DON'T include "reference" since it's the first word of
+            # "REFERENCE VCS" (composite header) ; the next word "VCS" already covers it.
+            def _is_header(text: str) -> bool:
+                t = (text or "").lower()
+                # Normalize accents
+                import unicodedata
+                t = unicodedata.normalize("NFD", t)
+                t = "".join(c for c in t if unicodedata.category(c) != "Mn")
+                return any(k in t for k in [
+                    "auxil", "identif", "coordo", "quotit", "communic"
+                ]) or t in ("nom", "lots", "vcs")
+            header_words = [w for w in words if _is_header(w["text"])]
+            if not header_words:
+                # Fallback : detect column boundaries from auxiliaire codes (C0XXX)
+                aux_words = [w for w in words if aux_re.match(w["text"])]
+                if not aux_words:
+                    continue
+                aux_x = sum(w["x0"] for w in aux_words) / len(aux_words)
+                # Column boundaries are estimated relative to aux_x
+                cols = {
+                    "aux":    (aux_x - 5,       aux_x + 50),
+                    "name":   (aux_x + 50,      aux_x + 280),
+                    "ident":  (aux_x + 280,     aux_x + 360),
+                    "coord":  (aux_x + 360,     aux_x + 540),
+                    "lots":   (aux_x + 540,     aux_x + 600),
+                    "qts":    (aux_x + 600,     aux_x + 670),
+                    "vcs":    (aux_x + 670,     aux_x + 900),
+                }
+            else:
+                # Build x-bounds from the header words
+                # Sort by x0
+                hw_sorted = sorted(header_words, key=lambda w: w["x0"])
+                xs = [w["x0"] for w in hw_sorted]
+                col_labels = []
+                for w in hw_sorted:
+                    t = (w["text"] or "").lower()
+                    import unicodedata
+                    t = unicodedata.normalize("NFD", t)
+                    t = "".join(c for c in t if unicodedata.category(c) != "Mn")
+                    if "auxil" in t:
+                        col_labels.append("aux")
+                    elif t == "nom":
+                        col_labels.append("name")
+                    elif "identif" in t:
+                        col_labels.append("ident")
+                    elif "coordo" in t:
+                        col_labels.append("coord")
+                    elif "lot" in t:
+                        col_labels.append("lots")
+                    elif "quotit" in t:
+                        col_labels.append("qts")
+                    elif "vcs" in t or "communic" in t or "reference" in t:
+                        col_labels.append("vcs")
+                    else:
+                        col_labels.append("other")
+                cols = {}
+                # Compute boundaries as midpoints between consecutive header anchors,
+                # since values in Optipro PDFs are often left/center aligned
+                # below the header (which itself is left-anchored on its label).
+                # First column starts at 0; last column ends at +infinity.
+                # Use header word centers for midpoint computation.
+                centers = [(w["x0"] + w["x1"]) / 2 for w in hw_sorted]
+                for i, lbl in enumerate(col_labels):
+                    if i == 0:
+                        x_start = 0
+                    else:
+                        x_start = (centers[i - 1] + centers[i]) / 2
+                    if i + 1 < len(col_labels):
+                        x_end = (centers[i] + centers[i + 1]) / 2
+                    else:
+                        x_end = 9999
+                    cols[lbl] = (x_start, x_end)
+
+            # Group words by row (y bucket) using y_tolerance ~ 4
+            # Skip header row(s)
+            header_y_max = max((w["bottom"] for w in header_words), default=0)
+            content_words = [w for w in words if w["top"] > header_y_max + 1]
+            # Bucket per ~5px
+            rows: dict[int, list[dict]] = {}
+            for w in content_words:
+                bucket = int(w["top"] / 4)
+                rows.setdefault(bucket, []).append(w)
+            # Sort buckets, then merge close buckets (within 2 buckets)
+            sorted_buckets = sorted(rows.keys())
+            merged: list[list[dict]] = []
+            last_bucket = -999
+            for b in sorted_buckets:
+                if b - last_bucket <= 2 and merged:
+                    merged[-1].extend(rows[b])
+                else:
+                    merged.append(list(rows[b]))
+                last_bucket = b
+            # For each merged row group, extract cells by x bounds
+            for grp in merged:
+                cells = {k: [] for k in cols}
+                # All words in this row group (for regex-based fallback VCS)
+                row_text_all = " ".join(w["text"] for w in sorted(grp, key=lambda w: w["x0"]))
+                for w in grp:
+                    cx = (w["x0"] + w["x1"]) / 2
+                    for col_name, (xs_, xe_) in cols.items():
+                        if xs_ <= cx < xe_:
+                            cells[col_name].append(w)
+                            break
+                # Each col cell : join words sorted by x
+                def cell_text(name):
+                    ws = cells.get(name, [])
+                    ws_sorted = sorted(ws, key=lambda w: w["x0"])
+                    return " ".join(w["text"] for w in ws_sorted).strip()
+                aux = cell_text("aux")
+                if not aux_re.match(aux):
+                    continue  # not a real owner row
+                if aux in seen_aux:
+                    continue
+                seen_aux.add(aux)
+                name_raw = cell_text("name")
+                ident = cell_text("ident")
+                coord_raw = cell_text("coord")
+                vcs_raw = cell_text("vcs")
+                # Fallback : look for VCS pattern in the entire row text (handles cases
+                # where the VCS column was estimated too narrow)
+                if not vcs_re.search(vcs_raw):
+                    m = vcs_re.search(row_text_all)
+                    if m:
+                        vcs_raw = m.group(0)
+                # decompose name
+                civility = ""
+                mc = re.match(_CIVILITY_RE, name_raw)
+                name_clean = name_raw
+                if mc:
+                    civility = mc.group(1).strip()
+                    name_clean = name_raw[mc.end():].strip()
+                tokens = name_clean.split()
+                last_name = first_name = ""
+                if tokens:
+                    upper_idx = 0
+                    while upper_idx < len(tokens) and tokens[upper_idx].isupper():
+                        upper_idx += 1
+                    if upper_idx > 0:
+                        last_name = " ".join(tokens[:upper_idx])
+                        first_name = " ".join(tokens[upper_idx:])
+                    else:
+                        last_name = tokens[0]
+                        first_name = " ".join(tokens[1:])
+                email_m = email_re.search(coord_raw)
+                phone_m = phone_re.search(coord_raw)
+                email = email_m.group(0) if email_m else ""
+                # Strip the email from coord before searching phone, to avoid matching digits inside the email
+                coord_for_phone = coord_raw.replace(email, " ") if email else coord_raw
+                phone_m = phone_re.search(coord_for_phone)
+                phone = phone_m.group(0).strip() if phone_m else ""
+                vcs_m = vcs_re.search(vcs_raw)
+                vcs_code = vcs_m.group(0).strip() if vcs_m else (vcs_raw if vcs_raw not in ("-", "") else "")
+                vcs_digits = re.sub(r"\D", "", vcs_code)
+                owners.append({
+                    "auxiliary_code": aux,
+                    "civility": civility,
+                    "last_name": last_name,
+                    "first_name": first_name,
+                    "name": (civility + " " + name_clean).strip(),
+                    "identifier": ident,
+                    "email": email,
+                    "phone": phone,
+                    "vcs_code": vcs_code,
+                    "vcs_digits": vcs_digits,
+                })
+    return {"owners": owners, "count": len(owners)}
+
+
+# ============================================================
 # BUDGET PDF parser
 # ============================================================
 def parse_budget_pdf(raw: bytes) -> dict:

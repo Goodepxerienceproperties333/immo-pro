@@ -10,7 +10,7 @@ from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Form
 from pydantic import BaseModel
 
 from import_wizard.csv_utils import sniff_csv, parse_french_number, parse_date, split_optipro_code, normalize_header
-from import_wizard.pdf_utils import extract_pdf, parse_natures_pdf, parse_budget_pdf, parse_distribution_keys_pdf
+from import_wizard.pdf_utils import extract_pdf, parse_natures_pdf, parse_budget_pdf, parse_distribution_keys_pdf, parse_owners_pdf
 
 logger = logging.getLogger("import_wizard")
 
@@ -84,6 +84,28 @@ class CommitDistributionKeysInput(BaseModel):
 # ============================================================
 def create_import_wizard_router(db):
     router = APIRouter(prefix="/api/import-wizard")
+
+    # ----- STANDALONE PDF PARSE (no session required) -----
+    @router.post("/parse-pdf")
+    async def parse_pdf_standalone(request: Request, file: UploadFile = File(...), kind: str = Form("generic")):
+        """Parse a PDF without needing an active session.
+        Used from the ACP creation wizard (where the ACP doesn't exist yet).
+        Returns parsed structured data, the caller is responsible for committing.
+        """
+        from server import get_current_user
+        await get_current_user(request)  # ensure logged in
+        raw = await file.read()
+        if len(raw) > 30 * 1024 * 1024:
+            raise HTTPException(400, "Fichier trop volumineux (max 30 Mo)")
+        if kind == "natures":
+            return parse_natures_pdf(raw)
+        if kind == "budget":
+            return parse_budget_pdf(raw)
+        if kind == "keys":
+            return parse_distribution_keys_pdf(raw)
+        if kind == "owners":
+            return parse_owners_pdf(raw)
+        return extract_pdf(raw)
 
     # ----- SESSIONS -----
     @router.post("/sessions")
@@ -191,6 +213,10 @@ def create_import_wizard_router(db):
             return res
         if kind == "keys":
             res = parse_distribution_keys_pdf(raw)
+            res["filename"] = file.filename
+            return res
+        if kind == "owners":
+            res = parse_owners_pdf(raw)
             res["filename"] = file.filename
             return res
         info = extract_pdf(raw)
