@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from typing import Optional
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import uuid
 import io
 
@@ -1250,6 +1250,63 @@ def create_reports_router(db):
         _exclude_reversals(entry_q)
         entries = await db.journal_entries.find(entry_q, {"_id": 0}).to_list(100000)
         seen_lines = set()
+
+        # ---- Reprise comptable : 2 sources combinees ----
+        # (a) Toutes les ecritures AVANT start_date (cumul des exercices clos)
+        # (b) Les ecritures AN dans la periode (OD d'ouverture du Bilan)
+        # Les 2 sources sont agregees en UNE SEULE ligne synthetique au sommet,
+        # datee du 1er jour de la periode visualisee (= start_date).
+        an_debit = 0.0
+        an_credit = 0.0
+        an_account = ""
+
+        # (a) Cumul des mouvements anterieurs au start_date
+        if start_date:
+            pre_q = {"copropriete_id": copropriete_id, "date": {"$lt": start_date}}
+            _exclude_reversals(pre_q)
+            pre_entries = await db.journal_entries.find(pre_q, {"_id": 0}).to_list(100000)
+            for pe in pre_entries:
+                for pln in pe.get("lines", []) or []:
+                    p_acc = pln.get("account_number", "")
+                    p_tpid = pln.get("third_party_id")
+                    if p_acc not in valid_accs and p_tpid != owner_id:
+                        continue
+                    an_debit += float(pln.get("debit", 0) or 0)
+                    an_credit += float(pln.get("credit", 0) or 0)
+                    if not an_account:
+                        an_account = p_acc
+
+        # (b) Ecritures AN dans la periode visualisee (l'OD d'ouverture pose le
+        # 1er jour de la periode est consideree comme reprise et pas comme mouvement)
+        for e in entries:
+            if (e.get("journal_type") or "") != "AN":
+                continue
+            for ln in e.get("lines", []) or []:
+                acc = ln.get("account_number", "")
+                tpid = ln.get("third_party_id")
+                if acc not in valid_accs and tpid != owner_id:
+                    continue
+                an_debit += float(ln.get("debit", 0) or 0)
+                an_credit += float(ln.get("credit", 0) or 0)
+                if not an_account:
+                    an_account = acc
+                # Tag this AN line as already processed so it's NOT shown
+                # again in the regular movements list below.
+                seen_lines.add((e.get("id"), acc, ln.get("debit", 0), ln.get("credit", 0), tpid))
+
+        if abs(an_debit - an_credit) > 0.001:
+            reprise_date = start_date or ""
+            movements.append({
+                "date": reprise_date,
+                "description": f"Reprise comptable au {reprise_date}" if reprise_date else "Reprise comptable",
+                "debit": round(an_debit, 2),
+                "credit": round(an_credit, 2),
+                "type": "reprise",
+                "reference": "REPRISE",
+                "account_number": an_account or (next(iter(valid_accs)) if valid_accs else ""),
+                "journal_type": "AN",
+                "is_reprise": True,
+            })
         for e in entries:
             for ln in e.get("lines", []) or []:
                 acc = ln.get("account_number", "")
@@ -1707,9 +1764,17 @@ def create_reports_router(db):
         return {"suppliers": result, "total_a_payer": total_a_payer}
 
     @router.get("/balance-tiers/suppliers/{supplier_id}")
-    async def situation_compte_supplier(supplier_id: str, copropriete_id: Optional[str] = None):
+    async def situation_compte_supplier(
+        supplier_id: str,
+        copropriete_id: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+    ):
         """Situation de compte fournisseur basee sur le grand livre.
-        Aggrege toutes les ecritures (AC/FI/OD/A-Nouveau) sur 44000XXX du fournisseur."""
+        Aggrege toutes les ecritures (AC/FI/OD/A-Nouveau) sur 44000XXX du fournisseur.
+        Filtre periode optionnel : si start_date est fourni, une ligne synthetique
+        "Reprise comptable" est inseree au sommet avec le solde cumule des
+        mouvements anterieurs (typiquement l'OD d'ouverture du Bilan)."""
         supplier = await db.suppliers.find_one({"id": supplier_id}, {"_id": 0})
         if not supplier:
             raise HTTPException(404, "Fournisseur non trouve")
@@ -1718,38 +1783,101 @@ def create_reports_router(db):
         if copropriete_id:
             tier_acc = ((supplier.get("tier_accounts") or {}).get(copropriete_id, {}) or {}).get("main", "")
 
+        def _line_matches(ln):
+            acc = ln.get("account_number", "")
+            tpid = ln.get("third_party_id")
+            return (tpid == supplier_id) or (tier_acc and acc == tier_acc)
+
         movements = []
         entry_q = {}
         if copropriete_id:
             entry_q["copropriete_id"] = copropriete_id
-        # SECURISATION : exclure contre-passations + ecritures extournees
-        _exclude_reversals(entry_q)
-        entries = await db.journal_entries.find(entry_q, {"_id": 0}).to_list(100000)
+
+        # ----- Mouvements de la periode -----
+        period_q = dict(entry_q)
+        if start_date or end_date:
+            period_q["date"] = {}
+            if start_date:
+                period_q["date"]["$gte"] = start_date
+            if end_date:
+                period_q["date"]["$lte"] = end_date
+        _exclude_reversals(period_q)
+        entries = await db.journal_entries.find(period_q, {"_id": 0}).to_list(100000)
         seen = set()
+
+        # ---- Reprise comptable : 2 sources combinees ----
+        # (a) Toutes les ecritures AVANT start_date (cumul des exercices clos)
+        # (b) Les ecritures AN dans la periode (OD d'ouverture du Bilan)
+        an_debit = 0.0
+        an_credit = 0.0
+        an_account = ""
+
+        # (a) Cumul des mouvements anterieurs au start_date
+        if start_date:
+            pre_q = dict(entry_q)
+            pre_q["date"] = {"$lt": start_date}
+            _exclude_reversals(pre_q)
+            pre_entries = await db.journal_entries.find(pre_q, {"_id": 0}).to_list(100000)
+            for pe in pre_entries:
+                for pln in pe.get("lines", []) or []:
+                    if not _line_matches(pln):
+                        continue
+                    an_debit += float(pln.get("debit", 0) or 0)
+                    an_credit += float(pln.get("credit", 0) or 0)
+                    if not an_account:
+                        an_account = pln.get("account_number", "")
+
+        # (b) Ecritures AN dans la periode
+        for e in entries:
+            if (e.get("journal_type") or "") != "AN":
+                continue
+            for ln in e.get("lines", []) or []:
+                if not _line_matches(ln):
+                    continue
+                an_debit += float(ln.get("debit", 0) or 0)
+                an_credit += float(ln.get("credit", 0) or 0)
+                if not an_account:
+                    an_account = ln.get("account_number", "")
+                seen.add((e.get("id"), ln.get("account_number", ""), ln.get("debit", 0), ln.get("credit", 0), ln.get("third_party_id")))
+        if abs(an_debit - an_credit) > 0.001:
+            reprise_date = start_date or ""
+            movements.append({
+                "date": reprise_date,
+                "description": f"Reprise comptable au {reprise_date}" if reprise_date else "Reprise comptable",
+                "debit": round(an_debit, 2),
+                "credit": round(an_credit, 2),
+                "type": "reprise",
+                "reference": "REPRISE",
+                "account_number": an_account or tier_acc,
+                "journal_type": "AN",
+                "is_reprise": True,
+            })
+
         for e in entries:
             for ln in e.get("lines", []) or []:
-                acc = ln.get("account_number", "")
-                tpid = ln.get("third_party_id")
-                match = (tpid == supplier_id) or (tier_acc and acc == tier_acc)
-                if not match:
+                if not _line_matches(ln):
                     continue
-                key = (e.get("id"), acc, ln.get("debit", 0), ln.get("credit", 0), tpid)
+                key = (e.get("id"), ln.get("account_number", ""), ln.get("debit", 0), ln.get("credit", 0), ln.get("third_party_id"))
                 if key in seen:
                     continue
                 seen.add(key)
+                line_desc = (ln.get("line_description") or "").strip()
+                entry_desc = (e.get("description", "") or "").strip()
+                final_desc = line_desc or entry_desc
                 movements.append({
                     "date": e.get("date", ""),
-                    "description": f"[{e.get('journal_type','?')}] {e.get('description','')}".strip(),
+                    "description": f"[{e.get('journal_type','?')}] {final_desc}".strip(),
                     "debit": float(ln.get("debit", 0) or 0),
                     "credit": float(ln.get("credit", 0) or 0),
                     "type": e.get("journal_type", "OD").lower(),
                     "reference": e.get("reference", "") or e.get("id", ""),
-                    "account_number": acc,
+                    "account_number": ln.get("account_number", ""),
                     "journal_type": e.get("journal_type", ""),
                 })
 
         movements.sort(key=lambda x: (x["date"], x.get("reference", "")))
-        running = 0
+        # Cote fournisseur : credit a payer = positif (convention CoproManager)
+        running = 0.0
         for m in movements:
             running += m["credit"] - m["debit"]
             m["running_balance"] = round(running, 2)

@@ -362,6 +362,9 @@ def parse_journals_csv(raw: bytes) -> dict:
             total_d = sum(ln["debit"] for ln in lines)
             total_c = sum(ln["credit"] for ln in lines)
             amount = abs(total_d) if total_d > 0 else abs(total_c)
+            # Find the identity if any
+            counter_identity = next((ln["identity"] for ln in lines if ln.get("identity")), "")
+            counter_aux = next((ln["auxiliary"] for ln in lines if ln.get("auxiliary")), "")
             transactions.append({
                 "num_doc": num_doc,
                 "date_value": lines[0]["date_value"],
@@ -372,6 +375,8 @@ def parse_journals_csv(raw: bytes) -> dict:
                 "bank_account_label": "",
                 "counterparty_account": lines[0]["account"],
                 "counterparty_account_label": lines[0]["account_label"],
+                "counterparty_name": counter_identity,
+                "counterparty_aux": counter_aux,
                 "amount": amount,
                 "direction": "neutral",
                 "ext_reference": lines[0]["ext_reference"],
@@ -385,6 +390,21 @@ def parse_journals_csv(raw: bytes) -> dict:
         direction = "in" if bank["debit"] > 0 else "out"
         # Counterparty : the first non-bank line (or the largest one)
         counter = other_lines[0]
+        # ---- Resolve the REAL counterparty name (supplier / owner) ----
+        # Optipro CSV stores it in `Identite` (e.g. "SRL ACE Garden") and
+        # the auxiliary code in `Auxiliaire` (e.g. "F0471"). Without these
+        # the bank statement shows a generic "Fournisseurs" label, which is
+        # unreadable and makes auto-lettrage impossible. We pick the first
+        # non-empty Identite among the non-bank lines.
+        counter_identity = ""
+        counter_aux = ""
+        for ln in other_lines:
+            if ln.get("identity") and not counter_identity:
+                counter_identity = ln["identity"]
+            if ln.get("auxiliary") and not counter_aux:
+                counter_aux = ln["auxiliary"]
+            if counter_identity and counter_aux:
+                break
         transactions.append({
             "num_doc": num_doc,
             "date_value": bank["date_value"],
@@ -395,6 +415,8 @@ def parse_journals_csv(raw: bytes) -> dict:
             "bank_account_label": bank["account_label"],
             "counterparty_account": counter["account"],
             "counterparty_account_label": counter["account_label"],
+            "counterparty_name": counter_identity,  # real supplier/owner name
+            "counterparty_aux": counter_aux,        # auxiliary code (F0XXX / C0XXX)
             "amount": round(amt, 2),
             "direction": direction,
             "ext_reference": bank["ext_reference"] or counter["ext_reference"],

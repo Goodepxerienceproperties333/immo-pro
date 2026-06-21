@@ -789,28 +789,46 @@ def create_import_wizard_router(db):
 
                 # ---- Create journal entry (Financier - FI) ----
                 je_id = ""
+                cp_name_for_je = (t.get("counterparty_name") or "").strip()
+                cp_aux_for_je = (t.get("counterparty_aux") or "").strip()
+                # Enrichi : nom du fournisseur + lib bancaire si possible
+                enriched_label = cp_name_for_je or cp_label
+                enriched_desc = libelle
+                if cp_name_for_je and cp_name_for_je.lower() not in libelle.lower():
+                    enriched_desc = f"{cp_name_for_je} - {libelle}" if libelle else cp_name_for_je
                 if bank_pcmn and cp_pcmn and amount > 0 and direction in ("in", "out"):
                     je_id = str(uuid.uuid4())
+                    # Try to resolve the third_party (supplier) for the counter-party line
+                    tp_id_je = ""
+                    if cp_aux_for_je:
+                        s_doc = await db.suppliers.find_one(
+                            {"copropriete_id": copro_id, "auxiliary_code": cp_aux_for_je},
+                            {"_id": 0, "id": 1},
+                        )
+                        if s_doc:
+                            tp_id_je = s_doc["id"]
                     if direction == "in":
                         lines = [
                             {"account_number": bank_pcmn, "account_name": bank_label, "debit": amount, "credit": 0.0,
-                             "description": libelle, "occupant_pct": None, "proprietaire_pct": None},
-                            {"account_number": cp_pcmn, "account_name": cp_label, "debit": 0.0, "credit": amount,
-                             "description": libelle, "occupant_pct": None, "proprietaire_pct": None},
+                             "description": enriched_desc, "occupant_pct": None, "proprietaire_pct": None},
+                            {"account_number": cp_pcmn, "account_name": enriched_label, "debit": 0.0, "credit": amount,
+                             "description": enriched_desc, "occupant_pct": None, "proprietaire_pct": None,
+                             **({"third_party_id": tp_id_je, "third_party_type": "supplier"} if tp_id_je else {})},
                         ]
                     else:  # out
                         lines = [
-                            {"account_number": cp_pcmn, "account_name": cp_label, "debit": amount, "credit": 0.0,
-                             "description": libelle, "occupant_pct": None, "proprietaire_pct": None},
+                            {"account_number": cp_pcmn, "account_name": enriched_label, "debit": amount, "credit": 0.0,
+                             "description": enriched_desc, "occupant_pct": None, "proprietaire_pct": None,
+                             **({"third_party_id": tp_id_je, "third_party_type": "supplier"} if tp_id_je else {})},
                             {"account_number": bank_pcmn, "account_name": bank_label, "debit": 0.0, "credit": amount,
-                             "description": libelle, "occupant_pct": None, "proprietaire_pct": None},
+                             "description": enriched_desc, "occupant_pct": None, "proprietaire_pct": None},
                         ]
                     await db.journal_entries.insert_one({
                         "id": je_id,
                         "journal_type": "FI",
                         "date": date_v,
                         "reference": num_doc,
-                        "description": libelle,
+                        "description": enriched_desc,
                         "lines": lines,
                         "total_debit": amount,
                         "total_credit": amount,
@@ -825,13 +843,29 @@ def create_import_wizard_router(db):
                 if stmt_id:
                     # Signed amount : IN = positive, OUT = negative (CoproManager convention)
                     signed_amount = amount if direction == "in" else (-amount if direction == "out" else amount)
+                    # Use the REAL supplier/owner name from the CSV if available
+                    # (Optipro 'Identite' column), else fallback to the generic
+                    # account label ("Fournisseurs" / "Frais bancaires...").
+                    cp_name = (t.get("counterparty_name") or "").strip() or cp_label
+                    cp_aux = (t.get("counterparty_aux") or "").strip()
+                    # Try to resolve the matched supplier_id via auxiliary_code
+                    matched_supplier_id = ""
+                    if cp_aux:
+                        sup_doc = await db.suppliers.find_one(
+                            {"copropriete_id": copro_id, "auxiliary_code": cp_aux},
+                            {"_id": 0, "id": 1},
+                        )
+                        if sup_doc:
+                            matched_supplier_id = sup_doc["id"]
                     txn_doc = {
                         "id": str(uuid.uuid4()),
                         "statement_id": stmt_id,
                         "copropriete_id": copro_id,
                         "date": date_v,
                         "amount": signed_amount,
-                        "counterparty_name": cp_label,
+                        "counterparty_name": cp_name,
+                        "counterparty_aux": cp_aux,
+                        "counterparty_supplier_id": matched_supplier_id,
                         "counterparty_account": "",  # IBAN of counterparty (unknown from journal)
                         "communication": libelle,
                         "transaction_type": "credit" if direction == "in" else "debit",
@@ -881,11 +915,58 @@ def create_import_wizard_router(db):
                 {"$set": {"closing_balance": net, "txn_count": len(txns)}},
             )
 
+        # ---- AUTO-LETTRAGE : matcher chaque transaction "out" (paiement)
+        # avec une facture impayee du meme fournisseur et meme montant. Permet
+        # au syndic d'eviter le lettrage manuel un-par-un pour les imports
+        # massifs Optipro. Tolerance : montant identique a 0.01 EUR pres,
+        # facture la plus ancienne d'abord. ----
+        auto_matched = 0
+        unmatched_txns = await db.bank_transactions.find({
+            "copropriete_id": copro_id,
+            "import_session_id": session_id,
+            "matched": False,
+            "counterparty_supplier_id": {"$ne": ""},
+        }, {"_id": 0}).to_list(10000)
+        for txn in unmatched_txns:
+            sup_id = txn.get("counterparty_supplier_id", "")
+            amt_signed = float(txn.get("amount") or 0)
+            if amt_signed >= 0 or not sup_id:
+                # IN movements (positive) ne sont pas des paiements de factures
+                continue
+            target_amount = round(abs(amt_signed), 2)
+            # Find unpaid invoice of this supplier with this amount
+            inv = await db.invoices.find_one({
+                "copropriete_id": copro_id,
+                "supplier_id": sup_id,
+                "status": {"$ne": "paid"},
+                "total_amount": {"$gte": target_amount - 0.015, "$lte": target_amount + 0.015},
+            }, sort=[("date", 1)])
+            if not inv:
+                continue
+            await db.bank_transactions.update_one(
+                {"id": txn["id"]},
+                {"$set": {
+                    "matched": True,
+                    "matched_type": "invoice",
+                    "match_type": "invoice",
+                    "matched_id": inv["id"],
+                    "matched_to": inv["id"],
+                    "matched_at": _now_iso(),
+                    "match_source": "auto_import_journals",
+                }},
+            )
+            await db.invoices.update_one(
+                {"id": inv["id"]},
+                {"$set": {"status": "paid", "paid_at": txn.get("date", "")}},
+            )
+            auto_matched += 1
+
         await _update_step(db, session_id, "journals", {
             "count": inserted,
             "statements_created": stmts_inserted,
             "journal_entries": je_inserted,
             "pcmn_created": pcmn_created,
+            "auto_matched": auto_matched,
             "errors": errors,
         })
         return {
@@ -893,6 +974,7 @@ def create_import_wizard_router(db):
             "statements_created": stmts_inserted,
             "journal_entries": je_inserted,
             "pcmn_created": pcmn_created,
+            "auto_matched": auto_matched,
             "errors": errors,
         }
 

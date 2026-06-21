@@ -860,27 +860,83 @@ def parse_budget_pdf(raw: bytes) -> dict:
             return 0.0
 
     with pdfplumber.open(io.BytesIO(raw)) as pdf:
+        current_section: dict = None  # Persist across pages : details on page N+1
+                                       # without a preceding section anchor are
+                                       # continuation of the LAST section from page N.
         for page_idx, page in enumerate(pdf.pages):
             words = page.extract_words(keep_blank_chars=False, x_tolerance=2, y_tolerance=3) or []
             if not words:
                 continue
-            # Determine amount column centers from "2025"/"2026" / "En cours"
-            amt_col_centers: list[float] = []
+            # ---- Determine the PER-PAGE header band Y range ----
+            # The header has 3 lines : "Réalisé Budget" / "Désignation" / "2025 2026".
+            # We find the LOWEST Y of the year row, which marks the start of data.
+            header_year_y = None
             for w in words:
-                if 175 < w["top"] < 195 and re.match(r"^20\d{2}$", w["text"]):
-                    amt_col_centers.append((w["x0"] + w["x1"]) / 2)
-            # Fallback positions if header not detected
-            if len(amt_col_centers) < 2:
-                amt_col_centers = [497.0, 640.0]  # default Optipro positions
-            # The third "En cours" column is detected by the "cours" word or default
-            en_cours_w = next((w for w in words if w["top"] < 195 and w["text"].lower() == "cours"), None)
-            third_col = (en_cours_w["x0"] + en_cours_w["x1"]) / 2 if en_cours_w else 782.0
-            amt_col_centers = sorted(amt_col_centers + [third_col])
-            if len(amt_col_centers) > 3:
-                amt_col_centers = amt_col_centers[-3:]
+                if re.match(r"^20\d{2}$", w["text"]) and w["x0"] > 400:
+                    if header_year_y is None or w["top"] < header_year_y:
+                        # Take the FIRST year row (smallest Y) which is the header
+                        header_year_y = w["top"]
+            # If no year row found (rare), fallback to the "Désignation" position
+            header_min_y = (header_year_y + 8) if header_year_y is not None else 195
+
+            # Determine amount column centers from the YEAR words ("2025", "2026")
+            # AND from the actual numeric data words (the right-aligned amounts
+            # may be 50-100px to the right of the header due to Optipro layout).
+            header_centers: list[float] = []
+            for w in words:
+                # The year header is at top = header_year_y on each page
+                if header_year_y is not None and abs(w["top"] - header_year_y) < 3 and re.match(r"^20\d{2}$", w["text"]):
+                    header_centers.append((w["x0"] + w["x1"]) / 2)
+            # The "En cours" column is detected by the "cours" word
+            en_cours_w = next((w for w in words if header_year_y is not None and w["top"] < header_year_y and w["text"].lower() == "cours"), None)
+
+            # ---- AMOUNT CLUSTERING : robust column detection from data ----
+            # Collect right-edges of every numeric word below the header. Cluster
+            # them into 2-3 groups (1D k-means light) to find the real column
+            # centers, which may differ from the year-header centers.
+            data_amt_xc: list[float] = []
+            num_re = re.compile(r"^-?[\d.,]+$")
+            for w in words:
+                if w["top"] <= header_min_y:
+                    continue
+                if w["x0"] < 400:  # left of the amount zone
+                    continue
+                if num_re.match(w["text"]):
+                    # Use x1 (right edge) since amounts are right-aligned
+                    data_amt_xc.append(w["x1"])
+            # Greedy 1D clustering (gap threshold 25)
+            data_amt_xc.sort()
+            data_clusters: list[list[float]] = []
+            for x in data_amt_xc:
+                if data_clusters and abs(x - data_clusters[-1][-1]) < 25:
+                    data_clusters[-1].append(x)
+                else:
+                    data_clusters.append([x])
+            # Keep only clusters with >= 3 points (real columns), then take their
+            # mean as column right-edge. Center = right_edge - 12 (avg width).
+            data_col_right_edges = [sum(c) / len(c) for c in data_clusters if len(c) >= 3]
+            data_col_centers = [e - 12 for e in data_col_right_edges]
+            data_col_centers.sort()
+
+            # Prefer data-driven columns if they look sensible (2 or 3 columns)
+            if 2 <= len(data_col_centers) <= 3:
+                amt_col_centers = data_col_centers
+            elif header_centers:
+                amt_col_centers = list(header_centers)
+                if en_cours_w:
+                    amt_col_centers.append((en_cours_w["x0"] + en_cours_w["x1"]) / 2)
+                amt_col_centers.sort()
+            else:
+                # Last-resort default Optipro positions
+                amt_col_centers = [607.0, 782.0]
+
             # Build amount column boundaries using clean midpoints (no overlap)
             amt_bounds: list[tuple[float, float, str]] = []  # (xs, xe, key)
-            keys = ["realise_n1", "budget_n", "en_cours"]
+            # If only 2 columns detected -> realise_n1 + budget_n (no en_cours)
+            if len(amt_col_centers) == 2:
+                keys = ["realise_n1", "budget_n"]
+            else:
+                keys = ["realise_n1", "budget_n", "en_cours"]
             for i, cx in enumerate(amt_col_centers):
                 if i == 0:
                     xs = cx - 60
@@ -912,7 +968,7 @@ def parse_budget_pdf(raw: bytes) -> dict:
             anchors = []
             for w in sorted(words, key=lambda w: (w["top"], w["x0"])):
                 kind = _is_anchor(w)
-                if not kind or w["top"] <= 195:
+                if not kind or w["top"] <= header_min_y:
                     continue
                 # Skip anchors below the "Totaux" summary row
                 if totaux_y is not None and w["top"] >= totaux_y - 1:
@@ -922,7 +978,6 @@ def parse_budget_pdf(raw: bytes) -> dict:
             if not anchors:
                 continue
 
-            current_section: dict = None
             n = len(anchors)
             for i in range(n):
                 a_top, a_x0, a_kind, a_code, anchor_w = anchors[i]
@@ -978,7 +1033,6 @@ def parse_budget_pdf(raw: bytes) -> dict:
                     # 2 amount words. If only one row has multiple amounts, use it.
                     anchor_bucket = int(a_top / 4)
                     best_y = None
-                    # Sort buckets by distance from anchor's bucket
                     candidates = sorted(row_buckets.keys(), key=lambda k: abs(k - anchor_bucket))
                     for cand in candidates:
                         if len(row_buckets[cand]) >= 2:
@@ -986,10 +1040,31 @@ def parse_budget_pdf(raw: bytes) -> dict:
                             break
                     if best_y is None:
                         best_y = candidates[0]
-                    row_amt_words = row_buckets[best_y]
-                    for xs_, xe_, key in amt_bounds:
-                        col_ws = [w for w in row_amt_words if xs_ <= (w["x0"] + w["x1"]) / 2 < xe_]
-                        amounts[key] = _join_amount(col_ws)
+                    row_amt_words = sorted(row_buckets[best_y], key=lambda w: w["x0"])
+                    # ---- Group contiguous amount words (gap < 15px) into single
+                    # "amount groups". Optipro splits "30 051,00" into two words
+                    # at the thin-space, which breaks naive column matching. We
+                    # rebuild full amounts before assigning them to columns.
+                    amount_groups: list[list[dict]] = []
+                    for w in row_amt_words:
+                        if amount_groups and (w["x0"] - amount_groups[-1][-1]["x1"]) < 15:
+                            amount_groups[-1].append(w)
+                        else:
+                            amount_groups.append([w])
+                    # Match each group to a column by its RIGHT edge (right-aligned)
+                    for grp in amount_groups:
+                        right_edge = grp[-1]["x1"]
+                        # Find the column whose [xs, xe] contains right_edge
+                        best_key = None
+                        for xs_, xe_, key in amt_bounds:
+                            # Loose match : right_edge must be within (xs - 10, xe + 20)
+                            if (xs_ - 10) <= right_edge <= (xe_ + 20):
+                                best_key = key
+                                break
+                        if best_key is None:
+                            # Fallback : nearest column by absolute distance to right edge
+                            best_key = min(amt_bounds, key=lambda b: min(abs(right_edge - b[0]), abs(right_edge - b[1])))[2]
+                        amounts[best_key] = _join_amount(grp)
 
                 if a_kind == "section":
                     current_section = {

@@ -11,6 +11,93 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 ## Implemented
+### Iter72ter (Feb 2026) - Budget parser v2 (multi-pages) + Reprise comptable + Lettrage auto + Banking names
+
+#### Budget PDF parser - Refonte multi-pages + alignement colonnes par cluster
+**Bug** : nouveau PDF Budget Optipro (format 3-colonnes "Désignation / Réalisé N-1 / Budget N")
+ne parse pas correctement :
+- Sections 0009, 0010, 0011 (page 2) IGNOREES car le filtre `top > 195` excluait
+  toute la page 2 (header de page 2 a un Y different de page 1).
+- Montants Budget 2026 lus comme 0 EUR : les colonnes etaient detectees depuis
+  les en-tetes annee ("2025", "2026") qui sont decales ~75px a GAUCHE des montants
+  reels (effet Optipro : annee centree, montants right-aligned).
+- Montants split par pdfplumber : "30 051,00" -> 2 mots "30" + "051,00" landing
+  dans des colonnes differentes apres boundary cut.
+
+**Fix `import_wizard/pdf_utils.py::parse_budget_pdf`** :
+1. **Header dynamique par page** : detecte le Y de la ligne "20XX" sur CHAQUE
+   page (ex : top=180 page 1, top=46 page 2) et utilise ce Y comme cutoff au
+   lieu d'un seuil hardcode 195.
+2. **Cluster des colonnes depuis les amounts** : collecte tous les right-edges
+   des mots numeriques (>400px), cluster 1D (gap < 25px), keep clusters >= 3 points.
+   Plus robuste que les en-tetes year-words.
+3. **Amount groups** : avant le matching column, regroupe les mots numeriques
+   contigus (gap < 15px) sur la meme Y en "amount group" -> "30" + "051,00"
+   devient une seule entite "30051.00" matchee a UNE colonne par son right-edge.
+4. **Current_section persistant entre pages** : un detail line sur page N+1 sans
+   anchor section precedente est rattache a la section ouverte en fin de page N
+   (fix des lines 61056-61300 de la section 0008 sur page 2).
+
+**Test E2E** : PDF "Budget du 01_01_2026 au 31_12_2026 (1).pdf" :
+- AVANT fix : 41 231 EUR (manque 769)
+- APRES fix : **42 000.00 EUR exactement** (12 sections detectees, ecart 0.00)
+- Sections : 0001 (30051), 0006 (0), 0007 (9000), 0008 (2054), 0009 (0), 0010 (0),
+  0011 (-605), 0012 (250), 0014 (0), 0015 (1250), 0017 (0), 0018 (0).
+
+**Note** : le commit-budget utilise deja `budget_n` (Budget 2026 uniquement),
+PAS `realise_n1` (Realise 2025 sert juste a la previsualisation).
+
+#### Reprise comptable dans Situation de compte (owners + suppliers)
+**Demande user** : la situation de compte d'un proprietaire ou fournisseur DOIT
+inclure une ligne "Reprise comptable" au sommet, datee du 1er jour de l'exercice
+visualise, agregeant le solde de cloture des exercices precedents (incl. OD
+d'ouverture / Bilan).
+
+**Backend** `routes/reports.py::situation_compte_owner` + `_supplier` :
+- Combine 2 sources dans une seule ligne "Reprise comptable au [start_date]" :
+  (a) toutes les ecritures avec date < start_date (cumul exercices clos),
+  (b) toutes les ecritures journal_type='AN' dans la periode visualisee.
+- Les lignes AN-in-period sont alors EXCLUES de la liste mouvements normale
+  (pas de doublon avec la ligne reprise).
+- Tag `is_reprise: True` + `journal_type: 'AN'` pour styling frontend.
+- Description : "Reprise comptable au YYYY-MM-DD".
+
+**Test E2E** : FY 2027 (start_date=2027-01-01) avec AN dans FY 2026 (1_400 EUR
+crediteur) :
+- AVANT fix : Total Debit=0 / Credit=0 / Solde=0 EUR (le AN etait < start_date)
+- APRES fix : ligne "Reprise comptable au 2027-01-01" affichee, Total Debit=2599.29
+  EUR pour LENOTRE-MANSART, ligne distincte du reste des mouvements.
+
+#### Import journaux bancaires - Nom fournisseur + auto-lettrage
+**Bug** : les bank_transactions importees affichaient "Fournisseurs" generique
+(label du compte 4400) au lieu du vrai nom (SRL ACE Garden, Engie...), rendant
+les extraits illisibles et empechant tout lettrage.
+
+**Fix `csv_utils.py::parse_journals_csv`** :
+- Recupere `Auxiliaire` (F0XXX) et `Identite` (nom fournisseur) depuis le CSV
+  Optipro (champ `Identite` = nom reel, `Auxiliaire` = code F0606).
+- Output transactions : ajoute `counterparty_name` (nom) et `counterparty_aux`
+  (code) en plus du libelle technique.
+
+**Fix `routes/import_wizard.py::commit_journals`** :
+- bank_transactions stocke maintenant le VRAI nom du fournisseur (counterparty_name)
+  + auxiliary_code + supplier_id resolu via auxiliary_code.
+- Journal entries FI : description enrichie avec nom du fournisseur, ET la ligne
+  credit/debit du fournisseur a `third_party_id` + `third_party_type='supplier'`
+  pour matching balance-tiers.
+
+**Auto-lettrage post-import** : pour chaque transaction "out" (paiement) avec
+supplier_id resolu, cherche une facture du meme fournisseur avec montant identique
+(tolerance 0.01 EUR), la plus ancienne d'abord. Si trouvee :
+- bank_transaction.matched=True, matched_id=invoice.id, match_source='auto_import_journals'
+- invoice.status='paid', paid_at=transaction.date
+
+**Test** : sur 39 txns Optipro, X transactions auto-lettrees (resultat dependant
+de la presence de factures correspondantes en DB).
+
+
+
+
 ### Iter72 (Feb 2026) - Phase I (OD d'ouverture) + Cles details + Banking visibility + Balance tiers AN + Lettrage manuel orphelins
 
 #### Lettrage manuel des fournisseurs orphelins (Balance de Tiers)

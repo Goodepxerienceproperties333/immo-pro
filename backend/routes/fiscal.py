@@ -699,6 +699,17 @@ def create_fiscal_router(db):
         ).to_list(1000)
         keys_map = {k["id"]: k["name"] for k in keys}
 
+        # 3b) Resolve expense categories (natures de depense)
+        cats = await db.expense_categories.find(
+            {"copropriete_id": copropriete_id} if copropriete_id else {}, {"_id": 0}
+        ).to_list(2000)
+        cat_by_id = {c["id"]: c for c in cats}
+        cat_by_acc = {}
+        for c in cats:
+            acc = c.get("account_number", "")
+            if acc:
+                cat_by_acc.setdefault(acc, c)
+
         # 4) Resolve PCMN names + bank accounts
         accs = await db.pcmn_accounts.find(
             {"class_num": 6, **({"copropriete_id": copropriete_id} if copropriete_id else {})},
@@ -721,9 +732,14 @@ def create_fiscal_router(db):
             }
 
         rows = []
+        # Set des `source_invoice_id` deja inclus via les factures pour eviter
+        # les doublons quand on parcourra les ecritures.
+        invoice_ids_done = set()
         for inv in invoices:
             acc = inv.get("account_number", "")
             key_id = inv.get("distribution_key_id", "")
+            invoice_ids_done.add(inv["id"])
+            cat = cat_by_id.get(inv.get("expense_category_id", "")) or cat_by_acc.get(acc) or {}
             rows.append({
                 "id": inv["id"],
                 "date": inv.get("date", ""),
@@ -732,6 +748,9 @@ def create_fiscal_router(db):
                 "description": inv.get("description", ""),
                 "account_number": acc,
                 "account_name": acc_names.get(acc, ""),
+                "expense_category_id": cat.get("id", ""),
+                "expense_category_name": cat.get("name", ""),
+                "expense_category_code": cat.get("code", ""),
                 "distribution_key_id": key_id,
                 "distribution_key_name": keys_map.get(key_id, "—"),
                 "vat_amount": inv.get("vat_amount", 0),
@@ -740,12 +759,93 @@ def create_fiscal_router(db):
                 "paid": inv["id"] in paid_map,
                 "paid_info": paid_map.get(inv["id"]),
                 "attachments_count": len(inv.get("attachments", []) or []),
-                # Repartition occupant/proprietaire (decompte locataire)
                 "occupant_pct": inv.get("occupant_pct", 0) or 0,
                 "proprietaire_pct": inv.get("proprietaire_pct", 100) if inv.get("proprietaire_pct") is not None else 100,
                 "occupant_amount": inv.get("occupant_amount", 0) or 0,
                 "proprietaire_amount": inv.get("proprietaire_amount", 0) or inv.get("total_amount", 0),
+                "source": "invoice",
+                "journal_type": "AC",
             })
+
+        # ----- Inclure aussi les ecritures FI / OD impactant les comptes 6XX -----
+        # (frais bancaires, produits financiers, regularisations) afin d'aligner
+        # la "Liste des depenses" avec la vue Optipro (qui regroupe AC + FI sur
+        # les charges).
+        # Resoudre tous les comptes PCMN classe 6, 65 (frais financiers), 75 (produits financiers)
+        all_charge_accs_q = {"class_num": {"$in": [6, 7]}}
+        if copropriete_id:
+            all_charge_accs_q["copropriete_id"] = copropriete_id
+        charge_accs = await db.pcmn_accounts.find(all_charge_accs_q, {"_id": 0, "number": 1, "name": 1, "class_num": 1}).to_list(2000)
+        charge_acc_set = {a["number"] for a in charge_accs}
+        charge_acc_names = {a["number"]: a["name"] for a in charge_accs}
+        # Heuristique : tout compte commencant par "6" ou "75" est considere comme charge/produit financier
+        def _is_charge_account(num: str) -> bool:
+            if not num:
+                return False
+            if num in charge_acc_set:
+                return True
+            return num.startswith("6") or num.startswith("75")
+
+        je_q = {"journal_type": {"$in": ["FI", "OD"]}}
+        if copropriete_id:
+            je_q["copropriete_id"] = copropriete_id
+        if date_from or date_to:
+            je_q["date"] = {}
+            if date_from:
+                je_q["date"]["$gte"] = date_from
+            if date_to:
+                je_q["date"]["$lte"] = date_to
+        # Exclude reversals + entries already represented by invoice
+        je_q["$and"] = [
+            {"reverses_id": {"$exists": False}},
+            {"reversed_by_id": {"$exists": False}},
+        ]
+        je_entries = await db.journal_entries.find(je_q, {"_id": 0}).sort("date", 1).to_list(50000)
+        for je in je_entries:
+            # Skip if linked to an invoice we already included
+            src_inv = je.get("source_invoice_id", "")
+            if src_inv and src_inv in invoice_ids_done:
+                continue
+            # Each line with a charge account contributes
+            for ln in je.get("lines", []) or []:
+                acc = (ln.get("account_number") or "").strip()
+                if not _is_charge_account(acc):
+                    continue
+                if account_number and acc != account_number:
+                    continue
+                # Signed amount : debit - credit (positive = expense, negative = product)
+                debit = float(ln.get("debit", 0) or 0)
+                credit = float(ln.get("credit", 0) or 0)
+                amount = debit - credit
+                if abs(amount) < 0.005:
+                    continue
+                desc = (ln.get("line_description") or ln.get("description") or je.get("description", "") or "").strip()
+                rows.append({
+                    "id": je.get("id", ""),
+                    "date": je.get("date", ""),
+                    "number": je.get("reference", "") or "",
+                    "supplier": ln.get("counterparty_name", "") or ln.get("third_party_label", "") or "—",
+                    "description": desc,
+                    "account_number": acc,
+                    "account_name": charge_acc_names.get(acc, ""),
+                    "distribution_key_id": "",
+                    "distribution_key_name": "—",
+                    "vat_amount": 0,
+                    "total_amount": round(amount, 2),
+                    "status": "comptabilise",
+                    "paid": True,
+                    "paid_info": None,
+                    "attachments_count": 0,
+                    "occupant_pct": 0,
+                    "proprietaire_pct": 100,
+                    "occupant_amount": 0,
+                    "proprietaire_amount": round(amount, 2),
+                    "source": "journal",
+                    "journal_type": je.get("journal_type", ""),
+                })
+
+        # Re-sort all rows by date for clean rendering
+        rows.sort(key=lambda r: (r.get("date", ""), r.get("number", "")))
 
         totals = {
             "by_account": {},
