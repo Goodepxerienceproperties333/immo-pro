@@ -1767,4 +1767,139 @@ def create_reports_router(db):
             "status": "crediteur" if total_credit > total_debit + 0.01 else ("debiteur" if total_debit > total_credit + 0.01 else "solde"),
         }
 
+    @router.post("/balance-tiers/lettrer-supplier")
+    async def lettrer_supplier(payload: dict, request: Request):
+        """Manual reconciliation : link an 'orphan' supplier name to an existing
+        supplier in DB and regenerate missing journal entries (AC) for that
+        supplier's invoices.
+
+        Body : { copropriete_id, orphan_name, supplier_id }
+        Effects :
+        1. Update `supplier.tier_accounts[copro_id].main` to a 4400xxx code (built
+           from auxiliary_code if not yet set : F0606 -> 4400606).
+        2. For each invoice with supplier matching orphan_name and NO existing
+           journal entry, create an AC double-entry (debit charges 6xxx, credit
+           supplier tier 4400xxx) so the balance-tiers can aggregate the supplier.
+        3. Backfill supplier_id on the invoices if missing.
+        """
+        copro_id = (payload.get("copropriete_id") or "").strip()
+        orphan_name = (payload.get("orphan_name") or "").strip()
+        supplier_id = (payload.get("supplier_id") or "").strip()
+        if not (copro_id and orphan_name and supplier_id):
+            raise HTTPException(400, "copropriete_id, orphan_name et supplier_id requis")
+
+        # Load supplier and validate it belongs to user scope (chinese wall)
+        sup = await db.suppliers.find_one({"id": supplier_id}, {"_id": 0})
+        if not sup:
+            raise HTTPException(404, "Fournisseur introuvable")
+
+        # Resolve / ensure the tier account 4400XXX for this supplier in this ACP
+        tier = ((sup.get("tier_accounts") or {}).get(copro_id, {}) or {}).get("main", "")
+        if not tier:
+            aux = (sup.get("auxiliary_code") or "").strip().upper()
+            if aux.startswith("F") and len(aux) >= 5:
+                tier = "4400" + aux[1:].zfill(3)
+            else:
+                # Generate a fresh 44000XXX code (next available)
+                existing_codes = await db.pcmn_accounts.distinct("number", {"copropriete_id": copro_id, "number": {"$regex": "^44000"}})
+                next_n = 1
+                used = {int(c[-3:]) for c in existing_codes if c[-3:].isdigit()}
+                while next_n in used:
+                    next_n += 1
+                tier = f"44000{next_n:03d}"
+            await db.suppliers.update_one(
+                {"id": supplier_id},
+                {"$set": {f"tier_accounts.{copro_id}.main": tier}},
+            )
+
+        # Ensure PCMN account exists
+        existing = await db.pcmn_accounts.find_one({"copropriete_id": copro_id, "number": tier})
+        if not existing:
+            await db.pcmn_accounts.insert_one({
+                "id": str(uuid.uuid4()),
+                "number": tier,
+                "label": sup.get("name") or tier,
+                "category": "44",
+                "is_tier": True,
+                "copropriete_id": copro_id,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            })
+
+        # Find invoices matching orphan_name in this ACP
+        cur = db.invoices.find({
+            "copropriete_id": copro_id,
+            "supplier": {"$regex": f"^{orphan_name}$", "$options": "i"},
+        }, {"_id": 0})
+        invs = await cur.to_list(1000)
+
+        je_created = 0
+        invoices_relinked = 0
+        for inv in invs:
+            inv_id = inv.get("id")
+            # Backfill supplier_id if missing or different
+            if inv.get("supplier_id") != supplier_id:
+                await db.invoices.update_one(
+                    {"id": inv_id},
+                    {"$set": {"supplier_id": supplier_id}},
+                )
+                invoices_relinked += 1
+            # Check if this invoice already has a journal entry
+            existing_je = await db.journal_entries.find_one({
+                "copropriete_id": copro_id,
+                "source_invoice_id": inv_id,
+            })
+            if existing_je:
+                continue
+            # Create AC journal entry
+            account_num = (inv.get("account_number") or "").strip()
+            total = float(inv.get("total_amount") or 0)
+            if not account_num or total <= 0:
+                continue
+            je_id = str(uuid.uuid4())
+            await db.journal_entries.insert_one({
+                "id": je_id,
+                "journal_type": "AC",
+                "date": inv.get("date") or "",
+                "reference": inv.get("internal_reference") or inv.get("number") or "",
+                "description": f"{sup.get('name','')} - {(inv.get('description') or '').strip()}".strip(" -"),
+                "lines": [
+                    {
+                        "account_number": account_num,
+                        "account_name": "",
+                        "debit": total,
+                        "credit": 0.0,
+                        "description": (inv.get("description") or "").strip(),
+                        "occupant_pct": float(inv.get("occupant_pct") or 100.0),
+                        "proprietaire_pct": float(inv.get("proprietaire_pct") or 0.0),
+                    },
+                    {
+                        "account_number": tier,
+                        "account_name": sup.get("name", ""),
+                        "debit": 0.0,
+                        "credit": total,
+                        "description": f"DA {inv.get('internal_reference','')}",
+                        "third_party_id": supplier_id,
+                        "third_party_type": "supplier",
+                        "occupant_pct": None,
+                        "proprietaire_pct": None,
+                    },
+                ],
+                "total_debit": total,
+                "total_credit": total,
+                "copropriete_id": copro_id,
+                "source_invoice_id": inv_id,
+                "manual_reconciled": True,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            })
+            je_created += 1
+
+        return {
+            "supplier_id": supplier_id,
+            "supplier_name": sup.get("name", ""),
+            "tier_account": tier,
+            "invoices_matched": len(invs),
+            "invoices_relinked": invoices_relinked,
+            "journal_entries_created": je_created,
+        }
+
     return router

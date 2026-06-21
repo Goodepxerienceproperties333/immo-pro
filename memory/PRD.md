@@ -11,7 +11,47 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 ## Implemented
-### Iter72 (Feb 2026) - Phase I (OD d'ouverture) + Cles details + Banking visibility + Balance tiers AN
+### Iter72 (Feb 2026) - Phase I (OD d'ouverture) + Cles details + Banking visibility + Balance tiers AN + Lettrage manuel orphelins
+
+#### Lettrage manuel des fournisseurs orphelins (Balance de Tiers)
+Bug observe par le user : apres l'import de factures, certains fournisseurs
+apparaissent comme "Orphelin" dans la balance de tiers (factures presentes
+mais pas d'ecriture comptable AC sur leur compte tier 4400XXX).
+Cause : pendant le commit-invoices, soit le supplier_aux_code etait vide,
+soit le tier_account du fournisseur n'etait pas encore configure, soit la
+session a ete partiellement rollbackee.
+
+**Nouveau endpoint** `POST /api/reports/balance-tiers/lettrer-supplier` :
+- Body : `{copropriete_id, orphan_name, supplier_id}`
+- Resout / cree le compte tier 4400XXX pour le fournisseur (via auxiliary_code
+  F0XXX -> 4400XXX, ou auto-incremente 44000XXX si pas d'aux).
+- Cree le PCMN account associe si manquant.
+- Met a jour `supplier.tier_accounts[copro_id].main = tier`.
+- Pour chaque facture avec `supplier == orphan_name` ET pas d'ecriture AC :
+  - Cree une ecriture AC double-entree (debit charge 6xxx / credit tier 4400xxx)
+    avec `third_party_id = supplier_id`.
+  - Backfill `invoice.supplier_id` si necessaire.
+- Returns : `{tier_account, invoices_matched, invoices_relinked, journal_entries_created}`.
+
+**Frontend** `BalanceTiersPage.js` :
+- Bouton "Lettrer" (icone Link2 ambre) sur chaque ligne orpheline du tab
+  Fournisseurs (au lieu du bouton Eye qui n'est dispo que pour les fournisseurs
+  connus).
+- Dialog modale avec :
+  - Titre + sous-titre indiquant le nom orphelin + nb factures.
+  - Input recherche autofocus (filtre par nom / aux_code / BCE / VAT).
+  - Liste scrollable des fournisseurs en base (max 60), affichant nom, BCE,
+    badge aux_code, icone Link2.
+  - Banner amber d'explication de l'effet du lettrage.
+  - Clic sur un fournisseur -> POST commit -> toast feedback -> reload table.
+
+**Test E2E** : sur ACP "import" avec 7 orphelins, click "Lettrer" sur
+"Dardenne Pierre" -> selection F0606 -> 2 factures relinkees + 2 ecritures AC
+creees (compte tier 44000606) -> orphan disparu, balance 1142.00 EUR affiche
+en "A payer".
+
+
+### Iter72bis - Original
 
 #### Phase I - OD d'ouverture / Bilan comptable (Optipro -> AN)
 **Backend** : `backend/routes/import_wizard.py::commit_opening_balance` retravaille

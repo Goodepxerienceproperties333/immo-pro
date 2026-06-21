@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { toast } from 'sonner';
-import { Users, Truck, Eye, ArrowUpRight, ArrowDownRight, Download, FileText, Filter, X } from 'lucide-react';
+import { Users, Truck, Eye, ArrowUpRight, ArrowDownRight, Download, FileText, Filter, X, Link2 } from 'lucide-react';
 import { fmtDate } from '@/lib/dateFmt';
 
 const API = process.env.REACT_APP_BACKEND_URL;
@@ -94,6 +94,12 @@ export default function BalanceTiersPage() {
   const [detail, setDetail] = useState(null);
   const [detailType, setDetailType] = useState('');
   const [loading, setLoading] = useState(true);
+  // ----- Manual reconciliation (lettrage manuel) state -----
+  const [lettrerOpen, setLettrerOpen] = useState(false);
+  const [lettrerOrphan, setLettrerOrphan] = useState(null);  // {supplier_name, credit, invoice_count}
+  const [lettrerSuppliers, setLettrerSuppliers] = useState([]);  // available suppliers for picker
+  const [lettrerSearch, setLettrerSearch] = useState('');
+  const [lettrerLoading, setLettrerLoading] = useState(false);
   const [filters, setFilters] = useState(() => {
     try {
       const saved = localStorage.getItem('balance-tiers-filters');
@@ -135,6 +141,49 @@ export default function BalanceTiersPage() {
       const { data } = await api.get(`/reports/balance-tiers/suppliers/${supplierId}`, { params });
       setDetail(data); setDetailType('supplier');
     } catch { toast.error('Erreur'); }
+  };
+
+  // ----- Manual reconciliation (lettrage manuel d'un fournisseur orphelin) -----
+  const openLettrerDialog = async (orphanRow) => {
+    setLettrerOrphan(orphanRow);
+    setLettrerSearch('');
+    setLettrerOpen(true);
+    try {
+      // Load all suppliers in the current ACP
+      const { data } = await api.get('/suppliers');
+      setLettrerSuppliers(data || []);
+    } catch {
+      setLettrerSuppliers([]);
+      toast.error('Erreur de chargement des fournisseurs');
+    }
+  };
+
+  const commitLettrer = async (selectedSupplierId) => {
+    if (!lettrerOrphan || !selectedSupplierId) return;
+    const coproId = localStorage.getItem('selectedCopro') || localStorage.getItem('copropriete_id') || '';
+    if (!coproId || coproId === 'all') {
+      toast.error('Selectionnez une ACP avant de lettrer'); return;
+    }
+    setLettrerLoading(true);
+    try {
+      const { data } = await api.post('/reports/balance-tiers/lettrer-supplier', {
+        copropriete_id: coproId,
+        orphan_name: lettrerOrphan.supplier_name,
+        supplier_id: selectedSupplierId,
+      });
+      toast.success(
+        `Lettrage OK : ${data.supplier_name} (compte ${data.tier_account}) - ` +
+        `${data.invoices_matched} facture(s) matchee(s), ${data.journal_entries_created} ecriture(s) AC creee(s)`
+      );
+      setLettrerOpen(false);
+      setLettrerOrphan(null);
+      await load();  // Refresh the table
+    } catch (e) {
+      const msg = e?.response?.data?.detail || 'Erreur lors du lettrage';
+      toast.error(typeof msg === 'string' ? msg : 'Erreur lettrage');
+    } finally {
+      setLettrerLoading(false);
+    }
   };
 
   if (loading && !ownersData) return <div className="h-1 w-48 bg-slate-200 rounded overflow-hidden mx-auto mt-20"><div className="h-full bg-[#0055FF] animate-pulse w-1/2" /></div>;
@@ -301,7 +350,11 @@ export default function BalanceTiersPage() {
                             {s.status === 'crediteur' ? 'A payer' : s.status === 'debiteur' ? 'Trop-paye' : 'Solde'}
                           </Badge>
                         </TableCell>
-                        <TableCell>{s.supplier_id ? <Button variant="ghost" size="sm" onClick={() => viewSupplierDetail(s.supplier_id)} data-testid={`view-supplier-${s.supplier_id}`}><Eye size={14} /></Button> : null}</TableCell>
+                        <TableCell>{s.supplier_id ? (
+                          <Button variant="ghost" size="sm" onClick={() => viewSupplierDetail(s.supplier_id)} data-testid={`view-supplier-${s.supplier_id}`}><Eye size={14} /></Button>
+                        ) : s.orphan ? (
+                          <Button variant="ghost" size="sm" onClick={() => openLettrerDialog(s)} className="text-amber-600 hover:text-amber-700 hover:bg-amber-50" title="Lettrer manuellement avec un fournisseur en base" data-testid={`lettrer-orphan-${i}`}><Link2 size={14} /></Button>
+                        ) : null}</TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
@@ -354,6 +407,83 @@ export default function BalanceTiersPage() {
                   ))}
                 </TableBody>
               </Table>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ----- Lettrage manuel dialog (orphan supplier reconciliation) ----- */}
+      <Dialog open={lettrerOpen} onOpenChange={setLettrerOpen}>
+        <DialogContent className="max-w-2xl" data-testid="lettrer-dialog">
+          <DialogHeader>
+            <DialogTitle style={{fontFamily:'Chivo,sans-serif'}}>
+              Lettrer manuellement
+            </DialogTitle>
+            <p className="text-sm text-slate-600 mt-1">
+              Selectionnez le fournisseur en base auquel rattacher les factures orphelines de
+              <strong className="ml-1 text-amber-700">&laquo;{lettrerOrphan?.supplier_name}&raquo;</strong>
+              {lettrerOrphan?.invoice_count > 0 && (
+                <span className="ml-1 text-slate-500">({lettrerOrphan.invoice_count} facture(s))</span>
+              )}
+            </p>
+          </DialogHeader>
+          <div className="mt-3">
+            <Input
+              placeholder="Rechercher un fournisseur (nom, BCE, F0XXX)..."
+              value={lettrerSearch}
+              onChange={e => setLettrerSearch(e.target.value)}
+              className="mb-3"
+              data-testid="lettrer-search-input"
+              autoFocus
+            />
+            <div className="max-h-[400px] overflow-y-auto border rounded-md divide-y divide-slate-100">
+              {lettrerSuppliers
+                .filter(sp => {
+                  if (!lettrerSearch) return true;
+                  const q = lettrerSearch.toLowerCase();
+                  return ((sp.name || '').toLowerCase().includes(q)
+                    || (sp.auxiliary_code || '').toLowerCase().includes(q)
+                    || (sp.vat_number || '').toLowerCase().includes(q)
+                    || (sp.bce_number || '').toLowerCase().includes(q));
+                })
+                .slice(0, 60)
+                .map(sp => (
+                  <button
+                    key={sp.id}
+                    onClick={() => commitLettrer(sp.id)}
+                    disabled={lettrerLoading}
+                    className="w-full text-left px-3 py-2 hover:bg-amber-50 flex items-center justify-between gap-2 text-sm disabled:opacity-50"
+                    data-testid={`lettrer-pick-${sp.id}`}
+                  >
+                    <div>
+                      <div className="font-medium">{sp.name}</div>
+                      <div className="text-xs text-slate-500">{sp.bce_number || sp.vat_number || '—'}</div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {sp.auxiliary_code && <Badge variant="outline" className="font-mono text-[10px] bg-slate-50">{sp.auxiliary_code}</Badge>}
+                      <Link2 size={14} className="text-amber-600" />
+                    </div>
+                  </button>
+                ))}
+              {lettrerSuppliers.length === 0 && (
+                <div className="px-3 py-6 text-center text-sm text-slate-500">
+                  Chargement des fournisseurs...
+                </div>
+              )}
+              {lettrerSuppliers.length > 0 && lettrerSuppliers.filter(sp => {
+                if (!lettrerSearch) return true;
+                const q = lettrerSearch.toLowerCase();
+                return ((sp.name || '').toLowerCase().includes(q));
+              }).length === 0 && (
+                <div className="px-3 py-6 text-center text-sm text-slate-500">
+                  Aucun fournisseur trouve pour &laquo;{lettrerSearch}&raquo;
+                </div>
+              )}
+            </div>
+            <div className="mt-3 p-2 bg-amber-50 border border-amber-200 rounded text-xs text-amber-800">
+              <strong>Effet du lettrage :</strong> les factures de <em>&laquo;{lettrerOrphan?.supplier_name}&raquo;</em> seront
+              rattachees au fournisseur selectionne ; les ecritures comptables AC manquantes (debit charge / credit 4400xxx)
+              seront automatiquement creees pour que le solde apparaisse dans la balance de tiers.
             </div>
           </div>
         </DialogContent>
