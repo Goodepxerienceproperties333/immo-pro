@@ -166,6 +166,191 @@ def _extract_pct(s: str) -> float:
     return _to_float(m.group(1))
 
 
+# ============================================================
+# BUDGET PDF parser
+# ============================================================
+def parse_budget_pdf(raw: bytes) -> dict:
+    """Parse 'Budget' PDF from Optipro.
+
+    Structure observed : sections grouped by distribution key code (e.g. "0001 -
+    Charges communes"). Each section lists PCMN accounts with budgeted amounts.
+
+    Returns: { sections: [{ key_code, key_label, lines: [{account, libelle, amount}] }],
+               total_global, count }
+    """
+    info = extract_pdf(raw)
+    sections: list[dict] = []
+    current_section: dict = None
+    total_global = 0.0
+
+    # Strategy : iterate the full text line by line and use regex to detect
+    # - section headers : starts with 4-digit code, e.g. "0001 - Charges communes"
+    # - data lines : starts with a PCMN account number (3-7 digits) + libelle + amount
+    import re
+    full_text = info.get("full_text", "")
+    for raw_line in full_text.split("\n"):
+        line = raw_line.strip()
+        if not line:
+            continue
+        # Section header : "0001 - Libelle"
+        sec_match = re.match(r"^(\d{4})\s*[-–]\s*(.+?)(?:\s+\d[\d\s.,]*)?$", line)
+        # We accept the section header only if it doesn't look like a data line
+        if sec_match and not re.search(r"\d+[.,]\d{2}\s*$", line):
+            code = sec_match.group(1)
+            label = sec_match.group(2).strip()
+            current_section = {"key_code": code, "key_label": label, "lines": [], "subtotal": 0.0}
+            sections.append(current_section)
+            continue
+        # Data line : account + libelle + amount at the end
+        # Account is 3-7 digits, can be 6 or 7 digits (612590)
+        # Amount ends with "x.xx" or "-x.xx"
+        dl_match = re.match(r"^(\d{3,7})\s+(.+?)\s+(-?[\d\s]+[.,]\d{2})\s*$", line)
+        if dl_match and current_section is not None:
+            account = dl_match.group(1)
+            libelle = dl_match.group(2).strip()
+            amount = _to_float(dl_match.group(3).replace(" ", "").replace(",", "."))
+            current_section["lines"].append({
+                "account": account,
+                "libelle": libelle,
+                "amount": amount,
+            })
+            current_section["subtotal"] += amount
+            total_global += amount
+            continue
+        # "Total" line at the end : extract the total_global
+        total_match = re.search(r"total[^\d]*(-?[\d\s]+[.,]\d{2})", line.lower())
+        if total_match and "section" not in line.lower():
+            tg = _to_float(total_match.group(1).replace(" ", "").replace(",", "."))
+            if tg > total_global:
+                total_global = tg
+    return {
+        "sections": sections,
+        "total_global": round(total_global, 2),
+        "count": sum(len(s["lines"]) for s in sections),
+    }
+
+
+# ============================================================
+# DISTRIBUTION KEYS PDF parser
+# ============================================================
+def parse_distribution_keys_pdf(raw: bytes) -> dict:
+    """Parse 'Cle de repartition' PDF from Optipro.
+
+    Each key has : code + libelle + lots with quotities + total.
+    Returns: { keys: [{code, name, type, lines: [{lot_label, lot_code, quotity}], total_quotities}] }
+    """
+    info = extract_pdf(raw)
+    keys: list[dict] = []
+    seen_codes: set[str] = set()
+
+    import re
+    for page in info["pages"]:
+        # Try to extract structured tables first
+        for table in page["tables"]:
+            if not table or len(table) < 1:
+                continue
+            # Heuristic : if the table has a "TOTAL QUOTITES" column, parse it
+            header_norm = [(c or "").lower().strip().replace("\n", " ") for c in table[0]]
+            has_total_qt = any("total" in h and ("quotit" in h or "qt" in h) for h in header_norm)
+            has_libelle = any("libelle" in h or "libellé" in h for h in header_norm)
+            if not (has_total_qt and has_libelle):
+                continue
+            # Locate columns
+            col_idx: dict[str, int] = {}
+            for i, h in enumerate(header_norm):
+                if ("libelle" in h or "libellé" in h) and "copro" not in h:
+                    col_idx.setdefault("libelle", i)
+                elif "copropri" in h:
+                    col_idx.setdefault("owner", i)
+                elif "total" in h and ("quotit" in h or "qt" in h):
+                    col_idx.setdefault("qt", i)
+                elif "lot" in h:
+                    col_idx.setdefault("lot", i)
+            # Iterate data rows; the key code/label is somewhere in the row
+            for row in table[1:]:
+                if not row or len(row) < 3:
+                    continue
+                # Try to split each cell by `\n` similar to natures parser
+                def get_cell(name):
+                    if name not in col_idx:
+                        return []
+                    idx = col_idx[name]
+                    if idx >= len(row):
+                        return []
+                    raw_cell = row[idx] or ""
+                    parts = [p.strip() for p in raw_cell.split("\n") if p.strip()]
+                    return parts
+                libelles = get_cell("libelle")
+                owners = get_cell("owner") if "owner" in col_idx else []
+                lots = get_cell("lot") if "lot" in col_idx else []
+                qts = get_cell("qt")
+                # The first libelle is typically the KEY name (e.g. "0001 - Charges communes")
+                if not libelles:
+                    continue
+                first_libelle = libelles[0]
+                code_match = re.match(r"^(\d{3,4})\s*[-–]\s*(.+)$", first_libelle)
+                # If no key code at the top of the row -> skip (not a new key, just a continuation)
+                if not code_match:
+                    continue
+                key_code = code_match.group(1)
+                key_name = code_match.group(2).strip()
+                if key_code in seen_codes:
+                    continue
+                seen_codes.add(key_code)
+                # Lines : remaining libelles paired with quotities and owners/lots
+                lines = []
+                total_qt = 0.0
+                for i in range(1, max(len(libelles), len(qts))):
+                    if i >= len(qts):
+                        continue
+                    qt_str = qts[i]
+                    qt = _to_float(qt_str)
+                    lot_label = libelles[i] if i < len(libelles) else ""
+                    owner_label = owners[i] if i < len(owners) else ""
+                    lot_code = lots[i] if i < len(lots) else ""
+                    if qt > 0 or lot_label:
+                        lines.append({
+                            "lot_label": lot_label,
+                            "lot_code": lot_code,
+                            "owner_label": owner_label,
+                            "quotity": qt,
+                        })
+                        total_qt += qt
+                # Last quotity in the row could be the total (e.g. 168.00 vs sum of 39+40+49+40)
+                if qts:
+                    last_qt = _to_float(qts[0])
+                    if abs(last_qt - total_qt) > 0.01 and last_qt > 0:
+                        # Use the explicit total if available
+                        explicit_total = last_qt
+                    else:
+                        explicit_total = total_qt
+                else:
+                    explicit_total = total_qt
+                keys.append({
+                    "code": key_code,
+                    "name": key_name,
+                    "type": "tantiemes",
+                    "lines": lines,
+                    "total_quotities": round(explicit_total, 6),
+                })
+    # Fallback : if no key parsed from tables, attempt text-based extraction
+    if not keys:
+        text = info.get("full_text", "")
+        key_blocks = re.split(r"(?=^\d{3,4}\s*[-–]\s*[A-Z])", text, flags=re.MULTILINE)
+        for block in key_blocks:
+            kmatch = re.match(r"^(\d{3,4})\s*[-–]\s*(.+?)$", block.strip().splitlines()[0] if block.strip() else "")
+            if not kmatch:
+                continue
+            keys.append({
+                "code": kmatch.group(1),
+                "name": kmatch.group(2).strip(),
+                "type": "tantiemes",
+                "lines": [],
+                "total_quotities": 0.0,
+            })
+    return {"keys": keys, "count": len(keys)}
+
+
 def _to_float(s: str) -> float:
     if not s:
         return 0.0

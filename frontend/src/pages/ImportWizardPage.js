@@ -21,19 +21,24 @@ import api from '@/lib/api';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import {
   Upload, Users, Truck, Home, Tag, CheckCircle2, X, AlertTriangle,
-  ChevronRight, ChevronLeft, FileWarning, Loader2, RotateCcw
+  ChevronRight, ChevronLeft, FileWarning, Loader2, RotateCcw,
+  Calendar, Wallet, PieChart, Plus, Trash2
 } from 'lucide-react';
 import { toast } from 'sonner';
 
 const STEPS = [
-  { key: 'owners',    label: 'Proprietaires',     icon: Users,  optional: false, kind: 'csv' },
-  { key: 'suppliers', label: 'Fournisseurs',      icon: Truck,  optional: false, kind: 'csv' },
-  { key: 'lots',      label: 'Lots',              icon: Home,   optional: false, kind: 'csv' },
-  { key: 'natures',   label: 'Natures depense',   icon: Tag,    optional: false, kind: 'pdf' },
+  { key: 'owners',    label: 'Proprietaires',     icon: Users,    optional: false, kind: 'csv' },
+  { key: 'suppliers', label: 'Fournisseurs',      icon: Truck,    optional: false, kind: 'csv' },
+  { key: 'lots',      label: 'Lots',              icon: Home,     optional: false, kind: 'csv' },
+  { key: 'natures',   label: 'Natures depense',   icon: Tag,      optional: false, kind: 'pdf' },
+  { key: 'fiscal_year', label: 'Exercice fiscal', icon: Calendar, optional: false, kind: 'form' },
+  { key: 'budget',    label: 'Budget',            icon: Wallet,   optional: true,  kind: 'pdf' },
+  { key: 'distribution_keys', label: 'Cles de repartition', icon: PieChart, optional: true, kind: 'pdf' },
 ];
 
 // Champs cibles attendus pour chaque étape (clé = nom du champ DB)
@@ -86,6 +91,9 @@ export default function ImportWizardPage() {
   const [sniffResult, setSniffResult] = useState(null);
   const [mapping, setMapping] = useState({});
   const [naturesParsed, setNaturesParsed] = useState([]);
+  const [budgetSections, setBudgetSections] = useState([]);
+  const [keysParsed, setKeysParsed] = useState([]);
+  const [fyForm, setFyForm] = useState({ name: '', start_date: '', end_date: '', status: 'open' });
   const [committing, setCommitting] = useState(false);
 
   const step = STEPS[stepIdx];
@@ -122,23 +130,29 @@ export default function ImportWizardPage() {
     setSniffResult(null);
     setMapping({});
     setNaturesParsed([]);
+    setBudgetSections([]);
+    setKeysParsed([]);
     try {
       const fd = new FormData();
       fd.append('file', file);
       const isPdf = step.kind === 'pdf';
       let r;
       if (isPdf) {
-        fd.append('kind', 'natures');
+        // Map step.key -> backend kind
+        const kindMap = { natures: 'natures', budget: 'budget', distribution_keys: 'keys' };
+        fd.append('kind', kindMap[step.key] || 'generic');
         r = await api.post(`/import-wizard/sessions/${session.id}/sniff-pdf`, fd, {
           headers: { 'Content-Type': 'multipart/form-data' },
         });
-        setNaturesParsed(r.data.natures || []);
-      } else {
+        if (step.key === 'natures') setNaturesParsed(r.data.natures || []);
+        if (step.key === 'budget') setBudgetSections(r.data.sections || []);
+        if (step.key === 'distribution_keys') setKeysParsed(r.data.keys || []);
+      } else if (step.kind === 'csv') {
         r = await api.post(`/import-wizard/sessions/${session.id}/sniff-csv`, fd, {
           headers: { 'Content-Type': 'multipart/form-data' },
         });
       }
-      setSniffResult(r.data);
+      setSniffResult(r?.data || {});
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Echec du parsing');
     } finally {
@@ -157,19 +171,44 @@ export default function ImportWizardPage() {
           mapping,
           rows: sniffResult?.rows || [],
         });
-      } else {
+        toast.success(`${r.data.inserted} ${step.label.toLowerCase()} importes`);
+      } else if (step.key === 'natures') {
         r = await api.post(`/import-wizard/sessions/${session.id}/commit-natures`, { natures: naturesParsed });
+        toast.success(`${r.data.inserted} natures importees`);
+      } else if (step.key === 'budget') {
+        const fyId = session?.steps?.fiscal_year?.fiscal_year_id;
+        if (!fyId) {
+          toast.error('Creez d\'abord l\'exercice fiscal a l\'etape precedente');
+          setCommitting(false);
+          return;
+        }
+        r = await api.post(`/import-wizard/sessions/${session.id}/commit-budget`, {
+          fiscal_year_id: fyId, sections: budgetSections
+        });
+        toast.success(`Budget cree : ${r.data.inserted} lignes (total ${r.data.total_amount?.toFixed(2)} EUR)`);
+      } else if (step.key === 'distribution_keys') {
+        r = await api.post(`/import-wizard/sessions/${session.id}/commit-distribution-keys`, { keys: keysParsed });
+        toast.success(`${r.data.inserted} cle(s) de repartition creees`);
+      } else if (step.key === 'fiscal_year') {
+        if (!fyForm.name || !fyForm.start_date || !fyForm.end_date) {
+          toast.error('Nom, date debut et date fin sont obligatoires');
+          setCommitting(false);
+          return;
+        }
+        r = await api.post(`/import-wizard/sessions/${session.id}/commit-fiscal-year`, fyForm);
+        toast.success(`Exercice "${r.data.name}" cree`);
       }
-      toast.success(`${r.data.inserted} ${step.label.toLowerCase()} importes`);
-      if (r.data.errors?.length) {
-        toast.warning(`${r.data.errors.length} ligne(s) en erreur`);
-      }
+      // Refresh session to update step counters
+      const sRes = await api.get('/import-wizard/sessions/active', { params: { copropriete_id: effectiveCopro } });
+      setSession(sRes.data);
       // advance
       if (stepIdx < STEPS.length - 1) {
         setStepIdx(stepIdx + 1);
         setSniffResult(null);
         setMapping({});
         setNaturesParsed([]);
+        setBudgetSections([]);
+        setKeysParsed([]);
       } else {
         // Final step : finish
         await api.post(`/import-wizard/sessions/${session.id}/finish`);
@@ -253,13 +292,13 @@ export default function ImportWizardPage() {
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          {!sniffResult && (
+          {!sniffResult && step.kind !== 'form' && (
             <div className="border-2 border-dashed border-slate-300 rounded-md p-8 text-center">
               <Upload size={32} className="mx-auto text-slate-400 mb-2" />
               <p className="text-sm text-slate-600 mb-3">
                 {step.kind === 'csv'
                   ? 'Chargez le fichier CSV exporte d\'Optipro/Sogis'
-                  : 'Chargez le PDF de la liste des natures de depense'}
+                  : `Chargez le PDF (${step.label})`}
               </p>
               <input
                 type="file"
@@ -275,6 +314,10 @@ export default function ImportWizardPage() {
             </div>
           )}
 
+          {step.kind === 'form' && step.key === 'fiscal_year' && (
+            <FiscalYearForm fyForm={fyForm} setFyForm={setFyForm} />
+          )}
+
           {sniffResult && step.kind === 'csv' && (
             <CsvMappingView
               sniff={sniffResult}
@@ -284,8 +327,16 @@ export default function ImportWizardPage() {
             />
           )}
 
-          {sniffResult && step.kind === 'pdf' && (
+          {sniffResult && step.key === 'natures' && (
             <NaturesPreview natures={naturesParsed} setNatures={setNaturesParsed} />
+          )}
+
+          {sniffResult && step.key === 'budget' && (
+            <BudgetPreview sections={budgetSections} setSections={setBudgetSections} />
+          )}
+
+          {sniffResult && step.key === 'distribution_keys' && (
+            <KeysPreview keys={keysParsed} setKeys={setKeysParsed} />
           )}
         </CardContent>
       </Card>
@@ -305,7 +356,7 @@ export default function ImportWizardPage() {
             </Button>
           )}
           <Button
-            disabled={!sniffResult || committing}
+            disabled={(step.kind === 'form' ? !fyForm.name : !sniffResult) || committing}
             onClick={handleCommit}
             className="bg-[#0055FF] hover:bg-[#0040CC]"
             data-testid="commit-step"
@@ -433,4 +484,171 @@ function NaturesPreview({ natures, setNatures }) {
 function updateNature(arr, setArr, idx, field, value) {
   const next = arr.map((n, i) => i === idx ? { ...n, [field]: value } : n);
   setArr(next);
+}
+
+// ============== FISCAL YEAR FORM (Step E) ==============
+function FiscalYearForm({ fyForm, setFyForm }) {
+  return (
+    <div className="space-y-4">
+      <div className="bg-blue-50 border border-blue-200 rounded p-3 text-xs text-blue-900">
+        Definissez l&apos;exercice d&apos;ouverture (souvent l&apos;exercice courant ou le suivant). Le bilan d&apos;ouverture (Phase 3) sera repris a la date de debut.
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div>
+          <label className="form-label text-xs">Nom de l&apos;exercice *</label>
+          <Input value={fyForm.name} onChange={e => setFyForm({...fyForm, name: e.target.value})} placeholder="Exercice 2026" data-testid="fy-name" />
+        </div>
+        <div>
+          <label className="form-label text-xs">Statut</label>
+          <Select value={fyForm.status} onValueChange={(v) => setFyForm({...fyForm, status: v})}>
+            <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="open">Ouvert</SelectItem>
+              <SelectItem value="closed">Cloture</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div>
+          <label className="form-label text-xs">Date debut *</label>
+          <Input type="date" value={fyForm.start_date} onChange={e => setFyForm({...fyForm, start_date: e.target.value})} data-testid="fy-start" />
+        </div>
+        <div>
+          <label className="form-label text-xs">Date fin *</label>
+          <Input type="date" value={fyForm.end_date} onChange={e => setFyForm({...fyForm, end_date: e.target.value})} data-testid="fy-end" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============== BUDGET PREVIEW (Step F) ==============
+function BudgetPreview({ sections, setSections }) {
+  if (!sections?.length) {
+    return <div className="text-center py-6 text-amber-600 text-sm"><AlertTriangle size={24} className="inline mr-1" /> Aucune section detectee dans le PDF.</div>;
+  }
+  const total = sections.reduce((acc, s) => acc + (s.lines || []).reduce((a, l) => a + (parseFloat(l.amount) || 0), 0), 0);
+  const upd = (sIdx, lIdx, field, value) => {
+    const next = sections.map((s, i) => {
+      if (i !== sIdx) return s;
+      const lines = s.lines.map((l, j) => j === lIdx ? { ...l, [field]: field === 'amount' ? (parseFloat(value) || 0) : value } : l);
+      return { ...s, lines };
+    });
+    setSections(next);
+  };
+  const addLine = (sIdx) => {
+    const next = sections.map((s, i) => i === sIdx ? { ...s, lines: [...s.lines, { account: '', libelle: '', amount: 0 }] } : s);
+    setSections(next);
+  };
+  const delLine = (sIdx, lIdx) => {
+    const next = sections.map((s, i) => i === sIdx ? { ...s, lines: s.lines.filter((_, j) => j !== lIdx) } : s);
+    setSections(next);
+  };
+  return (
+    <div className="space-y-3">
+      <div className="bg-blue-50 border border-blue-200 rounded p-3 text-xs text-blue-900 flex justify-between">
+        <span><strong>Verifiez puis ajustez le budget</strong> : {sections.length} section(s) detectees.</span>
+        <span className="font-mono font-semibold">Total : {total.toFixed(2)} EUR</span>
+      </div>
+      <div className="space-y-2 max-h-[420px] overflow-y-auto pr-1">
+        {sections.map((s, si) => (
+          <div key={si} className="border border-slate-200 rounded">
+            <div className="bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-800 flex justify-between">
+              <span>[{s.key_code}] {s.key_label}</span>
+              <span className="text-slate-500">{(s.lines || []).length} ligne(s)</span>
+            </div>
+            <table className="w-full text-xs">
+              <thead className="bg-slate-50">
+                <tr>
+                  <th className="px-1 py-1 text-left w-20">Compte</th>
+                  <th className="px-1 py-1 text-left">Libelle</th>
+                  <th className="px-1 py-1 text-right w-24">Montant (EUR)</th>
+                  <th className="w-6"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {(s.lines || []).map((l, li) => (
+                  <tr key={li} className="border-t border-slate-100">
+                    <td className="px-1 py-0.5"><input value={l.account} onChange={e => upd(si, li, 'account', e.target.value)} className="w-20 border-0 bg-transparent font-mono" /></td>
+                    <td className="px-1 py-0.5"><input value={l.libelle} onChange={e => upd(si, li, 'libelle', e.target.value)} className="w-full border-0 bg-transparent" /></td>
+                    <td className="px-1 py-0.5"><input type="number" step="0.01" value={l.amount} onChange={e => upd(si, li, 'amount', e.target.value)} className="w-24 border-0 bg-transparent text-right font-mono" /></td>
+                    <td className="px-0 py-0.5"><button onClick={() => delLine(si, li)} className="text-red-500 hover:text-red-700"><X size={11} /></button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <button onClick={() => addLine(si)} className="text-xs text-[#0055FF] hover:underline px-3 py-1 flex items-center gap-1">
+              <Plus size={11} /> Ajouter une ligne
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ============== DISTRIBUTION KEYS PREVIEW (Step J) ==============
+function KeysPreview({ keys, setKeys }) {
+  if (!keys?.length) {
+    return <div className="text-center py-6 text-amber-600 text-sm"><AlertTriangle size={24} className="inline mr-1" /> Aucune cle de repartition detectee dans le PDF.</div>;
+  }
+  const updKey = (idx, field, value) => {
+    setKeys(keys.map((k, i) => i === idx ? { ...k, [field]: value } : k));
+  };
+  const updLine = (kIdx, lIdx, field, value) => {
+    const next = keys.map((k, i) => {
+      if (i !== kIdx) return k;
+      const lines = k.lines.map((l, j) => j === lIdx ? { ...l, [field]: field === 'quotity' ? (parseFloat(value) || 0) : value } : l);
+      const total = lines.reduce((acc, l) => acc + (parseFloat(l.quotity) || 0), 0);
+      return { ...k, lines, total_quotities: total };
+    });
+    setKeys(next);
+  };
+  const delLine = (kIdx, lIdx) => {
+    const next = keys.map((k, i) => i === kIdx ? { ...k, lines: k.lines.filter((_, j) => j !== lIdx) } : k);
+    setKeys(next);
+  };
+  const delKey = (idx) => setKeys(keys.filter((_, i) => i !== idx));
+  return (
+    <div className="space-y-3">
+      <div className="bg-blue-50 border border-blue-200 rounded p-3 text-xs text-blue-900">
+        <strong>Verifiez les cles de repartition</strong> : pour chaque cle, les quotites doivent etre proportionnelles. Les lots sont matches automatiquement par le numero. Si le match echoue, il sera demande au syndic.
+      </div>
+      <div className="space-y-2 max-h-[440px] overflow-y-auto pr-1">
+        {keys.map((k, ki) => (
+          <div key={ki} className="border border-slate-200 rounded">
+            <div className="bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-800 flex justify-between items-center">
+              <div className="flex gap-2 items-center">
+                <input value={k.code} onChange={e => updKey(ki, 'code', e.target.value)} className="w-14 bg-white border border-slate-300 rounded px-1 font-mono" />
+                <input value={k.name} onChange={e => updKey(ki, 'name', e.target.value)} className="bg-white border border-slate-300 rounded px-1 w-72" />
+              </div>
+              <div className="flex gap-2 items-center">
+                <span className="text-slate-500">Total quotites : <strong>{k.total_quotities?.toFixed(2) || '0.00'}</strong></span>
+                <button onClick={() => delKey(ki)} className="text-red-500"><Trash2 size={12} /></button>
+              </div>
+            </div>
+            <table className="w-full text-xs">
+              <thead className="bg-slate-50">
+                <tr>
+                  <th className="px-1 py-1 text-left">Lot / Libelle</th>
+                  <th className="px-1 py-1 text-left w-24">Code</th>
+                  <th className="px-1 py-1 text-right w-24">Quotite</th>
+                  <th className="w-6"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {(k.lines || []).map((l, li) => (
+                  <tr key={li} className="border-t border-slate-100">
+                    <td className="px-1 py-0.5"><input value={l.lot_label} onChange={e => updLine(ki, li, 'lot_label', e.target.value)} className="w-full border-0 bg-transparent" /></td>
+                    <td className="px-1 py-0.5"><input value={l.lot_code} onChange={e => updLine(ki, li, 'lot_code', e.target.value)} className="w-24 border-0 bg-transparent font-mono" /></td>
+                    <td className="px-1 py-0.5"><input type="number" step="0.01" value={l.quotity} onChange={e => updLine(ki, li, 'quotity', e.target.value)} className="w-24 border-0 bg-transparent text-right font-mono" /></td>
+                    <td className="px-0 py-0.5"><button onClick={() => delLine(ki, li)} className="text-red-500 hover:text-red-700"><X size={11} /></button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }

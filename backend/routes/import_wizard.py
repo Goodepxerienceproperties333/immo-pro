@@ -10,7 +10,7 @@ from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Form
 from pydantic import BaseModel
 
 from import_wizard.csv_utils import sniff_csv, parse_french_number, parse_date, split_optipro_code, normalize_header
-from import_wizard.pdf_utils import extract_pdf, parse_natures_pdf
+from import_wizard.pdf_utils import extract_pdf, parse_natures_pdf, parse_budget_pdf, parse_distribution_keys_pdf
 
 logger = logging.getLogger("import_wizard")
 
@@ -63,6 +63,22 @@ class CommitNaturesInput(BaseModel):
     natures: List[dict]  # parsed natures (from PDF) confirmed by user
 
 
+class CommitFiscalYearInput(BaseModel):
+    name: str
+    start_date: str  # ISO YYYY-MM-DD
+    end_date: str
+    status: Optional[str] = "open"
+
+
+class CommitBudgetInput(BaseModel):
+    fiscal_year_id: str
+    sections: List[dict]  # parsed budget sections, possibly edited
+
+
+class CommitDistributionKeysInput(BaseModel):
+    keys: List[dict]  # parsed keys with their lines
+
+
 # ============================================================
 # Router
 # ============================================================
@@ -90,6 +106,8 @@ def create_import_wizard_router(db):
             "created_at": _now_iso(),
         }
         await db.import_sessions.insert_one(session)
+        # Remove any ObjectId left by Mongo
+        session.pop("_id", None)
         return session
 
     @router.get("/sessions/active")
@@ -165,6 +183,14 @@ def create_import_wizard_router(db):
             raise HTTPException(400, "Fichier trop volumineux (max 30 Mo)")
         if kind == "natures":
             res = parse_natures_pdf(raw)
+            res["filename"] = file.filename
+            return res
+        if kind == "budget":
+            res = parse_budget_pdf(raw)
+            res["filename"] = file.filename
+            return res
+        if kind == "keys":
+            res = parse_distribution_keys_pdf(raw)
             res["filename"] = file.filename
             return res
         info = extract_pdf(raw)
@@ -358,6 +384,156 @@ def create_import_wizard_router(db):
                 errors.append({"row": idx, "error": str(e)})
         await _update_step(db, session_id, "natures", {"count": inserted, "errors": errors})
         return {"inserted": inserted, "errors": errors}
+
+    # ----- E: FISCAL YEAR -----
+    @router.post("/sessions/{session_id}/commit-fiscal-year")
+    async def commit_fiscal_year(session_id: str, data: CommitFiscalYearInput, request: Request):
+        session = await db.import_sessions.find_one({"id": session_id})
+        if not session:
+            raise HTTPException(404, "Session introuvable")
+        copro_id = session["copropriete_id"]
+        await _require_acp_access(request, db, copro_id)
+        # Verifie qu'on n'a pas deja un exercice avec ce nom dans l'ACP
+        existing = await db.fiscal_years.find_one({"copropriete_id": copro_id, "name": data.name})
+        if existing:
+            raise HTTPException(400, f"L'exercice '{data.name}' existe deja dans cette ACP")
+        doc = {
+            "id": str(uuid.uuid4()),
+            "name": data.name,
+            "start_date": data.start_date,
+            "end_date": data.end_date,
+            "status": data.status or "open",
+            "copropriete_id": copro_id,
+            "import_session_id": session_id,
+            "created_at": _now_iso(),
+        }
+        await db.fiscal_years.insert_one(doc)
+        await _update_step(db, session_id, "fiscal_year", {"count": 1, "fiscal_year_id": doc["id"]})
+        return {"id": doc["id"], "name": doc["name"]}
+
+    # ----- F: BUDGET -----
+    @router.post("/sessions/{session_id}/commit-budget")
+    async def commit_budget(session_id: str, data: CommitBudgetInput, request: Request):
+        """Cree un budget unifie pour l'exercice avec des lignes par (section/cle, compte).
+
+        Le PDF Optipro structure le budget par section (= cle de repartition). Pour
+        chaque section, on a une liste de lignes (compte, libelle, montant). Notre
+        modele Budget supporte des lignes : { account_number, label, amount,
+        distribution_key_code (libre) }.
+        """
+        session = await db.import_sessions.find_one({"id": session_id})
+        if not session:
+            raise HTTPException(404, "Session introuvable")
+        copro_id = session["copropriete_id"]
+        await _require_acp_access(request, db, copro_id)
+        # Verifie que l'exercice existe
+        fy = await db.fiscal_years.find_one({"id": data.fiscal_year_id})
+        if not fy:
+            raise HTTPException(400, "Exercice fiscal introuvable")
+        # Construire les lignes a partir des sections
+        lines = []
+        total_amount = 0.0
+        for sec in data.sections:
+            key_code = (sec.get("key_code") or "").strip()
+            key_label = (sec.get("key_label") or "").strip()
+            for ln in sec.get("lines") or []:
+                amt = float(ln.get("amount") or 0)
+                lines.append({
+                    "account_number": (ln.get("account") or "").strip(),
+                    "label": (ln.get("libelle") or "").strip(),
+                    "amount": amt,
+                    "distribution_key_code": key_code,
+                    "distribution_key_label": key_label,
+                })
+                total_amount += amt
+        # Cree (ou remplace) le budget de l'exercice
+        existing = await db.budgets.find_one({"fiscal_year_id": data.fiscal_year_id, "copropriete_id": copro_id})
+        if existing:
+            await db.budgets.update_one(
+                {"id": existing["id"]},
+                {"$set": {
+                    "lines": lines,
+                    "total_amount": round(total_amount, 2),
+                    "updated_at": _now_iso(),
+                    "import_session_id": session_id,
+                }}
+            )
+            budget_id = existing["id"]
+        else:
+            budget_id = str(uuid.uuid4())
+            await db.budgets.insert_one({
+                "id": budget_id,
+                "fiscal_year_id": data.fiscal_year_id,
+                "copropriete_id": copro_id,
+                "lines": lines,
+                "total_amount": round(total_amount, 2),
+                "import_session_id": session_id,
+                "created_at": _now_iso(),
+            })
+        await _update_step(db, session_id, "budget", {
+            "count": len(lines),
+            "total_amount": round(total_amount, 2),
+            "budget_id": budget_id,
+        })
+        return {"inserted": len(lines), "total_amount": round(total_amount, 2)}
+
+    # ----- J: DISTRIBUTION KEYS -----
+    @router.post("/sessions/{session_id}/commit-distribution-keys")
+    async def commit_distribution_keys(session_id: str, data: CommitDistributionKeysInput, request: Request):
+        """Cree les cles de repartition + leurs tantiemes par lot.
+
+        Pour chaque cle : 1 doc distribution_keys + matching automatique des lots
+        importes pendant la session (basee sur le numero / le libelle).
+        """
+        session = await db.import_sessions.find_one({"id": session_id})
+        if not session:
+            raise HTTPException(404, "Session introuvable")
+        copro_id = session["copropriete_id"]
+        await _require_acp_access(request, db, copro_id)
+        # Lookup des lots de l'ACP (toute la base, pas juste la session)
+        lots = await db.lots.find({"copropriete_id": copro_id}, {"_id": 0, "id": 1, "number": 1, "description": 1}).to_list(2000)
+        lots_by_number = {(l.get("number") or "").lower().strip(): l["id"] for l in lots}
+        lots_by_desc = {(l.get("description") or "").lower().strip(): l["id"] for l in lots}
+        inserted = 0
+        for k in data.keys or []:
+            code = (k.get("code") or "").strip()
+            name = (k.get("name") or code).strip()
+            if not name:
+                continue
+            existing = await db.distribution_keys.find_one({"copropriete_id": copro_id, "code": code} if code else {"copropriete_id": copro_id, "name": name})
+            if existing:
+                continue
+            # Build lines : match each lot by number or label (case-insensitive)
+            kl_lines = []
+            for line in k.get("lines") or []:
+                quotity = float(line.get("quotity") or 0)
+                if quotity <= 0:
+                    continue
+                lot_label = (line.get("lot_label") or "").lower().strip()
+                lot_code = (line.get("lot_code") or "").lower().strip()
+                lot_id = lots_by_number.get(lot_code) or lots_by_number.get(lot_label) or lots_by_desc.get(lot_label) or ""
+                kl_lines.append({
+                    "lot_id": lot_id,
+                    "lot_label_raw": line.get("lot_label", ""),
+                    "lot_code_raw": line.get("lot_code", ""),
+                    "owner_label_raw": line.get("owner_label", ""),
+                    "quotity": quotity,
+                })
+            doc = {
+                "id": str(uuid.uuid4()),
+                "code": code,
+                "name": name,
+                "type": k.get("type") or "tantiemes",
+                "total_quotities": float(k.get("total_quotities") or sum(l["quotity"] for l in kl_lines)),
+                "lines": kl_lines,
+                "copropriete_id": copro_id,
+                "import_session_id": session_id,
+                "created_at": _now_iso(),
+            }
+            await db.distribution_keys.insert_one(doc)
+            inserted += 1
+        await _update_step(db, session_id, "distribution_keys", {"count": inserted})
+        return {"inserted": inserted}
 
     return router
 
