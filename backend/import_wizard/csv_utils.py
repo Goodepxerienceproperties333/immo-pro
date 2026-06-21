@@ -156,3 +156,253 @@ def split_optipro_code(s: str) -> tuple[str, str]:
         parts = s.split(" - ", 1)
         return (parts[0].strip(), parts[1].strip())
     return (s, s)
+
+
+# ============================================================
+# Optipro INVOICES CSV parser
+# ============================================================
+def parse_invoices_csv(raw: bytes) -> dict:
+    """Parse Optipro 'facture' CSV export.
+
+    Expected headers (in any order, case-insensitive, accents-tolerant) :
+      Copropriete code, Copropriete nom, Date facture, Date echeance,
+      Reference interne, Reference externe, Libelle, Ne pas payer, Fournisseur,
+      Compte, Cle, Dossier travaux, Nature, Code TVA, Part occupant,
+      Part proprietaire, Montant HT, Montant TVAC
+
+    Returns:
+      { invoices: [{
+          copro_code, copro_name,
+          date, due_date,
+          internal_ref_optipro, external_ref,
+          libelle, ne_pas_payer,
+          supplier_aux_code, supplier_name,
+          account_number, account_label,
+          dist_key_code, dist_key_label,
+          nature_code, nature_label,
+          vat_code,
+          part_occupant, part_proprietaire,
+          montant_ht, montant_tvac, montant_tva,
+        }, ...],
+        count }
+    """
+    enc = detect_encoding(raw)
+    text = raw.decode(enc, errors="replace")
+    # Sniff separator from first lines
+    sample_lines = text.splitlines()[:5]
+    sep = detect_separator(sample_lines)
+    reader = csv.DictReader(io.StringIO(text), delimiter=sep)
+
+    # Build a header map : normalized_header -> actual_header
+    headers = reader.fieldnames or []
+    nm = {normalize_header(h): h for h in headers}
+
+    def get(row: dict, *keys: str) -> str:
+        """Return first non-empty value for any normalized key in *keys."""
+        for k in keys:
+            actual = nm.get(k)
+            if actual and row.get(actual) not in (None, ""):
+                return str(row[actual]).strip()
+        return ""
+
+    invoices: list[dict] = []
+    for row in reader:
+        if not row:
+            continue
+        # Skip empty rows
+        if not any((v or "").strip() for v in row.values()):
+            continue
+
+        copro_code = get(row, "copropriete code", "copro code", "code copropriete")
+        copro_name = get(row, "copropriete nom", "copropriete", "nom copropriete")
+        date_fact = parse_date(get(row, "date facture", "date"))
+        date_ech = parse_date(get(row, "date echeance"))
+        ref_int = get(row, "reference interne", "ref interne")
+        ref_ext = get(row, "reference externe", "ref externe", "numero", "numero facture")
+        libelle = get(row, "libelle", "description")
+        ne_pas_payer_raw = get(row, "ne pas payer").lower()
+        ne_pas_payer = ne_pas_payer_raw in ("oui", "yes", "true", "1", "x")
+
+        sup_raw = get(row, "fournisseur", "supplier")
+        sup_code, sup_name = split_optipro_code(sup_raw)
+
+        acc_raw = get(row, "compte", "account")
+        acc_code, acc_label = split_optipro_code(acc_raw)
+
+        key_raw = get(row, "cle", "cle de repartition", "key")
+        key_code, key_label = split_optipro_code(key_raw)
+
+        nat_raw = get(row, "nature", "nature depense")
+        nat_code, nat_label = split_optipro_code(nat_raw)
+
+        vat_code = get(row, "code tva", "tva", "vat code")
+        part_occ = parse_french_number(get(row, "part occupant", "occupant"))
+        part_prop = parse_french_number(get(row, "part proprietaire", "proprietaire"))
+        mt_ht = parse_french_number(get(row, "montant ht", "ht"))
+        mt_tvac = parse_french_number(get(row, "montant tvac", "tvac", "ttc", "total"))
+        # VAT amount = TVAC - HT
+        mt_tva = round(mt_tvac - mt_ht, 2) if mt_tvac and mt_ht else 0.0
+
+        # Don't import rows that are obviously not invoices (empty supplier + 0 amounts)
+        if not sup_raw and mt_tvac == 0:
+            continue
+
+        invoices.append({
+            "copro_code": copro_code,
+            "copro_name": copro_name,
+            "date": date_fact or "",
+            "due_date": date_ech or "",
+            "internal_ref_optipro": ref_int,
+            "external_ref": ref_ext,
+            "libelle": libelle,
+            "ne_pas_payer": ne_pas_payer,
+            "supplier_aux_code": sup_code,
+            "supplier_name": sup_name,
+            "account_number": acc_code,
+            "account_label": acc_label,
+            "dist_key_code": key_code,
+            "dist_key_label": key_label,
+            "nature_code": nat_code,
+            "nature_label": nat_label,
+            "vat_code": vat_code,
+            "part_occupant": part_occ,
+            "part_proprietaire": part_prop,
+            "montant_ht": mt_ht,
+            "montant_tvac": mt_tvac,
+            "montant_tva": mt_tva,
+        })
+
+    return {"invoices": invoices, "count": len(invoices)}
+
+
+# ============================================================
+# Optipro JOURNALS CSV parser (Phase H - bank statements)
+# ============================================================
+def parse_journals_csv(raw: bytes) -> dict:
+    """Parse Optipro 'journaux financiers' CSV export.
+
+    Each transaction is split across multiple lines (double-entry accounting):
+    one debit line and one credit line, both sharing the same `Num. doc`.
+    We group lines by `Num. doc` to reconstruct the transactions.
+
+    Expected headers:
+      Date valeur, Num. doc, Libelle, Compte, Compte libelle, Auxiliaire,
+      Identite, Code journal, Date comptabilisation, Date echeance,
+      Reference interne, Reference piece, Date piece, Code lettrage,
+      Date lettrage, Code TVA, Debit, Credit
+
+    Returns:
+      { transactions: [{
+          date_value, num_doc, code_journal, libelle,
+          bank_account, bank_account_label,
+          counterparty_account, counterparty_account_label,
+          amount, direction (in/out),
+          ext_reference,
+        }],
+        raw_lines: [{...}],  # all individual debit/credit lines
+        count }
+    """
+    enc = detect_encoding(raw)
+    text = raw.decode(enc, errors="replace")
+    sample_lines = text.splitlines()[:5]
+    sep = detect_separator(sample_lines)
+    reader = csv.DictReader(io.StringIO(text), delimiter=sep)
+    headers = reader.fieldnames or []
+    nm = {normalize_header(h): h for h in headers}
+
+    def get(row: dict, *keys: str) -> str:
+        for k in keys:
+            actual = nm.get(k)
+            if actual and row.get(actual) not in (None, ""):
+                return str(row[actual]).strip()
+        return ""
+
+    raw_lines: list[dict] = []
+    # Bank account prefix (cash/bank accounts in PCMN are 550-559, 570-579)
+    def is_bank_account(acc: str) -> bool:
+        if not acc:
+            return False
+        return acc.startswith("55") or acc.startswith("57") or acc.startswith("416") or acc.startswith("417")
+
+    for row in reader:
+        if not row or not any((v or "").strip() for v in row.values()):
+            continue
+        line = {
+            "date_value": parse_date(get(row, "date valeur", "date")) or "",
+            "num_doc": get(row, "num doc", "numero document", "num. doc"),
+            "libelle": get(row, "libelle", "description"),
+            "account": get(row, "compte"),
+            "account_label": get(row, "compte libelle", "libelle compte"),
+            "auxiliary": get(row, "auxiliaire"),
+            "identity": get(row, "identite"),
+            "code_journal": get(row, "code journal", "journal"),
+            "date_compta": parse_date(get(row, "date comptabilisation")) or "",
+            "date_echeance": parse_date(get(row, "date echeance")) or "",
+            "ext_reference": get(row, "reference externe", "reference piece", "ref ext"),
+            "vat_code": get(row, "code tva", "tva"),
+            "debit": parse_french_number(get(row, "debit")),
+            "credit": parse_french_number(get(row, "credit")),
+        }
+        raw_lines.append(line)
+
+    # Group by num_doc to build transactions
+    by_doc: dict[str, list[dict]] = {}
+    for ln in raw_lines:
+        key = ln["num_doc"] or f"ROW_{len(by_doc)}"
+        by_doc.setdefault(key, []).append(ln)
+
+    transactions: list[dict] = []
+    for num_doc, lines in by_doc.items():
+        # Identify the bank line (account starts with 55x or 57x) and the counterparty line
+        bank_lines = [ln for ln in lines if is_bank_account(ln["account"])]
+        other_lines = [ln for ln in lines if not is_bank_account(ln["account"])]
+        if not bank_lines or not other_lines:
+            # Not a typical bank transaction (e.g. internal transfer or pure OD)
+            # Still emit ONE transaction summarizing all lines
+            total_d = sum(ln["debit"] for ln in lines)
+            total_c = sum(ln["credit"] for ln in lines)
+            amount = abs(total_d) if total_d > 0 else abs(total_c)
+            transactions.append({
+                "num_doc": num_doc,
+                "date_value": lines[0]["date_value"],
+                "date_compta": lines[0]["date_compta"],
+                "code_journal": lines[0]["code_journal"],
+                "libelle": lines[0]["libelle"],
+                "bank_account": "",
+                "bank_account_label": "",
+                "counterparty_account": lines[0]["account"],
+                "counterparty_account_label": lines[0]["account_label"],
+                "amount": amount,
+                "direction": "neutral",
+                "ext_reference": lines[0]["ext_reference"],
+                "lines_count": len(lines),
+            })
+            continue
+        bank = bank_lines[0]
+        # The bank's debit means money IN (credit on counter-party side)
+        # The bank's credit means money OUT (debit on counter-party side)
+        amt = bank["debit"] if bank["debit"] > 0 else bank["credit"]
+        direction = "in" if bank["debit"] > 0 else "out"
+        # Counterparty : the first non-bank line (or the largest one)
+        counter = other_lines[0]
+        transactions.append({
+            "num_doc": num_doc,
+            "date_value": bank["date_value"],
+            "date_compta": bank["date_compta"],
+            "code_journal": bank["code_journal"],
+            "libelle": bank["libelle"] or counter["libelle"],
+            "bank_account": bank["account"],
+            "bank_account_label": bank["account_label"],
+            "counterparty_account": counter["account"],
+            "counterparty_account_label": counter["account_label"],
+            "amount": round(amt, 2),
+            "direction": direction,
+            "ext_reference": bank["ext_reference"] or counter["ext_reference"],
+            "lines_count": len(lines),
+        })
+
+    return {
+        "transactions": transactions,
+        "raw_lines": raw_lines,
+        "count": len(transactions),
+    }

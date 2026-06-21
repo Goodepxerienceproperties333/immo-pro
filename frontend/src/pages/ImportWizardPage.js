@@ -27,7 +27,7 @@ import { Badge } from '@/components/ui/badge';
 import {
   Upload, Truck, Tag, CheckCircle2, X, AlertTriangle,
   ChevronRight, ChevronLeft, FileWarning, Loader2, RotateCcw,
-  Calendar, Wallet, PieChart, Plus, Trash2
+  Calendar, Wallet, PieChart, Plus, Trash2, FileText, Landmark
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -40,6 +40,8 @@ const STEPS = [
   { key: 'fiscal_year', label: 'Exercice fiscal', icon: Calendar, optional: false, kind: 'form' },
   { key: 'budget',    label: 'Budget',            icon: Wallet,   optional: true,  kind: 'pdf' },
   { key: 'distribution_keys', label: 'Cles de repartition', icon: PieChart, optional: true, kind: 'pdf' },
+  { key: 'invoices',  label: 'Factures',          icon: FileText, optional: true,  kind: 'csv_invoices' },
+  { key: 'journals',  label: 'Journaux financiers', icon: Landmark, optional: true, kind: 'csv_journals' },
 ];
 
 // Champs cibles attendus pour chaque étape (clé = nom du champ DB)
@@ -75,6 +77,8 @@ export default function ImportWizardPage() {
   const [budgetSections, setBudgetSections] = useState([]);
   const [keysParsed, setKeysParsed] = useState([]);
   const [suppliersParsed, setSuppliersParsed] = useState([]);
+  const [invoicesParsed, setInvoicesParsed] = useState([]);
+  const [journalsParsed, setJournalsParsed] = useState([]);
   // For 'csv_or_pdf' steps : tracks which mode the user picked for THIS step
   // (resets on every step change / file reset).
   const [uploadMode, setUploadMode] = useState(null);  // null | 'csv' | 'pdf'
@@ -118,19 +122,19 @@ export default function ImportWizardPage() {
     setBudgetSections([]);
     setKeysParsed([]);
     setSuppliersParsed([]);
+    setInvoicesParsed([]);
+    setJournalsParsed([]);
     try {
       const fd = new FormData();
       fd.append('file', file);
-      // Resolve effective kind for the upload :
-      // - 'csv_or_pdf' steps : uploadMode dictates which path
-      // - 'csv' / 'pdf' steps : straight to the appropriate path
+      // Effective kind for the upload
       const effectiveKind = step.kind === 'csv_or_pdf'
         ? (uploadMode || (file.name.toLowerCase().endsWith('.pdf') ? 'pdf' : 'csv'))
         : step.kind;
       const isPdf = effectiveKind === 'pdf';
+      const isStructuredCsv = effectiveKind === 'csv_invoices' || effectiveKind === 'csv_journals';
       let r;
       if (isPdf) {
-        // Map step.key -> backend kind
         const kindMap = { natures: 'natures', budget: 'budget', distribution_keys: 'keys', suppliers: 'suppliers' };
         fd.append('kind', kindMap[step.key] || 'generic');
         r = await api.post(`/import-wizard/sessions/${session.id}/sniff-pdf`, fd, {
@@ -140,6 +144,14 @@ export default function ImportWizardPage() {
         if (step.key === 'budget') setBudgetSections(r.data.sections || []);
         if (step.key === 'distribution_keys') setKeysParsed(r.data.keys || []);
         if (step.key === 'suppliers') setSuppliersParsed(r.data.suppliers || []);
+      } else if (isStructuredCsv) {
+        const kindParam = effectiveKind === 'csv_invoices' ? 'invoices' : 'journals';
+        fd.append('kind', kindParam);
+        r = await api.post(`/import-wizard/sessions/${session.id}/sniff-csv?kind=${kindParam}`, fd, {
+          headers: { 'Content-Type': 'multipart/form-data' },
+        });
+        if (effectiveKind === 'csv_invoices') setInvoicesParsed(r.data.invoices || []);
+        if (effectiveKind === 'csv_journals') setJournalsParsed(r.data.transactions || []);
       } else if (effectiveKind === 'csv') {
         r = await api.post(`/import-wizard/sessions/${session.id}/sniff-csv`, fd, {
           headers: { 'Content-Type': 'multipart/form-data' },
@@ -190,6 +202,16 @@ export default function ImportWizardPage() {
       } else if (step.key === 'distribution_keys') {
         r = await api.post(`/import-wizard/sessions/${session.id}/commit-distribution-keys`, { keys: keysParsed });
         toast.success(`${r.data.inserted} cle(s) de repartition creees`);
+      } else if (step.key === 'invoices') {
+        r = await api.post(`/import-wizard/sessions/${session.id}/commit-invoices`, { invoices: invoicesParsed });
+        const m = r.data;
+        toast.success(
+          `${m.inserted} facture(s) importees - ${m.matched_supplier} avec fournisseur, ` +
+          `${m.matched_key} avec cle, ${m.matched_category} avec nature`
+        );
+      } else if (step.key === 'journals') {
+        r = await api.post(`/import-wizard/sessions/${session.id}/commit-journals`, { transactions: journalsParsed });
+        toast.success(`${r.data.inserted} transaction(s) bancaire(s) importees`);
       } else if (step.key === 'fiscal_year') {
         if (!fyForm.name || !fyForm.start_date || !fyForm.end_date) {
           toast.error('Nom, date debut et date fin sont obligatoires');
@@ -211,6 +233,8 @@ export default function ImportWizardPage() {
         setBudgetSections([]);
         setKeysParsed([]);
         setSuppliersParsed([]);
+        setInvoicesParsed([]);
+        setJournalsParsed([]);
         setUploadMode(null);
       } else {
         // Final step : finish
@@ -303,13 +327,23 @@ export default function ImportWizardPage() {
                   ? 'Chargez le fichier CSV exporte d\'Optipro/Sogis'
                   : step.kind === 'csv_or_pdf'
                     ? 'Chargez le fichier CSV ou PDF exporte d\'Optipro/Sogis'
-                    : `Chargez le PDF (${step.label})`}
+                    : step.kind === 'csv_invoices'
+                      ? 'Chargez le CSV "facture_xxx.csv" Optipro'
+                      : step.kind === 'csv_journals'
+                        ? 'Chargez le CSV "journaux_xxx.csv" Optipro (journaux financiers)'
+                        : `Chargez le PDF (${step.label})`}
               </p>
               <input
                 type="file"
                 id="file-input"
                 className="hidden"
-                accept={step.kind === 'csv' ? '.csv,.txt' : step.kind === 'csv_or_pdf' ? '.csv,.txt,.pdf' : '.pdf'}
+                accept={
+                  step.kind === 'csv' || step.kind === 'csv_invoices' || step.kind === 'csv_journals'
+                    ? '.csv,.txt'
+                    : step.kind === 'csv_or_pdf'
+                      ? '.csv,.txt,.pdf'
+                      : '.pdf'
+                }
                 onChange={handleFileChange}
                 data-testid="file-input"
               />
@@ -358,6 +392,14 @@ export default function ImportWizardPage() {
             <SuppliersPdfPreview suppliers={suppliersParsed} setSuppliers={setSuppliersParsed} />
           )}
 
+          {sniffResult && step.key === 'invoices' && (
+            <InvoicesPreview invoices={invoicesParsed} setInvoices={setInvoicesParsed} />
+          )}
+
+          {sniffResult && step.key === 'journals' && (
+            <JournalsPreview transactions={journalsParsed} setTransactions={setJournalsParsed} />
+          )}
+
           {sniffResult && step.key === 'natures' && (
             <NaturesPreview natures={naturesParsed} setNatures={setNaturesParsed} />
           )}
@@ -374,11 +416,11 @@ export default function ImportWizardPage() {
 
       {/* Footer */}
       <div className="flex items-center justify-between mt-4">
-        <Button variant="outline" size="sm" disabled={stepIdx === 0} onClick={() => { setStepIdx(stepIdx - 1); setSniffResult(null); setMapping({}); setNaturesParsed([]); setSuppliersParsed([]); setUploadMode(null); }} data-testid="prev-step">
+        <Button variant="outline" size="sm" disabled={stepIdx === 0} onClick={() => { setStepIdx(stepIdx - 1); setSniffResult(null); setMapping({}); setNaturesParsed([]); setSuppliersParsed([]); setInvoicesParsed([]); setJournalsParsed([]); setUploadMode(null); }} data-testid="prev-step">
           <ChevronLeft size={14} className="mr-1" /> Etape precedente
         </Button>
         <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={() => { setSniffResult(null); setMapping({}); setNaturesParsed([]); setSuppliersParsed([]); setUploadMode(null); }} data-testid="reset-step">
+          <Button variant="outline" size="sm" onClick={() => { setSniffResult(null); setMapping({}); setNaturesParsed([]); setSuppliersParsed([]); setInvoicesParsed([]); setJournalsParsed([]); setUploadMode(null); }} data-testid="reset-step">
             <X size={14} className="mr-1" /> Annuler ce fichier
           </Button>
           {step.optional && stepIdx < STEPS.length - 1 && (
@@ -515,6 +557,149 @@ function NaturesPreview({ natures, setNatures }) {
 function updateNature(arr, setArr, idx, field, value) {
   const next = arr.map((n, i) => i === idx ? { ...n, [field]: value } : n);
   setArr(next);
+}
+
+// ============== INVOICES PREVIEW (Step G - Factures Optipro) ==============
+function InvoicesPreview({ invoices, setInvoices }) {
+  if (!invoices?.length) {
+    return (
+      <div className="text-center py-6 text-amber-600 text-sm">
+        <AlertTriangle size={24} className="inline mr-1" /> Aucune facture extraite du CSV.
+      </div>
+    );
+  }
+  const totalHT = invoices.reduce((a, i) => a + (parseFloat(i.montant_ht) || 0), 0);
+  const totalTVAC = invoices.reduce((a, i) => a + (parseFloat(i.montant_tvac) || 0), 0);
+  const uniqueSuppliers = [...new Set(invoices.map(i => i.supplier_aux_code).filter(Boolean))];
+  const upd = (idx, field, value) => {
+    const next = invoices.map((i, j) => j === idx ? { ...i, [field]: value } : i);
+    setInvoices(next);
+  };
+  const del = (idx) => setInvoices(invoices.filter((_, j) => j !== idx));
+  return (
+    <div className="space-y-3">
+      <div className="bg-blue-50 border border-blue-200 rounded p-3 text-xs text-blue-900 flex justify-between flex-wrap gap-2">
+        <span><strong>{invoices.length} facture(s)</strong> detectee(s) - {uniqueSuppliers.length} fournisseur(s) distinct(s)</span>
+        <span className="font-mono">HT : {totalHT.toFixed(2)} EUR | TVAC : <strong>{totalTVAC.toFixed(2)} EUR</strong></span>
+      </div>
+      <div className="text-[11px] text-amber-700 bg-amber-50 border border-amber-100 rounded p-2">
+        <AlertTriangle size={11} className="inline mr-1" /> Les factures seront auto-rattachees aux fournisseurs (via code <span className="font-mono">F0XXX</span>),
+        aux cles de repartition et aux natures de depense importes precedemment.
+      </div>
+      <div className="border border-slate-200 rounded overflow-x-auto max-h-[420px] overflow-y-auto">
+        <table className="w-full text-[11px]">
+          <thead className="bg-slate-50 sticky top-0">
+            <tr>
+              <th className="px-1 py-1 text-left w-20">Date</th>
+              <th className="px-1 py-1 text-left w-24">N° ext.</th>
+              <th className="px-1 py-1 text-left">Fournisseur</th>
+              <th className="px-1 py-1 text-left w-16">Cpte</th>
+              <th className="px-1 py-1 text-left w-12">Cle</th>
+              <th className="px-1 py-1 text-left w-12">Nat.</th>
+              <th className="px-1 py-1 text-left">Libelle</th>
+              <th className="px-1 py-1 text-right w-20">HT</th>
+              <th className="px-1 py-1 text-right w-20 bg-blue-50">TVAC</th>
+              <th className="px-1 py-1 text-center w-8">TVA</th>
+              <th className="w-6"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {invoices.map((i, idx) => (
+              <tr key={idx} className="border-t border-slate-100" data-testid={`inv-row-${idx}`}>
+                <td className="px-1 py-0.5"><input value={i.date} onChange={e => upd(idx, 'date', e.target.value)} className="w-20 border-0 bg-transparent font-mono text-[10px]" /></td>
+                <td className="px-1 py-0.5"><input value={i.external_ref} onChange={e => upd(idx, 'external_ref', e.target.value)} className="w-24 border-0 bg-transparent font-mono text-[10px]" /></td>
+                <td className="px-1 py-0.5">
+                  <div className="flex items-center gap-1">
+                    {i.supplier_aux_code && <span className="font-mono text-[9px] bg-emerald-100 text-emerald-700 px-1 rounded">{i.supplier_aux_code}</span>}
+                    <input value={i.supplier_name} onChange={e => upd(idx, 'supplier_name', e.target.value)} className="flex-1 border-0 bg-transparent text-[11px]" />
+                  </div>
+                </td>
+                <td className="px-1 py-0.5"><input value={i.account_number} onChange={e => upd(idx, 'account_number', e.target.value)} className="w-16 border-0 bg-transparent font-mono text-[10px]" /></td>
+                <td className="px-1 py-0.5"><input value={i.dist_key_code} onChange={e => upd(idx, 'dist_key_code', e.target.value)} className="w-12 border-0 bg-transparent font-mono text-[10px]" /></td>
+                <td className="px-1 py-0.5"><input value={i.nature_code} onChange={e => upd(idx, 'nature_code', e.target.value)} className="w-12 border-0 bg-transparent font-mono text-[10px]" /></td>
+                <td className="px-1 py-0.5"><input value={i.libelle} onChange={e => upd(idx, 'libelle', e.target.value)} className="w-full border-0 bg-transparent" /></td>
+                <td className="px-1 py-0.5"><input type="number" step="0.01" value={i.montant_ht} onChange={e => upd(idx, 'montant_ht', parseFloat(e.target.value) || 0)} className="w-20 border-0 bg-transparent text-right font-mono text-slate-500" /></td>
+                <td className="px-1 py-0.5 bg-blue-50/40"><input type="number" step="0.01" value={i.montant_tvac} onChange={e => upd(idx, 'montant_tvac', parseFloat(e.target.value) || 0)} className="w-20 border-0 bg-transparent text-right font-mono font-semibold" /></td>
+                <td className="px-1 py-0.5 text-center"><input value={i.vat_code} onChange={e => upd(idx, 'vat_code', e.target.value)} className="w-8 border-0 bg-transparent text-center font-mono text-[10px]" /></td>
+                <td className="px-0 py-0.5"><button onClick={() => del(idx)} className="text-red-500 hover:text-red-700" data-testid={`inv-del-${idx}`}><X size={11} /></button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ============== JOURNALS PREVIEW (Step H - Journaux financiers) ==============
+function JournalsPreview({ transactions, setTransactions }) {
+  if (!transactions?.length) {
+    return (
+      <div className="text-center py-6 text-amber-600 text-sm">
+        <AlertTriangle size={24} className="inline mr-1" /> Aucune transaction extraite du CSV.
+      </div>
+    );
+  }
+  const totalIn = transactions.filter(t => t.direction === 'in').reduce((a, t) => a + (parseFloat(t.amount) || 0), 0);
+  const totalOut = transactions.filter(t => t.direction === 'out').reduce((a, t) => a + (parseFloat(t.amount) || 0), 0);
+  const banks = [...new Set(transactions.map(t => t.bank_account).filter(Boolean))];
+  const del = (idx) => setTransactions(transactions.filter((_, j) => j !== idx));
+  const upd = (idx, field, value) => {
+    const next = transactions.map((t, j) => j === idx ? { ...t, [field]: value } : t);
+    setTransactions(next);
+  };
+  return (
+    <div className="space-y-3">
+      <div className="bg-blue-50 border border-blue-200 rounded p-3 text-xs text-blue-900">
+        <div className="flex justify-between flex-wrap gap-2">
+          <span><strong>{transactions.length} transaction(s)</strong> sur {banks.length} compte(s) bancaire(s) ({banks.join(', ') || 'aucun PCMN'})</span>
+          <span className="font-mono">
+            <span className="text-emerald-700">+{totalIn.toFixed(2)}</span> /{' '}
+            <span className="text-red-700">-{totalOut.toFixed(2)}</span> EUR
+          </span>
+        </div>
+        <div className="text-[10px] text-slate-600 mt-1 italic">
+          Solde net : {(totalIn - totalOut).toFixed(2)} EUR. Les transactions seront importees comme lignes d&apos;extrait bancaire pour rapprochement ulterieur.
+        </div>
+      </div>
+      <div className="border border-slate-200 rounded overflow-x-auto max-h-[420px] overflow-y-auto">
+        <table className="w-full text-[11px]">
+          <thead className="bg-slate-50 sticky top-0">
+            <tr>
+              <th className="px-1 py-1 text-left w-20">Date</th>
+              <th className="px-1 py-1 text-left w-14">Doc</th>
+              <th className="px-1 py-1 text-left w-12">J.</th>
+              <th className="px-1 py-1 text-left w-20">Banque</th>
+              <th className="px-1 py-1 text-left w-20">Cpte ctr.</th>
+              <th className="px-1 py-1 text-left">Libelle</th>
+              <th className="px-1 py-1 text-right w-20">Montant</th>
+              <th className="px-1 py-1 text-center w-12">Sens</th>
+              <th className="w-6"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {transactions.map((t, idx) => (
+              <tr key={idx} className="border-t border-slate-100" data-testid={`tx-row-${idx}`}>
+                <td className="px-1 py-0.5"><input value={t.date_value} onChange={e => upd(idx, 'date_value', e.target.value)} className="w-20 border-0 bg-transparent font-mono text-[10px]" /></td>
+                <td className="px-1 py-0.5 font-mono text-[10px] text-slate-500">{t.num_doc}</td>
+                <td className="px-1 py-0.5 font-mono text-[10px]">{t.code_journal}</td>
+                <td className="px-1 py-0.5 font-mono text-[10px]">{t.bank_account || <span className="text-amber-600">!</span>}</td>
+                <td className="px-1 py-0.5 font-mono text-[10px]">{t.counterparty_account}</td>
+                <td className="px-1 py-0.5"><input value={t.libelle} onChange={e => upd(idx, 'libelle', e.target.value)} className="w-full border-0 bg-transparent" /></td>
+                <td className="px-1 py-0.5"><input type="number" step="0.01" value={t.amount} onChange={e => upd(idx, 'amount', parseFloat(e.target.value) || 0)} className="w-20 border-0 bg-transparent text-right font-mono font-semibold" /></td>
+                <td className="px-1 py-0.5 text-center">
+                  {t.direction === 'in' && <span className="text-emerald-700 font-bold">+</span>}
+                  {t.direction === 'out' && <span className="text-red-700 font-bold">-</span>}
+                  {t.direction === 'neutral' && <span className="text-slate-400">~</span>}
+                </td>
+                <td className="px-0 py-0.5"><button onClick={() => del(idx)} className="text-red-500 hover:text-red-700" data-testid={`tx-del-${idx}`}><X size={11} /></button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
 }
 
 // ============== SUPPLIERS PDF PREVIEW (Step C variant for PDF) ==============

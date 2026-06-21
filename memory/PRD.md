@@ -12,6 +12,79 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 ## Implemented
 
+### Iter71 (Feb 2026) - Wizard Optipro Phases G + H : Factures + Journaux financiers
+
+#### Phase G - Factures (CSV Optipro)
+**Nouveau parser** `parse_invoices_csv` dans `backend/import_wizard/csv_utils.py` :
+- Encodage Latin-1 detecte automatiquement (CSVs Optipro/Sogis).
+- Separateur `;` detecte via sniff.
+- Headers normalises (lowercase + strip accents) : `Copropriete code`, `Date facture`,
+  `Date echeance`, `Reference interne/externe`, `Libelle`, `Ne pas payer`,
+  `Fournisseur`, `Compte`, `Cle`, `Nature`, `Code TVA`, `Part occupant/proprietaire`,
+  `Montant HT/TVAC`.
+- Decompose `Fournisseur` ("F0471 - SRL ACE Garden") en code + nom via `split_optipro_code`.
+- Calcul TVA = TVAC - HT.
+- Normalisation date DD/MM/YYYY -> YYYY-MM-DD via `parse_date`.
+
+**Nouvel endpoint** `POST /api/import-wizard/sessions/{id}/commit-invoices` :
+- Construit 3 lookups scoped a l'ACP : `sup_by_aux`, `keys_by_code`, `cats_by_code` + `cats_by_account`.
+- Auto-rattachement de chaque facture :
+  - Supplier via `auxiliary_code` F0XXX (exact match)
+  - Distribution_key via code 0XXX
+  - Expense_category via code Nature 0XXX OU fallback sur account_number (61060)
+- Repartition occupant/proprietaire normalisee (defaut 100/0 si non specifiee).
+- Generation auto de la `internal_reference` "FA-YYYY-NNNN" par ACP/annee.
+- Fiscal lock (`ensure_period_open`) verifie la date de chaque facture.
+- Tag `import_session_id` pour rollback.
+
+**Test E2E** : 22 fournisseurs PDF -> 34 factures importees -> **34/34 auto-rattachees**
+au fournisseur via F0XXX (100% match).
+
+#### Phase H - Journaux financiers / Extraits bancaires (CSV Optipro)
+**Nouveau parser** `parse_journals_csv` dans `csv_utils.py` :
+- Lit les 78 lignes en double-entry (debit + credit pour chaque transaction).
+- Regroupement par `Num. doc` -> 39 transactions consolidees.
+- Detection automatique du compte bancaire (PCMN 55x / 57x / 416x / 417x).
+- Direction `in/out/neutral` selon debit/credit du compte banque.
+- Compteparty account extrait des autres lignes.
+
+**Nouvel endpoint** `POST /api/import-wizard/sessions/{id}/commit-journals` :
+- Lookup automatique des `bank_accounts` de l'ACP via `account_number` ou `pcmn_account`.
+- Insere dans `bank_statement_lines` avec :
+  `bank_account_id, bank_pcmn_code, counterparty_account, num_doc, code_journal,
+   date_value, date_compta, libelle, amount, direction, status='imported'`.
+- Status "imported" -> pret pour rapprochement bancaire ulterieur.
+- Fiscal lock par ligne, rollback support via import_session_id.
+
+#### Frontend (`ImportWizardPage.js`)
+- **STEPS passe de 5 a 7** : Fournisseurs, Natures, Exercice fiscal, Budget,
+  Cles, **Factures** (icon FileText), **Journaux** (icon Landmark).
+- Les 2 nouvelles etapes ont `kind: 'csv_invoices'` / `'csv_journals'` -
+  upload direct sans mapping (format Optipro detecte).
+- Nouveau **`InvoicesPreview`** : table editable avec colonnes Date / N° ext /
+  Fournisseur (avec badge F0XXX vert) / Cpte / Cle / Nat / Libelle / HT / TVAC / TVA.
+  Banner haut : compteur + totaux HT/TVAC.
+- Nouveau **`JournalsPreview`** : table editable Date / Doc / J. / Banque / Cpte ctr /
+  Libelle / Montant / Sens (vert +/rouge -/gris ~). Banner avec total IN/OUT + solde net.
+
+#### Cleanup rollback
+`bank_statement_lines` ajoute a la liste des collections nettoyees lors du
+rollback de session.
+
+#### Tests E2E
+```
+SUPPLIERS PDF -> 22 suppliers inserted
+INVOICES CSV  -> 34 invoices inserted, 34/34 matched_supplier (auto-affectation via F0XXX)
+JOURNALS CSV  -> 39 transactions inserted (78 lignes -> 39 transactions consolidees)
+ROLLBACK      -> {suppliers: 22, invoices: 34, bank_statement_lines: 39} supprimes
+```
+
+#### Phase I - OD d'ouverture
+**Pas encore implementee**. Le user n'a pas fourni de fichier d'exemple pour
+cette phase. A planifier dans un prochain iter en attendant les specs.
+
+
+
 ### Iter70 (Feb 2026) - Refonte parser PDF Budget (3 colonnes correctes)
 
 #### Bug rapporte

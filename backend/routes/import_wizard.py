@@ -9,7 +9,7 @@ from typing import Optional, List
 from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Form
 from pydantic import BaseModel
 
-from import_wizard.csv_utils import sniff_csv, parse_french_number, parse_date, split_optipro_code, normalize_header
+from import_wizard.csv_utils import sniff_csv, parse_french_number, parse_date, split_optipro_code, normalize_header, parse_invoices_csv, parse_journals_csv
 from import_wizard.pdf_utils import extract_pdf, parse_natures_pdf, parse_budget_pdf, parse_distribution_keys_pdf, parse_owners_pdf, parse_lots_pdf, parse_suppliers_pdf
 
 logger = logging.getLogger("import_wizard")
@@ -81,6 +81,15 @@ class CommitDistributionKeysInput(BaseModel):
 
 class CommitSuppliersPdfInput(BaseModel):
     suppliers: List[dict]  # parsed suppliers (from PDF) confirmed by user
+
+
+class CommitInvoicesInput(BaseModel):
+    invoices: List[dict]  # parsed invoices confirmed by user
+
+
+class CommitJournalsInput(BaseModel):
+    transactions: List[dict]  # parsed journal transactions confirmed by user
+    bank_account_mapping: Optional[dict] = {}  # {'550472': 'bank_account_id_in_DB'}
 
 
 # ============================================================
@@ -158,7 +167,8 @@ def create_import_wizard_router(db):
         collections_to_clean = ["owners", "suppliers", "tenants", "lots",
                                 "expense_categories", "distribution_keys",
                                 "fiscal_years", "budgets", "invoices",
-                                "journal_entries", "bank_statements", "bank_transactions"]
+                                "journal_entries", "bank_statements", "bank_transactions",
+                                "bank_statement_lines"]
         report = {}
         for col in collections_to_clean:
             try:
@@ -187,9 +197,11 @@ def create_import_wizard_router(db):
 
     # ----- SNIFF (preview) -----
     @router.post("/sessions/{session_id}/sniff-csv")
-    async def sniff_csv_file(session_id: str, request: Request, file: UploadFile = File(...)):
-        """Inspect a CSV, return headers + preview rows + detected encoding/separator.
-        No DB write."""
+    async def sniff_csv_file(session_id: str, request: Request, file: UploadFile = File(...), kind: str = Form("generic")):
+        """Inspect a CSV. For `kind=invoices` / `kind=journals` : returns the
+        structured parsed data directly (no manual mapping needed - Optipro
+        format is known). Otherwise : returns generic sniff (headers + preview).
+        """
         session = await db.import_sessions.find_one({"id": session_id})
         if not session:
             raise HTTPException(404, "Session introuvable")
@@ -197,6 +209,14 @@ def create_import_wizard_router(db):
         raw = await file.read()
         if len(raw) > 20 * 1024 * 1024:
             raise HTTPException(400, "Fichier trop volumineux (max 20 Mo)")
+        if kind == "invoices":
+            res = parse_invoices_csv(raw)
+            res["filename"] = file.filename
+            return res
+        if kind == "journals":
+            res = parse_journals_csv(raw)
+            res["filename"] = file.filename
+            return res
         info = sniff_csv(raw)
         info["filename"] = file.filename
         return info
@@ -379,6 +399,220 @@ def create_import_wizard_router(db):
             except Exception as e:
                 errors.append({"row": idx, "error": str(e)})
         await _update_step(db, session_id, "suppliers", {"count": inserted, "errors": errors})
+        return {"inserted": inserted, "errors": errors}
+
+    # ----- G: INVOICES (factures) - CSV Optipro -----
+    @router.post("/sessions/{session_id}/commit-invoices")
+    async def commit_invoices(session_id: str, data: CommitInvoicesInput, request: Request):
+        """Commit pre-parsed invoices. Each invoice is auto-matched to:
+        - supplier (via F0XXX auxiliary_code)
+        - distribution_key (via key code from 'Cle' column)
+        - expense_category (via Nature code or account_number)
+        """
+        from fiscal_lock import ensure_period_open
+        session = await db.import_sessions.find_one({"id": session_id})
+        if not session:
+            raise HTTPException(404, "Session introuvable")
+        copro_id = session["copropriete_id"]
+        await _require_acp_access(request, db, copro_id)
+
+        # Build matching lookups (scoped to current ACP)
+        sup_by_aux: dict[str, str] = {}
+        async for s in db.suppliers.find({"copropriete_id": copro_id}, {"_id": 0, "id": 1, "auxiliary_code": 1, "name": 1}):
+            ax = (s.get("auxiliary_code") or "").upper().strip()
+            if ax:
+                sup_by_aux[ax] = s["id"]
+        keys_by_code: dict[str, str] = {}
+        async for k in db.distribution_keys.find({"copropriete_id": copro_id}, {"_id": 0, "id": 1, "code": 1, "import_code": 1}):
+            for fld in ("code", "import_code"):
+                v = (k.get(fld) or "").strip()
+                if v:
+                    keys_by_code[v.zfill(4)] = k["id"]
+                    keys_by_code[v] = k["id"]
+        cats_by_code: dict[str, str] = {}
+        cats_by_account: dict[str, str] = {}
+        async for c in db.expense_categories.find({"copropriete_id": copro_id}, {"_id": 0, "id": 1, "code": 1, "account_number": 1}):
+            v = (c.get("code") or "").strip()
+            if v:
+                cats_by_code[v.zfill(4)] = c["id"]
+                cats_by_code[v] = c["id"]
+            a = (c.get("account_number") or "").strip()
+            if a:
+                cats_by_account[a] = c["id"]
+
+        # Resolve unique invoice internal_reference per ACP/year
+        year_counters: dict[str, int] = {}
+
+        async def next_internal_ref(year: str) -> str:
+            prefix = f"FA-{year}-"
+            if year not in year_counters:
+                year_counters[year] = await db.invoices.count_documents({
+                    "copropriete_id": copro_id,
+                    "internal_reference": {"$regex": f"^{prefix}"},
+                })
+            year_counters[year] += 1
+            return f"{prefix}{year_counters[year]:04d}"
+
+        inserted = 0
+        errors = []
+        matched_supplier = 0
+        matched_key = 0
+        matched_category = 0
+        for idx, inv in enumerate(data.invoices):
+            try:
+                date_str = (inv.get("date") or "").strip()
+                if not date_str:
+                    errors.append({"row": idx, "error": "Date facture manquante"})
+                    continue
+                try:
+                    await ensure_period_open(db, copro_id, date_str, context="facture (import)")
+                except Exception as e:
+                    errors.append({"row": idx, "error": f"Periode fermee : {e}"})
+                    continue
+
+                supplier_aux = (inv.get("supplier_aux_code") or "").upper().strip()
+                supplier_id = sup_by_aux.get(supplier_aux) if supplier_aux else None
+                if supplier_id:
+                    matched_supplier += 1
+
+                key_code = (inv.get("dist_key_code") or "").strip()
+                dist_key_id = ""
+                if key_code:
+                    dist_key_id = keys_by_code.get(key_code) or keys_by_code.get(key_code.zfill(4)) or ""
+                    if dist_key_id:
+                        matched_key += 1
+
+                nature_code = (inv.get("nature_code") or "").strip()
+                account_num = (inv.get("account_number") or "").strip()
+                expense_cat_id = ""
+                if nature_code:
+                    expense_cat_id = cats_by_code.get(nature_code) or cats_by_code.get(nature_code.zfill(4)) or ""
+                if not expense_cat_id and account_num:
+                    expense_cat_id = cats_by_account.get(account_num) or ""
+                if expense_cat_id:
+                    matched_category += 1
+
+                total_amount = float(inv.get("montant_tvac") or 0)
+                vat_amount = float(inv.get("montant_tva") or 0)
+                occ_pct = float(inv.get("part_occupant") or 0)
+                prop_pct = float(inv.get("part_proprietaire") or 0)
+                if occ_pct == 0 and prop_pct == 0:
+                    occ_pct = 100.0
+                occ_pct = max(0.0, min(100.0, occ_pct))
+                prop_pct = round(100.0 - occ_pct, 2)
+
+                year = date_str[:4]
+                internal_ref = await next_internal_ref(year)
+
+                doc = {
+                    "id": str(uuid.uuid4()),
+                    "number": (inv.get("external_ref") or internal_ref).strip(),
+                    "internal_reference": internal_ref,
+                    "date": date_str,
+                    "due_date": (inv.get("due_date") or "").strip(),
+                    "supplier": (inv.get("supplier_name") or "").strip(),
+                    "supplier_id": supplier_id or "",
+                    "description": (inv.get("libelle") or "").strip(),
+                    "total_amount": total_amount,
+                    "vat_amount": vat_amount,
+                    "account_number": account_num,
+                    "expense_category_id": expense_cat_id,
+                    "distribution_key_id": dist_key_id,
+                    "distribution_lines": [],
+                    "status": "to_pay" if not inv.get("ne_pas_payer") else "do_not_pay",
+                    "copropriete_id": copro_id,
+                    "is_private_fee": False,
+                    "private_fee_owner_id": "",
+                    "occupant_pct": occ_pct,
+                    "proprietaire_pct": prop_pct,
+                    "occupant_amount": round(total_amount * occ_pct / 100, 2),
+                    "proprietaire_amount": round(total_amount * prop_pct / 100, 2),
+                    "vat_code": (inv.get("vat_code") or "").strip(),
+                    "supplier_aux_code": supplier_aux,
+                    "import_session_id": session_id,
+                    "created_at": _now_iso(),
+                }
+                await db.invoices.insert_one(doc)
+                inserted += 1
+            except Exception as e:
+                errors.append({"row": idx, "error": str(e)})
+
+        await _update_step(db, session_id, "invoices", {
+            "count": inserted,
+            "errors": errors,
+            "matched_supplier": matched_supplier,
+            "matched_key": matched_key,
+            "matched_category": matched_category,
+        })
+        return {
+            "inserted": inserted,
+            "errors": errors,
+            "matched_supplier": matched_supplier,
+            "matched_key": matched_key,
+            "matched_category": matched_category,
+        }
+
+    # ----- H: JOURNALS (extraits bancaires) - CSV Optipro -----
+    @router.post("/sessions/{session_id}/commit-journals")
+    async def commit_journals(session_id: str, data: CommitJournalsInput, request: Request):
+        """Commit pre-parsed bank journal transactions as bank statement lines."""
+        from fiscal_lock import ensure_period_open
+        session = await db.import_sessions.find_one({"id": session_id})
+        if not session:
+            raise HTTPException(404, "Session introuvable")
+        copro_id = session["copropriete_id"]
+        await _require_acp_access(request, db, copro_id)
+
+        bank_lookup: dict[str, str] = dict(data.bank_account_mapping or {})
+        async for ba in db.bank_accounts.find({"copropriete_id": copro_id}, {"_id": 0, "id": 1, "account_number": 1, "pcmn_account": 1}):
+            for fld in ("account_number", "pcmn_account"):
+                v = (ba.get(fld) or "").strip()
+                if v and v not in bank_lookup:
+                    bank_lookup[v] = ba["id"]
+
+        inserted = 0
+        errors = []
+        for idx, t in enumerate(data.transactions):
+            try:
+                date_v = (t.get("date_value") or "").strip()
+                if not date_v:
+                    errors.append({"row": idx, "error": "Date valeur manquante"})
+                    continue
+                try:
+                    await ensure_period_open(db, copro_id, date_v, context="releve bancaire (import)")
+                except Exception as e:
+                    errors.append({"row": idx, "error": f"Periode fermee : {e}"})
+                    continue
+                bank_pcmn = (t.get("bank_account") or "").strip()
+                bank_id = bank_lookup.get(bank_pcmn) if bank_pcmn else None
+                amount = float(t.get("amount") or 0)
+                direction = (t.get("direction") or "").strip()
+                doc = {
+                    "id": str(uuid.uuid4()),
+                    "copropriete_id": copro_id,
+                    "bank_account_id": bank_id or "",
+                    "bank_pcmn_code": bank_pcmn,
+                    "bank_pcmn_label": (t.get("bank_account_label") or "").strip(),
+                    "counterparty_account": (t.get("counterparty_account") or "").strip(),
+                    "counterparty_account_label": (t.get("counterparty_account_label") or "").strip(),
+                    "num_doc": (t.get("num_doc") or "").strip(),
+                    "code_journal": (t.get("code_journal") or "FIN").strip(),
+                    "date_value": date_v,
+                    "date_compta": (t.get("date_compta") or date_v).strip(),
+                    "libelle": (t.get("libelle") or "").strip(),
+                    "ext_reference": (t.get("ext_reference") or "").strip(),
+                    "amount": amount,
+                    "direction": direction,
+                    "status": "imported",
+                    "import_session_id": session_id,
+                    "created_at": _now_iso(),
+                }
+                await db.bank_statement_lines.insert_one(doc)
+                inserted += 1
+            except Exception as e:
+                errors.append({"row": idx, "error": str(e)})
+
+        await _update_step(db, session_id, "journals", {"count": inserted, "errors": errors})
         return {"inserted": inserted, "errors": errors}
 
     # ----- D: LOTS -----
