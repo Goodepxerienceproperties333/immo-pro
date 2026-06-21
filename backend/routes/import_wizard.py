@@ -10,7 +10,7 @@ from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Form
 from pydantic import BaseModel
 
 from import_wizard.csv_utils import sniff_csv, parse_french_number, parse_date, split_optipro_code, normalize_header
-from import_wizard.pdf_utils import extract_pdf, parse_natures_pdf, parse_budget_pdf, parse_distribution_keys_pdf, parse_owners_pdf
+from import_wizard.pdf_utils import extract_pdf, parse_natures_pdf, parse_budget_pdf, parse_distribution_keys_pdf, parse_owners_pdf, parse_lots_pdf
 
 logger = logging.getLogger("import_wizard")
 
@@ -105,6 +105,8 @@ def create_import_wizard_router(db):
             return parse_distribution_keys_pdf(raw)
         if kind == "owners":
             return parse_owners_pdf(raw)
+        if kind == "lots":
+            return parse_lots_pdf(raw)
         return extract_pdf(raw)
 
     # ----- SESSIONS -----

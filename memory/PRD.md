@@ -12,6 +12,118 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 ## Implemented
 
+### Iter68 (Feb 2026) - Import PDF Owners + Lots dans l'Assistant ACP + Auto-affectation
+
+#### Probleme P0
+Le parser PDF `parse_owners_pdf` (iter precedent) extrayait 0 ligne sur le PDF
+Optipro "Liste des coproprietaires.pdf" en raison des coordonnees x/y mal calculees.
+De plus, le CSV Lots avait des limites (le user demande un import PDF aussi).
+
+#### Refonte des parsers PDF (`import_wizard/pdf_utils.py`)
+Strategie anchor-based robuste utilisant 4 helpers reutilisables :
+- `_normalize_header(text)` : minuscules + NFD strip-accents.
+- `_detect_column_boundaries(header_words, label_map)` : detecte la ligne header
+  ACTUELLE (multi-rows merge si gap < 8px), exclut les headers parasites
+  (HAULOTTE, "Lots" dans le body), retourne les bornes x + `header_y_bottom`.
+- `_refine_columns_from_data(cols, ...)` : cluster les `x0` des 8 premieres
+  rows-anchors, merge les clusters dont gap < 25px (= meme colonne), puis
+  associe chaque cluster a une colonne header (margin gauche elargie a 30px
+  pour capturer les prefixes type "C0XXX - " dans la colonne PROPRIETAIRE).
+- `_group_into_rows_by_anchor(words, anchor_pred, header_y_max)` : bandes
+  Y delimitees par MIDPOINT entre anchors consecutifs -> capture le texte
+  qui wrap AU-DESSUS ET EN-DESSOUS de l'anchor (ex. "M. et Mme MOUCHET-"
+  sur la ligne au-dessus, "GERMAIN Gaston et Nicole" en-dessous).
+
+Cle technique : matching des mots par `x0` (donnees gauche-alignees Optipro)
+au lieu du centre (sinon les mots longs comme "Bernadette" debordent dans la
+colonne suivante).
+
+#### `parse_owners_pdf` corrige
+- Cols detectees : `aux, name, ident, coord, lots, qts, vcs`.
+- Anchor = `^C\d{4}$` (codes auxiliaires Optipro).
+- Decompose `name` en `civility / last_name / first_name` (regex civility
+  enrichie : `M. et/ou Mme`, `Mme et M.`, `Mr et Mme`...).
+- Tokens uppercase + hyphenated (MOUCHET-GERMAIN) traites comme last_name.
+- Test : 64 proprietaires extraits sur le PDF de reference (2 pages).
+
+#### `parse_lots_pdf` (nouveau)
+- Cols detectees : `code, reference, nature, batiment, qts, owner, address`.
+- Anchor = `^\d{4}$` avec `x0 < 80` (codes lot Optipro).
+- Header multi-ligne "NATURE DU BIEN" merge correctement (rows < 8px gap).
+- Parse owner field "C0946 - M. LEGROS Jean" -> owner_auxiliary_code +
+  owner_name separes.
+- Test : 72 lots extraits dont 4 appartements avec quotities (39/40/49/40).
+
+#### Endpoint backend
+- `POST /api/import-wizard/parse-pdf` (stateless, ACP non requise) :
+  ajout du parametre `kind=lots` (en plus de `owners/natures/budget/keys`).
+
+#### Model `OwnerInput` enrichi (`routes/properties.py`)
+Nouveaux champs accepts a la creation :
+- `civility` (M. / Mme / M. et Mme ...)
+- `auxiliary_code` (C0XXX Optipro - cle de matching avec les lots)
+- `identifier` (reference legacy Optipro)
+- `vcs_code` + `vcs_digits` (si fournis, on REUTILISE le VCS Optipro au lieu
+  d'en generer un nouveau - preserve la continuite des paiements).
+- `iban`.
+
+#### Frontend - Nouveau composant `PdfImportDialog.js`
+Composant generique reutilisable pour les imports PDF :
+- Zone upload + preview en tableau scrollable avec checkbox de selection
+  ligne par ligne.
+- Toggle "Tout selectionner / deselectionner".
+- Badge de comptage `X / Y selectionnees`.
+- Validation : reset ou import (callback `onImport(selectedRows)`).
+- Avertissement amber : "Verifiez les donnees parsees avant import."
+
+#### Frontend - `CoproprietesPage.js` (Assistant de creation ACP - Step 2)
+4 boutons d'import :
+- **Proprietaires (CSV)** [data-testid=`import-owners-csv-btn`]
+- **Proprietaires (PDF)** [data-testid=`import-owners-pdf-btn`] NOUVEAU
+- **Lots (CSV)** [data-testid=`import-lots-csv-btn`]
+- **Lots (PDF)** [data-testid=`import-lots-pdf-btn`] NOUVEAU
+- **Ajouter manuellement** [data-testid=`add-lot-btn`]
+
+#### Auto-affectation lot <-> proprietaire (cle de la demande user)
+- **Au moment de l'import lots** : match via `owner_auxiliary_code` (C0XXX)
+  exact, puis fallback nom (substring case-insensitive). Refetch owners
+  juste avant matching pour avoir la liste a jour.
+- **Au moment de l'import owners (PDF ou CSV)** : RETROACTIF - re-scan
+  `form.lots` apres setOwners, et auto-affecte les lots orphelins via leur
+  `_imported_owner_aux` ou `_imported_owner_name` sauvegardes.
+- Resultat : auto-affectation totale quel que soit l'ordre (Owners->Lots
+  ou Lots->Owners).
+
+#### UI feedback
+- **Summary banner** [data-testid=`lots-summary`] : "X lot(s) au total
+  - Y auto-affectes - Z orphelins (proprietaire manquant)".
+- **Badge vert** pour chaque proprietaire affecte (avec X de retrait).
+- **Badge ambre "Non rattache: C0XXX <nom>"** [data-testid=`lot-{i}-orphan`]
+  pour les lots orphelins (proprietaire pas encore importe).
+- **Bouton "Reessayer l'auto-affectation"** [data-testid=`lots-retry-match-btn`]
+  visible quand orphelins > 0 : refetch owners + re-scan.
+- **Toast d'import** mentionne le nombre auto-affecte : "72 lot(s) importes -
+  72 auto-affectes a leurs proprietaires".
+
+#### Tests E2E (playwright)
+- Login superadmin -> /coproprietes -> "Nouvelle ACP" -> Step 1 (nom) ->
+  Step 2 -> "Proprietaires (PDF)" -> upload `Liste des coproprietaires.pdf`
+  -> 64 lignes detectees -> Import -> 64 owners crees en DB.
+- "Lots (PDF)" -> upload `Liste des lots.pdf` -> 72 lignes detectees ->
+  Import -> 72 lots dans le state local, **72/72 auto-affectes via C0XXX**.
+- Summary banner affiche "72 lot(s) au total · 72 auto-affectes" en vert.
+- Badges verts visibles sur chaque ligne lot avec le nom du proprietaire
+  (ex: "M. LEGROS Jean", "Mme Grignard Liliane").
+
+#### Files de reference
+- `/app/backend/import_wizard/pdf_utils.py` (refonte parsers)
+- `/app/backend/routes/import_wizard.py` (endpoint +kind=lots)
+- `/app/backend/routes/properties.py` (OwnerInput enrichi)
+- `/app/frontend/src/components/PdfImportDialog.js` (NEW)
+- `/app/frontend/src/pages/CoproprietesPage.js` (boutons PDF + auto-affectation)
+
+
+
 ### Iter65 (Feb 2026) - Wizard d'import Optipro / Sogis (Phase 1)
 
 Module CRITIQUE pour la migration depuis les anciens logiciels syndic Optipro/Sogis. Decoupage en **4 phases**. Cette iteration livre la **Phase 1**.

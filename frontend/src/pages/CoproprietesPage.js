@@ -11,8 +11,9 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { Plus, Pencil, Trash2, Home, Search, Archive, RotateCcw, Landmark, PlusCircle, X, Eraser, Wand2, Upload, UserPlus } from 'lucide-react';
+import { Plus, Pencil, Trash2, Home, Search, Archive, RotateCcw, Landmark, PlusCircle, X, Eraser, Wand2, Upload, UserPlus, FileText } from 'lucide-react';
 import BulkCsvImportDialog from '@/components/BulkCsvImportDialog';
+import PdfImportDialog from '@/components/PdfImportDialog';
 
 const emptyBank = { iban: '', bic: '', account_type: 'vue', is_default: false, label: '' };
 const emptyLot = { number: '', description: '', lot_type: 'apartment', floor: 0, area: 0, quotity: 0 };
@@ -31,6 +32,8 @@ export default function CoproprietesPage() {
   const [form, setForm] = useState(emptyForm);
   const [bulkLotsOpen, setBulkLotsOpen] = useState(false);
   const [bulkOwnersOpen, setBulkOwnersOpen] = useState(false);
+  const [pdfOwnersOpen, setPdfOwnersOpen] = useState(false);
+  const [pdfLotsOpen, setPdfLotsOpen] = useState(false);
   const [importingOwners, setImportingOwners] = useState(false);
   const [step, setStep] = useState(1);
   const [ownerSearchByLot, setOwnerSearchByLot] = useState({});  // {lotIdx: 'query'}
@@ -323,22 +326,84 @@ export default function CoproprietesPage() {
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Lots et proprietaires</div>
-                  <div className="flex gap-2">
+                  <div className="flex gap-2 flex-wrap">
                     <Button variant="outline" size="sm" onClick={() => setBulkOwnersOpen(true)} className="border-emerald-300 text-emerald-700 hover:bg-emerald-50" data-testid="import-owners-csv-btn">
-                      <UserPlus size={14} className="mr-1" /> Importer proprietaires (CSV)
+                      <UserPlus size={14} className="mr-1" /> Proprietaires (CSV)
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={() => setPdfOwnersOpen(true)} className="border-emerald-300 text-emerald-700 hover:bg-emerald-50" data-testid="import-owners-pdf-btn">
+                      <FileText size={14} className="mr-1" /> Proprietaires (PDF)
                     </Button>
                     <Button variant="outline" size="sm" onClick={() => setBulkLotsOpen(true)} className="border-blue-300 text-blue-700 hover:bg-blue-50" data-testid="import-lots-csv-btn">
-                      <Upload size={14} className="mr-1" /> Importer lots (CSV)
+                      <Upload size={14} className="mr-1" /> Lots (CSV)
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={() => setPdfLotsOpen(true)} className="border-blue-300 text-blue-700 hover:bg-blue-50" data-testid="import-lots-pdf-btn">
+                      <FileText size={14} className="mr-1" /> Lots (PDF)
                     </Button>
                     <Button variant="outline" size="sm" onClick={addLot} data-testid="add-lot-btn"><PlusCircle size={14} className="mr-1" /> Ajouter manuellement</Button>
                   </div>
                 </div>
                 <div className="bg-blue-50/40 border border-blue-100 text-xs text-blue-700 p-2 rounded mb-3">
-                  <strong>Reprise Optipro/Sogis ?</strong> Cliquez sur &laquo;Importer proprietaires (CSV)&raquo; puis &laquo;Importer lots (CSV)&raquo; pour charger des centaines de lignes en quelques clics. Les proprietaires importes seront automatiquement suggeres lors du matching avec les lots.
+                  <strong>Reprise Optipro/Sogis ?</strong> Importez les <em>Listes des coproprietaires</em> et <em>Liste des lots</em> directement en PDF (export Optipro), ou en CSV. Les proprietaires importes seront automatiquement suggeres lors du matching avec les lots.
                 </div>
                 {(form.lots || []).length === 0 ? (
                   <p className="text-sm text-slate-400 text-center py-3 border rounded-md">Aucun lot - vous pourrez en ajouter plus tard via le menu Lots</p>
                 ) : (
+                  <>
+                    {/* Summary banner : counts of lots / matched / orphan */}
+                    {(() => {
+                      const total = form.lots.length;
+                      const matched = form.lots.filter(l => (l.owner_ids || []).length > 0).length;
+                      const orphans = form.lots.filter(l => (l.owner_ids || []).length === 0 && (l._imported_owner_name || l._imported_owner_aux)).length;
+                      const empty = total - matched - orphans;
+                      if (total === 0) return null;
+                      return (
+                        <div className="mb-3 flex items-center justify-between bg-slate-50/60 border border-slate-200 rounded-md px-3 py-2 text-[11px]" data-testid="lots-summary">
+                          <div className="flex items-center gap-3">
+                            <span><strong>{total}</strong> lot(s) au total</span>
+                            {matched > 0 && <span className="text-emerald-700"><strong>{matched}</strong> auto-affectes</span>}
+                            {orphans > 0 && <span className="text-amber-700"><strong>{orphans}</strong> orphelins (proprietaire manquant)</span>}
+                            {empty > 0 && <span className="text-slate-500"><strong>{empty}</strong> sans contrepartie</span>}
+                          </div>
+                          {orphans > 0 && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-6 px-2 text-[11px] border-amber-300 text-amber-700 hover:bg-amber-50"
+                              data-testid="lots-retry-match-btn"
+                              onClick={async () => {
+                                let nextOwners = owners;
+                                try {
+                                  const r = await api.get('/owners');
+                                  nextOwners = r.data || [];
+                                  setOwners(nextOwners);
+                                } catch (_e) { /* keep cache */ }
+                                let matched2 = 0;
+                                setForm(f => {
+                                  const lots = (f.lots || []).map(l => {
+                                    if ((l.owner_ids || []).length > 0) return l;
+                                    const aux = (l._imported_owner_aux || '').trim().toUpperCase();
+                                    const oname = (l._imported_owner_name || '').toLowerCase().trim();
+                                    let m = null;
+                                    if (aux) m = nextOwners.find(o => (o.auxiliary_code || '').toUpperCase() === aux);
+                                    if (!m && oname) m = nextOwners.find(o => {
+                                      const n = (o.name || '').toLowerCase().trim();
+                                      return n === oname || n.includes(oname) || oname.includes(n);
+                                    });
+                                    if (m) { matched2++; return { ...l, owner_id: m.id, owner_ids: [m.id] }; }
+                                    return l;
+                                  });
+                                  return { ...f, lots };
+                                });
+                                if (matched2 > 0) toast.success(`${matched2} lot(s) nouvellement affecte(s)`);
+                                else toast.info('Aucun nouveau rattachement - importez d\'abord les proprietaires correspondants');
+                              }}
+                            >
+                              Reessayer l&apos;auto-affectation
+                            </Button>
+                          )}
+                        </div>
+                      );
+                    })()}
                   <div className="space-y-3">
                     {form.lots.map((lot, i) => (
                       <div key={i} className="border rounded-md p-3 bg-slate-50/50 relative" data-testid={`lot-row-${i}`}>
@@ -371,12 +436,21 @@ export default function CoproprietesPage() {
                               {lot.owner_ids.map(oid => {
                                 const o = owners.find(x => x.id === oid);
                                 return (
-                                  <Badge key={oid} variant="outline" className="bg-[#0055FF]/10 border-[#0055FF]/30 text-slate-700 gap-1 pl-2 pr-1 py-0.5" data-testid={`lot-${i}-owner-${oid}`}>
+                                  <Badge key={oid} variant="outline" className="bg-emerald-50 border-emerald-300 text-emerald-800 gap-1 pl-2 pr-1 py-0.5" data-testid={`lot-${i}-owner-${oid}`}>
                                     <span className="text-[11px]">{o?.name || '(inconnu)'}</span>
-                                    <button onClick={() => removeOwnerFromLot(i, oid)} className="text-slate-400 hover:text-red-500"><X size={10} /></button>
+                                    <button onClick={() => removeOwnerFromLot(i, oid)} className="text-emerald-500 hover:text-red-500"><X size={10} /></button>
                                   </Badge>
                                 );
                               })}
+                            </div>
+                          )}
+                          {/* Orphan badge : lot imported but owner not matched */}
+                          {(lot.owner_ids || []).length === 0 && (lot._imported_owner_name || lot._imported_owner_aux) && (
+                            <div className="mb-2 flex items-center gap-2 text-[11px]">
+                              <Badge variant="outline" className="bg-amber-50 border-amber-300 text-amber-800 py-0.5" data-testid={`lot-${i}-orphan`}>
+                                Non rattache: {lot._imported_owner_aux ? <span className="font-mono">{lot._imported_owner_aux}</span> : null} {lot._imported_owner_name}
+                              </Badge>
+                              <span className="text-slate-400">- importez les proprietaires pour auto-affecter</span>
                             </div>
                           )}
                           <div className="relative">
@@ -406,6 +480,7 @@ export default function CoproprietesPage() {
                       Total quotites: <span className="font-mono font-semibold text-slate-700">{form.lots.reduce((s, l) => s + (parseFloat(l.quotity) || 0), 0).toFixed(2)}</span> / 10000
                     </div>
                   </div>
+                  </>
                 )}
               </div>
             )}
@@ -535,15 +610,204 @@ export default function CoproprietesPage() {
               ok++;
             } catch (_e) { ko++; }
           }
-          toast.success(`${ok} proprietaire(s) crees${ko ? ` (${ko} echec(s))` : ''}`);
           // Reload owners so the lot autocomplete sees them
+          let nextOwners = owners;
           try {
             const r = await api.get('/owners');
-            setOwners(r.data || []);
+            nextOwners = r.data || [];
+            setOwners(nextOwners);
           } catch (_e) {
             // ignore reload failure
           }
+          // Retroactive auto-assignment : if lots were imported BEFORE owners,
+          // match them now via the name kept in _imported_owner_name.
+          let retroMatched = 0;
+          setForm(f => {
+            const lots = (f.lots || []).map(l => {
+              if (l.owner_id) return l;
+              const oname = (l._imported_owner_name || '').toLowerCase().trim();
+              if (!oname) return l;
+              const matched = nextOwners.find(o => {
+                const n = (o.name || '').toLowerCase().trim();
+                return n === oname || n.includes(oname) || oname.includes(n);
+              });
+              if (matched) {
+                retroMatched++;
+                return { ...l, owner_id: matched.id, owner_ids: [matched.id] };
+              }
+              return l;
+            });
+            return { ...f, lots };
+          });
+          toast.success(
+            `${ok} proprietaire(s) crees${ko ? ` (${ko} echec(s))` : ''}` +
+            (retroMatched ? ` - ${retroMatched} lot(s) auto-affectes` : '')
+          );
           setImportingOwners(false);
+        }}
+      />
+
+      {/* PDF IMPORT : OWNERS via PDF Optipro */}
+      <PdfImportDialog
+        open={pdfOwnersOpen}
+        onClose={() => setPdfOwnersOpen(false)}
+        title="Importer des proprietaires depuis un PDF (Optipro / Sogis)"
+        kind="owners"
+        dataKey="owners"
+        hint="Liste des coproprietaires - export PDF Optipro/Sogis"
+        columns={[
+          { key: 'auxiliary_code', label: 'Code', monospace: true, width: 70 },
+          { key: 'civility', label: 'Civilite', width: 100 },
+          { key: 'last_name', label: 'Nom' },
+          { key: 'first_name', label: 'Prenom' },
+          { key: 'email', label: 'Email' },
+          { key: 'phone', label: 'Telephone' },
+          { key: 'vcs_code', label: 'VCS', monospace: true },
+        ]}
+        onImport={async (rows) => {
+          if (importingOwners) return;
+          setImportingOwners(true);
+          const created = [];
+          let ok = 0, ko = 0;
+          for (const r of rows) {
+            try {
+              const last = r.last_name || '';
+              const first = r.first_name || '';
+              const civ = r.civility ? `${r.civility} ` : '';
+              const name = (civ + last + ' ' + first).trim() || (r.name || '');
+              if (!last && !r.name) { ko++; continue; }
+              const resp = await api.post('/owners', {
+                first_name: first,
+                last_name: last || r.name,
+                name,
+                civility: r.civility || '',
+                address: '',
+                postal_code: '',
+                city: '',
+                country: 'Belgique',
+                email: r.email || '',
+                phone: r.phone || '',
+                vcs_code: r.vcs_code || '',
+                vcs_digits: r.vcs_digits || '',
+                auxiliary_code: r.auxiliary_code || '',
+                identifier: r.identifier || '',
+              });
+              if (resp?.data) created.push(resp.data);
+              ok++;
+            } catch (_e) { ko++; }
+          }
+          // Re-fetch the full list so the local state is consistent
+          let nextOwners = owners;
+          try {
+            const rr = await api.get('/owners');
+            nextOwners = rr.data || [];
+            setOwners(nextOwners);
+          } catch (_e) {
+            // ignore
+          }
+          // RETROACTIVE LOT-OWNER AUTO-ASSIGNMENT : if lots were imported
+          // BEFORE owners, match them now via _imported_owner_aux (C0XXX).
+          let retroMatched = 0;
+          setForm(f => {
+            const lots = (f.lots || []).map(l => {
+              if (l.owner_id) return l;  // already assigned
+              const aux = (l._imported_owner_aux || '').trim().toUpperCase();
+              const oname = (l._imported_owner_name || '').toLowerCase().trim();
+              let matched = null;
+              if (aux) {
+                matched = nextOwners.find(o => (o.auxiliary_code || '').toUpperCase() === aux);
+              }
+              if (!matched && oname) {
+                matched = nextOwners.find(o => {
+                  const n = (o.name || '').toLowerCase().trim();
+                  return n === oname || n.includes(oname) || oname.includes(n);
+                });
+              }
+              if (matched) {
+                retroMatched++;
+                return { ...l, owner_id: matched.id, owner_ids: [matched.id] };
+              }
+              return l;
+            });
+            return { ...f, lots };
+          });
+          toast.success(
+            `${ok} proprietaire(s) crees${ko ? ` (${ko} echec(s))` : ''}` +
+            (retroMatched ? ` - ${retroMatched} lot(s) auto-affectes` : '')
+          );
+          setImportingOwners(false);
+        }}
+      />
+
+      {/* PDF IMPORT : LOTS via PDF Optipro */}
+      <PdfImportDialog
+        open={pdfLotsOpen}
+        onClose={() => setPdfLotsOpen(false)}
+        title="Importer des lots depuis un PDF (Optipro / Sogis)"
+        kind="lots"
+        dataKey="lots"
+        hint="Liste des lots - export PDF Optipro/Sogis"
+        columns={[
+          { key: 'code', label: 'Code', monospace: true, width: 70 },
+          { key: 'reference', label: 'Reference', width: 100 },
+          { key: 'nature', label: 'Nature' },
+          { key: 'batiment', label: 'Batiment' },
+          { key: 'quotities_value', label: 'Quotites' },
+          { key: 'owner_auxiliary_code', label: 'Code prop.', monospace: true },
+          { key: 'owner_name', label: 'Proprietaire' },
+        ]}
+        onImport={async (rows) => {
+          // Refetch owners JUST BEFORE matching to ensure freshly-imported
+          // owners (from a prior PDF/CSV import) are visible.
+          let availableOwners = owners;
+          try {
+            const rr = await api.get('/owners');
+            availableOwners = rr.data || [];
+            setOwners(availableOwners);
+          } catch (_e) {
+            // use local cache
+          }
+          const natureMap = (n) => {
+            const u = (n || '').toUpperCase();
+            if (u.includes('APPART')) return 'apartment';
+            if (u.includes('GARAGE') || u.includes('PARKING')) return 'parking';
+            if (u.includes('CAVE')) return 'cave';
+            if (u.includes('COMMERCE')) return 'commerce';
+            if (u.includes('BUREAU')) return 'bureau';
+            return 'autre';
+          };
+          const newLots = rows.map((r) => {
+            const aux = (r.owner_auxiliary_code || '').trim().toUpperCase();
+            const ownerName = (r.owner_name || '').toLowerCase().trim();
+            let matched = null;
+            if (aux) {
+              matched = availableOwners.find((o) => (o.auxiliary_code || '').toUpperCase() === aux);
+            }
+            if (!matched && ownerName) {
+              matched = availableOwners.find((o) => {
+                const n = (o.name || '').toLowerCase().trim();
+                return n === ownerName || n.includes(ownerName) || ownerName.includes(n);
+              });
+            }
+            return {
+              number: r.reference || r.code,
+              description: r.nature || '',
+              lot_type: natureMap(r.nature),
+              floor: 0,
+              area: 0,
+              quotity: parseFloat(r.quotities_value || 0) || 0,
+              owner_id: matched?.id || '',
+              owner_ids: matched ? [matched.id] : [],
+              _imported_owner_name: r.owner_name || '',
+              _imported_owner_aux: r.owner_auxiliary_code || '',
+            };
+          });
+          setForm((f) => ({ ...f, lots: [...(f.lots || []), ...newLots] }));
+          const matchedCount = newLots.filter((l) => l.owner_id).length;
+          toast.success(
+            `${newLots.length} lot(s) importes` +
+            (matchedCount ? ` - ${matchedCount} auto-affectes a leurs proprietaires` : ' (importez d\'abord les proprietaires pour l\'auto-affectation)')
+          );
         }}
       />
     </div>

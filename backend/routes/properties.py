@@ -55,6 +55,7 @@ def create_properties_router(db):
         first_name: Optional[str] = ""
         last_name: Optional[str] = ""
         name: Optional[str] = ""
+        civility: Optional[str] = ""
         address: Optional[str] = ""
         postal_code: Optional[str] = ""
         city: Optional[str] = ""
@@ -64,6 +65,12 @@ def create_properties_router(db):
         phone: Optional[str] = ""
         phone2: Optional[str] = ""
         copropriete_id: Optional[str] = ""
+        # Optional Optipro/Sogis import fields - kept as legacy reference
+        auxiliary_code: Optional[str] = ""  # ex. "C0777"
+        identifier: Optional[str] = ""      # ex. "193M04"
+        vcs_code: Optional[str] = ""        # if provided, keep it; otherwise auto-generate
+        vcs_digits: Optional[str] = ""
+        iban: Optional[str] = ""
 
     @router.get("/owners")
     async def list_owners(request: Request, copropriete_id: Optional[str] = None):
@@ -102,14 +109,21 @@ def create_properties_router(db):
     @router.post("/owners")
     async def create_owner(data: OwnerInput):
         from server import generate_vcs
-        vcs_code = await generate_vcs(db)
-        vcs_digits = vcs_code.replace("+", "").replace("/", "")
+        # If a VCS code is provided (e.g. from an Optipro import), reuse it
+        # to preserve the legacy reference. Otherwise auto-generate one.
+        vcs_code = (data.vcs_code or "").strip()
+        if not vcs_code:
+            vcs_code = await generate_vcs(db)
+        vcs_digits = (data.vcs_digits or "").strip()
+        if not vcs_digits:
+            vcs_digits = vcs_code.replace("+", "").replace("/", "")
         full_name = data.name or f"{data.last_name} {data.first_name}".strip()
         doc = {
             "id": str(uuid.uuid4()),
             "first_name": data.first_name,
             "last_name": data.last_name,
             "name": full_name,
+            "civility": data.civility or "",
             "address": data.address,
             "postal_code": data.postal_code,
             "city": data.city,
@@ -120,6 +134,9 @@ def create_properties_router(db):
             "phone2": data.phone2,
             "vcs_code": vcs_code,
             "vcs_digits": vcs_digits,
+            "auxiliary_code": (data.auxiliary_code or "").strip(),
+            "identifier": (data.identifier or "").strip(),
+            "iban": (data.iban or "").strip(),
             "copropriete_id": data.copropriete_id,
             "created_at": datetime.now(timezone.utc).isoformat()
         }
