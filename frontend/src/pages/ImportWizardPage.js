@@ -206,12 +206,17 @@ export default function ImportWizardPage() {
         r = await api.post(`/import-wizard/sessions/${session.id}/commit-invoices`, { invoices: invoicesParsed });
         const m = r.data;
         toast.success(
-          `${m.inserted} facture(s) importees - ${m.matched_supplier} avec fournisseur, ` +
-          `${m.matched_key} avec cle, ${m.matched_category} avec nature`
+          `${m.inserted} facture(s) validee(s) + ${m.journal_entries || 0} ecriture(s) AC creee(s)` +
+          (m.pcmn_created ? ` - ${m.pcmn_created} compte(s) PCMN auto-ajoutes` : '') +
+          ` - ${m.matched_supplier} avec fournisseur, ${m.matched_key} avec cle, ${m.matched_category} avec nature`
         );
       } else if (step.key === 'journals') {
         r = await api.post(`/import-wizard/sessions/${session.id}/commit-journals`, { transactions: journalsParsed });
-        toast.success(`${r.data.inserted} transaction(s) bancaire(s) importees`);
+        const m = r.data;
+        toast.success(
+          `${m.inserted} transaction(s) bancaire(s) importee(s) + ${m.journal_entries || 0} ecriture(s) FI` +
+          (m.pcmn_created ? ` - ${m.pcmn_created} compte(s) PCMN auto-ajoutes` : '')
+        );
       } else if (step.key === 'fiscal_year') {
         if (!fyForm.name || !fyForm.start_date || !fyForm.end_date) {
           toast.error('Nom, date debut et date fin sont obligatoires');

@@ -1036,6 +1036,150 @@ def parse_budget_pdf(raw: bytes) -> dict:
 
 
 # ============================================================
+# BALANCE SHEET PDF parser (Optipro "Bilan comptable") - Phase I OD ouverture
+# ============================================================
+def parse_balance_pdf(raw: bytes) -> dict:
+    """Parse Optipro 'Bilan comptable' PDF (balance sheet at year-end).
+
+    Structure : 2 columns side-by-side
+      - LEFT  : Actif (Assets)  : x in [40, 420]
+      - RIGHT : Passif (Liabilities) : x in [420, 800]
+
+    Each side has:
+      - Main account rows (3-4 digit code, e.g. "410", "550472")
+      - Detail sub-account rows (7-digit code, e.g. "4100960", "4400025")
+
+    Total actif = Total passif (balanced by construction).
+
+    Returns:
+      { actif: [{ account, label, amount, is_subaccount }],
+        passif: [{ account, label, amount, is_subaccount }],
+        total_actif, total_passif, balanced,
+        period_end_date }
+    """
+    import re
+    info = {"actif": [], "passif": [], "total_actif": 0.0, "total_passif": 0.0,
+            "balanced": False, "period_end_date": ""}
+    account_re = re.compile(r"^\d{3,7}$")
+    amount_word_re = re.compile(r"^-?[\d.,]+$")
+
+    def _join_amount(words: list[dict]) -> float:
+        if not words:
+            return 0.0
+        ws = sorted(words, key=lambda w: w["x0"])
+        joined = "".join(w["text"] for w in ws).replace(" ", "").replace(",", ".").replace("\u00a0", "")
+        try:
+            return float(joined)
+        except ValueError:
+            return 0.0
+
+    with pdfplumber.open(io.BytesIO(raw)) as pdf:
+        for page in pdf.pages:
+            words = page.extract_words(keep_blank_chars=False, x_tolerance=2, y_tolerance=3) or []
+            if not words:
+                continue
+
+            # Detect period end date from header
+            for w in words:
+                if w["top"] < 60:
+                    m = re.match(r"^(\d{2}/\d{2}/\d{4})$", w["text"])
+                    if m:
+                        info["period_end_date"] = m.group(1)
+
+            # Detect "Actif" / "Passif" headers to determine the split x
+            actif_x = passif_x = None
+            for w in words:
+                if w["top"] < 180 and w["text"].lower() == "actif":
+                    actif_x = (w["x0"] + w["x1"]) / 2
+                elif w["top"] < 180 and w["text"].lower() == "passif":
+                    passif_x = (w["x0"] + w["x1"]) / 2
+            if actif_x is None or passif_x is None:
+                continue
+            split_x = (actif_x + passif_x) / 2  # boundary between Actif and Passif zones
+
+            # Detect Total actif / Total passif row to stop scanning
+            total_y = None
+            for w in words:
+                if w["text"].lower() == "total":
+                    total_y = w["top"]
+                    break
+
+            # Find data anchors : account codes (3-7 digits)
+            def _is_anchor(w):
+                return bool(account_re.match(w["text"]))
+
+            anchors = []
+            for w in sorted(words, key=lambda w: (w["top"], w["x0"])):
+                if not _is_anchor(w):
+                    continue
+                if w["top"] <= 180:
+                    continue
+                if total_y is not None and w["top"] >= total_y - 1:
+                    continue
+                # Side detection : center x of the word relative to split
+                cx = (w["x0"] + w["x1"]) / 2
+                side = "actif" if cx < split_x else "passif"
+                # Sub-account if x0 > 60 (Actif) or x0 > 435 (Passif)
+                if side == "actif":
+                    is_sub = w["x0"] > 60
+                else:
+                    is_sub = w["x0"] > 435
+                anchors.append((w["top"], w["x0"], side, w["text"], w, is_sub))
+
+            # Group anchors by (side, top) - one row per side at each Y position
+            # Then for each anchor, find the libellé (text words AFTER the code)
+            # and the amount (numeric words RIGHT side of the side zone).
+            for top, ax0, side, code, anchor_w, is_sub in anchors:
+                # Y band : just this row (top +/- 4)
+                row_ws = [w for w in words if abs(w["top"] - top) < 4]
+                # Filter by side
+                if side == "actif":
+                    side_ws = [w for w in row_ws if (w["x0"] + w["x1"]) / 2 < split_x]
+                    amount_xmin = 350  # amounts right-aligned in Actif column
+                else:
+                    side_ws = [w for w in row_ws if (w["x0"] + w["x1"]) / 2 >= split_x]
+                    amount_xmin = 730  # amounts right-aligned in Passif column
+
+                # Sort by x0
+                side_ws.sort(key=lambda w: w["x0"])
+                # libellé : words between (anchor.x1 + 4) and amount_xmin
+                # ALSO skip a dash separator if present right after the code
+                libelle_words = []
+                amount_words = []
+                for w in side_ws:
+                    if w is anchor_w:
+                        continue
+                    if amount_word_re.match(w["text"]) and w["x0"] >= amount_xmin:
+                        amount_words.append(w)
+                    elif w["text"] in ("-", "–") and abs(w["x0"] - (anchor_w["x1"] + 2)) < 5:
+                        continue
+                    else:
+                        libelle_words.append(w)
+                libelle = " ".join(w["text"] for w in libelle_words).strip()
+                libelle = re.sub(r"^[-–]\s*", "", libelle)
+                amount = _join_amount(amount_words)
+
+                entry = {
+                    "account": code,
+                    "label": libelle,
+                    "amount": amount,
+                    "is_subaccount": is_sub,
+                }
+                info[side].append(entry)
+
+            # Capture Total actif / Total passif
+            if total_y is not None:
+                total_ws = [w for w in words if abs(w["top"] - total_y) < 4 and amount_word_re.match(w["text"])]
+                actif_amt_ws = [w for w in total_ws if (w["x0"] + w["x1"]) / 2 < split_x and w["x0"] >= 350]
+                passif_amt_ws = [w for w in total_ws if (w["x0"] + w["x1"]) / 2 >= split_x and w["x0"] >= 730]
+                info["total_actif"] = _join_amount(actif_amt_ws)
+                info["total_passif"] = _join_amount(passif_amt_ws)
+
+    info["balanced"] = abs(info["total_actif"] - info["total_passif"]) < 0.01
+    return info
+
+
+# ============================================================
 # DISTRIBUTION KEYS PDF parser
 # ============================================================
 def parse_distribution_keys_pdf(raw: bytes) -> dict:

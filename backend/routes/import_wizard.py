@@ -10,7 +10,7 @@ from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Form
 from pydantic import BaseModel
 
 from import_wizard.csv_utils import sniff_csv, parse_french_number, parse_date, split_optipro_code, normalize_header, parse_invoices_csv, parse_journals_csv
-from import_wizard.pdf_utils import extract_pdf, parse_natures_pdf, parse_budget_pdf, parse_distribution_keys_pdf, parse_owners_pdf, parse_lots_pdf, parse_suppliers_pdf
+from import_wizard.pdf_utils import extract_pdf, parse_natures_pdf, parse_budget_pdf, parse_distribution_keys_pdf, parse_owners_pdf, parse_lots_pdf, parse_suppliers_pdf, parse_balance_pdf
 
 logger = logging.getLogger("import_wizard")
 
@@ -168,7 +168,7 @@ def create_import_wizard_router(db):
                                 "expense_categories", "distribution_keys",
                                 "fiscal_years", "budgets", "invoices",
                                 "journal_entries", "bank_statements", "bank_transactions",
-                                "bank_statement_lines"]
+                                "bank_statement_lines", "pcmn_accounts"]
         report = {}
         for col in collections_to_clean:
             try:
@@ -402,12 +402,53 @@ def create_import_wizard_router(db):
         return {"inserted": inserted, "errors": errors}
 
     # ----- G: INVOICES (factures) - CSV Optipro -----
+    async def _ensure_pcmn_accounts(copro_id: str, accounts_needed: dict[str, str]) -> int:
+        """Ensure each (account_number -> account_name) exists in this ACP's PCMN.
+
+        Returns the count of newly-created accounts.
+        """
+        if not accounts_needed:
+            return 0
+        existing = set()
+        async for p in db.pcmn_accounts.find(
+            {"copropriete_id": copro_id, "number": {"$in": list(accounts_needed.keys())}},
+            {"_id": 0, "number": 1}
+        ):
+            existing.add(p["number"])
+        missing = {n: lbl for n, lbl in accounts_needed.items() if n not in existing}
+        created = 0
+        for num, lbl in missing.items():
+            try:
+                class_num = int(num[0]) if num and num[0].isdigit() else 0
+            except (ValueError, IndexError):
+                class_num = 0
+            await db.pcmn_accounts.insert_one({
+                "id": str(uuid.uuid4()),
+                "number": num,
+                "name": lbl or num,
+                "class_num": class_num,
+                "parent": "",
+                "is_system": False,
+                "is_imported": True,
+                "copropriete_id": copro_id,
+                "created_at": _now_iso(),
+            })
+            created += 1
+        return created
+
     @router.post("/sessions/{session_id}/commit-invoices")
     async def commit_invoices(session_id: str, data: CommitInvoicesInput, request: Request):
         """Commit pre-parsed invoices. Each invoice is auto-matched to:
         - supplier (via F0XXX auxiliary_code)
         - distribution_key (via key code from 'Cle' column)
         - expense_category (via Nature code or account_number)
+
+        Side effects:
+        - Missing PCMN accounts (charge 61xxx + supplier sub-account 4400xxx)
+          are auto-created in the ACP's chart of accounts.
+        - A journal entry of type 'AC' (Achats) is created for each invoice
+          with double-entry: DEBIT charge / CREDIT supplier.
+        - Invoice status is set to 'unpaid' (validated, awaiting payment).
         """
         from fiscal_lock import ensure_period_open
         session = await db.import_sessions.find_one({"id": session_id})
@@ -416,12 +457,12 @@ def create_import_wizard_router(db):
         copro_id = session["copropriete_id"]
         await _require_acp_access(request, db, copro_id)
 
-        # Build matching lookups (scoped to current ACP)
-        sup_by_aux: dict[str, str] = {}
+        # Build matching lookups
+        sup_by_aux: dict[str, dict] = {}
         async for s in db.suppliers.find({"copropriete_id": copro_id}, {"_id": 0, "id": 1, "auxiliary_code": 1, "name": 1}):
             ax = (s.get("auxiliary_code") or "").upper().strip()
             if ax:
-                sup_by_aux[ax] = s["id"]
+                sup_by_aux[ax] = s
         keys_by_code: dict[str, str] = {}
         async for k in db.distribution_keys.find({"copropriete_id": copro_id}, {"_id": 0, "id": 1, "code": 1, "import_code": 1}):
             for fld in ("code", "import_code"):
@@ -440,7 +481,22 @@ def create_import_wizard_router(db):
             if a:
                 cats_by_account[a] = c["id"]
 
-        # Resolve unique invoice internal_reference per ACP/year
+        # ---- Pre-pass : collect all PCMN accounts that will be needed ----
+        accounts_needed: dict[str, str] = {}
+        for inv in data.invoices:
+            acc_num = (inv.get("account_number") or "").strip()
+            acc_lbl = (inv.get("account_label") or "").strip()
+            if acc_num:
+                accounts_needed[acc_num] = acc_lbl
+            sup_aux = (inv.get("supplier_aux_code") or "").upper().strip()
+            if sup_aux.startswith("F") and len(sup_aux) >= 5:
+                # PCMN supplier sub-account: 4400 + last 3 digits of F-code
+                # F0471 -> 4400471
+                sup_pcmn = "4400" + sup_aux[1:].zfill(3)
+                sup_lbl = (inv.get("supplier_name") or "").strip() or sup_aux
+                accounts_needed[sup_pcmn] = sup_lbl
+        pcmn_created = await _ensure_pcmn_accounts(copro_id, accounts_needed)
+
         year_counters: dict[str, int] = {}
 
         async def next_internal_ref(year: str) -> str:
@@ -454,6 +510,7 @@ def create_import_wizard_router(db):
             return f"{prefix}{year_counters[year]:04d}"
 
         inserted = 0
+        je_inserted = 0
         errors = []
         matched_supplier = 0
         matched_key = 0
@@ -471,7 +528,8 @@ def create_import_wizard_router(db):
                     continue
 
                 supplier_aux = (inv.get("supplier_aux_code") or "").upper().strip()
-                supplier_id = sup_by_aux.get(supplier_aux) if supplier_aux else None
+                supplier_doc = sup_by_aux.get(supplier_aux) if supplier_aux else None
+                supplier_id = supplier_doc["id"] if supplier_doc else None
                 if supplier_id:
                     matched_supplier += 1
 
@@ -503,14 +561,61 @@ def create_import_wizard_router(db):
 
                 year = date_str[:4]
                 internal_ref = await next_internal_ref(year)
+                invoice_id = str(uuid.uuid4())
+
+                # Compute supplier PCMN sub-account for the journal entry
+                sup_pcmn = ""
+                if supplier_aux.startswith("F") and len(supplier_aux) >= 5:
+                    sup_pcmn = "4400" + supplier_aux[1:].zfill(3)
+                supplier_label = (inv.get("supplier_name") or supplier_aux).strip()
+
+                # ---- Create journal entry (Achats - AC) ----
+                je_id = ""
+                if account_num and sup_pcmn and total_amount > 0:
+                    je_id = str(uuid.uuid4())
+                    je_doc = {
+                        "id": je_id,
+                        "journal_type": "AC",
+                        "date": date_str,
+                        "reference": internal_ref,
+                        "description": f"{supplier_label} - {(inv.get('libelle') or '').strip()}".strip(" -"),
+                        "lines": [
+                            {
+                                "account_number": account_num,
+                                "account_name": (inv.get("account_label") or "").strip(),
+                                "debit": total_amount,
+                                "credit": 0.0,
+                                "description": (inv.get("libelle") or "").strip(),
+                                "occupant_pct": occ_pct,
+                                "proprietaire_pct": prop_pct,
+                            },
+                            {
+                                "account_number": sup_pcmn,
+                                "account_name": supplier_label,
+                                "debit": 0.0,
+                                "credit": total_amount,
+                                "description": f"DA {internal_ref}",
+                                "occupant_pct": None,
+                                "proprietaire_pct": None,
+                            },
+                        ],
+                        "total_debit": total_amount,
+                        "total_credit": total_amount,
+                        "copropriete_id": copro_id,
+                        "import_session_id": session_id,
+                        "source_invoice_id": invoice_id,
+                        "created_at": _now_iso(),
+                    }
+                    await db.journal_entries.insert_one(je_doc)
+                    je_inserted += 1
 
                 doc = {
-                    "id": str(uuid.uuid4()),
+                    "id": invoice_id,
                     "number": (inv.get("external_ref") or internal_ref).strip(),
                     "internal_reference": internal_ref,
                     "date": date_str,
                     "due_date": (inv.get("due_date") or "").strip(),
-                    "supplier": (inv.get("supplier_name") or "").strip(),
+                    "supplier": supplier_label,
                     "supplier_id": supplier_id or "",
                     "description": (inv.get("libelle") or "").strip(),
                     "total_amount": total_amount,
@@ -519,7 +624,7 @@ def create_import_wizard_router(db):
                     "expense_category_id": expense_cat_id,
                     "distribution_key_id": dist_key_id,
                     "distribution_lines": [],
-                    "status": "to_pay" if not inv.get("ne_pas_payer") else "do_not_pay",
+                    "status": "do_not_pay" if inv.get("ne_pas_payer") else "unpaid",
                     "copropriete_id": copro_id,
                     "is_private_fee": False,
                     "private_fee_owner_id": "",
@@ -529,6 +634,7 @@ def create_import_wizard_router(db):
                     "proprietaire_amount": round(total_amount * prop_pct / 100, 2),
                     "vat_code": (inv.get("vat_code") or "").strip(),
                     "supplier_aux_code": supplier_aux,
+                    "journal_entry_id": je_id,
                     "import_session_id": session_id,
                     "created_at": _now_iso(),
                 }
@@ -539,6 +645,8 @@ def create_import_wizard_router(db):
 
         await _update_step(db, session_id, "invoices", {
             "count": inserted,
+            "journal_entries": je_inserted,
+            "pcmn_created": pcmn_created,
             "errors": errors,
             "matched_supplier": matched_supplier,
             "matched_key": matched_key,
@@ -546,6 +654,8 @@ def create_import_wizard_router(db):
         })
         return {
             "inserted": inserted,
+            "journal_entries": je_inserted,
+            "pcmn_created": pcmn_created,
             "errors": errors,
             "matched_supplier": matched_supplier,
             "matched_key": matched_key,
@@ -555,7 +665,14 @@ def create_import_wizard_router(db):
     # ----- H: JOURNALS (extraits bancaires) - CSV Optipro -----
     @router.post("/sessions/{session_id}/commit-journals")
     async def commit_journals(session_id: str, data: CommitJournalsInput, request: Request):
-        """Commit pre-parsed bank journal transactions as bank statement lines."""
+        """Commit pre-parsed bank journal transactions.
+
+        Side effects:
+        - Missing PCMN accounts (bank 55x/57x + counterparty) auto-created.
+        - A journal entry of type 'FI' (Financier) is created for each
+          transaction with double-entry.
+        - Bank_statement_lines also stored for later reconciliation.
+        """
         from fiscal_lock import ensure_period_open
         session = await db.import_sessions.find_one({"id": session_id})
         if not session:
@@ -570,7 +687,21 @@ def create_import_wizard_router(db):
                 if v and v not in bank_lookup:
                     bank_lookup[v] = ba["id"]
 
+        # Pre-pass: collect PCMN accounts needed
+        accounts_needed: dict[str, str] = {}
+        for t in data.transactions:
+            bp = (t.get("bank_account") or "").strip()
+            bl = (t.get("bank_account_label") or "").strip()
+            if bp:
+                accounts_needed[bp] = bl
+            cp = (t.get("counterparty_account") or "").strip()
+            cl = (t.get("counterparty_account_label") or "").strip()
+            if cp:
+                accounts_needed[cp] = cl
+        pcmn_created = await _ensure_pcmn_accounts(copro_id, accounts_needed)
+
         inserted = 0
+        je_inserted = 0
         errors = []
         for idx, t in enumerate(data.transactions):
             try:
@@ -585,25 +716,67 @@ def create_import_wizard_router(db):
                     continue
                 bank_pcmn = (t.get("bank_account") or "").strip()
                 bank_id = bank_lookup.get(bank_pcmn) if bank_pcmn else None
+                cp_pcmn = (t.get("counterparty_account") or "").strip()
+                bank_label = (t.get("bank_account_label") or "").strip()
+                cp_label = (t.get("counterparty_account_label") or "").strip()
                 amount = float(t.get("amount") or 0)
                 direction = (t.get("direction") or "").strip()
+                libelle = (t.get("libelle") or "").strip()
+                num_doc = (t.get("num_doc") or "").strip()
+
+                # ---- Create journal entry (Financier - FI) ----
+                # IN = money received (debit bank, credit counterparty/owner/etc.)
+                # OUT = money paid (credit bank, debit counterparty/supplier/etc.)
+                je_id = ""
+                if bank_pcmn and cp_pcmn and amount > 0 and direction in ("in", "out"):
+                    je_id = str(uuid.uuid4())
+                    if direction == "in":
+                        lines = [
+                            {"account_number": bank_pcmn, "account_name": bank_label, "debit": amount, "credit": 0.0,
+                             "description": libelle, "occupant_pct": None, "proprietaire_pct": None},
+                            {"account_number": cp_pcmn, "account_name": cp_label, "debit": 0.0, "credit": amount,
+                             "description": libelle, "occupant_pct": None, "proprietaire_pct": None},
+                        ]
+                    else:  # out
+                        lines = [
+                            {"account_number": cp_pcmn, "account_name": cp_label, "debit": amount, "credit": 0.0,
+                             "description": libelle, "occupant_pct": None, "proprietaire_pct": None},
+                            {"account_number": bank_pcmn, "account_name": bank_label, "debit": 0.0, "credit": amount,
+                             "description": libelle, "occupant_pct": None, "proprietaire_pct": None},
+                        ]
+                    await db.journal_entries.insert_one({
+                        "id": je_id,
+                        "journal_type": "FI",
+                        "date": date_v,
+                        "reference": num_doc,
+                        "description": libelle,
+                        "lines": lines,
+                        "total_debit": amount,
+                        "total_credit": amount,
+                        "copropriete_id": copro_id,
+                        "import_session_id": session_id,
+                        "created_at": _now_iso(),
+                    })
+                    je_inserted += 1
+
                 doc = {
                     "id": str(uuid.uuid4()),
                     "copropriete_id": copro_id,
                     "bank_account_id": bank_id or "",
                     "bank_pcmn_code": bank_pcmn,
-                    "bank_pcmn_label": (t.get("bank_account_label") or "").strip(),
-                    "counterparty_account": (t.get("counterparty_account") or "").strip(),
-                    "counterparty_account_label": (t.get("counterparty_account_label") or "").strip(),
-                    "num_doc": (t.get("num_doc") or "").strip(),
+                    "bank_pcmn_label": bank_label,
+                    "counterparty_account": cp_pcmn,
+                    "counterparty_account_label": cp_label,
+                    "num_doc": num_doc,
                     "code_journal": (t.get("code_journal") or "FIN").strip(),
                     "date_value": date_v,
                     "date_compta": (t.get("date_compta") or date_v).strip(),
-                    "libelle": (t.get("libelle") or "").strip(),
+                    "libelle": libelle,
                     "ext_reference": (t.get("ext_reference") or "").strip(),
                     "amount": amount,
                     "direction": direction,
                     "status": "imported",
+                    "journal_entry_id": je_id,
                     "import_session_id": session_id,
                     "created_at": _now_iso(),
                 }
@@ -612,8 +785,18 @@ def create_import_wizard_router(db):
             except Exception as e:
                 errors.append({"row": idx, "error": str(e)})
 
-        await _update_step(db, session_id, "journals", {"count": inserted, "errors": errors})
-        return {"inserted": inserted, "errors": errors}
+        await _update_step(db, session_id, "journals", {
+            "count": inserted,
+            "journal_entries": je_inserted,
+            "pcmn_created": pcmn_created,
+            "errors": errors,
+        })
+        return {
+            "inserted": inserted,
+            "journal_entries": je_inserted,
+            "pcmn_created": pcmn_created,
+            "errors": errors,
+        }
 
     # ----- D: LOTS -----
     @router.post("/sessions/{session_id}/commit-lots")
@@ -749,18 +932,61 @@ def create_import_wizard_router(db):
         fy = await db.fiscal_years.find_one({"id": data.fiscal_year_id})
         if not fy:
             raise HTTPException(400, "Exercice fiscal introuvable")
-        # Construire les lignes a partir des sections
+
+        # ---- Auto-create distribution_keys for each unique section code ----
+        # The Optipro budget PDF structures lines by 'key_code' (e.g. 0001, 0006).
+        # Each such code corresponds to a distribution key. We auto-create them
+        # if missing so the user doesn't have to maintain them separately.
+        existing_keys: dict[str, str] = {}  # code -> id
+        async for k in db.distribution_keys.find({"copropriete_id": copro_id}, {"_id": 0, "id": 1, "code": 1, "import_code": 1}):
+            for fld in ("code", "import_code"):
+                v = (k.get(fld) or "").strip()
+                if v:
+                    existing_keys[v] = k["id"]
+                    existing_keys[v.zfill(4)] = k["id"]
+        keys_created = 0
+        section_key_codes: dict[str, dict] = {}
+        for sec in data.sections:
+            key_code = (sec.get("key_code") or "").strip()
+            key_label = (sec.get("key_label") or "").strip()
+            if not key_code or key_code in section_key_codes:
+                continue
+            section_key_codes[key_code] = {"code": key_code, "label": key_label}
+        for code, info in section_key_codes.items():
+            if code in existing_keys or code.zfill(4) in existing_keys:
+                continue
+            key_id = str(uuid.uuid4())
+            await db.distribution_keys.insert_one({
+                "id": key_id,
+                "code": code,
+                "import_code": code,
+                "name": info["label"] or f"Cle {code}",
+                "description": "",
+                "type": "quotities",
+                "is_special": False,
+                "lines": [],
+                "copropriete_id": copro_id,
+                "import_session_id": session_id,
+                "created_at": _now_iso(),
+            })
+            existing_keys[code] = key_id
+            existing_keys[code.zfill(4)] = key_id
+            keys_created += 1
+
+        # Construire les lignes a partir des sections (with key_id linking)
         lines = []
         total_amount = 0.0
         for sec in data.sections:
             key_code = (sec.get("key_code") or "").strip()
             key_label = (sec.get("key_label") or "").strip()
+            key_id = existing_keys.get(key_code) or existing_keys.get(key_code.zfill(4)) or ""
             for ln in sec.get("lines") or []:
                 amt = float(ln.get("amount") or 0)
                 lines.append({
                     "account_number": (ln.get("account") or "").strip(),
                     "label": (ln.get("libelle") or "").strip(),
                     "amount": amt,
+                    "distribution_key_id": key_id,
                     "distribution_key_code": key_code,
                     "distribution_key_label": key_label,
                 })
@@ -793,8 +1019,13 @@ def create_import_wizard_router(db):
             "count": len(lines),
             "total_amount": round(total_amount, 2),
             "budget_id": budget_id,
+            "keys_created": keys_created,
         })
-        return {"inserted": len(lines), "total_amount": round(total_amount, 2)}
+        return {
+            "inserted": len(lines),
+            "total_amount": round(total_amount, 2),
+            "keys_created": keys_created,
+        }
 
     # ----- J: DISTRIBUTION KEYS -----
     @router.post("/sessions/{session_id}/commit-distribution-keys")
