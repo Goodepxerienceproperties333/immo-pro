@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import api from '@/lib/api';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
@@ -19,6 +19,7 @@ const emptyForm = { name: '', bce: '', address: '', postal_code: '', city: '', c
 
 export default function CoproprietesPage() {
   const { isAdmin, isManager, isSuperadmin } = useAuth();
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [coproprietes, setCoproprietes] = useState([]);
   const [owners, setOwners] = useState([]);
@@ -116,13 +117,25 @@ export default function CoproprietesPage() {
 
   const handleSave = async () => {
     try {
-      if (editing) { await api.put(`/coproprietes/${editing.id}`, form); toast.success('Copropriete modifiee'); }
+      if (editing) { await api.put(`/coproprietes/${editing.id}`, form); toast.success('Copropriete modifiee'); setDialogOpen(false); load(); }
       else {
-        await api.post('/coproprietes', form);
+        const r = await api.post('/coproprietes', form);
+        const newCopro = r.data;
         const nLots = (form.lots || []).filter(l => l.number && l.number.trim()).length;
         toast.success(nLots > 0 ? `ACP creee avec ${nLots} lot(s)` : 'Copropriete creee');
+        setDialogOpen(false); load();
+        // Reprise Optipro/Sogis ?
+        setTimeout(() => {
+          if (newCopro?.id && window.confirm(
+            `L'ACP "${newCopro.name}" a ete creee.\n\n` +
+            `S'agit-il d'une REPRISE depuis Optipro / Sogis ?\n\n` +
+            `[OK] : Lancer le wizard d'import (proprietaires, fournisseurs, lots, natures, factures...).\n` +
+            `[Annuler] : Continuer normalement.`
+          )) {
+            navigate(`/import-wizard?copropriete_id=${newCopro.id}`);
+          }
+        }, 200);
       }
-      setDialogOpen(false); load();
     } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); }
   };
   const handleDelete = async (id) => { if (!window.confirm('Supprimer cette copropriete ?')) return; try { await api.delete(`/coproprietes/${id}`); toast.success('Supprimee'); load(); } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); } };

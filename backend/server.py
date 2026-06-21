@@ -627,6 +627,7 @@ from routes.exports import create_exports_router, create_reminders_router
 from routes.invoice_ai import create_invoice_ai_router
 from routes.expense_categories import create_expense_categories_router
 from routes.team import create_team_router
+from routes.import_wizard import create_import_wizard_router
 
 app.include_router(create_properties_router(db))
 app.include_router(create_accounting_router(db))
@@ -636,6 +637,7 @@ app.include_router(create_banking_router(db))
 app.include_router(create_documents_router(db))
 app.include_router(create_admin_router(db))
 app.include_router(create_team_router(db))
+app.include_router(create_import_wizard_router(db))
 app.include_router(create_coproprietes_router(db))
 app.include_router(create_suppliers_router(db))
 app.include_router(create_fiscal_router(db))

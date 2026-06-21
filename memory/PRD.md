@@ -12,6 +12,54 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 ## Implemented
 
+### Iter65 (Feb 2026) - Wizard d'import Optipro / Sogis (Phase 1)
+
+Module CRITIQUE pour la migration depuis les anciens logiciels syndic Optipro/Sogis. Decoupage en **4 phases**. Cette iteration livre la **Phase 1**.
+
+#### Analyse des fichiers Optipro fournis
+- **Factures CSV** : UTF-8, separateur `;`, dates JJ/MM/AAAA, virgule decimale. Colonnes : Copropriete code, nom, Date, Fournisseur (F0471 - SRL ACE Garden), Compte (61060 - libelle), Cle (0001 - libelle), Nature, Code TVA, Part occupant/proprietaire, Montant HT/TVAC.
+- **Journaux CSV** : UTF-8, separateur `,`, dates JJ/MM/AAAA, point decimal. Format dual-entry (1 facture = 2 lignes : debit/credit).
+- **Bilan PDF** : comptes 410 (copro), 440 (fournisseurs), 550xxx (banque), 100 (fonds roulement), 494 (regularisation). Total ACTIF / PASSIF.
+- **Budget PDF** : sections par cle de repartition + comptes 61xxx avec montants budgetes.
+- **Natures PDF** : Code (0001-0042), Libelle, Compte PCMN, TVA, Part occupant/proprietaire en %.
+- **Cles PDF** : code + nom, type tantiemes, repartition par lot avec total quotites.
+
+#### Backend `import_wizard/` (Phase 1)
+- `csv_utils.py` : sniffing (UTF-8/cp1252/latin-1), detection separateur, normalisation headers (suppression accents/replacement chars), parse_french_number, parse_date, split_optipro_code (`F0471 - SRL ACE Garden` -> `("F0471", "SRL ACE Garden")`).
+- `pdf_utils.py` : extraction pdfplumber avec parser `parse_natures_pdf` qui gere les cellules multilignes (split par `\n` + zip des colonnes + heuristique de merge des wraps).
+- `routes/import_wizard.py` : endpoints
+  - `POST /api/import-wizard/sessions` : creer session pour ACP
+  - `GET /api/import-wizard/sessions/active?copropriete_id=` : recuperer session active
+  - `POST /api/import-wizard/sessions/{id}/sniff-csv` : preview CSV (headers + 20 lignes + meta)
+  - `POST /api/import-wizard/sessions/{id}/sniff-pdf?kind=natures` : extraction PDF
+  - `POST /api/import-wizard/sessions/{id}/commit-owners` : insert tagged `import_session_id`
+  - idem pour `commit-suppliers`, `commit-lots`, `commit-natures`
+  - `POST /api/import-wizard/sessions/{id}/finish` : verrouille la session
+  - `DELETE /api/import-wizard/sessions/{id}` : **rollback complet** (supprime tous docs taggees)
+- Chinese wall actif : seul un user avec l'ACP dans son `copropriete_ids` (ou superadmin) peut creer/manipuler une session.
+
+#### Frontend `ImportWizardPage.js`
+- Stepper visuel 4 etapes : Proprietaires (A) -> Fournisseurs (C) -> Lots (D) -> Natures (K).
+- Upload + sniff + preview tableau (20 premieres lignes) avec encoding/separateur affiches.
+- **Mapping manuel** des colonnes : pour chaque champ cible (last_name, address, etc.), select sur les headers detectes. Champs obligatoires marques `*`.
+- Pour les natures (PDF) : tableau editable inline (code, libelle, compte, TVA, % occ/prop, suppression de lignes).
+- Bouton `Annuler l'import` permanent (delete session = rollback complet).
+- Apres `finish`, redirection vers le dashboard de l'ACP.
+
+#### Integration creation d'ACP
+- Apres `POST /coproprietes` reussi, modal de confirmation : "S'agit-il d'une REPRISE depuis Optipro / Sogis ?"
+- Si Oui : redirection automatique vers `/import-wizard?copropriete_id=<new_id>`.
+- Si Non : flow normal.
+
+#### Tests E2E (curl)
+- Creation session pour ACP Test (Finlead) : OK (id genere).
+- Sniff PDF natures : 27 natures detectees correctement (code + libelle + compte + TVA + parts).
+- Commit-natures : 27 docs inseres dans `expense_categories` avec `import_session_id`.
+- DELETE session : 27 docs supprimes, base intacte (4 natures pre-existantes preservees).
+- Screenshot E2E Playwright : wizard charge correctement avec stepper + zone upload.
+
+
+
 ### Iter63 (Feb 2026) - Integration Microsoft Graph pour invitations par email
 
 #### Configuration MSGRAPH (Azure AD App Registration)
