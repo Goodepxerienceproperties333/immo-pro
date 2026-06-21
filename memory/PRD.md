@@ -12,6 +12,62 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 ## Implemented
 
+### Iter70 (Feb 2026) - Refonte parser PDF Budget (3 colonnes correctes)
+
+#### Bug rapporte
+Le parser `parse_budget_pdf` etait text-based (regex sur full_text) et echouait sur
+le PDF Optipro "Budget" : il detectait une seule section "0008" au lieu de 10,
+melait les amounts dans les libelles ("Travaux divers 36,30 38,00"), et affichait
+des montants 0 ou aberrants (ex: 145,2 pour Ordures menageres au lieu de 2 820,00).
+
+#### Refonte anchor-based (`backend/import_wizard/pdf_utils.py`)
+Memes principes que les autres parsers (owners/lots/suppliers) :
+- Anchor sections : `^0\d{3}$` (4 chiffres commencant par 0) avec `x0 < 50`.
+- Anchor details : `^\d{3,5}$` (3 a 5 chiffres NE commencant PAS par 0) avec `x0 >= 50`.
+- Bandes Y entre anchors consecutifs pour capturer les libelles multi-lignes
+  (ex. "Repartition frais banane (Le Notre-Mansart / Raphael-Michel-Ange /
+  Velasquez - goya)" sur 3 lignes).
+- 3 colonnes de montants detectees automatiquement par leurs centres x
+  (Realise N-1, Budget N, En cours).
+- Bornes amount non-chevauchantes (midpoints entre centres consecutifs).
+- Detection du mot "Totaux" pour stopper la bande avant la ligne footer
+  "Totaux generaux : 42 000,00" (qui polluait la derniere section).
+- Selection de la ligne d'amounts CLOSEST de l'anchor (au lieu du max) pour
+  eviter qu'une ligne footer plus loin vole les montants.
+
+#### Donnees retournees enrichies
+Chaque section et chaque ligne porte maintenant les 3 montants :
+- `realise_n1` (Realise N-1, info pour comparaison)
+- `budget_n` (Budget N, **valeur importee comme budget previsionnel**)
+- `en_cours` (En cours, info pour suivi)
+- `amount` (legacy : synchro avec `budget_n` pour back-compat avec
+  `/commit-budget` endpoint inchange)
+
+#### Resultats sur PDF de reference (`Budget du 01_01_2026 au 31_12_2026.pdf`)
+- **10 sections** detectees (0001 / 0006 / 0007 / 0008 / 0011 / 0012 / 0014 /
+  0015 / 0017 / 0018) au lieu de 1.
+- **25 lignes de detail** parsees avec amounts repartis sur les 3 colonnes.
+- **Total Budget N = 42 000.00 EUR** correspond exactement au "Totaux
+  generaux" du PDF.
+- Libelles multi-lignes captures (ex. section 0008 nom complet avec "goya)").
+
+#### Frontend - `BudgetPreview` (`ImportWizardPage.js`)
+- Affichage en **3 colonnes** : Realise N-1 (gris, indicatif) / **Budget N**
+  (fond bleu, surligne, editable - **importe**) / En cours (gris, indicatif).
+- Header section : montre les 3 sous-totaux ([0001] Charges communes -
+  N-1: 25 507,50 / **N: 30 051,00** / En cours: 15 909,91).
+- Banner haut : Budget N total + Realise N-1 et En cours en reference, avec
+  rappel "Seule la colonne Budget N est importee".
+- Edition inline des 3 montants + synchronisation `amount`/`budget_n`.
+
+#### Validation
+- Standalone `POST /api/import-wizard/parse-pdf?kind=budget` : 10 sections,
+  total 42 000.
+- Session-bound `POST /sessions/{id}/sniff-pdf?kind=budget` : meme resultat.
+- Rollback session OK (chinese wall preservee).
+
+
+
 ### Iter69 (Feb 2026) - Import PDF Fournisseurs + Wizard Optipro simplifie
 
 #### Demande user

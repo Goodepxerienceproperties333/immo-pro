@@ -821,57 +821,213 @@ def parse_suppliers_pdf(raw: bytes) -> dict:
 def parse_budget_pdf(raw: bytes) -> dict:
     """Parse 'Budget' PDF from Optipro.
 
-    Structure observed : sections grouped by distribution key code (e.g. "0001 -
-    Charges communes"). Each section lists PCMN accounts with budgeted amounts.
+    Structure : sections grouped by distribution key code (4-digit code starting
+    with 0, e.g. "0001", "0006", "0008"). Each section has PCMN account lines
+    (3-5 digits NOT starting with 0, e.g. "61037", "650", "6160").
 
-    Returns: { sections: [{ key_code, key_label, lines: [{account, libelle, amount}] }],
+    The PDF has 3 amount columns at the right side:
+      - Realise N-1 (Realise 2025)
+      - Budget N (Budget 2026)
+      - En cours
+
+    Anchor strategy :
+      - Section anchor : 4-digit code matching `^0\\d{3}$` at x0 < 50.
+      - Detail anchor : 3-5 digit code matching `^\\d{3,5}$` at x0 >= 50.
+      - Libelles can wrap to multiple lines (band capture).
+
+    Returns: { sections: [{ key_code, key_label, realise_n1, budget_n, en_cours,
+                            lines: [{account, libelle, realise_n1, budget_n, en_cours}] }],
                total_global, count }
     """
-    info = extract_pdf(raw)
-    sections: list[dict] = []
-    current_section: dict = None
-    total_global = 0.0
-
-    # Strategy : iterate the full text line by line and use regex to detect
-    # - section headers : starts with 4-digit code, e.g. "0001 - Charges communes"
-    # - data lines : starts with a PCMN account number (3-7 digits) + libelle + amount
     import re
-    full_text = info.get("full_text", "")
-    for raw_line in full_text.split("\n"):
-        line = raw_line.strip()
-        if not line:
-            continue
-        # Section header : "0001 - Libelle"
-        sec_match = re.match(r"^(\d{4})\s*[-–]\s*(.+?)(?:\s+\d[\d\s.,]*)?$", line)
-        # We accept the section header only if it doesn't look like a data line
-        if sec_match and not re.search(r"\d+[.,]\d{2}\s*$", line):
-            code = sec_match.group(1)
-            label = sec_match.group(2).strip()
-            current_section = {"key_code": code, "key_label": label, "lines": [], "subtotal": 0.0}
-            sections.append(current_section)
-            continue
-        # Data line : account + libelle + amount at the end
-        # Account is 3-7 digits, can be 6 or 7 digits (612590)
-        # Amount ends with "x.xx" or "-x.xx"
-        dl_match = re.match(r"^(\d{3,7})\s+(.+?)\s+(-?[\d\s]+[.,]\d{2})\s*$", line)
-        if dl_match and current_section is not None:
-            account = dl_match.group(1)
-            libelle = dl_match.group(2).strip()
-            amount = _to_float(dl_match.group(3).replace(" ", "").replace(",", "."))
-            current_section["lines"].append({
-                "account": account,
-                "libelle": libelle,
-                "amount": amount,
-            })
-            current_section["subtotal"] += amount
-            total_global += amount
-            continue
-        # "Total" line at the end : extract the total_global
-        total_match = re.search(r"total[^\d]*(-?[\d\s]+[.,]\d{2})", line.lower())
-        if total_match and "section" not in line.lower():
-            tg = _to_float(total_match.group(1).replace(" ", "").replace(",", "."))
-            if tg > total_global:
-                total_global = tg
+    sections: list[dict] = []
+    section_anchor_re = re.compile(r"^0\d{3}$")
+    detail_anchor_re = re.compile(r"^\d{3,5}$")
+    amount_word_re = re.compile(r"^-?[\d.,]+$")
+
+    def _join_amount(words: list[dict]) -> float:
+        """Join numeric word fragments into a single float.
+        e.g. '25', '507,50' -> 25507.50 ; '-585,89' stays '-585.89'."""
+        if not words:
+            return 0.0
+        # Sort by x0 to get left-to-right order
+        ws = sorted(words, key=lambda w: w["x0"])
+        joined = "".join(w["text"] for w in ws).replace(" ", "").replace(",", ".")
+        joined = joined.replace("\u00a0", "")  # nbsp
+        try:
+            return float(joined)
+        except ValueError:
+            return 0.0
+
+    with pdfplumber.open(io.BytesIO(raw)) as pdf:
+        for page_idx, page in enumerate(pdf.pages):
+            words = page.extract_words(keep_blank_chars=False, x_tolerance=2, y_tolerance=3) or []
+            if not words:
+                continue
+            # Determine amount column centers from "2025"/"2026" / "En cours"
+            amt_col_centers: list[float] = []
+            for w in words:
+                if 175 < w["top"] < 195 and re.match(r"^20\d{2}$", w["text"]):
+                    amt_col_centers.append((w["x0"] + w["x1"]) / 2)
+            # Fallback positions if header not detected
+            if len(amt_col_centers) < 2:
+                amt_col_centers = [497.0, 640.0]  # default Optipro positions
+            # The third "En cours" column is detected by the "cours" word or default
+            en_cours_w = next((w for w in words if w["top"] < 195 and w["text"].lower() == "cours"), None)
+            third_col = (en_cours_w["x0"] + en_cours_w["x1"]) / 2 if en_cours_w else 782.0
+            amt_col_centers = sorted(amt_col_centers + [third_col])
+            if len(amt_col_centers) > 3:
+                amt_col_centers = amt_col_centers[-3:]
+            # Build amount column boundaries using clean midpoints (no overlap)
+            amt_bounds: list[tuple[float, float, str]] = []  # (xs, xe, key)
+            keys = ["realise_n1", "budget_n", "en_cours"]
+            for i, cx in enumerate(amt_col_centers):
+                if i == 0:
+                    xs = cx - 60
+                else:
+                    xs = (amt_col_centers[i - 1] + cx) / 2
+                if i + 1 < len(amt_col_centers):
+                    xe = (cx + amt_col_centers[i + 1]) / 2
+                else:
+                    xe = cx + 60
+                amt_bounds.append((xs, xe, keys[i]))
+
+            # Detect "Totaux" / "Total" row to stop band scanning (page footer summary)
+            totaux_y = None
+            for w in words:
+                t = w["text"].lower().strip(":")
+                if t in ("totaux", "total"):
+                    totaux_y = w["top"]
+                    break
+
+            # Anchors (sections AND details) sorted by Y
+            def _is_anchor(w):
+                t = w["text"]
+                if section_anchor_re.match(t) and w["x0"] < 50:
+                    return ("section", t)
+                if detail_anchor_re.match(t) and 50 <= w["x0"] < 90 and not t.startswith("0"):
+                    return ("detail", t)
+                return None
+
+            anchors = []
+            for w in sorted(words, key=lambda w: (w["top"], w["x0"])):
+                kind = _is_anchor(w)
+                if not kind or w["top"] <= 195:
+                    continue
+                # Skip anchors below the "Totaux" summary row
+                if totaux_y is not None and w["top"] >= totaux_y - 1:
+                    continue
+                anchors.append((w["top"], w["x0"], kind[0], kind[1], w))
+
+            if not anchors:
+                continue
+
+            current_section: dict = None
+            n = len(anchors)
+            for i in range(n):
+                a_top, a_x0, a_kind, a_code, anchor_w = anchors[i]
+                # Band ends at next anchor's top OR at the "Totaux" row (whichever comes first)
+                next_anchor_top = anchors[i + 1][0] if i + 1 < n else a_top + 500
+                band_end = next_anchor_top
+                if totaux_y is not None and totaux_y < band_end:
+                    band_end = totaux_y
+
+                # Collect words in the Y band [a_top - 1, band_end - 1)
+                band_words = [w for w in words if a_top - 1 <= w["top"] < band_end - 1]
+
+                # Libelle words : x BETWEEN anchor.x1 (right edge of code) + 2px AND
+                # the leftmost amount column start. For SECTIONS, allow wrap lines
+                # at low x (x < 50) too - they continue the section libelle.
+                libelle_xmax = amt_bounds[0][0] - 10  # just before first amount col
+                libelle_words = []
+                for w in band_words:
+                    if w is anchor_w:
+                        continue
+                    # Skip amount-zone words
+                    if w["x0"] >= amt_bounds[0][0] - 10:
+                        continue
+                    # Skip the dash " - " word that immediately follows the code
+                    if w["text"] in ("-", "–") and abs(w["top"] - a_top) < 4 and 60 < w["x0"] < 100:
+                        continue
+                    if a_kind == "section":
+                        # Section libelles may wrap at low x (e.g. "goya)" at x~42)
+                        if w["x0"] < libelle_xmax:
+                            libelle_words.append(w)
+                    else:  # detail
+                        # Detail libelles : x in [70, libelle_xmax]
+                        if 65 <= w["x0"] < libelle_xmax:
+                            libelle_words.append(w)
+                libelle_words.sort(key=lambda w: (w["top"], w["x0"]))
+                libelle_parts = [w["text"] for w in libelle_words]
+                libelle = " ".join(libelle_parts).strip()
+                libelle = re.sub(r"^[-–]\s*", "", libelle).strip()
+
+                # Amount columns : group amount words by row, take the row with the
+                # most numeric words in amount zone (= the section/detail summary row).
+                row_buckets: dict[int, list[dict]] = {}
+                for w in band_words:
+                    if not amount_word_re.match(w["text"]):
+                        continue
+                    if w["x0"] < amt_bounds[0][0] - 5:
+                        continue
+                    by_y = int(w["top"] / 4)
+                    row_buckets.setdefault(by_y, []).append(w)
+                amounts: dict[str, float] = {"realise_n1": 0.0, "budget_n": 0.0, "en_cours": 0.0}
+                if row_buckets:
+                    # Prefer the row CLOSEST to the anchor (earliest Y) with at least
+                    # 2 amount words. If only one row has multiple amounts, use it.
+                    anchor_bucket = int(a_top / 4)
+                    best_y = None
+                    # Sort buckets by distance from anchor's bucket
+                    candidates = sorted(row_buckets.keys(), key=lambda k: abs(k - anchor_bucket))
+                    for cand in candidates:
+                        if len(row_buckets[cand]) >= 2:
+                            best_y = cand
+                            break
+                    if best_y is None:
+                        best_y = candidates[0]
+                    row_amt_words = row_buckets[best_y]
+                    for xs_, xe_, key in amt_bounds:
+                        col_ws = [w for w in row_amt_words if xs_ <= (w["x0"] + w["x1"]) / 2 < xe_]
+                        amounts[key] = _join_amount(col_ws)
+
+                if a_kind == "section":
+                    current_section = {
+                        "key_code": a_code,
+                        "key_label": libelle,
+                        "realise_n1": amounts["realise_n1"],
+                        "budget_n": amounts["budget_n"],
+                        "en_cours": amounts["en_cours"],
+                        "lines": [],
+                        "subtotal": 0.0,
+                    }
+                    sections.append(current_section)
+                else:  # detail
+                    if current_section is None:
+                        # detail before any section : create a "default" section
+                        current_section = {
+                            "key_code": "????",
+                            "key_label": "(Sans section)",
+                            "realise_n1": 0.0,
+                            "budget_n": 0.0,
+                            "en_cours": 0.0,
+                            "lines": [],
+                            "subtotal": 0.0,
+                        }
+                        sections.append(current_section)
+                    current_section["lines"].append({
+                        "account": a_code,
+                        "libelle": libelle,
+                        "realise_n1": amounts["realise_n1"],
+                        "budget_n": amounts["budget_n"],
+                        "en_cours": amounts["en_cours"],
+                        # legacy field for back-compat with existing commit endpoint
+                        "amount": amounts["budget_n"],
+                    })
+                    current_section["subtotal"] += amounts["budget_n"]
+            # endfor anchors of page
+
+    total_global = sum(s.get("budget_n", 0.0) for s in sections)
     return {
         "sections": sections,
         "total_global": round(total_global, 2),

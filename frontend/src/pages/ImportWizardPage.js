@@ -614,17 +614,40 @@ function BudgetPreview({ sections, setSections }) {
   if (!sections?.length) {
     return <div className="text-center py-6 text-amber-600 text-sm"><AlertTriangle size={24} className="inline mr-1" /> Aucune section detectee dans le PDF.</div>;
   }
-  const total = sections.reduce((acc, s) => acc + (s.lines || []).reduce((a, l) => a + (parseFloat(l.amount) || 0), 0), 0);
+  // Total Budget N (this is what gets imported into the budget table)
+  const totalBudgetN = sections.reduce(
+    (acc, s) => acc + (s.lines || []).reduce((a, l) => a + (parseFloat(l.budget_n ?? l.amount) || 0), 0),
+    0
+  );
+  const totalRealiseN1 = sections.reduce(
+    (acc, s) => acc + (s.lines || []).reduce((a, l) => a + (parseFloat(l.realise_n1) || 0), 0),
+    0
+  );
+  const totalEnCours = sections.reduce(
+    (acc, s) => acc + (s.lines || []).reduce((a, l) => a + (parseFloat(l.en_cours) || 0), 0),
+    0
+  );
   const upd = (sIdx, lIdx, field, value) => {
     const next = sections.map((s, i) => {
       if (i !== sIdx) return s;
-      const lines = s.lines.map((l, j) => j === lIdx ? { ...l, [field]: field === 'amount' ? (parseFloat(value) || 0) : value } : l);
+      const lines = s.lines.map((l, j) => {
+        if (j !== lIdx) return l;
+        let v = value;
+        if (['amount', 'budget_n', 'realise_n1', 'en_cours'].includes(field)) {
+          v = parseFloat(value) || 0;
+        }
+        const merged = { ...l, [field]: v };
+        // Keep legacy 'amount' field in sync with 'budget_n'
+        if (field === 'budget_n') merged.amount = v;
+        if (field === 'amount') merged.budget_n = v;
+        return merged;
+      });
       return { ...s, lines };
     });
     setSections(next);
   };
   const addLine = (sIdx) => {
-    const next = sections.map((s, i) => i === sIdx ? { ...s, lines: [...s.lines, { account: '', libelle: '', amount: 0 }] } : s);
+    const next = sections.map((s, i) => i === sIdx ? { ...s, lines: [...s.lines, { account: '', libelle: '', realise_n1: 0, budget_n: 0, en_cours: 0, amount: 0 }] } : s);
     setSections(next);
   };
   const delLine = (sIdx, lIdx) => {
@@ -633,23 +656,37 @@ function BudgetPreview({ sections, setSections }) {
   };
   return (
     <div className="space-y-3">
-      <div className="bg-blue-50 border border-blue-200 rounded p-3 text-xs text-blue-900 flex justify-between">
-        <span><strong>Verifiez puis ajustez le budget</strong> : {sections.length} section(s) detectees.</span>
-        <span className="font-mono font-semibold">Total : {total.toFixed(2)} EUR</span>
+      <div className="bg-blue-50 border border-blue-200 rounded p-3 text-xs text-blue-900">
+        <div className="flex justify-between mb-1">
+          <span><strong>Verifiez puis ajustez le budget</strong> : {sections.length} section(s) detectees.</span>
+          <span className="font-mono font-semibold">Budget N : {totalBudgetN.toFixed(2)} EUR</span>
+        </div>
+        <div className="text-[10px] text-slate-600 flex gap-4 mt-1">
+          <span>Realise N-1 (reference) : <span className="font-mono">{totalRealiseN1.toFixed(2)}</span></span>
+          <span>En cours (info) : <span className="font-mono">{totalEnCours.toFixed(2)}</span></span>
+          <span className="ml-auto text-[10px] italic">Seule la colonne <strong>Budget N</strong> est importee comme budget previsionnel.</span>
+        </div>
       </div>
       <div className="space-y-2 max-h-[420px] overflow-y-auto pr-1">
         {sections.map((s, si) => (
           <div key={si} className="border border-slate-200 rounded">
-            <div className="bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-800 flex justify-between">
+            <div className="bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-800 flex justify-between items-center">
               <span>[{s.key_code}] {s.key_label}</span>
-              <span className="text-slate-500">{(s.lines || []).length} ligne(s)</span>
+              <div className="flex gap-3 text-[10px] font-normal text-slate-500">
+                <span>N-1: <span className="font-mono">{(parseFloat(s.realise_n1) || 0).toFixed(2)}</span></span>
+                <span>N: <span className="font-mono font-semibold text-slate-700">{(parseFloat(s.budget_n) || 0).toFixed(2)}</span></span>
+                <span>En cours: <span className="font-mono">{(parseFloat(s.en_cours) || 0).toFixed(2)}</span></span>
+                <span>({(s.lines || []).length} ligne(s))</span>
+              </div>
             </div>
             <table className="w-full text-xs">
               <thead className="bg-slate-50">
                 <tr>
                   <th className="px-1 py-1 text-left w-20">Compte</th>
                   <th className="px-1 py-1 text-left">Libelle</th>
-                  <th className="px-1 py-1 text-right w-24">Montant (EUR)</th>
+                  <th className="px-1 py-1 text-right w-20">Realise N-1</th>
+                  <th className="px-1 py-1 text-right w-20 bg-blue-50">Budget N</th>
+                  <th className="px-1 py-1 text-right w-20">En cours</th>
                   <th className="w-6"></th>
                 </tr>
               </thead>
@@ -658,7 +695,9 @@ function BudgetPreview({ sections, setSections }) {
                   <tr key={li} className="border-t border-slate-100">
                     <td className="px-1 py-0.5"><input value={l.account} onChange={e => upd(si, li, 'account', e.target.value)} className="w-20 border-0 bg-transparent font-mono" /></td>
                     <td className="px-1 py-0.5"><input value={l.libelle} onChange={e => upd(si, li, 'libelle', e.target.value)} className="w-full border-0 bg-transparent" /></td>
-                    <td className="px-1 py-0.5"><input type="number" step="0.01" value={l.amount} onChange={e => upd(si, li, 'amount', e.target.value)} className="w-24 border-0 bg-transparent text-right font-mono" /></td>
+                    <td className="px-1 py-0.5"><input type="number" step="0.01" value={l.realise_n1 ?? 0} onChange={e => upd(si, li, 'realise_n1', e.target.value)} className="w-20 border-0 bg-transparent text-right font-mono text-slate-500" /></td>
+                    <td className="px-1 py-0.5 bg-blue-50/50"><input type="number" step="0.01" value={l.budget_n ?? l.amount ?? 0} onChange={e => upd(si, li, 'budget_n', e.target.value)} className="w-20 border-0 bg-transparent text-right font-mono font-semibold" /></td>
+                    <td className="px-1 py-0.5"><input type="number" step="0.01" value={l.en_cours ?? 0} onChange={e => upd(si, li, 'en_cours', e.target.value)} className="w-20 border-0 bg-transparent text-right font-mono text-slate-500" /></td>
                     <td className="px-0 py-0.5"><button onClick={() => delLine(si, li)} className="text-red-500 hover:text-red-700"><X size={11} /></button></td>
                   </tr>
                 ))}
