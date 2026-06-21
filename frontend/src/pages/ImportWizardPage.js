@@ -241,7 +241,8 @@ export default function ImportWizardPage() {
         toast.success(
           `OD d'ouverture creee : ${m.lines} ligne(s) au ${m.entry_date} ` +
           `(Debit/Credit ${m.total_debit.toFixed(2)} EUR)` +
-          (m.pcmn_created ? ` - ${m.pcmn_created} compte(s) PCMN auto-ajoutes` : '')
+          (m.pcmn_created ? ` - ${m.pcmn_created} compte(s) PCMN auto-ajoutes` : '') +
+          ((m.owners_linked || m.suppliers_linked) ? ` - ${m.owners_linked} owner(s) + ${m.suppliers_linked} fournisseur(s) lies via auxiliary_code` : '')
         );
       } else if (step.key === 'fiscal_year') {
         if (!fyForm.name || !fyForm.start_date || !fyForm.end_date) {

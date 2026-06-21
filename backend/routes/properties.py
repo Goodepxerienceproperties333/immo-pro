@@ -73,37 +73,50 @@ def create_properties_router(db):
         iban: Optional[str] = ""
 
     @router.get("/owners")
-    async def list_owners(request: Request, copropriete_id: Optional[str] = None):
+    async def list_owners(request: Request, copropriete_id: Optional[str] = None, include_unassigned: bool = False):
         """Liste des proprietaires - chinese wall STRICT (RGPD).
 
         - Superadmin/admin : voit tout.
         - Syndic/gestionnaire : ne voit QUE les proprietaires ayant un lot dans
           UNE DE SES ACPs (`user.copropriete_ids`).
         - Avec `copropriete_id` : restreint a cette ACP (verifie deja par middleware).
+        - `include_unassigned=true` : ajoute les owners orphelins (copropriete_id="")
+          qui ont ete crees mais pas encore lies a un lot. Indispensable pour
+          l'assistant de creation d'ACP (drop-down d'affectation lot->owner) afin
+          que les owners juste importes via PdfImportDialog soient visibles.
         """
         # Aussi accepter le header X-Copropriete-Id pour homogeneiser
         if not copropriete_id:
             copropriete_id = request.headers.get("X-Copropriete-Id") or None
         is_super, allowed_copros = await _get_user_scope(request)
+        # Helper to also fetch orphan owners (copropriete_id == "" or missing) when requested
+        async def _fetch_orphans():
+            return await db.owners.find(
+                {"$or": [{"copropriete_id": ""}, {"copropriete_id": {"$exists": False}}, {"copropriete_id": None}]},
+                {"_id": 0},
+            ).sort("last_name", 1).to_list(2000)
         if copropriete_id:
             # Cas ACP specifique : owners ayant un lot dans cette ACP
             owner_ids_single = await db.lots.distinct("owner_id", {"copropriete_id": copropriete_id})
             owner_ids_multi = await db.lots.distinct("owner_ids", {"copropriete_id": copropriete_id})
             allowed = {oid for oid in (owner_ids_single or []) if oid} | {oid for oid in (owner_ids_multi or []) if oid}
-            if not allowed:
-                return []
-            owners = await db.owners.find({"id": {"$in": list(allowed)}}, {"_id": 0}).sort("last_name", 1).to_list(2000)
-        elif is_super:
+            owners = await db.owners.find({"id": {"$in": list(allowed)}}, {"_id": 0}).sort("last_name", 1).to_list(2000) if allowed else []
+            if include_unassigned:
+                owners.extend(await _fetch_orphans())
+            return owners
+        if is_super:
             # Superadmin sans param : tous les owners (vue plateforme)
             owners = await db.owners.find({}, {"_id": 0}).sort("last_name", 1).to_list(2000)
-        else:
-            # Syndic / gestionnaire sans param : owners de TOUTES SES ACPs
-            allowed_owner_ids = await _allowed_owner_ids(allowed_copros)
-            if not allowed_owner_ids:
-                return []
+            return owners
+        # Syndic / gestionnaire sans param : owners de TOUTES SES ACPs
+        allowed_owner_ids = await _allowed_owner_ids(allowed_copros)
+        owners = []
+        if allowed_owner_ids:
             owners = await db.owners.find(
                 {"id": {"$in": list(allowed_owner_ids)}}, {"_id": 0}
             ).sort("last_name", 1).to_list(2000)
+        if include_unassigned:
+            owners.extend(await _fetch_orphans())
         return owners
 
     @router.post("/owners")

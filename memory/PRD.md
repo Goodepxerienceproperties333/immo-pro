@@ -11,6 +11,131 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 ## Implemented
+### Iter72 (Feb 2026) - Phase I (OD d'ouverture) + Cles details + Banking visibility + Balance tiers AN
+
+#### Phase I - OD d'ouverture / Bilan comptable (Optipro -> AN)
+**Backend** : `backend/routes/import_wizard.py::commit_opening_balance` retravaille
+- Parser PDF `parse_balance_pdf` (deja en place) extrait actif/passif avec
+  is_subaccount=True pour les sous-comptes (4100960, 4400025, etc.)
+- **Filtre leaf-accounts** : exclut les comptes parents (410, 440) quand ils ont
+  des sous-comptes -> evite le double comptage (parent + enfants).
+  Ex : Actif {410=3682.05, 4100960=2599.29, 4100962=1082.76, 550472=8173.79} ->
+  leaves = [4100960, 4100962, 550472] = 11855.84.
+- **Mapping owners/suppliers** via auxiliary_code Optipro :
+  - Compte 4100960 -> owner avec auxiliary_code "C0960"
+  - Compte 4400025 -> supplier avec auxiliary_code "F0025"
+  - Compte 4001XXXX (reserve) -> owner via meme regle
+  - Si match : `third_party_id` + `third_party_type` ajoutes sur la ligne, ET
+    `owner.tier_accounts[copro_id].provisions` (ou reserve) mis a jour avec le
+    code Optipro -> la balance-tiers reconnait automatiquement les soldes.
+- Ecriture journal_entries de type **AN** datee au 1er jour de l'exercice
+  fiscal (ou 01/01 de l'annee+1 du period_end_date).
+- Fiscal lock check sur la date de l'ecriture.
+
+**Frontend** : `OpeningBalancePreview` (`ImportWizardPage.js`) :
+- Totaux Actif/Passif calcules sur leaves uniquement (synchro avec backend).
+- Banner d'info : "Les comptes parents qui regroupent des sous-comptes sont
+  automatiquement exclus du commit pour eviter le double comptage."
+- Tableau editable 2 colonnes Actif/Passif avec affichage hierarchique (parents
+  en gras, sous-comptes indented).
+- Toast post-commit indique le nombre d'owners + suppliers lies.
+
+**Test E2E** : PDF "Bilan comptable au 31/12/2025.pdf" -> 9 lignes leaves
+inserees (4 actif, 5 passif, dont 3 + 6 sub-accounts), Debit=Credit=11855.84,
+4 owners + 4 suppliers automatiquement lies.
+
+#### Balance de Tiers - Reprise comptable des soldes d'ouverture
+Le bilan d'ouverture (AN) est maintenant visible dans la Balance de Tiers :
+- Owners : LENOTRE-MANSART 2599.29 debiteur, RAPHAEL-MICHEL ANGE -1194.36
+  crediteur, RUBENS-RENOIR 1082.76 debiteur, VELASQUEZ-GOYA -4746.16 crediteur.
+- Suppliers : 4 fournisseurs avec leurs comptes 440xxxx (Engie 360, SUEZ
+  1656.79, SRL ACE Garden 1515.53, Vidange 2383).
+- Total debiteurs : 3682.05 EUR, Total crediteurs : 5940.52 EUR.
+- Total a payer aux fournisseurs : 14828.57 EUR (incluant AN + factures import).
+
+#### Cles de repartition - Parser refonte (lignes detail)
+**Bug** : le parser `parse_distribution_keys_pdf` ne lisait pas les lignes
+detail (lot/quotite). Le PDF Optipro a une structure 2-lignes :
+  - Row N   = resume cle : ['0001 - Charges communes', '-', '4', '168,00']
+  - Row N+1 = details : ['Lot1\nLot2\n...', 'C0960\nC0961\n...', '-...', '39\n40...']
+**Fix** : parsing en 2 passes - on detecte la row resume (avec code 0XXX) et
+on ATTACHE les lignes de la row suivante (sans code) au `current_key`.
+- Resultat sur PDF reference : 4 lignes detail extraites (LENOTRE-MANSART,
+  RAPHAEL-MICHEL ANGE, RUBENS-RENOIR, VELASQUEZ-GOYA) avec quotities 39, 40,
+  49, 40 -> total 168 ✓.
+
+**Frontend** : `KeysPreview` (`ImportWizardPage.js`) :
+- Colonne "Coproprietaire" ajoutee (affiche owner_label de Optipro, ex.
+  "C0960 - LENOTRE-MANSART").
+- Banner amber si aucune ligne extraite ("Verifiez le PDF source").
+
+**Commit** : `commit-distribution-keys` met a jour les cles existantes avec 0
+lignes au lieu de les ignorer (cas frequent : une cle 0001 avait ete creee
+vide par un import precedent, le nouvel import enrichit avec les lignes).
+
+#### Banking - Visibilite des imports journaux
+**Bug** : apres l'import du CSV "journaux", les transactions etaient stockees
+dans `bank_statement_lines` mais l'interface `/banking` ne les voyait pas (elle
+lit `bank_statements` + `bank_transactions`).
+**Fix** `commit_journals` (`routes/import_wizard.py`) :
+- Cree des **bank_statements** parents groupes par (bank_pcmn, year-month) -
+  ex: pour 39 txns on a 4 statements (IMP-2026-01, IMP-2026-03, IMP-2026-04,
+  IMP-2026-05).
+- Pour chaque txn : insertion dans `bank_transactions` avec statement_id +
+  signed_amount (IN=positif, OUT=negatif), counterparty_name, communication.
+- Closing_balance auto-calcule = sum des mouvements de l'extrait.
+- Conserve bank_statement_lines pour audit/tracabilite.
+- Rollback : ces collections etaient deja dans la liste -> propre.
+
+**Test E2E** : CSV `journaux_20260621644.csv` (39 txns) -> 4 bank_statements
+visibles dans /banking + 39 journal_entries FI + 39 bank_statement_lines.
+
+#### Dropdown propriétaires - Bug d'affichage post-import
+**Bug** : dans l'Assistant de creation ACP (Step 2 - Lots & proprietaires), le
+dropdown d'affectation lot -> proprietaire ne montrait QUE les owners ayant un
+lot dans l'ACP courante (chinese-wall via `db.lots.distinct`). Les owners
+juste importes via PdfImportDialog (sans lot encore lie) etaient invisibles.
+
+**Fix 1 - Backend `properties.py::list_owners`** : nouveau param
+`include_unassigned=true` qui ajoute les owners orphelins (copropriete_id="")
+au resultat. Test : sans param = 0 owners pour ACP "import" ; avec param =
+845 owners visibles (les imports orphelins du PDF Optipro).
+
+**Fix 2 - Frontend `CoproprietesPage.js`** :
+- Tous les `api.get('/owners')` envoient maintenant `?include_unassigned=true`
+  pendant le dialog d'edition/creation d'ACP.
+- Nouveau state `ownerFocusLot` : la dropdown s'ouvre AU FOCUS de l'input
+  (sans saisie obligatoire) et affiche jusqu'a 50 owners disponibles avec leur
+  auxiliary_code (C0XXX) et VCS code.
+- Refetch automatique des owners au focus pour avoir la liste fraiche.
+- Placeholder : "Cliquez pour voir la liste, ou tapez nom / email / VCS..."
+
+#### Difference Optipro vs CoproManager (montants depenses)
+**Analyse demandee** : User comparait le "Total filtre depenses" CoproManager
+(20026.18 EUR / 34) avec l'Optipro "Liste des depenses" (20323.29 EUR).
+Difference = 297.11 EUR.
+
+**Decompose** :
+- 305.00 + 0.15 + 2.50 + 2.50 + 2.50 + 9.68 - 25.22 = 297.11 EUR
+- Lignes Optipro sur comptes 650 (Frais bancaires) + 750 (Produits financiers)
+
+**Conclusion** : difference attendue et CORRECTE :
+- Optipro liste tout (frais bancaires + factures) dans la meme "Liste des depenses"
+- CoproManager separe par journal comptable :
+  - AC (achats fournisseurs) : 34 factures = 20026.18 EUR (matches le dashboard)
+  - FI (financier - frais bancaires) : ~297.11 EUR (dans /banking et grand livre)
+- Conforme au PCMN belge : ne pas melanger compte 6X (charges) et 65X (frais financiers).
+
+#### Files de reference
+- `/app/backend/import_wizard/pdf_utils.py` (parser keys refonte 2-passes)
+- `/app/backend/routes/import_wizard.py` (commit_opening_balance + journals + keys)
+- `/app/backend/routes/properties.py` (list_owners + include_unassigned)
+- `/app/frontend/src/pages/ImportWizardPage.js` (OpeningBalancePreview + KeysPreview)
+- `/app/frontend/src/pages/CoproprietesPage.js` (dropdown owners au focus)
+
+
+
+
 
 ### Iter71 (Feb 2026) - Wizard Optipro Phases G + H : Factures + Journaux financiers
 

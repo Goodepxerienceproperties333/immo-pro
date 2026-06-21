@@ -982,34 +982,101 @@ def create_import_wizard_router(db):
         except Exception as e:
             raise HTTPException(400, f"Periode fermee : {e}")
 
-        # Build the journal entry lines
+        # ---- Mapping comptes 410xxxx / 440xxxx -> owners / suppliers Optipro ----
+        # Optipro convention :
+        #   compte 4100960  ->  owner  avec auxiliary_code = "C0960"
+        #   compte 4400025  ->  supplier avec auxiliary_code = "F0025"
+        # Pour les comptes 4001xxxx (fonds de reserve Optipro) idem owner.
+        # On indexe TOUS les owners/suppliers (sans filtre copropriete_id car les
+        # owners importes via PdfImportDialog peuvent avoir copropriete_id="").
+        owners_by_aux: dict[str, dict] = {}
+        async for o in db.owners.find({"auxiliary_code": {"$exists": True, "$ne": ""}}, {"_id": 0, "id": 1, "name": 1, "auxiliary_code": 1, "tier_accounts": 1, "copropriete_id": 1}):
+            aux = (o.get("auxiliary_code") or "").upper().strip()
+            if aux:
+                owners_by_aux[aux] = o
+        suppliers_by_aux: dict[str, dict] = {}
+        async for sup in db.suppliers.find({"auxiliary_code": {"$exists": True, "$ne": ""}, "copropriete_id": copro_id}, {"_id": 0, "id": 1, "name": 1, "auxiliary_code": 1, "tier_accounts": 1}):
+            aux = (sup.get("auxiliary_code") or "").upper().strip()
+            if aux:
+                suppliers_by_aux[aux] = sup
+
+        def _resolve_third_party(account_number: str) -> tuple:
+            """Returns (third_party_id, third_party_type, party_doc) or (None, None, None)."""
+            acc = (account_number or "").strip()
+            if not acc:
+                return None, None, None
+            # 410xxxx or 4001xxxx -> owner (4 digits after prefix)
+            if acc.startswith("410") and len(acc) >= 7:
+                aux = "C" + acc[-4:]
+                o = owners_by_aux.get(aux)
+                if o:
+                    return o["id"], "owner", o
+            if acc.startswith("4001") and len(acc) >= 8:
+                aux = "C" + acc[-4:]
+                o = owners_by_aux.get(aux)
+                if o:
+                    return o["id"], "owner", o
+            # 440xxxx -> supplier
+            if acc.startswith("440") and len(acc) >= 7:
+                aux = "F" + acc[-4:]
+                sup = suppliers_by_aux.get(aux)
+                if sup:
+                    return sup["id"], "supplier", sup
+            return None, None, None
+
+        # Build the journal entry lines + collect tier_accounts updates
         lines = []
-        for a in actif:
+        owner_tier_updates: dict[str, dict] = {}  # owner_id -> {"provisions": "...", "reserve": "..."}
+        supplier_tier_updates: dict[str, str] = {}  # supplier_id -> "4400xxx"
+        owners_linked = 0
+        suppliers_linked = 0
+        for a in actif + passif:
             amt = round(float(a.get("amount") or 0), 2)
             if amt == 0:
                 continue
-            lines.append({
-                "account_number": (a.get("account") or "").strip(),
+            is_actif = a in actif
+            acc_num = (a.get("account") or "").strip()
+            tp_id, tp_type, party = _resolve_third_party(acc_num)
+            line = {
+                "account_number": acc_num,
                 "account_name": (a.get("label") or "").strip(),
-                "debit": amt,
-                "credit": 0.0,
+                "debit": amt if is_actif else 0.0,
+                "credit": 0.0 if is_actif else amt,
                 "description": f"A-Nouveau : {(a.get('label') or '').strip()}",
+                "line_description": f"A-Nouveau {acc_num}" + (f" - {party.get('name','')}" if party else ""),
                 "occupant_pct": None,
                 "proprietaire_pct": None,
-            })
-        for p in passif:
-            amt = round(float(p.get("amount") or 0), 2)
-            if amt == 0:
-                continue
-            lines.append({
-                "account_number": (p.get("account") or "").strip(),
-                "account_name": (p.get("label") or "").strip(),
-                "debit": 0.0,
-                "credit": amt,
-                "description": f"A-Nouveau : {(p.get('label') or '').strip()}",
-                "occupant_pct": None,
-                "proprietaire_pct": None,
-            })
+            }
+            if tp_id:
+                line["third_party_id"] = tp_id
+                line["third_party_type"] = tp_type
+                if tp_type == "owner":
+                    owners_linked += 1
+                    # Schedule tier_account update : provisions for 410xxx, reserve for 4001xxx
+                    key = "reserve" if acc_num.startswith("4001") else "provisions"
+                    owner_tier_updates.setdefault(tp_id, {})[key] = acc_num
+                elif tp_type == "supplier":
+                    suppliers_linked += 1
+                    supplier_tier_updates[tp_id] = acc_num
+            lines.append(line)
+
+        # ---- Apply tier_accounts updates (owners / suppliers) ----
+        for oid, updates in owner_tier_updates.items():
+            owner = owners_by_aux.get(next(iter([k for k, v in owners_by_aux.items() if v["id"] == oid]), ""), None)
+            existing_tier = ((owner or {}).get("tier_accounts") or {}).get(copro_id, {}) or {}
+            merged = {**existing_tier, **updates}
+            await db.owners.update_one(
+                {"id": oid},
+                {"$set": {f"tier_accounts.{copro_id}": merged}},
+            )
+        for sid, acc in supplier_tier_updates.items():
+            sup = next((s for s in suppliers_by_aux.values() if s["id"] == sid), None)
+            existing_tier = ((sup or {}).get("tier_accounts") or {}).get(copro_id, {}) or {}
+            merged = {**existing_tier, "main": acc}
+            await db.suppliers.update_one(
+                {"id": sid},
+                {"$set": {f"tier_accounts.{copro_id}": merged}},
+            )
 
         period_end = (data.period_end_date or "").strip() or "n-1"
         je_id = str(uuid.uuid4())
@@ -1033,6 +1100,8 @@ def create_import_wizard_router(db):
             "total_credit": total_passif,
             "journal_entry_id": je_id,
             "pcmn_created": pcmn_created,
+            "owners_linked": owners_linked,
+            "suppliers_linked": suppliers_linked,
             "entry_date": entry_date,
         })
         return {
@@ -1042,6 +1111,8 @@ def create_import_wizard_router(db):
             "total_credit": total_passif,
             "journal_entry_id": je_id,
             "pcmn_created": pcmn_created,
+            "owners_linked": owners_linked,
+            "suppliers_linked": suppliers_linked,
             "entry_date": entry_date,
         }
 
