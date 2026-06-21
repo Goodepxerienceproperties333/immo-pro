@@ -27,7 +27,7 @@ import { Badge } from '@/components/ui/badge';
 import {
   Upload, Truck, Tag, CheckCircle2, X, AlertTriangle,
   ChevronRight, ChevronLeft, FileWarning, Loader2, RotateCcw,
-  Calendar, Wallet, PieChart, Plus, Trash2, FileText, Landmark
+  Calendar, Wallet, PieChart, Plus, Trash2, FileText, Landmark, Scale
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -42,6 +42,7 @@ const STEPS = [
   { key: 'distribution_keys', label: 'Cles de repartition', icon: PieChart, optional: true, kind: 'pdf' },
   { key: 'invoices',  label: 'Factures',          icon: FileText, optional: true,  kind: 'csv_invoices' },
   { key: 'journals',  label: 'Journaux financiers', icon: Landmark, optional: true, kind: 'csv_journals' },
+  { key: 'opening_balance', label: 'OD d\'ouverture', icon: Scale, optional: true, kind: 'pdf_balance' },
 ];
 
 // Champs cibles attendus pour chaque étape (clé = nom du champ DB)
@@ -79,6 +80,7 @@ export default function ImportWizardPage() {
   const [suppliersParsed, setSuppliersParsed] = useState([]);
   const [invoicesParsed, setInvoicesParsed] = useState([]);
   const [journalsParsed, setJournalsParsed] = useState([]);
+  const [balanceParsed, setBalanceParsed] = useState({ actif: [], passif: [], total_actif: 0, total_passif: 0, balanced: false, period_end_date: '' });
   // For 'csv_or_pdf' steps : tracks which mode the user picked for THIS step
   // (resets on every step change / file reset).
   const [uploadMode, setUploadMode] = useState(null);  // null | 'csv' | 'pdf'
@@ -124,6 +126,7 @@ export default function ImportWizardPage() {
     setSuppliersParsed([]);
     setInvoicesParsed([]);
     setJournalsParsed([]);
+    setBalanceParsed({ actif: [], passif: [], total_actif: 0, total_passif: 0, balanced: false, period_end_date: '' });
     try {
       const fd = new FormData();
       fd.append('file', file);
@@ -131,11 +134,11 @@ export default function ImportWizardPage() {
       const effectiveKind = step.kind === 'csv_or_pdf'
         ? (uploadMode || (file.name.toLowerCase().endsWith('.pdf') ? 'pdf' : 'csv'))
         : step.kind;
-      const isPdf = effectiveKind === 'pdf';
+      const isPdf = effectiveKind === 'pdf' || effectiveKind === 'pdf_balance';
       const isStructuredCsv = effectiveKind === 'csv_invoices' || effectiveKind === 'csv_journals';
       let r;
       if (isPdf) {
-        const kindMap = { natures: 'natures', budget: 'budget', distribution_keys: 'keys', suppliers: 'suppliers' };
+        const kindMap = { natures: 'natures', budget: 'budget', distribution_keys: 'keys', suppliers: 'suppliers', opening_balance: 'balance' };
         fd.append('kind', kindMap[step.key] || 'generic');
         r = await api.post(`/import-wizard/sessions/${session.id}/sniff-pdf`, fd, {
           headers: { 'Content-Type': 'multipart/form-data' },
@@ -144,6 +147,16 @@ export default function ImportWizardPage() {
         if (step.key === 'budget') setBudgetSections(r.data.sections || []);
         if (step.key === 'distribution_keys') setKeysParsed(r.data.keys || []);
         if (step.key === 'suppliers') setSuppliersParsed(r.data.suppliers || []);
+        if (step.key === 'opening_balance') {
+          setBalanceParsed({
+            actif: r.data.actif || [],
+            passif: r.data.passif || [],
+            total_actif: r.data.total_actif || 0,
+            total_passif: r.data.total_passif || 0,
+            balanced: r.data.balanced || false,
+            period_end_date: r.data.period_end_date || '',
+          });
+        }
       } else if (isStructuredCsv) {
         const kindParam = effectiveKind === 'csv_invoices' ? 'invoices' : 'journals';
         fd.append('kind', kindParam);
@@ -217,6 +230,19 @@ export default function ImportWizardPage() {
           `${m.inserted} transaction(s) bancaire(s) importee(s) + ${m.journal_entries || 0} ecriture(s) FI` +
           (m.pcmn_created ? ` - ${m.pcmn_created} compte(s) PCMN auto-ajoutes` : '')
         );
+      } else if (step.key === 'opening_balance') {
+        r = await api.post(`/import-wizard/sessions/${session.id}/commit-opening-balance`, {
+          actif: balanceParsed.actif,
+          passif: balanceParsed.passif,
+          period_end_date: balanceParsed.period_end_date,
+          fiscal_year_id: session?.steps?.fiscal_year?.fiscal_year_id || '',
+        });
+        const m = r.data;
+        toast.success(
+          `OD d'ouverture creee : ${m.lines} ligne(s) au ${m.entry_date} ` +
+          `(Debit/Credit ${m.total_debit.toFixed(2)} EUR)` +
+          (m.pcmn_created ? ` - ${m.pcmn_created} compte(s) PCMN auto-ajoutes` : '')
+        );
       } else if (step.key === 'fiscal_year') {
         if (!fyForm.name || !fyForm.start_date || !fyForm.end_date) {
           toast.error('Nom, date debut et date fin sont obligatoires');
@@ -240,6 +266,7 @@ export default function ImportWizardPage() {
         setSuppliersParsed([]);
         setInvoicesParsed([]);
         setJournalsParsed([]);
+        setBalanceParsed({ actif: [], passif: [], total_actif: 0, total_passif: 0, balanced: false, period_end_date: '' });
         setUploadMode(null);
       } else {
         // Final step : finish
@@ -336,7 +363,9 @@ export default function ImportWizardPage() {
                       ? 'Chargez le CSV "facture_xxx.csv" Optipro'
                       : step.kind === 'csv_journals'
                         ? 'Chargez le CSV "journaux_xxx.csv" Optipro (journaux financiers)'
-                        : `Chargez le PDF (${step.label})`}
+                        : step.kind === 'pdf_balance'
+                          ? 'Chargez le PDF "Bilan comptable au JJ/MM/AAAA" - utilise pour generer l\'OD d\'ouverture (A-Nouveau)'
+                          : `Chargez le PDF (${step.label})`}
               </p>
               <input
                 type="file"
@@ -405,6 +434,10 @@ export default function ImportWizardPage() {
             <JournalsPreview transactions={journalsParsed} setTransactions={setJournalsParsed} />
           )}
 
+          {sniffResult && step.key === 'opening_balance' && (
+            <OpeningBalancePreview balance={balanceParsed} setBalance={setBalanceParsed} />
+          )}
+
           {sniffResult && step.key === 'natures' && (
             <NaturesPreview natures={naturesParsed} setNatures={setNaturesParsed} />
           )}
@@ -421,11 +454,11 @@ export default function ImportWizardPage() {
 
       {/* Footer */}
       <div className="flex items-center justify-between mt-4">
-        <Button variant="outline" size="sm" disabled={stepIdx === 0} onClick={() => { setStepIdx(stepIdx - 1); setSniffResult(null); setMapping({}); setNaturesParsed([]); setSuppliersParsed([]); setInvoicesParsed([]); setJournalsParsed([]); setUploadMode(null); }} data-testid="prev-step">
+        <Button variant="outline" size="sm" disabled={stepIdx === 0} onClick={() => { setStepIdx(stepIdx - 1); setSniffResult(null); setMapping({}); setNaturesParsed([]); setSuppliersParsed([]); setInvoicesParsed([]); setJournalsParsed([]); setBalanceParsed({ actif: [], passif: [], total_actif: 0, total_passif: 0, balanced: false, period_end_date: '' }); setUploadMode(null); }} data-testid="prev-step">
           <ChevronLeft size={14} className="mr-1" /> Etape precedente
         </Button>
         <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={() => { setSniffResult(null); setMapping({}); setNaturesParsed([]); setSuppliersParsed([]); setInvoicesParsed([]); setJournalsParsed([]); setUploadMode(null); }} data-testid="reset-step">
+          <Button variant="outline" size="sm" onClick={() => { setSniffResult(null); setMapping({}); setNaturesParsed([]); setSuppliersParsed([]); setInvoicesParsed([]); setJournalsParsed([]); setBalanceParsed({ actif: [], passif: [], total_actif: 0, total_passif: 0, balanced: false, period_end_date: '' }); setUploadMode(null); }} data-testid="reset-step">
             <X size={14} className="mr-1" /> Annuler ce fichier
           </Button>
           {step.optional && stepIdx < STEPS.length - 1 && (
@@ -562,6 +595,114 @@ function NaturesPreview({ natures, setNatures }) {
 function updateNature(arr, setArr, idx, field, value) {
   const next = arr.map((n, i) => i === idx ? { ...n, [field]: value } : n);
   setArr(next);
+}
+
+// ============== OPENING BALANCE PREVIEW (Step I - OD ouverture / Bilan) ==============
+function OpeningBalancePreview({ balance, setBalance }) {
+  if (!balance.actif?.length && !balance.passif?.length) {
+    return (
+      <div className="text-center py-6 text-amber-600 text-sm">
+        <AlertTriangle size={24} className="inline mr-1" /> Aucun compte detecte dans le bilan PDF.
+      </div>
+    );
+  }
+  const totalA = balance.actif.reduce((s, a) => s + (parseFloat(a.amount) || 0), 0);
+  const totalP = balance.passif.reduce((s, p) => s + (parseFloat(p.amount) || 0), 0);
+  const isBalanced = Math.abs(totalA - totalP) < 0.01;
+
+  const updSide = (side, idx, field, value) => {
+    const v = field === 'amount' ? (parseFloat(value) || 0) : value;
+    const next = { ...balance, [side]: balance[side].map((it, i) => i === idx ? { ...it, [field]: v } : it) };
+    setBalance(next);
+  };
+  const delSide = (side, idx) => {
+    setBalance({ ...balance, [side]: balance[side].filter((_, i) => i !== idx) });
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className={`border rounded p-3 text-xs flex justify-between items-center ${isBalanced ? 'bg-emerald-50 border-emerald-200' : 'bg-amber-50 border-amber-200'}`}>
+        <div>
+          <div className="font-semibold">
+            Bilan au <span className="font-mono">{balance.period_end_date || '—'}</span>
+          </div>
+          <div className="text-[11px] mt-0.5">
+            {isBalanced
+              ? `Equilibre OK. L'OD d'ouverture (type AN) sera generee avec ${balance.actif.length + balance.passif.length} ligne(s).`
+              : 'ATTENTION : le bilan est desequilibre. Ajustez les montants avant validation.'}
+          </div>
+        </div>
+        <div className="font-mono text-right">
+          <div>Total Actif : <span className="font-semibold">{totalA.toFixed(2)}</span></div>
+          <div>Total Passif : <span className="font-semibold">{totalP.toFixed(2)}</span></div>
+          <div className={`text-[10px] ${isBalanced ? 'text-emerald-700' : 'text-red-700'}`}>
+            Ecart : {(totalA - totalP).toFixed(2)} EUR
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        {/* ACTIF (Debit) */}
+        <div className="border border-slate-200 rounded">
+          <div className="bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-800 flex justify-between">
+            <span>ACTIF (Debit)</span>
+            <span className="font-mono">{totalA.toFixed(2)} EUR</span>
+          </div>
+          <table className="w-full text-[11px]">
+            <thead className="bg-slate-50">
+              <tr>
+                <th className="px-1 py-1 text-left w-20">Compte</th>
+                <th className="px-1 py-1 text-left">Libelle</th>
+                <th className="px-1 py-1 text-right w-24">Montant</th>
+                <th className="w-6"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {balance.actif.map((a, i) => (
+                <tr key={i} className={`border-t border-slate-100 ${a.is_subaccount ? 'pl-4 text-slate-600' : 'font-semibold'}`}>
+                  <td className="px-1 py-0.5 font-mono text-[10px]">{a.is_subaccount ? '  ' : ''}<input value={a.account} onChange={e => updSide('actif', i, 'account', e.target.value)} className="w-16 border-0 bg-transparent font-mono text-[10px]" /></td>
+                  <td className="px-1 py-0.5"><input value={a.label} onChange={e => updSide('actif', i, 'label', e.target.value)} className="w-full border-0 bg-transparent" /></td>
+                  <td className="px-1 py-0.5"><input type="number" step="0.01" value={a.amount} onChange={e => updSide('actif', i, 'amount', e.target.value)} className="w-24 border-0 bg-transparent text-right font-mono" /></td>
+                  <td className="px-0 py-0.5"><button onClick={() => delSide('actif', i)} className="text-red-500 hover:text-red-700"><X size={11} /></button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {/* PASSIF (Credit) */}
+        <div className="border border-slate-200 rounded">
+          <div className="bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-800 flex justify-between">
+            <span>PASSIF (Credit)</span>
+            <span className="font-mono">{totalP.toFixed(2)} EUR</span>
+          </div>
+          <table className="w-full text-[11px]">
+            <thead className="bg-slate-50">
+              <tr>
+                <th className="px-1 py-1 text-left w-20">Compte</th>
+                <th className="px-1 py-1 text-left">Libelle</th>
+                <th className="px-1 py-1 text-right w-24">Montant</th>
+                <th className="w-6"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {balance.passif.map((p, i) => (
+                <tr key={i} className={`border-t border-slate-100 ${p.is_subaccount ? 'pl-4 text-slate-600' : 'font-semibold'}`}>
+                  <td className="px-1 py-0.5 font-mono text-[10px]"><input value={p.account} onChange={e => updSide('passif', i, 'account', e.target.value)} className="w-16 border-0 bg-transparent font-mono text-[10px]" /></td>
+                  <td className="px-1 py-0.5"><input value={p.label} onChange={e => updSide('passif', i, 'label', e.target.value)} className="w-full border-0 bg-transparent" /></td>
+                  <td className="px-1 py-0.5"><input type="number" step="0.01" value={p.amount} onChange={e => updSide('passif', i, 'amount', e.target.value)} className="w-24 border-0 bg-transparent text-right font-mono" /></td>
+                  <td className="px-0 py-0.5"><button onClick={() => delSide('passif', i)} className="text-red-500 hover:text-red-700"><X size={11} /></button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div className="text-[11px] text-slate-500 italic">
+        Une seule ecriture comptable de type <strong>AN</strong> (A-Nouveau) sera creee au 1er jour de l&apos;exercice fiscal selectionne,
+        avec toutes les lignes Actif en DEBIT et toutes les lignes Passif en CREDIT.
+      </div>
+    </div>
+  );
 }
 
 // ============== INVOICES PREVIEW (Step G - Factures Optipro) ==============

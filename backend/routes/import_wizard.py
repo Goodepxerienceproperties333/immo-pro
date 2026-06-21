@@ -92,6 +92,13 @@ class CommitJournalsInput(BaseModel):
     bank_account_mapping: Optional[dict] = {}  # {'550472': 'bank_account_id_in_DB'}
 
 
+class CommitOpeningBalanceInput(BaseModel):
+    actif: List[dict]  # [{account, label, amount, is_subaccount}]
+    passif: List[dict]
+    period_end_date: Optional[str] = ""  # DD/MM/YYYY of the balance sheet
+    fiscal_year_id: Optional[str] = ""  # FY into which to post the AN entry
+
+
 # ============================================================
 # Router
 # ============================================================
@@ -122,6 +129,8 @@ def create_import_wizard_router(db):
             return parse_lots_pdf(raw)
         if kind == "suppliers":
             return parse_suppliers_pdf(raw)
+        if kind == "balance":
+            return parse_balance_pdf(raw)
         return extract_pdf(raw)
 
     # ----- SESSIONS -----
@@ -253,6 +262,10 @@ def create_import_wizard_router(db):
             return res
         if kind == "suppliers":
             res = parse_suppliers_pdf(raw)
+            res["filename"] = file.filename
+            return res
+        if kind == "balance":
+            res = parse_balance_pdf(raw)
             res["filename"] = file.filename
             return res
         info = extract_pdf(raw)
@@ -796,6 +809,134 @@ def create_import_wizard_router(db):
             "journal_entries": je_inserted,
             "pcmn_created": pcmn_created,
             "errors": errors,
+        }
+
+    # ----- I: OPENING BALANCE (OD d'ouverture - Bilan comptable) -----
+    @router.post("/sessions/{session_id}/commit-opening-balance")
+    async def commit_opening_balance(session_id: str, data: CommitOpeningBalanceInput, request: Request):
+        """Commit an opening balance from a 'Bilan comptable' PDF.
+
+        Generates ONE journal entry of type 'AN' (A-Nouveau) with:
+        - DEBIT lines for each ACTIF account
+        - CREDIT lines for each PASSIF account
+        Total debit = Total credit by construction (balance sheet equilibrium).
+
+        Also auto-creates missing PCMN accounts and sets the entry date to
+        the FIRST DAY of the current fiscal year (or 1st January of the year
+        following the balance period_end_date).
+        """
+        from fiscal_lock import ensure_period_open
+        session = await db.import_sessions.find_one({"id": session_id})
+        if not session:
+            raise HTTPException(404, "Session introuvable")
+        copro_id = session["copropriete_id"]
+        await _require_acp_access(request, db, copro_id)
+
+        actif = data.actif or []
+        passif = data.passif or []
+        total_actif = round(sum(float(a.get("amount") or 0) for a in actif), 2)
+        total_passif = round(sum(float(p.get("amount") or 0) for p in passif), 2)
+        if abs(total_actif - total_passif) > 0.01:
+            raise HTTPException(400, f"Bilan non equilibre : Actif {total_actif} != Passif {total_passif}")
+        if total_actif == 0:
+            raise HTTPException(400, "Bilan vide (aucun montant a importer)")
+
+        # Auto-create missing PCMN accounts
+        accounts_needed: dict[str, str] = {}
+        for a in actif + passif:
+            num = (a.get("account") or "").strip()
+            lbl = (a.get("label") or "").strip()
+            if num:
+                accounts_needed[num] = lbl
+        pcmn_created = await _ensure_pcmn_accounts(copro_id, accounts_needed)
+
+        # Determine entry date : 1st day of the FY containing the year+1 of period_end_date
+        # OR the FY's start_date if available
+        entry_date = ""
+        fy = None
+        if data.fiscal_year_id:
+            fy = await db.fiscal_years.find_one({"id": data.fiscal_year_id, "copropriete_id": copro_id})
+            if fy:
+                entry_date = (fy.get("start_date") or "").strip()
+        if not entry_date and data.period_end_date:
+            # Convert DD/MM/YYYY -> YYYY+1-01-01
+            try:
+                parts = data.period_end_date.split("/")
+                if len(parts) == 3:
+                    year = int(parts[2])
+                    entry_date = f"{year + 1}-01-01"
+            except (ValueError, IndexError):
+                pass
+        if not entry_date:
+            entry_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+        # Fiscal lock check
+        try:
+            await ensure_period_open(db, copro_id, entry_date, context="OD d'ouverture (AN)")
+        except Exception as e:
+            raise HTTPException(400, f"Periode fermee : {e}")
+
+        # Build the journal entry lines
+        lines = []
+        for a in actif:
+            amt = round(float(a.get("amount") or 0), 2)
+            if amt == 0:
+                continue
+            lines.append({
+                "account_number": (a.get("account") or "").strip(),
+                "account_name": (a.get("label") or "").strip(),
+                "debit": amt,
+                "credit": 0.0,
+                "description": f"A-Nouveau : {(a.get('label') or '').strip()}",
+                "occupant_pct": None,
+                "proprietaire_pct": None,
+            })
+        for p in passif:
+            amt = round(float(p.get("amount") or 0), 2)
+            if amt == 0:
+                continue
+            lines.append({
+                "account_number": (p.get("account") or "").strip(),
+                "account_name": (p.get("label") or "").strip(),
+                "debit": 0.0,
+                "credit": amt,
+                "description": f"A-Nouveau : {(p.get('label') or '').strip()}",
+                "occupant_pct": None,
+                "proprietaire_pct": None,
+            })
+
+        period_end = (data.period_end_date or "").strip() or "n-1"
+        je_id = str(uuid.uuid4())
+        await db.journal_entries.insert_one({
+            "id": je_id,
+            "journal_type": "AN",
+            "date": entry_date,
+            "reference": f"AN-{entry_date[:4]}-001",
+            "description": f"OD d'ouverture - Bilan au {period_end}",
+            "lines": lines,
+            "total_debit": total_actif,
+            "total_credit": total_passif,
+            "copropriete_id": copro_id,
+            "import_session_id": session_id,
+            "created_at": _now_iso(),
+        })
+
+        await _update_step(db, session_id, "opening_balance", {
+            "count": len(lines),
+            "total_debit": total_actif,
+            "total_credit": total_passif,
+            "journal_entry_id": je_id,
+            "pcmn_created": pcmn_created,
+            "entry_date": entry_date,
+        })
+        return {
+            "inserted": 1,
+            "lines": len(lines),
+            "total_debit": total_actif,
+            "total_credit": total_passif,
+            "journal_entry_id": je_id,
+            "pcmn_created": pcmn_created,
+            "entry_date": entry_date,
         }
 
     # ----- D: LOTS -----
