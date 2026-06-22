@@ -1,14 +1,18 @@
-from fastapi import APIRouter, HTTPException, UploadFile, File, Request
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime, timezone
 from pathlib import Path
 import uuid
+import json
+import shutil
 from auto_entries import generate_purchase_entry, _delete_auto_entries
 
 INVOICE_ATTACHMENTS_DIR = Path("/app/uploads/invoice_attachments")
 INVOICE_ATTACHMENTS_DIR.mkdir(parents=True, exist_ok=True)
+INVOICE_BUNDLES_DIR = Path("/app/uploads/invoice_attachments/_bundles")
+INVOICE_BUNDLES_DIR.mkdir(parents=True, exist_ok=True)
 
 
 class DistKeyLot(BaseModel):
@@ -430,5 +434,253 @@ def create_invoices_router(db):
             {"$pull": {"attachments": {"id": attachment_id}}}
         )
         return {"message": "Piece jointe supprimee"}
+
+    # ---- INVOICE BUNDLE (Regroupement de PDFs Optipro) ----
+    @router.post("/invoices/bundle-analyze")
+    async def bundle_analyze(
+        request: Request,
+        file: UploadFile = File(...),
+        copropriete_id: Optional[str] = Form(None),
+    ):
+        """Etape 1 : Recoit un PDF "Regroupement de documents" (factures concatenees).
+        Detecte chaque facture (page_range), extrait les metadonnees et propose un
+        matching avec les factures existantes de l'ACP.
+        Retourne un session_id (qui pointe sur le PDF stocke temporairement) +
+        la liste des blocks avec un suggested_match optionnel."""
+        from import_wizard.pdf_invoices_bundle import parse_invoice_bundle, match_invoice
+
+        if not copropriete_id:
+            copropriete_id = request.headers.get("X-Copropriete-Id") or ""
+        if not copropriete_id:
+            raise HTTPException(400, "copropriete_id requis pour l'analyse du bundle")
+
+        ext = Path(file.filename or "bundle.pdf").suffix.lower()
+        if ext != ".pdf":
+            raise HTTPException(400, "Format autorise : PDF uniquement")
+
+        raw = await file.read()
+        if not raw or len(raw) < 100:
+            raise HTTPException(400, "Fichier vide ou invalide")
+
+        # Parse PDF (slow operation, can take 10s for 100+ pages)
+        try:
+            info = parse_invoice_bundle(raw)
+        except Exception as e:
+            raise HTTPException(500, f"Echec analyse PDF : {e}")
+
+        # Persist bundle file for later page extraction
+        session_id = str(uuid.uuid4())
+        session_dir = INVOICE_BUNDLES_DIR / session_id
+        session_dir.mkdir(parents=True, exist_ok=True)
+        bundle_path = session_dir / "bundle.pdf"
+        with open(bundle_path, "wb") as f:
+            f.write(raw)
+
+        # Load candidate invoices for this ACP (no need for attachments in matcher)
+        invoices = await db.invoices.find(
+            {"copropriete_id": copropriete_id},
+            {"_id": 0, "id": 1, "number": 1, "internal_reference": 1,
+             "supplier": 1, "total_amount": 1, "date": 1, "attachments": 1},
+        ).sort("date", -1).to_list(5000)
+        # Map to matcher candidate format (supplier_name expected)
+        cands = [{
+            "id": inv["id"],
+            "number": inv.get("number") or "",
+            "internal_reference": inv.get("internal_reference") or "",
+            "supplier_name": inv.get("supplier") or "",
+            "total_amount": float(inv.get("total_amount") or 0),
+            "date": inv.get("date") or "",
+            "has_attachment": bool(inv.get("attachments")),
+        } for inv in invoices]
+
+        blocks_out = []
+        for i, blk in enumerate(info.get("blocks", [])):
+            match = match_invoice(blk, cands)
+            blocks_out.append({
+                "block_id": f"blk-{i}",
+                "page_range": blk.get("page_range", []),
+                "page_count": blk.get("page_count", 0),
+                "invoice_number": blk.get("invoice_number", ""),
+                "date_iso": blk.get("date_iso", ""),
+                "date_display": blk.get("date_display", ""),
+                "supplier_hint": blk.get("supplier_hint", ""),
+                "supplier_tva": blk.get("supplier_tva", ""),
+                "total_amount": blk.get("total_amount", 0.0),
+                "raw_text_preview": blk.get("raw_text_preview", ""),
+                "suggested_match": (
+                    {
+                        "invoice_id": match["id"],
+                        "invoice_number": match.get("number"),
+                        "internal_reference": match.get("internal_reference"),
+                        "supplier": match.get("supplier_name"),
+                        "total_amount": match.get("total_amount"),
+                        "date": match.get("date"),
+                        "has_attachment": match.get("has_attachment", False),
+                        "confidence": match.get("match_confidence", 0),
+                        "method": match.get("match_method", ""),
+                    } if match else None
+                ),
+            })
+
+        # Persist session metadata for the commit step
+        meta = {
+            "session_id": session_id,
+            "copropriete_id": copropriete_id,
+            "total_pages": info.get("total_pages", 0),
+            "invoice_count": info.get("invoice_count", 0),
+            "blocks": blocks_out,
+            "filename": file.filename or "bundle.pdf",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        with open(session_dir / "meta.json", "w") as f:
+            json.dump(meta, f)
+
+        return {
+            "session_id": session_id,
+            "total_pages": info.get("total_pages", 0),
+            "invoice_count": info.get("invoice_count", 0),
+            "blocks": blocks_out,
+            "filename": file.filename or "bundle.pdf",
+        }
+
+    @router.post("/invoices/bundle-commit")
+    async def bundle_commit(payload: dict):
+        """Etape 2 : Pour chaque block, extrait les pages correspondantes du PDF
+        bundle et les attache a la facture choisie (ou cree une nouvelle facture
+        si mode='create').
+        Body : {
+          session_id: str,
+          assignments: [
+            { block_id, page_range, mode: 'attach'|'create'|'skip',
+              invoice_id?: str,  # mode=attach
+              invoice_data?: {...}  # mode=create (full InvoiceInput payload)
+            }, ...
+          ]
+        }"""
+        from import_wizard.pdf_invoices_bundle import extract_block_pdf
+        from fiscal_lock import ensure_period_open
+
+        session_id = payload.get("session_id") or ""
+        assignments = payload.get("assignments") or []
+        if not session_id or not assignments:
+            raise HTTPException(400, "session_id et assignments requis")
+
+        session_dir = INVOICE_BUNDLES_DIR / session_id
+        bundle_path = session_dir / "bundle.pdf"
+        meta_path = session_dir / "meta.json"
+        if not bundle_path.exists() or not meta_path.exists():
+            raise HTTPException(404, "Session bundle introuvable ou expiree")
+
+        with open(meta_path) as f:
+            meta = json.load(f)
+        copropriete_id = meta.get("copropriete_id", "")
+        with open(bundle_path, "rb") as f:
+            raw = f.read()
+
+        attached = 0
+        created = 0
+        skipped = 0
+        errors = []
+        results = []
+
+        for assignment in assignments:
+            block_id = assignment.get("block_id", "")
+            page_range = assignment.get("page_range") or []
+            mode = assignment.get("mode", "skip")
+
+            if mode == "skip":
+                skipped += 1
+                results.append({"block_id": block_id, "status": "skipped"})
+                continue
+
+            if not page_range:
+                errors.append({"block_id": block_id, "error": "page_range vide"})
+                continue
+
+            invoice_id = assignment.get("invoice_id") or ""
+            try:
+                # Mode 'create' : create the invoice first using InvoiceInput
+                if mode == "create":
+                    inv_data = assignment.get("invoice_data") or {}
+                    if not inv_data.get("number") or not inv_data.get("date") or not inv_data.get("supplier"):
+                        errors.append({"block_id": block_id, "error": "Donnees facture incompletes (number, date, supplier requis)"})
+                        continue
+                    inv_data["copropriete_id"] = inv_data.get("copropriete_id") or copropriete_id
+                    # Build InvoiceInput-compatible payload
+                    try:
+                        invoice_input = InvoiceInput(**inv_data)
+                    except Exception as e:
+                        errors.append({"block_id": block_id, "error": f"Validation : {e}"})
+                        continue
+                    new_inv = await create_invoice(invoice_input)
+                    invoice_id = new_inv["id"]
+                    created += 1
+
+                if not invoice_id:
+                    errors.append({"block_id": block_id, "error": "invoice_id manquant"})
+                    continue
+
+                inv = await db.invoices.find_one({"id": invoice_id, "copropriete_id": copropriete_id}, {"_id": 0})
+                if not inv:
+                    errors.append({"block_id": block_id, "error": "Facture introuvable dans l'ACP"})
+                    continue
+
+                # Verrou fiscal : ne pas attacher dans un exercice cloture
+                try:
+                    await ensure_period_open(db, inv.get("copropriete_id", ""), inv.get("date"), context="piece jointe")
+                except Exception as e:
+                    errors.append({"block_id": block_id, "error": f"Exercice cloture : {e}"})
+                    continue
+
+                # Extract pages and save as new attachment
+                pdf_bytes = extract_block_pdf(raw, page_range)
+                att_id = str(uuid.uuid4())
+                stored_name = f"{att_id}.pdf"
+                stored_path = INVOICE_ATTACHMENTS_DIR / stored_name
+                with open(stored_path, "wb") as f:
+                    f.write(pdf_bytes)
+                pages_label = f"p{page_range[0]}-{page_range[-1]}" if len(page_range) > 1 else f"p{page_range[0]}"
+                attachment = {
+                    "id": att_id,
+                    "filename": f"bundle-{pages_label}.pdf",
+                    "stored_path": str(stored_path),
+                    "mime_type": "application/pdf",
+                    "size": len(pdf_bytes),
+                    "uploaded_at": datetime.now(timezone.utc).isoformat(),
+                    "source": "bundle",
+                    "bundle_session_id": session_id,
+                    "bundle_page_range": page_range,
+                }
+                await db.invoices.update_one(
+                    {"id": invoice_id},
+                    {"$push": {"attachments": attachment}},
+                )
+                attached += 1
+                results.append({
+                    "block_id": block_id,
+                    "status": "created_and_attached" if mode == "create" else "attached",
+                    "invoice_id": invoice_id,
+                    "attachment_id": att_id,
+                })
+            except HTTPException as e:
+                errors.append({"block_id": block_id, "error": e.detail})
+            except Exception as e:
+                errors.append({"block_id": block_id, "error": str(e)})
+
+        # Cleanup session if all assignments are processed (no rollback strategy
+        # needed: each block is independent). Only remove the bundle PDF, keep
+        # meta.json for audit until manual cleanup.
+        try:
+            shutil.rmtree(session_dir)
+        except Exception:
+            pass
+
+        return {
+            "attached": attached,
+            "created": created,
+            "skipped": skipped,
+            "errors": errors,
+            "results": results,
+        }
 
     return router

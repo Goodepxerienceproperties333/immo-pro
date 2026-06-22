@@ -9,8 +9,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { Plus, Trash2, Key, Receipt, Sparkles, Paperclip, Download, X, Pencil, AlertTriangle, Filter } from 'lucide-react';
+import { Plus, Trash2, Key, Receipt, Sparkles, Paperclip, Download, X, Pencil, AlertTriangle, Filter, FolderInput } from 'lucide-react';
 import AccountSearchSelect from '@/components/AccountSearchSelect';
+import BundleImportDialog from '@/components/BundleImportDialog';
 import { fmtDate } from '@/lib/dateFmt';
 import { useFiscalYearParams } from '@/hooks/useFiscalYearParams';
 
@@ -38,6 +39,7 @@ export default function InvoicesPage() {
   const [attachDialogInv, setAttachDialogInv] = useState(null); // invoice being managed
   const [newCatDialog, setNewCatDialog] = useState(false);
   const [newCatForm, setNewCatForm] = useState({ name: '', account_number: '', description: '' });
+  const [bundleDialog, setBundleDialog] = useState(false);
   const fyParams = useFiscalYearParams();
 
   const load = useCallback(async () => {
@@ -259,6 +261,10 @@ export default function InvoicesPage() {
 
         <TabsContent value="invoices" className="mt-0">
           <div className="flex justify-end gap-2 mb-4">
+            <Button type="button" variant="outline" className="border-emerald-300 text-emerald-700 hover:bg-emerald-50" data-testid="bundle-import-btn"
+              onClick={() => setBundleDialog(true)}>
+              <FolderInput size={16} className="mr-2" /> Importer un regroupement de PDFs
+            </Button>
             <label className="inline-flex">
               <Button type="button" variant="outline" className="border-purple-300 text-purple-700 hover:bg-purple-50" data-testid="ai-extract-btn"
                 onClick={() => document.getElementById('ai-pdf-input').click()} disabled={aiExtracting}>
@@ -808,6 +814,17 @@ export default function InvoicesPage() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Bundle PDF import dialog */}
+      <BundleImportDialog
+        open={bundleDialog}
+        onOpenChange={setBundleDialog}
+        invoices={invoices}
+        distKeys={distKeys}
+        categories={categories}
+        accounts={accounts}
+        onSuccess={load}
+      />
 
       {/* Create Expense Category inline dialog */}
       <Dialog open={newCatDialog} onOpenChange={setNewCatDialog}>

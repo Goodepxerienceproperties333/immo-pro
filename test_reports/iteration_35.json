@@ -1,0 +1,41 @@
+{
+  "summary": "Iter 36 - Bundle PDF (Regroupement de factures) E2E + merge_cm_optipro_owners verification. 7/8 backend pytest passed. Full frontend bundle flow (analyze + auto-match + commit + done) works end-to-end on /tmp/regroupement.pdf (87 pages -> 14 blocks detected). 1 backend regression: 4 active CM-tier PCMN accounts (40000005, 40000008, 40010005, 40010008) and 2 inactive parent accounts (400000, 400100) still present in Gaura after merge_cm_optipro_owners.py was run.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "merge_cm_optipro_owners.py (script)", "issue": "Script ne nettoie pas completement les comptes PCMN dans ACP Gaura: 4 comptes tier actifs (40000005, 40000008, 40010005, 40010008) et 2 comptes parents (400000, 400100) subsistent. Owners eux sont bien dedupliques (test_no_40000_owner_accounts_in_gaura PASS), seul le PCMN n'est pas purge. Risque: si ces comptes restent referenceables, ils peuvent reapparaitre dans listes/journaux.", "priority": "HIGH"}
+    ],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Bundle import depuis /invoices", "issue": "Si l'utilisateur arrive sur /invoices sans avoir cliquer un ACP au prealable, localStorage.copropriete_id reste vide et l'API renvoie 400. Le bouton bundle-import-btn est visible sans selection ACP. Recommandation: griser le bouton si pas d'ACP, ou afficher un toast explicite au lieu d'un 400 cote API.", "affected_selectors": ["bundle-import-btn", "bundle-select-file-btn"]}
+    ],
+    "design_issues": [
+      {"screen": "AdminDashboardPage", "issues": ["React hydration warning: <Badge> (div) imbrique dans <p> (className=page-subtitle). Genere console.error a chaque rendu. Voir AdminDashboardPage.js ligne 57-58."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter36_bundle_and_merge.py",
+    "/app/test_reports/pytest/iter36.xml"
+  ],
+  "action_items": [
+    "Corriger merge_cm_optipro_owners.py pour supprimer aussi les comptes PCMN 40000XXX / 40010XXX (tier_account=True) restants dans ACP Gaura. Idempotent re-run du script pourrait suffire.",
+    "(Optionnel) Disabled le bouton 'Importer un regroupement de PDFs' tant que aucun ACP n'est selectionne (lecture localStorage.copropriete_id) pour eviter le 400 cote API.",
+    "(Minor) Corriger AdminDashboardPage.js ligne 57-58 - Badge dans <p> => hydration error."
+  ],
+  "critical_code_review_comments": [
+    "BundleImportDialog.js ligne 56-63: la logique d'auto-match attache automatiquement les blocs avec confidence>=0.65. C'est OK mais 0.65 est aussi le seuil 'amber'. Reflechir a passer le seuil auto a 0.85 (vert) pour eviter mauvais matchs silencieux.",
+    "invoices.py bundle_commit: pas d'authentification check explicite (pas de Depends(get_current_user)). Si d'autres endpoints sont proteges par middleware global, OK, sinon a verifier.",
+    "pdf_invoices_bundle.py: parse_invoice_bundle utilise pdfplumber qui peut etre lent pour gros PDFs (87 pages = ~10-15s). Considerer une notion async/timeout pour eviter blocage frontend.",
+    "invoices.py: variable INVOICE_BUNDLES_DIR pointe vers /app/uploads/... bien dans le repertoire monte. Apres commit, shutil.rmtree(session_dir) est appele -> impossible de re-commit si le user veut corriger. C'est intentionnel mais pas de message d'erreur clair si re-tentative."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter36_bundle_and_merge.py"],
+  "success_rate": {"backend": "87.5% (7/8)", "frontend": "100% (analyze+commit+done all OK)"},
+  "test_credentials": "admin@copro.be / admin123 (super admin, OK)",
+  "seed_data_creation": "Aucune. Le test bundle-commit a cree 1 facture TEST_Bundle_Supplier + 7 attachements 'bundle' sur factures existantes. Tous nettoyes a la fin (DELETE invoice TEST + pull attachments source=bundle). MongoDB clean.",
+  "retest_needed": true,
+  "main_agent_can_self_test": false,
+  "context_for_next_testing_agent": "L'endpoint /api/balance-tiers/owners est sous /api/reports/ (prefix). PCMN endpoint est /api/accounting/pcmn. Le bouton 'Importer un regroupement de PDFs' s'appelle data-testid='bundle-import-btn' sur /invoices. Pour tester le flow complet il FAUT setter localStorage.copropriete_id avant navigation /invoices (sinon API 400). PDF /tmp/regroupement.pdf = 87 pages, 14 invoices, parsing prend ~5s. Auto-match cree 7 attach automatiques (confidence>=0.65 sans PJ existante).",
+  "rca_of_the_issue": "Le script merge_cm_optipro_owners.py n'a pas supprime tous les comptes PCMN 40000XXX/40010XXX (tier_accounts). Probablement la query du script filtre sur is_tier_account ou un autre flag, mais 4 tier_accounts actifs subsistent. Reproduction: GET /api/accounting/pcmn?copropriete_id=b5f14232-34f5-4805-9b9e-ebd32ad8baa5 renvoie 40000005/40000008/40010005/40010008 (tous active=True, is_tier_account=True). Mitigation: re-executer script avec query corrigee OU script de cleanup specifique sur ces 4 comptes."
+}
