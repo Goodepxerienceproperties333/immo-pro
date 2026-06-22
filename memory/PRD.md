@@ -11,6 +11,59 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 ## Implemented
+### Iter72septies (Feb 2026) - Liste des depenses : dedup triplication + import OD year-end
+
+**Bugs rapportes** : "Corrige la liste depenses alors elle n'est pas bonne"
+- ACP Gaura : total API 33658.05 EUR vs PDF Optipro 33828.43 EUR (diff -170 EUR)
+- Compte 650 (Frais bancaires) montrait 894.96 EUR au lieu de 298.32 EUR (x3)
+
+**Root cause 1 - Triplication FI/OD/bank** :
+L'utilisateur avait clique 3 fois sur "commit-journals" pendant l'import. Chaque
+clic re-creait toutes les ecritures FI + bank_transactions + bank_statements :
+- 618 FI JE (au lieu de 206 unique)
+- 618 bank_transactions (au lieu de 197 unique)
+- 39 bank_statements (au lieu de 13 unique)
+
+**Root cause 2 - Entrees OD manquantes** :
+Le wizard ne gere que AC (achats) et FI (banque). Les ajustements de fin
+d'annee Optipro (charges a reporter, FAR, AGS write-offs, sinistres) ne sont
+PAS importes. Pour Gaura, 10 entrees OD totalisant +595.97 EUR (net) etaient
+absentes.
+
+**Fix 1** (`/app/backend/scripts/dedup_journal_entries.py` - permanent) :
+- Signature de dedup : `(date, reference, journal_type, sorted lines amounts)`
+- Garde le plus ancien par `created_at`, supprime les copies
+- Couvre AC/FI/OD + bank_transactions + bank_statements (signatures distinctes)
+- **Result Gaura** : 412 JE supprimees + 417 bank_txns + 26 bank_statements
+
+**Fix 2** (`/app/backend/scripts/add_gaura_year_end_od.py` - one-shot Gaura) :
+Cree 10 ecritures OD year-end avec contrepartie correcte :
+1. Annulation charges a reporter (Ascenseurs) +4141.40
+2. Charge a reporter ascenseurs 2026 -4234.26
+3. FAR ENGIE 10-12/2025 +512.00
+4. Nettoyage de bilan (AGS point 8) +7342.97
+5. Sinistre pompe de relevage - cloture -3183.65
+6. Rupture devidoir - remboursement partiel -5813.63
+7. Sinistre inondation pompe de relevage - cloture -562.67
+8. Sinistre rupture canalisation (2022) +4018.14
+9. Regularisation SIN 202200724 INONDATION -1298.25
+10. Imputation coproprietaire frais privatifs (643->410) -155.03
+
+**Result E2E (verifie par API)** :
+- ✅ **API total : 33,828.43 EUR** = PDF total **33,828.43 EUR** (diff +0.00)
+- ✅ **22/22 comptes match exactement** (61011, 61066, 61214, 66, 650, 643, etc.)
+- ✅ 109 lignes de depenses dans la vue (vs 147 avant dedup)
+- ✅ Cle "Charges communes" : 43/43 lots matched, total 10000.00
+
+**Note** : Les OD year-end utilisent des contreparties par defaut (499603,
+494001, 4990 Provisions sinistres, 410). L'utilisateur peut les re-categoriser
+dans la page Comptabilite si son syndic utilise d'autres comptes.
+
+**Fichiers** :
+- `/app/backend/scripts/dedup_journal_entries.py` (etendu avec bank dedup)
+- `/app/backend/scripts/add_gaura_year_end_od.py` (nouveau)
+
+
 ### Iter72sexies (Feb 2026) - Distribution keys schema unifie + lot matching + invoice distribution_lines recompute
 
 **Bugs rapportes** :
