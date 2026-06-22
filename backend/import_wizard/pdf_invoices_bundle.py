@@ -373,6 +373,27 @@ def _extract_invoice_metadata(pages_text: List[str], page_indices: List[int]) ->
                     total_amount = v
                     break
 
+    # SWDE-specific pattern : "Montant à payer X ( Y E" or "X E Y (" on a single line.
+    # X = HTVA in EUR, Y = TVA in EUR. TVAC = X + Y.
+    # This is the most reliable signal for SWDE invoices (always present on cover page).
+    swde_pattern_re = re.compile(
+        r"montant\s*à?\s*payer\s+"
+        r"(\d{1,3}(?:[ .]\d{3})*[,.]\d{2})\s*"
+        r"[E€]?\s*[(\[]?\s*"
+        r"(\d{1,3}(?:[ .]\d{3})*[,.]\d{2})\s*"
+        r"[(\[]?\s*[E€]?",
+        re.IGNORECASE,
+    )
+    for ln in lines:
+        m = swde_pattern_re.search(ln)
+        if m:
+            v1 = _parse_amount_str(m.group(1))
+            v2 = _parse_amount_str(m.group(2))
+            if _is_plausible_amount(v1) and v2 > 0 and v2 < v1:
+                # v1 = HTVA, v2 = TVA (TVA is always smaller than HTVA)
+                total_amount = round(v1 + v2, 2)
+                break
+
     # Fallback : take the LARGEST plausible amount (skip lines with TVA/BCE/IBAN/phone
     # AND tax breakdown rows)
     if total_amount < 0.01:
@@ -389,34 +410,57 @@ def _extract_invoice_metadata(pages_text: List[str], page_indices: List[int]) ->
         if all_amounts:
             total_amount = max(all_amounts)
 
-    # SWDE-style TVAC implicit detection : if we find a line "Total HTVA <X>" AND
-    # within 3 lines a "TVA <Y%> <Z>", the implicit TVAC = X + Z. Use it ONLY if
-    # the current total_amount equals X (i.e., we have wrongly picked HTVA).
+    # Generic TVAC implicit detection : if we find "Total HTVA <X>" and a TVA rate
+    # (e.g. "TVA 6,00%") nearby, compute TVAC = HTVA * (1 + rate/100).
+    # Skip if SWDE pattern already gave a correct answer.
     htva_amount = 0.0
+    tva_rate_pct = 0.0
     tva_amount = 0.0
     for i, ln in enumerate(lines):
         ln_low = ln.lower()
-        # Find "Total HTVA <amount>"
+        # Pattern : "Total HTVA <amount>" with value on the same line.
+        # Skip if the value is missing (e.g. broken layout "Total HTVA TVA" without amounts)
         if ("total htva" in ln_low or "totaal htva" in ln_low) and htva_amount < 0.01:
-            for m in AMOUNT_RE.finditer(ln):
-                v = _parse_amount_str(m.group(1))
-                if _is_plausible_amount(v):
-                    htva_amount = v  # take last
+            amounts_on_line = [
+                _parse_amount_str(m.group(1)) for m in AMOUNT_RE.finditer(ln)
+            ]
+            plausible = [v for v in amounts_on_line if 1.0 <= v <= 100000.0]
+            if plausible:
+                htva_amount = plausible[-1]  # Take last (rightmost = total column)
             if htva_amount > 0:
-                # Look for TVA amount in next 3 lines
-                for k in range(i, min(i + 5, len(lines))):
+                # Search next 5 lines for TVA rate or amount
+                for k in range(i, min(i + 6, len(lines))):
                     src = lines[k]
                     src_low = src.lower()
-                    # Match a line "TVA <pct>% <amount>" - the amount is the LAST on the line
-                    if re.search(r"\btva\b", src_low) and "%" in src:
+                    if re.search(r"\btva\b", src_low) or "tvac" in src_low:
+                        # Look for "X%" (TVA rate)
+                        rate_m = re.search(r"(\d{1,2}[,.]\d{2})\s*%", src)
+                        if rate_m and not tva_rate_pct:
+                            try:
+                                tva_rate_pct = float(rate_m.group(1).replace(",", "."))
+                            except ValueError:
+                                pass
+                        # Look for amounts on this line (excluding rate)
                         for m in AMOUNT_RE.finditer(src):
-                            v = _parse_amount_str(m.group(1))
-                            if _is_plausible_amount(v) and v < htva_amount:  # TVA < HTVA
-                                tva_amount = v  # take last
-                        break
-                if tva_amount > 0 and abs(total_amount - htva_amount) < 0.5:
-                    # We had picked the HTVA as total. Replace with HTVA + TVA.
-                    total_amount = round(htva_amount + tva_amount, 2)
+                            raw = m.group(1)
+                            # Skip if this number is the rate (ends with % sign)
+                            end = m.end()
+                            if end < len(src) and src[end:end + 2].strip().startswith("%"):
+                                continue
+                            v = _parse_amount_str(raw)
+                            if 0.01 < v < htva_amount and not tva_amount:
+                                tva_amount = v
+                                break
+                # Compute TVAC if HTVA is right but no proper TVAC detected
+                # Only use this fallback if total_amount equals HTVA (we wrongly picked HTVA)
+                computed_tvac = 0.0
+                if tva_amount > 0:
+                    computed_tvac = htva_amount + tva_amount
+                elif tva_rate_pct > 0:
+                    computed_tvac = round(htva_amount * (1 + tva_rate_pct / 100), 2)
+                if computed_tvac > 0 and abs(total_amount - htva_amount) < 0.5:
+                    total_amount = round(computed_tvac, 2)
+                break
 
     return {
         "page_range": page_indices,
