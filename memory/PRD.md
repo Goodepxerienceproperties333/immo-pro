@@ -11,51 +11,90 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 ## Implemented
-### Iter72quater (Feb 2026) - Restauration des 4 proprietaires Optipro + Dedup suppliers ACP "import"
+### Iter72quinquies (Feb 2026) - PDF Bilan parser : reconnaissance des comptes PCMN 2 chiffres
 
-**Bug rapporte** : sur ACP "import" (be6e826c), les 4 proprietaires Optipro
-(LENOTRE-MANSART / RUBENS-RENOIR / VELASQUEZ-GOYA / RAPHAEL-MICHEL ANGE) ont
-"disparu" de la Balance de Tiers + la liste des proprietaires de l'ACP.
+**Bug rapporte** : a l'import d'un Bilan comptable Optipro au 31/12/2024, l'etape 8/8 (OD d'ouverture) affichait un desequilibre de 25.46 EUR :
+- Total Actif : 23 981.64
+- Total Passif : 23 956.18 (manque 25.46)
+- Bilan correct dans Optipro.
 
-**Root cause analysis** :
-1. Le script `dedup_owners.py` de iter72ter avait supprime 704 doublons mais
-   garde 3 versions des 4 owners principaux (canonical + 2 dupes avec
-   `auxiliary_code=null` au lieu de "" -> queries de dedup les ont rate).
-2. Les 4 owners canoniques (aux C0960..C0963) avaient `copropriete_ids=[]`
-   ET aucun `lots.owner_id` rempli dans cette ACP -> invisibles via le
-   endpoint `list_owners` (qui resoud les owners via `lots.distinct("owner_id")`).
-3. Pareil cote suppliers : 22 codes F0XXX en 4 versions chacun (88 supplier docs)
-   -> balance-tiers split entre comptes Optipro (4400XXX) et CM (44000XXX).
+**Root cause** : le regex d'ancres du parser `parse_balance_pdf` filtrait les
+comptes a 3-7 chiffres (`^\d{3,7}$`). Le compte PCMN `14 - Résultat exercice`
+(2 chiffres) etait donc ignore. Les bilans belges PCMN incluent regulierement
+des comptes de classe 1 a 2 chiffres : `10 Capital`, `13 Reserves`,
+`14 Résultat reporte`, `15 Subsides en capital`, `16 Provisions`.
 
-**Fix data (scripts permanents `/app/backend/scripts/`)** :
+**Fix** (`/app/backend/import_wizard/pdf_utils.py::parse_balance_pdf`) :
+- Regex d'ancres : `^\d{3,7}$` -> `^\d{2,7}$`
+- Anti-faux-positif : un compte a 2 chiffres ne peut JAMAIS etre un
+  sous-compte (`is_sub`). Ca evite que des fragments d'amounts comme `10`
+  (issus de `10 262,39`) soient pris pour des ancres.
 
-`fix_owners_import_acp.py` :
-- Supprime les 4 doublons doubles-names ("LENOTRE-MANSART LENOTRE-MANSART"...).
-- Merge les 4 doublons mono-name (aux=null) dans le canonical via remap des
-  refs (journal_entries, lots, bank_txns, fund_calls).
-- Rattache les 4 appartements (`number='Lots Le Nôtre-Mansart'`, etc.) aux
-  4 owners canoniques via `owner_id` + `owner_ids`.
-- Ajoute ACP "import" dans `copropriete_ids` des 4 canoniques.
+**Result E2E (verifie par API)** :
+- Bilan 31/12/2024 (FINLEAD PROPERTIES) : Total Actif 23 981.64 = Total Passif 23 981.64 (equilibre)
+- 10 entrees Actif + 23 entrees Passif (dont `14 - Résultat exercice : 25,46`)
+- Regression test : `/app/backend/tests/test_iter72_bilan_2digit.py` (2 tests)
 
-`dedup_suppliers.py` :
-- Groupe par `auxiliary_code` upper-case.
-- Choisit canonical = supplier avec tier Optipro 4400XXX (6 chars), sinon fallback.
-- Merge `tier_accounts.{ACP}.aliases` avec les Optipro accs des dupes.
-- Remap JE lines (third_party_id + rewrite account 44000XXX -> 4400XXX si
-  ecart entre tier CM et tier Optipro).
-- Remap invoices, bank_transactions.
-- Delete les 66 supplier docs surnumeraires (22 x 3).
+**Fichiers** :
+- `/app/backend/import_wizard/pdf_utils.py` (regex + filtre is_sub)
+- `/app/backend/tests/test_iter72_bilan_2digit.py` (nouveau)
 
-**Result E2E (api `/api/reports/balance-tiers`)** :
-- Owners : 4 lignes uniques, Total deb 3682.05 EUR / Total cred 5940.52 EUR.
-- Suppliers : 10 lignes uniques (au lieu de 12 split), Total a payer 828.07 EUR.
-- 0 doublon, 0 owner orphelin, 0 supplier split entre 2 comptes tier.
+### Iter72quater (Feb 2026) - Restauration des refs owners orphelines apres dedup trop aggressif + Restoration ACP TER
+
+**Bug rapporte (escalation)** : meme apres le fix de l'ACP "import", l'utilisateur
+exporte la Balance des tiers de l'ACP **TER** en Excel et constate :
+- 60 proprietaires liste avec colonnes vides (Total appele, Total paye)
+- Les 4 proprietaires Optipro (LENOTRE-MANSART, RUBENS-RENOIR, VELASQUEZ-GOYA,
+  RAPHAEL-MICHEL ANGE) sont TOUJOURS ABSENTS de TER.
+
+**Root cause (decouverte critique)** : le script `dedup_owners.py` (iter72ter)
+avait supprime les copies ACP-specifiques de chaque owner. Le PDF Optipro avait
+ete importe 3 fois (dans les ACPs "import", "BIS" et "TER"), creant 3 instances
+de chaque owner (UUID different mais meme aux_code). Le dedup en a garde UN seul
+(celui de "import") et a supprime les 2 autres -> ACPs BIS et TER se sont
+retrouvees avec des `lots.owner_id` et `journal_entries.lines.third_party_id`
+pointant vers des owner_id supprimes (orphelins).
+
+**Symptome** : 12 orphan tpids dans les JE de TER (4 owners + 4 suppliers pour
+le AN d'ouverture) + 4 orphan lots (les 4 appartements Optipro). Le endpoint
+`list_owners` ne resoud les owners que via `lots.distinct("owner_id")` -> avec
+des owner_ids invalides, seuls les 60 vrais proprietaires de TER apparaissaient,
+les 4 Optipro etaient invisibles.
+
+**Fix data (script permanent `restore_orphan_owner_refs.py`)** :
+1. Pour chaque ACP, scan des `lots` et `journal_entries.lines` pour detecter les
+   `owner_id` / `third_party_id` orphelins (ID inexistant en DB).
+2. Mapping orphelin -> canonical via :
+   - **Lots** : `lot.number` (ex. "Lots Le Nôtre-Mansart" -> aux C0960 canonical)
+   - **JE lines** : `account_number` (ex. `4100960` -> owner C0960, `4400471` -> supplier F0471)
+3. Update des references en place :
+   - `lots.owner_id` + `owner_ids` -> canonical id
+   - `JE.lines.third_party_id` + `third_party_type` -> canonical id
+4. Pour chaque ACP, ensure `owner.copropriete_ids` contient l'ACP +
+   `tier_accounts[ACP].provisions` est configure (derive de l'aux_code :
+   `C0960` -> `4100960`).
+
+**Result E2E (apres restore)** :
+- **ACP "import"** : 4 owners (Optipro), Total deb 3682.05 / cred 5940.52 EUR ✅
+- **ACP "TER"** : 64 owners (60 existants + 4 Optipro relinkees), Total deb 3682.05 /
+  cred 5940.52 EUR + suppliers 9 unique, Total a payer 10843.07 EUR ✅
+- **ACP "BIS"** : 0 owners (vide, AN sans tpid -> normal) ✅
+- 4 lots relinkees + 8 JE lines relinkees + 69 copropriete_ids additions + 13 tier_accounts configures
+
+**Lecons apprises (regle critique pour futurs dedups)** :
+- **NE JAMAIS dedup-er les owners par aux_code GLOBAL** sans verifier que les
+  copies ne sont pas ACP-specifiques (chaque ACP doit avoir SA copie d'un owner
+  Optipro si l'import a ete fait dans chaque ACP separement).
+- Alternative correcte : dedup PAR ACP (grouper par `auxiliary_code` ET
+  `tier_accounts[ACP_id]` existant) pour ne jamais effacer une copie utilisee
+  par une autre ACP.
+- Le `restore_orphan_owner_refs.py` est utilisable a la demande si une telle
+  situation se reproduit.
 
 **Fichiers de reference** :
-- `/app/backend/scripts/fix_owners_import_acp.py` (nouveau)
-- `/app/backend/scripts/dedup_suppliers.py` (nouveau)
-- `/app/backend/routes/properties.py::list_owners` (logique inchangee)
-- `/app/backend/routes/reports.py::balance_tiers_owners` (logique inchangee)
+- `/app/backend/scripts/fix_owners_import_acp.py`
+- `/app/backend/scripts/dedup_suppliers.py`
+- `/app/backend/scripts/restore_orphan_owner_refs.py` (nouveau - critique)
 
 
 ### Iter72ter (Feb 2026) - Budget parser v2 (multi-pages) + Reprise comptable + Lettrage auto + Banking names

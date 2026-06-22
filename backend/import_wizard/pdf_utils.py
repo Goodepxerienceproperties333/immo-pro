@@ -1135,7 +1135,7 @@ def parse_balance_pdf(raw: bytes) -> dict:
     import re
     info = {"actif": [], "passif": [], "total_actif": 0.0, "total_passif": 0.0,
             "balanced": False, "period_end_date": ""}
-    account_re = re.compile(r"^\d{3,7}$")
+    account_re = re.compile(r"^\d{2,7}$")
     amount_word_re = re.compile(r"^-?[\d.,]+$")
 
     def _join_amount(words: list[dict]) -> float:
@@ -1199,6 +1199,12 @@ def parse_balance_pdf(raw: bytes) -> dict:
                     is_sub = w["x0"] > 60
                 else:
                     is_sub = w["x0"] > 435
+                # 2-digit accounts (e.g. "14 - Resultat exercice", "10 - Capital")
+                # are ONLY ever main accounts. Reject if found in a sub-account
+                # x-position to avoid false positives from amount fragments
+                # (e.g. "10" inside "10 262,39" amount).
+                if len(w["text"]) == 2 and is_sub:
+                    continue
                 anchors.append((w["top"], w["x0"], side, w["text"], w, is_sub))
 
             # Group anchors by (side, top) - one row per side at each Y position
