@@ -82,7 +82,7 @@ export default function ImportWizardPage() {
   const [invoicesParsed, setInvoicesParsed] = useState([]);
   const [journalsParsed, setJournalsParsed] = useState([]);
   const [balanceParsed, setBalanceParsed] = useState({ actif: [], passif: [], total_actif: 0, total_passif: 0, balanced: false, period_end_date: '' });
-  const [odEntriesParsed, setOdEntriesParsed] = useState({ entries: [], total_count: 0, total_amount: 0, period_start: '', period_end: '' });
+  const [odEntriesParsed, setOdEntriesParsed] = useState({ format: '', entries: [], total_count: 0, total_amount: 0, period_start: '', period_end: '' });
   // For 'csv_or_pdf' steps : tracks which mode the user picked for THIS step
   // (resets on every step change / file reset).
   const [uploadMode, setUploadMode] = useState(null);  // null | 'csv' | 'pdf'
@@ -129,7 +129,7 @@ export default function ImportWizardPage() {
     setInvoicesParsed([]);
     setJournalsParsed([]);
     setBalanceParsed({ actif: [], passif: [], total_actif: 0, total_passif: 0, balanced: false, period_end_date: '' });
-    setOdEntriesParsed({ entries: [], total_count: 0, total_amount: 0, period_start: '', period_end: '' });
+    setOdEntriesParsed({ format: '', entries: [], total_count: 0, total_amount: 0, period_start: '', period_end: '' });
     try {
       const fd = new FormData();
       fd.append('file', file);
@@ -161,17 +161,26 @@ export default function ImportWizardPage() {
           });
         }
         if (step.key === 'od_entries') {
-          // Pre-fill chosen_counterpart with suggested values (high-confidence only)
-          const entries = (r.data.entries || []).map(e => ({
-            ...e,
-            counterpart_account: e.suggested_counterpart?.confidence === 'high'
-              ? (e.suggested_counterpart?.account || '')
-              : '',
-            counterpart_account_name: e.suggested_counterpart?.confidence === 'high'
-              ? (e.suggested_counterpart?.account_name || '')
-              : '',
-          }));
+          // Branch by format. Journal OD : entries already have explicit lines
+          // + included flag set by the parser. Liste des depenses : pre-fill
+          // counterpart with high-confidence suggestions.
+          const format = r.data.format || 'expense_list';
+          let entries;
+          if (format === 'od_journal') {
+            entries = (r.data.entries || []).map(e => ({ ...e }));
+          } else {
+            entries = (r.data.entries || []).map(e => ({
+              ...e,
+              counterpart_account: e.suggested_counterpart?.confidence === 'high'
+                ? (e.suggested_counterpart?.account || '')
+                : '',
+              counterpart_account_name: e.suggested_counterpart?.confidence === 'high'
+                ? (e.suggested_counterpart?.account_name || '')
+                : '',
+            }));
+          }
           setOdEntriesParsed({
+            format,
             entries,
             total_count: r.data.total_count || 0,
             total_amount: r.data.total_amount || 0,
@@ -310,7 +319,7 @@ export default function ImportWizardPage() {
         setInvoicesParsed([]);
         setJournalsParsed([]);
         setBalanceParsed({ actif: [], passif: [], total_actif: 0, total_passif: 0, balanced: false, period_end_date: '' });
-        setOdEntriesParsed({ entries: [], total_count: 0, total_amount: 0, period_start: '', period_end: '' });
+        setOdEntriesParsed({ format: '', entries: [], total_count: 0, total_amount: 0, period_start: '', period_end: '' });
         setUploadMode(null);
       } else {
         // Final step : finish
