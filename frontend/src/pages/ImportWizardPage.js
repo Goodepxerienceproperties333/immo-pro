@@ -276,12 +276,24 @@ export default function ImportWizardPage() {
           ((m.owners_linked || m.suppliers_linked) ? ` - ${m.owners_linked} owner(s) + ${m.suppliers_linked} fournisseur(s) lies via auxiliary_code` : '')
         );
       } else if (step.key === 'od_entries') {
-        // Pre-flight : every entry MUST have a counterpart selected
-        const missing = (odEntriesParsed.entries || []).filter(e => !(e.counterpart_account || '').trim());
-        if (missing.length > 0) {
-          toast.error(`${missing.length} ecriture(s) sans contrepartie. Definissez le compte de contrepartie pour chaque ligne avant validation.`);
-          setCommitting(false);
-          return;
+        const isJournalOd = odEntriesParsed.format === 'od_journal';
+        if (isJournalOd) {
+          // Format Journal OD : entries have explicit balanced lines, no counterpart needed.
+          // Pre-flight : at least one entry must be included.
+          const includedCount = (odEntriesParsed.entries || []).filter(e => e.included).length;
+          if (includedCount === 0) {
+            toast.error('Aucune ecriture cochee. Cochez au moins une ecriture a importer.');
+            setCommitting(false);
+            return;
+          }
+        } else {
+          // Format Liste des depenses : every included entry MUST have a counterpart.
+          const missing = (odEntriesParsed.entries || []).filter(e => !(e.counterpart_account || '').trim());
+          if (missing.length > 0) {
+            toast.error(`${missing.length} ecriture(s) sans contrepartie. Definissez le compte de contrepartie pour chaque ligne avant validation.`);
+            setCommitting(false);
+            return;
+          }
         }
         r = await api.post(`/import-wizard/sessions/${session.id}/commit-od-entries`, {
           entries: odEntriesParsed.entries,
@@ -289,7 +301,7 @@ export default function ImportWizardPage() {
         const m = r.data;
         toast.success(
           `${m.inserted} ecriture(s) OD year-end creee(s)` +
-          (m.skipped ? ` - ${m.skipped} ignoree(s) (doublons)` : '') +
+          (m.skipped ? ` - ${m.skipped} ignoree(s) (${isJournalOd ? 'doublons ou exclues' : 'doublons'})` : '') +
           (m.pcmn_created ? ` - ${m.pcmn_created} compte(s) PCMN auto-ajoutes` : '')
         );
         if (m.errors?.length) {

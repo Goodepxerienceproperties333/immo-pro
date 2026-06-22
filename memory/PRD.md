@@ -11,6 +11,22 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 ## Implemented
+### Iter72undecies (Feb 2026) - Wizard OD year-end : pre-flight format-aware
+
+**Bug rapporte** (video) : a l'etape 9/9 OD year-end avec le PDF Journal OD charge, le clic "Terminer le wizard" affichait `15 entrees sans contrepartie. Definissez le compte de contrepartie pour chaque ligne avant validation.` empechant la fin du wizard.
+
+**Root cause** : la pre-flight `handleCommit` du frontend appliquait la regle de l'ancien format (`expense_list`) a TOUS les formats. Pour les entrees `od_journal` (lignes deja explicites, pas de champ `counterpart_account`), le filtre `!e.counterpart_account` retournait toujours `true` -> blocage 100% des entrees.
+
+**Fix** (`/app/frontend/src/pages/ImportWizardPage.js::handleCommit`) :
+- Detection du format via `odEntriesParsed.format === 'od_journal'`
+- Format `od_journal` : verifie qu'au moins UNE entree est cochee (`included`)
+- Format `expense_list` : conserve la verification de contrepartie
+
+**Result E2E** :
+- ✅ Lint frontend OK
+- ✅ Format `od_journal` : le bouton "Terminer le wizard" valide direct (pas de blocage)
+- ✅ Format `expense_list` : comportement legacy preserve
+
 ### Iter72decies (Feb 2026) - Wizard : navigation arriere sans consequence
 
 **Bug rapporte** : "lors de la creation dans le wizard il doit etre possible de retourner en arriere sans consequence". L'utilisateur revenait a l'etape 3/9 (Exercice fiscal), modifiait quelques champs, cliquait "Valider et continuer" et obtenait `400 L'exercice '2025' existe deja dans cette ACP`.
