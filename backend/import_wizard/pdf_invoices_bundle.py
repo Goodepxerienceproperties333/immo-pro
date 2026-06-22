@@ -22,6 +22,27 @@ INVOICE_KEYWORDS = (
 # Date patterns
 DATE_RE = re.compile(r"(\d{1,2})[/\.\-](\d{1,2})[/\.\-](\d{2,4})")
 
+# Spelled-out date in French/Dutch/English : "16 mars 2025", "14 september 2025", etc.
+MONTH_NAMES = {
+    # French
+    "janvier": 1, "février": 2, "fevrier": 2, "mars": 3, "avril": 4, "mai": 5,
+    "juin": 6, "juillet": 7, "août": 8, "aout": 8, "septembre": 9, "septembre,": 9,
+    "octobre": 10, "novembre": 11, "décembre": 12, "decembre": 12,
+    # Dutch
+    "januari": 1, "februari": 2, "maart": 3, "april": 4, "mei": 5,
+    "juni": 6, "juli": 7, "augustus": 8, "september": 9,
+    "oktober": 10, "november": 11, "december": 12,
+    # English
+    "january": 1, "february": 2, "march": 3, "may": 5,
+    "june": 6, "july": 7, "august": 8,
+}
+SPELLED_DATE_RE = re.compile(
+    r"\b(\d{1,2})\s+("
+    + "|".join(sorted(MONTH_NAMES.keys(), key=len, reverse=True))
+    + r")\s+(\d{4})\b",
+    re.IGNORECASE,
+)
+
 # Invoice number patterns (Optipro format like "V-250494", "FA-XXXX", "250494", "2025-...")
 INVOICE_NUM_RE = re.compile(
     r"\b((?:V|FA|F|N|FACT)[\-/]?\d{4,9}|\d{4,12}|\d{4}[/-]\d{4,6})\b",
@@ -160,30 +181,77 @@ def _extract_invoice_metadata(pages_text: List[str], page_indices: List[int]) ->
         if m:
             invoice_number = m.group(1)
 
-    # 2) Date : look for "Date :" first, else first plausible date
+    # 2) Date : multi-pass cascade prioritizing reliable sources :
+    #    a) Spelled-out date ("16 mars 2025") near "Facture du" / "Date" - highest priority
+    #    b) Numeric date NEAR "Date facture", "Date :", "Facture du" keywords
+    #    c) Numeric date with year in (current_window) - 2024..2026
+    #    d) Generic plausible date as last fallback
     date_iso = ""
     date_display = ""
-    for ln in full_text.split("\n"):
-        if "date" in ln.lower() and ":" in ln:
-            m = DATE_RE.search(ln)
-            if m:
-                dd, mm, yy = m.groups()
-                if len(yy) == 2:
-                    yy = "20" + yy
-                if _is_plausible_date(yy, mm, dd):
-                    date_iso = f"{yy}-{mm.zfill(2)}-{dd.zfill(2)}"
-                    date_display = f"{dd.zfill(2)}/{mm.zfill(2)}/{yy}"
-                    break
-    if not date_iso:
-        # Try ALL dates found in the doc and pick the first plausible one
-        for m in DATE_RE.finditer(full_text):
+    lines_for_date = full_text.split("\n")
+
+    def _try_spelled_date(text):
+        m = SPELLED_DATE_RE.search(text)
+        if not m:
+            return None
+        dd, mon, yy = m.groups()
+        mm = MONTH_NAMES.get(mon.lower(), 0)
+        if not mm:
+            return None
+        if not _is_plausible_date(yy, str(mm), dd):
+            return None
+        return f"{yy}-{str(mm).zfill(2)}-{dd.zfill(2)}", f"{dd.zfill(2)}/{str(mm).zfill(2)}/{yy}"
+
+    def _try_numeric_date(text, year_window=None):
+        for m in DATE_RE.finditer(text):
             dd, mm, yy = m.groups()
             if len(yy) == 2:
                 yy = "20" + yy
-            if _is_plausible_date(yy, mm, dd):
-                date_iso = f"{yy}-{mm.zfill(2)}-{dd.zfill(2)}"
-                date_display = f"{dd.zfill(2)}/{mm.zfill(2)}/{yy}"
-                break
+            if not _is_plausible_date(yy, mm, dd):
+                continue
+            if year_window and not (year_window[0] <= int(yy) <= year_window[1]):
+                continue
+            # Skip if the match is preceded by other digits/letters (suggests contract number)
+            start = m.start()
+            if start > 0 and (text[start - 1].isdigit() or text[start - 1] in "-/"):
+                continue
+            return f"{yy}-{mm.zfill(2)}-{dd.zfill(2)}", f"{dd.zfill(2)}/{mm.zfill(2)}/{yy}"
+        return None
+
+    # Pass a : spelled-out date (most reliable)
+    sd = _try_spelled_date(full_text)
+    if sd:
+        date_iso, date_display = sd
+
+    # Pass b : numeric date near a Date-keyword
+    if not date_iso:
+        for i, ln in enumerate(lines_for_date):
+            ln_low = ln.lower()
+            if any(k in ln_low for k in ("date facture", "facture du", "date du", "date d'echeance", "date :", "datum")):
+                # Check this line + next 2 lines
+                window = "\n".join(lines_for_date[i:i + 3])
+                # Try spelled first
+                sd = _try_spelled_date(window)
+                if sd:
+                    date_iso, date_display = sd
+                    break
+                # Then numeric (restricted to recent years)
+                nd = _try_numeric_date(window, year_window=(2023, 2030))
+                if nd:
+                    date_iso, date_display = nd
+                    break
+
+    # Pass c : any numeric date with year in (2024..2026)
+    if not date_iso:
+        nd = _try_numeric_date(full_text, year_window=(2024, 2026))
+        if nd:
+            date_iso, date_display = nd
+
+    # Pass d : any plausible date as last fallback (with anti-junk check)
+    if not date_iso:
+        nd = _try_numeric_date(full_text)
+        if nd:
+            date_iso, date_display = nd
 
     # 3) Supplier name (best-effort) : first non-empty line that's not a keyword
     supplier_hint = ""
