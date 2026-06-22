@@ -573,6 +573,35 @@ def _page_invoice_signature(page_text: str) -> dict:
     }
 
 
+def _extract_doc_ref(text: str) -> str:
+    """Extract document reference from patterns like 'N°Document. 118 151 370 475'
+    or 'Numéro de facture 117 022 008 316' (used in Engie/utility PDFs)."""
+    for m in re.finditer(
+        r"(?:n[°o]\.?\s*document|num[ée]ro\s+(?:de\s+)?(?:facture|document|note\s+de\s+cr[ée]dit)|note\s+de\s+cr[ée]dit\s+du)\s*[:.\s]*([\d\s/-]{6,30})",
+        text[:1500].lower(),
+    ):
+        ref = re.sub(r"[^\d\s]", "", m.group(1)).strip()
+        if ref and len(re.sub(r"\s", "", ref)) >= 6:
+            return ref
+    return ""
+
+
+def _extract_credit_note_ref(text: str) -> str:
+    """Extract the invoice number from a "Détail note de crédit <NNN>" or
+    "Détail facture <NNN>" header. Returns the number or empty string.
+
+    Supports multi-block numbers with spaces like "118 151 370 475".
+    """
+    m = re.search(
+        r"(?:détail\s+(?:note\s+de\s+cr[ée]dit|facture)|detail\s+(?:note\s+de\s+credit|facture))\s+"
+        r"(\d{1,4}(?:[\s/-]+\d{2,5}){0,5})",
+        text[:500].lower(),
+    )
+    if m:
+        return re.sub(r"[^\d\s]", "", m.group(1)).strip()
+    return ""
+
+
 def _split_into_invoice_blocks(page_texts: List[str]) -> List[List[int]]:
     """Smart segmentation : returns list of (list of 0-based page indices), each = 1 invoice.
 
@@ -588,6 +617,8 @@ def _split_into_invoice_blocks(page_texts: List[str]) -> List[List[int]]:
     blocks: List[List[int]] = []
     current: List[int] = []
     prev_sig = None
+    prev_credit_ref = ""  # "Détail note de crédit <N>" or "N°Document <N>" from a previous page
+    block_doc_refs: List[str] = []  # All doc refs found in the current block
 
     for idx, text in enumerate(page_texts):
         if _is_empty_page(text):
@@ -595,13 +626,31 @@ def _split_into_invoice_blocks(page_texts: List[str]) -> List[List[int]]:
                 blocks.append(current)
                 current = []
             prev_sig = None
+            prev_credit_ref = ""
+            block_doc_refs = []
             continue
 
         sig = _page_invoice_signature(text)
         head = "\n".join(text.split("\n")[:5]).lower()
         is_continuation = False
 
-        if current and prev_sig is not None:
+        # Strong signal : "Détail note de crédit/facture <N>" continuing the previous page
+        credit_ref = _extract_credit_note_ref(text)
+        doc_ref = _extract_doc_ref(text)
+        if current and credit_ref:
+            # Compare with previous credit_ref OR any doc_ref/inv_num seen in the block
+            if prev_credit_ref and _ref_similar(credit_ref, prev_credit_ref):
+                is_continuation = True
+            else:
+                for ref in block_doc_refs:
+                    if _ref_similar(credit_ref, ref):
+                        is_continuation = True
+                        break
+                if not is_continuation and prev_sig and prev_sig.get("inv_num"):
+                    if _ref_similar(credit_ref, prev_sig["inv_num"]):
+                        is_continuation = True
+
+        if not is_continuation and current and prev_sig is not None:
             # Strong continuation : "Page 2/Y", "Page 3/Y" etc. at top
             if re.search(r"^\s*page\s+[2-9]\s*[/de\\]", head, re.MULTILINE):
                 is_continuation = True
@@ -621,13 +670,9 @@ def _split_into_invoice_blocks(page_texts: List[str]) -> List[List[int]]:
             else:
                 # Page has a header (Facture/Note/Comptabilise) ->
                 # Check if it's a new invoice or just a stamp on a continuation.
-                # Same supplier (BCE) + same invoice number + same date -> continuation
-                # Different ANY signal -> new invoice
                 same_bce = sig["bce"] and prev_sig["bce"] and sig["bce"] == prev_sig["bce"]
                 same_inv = sig["inv_num"] and prev_sig["inv_num"] and sig["inv_num"] == prev_sig["inv_num"]
                 same_date = sig["date_iso"] and prev_sig["date_iso"] and sig["date_iso"] == prev_sig["date_iso"]
-                # All 3 must match for continuation. Otherwise it's a new invoice
-                # of the same supplier (very common in Optipro bundles).
                 if same_bce and same_inv and same_date:
                     is_continuation = True
                 elif same_bce and same_inv and not sig["date_iso"]:
@@ -640,11 +685,32 @@ def _split_into_invoice_blocks(page_texts: List[str]) -> List[List[int]]:
             if current:
                 blocks.append(current)
             current = [idx]
+            block_doc_refs = []
         prev_sig = sig
+        if credit_ref:
+            prev_credit_ref = credit_ref
+        if doc_ref:
+            block_doc_refs.append(doc_ref)
+        if sig.get("inv_num"):
+            block_doc_refs.append(sig["inv_num"])
 
     if current:
         blocks.append(current)
     return blocks
+
+
+def _ref_similar(a: str, b: str) -> bool:
+    """True if two invoice/credit refs are similar (after normalizing spaces/dashes)."""
+    na = re.sub(r"[^\d]", "", a)
+    nb = re.sub(r"[^\d]", "", b)
+    if not na or not nb:
+        return False
+    if na == nb:
+        return True
+    # endswith / startswith with at least 6 common digits
+    if len(na) >= 6 and len(nb) >= 6 and (na.endswith(nb) or nb.endswith(na) or na in nb or nb in na):
+        return True
+    return False
 
 
 def match_invoice(extracted: Dict, candidates: List[Dict]) -> Optional[Dict]:
