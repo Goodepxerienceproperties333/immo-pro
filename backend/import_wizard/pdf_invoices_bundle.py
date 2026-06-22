@@ -43,6 +43,54 @@ def _is_empty_page(text: str) -> bool:
     return len(cleaned) < 30
 
 
+def _parse_amount_str(s: str) -> float:
+    """Parse a number string detected by AMOUNT_RE.
+
+    Belgian format ("1.234,56") -> dot is thousands separator, comma is decimal.
+    US format ("1234.56") -> dot is decimal.
+    Plain ("1234,56") -> comma is decimal.
+    Returns 0.0 if the string is implausible.
+    """
+    s = s.strip().replace(" ", "")
+    if "," in s:
+        # BE / FR : remove thousand dots, then convert comma to dot
+        s = s.replace(".", "").replace(",", ".")
+    # else: US format, keep as-is (already valid "1234.56" -> 1234.56)
+    try:
+        return float(s)
+    except ValueError:
+        return 0.0
+
+
+def _is_plausible_amount(v: float) -> bool:
+    return 0.01 <= v <= 100000.0
+
+
+def _is_plausible_date(yy: str, mm: str, dd: str) -> bool:
+    """Validate date components from regex match."""
+    try:
+        y, m, d = int(yy), int(mm), int(dd)
+    except (ValueError, TypeError):
+        return False
+    if y < 2000 or y > 2035:
+        return False
+    if m < 1 or m > 12:
+        return False
+    if d < 1 or d > 31:
+        return False
+    return True
+
+
+def _line_looks_like_tva_or_id(ln: str) -> bool:
+    """True if the line contains a VAT/BCE/IBAN/phone marker that would make
+    its numbers unsuitable as invoice amount."""
+    low = ln.lower()
+    return any(k in low for k in (
+        "tva", "bce", "vat", "iban", "bic", "siret", "siren", "tel", "tél",
+        "n° entreprise", "numero entreprise", "n° de référence", "compte bancaire",
+    ))
+
+
 def _extract_invoice_metadata(pages_text: List[str], page_indices: List[int]) -> Dict:
     """From a list of consecutive page texts (one invoice block), extract metadata."""
     full_text = "\n".join(pages_text)
@@ -71,17 +119,20 @@ def _extract_invoice_metadata(pages_text: List[str], page_indices: List[int]) ->
                 dd, mm, yy = m.groups()
                 if len(yy) == 2:
                     yy = "20" + yy
-                date_iso = f"{yy}-{mm.zfill(2)}-{dd.zfill(2)}"
-                date_display = f"{dd.zfill(2)}/{mm.zfill(2)}/{yy}"
-                break
+                if _is_plausible_date(yy, mm, dd):
+                    date_iso = f"{yy}-{mm.zfill(2)}-{dd.zfill(2)}"
+                    date_display = f"{dd.zfill(2)}/{mm.zfill(2)}/{yy}"
+                    break
     if not date_iso:
-        m = DATE_RE.search(full_text)
-        if m:
+        # Try ALL dates found in the doc and pick the first plausible one
+        for m in DATE_RE.finditer(full_text):
             dd, mm, yy = m.groups()
             if len(yy) == 2:
                 yy = "20" + yy
-            date_iso = f"{yy}-{mm.zfill(2)}-{dd.zfill(2)}"
-            date_display = f"{dd.zfill(2)}/{mm.zfill(2)}/{yy}"
+            if _is_plausible_date(yy, mm, dd):
+                date_iso = f"{yy}-{mm.zfill(2)}-{dd.zfill(2)}"
+                date_display = f"{dd.zfill(2)}/{mm.zfill(2)}/{yy}"
+                break
 
     # 3) Supplier name (best-effort) : first non-empty line that's not a keyword
     supplier_hint = ""
@@ -116,36 +167,42 @@ def _extract_invoice_metadata(pages_text: List[str], page_indices: List[int]) ->
 
     # 5) Total amount (look for "Total TVAC", "Montant TTC", "Total" near end)
     total_amount = 0.0
-    # Search last 25 lines for total
-    lines_lower = [ln.lower() for ln in full_text.split("\n")]
+    lines = full_text.split("\n")
+    lines_lower = [ln.lower() for ln in lines]
     for i, ln_lower in enumerate(lines_lower):
-        if any(kw in ln_lower for kw in ("total tvac", "total ttc", "montant tvac", "total tvac €", "total tvac e",
-                                         "total ttc €", "total ttc e", "total à payer", "a payer", "net a payer")):
-            # find amount in this line or the next 2 lines
-            for j in range(i, min(i + 3, len(lines_lower))):
-                src = full_text.split("\n")[j]
+        if any(kw in ln_lower for kw in (
+            "total tvac", "total ttc", "montant tvac", "total tvac €", "total tvac e",
+            "total ttc €", "total ttc e", "total à payer", "a payer", "net a payer",
+            "total a payer", "montant ttc",
+        )):
+            # find amount in this line or the next 2 lines, skipping TVA/BCE lines
+            for j in range(i, min(i + 3, len(lines))):
+                src = lines[j]
+                if _line_looks_like_tva_or_id(src):
+                    continue
                 ms = AMOUNT_RE.findall(src)
                 if ms:
-                    # Take the LAST number on the line (rightmost = total)
-                    amt_str = ms[-1].replace(" ", "").replace(".", "").replace(",", ".")
-                    try:
-                        total_amount = float(amt_str)
-                    except ValueError:
-                        pass
+                    # Take the LAST plausible number on the line (rightmost = total)
+                    for cand in reversed(ms):
+                        v = _parse_amount_str(cand)
+                        if _is_plausible_amount(v):
+                            total_amount = v
+                            break
                     if total_amount > 0:
                         break
             if total_amount > 0:
                 break
 
-    # Fallback : take the LARGEST amount in the doc as total
+    # Fallback : take the LARGEST plausible amount (skip lines with TVA/BCE/IBAN/phone)
     if total_amount < 0.01:
         all_amounts = []
-        for m in AMOUNT_RE.finditer(full_text):
-            s = m.group(1).replace(" ", "").replace(".", "").replace(",", ".")
-            try:
-                all_amounts.append(float(s))
-            except ValueError:
+        for j, ln in enumerate(lines):
+            if _line_looks_like_tva_or_id(ln):
                 continue
+            for m in AMOUNT_RE.finditer(ln):
+                v = _parse_amount_str(m.group(1))
+                if _is_plausible_amount(v):
+                    all_amounts.append(v)
         if all_amounts:
             total_amount = max(all_amounts)
 

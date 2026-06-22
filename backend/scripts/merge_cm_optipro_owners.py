@@ -184,5 +184,40 @@ async def main():
     print(f"Fund calls remapped : {total_fund_calls_remapped}")
     print(f"PCMN CM accounts deleted : {total_pcmn_deleted}")
 
+    # 8. Final cleanup pass : remove stale CM-style PCMN parent accounts
+    # (40000X, 40010X, 400000, 400100) that have ZERO journal references and
+    # ZERO owner references. These are placeholders that linger after the merge.
+    print(f"\n=== Final cleanup : stale CM placeholder accounts ===")
+    total_stale_deleted = 0
+    async for cop in db.coproprietes.find({}, {"_id": 0, "id": 1, "name": 1}):
+        ACP = cop["id"]
+        # Find all CM-style accounts in this ACP
+        async for a in db.pcmn_accounts.find(
+            {"copropriete_id": ACP,
+             "$or": [
+                 {"number": {"$regex": "^40000"}},
+                 {"number": {"$regex": "^40010"}},
+                 {"number": "400000"},
+                 {"number": "400100"},
+             ]},
+            {"_id": 0, "number": 1, "is_tier_account": 1, "active": 1}
+        ):
+            n_je = await db.journal_entries.count_documents({
+                "copropriete_id": ACP, "lines.account_number": a["number"],
+            })
+            n_owner = await db.owners.count_documents({
+                f"tier_accounts.{ACP}.provisions": a["number"],
+            })
+            n_owner_r = await db.owners.count_documents({
+                f"tier_accounts.{ACP}.reserve": a["number"],
+            })
+            if n_je == 0 and n_owner == 0 and n_owner_r == 0:
+                await db.pcmn_accounts.delete_one({
+                    "copropriete_id": ACP, "number": a["number"],
+                })
+                print(f"  [{ACP[:8]}] deleted stale account {a['number']}")
+                total_stale_deleted += 1
+    print(f"Stale placeholder accounts deleted : {total_stale_deleted}")
+
 
 asyncio.run(main())
