@@ -83,12 +83,27 @@ def _is_plausible_date(yy: str, mm: str, dd: str) -> bool:
 
 def _line_looks_like_tva_or_id(ln: str) -> bool:
     """True if the line contains a VAT/BCE/IBAN/phone marker that would make
-    its numbers unsuitable as invoice amount."""
+    its numbers unsuitable as invoice amount.
+
+    Uses word boundaries to avoid false positive on "TVAC" (which contains "tva").
+    """
     low = ln.lower()
-    return any(k in low for k in (
-        "tva", "bce", "vat", "iban", "bic", "siret", "siren", "tel", "tél",
-        "n° entreprise", "numero entreprise", "n° de référence", "compte bancaire",
-    ))
+    # Word-boundary checks to avoid matching inside "tvac" / "tvas" etc.
+    bad_patterns = [
+        r"\btva[\s:.]",       # "TVA :" "TVA."  but NOT "tvac"
+        r"n[°o]\s*tva",        # "N° TVA"
+        r"\bbce\b",
+        r"\bvat\b",
+        r"\biban\b",
+        r"\bbic\b",
+        r"\bsiret\b", r"\bsiren\b",
+        r"\btel[\s:.]", r"\bt[ée]l[\s:.]",
+        r"n[°o] entreprise", r"numero entreprise",
+        r"n[°o] de r[ée]f[ée]rence",
+        r"compte bancaire",
+        r"\bBE\s*\d{2}\s*\d{4}",  # IBAN-like Belgian: BE70 8601 ...
+    ]
+    return any(re.search(p, low) for p in bad_patterns)
 
 
 def _extract_invoice_metadata(pages_text: List[str], page_indices: List[int]) -> Dict:
@@ -241,18 +256,9 @@ def parse_invoice_bundle(raw: bytes) -> dict:
             page_texts.append(t)
             page_is_empty.append(_is_empty_page(t))
 
-    # Group consecutive non-empty pages into "blocks" (each block = 1 invoice)
-    blocks_pages: List[List[int]] = []
-    current: List[int] = []
-    for idx, empty in enumerate(page_is_empty):
-        if empty:
-            if current:
-                blocks_pages.append(current)
-                current = []
-        else:
-            current.append(idx)
-    if current:
-        blocks_pages.append(current)
+    # SMART SEGMENTATION : split into invoice blocks using signature heuristics
+    # (instead of just "consecutive non-empty pages")
+    blocks_pages = _split_into_invoice_blocks(page_texts)
 
     # Extract metadata from each block
     for pi_list in blocks_pages:
@@ -278,16 +284,143 @@ def extract_block_pdf(raw: bytes, page_range_1based: List[int]) -> bytes:
     return buf.getvalue()
 
 
+def _page_invoice_signature(page_text: str) -> dict:
+    """Extract per-page identifying signals (BCE, invoice number, date, totals).
+    Used to decide if a page starts a new invoice or continues the previous one."""
+    if not page_text:
+        return {"bce": "", "inv_num": "", "date_iso": "", "has_header": False}
+    head = "\n".join(page_text.split("\n")[:25])
+    bce_m = re.search(r"BE\s*0\s*\d{3}[\s.]?\d{3}[\s.]?\d{3}", page_text)
+    bce = bce_m.group(0).replace(" ", "").replace(".", "") if bce_m else ""
+
+    # Invoice number near "Facture", "Réf", "Date" — best-effort
+    inv_num = ""
+    for ln in head.split("\n"):
+        ln_low = ln.lower()
+        if any(k in ln_low for k in ("référence", "reference", "n° facture", "facture n", "v-", "n°facture")):
+            m = INVOICE_NUM_RE.search(ln)
+            if m:
+                inv_num = m.group(1)
+                break
+    if not inv_num:
+        # Look for a "DDMMYY" date followed by an invoice number pattern (common in Optipro tables)
+        m = re.search(r"\b(\d{6,9}|\d{4}/\d{2,6})\b", head)
+        if m:
+            inv_num = m.group(1)
+
+    # Date (try multiple formats)
+    date_iso = ""
+    for m in DATE_RE.finditer(page_text):
+        dd, mm, yy = m.groups()
+        if len(yy) == 2:
+            yy = "20" + yy
+        if _is_plausible_date(yy, mm, dd):
+            date_iso = f"{yy}-{mm.zfill(2)}-{dd.zfill(2)}"
+            break
+
+    # Has invoice header keywords?
+    head_low = head.lower()
+    has_facture = "facture" in head_low or "invoice" in head_low
+    has_credit_note = "note de cré" in head_low or "note credit" in head_low or "note de credit" in head_low
+    has_stamp = bool(re.search(r"comptabilis[ée]\s*le", head_low))
+    has_header = has_facture or has_credit_note or has_stamp
+
+    return {
+        "bce": bce, "inv_num": inv_num, "date_iso": date_iso,
+        "has_header": has_header, "has_facture": has_facture,
+        "has_credit_note": has_credit_note, "has_stamp": has_stamp,
+    }
+
+
+def _split_into_invoice_blocks(page_texts: List[str]) -> List[List[int]]:
+    """Smart segmentation : returns list of (list of 0-based page indices), each = 1 invoice.
+
+    Strategy:
+      - Empty pages are separators (never included in a block)
+      - Each non-empty page is normally a NEW invoice (Optipro tends to use 1 page = 1 invoice)
+      - A page is treated as a CONTINUATION of the previous invoice if :
+        * It has no invoice header (no "Facture", "Note de credit", "Comptabilise")
+        * AND it has no new BCE different from previous page's BCE
+        * AND it has no new invoice number / different date
+        * OR it explicitly contains "Page X/Y" with X >= 2
+    """
+    blocks: List[List[int]] = []
+    current: List[int] = []
+    prev_sig = None
+
+    for idx, text in enumerate(page_texts):
+        if _is_empty_page(text):
+            if current:
+                blocks.append(current)
+                current = []
+            prev_sig = None
+            continue
+
+        sig = _page_invoice_signature(text)
+        head = "\n".join(text.split("\n")[:5]).lower()
+        is_continuation = False
+
+        if current and prev_sig is not None:
+            # Strong continuation : "Page 2/Y", "Page 3/Y" etc. at top
+            if re.search(r"^\s*page\s+[2-9]\s*[/de\\]", head, re.MULTILINE):
+                is_continuation = True
+            elif "page 2/" in head or "page 3/" in head or "page 4/" in head or "page 5/" in head:
+                is_continuation = True
+            elif not sig["has_header"]:
+                # No invoice header on this page
+                if sig["bce"] and prev_sig["bce"] and sig["bce"] == prev_sig["bce"]:
+                    # Same supplier, no new header -> continuation
+                    is_continuation = True
+                elif not sig["bce"] and not sig["inv_num"]:
+                    # No identifying info -> continuation
+                    is_continuation = True
+                elif sig["inv_num"] and prev_sig["inv_num"] and sig["inv_num"] == prev_sig["inv_num"]:
+                    # Same invoice number -> continuation
+                    is_continuation = True
+            else:
+                # Page has a header (Facture/Note/Comptabilise) ->
+                # Check if it's a new invoice or just a stamp on a continuation.
+                # Same supplier (BCE) + same invoice number + same date -> continuation
+                # Different ANY signal -> new invoice
+                same_bce = sig["bce"] and prev_sig["bce"] and sig["bce"] == prev_sig["bce"]
+                same_inv = sig["inv_num"] and prev_sig["inv_num"] and sig["inv_num"] == prev_sig["inv_num"]
+                same_date = sig["date_iso"] and prev_sig["date_iso"] and sig["date_iso"] == prev_sig["date_iso"]
+                # All 3 must match for continuation. Otherwise it's a new invoice
+                # of the same supplier (very common in Optipro bundles).
+                if same_bce and same_inv and same_date:
+                    is_continuation = True
+                elif same_bce and same_inv and not sig["date_iso"]:
+                    # No date on this page but same supplier+invoice number
+                    is_continuation = True
+
+        if is_continuation:
+            current.append(idx)
+        else:
+            if current:
+                blocks.append(current)
+            current = [idx]
+        prev_sig = sig
+
+    if current:
+        blocks.append(current)
+    return blocks
+
+
 def match_invoice(extracted: Dict, candidates: List[Dict]) -> Optional[Dict]:
     """Match an extracted invoice against existing invoices in DB.
 
     Cascade : exact invoice number > supplier+amount > supplier+date > best amount/date guess.
     Returns the best matching candidate with `match_confidence` and `match_method`.
+
+    NEW: when matching by invoice_number, also verify the amount is plausible
+    (within 5% or 1 EUR). Otherwise downgrade to lower confidence.
     """
     if not candidates:
         return None
 
-    # Pass 1 : exact invoice number match
+    extracted_amount = float(extracted.get("total_amount") or 0)
+
+    # Pass 1 : exact invoice number match (+ amount sanity)
     inv_num = (extracted.get("invoice_number") or "").strip().lower()
     if inv_num and len(inv_num) >= 4:
         for cand in candidates:
@@ -297,12 +430,32 @@ def match_invoice(extracted: Dict, candidates: List[Dict]) -> Optional[Dict]:
                 str(cand.get("invoice_number") or "").lower(),
             ]
             for cn in cand_nums:
-                if cn and (cn == inv_num or cn.endswith(inv_num) or inv_num.endswith(cn)):
-                    return {**cand, "match_confidence": 0.95, "match_method": "invoice_number"}
+                if not cn:
+                    continue
+                # Strict equality OR strong endswith (at least 5 chars matching at the end)
+                match = False
+                if cn == inv_num:
+                    match = True
+                elif len(inv_num) >= 5 and (cn.endswith(inv_num) or inv_num.endswith(cn)):
+                    # Only accept endswith if the matching suffix is at least 5 chars
+                    common_len = min(len(cn), len(inv_num))
+                    if common_len >= 5:
+                        match = True
+                if match:
+                    cand_amount = float(cand.get("total_amount") or 0)
+                    # Amount sanity check
+                    if extracted_amount > 0 and cand_amount > 0:
+                        amt_diff = abs(cand_amount - extracted_amount)
+                        if amt_diff < 0.5 or amt_diff / max(cand_amount, 0.01) < 0.05:
+                            return {**cand, "match_confidence": 0.95, "match_method": "invoice_number"}
+                        # invoice number matches but amount differs by > 5% -> downgrade
+                        return {**cand, "match_confidence": 0.55, "match_method": "invoice_number_amount_mismatch"}
+                    # No extracted amount -> still accept by invoice_number
+                    return {**cand, "match_confidence": 0.85, "match_method": "invoice_number"}
 
     # Pass 2 : supplier name + total amount (within 1 cent)
     supplier_hint = (extracted.get("supplier_hint") or "").lower().strip()
-    amount = float(extracted.get("total_amount") or 0)
+    amount = extracted_amount
     if supplier_hint and amount > 0:
         best = None
         for cand in candidates:
