@@ -11,6 +11,34 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 ## Implemented
+### Iter72decies (Feb 2026) - Wizard : navigation arriere sans consequence
+
+**Bug rapporte** : "lors de la creation dans le wizard il doit etre possible de retourner en arriere sans consequence". L'utilisateur revenait a l'etape 3/9 (Exercice fiscal), modifiait quelques champs, cliquait "Valider et continuer" et obtenait `400 L'exercice '2025' existe deja dans cette ACP`.
+
+**Root cause** : chaque endpoint `commit-XXX` du wizard creait des records DB. Retour en arriere + re-validation = doublon -> rejet backend. La conception ne supportait pas un workflow back-and-forth.
+
+**Fix backend** (`commit-fiscal-year`) :
+- Idempotence ciblee par session : si un fiscal year avec le meme nom existe deja pour cette ACP et qu'il a ete cree par CETTE session (`import_session_id`), on update les dates/status et on retourne `{id, name, idempotent: true}` au lieu de lever 400.
+- Une vraie collision avec une AUTRE session leve toujours 400 (protege contre l'ecrasement involontaire).
+
+**Fix frontend** (`ImportWizardPage.js` footer) :
+- Detection auto : `stepAlreadyDone = !!(session.steps[step.key].count > 0 || inserted > 0 || fiscal_year_id)`
+- Si l'etape est deja validee ET aucun nouveau fichier upload :
+  - Affiche un bouton **vert** "Etape deja validee - Continuer ->" qui passe a l'etape suivante SANS commit
+  - L'utilisateur peut cliquer "Annuler ce fichier" pour repartir et re-valider fresh
+- Sinon, comportement normal (Valider et continuer)
+- Le bouton "Etape precedente" reinit aussi l'etat `odEntriesParsed` (oubli precedent qui fuyait entre etapes)
+
+**Result E2E (verifie via API)** :
+- ✅ 1er commit fiscal-year : `{id: "1ecfe6cd", name: "2025"}`
+- ✅ 2eme commit (back+forward) : `{id: "1ecfe6cd", name: "2025", idempotent: true}` SAME ID
+- ✅ Le bouton frontend devient vert "Etape deja validee" quand on revient sur une etape complete
+- ✅ Lint frontend OK
+
+**Fichiers** :
+- `/app/backend/routes/import_wizard.py::commit_fiscal_year` (idempotence par session)
+- `/app/frontend/src/pages/ImportWizardPage.js` (logique conditionnelle du bouton primary)
+
 ### Iter72nonies (Feb 2026) - Support du PDF "Journal OD" Optipro (format optimal) + correctif crash UI
 
 **Probleme** : a l'upload du PDF "Journal comptable OD" (le bon document Optipro), la page crashait avec

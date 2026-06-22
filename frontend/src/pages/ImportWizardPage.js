@@ -536,28 +536,55 @@ export default function ImportWizardPage() {
 
       {/* Footer */}
       <div className="flex items-center justify-between mt-4">
-        <Button variant="outline" size="sm" disabled={stepIdx === 0} onClick={() => { setStepIdx(stepIdx - 1); setSniffResult(null); setMapping({}); setNaturesParsed([]); setSuppliersParsed([]); setInvoicesParsed([]); setJournalsParsed([]); setBalanceParsed({ actif: [], passif: [], total_actif: 0, total_passif: 0, balanced: false, period_end_date: '' }); setUploadMode(null); }} data-testid="prev-step">
+        <Button variant="outline" size="sm" disabled={stepIdx === 0} onClick={() => { setStepIdx(stepIdx - 1); setSniffResult(null); setMapping({}); setNaturesParsed([]); setSuppliersParsed([]); setInvoicesParsed([]); setJournalsParsed([]); setBalanceParsed({ actif: [], passif: [], total_actif: 0, total_passif: 0, balanced: false, period_end_date: '' }); setOdEntriesParsed({ format: '', entries: [], total_count: 0, total_amount: 0, period_start: '', period_end: '' }); setUploadMode(null); }} data-testid="prev-step">
           <ChevronLeft size={14} className="mr-1" /> Etape precedente
         </Button>
         <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={() => { setSniffResult(null); setMapping({}); setNaturesParsed([]); setSuppliersParsed([]); setInvoicesParsed([]); setJournalsParsed([]); setBalanceParsed({ actif: [], passif: [], total_actif: 0, total_passif: 0, balanced: false, period_end_date: '' }); setUploadMode(null); }} data-testid="reset-step">
+          <Button variant="outline" size="sm" onClick={() => { setSniffResult(null); setMapping({}); setNaturesParsed([]); setSuppliersParsed([]); setInvoicesParsed([]); setJournalsParsed([]); setBalanceParsed({ actif: [], passif: [], total_actif: 0, total_passif: 0, balanced: false, period_end_date: '' }); setOdEntriesParsed({ format: '', entries: [], total_count: 0, total_amount: 0, period_start: '', period_end: '' }); setUploadMode(null); }} data-testid="reset-step">
             <X size={14} className="mr-1" /> Annuler ce fichier
           </Button>
-          {step.optional && stepIdx < STEPS.length - 1 && (
-            <Button variant="outline" size="sm" onClick={() => { setStepIdx(stepIdx + 1); setSniffResult(null); }} data-testid="skip-step">
-              Passer cette etape
-            </Button>
-          )}
-          <Button
-            disabled={(step.kind === 'form' ? !fyForm.name : !sniffResult) || committing}
-            onClick={handleCommit}
-            className="bg-[#0055FF] hover:bg-[#0040CC]"
-            data-testid="commit-step"
-          >
-            {committing ? <><Loader2 size={14} className="animate-spin mr-1" /> Import...</> : (
-              stepIdx === STEPS.length - 1 ? <>Terminer le wizard <CheckCircle2 size={14} className="ml-1" /></> : <>Valider et continuer <ChevronRight size={14} className="ml-1" /></>
-            )}
-          </Button>
+          {(() => {
+            // Detect if the current step has already been validated by the
+            // session. If yes (and the user has not loaded a new file / changed
+            // the form), the click on the primary button should simply go to
+            // the next step WITHOUT re-running the commit (which would error
+            // out e.g. "L'exercice 2025 existe deja"). The user can still
+            // "Annuler ce fichier" to reset and re-validate fresh.
+            const stepData = session?.steps?.[step.key];
+            const stepAlreadyDone = !!(stepData?.count > 0 || stepData?.inserted > 0 || stepData?.fiscal_year_id);
+            const hasNewData = !!sniffResult;
+            if (stepAlreadyDone && !hasNewData && stepIdx < STEPS.length - 1) {
+              return (
+                <Button
+                  onClick={() => { setStepIdx(stepIdx + 1); setSniffResult(null); }}
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white"
+                  data-testid="next-step-validated"
+                  title="Etape deja validee - on passe a la suivante sans rejouer l'import."
+                >
+                  Etape deja validee &mdash; Continuer <ChevronRight size={14} className="ml-1" />
+                </Button>
+              );
+            }
+            if (step.optional && stepIdx < STEPS.length - 1 && !sniffResult && step.kind !== 'form') {
+              return (
+                <Button variant="outline" size="sm" onClick={() => { setStepIdx(stepIdx + 1); setSniffResult(null); }} data-testid="skip-step">
+                  Passer cette etape
+                </Button>
+              );
+            }
+            return (
+              <Button
+                disabled={(step.kind === 'form' ? !fyForm.name : !sniffResult) || committing}
+                onClick={handleCommit}
+                className="bg-[#0055FF] hover:bg-[#0040CC]"
+                data-testid="commit-step"
+              >
+                {committing ? <><Loader2 size={14} className="animate-spin mr-1" /> Import...</> : (
+                  stepIdx === STEPS.length - 1 ? <>Terminer le wizard <CheckCircle2 size={14} className="ml-1" /></> : <>Valider et continuer <ChevronRight size={14} className="ml-1" /></>
+                )}
+              </Button>
+            );
+          })()}
         </div>
       </div>
     </div>

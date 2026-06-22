@@ -1607,9 +1607,23 @@ def create_import_wizard_router(db):
             raise HTTPException(404, "Session introuvable")
         copro_id = session["copropriete_id"]
         await _require_acp_access(request, db, copro_id)
-        # Verifie qu'on n'a pas deja un exercice avec ce nom dans l'ACP
+        # Idempotence : if an exercice with this name already exists for this
+        # ACP, check whether it was created BY THIS SESSION. If yes, return it
+        # as-is (so user can navigate back-and-forth in the wizard without
+        # getting "L'exercice 2025 existe deja" errors). Otherwise it's a real
+        # conflict with a previous import.
         existing = await db.fiscal_years.find_one({"copropriete_id": copro_id, "name": data.name})
         if existing:
+            if existing.get("import_session_id") == session_id:
+                # Same session : update dates/status in case user edited the form
+                update = {
+                    "start_date": data.start_date,
+                    "end_date": data.end_date,
+                    "status": data.status or existing.get("status") or "open",
+                }
+                await db.fiscal_years.update_one({"id": existing["id"]}, {"$set": update})
+                await _update_step(db, session_id, "fiscal_year", {"count": 1, "fiscal_year_id": existing["id"]})
+                return {"id": existing["id"], "name": existing["name"], "idempotent": True}
             raise HTTPException(400, f"L'exercice '{data.name}' existe deja dans cette ACP")
         doc = {
             "id": str(uuid.uuid4()),
