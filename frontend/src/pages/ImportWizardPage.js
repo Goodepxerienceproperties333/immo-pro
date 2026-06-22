@@ -372,7 +372,7 @@ export default function ImportWizardPage() {
   }
 
   return (
-    <div data-testid="import-wizard-page" className="max-w-6xl mx-auto">
+    <div data-testid="import-wizard-page" className="max-w-[1600px] mx-auto px-4">
       {/* Header */}
       <div className="page-header flex items-center justify-between">
         <div>
@@ -893,16 +893,16 @@ function OdJournalPreview({ odData, setOdData }) {
         avec les factures AC + entrees AN deja importees.
       </div>
 
-      <div className="border border-slate-200 rounded overflow-x-auto max-h-[520px] overflow-y-auto">
-        <table className="w-full text-[11px]">
+      <div className="border border-slate-200 rounded overflow-x-auto max-h-[70vh] overflow-y-auto">
+        <table className="w-full text-xs">
           <thead className="bg-slate-50 sticky top-0">
             <tr>
-              <th className="px-2 py-1 text-center w-8">A importer</th>
-              <th className="px-2 py-1 text-left w-24">Date</th>
-              <th className="px-2 py-1 text-left w-16">Ref</th>
-              <th className="px-2 py-1 text-left">Description</th>
-              <th className="px-2 py-1 text-right w-24">Total D/C</th>
-              <th className="px-2 py-1 text-left w-24">Statut</th>
+              <th className="px-3 py-2 text-center w-20">A importer</th>
+              <th className="px-3 py-2 text-left w-28">Date</th>
+              <th className="px-3 py-2 text-left w-20">Ref</th>
+              <th className="px-3 py-2 text-left">Description</th>
+              <th className="px-3 py-2 text-right w-28">Total D/C</th>
+              <th className="px-3 py-2 text-left w-28">Statut</th>
             </tr>
           </thead>
           <tbody>
@@ -911,44 +911,45 @@ function OdJournalPreview({ odData, setOdData }) {
               return (
                 <Fragment key={i}>
                   <tr className={`border-t border-slate-100 ${!e.included ? 'bg-slate-50 text-slate-400' : ''}`} data-testid={`od-journal-row-${i}`}>
-                    <td className="px-2 py-0.5 text-center">
+                    <td className="px-3 py-1.5 text-center">
                       <input
                         type="checkbox"
                         checked={!!e.included}
                         onChange={() => toggleIncluded(i)}
                         disabled={!balanced}
+                        className="w-4 h-4"
                         data-testid={`od-include-${i}`}
                       />
                     </td>
-                    <td className="px-2 py-0.5 font-mono">{e.date_display || e.date}</td>
-                    <td className="px-2 py-0.5 font-mono text-[10px]">{e.reference}</td>
-                    <td className="px-2 py-0.5">
+                    <td className="px-3 py-1.5 font-mono">{e.date_display || e.date}</td>
+                    <td className="px-3 py-1.5 font-mono text-[11px]">{e.reference}</td>
+                    <td className="px-3 py-1.5">
                       {e.description}
                       {e.exclusion_reason && (
-                        <div className="text-[9px] text-amber-700 italic">⚠ {e.exclusion_reason}</div>
+                        <div className="text-[10px] text-amber-700 italic mt-0.5">⚠ {e.exclusion_reason}</div>
                       )}
                     </td>
-                    <td className="px-2 py-0.5 text-right font-mono">
+                    <td className="px-3 py-1.5 text-right font-mono font-semibold">
                       {(Number(e.total_debit) || 0).toFixed(2)}
                     </td>
-                    <td className="px-2 py-0.5">
+                    <td className="px-3 py-1.5">
                       {balanced ? (
-                        <span className="text-emerald-700 text-[10px]">✓ equilibree</span>
+                        <span className="text-emerald-700 text-[11px]">✓ equilibree</span>
                       ) : (
-                        <span className="text-red-700 text-[10px]">✗ desequilibree</span>
+                        <span className="text-red-700 text-[11px]">✗ desequilibree</span>
                       )}
                     </td>
                   </tr>
                   {/* Lines (indented, smaller) */}
                   {e.included && (e.lines || []).map((ln, li) => (
-                    <tr key={`${i}-${li}`} className="text-[10px] text-slate-600 bg-slate-50/30">
+                    <tr key={`${i}-${li}`} className="text-[11px] text-slate-600 bg-slate-50/30">
                       <td colSpan={2}></td>
-                      <td className="px-2 py-0 font-mono">{ln.account_number}</td>
-                      <td className="px-2 py-0">
+                      <td className="px-3 py-0.5 font-mono">{ln.account_number}</td>
+                      <td className="px-3 py-0.5">
                         {ln.account_name}
                         {ln.auxiliary_info && <span className="text-slate-400 ml-2">| {ln.auxiliary_info}</span>}
                       </td>
-                      <td className="px-2 py-0 text-right font-mono">
+                      <td className="px-3 py-0.5 text-right font-mono">
                         {ln.debit > 0 && <span className="text-slate-700">D {ln.debit.toFixed(2)}</span>}
                         {ln.credit > 0 && <span className="text-slate-700">C {ln.credit.toFixed(2)}</span>}
                       </td>
