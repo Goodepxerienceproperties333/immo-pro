@@ -398,7 +398,13 @@ def create_invoices_router(db):
         return attachment
 
     @router.get("/invoices/{invoice_id}/attachments/{attachment_id}/download")
-    async def download_invoice_attachment(invoice_id: str, attachment_id: str):
+    async def download_invoice_attachment(invoice_id: str, attachment_id: str, disposition: str = "attachment"):
+        """Stream the attachment file.
+
+        Query param `disposition`:
+          - `attachment` (default) : Content-Disposition: attachment (forces download)
+          - `inline` : Content-Disposition: inline (renders in browser viewer for PDF/PNG/JPG)
+        """
         inv = await db.invoices.find_one({"id": invoice_id}, {"_id": 0})
         if not inv:
             raise HTTPException(404, "Facture non trouvee")
@@ -407,8 +413,17 @@ def create_invoices_router(db):
                 path = att.get("stored_path", "")
                 if not path or not Path(path).exists():
                     raise HTTPException(404, "Fichier introuvable")
-                return FileResponse(path, media_type=att.get("mime_type", "application/pdf"),
-                                    filename=att.get("filename", "facture.pdf"))
+                filename = att.get("filename", "facture.pdf")
+                media_type = att.get("mime_type", "application/pdf")
+                if disposition == "inline":
+                    # Inline -> render in browser native viewer
+                    safe_name = filename.replace('"', "")
+                    return FileResponse(
+                        path,
+                        media_type=media_type,
+                        headers={"Content-Disposition": f'inline; filename="{safe_name}"'},
+                    )
+                return FileResponse(path, media_type=media_type, filename=filename)
         raise HTTPException(404, "Piece jointe non trouvee")
 
     @router.delete("/invoices/{invoice_id}/attachments/{attachment_id}")

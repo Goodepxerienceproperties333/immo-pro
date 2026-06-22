@@ -28,8 +28,11 @@ INVOICE_NUM_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Amount patterns (Belgian/French numbers : 1.234,56 or 1 234,56 or 1234.56)
-AMOUNT_RE = re.compile(r"(\d{1,3}(?:[ .]\d{3})*,\d{2}|\d+,\d{2}|\d+\.\d{2})")
+# Amount patterns (Belgian/French numbers : 1.234,56 or 1 234,56 or 1234.56).
+# We re-allow space as thousand separator since real invoices use it (e.g. AXA, Clean & Co).
+# Ambiguous cases ("1 249,58" = qty×price vs 1249.58) are handled at the caller level
+# by skipping lines that look like tax breakdown tables (contain % or 4+ numbers).
+AMOUNT_RE = re.compile(r"(\d{1,3}(?:[ .]\d{3})+,\d{2}|\d+,\d{2}|\d+\.\d{2})")
 
 # TVA number (Belgian) : BE 0XXX.XXX.XXX or BE 1XXX.XXX.XXX
 TVA_BE_RE = re.compile(r"\bBE\s*[01]\d{3}[ .]?\d{3}[ .]?\d{3}\b")
@@ -79,6 +82,39 @@ def _is_plausible_date(yy: str, mm: str, dd: str) -> bool:
     if d < 1 or d > 31:
         return False
     return True
+
+
+def _looks_like_tax_breakdown_row(ln: str) -> bool:
+    """True if the line looks like a TVA tax breakdown row OR a qty x price row.
+
+    Patterns covered :
+      - "21% rate row" : starts with "21 " followed by amounts (TVA breakdown)
+      - "qty x price" : has 2+ amounts AND a leading "X " (single small digit) before an amount
+    """
+    # Lines containing "%" -> almost always a TVA rate row
+    if "%" in ln:
+        return True
+    matches = list(AMOUNT_RE.finditer(ln))
+    if len(matches) < 2:
+        return False
+    stripped = ln.strip()
+    # Pattern : line starts with 1-2 digits + space + digits, with 2+ amounts -> tax row
+    if len(matches) >= 3 and re.match(r"^\d{1,2}\s+\d", stripped):
+        return True
+    # Pattern : the first amount has a "single small digit" prefix (e.g. "1 249,58")
+    # AND the same value appears WITHOUT prefix later in the line.
+    # This is the classic "quantity 1 x unit_price 249,58 = total 249,58" table row.
+    if len(matches) >= 2:
+        first_raw = matches[0].group(1)
+        # First amount has a " " (space) thousand sep AND starts with 1-2 digits before it
+        m = re.match(r"^(\d{1,2})\s+(\d{3},\d{2})$", first_raw)
+        if m:
+            qty_prefix, real_amount = m.groups()
+            # Is the real_amount present as a separate match later in the line?
+            for later in matches[1:]:
+                if later.group(1).strip() == real_amount:
+                    return True
+    return False
 
 
 def _line_looks_like_tva_or_id(ln: str) -> bool:
@@ -184,35 +220,60 @@ def _extract_invoice_metadata(pages_text: List[str], page_indices: List[int]) ->
     total_amount = 0.0
     lines = full_text.split("\n")
     lines_lower = [ln.lower() for ln in lines]
+    # Keywords sorted from most specific to most generic, with priorities.
+    # When a keyword matches, search the same line + next 4 lines for an amount.
+    # We prefer the LARGEST plausible amount found near the keyword (not just the last
+    # one on the line, because secondary numbers like VAT base may follow).
+    strong_keywords = (
+        "total tvac", "total ttc", "montant tvac", "montant ttc",
+        "total à payer", "total a payer", "net a payer",
+        "totaal / total", "totaal ttc", "totaal tvac",
+        "veuillez verser",
+        "total eur",
+    )
+    weak_keywords = ("a payer", "à payer", "totaal", "total ")
+
+    def _find_total_near(start_i):
+        """Scan lines [start_i .. start_i+4] for the LARGEST plausible amount,
+        skipping TVA/BCE/IBAN lines AND tax breakdown rows."""
+        best = 0.0
+        for j in range(start_i, min(start_i + 5, len(lines))):
+            src = lines[j]
+            if _line_looks_like_tva_or_id(src):
+                continue
+            if _looks_like_tax_breakdown_row(src):
+                continue
+            for m in AMOUNT_RE.finditer(src):
+                v = _parse_amount_str(m.group(1))
+                if _is_plausible_amount(v) and v > best:
+                    best = v
+        return best
+
+    # First pass : look for strong keywords (most reliable)
     for i, ln_lower in enumerate(lines_lower):
-        if any(kw in ln_lower for kw in (
-            "total tvac", "total ttc", "montant tvac", "total tvac €", "total tvac e",
-            "total ttc €", "total ttc e", "total à payer", "a payer", "net a payer",
-            "total a payer", "montant ttc",
-        )):
-            # find amount in this line or the next 2 lines, skipping TVA/BCE lines
-            for j in range(i, min(i + 3, len(lines))):
-                src = lines[j]
-                if _line_looks_like_tva_or_id(src):
-                    continue
-                ms = AMOUNT_RE.findall(src)
-                if ms:
-                    # Take the LAST plausible number on the line (rightmost = total)
-                    for cand in reversed(ms):
-                        v = _parse_amount_str(cand)
-                        if _is_plausible_amount(v):
-                            total_amount = v
-                            break
-                    if total_amount > 0:
-                        break
-            if total_amount > 0:
+        if any(kw in ln_lower for kw in strong_keywords):
+            v = _find_total_near(i)
+            if v > 0:
+                total_amount = v
                 break
 
-    # Fallback : take the LARGEST plausible amount (skip lines with TVA/BCE/IBAN/phone)
+    # Second pass : weak keywords if no strong match
+    if total_amount < 0.01:
+        for i, ln_lower in enumerate(lines_lower):
+            if any(kw in ln_lower for kw in weak_keywords):
+                v = _find_total_near(i)
+                if v > 0:
+                    total_amount = v
+                    break
+
+    # Fallback : take the LARGEST plausible amount (skip lines with TVA/BCE/IBAN/phone
+    # AND tax breakdown rows)
     if total_amount < 0.01:
         all_amounts = []
         for j, ln in enumerate(lines):
             if _line_looks_like_tva_or_id(ln):
+                continue
+            if _looks_like_tax_breakdown_row(ln):
                 continue
             for m in AMOUNT_RE.finditer(ln):
                 v = _parse_amount_str(m.group(1))

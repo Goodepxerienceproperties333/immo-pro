@@ -40,6 +40,7 @@ export default function InvoicesPage() {
   const [newCatDialog, setNewCatDialog] = useState(false);
   const [newCatForm, setNewCatForm] = useState({ name: '', account_number: '', description: '' });
   const [bundleDialog, setBundleDialog] = useState(false);
+  const [viewerAttachment, setViewerAttachment] = useState(null); // {url, filename}
   const fyParams = useFiscalYearParams();
 
   const load = useCallback(async () => {
@@ -799,18 +800,56 @@ export default function InvoicesPage() {
             <div className="space-y-1 max-h-64 overflow-y-auto">
               {(attachDialogInv?.attachments || []).length === 0 ? (
                 <div className="text-sm text-slate-400 text-center py-3">Aucune piece jointe</div>
-              ) : attachDialogInv.attachments.map((a) => (
-                <div key={a.id} className="flex items-center justify-between border rounded px-2 py-1.5 text-sm">
-                  <span className="truncate flex items-center gap-2"><Paperclip size={12} />{a.filename}</span>
-                  <div className="flex gap-1">
-                    <a href={`${API}/api/invoices/${attachDialogInv.id}/attachments/${a.id}/download`} target="_blank" rel="noreferrer">
-                      <Button variant="ghost" size="sm"><Download size={14} /></Button>
-                    </a>
-                    <Button variant="ghost" size="sm" className="text-red-500" onClick={() => deleteInvoiceAttachment(attachDialogInv.id, a.id)}><Trash2 size={14} /></Button>
+              ) : attachDialogInv.attachments.map((a) => {
+                const coproId = localStorage.getItem('copropriete_id') || '';
+                const inlineUrl = `${API}/api/invoices/${attachDialogInv.id}/attachments/${a.id}/download?disposition=inline&copropriete_id=${coproId}`;
+                const downloadUrl = `${API}/api/invoices/${attachDialogInv.id}/attachments/${a.id}/download?copropriete_id=${coproId}`;
+                return (
+                  <div key={a.id} className="flex items-center justify-between border rounded px-2 py-1.5 text-sm">
+                    <button
+                      type="button"
+                      className="truncate flex items-center gap-2 text-left text-blue-600 hover:text-blue-800 hover:underline cursor-pointer"
+                      onClick={() => setViewerAttachment({ url: inlineUrl, filename: a.filename })}
+                      data-testid={`view-attachment-${a.id}`}
+                    >
+                      <Paperclip size={12} />{a.filename}
+                    </button>
+                    <div className="flex gap-1">
+                      <a href={downloadUrl} target="_blank" rel="noreferrer" title="Telecharger">
+                        <Button variant="ghost" size="sm"><Download size={14} /></Button>
+                      </a>
+                      <Button variant="ghost" size="sm" className="text-red-500" onClick={() => deleteInvoiceAttachment(attachDialogInv.id, a.id)}><Trash2 size={14} /></Button>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* PDF / Image viewer modal */}
+      <Dialog open={!!viewerAttachment} onOpenChange={(o) => { if (!o) setViewerAttachment(null); }}>
+        <DialogContent className="max-w-6xl w-[95vw] h-[92vh] p-0 flex flex-col overflow-hidden" data-testid="attachment-viewer">
+          <DialogHeader className="px-4 py-2 border-b">
+            <DialogTitle className="text-sm font-medium flex items-center justify-between gap-2 pr-8">
+              <span className="truncate flex items-center gap-2"><Paperclip size={14} />{viewerAttachment?.filename}</span>
+              {viewerAttachment && (
+                <a href={viewerAttachment.url.replace('disposition=inline', 'disposition=attachment')} target="_blank" rel="noreferrer">
+                  <Button variant="outline" size="sm" data-testid="viewer-download-btn"><Download size={14} className="mr-1" /> Télécharger</Button>
+                </a>
+              )}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="flex-1 bg-slate-100 overflow-hidden">
+            {viewerAttachment && (
+              <iframe
+                src={viewerAttachment.url}
+                title={viewerAttachment.filename}
+                className="w-full h-full border-0"
+                data-testid="viewer-iframe"
+              />
+            )}
           </div>
         </DialogContent>
       </Dialog>

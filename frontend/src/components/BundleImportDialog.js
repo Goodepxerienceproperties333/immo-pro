@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import api from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -17,13 +17,30 @@ import { fmtDate } from '@/lib/dateFmt';
  */
 export default function BundleImportDialog({
   open, onOpenChange,
-  invoices, distKeys, categories, accounts,
+  invoices: invoicesProp, distKeys, categories, accounts,
   onSuccess,
 }) {
   const [step, setStep] = useState('idle'); // idle | analyzing | review | committing | done
   const [bundleResult, setBundleResult] = useState(null);
   const [assignments, setAssignments] = useState({}); // block_id -> {mode, invoice_id, invoice_data, expanded}
   const [commitResult, setCommitResult] = useState(null);
+  const [allInvoices, setAllInvoices] = useState([]);
+
+  // Load ALL invoices for the ACP when dialog opens (ignore fiscal year filter)
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data } = await api.get('/invoices', { params: { all: true } });
+        if (!cancelled) setAllInvoices(data || []);
+      } catch {
+        // Fallback to prop
+        if (!cancelled) setAllInvoices(invoicesProp || []);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [open, invoicesProp]);
 
   const reset = () => {
     setStep('idle'); setBundleResult(null); setAssignments({}); setCommitResult(null);
@@ -152,8 +169,8 @@ export default function BundleImportDialog({
   };
 
   const sortedInvoices = useMemo(() => {
-    return [...(invoices || [])].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
-  }, [invoices]);
+    return [...(allInvoices || [])].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  }, [allInvoices]);
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
@@ -285,30 +302,35 @@ export default function BundleImportDialog({
                         </td>
                         <td className="p-2">
                           {a.mode === 'attach' && (
-                            <Select
-                              value={a.invoice_id || ''}
-                              onValueChange={v => updateAssignment(b.block_id, { invoice_id: v })}
-                            >
-                              <SelectTrigger className="h-7 text-[11px]" data-testid={`bundle-invoice-select-${b.block_id}`}>
-                                <SelectValue placeholder="Choisir une facture..." />
-                              </SelectTrigger>
-                              <SelectContent>
-                                {sortedInvoices.length === 0 && (
-                                  <div className="p-2 text-xs text-slate-400">Aucune facture en base</div>
-                                )}
-                                {sortedInvoices.map(inv => (
-                                  <SelectItem key={inv.id} value={inv.id}>
-                                    <span className="font-mono text-[10px] text-slate-500">{fmtDate(inv.date)}</span>
-                                    {' - '}
-                                    <span className="font-mono">{inv.number}</span>
-                                    {' - '}
-                                    <span>{inv.supplier}</span>
-                                    <span className="text-slate-400"> ({Number(inv.total_amount || 0).toFixed(2)}E)</span>
-                                    {(inv.attachments?.length || 0) > 0 && <span className="text-red-500"> [PJ]</span>}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
+                            <div className="space-y-1">
+                              {a.invoice_id && (() => {
+                                const cur = sortedInvoices.find(inv => inv.id === a.invoice_id);
+                                return cur ? (
+                                  <div className="text-[11px] text-emerald-700 font-medium">
+                                    {fmtDate(cur.date)} - {cur.number} - {cur.supplier}
+                                    {' '}<span className="text-slate-400">({Number(cur.total_amount || 0).toFixed(2)}E)</span>
+                                  </div>
+                                ) : null;
+                              })()}
+                              <Select
+                                value={a.invoice_id || ''}
+                                onValueChange={v => updateAssignment(b.block_id, { invoice_id: v })}
+                              >
+                                <SelectTrigger className="h-7 text-[11px]" data-testid={`bundle-invoice-select-${b.block_id}`}>
+                                  <SelectValue placeholder="-- Changer de facture --" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {sortedInvoices.length === 0 && (
+                                    <div className="p-2 text-xs text-slate-400">Aucune facture en base</div>
+                                  )}
+                                  {sortedInvoices.map(inv => (
+                                    <SelectItem key={inv.id} value={inv.id}>
+                                      {fmtDate(inv.date)} - {inv.number} - {inv.supplier} ({Number(inv.total_amount || 0).toFixed(2)}E){(inv.attachments?.length || 0) > 0 ? ' [PJ]' : ''}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            </div>
                           )}
                           {a.mode === 'create' && (
                             <CreateInvoiceMini

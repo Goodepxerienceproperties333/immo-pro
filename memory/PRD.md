@@ -11,6 +11,54 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 ## Implemented
+### Iter72quatuordecies (Feb 2026) - Bundle PDF Invoices + Viewer + Cleanup Gaura
+
+**Tasks completed in this iteration**:
+
+1. **Cleanup Gaura ACP (script `gaura_remediation_execute.py`)**:
+   - Phase A: deleted 3 test owners (ALEXIS Jean-Pierre, GRAMME GILLES, Wauthier-Catinus) + cascade (88 JE FI, 6 PCMN accounts)
+   - Phase A: merged 5 remaining CM/Optipro duplicate owners (BERNARD, Heremans, Ferdinande, Leyder, Dubuisson) - 28 JE lines migrated
+   - Phase B: merged 9 SPRL Marougrav records (2024/525, 13.75-13.76 EUR each) into 1 record (123.78 EUR)
+   - Phase B: merged 4 SRL Finlead pairs (each had 2 records: principal 1269.06/1142.16 + admin fee 165) into 1 record (1434.06 or 1307.16)
+   - Result: 75 -> **63 invoices** matching official Optipro "Factures fournisseurs" PDF list
+
+2. **Bundle PDF Invoice Import**:
+   - Backend `/app/backend/import_wizard/pdf_invoices_bundle.py`: Smart segmentation using per-page signatures (BCE/TVA, invoice number, date) to split concatenated invoices. Detection robustness: 14 -> 33 invoice blocks on Gaura "Regroupement.pdf" (87 pages). Match cascade: exact n° -> supplier+amount -> supplier+date -> amount-only fallback. 21 strong auto-matches (>=85% confidence).
+   - Parser fixes:
+     - Belgian thousand separator "." vs space: allow space but skip qty x price tax-breakdown table rows
+     - Date sanity: reject month > 12 or year < 2000 or year > 2035
+     - Amount sanity: reject > 100,000 EUR (avoid BCE/TVA numbers as amounts)
+     - Invoice number match amount cross-check: downgrade confidence to 0.55 if amount differs > 5%
+   - Backend `/api/invoices/bundle-analyze` + `/api/invoices/bundle-commit`: 2-step flow (analyze + review + commit)
+   - Frontend `/app/frontend/src/components/BundleImportDialog.js`: Full UI with table review, per-block actions (attach/create/skip), auto-mode based on confidence. `[deja PJ]` warning when target invoice already has attachment (safety against duplicates)
+   - Bundle commit: extracts pages from session PDF (saved in `/app/uploads/invoice_attachments/_bundles/<session_id>/`), creates 1 attachment per block with `source=bundle`
+
+3. **PDF List Parser (compare/diagnostic tool)**:
+   - `/app/backend/import_wizard/pdf_supplier_invoice_list.py` parses the official Optipro "Factures fournisseurs" tabular PDF (63 invoices in 5 pages with HT/TVAC allocations). Used for DB reconciliation diagnostics.
+
+4. **Attachment Viewer (PDF/Image)**:
+   - Backend: `/api/invoices/{id}/attachments/{att_id}/download?disposition=inline` returns `Content-Disposition: inline` for browser native viewer rendering
+   - Default `disposition=attachment` (legacy) forces download
+   - Frontend (`InvoicesPage.js`): Attachment filename is now a clickable link (blue, hover underline). Click opens a wide modal (`max-w-6xl h-[92vh]`) with iframe pointing to inline URL. Download button still available alongside.
+   - Verified via curl: HTTP 200, Content-Type application/pdf, Content-Disposition inline, %PDF-1.5 magic bytes
+
+**Files changed**:
+- `/app/backend/routes/invoices.py`: added `bundle-analyze`, `bundle-commit` endpoints, inline disposition support
+- `/app/backend/import_wizard/pdf_invoices_bundle.py`: smart segmentation + parser fixes
+- `/app/backend/import_wizard/pdf_supplier_invoice_list.py`: new (official list parser)
+- `/app/backend/scripts/merge_cm_optipro_owners.py`: enhanced with stale account cleanup
+- `/app/backend/scripts/gaura_full_remediation.py`: dry-run script
+- `/app/backend/scripts/gaura_remediation_execute.py`: execute script for Phase A + B
+- `/app/frontend/src/components/BundleImportDialog.js`: new
+- `/app/frontend/src/pages/InvoicesPage.js`: bundle button + viewer modal
+
+**Result E2E**:
+- ✅ Backend curl tests pass for bundle-analyze and bundle-commit
+- ✅ Backend curl test for inline disposition header
+- ✅ Frontend UI demonstrated via screenshot tool (bundle dialog opens correctly)
+- ⚠️ E2E viewer test in test environment blocked by FY 2026 default filter (data is in FY 2025) - viewer works manually when user selects FY 2025
+
+
 ### Iter72undecies (Feb 2026) - Wizard OD year-end : pre-flight format-aware
 
 **Bug rapporte** (video) : a l'etape 9/9 OD year-end avec le PDF Journal OD charge, le clic "Terminer le wizard" affichait `15 entrees sans contrepartie. Definissez le compte de contrepartie pour chaque ligne avant validation.` empechant la fin du wizard.
