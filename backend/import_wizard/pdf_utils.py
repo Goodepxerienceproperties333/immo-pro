@@ -1416,3 +1416,274 @@ def _to_float(s: str) -> float:
         return float(s)
     except (TypeError, ValueError):
         return 0.0
+
+
+
+# ============================================================
+# OD YEAR-END ENTRIES PDF parser (Optipro "Liste des depenses")
+# ============================================================
+# Extracts only the rows where N° piece = "-" (Operations Diverses).
+# Skips compte 650 (Frais bancaires) as those are handled by FI journals.
+def parse_od_entries_pdf(raw: bytes) -> dict:
+    """Parse Optipro 'Liste des depenses' PDF and extract only OD entries
+    (rows where Ref. interne = '-'). Skips bank fees (compte 650).
+
+    OD entries = year-end adjustments :
+      - Charges a reporter / Annulation charges a reporter
+      - Factures a recevoir (FAR)
+      - Nettoyage de bilan (AGS)
+      - Sinistre adjustments (cloture, regularisation)
+      - Imputation coproprietaire (frais privatifs)
+      - Corrections de situation de compte
+
+    Column boundaries (Optipro standard 'Liste des depenses') :
+      Date : x ~ 50-100
+      Libelle : x ~ 110-340
+      Fournisseur : x ~ 341-460
+      Ref. interne : x ~ 460-555  (OD if = "-")
+      Montant : x ~ 625-680
+      Part proprietaire : x ~ 695-735
+      Part occupant : x ~ 765-800
+
+    Returns: {
+      entries: [{date, libelle, account_number, account_name,
+                 amount (signed), proprietaire_pct, occupant_pct,
+                 suggested_counterpart, source_page, source_y}],
+      total_count, total_amount, period_start, period_end
+    }
+    """
+    import re
+    info = {
+        "entries": [],
+        "total_count": 0,
+        "total_amount": 0.0,
+        "period_start": "",
+        "period_end": "",
+    }
+    date_re = re.compile(r"^\d{2}/\d{2}/\d{4}$")
+    amount_re = re.compile(r"^-?[\d.,\u00a0 ]+$")
+    compte_re = re.compile(r"^(\d{3,7})$")
+    period_re = re.compile(r"^(\d{2}/\d{2}/\d{4})$")
+
+    def _to_float(parts: list[str]) -> float:
+        """Join multi-token amount '1 234,56' -> 1234.56, '-3 183,65' -> -3183.65."""
+        joined = "".join(parts).replace(" ", "").replace("\u00a0", "").replace(",", ".")
+        try:
+            return float(joined)
+        except (ValueError, TypeError):
+            return 0.0
+
+    def _is_libelle_word(w) -> bool:
+        return 100 < w["x0"] < 340
+
+    def _is_supplier_zone(w) -> bool:
+        return 340 < w["x0"] < 455
+
+    def _is_ref_zone(w) -> bool:
+        return 455 < w["x0"] < 555
+
+    def _is_amount_zone(w) -> bool:
+        return 620 < w["x0"] < 685
+
+    def _is_prop_zone(w) -> bool:
+        return 685 < w["x0"] < 745
+
+    def _is_occ_zone(w) -> bool:
+        return 745 < w["x0"] < 810
+
+    with pdfplumber.open(io.BytesIO(raw)) as pdf:
+        # Period detection (page 1 header)
+        if pdf.pages:
+            p0 = pdf.pages[0]
+            ws0 = p0.extract_words(keep_blank_chars=False, x_tolerance=2, y_tolerance=3) or []
+            for w in ws0:
+                if w["top"] < 60:
+                    m = period_re.match(w["text"])
+                    if m:
+                        if not info["period_start"]:
+                            info["period_start"] = m.group(1)
+                        else:
+                            info["period_end"] = m.group(1)
+
+        # current_account = the most recent "Compte : XXXXX - LIBELLE" seen above
+        current_account = ""
+        current_account_name = ""
+
+        for page_idx, page in enumerate(pdf.pages):
+            words = page.extract_words(keep_blank_chars=False, x_tolerance=2, y_tolerance=3) or []
+            if not words:
+                continue
+            # Group by line (round y to nearest)
+            from collections import defaultdict
+            lines: dict[float, list] = defaultdict(list)
+            for w in words:
+                lines[round(w["top"])].append(w)
+
+            for y in sorted(lines.keys()):
+                ws = sorted(lines[y], key=lambda w: w["x0"])
+                # ---- Detect "Compte : XXXXX - LIBELLE" header rows -----
+                # Pattern : ['Compte', ':', '61011', '-', 'Contrat', ...]
+                if (len(ws) >= 4
+                    and ws[0]["text"] == "Compte"
+                    and ws[1]["text"] == ":"
+                    and compte_re.match(ws[2]["text"])):
+                    current_account = ws[2]["text"]
+                    # libelle = everything after the dash, before amounts (x < 620)
+                    lbl_parts = []
+                    for w in ws[3:]:
+                        if w["text"] == "-":
+                            continue
+                        if w["x0"] > 620:
+                            break
+                        lbl_parts.append(w["text"])
+                    current_account_name = " ".join(lbl_parts).strip()
+                    continue
+
+                # ---- Detect a data row : starts with a date ----
+                if not ws or not date_re.match(ws[0]["text"]) or ws[0]["x0"] > 80:
+                    continue
+                date_str = ws[0]["text"]
+                # Parse Ref. interne column : must be "-" for OD
+                ref_ws = [w for w in ws if _is_ref_zone(w)]
+                ref_text = " ".join(w["text"] for w in ref_ws).strip()
+                if ref_text != "-":
+                    continue  # invoice row, not OD
+
+                # Filter : skip if no current_account context (header glitch)
+                if not current_account:
+                    continue
+
+                # Filter : skip bank fees (compte 650) - they belong to FI journals
+                if current_account == "650":
+                    continue
+
+                # Libelle : all words in x=100-340 zone
+                lib_words = [w for w in ws if _is_libelle_word(w)]
+                lib_text = " ".join(w["text"] for w in sorted(lib_words, key=lambda w: w["x0"]))
+
+                # Supplier text (usually "-" for OD but keep for context)
+                sup_words = [w for w in ws if _is_supplier_zone(w)]
+                sup_text = " ".join(w["text"] for w in sup_words).strip()
+                if sup_text and sup_text != "-":
+                    lib_text = (lib_text + " | " + sup_text).strip(" |")
+
+                # Montant (signed) : x=620-685
+                amt_words = [w for w in ws if _is_amount_zone(w)]
+                amt_parts = [w["text"] for w in sorted(amt_words, key=lambda w: w["x0"])]
+                amount = _to_float(amt_parts)
+                if abs(amount) < 0.005:
+                    continue  # zero-amount, skip
+
+                # Part proprietaire : x=685-745
+                prop_words = [w for w in ws if _is_prop_zone(w)]
+                prop_amount = _to_float([w["text"] for w in sorted(prop_words, key=lambda w: w["x0"])])
+                # Part occupant : x=745-810
+                occ_words = [w for w in ws if _is_occ_zone(w)]
+                occ_amount = _to_float([w["text"] for w in sorted(occ_words, key=lambda w: w["x0"])])
+                total_pct = 100.0
+                if abs(amount) > 0.01:
+                    prop_pct = round(abs(prop_amount) / abs(amount) * 100, 2)
+                    occ_pct = round(abs(occ_amount) / abs(amount) * 100, 2)
+                else:
+                    prop_pct, occ_pct = 100.0, 0.0
+                # Sanity: clip
+                prop_pct = max(0.0, min(100.0, prop_pct))
+                occ_pct = max(0.0, min(100.0, occ_pct))
+
+                info["entries"].append({
+                    "date": _to_iso_date(date_str),
+                    "libelle": lib_text.strip(),
+                    "account_number": current_account,
+                    "account_name": current_account_name,
+                    "amount": round(amount, 2),
+                    "proprietaire_pct": prop_pct,
+                    "occupant_pct": occ_pct,
+                    "suggested_counterpart": _suggest_od_counterpart(lib_text, current_account, amount),
+                    "source_page": page_idx + 1,
+                    "source_y": y,
+                })
+                info["total_amount"] += amount
+
+    info["entries"].sort(key=lambda e: (e["date"], e["account_number"]))
+    info["total_count"] = len(info["entries"])
+    info["total_amount"] = round(info["total_amount"], 2)
+    return info
+
+
+def _to_iso_date(s: str) -> str:
+    """DD/MM/YYYY -> YYYY-MM-DD"""
+    try:
+        parts = s.split("/")
+        if len(parts) == 3:
+            return f"{parts[2]}-{parts[1].zfill(2)}-{parts[0].zfill(2)}"
+    except (ValueError, IndexError):
+        pass
+    return s
+
+
+def _suggest_od_counterpart(libelle: str, charge_account: str, amount: float) -> dict:
+    """Suggest counterpart account for an OD entry based on libelle keywords.
+
+    Returns {"account": "XXX", "account_name": "...", "confidence": "high/medium/low/none"}.
+    `confidence=none` means user MUST choose manually.
+    """
+    if not libelle:
+        # Even without libelle, special : compte 643 (Frais privatifs) -> 410
+        if charge_account == "643":
+            return {"account": "410", "account_name": "Coproprietaires", "confidence": "high"}
+        return {"account": "", "account_name": "", "confidence": "none"}
+    # Special : compte 643 (Frais privatifs) is ALWAYS paired with 410 (imputation
+    # coproprietaire) regardless of libelle keywords - check this first.
+    if charge_account == "643":
+        return {"account": "410", "account_name": "Coproprietaires", "confidence": "high"}
+    # Normalize accents for keyword matching
+    import unicodedata
+    lbl_raw = libelle.lower().strip()
+    lbl = "".join(ch for ch in unicodedata.normalize("NFD", lbl_raw) if unicodedata.category(ch) != "Mn")
+
+    # Order matters : more specific patterns first
+    rules = [
+        # FAR : Factures a recevoir
+        (("far ", "facture a recevoir", "factures a recevoir"), "444", "Factures a recevoir", "high"),
+        # Charges a reporter (deferral)
+        (("annulation charges a reporter", "annulation des charges a reporter"),
+         "490", "Charges a reporter", "high"),
+        (("charge a reporter", "charges a reporter"), "490", "Charges a reporter", "high"),
+        # AGS / Nettoyage de bilan -> creances douteuses
+        (("nettoyage de bilan", "ags point", "ags decision", "apurement creance"),
+         "417", "Creances douteuses", "high"),
+        # SIN INONDATION specific
+        (("sin 202200724", "sin202200724", "regularisation sin 202200724"),
+         "494001", "SIN 202200724 INONDATION", "high"),
+        # Sinistre inondation / Sinistre canalisation -> SIN INONDATION generic
+        (("sin ", "regularisation sin", "sinistre canalisation"),
+         "494001", "SIN INONDATION", "medium"),
+        # Sinistre pompe / Pompe de relevage
+        (("sinistre pompe", "pompe de relevage", "sinistre garage"),
+         "499603", "Sinistre garage - Pompe de relevage", "high"),
+        # Sinistre inondation pompe
+        (("sinistre innondation", "sinistre inondation"),
+         "499603", "Sinistre garage - Pompe de relevage", "medium"),
+        # Generic sinistre
+        (("sinistre", "rupture devidoir", "remboursement sinistre"),
+         "4990", "Provisions sinistres diverses", "low"),
+        # Imputation coproprietaire / Frais privatifs
+        (("imputation coproprietaire", "imputation proprietaire", "imputation occupant"),
+         "410", "Coproprietaires", "high"),
+        # Correction de situation de compte
+        (("correction de situation de compte", "correction situation",
+          "transfert solde crediteur", "transfert solde debiteur"),
+         "410", "Coproprietaires", "medium"),
+        # Refunds / Reimbursements (negative entries on 61066 typically)
+        (("remboursement",), "4990", "Provisions sinistres diverses", "low"),
+    ]
+
+    for keywords, account, account_name, confidence in rules:
+        for kw in keywords:
+            if kw in lbl:
+                return {"account": account, "account_name": account_name, "confidence": confidence}
+
+    # Special : if compte 643 (Frais privatifs) -> counterpart is always 410
+    # (already handled at top of function, kept here for safety)
+
+    return {"account": "", "account_name": "", "confidence": "none"}

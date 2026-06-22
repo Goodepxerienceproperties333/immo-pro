@@ -11,6 +11,56 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 ## Implemented
+### Iter72octies (Feb 2026) - Step "OD year-end" dans le wizard d'import
+
+**Demande utilisateur** : "Ajouter un step OD year-end dans le wizard d'import (pour eviter de devoir scripter chaque ACP)"
+
+**Choix utilisateur** :
+- Format : upload du PDF "Liste des depenses" Optipro, parse uniquement les lignes avec N° piece = "-"
+- Contrepartie : auto-detection par mot-cle + correction manuelle ligne par ligne (mix)
+- Inconnue : bloquer la validation tant que toutes les contreparties ne sont pas definies
+
+**Implementation backend** :
+- `/app/backend/import_wizard/pdf_utils.py` :
+  - `parse_od_entries_pdf(raw)` : parse les lignes OD (Ref. interne = "-"), skip compte 650 (FI), extrait date/libelle/account/amount/proprietaire_pct/occupant_pct par colonnes x-position
+  - `_suggest_od_counterpart(libelle, charge_acc, amount)` : auto-detection par mot-cle (FAR -> 444, "charges a reporter" -> 490, "Nettoyage de bilan/AGS" -> 417, "SIN INONDATION" -> 494001, "Sinistre pompe/garage" -> 499603, "Imputation copro" -> 410, fallback 4990) avec normalization d'accents pour matcher "à reporter"
+  - Special : compte 643 (Frais privatifs) -> 410 forcement
+  - Retourne `confidence: high/medium/low/none`
+- `/app/backend/routes/import_wizard.py` :
+  - `POST /api/import-wizard/sessions/{id}/sniff-pdf` accepte `kind=od_entries`
+  - Nouveau endpoint `POST /api/import-wizard/sessions/{id}/commit-od-entries` :
+    - Bloque si une entry a `counterpart_account` vide (HTTPException 400 avec liste des lignes incompletes)
+    - Auto-cree les comptes PCMN manquants
+    - Cree une JE balancee par entree (DEBIT charge / CREDIT counterpart si amount > 0 ; inverse si < 0)
+    - Idempotence : signature `(date, libelle, charge_acc, amount, source_y, source_page)` -> re-import du meme PDF skip 33/33
+
+**Implementation frontend** (`/app/frontend/src/pages/ImportWizardPage.js`) :
+- Nouveau step `od_entries` (icon ClipboardList) en position 11/11, optional
+- `OdEntriesPreview` component : tableau avec colonnes Date/Libelle/Compte/Montant/Contrepartie (dropdown)/Conf (badge OK/~/?/!)/X
+- Pre-fill des contreparties high-confidence ; les low/none arrivent vides (fond rouge)
+- Header summary : total positif/negatif/net, count, periode
+- Bouton commit bloque cote front si `missing > 0` (avec toast.error explicite)
+- Liste de comptes PCMN belge standard pre-remplie + support compte custom (fallback 4990)
+
+**Result E2E (verifie via API sur Gaura)** :
+- 33 OD entries detectees du PDF Gaura : 31 high confidence + 2 low (sinistres complexes)
+- Commit sans contrepartie -> HTTP 400 bloquant
+- Commit complet : 33 inserted, 0 skipped, 0 errors
+- **API expense total : 33,828.43 EUR** = PDF total **33,828.43 EUR** (diff +0.00)
+- Re-import du meme PDF : 0 inserted, 33 skipped (idempotence parfaite)
+
+**Regression tests** : `/app/backend/tests/test_iter72_od_entries_wizard.py` (4 tests, PASSED)
+- Filtrage 650 OK
+- Auto-detection accent-insensitive (à reporter)
+- 643 -> 410 force
+- Periode et entries count corrects
+
+**Fichiers** :
+- `/app/backend/import_wizard/pdf_utils.py` (parser + helper auto-detect)
+- `/app/backend/routes/import_wizard.py` (sniff + commit endpoints)
+- `/app/frontend/src/pages/ImportWizardPage.js` (step + preview component)
+- `/app/backend/tests/test_iter72_od_entries_wizard.py` (regression)
+
 ### Iter72septies (Feb 2026) - Liste des depenses : dedup triplication + import OD year-end
 
 **Bugs rapportes** : "Corrige la liste depenses alors elle n'est pas bonne"

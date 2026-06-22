@@ -27,7 +27,7 @@ import { Badge } from '@/components/ui/badge';
 import {
   Upload, Truck, Tag, CheckCircle2, X, AlertTriangle,
   ChevronRight, ChevronLeft, FileWarning, Loader2, RotateCcw,
-  Calendar, Wallet, PieChart, Plus, Trash2, FileText, Landmark, Scale
+  Calendar, Wallet, PieChart, Plus, Trash2, FileText, Landmark, Scale, ClipboardList
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -43,6 +43,7 @@ const STEPS = [
   { key: 'invoices',  label: 'Factures',          icon: FileText, optional: true,  kind: 'csv_invoices' },
   { key: 'journals',  label: 'Journaux financiers', icon: Landmark, optional: true, kind: 'csv_journals' },
   { key: 'opening_balance', label: 'OD d\'ouverture', icon: Scale, optional: true, kind: 'pdf_balance' },
+  { key: 'od_entries', label: 'OD year-end', icon: ClipboardList, optional: true, kind: 'pdf_od_entries' },
 ];
 
 // Champs cibles attendus pour chaque étape (clé = nom du champ DB)
@@ -81,6 +82,7 @@ export default function ImportWizardPage() {
   const [invoicesParsed, setInvoicesParsed] = useState([]);
   const [journalsParsed, setJournalsParsed] = useState([]);
   const [balanceParsed, setBalanceParsed] = useState({ actif: [], passif: [], total_actif: 0, total_passif: 0, balanced: false, period_end_date: '' });
+  const [odEntriesParsed, setOdEntriesParsed] = useState({ entries: [], total_count: 0, total_amount: 0, period_start: '', period_end: '' });
   // For 'csv_or_pdf' steps : tracks which mode the user picked for THIS step
   // (resets on every step change / file reset).
   const [uploadMode, setUploadMode] = useState(null);  // null | 'csv' | 'pdf'
@@ -127,6 +129,7 @@ export default function ImportWizardPage() {
     setInvoicesParsed([]);
     setJournalsParsed([]);
     setBalanceParsed({ actif: [], passif: [], total_actif: 0, total_passif: 0, balanced: false, period_end_date: '' });
+    setOdEntriesParsed({ entries: [], total_count: 0, total_amount: 0, period_start: '', period_end: '' });
     try {
       const fd = new FormData();
       fd.append('file', file);
@@ -134,11 +137,11 @@ export default function ImportWizardPage() {
       const effectiveKind = step.kind === 'csv_or_pdf'
         ? (uploadMode || (file.name.toLowerCase().endsWith('.pdf') ? 'pdf' : 'csv'))
         : step.kind;
-      const isPdf = effectiveKind === 'pdf' || effectiveKind === 'pdf_balance';
+      const isPdf = effectiveKind === 'pdf' || effectiveKind === 'pdf_balance' || effectiveKind === 'pdf_od_entries';
       const isStructuredCsv = effectiveKind === 'csv_invoices' || effectiveKind === 'csv_journals';
       let r;
       if (isPdf) {
-        const kindMap = { natures: 'natures', budget: 'budget', distribution_keys: 'keys', suppliers: 'suppliers', opening_balance: 'balance' };
+        const kindMap = { natures: 'natures', budget: 'budget', distribution_keys: 'keys', suppliers: 'suppliers', opening_balance: 'balance', od_entries: 'od_entries' };
         fd.append('kind', kindMap[step.key] || 'generic');
         r = await api.post(`/import-wizard/sessions/${session.id}/sniff-pdf`, fd, {
           headers: { 'Content-Type': 'multipart/form-data' },
@@ -155,6 +158,25 @@ export default function ImportWizardPage() {
             total_passif: r.data.total_passif || 0,
             balanced: r.data.balanced || false,
             period_end_date: r.data.period_end_date || '',
+          });
+        }
+        if (step.key === 'od_entries') {
+          // Pre-fill chosen_counterpart with suggested values (high-confidence only)
+          const entries = (r.data.entries || []).map(e => ({
+            ...e,
+            counterpart_account: e.suggested_counterpart?.confidence === 'high'
+              ? (e.suggested_counterpart?.account || '')
+              : '',
+            counterpart_account_name: e.suggested_counterpart?.confidence === 'high'
+              ? (e.suggested_counterpart?.account_name || '')
+              : '',
+          }));
+          setOdEntriesParsed({
+            entries,
+            total_count: r.data.total_count || 0,
+            total_amount: r.data.total_amount || 0,
+            period_start: r.data.period_start || '',
+            period_end: r.data.period_end || '',
           });
         }
       } else if (isStructuredCsv) {
@@ -244,6 +266,26 @@ export default function ImportWizardPage() {
           (m.pcmn_created ? ` - ${m.pcmn_created} compte(s) PCMN auto-ajoutes` : '') +
           ((m.owners_linked || m.suppliers_linked) ? ` - ${m.owners_linked} owner(s) + ${m.suppliers_linked} fournisseur(s) lies via auxiliary_code` : '')
         );
+      } else if (step.key === 'od_entries') {
+        // Pre-flight : every entry MUST have a counterpart selected
+        const missing = (odEntriesParsed.entries || []).filter(e => !(e.counterpart_account || '').trim());
+        if (missing.length > 0) {
+          toast.error(`${missing.length} ecriture(s) sans contrepartie. Definissez le compte de contrepartie pour chaque ligne avant validation.`);
+          setCommitting(false);
+          return;
+        }
+        r = await api.post(`/import-wizard/sessions/${session.id}/commit-od-entries`, {
+          entries: odEntriesParsed.entries,
+        });
+        const m = r.data;
+        toast.success(
+          `${m.inserted} ecriture(s) OD year-end creee(s)` +
+          (m.skipped ? ` - ${m.skipped} ignoree(s) (doublons)` : '') +
+          (m.pcmn_created ? ` - ${m.pcmn_created} compte(s) PCMN auto-ajoutes` : '')
+        );
+        if (m.errors?.length) {
+          toast.error(`${m.errors.length} erreur(s) : ${m.errors[0].error}`);
+        }
       } else if (step.key === 'fiscal_year') {
         if (!fyForm.name || !fyForm.start_date || !fyForm.end_date) {
           toast.error('Nom, date debut et date fin sont obligatoires');
@@ -268,6 +310,7 @@ export default function ImportWizardPage() {
         setInvoicesParsed([]);
         setJournalsParsed([]);
         setBalanceParsed({ actif: [], passif: [], total_actif: 0, total_passif: 0, balanced: false, period_end_date: '' });
+        setOdEntriesParsed({ entries: [], total_count: 0, total_amount: 0, period_start: '', period_end: '' });
         setUploadMode(null);
       } else {
         // Final step : finish
@@ -437,6 +480,10 @@ export default function ImportWizardPage() {
 
           {sniffResult && step.key === 'opening_balance' && (
             <OpeningBalancePreview balance={balanceParsed} setBalance={setBalanceParsed} />
+          )}
+
+          {sniffResult && step.key === 'od_entries' && (
+            <OdEntriesPreview odData={odEntriesParsed} setOdData={setOdEntriesParsed} />
           )}
 
           {sniffResult && step.key === 'natures' && (
@@ -719,6 +766,148 @@ function OpeningBalancePreview({ balance, setBalance }) {
     </div>
   );
 }
+
+// ============== OD YEAR-END PREVIEW (Step J - Liste depenses OD) ==============
+function OdEntriesPreview({ odData, setOdData }) {
+  if (!odData?.entries?.length) {
+    return (
+      <div className="text-center py-6 text-amber-600 text-sm">
+        <AlertTriangle size={24} className="inline mr-1" /> Aucune ecriture OD year-end detectee dans le PDF (pas de ligne avec N&deg; piece = &quot;-&quot;).
+      </div>
+    );
+  }
+  const upd = (idx, field, value) => {
+    const next = odData.entries.map((e, i) => i === idx ? { ...e, [field]: value } : e);
+    setOdData({ ...odData, entries: next });
+  };
+  const del = (idx) => {
+    setOdData({ ...odData, entries: odData.entries.filter((_, i) => i !== idx) });
+  };
+  // Common Belgian PCMN counterpart accounts for OD
+  const counterpartChoices = [
+    { value: '', label: '-- Choisir --' },
+    { value: '490|Charges a reporter', label: '490 - Charges a reporter' },
+    { value: '491|Produits a reporter', label: '491 - Produits a reporter' },
+    { value: '444|Factures a recevoir', label: '444 - Factures a recevoir (FAR)' },
+    { value: '417|Creances douteuses', label: '417 - Creances douteuses (AGS)' },
+    { value: '410|Coproprietaires', label: '410 - Coproprietaires (imputation)' },
+    { value: '494|Provisions sinistres', label: '494 - Provisions sinistres' },
+    { value: '494001|SIN 202200724 INONDATION', label: '494001 - SIN 202200724 INONDATION' },
+    { value: '499|Provisions diverses', label: '499 - Provisions diverses' },
+    { value: '499603|Sinistre garage - Pompe de relevage', label: '499603 - Sinistre garage - Pompe de relevage' },
+    { value: '4990|Provisions sinistres diverses', label: '4990 - Provisions sinistres diverses' },
+    { value: '4991|Arrondis crediteurs', label: '4991 - Arrondis crediteurs' },
+  ];
+
+  const missing = odData.entries.filter(e => !(e.counterpart_account || '').trim()).length;
+  const sumPositive = odData.entries.filter(e => e.amount > 0).reduce((s, e) => s + e.amount, 0);
+  const sumNegative = odData.entries.filter(e => e.amount < 0).reduce((s, e) => s + e.amount, 0);
+
+  const confidenceBadge = (conf) => {
+    if (conf === 'high') return <span className="text-emerald-700 text-[9px]">[OK]</span>;
+    if (conf === 'medium') return <span className="text-amber-700 text-[9px]">[~]</span>;
+    if (conf === 'low') return <span className="text-orange-700 text-[9px]">[?]</span>;
+    return <span className="text-red-700 text-[9px]">[!]</span>;
+  };
+
+  return (
+    <div className="space-y-3" data-testid="od-entries-preview">
+      <div className={`border rounded p-3 text-xs flex justify-between items-center ${missing === 0 ? 'bg-emerald-50 border-emerald-200' : 'bg-amber-50 border-amber-200'}`}>
+        <div>
+          <div className="font-semibold">
+            OD year-end du <span className="font-mono">{odData.period_start || '—'}</span> au <span className="font-mono">{odData.period_end || '—'}</span>
+          </div>
+          <div className="text-[11px] mt-0.5">
+            {missing === 0
+              ? `Toutes les contreparties sont definies. ${odData.entries.length} ecriture(s) OD pretes a etre validees.`
+              : `${missing} ecriture(s) sans contrepartie. Definissez le compte pour chaque ligne en rouge avant validation.`}
+          </div>
+        </div>
+        <div className="font-mono text-right text-[11px]">
+          <div>Positifs : <span className="font-semibold text-slate-700">+{sumPositive.toFixed(2)}</span></div>
+          <div>Negatifs : <span className="font-semibold text-slate-700">{sumNegative.toFixed(2)}</span></div>
+          <div>Total net : <span className="font-semibold">{odData.total_amount.toFixed(2)} EUR</span></div>
+        </div>
+      </div>
+
+      <div className="bg-blue-50 border border-blue-200 rounded p-2 text-[11px] text-blue-900">
+        <strong>Auto-detection :</strong> les contreparties marquees [OK] sont auto-detectees avec haute confiance.
+        Les lignes [~] [?] [!] necessitent votre choix. Comptes proposes : 490 (charges a reporter), 444 (FAR),
+        417 (AGS), 494/499 (sinistres), 410 (imputation copro).
+      </div>
+
+      <div className="border border-slate-200 rounded overflow-x-auto max-h-[480px] overflow-y-auto">
+        <table className="w-full text-[11px]">
+          <thead className="bg-slate-50 sticky top-0">
+            <tr>
+              <th className="px-2 py-1 text-left w-24">Date</th>
+              <th className="px-2 py-1 text-left">Libelle</th>
+              <th className="px-2 py-1 text-left w-20">Compte</th>
+              <th className="px-2 py-1 text-right w-24">Montant</th>
+              <th className="px-2 py-1 text-left w-72">Contrepartie</th>
+              <th className="px-2 py-1 text-right w-12">Conf</th>
+              <th className="w-6"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {odData.entries.map((e, i) => {
+              const hasCounter = !!(e.counterpart_account || '').trim();
+              const cpVal = e.counterpart_account ? `${e.counterpart_account}|${e.counterpart_account_name || ''}` : '';
+              return (
+                <tr key={i} className={`border-t border-slate-100 ${!hasCounter ? 'bg-red-50' : ''}`} data-testid={`od-row-${i}`}>
+                  <td className="px-2 py-0.5 font-mono">{e.date}</td>
+                  <td className="px-2 py-0.5 text-[10px]" title={e.libelle}>{e.libelle.length > 50 ? e.libelle.slice(0, 50) + '...' : e.libelle}</td>
+                  <td className="px-2 py-0.5 font-mono">
+                    <div>{e.account_number}</div>
+                    <div className="text-[9px] text-slate-500">{e.account_name?.slice(0, 18)}</div>
+                  </td>
+                  <td className={`px-2 py-0.5 text-right font-mono ${e.amount < 0 ? 'text-red-700' : 'text-slate-800'}`}>{e.amount.toFixed(2)}</td>
+                  <td className="px-2 py-0.5">
+                    <select
+                      value={cpVal}
+                      onChange={ev => {
+                        const [acc, name] = (ev.target.value || '|').split('|');
+                        upd(i, 'counterpart_account', acc);
+                        upd(i, 'counterpart_account_name', name || '');
+                      }}
+                      className={`w-full text-[10px] border ${hasCounter ? 'border-slate-200' : 'border-red-300 bg-red-50'} rounded px-1 py-0.5`}
+                      data-testid={`od-counterpart-${i}`}
+                    >
+                      {counterpartChoices.map(opt => (
+                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                      ))}
+                      {/* If suggested isn't in standard list, keep it as custom */}
+                      {e.counterpart_account && !counterpartChoices.find(c => c.value.startsWith(e.counterpart_account + '|')) && (
+                        <option value={cpVal}>{e.counterpart_account} - {e.counterpart_account_name}</option>
+                      )}
+                    </select>
+                  </td>
+                  <td className="px-1 py-0.5 text-center">
+                    {confidenceBadge(e.suggested_counterpart?.confidence)}
+                  </td>
+                  <td className="px-0 py-0.5">
+                    <button onClick={() => del(i)} className="text-red-500 hover:text-red-700" data-testid={`od-del-${i}`}>
+                      <X size={11} />
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="text-[11px] text-slate-500 italic">
+        Chaque ecriture OD sera generee en double-entree equilibree :
+        montant positif &rArr; <strong>DEBIT charge</strong> / <strong>CREDIT contrepartie</strong> ;
+        montant negatif &rArr; <strong>DEBIT contrepartie</strong> / <strong>CREDIT charge</strong>.
+        Les comptes de la liste ne sont que des suggestions standard PCMN belge ; vous pouvez en ajouter
+        d&apos;autres via la page Comptabilite apres validation.
+      </div>
+    </div>
+  );
+}
+
 
 // ============== INVOICES PREVIEW (Step G - Factures Optipro) ==============
 function InvoicesPreview({ invoices, setInvoices }) {

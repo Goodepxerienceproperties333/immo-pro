@@ -10,7 +10,7 @@ from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Form
 from pydantic import BaseModel
 
 from import_wizard.csv_utils import sniff_csv, parse_french_number, parse_date, split_optipro_code, normalize_header, parse_invoices_csv, parse_journals_csv
-from import_wizard.pdf_utils import extract_pdf, parse_natures_pdf, parse_budget_pdf, parse_distribution_keys_pdf, parse_owners_pdf, parse_lots_pdf, parse_suppliers_pdf, parse_balance_pdf
+from import_wizard.pdf_utils import extract_pdf, parse_natures_pdf, parse_budget_pdf, parse_distribution_keys_pdf, parse_owners_pdf, parse_lots_pdf, parse_suppliers_pdf, parse_balance_pdf, parse_od_entries_pdf
 
 logger = logging.getLogger("import_wizard")
 
@@ -99,6 +99,14 @@ class CommitOpeningBalanceInput(BaseModel):
     fiscal_year_id: Optional[str] = ""  # FY into which to post the AN entry
 
 
+class CommitOdEntriesInput(BaseModel):
+    """Each entry must have both a charge account AND a counterpart account
+    chosen by the user before commit (no defaults, no fallback)."""
+    entries: List[dict]  # [{date, libelle, account_number, account_name,
+                         #   amount, counterpart_account, counterpart_account_name,
+                         #   proprietaire_pct, occupant_pct}]
+
+
 # ============================================================
 # Router
 # ============================================================
@@ -131,6 +139,8 @@ def create_import_wizard_router(db):
             return parse_suppliers_pdf(raw)
         if kind == "balance":
             return parse_balance_pdf(raw)
+        if kind == "od_entries":
+            return parse_od_entries_pdf(raw)
         return extract_pdf(raw)
 
     # ----- SESSIONS -----
@@ -266,6 +276,10 @@ def create_import_wizard_router(db):
             return res
         if kind == "balance":
             res = parse_balance_pdf(raw)
+            res["filename"] = file.filename
+            return res
+        if kind == "od_entries":
+            res = parse_od_entries_pdf(raw)
             res["filename"] = file.filename
             return res
         info = extract_pdf(raw)
@@ -1197,6 +1211,170 @@ def create_import_wizard_router(db):
             "suppliers_linked": suppliers_linked,
             "entry_date": entry_date,
         }
+
+    # ----- C-BIS: OD YEAR-END ENTRIES -----
+    @router.post("/sessions/{session_id}/commit-od-entries")
+    async def commit_od_entries(session_id: str, data: CommitOdEntriesInput, request: Request):
+        """Commit year-end OD (Operations Diverses) entries from the Optipro
+        "Liste des depenses" PDF.
+
+        For each entry, the user has already chosen :
+          - the charge account (e.g. 61011, 66, 61066, 643, 61214)
+          - the counterpart account (e.g. 490, 444, 417, 499603, 494001, 4990, 410)
+        The endpoint :
+          1. Validates that EVERY entry has both accounts set (no defaults).
+          2. Auto-creates the PCMN accounts if missing.
+          3. For each entry, creates a balanced OD journal entry :
+             - if amount > 0 : DEBIT charge / CREDIT counterpart
+             - if amount < 0 : DEBIT counterpart / CREDIT charge (release)
+          4. Skips entries whose signature already exists (idempotent).
+        """
+        from fiscal_lock import ensure_period_open
+        session = await db.import_sessions.find_one({"id": session_id})
+        if not session:
+            raise HTTPException(404, "Session introuvable")
+        copro_id = session["copropriete_id"]
+        await _require_acp_access(request, db, copro_id)
+
+        entries = data.entries or []
+        if not entries:
+            raise HTTPException(400, "Aucune ecriture OD a importer")
+
+        # ---- Pre-flight : every entry MUST have charge + counterpart ----
+        missing_counterpart = [
+            i for i, e in enumerate(entries)
+            if not (e.get("counterpart_account") or "").strip()
+        ]
+        if missing_counterpart:
+            raise HTTPException(
+                400,
+                f"{len(missing_counterpart)} ecriture(s) sans contrepartie definie : "
+                f"lignes {missing_counterpart[:5]}{'...' if len(missing_counterpart) > 5 else ''}. "
+                "Choisissez une contrepartie pour chaque ligne avant validation.",
+            )
+
+        # ---- Auto-create missing PCMN accounts ----
+        accounts_needed: dict[str, str] = {}
+        for e in entries:
+            for k_acc, k_name in [
+                ("account_number", "account_name"),
+                ("counterpart_account", "counterpart_account_name"),
+            ]:
+                num = (e.get(k_acc) or "").strip()
+                lbl = (e.get(k_name) or "").strip()
+                if num:
+                    accounts_needed[num] = lbl
+        pcmn_created = await _ensure_pcmn_accounts(copro_id, accounts_needed)
+
+        # ---- Build OD journal entries ----
+        inserted = 0
+        skipped = 0
+        errors: list[dict] = []
+        existing_count = await db.journal_entries.count_documents({
+            "copropriete_id": copro_id, "journal_type": "OD",
+        })
+        year_for_ref = (entries[0].get("date", "") or "")[:4] or datetime.now(timezone.utc).strftime("%Y")
+        seq = existing_count + 1
+
+        for idx, e in enumerate(entries):
+            date = (e.get("date") or "").strip()
+            if not date:
+                errors.append({"idx": idx, "error": "Date manquante"})
+                continue
+            charge_acc = (e.get("account_number") or "").strip()
+            counter_acc = (e.get("counterpart_account") or "").strip()
+            charge_name = (e.get("account_name") or "").strip() or charge_acc
+            counter_name = (e.get("counterpart_account_name") or "").strip() or counter_acc
+            amount = float(e.get("amount") or 0)
+            if abs(amount) < 0.005:
+                skipped += 1
+                continue
+            libelle = (e.get("libelle") or "").strip() or f"OD {date}"
+            occ_pct = float(e.get("occupant_pct") or 0)
+            prop_pct = float(e.get("proprietaire_pct") if e.get("proprietaire_pct") is not None else max(0.0, 100.0 - occ_pct))
+
+            # Idempotence : skip ONLY if EXACT match (date+charge+amount+libelle+source_y)
+            # already exists from a previous wizard run. We include the source_y
+            # so that multiple legitimate identical-amount entries on the same
+            # day (e.g. 4 lots paying the same private fee on the same date)
+            # are NOT mistakenly deduped.
+            sig_amount = round(abs(amount), 2)
+            source_y = float(e.get("source_y") or 0)
+            source_page = int(e.get("source_page") or 0)
+            existing = await db.journal_entries.find_one({
+                "copropriete_id": copro_id,
+                "journal_type": "OD",
+                "date": date,
+                "description": libelle,
+                "manually_created_from_od_wizard": True,
+                "od_source_y": source_y,
+                "od_source_page": source_page,
+                "lines": {"$elemMatch": {
+                    "account_number": charge_acc,
+                    "$or": [{"debit": sig_amount}, {"credit": sig_amount}],
+                }},
+            }, {"_id": 0, "id": 1})
+            if existing:
+                skipped += 1
+                continue
+
+            # Fiscal lock check
+            try:
+                await ensure_period_open(db, copro_id, date, context=f"OD year-end {libelle[:40]}")
+            except Exception as ex:
+                errors.append({"idx": idx, "error": f"Periode fermee : {ex}"})
+                continue
+
+            # Build balanced double-entry
+            if amount > 0:
+                lines = [
+                    {"account_number": charge_acc, "account_name": charge_name,
+                     "description": libelle, "debit": round(amount, 2), "credit": 0.0,
+                     "occupant_pct": occ_pct, "proprietaire_pct": prop_pct},
+                    {"account_number": counter_acc, "account_name": counter_name,
+                     "description": libelle, "debit": 0.0, "credit": round(amount, 2),
+                     "occupant_pct": 0.0, "proprietaire_pct": 100.0},
+                ]
+            else:
+                # negative -> release : DEBIT counterpart / CREDIT charge
+                lines = [
+                    {"account_number": counter_acc, "account_name": counter_name,
+                     "description": libelle, "debit": round(abs(amount), 2), "credit": 0.0,
+                     "occupant_pct": 0.0, "proprietaire_pct": 100.0},
+                    {"account_number": charge_acc, "account_name": charge_name,
+                     "description": libelle, "debit": 0.0, "credit": round(abs(amount), 2),
+                     "occupant_pct": occ_pct, "proprietaire_pct": prop_pct},
+                ]
+            doc = {
+                "id": str(uuid.uuid4()),
+                "journal_type": "OD",
+                "date": date,
+                "reference": f"OD-{year_for_ref}-{seq:04d}",
+                "description": libelle,
+                "lines": lines,
+                "total_debit": round(abs(amount), 2),
+                "total_credit": round(abs(amount), 2),
+                "copropriete_id": copro_id,
+                "manually_created_from_od_wizard": True,
+                "od_source_y": source_y,
+                "od_source_page": source_page,
+                "import_session_id": session_id,
+                "created_at": _now_iso(),
+            }
+            await db.journal_entries.insert_one(doc)
+            inserted += 1
+            seq += 1
+
+        await _update_step(db, session_id, "od_entries", {
+            "inserted": inserted, "skipped": skipped, "errors": len(errors),
+        })
+        return {
+            "inserted": inserted,
+            "skipped": skipped,
+            "errors": errors,
+            "pcmn_created": pcmn_created,
+        }
+
 
     # ----- D: LOTS -----
     @router.post("/sessions/{session_id}/commit-lots")
