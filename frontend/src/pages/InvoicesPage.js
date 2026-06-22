@@ -423,7 +423,7 @@ export default function InvoicesPage() {
 
       {/* Invoice Dialog */}
       <Dialog open={invoiceDialog} onOpenChange={(open) => { if (!open) { setEditingInvoice(null); setPendingPdf(null); } setInvoiceDialog(open); }}>
-        <DialogContent className="max-w-2xl" data-testid="invoice-dialog">
+        <DialogContent className="max-w-5xl w-[95vw] max-h-[92vh] overflow-y-auto" data-testid="invoice-dialog">
           <DialogHeader><DialogTitle style={{fontFamily:'Chivo,sans-serif'}}>{editingInvoice ? 'Modifier la facture' : 'Nouvelle facture'}</DialogTitle></DialogHeader>
           <div className="space-y-4 mt-2">
             {aiHint && (
@@ -660,7 +660,7 @@ export default function InvoicesPage() {
 
       {/* Distribution Key Dialog */}
       <Dialog open={keyDialog} onOpenChange={(open) => { if (!open) { setEditingKey(null); setKeyUsage(null); } setKeyDialog(open); }}>
-        <DialogContent className="max-w-2xl" data-testid="key-dialog">
+        <DialogContent className="max-w-5xl w-[95vw] max-h-[92vh] overflow-y-auto" data-testid="key-dialog">
           <DialogHeader><DialogTitle style={{fontFamily:'Chivo,sans-serif'}}>{editingKey ? 'Modifier la cle' : 'Nouvelle cle de repartition'}</DialogTitle></DialogHeader>
           <div className="space-y-4 mt-2">
             {editingKey && keyUsage && keyUsage.total > 0 && (
