@@ -15,7 +15,7 @@
  *
  * Rollback complet possible via le bouton "Annuler l'import" (DELETE session).
  */
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Fragment } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import api from '@/lib/api';
 import { useAuth } from '@/contexts/AuthContext';
@@ -797,10 +797,134 @@ function OdEntriesPreview({ odData, setOdData }) {
   if (!odData?.entries?.length) {
     return (
       <div className="text-center py-6 text-amber-600 text-sm">
-        <AlertTriangle size={24} className="inline mr-1" /> Aucune ecriture OD year-end detectee dans le PDF (pas de ligne avec N&deg; piece = &quot;-&quot;).
+        <AlertTriangle size={24} className="inline mr-1" /> Aucune ecriture OD year-end detectee dans le PDF.
       </div>
     );
   }
+  // Dispatch on format : "od_journal" (preferred, explicit balanced lines)
+  // vs "expense_list" (legacy, charge+counterpart dropdown).
+  if (odData.format === 'od_journal') {
+    return <OdJournalPreview odData={odData} setOdData={setOdData} />;
+  }
+  return <OdExpenseListPreview odData={odData} setOdData={setOdData} />;
+}
+
+// ============== Format A : Journal OD (full balanced lines) ==============
+function OdJournalPreview({ odData, setOdData }) {
+  const toggleIncluded = (idx) => {
+    const next = odData.entries.map((e, i) => i === idx ? { ...e, included: !e.included } : e);
+    setOdData({ ...odData, entries: next });
+  };
+  const includedCount = odData.entries.filter(e => e.included).length;
+  const excludedCount = odData.entries.length - includedCount;
+  const totalIncluded = odData.entries
+    .filter(e => e.included)
+    .reduce((s, e) => s + (Number(e.total_debit) || 0), 0);
+
+  return (
+    <div className="space-y-3" data-testid="od-journal-preview">
+      <div className="border border-emerald-200 bg-emerald-50 rounded p-3 text-xs flex justify-between items-center">
+        <div>
+          <div className="font-semibold">
+            Journal OD Optipro du <span className="font-mono">{odData.period_start || '—'}</span> au <span className="font-mono">{odData.period_end || '—'}</span>
+          </div>
+          <div className="text-[11px] mt-0.5">
+            <strong>{odData.entries.length} ecritures detectees</strong> avec contreparties explicites.
+            {' '}{includedCount} a importer, {excludedCount} exclues (ecritures de cloture - decoche pour reactiver).
+          </div>
+        </div>
+        <div className="font-mono text-right text-[11px]">
+          <div>Total a importer : <span className="font-semibold">{totalIncluded.toFixed(2)} EUR</span></div>
+        </div>
+      </div>
+
+      <div className="bg-blue-50 border border-blue-200 rounded p-2 text-[11px] text-blue-900">
+        <strong>Format detecte :</strong> Journal comptable OD Optipro - les contreparties sont deja explicites
+        dans le PDF, aucune saisie manuelle requise. Les ecritures de <strong>cloture annuelle</strong> (transfert
+        des charges vers 701 puis vers les coproprietaires) sont decochees par defaut pour eviter les doublons
+        avec les factures AC + entrees AN deja importees.
+      </div>
+
+      <div className="border border-slate-200 rounded overflow-x-auto max-h-[520px] overflow-y-auto">
+        <table className="w-full text-[11px]">
+          <thead className="bg-slate-50 sticky top-0">
+            <tr>
+              <th className="px-2 py-1 text-center w-8">A importer</th>
+              <th className="px-2 py-1 text-left w-24">Date</th>
+              <th className="px-2 py-1 text-left w-16">Ref</th>
+              <th className="px-2 py-1 text-left">Description</th>
+              <th className="px-2 py-1 text-right w-24">Total D/C</th>
+              <th className="px-2 py-1 text-left w-24">Statut</th>
+            </tr>
+          </thead>
+          <tbody>
+            {odData.entries.map((e, i) => {
+              const balanced = !!e.balanced;
+              return (
+                <Fragment key={i}>
+                  <tr className={`border-t border-slate-100 ${!e.included ? 'bg-slate-50 text-slate-400' : ''}`} data-testid={`od-journal-row-${i}`}>
+                    <td className="px-2 py-0.5 text-center">
+                      <input
+                        type="checkbox"
+                        checked={!!e.included}
+                        onChange={() => toggleIncluded(i)}
+                        disabled={!balanced}
+                        data-testid={`od-include-${i}`}
+                      />
+                    </td>
+                    <td className="px-2 py-0.5 font-mono">{e.date_display || e.date}</td>
+                    <td className="px-2 py-0.5 font-mono text-[10px]">{e.reference}</td>
+                    <td className="px-2 py-0.5">
+                      {e.description}
+                      {e.exclusion_reason && (
+                        <div className="text-[9px] text-amber-700 italic">⚠ {e.exclusion_reason}</div>
+                      )}
+                    </td>
+                    <td className="px-2 py-0.5 text-right font-mono">
+                      {(Number(e.total_debit) || 0).toFixed(2)}
+                    </td>
+                    <td className="px-2 py-0.5">
+                      {balanced ? (
+                        <span className="text-emerald-700 text-[10px]">✓ equilibree</span>
+                      ) : (
+                        <span className="text-red-700 text-[10px]">✗ desequilibree</span>
+                      )}
+                    </td>
+                  </tr>
+                  {/* Lines (indented, smaller) */}
+                  {e.included && (e.lines || []).map((ln, li) => (
+                    <tr key={`${i}-${li}`} className="text-[10px] text-slate-600 bg-slate-50/30">
+                      <td colSpan={2}></td>
+                      <td className="px-2 py-0 font-mono">{ln.account_number}</td>
+                      <td className="px-2 py-0">
+                        {ln.account_name}
+                        {ln.auxiliary_info && <span className="text-slate-400 ml-2">| {ln.auxiliary_info}</span>}
+                      </td>
+                      <td className="px-2 py-0 text-right font-mono">
+                        {ln.debit > 0 && <span className="text-slate-700">D {ln.debit.toFixed(2)}</span>}
+                        {ln.credit > 0 && <span className="text-slate-700">C {ln.credit.toFixed(2)}</span>}
+                      </td>
+                      <td></td>
+                    </tr>
+                  ))}
+                </Fragment>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="text-[11px] text-slate-500 italic">
+        Chaque ecriture sera importee <strong>telle quelle</strong> (lignes deja equilibrees par Optipro) avec
+        sa reference d&apos;origine conservee dans le champ <code>optipro_reference</code>. Les coproprietaires
+        et fournisseurs sont rattaches automatiquement via leur <code>auxiliary_code</code> (C1996, F0145, etc.).
+      </div>
+    </div>
+  );
+}
+
+// ============== Format B : Liste des depenses (legacy) ==============
+function OdExpenseListPreview({ odData, setOdData }) {
   const upd = (idx, field, value) => {
     const next = odData.entries.map((e, i) => i === idx ? { ...e, [field]: value } : e);
     setOdData({ ...odData, entries: next });
@@ -878,15 +1002,16 @@ function OdEntriesPreview({ odData, setOdData }) {
             {odData.entries.map((e, i) => {
               const hasCounter = !!(e.counterpart_account || '').trim();
               const cpVal = e.counterpart_account ? `${e.counterpart_account}|${e.counterpart_account_name || ''}` : '';
+              const libelle = e.libelle || '';
               return (
                 <tr key={i} className={`border-t border-slate-100 ${!hasCounter ? 'bg-red-50' : ''}`} data-testid={`od-row-${i}`}>
                   <td className="px-2 py-0.5 font-mono">{e.date}</td>
-                  <td className="px-2 py-0.5 text-[10px]" title={e.libelle}>{e.libelle.length > 50 ? e.libelle.slice(0, 50) + '...' : e.libelle}</td>
+                  <td className="px-2 py-0.5 text-[10px]" title={libelle}>{libelle.length > 50 ? libelle.slice(0, 50) + '...' : libelle}</td>
                   <td className="px-2 py-0.5 font-mono">
                     <div>{e.account_number}</div>
-                    <div className="text-[9px] text-slate-500">{e.account_name?.slice(0, 18)}</div>
+                    <div className="text-[9px] text-slate-500">{(e.account_name || '').slice(0, 18)}</div>
                   </td>
-                  <td className={`px-2 py-0.5 text-right font-mono ${e.amount < 0 ? 'text-red-700' : 'text-slate-800'}`}>{e.amount.toFixed(2)}</td>
+                  <td className={`px-2 py-0.5 text-right font-mono ${e.amount < 0 ? 'text-red-700' : 'text-slate-800'}`}>{(Number(e.amount) || 0).toFixed(2)}</td>
                   <td className="px-2 py-0.5">
                     <select
                       value={cpVal}

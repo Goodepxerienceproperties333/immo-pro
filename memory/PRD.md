@@ -11,6 +11,65 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 ## Implemented
+### Iter72nonies (Feb 2026) - Support du PDF "Journal OD" Optipro (format optimal) + correctif crash UI
+
+**Probleme** : a l'upload du PDF "Journal comptable OD" (le bon document Optipro), la page crashait avec
+`TypeError: Cannot read properties of undefined (reading 'length')` au niveau de `OdEntriesPreview` parce
+que les entrees du format `od_journal` n'ont pas les champs `libelle/amount/suggested_counterpart`.
+
+**Decouverte** : le PDF "Journal comptable OD" est BIEN MEILLEUR que la "Liste des depenses" car :
+- Chaque ecriture est deja **equilibree avec ses lignes explicites** (compte, debit, credit)
+- Les **codes auxiliaires** (C1996, F0145) sont directement dans le PDF
+- Aucune saisie manuelle de contrepartie requise
+- L'utilisateur n'a qu'a inclure/exclure les ecritures de cloture annuelle
+
+**Implementation** :
+
+1. **Backend - Auto-detection des 2 formats** (`pdf_utils.py::parse_od_entries_pdf`) :
+   - Detecte "JOURNAL COMPTABLE : OPERATIONS DIVERSES" dans le premier texte
+   - Si oui -> `_parse_od_journal_pdf` (35 entrees, lignes explicites)
+   - Sinon -> `_parse_od_expense_list_pdf` (33 entrees, suggested_counterpart)
+   - Retour unifie avec `format: "od_journal" | "expense_list"`
+
+2. **Backend - Parser Journal OD** :
+   - Regex header : `DD/MM/YYYY - NNNNNN - description TOTAL_D TOTAL_C`
+   - Regex line : `ACCOUNT - LIBELLE [| AUX_INFO] OD DD/MM/YYYY DD/MM/YYYY DEBIT CREDIT`
+   - Split aux_info pour separer `account_name` et `auxiliary_info`
+   - **Exclusion auto** des "Cloture - SOMETHING" et "Solde des comptes" (vrais closings)
+   - **NON-exclusion** des "Sinistre X - cloture" (fausses-positives evitees via prefix check)
+   - Validation balance par entree
+
+3. **Backend - Endpoint `commit-od-entries` dual-mode** :
+   - Detecte le format via presence de `lines` dans la 1re entree
+   - Format A (expense_list) : controle counterpart obligatoire, JE 2 lignes auto-construite
+   - Format B (journal_od) : utilise les lignes du PDF telles quelles, controle equilibre
+   - Auxiliary lookup : C1996 -> owner_id canonique, F0145 -> supplier_id canonique via `auxiliary_code`
+   - Idempotence via `optipro_reference` (Journal OD) ou `source_y/page` (expense list)
+
+4. **Frontend - Composant `OdEntriesPreview` refactor** :
+   - Dispatch sur `odData.format` :
+     - `od_journal` -> `OdJournalPreview` : tableau avec checkbox include/exclude, lignes detaillees indentees
+     - `expense_list` -> `OdExpenseListPreview` : ancien tableau avec dropdown contrepartie
+   - Empeche le crash en utilisant le bon composant pour chaque format
+
+**Result E2E (verifie sur Gaura via API)** :
+- ✅ PDF "Journal OD" parse : 35 entrees, format auto-detecte
+- ✅ 33 incluses par defaut + 2 exclues (000466, 000467 cloture)
+- ✅ Sinistre closures NON-exclues (000187, 000428 correctement gardes)
+- ✅ Codes auxiliaires C1996/F0145 lies aux owner/supplier_id canoniques
+- ✅ Commit Journal OD : 33 inserted, 2 skipped (closing), 0 errors
+- ✅ **API expense list = 33,828.43 EUR = PDF Optipro 33,828.43 EUR (diff +0.00)**
+- ✅ Idempotence parfaite via `optipro_reference`
+- ✅ Backwards-compat : "Liste des depenses" toujours supporte (4 tests legacy PASSED)
+
+**Regression tests** : `/app/backend/tests/test_iter72_journal_od_wizard.py` (5 tests, PASSED)
+
+**Fichiers** :
+- `/app/backend/import_wizard/pdf_utils.py` (auto-detect + parser journal_od)
+- `/app/backend/routes/import_wizard.py` (commit dual-mode)
+- `/app/frontend/src/pages/ImportWizardPage.js` (OdEntriesPreview dispatcher, Fragment import)
+- `/app/backend/tests/test_iter72_journal_od_wizard.py` (5 tests)
+
 ### Iter72octies (Feb 2026) - Step "OD year-end" dans le wizard d'import
 
 **Demande utilisateur** : "Ajouter un step OD year-end dans le wizard d'import (pour eviter de devoir scripter chaque ACP)"

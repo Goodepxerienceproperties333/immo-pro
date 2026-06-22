@@ -1215,18 +1215,26 @@ def create_import_wizard_router(db):
     # ----- C-BIS: OD YEAR-END ENTRIES -----
     @router.post("/sessions/{session_id}/commit-od-entries")
     async def commit_od_entries(session_id: str, data: CommitOdEntriesInput, request: Request):
-        """Commit year-end OD (Operations Diverses) entries from the Optipro
-        "Liste des depenses" PDF.
+        """Commit year-end OD (Operations Diverses) entries.
 
-        For each entry, the user has already chosen :
-          - the charge account (e.g. 61011, 66, 61066, 643, 61214)
-          - the counterpart account (e.g. 490, 444, 417, 499603, 494001, 4990, 410)
+        Supports two payload formats :
+
+        A) Liste des depenses (legacy) - each entry has charge+counterpart+amount :
+           {date, libelle, account_number, account_name, amount,
+            counterpart_account, counterpart_account_name,
+            proprietaire_pct, occupant_pct}
+
+        B) Journal comptable OD (preferred) - each entry has explicit lines :
+           {date, reference, description, lines: [{account_number, account_name,
+            auxiliary_info, debit, credit}], included: True/False}
+
+        For format A : a 2-line balanced JE is auto-built.
+        For format B : the input lines ARE the JE lines (already balanced).
+
         The endpoint :
-          1. Validates that EVERY entry has both accounts set (no defaults).
+          1. Validates (A) every entry has counterpart OR (B) every entry is balanced.
           2. Auto-creates the PCMN accounts if missing.
-          3. For each entry, creates a balanced OD journal entry :
-             - if amount > 0 : DEBIT charge / CREDIT counterpart
-             - if amount < 0 : DEBIT counterpart / CREDIT charge (release)
+          3. Resolves auxiliary_info (e.g. "C1996 M. brumagne") -> third_party_id.
           4. Skips entries whose signature already exists (idempotent).
         """
         from fiscal_lock import ensure_period_open
@@ -1240,31 +1248,81 @@ def create_import_wizard_router(db):
         if not entries:
             raise HTTPException(400, "Aucune ecriture OD a importer")
 
-        # ---- Pre-flight : every entry MUST have charge + counterpart ----
-        missing_counterpart = [
-            i for i, e in enumerate(entries)
-            if not (e.get("counterpart_account") or "").strip()
-        ]
-        if missing_counterpart:
-            raise HTTPException(
-                400,
-                f"{len(missing_counterpart)} ecriture(s) sans contrepartie definie : "
-                f"lignes {missing_counterpart[:5]}{'...' if len(missing_counterpart) > 5 else ''}. "
-                "Choisissez une contrepartie pour chaque ligne avant validation.",
-            )
+        # ---- Detect payload format ----
+        # Format B if first entry has non-empty 'lines'
+        is_journal_od = bool(entries[0].get("lines"))
+
+        # ---- Pre-flight ----
+        if is_journal_od:
+            unbalanced = []
+            for i, e in enumerate(entries):
+                if not e.get("included", True):
+                    continue
+                lines_in = e.get("lines") or []
+                sum_d = round(sum(float(ln.get("debit") or 0) for ln in lines_in), 2)
+                sum_c = round(sum(float(ln.get("credit") or 0) for ln in lines_in), 2)
+                if abs(sum_d - sum_c) > 0.01:
+                    unbalanced.append({"idx": i, "ref": e.get("reference", ""), "diff": sum_d - sum_c})
+            if unbalanced:
+                raise HTTPException(
+                    400,
+                    f"{len(unbalanced)} ecriture(s) desequilibree(s). Verifiez le PDF source. "
+                    f"Exemples : {[u['ref'] for u in unbalanced[:3]]}",
+                )
+        else:
+            missing_counterpart = [
+                i for i, e in enumerate(entries)
+                if not (e.get("counterpart_account") or "").strip()
+            ]
+            if missing_counterpart:
+                raise HTTPException(
+                    400,
+                    f"{len(missing_counterpart)} ecriture(s) sans contrepartie definie : "
+                    f"lignes {missing_counterpart[:5]}{'...' if len(missing_counterpart) > 5 else ''}. "
+                    "Choisissez une contrepartie pour chaque ligne avant validation.",
+                )
 
         # ---- Auto-create missing PCMN accounts ----
         accounts_needed: dict[str, str] = {}
-        for e in entries:
-            for k_acc, k_name in [
-                ("account_number", "account_name"),
-                ("counterpart_account", "counterpart_account_name"),
-            ]:
-                num = (e.get(k_acc) or "").strip()
-                lbl = (e.get(k_name) or "").strip()
-                if num:
-                    accounts_needed[num] = lbl
+        if is_journal_od:
+            for e in entries:
+                if not e.get("included", True):
+                    continue
+                for ln in (e.get("lines") or []):
+                    num = (ln.get("account_number") or "").strip()
+                    if num:
+                        accounts_needed[num] = (ln.get("account_name") or "").strip() or num
+        else:
+            for e in entries:
+                for k_acc, k_name in [
+                    ("account_number", "account_name"),
+                    ("counterpart_account", "counterpart_account_name"),
+                ]:
+                    num = (e.get(k_acc) or "").strip()
+                    lbl = (e.get(k_name) or "").strip()
+                    if num:
+                        accounts_needed[num] = lbl
         pcmn_created = await _ensure_pcmn_accounts(copro_id, accounts_needed)
+
+        # ---- Pre-load owner/supplier lookup by auxiliary_code ----
+        # For Journal OD : lines like "Coproprietaires | C1996 M. brumagne"
+        # need to be linked to the canonical owner id.
+        import re as _re_aux
+        aux_re = _re_aux.compile(r"^(C|F)(\d{3,5})\b")
+        owner_by_aux: dict[str, str] = {}
+        async for o in db.owners.find(
+            {"auxiliary_code": {"$exists": True, "$ne": ""}}, {"_id": 0, "id": 1, "auxiliary_code": 1},
+        ):
+            ac = (o.get("auxiliary_code") or "").upper().strip()
+            if ac:
+                owner_by_aux.setdefault(ac, o["id"])
+        supplier_by_aux: dict[str, str] = {}
+        async for s in db.suppliers.find(
+            {"auxiliary_code": {"$exists": True, "$ne": ""}}, {"_id": 0, "id": 1, "auxiliary_code": 1},
+        ):
+            ac = (s.get("auxiliary_code") or "").upper().strip()
+            if ac:
+                supplier_by_aux.setdefault(ac, s["id"])
 
         # ---- Build OD journal entries ----
         inserted = 0
@@ -1277,10 +1335,88 @@ def create_import_wizard_router(db):
         seq = existing_count + 1
 
         for idx, e in enumerate(entries):
+            # Skip excluded entries (Journal OD : closing entries by default)
+            if is_journal_od and not e.get("included", True):
+                skipped += 1
+                continue
+
             date = (e.get("date") or "").strip()
             if not date:
                 errors.append({"idx": idx, "error": "Date manquante"})
                 continue
+
+            if is_journal_od:
+                ref_optipro = (e.get("reference") or "").strip()
+                libelle = (e.get("description") or "").strip() or f"OD {date}"
+                # Idempotence : skip if (date, libelle, Optipro reference) already exists
+                existing = await db.journal_entries.find_one({
+                    "copropriete_id": copro_id,
+                    "journal_type": "OD",
+                    "date": date,
+                    "optipro_reference": ref_optipro,
+                    "manually_created_from_od_wizard": True,
+                }, {"_id": 0, "id": 1})
+                if existing:
+                    skipped += 1
+                    continue
+                # Fiscal lock check
+                try:
+                    await ensure_period_open(db, copro_id, date, context=f"OD year-end {libelle[:40]}")
+                except Exception as ex:
+                    errors.append({"idx": idx, "error": f"Periode fermee : {ex}"})
+                    continue
+                # Build lines from the PDF lines (already balanced)
+                lines = []
+                for ln in (e.get("lines") or []):
+                    acc = (ln.get("account_number") or "").strip()
+                    name = (ln.get("account_name") or "").strip() or acc
+                    aux_raw = (ln.get("auxiliary_info") or "").strip()
+                    tpid = ""
+                    tptype = ""
+                    if aux_raw:
+                        m = aux_re.match(aux_raw)
+                        if m:
+                            code = (m.group(1) + m.group(2)).upper()
+                            if m.group(1) == "C":
+                                tpid = owner_by_aux.get(code, "")
+                                tptype = "owner" if tpid else ""
+                            elif m.group(1) == "F":
+                                tpid = supplier_by_aux.get(code, "")
+                                tptype = "supplier" if tpid else ""
+                    lines.append({
+                        "account_number": acc,
+                        "account_name": name,
+                        "description": libelle,
+                        "debit": round(float(ln.get("debit") or 0), 2),
+                        "credit": round(float(ln.get("credit") or 0), 2),
+                        "auxiliary_info": aux_raw,
+                        "third_party_id": tpid,
+                        "third_party_type": tptype,
+                    })
+                total_d = round(sum(ln["debit"] for ln in lines), 2)
+                total_c = round(sum(ln["credit"] for ln in lines), 2)
+                doc = {
+                    "id": str(uuid.uuid4()),
+                    "journal_type": "OD",
+                    "date": date,
+                    "reference": f"OD-{year_for_ref}-{seq:04d}",
+                    "optipro_reference": ref_optipro,
+                    "description": libelle,
+                    "lines": lines,
+                    "total_debit": total_d,
+                    "total_credit": total_c,
+                    "copropriete_id": copro_id,
+                    "manually_created_from_od_wizard": True,
+                    "od_source_format": "od_journal",
+                    "import_session_id": session_id,
+                    "created_at": _now_iso(),
+                }
+                await db.journal_entries.insert_one(doc)
+                inserted += 1
+                seq += 1
+                continue
+
+            # ---- Format A : Liste des depenses ----
             charge_acc = (e.get("account_number") or "").strip()
             counter_acc = (e.get("counterpart_account") or "").strip()
             charge_name = (e.get("account_name") or "").strip() or charge_acc
@@ -1294,10 +1430,7 @@ def create_import_wizard_router(db):
             prop_pct = float(e.get("proprietaire_pct") if e.get("proprietaire_pct") is not None else max(0.0, 100.0 - occ_pct))
 
             # Idempotence : skip ONLY if EXACT match (date+charge+amount+libelle+source_y)
-            # already exists from a previous wizard run. We include the source_y
-            # so that multiple legitimate identical-amount entries on the same
-            # day (e.g. 4 lots paying the same private fee on the same date)
-            # are NOT mistakenly deduped.
+            # already exists from a previous wizard run.
             sig_amount = round(abs(amount), 2)
             source_y = float(e.get("source_y") or 0)
             source_page = int(e.get("source_page") or 0)
@@ -1358,6 +1491,7 @@ def create_import_wizard_router(db):
                 "manually_created_from_od_wizard": True,
                 "od_source_y": source_y,
                 "od_source_page": source_page,
+                "od_source_format": "expense_list",
                 "import_session_id": session_id,
                 "created_at": _now_iso(),
             }

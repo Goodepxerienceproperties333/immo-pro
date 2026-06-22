@@ -1425,6 +1425,152 @@ def _to_float(s: str) -> float:
 # Extracts only the rows where N° piece = "-" (Operations Diverses).
 # Skips compte 650 (Frais bancaires) as those are handled by FI journals.
 def parse_od_entries_pdf(raw: bytes) -> dict:
+    """Auto-detect and parse OD entries from either :
+      A) Optipro "Liste des depenses" PDF (rows with N° piece = "-")
+      B) Optipro "Journal comptable - OD" PDF (full balanced double-entries)
+
+    Returns a unified shape :
+    {
+      format: "expense_list" | "od_journal",
+      entries: [...],  # shape depends on format
+      total_count, total_amount, period_start, period_end
+    }
+    """
+    # Detection : peek at first page for "JOURNAL COMPTABLE" header
+    try:
+        with pdfplumber.open(io.BytesIO(raw)) as pdf:
+            first_txt = (pdf.pages[0].extract_text() or "") if pdf.pages else ""
+    except Exception:
+        first_txt = ""
+    is_journal_od = (
+        "JOURNAL COMPTABLE" in first_txt.upper()
+        and "OD" in first_txt.upper()
+        and "OP" in first_txt.upper()  # OPERATIONS / OPÉRATIONS
+    )
+    if is_journal_od:
+        return _parse_od_journal_pdf(raw)
+    # Fallback : Liste des depenses parser
+    return _parse_od_expense_list_pdf(raw)
+
+
+def _parse_od_journal_pdf(raw: bytes) -> dict:
+    """Parse Optipro 'Journal comptable - OD' PDF (full balanced double-entries).
+
+    Format :
+      Entry header : "DD/MM/YYYY - NNNNNN - description TOTAL_DEB TOTAL_CRED"
+      Each line   : "ACCOUNT - LIBELLE [| AUX_INFO] OD DD/MM/YYYY DD/MM/YYYY DEBIT CREDIT"
+
+    Returns: {
+      format: "od_journal",
+      entries: [{date, reference, description, lines: [...], total_debit,
+                 total_credit, balanced, included, exclusion_reason}],
+      ...
+    }
+    """
+    import re
+    info = {
+        "format": "od_journal",
+        "entries": [],
+        "total_count": 0,
+        "total_amount": 0.0,
+        "period_start": "",
+        "period_end": "",
+    }
+    header_re = re.compile(r"^(\d{2}/\d{2}/\d{4}) - (\d+) - (.+?) ([\d ]+,\d{2}) ([\d ]+,\d{2})$")
+    line_re = re.compile(r"^(\d{2,8}) - (.+?) OD (\d{2}/\d{2}/\d{4}) (\d{2}/\d{2}/\d{4}) ([\d ]+,\d{2}) ([\d ]+,\d{2})$")
+    period_re = re.compile(r"DU (\d{2}/\d{2}/\d{4}) AU (\d{2}/\d{2}/\d{4})")
+
+    def _f(s: str) -> float:
+        try:
+            return float(s.replace(" ", "").replace("\u00a0", "").replace(",", "."))
+        except (ValueError, TypeError):
+            return 0.0
+
+    with pdfplumber.open(io.BytesIO(raw)) as pdf:
+        all_lines = []
+        for pi, page in enumerate(pdf.pages):
+            txt = page.extract_text() or ""
+            for ln in txt.split("\n"):
+                all_lines.append((pi + 1, ln))
+        # period detection
+        for _pi, ln in all_lines[:10]:
+            m = period_re.search(ln.upper().replace("É", "E"))
+            if m:
+                info["period_start"] = m.group(1)
+                info["period_end"] = m.group(2)
+                break
+
+    current = None
+    for pi, ln in all_lines:
+        ln_strip = ln.strip()
+        if not ln_strip:
+            continue
+        mh = header_re.match(ln_strip)
+        if mh:
+            if current:
+                info["entries"].append(current)
+            desc = mh.group(3).strip()
+            # Closing entries should be excluded by default : they transfer all
+            # expense accounts to 701 (provisions) and split among owners. If we
+            # imported them too, we'd duplicate the year's charges.
+            # Pattern : description STARTS with "Cloture - " or "Clôture - "
+            # (real closing accounting entries always have this prefix from
+            # Optipro). Sinistre closures like "Sinistre X - clôture" are NOT
+            # accounting closings and should be imported.
+            desc_low = desc.lower()
+            is_closing = (
+                desc_low.startswith("cloture - ")
+                or desc_low.startswith("clôture - ")
+                or desc_low.startswith("solde des comptes")
+            )
+            current = {
+                "date": _to_iso_date(mh.group(1)),
+                "date_display": mh.group(1),
+                "reference": mh.group(2),
+                "description": desc,
+                "total_debit": _f(mh.group(4)),
+                "total_credit": _f(mh.group(5)),
+                "lines": [],
+                "balanced": True,
+                "included": not is_closing,
+                "exclusion_reason": "Ecriture de cloture (eviterait les doublons)" if is_closing else "",
+                "source_page": pi,
+            }
+            continue
+        ml = line_re.match(ln_strip)
+        if ml and current:
+            account = ml.group(1)
+            label_full = ml.group(2).strip()
+            label = label_full
+            aux_info = ""
+            if " | " in label_full:
+                label, aux_info = label_full.split(" | ", 1)
+                aux_info = aux_info.strip()
+            current["lines"].append({
+                "account_number": account,
+                "account_name": label.strip(),
+                "auxiliary_info": aux_info,
+                "debit": _f(ml.group(5)),
+                "credit": _f(ml.group(6)),
+            })
+    if current:
+        info["entries"].append(current)
+
+    # Validate balance per entry
+    for e in info["entries"]:
+        sum_d = round(sum(l["debit"] for l in e["lines"]), 2)
+        sum_c = round(sum(l["credit"] for l in e["lines"]), 2)
+        e["balanced"] = abs(sum_d - sum_c) < 0.01
+        if not e["balanced"]:
+            e["included"] = False
+            e["exclusion_reason"] = f"Ecriture desequilibree (D={sum_d} C={sum_c})"
+
+    info["total_count"] = len(info["entries"])
+    info["total_amount"] = round(sum(e["total_debit"] for e in info["entries"] if e["included"]), 2)
+    return info
+
+
+def _parse_od_expense_list_pdf(raw: bytes) -> dict:
     """Parse Optipro 'Liste des depenses' PDF and extract only OD entries
     (rows where Ref. interne = '-'). Skips bank fees (compte 650).
 
@@ -1454,6 +1600,7 @@ def parse_od_entries_pdf(raw: bytes) -> dict:
     """
     import re
     info = {
+        "format": "expense_list",
         "entries": [],
         "total_count": 0,
         "total_amount": 0.0,
