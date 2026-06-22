@@ -11,6 +11,60 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 ## Implemented
+### Iter72sexies (Feb 2026) - Distribution keys schema unifie + lot matching + invoice distribution_lines recompute
+
+**Bugs rapportes** :
+1. "La creation de la cle de repartition ne s'est pas faite" : sur ACP Gaura,
+   le dialog "Modifier la cle" affichait Total quotite = 0.00 alors que la cle
+   "Charges communes" existait avec 63 factures liees.
+2. "La liste de depenses ne correspond pas" : repartition par proprietaire
+   non calculee sur les factures importees via le wizard.
+
+**Root cause** :
+Le wizard `commit-distribution-keys` ecrivait les cles avec un schema different
+de celui attendu par l'API publique :
+- Wizard : `lines: [{lot_id, lot_label_raw, lot_code_raw, owner_label_raw, quotity}]` + `type: 'tantiemes'`
+- API publique : `lots: [{lot_id, lot_number, share}]` + `key_type: 'quotity'`
+
+En plus, le matching des lots echouait :
+- `lot_code_raw` = "-" (juste un tiret du PDF Optipro)
+- `lot_label_raw` = "B0-1 - APPARTEMENT" -> ne matche pas le `lot.number = "B0-1"`
+
+Resultat :
+- Frontend dialog : `keyForm.lots` vide -> Total quotite = 0.00
+- POST /api/invoices : `key.lots = []` -> `distribution_lines = []` -> pas de repartition par proprietaire
+- API GET /api/fiscal/expenses : totals OK mais champ `total_amount` par invoice manquait de detail proprietaire
+
+**Fix backend** (`/app/backend/routes/import_wizard.py::commit_distribution_keys`) :
+1. Ajout helper `_extract_lot_number()` qui strip " - SUFFIX" :
+   `"B0-1 - APPARTEMENT"` -> `"b0-1"`, `"Cave 1 - CAVE"` -> `"cave 1"`.
+2. Tentative de matching en cascade : `lot_code` extrait, `lot_label` extrait,
+   `lot_code` brut, `lot_label` brut. Skip si valeur `"-"` ou vide.
+3. Ecrit DOUBLE schema (`lots` ET `lines` en alias) pour compat ascendante.
+4. Stocke `key_type = 'quotity'` (vs `type = 'tantiemes'` en plus).
+
+**Scripts permanents `/app/backend/scripts/`** :
+- `migrate_distribution_keys_schema.py` : migre toutes les cles existantes
+  (`lines` -> `lots`) avec rematching des lot_ids via numero extrait.
+- `recompute_invoice_distribution_lines.py` : re-calcule
+  `invoices.distribution_lines` apres migration des cles (regroupe les
+  factures sans distribution par owner_id+amount).
+
+**Result E2E (verifie par API)** :
+- Cle "Charges communes" Gaura : 43/43 lots matched, total 10000.00 ✓
+- 90 factures reparties (63 Gaura + 27 autres ACPs) avec distribution_lines
+  computees (lot_id + lot_number + owner_name + share + amount)
+- API `/api/distribution-keys?copropriete_id=Gaura` retourne lots = 43 matched
+- Frontend "Modifier la cle" affichera Total quotite = 10000.00 (non plus 0.00)
+
+**Regression tests** : `/app/backend/tests/test_iter72_distribution_keys_schema.py` (2 tests, PASSED)
+
+**Fichiers** :
+- `/app/backend/routes/import_wizard.py` (commit_distribution_keys reecrit)
+- `/app/backend/scripts/migrate_distribution_keys_schema.py` (nouveau)
+- `/app/backend/scripts/recompute_invoice_distribution_lines.py` (nouveau)
+- `/app/backend/tests/test_iter72_distribution_keys_schema.py` (nouveau)
+
 ### Iter72quinquies (Feb 2026) - PDF Bilan parser : reconnaissance des comptes PCMN 2 chiffres
 
 **Bug rapporte** : a l'import d'un Bilan comptable Optipro au 31/12/2024, l'etape 8/8 (OD d'ouverture) affichait un desequilibre de 25.46 EUR :

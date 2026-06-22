@@ -1432,8 +1432,9 @@ def create_import_wizard_router(db):
     async def commit_distribution_keys(session_id: str, data: CommitDistributionKeysInput, request: Request):
         """Cree les cles de repartition + leurs tantiemes par lot.
 
-        Pour chaque cle : 1 doc distribution_keys + matching automatique des lots
-        importes pendant la session (basee sur le numero / le libelle).
+        Pour chaque cle : 1 doc distribution_keys (schema unifie avec
+        /api/distribution-keys) + matching automatique des lots de l'ACP via
+        leur numero extrait du libelle (ex. 'B0-1 - APPARTEMENT' -> 'B0-1').
         """
         session = await db.import_sessions.find_one({"id": session_id})
         if not session:
@@ -1442,8 +1443,21 @@ def create_import_wizard_router(db):
         await _require_acp_access(request, db, copro_id)
         # Lookup des lots de l'ACP (toute la base, pas juste la session)
         lots = await db.lots.find({"copropriete_id": copro_id}, {"_id": 0, "id": 1, "number": 1, "description": 1}).to_list(2000)
-        lots_by_number = {(l.get("number") or "").lower().strip(): l["id"] for l in lots}
-        lots_by_desc = {(l.get("description") or "").lower().strip(): l["id"] for l in lots}
+        lots_by_number = {(l.get("number") or "").lower().strip(): l for l in lots}
+        lots_by_desc = {(l.get("description") or "").lower().strip(): l for l in lots}
+
+        def _extract_lot_number(raw: str) -> str:
+            """Extract the lot number from a raw PDF label.
+            'B0-1 - APPARTEMENT' -> 'B0-1', 'Cave 1 - CAVE' -> 'Cave 1',
+            'Garage 5' -> 'Garage 5'. Returns lowercase stripped."""
+            if not raw:
+                return ""
+            s = str(raw).strip()
+            # Strip everything after " - " separator if present
+            if " - " in s:
+                s = s.split(" - ", 1)[0].strip()
+            return s.lower().strip()
+
         inserted = 0
         for k in data.keys or []:
             code = (k.get("code") or "").strip()
@@ -1451,36 +1465,55 @@ def create_import_wizard_router(db):
             if not name:
                 continue
             existing = await db.distribution_keys.find_one({"copropriete_id": copro_id, "code": code} if code else {"copropriete_id": copro_id, "name": name})
-            # Build lines : match each lot by number or label (case-insensitive)
-            kl_lines = []
+            # Build lots[] : match each input line to a real lot
+            api_lots = []
             for line in k.get("lines") or []:
                 quotity = float(line.get("quotity") or 0)
                 if quotity <= 0:
                     continue
-                lot_label = (line.get("lot_label") or "").lower().strip()
-                lot_code = (line.get("lot_code") or "").lower().strip()
-                lot_id = lots_by_number.get(lot_code) or lots_by_number.get(lot_label) or lots_by_desc.get(lot_label) or ""
-                kl_lines.append({
-                    "lot_id": lot_id,
+                lot_label = (line.get("lot_label") or "")
+                lot_code = (line.get("lot_code") or "")
+                # Extract lot number from various raw fields (PDF labels like
+                # 'B0-1 - APPARTEMENT' are common). Try in order.
+                candidates = [
+                    _extract_lot_number(lot_code),
+                    _extract_lot_number(lot_label),
+                    (lot_code or "").lower().strip(),
+                    (lot_label or "").lower().strip(),
+                ]
+                matched_lot = None
+                for cand in candidates:
+                    if not cand or cand == "-":
+                        continue
+                    matched_lot = lots_by_number.get(cand) or lots_by_desc.get(cand)
+                    if matched_lot:
+                        break
+                api_lots.append({
+                    "lot_id": matched_lot["id"] if matched_lot else "",
+                    "lot_number": matched_lot["number"] if matched_lot else (lot_code or lot_label or ""),
+                    "share": quotity,
+                    # raw fields kept for traceability
                     "lot_label_raw": line.get("lot_label", ""),
                     "lot_code_raw": line.get("lot_code", ""),
                     "owner_label_raw": line.get("owner_label", ""),
-                    "quotity": quotity,
                 })
-            total_q = float(k.get("total_quotities") or sum(l["quotity"] for l in kl_lines))
+            total_q = float(k.get("total_quotities") or sum(l["share"] for l in api_lots))
+            key_type_in = (k.get("type") or "").lower()
+            api_key_type = "equal" if key_type_in == "equal" else "quotity"
             if existing:
-                # If the existing key has NO lines (was previously created from an
-                # empty parse), enrich it with the new lines + import_session_id.
-                # Otherwise we keep the existing one untouched to avoid clobbering
-                # user edits.
-                if not (existing.get("lines") or []):
+                # If the existing key has NO lots (empty parse), enrich it with
+                # the matched lots. Otherwise keep user edits untouched.
+                has_lots = bool(existing.get("lots") or [])
+                if not has_lots:
                     await db.distribution_keys.update_one(
                         {"id": existing["id"]},
                         {"$set": {
                             "name": name,
+                            "key_type": api_key_type,
                             "type": k.get("type") or existing.get("type") or "tantiemes",
                             "total_quotities": total_q,
-                            "lines": kl_lines,
+                            "lots": api_lots,
+                            "lines": api_lots,  # kept for legacy compatibility
                             "import_session_id": session_id,
                             "updated_at": _now_iso(),
                         }},
@@ -1491,9 +1524,11 @@ def create_import_wizard_router(db):
                 "id": str(uuid.uuid4()),
                 "code": code,
                 "name": name,
+                "key_type": api_key_type,
                 "type": k.get("type") or "tantiemes",
                 "total_quotities": total_q,
-                "lines": kl_lines,
+                "lots": api_lots,
+                "lines": api_lots,  # legacy alias
                 "copropriete_id": copro_id,
                 "import_session_id": session_id,
                 "created_at": _now_iso(),
