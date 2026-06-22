@@ -175,7 +175,7 @@ export default function BundleImportDialog({
   return (
     <Dialog open={open} onOpenChange={handleClose}>
       <DialogContent
-        className="max-w-7xl w-[97vw] max-h-[94vh] overflow-y-auto"
+        className="max-w-7xl w-[97vw] max-h-[94vh] flex flex-col overflow-hidden"
         data-testid="bundle-import-dialog"
       >
         <DialogHeader>
@@ -224,8 +224,8 @@ export default function BundleImportDialog({
         )}
 
         {step === 'review' && bundleResult && (
-          <div className="space-y-3" data-testid="bundle-review">
-            <div className="flex items-center justify-between text-sm bg-blue-50 border border-blue-200 rounded p-3">
+          <div className="space-y-3 flex flex-col" style={{maxHeight: 'calc(94vh - 5rem)'}} data-testid="bundle-review">
+            <div className="flex items-center justify-between text-sm bg-blue-50 border border-blue-200 rounded p-3 shrink-0">
               <div>
                 <b>{bundleResult.invoice_count}</b> facture(s) detectee(s) sur <b>{bundleResult.total_pages}</b> page(s)
                 <span className="text-slate-500 ml-2">({bundleResult.filename})</span>
@@ -235,7 +235,7 @@ export default function BundleImportDialog({
               </div>
             </div>
 
-            <div className="border rounded overflow-hidden">
+            <div className="border rounded overflow-auto flex-1 min-h-0">
               <table className="w-full text-xs" data-testid="bundle-blocks-table">
                 <thead className="bg-slate-50 text-[10px] uppercase tracking-wide text-slate-600">
                   <tr>
@@ -355,17 +355,17 @@ export default function BundleImportDialog({
               </table>
             </div>
 
-            <div className="flex items-center justify-between pt-2 border-t">
+            <div className="flex items-center justify-between pt-3 border-t shrink-0 sticky bottom-0 bg-white -mx-6 px-6 pb-1">
               <div className="text-xs text-slate-500">
-                {Object.values(assignments).filter(a => a.mode === 'attach').length} attachement(s),
-                {' '}{Object.values(assignments).filter(a => a.mode === 'create').length} creation(s),
-                {' '}{Object.values(assignments).filter(a => a.mode === 'skip').length} ignoree(s)
+                <span className="font-semibold text-blue-700">{Object.values(assignments).filter(a => a.mode === 'attach').length}</span> attachement(s),{' '}
+                <span className="font-semibold text-emerald-700">{Object.values(assignments).filter(a => a.mode === 'create').length}</span> creation(s),{' '}
+                <span className="font-semibold text-slate-500">{Object.values(assignments).filter(a => a.mode === 'skip').length}</span> ignoree(s)
               </div>
               <div className="flex gap-2">
                 <Button variant="outline" onClick={() => handleClose(false)} data-testid="bundle-cancel-btn">Annuler</Button>
                 <Button
                   onClick={commit}
-                  className="bg-[#0055FF] hover:bg-[#0040CC]"
+                  className="bg-[#0055FF] hover:bg-[#0040CC] font-semibold shadow-md"
                   data-testid="bundle-commit-btn"
                 >
                   <Check size={16} className="mr-2" /> Confirmer l import

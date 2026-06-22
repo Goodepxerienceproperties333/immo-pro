@@ -255,28 +255,67 @@ def _extract_invoice_metadata(pages_text: List[str], page_indices: List[int]) ->
 
     # 3) Supplier name (best-effort) : first non-empty line that's not a keyword
     supplier_hint = ""
-    for ln in full_text.split("\n"):
-        ln_strip = ln.strip()
-        ln_low = ln_strip.lower()
-        if not ln_strip:
-            continue
-        if any(kw in ln_low for kw in INVOICE_KEYWORDS):
-            continue
-        if "date" in ln_low and ":" in ln_low:
-            continue
-        if "echéance" in ln_low or "echeance" in ln_low or "écheance" in ln_low:
-            continue
-        if DATE_RE.match(ln_strip):
-            continue
-        if INVOICE_NUM_RE.match(ln_strip) and len(ln_strip) < 20:
-            continue
-        if len(ln_strip) < 4 or len(ln_strip) > 60:
-            continue
-        # Skip lines starting with numbers
-        if ln_strip[0].isdigit():
-            continue
-        supplier_hint = ln_strip
-        break
+    # First : try to detect a well-known supplier by keyword.
+    # We search only in the TOP portion of the page (first 25 lines) to avoid
+    # false positives from footer / email signatures (e.g. "@finlead.be").
+    KNOWN_SUPPLIERS = [
+        ("SWDE", ["swde", "société wallonne des eaux", "societe wallonne des eaux"]),
+        ("Engie", ["engie", "engle"]),
+        ("Normec BTV", ["normec"]),
+        ("AXA Belgium", ["axa belgium", "axa assistance"]),
+        ("AG Insurance", ["ag insurance"]),
+        ("SRL Vert Ombrage", ["vert ombrage"]),
+        ("SRL Sophi Management", ["sophi management"]),
+        ("Clean & Co", ["clean &", "clean and co", "clean8co"]),
+        ("Wery Legal", ["wery legal"]),
+        ("SPRL Marougrav", ["marougrav"]),
+        ("SA Orona", ["orona"]),
+        ("Venturis", ["venturis"]),
+        ("Alarm Master NV/SA", ["alarm master"]),
+        ("ATG Wood sprl", ["atg wood"]),
+        ("SA Eurofides", ["eurofides"]),
+        ("SNEYERS Philippe", ["sneyers"]),
+        ("M. Alex BENOIT", ["alex benoit"]),
+        ("ARTHESIA", ["arthesia"]),
+        ("Evrard Gérald", ["evrard"]),
+        ("Neltane", ["neltane"]),
+        ("Braco & Le Chimiste", ["braco"]),
+        ("All Access", ["all access"]),
+        ("Vidange Efficace", ["vidange efficace"]),
+        # SRL Finlead is intentionally LAST and is filtered to avoid footer false positives
+        ("SRL Finlead", ["finlead acp", "fin lead", "srl finlead", "finlead asbl"]),
+    ]
+    # Search only top 25 lines (header area), avoiding footer noise
+    head_text = "\n".join(full_text.split("\n")[:25]).lower()
+    for canonical, keywords in KNOWN_SUPPLIERS:
+        if any(kw in head_text for kw in keywords):
+            supplier_hint = canonical
+            break
+
+    # Fallback : first non-empty line that's not a keyword
+    if not supplier_hint:
+        for ln in full_text.split("\n"):
+            ln_strip = ln.strip()
+            ln_low = ln_strip.lower()
+            if not ln_strip:
+                continue
+            if any(kw in ln_low for kw in INVOICE_KEYWORDS):
+                continue
+            if "date" in ln_low and ":" in ln_low:
+                continue
+            if "echéance" in ln_low or "echeance" in ln_low or "écheance" in ln_low:
+                continue
+            if DATE_RE.match(ln_strip):
+                continue
+            if INVOICE_NUM_RE.match(ln_strip) and len(ln_strip) < 20:
+                continue
+            if len(ln_strip) < 4 or len(ln_strip) > 60:
+                continue
+            # Skip lines starting with numbers
+            if ln_strip[0].isdigit():
+                continue
+            supplier_hint = ln_strip
+            break
 
     # 4) TVA number
     tva = ""
@@ -349,6 +388,35 @@ def _extract_invoice_metadata(pages_text: List[str], page_indices: List[int]) ->
                     all_amounts.append(v)
         if all_amounts:
             total_amount = max(all_amounts)
+
+    # SWDE-style TVAC implicit detection : if we find a line "Total HTVA <X>" AND
+    # within 3 lines a "TVA <Y%> <Z>", the implicit TVAC = X + Z. Use it ONLY if
+    # the current total_amount equals X (i.e., we have wrongly picked HTVA).
+    htva_amount = 0.0
+    tva_amount = 0.0
+    for i, ln in enumerate(lines):
+        ln_low = ln.lower()
+        # Find "Total HTVA <amount>"
+        if ("total htva" in ln_low or "totaal htva" in ln_low) and htva_amount < 0.01:
+            for m in AMOUNT_RE.finditer(ln):
+                v = _parse_amount_str(m.group(1))
+                if _is_plausible_amount(v):
+                    htva_amount = v  # take last
+            if htva_amount > 0:
+                # Look for TVA amount in next 3 lines
+                for k in range(i, min(i + 5, len(lines))):
+                    src = lines[k]
+                    src_low = src.lower()
+                    # Match a line "TVA <pct>% <amount>" - the amount is the LAST on the line
+                    if re.search(r"\btva\b", src_low) and "%" in src:
+                        for m in AMOUNT_RE.finditer(src):
+                            v = _parse_amount_str(m.group(1))
+                            if _is_plausible_amount(v) and v < htva_amount:  # TVA < HTVA
+                                tva_amount = v  # take last
+                        break
+                if tva_amount > 0 and abs(total_amount - htva_amount) < 0.5:
+                    # We had picked the HTVA as total. Replace with HTVA + TVA.
+                    total_amount = round(htva_amount + tva_amount, 2)
 
     return {
         "page_range": page_indices,
