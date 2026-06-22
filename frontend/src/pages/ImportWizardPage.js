@@ -395,6 +395,29 @@ export default function ImportWizardPage() {
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
+          {!sniffResult && step.key === 'od_entries' && (
+            <div className="bg-blue-50 border border-blue-200 rounded p-3 text-[12px] text-blue-900 space-y-1.5">
+              <div className="font-semibold flex items-center gap-1.5">
+                <ClipboardList size={14} /> A quoi sert cette etape ?
+              </div>
+              <div>
+                Les OD year-end sont des <strong>ecritures comptables de cloture d&apos;exercice</strong> qui
+                n&apos;ont <strong>pas de facture associee</strong> (N&deg; piece = &quot;-&quot; dans Optipro) :
+              </div>
+              <ul className="list-disc pl-5 text-[11px] space-y-0.5">
+                <li><strong>Charges a reporter / Annulation</strong> (compte 490) : depenses payees en N-1 imputables a N, ou inversement</li>
+                <li><strong>Factures a recevoir (FAR)</strong> (compte 444) : services consommes en N mais facturees seulement en N+1</li>
+                <li><strong>Nettoyage de bilan AGS</strong> (compte 417) : apurement de creances douteuses decide en assemblee</li>
+                <li><strong>Ajustements sinistres</strong> (494, 499) : cloture de provisions et remboursements assurance</li>
+                <li><strong>Imputations privatives</strong> (compte 643 vers 410) : transfert des frais privatifs vers les coproprietaires concernes</li>
+              </ul>
+              <div className="text-[11px] pt-1">
+                Sans cette etape, la <strong>Liste des depenses</strong> de l&apos;app ne correspondra pas au total Optipro
+                (par ex. -767 EUR d&apos;ecart sur Gaura 2025). Le wizard les detecte et propose une contrepartie automatique
+                par mot-cle ; vous validez/corrigez ligne par ligne avant commit.
+              </div>
+            </div>
+          )}
           {!sniffResult && step.kind !== 'form' && (
             <div className="border-2 border-dashed border-slate-300 rounded-md p-8 text-center">
               <Upload size={32} className="mx-auto text-slate-400 mb-2" />
@@ -409,7 +432,9 @@ export default function ImportWizardPage() {
                         ? 'Chargez le CSV "journaux_xxx.csv" Optipro (journaux financiers)'
                         : step.kind === 'pdf_balance'
                           ? 'Chargez le PDF "Bilan comptable au JJ/MM/AAAA" - utilise pour generer l\'OD d\'ouverture (A-Nouveau)'
-                          : `Chargez le PDF (${step.label})`}
+                          : step.kind === 'pdf_od_entries'
+                            ? <span>Chargez le <strong>meme PDF &laquo;Liste des depenses&raquo;</strong> que pour les factures.<br/>Le wizard extrait <strong>uniquement les lignes avec N&deg; piece = &quot;-&quot;</strong> (= ecritures OD year-end : charges a reporter, FAR, AGS, sinistres, imputations privatives) qui ne sont pas des factures.</span>
+                            : `Chargez le PDF (${step.label})`}
               </p>
               <input
                 type="file"
