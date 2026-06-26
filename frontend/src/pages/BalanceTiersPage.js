@@ -100,11 +100,16 @@ export default function BalanceTiersPage() {
   const [lettrerSuppliers, setLettrerSuppliers] = useState([]);  // available suppliers for picker
   const [lettrerSearch, setLettrerSearch] = useState('');
   const [lettrerLoading, setLettrerLoading] = useState(false);
+  // ----- Multi-selection merge state -----
+  const [mergeMode, setMergeMode] = useState(false);
+  const [selectedSupplierIds, setSelectedSupplierIds] = useState(new Set());
+  const [mergeDialogOpen, setMergeDialogOpen] = useState(false);
+  const [mergeKeepId, setMergeKeepId] = useState('');
   const [filters, setFilters] = useState(() => {
     try {
       const saved = localStorage.getItem('balance-tiers-filters');
       if (saved) return JSON.parse(saved);
-    } catch {}
+    } catch { /* ignore parse error */ }
     return { startDate: '', endDate: '', search: '' };
   });
 
@@ -316,15 +321,43 @@ export default function BalanceTiersPage() {
         <TabsContent value="suppliers" className="mt-0">
           {suppliersData && (
             <>
-              <Card className="border-orange-200 bg-orange-50 mb-4"><CardContent className="p-4 flex items-center gap-3">
-                <Truck size={20} className="text-orange-600" />
-                <div><div className="text-[10px] uppercase tracking-wider text-orange-600 font-semibold">Total a payer aux fournisseurs</div>
-                  <div className="text-xl font-black text-orange-700 font-mono" style={{fontFamily:'Chivo,sans-serif'}}>{suppliersData.total_a_payer.toFixed(2)} EUR</div>
+              <Card className="border-orange-200 bg-orange-50 mb-4"><CardContent className="p-4 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <Truck size={20} className="text-orange-600" />
+                  <div><div className="text-[10px] uppercase tracking-wider text-orange-600 font-semibold">Total a payer aux fournisseurs</div>
+                    <div className="text-xl font-black text-orange-700 font-mono" style={{fontFamily:'Chivo,sans-serif'}}>{suppliersData.total_a_payer.toFixed(2)} EUR</div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  {!mergeMode ? (
+                    <Button size="sm" variant="outline" onClick={() => { setMergeMode(true); setSelectedSupplierIds(new Set()); }} className="border-orange-300 text-orange-700 hover:bg-orange-100" data-testid="enter-merge-mode-btn">
+                      <Link2 size={13} className="mr-1.5" /> Fusionner des fournisseurs
+                    </Button>
+                  ) : (
+                    <>
+                      <span className="text-xs text-orange-700 font-medium">{selectedSupplierIds.size} selectionne(s)</span>
+                      <Button
+                        size="sm"
+                        onClick={() => {
+                          if (selectedSupplierIds.size < 2) { toast.error('Selectionnez au moins 2 fournisseurs'); return; }
+                          const selected = suppliersData.suppliers.filter(s => selectedSupplierIds.has(s.supplier_id));
+                          const best = selected.find(s => s.vat_number) || selected[0];
+                          setMergeKeepId(best?.supplier_id || '');
+                          setMergeDialogOpen(true);
+                        }}
+                        disabled={selectedSupplierIds.size < 2}
+                        className="bg-orange-600 hover:bg-orange-700 text-white"
+                        data-testid="open-merge-dialog-btn"
+                      >Fusionner la selection</Button>
+                      <Button size="sm" variant="ghost" onClick={() => { setMergeMode(false); setSelectedSupplierIds(new Set()); }} data-testid="exit-merge-mode-btn">Annuler</Button>
+                    </>
+                  )}
                 </div>
               </CardContent></Card>
               <div className="bg-white rounded-md border border-slate-200 overflow-hidden">
                 <Table>
                   <TableHeader><TableRow>
+                    {mergeMode && <TableHead className="w-8 px-1"></TableHead>}
                     <TableHead>Fournisseur</TableHead><TableHead>Compte</TableHead><TableHead>N TVA</TableHead>
                     <TableHead className="text-right">Facture</TableHead><TableHead className="text-right">Paye</TableHead>
                     <TableHead className="text-right text-slate-500" title="Debit du compte tier dans le grand livre">D. compte</TableHead>
@@ -333,7 +366,24 @@ export default function BalanceTiersPage() {
                   </TableRow></TableHeader>
                   <TableBody>
                     {applyTextFilter(suppliersData.suppliers).map((s, i) => (
-                      <TableRow key={s.supplier_id || `orphan-${i}`} className="hover:bg-slate-50/50">
+                      <TableRow key={s.supplier_id || `orphan-${i}`} className={`hover:bg-slate-50/50 ${selectedSupplierIds.has(s.supplier_id) ? 'bg-orange-50/50' : ''}`}>
+                        {mergeMode && (
+                          <TableCell className="px-1">
+                            {s.supplier_id && (
+                              <input
+                                type="checkbox"
+                                checked={selectedSupplierIds.has(s.supplier_id)}
+                                onChange={() => {
+                                  const next = new Set(selectedSupplierIds);
+                                  if (next.has(s.supplier_id)) next.delete(s.supplier_id);
+                                  else next.add(s.supplier_id);
+                                  setSelectedSupplierIds(next);
+                                }}
+                                data-testid={`merge-select-${s.supplier_id}`}
+                              />
+                            )}
+                          </TableCell>
+                        )}
                         <TableCell className="font-medium">
                           {s.supplier_name}
                           {s.orphan && <Badge variant="outline" className="ml-2 text-[10px] bg-amber-50 text-amber-700 border-amber-200">Orphelin</Badge>}
@@ -484,6 +534,80 @@ export default function BalanceTiersPage() {
               <strong>Effet du lettrage :</strong> les factures de <em>&laquo;{lettrerOrphan?.supplier_name}&raquo;</em> seront
               rattachees au fournisseur selectionne ; les ecritures comptables AC manquantes (debit charge / credit 4400xxx)
               seront automatiquement creees pour que le solde apparaisse dans la balance de tiers.
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ----- Merge suppliers dialog ----- */}
+      <Dialog open={mergeDialogOpen} onOpenChange={setMergeDialogOpen}>
+        <DialogContent className="max-w-2xl p-0 overflow-hidden" data-testid="merge-suppliers-dialog">
+          <div className="bg-gradient-to-r from-orange-600 to-orange-500 text-white px-5 py-4">
+            <DialogTitle className="text-base font-semibold m-0">Fusionner {selectedSupplierIds.size} fournisseurs</DialogTitle>
+            <div className="mt-1 text-xs opacity-90">
+              Choisissez le fournisseur a conserver. Les autres seront absorbes (factures, transactions reassociees, infos manquantes copiees), puis supprimes.
+            </div>
+          </div>
+          <div className="p-5 space-y-3">
+            <p className="text-xs text-slate-700 font-medium">Conserver ce fournisseur :</p>
+            <div className="space-y-1.5 max-h-[360px] overflow-y-auto">
+              {suppliersData && suppliersData.suppliers
+                .filter(s => selectedSupplierIds.has(s.supplier_id))
+                .map(s => {
+                  const isKept = s.supplier_id === mergeKeepId;
+                  return (
+                    <label
+                      key={s.supplier_id}
+                      className={`flex items-center gap-3 border rounded-md px-3 py-2 cursor-pointer ${isKept ? 'border-orange-400 bg-orange-50' : 'border-slate-200 hover:border-slate-300'}`}
+                    >
+                      <input
+                        type="radio"
+                        name="merge-keep"
+                        checked={isKept}
+                        onChange={() => setMergeKeepId(s.supplier_id)}
+                        data-testid={`merge-keep-${s.supplier_id}`}
+                      />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-medium text-sm">{s.supplier_name}</span>
+                          {s.vat_number && <Badge variant="outline" className="text-[10px] font-mono bg-blue-50 text-blue-700 border-blue-200">TVA {s.vat_number}</Badge>}
+                          <Badge variant="outline" className="text-[10px] font-mono">{s.tier_account || '—'}</Badge>
+                        </div>
+                        <div className="text-[11px] text-slate-500 mt-0.5">
+                          Facture: {s.total_invoiced.toFixed(2)} EUR &middot; Paye: {s.total_paid.toFixed(2)} EUR &middot; Solde: {s.balance.toFixed(2)} EUR
+                        </div>
+                      </div>
+                      {isKept && <Badge className="bg-orange-600 text-white text-[10px]">A CONSERVER</Badge>}
+                    </label>
+                  );
+                })}
+            </div>
+            <div className="mt-3 p-2 bg-amber-50 border border-amber-200 rounded text-xs text-amber-800">
+              <strong>Attention :</strong> les fournisseurs absorbes seront supprimes apres reassociation des factures et transactions. Les ecritures comptables historiques restent inchangees.
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="ghost" onClick={() => setMergeDialogOpen(false)} data-testid="merge-cancel-btn">Annuler</Button>
+              <Button
+                onClick={async () => {
+                  const removeIds = Array.from(selectedSupplierIds).filter(id => id !== mergeKeepId);
+                  if (!mergeKeepId || removeIds.length === 0) {
+                    toast.error('Selection invalide');
+                    return;
+                  }
+                  try {
+                    const r = await api.post('/suppliers/merge', { keep_id: mergeKeepId, remove_ids: removeIds });
+                    toast.success(`Fusion OK : ${r.data.invoices_migrated} facture(s), ${r.data.bank_transactions_migrated} transaction(s) reassociees, ${r.data.removed_ids.length} fournisseur(s) absorbe(s)`);
+                    setMergeDialogOpen(false);
+                    setMergeMode(false);
+                    setSelectedSupplierIds(new Set());
+                    load();
+                  } catch (err) {
+                    toast.error(err.response?.data?.detail || 'Erreur fusion');
+                  }
+                }}
+                className="bg-orange-600 hover:bg-orange-700 text-white"
+                data-testid="merge-confirm-btn"
+              >Confirmer la fusion</Button>
             </div>
           </div>
         </DialogContent>

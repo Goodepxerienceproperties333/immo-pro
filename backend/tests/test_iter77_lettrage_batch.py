@@ -132,10 +132,11 @@ async def _test_batch_partiel():
         await _cleanup(db, cid)
 
 
-async def _test_batch_overpayment_refused():
-    """3 txns de 200 EUR vers facture 300 EUR -> HTTPException 400 (sur-paiement)."""
+async def _test_batch_overpayment_allowed():
+    """3 txns de 200 EUR vers facture 300 EUR -> status=paid + overpaid_amount=300.
+    L'excedent sera reflete sur le compte tiers lors de la comptabilisation
+    (pas de blocage)."""
     from motor.motor_asyncio import AsyncIOMotorClient
-    from fastapi import HTTPException
     client = AsyncIOMotorClient(os.environ["MONGO_URL"])
     db = client[os.environ["DB_NAME"]]
     cid, inv_id, stmt_id, txn_ids = await _setup_invoice_and_txns(db, 300.0, (200, 200, 200))
@@ -144,14 +145,22 @@ async def _test_batch_overpayment_refused():
         router = create_banking_router(db)
         fn = _get_endpoint(router, "/api/banking/lettrage-batch")
         payload = LettrageBatchInput(transaction_ids=txn_ids, match_to_id=inv_id)
-        try:
-            await fn(data=payload)
-            raise AssertionError("Sur-paiement aurait du etre refuse")
-        except HTTPException as e:
-            assert e.status_code == 400
-            assert "Sur" in e.detail or "sur" in e.detail.lower()
+        res = await fn(data=payload)
+        # Sur-paiement accepte
+        assert res["status"] == "paid"
+        assert abs(res["total_paid"] - 600.00) < 0.01
+        assert abs(res["overpaid_amount"] - 300.00) < 0.01
+        inv = await db.invoices.find_one({"id": inv_id}, {"_id": 0})
+        assert inv["status"] == "paid"
+        assert abs(inv.get("overpaid_amount", 0) - 300.00) < 0.01
     finally:
         await _cleanup(db, cid)
+
+
+def test_lettrage_batch_overpayment_allowed():
+    """Sur-paiement accepte : le solde s'ajustera sur le compte tiers
+    proprietaire lors de la comptabilisation."""
+    asyncio.run(_test_batch_overpayment_allowed())
 
 
 async def _test_unlettrage_partial_recalc():

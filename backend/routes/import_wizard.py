@@ -339,6 +339,7 @@ def create_import_wizard_router(db):
     # ----- C: SUPPLIERS -----
     @router.post("/sessions/{session_id}/commit-suppliers")
     async def commit_suppliers(session_id: str, data: CommitSuppliersInput, request: Request):
+        from routes.suppliers import find_duplicate_supplier
         session = await db.import_sessions.find_one({"id": session_id})
         if not session:
             raise HTTPException(404, "Session introuvable")
@@ -348,6 +349,7 @@ def create_import_wizard_router(db):
         if "name" not in m or m["name"] in ("", None):
             raise HTTPException(400, "Mapping requis pour 'name'")
         inserted = 0
+        skipped_duplicates = 0
         errors = []
         for idx, row in enumerate(data.rows):
             try:
@@ -359,18 +361,29 @@ def create_import_wizard_router(db):
                 name = col("name")
                 if not name:
                     continue
+                bce = col("bce_number")
+                vat = col("vat_number")
+                iban = col("iban")
+                # Check anti-doublon scope ACP : skip silencieux (pas une erreur lors d'un import)
+                dup = await find_duplicate_supplier(
+                    db, name=name, bce_number=bce, vat_number=vat,
+                    iban=iban, copro_id=copro_id,
+                )
+                if dup:
+                    skipped_duplicates += 1
+                    continue
                 doc = {
                     "id": str(uuid.uuid4()),
                     "name": name,
-                    "vat_number": col("vat_number"),
-                    "bce_number": col("bce_number"),
+                    "vat_number": vat,
+                    "bce_number": bce,
                     "address": col("address"),
                     "postal_code": col("postal_code"),
                     "city": col("city"),
                     "country": col("country") or "Belgique",
                     "phone": col("phone"),
                     "email": col("email"),
-                    "iban": col("iban"),
+                    "iban": iban,
                     "bic": col("bic"),
                     "default_account": col("default_account"),
                     "notes": col("notes"),
@@ -382,23 +395,34 @@ def create_import_wizard_router(db):
                 inserted += 1
             except Exception as e:
                 errors.append({"row": idx, "error": str(e)})
-        await _update_step(db, session_id, "suppliers", {"count": inserted, "errors": errors})
-        return {"inserted": inserted, "errors": errors}
+        await _update_step(db, session_id, "suppliers", {
+            "count": inserted, "skipped_duplicates": skipped_duplicates, "errors": errors,
+        })
+        return {"inserted": inserted, "skipped_duplicates": skipped_duplicates, "errors": errors}
 
     # ----- C-bis: SUPPLIERS via PDF (no mapping needed - already structured) -----
     @router.post("/sessions/{session_id}/commit-suppliers-pdf")
     async def commit_suppliers_pdf(session_id: str, data: CommitSuppliersPdfInput, request: Request):
+        from routes.suppliers import find_duplicate_supplier
         session = await db.import_sessions.find_one({"id": session_id})
         if not session:
             raise HTTPException(404, "Session introuvable")
         copro_id = session["copropriete_id"]
         await _require_acp_access(request, db, copro_id)
         inserted = 0
+        skipped_duplicates = 0
         errors = []
         for idx, s in enumerate(data.suppliers):
             try:
                 name = (s.get("name") or "").strip()
                 if not name:
+                    continue
+                # Check anti-doublon scope ACP : skip silencieux (PDF Optipro ne contient pas BCE/IBAN)
+                dup = await find_duplicate_supplier(
+                    db, name=name, bce_number="", vat_number="", iban="", copro_id=copro_id,
+                )
+                if dup:
+                    skipped_duplicates += 1
                     continue
                 doc = {
                     "id": str(uuid.uuid4()),
@@ -425,8 +449,10 @@ def create_import_wizard_router(db):
                 inserted += 1
             except Exception as e:
                 errors.append({"row": idx, "error": str(e)})
-        await _update_step(db, session_id, "suppliers", {"count": inserted, "errors": errors})
-        return {"inserted": inserted, "errors": errors}
+        await _update_step(db, session_id, "suppliers", {
+            "count": inserted, "skipped_duplicates": skipped_duplicates, "errors": errors,
+        })
+        return {"inserted": inserted, "skipped_duplicates": skipped_duplicates, "errors": errors}
 
     # ----- G: INVOICES (factures) - CSV Optipro -----
     async def _ensure_pcmn_accounts(copro_id: str, accounts_needed: dict[str, str]) -> int:

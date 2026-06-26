@@ -782,13 +782,13 @@ export default function BankingPage() {
                   const isExact = Math.abs(diff) < 0.01;
                   const isOver = diff < -0.01;
                   return (
-                    <div key={inv.id} className={`border rounded-md px-3 py-2.5 ${isExact ? 'border-green-400 bg-green-50/40' : isOver ? 'border-red-300 bg-red-50/30' : 'border-slate-200'}`} data-testid={`batch-lettrage-invoice-${inv.id}`}>
+                    <div key={inv.id} className={`border rounded-md px-3 py-2.5 ${isExact ? 'border-green-400 bg-green-50/40' : isOver ? 'border-amber-300 bg-amber-50/30' : 'border-slate-200'}`} data-testid={`batch-lettrage-invoice-${inv.id}`}>
                       <div className="flex items-start justify-between gap-3 mb-1">
                         <div className="flex-1 min-w-0 flex items-center gap-2 flex-wrap">
                           <span className="font-mono text-xs font-semibold text-slate-700">{inv.number || '—'}</span>
                           <span className="text-sm font-medium text-slate-900 truncate">{inv.supplier || ''}</span>
                           {isExact && <span className="text-[10px] bg-green-600 text-white px-2 py-0.5 rounded-full font-semibold">SOLDE EXACT</span>}
-                          {isOver && <span className="text-[10px] bg-red-600 text-white px-2 py-0.5 rounded-full font-semibold">SUR-PAIEMENT</span>}
+                          {isOver && <span className="text-[10px] bg-amber-500 text-white px-2 py-0.5 rounded-full font-semibold" title="L'excedent sera porte au compte tiers du proprietaire lors de la comptabilisation">SUR-PAIEMENT (+{(selectedTotal - amount).toFixed(2)} EUR)</span>}
                           {!isExact && !isOver && diff > 0.01 && (
                             <span className="text-[10px] bg-amber-500 text-white px-2 py-0.5 rounded-full font-semibold">PARTIEL ({(amount - selectedTotal).toFixed(2)} EUR)</span>
                           )}
@@ -805,8 +805,7 @@ export default function BankingPage() {
                         <Button
                           size="sm"
                           onClick={() => doBatchLettrage(inv.id)}
-                          disabled={isOver}
-                          className={isOver ? 'opacity-50 cursor-not-allowed h-7 text-xs' : 'bg-[#0055FF] hover:bg-[#0040CC] text-white h-7 text-xs'}
+                          className="bg-[#0055FF] hover:bg-[#0040CC] text-white h-7 text-xs"
                           data-testid={`batch-lettrage-confirm-${inv.id}`}
                         ><Link2 size={11} className="mr-1" /> Lettrer ici</Button>
                       </div>

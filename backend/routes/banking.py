@@ -711,12 +711,9 @@ def create_banking_router(db):
         ), 2)
         if inv_amount <= 0:
             raise HTTPException(400, "Facture sans montant TVAC connu")
-        if total_txn > inv_amount + 0.01:
-            raise HTTPException(
-                400,
-                f"Somme des transactions ({total_txn:.2f} EUR) > montant facture ({inv_amount:.2f} EUR). "
-                "Refusee pour eviter une sur-payment.",
-            )
+        # Note: les sur-paiements sont autorises. Le solde excedentaire se reflete
+        # automatiquement sur le compte tiers du proprietaire (44XXXXX) lors de
+        # la comptabilisation de l'extrait bancaire. Pas de check ici.
 
         # Lettrage : meme lettrage_code pour toutes les txns du groupe
         lettrage_code = str(uuid.uuid4())[:8].upper()
@@ -732,18 +729,21 @@ def create_banking_router(db):
             }},
         )
 
-        # Statut facture : paid si exact, partially_paid sinon
+        # Statut facture : paid si exact, partially_paid sinon, overpaid si > inv_amount
         is_full = abs(total_txn - inv_amount) < 0.01
+        is_overpaid = total_txn > inv_amount + 0.01
         invoice_update = {
             "amount_paid": total_txn,
             "lettrage_code": lettrage_code,
         }
-        if is_full:
+        if is_full or is_overpaid:
             invoice_update["status"] = "paid"
             invoice_update["paid_at"] = now_iso
-            # paid_by_transaction_id pour back-compat (premier txn du groupe)
             invoice_update["paid_by_transaction_id"] = data.transaction_ids[0]
             invoice_update["paid_by_transaction_ids"] = list(data.transaction_ids)
+            if is_overpaid:
+                # Excedent : sera reflete sur le compte tiers lors de la comptabilisation
+                invoice_update["overpaid_amount"] = round(total_txn - inv_amount, 2)
         else:
             invoice_update["status"] = "partially_paid"
             invoice_update["paid_by_transaction_ids"] = list(data.transaction_ids)
@@ -765,8 +765,9 @@ def create_banking_router(db):
             "lettrage_code": lettrage_code,
             "total_paid": total_txn,
             "invoice_amount": inv_amount,
-            "status": "paid" if is_full else "partially_paid",
+            "status": "paid" if (is_full or is_overpaid) else "partially_paid",
             "remaining": round(inv_amount - total_txn, 2),
+            "overpaid_amount": round(max(0, total_txn - inv_amount), 2),
         }
 
     @router.post("/unlettrage/{txn_id}")

@@ -2,8 +2,82 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime, timezone
+import re
 import uuid
 from tier_accounts import assign_supplier_account
+
+
+def _norm_name(value: str) -> str:
+    """Normalise un nom : minuscules, espaces multiples reduits, trim, MOTS TRIES.
+
+    Le tri alphabetique des mots permet de detecter les doublons type
+    "Finlead srl" vs "SRL Finlead" (meme entreprise, ordre des mots different).
+    Les particules generiques (sa, sprl, srl, sarl, sas, scrl, asbl, scs, snc,
+    nv, bv, bvba) ne sont pas filtrees mais incluses dans le tri.
+    """
+    words = (value or "").strip().lower().split()
+    # Tri alphabetique pour egaliser "finlead srl" et "srl finlead"
+    return " ".join(sorted(words))
+
+
+def _norm_id(value: str) -> str:
+    """Normalise un BCE/TVA ou IBAN : alphanumerique uppercase uniquement.
+    Ex: 'BE 0123.456.789' -> 'BE0123456789', 'BE12 3456 7890 1234' -> 'BE12345678901234'.
+    """
+    return re.sub(r"[^A-Za-z0-9]", "", (value or "")).upper()
+
+
+async def find_duplicate_supplier(
+    db, *, name: str, bce_number: str = "", vat_number: str = "",
+    iban: str = "", copro_id: str = "", exclude_id: Optional[str] = None,
+) -> Optional[dict]:
+    """Recherche un fournisseur en doublon sur 3 criteres (l'un suffit) :
+        1. BCE ou TVA identique (normalises)
+        2. Nom identique (normalise)
+        3. IBAN identique (normalise)
+
+    Scope : limite aux fournisseurs rattaches a `copro_id` (direct ou via
+    tier_accounts.<copro_id>). Si copro_id vide, recherche globale.
+
+    Retourne {"supplier": <doc>, "field": "bce|vat|name|iban", "value": <str>}
+    ou None.
+    """
+    norm_name = _norm_name(name)
+    norm_bce = _norm_id(bce_number)
+    norm_vat = _norm_id(vat_number)
+    norm_iban = _norm_id(iban)
+    if not (norm_name or norm_bce or norm_vat or norm_iban):
+        return None
+
+    # Construit la projection scope ACP
+    base_query: dict = {}
+    if copro_id:
+        base_query["$or"] = [
+            {"copropriete_id": copro_id},
+            {f"tier_accounts.{copro_id}": {"$exists": True}},
+        ]
+    if exclude_id:
+        base_query["id"] = {"$ne": exclude_id}
+
+    # On charge tous les candidats du scope et on compare en python (les
+    # normalisations cote DB seraient fragiles avec les espaces / points / etc).
+    candidates = await db.suppliers.find(base_query, {"_id": 0}).to_list(5000)
+    for s in candidates:
+        if norm_bce:
+            if _norm_id(s.get("bce_number", "")) == norm_bce:
+                return {"supplier": s, "field": "bce_number", "value": s.get("bce_number", "")}
+            if _norm_id(s.get("vat_number", "")) == norm_bce:
+                return {"supplier": s, "field": "vat_number", "value": s.get("vat_number", "")}
+        if norm_vat:
+            if _norm_id(s.get("vat_number", "")) == norm_vat:
+                return {"supplier": s, "field": "vat_number", "value": s.get("vat_number", "")}
+            if _norm_id(s.get("bce_number", "")) == norm_vat:
+                return {"supplier": s, "field": "bce_number", "value": s.get("bce_number", "")}
+        if norm_iban and _norm_id(s.get("iban", "")) == norm_iban:
+            return {"supplier": s, "field": "iban", "value": s.get("iban", "")}
+        if norm_name and _norm_name(s.get("name", "")) == norm_name:
+            return {"supplier": s, "field": "name", "value": s.get("name", "")}
+    return None
 
 
 class SupplierInput(BaseModel):
@@ -21,6 +95,16 @@ class SupplierInput(BaseModel):
     default_account: Optional[str] = ""
     notes: Optional[str] = ""
     copropriete_id: Optional[str] = ""
+
+
+class SupplierMergeInput(BaseModel):
+    """Fusion de fournisseurs : on garde `keep_id` et on absorbe `remove_ids`.
+    Toutes les references (factures, transactions bancaires, ecritures comptables,
+    invoice_lines, ...) sont reassociees a `keep_id`. Les champs vides de keep
+    sont remplis depuis les remove (premier non-vide gagne).
+    """
+    keep_id: str
+    remove_ids: list[str]
 
 
 def create_suppliers_router(db):
@@ -93,6 +177,29 @@ def create_suppliers_router(db):
                 raise HTTPException(400, "Un fournisseur doit etre rattache a une copropriete (chinese wall + RGPD)")
             if copro_id not in (allowed_copros or []):
                 raise HTTPException(403, "Vous ne pouvez attribuer ce fournisseur qu'a une de vos ACPs")
+        # Check anti-doublon : BCE/TVA, nom et IBAN normalises (scope ACP)
+        dup = await find_duplicate_supplier(
+            db,
+            name=data.name,
+            bce_number=data.bce_number or "",
+            vat_number=data.vat_number or "",
+            iban=data.iban or "",
+            copro_id=copro_id,
+        )
+        if dup:
+            field_label = {
+                "bce_number": "numero BCE",
+                "vat_number": "numero TVA",
+                "iban": "compte bancaire (IBAN)",
+                "name": "nom",
+            }.get(dup["field"], dup["field"])
+            existing = dup["supplier"]
+            raise HTTPException(
+                409,
+                f"Doublon detecte : un fournisseur avec le meme {field_label} existe deja "
+                f"({existing.get('name', '')} - {dup['value']}). "
+                f"Utilisez l'existant ou modifiez les criteres uniques.",
+            )
         doc = {
             "id": str(uuid.uuid4()),
             **data.model_dump(),
@@ -122,10 +229,33 @@ def create_suppliers_router(db):
             raise HTTPException(404, "Fournisseur non trouve")
         if not is_super and not _supplier_in_scope(existing, allowed_copros):
             raise HTTPException(404, "Fournisseur non trouve")
-        copro_id = data.copropriete_id or getattr(request.state, "copropriete_id", "") or ""
+        copro_id = data.copropriete_id or getattr(request.state, "copropriete_id", "") or existing.get("copropriete_id", "")
         # Empeche un syndic de "transferer" un fournisseur vers une ACP qui n'est pas la sienne
         if not is_super and copro_id and copro_id not in (allowed_copros or []):
             raise HTTPException(403, "Vous ne pouvez attribuer ce fournisseur qu'a une de vos ACPs")
+        # Check anti-doublon : exclure le fournisseur en cours d'edition
+        dup = await find_duplicate_supplier(
+            db,
+            name=data.name,
+            bce_number=data.bce_number or "",
+            vat_number=data.vat_number or "",
+            iban=data.iban or "",
+            copro_id=copro_id,
+            exclude_id=supplier_id,
+        )
+        if dup:
+            field_label = {
+                "bce_number": "numero BCE",
+                "vat_number": "numero TVA",
+                "iban": "compte bancaire (IBAN)",
+                "name": "nom",
+            }.get(dup["field"], dup["field"])
+            existing_dup = dup["supplier"]
+            raise HTTPException(
+                409,
+                f"Doublon detecte : un autre fournisseur avec le meme {field_label} existe deja "
+                f"({existing_dup.get('name', '')} - {dup['value']}).",
+            )
         result = await db.suppliers.update_one({"id": supplier_id}, {"$set": data.model_dump()})
         if result.matched_count == 0:
             raise HTTPException(404, "Fournisseur non trouve")
@@ -147,5 +277,87 @@ def create_suppliers_router(db):
         if result.deleted_count == 0:
             raise HTTPException(404, "Fournisseur non trouve")
         return {"message": "Fournisseur supprime"}
+
+    @router.post("/merge")
+    async def merge_suppliers(data: SupplierMergeInput, request: Request):
+        """Fusion de N fournisseurs : keep_id conserve, remove_ids absorbes.
+
+        Reassociations effectuees :
+        - invoices.supplier_id : remove_ids -> keep_id
+        - invoices.supplier_name : mis a jour si match remove_id
+        - bank_transactions.matched_to (match_type='supplier_payment') -> keep_id
+        - journal_entries : aucune modification (lignes referencent les comptes
+          PCMN, pas les supplier_ids ; les comptes tiers sont par fournisseur
+          mais on prefere conserver les ecritures historiques telles quelles
+          pour la tracabilite comptable)
+
+        Enrichissement de keep depuis remove (premier non-vide gagne) sur :
+        bce_number, vat_number, iban, bic, email, phone, address, postal_code,
+        city, country.
+
+        Apres absorption, les remove_ids sont supprimes.
+        """
+        is_super, allowed_copros = await _get_user_scope(request)
+        keep = await db.suppliers.find_one({"id": data.keep_id}, {"_id": 0})
+        if not keep:
+            raise HTTPException(404, f"Fournisseur a conserver introuvable : {data.keep_id}")
+        if not is_super and not _supplier_in_scope(keep, allowed_copros):
+            raise HTTPException(403, "Acces refuse au fournisseur a conserver")
+
+        if data.keep_id in data.remove_ids:
+            raise HTTPException(400, "keep_id ne peut pas etre dans remove_ids")
+        if not data.remove_ids:
+            raise HTTPException(400, "Aucun fournisseur a fusionner")
+
+        removes = await db.suppliers.find(
+            {"id": {"$in": data.remove_ids}}, {"_id": 0}
+        ).to_list(50)
+        found_ids = {r["id"] for r in removes}
+        missing = set(data.remove_ids) - found_ids
+        if missing:
+            raise HTTPException(404, f"Fournisseur(s) a fusionner introuvable(s) : {', '.join(missing)}")
+        if not is_super:
+            for r in removes:
+                if not _supplier_in_scope(r, allowed_copros):
+                    raise HTTPException(403, f"Acces refuse au fournisseur {r.get('name', '')}")
+
+        # 1) Enrichissement keep depuis removes (premier non-vide gagne)
+        enrich_fields = [
+            "bce_number", "vat_number", "iban", "bic", "email", "phone",
+            "address", "postal_code", "city", "country", "notes",
+        ]
+        enrichment = {}
+        for f in enrich_fields:
+            if not (keep.get(f) or "").strip():
+                for r in removes:
+                    if (r.get(f) or "").strip():
+                        enrichment[f] = r[f]
+                        break
+        if enrichment:
+            await db.suppliers.update_one({"id": data.keep_id}, {"$set": enrichment})
+
+        # 2) Migration des factures
+        invoices_updated = await db.invoices.update_many(
+            {"supplier_id": {"$in": data.remove_ids}},
+            {"$set": {"supplier_id": data.keep_id, "supplier_name": keep.get("name", "")}},
+        )
+
+        # 3) Migration des bank_transactions appariees a un fournisseur
+        txns_updated = await db.bank_transactions.update_many(
+            {"match_type": "supplier_payment", "matched_to": {"$in": data.remove_ids}},
+            {"$set": {"matched_to": data.keep_id}},
+        )
+
+        # 4) Suppression des doublons
+        deleted = await db.suppliers.delete_many({"id": {"$in": data.remove_ids}})
+
+        return {
+            "message": f"Fusion effectuee : {deleted.deleted_count} fournisseur(s) absorbe(s)",
+            "kept_id": data.keep_id,
+            "removed_ids": data.remove_ids,
+            "enriched_fields": list(enrichment.keys()),
+            "invoices_migrated": invoices_updated.modified_count,
+            "bank_transactions_migrated": txns_updated.modified_count,
+        }
 
     return router
