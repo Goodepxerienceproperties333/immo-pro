@@ -43,6 +43,8 @@ export default function BankingPage() {
   const [selectedTxnIds, setSelectedTxnIds] = useState(new Set());
   const [batchLettrageDialog, setBatchLettrageDialog] = useState(false);
   const [batchInvoiceSearch, setBatchInvoiceSearch] = useState('');
+  // 1 txn -> N invoices (multi-selection des factures dans le dialog lettrage de transaction)
+  const [selectedInvoiceIds, setSelectedInvoiceIds] = useState(new Set());
 
   const load = useCallback(async () => {
     const promises = [
@@ -146,10 +148,40 @@ export default function BankingPage() {
   };
 
   // LETTRAGE
-  const openLettrage = (txn) => { setLettrageTarget(txn); setLettrageDialog(true); setLookupQuery(''); };
+  const openLettrage = (txn) => { setLettrageTarget(txn); setLettrageDialog(true); setLookupQuery(''); setSelectedInvoiceIds(new Set()); };
   const doLettrage = async (id, type) => { try { await api.post('/banking/lettrage', { transaction_id: lettrageTarget.id, match_to_id: id, match_type: type }); toast.success('Lettre'); setLettrageDialog(false); if (selectedStmt) loadStmtTxns(selectedStmt); else load(); load(); } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); } };
   const unlettrage = async (id) => { await api.post(`/banking/unlettrage/${id}`); toast.success('Delettrage'); if (selectedStmt) loadStmtTxns(selectedStmt); else load(); load(); };
   const unlettrageByInvoice = async (invId) => { try { await api.post(`/banking/unlettrage-by-invoice/${invId}`); toast.success('Facture delettree'); if (selectedStmt) loadStmtTxns(selectedStmt); load(); } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); } };
+  // 1 txn -> N factures : multi-selection dans le dialog Lettrage
+  const toggleInvoiceSelected = (id) => {
+    setSelectedInvoiceIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+  const selectedInvoicesTotal = (lettrageTarget ? invoices.filter(i => selectedInvoiceIds.has(i.id)) : [])
+    .reduce((s, i) => s + Number(i.total_amount || i.amount_ttc || i.amount || 0), 0);
+  const doLettrageMultiInvoices = async () => {
+    if (!lettrageTarget || selectedInvoiceIds.size === 0) return;
+    try {
+      const r = await api.post('/banking/lettrage-multi-invoices', {
+        transaction_id: lettrageTarget.id,
+        invoice_ids: Array.from(selectedInvoiceIds),
+      });
+      const { transaction_amount, invoice_total, remaining, is_exact } = r.data;
+      const msg = is_exact
+        ? `Lettrage OK : ${selectedInvoiceIds.size} factures = ${invoice_total.toFixed(2)} EUR (exact)`
+        : `Lettrage OK : ${selectedInvoiceIds.size} factures pour ${invoice_total.toFixed(2)} EUR / txn ${transaction_amount.toFixed(2)} EUR (ecart ${Math.abs(remaining).toFixed(2)} EUR sur compte tiers)`;
+      toast.success(msg);
+      setLettrageDialog(false);
+      setSelectedInvoiceIds(new Set());
+      if (selectedStmt) loadStmtTxns(selectedStmt); else load();
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur lettrage multi-factures');
+    }
+  };
 
   // ---- MULTI-SELECTION LETTRAGE (N transactions -> 1 facture) ----
   const toggleTxnSelected = (id) => {
@@ -649,7 +681,30 @@ export default function BankingPage() {
                 <div className="text-[11px] text-slate-500 mb-3 flex items-center gap-4">
                   <span className="flex items-center gap-1.5"><span className="inline-block w-2.5 h-2.5 rounded-full bg-red-400" /> A lettrer</span>
                   <span className="flex items-center gap-1.5"><span className="inline-block w-2.5 h-2.5 rounded-full bg-green-400" /> Deja lettree</span>
+                  <span className="ml-auto text-slate-600"><b>Astuce :</b> cochez plusieurs factures pour les lettrer ensemble a cette transaction.</span>
                 </div>
+                {/* Barre de selection multi-factures */}
+                {selectedInvoiceIds.size > 0 && (
+                  <div className="bg-[#0055FF]/10 border border-[#0055FF]/30 rounded px-3 py-2 mb-3 flex items-center justify-between text-xs" data-testid="multi-invoice-toolbar">
+                    <div>
+                      <strong className="text-[#0055FF]">{selectedInvoiceIds.size} factures selectionnees</strong>
+                      <span className="ml-3 font-mono">Total : <strong>{selectedInvoicesTotal.toFixed(2)} EUR</strong></span>
+                      {(() => {
+                        const txnAmt = Math.abs(Number(lettrageTarget?.amount || 0));
+                        const diff = txnAmt - selectedInvoicesTotal;
+                        if (Math.abs(diff) < 0.01) return <span className="ml-2 text-green-700 font-semibold">= SOLDE EXACT</span>;
+                        if (diff > 0) return <span className="ml-2 text-amber-700 font-semibold">- partiel (txn reste {diff.toFixed(2)} EUR)</span>;
+                        return <span className="ml-2 text-amber-700 font-semibold">- sur-paiement ({(-diff).toFixed(2)} EUR)</span>;
+                      })()}
+                    </div>
+                    <div className="flex gap-2">
+                      <Button size="sm" onClick={doLettrageMultiInvoices} className="bg-[#0055FF] hover:bg-[#0040CC] text-white h-7 text-xs" data-testid="multi-invoice-confirm-btn">
+                        <Link2 size={11} className="mr-1" /> Lettrer ces {selectedInvoiceIds.size} factures
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={() => setSelectedInvoiceIds(new Set())} className="h-7 text-xs">Annuler</Button>
+                    </div>
+                  </div>
+                )}
                 <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
                   {(() => {
                     const cpName = (lettrageTarget?.counterparty_name || '').toLowerCase().trim();
@@ -674,16 +729,27 @@ export default function BankingPage() {
                     if (list.length === 0) return <p className="text-sm text-slate-400 text-center py-8">Aucune facture trouvee</p>;
                     return list.map(inv => {
                       const isPaid = inv.status === 'paid';
-                      const borderClr = isPaid ? 'border-l-green-400 bg-green-50/40' : 'border-l-red-400 bg-red-50/30';
+                      const isSelected = selectedInvoiceIds.has(inv.id);
+                      const borderClr = isPaid ? 'border-l-green-400 bg-green-50/40' : isSelected ? 'border-l-[#0055FF] bg-blue-50/50' : 'border-l-red-400 bg-red-50/30';
                       return (
                         <div
                           key={inv.id}
                           className={`border border-slate-200 border-l-4 ${borderClr} rounded-md px-3 py-2.5 transition-shadow hover:shadow-sm`}
                           data-testid={`lettrage-invoice-row-${inv.id}`}
                         >
-                          {/* Ligne 1 : numero + fournisseur + badge statut + montant aligned right */}
+                          {/* Ligne 1 : checkbox + numero + fournisseur + badge statut + montant aligned right */}
                           <div className="flex items-start justify-between gap-3 mb-1">
                             <div className="flex-1 min-w-0 flex items-center gap-2 flex-wrap">
+                              {!isPaid && (
+                                <input
+                                  type="checkbox"
+                                  checked={isSelected}
+                                  onChange={() => toggleInvoiceSelected(inv.id)}
+                                  className="shrink-0"
+                                  data-testid={`lettrage-invoice-check-${inv.id}`}
+                                  title="Cocher pour lettrer plusieurs factures avec cette transaction"
+                                />
+                              )}
                               <span className="font-mono text-xs font-semibold text-slate-700">{inv.number || '—'}</span>
                               <span className="text-sm font-medium text-slate-900 truncate">{inv.supplier || ''}</span>
                               {isPaid

@@ -50,6 +50,12 @@ class LettrageBatchInput(BaseModel):
     match_type: str = "invoice"  # pour l'instant uniquement 'invoice'
 
 
+class LettrageMultiInvoicesInput(BaseModel):
+    """1 transaction vers N factures (un virement qui solde plusieurs factures)."""
+    transaction_id: str
+    invoice_ids: List[str]
+
+
 class InlineLineInput(BaseModel):
     date: str
     amount: float
@@ -768,6 +774,105 @@ def create_banking_router(db):
             "status": "paid" if (is_full or is_overpaid) else "partially_paid",
             "remaining": round(inv_amount - total_txn, 2),
             "overpaid_amount": round(max(0, total_txn - inv_amount), 2),
+        }
+
+    @router.post("/lettrage-multi-invoices")
+    async def lettrage_multi_invoices(data: LettrageMultiInvoicesInput):
+        """Lettrage d'UNE transaction vers PLUSIEURS factures.
+
+        Cas type : un virement bancaire qui solde 2+ factures en un seul mouvement
+        (ex. paiement groupe d'un fournisseur a un trimestre, ou solde + acompte).
+
+        - Verifie que la transaction existe et n'est pas deja lettree a une autre cible
+          (sauf si deja lettree a une de ces memes factures = OK pour la resoumission).
+        - Calcule la somme des montants TVAC des factures et compare au montant txn.
+        - Chaque facture passe a paid + amount_paid=son_total + paid_by_transaction_ids=[txn_id]
+          partagent un lettrage_code commun.
+        - La transaction est marquee matched=True avec match_type='multi_invoice' et
+          matched_to_ids=[inv_ids...] (champ liste). matched_to (singulier) = premier inv_id pour
+          la retro-compatibilite avec l'UI existante.
+        - Sur-paiement accepte (excedent sera reflete sur compte tiers a la comptabilisation).
+        """
+        if not data.invoice_ids:
+            raise HTTPException(400, "Aucune facture selectionnee")
+        txn = await db.bank_transactions.find_one({"id": data.transaction_id}, {"_id": 0})
+        if not txn:
+            raise HTTPException(404, "Transaction non trouvee")
+        invoices = await db.invoices.find(
+            {"id": {"$in": data.invoice_ids}}, {"_id": 0}
+        ).to_list(1000)
+        found_ids = {i["id"] for i in invoices}
+        missing = set(data.invoice_ids) - found_ids
+        if missing:
+            raise HTTPException(404, f"Factures introuvables : {', '.join(missing)}")
+
+        # Coherence ACP
+        txn_acp = txn.get("copropriete_id", "")
+        for inv in invoices:
+            if txn_acp and inv.get("copropriete_id") and inv["copropriete_id"] != txn_acp:
+                raise HTTPException(
+                    400,
+                    f"Facture {inv.get('number', inv['id'][:8])} dans une autre ACP que la transaction.",
+                )
+
+        # Calcul
+        txn_amount = abs(float(txn.get("amount", 0) or 0))
+        invoice_total = round(sum(float(
+            i.get("amount_ttc") or i.get("total_amount") or i.get("amount") or 0
+        ) for i in invoices), 2)
+        txn_amount = round(txn_amount, 2)
+
+        lettrage_code = str(uuid.uuid4())[:8].upper()
+        now_iso = datetime.now(timezone.utc).isoformat()
+
+        # Marque la transaction
+        await db.bank_transactions.update_one(
+            {"id": data.transaction_id},
+            {"$set": {
+                "matched": True,
+                "matched_to": data.invoice_ids[0],  # back-compat (1er invoice)
+                "matched_to_ids": list(data.invoice_ids),
+                "match_type": "multi_invoice",
+                "lettrage_code": lettrage_code,
+                "lettrage_at": now_iso,
+            }},
+        )
+
+        # Chaque facture : paid (son montant integral est couvert par la part de la txn)
+        for inv in invoices:
+            inv_amt = round(float(
+                inv.get("amount_ttc") or inv.get("total_amount") or inv.get("amount") or 0
+            ), 2)
+            await db.invoices.update_one(
+                {"id": inv["id"]},
+                {"$set": {
+                    "status": "paid",
+                    "paid_at": now_iso,
+                    "amount_paid": inv_amt,
+                    "paid_by_transaction_id": data.transaction_id,
+                    "paid_by_transaction_ids": [data.transaction_id],
+                    "lettrage_code": lettrage_code,
+                }},
+            )
+
+        # Regenere ecriture FI
+        try:
+            fresh = await db.bank_transactions.find_one({"id": data.transaction_id}, {"_id": 0})
+            if fresh:
+                await generate_bank_entry(db, fresh)
+        except Exception as e:
+            print(f"[lettrage-multi-invoices] FI regen failed: {e}")
+
+        is_exact = abs(txn_amount - invoice_total) < 0.01
+        return {
+            "message": f"Lettrage effectue : 1 transaction -> {len(data.invoice_ids)} factures",
+            "transaction_id": data.transaction_id,
+            "invoice_ids": data.invoice_ids,
+            "lettrage_code": lettrage_code,
+            "transaction_amount": txn_amount,
+            "invoice_total": invoice_total,
+            "remaining": round(txn_amount - invoice_total, 2),
+            "is_exact": is_exact,
         }
 
     @router.post("/unlettrage/{txn_id}")

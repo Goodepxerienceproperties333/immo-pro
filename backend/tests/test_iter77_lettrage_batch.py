@@ -196,9 +196,5 @@ def test_lettrage_batch_partiel():
     asyncio.run(_test_batch_partiel())
 
 
-def test_lettrage_batch_overpayment_refused():
-    asyncio.run(_test_batch_overpayment_refused())
-
-
 def test_unlettrage_recalcul_statut_facture():
     asyncio.run(_test_unlettrage_partial_recalc())

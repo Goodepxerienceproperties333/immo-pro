@@ -11,6 +11,69 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 ## Implemented
+### Iter80 (Feb 2026) - Lettrage 1 transaction -> N factures
+
+**Demande user** : "je dois pouvoir selectionner 2 factures permettant d'arriver
+au montant du paiement, corrige ca une checkbox est une bonne approche".
+
+**Implementation** :
+- Backend : nouveau endpoint `POST /api/banking/lettrage-multi-invoices` qui
+  accepte `transaction_id` + `invoice_ids[]`. Marque chaque facture comme paid
+  avec un `lettrage_code` commun. La txn passe en `match_type='multi_invoice'`
+  avec `matched_to_ids[]` (champ liste) + `matched_to` (singulier, retro-compat).
+  Sur-paiement accepte (excedent reflete sur compte tiers).
+- Frontend `BankingPage.js` : checkbox sur chaque carte de facture (uniquement
+  pour les "A PAYER") dans le dialog "Lettrage de la transaction". Toolbar bleue
+  qui apparait avec running total + indicateur SOLDE EXACT / partiel / sur-paiement.
+  Bouton "Lettrer ces N factures" pour valider en lot.
+- **Tests** : `test_iter80_lettrage_multi_invoices.py` (2 tests, PASSED).
+
+### Iter79 (Feb 2026) - Fusion de fournisseurs (centralisation)
+
+**Demande user** : "fusionne les comptes fournisseurs pour centraliser les
+informations" (cas Finlead srl vs SRL Finlead - meme entreprise, libelles
+inverses).
+
+**Implementation** :
+1. **Normalisation tolerante a l'ordre des mots** (`routes/suppliers.py::_norm_name`) :
+   les mots sont tries alphabetiquement avant comparaison. Detecte desormais
+   "Finlead srl" == "SRL Finlead" comme doublon.
+2. **Endpoint `POST /api/suppliers/merge`** :
+   - Input : `{keep_id, remove_ids: List[str]}`
+   - Reassocie `invoices.supplier_id` + `bank_transactions.matched_to`
+     (match_type='supplier_payment')
+   - Enrichit le supplier conserve depuis les absorbes (premier non-vide gagne) :
+     bce_number, vat_number, iban, bic, email, phone, address, postal_code,
+     city, country, notes.
+   - Supprime les remove_ids.
+3. **UI** (`BalanceTiersPage.js`) :
+   - Bouton "Fusionner des fournisseurs" sur la card "Total a payer".
+   - Mode merge : checkbox par ligne fournisseur (uniquement ceux avec supplier_id).
+   - Dialog : radio pour choisir le supplier "a conserver" (defaut = celui avec
+     TVA, sinon le 1er). Aper├ºu des soldes. Confirme.
+
+**Tests** : `test_iter79_suppliers_merge.py` (3 tests, PASSED).
+
+### Iter78 (Feb 2026) - Check anti-doublon fournisseurs
+
+**Demande user** : "pas de doublon de fournisseur autorise, check fait sur le
+nr BCE, nom et compte bancaire".
+
+**Implementation** :
+- Helper `find_duplicate_supplier(db, *, name, bce_number, vat_number, iban,
+  copro_id, exclude_id=None)` dans `routes/suppliers.py`. Recherche sur 3
+  criteres (l'un suffit) : BCE/TVA normalises, nom normalise (tri alphabetique),
+  IBAN normalise.
+- Scope ACP : 2 ACPs peuvent avoir le meme fournisseur (chinese wall preserve).
+- POST /api/suppliers : 409 si doublon detecte avec libelle "doublon detecte :
+  un fournisseur avec le meme {nom|BCE|TVA|IBAN} existe deja".
+- PUT /api/suppliers/{id} : meme check avec exclude_id (on peut editer sans
+  declencher un doublon contre soi-meme).
+- import_wizard (CSV + PDF) : skip silencieux des doublons (skipped_duplicates
+  retourne dans la reponse, pas une erreur bloquante).
+
+**Tests** : `test_iter78_suppliers_duplicate.py` (5 tests, PASSED).
+
 ### Iter77 (Feb 2026) - Lettrage en lot bancaire (N transactions -> 1 facture)
 
 **Demande user** : "possibilite de lettrer plusieurs transactions dans les
