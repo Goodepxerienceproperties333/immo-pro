@@ -39,6 +39,10 @@ export default function BankingPage() {
   const [bankAccounts, setBankAccounts] = useState([]);
   const [inlineLines, setInlineLines] = useState([]);
   const [editForm, setEditForm] = useState({});
+  // ----- Multi-selection lettrage state -----
+  const [selectedTxnIds, setSelectedTxnIds] = useState(new Set());
+  const [batchLettrageDialog, setBatchLettrageDialog] = useState(false);
+  const [batchInvoiceSearch, setBatchInvoiceSearch] = useState('');
 
   const load = useCallback(async () => {
     const promises = [
@@ -146,6 +150,40 @@ export default function BankingPage() {
   const doLettrage = async (id, type) => { try { await api.post('/banking/lettrage', { transaction_id: lettrageTarget.id, match_to_id: id, match_type: type }); toast.success('Lettre'); setLettrageDialog(false); if (selectedStmt) loadStmtTxns(selectedStmt); else load(); load(); } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); } };
   const unlettrage = async (id) => { await api.post(`/banking/unlettrage/${id}`); toast.success('Delettrage'); if (selectedStmt) loadStmtTxns(selectedStmt); else load(); load(); };
   const unlettrageByInvoice = async (invId) => { try { await api.post(`/banking/unlettrage-by-invoice/${invId}`); toast.success('Facture delettree'); if (selectedStmt) loadStmtTxns(selectedStmt); load(); } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); } };
+
+  // ---- MULTI-SELECTION LETTRAGE (N transactions -> 1 facture) ----
+  const toggleTxnSelected = (id) => {
+    setSelectedTxnIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+  const clearSelection = () => setSelectedTxnIds(new Set());
+  // Multi-selection : ne s'applique qu'aux txns de l'extrait actuellement ouvert
+  const selectedTxns = transactions.filter(t => selectedTxnIds.has(t.id));
+  const selectedTotal = selectedTxns.reduce((s, t) => s + Math.abs(Number(t.amount) || 0), 0);
+  const doBatchLettrage = async (invoiceId) => {
+    try {
+      const ids = Array.from(selectedTxnIds);
+      const r = await api.post('/banking/lettrage-batch', {
+        transaction_ids: ids,
+        match_to_id: invoiceId,
+        match_type: 'invoice',
+      });
+      const { total_paid, invoice_amount, status, remaining } = r.data;
+      const msg = status === 'paid'
+        ? `Lettrage OK : ${ids.length} transactions = ${total_paid.toFixed(2)} EUR / ${invoice_amount.toFixed(2)} EUR (solde)`
+        : `Lettrage partiel : ${total_paid.toFixed(2)} EUR / ${invoice_amount.toFixed(2)} EUR (reste ${remaining.toFixed(2)} EUR)`;
+      toast.success(msg);
+      setBatchLettrageDialog(false);
+      clearSelection();
+      if (selectedStmt) loadStmtTxns(selectedStmt); else load();
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur lettrage en lot');
+    }
+  };
   // unpaidInv (legacy) supprime - l'onglet factures affiche maintenant toutes les factures avec coloration.
 
   // unpaidInv (legacy) supprime - l'onglet factures affiche maintenant toutes les factures avec coloration.
@@ -355,17 +393,51 @@ export default function BankingPage() {
                   </div>
                 )}
 
+                {/* Toolbar selection multi-lettrage */}
+                {selectedTxnIds.size > 0 && (
+                  <div className="bg-[#0055FF]/10 border border-[#0055FF]/30 rounded-md px-3 py-2 mb-2 flex items-center justify-between text-sm" data-testid="batch-lettrage-toolbar">
+                    <div className="flex items-center gap-4">
+                      <strong className="text-[#0055FF]">{selectedTxnIds.size} transaction(s) selectionnee(s)</strong>
+                      <span className="font-mono text-slate-700">Total : <strong>{selectedTotal.toFixed(2)} EUR</strong></span>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button size="sm" onClick={() => { setBatchInvoiceSearch(''); setBatchLettrageDialog(true); }} className="bg-[#0055FF] hover:bg-[#0040CC] text-white" data-testid="batch-lettrage-open-btn">
+                        <Link2 size={13} className="mr-1.5" /> Lettrer la selection vers une facture
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={clearSelection} data-testid="batch-lettrage-clear-btn">Annuler</Button>
+                    </div>
+                  </div>
+                )}
+
                 {/* Transaction table */}
                 <Table>
                   <TableHeader><TableRow>
+                    <TableHead className="w-8 px-1">
+                      <input
+                        type="checkbox"
+                        title="Tout selectionner (txns non lettrees)"
+                        checked={transactions.length > 0 && transactions.filter(t => !t.matched).every(t => selectedTxnIds.has(t.id))}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            const next = new Set(selectedTxnIds);
+                            transactions.filter(t => !t.matched).forEach(t => next.add(t.id));
+                            setSelectedTxnIds(next);
+                          } else {
+                            clearSelection();
+                          }
+                        }}
+                        data-testid="batch-select-all-checkbox"
+                      />
+                    </TableHead>
                     <TableHead className="w-24">Date</TableHead><TableHead className="min-w-[200px]">Contrepartie</TableHead><TableHead className="min-w-[200px]">Communication</TableHead>
                     <TableHead className="text-right w-28">Montant</TableHead><TableHead className="w-24">Lettrage</TableHead><TableHead className="w-24"></TableHead>
                   </TableRow></TableHeader>
                   <TableBody>
                     {transactions.length === 0 ? (
-                      <TableRow><TableCell colSpan={6} className="text-center py-6 text-slate-400 text-sm">Cliquez "Ajouter lignes" pour encoder</TableCell></TableRow>
+                      <TableRow><TableCell colSpan={7} className="text-center py-6 text-slate-400 text-sm">Cliquez &laquo;Ajouter lignes&raquo; pour encoder</TableCell></TableRow>
                     ) : transactions.map(txn => editingTxn === txn.id ? (
                       <TableRow key={txn.id} className="bg-yellow-50/50">
+                        <TableCell></TableCell>
                         <TableCell><Input type="date" className="h-7 text-xs" value={editForm.date} onChange={e => setEditForm({...editForm, date: e.target.value})} /></TableCell>
                         <TableCell>
                           <CounterpartySearchSelect
@@ -393,7 +465,17 @@ export default function BankingPage() {
                         </TableCell>
                       </TableRow>
                     ) : (
-                      <TableRow key={txn.id} className="hover:bg-slate-50/50">
+                      <TableRow key={txn.id} className={`hover:bg-slate-50/50 ${selectedTxnIds.has(txn.id) ? 'bg-blue-50/40' : ''}`}>
+                        <TableCell className="px-1">
+                          {!txn.matched && (
+                            <input
+                              type="checkbox"
+                              checked={selectedTxnIds.has(txn.id)}
+                              onChange={() => toggleTxnSelected(txn.id)}
+                              data-testid={`select-txn-${txn.id}`}
+                            />
+                          )}
+                        </TableCell>
                         <TableCell className="font-mono text-xs">{fmtDate(txn.date)}</TableCell>
                         <TableCell className="text-sm break-words" style={{wordBreak: 'break-word'}}>{txn.counterparty_name}</TableCell>
                         <TableCell className="text-sm break-words" style={{wordBreak: 'break-word'}}>{txn.communication}</TableCell>
@@ -661,6 +743,78 @@ export default function BankingPage() {
                 </div>
               </TabsContent>
             </Tabs>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ----- Dialog lettrage en lot (N transactions -> 1 facture) ----- */}
+      <Dialog open={batchLettrageDialog} onOpenChange={setBatchLettrageDialog}>
+        <DialogContent className="max-w-3xl p-0 overflow-hidden" data-testid="batch-lettrage-dialog">
+          <div className="bg-gradient-to-r from-[#0055FF] to-[#0040CC] text-white px-5 py-4">
+            <DialogTitle className="text-base font-semibold m-0">Lettrer {selectedTxnIds.size} transaction(s) vers une facture</DialogTitle>
+            <div className="mt-1 text-xs opacity-90">
+              Total selectionne : <strong className="font-mono">{selectedTotal.toFixed(2)} EUR</strong>
+              {' '} - choisissez UNE facture a solder (totalement ou partiellement).
+            </div>
+          </div>
+          <div className="p-5 space-y-3">
+            <Input
+              placeholder="Rechercher par numero, fournisseur ou description..."
+              value={batchInvoiceSearch}
+              onChange={e => setBatchInvoiceSearch(e.target.value)}
+              data-testid="batch-lettrage-search"
+            />
+            <div className="space-y-1.5 max-h-[420px] overflow-y-auto pr-1">
+              {(() => {
+                const q = batchInvoiceSearch.trim().toLowerCase();
+                const list = invoices.filter(inv => {
+                  if (!q) return true;
+                  return (inv.number || '').toLowerCase().includes(q)
+                      || (inv.supplier || '').toLowerCase().includes(q)
+                      || (inv.description || '').toLowerCase().includes(q);
+                });
+                if (list.length === 0) {
+                  return <div className="text-center py-6 text-slate-400 text-sm">Aucune facture correspondante</div>;
+                }
+                return list.map(inv => {
+                  const amount = Number(inv.total_amount || inv.amount_ttc || inv.amount || 0);
+                  const diff = amount - selectedTotal;
+                  const isExact = Math.abs(diff) < 0.01;
+                  const isOver = diff < -0.01;
+                  return (
+                    <div key={inv.id} className={`border rounded-md px-3 py-2.5 ${isExact ? 'border-green-400 bg-green-50/40' : isOver ? 'border-red-300 bg-red-50/30' : 'border-slate-200'}`} data-testid={`batch-lettrage-invoice-${inv.id}`}>
+                      <div className="flex items-start justify-between gap-3 mb-1">
+                        <div className="flex-1 min-w-0 flex items-center gap-2 flex-wrap">
+                          <span className="font-mono text-xs font-semibold text-slate-700">{inv.number || '—'}</span>
+                          <span className="text-sm font-medium text-slate-900 truncate">{inv.supplier || ''}</span>
+                          {isExact && <span className="text-[10px] bg-green-600 text-white px-2 py-0.5 rounded-full font-semibold">SOLDE EXACT</span>}
+                          {isOver && <span className="text-[10px] bg-red-600 text-white px-2 py-0.5 rounded-full font-semibold">SUR-PAIEMENT</span>}
+                          {!isExact && !isOver && diff > 0.01 && (
+                            <span className="text-[10px] bg-amber-500 text-white px-2 py-0.5 rounded-full font-semibold">PARTIEL ({(amount - selectedTotal).toFixed(2)} EUR)</span>
+                          )}
+                        </div>
+                        <div className="text-right shrink-0">
+                          <div className="font-mono font-semibold text-slate-900 text-sm leading-tight">{amount.toFixed(2)} <span className="text-[10px] text-slate-500">EUR</span></div>
+                          <div className="text-[10px] text-slate-500 mt-0.5">{fmtDate(inv.date)}</div>
+                        </div>
+                      </div>
+                      <div className="flex items-end justify-between gap-3">
+                        <p className="text-[11px] text-slate-600 line-clamp-2 leading-snug flex-1 min-w-0">
+                          {inv.description || <span className="text-slate-400 italic">Aucune description</span>}
+                        </p>
+                        <Button
+                          size="sm"
+                          onClick={() => doBatchLettrage(inv.id)}
+                          disabled={isOver}
+                          className={isOver ? 'opacity-50 cursor-not-allowed h-7 text-xs' : 'bg-[#0055FF] hover:bg-[#0040CC] text-white h-7 text-xs'}
+                          data-testid={`batch-lettrage-confirm-${inv.id}`}
+                        ><Link2 size={11} className="mr-1" /> Lettrer ici</Button>
+                      </div>
+                    </div>
+                  );
+                });
+              })()}
+            </div>
           </div>
         </DialogContent>
       </Dialog>

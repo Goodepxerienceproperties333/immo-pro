@@ -11,6 +11,85 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 ## Implemented
+### Iter77 (Feb 2026) - Lettrage en lot bancaire (N transactions -> 1 facture)
+
+**Demande user** : "possibilite de lettrer plusieurs transactions dans les
+extraits de compte" - choix : N txns bancaires vers 1 facture (paiements partiels).
+
+**Implementation** :
+
+1. **Backend** (`/app/backend/routes/banking.py`) :
+   - Nouveau model `LettrageBatchInput(transaction_ids: List[str], match_to_id, match_type)`.
+   - Nouveau endpoint `POST /api/banking/lettrage-batch` :
+     - Valide : toutes les txns existent, aucune lettree a une AUTRE facture,
+       toutes dans la meme ACP que la facture, somme <= total TVAC.
+     - Marque les N txns avec `matched=True, match_type='invoice', matched_to=<id>,
+       lettrage_code=<UUID8>` (code commun pour tracer le groupe).
+     - Facture : `paid` si somme == TVAC (a 0.01 EUR pres), sinon `partially_paid`
+       avec `amount_paid` + `paid_by_transaction_ids[]`.
+   - `/unlettrage/{txn_id}` enrichi : recalcule le statut de la facture en fonction
+     des txns restantes (paid -> partially_paid -> unpaid suivant somme).
+   - Refuse les sur-paiements (total_txn > inv_amount + 0.01).
+
+2. **Frontend** (`/app/frontend/src/pages/BankingPage.js`) :
+   - Checkbox "select all" dans le header de la table + checkbox par ligne (uniquement
+     pour les txns non lettrees).
+   - Toolbar bleue qui apparait des qu'une txn est selectionnee : affiche
+     "N transaction(s) selectionnee(s) - Total: X EUR" + bouton "Lettrer la
+     selection vers une facture".
+   - Dialog batch-lettrage : recherche par numero/fournisseur/description avec
+     coloration :
+       - Vert + badge "SOLDE EXACT" si selectedTotal == facture
+       - Rouge + badge "SUR-PAIEMENT" si selectedTotal > facture (bouton disabled)
+       - Ambre + "PARTIEL (X EUR restant)" sinon
+
+**Tests de regression** : `test_iter77_lettrage_batch.py` (4 tests, PASSED) :
+- 3x100 EUR -> facture 300 EUR -> paid + lettrage_code unique partage
+- 2x100 EUR -> facture 300 EUR -> partially_paid + amount_paid=200, remaining=100
+- 3x200 EUR -> facture 300 EUR -> HTTP 400 (sur-paiement refuse)
+- Apres lettrage 3x100 (paid), unlettrage d'1 txn -> statut recalcule en partially_paid
+
+### Iter76 (Feb 2026) - Prorata mutation sur appels de provisions
+
+**Bug** : la mutation utilisait `[call.date, call.due_date]` (fenetre d'emission
+~30j) au lieu de la periode COUVERTE (~3 mois pour trimestriel). Le prorata ne
+s'appliquait que si la vente tombait DANS la fenetre d'emission, soit <10% des
+cas reels.
+
+**Fix** :
+- Generation des appels : ajout de `period_start` / `period_end` (periode reelle
+  couverte) lors de la creation depuis le budget. Pour Q1 fy 2026 :
+  `[2026-01-01, 2026-03-31]` (vs `[2026-01-01, 2026-01-31]` precedemment).
+- Mutate_lot : utilise `period_start/period_end` si presents, sinon deduit depuis
+  "X/N" + fiscal_year (fallback intelligent), sinon `+90j` en dernier recours.
+- Script migration `migrate_fund_calls_periods.py` : 13 fund_calls existants
+  mis a jour. Idempotent.
+
+**Tests** : `test_iter76_mutation_prorata.py` (6 tests, PASSED) - validations
+unitaires de `_compute_period` + E2E test mutation Q1 vente au 15/02/2026 :
+- Periode = 90j (01/01 - 31/03), jours restants = 45j
+- Prorata = 600 EUR * (45/90) = 300.00 EUR (transfert vendeur -> acheteur)
+
+### Iter75 (Feb 2026) - Budget PDF : cles speciales + exercice fiscal non-calendar
+
+**Bugs corriges** :
+1. **Crash IndexError** sur budgets a exercice fiscal non-calendrier
+   (01/10/2025 - 30/09/2026) : 4 year-tokens dans le header + clusters fragments
+   de milliers ("18" + "800,00") creaient >3 colonnes, depassant les keys
+   ("realise_n1", "budget_n", "en_cours").
+2. **Cles speciales non reconnues** : section "0002 - Cle Speciales ascenseurs"
+   etait creee comme cle generique (is_special=False).
+
+**Fix** (`/app/backend/import_wizard/pdf_utils.py` + `routes/import_wizard.py`) :
+- Cluster merge intelligent : les clusters "fragment" (entiers 1-3 chiffres sans
+  virgule) sont mergees avec leur voisin de droite (gap < 35px).
+- Defensive : truncate `amt_col_centers` a `len(keys)` pour eviter l'IndexError.
+- Detection regex "Cle Speciale" / "speciale" sur le libelle de section ->
+  `section.is_special=True`. Auto-creation de la distribution_key avec ce flag.
+- UI BudgetPreview : badge violet "SPECIALE" sur les sections speciales.
+
+**Tests** : `test_iter75_budget_special_keys.py` (1 test, PASSED).
+
 ### Iter74 (Feb 2026) - Natures de depense par defaut auto-seedees
 
 **Demande user** : "ces natures de depenses sont a creer pour toutes nouvelles ACP,
