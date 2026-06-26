@@ -1663,6 +1663,9 @@ def create_import_wizard_router(db):
         # The Optipro budget PDF structures lines by 'key_code' (e.g. 0001, 0006).
         # Each such code corresponds to a distribution key. We auto-create them
         # if missing so the user doesn't have to maintain them separately.
+        # Cles "speciales" (Cle Speciale ascenseurs, eau, etc.) sont taggees
+        # is_special=True pour permettre un traitement different en repartition
+        # (uniquement les lots concernes, pas tous les coproprietaires).
         existing_keys: dict[str, str] = {}  # code -> id
         async for k in db.distribution_keys.find({"copropriete_id": copro_id}, {"_id": 0, "id": 1, "code": 1, "import_code": 1}):
             for fld in ("code", "import_code"):
@@ -1671,15 +1674,27 @@ def create_import_wizard_router(db):
                     existing_keys[v] = k["id"]
                     existing_keys[v.zfill(4)] = k["id"]
         keys_created = 0
+        keys_special_created = 0
         section_key_codes: dict[str, dict] = {}
         for sec in data.sections:
             key_code = (sec.get("key_code") or "").strip()
             key_label = (sec.get("key_label") or "").strip()
             if not key_code or key_code in section_key_codes:
                 continue
-            section_key_codes[key_code] = {"code": key_code, "label": key_label}
+            section_key_codes[key_code] = {
+                "code": key_code,
+                "label": key_label,
+                "is_special": bool(sec.get("is_special", False)),
+            }
         for code, info in section_key_codes.items():
             if code in existing_keys or code.zfill(4) in existing_keys:
+                # Si la cle existe deja mais qu'elle n'est pas marquee is_special
+                # alors que la nouvelle section l'indique, on met a jour le flag.
+                if info["is_special"]:
+                    await db.distribution_keys.update_one(
+                        {"id": existing_keys.get(code) or existing_keys.get(code.zfill(4))},
+                        {"$set": {"is_special": True, "updated_at": _now_iso()}},
+                    )
                 continue
             key_id = str(uuid.uuid4())
             await db.distribution_keys.insert_one({
@@ -1689,8 +1704,10 @@ def create_import_wizard_router(db):
                 "name": info["label"] or f"Cle {code}",
                 "description": "",
                 "type": "quotities",
-                "is_special": False,
+                "key_type": "quotity",
+                "is_special": info["is_special"],
                 "lines": [],
+                "lots": [],
                 "copropriete_id": copro_id,
                 "import_session_id": session_id,
                 "created_at": _now_iso(),
@@ -1698,6 +1715,8 @@ def create_import_wizard_router(db):
             existing_keys[code] = key_id
             existing_keys[code.zfill(4)] = key_id
             keys_created += 1
+            if info["is_special"]:
+                keys_special_created += 1
 
         # Construire les lignes a partir des sections (with key_id linking)
         lines = []
@@ -1746,11 +1765,13 @@ def create_import_wizard_router(db):
             "total_amount": round(total_amount, 2),
             "budget_id": budget_id,
             "keys_created": keys_created,
+            "keys_special_created": keys_special_created,
         })
         return {
             "inserted": len(lines),
             "total_amount": round(total_amount, 2),
             "keys_created": keys_created,
+            "keys_special_created": keys_special_created,
         }
 
     # ----- J: DISTRIBUTION KEYS -----
@@ -1827,24 +1848,27 @@ def create_import_wizard_router(db):
             key_type_in = (k.get("type") or "").lower()
             api_key_type = "equal" if key_type_in == "equal" else "quotity"
             if existing:
-                # If the existing key has NO lots (empty parse), enrich it with
-                # the matched lots. Otherwise keep user edits untouched.
-                has_lots = bool(existing.get("lots") or [])
-                if not has_lots:
-                    await db.distribution_keys.update_one(
-                        {"id": existing["id"]},
-                        {"$set": {
-                            "name": name,
-                            "key_type": api_key_type,
-                            "type": k.get("type") or existing.get("type") or "tantiemes",
-                            "total_quotities": total_q,
-                            "lots": api_lots,
-                            "lines": api_lots,  # kept for legacy compatibility
-                            "import_session_id": session_id,
-                            "updated_at": _now_iso(),
-                        }},
-                    )
-                    inserted += 1
+                # Re-import : on met TOUJOURS a jour la cle existante avec les
+                # nouveaux lots / quotites parses du PDF. C'est la responsabilite
+                # de l'utilisateur de verifier les valeurs avant commit.
+                # Si le PDF ne contient pas de lignes, on conserve les lots existants
+                # (sinon on viderait la cle accidentellement).
+                update_fields = {
+                    "name": name,
+                    "key_type": api_key_type,
+                    "type": k.get("type") or existing.get("type") or "tantiemes",
+                    "import_session_id": session_id,
+                    "updated_at": _now_iso(),
+                }
+                if api_lots:
+                    update_fields["total_quotities"] = total_q
+                    update_fields["lots"] = api_lots
+                    update_fields["lines"] = api_lots
+                await db.distribution_keys.update_one(
+                    {"id": existing["id"]},
+                    {"$set": update_fields},
+                )
+                inserted += 1
                 continue
             doc = {
                 "id": str(uuid.uuid4()),

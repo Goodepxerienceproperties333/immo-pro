@@ -384,12 +384,23 @@ def create_fund_calls_router(db):
         n_calls = data.frequency
         budget_lines = budget.get("lines", [])
         budget_total = round(sum(l.get("amount", 0) for l in budget_lines), 2)
+        # Fiscal year end for the last call's period_end
+        fy_end = (fy or {}).get("end_date", "") or ""
         # Per call portion of each budget line
         results = []
+        # Pre-calcul des dates de chaque appel pour deduire les period_start/period_end
+        call_dates = [_add_months(data.start_date, i * interval_months) for i in range(n_calls)]
         for i in range(n_calls):
-            call_date = _add_months(data.start_date, i * interval_months)
+            call_date = call_dates[i]
             due_date = (datetime.strptime(call_date, "%Y-%m-%d")
                         + timedelta(days=data.due_offset_days or 30)).strftime("%Y-%m-%d")
+            # period_end = veille du prochain appel, ou fy_end pour le dernier
+            if i + 1 < n_calls:
+                next_dt = datetime.strptime(call_dates[i + 1], "%Y-%m-%d")
+                period_end = (next_dt - timedelta(days=1)).strftime("%Y-%m-%d")
+            else:
+                period_end = fy_end or (datetime.strptime(call_date, "%Y-%m-%d")
+                                        + timedelta(days=interval_months * 30 - 1)).strftime("%Y-%m-%d")
             # Aggregate distribution by owner combining all budget lines
             owner_agg = {}  # owner_id -> {amount, breakdown_by_line[]}
             call_total = 0.0
@@ -487,6 +498,8 @@ def create_fund_calls_router(db):
                 "name": name,
                 "date": call_date,
                 "due_date": due_date,
+                "period_start": call_date,
+                "period_end": period_end,
                 "total_amount": round(call_total, 2),
                 "reserve_amount": round(reserve_added, 2),
                 "roulement_amount": round(roulement_added, 2),
@@ -521,6 +534,13 @@ def create_fund_calls_router(db):
             for i in range(freq):
                 cd = _add_months(sdate, i * interval)
                 dd = (datetime.strptime(cd, "%Y-%m-%d") + timedelta(days=offset)).strftime("%Y-%m-%d")
+                # period_end = veille du prochain appel, ou cd + interval - 1 jour pour le dernier
+                if i + 1 < freq:
+                    next_cd = _add_months(sdate, (i + 1) * interval)
+                    pend = (datetime.strptime(next_cd, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
+                else:
+                    pend = ((fy or {}).get("end_date") or
+                            (datetime.strptime(cd, "%Y-%m-%d") + timedelta(days=interval * 30 - 1)).strftime("%Y-%m-%d"))
                 dist = _distribute_amount(per_call, fund.distribution_key_id or "")
                 distribution = []
                 for oid, d in dist.items():
@@ -551,6 +571,8 @@ def create_fund_calls_router(db):
                     "name": f"{base_label} - {freq_label} {i + 1}/{freq} - {fy_name}".strip(" -"),
                     "date": cd,
                     "due_date": dd,
+                    "period_start": cd,
+                    "period_end": pend,
                     "total_amount": per_call,
                     "reserve_amount": per_call if fund_kind == "reserve" else 0.0,
                     "roulement_amount": per_call if fund_kind == "roulement" else 0.0,
@@ -588,6 +610,8 @@ def create_fund_calls_router(db):
                 "name": c["name"],
                 "date": c["date"],
                 "due_date": c["due_date"],
+                "period_start": c.get("period_start", c["date"]),
+                "period_end": c.get("period_end", c["due_date"]),
                 "fiscal_year_id": c["fiscal_year_id"],
                 "description": f"Appel auto. issu du budget {budget.get('name','')}",
                 "total_amount": c["total_amount"],

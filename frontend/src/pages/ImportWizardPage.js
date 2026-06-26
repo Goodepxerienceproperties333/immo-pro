@@ -116,20 +116,30 @@ export default function ImportWizardPage() {
   }, [effectiveCopro]);
 
   // ----- file upload -----
-  const handleFileChange = async (e) => {
+  const handleFileChange = async (e, opts = {}) => {
+    let { append = false } = opts;
+    // Detection alternative via dataset (utilise par le bouton "Ajouter un autre PDF")
+    if (!append && e?.target?.dataset?.appendMode === 'true') {
+      append = true;
+      e.target.dataset.appendMode = '';
+    }
     const file = e.target.files?.[0];
     if (!file || !session) return;
     setSniffing(true);
-    setSniffResult(null);
-    setMapping({});
-    setNaturesParsed([]);
-    setBudgetSections([]);
-    setKeysParsed([]);
-    setSuppliersParsed([]);
-    setInvoicesParsed([]);
-    setJournalsParsed([]);
-    setBalanceParsed({ actif: [], passif: [], total_actif: 0, total_passif: 0, balanced: false, period_end_date: '' });
-    setOdEntriesParsed({ format: '', entries: [], total_count: 0, total_amount: 0, period_start: '', period_end: '' });
+    if (!append) {
+      // Reinitialise les etats locaux uniquement lors d'un upload initial.
+      // En mode append (multi-PDF cles), on conserve les donnees deja parsees.
+      setSniffResult(null);
+      setMapping({});
+      setNaturesParsed([]);
+      setBudgetSections([]);
+      setKeysParsed([]);
+      setSuppliersParsed([]);
+      setInvoicesParsed([]);
+      setJournalsParsed([]);
+      setBalanceParsed({ actif: [], passif: [], total_actif: 0, total_passif: 0, balanced: false, period_end_date: '' });
+      setOdEntriesParsed({ format: '', entries: [], total_count: 0, total_amount: 0, period_start: '', period_end: '' });
+    }
     try {
       const fd = new FormData();
       fd.append('file', file);
@@ -148,7 +158,31 @@ export default function ImportWizardPage() {
         });
         if (step.key === 'natures') setNaturesParsed(r.data.natures || []);
         if (step.key === 'budget') setBudgetSections(r.data.sections || []);
-        if (step.key === 'distribution_keys') setKeysParsed(r.data.keys || []);
+        if (step.key === 'distribution_keys') {
+          const incoming = r.data.keys || [];
+          if (append && keysParsed.length > 0) {
+            // Merge : dedupe par code (le dernier upload ecrase). Si pas de code,
+            // dedupe par nom. Les nouvelles cles sans match sont ajoutees.
+            const byCode = new Map();
+            const noCodeByName = new Map();
+            keysParsed.forEach(k => {
+              if (k.code) byCode.set(k.code.trim(), k);
+              else noCodeByName.set((k.name || '').trim(), k);
+            });
+            incoming.forEach(k => {
+              const code = (k.code || '').trim();
+              const nm = (k.name || '').trim();
+              if (code) byCode.set(code, k);
+              else if (nm) noCodeByName.set(nm, k);
+            });
+            const merged = [...byCode.values(), ...noCodeByName.values()];
+            const newKeysCount = merged.length - keysParsed.length;
+            setKeysParsed(merged);
+            toast.success(`+${incoming.length} cle(s) parsees - ${newKeysCount > 0 ? newKeysCount + ' nouvelle(s)' : 'toutes deja presentes (mises a jour)'}. Total : ${merged.length}`);
+          } else {
+            setKeysParsed(incoming);
+          }
+        }
         if (step.key === 'suppliers') setSuppliersParsed(r.data.suppliers || []);
         if (step.key === 'opening_balance') {
           setBalanceParsed({
@@ -541,7 +575,19 @@ export default function ImportWizardPage() {
           )}
 
           {sniffResult && step.key === 'distribution_keys' && (
-            <KeysPreview keys={keysParsed} setKeys={setKeysParsed} />
+            <KeysPreview
+              keys={keysParsed}
+              setKeys={setKeysParsed}
+              onAddPdf={() => {
+                const inp = document.getElementById('file-input');
+                if (inp) {
+                  // marqueur pour handleFileChange : prochain upload en mode append
+                  inp.dataset.appendMode = 'true';
+                  inp.value = '';
+                  inp.click();
+                }
+              }}
+            />
           )}
         </CardContent>
       </Card>
@@ -1403,9 +1449,14 @@ function BudgetPreview({ sections, setSections }) {
       </div>
       <div className="space-y-2 max-h-[420px] overflow-y-auto pr-1">
         {sections.map((s, si) => (
-          <div key={si} className="border border-slate-200 rounded">
-            <div className="bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-800 flex justify-between items-center">
-              <span>[{s.key_code}] {s.key_label}</span>
+          <div key={si} className={`border rounded ${s.is_special ? 'border-purple-300 bg-purple-50/40' : 'border-slate-200'}`}>
+            <div className={`px-3 py-1.5 text-xs font-semibold text-slate-800 flex justify-between items-center ${s.is_special ? 'bg-purple-100' : 'bg-slate-100'}`}>
+              <span>
+                [{s.key_code}] {s.key_label}
+                {s.is_special && (
+                  <span className="ml-2 px-1.5 py-0.5 rounded bg-purple-600 text-white text-[10px] uppercase tracking-wide" title="Cle speciale - ne s'applique qu'aux lots concernes (ex. ascenseur)">Speciale</span>
+                )}
+              </span>
               <div className="flex gap-3 text-[10px] font-normal text-slate-500">
                 <span>N-1: <span className="font-mono">{(parseFloat(s.realise_n1) || 0).toFixed(2)}</span></span>
                 <span>N: <span className="font-mono font-semibold text-slate-700">{(parseFloat(s.budget_n) || 0).toFixed(2)}</span></span>
@@ -1448,9 +1499,45 @@ function BudgetPreview({ sections, setSections }) {
 }
 
 // ============== DISTRIBUTION KEYS PREVIEW (Step J) ==============
-function KeysPreview({ keys, setKeys }) {
+function KeysPreview({ keys, setKeys, onAddPdf }) {
+  const addManualKey = () => {
+    const next = [...keys, {
+      code: '',
+      name: 'Nouvelle cle',
+      type: 'tantiemes',
+      lines: [],
+      total_quotities: 0,
+      _manual: true,
+    }];
+    setKeys(next);
+  };
+  const addLine = (kIdx) => {
+    const next = keys.map((k, i) => i === kIdx
+      ? { ...k, lines: [...(k.lines || []), { lot_label: '', lot_code: '', owner_label: '', quotity: 0 }] }
+      : k);
+    setKeys(next);
+  };
+  const headerActions = (
+    <div className="flex flex-wrap gap-2 mb-2">
+      {onAddPdf && (
+        <Button size="sm" variant="outline" onClick={onAddPdf} className="border-blue-300 text-blue-700 hover:bg-blue-50" data-testid="keys-add-pdf-btn">
+          <Upload size={13} className="mr-1.5" /> Ajouter un autre PDF
+        </Button>
+      )}
+      <Button size="sm" variant="outline" onClick={addManualKey} className="border-emerald-300 text-emerald-700 hover:bg-emerald-50" data-testid="keys-add-manual-btn">
+        <Plus size={13} className="mr-1.5" /> Ajouter une cle manuelle
+      </Button>
+    </div>
+  );
   if (!keys?.length) {
-    return <div className="text-center py-6 text-amber-600 text-sm"><AlertTriangle size={24} className="inline mr-1" /> Aucune cle de repartition detectee dans le PDF.</div>;
+    return (
+      <div>
+        {headerActions}
+        <div className="text-center py-6 text-amber-600 text-sm">
+          <AlertTriangle size={24} className="inline mr-1" /> Aucune cle de repartition pour l&apos;instant. Ajoutez-en via un PDF ou manuellement.
+        </div>
+      </div>
+    );
   }
   const updKey = (idx, field, value) => {
     setKeys(keys.map((k, i) => i === idx ? { ...k, [field]: value } : k));
@@ -1472,18 +1559,21 @@ function KeysPreview({ keys, setKeys }) {
   return (
     <div className="space-y-3">
       <div className="bg-blue-50 border border-blue-200 rounded p-3 text-xs text-blue-900">
-        <strong>Verifiez les cles de repartition</strong> : pour chaque cle, les quotites doivent etre proportionnelles. Les lots sont matches automatiquement par le numero. Si le match echoue, il sera demande au syndic.
+        <strong>Verifiez les cles de repartition</strong> : pour chaque cle, les quotites doivent etre proportionnelles. Les lots sont matches automatiquement par le numero. Vous pouvez uploader plusieurs PDFs successivement (les codes en double seront mis a jour).
       </div>
+      {headerActions}
       <div className="space-y-2 max-h-[440px] overflow-y-auto pr-1">
         {keys.map((k, ki) => (
           <div key={ki} className="border border-slate-200 rounded">
             <div className="bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-800 flex justify-between items-center">
               <div className="flex gap-2 items-center">
-                <input value={k.code} onChange={e => updKey(ki, 'code', e.target.value)} className="w-14 bg-white border border-slate-300 rounded px-1 font-mono" />
-                <input value={k.name} onChange={e => updKey(ki, 'name', e.target.value)} className="bg-white border border-slate-300 rounded px-1 w-72" />
+                <input value={k.code || ''} onChange={e => updKey(ki, 'code', e.target.value)} placeholder="0001" className="w-14 bg-white border border-slate-300 rounded px-1 font-mono" />
+                <input value={k.name || ''} onChange={e => updKey(ki, 'name', e.target.value)} className="bg-white border border-slate-300 rounded px-1 w-72" />
+                {k._manual && <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 text-[10px]">manuel</span>}
               </div>
               <div className="flex gap-2 items-center">
                 <span className="text-slate-500">Total quotites : <strong>{k.total_quotities?.toFixed(2) || '0.00'}</strong></span>
+                <button onClick={() => addLine(ki)} className="text-emerald-600 hover:text-emerald-800" title="Ajouter une ligne"><Plus size={12} /></button>
                 <button onClick={() => delKey(ki)} className="text-red-500"><Trash2 size={12} /></button>
               </div>
             </div>

@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from typing import Optional, List
 from bson import ObjectId
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import uuid
 from tier_accounts import assign_owner_accounts
 
@@ -406,38 +406,91 @@ def create_properties_router(db):
             roulement_quota = 0.0
 
         # ---- 2) Prorata provisions sur appels emis chevauchant sale_date ----
+        # On utilise period_start / period_end (periode effective COUVERTE par l'appel)
+        # si presents. Sinon fallback intelligent : deduit la periode depuis le nom
+        # "X/N" et l'exercice fiscal, OU [date, date + 90j] en dernier recours.
         sale_date = data.sale_date
         try:
             sale_dt = datetime.strptime(sale_date, "%Y-%m-%d").date()
         except Exception:
             raise HTTPException(400, "sale_date doit etre au format YYYY-MM-DD")
 
+        # Pre-fetch des exercices fiscaux pour le fallback
+        fy_by_id: dict = {}
+        async for _fy in db.fiscal_years.find({"copropriete_id": copro_id}, {"_id": 0}):
+            fy_by_id[_fy["id"]] = _fy
+
+        def _resolve_period(call: dict) -> tuple:
+            """Retourne (period_start_date, period_end_date) pour un appel.
+            Priorite : period_start/period_end stockes > deduction depuis nom + fy
+            > [date, date+90j] fallback."""
+            # 1) Champs explicites (appels generes apres iter76)
+            ps = call.get("period_start")
+            pe = call.get("period_end")
+            if ps and pe:
+                try:
+                    return (datetime.strptime(ps, "%Y-%m-%d").date(),
+                            datetime.strptime(pe, "%Y-%m-%d").date())
+                except Exception:
+                    pass
+            # 2) Deduction depuis "X/N" dans le nom + fiscal year
+            import re as _re
+            try:
+                start_dt = datetime.strptime(call.get("date", ""), "%Y-%m-%d").date()
+            except Exception:
+                return None, None
+            m = _re.search(r"(\d+)\s*/\s*(\d+)", call.get("name", "") or "")
+            if m:
+                try:
+                    n_calls = int(m.group(2))
+                    if n_calls in (1, 2, 3, 4, 6, 12) and n_calls > 0:
+                        interval = 12 // n_calls
+                        fy = fy_by_id.get(call.get("fiscal_year_id", ""))
+                        # period_end = start_dt + interval mois - 1 jour
+                        # (en respectant fin d'exercice si dispo)
+                        try:
+                            year = start_dt.year
+                            month = start_dt.month + interval
+                            while month > 12:
+                                month -= 12
+                                year += 1
+                            try:
+                                next_start = start_dt.replace(year=year, month=month)
+                            except ValueError:
+                                # Cas 31 janvier + 1 mois -> 28/29 fevrier
+                                from calendar import monthrange
+                                last_day = monthrange(year, month)[1]
+                                next_start = start_dt.replace(year=year, month=month, day=min(start_dt.day, last_day))
+                            end_dt = next_start - timedelta(days=1)
+                            # Borne haut fin d'exercice
+                            if fy:
+                                try:
+                                    fy_end_dt = datetime.strptime(fy["end_date"], "%Y-%m-%d").date()
+                                    if end_dt > fy_end_dt:
+                                        end_dt = fy_end_dt
+                                except Exception:
+                                    pass
+                            return start_dt, end_dt
+                        except Exception:
+                            pass
+                except (ValueError, ZeroDivisionError):
+                    pass
+            # 3) Fallback : 90 jours
+            return start_dt, start_dt + timedelta(days=90)
+
         # On considere les fund_calls de type 'provisions' (pas reserve/roulement)
-        # dont la periode [date, due_date OU prochaine echeance] chevauche sale_date
-        # et qui ont une ligne pour old_owner_id dans la distribution
+        # dont la periode COUVERTE chevauche sale_date
         calls = await db.fund_calls.find(
             {"copropriete_id": copro_id}, {"_id": 0}
         ).sort("date", 1).to_list(10000)
-        # Filtrer : calls de provisions deja emis
         calls = [c for c in calls if (c.get("call_type") or "provisions") == "provisions"]
 
         prorata_total = 0.0
         prorata_details = []
         for c in calls:
-            try:
-                c_start = datetime.strptime(c.get("date", ""), "%Y-%m-%d").date()
-            except Exception:
+            c_start, c_end = _resolve_period(c)
+            if not c_start or not c_end or c_end < c_start:
                 continue
-            # Periode = [c_start, c_end] ou c_end = due_date du call (ou +90j defaut)
-            due = c.get("due_date") or c.get("date")
-            try:
-                c_end = datetime.strptime(due, "%Y-%m-%d").date()
-            except Exception:
-                continue
-            if c_end <= c_start:
-                # securite : si due_date <= date, on suppose une periode de 90 jours
-                from datetime import timedelta as _td
-                c_end = c_start + _td(days=90)
             if not (c_start <= sale_dt <= c_end):
                 continue
             # Montant appele pour le vendeur sur ce call

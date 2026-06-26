@@ -896,6 +896,7 @@ def parse_budget_pdf(raw: bytes) -> dict:
             # centers, which may differ from the year-header centers.
             data_amt_xc: list[float] = []
             num_re = re.compile(r"^-?[\d.,]+$")
+            data_words_for_xc: list[dict] = []
             for w in words:
                 if w["top"] <= header_min_y:
                     continue
@@ -904,6 +905,7 @@ def parse_budget_pdf(raw: bytes) -> dict:
                 if num_re.match(w["text"]):
                     # Use x1 (right edge) since amounts are right-aligned
                     data_amt_xc.append(w["x1"])
+                    data_words_for_xc.append(w)
             # Greedy 1D clustering (gap threshold 25)
             data_amt_xc.sort()
             data_clusters: list[list[float]] = []
@@ -912,6 +914,36 @@ def parse_budget_pdf(raw: bytes) -> dict:
                     data_clusters[-1].append(x)
                 else:
                     data_clusters.append([x])
+            # Fix Optipro "thousands fragment" : in budgets with amounts > 999, the
+            # PDF splits "18 800,00" into 2 words ("18" + "800,00"), creating an
+            # artefact cluster ~25-30px LEFT of the real amount cluster. The
+            # fragment cluster contains ONLY short integer values (no comma).
+            # We merge such fragment clusters into the next (real) cluster.
+            def _is_fragment_cluster(cluster: list[float]) -> bool:
+                """A cluster is a thousand-fragment if all its words are 1-3 digit
+                integers (no comma) at the same right-edge."""
+                # Find the words at these right-edges
+                xs_set = {round(x, 1) for x in cluster}
+                texts = [w["text"] for w in data_words_for_xc if round(w["x1"], 1) in xs_set]
+                if not texts:
+                    return False
+                return all(re.match(r"^-?\d{1,3}$", t) for t in texts)
+
+            i = 0
+            merged_clusters: list[list[float]] = []
+            while i < len(data_clusters):
+                cur = data_clusters[i]
+                # If next cluster exists and is within 35px AND current is fragment-like
+                if i + 1 < len(data_clusters):
+                    gap = min(data_clusters[i + 1]) - max(cur)
+                    if gap < 35 and _is_fragment_cluster(cur):
+                        merged = cur + data_clusters[i + 1]
+                        merged_clusters.append(merged)
+                        i += 2
+                        continue
+                merged_clusters.append(cur)
+                i += 1
+            data_clusters = merged_clusters
             # Keep only clusters with >= 3 points (real columns), then take their
             # mean as column right-edge. Center = right_edge - 12 (avg width).
             data_col_right_edges = [sum(c) / len(c) for c in data_clusters if len(c) >= 3]
@@ -922,7 +954,16 @@ def parse_budget_pdf(raw: bytes) -> dict:
             if 2 <= len(data_col_centers) <= 3:
                 amt_col_centers = data_col_centers
             elif header_centers:
-                amt_col_centers = list(header_centers)
+                # Header may have year-range tokens like "2024 - 2025" creating
+                # 2 year-tokens per column. Cluster header centers too (gap < 35).
+                header_centers_sorted = sorted(header_centers)
+                hc_clusters: list[list[float]] = []
+                for x in header_centers_sorted:
+                    if hc_clusters and (x - hc_clusters[-1][-1]) < 35:
+                        hc_clusters[-1].append(x)
+                    else:
+                        hc_clusters.append([x])
+                amt_col_centers = [sum(c) / len(c) for c in hc_clusters]
                 if en_cours_w:
                     amt_col_centers.append((en_cours_w["x0"] + en_cours_w["x1"]) / 2)
                 amt_col_centers.sort()
@@ -932,11 +973,17 @@ def parse_budget_pdf(raw: bytes) -> dict:
 
             # Build amount column boundaries using clean midpoints (no overlap)
             amt_bounds: list[tuple[float, float, str]] = []  # (xs, xe, key)
-            # If only 2 columns detected -> realise_n1 + budget_n (no en_cours)
-            if len(amt_col_centers) == 2:
+            # Map column count -> key names (1 col = budget only, 2 cols = N-1 + N,
+            # 3 cols = N-1 + N + en_cours). Truncate to length of amt_col_centers
+            # to avoid IndexError on PDFs with unusual column layouts.
+            if len(amt_col_centers) == 1:
+                keys = ["budget_n"]
+            elif len(amt_col_centers) == 2:
                 keys = ["realise_n1", "budget_n"]
             else:
                 keys = ["realise_n1", "budget_n", "en_cours"]
+            # Defensive : if amt_col_centers has more entries than keys, truncate.
+            amt_col_centers = amt_col_centers[: len(keys)]
             for i, cx in enumerate(amt_col_centers):
                 if i == 0:
                     xs = cx - 60
@@ -1067,9 +1114,19 @@ def parse_budget_pdf(raw: bytes) -> dict:
                         amounts[best_key] = _join_amount(grp)
 
                 if a_kind == "section":
+                    # Detection des cles speciales : libelle commence par "Cle Speciale[s]"
+                    # ou contient "speciale[s]" (insensible aux accents et a la casse).
+                    label_lower = (libelle or "").lower()
+                    label_norm = re.sub(r"[éèê]", "e", label_lower)
+                    is_special = bool(
+                        re.search(r"\bcl[eé]s?\s+sp[eé]ciale", label_lower) or
+                        re.search(r"\bcle\s+speciale", label_norm) or
+                        re.search(r"\bsp[eé]ciale[s]?\b", label_lower)
+                    )
                     current_section = {
                         "key_code": a_code,
                         "key_label": libelle,
+                        "is_special": is_special,
                         "realise_n1": amounts["realise_n1"],
                         "budget_n": amounts["budget_n"],
                         "en_cours": amounts["en_cours"],
@@ -1083,6 +1140,7 @@ def parse_budget_pdf(raw: bytes) -> dict:
                         current_section = {
                             "key_code": "????",
                             "key_label": "(Sans section)",
+                            "is_special": False,
                             "realise_n1": 0.0,
                             "budget_n": 0.0,
                             "en_cours": 0.0,
