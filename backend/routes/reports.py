@@ -432,6 +432,75 @@ def create_reports_router(db):
                         "is_owner_aggregated": True,
                     }
 
+            # ---- Repartition des comptes de regularisation 49X sur les proprietaires ----
+            # Regle metier (PCMN copro) : en consultation "Apres repartition", les comptes
+            # de regularisation (490-498, hors 499 synthetique) sont consideres comme
+            # appartenant collectivement aux proprietaires. On les repartit par quotite.
+            #
+            # PRINCIPE D'EQUILIBRE : un compte 49X conserve sa NATURE (actif/passif) en
+            # passant sur les comptes proprietaires. C'est juste un changement de rubrique
+            # de presentation, pas une re-affectation comptable.
+            #   - Compte 49X ACTIF (solde debiteur, ex. 490 charges a reporter)
+            #       -> ajoute au DEBIT des proprietaires (reste cote ACTIF, rubrique V.A)
+            #   - Compte 49X PASSIF (solde crediteur, ex. 493 produits a reporter)
+            #       -> ajoute au CREDIT des proprietaires (reste cote PASSIF, rubrique VI.A)
+            # Cela preserve mathematiquement l'equilibre : on deplace simplement le
+            # montant d'une rubrique a l'autre du MEME cote du bilan.
+            regul_actif_by_account = {}  # acc -> solde positif (actif)
+            regul_passif_by_account = {}  # acc -> abs(solde negatif) (passif)
+            for acc, b in balances.items():
+                if not acc.startswith("49") or acc == "499":
+                    continue
+                solde = round(b["debit"] - b["credit"], 2)
+                if abs(solde) < 0.01:
+                    continue
+                if solde > 0:
+                    regul_actif_by_account[acc] = solde
+                else:
+                    regul_passif_by_account[acc] = abs(solde)
+
+            if (regul_actif_by_account or regul_passif_by_account) and total_quotities > 0:
+                total_actif_regul = sum(regul_actif_by_account.values())
+                total_passif_regul = sum(regul_passif_by_account.values())
+                # Repartition par quotite avec gestion d'arrondi : on calcule la somme
+                # distribuee et on l'ajuste sur le dernier owner pour neutraliser les
+                # ecarts d'arrondi cumules.
+                actif_distributed = 0.0
+                passif_distributed = 0.0
+                owner_items = list(owner_quotities.items())
+                for idx, (oid, quo) in enumerate(owner_items):
+                    ratio = quo / total_quotities
+                    is_last = (idx == len(owner_items) - 1)
+                    if is_last:
+                        actif_share = round(total_actif_regul - actif_distributed, 2)
+                        passif_share = round(total_passif_regul - passif_distributed, 2)
+                    else:
+                        actif_share = round(total_actif_regul * ratio, 2)
+                        passif_share = round(total_passif_regul * ratio, 2)
+                        actif_distributed += actif_share
+                        passif_distributed += passif_share
+                    if abs(actif_share) < 0.005 and abs(passif_share) < 0.005:
+                        continue
+                    virt_acc = f"OWNER_{oid}"
+                    if virt_acc not in balances:
+                        owner_doc = next((o for o in owners_for_acp if o["id"] == oid), None)
+                        if not owner_doc:
+                            continue
+                        balances[virt_acc] = {
+                            "account_number": virt_acc,
+                            "account_name": owner_doc.get("name", ""),
+                            "debit": 0.0, "credit": 0.0,
+                            "is_owner_aggregated": True,
+                        }
+                    # Regul actif -> owner DEBIT (reste cote ACTIF, rubrique V.A)
+                    balances[virt_acc]["debit"] += actif_share
+                    # Regul passif -> owner CREDIT (reste cote PASSIF, rubrique VI.A)
+                    balances[virt_acc]["credit"] += passif_share
+                # Neutralise les comptes 49X reels (sauf 499)
+                for acc in list(regul_actif_by_account.keys()) + list(regul_passif_by_account.keys()):
+                    balances[acc]["debit"] = 0.0
+                    balances[acc]["credit"] = 0.0
+
             # Reset buckets et re-classer suite a modification balances
             actif_buckets = {k: [] for k in actif_buckets}
             passif_buckets = {k: [] for k in passif_buckets}

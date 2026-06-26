@@ -345,12 +345,23 @@ def create_reminders_router(db):
         # Gather unpaid fund call shares
         fund_calls = await db.fund_calls.find({"copropriete_id": copropriete_id}, {"_id": 0}).to_list(10000)
         today = datetime.now(timezone.utc).date()
+
+        def _fmt_date(s: str) -> str:
+            """ISO YYYY-MM-DD -> DD/MM/YYYY. Renvoie la valeur d'origine si parse echoue."""
+            if not s:
+                return ""
+            try:
+                return datetime.strptime(s, "%Y-%m-%d").date().strftime("%d/%m/%Y")
+            except Exception:
+                return s
+
         unpaid_items = []
         total_due = 0.0
         for fc in fund_calls:
             for d in fc.get("distribution", []):
                 if d.get("owner_id") == owner_id and not d.get("paid"):
                     due_str = fc.get("due_date") or fc.get("date") or ""
+                    period_str = fc.get("date") or ""
                     try:
                         due_date = datetime.strptime(due_str, "%Y-%m-%d").date()
                         days = (today - due_date).days
@@ -358,11 +369,14 @@ def create_reminders_router(db):
                         days = 0
                     unpaid_items.append({
                         "name": fc.get("name", ""),
-                        "due": due_str,
+                        "period": _fmt_date(period_str),
+                        "due": _fmt_date(due_str),
                         "amount": d.get("amount", 0),
                         "days_late": days,
                     })
                     total_due += d.get("amount", 0)
+        # Tri par date d'appel pour une lecture chronologique
+        unpaid_items.sort(key=lambda x: x.get("period", ""))
 
         buf = io.BytesIO()
         doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=20 * mm, bottomMargin=20 * mm,
@@ -392,20 +406,57 @@ def create_reminders_router(db):
         elements.append(Spacer(1, 6 * mm))
 
         if unpaid_items:
-            rows = [["Appel", "Echeance", "Jours de retard", "Montant"]]
+            # Style pour cellules avec word-wrap (evite la superposition de texte
+            # quand le libelle de l'appel depasse la largeur de la colonne).
+            cell_style = ParagraphStyle(
+                "tbl_cell", parent=styles["Normal"], fontSize=9, leading=11,
+            )
+            cell_right = ParagraphStyle(
+                "tbl_cell_r", parent=cell_style, alignment=2,  # right
+            )
+            header_style = ParagraphStyle(
+                "tbl_hdr", parent=styles["Normal"], fontSize=9, leading=11,
+                fontName="Helvetica-Bold", textColor=colors.white,
+            )
+            header_right = ParagraphStyle(
+                "tbl_hdr_r", parent=header_style, alignment=2,
+            )
+            rows = [[
+                Paragraph("Appel", header_style),
+                Paragraph("Periode", header_style),
+                Paragraph("Echeance", header_style),
+                Paragraph("Jours de retard", header_style),
+                Paragraph("Montant", header_right),
+            ]]
             for u in unpaid_items:
-                rows.append([u["name"], u["due"], f"{u['days_late']} j", f"{u['amount']:.2f} EUR"])
-            rows.append(["", "", "TOTAL", f"{total_due:.2f} EUR"])
-            t = Table(rows, colWidths=[60 * mm, 30 * mm, 30 * mm, 35 * mm])
+                rows.append([
+                    Paragraph(u["name"], cell_style),
+                    Paragraph(u.get("period", ""), cell_style),
+                    Paragraph(u["due"], cell_style),
+                    Paragraph(f"{u['days_late']} j", cell_style),
+                    Paragraph(f"{u['amount']:.2f} EUR", cell_right),
+                ])
+            rows.append([
+                "", "", "",
+                Paragraph("<b>TOTAL</b>", cell_style),
+                Paragraph(f"<b>{total_due:.2f} EUR</b>", cell_right),
+            ])
+            t = Table(
+                rows,
+                colWidths=[55 * mm, 25 * mm, 25 * mm, 25 * mm, 25 * mm],
+                repeatRows=1,
+            )
             t.setStyle(TableStyle([
                 ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0055FF")),
                 ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
                 ("FONTSIZE", (0, 0), (-1, -1), 9),
-                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                ("ALIGN", (3, 0), (3, -1), "RIGHT"),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 4),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+                ("TOPPADDING", (0, 0), (-1, -1), 3),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
                 ("GRID", (0, 0), (-1, -1), 0.3, colors.HexColor("#CCCCCC")),
                 ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#F1F5F9")),
-                ("FONTNAME", (2, -1), (3, -1), "Helvetica-Bold"),
             ]))
             elements.append(t)
 

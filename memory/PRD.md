@@ -11,6 +11,50 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 ## Implemented
+### Iter73 (Feb 2026) - Bilan equilibre apres repartition + Rappels PDF (periode + no overflow)
+
+**Bugs corriges** :
+
+1. **P0 - Bilan "Apres repartition" desequilibre** (`/app/backend/routes/reports.py`)
+   - Symptome : sur ACP Gaura, `view_mode=after_distribution` retournait
+     `ecart=23029.82` (Actif != Passif).
+   - Root cause : la distribution des comptes 49X (regul.) sur les proprietaires
+     inversait les cotes :
+       - Regul ACTIF (D-C > 0) etait ajoute en CREDIT owner (-> PASSIF)
+       - Regul PASSIF (D-C < 0) etait ajoute en DEBIT owner (-> ACTIF)
+     Resultat : chaque montant creait un ecart de 2*amount au lieu de zero.
+   - Fix : la NATURE du compte 49X est preservee sur le compte proprietaire.
+     C'est juste un changement de rubrique de presentation, pas une re-affectation
+     comptable.
+       - 49X ACTIF  -> owner DEBIT  (reste cote ACTIF, rubrique V.A)
+       - 49X PASSIF -> owner CREDIT (reste cote PASSIF, rubrique VI.A)
+   - Ajout : ajustement d'arrondi sur le dernier owner pour neutraliser les
+     ecarts cumules dus a `round(amount * ratio, 2)`.
+   - Result E2E : Gaura `view_mode=after_distribution` -> actif=93821.58,
+     passif=93821.58, equilibre=True, ecart=0.0.
+
+2. **P1 - Rappels PDF : superposition de texte + date de periode manquante**
+   (`/app/backend/routes/exports.py::generate_reminder_letter`)
+   - Symptome : la cellule "Appel" debordait sur les colonnes voisines quand
+     le libelle etait long (ex. "Trimestriel 1/4 - Exercice 2026"). Pas de
+     date de periode pour identifier l'appel concerne.
+   - Fix : chaque cellule de la Table ReportLab est wrappee dans un `Paragraph`
+     pour permettre le word-wrap. Nouvelle colonne "Periode" entre "Appel" et
+     "Echeance" affichant la date d'appel. Dates au format DD/MM/YYYY (vs
+     YYYY-MM-DD ISO precedent). Items tries par date de periode pour
+     chronologie lisible.
+   - Result E2E : PDF de rappel pour ACP Test/Trimestriels 1-4 2026 confirme :
+     pas de chevauchement de texte, colonne Periode bien presente avec dates
+     01/01/2026, 01/04/2026, 01/07/2026, 01/10/2026.
+
+**Tests de regression** :
+- `/app/backend/tests/test_iter73_bilan_apres_repartition_49x.py` (1 test)
+- `/app/backend/tests/test_iter73_reminders_pdf_layout.py` (1 test)
+
+**Fichiers modifies** :
+- `/app/backend/routes/reports.py` (lignes 435-505 : repartition 49X)
+- `/app/backend/routes/exports.py` (lignes 345-460 : generate_reminder_letter)
+
 ### Iter72quatuordecies (Feb 2026) - Bundle PDF Invoices + Viewer + Cleanup Gaura
 
 **Tasks completed in this iteration**:
