@@ -13,13 +13,20 @@ import uuid
 
 class ExpenseCategoryInput(BaseModel):
     name: str
-    account_number: str  # PCMN class 6 (one-to-one)
+    account_number: str  # PCMN class 6 (Charges) or class 7 (Produits)
     description: Optional[str] = ""
     copropriete_id: Optional[str] = ""
     # Repartition occupant/proprietaire pour le decompte locataire annuel.
     # Somme = 100. Defaut : 0% occupant, 100% proprio (charge restant a charge du proprio).
     default_occupant_pct: Optional[float] = 0.0
     default_proprietaire_pct: Optional[float] = 100.0
+    # Code Optipro/Sogis (4 chiffres) - optionnel, pour tracabilite avec les imports
+    code: Optional[str] = ""
+    # Code TVA standard belge : A1 (21%), A2 (6%), A3 (12%), A4 (0%/exonere)
+    vat_code: Optional[str] = ""
+    # "charge" (classe 6) ou "produit" (classe 7). Auto-derive depuis le compte
+    # si non fourni cote backend.
+    kind: Optional[str] = ""
 
 
 def create_expense_categories_router(db):
@@ -74,18 +81,21 @@ def create_expense_categories_router(db):
         }, {"_id": 0})
         if existing:
             raise HTTPException(409, f"Une nature existe deja pour ce compte ({existing.get('name','?')})")
-        # Validate account exists and is class 6
+        # Validate account exists and is class 6 (Charges) or class 7 (Produits)
         pcmn = await db.pcmn_accounts.find_one({
             "number": data.account_number,
             "copropriete_id": data.copropriete_id or "",
         }, {"_id": 0})
         if not pcmn:
             raise HTTPException(400, "Compte PCMN inexistant pour cette ACP")
-        if pcmn.get("class_num") != 6:
-            raise HTTPException(400, "Le compte doit etre de classe 6 (Charges)")
+        if pcmn.get("class_num") not in (6, 7):
+            raise HTTPException(400, "Le compte doit etre de classe 6 (Charges) ou 7 (Produits)")
+        # Auto-derive kind from class_num if not explicitly set
+        kind = data.kind or ("produit" if pcmn.get("class_num") == 7 else "charge")
         doc = {
             "id": str(uuid.uuid4()),
             **data.model_dump(),
+            "kind": kind,
             "account_name": pcmn.get("name", ""),
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
@@ -122,8 +132,8 @@ def create_expense_categories_router(db):
                 "number": data.account_number,
                 "copropriete_id": data.copropriete_id or existing.get("copropriete_id", ""),
             }, {"_id": 0})
-            if not pcmn or pcmn.get("class_num") != 6:
-                raise HTTPException(400, "Compte invalide (classe 6 obligatoire)")
+            if not pcmn or pcmn.get("class_num") not in (6, 7):
+                raise HTTPException(400, "Compte invalide (classe 6 ou 7 obligatoire)")
         await db.expense_categories.update_one(
             {"id": cat_id}, {"$set": data.model_dump()}
         )

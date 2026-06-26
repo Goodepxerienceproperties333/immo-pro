@@ -72,6 +72,50 @@ def create_coproprietes_router(db):
         if docs:
             await db.pcmn_accounts.insert_many(docs)
 
+    async def _seed_default_expense_natures(copro_id: str):
+        """Seed les natures de depense par defaut pour une nouvelle ACP.
+
+        Source : `default_expense_natures.DEFAULT_EXPENSE_NATURES` (23 entrees).
+        Skip silencieux si une nature existe deja pour le meme `account_number` dans
+        cette ACP (la contrainte 1:1 nature<->compte est respectee).
+
+        Retourne le nombre de natures inserees.
+        """
+        from default_expense_natures import DEFAULT_EXPENSE_NATURES
+        # Comptes deja attribues a une nature dans cette ACP (1:1)
+        existing = await db.expense_categories.find(
+            {"copropriete_id": copro_id}, {"_id": 0, "account_number": 1}
+        ).to_list(1000)
+        used_accounts = {e.get("account_number") for e in existing}
+        # Mapping numero -> nom PCMN pour le `account_name`
+        pcmn = await db.pcmn_accounts.find(
+            {"copropriete_id": copro_id}, {"_id": 0, "number": 1, "name": 1}
+        ).to_list(2000)
+        pcmn_map = {p["number"]: p.get("name", "") for p in pcmn}
+        now_iso = datetime.now(timezone.utc).isoformat()
+        docs = []
+        for nat in DEFAULT_EXPENSE_NATURES:
+            if nat["account_number"] in used_accounts:
+                continue
+            docs.append({
+                "id": str(uuid.uuid4()),
+                "code": nat["code"],
+                "name": nat["name"],
+                "label": nat["name"],
+                "account_number": nat["account_number"],
+                "account_name": pcmn_map.get(nat["account_number"], nat["name"]),
+                "vat_code": nat.get("vat_code", ""),
+                "default_occupant_pct": float(nat["default_occupant_pct"]),
+                "default_proprietaire_pct": float(nat["default_proprietaire_pct"]),
+                "kind": nat.get("kind", "charge"),
+                "is_default_seed": True,
+                "copropriete_id": copro_id,
+                "created_at": now_iso,
+            })
+        if docs:
+            await db.expense_categories.insert_many(docs)
+        return len(docs)
+
     async def _generate_reference(db_ref):
         """Generate chronological reference ACP-YYYYMM-NNN."""
         now = datetime.now(timezone.utc)
@@ -166,6 +210,8 @@ def create_coproprietes_router(db):
         # Seed full PCMN plan for this ACP + bank account PCMN entries
         await _seed_pcmn_for_acp(doc["id"])
         await _create_pcmn_accounts(bank_accounts, doc["id"])
+        # Seed default expense natures (23 standard categories - PCMN belge)
+        await _seed_default_expense_natures(doc["id"])
         # Seed default document categories
         from routes.documents import DEFAULT_CATEGORIES
         now_iso = datetime.now(timezone.utc).isoformat()

@@ -11,6 +11,56 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 ## Implemented
+### Iter74 (Feb 2026) - Natures de depense par defaut auto-seedees
+
+**Demande user** : "ces natures de depenses sont a creer pour toutes nouvelles ACP,
+ce sont des natures par defaut" (PDF "LISTE DES NATURES DE DEPENSE PAR DEFAUT"
+fourni par SRL FINLEAD PROPERTIES contenant 23 entrees).
+
+**Implementation** :
+
+1. **Liste centrale** (`/app/backend/default_expense_natures.py`) : 23 natures
+   couvrant tous les cas usuels d'une copro belge avec syndic professionnel :
+   - Honoraires syndic + frais admin (50/50)
+   - Assurances (incendie, RC, defense en justice) - 100% proprietaire
+   - Ascenseurs (contrat, controle, reparations)
+   - Fluides : eau, electricite, gaz - 100% occupant
+   - Incendie (alerte, contrats, extincteurs, prevention)
+   - Entretien jardins + nettoyage batiment
+   - Travaux, salles, frais bancaires, honoraires experts
+   - 1 produit : Interets crediteurs (compte 750, kind="produit")
+   - Codes TVA belges : A1 (21%), A2 (6%), A4 (0%/exonere)
+
+2. **Auto-seed a la creation d'ACP** (`/app/backend/routes/coproprietes.py`) :
+   - `_seed_default_expense_natures(copro_id)` appele dans `create_copropriete`
+     apres `_seed_pcmn_for_acp`. Skip silencieux si une nature existe deja
+     pour le meme `account_number` (respect 1:1).
+   - Verification E2E : nouvelle ACP -> 23 natures auto-creees (22 charges + 1 produit).
+
+3. **Migration des ACPs existantes** (`/app/backend/scripts/seed_default_expense_natures_existing_acps.py`) :
+   - Idempotent (`--dry-run` supporte). Skip les comptes deja attribues a une autre nature.
+   - Resultat : 101 natures inserees sur 7 ACPs existantes (60 skip car deja en place).
+
+4. **Support classe 7 (Produits) dans expense_categories** (`/app/backend/routes/expense_categories.py`) :
+   - Validation `class_num` elargie : accepte classe 6 (Charges) ET classe 7 (Produits).
+   - Champ `kind` auto-derive depuis le PCMN si non fourni : 7 -> "produit", 6 -> "charge".
+   - Nouveaux champs `ExpenseCategoryInput` : `code`, `vat_code`, `kind`.
+
+5. **UI NaturesPage** (`/app/frontend/src/pages/ExpenseCategoriesPage.js`) :
+   - Charge desormais les comptes des classes 6 ET 7 (deux appels paralleles fusionnes).
+   - Nouvelles colonnes table : `Code`, `TVA`, `Type` (badge "Charge" gris / "Produit" emeraude).
+   - Dialog edition enrichi avec champs `code` et `vat_code` au-dessus du nom.
+
+**Tests de regression** :
+- `/app/backend/tests/test_iter74_default_expense_natures_seed.py` (2 tests, PASSED)
+
+**Fichiers** :
+- `/app/backend/default_expense_natures.py` (NEW - 23 natures)
+- `/app/backend/routes/coproprietes.py` (helper + invocation)
+- `/app/backend/routes/expense_categories.py` (support classe 7 + nouveaux champs)
+- `/app/backend/scripts/seed_default_expense_natures_existing_acps.py` (NEW - migration)
+- `/app/frontend/src/pages/ExpenseCategoriesPage.js` (table + dialog enrichis)
+
 ### Iter73 (Feb 2026) - Bilan equilibre apres repartition + Rappels PDF (periode + no overflow)
 
 **Bugs corriges** :

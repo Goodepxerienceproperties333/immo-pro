@@ -15,28 +15,32 @@ export default function ExpenseCategoriesPage() {
   const [pcmnAccounts, setPcmnAccounts] = useState([]);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState(null);
-  const [form, setForm] = useState({ name: '', account_number: '', description: '', default_occupant_pct: 0, default_proprietaire_pct: 100 });
+  const [form, setForm] = useState({ name: '', code: '', vat_code: '', account_number: '', description: '', default_occupant_pct: 0, default_proprietaire_pct: 100 });
   const [search, setSearch] = useState('');
   const [accountPopoverOpen, setAccountPopoverOpen] = useState(false);
 
   const load = useCallback(async () => {
-    const [c, p] = await Promise.all([
+    const [c, p6, p7] = await Promise.all([
       api.get('/expense-categories'),
       api.get('/accounting/pcmn', { params: { class_num: 6 } }),
+      api.get('/accounting/pcmn', { params: { class_num: 7 } }),
     ]);
-    setCats(c.data); setPcmnAccounts(p.data);
+    setCats(c.data);
+    setPcmnAccounts([...p6.data, ...p7.data].sort((a, b) => a.number.localeCompare(b.number)));
   }, []);
   useEffect(() => { load(); }, [load]);
 
   const openCreate = () => {
     setEditing(null);
-    setForm({ name: '', account_number: '', description: '', default_occupant_pct: 0, default_proprietaire_pct: 100 });
+    setForm({ name: '', code: '', vat_code: '', account_number: '', description: '', default_occupant_pct: 0, default_proprietaire_pct: 100 });
     setDialogOpen(true);
   };
   const openEdit = (c) => {
     setEditing(c);
     setForm({
       name: c.name,
+      code: c.code || '',
+      vat_code: c.vat_code || '',
       account_number: c.account_number,
       description: c.description || '',
       default_occupant_pct: c.default_occupant_pct ?? 0,
@@ -80,7 +84,7 @@ export default function ExpenseCategoriesPage() {
       <div className="page-header flex items-start justify-between">
         <div>
           <h1 className="page-title"><Tag size={24} className="inline mr-2" />Natures de depense</h1>
-          <p className="page-subtitle">Categories metier liees aux comptes PCMN classe 6 (1 nature = 1 compte)</p>
+          <p className="page-subtitle">Categories metier liees aux comptes PCMN (1 nature = 1 compte). Classes 6 (Charges) et 7 (Produits).</p>
         </div>
         <Button onClick={openCreate} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="create-category-btn"><Plus size={16} className="mr-2" />Nouvelle nature</Button>
       </div>
@@ -93,23 +97,32 @@ export default function ExpenseCategoriesPage() {
       <div className="bg-white rounded-md border border-slate-200 overflow-hidden">
         <Table>
           <TableHeader><TableRow>
+            <TableHead className="w-16">Code</TableHead>
             <TableHead>Nature</TableHead><TableHead>Compte PCMN</TableHead>
-            <TableHead>Description</TableHead>
+            <TableHead className="w-20">TVA</TableHead>
+            <TableHead className="w-20">Type</TableHead>
             <TableHead className="text-right">Factures liees</TableHead>
             <TableHead className="text-right">Total facture</TableHead>
             <TableHead className="w-24">Actions</TableHead>
           </TableRow></TableHeader>
           <TableBody>
             {filtered.length === 0 ? (
-              <TableRow><TableCell colSpan={6} className="text-center py-10 text-slate-400">Aucune nature - creez-en une pour faciliter la saisie des factures</TableCell></TableRow>
+              <TableRow><TableCell colSpan={8} className="text-center py-10 text-slate-400">Aucune nature - creez-en une pour faciliter la saisie des factures</TableCell></TableRow>
             ) : filtered.map(c => (
               <TableRow key={c.id} className="hover:bg-slate-50/50" data-testid={`category-row-${c.id}`}>
+                <TableCell className="font-mono text-xs text-slate-500">{c.code || '-'}</TableCell>
                 <TableCell className="font-medium">{c.name}</TableCell>
                 <TableCell className="font-mono text-sm">
                   {c.account_number}
                   <div className="text-[11px] text-slate-500">{c.account_name}</div>
                 </TableCell>
-                <TableCell className="text-xs text-slate-600 max-w-[300px] truncate">{c.description}</TableCell>
+                <TableCell className="text-xs">{c.vat_code || <span className="text-slate-300">-</span>}</TableCell>
+                <TableCell>
+                  {c.kind === 'produit'
+                    ? <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200">Produit</Badge>
+                    : <Badge variant="outline" className="bg-slate-50 text-slate-600 border-slate-200">Charge</Badge>
+                  }
+                </TableCell>
                 <TableCell className="text-right">{c.invoice_count > 0 ? <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200">{c.invoice_count}</Badge> : <span className="text-slate-300">0</span>}</TableCell>
                 <TableCell className="text-right font-mono text-sm">{(c.invoice_total || 0).toFixed(2)} EUR</TableCell>
                 <TableCell>
@@ -128,12 +141,22 @@ export default function ExpenseCategoriesPage() {
         <DialogContent className="max-w-lg">
           <DialogHeader><DialogTitle style={{fontFamily:'Chivo,sans-serif'}}>{editing ? 'Modifier' : 'Nouvelle'} nature de depense</DialogTitle></DialogHeader>
           <div className="space-y-4 mt-2">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="form-label">Code (4 chiffres)</label>
+                <Input value={form.code} onChange={e => setForm({...form, code: e.target.value})} placeholder="0001" data-testid="category-code-input" />
+              </div>
+              <div>
+                <label className="form-label">Code TVA</label>
+                <Input value={form.vat_code} onChange={e => setForm({...form, vat_code: e.target.value})} placeholder="A1 (21%), A2 (6%), A4 (0%)" data-testid="category-vat-input" />
+              </div>
+            </div>
             <div>
               <label className="form-label">Nom de la nature *</label>
               <Input value={form.name} onChange={e => setForm({...form, name: e.target.value})} placeholder="Ex: Entretien ascenseur cage A" data-testid="category-name-input" />
             </div>
             <div>
-              <label className="form-label">Compte PCMN (classe 6) *</label>
+              <label className="form-label">Compte PCMN (classe 6 ou 7) *</label>
               <Popover open={accountPopoverOpen} onOpenChange={setAccountPopoverOpen}>
                 <PopoverTrigger asChild>
                   <Button variant="outline" role="combobox" className="w-full justify-between font-normal" data-testid="account-lookup-btn">
@@ -162,7 +185,7 @@ export default function ExpenseCategoriesPage() {
                   </Command>
                 </PopoverContent>
               </Popover>
-              <p className="text-[11px] text-slate-500 mt-1">Un compte ne peut etre lie qu'a UNE seule nature (relation 1:1)</p>
+              <p className="text-[11px] text-slate-500 mt-1">Un compte ne peut etre lie qu&apos;a UNE seule nature (relation 1:1)</p>
             </div>
             <div>
               <label className="form-label">Description (optionnel)</label>
