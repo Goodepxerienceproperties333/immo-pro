@@ -541,7 +541,13 @@ export default function BalanceTiersPage() {
 
       {/* ----- Merge suppliers dialog ----- */}
       <Dialog open={mergeDialogOpen} onOpenChange={setMergeDialogOpen}>
-        <DialogContent className="max-w-2xl p-0 overflow-hidden" data-testid="merge-suppliers-dialog">
+        <DialogContent
+          className="max-w-2xl p-0 overflow-hidden"
+          data-testid="merge-suppliers-dialog"
+          onPointerDownOutside={(e) => e.preventDefault()}
+          onInteractOutside={(e) => e.preventDefault()}
+          onEscapeKeyDown={(e) => e.preventDefault()}
+        >
           <div className="bg-gradient-to-r from-orange-600 to-orange-500 text-white px-5 py-4">
             <DialogTitle className="text-base font-semibold m-0">Fusionner {selectedSupplierIds.size} fournisseurs</DialogTitle>
             <div className="mt-1 text-xs opacity-90">

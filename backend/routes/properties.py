@@ -71,6 +71,83 @@ def create_properties_router(db):
         vcs_code: Optional[str] = ""        # if provided, keep it; otherwise auto-generate
         vcs_digits: Optional[str] = ""
         iban: Optional[str] = ""
+        # BCE pour les proprietaires personnes morales (societes)
+        bce_number: Optional[str] = ""
+
+    # ---- Helpers anti-doublon (cf. routes/suppliers.py pour la meme logique) ----
+    import re as _re
+
+    def _norm_owner_name(first: str, last: str, name: str) -> str:
+        """Normalise un nom proprietaire en triant les mots alphabetiquement.
+        Combine first_name + last_name si fournis, sinon name. Tolerant a
+        l'ordre "Jean DUPONT" vs "DUPONT Jean"."""
+        combined = (f"{first} {last}".strip() or name or "").lower()
+        return " ".join(sorted(combined.split()))
+
+    def _norm_alphanum(value: str) -> str:
+        """Alphanumerique uppercase uniquement (BCE, IBAN, telephone)."""
+        return _re.sub(r"[^A-Za-z0-9]", "", (value or "")).upper()
+
+    def _norm_address(addr: str, postal: str, city: str) -> str:
+        """Normalise une adresse complete : minuscules + alphanumerique
+        + espaces multiples reduits. Tolerant aux ponctuations et casse."""
+        full = f"{addr} {postal} {city}".strip().lower()
+        # Garde espaces mais retire ponctuation
+        full = _re.sub(r"[^a-z0-9\s]", "", full)
+        return " ".join(full.split())
+
+    async def find_duplicate_owner(
+        *, first_name: str, last_name: str, name: str,
+        email: str, phone: str, bce_number: str,
+        address: str, postal_code: str, city: str,
+        copro_id: str = "", exclude_id: Optional[str] = None,
+    ) -> Optional[dict]:
+        """Detecte un doublon de proprietaire sur 5 criteres (l'un suffit) :
+        1. Nom + prenom normalises (mots tries alphabetiquement)
+        2. Email (champ email OU email2) normalise
+        3. Telephone normalise (alphanumerique)
+        4. BCE normalise
+        5. Adresse complete normalisee (adresse + cp + ville)
+
+        Scope : limite a copro_id si fourni (chinese wall), sinon global.
+        Retourne {"owner": doc, "field": "name|email|phone|bce|address", "value": ...}.
+        """
+        norm_name = _norm_owner_name(first_name, last_name, name)
+        norm_email = (email or "").strip().lower()
+        norm_phone = _norm_alphanum(phone)
+        norm_bce = _norm_alphanum(bce_number)
+        norm_addr = _norm_address(address, postal_code, city)
+        if not (norm_name or norm_email or norm_phone or norm_bce or norm_addr):
+            return None
+
+        base_query: dict = {}
+        if copro_id:
+            base_query["copropriete_id"] = copro_id
+        if exclude_id:
+            base_query["id"] = {"$ne": exclude_id}
+        candidates = await db.owners.find(base_query, {"_id": 0}).to_list(5000)
+        for o in candidates:
+            if norm_email:
+                e1 = (o.get("email") or "").strip().lower()
+                e2 = (o.get("email2") or "").strip().lower()
+                if e1 == norm_email or e2 == norm_email:
+                    return {"owner": o, "field": "email", "value": email}
+            if norm_phone:
+                p1 = _norm_alphanum(o.get("phone", ""))
+                p2 = _norm_alphanum(o.get("phone2", ""))
+                if p1 == norm_phone or p2 == norm_phone:
+                    return {"owner": o, "field": "phone", "value": phone}
+            if norm_bce and _norm_alphanum(o.get("bce_number", "")) == norm_bce:
+                return {"owner": o, "field": "bce_number", "value": bce_number}
+            if norm_name:
+                o_name = _norm_owner_name(o.get("first_name", ""), o.get("last_name", ""), o.get("name", ""))
+                if o_name and o_name == norm_name:
+                    return {"owner": o, "field": "name", "value": f"{first_name} {last_name}".strip() or name}
+            if norm_addr:
+                o_addr = _norm_address(o.get("address", ""), o.get("postal_code", ""), o.get("city", ""))
+                if o_addr and o_addr == norm_addr:
+                    return {"owner": o, "field": "address", "value": f"{address}, {postal_code} {city}".strip()}
+        return None
 
     @router.get("/owners")
     async def list_owners(request: Request, copropriete_id: Optional[str] = None, include_unassigned: bool = False):
@@ -122,6 +199,32 @@ def create_properties_router(db):
     @router.post("/owners")
     async def create_owner(data: OwnerInput):
         from server import generate_vcs
+        # Check anti-doublon avant creation
+        dup = await find_duplicate_owner(
+            first_name=data.first_name or "", last_name=data.last_name or "",
+            name=data.name or "",
+            email=data.email or "", phone=data.phone or "",
+            bce_number=data.bce_number or "",
+            address=data.address or "", postal_code=data.postal_code or "",
+            city=data.city or "",
+            copro_id=data.copropriete_id or "",
+        )
+        if dup:
+            field_label = {
+                "name": "nom + prenom",
+                "email": "email",
+                "phone": "telephone",
+                "bce_number": "numero BCE",
+                "address": "adresse postale",
+            }.get(dup["field"], dup["field"])
+            existing = dup["owner"]
+            existing_name = existing.get("name") or f"{existing.get('first_name','')} {existing.get('last_name','')}".strip()
+            raise HTTPException(
+                409,
+                f"Doublon detecte : un proprietaire avec le meme {field_label} existe deja "
+                f"({existing_name} - id {existing.get('id','')[:8]}). "
+                f"Utilisez le proprietaire existant plutot que d'en creer un nouveau.",
+            )
         # If a VCS code is provided (e.g. from an Optipro import), reuse it
         # to preserve the legacy reference. Otherwise auto-generate one.
         vcs_code = (data.vcs_code or "").strip()
@@ -150,6 +253,7 @@ def create_properties_router(db):
             "auxiliary_code": (data.auxiliary_code or "").strip(),
             "identifier": (data.identifier or "").strip(),
             "iban": (data.iban or "").strip(),
+            "bce_number": (data.bce_number or "").strip(),
             "copropriete_id": data.copropriete_id,
             "created_at": datetime.now(timezone.utc).isoformat()
         }
@@ -226,6 +330,36 @@ def create_properties_router(db):
         is_super, allowed_copros = await _get_user_scope(request)
         if not is_super and not await _owner_in_scope(owner_id, allowed_copros):
             raise HTTPException(404, "Proprietaire non trouve")
+        # Check anti-doublon (excluant l'owner en cours d'edition)
+        existing_doc = await db.owners.find_one({"id": owner_id}, {"_id": 0})
+        copro_id_check = (data.copropriete_id or
+                          getattr(request.state, "copropriete_id", "") or
+                          (existing_doc or {}).get("copropriete_id", ""))
+        dup = await find_duplicate_owner(
+            first_name=data.first_name or "", last_name=data.last_name or "",
+            name=data.name or "",
+            email=data.email or "", phone=data.phone or "",
+            bce_number=data.bce_number or "",
+            address=data.address or "", postal_code=data.postal_code or "",
+            city=data.city or "",
+            copro_id=copro_id_check,
+            exclude_id=owner_id,
+        )
+        if dup:
+            field_label = {
+                "name": "nom + prenom",
+                "email": "email",
+                "phone": "telephone",
+                "bce_number": "numero BCE",
+                "address": "adresse postale",
+            }.get(dup["field"], dup["field"])
+            existing = dup["owner"]
+            existing_name = existing.get("name") or f"{existing.get('first_name','')} {existing.get('last_name','')}".strip()
+            raise HTTPException(
+                409,
+                f"Doublon detecte : un autre proprietaire avec le meme {field_label} existe deja "
+                f"({existing_name}).",
+            )
         full_name = data.name or f"{data.last_name} {data.first_name}".strip()
         result = await db.owners.update_one(
             {"id": owner_id},
@@ -234,6 +368,7 @@ def create_properties_router(db):
                 "address": data.address, "postal_code": data.postal_code, "city": data.city,
                 "country": data.country, "email": data.email, "email2": data.email2,
                 "phone": data.phone, "phone2": data.phone2,
+                "bce_number": (data.bce_number or "").strip(),
             }}
         )
         if result.matched_count == 0:

@@ -11,6 +11,60 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 ## Implemented
+### Iter81 (Feb 2026) - Anti-doublon proprietaires + Cleanup test users + Verrouillage dialogs
+
+**Demande user** : (1) "il n'est pas autorise de creer de doublons aussi bien
+proprietaires que fournisseurs, en cas de doublons il faut garder l'original
+et l'utiliser, le check se fait sur nom et prenom, adresse email, nr de
+telephone, NR BCE, adresse" (2) "supprimer tous les tests user en production"
+(3) "Voulez-vous appliquer le meme verrouillage anti-fermeture aux autres
+dialogs critiques (Bundle PDF, Fusion fournisseurs, Mutation lot) ? oui"
+
+**Implementation** :
+
+1. **Anti-doublon proprietaires** (`routes/properties.py::find_duplicate_owner`) :
+   - 5 criteres testes (l'un suffit pour bloquer) :
+     - Nom + prenom (mots tries alphabetiquement -> tolere ordre inverse)
+     - Email (champ email ou email2, casse insensitive)
+     - Telephone normalise (alphanumerique uppercase, tolere espaces/tirets/parentheses)
+     - BCE normalise (alphanumerique uppercase)
+     - Adresse complete normalisee (rue + code postal + ville, alphanumerique
+       + minuscules, ponctuation ignoree)
+   - Ajout du champ `bce_number` au model `OwnerInput` pour les proprietaires
+     personnes morales (societes proprietaires de lots).
+   - POST /api/owners : 409 si doublon detecte
+   - PUT /api/owners/{id} : 409 si doublon (exclude_id pour permettre l'edition
+     du proprietaire sans declenchement contre lui-meme)
+   - import_wizard commit_owners : skip silencieux des doublons avec compteur
+     `skipped_duplicates`. Cache local pour perf import en lot.
+   - Scope ACP (chinese wall) : 2 ACPs peuvent avoir le meme owner.
+
+2. **Cleanup test users** (`scripts/cleanup_test_users.py`) :
+   - Detection des emails de test via patterns regex :
+     `test_[a-f0-9]+@`, `test_iter\d+`, `@example\.com$`, `itr\d+`, `pytest_`
+   - Whitelist defensive : admin@copro.be, gerald@gep.be,
+     welcome@goodexperienceproperties.be, evrard.gerald@outlook.be
+   - Cleanup associes : `user_sessions`, `password_reset_tokens`,
+     `owners` (par email).
+   - Idempotent. Mode `--dry-run` supporte.
+   - **PREVIEW** : 4 test users supprimes (test_2b38e4fb, test_be9c662c,
+     test_iter9_xxx, test_iter16_owner_xxx).
+   - **PROD** : script disponible, a executer apres redeploiement via terminal
+     Emergent (l'agent n'a pas acces production).
+
+3. **Verrouillage dialogs critiques** :
+   - `BundleImportDialog.js` (import factures groupees)
+   - `LotsPage.js mutation-dialog` (vente / changement de proprietaire)
+   - `BalanceTiersPage.js merge-suppliers-dialog` (fusion fournisseurs)
+   - 3 props ajoutees a `<DialogContent>` :
+     - `onPointerDownOutside={(e) => e.preventDefault()}`
+     - `onInteractOutside={(e) => e.preventDefault()}`
+     - `onEscapeKeyDown={(e) => e.preventDefault()}`
+   - Fermeture possible UNIQUEMENT via le bouton X / Annuler / validation finale.
+
+**Tests** : `test_iter81_owners_duplicate_and_cleanup.py` (7 tests, PASSED).
+**Suite complete iter73-81** : 33/33 tests verts.
+
 ### Iter80 (Feb 2026) - Lettrage 1 transaction -> N factures
 
 **Demande user** : "je dois pouvoir selectionner 2 factures permettant d'arriver

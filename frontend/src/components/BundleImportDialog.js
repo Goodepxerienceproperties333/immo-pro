@@ -177,6 +177,9 @@ export default function BundleImportDialog({
       <DialogContent
         className="max-w-7xl w-[97vw] max-h-[94vh] flex flex-col overflow-hidden"
         data-testid="bundle-import-dialog"
+        onPointerDownOutside={(e) => e.preventDefault()}
+        onInteractOutside={(e) => e.preventDefault()}
+        onEscapeKeyDown={(e) => e.preventDefault()}
       >
         <DialogHeader>
           <DialogTitle style={{fontFamily:'Chivo,sans-serif'}} className="flex items-center gap-2">

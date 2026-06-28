@@ -299,7 +299,39 @@ def create_import_wizard_router(db):
         for k in required:
             if k not in m or m[k] in ("", None):
                 raise HTTPException(400, f"Mapping requis pour '{k}'")
+
+        # Helpers de normalisation (alignes sur routes/properties.py)
+        import re as _re
+        def _norm_name(first, last):
+            return " ".join(sorted(f"{first} {last}".lower().strip().split()))
+        def _norm_an(v):
+            return _re.sub(r"[^A-Za-z0-9]", "", v or "").upper()
+        def _norm_addr(a, p, c):
+            full = _re.sub(r"[^a-z0-9\s]", "", f"{a} {p} {c}".strip().lower())
+            return " ".join(full.split())
+
+        # Pre-load des owners existants pour cette ACP (perf import en lot)
+        existing_owners = await db.owners.find(
+            {"copropriete_id": copro_id}, {"_id": 0}
+        ).to_list(5000)
+        existing_by_name = {}
+        existing_by_email = {}
+        existing_by_phone = {}
+        for o in existing_owners:
+            nn = _norm_name(o.get("first_name", ""), o.get("last_name", "") or o.get("name", ""))
+            if nn:
+                existing_by_name[nn] = o["id"]
+            for e_field in ("email", "email2"):
+                e = (o.get(e_field) or "").strip().lower()
+                if e:
+                    existing_by_email[e] = o["id"]
+            for p_field in ("phone", "phone2"):
+                p = _norm_an(o.get(p_field, ""))
+                if p:
+                    existing_by_phone[p] = o["id"]
+
         inserted = 0
+        skipped_duplicates = 0
         errors = []
         for idx, row in enumerate(data.rows):
             try:
@@ -313,6 +345,20 @@ def create_import_wizard_router(db):
                     continue
                 first_name = col("first_name")
                 full = (f"{last_name} {first_name}".strip()) if first_name else last_name
+                email = col("email")
+                phone = col("phone")
+                # Skip silencieux si doublon detecte (sur nom OU email OU phone)
+                norm_name = _norm_name(first_name, last_name)
+                norm_email = email.lower() if email else ""
+                norm_phone = _norm_an(phone) if phone else ""
+                is_dup = (
+                    (norm_name and norm_name in existing_by_name) or
+                    (norm_email and norm_email in existing_by_email) or
+                    (norm_phone and norm_phone in existing_by_phone)
+                )
+                if is_dup:
+                    skipped_duplicates += 1
+                    continue
                 doc = {
                     "id": str(uuid.uuid4()),
                     "first_name": first_name,
@@ -322,8 +368,8 @@ def create_import_wizard_router(db):
                     "postal_code": col("postal_code"),
                     "city": col("city"),
                     "country": col("country") or "Belgique",
-                    "email": col("email"),
-                    "phone": col("phone"),
+                    "email": email,
+                    "phone": phone,
                     "iban": col("iban"),
                     "copropriete_id": copro_id,
                     "import_session_id": session_id,
@@ -331,10 +377,19 @@ def create_import_wizard_router(db):
                 }
                 await db.owners.insert_one(doc)
                 inserted += 1
+                # Met a jour les indexes locaux pour les rows suivantes
+                if norm_name:
+                    existing_by_name[norm_name] = doc["id"]
+                if norm_email:
+                    existing_by_email[norm_email] = doc["id"]
+                if norm_phone:
+                    existing_by_phone[norm_phone] = doc["id"]
             except Exception as e:
                 errors.append({"row": idx, "error": str(e)})
-        await _update_step(db, session_id, "owners", {"count": inserted, "errors": errors})
-        return {"inserted": inserted, "errors": errors}
+        await _update_step(db, session_id, "owners", {
+            "count": inserted, "skipped_duplicates": skipped_duplicates, "errors": errors,
+        })
+        return {"inserted": inserted, "skipped_duplicates": skipped_duplicates, "errors": errors}
 
     # ----- C: SUPPLIERS -----
     @router.post("/sessions/{session_id}/commit-suppliers")

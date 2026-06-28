@@ -221,7 +221,13 @@ function MutationDialog({ lot, owners, ownersRefresh, onClose, onDone }) {
 
   return (
     <Dialog open={!!lot} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="max-w-2xl" data-testid="mutation-dialog">
+      <DialogContent
+        className="max-w-2xl"
+        data-testid="mutation-dialog"
+        onPointerDownOutside={(e) => e.preventDefault()}
+        onInteractOutside={(e) => e.preventDefault()}
+        onEscapeKeyDown={(e) => e.preventDefault()}
+      >
         <DialogHeader>
           <DialogTitle style={{fontFamily:'Chivo,sans-serif'}}>
             Mutation du lot {lot?.number} (vente)
