@@ -222,7 +222,7 @@ function MutationDialog({ lot, owners, ownersRefresh, onClose, onDone }) {
   return (
     <Dialog open={!!lot} onOpenChange={(v) => !v && onClose()}>
       <DialogContent
-        className="max-w-2xl"
+        className="max-w-3xl w-[95vw] max-h-[92vh] overflow-y-auto"
         data-testid="mutation-dialog"
         onPointerDownOutside={(e) => e.preventDefault()}
         onInteractOutside={(e) => e.preventDefault()}
@@ -396,7 +396,7 @@ function MutationDialog({ lot, owners, ownersRefresh, onClose, onDone }) {
             </div>
           )}
 
-          <div className="flex gap-3 justify-end">
+          <div className="sticky bottom-0 -mx-6 px-6 pt-3 pb-1 bg-white border-t border-slate-200 flex gap-3 justify-end z-10">
             <Button variant="outline" onClick={onClose}>Annuler</Button>
             <Button
               onClick={handleConfirm}
