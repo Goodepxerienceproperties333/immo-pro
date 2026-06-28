@@ -5,7 +5,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Users, Unlock, ScrollText, ArrowRight, ShieldAlert, IdCard, Building2, ChevronDown, ChevronRight as ChevRight, Briefcase } from 'lucide-react';
+import { Users, Unlock, ScrollText, ArrowRight, ShieldAlert, IdCard, Building2, ChevronDown, ChevronRight as ChevRight, Briefcase, Merge } from 'lucide-react';
 import { fmtDate } from '@/lib/dateFmt';
 
 export default function AdminDashboardPage() {
@@ -94,7 +94,7 @@ export default function AdminDashboardPage() {
       </div>
 
       {/* Action cards */}
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
         <Card className="hover:shadow-md transition cursor-pointer" onClick={() => navigate('/admin/users')} data-testid="card-users">
           <CardHeader className="pb-2"><CardTitle className="text-base flex items-center gap-2 text-slate-900"><Users size={18} className="text-[#0055FF]" />Utilisateurs</CardTitle></CardHeader>
           <CardContent className="text-sm text-slate-600 pt-1">
@@ -114,6 +114,13 @@ export default function AdminDashboardPage() {
           <CardContent className="text-sm text-slate-600 pt-1">
             <p>Modifier une ecriture verrouillee, forcer la reouverture d&apos;un exercice.</p>
             <Button variant="link" className="px-0 mt-2 text-amber-600" data-testid="btn-go-unlock">Ouvrir <ArrowRight size={14} className="ml-1" /></Button>
+          </CardContent>
+        </Card>
+        <Card className="hover:shadow-md transition cursor-pointer border-purple-200" onClick={() => navigate('/admin/duplicates')} data-testid="card-duplicates">
+          <CardHeader className="pb-2"><CardTitle className="text-base flex items-center gap-2 text-slate-900"><Merge size={18} className="text-purple-600" />Doublons potentiels</CardTitle></CardHeader>
+          <CardContent className="text-sm text-slate-600 pt-1">
+            <p>Detecter et fusionner les doublons fournisseurs, proprietaires et utilisateurs (chinese wall par syndic).</p>
+            <Button variant="link" className="px-0 mt-2 text-purple-600" data-testid="btn-go-duplicates">Ouvrir <ArrowRight size={14} className="ml-1" /></Button>
           </CardContent>
         </Card>
         <Card className="hover:shadow-md transition cursor-pointer" onClick={() => navigate('/admin/audit')} data-testid="card-audit">
