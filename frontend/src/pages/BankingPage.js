@@ -14,6 +14,7 @@ import { Plus, Trash2, Upload, Link2, Unlink, Search, Landmark, PlusCircle, Save
 import { useFiscalYearParams } from '@/hooks/useFiscalYearParams';
 import { useAuth } from '@/contexts/AuthContext';
 import CounterpartySearchSelect from '@/components/CounterpartySearchSelect';
+import CodaImportDialog from '@/components/CodaImportDialog';
 import { fmtDate } from '@/lib/dateFmt';
 
 export default function BankingPage() {
@@ -35,6 +36,8 @@ export default function BankingPage() {
   const [lookupResults, setLookupResults] = useState(null);
   const [lookupQuery, setLookupQuery] = useState('');
   const codaRef = useRef(null);
+  const [codaPreview, setCodaPreview] = useState(null);
+  const [codaDialogOpen, setCodaDialogOpen] = useState(false);
   const [stmtForm, setStmtForm] = useState({ number: '', date: '', account_number: '', opening_balance: 0, closing_balance: 0 });
   const [bankAccounts, setBankAccounts] = useState([]);
   const [inlineLines, setInlineLines] = useState([]);
@@ -73,10 +76,20 @@ export default function BankingPage() {
     try {
       const fd = new FormData();
       fd.append('file', file);
-      const coproId = localStorage.getItem('selectedCopro');
+      const coproId = selectedCopro || localStorage.getItem('copropriete_id') || '';
       if (coproId) fd.append('copropriete_id', coproId);
-      const { data } = await api.post('/banking/coda/import', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
-      toast.success(data.message); load();
+      // Step 1 : preview only - no DB write yet
+      const { data } = await api.post('/banking/coda/preview', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      setCodaPreview(data);
+      setCodaDialogOpen(true);
+      if (data.duplicate_warning) {
+        toast.warning('Fichier deja importe', {
+          description: data.duplicate_warning.message,
+          duration: 8000,
+        });
+      } else {
+        toast.success(`${data.movements?.length || 0} mouvement(s) detecte(s) - reviewez et confirmez`);
+      }
     }
     catch (err) { toast.error(err.response?.data?.detail || 'Erreur CODA'); }
     finally { setCodaUploading(false); if (codaRef.current) codaRef.current.value = ''; }
@@ -883,6 +896,18 @@ export default function BankingPage() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* CODA Import Mapping Dialog */}
+      <CodaImportDialog
+        open={codaDialogOpen}
+        onClose={() => setCodaDialogOpen(false)}
+        preview={codaPreview}
+        copropriete_id={selectedCopro || localStorage.getItem('copropriete_id') || ''}
+        owners={owners}
+        suppliers={suppliers}
+        invoices={invoices}
+        onSuccess={() => { setCodaPreview(null); load(); }}
+      />
     </div>
   );
 }

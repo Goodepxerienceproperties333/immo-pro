@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Request
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime, timezone
+import hashlib
 import uuid
 from auto_entries import generate_bank_entry, _delete_auto_entries
 
@@ -222,6 +223,141 @@ def create_banking_router(db):
                         except Exception as e:
                             print(f"[auto-entry] invoice match failed: {e}")
                         return
+
+    async def _suggest_match_for_movement(mov: dict, copro_id: str) -> dict:
+        """Calcule une SUGGESTION de match pour un mouvement CODA SANS rien persister.
+
+        Retourne dict {
+          match_type: "owner_payment"|"supplier_payment"|"invoice"|"",
+          match_id: <id> | "",
+          match_label: <nom affiche>,
+          match_reason: "vcs"|"name_exact"|"name_partial"|"supplier_iban"|"supplier_name"|"invoice_number"|"",
+          confidence: "high"|"medium"|"low",
+        }
+
+        Reutilise la meme logique que `_try_auto_lettrage_vcs` mais retourne au
+        lieu de persister. Permet l'UI de mapping CODA d'afficher des suggestions.
+        """
+        import re as _re
+        comm = (mov.get("communication") or "").strip()
+        cp_name = (mov.get("counterparty_name") or "").strip()
+        cp_account = (mov.get("counterparty_account") or "").strip().replace(" ", "")
+        amount = float(mov.get("amount", 0) or 0)
+        is_debit = amount < 0 or (mov.get("type") == "debit")
+
+        empty = {"match_type": "", "match_id": "", "match_label": "",
+                 "match_reason": "", "confidence": ""}
+
+        # 1) VCS sur la communication (highest confidence)
+        vcs_clean = ""
+        if comm and len(comm) >= 3:
+            m = _re.search(r"(\d{3})[\s/]*(\d{4})[\s/]*(\d{5})", comm)
+            if m:
+                vcs_clean = m.group(1) + m.group(2) + m.group(3)
+            else:
+                digits = _re.sub(r"\D", "", comm)
+                if len(digits) >= 12:
+                    vcs_clean = digits[:12]
+        if vcs_clean and len(vcs_clean) == 12:
+            owner = await db.owners.find_one({"vcs_digits": vcs_clean}, {"_id": 0})
+            if not owner:
+                owner = await db.owners.find_one(
+                    {"vcs_code": {"$regex": _re.escape(vcs_clean)}}, {"_id": 0}
+                )
+            if owner:
+                return {
+                    "match_type": "owner_payment",
+                    "match_id": owner["id"],
+                    "match_label": owner.get("name", ""),
+                    "match_reason": "vcs",
+                    "confidence": "high",
+                }
+
+        # 2) Nom exact du counterparty -> owner
+        if cp_name and len(cp_name) >= 3:
+            esc = _re.escape(cp_name)
+            owner = await db.owners.find_one(
+                {"name": {"$regex": f"^{esc}$", "$options": "i"}}, {"_id": 0}
+            )
+            if owner:
+                return {
+                    "match_type": "owner_payment",
+                    "match_id": owner["id"],
+                    "match_label": owner.get("name", ""),
+                    "match_reason": "name_exact",
+                    "confidence": "medium",
+                }
+            # Nom partiel
+            if " " in cp_name:
+                parts = [p for p in cp_name.split() if p]
+                if len(parts) >= 2:
+                    for p in [parts[0], parts[-1], " ".join(parts[:2]), " ".join(parts[-2:])]:
+                        if len(p) < 3:
+                            continue
+                        owner = await db.owners.find_one(
+                            {"$or": [
+                                {"last_name": {"$regex": f"^{_re.escape(p)}$", "$options": "i"}},
+                                {"name": {"$regex": _re.escape(p), "$options": "i"}},
+                            ]},
+                            {"_id": 0}
+                        )
+                        if owner:
+                            return {
+                                "match_type": "owner_payment",
+                                "match_id": owner["id"],
+                                "match_label": owner.get("name", ""),
+                                "match_reason": "name_partial",
+                                "confidence": "low",
+                            }
+
+        # 3) Fournisseur par IBAN
+        if cp_account:
+            sup = await db.suppliers.find_one(
+                {"iban": {"$regex": _re.escape(cp_account), "$options": "i"}}, {"_id": 0}
+            )
+            if sup:
+                if is_debit:
+                    return {
+                        "match_type": "supplier_payment",
+                        "match_id": sup["id"],
+                        "match_label": sup.get("name", ""),
+                        "match_reason": "supplier_iban",
+                        "confidence": "high",
+                    }
+
+        # 4) Fournisseur par nom exact
+        if cp_name and len(cp_name) >= 3:
+            esc = _re.escape(cp_name)
+            sup = await db.suppliers.find_one(
+                {"name": {"$regex": f"^{esc}$", "$options": "i"}}, {"_id": 0}
+            )
+            if sup and is_debit:
+                return {
+                    "match_type": "supplier_payment",
+                    "match_id": sup["id"],
+                    "match_label": sup.get("name", ""),
+                    "match_reason": "supplier_name",
+                    "confidence": "medium",
+                }
+
+        # 5) Numero de facture impayee dans communication
+        if copro_id:
+            search_text = f"{cp_name} {comm}".strip()
+            if search_text and len(search_text) >= 3:
+                unpaid = await db.invoices.find(
+                    {"copropriete_id": copro_id, "status": "unpaid"}, {"_id": 0}
+                ).to_list(500)
+                for inv in unpaid:
+                    inv_num = (inv.get("number") or "").strip()
+                    if inv_num and len(inv_num) >= 3 and inv_num in search_text:
+                        return {
+                            "match_type": "invoice",
+                            "match_id": inv["id"],
+                            "match_label": f"Facture {inv_num} - {inv.get('supplier','')}",
+                            "match_reason": "invoice_number",
+                            "confidence": "medium",
+                        }
+        return empty
 
     # ---- BANK STATEMENTS ----
     @router.get("/statements")
@@ -986,7 +1122,6 @@ def create_banking_router(db):
         stmt_id = str(uuid.uuid4())
         old_bal = parsed.get("old_balance", {})
         new_bal = parsed.get("new_balance", {})
-        header = parsed.get("header", {})
 
         statement = {
             "id": stmt_id,
@@ -1035,6 +1170,247 @@ def create_banking_router(db):
             "opening_balance": statement["opening_balance"],
             "closing_balance": statement["closing_balance"]
         }
+
+    # ---- CODA PREVIEW + CONFIRMED IMPORT (mapping UI) ----
+    @router.post("/coda/preview")
+    async def preview_coda(
+        file: UploadFile = File(...),
+        copropriete_id: Optional[str] = Form(""),
+    ):
+        """Parse un fichier CODA SANS rien persister.
+        Retourne la structure parsee + une suggestion de match par mouvement,
+        + un flag `duplicate_warning` si le fichier (hash SHA256) a deja ete importe.
+
+        L'UI utilise ce retour pour afficher une table de mapping et permettre
+        a l'utilisateur d'override les suggestions avant import definitif.
+        """
+        from coda_parser import parse_coda_file
+        content = await file.read()
+        file_hash = hashlib.sha256(content).hexdigest()
+        text = content.decode("latin-1", errors="replace")
+        try:
+            parsed = parse_coda_file(text)
+        except Exception as e:
+            raise HTTPException(400, f"Erreur de parsing CODA: {str(e)}")
+
+        # Detection doublon : meme hash deja importe pour cette ACP
+        duplicate_warning = None
+        if copropriete_id:
+            existing = await db.bank_statements.find_one(
+                {"coda_hash": file_hash, "copropriete_id": copropriete_id},
+                {"_id": 0},
+            )
+            if existing:
+                duplicate_warning = {
+                    "statement_id": existing.get("id"),
+                    "statement_number": existing.get("number", ""),
+                    "imported_at": existing.get("created_at", ""),
+                    "message": f"Ce fichier CODA a deja ete importe le {(existing.get('created_at','') or '')[:10]} (extrait {existing.get('number','?')}). Verifiez avant de reimporter.",
+                }
+
+        # Compatibilite IBAN compte detenteur : verifie que le compte de
+        # l'extrait correspond a un compte bancaire connu pour cette ACP.
+        account_holder_warning = None
+        if copropriete_id and parsed.get("old_balance", {}).get("account_number"):
+            stmt_account = parsed["old_balance"]["account_number"].replace(" ", "")
+            copro = await db.coproprietes.find_one(
+                {"id": copropriete_id}, {"_id": 0, "bank_accounts": 1}
+            )
+            known_ibans = [
+                (ba.get("iban") or "").replace(" ", "")
+                for ba in (copro.get("bank_accounts") or [])
+            ] if copro else []
+            if known_ibans and stmt_account not in known_ibans:
+                # Compare aussi sans le pays/format
+                clean = "".join(c for c in stmt_account if c.isalnum())
+                if not any(clean and clean in ki for ki in known_ibans):
+                    account_holder_warning = (
+                        f"Le compte {stmt_account} ne correspond a aucun IBAN "
+                        f"connu pour cette ACP ({len(known_ibans)} IBAN(s) enregistre(s))."
+                    )
+
+        # Suggestions de match par mouvement
+        movements_enriched = []
+        for idx, mov in enumerate(parsed.get("movements", [])):
+            suggestion = await _suggest_match_for_movement(mov, copropriete_id or "")
+            movements_enriched.append({
+                "index": idx,
+                "value_date": mov.get("value_date") or "",
+                "entry_date": mov.get("entry_date") or "",
+                "amount": mov.get("amount", 0),
+                "type": mov.get("type", "credit"),
+                "counterparty_name": mov.get("counterparty_name", ""),
+                "counterparty_account": mov.get("counterparty_account", ""),
+                "communication": mov.get("communication", ""),
+                "transaction_code": mov.get("transaction_code", ""),
+                "reference": mov.get("reference", ""),
+                "suggestion": suggestion,
+            })
+
+        return {
+            "file_hash": file_hash,
+            "filename": file.filename,
+            "header": parsed.get("header", {}),
+            "old_balance": parsed.get("old_balance", {}),
+            "new_balance": parsed.get("new_balance", {}),
+            "summary": parsed.get("summary", {}),
+            "movements": movements_enriched,
+            "duplicate_warning": duplicate_warning,
+            "account_holder_warning": account_holder_warning,
+        }
+
+    class CodaMovementConfirm(BaseModel):
+        # Champs natifs du mouvement CODA (transmis tel quel depuis le preview)
+        value_date: str = ""
+        entry_date: str = ""
+        amount: float = 0.0
+        type: str = "credit"
+        counterparty_name: str = ""
+        counterparty_account: str = ""
+        communication: str = ""
+        transaction_code: str = ""
+        reference: str = ""
+        # Override utilisateur (None ou {match_type, match_id})
+        manual_match_type: Optional[str] = ""  # "owner_payment" | "supplier_payment" | "invoice" | ""
+        manual_match_id: Optional[str] = ""
+        # Si False, l'utilisateur veut IGNORER ce mouvement (ne pas creer de txn)
+        include: bool = True
+
+    class CodaConfirmInput(BaseModel):
+        file_hash: str
+        filename: Optional[str] = ""
+        copropriete_id: str
+        # Header / balances (issus du preview, repostes tel quel)
+        statement_number: Optional[str] = ""
+        statement_date: Optional[str] = ""
+        account_number: Optional[str] = ""
+        opening_balance: Optional[float] = 0.0
+        closing_balance: Optional[float] = 0.0
+        # Mouvements valides par l'utilisateur
+        movements: List[CodaMovementConfirm] = []
+
+    @router.post("/coda/import-confirmed")
+    async def import_coda_confirmed(data: CodaConfirmInput):
+        """Importe les mouvements CODA apres validation par l'utilisateur (UI mapping).
+
+        - Verifie que `file_hash` n'a pas ete deja importe pour cette ACP (idempotence)
+        - Cree le statement avec `coda_hash` stocke
+        - Cree une transaction par mouvement included
+        - Si manual_match fourni : applique le match + tente generer ecriture
+        - Sinon : tente auto-lettrage VCS comme dans /coda/import classique
+        """
+        if not data.copropriete_id:
+            raise HTTPException(400, "copropriete_id requis")
+        # Re-verifie hash unique pour eviter race
+        existing = await db.bank_statements.find_one(
+            {"coda_hash": data.file_hash, "copropriete_id": data.copropriete_id},
+            {"_id": 0},
+        )
+        if existing:
+            raise HTTPException(
+                409,
+                f"Ce fichier CODA a deja ete importe (extrait {existing.get('number','?')} "
+                f"du {(existing.get('created_at','') or '')[:10]}). Suppression requise avant re-import."
+            )
+
+        stmt_id = str(uuid.uuid4())
+        statement = {
+            "id": stmt_id,
+            "number": data.statement_number or "",
+            "date": data.statement_date or datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+            "account_number": data.account_number or "",
+            "opening_balance": float(data.opening_balance or 0),
+            "closing_balance": float(data.closing_balance or 0),
+            "source": "CODA",
+            "filename": data.filename or "",
+            "copropriete_id": data.copropriete_id,
+            "coda_hash": data.file_hash,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        await db.bank_statements.insert_one(statement)
+
+        included = [m for m in data.movements if m.include]
+        ignored = len(data.movements) - len(included)
+        transactions_to_insert = []
+        manual_decisions = []  # (txn_id, manual_match_type, manual_match_id)
+        for mov in included:
+            txn_id = str(uuid.uuid4())
+            txn = {
+                "id": txn_id,
+                "statement_id": stmt_id,
+                "date": mov.value_date or mov.entry_date or "",
+                "amount": float(mov.amount or 0),
+                "counterparty_name": mov.counterparty_name or "",
+                "counterparty_account": mov.counterparty_account or "",
+                "communication": mov.communication or "",
+                "transaction_type": mov.type or "credit",
+                "account_number": "",
+                "matched": False,
+                "matched_to": "",
+                "match_type": "",
+                "copropriete_id": data.copropriete_id,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            transactions_to_insert.append(txn)
+            if mov.manual_match_type and mov.manual_match_id:
+                manual_decisions.append((txn_id, mov.manual_match_type, mov.manual_match_id))
+
+        if transactions_to_insert:
+            await db.bank_transactions.insert_many(transactions_to_insert)
+
+        # Applique les overrides utilisateur + auto-lettrage pour les autres
+        matched_manual = 0
+        matched_auto = 0
+        manual_ids = {d[0] for d in manual_decisions}
+        for txn_id, mtype, mid in manual_decisions:
+            # Verifie que l'entite existe et applique le match
+            ok = False
+            if mtype == "owner_payment":
+                ok = (await db.owners.count_documents({"id": mid}, limit=1)) > 0
+            elif mtype == "supplier_payment":
+                ok = (await db.suppliers.count_documents({"id": mid}, limit=1)) > 0
+            elif mtype == "invoice":
+                ok = (await db.invoices.count_documents({"id": mid}, limit=1)) > 0
+            if not ok:
+                continue
+            await db.bank_transactions.update_one(
+                {"id": txn_id},
+                {"$set": {"matched": True, "matched_to": mid, "match_type": mtype}},
+            )
+            fresh = await db.bank_transactions.find_one({"id": txn_id}, {"_id": 0})
+            try:
+                if fresh:
+                    await generate_bank_entry(db, fresh)
+                    if mtype == "invoice":
+                        await db.invoices.update_one(
+                            {"id": mid},
+                            {"$set": {"status": "paid", "paid_at": fresh.get("date"),
+                                      "paid_by_transaction_id": txn_id}},
+                        )
+            except Exception as e:
+                print(f"[coda-confirmed] manual match entry failed: {e}")
+            matched_manual += 1
+
+        # Auto-lettrage VCS pour les txns sans override
+        for txn in transactions_to_insert:
+            if txn["id"] in manual_ids:
+                continue
+            await _try_auto_lettrage_vcs(txn)
+            fresh = await db.bank_transactions.find_one({"id": txn["id"]}, {"_id": 0})
+            if fresh and fresh.get("matched"):
+                matched_auto += 1
+
+        return {
+            "message": f"Import CODA confirme : {len(transactions_to_insert)} transaction(s) creee(s), {ignored} ignoree(s)",
+            "statement_id": stmt_id,
+            "transactions_count": len(transactions_to_insert),
+            "ignored_count": ignored,
+            "matched_manual": matched_manual,
+            "matched_auto": matched_auto,
+            "opening_balance": statement["opening_balance"],
+            "closing_balance": statement["closing_balance"],
+        }
+
 
     # ---- ADD LINES TO EXISTING STATEMENT ----
     @router.post("/statements/{stmt_id}/add-lines")

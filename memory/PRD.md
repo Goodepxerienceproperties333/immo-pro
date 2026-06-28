@@ -2584,7 +2584,7 @@ Score = 100 - penalites par anomalie. Labels : Excellent/Bon/Moyen/Critique.
 - **iter20: 10/10 (P0 balance tiers from journal_entries - OD Dubois visible + reserve_balance separe / P1 wizard 3 series independantes provisions+reserve+roulement avec frequency/start/due par fonds / P2 AccountSearchSelect composant reutilisable / P3 BCE fournisseur extraction + matching priorise + suggest creation fiche) + 45/45 regression iter16+18+19 = 55/55**
 - **iter25: 5/5 nouveaux (Bilan ACP Demo expose PCMN 55103400 + 551079 reels / regenerate-bank-entries shape correcte + admin-only / cleanup-orphan-entries idempotent / signe debit/credit verifie / DELETE statement cascade FI auto) + 44/46 regression iter21-iter24 (2 echecs = drift Alex BENOIT pre-existing, hors scope)**
 - **iter26: 9/9 nouveaux (Fonds reserve credit 160 classe 1 / Fonds roulement credit 100 classe 1 / migrate-reserve-to-classe1 idempotent + RBAC / legacy generate-entries call_type=reserve credit 160 / Bilan ACP Demo 160 en II.Reserves + 100 en I.Capital / aucune 701000 auto-generee restante) + 29/31 regression iter25/iter20/iter16**
-- **iter84: 22/22 (Mutation - Split OD par date : 4/4 / Detection+fusion doublons admin chinese-wall : 5/5 / regressions iter79+82+83 : 13/13)**
+- **iter84: 25/25 (Mutation - Split OD par date : 4/4 / Detection+fusion doublons admin chinese-wall : 5/5 / CODA preview+mapping UI : 3/3 / regressions iter79+82+83 : 13/13)**
   - `_compute_mutation_breakdown` enrichi avec `call_date` dans current_period_details
   - `_apply_to_lot` ecrit 1 OD `fonds_roulement` datee `sale_date` + N OD `prorata` datees call_date d'origine (agregees par date)
   - `mutation_record.journal_entry_ids` (liste) et `entries_created` (breakdown kind/date/amount)
@@ -2593,6 +2593,9 @@ Score = 100 - penalites par anomalie. Labels : Excellent/Bon/Moyen/Critique.
   - UI `AdminDuplicatesPage.js` 3 tabs (Fournisseurs/Proprietaires/Utilisateurs) + ACP picker + selection KEEP + bouton Fusionner cards 3-col
   - Composant `SupplierSearchSelect` autocomplete dans facture (liste filtree des fournisseurs deja utilises, deduplique, creation fiche en ligne avec verif BCE doublon)
   - Frontend LotsPage : colonne "Date appel" ajoutee dans preview prorata + note explicative
+  - Routes `/api/banking/coda/preview` (parse + suggestions match VCS/IBAN/nom + hash SHA256) et `/api/banking/coda/import-confirmed` (persiste avec overrides utilisateur + auto-lettrage)
+  - Composant `CodaImportDialog.js` mapping UI : header balances + stats + filtres + table mouvements avec override Type+Entite par ligne + checkbox include + verif equilibre delta
+  - Detection doublon CODA : SHA256 par ACP, bandeau d'alerte si re-import, blocage idempotence backend (409)
 
 ## Backlog P1
 - Gestion AG (ordre du jour, votes, PV, convocations)
