@@ -484,7 +484,7 @@ export default function InvoicesPage() {
 
       {/* Invoice Dialog */}
       <Dialog open={invoiceDialog} onOpenChange={(open) => { if (!open) { setEditingInvoice(null); setPendingPdf(null); } setInvoiceDialog(open); }}>
-        <DialogContent className="max-w-5xl w-[95vw] max-h-[92vh] overflow-y-auto" data-testid="invoice-dialog">
+        <DialogContent className="max-w-[1600px] w-[97vw] max-h-[92vh] overflow-y-auto" data-testid="invoice-dialog">
           <DialogHeader><DialogTitle style={{fontFamily:'Chivo,sans-serif'}}>{editingInvoice ? 'Modifier la facture' : 'Nouvelle facture'}</DialogTitle></DialogHeader>
           <div className="space-y-4 mt-2">
             {/* Loading banner during AI extraction */}
@@ -640,11 +640,23 @@ export default function InvoicesPage() {
                 <input
                   type="checkbox"
                   checked={!!invForm.is_private_fee}
-                  onChange={e => setInvForm(f => ({ ...f, is_private_fee: e.target.checked, distribution_key_id: e.target.checked ? '' : f.distribution_key_id }))}
+                  onChange={e => setInvForm(f => ({
+                    ...f,
+                    is_private_fee: e.target.checked,
+                    // Cocher Frais privatif vide les lignes multiples (incompatibles)
+                    // et la cle de repartition
+                    lines: e.target.checked ? [] : f.lines,
+                    distribution_key_id: e.target.checked ? '' : f.distribution_key_id,
+                  }))}
                   className="rounded border-amber-400 text-amber-600 focus:ring-amber-500"
                   data-testid="inv-private-fee"
                 />
                 Frais privatif (a charge d'un seul proprietaire)
+                {(invForm.lines && invForm.lines.length > 0) && !invForm.is_private_fee && (
+                  <span className="ml-auto text-[10px] text-amber-700 italic">
+                    (videra les {invForm.lines.length} lignes multiples)
+                  </span>
+                )}
               </label>
               {invForm.is_private_fee && (
                 <div className="mt-3 space-y-1">
