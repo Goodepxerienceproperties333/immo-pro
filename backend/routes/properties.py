@@ -480,6 +480,71 @@ def create_properties_router(db):
         sale_price: Optional[float] = 0.0
         note: Optional[str] = ""
 
+    # ---- LIENS ENTRE LOTS (regroupements appartement + cave/parking) ----
+    class LotLinkInput(BaseModel):
+        child_lot_ids: List[str]  # IDs des lots a lier comme enfants du parent
+
+    @router.post("/lots/{parent_id}/link")
+    async def link_lots(parent_id: str, data: LotLinkInput):
+        """Lie des lots enfants (caves, parkings...) a un lot parent (appartement).
+        Contraintes :
+        - Le parent ne doit pas etre deja un enfant (pas de chaine).
+        - Tous les enfants doivent appartenir au meme proprietaire que le parent.
+        - Tous les lots doivent etre dans la meme ACP.
+        - Un enfant ne peut pas se lier a lui-meme.
+        - Un enfant deja lie ailleurs doit etre delie avant.
+        """
+        parent = await db.lots.find_one({"id": parent_id}, {"_id": 0})
+        if not parent:
+            raise HTTPException(404, "Lot parent non trouve")
+        if parent.get("parent_lot_id"):
+            raise HTTPException(400, "Ce lot est deja un lot enfant - impossible de creer une chaine de liens")
+        if not parent.get("owner_id"):
+            raise HTTPException(400, "Le lot parent n'a pas de proprietaire - assignez-en un avant de lier")
+
+        copro_id = parent.get("copropriete_id", "")
+        owner_id = parent.get("owner_id", "")
+        added = []
+        for child_id in data.child_lot_ids:
+            if child_id == parent_id:
+                raise HTTPException(400, "Un lot ne peut pas se lier a lui-meme")
+            child = await db.lots.find_one({"id": child_id}, {"_id": 0})
+            if not child:
+                raise HTTPException(404, f"Lot enfant {child_id} non trouve")
+            if child.get("copropriete_id") != copro_id:
+                raise HTTPException(400, f"Lot {child.get('number','?')} : ACP differente du parent")
+            if child.get("owner_id") != owner_id:
+                raise HTTPException(400, f"Lot {child.get('number','?')} : proprietaire different du parent (parent={owner_id}, enfant={child.get('owner_id') or 'aucun'})")
+            if child.get("parent_lot_id"):
+                if child["parent_lot_id"] == parent_id:
+                    continue  # deja lie a ce parent, idempotent
+                other_parent = await db.lots.find_one({"id": child["parent_lot_id"]}, {"_id": 0, "number": 1})
+                raise HTTPException(400, f"Lot {child.get('number','?')} : deja lie au lot {other_parent.get('number','?') if other_parent else '?'} - deliez-le d'abord")
+            # Verifie que l'enfant n'est pas lui-meme un parent
+            grandkids = await db.lots.count_documents({"parent_lot_id": child_id})
+            if grandkids:
+                raise HTTPException(400, f"Lot {child.get('number','?')} : est deja un lot parent (a {grandkids} enfants). Impossible de creer une chaine.")
+            await db.lots.update_one({"id": child_id}, {"$set": {"parent_lot_id": parent_id}})
+            added.append(child_id)
+        updated_parent = await db.lots.find_one({"id": parent_id}, {"_id": 0})
+        children = await db.lots.find({"parent_lot_id": parent_id}, {"_id": 0}).to_list(100)
+        return {"parent": updated_parent, "children": children, "added": added}
+
+    @router.post("/lots/{parent_id}/unlink")
+    async def unlink_lots(parent_id: str, data: LotLinkInput):
+        """Delie un ou plusieurs lots enfants du parent."""
+        removed = []
+        for child_id in data.child_lot_ids:
+            result = await db.lots.update_one(
+                {"id": child_id, "parent_lot_id": parent_id},
+                {"$unset": {"parent_lot_id": ""}}
+            )
+            if result.modified_count > 0:
+                removed.append(child_id)
+        updated_parent = await db.lots.find_one({"id": parent_id}, {"_id": 0})
+        children = await db.lots.find({"parent_lot_id": parent_id}, {"_id": 0}).to_list(100)
+        return {"parent": updated_parent, "children": children, "removed": removed}
+
     async def _resolve_call_period(call: dict, fy_by_id: dict) -> tuple:
         """Retourne (period_start_date, period_end_date) pour un appel.
         Priorite : period_start/period_end stockes > deduction depuis nom + fy
@@ -678,22 +743,21 @@ def create_properties_router(db):
     @router.post("/lots/{lot_id}/mutate")
     async def mutate_lot(lot_id: str, data: LotMutationInput):
         """Mutation d'un lot (vente entre proprietaires). Calcule et passe l'OD
-        comptable de transfert :
-        - Fonds de roulement : transfert de la quote-part du lot du vendeur vers l'acquereur
-          (calculee sur les quotities du lot vs total des quotities de l'ACP, sur le solde
-          actuel du compte 100).
-        - Prorata appel en cours : portion posterieure a sale_date des appels deja emis
-          dont la periode chevauche sale_date. Cette portion est creditee au vendeur
-          (il l'a deja payee mais ne consommera pas) et debitee a l'acquereur (qui en
-          beneficiera).
-        - Appels de provisions futurs : pour information uniquement, liste les appels
-          dont la periode commence APRES sale_date. Ces appels seront emis normalement
-          a l'acquereur (re-affectation du lot post-mutation).
-        Met a jour lot.owner_id = new_owner_id et conserve l'historique dans lot.mutations[].
+        comptable de transfert.
+
+        Si le lot a des enfants lies (autres lots dont parent_lot_id = lot_id),
+        la mutation est appliquee a TOUS les lots du groupe (mutation groupee).
+        Chaque lot recoit sa propre ecriture OD et son propre mutation_record.
+
+        Refuse si le lot vise est un enfant (parent_lot_id non vide) :
+        l'utilisateur doit muter le lot parent pour declencher la mutation groupee.
         """
         lot = await db.lots.find_one({"id": lot_id}, {"_id": 0})
         if not lot:
             raise HTTPException(404, "Lot non trouve")
+        if lot.get("parent_lot_id"):
+            other = await db.lots.find_one({"id": lot["parent_lot_id"]}, {"_id": 0, "number": 1})
+            raise HTTPException(400, f"Ce lot est lie au lot parent {other.get('number','?') if other else '?'} - mutez le parent pour effectuer la mutation groupee")
         copro_id = lot.get("copropriete_id", "")
         if not copro_id:
             raise HTTPException(400, "Lot sans copropriete")
@@ -723,90 +787,104 @@ def create_properties_router(db):
         except Exception:
             raise HTTPException(400, "sale_date doit etre au format YYYY-MM-DD")
 
-        breakdown = await _compute_mutation_breakdown(lot, old_owner_id, sale_dt)
-        roulement_quota = breakdown["roulement_quota"]
-        current_prorata = breakdown["current_period_prorata"]
-        total_transfer = breakdown["total_transfer"]
         sale_date = data.sale_date
+        # Recupere les lots enfants pour la mutation groupee
+        children = await db.lots.find({"parent_lot_id": lot_id}, {"_id": 0}).to_list(100)
+        # Securite : tous les enfants doivent avoir le meme proprietaire courant
+        for ch in children:
+            if ch.get("owner_id") != old_owner_id:
+                raise HTTPException(400, f"Lot enfant {ch.get('number','?')} a un proprietaire different - lien incoherent. Deliez-le ou alignez les proprietaires.")
 
-        # ---- Generation de l'ecriture OD (uniquement roulement + prorata appel courant) ----
-        entry_id = None
-        if total_transfer > 0.001:
-            lines = [
-                {
-                    "account_number": new_acc,
-                    "account_name": f"Mutation - {new_owner.get('last_name') or new_owner.get('name')}",
-                    "debit": total_transfer, "credit": 0.0,
-                    "third_party_id": data.new_owner_id,
-                    "third_party_name": new_owner.get("name", ""),
-                },
-                {
-                    "account_number": old_acc,
-                    "account_name": f"Mutation - {old_owner.get('last_name') or old_owner.get('name')}",
-                    "debit": 0.0, "credit": total_transfer,
-                    "third_party_id": old_owner_id,
-                    "third_party_name": old_owner.get("name", ""),
-                },
-            ]
-            entry = {
+        all_lots = [lot] + children
+
+        async def _apply_to_lot(lt: dict) -> dict:
+            """Applique la mutation a un seul lot et retourne le mutation_record."""
+            bd = await _compute_mutation_breakdown(lt, old_owner_id, sale_dt)
+            r_quota = bd["roulement_quota"]
+            c_prorata = bd["current_period_prorata"]
+            t_transfer = bd["total_transfer"]
+            entry_id = None
+            if t_transfer > 0.001:
+                lines = [
+                    {"account_number": new_acc,
+                     "account_name": f"Mutation - {new_owner.get('last_name') or new_owner.get('name')}",
+                     "debit": t_transfer, "credit": 0.0,
+                     "third_party_id": data.new_owner_id,
+                     "third_party_name": new_owner.get("name", "")},
+                    {"account_number": old_acc,
+                     "account_name": f"Mutation - {old_owner.get('last_name') or old_owner.get('name')}",
+                     "debit": 0.0, "credit": t_transfer,
+                     "third_party_id": old_owner_id,
+                     "third_party_name": old_owner.get("name", "")},
+                ]
+                entry = {
+                    "id": str(uuid.uuid4()),
+                    "journal_type": "OD",
+                    "date": sale_date,
+                    "reference": f"MUT-{lt.get('number','')[:20]}",
+                    "description": (
+                        f"Mutation lot {lt.get('number','')}: {old_owner.get('name','')} -> {new_owner.get('name','')} "
+                        f"(roulement {r_quota:.2f} EUR + prorata appel en cours {c_prorata:.2f} EUR)"
+                    ),
+                    "lines": lines,
+                    "total_debit": t_transfer,
+                    "total_credit": t_transfer,
+                    "copropriete_id": copro_id,
+                    "auto_generated": False,
+                    "manually_edited": True,
+                    "source_type": "lot_mutation",
+                    "source_id": lt["id"],
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                }
+                await db.journal_entries.insert_one(entry)
+                entry_id = entry["id"]
+
+            mut_rec = {
                 "id": str(uuid.uuid4()),
-                "journal_type": "OD",
                 "date": sale_date,
-                "reference": f"MUT-{lot.get('number','')[:20]}",
-                "description": (
-                    f"Mutation lot {lot.get('number','')}: {old_owner.get('name','')} -> {new_owner.get('name','')} "
-                    f"(roulement {roulement_quota:.2f} EUR + prorata appel en cours {current_prorata:.2f} EUR)"
-                ),
-                "lines": lines,
-                "total_debit": total_transfer,
-                "total_credit": total_transfer,
-                "copropriete_id": copro_id,
-                "auto_generated": False,
-                "manually_edited": True,
-                "source_type": "lot_mutation",
-                "source_id": lot_id,
+                "old_owner_id": old_owner_id,
+                "old_owner_name": old_owner.get("name", ""),
+                "new_owner_id": data.new_owner_id,
+                "new_owner_name": new_owner.get("name", ""),
+                "roulement_quota": r_quota,
+                "prorata_provisions": c_prorata,  # alias legacy
+                "current_period_prorata": c_prorata,
+                "current_period_details": bd["current_period_details"],
+                "future_calls": bd["future_calls"],
+                "future_calls_total": bd["future_calls_total"],
+                "budget_frequency": bd["budget_frequency"],
+                "budget_frequency_label": bd["budget_frequency_label"],
+                "total_transfer": t_transfer,
+                "sale_price": float(data.sale_price or 0) if lt["id"] == lot_id else 0.0,
+                "note": data.note or "",
+                "journal_entry_id": entry_id,
                 "created_at": datetime.now(timezone.utc).isoformat(),
+                "prorata_details": bd["current_period_details"],  # alias legacy
+                # Lien parent : si ce lot fait partie d'une mutation groupee
+                "grouped_mutation": len(all_lots) > 1,
+                "grouped_parent_lot_id": lot_id if lt["id"] != lot_id else "",
             }
-            await db.journal_entries.insert_one(entry)
-            entry_id = entry["id"]
+            await db.lots.update_one(
+                {"id": lt["id"]},
+                {"$set": {"owner_id": data.new_owner_id, "owner_ids": [data.new_owner_id]},
+                 "$push": {"mutations": mut_rec}}
+            )
+            return mut_rec
 
-        # ---- Maj du lot + historique ----
-        mutation_record = {
-            "id": str(uuid.uuid4()),
-            "date": sale_date,
-            "old_owner_id": old_owner_id,
-            "old_owner_name": old_owner.get("name", ""),
-            "new_owner_id": data.new_owner_id,
-            "new_owner_name": new_owner.get("name", ""),
-            "roulement_quota": roulement_quota,
-            # Prorata sur l'appel en cours uniquement (compatible legacy)
-            "prorata_provisions": current_prorata,
-            "current_period_prorata": current_prorata,
-            "current_period_details": breakdown["current_period_details"],
-            # Appels futurs (informatif, non transferes via OD)
-            "future_calls": breakdown["future_calls"],
-            "future_calls_total": breakdown["future_calls_total"],
-            "budget_frequency": breakdown["budget_frequency"],
-            "budget_frequency_label": breakdown["budget_frequency_label"],
-            # Total transfert OD
-            "total_transfer": total_transfer,
-            "sale_price": float(data.sale_price or 0),
-            "note": data.note or "",
-            "journal_entry_id": entry_id,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            # Alias legacy
-            "prorata_details": breakdown["current_period_details"],
-        }
-        await db.lots.update_one(
-            {"id": lot_id},
-            {"$set": {"owner_id": data.new_owner_id,
-                      "owner_ids": [data.new_owner_id]},
-             "$push": {"mutations": mutation_record}}
-        )
-        updated = await db.lots.find_one({"id": lot_id}, {"_id": 0})
+        all_mutations = []
+        agg_total = 0.0
+        for lt in all_lots:
+            mr = await _apply_to_lot(lt)
+            all_mutations.append({"lot_id": lt["id"], "lot_number": lt.get("number", ""), "mutation": mr})
+            agg_total += mr["total_transfer"]
+
+        updated_lot = await db.lots.find_one({"id": lot_id}, {"_id": 0})
         return {
-            "lot": updated,
-            "mutation": mutation_record,
+            "lot": updated_lot,
+            "mutation": all_mutations[0]["mutation"],  # racine = parent (compat retro)
+            "grouped_mutations": all_mutations,
+            "linked_lots_count": len(children),
+            "grouped_total_transfer": round(agg_total, 2),
         }
 
     @router.delete("/lots/{lot_id}/mutate/{mutation_id}")
@@ -859,10 +937,16 @@ def create_properties_router(db):
         - Fonds de roulement (quote-part sur quotites, JAMAIS au prorata temporel)
         - Prorata appel en cours (provisions, portion apres la vente)
         - Appels de provisions futurs (informatif, montant complet a l'acquereur)
+
+        Si le lot a des enfants lies (parent_lot_id pointe vers lui), le decompte
+        agrege automatiquement parent + enfants et retourne aussi `per_lot_breakdowns`.
         """
         lot = await db.lots.find_one({"id": lot_id}, {"_id": 0})
         if not lot:
             raise HTTPException(404, "Lot non trouve")
+        if lot.get("parent_lot_id"):
+            other = await db.lots.find_one({"id": lot["parent_lot_id"]}, {"_id": 0, "number": 1})
+            raise HTTPException(400, f"Ce lot est lie au lot parent {other.get('number','?') if other else '?'} - mutez le parent pour effectuer la mutation groupee")
         copro_id = lot.get("copropriete_id", "")
         old_owner_id = lot.get("owner_id", "")
         if not (copro_id and old_owner_id):
@@ -873,7 +957,43 @@ def create_properties_router(db):
         except Exception:
             raise HTTPException(400, "sale_date doit etre au format YYYY-MM-DD")
 
-        return await _compute_mutation_breakdown(lot, old_owner_id, sale_dt)
+        # Recupere les lots enfants lies (mutation groupee)
+        children = await db.lots.find({"parent_lot_id": lot_id}, {"_id": 0}).to_list(100)
+        all_lots = [lot] + children
+
+        per_lot = []
+        agg = {
+            "fonds_roulement_total_acp": 0.0,
+            "roulement_quota": 0.0,
+            "current_period_prorata": 0.0,
+            "future_calls_total": 0.0,
+            "total_transfer": 0.0,
+        }
+        for lt in all_lots:
+            bd = await _compute_mutation_breakdown(lt, lt.get("owner_id", ""), sale_dt)
+            per_lot.append({"lot_id": lt["id"], "lot_number": lt.get("number", ""), **bd})
+            agg["fonds_roulement_total_acp"] = bd["fonds_roulement_total"]  # meme valeur sur tous (ACP)
+            agg["roulement_quota"] += bd["roulement_quota"]
+            agg["current_period_prorata"] += bd["current_period_prorata"]
+            agg["future_calls_total"] += bd["future_calls_total"]
+            agg["total_transfer"] += bd["total_transfer"]
+        # Round agregats
+        for k in ("roulement_quota", "current_period_prorata", "future_calls_total", "total_transfer"):
+            agg[k] = round(agg[k], 2)
+
+        # Retourne le breakdown DU PARENT en racine (pour compat retro) + per_lot_breakdowns
+        root = per_lot[0]
+        root_payload = {k: v for k, v in root.items() if k not in ("lot_id", "lot_number")}
+        return {
+            **root_payload,
+            "per_lot_breakdowns": per_lot,
+            "linked_lots_count": len(children),
+            # Totaux agreges
+            "grouped_total_roulement": agg["roulement_quota"],
+            "grouped_total_current_prorata": agg["current_period_prorata"],
+            "grouped_total_future": agg["future_calls_total"],
+            "grouped_total_transfer": agg["total_transfer"],
+        }
 
     # ---- TENANTS ----
     class TenantInput(BaseModel):

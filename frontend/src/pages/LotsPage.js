@@ -7,7 +7,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { Plus, Pencil, Trash2, Search, X, ArrowRightLeft, UserPlus } from 'lucide-react';
+import { Plus, Pencil, Trash2, Search, X, ArrowRightLeft, UserPlus, Link2, Link2Off } from 'lucide-react';
 import { fmtDate } from '@/lib/dateFmt';
 
 const LOT_TYPES = [
@@ -161,6 +161,170 @@ function OwnerPicker({ owners, selectedIds, onChange, multi = true, onOwnerCreat
   );
 }
 
+// ----- Link dialog (lier des lots enfants à un lot parent) -----
+function LinkDialog({ parentLot, allLots, owners, onClose, onDone }) {
+  const [selectedIds, setSelectedIds] = useState([]);
+  const [busy, setBusy] = useState(false);
+
+  const ownerName = useMemo(() =>
+    owners.find(o => o.id === parentLot?.owner_id)?.name || '(inconnu)',
+    [owners, parentLot]
+  );
+
+  // Lots eligibles : meme ACP, meme owner, pas le parent lui-meme,
+  // pas deja un parent (sans enfants), pas deja lie ailleurs (sauf au parent courant)
+  const eligible = useMemo(() => {
+    if (!parentLot) return [];
+    return allLots.filter(l =>
+      l.id !== parentLot.id &&
+      l.copropriete_id === parentLot.copropriete_id &&
+      l.owner_id === parentLot.owner_id &&
+      (!l.parent_lot_id || l.parent_lot_id === parentLot.id) &&
+      !allLots.some(other => other.parent_lot_id === l.id)  // n'est pas deja un parent
+    );
+  }, [parentLot, allLots]);
+
+  // Enfants deja lies au parent courant
+  const currentChildren = useMemo(() =>
+    allLots.filter(l => l.parent_lot_id === parentLot?.id),
+    [allLots, parentLot]
+  );
+
+  const toggle = (id) => {
+    setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  };
+
+  const handleLink = async () => {
+    if (selectedIds.length === 0) { toast.error('Aucun lot selectionne'); return; }
+    setBusy(true);
+    try {
+      await api.post(`/lots/${parentLot.id}/link`, { child_lot_ids: selectedIds });
+      toast.success(`${selectedIds.length} lot(s) lie(s)`);
+      onDone();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur lien');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleUnlink = async (childId) => {
+    if (!window.confirm('Delier ce lot du parent ?')) return;
+    setBusy(true);
+    try {
+      await api.post(`/lots/${parentLot.id}/unlink`, { child_lot_ids: [childId] });
+      toast.success('Lot delie');
+      onDone();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur unlink');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!parentLot) return null;
+  const notYetLinked = eligible.filter(l => l.parent_lot_id !== parentLot.id);
+  return (
+    <Dialog open={!!parentLot} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto" data-testid="link-dialog">
+        <DialogHeader>
+          <DialogTitle style={{fontFamily:'Chivo,sans-serif'}}>
+            Lots lies au lot {parentLot.number}
+          </DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4 mt-2">
+          <div className="rounded-md bg-slate-50 border border-slate-200 p-3 text-sm">
+            <span className="text-slate-500">Lot parent : </span>
+            <span className="font-medium text-slate-900">{parentLot.number}</span>
+            <span className="text-slate-400 mx-2">·</span>
+            <span className="text-slate-500">Type : </span>
+            <span className="font-medium text-slate-900">{LOT_TYPES.find(t => t.value === parentLot.lot_type)?.label || parentLot.lot_type}</span>
+            <span className="text-slate-400 mx-2">·</span>
+            <span className="text-slate-500">Proprietaire : </span>
+            <span className="font-medium text-slate-900">{ownerName}</span>
+          </div>
+
+          {/* Enfants deja lies */}
+          {currentChildren.length > 0 && (
+            <div className="rounded-md border border-indigo-200 bg-indigo-50 p-3">
+              <div className="text-xs font-bold text-indigo-800 uppercase tracking-wider mb-2">
+                Lots actuellement lies ({currentChildren.length})
+              </div>
+              <div className="space-y-1.5" data-testid="linked-children-list">
+                {currentChildren.map(c => (
+                  <div key={c.id} className="flex items-center justify-between bg-white rounded border border-indigo-100 px-2 py-1.5 text-sm">
+                    <div>
+                      <span className="font-mono font-medium">{c.number}</span>
+                      <span className="text-slate-400 mx-2">·</span>
+                      <span className="text-slate-600">{LOT_TYPES.find(t => t.value === c.lot_type)?.label || c.lot_type}</span>
+                      {c.description && <span className="text-slate-400 ml-2">{c.description}</span>}
+                    </div>
+                    <Button
+                      variant="ghost" size="sm"
+                      onClick={() => handleUnlink(c.id)}
+                      disabled={busy}
+                      className="text-red-500 hover:text-red-700 h-7"
+                      data-testid={`unlink-child-${c.id}`}
+                    >
+                      <Link2Off size={12} className="mr-1" /> Delier
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Ajouter de nouveaux enfants */}
+          <div>
+            <div className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
+              Ajouter des lots a lier ({notYetLinked.length} eligible{notYetLinked.length > 1 ? 's' : ''})
+            </div>
+            <p className="text-[11px] text-slate-500 mb-2">
+              Seuls les lots de la meme ACP, appartenant au meme proprietaire et non lies ailleurs sont eligibles.
+            </p>
+            {notYetLinked.length === 0 ? (
+              <div className="text-sm text-slate-400 italic p-3 bg-slate-50 rounded">
+                Aucun lot eligible. Pour pouvoir lier un autre lot, il doit avoir le meme proprietaire que ce lot parent.
+              </div>
+            ) : (
+              <div className="max-h-72 overflow-y-auto border border-slate-200 rounded">
+                {notYetLinked.map(l => (
+                  <label key={l.id} className="flex items-center gap-2 px-3 py-2 hover:bg-slate-50 cursor-pointer border-b border-slate-100 last:border-b-0">
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.includes(l.id)}
+                      onChange={() => toggle(l.id)}
+                      className="rounded"
+                      data-testid={`link-select-${l.id}`}
+                    />
+                    <span className="font-mono font-medium text-sm">{l.number}</span>
+                    <Badge variant="outline" className="text-[10px]">{LOT_TYPES.find(t => t.value === l.lot_type)?.label || l.lot_type}</Badge>
+                    {l.description && <span className="text-xs text-slate-500">{l.description}</span>}
+                    <span className="ml-auto text-[10px] text-slate-400 font-mono">{l.quotity}/qt</span>
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="sticky bottom-0 -mx-6 px-6 pt-3 pb-1 bg-white border-t border-slate-200 flex gap-3 justify-end z-10">
+            <Button variant="outline" onClick={onClose}>Fermer</Button>
+            <Button
+              onClick={handleLink}
+              disabled={busy || selectedIds.length === 0}
+              className="bg-indigo-600 hover:bg-indigo-700"
+              data-testid="link-confirm-btn"
+            >
+              <Link2 size={14} className="mr-1" />
+              {busy ? 'Traitement...' : `Lier ${selectedIds.length} lot${selectedIds.length > 1 ? 's' : ''}`}
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ----- Mutation dialog -----
 function MutationDialog({ lot, owners, ownersRefresh, onClose, onDone }) {
   const [newOwnerIds, setNewOwnerIds] = useState([]);
@@ -239,6 +403,46 @@ function MutationDialog({ lot, owners, ownersRefresh, onClose, onDone }) {
             <span className="font-medium text-slate-900">{currentOwnerName}</span>
             <span className="text-slate-400 ml-3">Quotites : <span className="font-mono">{lot?.quotity}</span></span>
           </div>
+
+          {/* Bandeau mutation groupee */}
+          {preview && preview.linked_lots_count > 0 && (
+            <div className="rounded-md border-2 border-indigo-300 bg-indigo-50 p-3" data-testid="grouped-mutation-banner">
+              <div className="flex items-center gap-2 text-sm">
+                <Link2 size={16} className="text-indigo-700" />
+                <span className="font-semibold text-indigo-900">
+                  Mutation groupee : {preview.linked_lots_count + 1} lots seront mutes ensemble
+                </span>
+              </div>
+              <div className="text-xs text-indigo-700 mt-1.5">
+                Lot principal : <b>{lot?.number}</b> + {preview.linked_lots_count} lot(s) lie(s).
+                Chaque lot recevra sa propre ecriture OD.
+              </div>
+              {preview.per_lot_breakdowns && preview.per_lot_breakdowns.length > 0 && (
+                <table className="w-full mt-2 text-[11px] bg-white rounded">
+                  <thead className="text-slate-500">
+                    <tr><th className="text-left px-2 py-1">Lot</th><th className="text-right px-2 py-1">Quotite</th><th className="text-right px-2 py-1">Roulement</th><th className="text-right px-2 py-1">Prorata courant</th><th className="text-right px-2 py-1">Transfert OD</th></tr>
+                  </thead>
+                  <tbody>
+                    {preview.per_lot_breakdowns.map((b, i) => (
+                      <tr key={i} className="border-t border-slate-100">
+                        <td className="px-2 py-1 font-mono">{b.lot_number}</td>
+                        <td className="text-right px-2 py-1 font-mono">{b.lot_quotity}</td>
+                        <td className="text-right px-2 py-1 font-mono">{b.roulement_quota?.toFixed(2)}</td>
+                        <td className="text-right px-2 py-1 font-mono">{b.current_period_prorata?.toFixed(2)}</td>
+                        <td className="text-right px-2 py-1 font-mono font-semibold text-indigo-700">{b.total_transfer?.toFixed(2)}</td>
+                      </tr>
+                    ))}
+                    <tr className="border-t-2 border-indigo-300 bg-indigo-50">
+                      <td colSpan="4" className="px-2 py-1 text-right font-semibold">Total groupe :</td>
+                      <td className="text-right px-2 py-1 font-mono font-bold text-indigo-900" data-testid="grouped-total-transfer">
+                        {preview.grouped_total_transfer?.toFixed(2)} EUR
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              )}
+            </div>
+          )}
 
           <div>
             <label className="form-label">Acquereur *</label>
@@ -471,6 +675,19 @@ export default function LotsPage() {
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState({ number: '', description: '', lot_type: 'apartment', floor: 0, area: 0, quotity: 0, owner_id: '', owner_ids: [] });
   const [mutationLot, setMutationLot] = useState(null);
+  const [linkLot, setLinkLot] = useState(null);
+
+  // Derived : map lot.id -> children + parent lookup
+  const childrenByParent = useMemo(() => {
+    const m = {};
+    for (const l of lots) {
+      if (l.parent_lot_id) {
+        (m[l.parent_lot_id] = m[l.parent_lot_id] || []).push(l);
+      }
+    }
+    return m;
+  }, [lots]);
+  const lotById = useMemo(() => Object.fromEntries(lots.map(l => [l.id, l])), [lots]);
 
   const load = useCallback(async () => {
     const [lotsRes, ownersRes] = await Promise.all([api.get('/lots'), api.get('/owners')]);
@@ -565,17 +782,40 @@ export default function LotsPage() {
                       {lot.mutations.length} mutation{lot.mutations.length > 1 ? 's' : ''}
                     </Badge>
                   )}
+                  {(childrenByParent[lot.id] || []).length > 0 && (
+                    <Badge variant="outline" className="ml-2 bg-indigo-50 border-indigo-200 text-indigo-700 text-[10px]" data-testid={`lot-parent-badge-${lot.id}`}>
+                      <Link2 size={10} className="inline mr-0.5" /> {childrenByParent[lot.id].length} lot{childrenByParent[lot.id].length > 1 ? 's' : ''} lie{childrenByParent[lot.id].length > 1 ? 's' : ''}
+                    </Badge>
+                  )}
+                  {lot.parent_lot_id && (
+                    <Badge variant="outline" className="ml-2 bg-slate-50 border-slate-300 text-slate-600 text-[10px]" data-testid={`lot-child-badge-${lot.id}`}>
+                      <Link2 size={10} className="inline mr-0.5" /> Lie a {lotById[lot.parent_lot_id]?.number || '?'}
+                    </Badge>
+                  )}
                 </TableCell>
                 <TableCell>
                   <div className="flex gap-1">
                     <Button variant="ghost" size="sm" onClick={() => openEdit(lot)} data-testid={`edit-lot-${lot.id}`}><Pencil size={14} /></Button>
+                    {!lot.parent_lot_id && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setLinkLot(lot)}
+                        className="text-indigo-600 hover:text-indigo-800"
+                        title={(childrenByParent[lot.id] || []).length > 0 ? `Gerer les ${childrenByParent[lot.id].length} lot(s) lie(s)` : 'Lier des lots (cave, parking...)'}
+                        disabled={!lot.owner_id}
+                        data-testid={`link-lot-${lot.id}`}
+                      >
+                        <Link2 size={14} />
+                      </Button>
+                    )}
                     <Button
                       variant="ghost"
                       size="sm"
                       onClick={() => setMutationLot(lot)}
                       className="text-[#0055FF] hover:text-[#0040CC]"
-                      title="Muter (vente)"
-                      disabled={!lot.owner_id}
+                      title={lot.parent_lot_id ? `Lie a ${lotById[lot.parent_lot_id]?.number || '?'} - mutez le lot parent` : 'Muter (vente)'}
+                      disabled={!lot.owner_id || !!lot.parent_lot_id}
                       data-testid={`mutate-lot-${lot.id}`}
                     >
                       <ArrowRightLeft size={14} />
@@ -656,6 +896,17 @@ export default function LotsPage() {
           ownersRefresh={load}
           onClose={() => setMutationLot(null)}
           onDone={() => { setMutationLot(null); load(); }}
+        />
+      )}
+
+      {/* Link dialog */}
+      {linkLot && (
+        <LinkDialog
+          parentLot={linkLot}
+          allLots={lots}
+          owners={owners}
+          onClose={() => setLinkLot(null)}
+          onDone={() => { load(); }}
         />
       )}
     </div>
