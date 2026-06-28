@@ -252,7 +252,13 @@ export default function CoproprietesPage() {
 
       {/* Dialog */}
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto" data-testid="copro-dialog">
+        <DialogContent
+          className="max-w-3xl max-h-[85vh] overflow-y-auto"
+          data-testid="copro-dialog"
+          onPointerDownOutside={(e) => e.preventDefault()}
+          onInteractOutside={(e) => e.preventDefault()}
+          onEscapeKeyDown={(e) => e.preventDefault()}
+        >
           <DialogHeader>
             <DialogTitle style={{fontFamily:'Chivo,sans-serif'}}>{editing ? 'Modifier ACP' : 'Assistant de creation ACP'}</DialogTitle>
             {editing?.reference && <p className="font-mono text-sm text-[#0055FF]">Ref: {editing.reference}</p>}
