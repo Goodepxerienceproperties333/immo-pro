@@ -270,11 +270,48 @@ def create_invoices_router(db):
         merged_list = list(merged.values())
         return resolved, merged_list
 
+    def _norm(s: str) -> str:
+        """Normalise une chaine pour comparaison anti-doublons : majuscules,
+        sans accents, sans espaces multiples, sans dashes/spaces de bord."""
+        if not s:
+            return ""
+        import unicodedata as _u
+        n = _u.normalize("NFKD", s)
+        n = "".join(c for c in n if not _u.combining(c))
+        return " ".join(n.upper().split()).strip(" -.")
+
+    async def _check_invoice_duplicate(data: InvoiceInput, exclude_id: str = ""):
+        """Anti-doublon strict : meme (fournisseur normalise, numero normalise, ACP).
+        Leve HTTPException 409 si une autre facture matche. Le N° interne
+        FA-AAAA-NNNN n'est jamais utilise (c'est le N° FOURNISSEUR qui compte)."""
+        norm_num = _norm(data.number)
+        norm_sup = _norm(data.supplier)
+        if not norm_num or not norm_sup:
+            return  # Si l'un manque, on laisse passer (validation des champs ailleurs)
+        copro_id = (data.copropriete_id or "").strip()
+        q: dict = {}
+        if copro_id:
+            q["copropriete_id"] = copro_id
+        if exclude_id:
+            q["id"] = {"$ne": exclude_id}
+        async for inv in db.invoices.find(q, {"_id": 0, "id": 1, "number": 1, "supplier": 1, "date": 1, "total_amount": 1}):
+            if (_norm(inv.get("number", "")) == norm_num and
+                    _norm(inv.get("supplier", "")) == norm_sup):
+                raise HTTPException(
+                    409,
+                    f"Facture en doublon : numero '{data.number}' du fournisseur "
+                    f"'{data.supplier}' existe deja (date {inv.get('date','?')}, "
+                    f"montant {inv.get('total_amount','?')} EUR). "
+                    f"Si c'est une facture distincte, modifiez le numero pour le rendre unique."
+                )
+
     @router.post("/invoices")
     async def create_invoice(data: InvoiceInput):
         from fiscal_lock import ensure_period_open
         # Verrou fiscal : la date de la facture doit etre dans une periode ouverte
         await ensure_period_open(db, data.copropriete_id or "", data.date, context="facture")
+        # Anti-doublon strict avant toute persistance
+        await _check_invoice_duplicate(data)
         # Resolve multi-line first (raises if invalid)
         resolved_lines, merged_dist = await _resolve_invoice_lines(data)
         # If expense_category_id provided, derive/override account_number
@@ -384,6 +421,8 @@ def create_invoices_router(db):
             # Verrou : la date d'origine ET la nouvelle doivent etre dans un exercice ouvert
             await ensure_period_open(db, existing_for_lock.get("copropriete_id", ""), existing_for_lock.get("date"), context="facture")
         await ensure_period_open(db, data.copropriete_id or (existing_for_lock or {}).get("copropriete_id", ""), data.date, context="facture")
+        # Anti-doublon (excluant cette facture elle-meme)
+        await _check_invoice_duplicate(data, exclude_id=invoice_id)
         # Resolve multi-line first
         resolved_lines, merged_dist = await _resolve_invoice_lines(data)
         account_number = data.account_number
