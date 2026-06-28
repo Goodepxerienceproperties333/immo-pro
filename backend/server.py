@@ -25,10 +25,24 @@ db = client[os.environ['DB_NAME']]
 
 app = FastAPI(title="CoproManager")
 
-# CORS
+# CORS - cookie-based auth needs explicit origins (allow_credentials=True is
+# incompatible with allow_origins=["*"]). We honor CORS_ORIGINS if it lists
+# specific domains; otherwise fall back to FRONTEND_URL.
+def _build_cors_origins():
+    raw = os.environ.get("CORS_ORIGINS", "").strip()
+    fe = os.environ.get("FRONTEND_URL", "").strip()
+    explicit = []
+    if raw and raw != "*":
+        explicit = [o.strip() for o in raw.split(",") if o.strip() and o.strip() != "*"]
+    # Always include FRONTEND_URL so preview/prod stay reachable
+    if fe and fe not in explicit:
+        explicit.append(fe)
+    return explicit or [fe] if fe else ["http://localhost:3000"]
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[os.environ.get('FRONTEND_URL', 'http://localhost:3000')],
+    allow_origins=_build_cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
