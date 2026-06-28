@@ -53,12 +53,26 @@ async def _extract_invoice_with_ai(file_path: str, mime_type: str, known_pcmn: l
                 '"net_amount": <float HT>, '
                 '"vat_rate": <float, e.g. 21 or 6>, '
                 '"description": "<short description of service/goods>", '
-                '"suggested_pcmn_account": "<6-digit account from this list, best match>", '
+                '"suggested_pcmn_account": "<6-digit account from list, best match for whole invoice>", '
                 '"vat_number": "<supplier VAT BE0xxx.xxx.xxx or empty>", '
                 '"bce_number": "<supplier BCE/CBE/KBO number, e.g. 0123.456.789 or BE0123456789 or empty>", '
                 '"iban": "<supplier IBAN or empty>", '
-                '"communication": "<structured comm or empty>"'
+                '"communication": "<structured comm or empty>", '
+                '"lines": [<line objects, see below>]'
                 "}\n\n"
+                "Each detail line in `lines` MUST have shape: "
+                '{"description": "<short label of the line>", '
+                '"amount": <float TTC for this line>, '
+                '"suggested_pcmn_account": "<best-match 6-digit account from list>"'
+                "}\n\n"
+                "Rules for lines extraction:\n"
+                "- If the invoice has SEVERAL detail rows/postes (different services or goods), "
+                "  return one object per row, each with its own amount and best-matched account.\n"
+                "- If the invoice has only ONE detail row, return lines=[] (empty array) — "
+                "  do NOT duplicate the single total as a one-element array.\n"
+                "- The sum of lines[].amount MUST equal total_amount (within 0.01 EUR tolerance).\n"
+                "- Match each line's account independently (e.g. honoraires syndic -> 612xxx, "
+                "  frais admin -> 612xxx or 613xxx, entretien -> 611xxx, electricite -> 612xxx, etc.).\n\n"
                 "Available PCMN accounts (class 6 only, choose the most appropriate):\n"
                 f"{pcmn_hint}\n"
                 "Use 0 or empty strings if unknown. Date format ISO YYYY-MM-DD only."
@@ -110,6 +124,46 @@ def create_invoice_ai_router(db):
             exists = await db.pcmn_accounts.find_one({"number": result["suggested_pcmn_account"], "copropriete_id": copropriete_id or {"$exists": True}}, {"_id": 0})
             if not exists:
                 result["suggested_pcmn_account"] = ""
+
+        # Validate AI-extracted lines (if present): each line must have a valid
+        # suggested account, and the sum of amounts must match total (0.01 tolerance).
+        raw_lines = result.get("lines") or []
+        if isinstance(raw_lines, list) and len(raw_lines) > 1:
+            # Pre-fetch valid PCMN account numbers for this ACP
+            valid_accs = set()
+            async for p in db.pcmn_accounts.find(
+                {"copropriete_id": copropriete_id or {"$exists": True}},
+                {"_id": 0, "number": 1},
+            ):
+                valid_accs.add(p["number"])
+
+            cleaned = []
+            for ln in raw_lines:
+                if not isinstance(ln, dict):
+                    continue
+                try:
+                    amt = float(ln.get("amount", 0) or 0)
+                except (TypeError, ValueError):
+                    amt = 0
+                if amt <= 0:
+                    continue
+                acc = (ln.get("suggested_pcmn_account") or "").strip()
+                if acc and acc not in valid_accs:
+                    acc = ""  # invalid, let user pick
+                cleaned.append({
+                    "description": (ln.get("description") or "").strip(),
+                    "amount": round(amt, 2),
+                    "suggested_pcmn_account": acc,
+                })
+            # Verify sum coherence
+            total = float(result.get("total_amount", 0) or 0)
+            line_sum = round(sum(item["amount"] for item in cleaned), 2)
+            if cleaned and abs(line_sum - total) > 0.01:
+                # Mismatch -> drop lines (single-line fallback)
+                cleaned = []
+            result["lines"] = cleaned
+        else:
+            result["lines"] = []  # Single-line invoice -> empty lines
 
         # Normalize BCE/VAT numbers (strip dots, spaces; uppercase prefix)
         def _norm_bce(v: str) -> str:

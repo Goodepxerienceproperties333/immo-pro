@@ -118,18 +118,32 @@ export default function InvoicesPage() {
       if (!ext || Object.keys(ext).length === 0) {
         setAiHint('Aucune donnee extraite, completez manuellement.');
       } else {
-        setInvForm(f => ({
-          ...f,
-          number: ext.number || f.number,
-          date: ext.date || f.date,
-          due_date: ext.due_date || f.due_date,
-          supplier: ext.supplier_name || f.supplier,
-          description: ext.description || f.description,
-          total_amount: ext.total_amount || f.total_amount,
-          vat_amount: ext.vat_amount || f.vat_amount,
-          account_number: ext.suggested_pcmn_account || f.account_number,
-        }));
+        setInvForm(f => {
+          // Si l'IA a detecte 2+ lignes, on pre-remplit le mode multi-lignes
+          const aiLines = Array.isArray(ext.lines) ? ext.lines.filter(ln => Number(ln.amount) > 0) : [];
+          const useMulti = aiLines.length >= 2;
+          return {
+            ...f,
+            number: ext.number || f.number,
+            date: ext.date || f.date,
+            due_date: ext.due_date || f.due_date,
+            supplier: ext.supplier_name || f.supplier,
+            description: ext.description || f.description,
+            total_amount: ext.total_amount || f.total_amount,
+            vat_amount: ext.vat_amount || f.vat_amount,
+            account_number: useMulti ? '' : (ext.suggested_pcmn_account || f.account_number),
+            lines: useMulti ? aiLines.map(ln => ({
+              account_number: ln.suggested_pcmn_account || '',
+              expense_category_id: '',
+              distribution_key_id: '',
+              amount: Number(ln.amount) || 0,
+              description: ln.description || '',
+            })) : [],
+          };
+        });
         const parts = [];
+        const aiLinesCount = Array.isArray(ext.lines) ? ext.lines.filter(ln => Number(ln.amount) > 0).length : 0;
+        if (aiLinesCount >= 2) parts.push(`${aiLinesCount} lignes detectees - mode multi-lignes pre-rempli`);
         if (ext.vat_number) parts.push(`TVA fourn.: ${ext.vat_number}`);
         if (ext.bce_number) parts.push(`BCE: ${ext.bce_number}`);
         if (ext.iban) parts.push(`IBAN: ${ext.iban}`);

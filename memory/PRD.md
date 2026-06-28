@@ -98,6 +98,20 @@ permet de voir la facture" (3) deployment readiness check
      * Progress bar indeterminee glissant horizontalement
    - Animations CSS dans `index.css` : `ai-progress-slide` + `ai-dot-bounce`.
 
+7. **Extraction IA des lignes detaillees** (`routes/invoice_ai.py` + `pages/InvoicesPage.js`) :
+   - **Backend** : prompt Claude enrichi avec champ `lines: []` retournant
+     {description, amount, suggested_pcmn_account} par ligne detail/poste.
+     Validation post-AI : verifie chaque suggested_pcmn_account existe en base,
+     blank-le sinon. Verifie somme == total_amount (0.01 tolerance), reset
+     les lignes en cas de mismatch.
+   - **Frontend** : si l'IA retourne 2+ lignes, pre-remplit automatiquement
+     `invForm.lines` en mode multi-lignes (le bloc "LIGNES MULTIPLES" s'active
+     tout seul, le mode 1-ligne se grise). Bandeau aiHint affiche
+     "N lignes detectees - mode multi-lignes pre-rempli".
+   - **Test live** : PDF Finlead V-260701 (135 KB) extrait correctement
+     2 lignes : Honoraires syndic 934.29 + Frais admin 135.00 = 1069.29 EUR.
+     Le fournisseur Finlead srl est aussi reconnu via BCE (BE0728990830).
+
 **Tests** :
 - `tests/test_iter82_mutation_split.py` : 3/3 (mutation 3 sections).
 - `tests/test_iter83_invoice_multi_lines.py` : 3/3 (create multi-line, total
