@@ -740,6 +740,7 @@ def create_properties_router(db):
                 current_prorata_details.append({
                     "fund_call_id": c.get("id"),
                     "fund_call_name": c.get("name", ""),
+                    "call_date": c.get("date", ""),  # date originale de l'appel (pour ecriture OD)
                     "period_start": c_start.isoformat(),
                     "period_end": c_end.isoformat(),
                     "lot_amount": amount_lot,
@@ -864,46 +865,102 @@ def create_properties_router(db):
         all_lots = [lot] + children
 
         async def _apply_to_lot(lt: dict) -> dict:
-            """Applique la mutation a un seul lot et retourne le mutation_record."""
+            """Applique la mutation a un seul lot et retourne le mutation_record.
+
+            REGLE FISCALE (iter84) : ecritures eclatees par date d'origine.
+              - Fonds de roulement : 1 ecriture OD datee `sale_date` (mutation du capital).
+              - Prorata appels en cours : 1 ecriture OD par DATE D'APPEL (agregee si
+                plusieurs lignes meme date), pour que les situations de compte
+                refletent le bon timing des budgets.
+            """
             bd = await _compute_mutation_breakdown(lt, old_owner_id, sale_dt)
             r_quota = bd["roulement_quota"]
             c_prorata = bd["current_period_prorata"]
             t_transfer = bd["total_transfer"]
-            entry_id = None
-            if t_transfer > 0.001:
+
+            journal_entry_ids: list = []
+            entries_created: list = []
+
+            def _build_entry(amount: float, entry_date: str, kind: str, label: str, ref_suffix: str) -> dict:
                 lines = [
                     {"account_number": new_acc,
                      "account_name": f"Mutation - {new_owner.get('last_name') or new_owner.get('name')}",
-                     "debit": t_transfer, "credit": 0.0,
+                     "debit": amount, "credit": 0.0,
                      "third_party_id": data.new_owner_id,
                      "third_party_name": new_owner.get("name", "")},
                     {"account_number": old_acc,
                      "account_name": f"Mutation - {old_owner.get('last_name') or old_owner.get('name')}",
-                     "debit": 0.0, "credit": t_transfer,
+                     "debit": 0.0, "credit": amount,
                      "third_party_id": old_owner_id,
                      "third_party_name": old_owner.get("name", "")},
                 ]
-                entry = {
+                return {
                     "id": str(uuid.uuid4()),
                     "journal_type": "OD",
-                    "date": sale_date,
-                    "reference": f"MUT-{lt.get('number','')[:20]}",
+                    "date": entry_date,
+                    "reference": f"MUT-{lt.get('number','')[:18]}-{ref_suffix}",
                     "description": (
-                        f"Mutation lot {lt.get('number','')}: {old_owner.get('name','')} -> {new_owner.get('name','')} "
-                        f"(roulement {r_quota:.2f} EUR + prorata appel en cours {c_prorata:.2f} EUR)"
+                        f"Mutation lot {lt.get('number','')} - {label}: "
+                        f"{old_owner.get('name','')} -> {new_owner.get('name','')} ({amount:.2f} EUR)"
                     ),
                     "lines": lines,
-                    "total_debit": t_transfer,
-                    "total_credit": t_transfer,
+                    "total_debit": amount,
+                    "total_credit": amount,
                     "copropriete_id": copro_id,
                     "auto_generated": False,
                     "manually_edited": True,
                     "source_type": "lot_mutation",
                     "source_id": lt["id"],
+                    "source_subtype": kind,  # fonds_roulement | prorata
                     "created_at": datetime.now(timezone.utc).isoformat(),
                 }
+
+            # 1) Fonds de roulement : datee sale_date (transfert du capital permanent)
+            if r_quota > 0.001:
+                entry = _build_entry(
+                    amount=r_quota,
+                    entry_date=sale_date,
+                    kind="fonds_roulement",
+                    label="Fonds de roulement",
+                    ref_suffix="R",
+                )
                 await db.journal_entries.insert_one(entry)
-                entry_id = entry["id"]
+                journal_entry_ids.append(entry["id"])
+                entries_created.append({
+                    "kind": "fonds_roulement",
+                    "id": entry["id"],
+                    "date": sale_date,
+                    "amount": r_quota,
+                })
+
+            # 2) Prorata appel en cours : 1 ecriture par DATE D'APPEL d'origine
+            #    (agrege les lignes ayant la meme call_date pour limiter le bruit).
+            from collections import defaultdict
+            prorata_by_date: dict = defaultdict(list)
+            for d in (bd.get("current_period_details") or []):
+                cd = d.get("call_date") or sale_date  # fallback si manquant (ancien data)
+                prorata_by_date[cd].append(d)
+            for entry_date, details in prorata_by_date.items():
+                subtotal = round(sum(float(d.get("prorata", 0) or 0) for d in details), 2)
+                if subtotal <= 0.001:
+                    continue
+                call_names = ", ".join(d.get("fund_call_name", "?") for d in details)
+                entry = _build_entry(
+                    amount=subtotal,
+                    entry_date=entry_date,
+                    kind="prorata",
+                    label=f"Prorata appel ({call_names})",
+                    ref_suffix="P",
+                )
+                await db.journal_entries.insert_one(entry)
+                journal_entry_ids.append(entry["id"])
+                entries_created.append({
+                    "kind": "prorata",
+                    "id": entry["id"],
+                    "date": entry_date,
+                    "amount": subtotal,
+                    "fund_call_ids": [d.get("fund_call_id") for d in details],
+                })
 
             mut_rec = {
                 "id": str(uuid.uuid4()),
@@ -923,7 +980,11 @@ def create_properties_router(db):
                 "total_transfer": t_transfer,
                 "sale_price": float(data.sale_price or 0) if lt["id"] == lot_id else 0.0,
                 "note": data.note or "",
-                "journal_entry_id": entry_id,
+                # journal_entry_id (legacy) = premiere ecriture creee (fonds de roulement
+                # si present, sinon premier prorata). journal_entry_ids = liste complete.
+                "journal_entry_id": journal_entry_ids[0] if journal_entry_ids else None,
+                "journal_entry_ids": journal_entry_ids,
+                "entries_created": entries_created,
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "prorata_details": bd["current_period_details"],  # alias legacy
                 # Lien parent : si ce lot fait partie d'une mutation groupee
@@ -994,10 +1055,18 @@ def create_properties_router(db):
             raise HTTPException(400, "Mutation sans old_owner_id - impossible de restaurer")
 
         async def _cancel_single(target_lot_id: str, mutation_record: dict):
-            """Annule une mutation pour un lot : supprime OD + pop l'historique."""
-            entry_id = mutation_record.get("journal_entry_id")
-            if entry_id:
-                await db.journal_entries.delete_one({"id": entry_id})
+            """Annule une mutation pour un lot : supprime TOUTES les ecritures OD
+            (fonds de roulement + prorata) + pop l'historique.
+            Compatible avec ancien format (journal_entry_id seul) et nouveau
+            format (journal_entry_ids liste).
+            """
+            entry_ids = list(mutation_record.get("journal_entry_ids") or [])
+            legacy_id = mutation_record.get("journal_entry_id")
+            if legacy_id and legacy_id not in entry_ids:
+                entry_ids.append(legacy_id)
+            for eid in entry_ids:
+                if eid:
+                    await db.journal_entries.delete_one({"id": eid})
             await db.lots.update_one(
                 {"id": target_lot_id},
                 {"$set": {"owner_id": mutation_record.get("old_owner_id"),

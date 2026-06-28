@@ -149,11 +149,18 @@ async def _run():
         # Persistance via mutate_lot
         result = await mutate_fn(lot_id=lot_id, data=payload)
         mut = result["mutation"]
-        # Verifie l'ecriture comptable OD
-        je = await db.journal_entries.find_one({"id": mut["journal_entry_id"]}, {"_id": 0})
-        assert je is not None
-        assert abs(je["total_debit"] - expected_total) < 0.01
-        # Debit sur TEUWEN (4100002) et Credit sur Matexi (4100001)
+        # Depuis iter84 : ecritures eclatees par date (FR sur sale_date, prorata sur call_date)
+        # On verifie la SOMME des ecritures, pas une entree unique.
+        jes = await db.journal_entries.find(
+            {"source_id": lot_id, "source_type": "lot_mutation"}, {"_id": 0}
+        ).to_list(10)
+        assert jes, "Aucune ecriture de mutation trouvee"
+        sum_debit = sum(j.get("total_debit", 0) for j in jes)
+        assert abs(sum_debit - expected_total) < 0.01, (
+            f"Somme OD attendue {expected_total}, recu {sum_debit}"
+        )
+        # Verifie sens debit/credit sur la premiere ecriture (FR ou prorata)
+        je = jes[0]
         debit_acc = next(l for l in je["lines"] if l["debit"] > 0)["account_number"]
         credit_acc = next(l for l in je["lines"] if l["credit"] > 0)["account_number"]
         assert debit_acc == "4100002", f"Debit attendu sur TEUWEN (4100002), recu {debit_acc}"

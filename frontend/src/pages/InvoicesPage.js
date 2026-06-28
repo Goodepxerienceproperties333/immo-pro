@@ -11,6 +11,7 @@ import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
 import { Plus, Trash2, Key, Receipt, Sparkles, Paperclip, Download, X, Pencil, AlertTriangle, Filter, FolderInput, Eye, Loader2 } from 'lucide-react';
 import AccountSearchSelect from '@/components/AccountSearchSelect';
+import SupplierSearchSelect from '@/components/SupplierSearchSelect';
 import BundleImportDialog from '@/components/BundleImportDialog';
 import { fmtDate } from '@/lib/dateFmt';
 import { useFiscalYearParams } from '@/hooks/useFiscalYearParams';
@@ -21,6 +22,7 @@ export default function InvoicesPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [tab, setTab] = useState('invoices');
   const [invoices, setInvoices] = useState([]);
+  const [suppliers, setSuppliers] = useState([]);
   const [invFilters, setInvFilters] = useState({ startDate: '', endDate: '', supplier: '', reference: '', status: '' });
   const [distKeys, setDistKeys] = useState([]);
   const [accounts, setAccounts] = useState([]);
@@ -44,13 +46,16 @@ export default function InvoicesPage() {
   const fyParams = useFiscalYearParams();
 
   const load = useCallback(async () => {
-    const [inv, dk, acc, lt, cat, ow] = await Promise.all([
+    const copro = localStorage.getItem('copropriete_id') || '';
+    const supplierParams = copro ? { copropriete_id: copro } : {};
+    const [inv, dk, acc, lt, cat, ow, sup] = await Promise.all([
       api.get('/invoices', { params: fyParams }), api.get('/distribution-keys'),
       api.get('/accounting/pcmn', { params: { class_num: 6 } }), api.get('/lots'),
       api.get('/expense-categories'), api.get('/owners'),
+      api.get('/suppliers', { params: supplierParams }),
     ]);
     setInvoices(inv.data); setDistKeys(dk.data); setAccounts(acc.data); setLots(lt.data);
-    setCategories(cat.data); setOwners(ow.data);
+    setCategories(cat.data); setOwners(ow.data); setSuppliers(sup.data);
   }, [fyParams.date_from, fyParams.date_to]);
 
   useEffect(() => { load(); }, [load]);
@@ -544,6 +549,8 @@ export default function InvoicesPage() {
                       const copro = localStorage.getItem('copropriete_id') || '';
                       const { data } = await api.post('/suppliers', { ...suggestCreateSupplier, copropriete_id: copro });
                       toast.success(`Fiche fournisseur creee : ${data.name}`);
+                      // Ajoute le nouveau fournisseur dans la liste locale pour l'autocomplete
+                      setSuppliers(prev => [...prev, data].sort((a, b) => (a.name || '').localeCompare(b.name || '')));
                       setSuggestCreateSupplier(null);
                     } catch (err) { toast.error(err.response?.data?.detail || 'Erreur creation'); }
                   }} data-testid="suggest-supplier-create">Creer la fiche</Button>
@@ -624,7 +631,23 @@ export default function InvoicesPage() {
               <div><label className="form-label">Echeance</label><Input type="date" value={invForm.due_date} onChange={e => setInvForm({...invForm, due_date: e.target.value})} /></div>
             </div>
             <div className="grid grid-cols-2 gap-4">
-              <div><label className="form-label">Fournisseur *</label><Input value={invForm.supplier} onChange={e => setInvForm({...invForm, supplier: e.target.value})} data-testid="inv-supplier" /></div>
+              <div>
+                <label className="form-label">Fournisseur *</label>
+                <SupplierSearchSelect
+                  suppliers={suppliers}
+                  usedNames={[...new Set(invoices.map(i => (i.supplier || '').trim()).filter(Boolean))]}
+                  value={invForm.supplier}
+                  onChange={(name) => setInvForm({ ...invForm, supplier: name })}
+                  onCreateSupplier={async (data) => {
+                    const copro = localStorage.getItem('copropriete_id') || '';
+                    const { data: created } = await api.post('/suppliers', { ...data, copropriete_id: copro });
+                    setSuppliers(prev => [...prev, created].sort((a, b) => (a.name || '').localeCompare(b.name || '')));
+                    toast.success(`Fiche fournisseur creee : ${created.name}`);
+                    return created;
+                  }}
+                  testId="inv-supplier"
+                />
+              </div>
               <div><label className="form-label">Description</label><Input value={invForm.description} onChange={e => setInvForm({...invForm, description: e.target.value})} /></div>
             </div>
             <div className="grid grid-cols-3 gap-4">

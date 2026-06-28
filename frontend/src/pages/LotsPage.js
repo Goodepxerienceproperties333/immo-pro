@@ -518,12 +518,13 @@ function MutationDialog({ lot, owners, ownersRefresh, onClose, onDone }) {
                   ) : (
                     <table className="w-full text-[11px]">
                       <thead className="text-slate-500">
-                        <tr><th className="text-left">Appel</th><th className="text-right">Periode</th><th className="text-right">Mt vendeur</th><th className="text-right">Jours apres</th><th className="text-right">Prorata</th></tr>
+                        <tr><th className="text-left">Appel</th><th className="text-right">Date appel</th><th className="text-right">Periode</th><th className="text-right">Mt vendeur</th><th className="text-right">Jours apres</th><th className="text-right">Prorata</th></tr>
                       </thead>
                       <tbody>
                         {(preview.current_period_details || []).map((d, i) => (
                           <tr key={i} className="border-t border-slate-200">
                             <td className="py-1">{d.fund_call_name}</td>
+                            <td className="text-right font-mono text-slate-500">{d.call_date || '-'}</td>
                             <td className="text-right">{d.period_start} -&gt; {d.period_end}</td>
                             <td className="text-right font-mono">{d.owner_amount.toFixed(2)}</td>
                             <td className="text-right font-mono">{d.days_after}/{d.total_days}</td>
@@ -531,7 +532,7 @@ function MutationDialog({ lot, owners, ownersRefresh, onClose, onDone }) {
                           </tr>
                         ))}
                         <tr className="border-t-2 border-slate-300 bg-white">
-                          <td colSpan="4" className="py-1 text-right font-semibold">Sous-total prorata appel courant</td>
+                          <td colSpan="5" className="py-1 text-right font-semibold">Sous-total prorata appel courant</td>
                           <td className="text-right font-mono font-bold text-[#0055FF]" data-testid="mutation-current-prorata">
                             {preview.current_period_prorata?.toFixed(2)} EUR
                           </td>
@@ -539,6 +540,10 @@ function MutationDialog({ lot, owners, ownersRefresh, onClose, onDone }) {
                       </tbody>
                     </table>
                   )}
+                  <p className="text-[10px] text-slate-500 italic mt-1">
+                    Les ecritures OD de prorata utilisent la <b>date originale de l&apos;appel</b> (et non la date de vente)
+                    pour preserver la coherence des situations de compte.
+                  </p>
                 </div>
 
                 {/* 2b : Appels futurs */}
