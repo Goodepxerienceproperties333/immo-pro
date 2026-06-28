@@ -900,7 +900,16 @@ def create_properties_router(db):
     async def cancel_mutation(lot_id: str, mutation_id: str):
         """Annule la DERNIERE mutation d'un lot : restaure l'ancien proprietaire,
         supprime l'ecriture OD de mutation et retire l'entree d'historique.
-        Refuse si la mutation visee n'est pas la plus recente."""
+
+        Si la mutation etait GROUPEE (parent + enfants), annule aussi
+        automatiquement les mutations synchronisees sur les lots enfants
+        (meme date + meme journal_entry source).
+
+        Refuse :
+        - si la mutation visee n'est pas la plus recente
+        - si on tente d'annuler la mutation depuis un lot enfant (passer par
+          le parent)
+        """
         lot = await db.lots.find_one({"id": lot_id}, {"_id": 0})
         if not lot:
             raise HTTPException(404, "Lot non trouve")
@@ -908,35 +917,78 @@ def create_properties_router(db):
         if not mutations:
             raise HTTPException(400, "Ce lot n'a aucune mutation a annuler")
         last = mutations[-1]
-        # Accept "last" as a shortcut for the most recent mutation, or accept
-        # the id if it matches. Older mutations created before the `id` field
-        # was added won't have one, so we also accept a match-by-position when
-        # the id is missing.
         if mutation_id != "last" and last.get("id") and last.get("id") != mutation_id:
             raise HTTPException(
                 400,
                 "Seule la derniere mutation peut etre annulee (les mutations anterieures sont figees)."
             )
-        # Restore previous owner
+        # Refus annulation depuis enfant : doit passer par le parent
+        if last.get("grouped_parent_lot_id"):
+            parent_id = last["grouped_parent_lot_id"]
+            parent = await db.lots.find_one({"id": parent_id}, {"_id": 0, "number": 1})
+            raise HTTPException(
+                400,
+                f"Ce lot fait partie d'une mutation groupee avec le lot parent {parent.get('number','?') if parent else '?'}. "
+                f"Annulez la mutation depuis le lot parent pour annuler le groupe entier."
+            )
+
         old_owner_id = last.get("old_owner_id")
         if not old_owner_id:
             raise HTTPException(400, "Mutation sans old_owner_id - impossible de restaurer")
-        # Delete OD entry if any
-        entry_id = last.get("journal_entry_id")
-        if entry_id:
-            await db.journal_entries.delete_one({"id": entry_id})
-        # Pop the last mutation + restore owner
-        await db.lots.update_one(
-            {"id": lot_id},
-            {"$set": {"owner_id": old_owner_id, "owner_ids": [old_owner_id]},
-             "$pop": {"mutations": 1}}
-        )
+
+        async def _cancel_single(target_lot_id: str, mutation_record: dict):
+            """Annule une mutation pour un lot : supprime OD + pop l'historique."""
+            entry_id = mutation_record.get("journal_entry_id")
+            if entry_id:
+                await db.journal_entries.delete_one({"id": entry_id})
+            await db.lots.update_one(
+                {"id": target_lot_id},
+                {"$set": {"owner_id": mutation_record.get("old_owner_id"),
+                          "owner_ids": [mutation_record.get("old_owner_id")]},
+                 "$pop": {"mutations": 1}}
+            )
+
+        cancelled = [{"lot_id": lot_id, "lot_number": lot.get("number", ""), "mutation_id": last.get("id")}]
+        # Annule le parent
+        await _cancel_single(lot_id, last)
+
+        # Si c'etait une mutation groupee (parent), annule aussi les enfants
+        # dont la DERNIERE mutation a le meme grouped_parent_lot_id == lot_id
+        # ET la meme date que la mutation parent (securite)
+        if last.get("grouped_mutation"):
+            sale_date = last.get("date")
+            # Cherche tous les lots qui ont actuellement parent_lot_id = lot_id
+            # OR qui avaient une mutation groupee pointant vers ce parent
+            potential_children = await db.lots.find({
+                "$or": [
+                    {"parent_lot_id": lot_id},
+                    {"mutations.grouped_parent_lot_id": lot_id},
+                ]
+            }, {"_id": 0}).to_list(100)
+            for ch in potential_children:
+                if ch["id"] == lot_id:
+                    continue
+                ch_muts = ch.get("mutations") or []
+                if not ch_muts:
+                    continue
+                ch_last = ch_muts[-1]
+                # Match : meme date + meme parent + meme owner d'origine
+                if (ch_last.get("grouped_parent_lot_id") == lot_id and
+                        ch_last.get("date") == sale_date and
+                        ch_last.get("old_owner_id") == old_owner_id):
+                    cancelled.append({"lot_id": ch["id"], "lot_number": ch.get("number", ""), "mutation_id": ch_last.get("id")})
+                    await _cancel_single(ch["id"], ch_last)
+
         updated = await db.lots.find_one({"id": lot_id}, {"_id": 0})
         return {
             "status": "ok",
-            "message": "Mutation annulee, proprietaire precedent restaure",
+            "message": (f"Mutation groupee annulee sur {len(cancelled)} lots, proprietaire precedent restaure"
+                        if len(cancelled) > 1
+                        else "Mutation annulee, proprietaire precedent restaure"),
             "lot": updated,
             "cancelled_mutation": last,
+            "cancelled_count": len(cancelled),
+            "cancelled_lots": cancelled,
         }
 
     @router.post("/lots/{lot_id}/mutate-preview")
