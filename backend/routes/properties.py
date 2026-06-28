@@ -602,8 +602,13 @@ def create_properties_router(db):
         - Fonds de roulement (capital transfer between seller and buyer)
         - Prorata appel en cours (call covering sale_date, only the days_after portion)
         - Appels de provisions futurs (calls with period_start > sale_dt, informational)
+
+        IMPORTANT (iter83 fix) : le prorata + futurs sont calcules sur la quote-part
+        DU LOT muté uniquement (et non sur l'ensemble des lots du vendeur dans
+        l'appel). On filtre la distribution par `lot_id == lot["id"]`.
         """
         copro_id = lot.get("copropriete_id", "")
+        lot_id_this = lot.get("id", "")
 
         # ---- 1) Quote-part fonds de roulement (compte 100) ----
         roul_pipeline = [
@@ -646,21 +651,26 @@ def create_properties_router(db):
             if not c_start or not c_end or c_end < c_start:
                 continue
             dist = c.get("distribution") or []
-            # Pour l'appel en cours : utiliser owner = vendeur (qui a paye)
-            owner_line = next((d for d in dist if d.get("owner_id") == old_owner_id), None)
+            # On filtre par LOT (et non par owner) : la distribution d'un appel
+            # contient 1 ligne par lot. Si le vendeur possede plusieurs lots,
+            # on ne prend QUE la quote-part du lot mute.
+            lot_line = next((d for d in dist if d.get("lot_id") == lot_id_this), None)
+            # Fallback compatibilite : appels anciens sans lot_id, on prend la part owner
+            if not lot_line and not any(d.get("lot_id") for d in dist):
+                lot_line = next((d for d in dist if d.get("owner_id") == old_owner_id), None)
 
             if c_start <= sale_dt <= c_end:
                 # Appel en cours : prorata sur la portion APRES la vente
-                if not owner_line:
+                if not lot_line:
                     continue
-                amount_owner = float(owner_line.get("amount", 0) or 0)
-                if amount_owner <= 0:
+                amount_lot = float(lot_line.get("amount", 0) or 0)
+                if amount_lot <= 0:
                     continue
                 total_days = (c_end - c_start).days + 1
                 days_after = (c_end - sale_dt).days + 1
                 if total_days <= 0:
                     continue
-                prorata = round(amount_owner * (days_after / total_days), 2)
+                prorata = round(amount_lot * (days_after / total_days), 2)
                 if prorata < 0.01:
                     continue
                 current_prorata_total += prorata
@@ -669,19 +679,18 @@ def create_properties_router(db):
                     "fund_call_name": c.get("name", ""),
                     "period_start": c_start.isoformat(),
                     "period_end": c_end.isoformat(),
-                    "owner_amount": amount_owner,
+                    "lot_amount": amount_lot,
+                    "owner_amount": amount_lot,  # alias retro-compat
                     "prorata": prorata,
                     "days_after": days_after,
                     "total_days": total_days,
                 })
             elif c_start > sale_dt:
-                # Appel futur : montant total qui sera appele a l'acquereur
-                # Si owner_line existe pour le vendeur, l'acquereur paiera le meme montant
-                # (le syndic re-affecte le lot apres mutation). On l'utilise comme estimation.
-                if not owner_line:
+                # Appel futur : montant complet du LOT (pour info, factures a l'acquereur)
+                if not lot_line:
                     continue
-                amount_owner = float(owner_line.get("amount", 0) or 0)
-                if amount_owner <= 0:
+                amount_lot = float(lot_line.get("amount", 0) or 0)
+                if amount_lot <= 0:
                     continue
                 future_calls.append({
                     "fund_call_id": c.get("id"),
@@ -690,9 +699,9 @@ def create_properties_router(db):
                     "due_date": c.get("due_date", ""),
                     "period_start": c_start.isoformat(),
                     "period_end": c_end.isoformat(),
-                    "amount": amount_owner,
+                    "amount": amount_lot,
                 })
-                future_calls_total += amount_owner
+                future_calls_total += amount_lot
 
         current_prorata_total = round(current_prorata_total, 2)
         future_calls_total = round(future_calls_total, 2)
