@@ -596,6 +596,75 @@ def create_properties_router(db):
                 pass
         return start_dt, start_dt + timedelta(days=90)
 
+    async def _compute_lot_amount_in_call(call: dict, lot_id_this: str, lot_doc: dict,
+                                          keys_cache: dict, all_lots_cache: dict) -> float:
+        """Calcule la quote-part EXACTE d'un lot dans un appel de fonds.
+
+        Ordre de resolution :
+        1. Si `distribution` contient des entrees avec `lot_id`, sommer celles
+           qui matchent le lot mute (cas explicite, le plus precis).
+        2. Sinon, si l'appel a `lines` (budget lines avec distribution_key_id),
+           recalculer via chaque cle : line.amount * (lot_share / total_shares).
+        3. Sinon (legacy), repartir le montant aggrege par owner aux quotites
+           des lots du proprietaire dans l'ACP.
+        """
+        # Cas 1 : distribution avec lot_id explicite
+        dist = call.get("distribution") or []
+        lot_entries = [d for d in dist if d.get("lot_id") == lot_id_this]
+        if lot_entries:
+            return round(sum(float(d.get("amount", 0) or 0) for d in lot_entries), 2)
+
+        # Cas 2 : pas de lot_id dans distribution mais on a les budget lines
+        lines = call.get("lines") or []
+        if lines:
+            lot_total = 0.0
+            for ln in lines:
+                key_id = ln.get("distribution_key_id", "")
+                line_amt = float(ln.get("amount", 0) or 0)
+                if line_amt <= 0:
+                    continue
+                if key_id:
+                    if key_id not in keys_cache:
+                        keys_cache[key_id] = await db.distribution_keys.find_one({"id": key_id}, {"_id": 0})
+                    key = keys_cache[key_id]
+                    if key and key.get("lots"):
+                        lot_entry = next((kl for kl in key["lots"] if kl["lot_id"] == lot_id_this), None)
+                        if lot_entry:
+                            total_shares = sum(float(kl.get("share", 0) or 0) for kl in key["lots"])
+                            if total_shares > 0:
+                                lot_total += line_amt * (float(lot_entry["share"]) / total_shares)
+                else:
+                    # Pas de cle -> repartition aux quotites globales
+                    lot_quot = float(lot_doc.get("quotity", 0) or 0)
+                    if "all_lots_quotity_total" not in all_lots_cache:
+                        all_lots_cache["all_lots_quotity_total"] = sum(
+                            float(lt.get("quotity", 0) or 0)
+                            for lt in all_lots_cache.get("all_lots", [])
+                        )
+                    total_q = all_lots_cache["all_lots_quotity_total"]
+                    if total_q > 0 and lot_quot > 0:
+                        lot_total += line_amt * (lot_quot / total_q)
+            return round(lot_total, 2)
+
+        # Cas 3 (legacy fallback) : on prend la part owner aggregee du call et on
+        # repartit aux quotites des lots du proprietaire dans l'ACP.
+        owner_id = lot_doc.get("owner_id", "")
+        # Somme TOUS les entries de cet owner (un owner peut avoir N entries)
+        owner_amount = sum(float(d.get("amount", 0) or 0) for d in dist if d.get("owner_id") == owner_id)
+        if owner_amount <= 0:
+            return 0.0
+        # Quotities totales du proprietaire dans cette ACP
+        if "owner_lots_quotity" not in all_lots_cache:
+            all_lots_cache["owner_lots_quotity"] = {}
+        if owner_id not in all_lots_cache["owner_lots_quotity"]:
+            owner_lots = [lt for lt in all_lots_cache.get("all_lots", []) if lt.get("owner_id") == owner_id]
+            all_lots_cache["owner_lots_quotity"][owner_id] = sum(float(lt.get("quotity", 0) or 0) for lt in owner_lots)
+        owner_total_q = all_lots_cache["owner_lots_quotity"][owner_id]
+        lot_quot = float(lot_doc.get("quotity", 0) or 0)
+        if owner_total_q <= 0 or lot_quot <= 0:
+            return 0.0
+        return round(owner_amount * (lot_quot / owner_total_q), 2)
+
     async def _compute_mutation_breakdown(lot: dict, old_owner_id: str, sale_dt) -> dict:
         """Compute the full mutation breakdown WITHOUT persisting anything.
         Returns a dict with three explicit sections:
@@ -621,7 +690,7 @@ def create_properties_router(db):
         ]
         agg = await db.journal_entries.aggregate(roul_pipeline).to_list(1)
         fonds_roul_total = round((agg[0]["credit"] - agg[0]["debit"]) if agg else 0.0, 2)
-        all_lots = await db.lots.find({"copropriete_id": copro_id}, {"_id": 0, "quotity": 1}).to_list(10000)
+        all_lots = await db.lots.find({"copropriete_id": copro_id}, {"_id": 0, "quotity": 1, "id": 1, "owner_id": 1}).to_list(10000)
         total_quotity = round(sum(float(lt.get("quotity", 0) or 0) for lt in all_lots), 6)
         lot_quotity = float(lot.get("quotity", 0) or 0)
         if total_quotity > 0 and lot_quotity > 0 and fonds_roul_total > 0:
@@ -640,6 +709,10 @@ def create_properties_router(db):
         ).sort("date", 1).to_list(10000)
         calls = [c for c in calls if (c.get("call_type") or "provisions") == "provisions"]
 
+        # Caches pour eviter de recharger les cles a chaque iteration
+        keys_cache: dict = {}
+        all_lots_cache: dict = {"all_lots": all_lots}
+
         # ---- 2) Prorata sur l'appel en cours (couvrant sale_date) ----
         # ---- 3) Appels de provisions futurs (period_start > sale_dt) ----
         current_prorata_total = 0.0
@@ -650,22 +723,12 @@ def create_properties_router(db):
             c_start, c_end = await _resolve_call_period(c, fy_by_id)
             if not c_start or not c_end or c_end < c_start:
                 continue
-            dist = c.get("distribution") or []
-            # On filtre par LOT (et non par owner) : la distribution d'un appel
-            # contient 1 ligne par lot. Si le vendeur possede plusieurs lots,
-            # on ne prend QUE la quote-part du lot mute.
-            lot_line = next((d for d in dist if d.get("lot_id") == lot_id_this), None)
-            # Fallback compatibilite : appels anciens sans lot_id, on prend la part owner
-            if not lot_line and not any(d.get("lot_id") for d in dist):
-                lot_line = next((d for d in dist if d.get("owner_id") == old_owner_id), None)
+            # CORRECT : calcul de la quote-part DU LOT mute en re-resolvant via cle
+            amount_lot = await _compute_lot_amount_in_call(c, lot_id_this, lot, keys_cache, all_lots_cache)
+            if amount_lot <= 0.001:
+                continue
 
             if c_start <= sale_dt <= c_end:
-                # Appel en cours : prorata sur la portion APRES la vente
-                if not lot_line:
-                    continue
-                amount_lot = float(lot_line.get("amount", 0) or 0)
-                if amount_lot <= 0:
-                    continue
                 total_days = (c_end - c_start).days + 1
                 days_after = (c_end - sale_dt).days + 1
                 if total_days <= 0:
@@ -686,12 +749,6 @@ def create_properties_router(db):
                     "total_days": total_days,
                 })
             elif c_start > sale_dt:
-                # Appel futur : montant complet du LOT (pour info, factures a l'acquereur)
-                if not lot_line:
-                    continue
-                amount_lot = float(lot_line.get("amount", 0) or 0)
-                if amount_lot <= 0:
-                    continue
                 future_calls.append({
                     "fund_call_id": c.get("id"),
                     "fund_call_name": c.get("name", ""),

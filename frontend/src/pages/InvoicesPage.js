@@ -115,8 +115,14 @@ export default function InvoicesPage() {
       if (copro) fd.append('copropriete_id', copro);
       const { data } = await api.post('/invoices-ai/extract', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       const ext = data.extracted || {};
-      if (!ext || Object.keys(ext).length === 0) {
-        setAiHint('Aucune donnee extraite, completez manuellement.');
+      // Si le backend retourne un warning explicite (PDF illisible, pas de cle LLM, etc.)
+      if (ext._warning) {
+        setAiHint(ext._warning);
+        toast.warning(ext._warning, { duration: 8000 });
+      } else if (!ext.number && !ext.supplier_name && !ext.total_amount) {
+        // Aucun champ utile rempli : afficher un warning au lieu d'un faux success
+        setAiHint('IA n\'a pas pu extraire de donnees utiles - completez manuellement.');
+        toast.warning('Aucune donnee extraite, completez manuellement', { duration: 5000 });
       } else {
         setInvForm(f => {
           // Si l'IA a detecte 2+ lignes, on pre-remplit le mode multi-lignes

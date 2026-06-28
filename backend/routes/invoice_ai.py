@@ -25,17 +25,24 @@ async def _extract_pdf_text(file_path: str, max_chars: int = 8000) -> str:
 
 
 async def _extract_invoice_with_ai(file_path: str, mime_type: str, known_pcmn: list) -> dict:
-    """Use Claude Sonnet 4.5 to extract invoice metadata from PDF."""
+    """Use Claude Sonnet 4.5 to extract invoice metadata from PDF.
+    - Tries text extraction first (fast).
+    - Falls back to Claude vision (PDF binary) if text empty (scan-image PDFs).
+    Returns:
+    - dict with extracted fields on success
+    - dict with `_warning` key when extraction failed
+    """
     if mime_type != "application/pdf":
-        return {}
+        return {"_warning": "Format non supporte (PDF uniquement pour l'extraction IA)"}
+
     text = await _extract_pdf_text(file_path)
-    if not text:
-        return {}
+    use_vision = not text  # scan-image PDF without OCR layer
+
     try:
-        from emergentintegrations.llm.chat import LlmChat, UserMessage
+        from emergentintegrations.llm.chat import LlmChat, UserMessage, FileContent
         api_key = os.environ.get("EMERGENT_LLM_KEY")
         if not api_key:
-            return {}
+            return {"_warning": "Cle LLM Emergent non configuree, extraction IA indisponible"}
         pcmn_hint = "\n".join(f"  {p['number']} - {p['name']}" for p in known_pcmn[:60])
         chat = LlmChat(
             api_key=api_key,
@@ -79,7 +86,26 @@ async def _extract_invoice_with_ai(file_path: str, mime_type: str, known_pcmn: l
             ),
         ).with_model("anthropic", "claude-sonnet-4-5-20250929")
 
-        msg = UserMessage(text=f"Extract metadata from this Belgian supplier invoice:\n\n{text}")
+        if use_vision:
+            # Send the PDF as a file attachment (Claude vision parses scan-image PDFs)
+            import base64
+            with open(file_path, "rb") as fpdf:
+                pdf_b64 = base64.b64encode(fpdf.read()).decode("ascii")
+            file_content = FileContent(
+                content_type="application/pdf",
+                file_content_base64=pdf_b64,
+            )
+            msg = UserMessage(
+                text=(
+                    "Extract metadata from this Belgian supplier invoice (PDF is a "
+                    "scanned image, please OCR it visually). Output the strict JSON "
+                    "schema described in the system message."
+                ),
+                file_contents=[file_content],
+            )
+        else:
+            msg = UserMessage(text=f"Extract metadata from this Belgian supplier invoice:\n\n{text}")
+
         response = await chat.send_message(msg)
         txt = response.strip()
         if txt.startswith("```"):
@@ -90,7 +116,7 @@ async def _extract_invoice_with_ai(file_path: str, mime_type: str, known_pcmn: l
         return json.loads(txt)
     except Exception as e:
         print(f"[AI invoice extract skipped]: {e}")
-        return {}
+        return {"_warning": f"Echec extraction IA : {str(e)[:200]}"}
 
 
 def create_invoice_ai_router(db):
