@@ -11,7 +11,79 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 ## Implemented
-### Iter81 (Feb 2026) - Anti-doublon proprietaires + Cleanup test users + Verrouillage dialogs
+### Iter83 (Feb 2026) - Mutation lot decomposee + Apercu facture + CORS deployment fix
+
+**Demande user** : (1) "lors d'une mutation de lot, separer explicitement le
+transfert du fonds de roulement et les proratas des appels de provisions
+futurs a prevoir selon la periodicite du budget" (2) "permettre d'avoir un
+apercu de la facture lors de la redaction d'une facture, genre un oeil qui
+permet de voir la facture" (3) deployment readiness check
+
+**Implementation** :
+
+1. **Decompte de mutation en 3 sections** (`routes/properties.py`) :
+   - Refactor : nouvelle fonction `_compute_mutation_breakdown(lot, old_owner_id, sale_dt)`
+     partagee entre `mutate_lot` et `mutate_lot_preview` (DRY).
+   - Helper `_resolve_call_period(call, fy_by_id)` extrait pour calculer la
+     periode couverte d'un appel (period_start/period_end stockes > deduction
+     X/N + fy > fallback 90j).
+   - 3 blocs distincts dans le payload :
+     * **Fonds de roulement** : quote-part sur `lot_quotity / total_quotity`,
+       JAMAIS au prorata temporel (capital permanent).
+     * **Prorata appel en cours** (`current_period_prorata`) : portion APRES
+       sale_date des appels chevauchant sale_dt, transferee vendeur->acquereur.
+     * **Appels futurs** (`future_calls`, `future_calls_total`) : liste
+       informationnelle des appels dont period_start > sale_dt (l'acquereur
+       les paiera normalement apres reaffectation du lot). NON inclus dans l'OD.
+   - Detection automatique de la frequence (`budget_frequency`,
+     `budget_frequency_label`) depuis le pattern X/N des noms d'appels.
+   - L'ecriture OD ne contient QUE `roulement_quota + current_period_prorata`
+     (les futurs sont info-only).
+   - Alias retrocompatibles : `prorata_provisions`, `prorata_details` (anciens
+     noms preservés pour ne pas casser les historiques de mutations passees).
+
+2. **Frontend mutation (`LotsPage.js`)** :
+   - 3 blocs visuels distincts dans le dialogue :
+     * Bloc 1 (vert) : "Transfert du fonds de roulement" avec quote-part.
+     * Bloc 2 (bleu) : "Appels de provisions a prevoir" avec sous-bloc 2a
+       (prorata appel courant) + 2b (table des appels futurs).
+     * Bloc Synthese : recap de l'ecriture OD (roulement + prorata courant).
+   - Historique des mutations : affiche aussi les appels futurs et
+     budget_frequency_label si disponibles.
+
+3. **Apercu facture pendant rédaction** (`pages/InvoicesPage.js`) :
+   - Icone Eye (lucide-react) ajoutee a cote du bandeau "PDF a attacher"
+     (PDF en attente d'attachement). Clic genere une URL blob locale et
+     ouvre le viewer plein ecran (iframe).
+   - Nouveau bloc "Pieces jointes (N)" en mode edition, avec une icone Eye
+     par fichier qui ouvre le viewer (URL inline du backend).
+   - Cleanup memoire : `URL.revokeObjectURL` appele a la fermeture du viewer
+     pour eviter les fuites sur les blob URLs.
+   - Bouton Telecharger du viewer adapte : `download=filename` pour les blobs,
+     URL avec `disposition=attachment` pour les pieces jointes serveur.
+
+4. **CORS deployment fix** (`server.py`) :
+   - Bug : code lisait FRONTEND_URL mais ignorait CORS_ORIGINS env var.
+   - Fix : `_build_cors_origins()` lit CORS_ORIGINS (comma-separated, ignore "*"),
+     toujours fusionne FRONTEND_URL pour preview+prod. `allow_credentials=True`
+     conserve pour l'auth cookie JWT.
+   - Login + cookies verifies : 200 OK avec set-cookie access_token+refresh_token.
+
+**Tests** :
+- `tests/test_iter82_mutation_split.py` : 3 tests E2E (breakdown 3 sections,
+  no future_calls quand vente apres Q4, only future_calls quand vente avant Q1).
+- `tests/test_iter76_mutation_prorata.py` : 6 tests anciens passent toujours
+  (alias retrocompatibles fonctionnent).
+- Tous tests mutation : 9/9 passent.
+
+**Smoke test screenshots** :
+- Dialogue facture avec PDF charge -> Eye + X visibles a droite du bandeau.
+- Clic Eye -> viewer plein ecran ouvre avec iframe du PDF + bouton Telecharger.
+
+**Deployment check** : FAIL -> WARN. Seuls les warnings de query optimization
+restent (preexistants, non-bloquants). CORS pass.
+
+
 
 **Demande user** : (1) "il n'est pas autorise de creer de doublons aussi bien
 proprietaires que fournisseurs, en cas de doublons il faut garder l'original
