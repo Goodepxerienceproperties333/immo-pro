@@ -64,3 +64,30 @@ code {
         display: contents !important;
     }
 }
+
+/* ===== Invoice AI extraction loader ===== */
+@keyframes ai-progress-slide {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(400%); }
+}
+
+.ai-progress-bar {
+    animation: ai-progress-slide 1.4s ease-in-out infinite;
+}
+
+@keyframes ai-dot-bounce {
+    0%, 80%, 100% { opacity: 0.25; transform: translateY(0); }
+    40% { opacity: 1; transform: translateY(-3px); }
+}
+
+.ai-dot {
+    display: inline-block;
+    font-weight: 900;
+    color: rgb(168 85 247); /* purple-500 */
+    animation: ai-dot-bounce 1.2s ease-in-out infinite;
+}
+
+.ai-dot-1 { animation-delay: 0s; }
+.ai-dot-2 { animation-delay: 0.18s; }
+.ai-dot-3 { animation-delay: 0.36s; }
+

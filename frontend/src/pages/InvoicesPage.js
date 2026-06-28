@@ -9,7 +9,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { Plus, Trash2, Key, Receipt, Sparkles, Paperclip, Download, X, Pencil, AlertTriangle, Filter, FolderInput, Eye } from 'lucide-react';
+import { Plus, Trash2, Key, Receipt, Sparkles, Paperclip, Download, X, Pencil, AlertTriangle, Filter, FolderInput, Eye, Loader2 } from 'lucide-react';
 import AccountSearchSelect from '@/components/AccountSearchSelect';
 import BundleImportDialog from '@/components/BundleImportDialog';
 import { fmtDate } from '@/lib/dateFmt';
@@ -269,7 +269,11 @@ export default function InvoicesPage() {
             <label className="inline-flex">
               <Button type="button" variant="outline" className="border-purple-300 text-purple-700 hover:bg-purple-50" data-testid="ai-extract-btn"
                 onClick={() => document.getElementById('ai-pdf-input').click()} disabled={aiExtracting}>
-                <Sparkles size={16} className="mr-2" /> {aiExtracting ? 'Extraction IA...' : 'Importer facture PDF (IA)'}
+                {aiExtracting ? (
+                  <><Loader2 size={16} className="mr-2 animate-spin" /> Extraction IA...</>
+                ) : (
+                  <><Sparkles size={16} className="mr-2" /> Importer facture PDF (IA)</>
+                )}
               </Button>
               <input id="ai-pdf-input" type="file" accept="application/pdf" className="hidden" onChange={(e) => {
                 const f = e.target.files?.[0]; if (!f) return;
@@ -433,6 +437,37 @@ export default function InvoicesPage() {
         <DialogContent className="max-w-5xl w-[95vw] max-h-[92vh] overflow-y-auto" data-testid="invoice-dialog">
           <DialogHeader><DialogTitle style={{fontFamily:'Chivo,sans-serif'}}>{editingInvoice ? 'Modifier la facture' : 'Nouvelle facture'}</DialogTitle></DialogHeader>
           <div className="space-y-4 mt-2">
+            {/* Loading banner during AI extraction */}
+            {aiExtracting && (
+              <div
+                className="relative overflow-hidden rounded-md border border-purple-300 bg-gradient-to-r from-purple-50 via-fuchsia-50 to-purple-50 px-4 py-3"
+                data-testid="ai-extracting-banner"
+              >
+                {/* Animated progress bar (indeterminate) */}
+                <div className="absolute top-0 left-0 h-0.5 w-full bg-purple-100 overflow-hidden">
+                  <div className="h-full w-1/3 bg-gradient-to-r from-purple-400 via-fuchsia-500 to-purple-400 ai-progress-bar" />
+                </div>
+                <div className="flex items-center gap-3">
+                  <div className="relative flex items-center justify-center w-9 h-9 rounded-full bg-purple-100">
+                    <Loader2 size={20} className="text-purple-700 animate-spin" />
+                    <Sparkles size={10} className="absolute top-1.5 right-1.5 text-fuchsia-500 animate-pulse" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-semibold text-purple-900 flex items-center gap-2">
+                      Analyse de la facture par IA
+                      <span className="inline-flex gap-1">
+                        <span className="ai-dot ai-dot-1">.</span>
+                        <span className="ai-dot ai-dot-2">.</span>
+                        <span className="ai-dot ai-dot-3">.</span>
+                      </span>
+                    </div>
+                    <div className="text-[11px] text-purple-700 mt-0.5">
+                      Lecture du PDF, extraction du numero, fournisseur, montants et detection du compte PCMN...
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
             {aiHint && (
               <div className="text-xs px-3 py-2 rounded bg-purple-50 border border-purple-200 text-purple-800" data-testid="ai-hint">
                 <Sparkles size={12} className="inline mr-1" /> {aiHint}
