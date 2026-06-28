@@ -480,6 +480,201 @@ def create_properties_router(db):
         sale_price: Optional[float] = 0.0
         note: Optional[str] = ""
 
+    async def _resolve_call_period(call: dict, fy_by_id: dict) -> tuple:
+        """Retourne (period_start_date, period_end_date) pour un appel.
+        Priorite : period_start/period_end stockes > deduction depuis nom + fy
+        > [date, date+90j] fallback."""
+        ps = call.get("period_start")
+        pe = call.get("period_end")
+        if ps and pe:
+            try:
+                return (datetime.strptime(ps, "%Y-%m-%d").date(),
+                        datetime.strptime(pe, "%Y-%m-%d").date())
+            except Exception:
+                pass
+        import re as _re
+        try:
+            start_dt = datetime.strptime(call.get("date", ""), "%Y-%m-%d").date()
+        except Exception:
+            return None, None
+        m = _re.search(r"(\d+)\s*/\s*(\d+)", call.get("name", "") or "")
+        if m:
+            try:
+                n_calls = int(m.group(2))
+                if n_calls in (1, 2, 3, 4, 6, 12) and n_calls > 0:
+                    interval = 12 // n_calls
+                    fy = fy_by_id.get(call.get("fiscal_year_id", ""))
+                    try:
+                        year = start_dt.year
+                        month = start_dt.month + interval
+                        while month > 12:
+                            month -= 12
+                            year += 1
+                        try:
+                            next_start = start_dt.replace(year=year, month=month)
+                        except ValueError:
+                            from calendar import monthrange
+                            last_day = monthrange(year, month)[1]
+                            next_start = start_dt.replace(year=year, month=month, day=min(start_dt.day, last_day))
+                        end_dt = next_start - timedelta(days=1)
+                        if fy:
+                            try:
+                                fy_end_dt = datetime.strptime(fy["end_date"], "%Y-%m-%d").date()
+                                if end_dt > fy_end_dt:
+                                    end_dt = fy_end_dt
+                            except Exception:
+                                pass
+                        return start_dt, end_dt
+                    except Exception:
+                        pass
+            except (ValueError, ZeroDivisionError):
+                pass
+        return start_dt, start_dt + timedelta(days=90)
+
+    async def _compute_mutation_breakdown(lot: dict, old_owner_id: str, sale_dt) -> dict:
+        """Compute the full mutation breakdown WITHOUT persisting anything.
+        Returns a dict with three explicit sections:
+        - Fonds de roulement (capital transfer between seller and buyer)
+        - Prorata appel en cours (call covering sale_date, only the days_after portion)
+        - Appels de provisions futurs (calls with period_start > sale_dt, informational)
+        """
+        copro_id = lot.get("copropriete_id", "")
+
+        # ---- 1) Quote-part fonds de roulement (compte 100) ----
+        roul_pipeline = [
+            {"$match": {"copropriete_id": copro_id}},
+            {"$unwind": "$lines"},
+            {"$match": {"lines.account_number": "100"}},
+            {"$group": {"_id": None,
+                        "credit": {"$sum": "$lines.credit"},
+                        "debit": {"$sum": "$lines.debit"}}},
+        ]
+        agg = await db.journal_entries.aggregate(roul_pipeline).to_list(1)
+        fonds_roul_total = round((agg[0]["credit"] - agg[0]["debit"]) if agg else 0.0, 2)
+        all_lots = await db.lots.find({"copropriete_id": copro_id}, {"_id": 0, "quotity": 1}).to_list(10000)
+        total_quotity = round(sum(float(lt.get("quotity", 0) or 0) for lt in all_lots), 6)
+        lot_quotity = float(lot.get("quotity", 0) or 0)
+        if total_quotity > 0 and lot_quotity > 0 and fonds_roul_total > 0:
+            roulement_quota = round(fonds_roul_total * (lot_quotity / total_quotity), 2)
+        else:
+            roulement_quota = 0.0
+
+        # Pre-fetch fiscal years for period resolution
+        fy_by_id: dict = {}
+        async for _fy in db.fiscal_years.find({"copropriete_id": copro_id}, {"_id": 0}):
+            fy_by_id[_fy["id"]] = _fy
+
+        # All provisions calls for this ACP
+        calls = await db.fund_calls.find(
+            {"copropriete_id": copro_id}, {"_id": 0}
+        ).sort("date", 1).to_list(10000)
+        calls = [c for c in calls if (c.get("call_type") or "provisions") == "provisions"]
+
+        # ---- 2) Prorata sur l'appel en cours (couvrant sale_date) ----
+        # ---- 3) Appels de provisions futurs (period_start > sale_dt) ----
+        current_prorata_total = 0.0
+        current_prorata_details = []
+        future_calls = []
+        future_calls_total = 0.0
+        for c in calls:
+            c_start, c_end = await _resolve_call_period(c, fy_by_id)
+            if not c_start or not c_end or c_end < c_start:
+                continue
+            dist = c.get("distribution") or []
+            # Pour l'appel en cours : utiliser owner = vendeur (qui a paye)
+            owner_line = next((d for d in dist if d.get("owner_id") == old_owner_id), None)
+
+            if c_start <= sale_dt <= c_end:
+                # Appel en cours : prorata sur la portion APRES la vente
+                if not owner_line:
+                    continue
+                amount_owner = float(owner_line.get("amount", 0) or 0)
+                if amount_owner <= 0:
+                    continue
+                total_days = (c_end - c_start).days + 1
+                days_after = (c_end - sale_dt).days + 1
+                if total_days <= 0:
+                    continue
+                prorata = round(amount_owner * (days_after / total_days), 2)
+                if prorata < 0.01:
+                    continue
+                current_prorata_total += prorata
+                current_prorata_details.append({
+                    "fund_call_id": c.get("id"),
+                    "fund_call_name": c.get("name", ""),
+                    "period_start": c_start.isoformat(),
+                    "period_end": c_end.isoformat(),
+                    "owner_amount": amount_owner,
+                    "prorata": prorata,
+                    "days_after": days_after,
+                    "total_days": total_days,
+                })
+            elif c_start > sale_dt:
+                # Appel futur : montant total qui sera appele a l'acquereur
+                # Si owner_line existe pour le vendeur, l'acquereur paiera le meme montant
+                # (le syndic re-affecte le lot apres mutation). On l'utilise comme estimation.
+                if not owner_line:
+                    continue
+                amount_owner = float(owner_line.get("amount", 0) or 0)
+                if amount_owner <= 0:
+                    continue
+                future_calls.append({
+                    "fund_call_id": c.get("id"),
+                    "fund_call_name": c.get("name", ""),
+                    "date": c.get("date", ""),
+                    "due_date": c.get("due_date", ""),
+                    "period_start": c_start.isoformat(),
+                    "period_end": c_end.isoformat(),
+                    "amount": amount_owner,
+                })
+                future_calls_total += amount_owner
+
+        current_prorata_total = round(current_prorata_total, 2)
+        future_calls_total = round(future_calls_total, 2)
+
+        # Detect budget frequency for display (use the first future or current call)
+        budget_frequency = None
+        budget_frequency_label = ""
+        import re as _re
+        for c in calls:
+            m = _re.search(r"(\d+)\s*/\s*(\d+)", c.get("name", "") or "")
+            if m:
+                try:
+                    n = int(m.group(2))
+                    if n in (1, 2, 3, 4, 6, 12):
+                        budget_frequency = n
+                        budget_frequency_label = {
+                            1: "Annuel", 2: "Semestriel", 3: "Quadrimestriel",
+                            4: "Trimestriel", 6: "Bi-mensuel", 12: "Mensuel",
+                        }[n]
+                        break
+                except ValueError:
+                    pass
+
+        total_transfer = round(roulement_quota + current_prorata_total, 2)
+
+        return {
+            # Section 1 : Fonds de roulement
+            "fonds_roulement_total": fonds_roul_total,
+            "lot_quotity": lot_quotity,
+            "total_quotity": total_quotity,
+            "roulement_quota": roulement_quota,
+            # Section 2 : Prorata appel en cours (portion apres vente, transferee
+            # de l'acquereur vers le vendeur via OD)
+            "current_period_prorata": current_prorata_total,
+            "current_period_details": current_prorata_details,
+            # Alias retrocompatibles (anciens noms utilises par le frontend)
+            "prorata_provisions": current_prorata_total,
+            "prorata_details": current_prorata_details,
+            # Section 3 : Appels de provisions futurs a prevoir (informatif)
+            "future_calls": future_calls,
+            "future_calls_total": future_calls_total,
+            "budget_frequency": budget_frequency,
+            "budget_frequency_label": budget_frequency_label,
+            # Total ECRITURE OD (roulement + prorata appel en cours uniquement)
+            "total_transfer": total_transfer,
+        }
+
     @router.post("/lots/{lot_id}/mutate")
     async def mutate_lot(lot_id: str, data: LotMutationInput):
         """Mutation d'un lot (vente entre proprietaires). Calcule et passe l'OD
@@ -487,9 +682,13 @@ def create_properties_router(db):
         - Fonds de roulement : transfert de la quote-part du lot du vendeur vers l'acquereur
           (calculee sur les quotities du lot vs total des quotities de l'ACP, sur le solde
           actuel du compte 100).
-        - Provisions pour charges : prorata sur les appels deja emis dont la periode
-          chevauche sale_date. La part posterieure a sale_date est creditee au vendeur
-          et debitee a l'acquereur.
+        - Prorata appel en cours : portion posterieure a sale_date des appels deja emis
+          dont la periode chevauche sale_date. Cette portion est creditee au vendeur
+          (il l'a deja payee mais ne consommera pas) et debitee a l'acquereur (qui en
+          beneficiera).
+        - Appels de provisions futurs : pour information uniquement, liste les appels
+          dont la periode commence APRES sale_date. Ces appels seront emis normalement
+          a l'acquereur (re-affectation du lot post-mutation).
         Met a jour lot.owner_id = new_owner_id et conserve l'historique dans lot.mutations[].
         """
         lot = await db.lots.find_one({"id": lot_id}, {"_id": 0})
@@ -519,146 +718,18 @@ def create_properties_router(db):
         if not old_acc or not new_acc:
             raise HTTPException(500, "Impossible de resoudre les comptes tiers")
 
-        # ---- 1) Quote-part fonds de roulement (compte 100) ----
-        # Solde actuel du compte 100 cote credit (passif) pour cette ACP
-        roul_pipeline = [
-            {"$match": {"copropriete_id": copro_id}},
-            {"$unwind": "$lines"},
-            {"$match": {"lines.account_number": "100"}},
-            {"$group": {"_id": None,
-                        "credit": {"$sum": "$lines.credit"},
-                        "debit": {"$sum": "$lines.debit"}}},
-        ]
-        agg = await db.journal_entries.aggregate(roul_pipeline).to_list(1)
-        fonds_roul_total = round((agg[0]["credit"] - agg[0]["debit"]) if agg else 0.0, 2)
-        # Quotites totales de l'ACP
-        all_lots = await db.lots.find({"copropriete_id": copro_id}, {"_id": 0, "quotity": 1}).to_list(10000)
-        total_quotity = round(sum(float(l.get("quotity", 0) or 0) for l in all_lots), 6)
-        lot_quotity = float(lot.get("quotity", 0) or 0)
-        if total_quotity > 0 and lot_quotity > 0 and fonds_roul_total > 0:
-            roulement_quota = round(fonds_roul_total * (lot_quotity / total_quotity), 2)
-        else:
-            roulement_quota = 0.0
-
-        # ---- 2) Prorata provisions sur appels emis chevauchant sale_date ----
-        # On utilise period_start / period_end (periode effective COUVERTE par l'appel)
-        # si presents. Sinon fallback intelligent : deduit la periode depuis le nom
-        # "X/N" et l'exercice fiscal, OU [date, date + 90j] en dernier recours.
-        sale_date = data.sale_date
         try:
-            sale_dt = datetime.strptime(sale_date, "%Y-%m-%d").date()
+            sale_dt = datetime.strptime(data.sale_date, "%Y-%m-%d").date()
         except Exception:
             raise HTTPException(400, "sale_date doit etre au format YYYY-MM-DD")
 
-        # Pre-fetch des exercices fiscaux pour le fallback
-        fy_by_id: dict = {}
-        async for _fy in db.fiscal_years.find({"copropriete_id": copro_id}, {"_id": 0}):
-            fy_by_id[_fy["id"]] = _fy
+        breakdown = await _compute_mutation_breakdown(lot, old_owner_id, sale_dt)
+        roulement_quota = breakdown["roulement_quota"]
+        current_prorata = breakdown["current_period_prorata"]
+        total_transfer = breakdown["total_transfer"]
+        sale_date = data.sale_date
 
-        def _resolve_period(call: dict) -> tuple:
-            """Retourne (period_start_date, period_end_date) pour un appel.
-            Priorite : period_start/period_end stockes > deduction depuis nom + fy
-            > [date, date+90j] fallback."""
-            # 1) Champs explicites (appels generes apres iter76)
-            ps = call.get("period_start")
-            pe = call.get("period_end")
-            if ps and pe:
-                try:
-                    return (datetime.strptime(ps, "%Y-%m-%d").date(),
-                            datetime.strptime(pe, "%Y-%m-%d").date())
-                except Exception:
-                    pass
-            # 2) Deduction depuis "X/N" dans le nom + fiscal year
-            import re as _re
-            try:
-                start_dt = datetime.strptime(call.get("date", ""), "%Y-%m-%d").date()
-            except Exception:
-                return None, None
-            m = _re.search(r"(\d+)\s*/\s*(\d+)", call.get("name", "") or "")
-            if m:
-                try:
-                    n_calls = int(m.group(2))
-                    if n_calls in (1, 2, 3, 4, 6, 12) and n_calls > 0:
-                        interval = 12 // n_calls
-                        fy = fy_by_id.get(call.get("fiscal_year_id", ""))
-                        # period_end = start_dt + interval mois - 1 jour
-                        # (en respectant fin d'exercice si dispo)
-                        try:
-                            year = start_dt.year
-                            month = start_dt.month + interval
-                            while month > 12:
-                                month -= 12
-                                year += 1
-                            try:
-                                next_start = start_dt.replace(year=year, month=month)
-                            except ValueError:
-                                # Cas 31 janvier + 1 mois -> 28/29 fevrier
-                                from calendar import monthrange
-                                last_day = monthrange(year, month)[1]
-                                next_start = start_dt.replace(year=year, month=month, day=min(start_dt.day, last_day))
-                            end_dt = next_start - timedelta(days=1)
-                            # Borne haut fin d'exercice
-                            if fy:
-                                try:
-                                    fy_end_dt = datetime.strptime(fy["end_date"], "%Y-%m-%d").date()
-                                    if end_dt > fy_end_dt:
-                                        end_dt = fy_end_dt
-                                except Exception:
-                                    pass
-                            return start_dt, end_dt
-                        except Exception:
-                            pass
-                except (ValueError, ZeroDivisionError):
-                    pass
-            # 3) Fallback : 90 jours
-            return start_dt, start_dt + timedelta(days=90)
-
-        # On considere les fund_calls de type 'provisions' (pas reserve/roulement)
-        # dont la periode COUVERTE chevauche sale_date
-        calls = await db.fund_calls.find(
-            {"copropriete_id": copro_id}, {"_id": 0}
-        ).sort("date", 1).to_list(10000)
-        calls = [c for c in calls if (c.get("call_type") or "provisions") == "provisions"]
-
-        prorata_total = 0.0
-        prorata_details = []
-        for c in calls:
-            c_start, c_end = _resolve_period(c)
-            if not c_start or not c_end or c_end < c_start:
-                continue
-            if not (c_start <= sale_dt <= c_end):
-                continue
-            # Montant appele pour le vendeur sur ce call
-            dist = c.get("distribution") or []
-            owner_line = next((d for d in dist if d.get("owner_id") == old_owner_id), None)
-            if not owner_line:
-                continue
-            amount_owner = float(owner_line.get("amount", 0) or 0)
-            if amount_owner <= 0:
-                continue
-            # Prorata: portion APRES sale_date (jour de la vente inclus pour l'acquereur)
-            total_days = (c_end - c_start).days + 1
-            days_after = (c_end - sale_dt).days + 1
-            if total_days <= 0:
-                continue
-            prorata = round(amount_owner * (days_after / total_days), 2)
-            if prorata < 0.01:
-                continue
-            prorata_total += prorata
-            prorata_details.append({
-                "fund_call_id": c.get("id"),
-                "fund_call_name": c.get("name", ""),
-                "period_start": c_start.isoformat(),
-                "period_end": c_end.isoformat(),
-                "owner_amount": amount_owner,
-                "prorata": prorata,
-                "days_after": days_after,
-                "total_days": total_days,
-            })
-        prorata_total = round(prorata_total, 2)
-
-        # ---- 3) Generation de l'ecriture OD ----
-        total_transfer = round(roulement_quota + prorata_total, 2)
+        # ---- Generation de l'ecriture OD (uniquement roulement + prorata appel courant) ----
         entry_id = None
         if total_transfer > 0.001:
             lines = [
@@ -684,7 +755,7 @@ def create_properties_router(db):
                 "reference": f"MUT-{lot.get('number','')[:20]}",
                 "description": (
                     f"Mutation lot {lot.get('number','')}: {old_owner.get('name','')} -> {new_owner.get('name','')} "
-                    f"(roulement {roulement_quota:.2f} EUR + prorata provisions {prorata_total:.2f} EUR)"
+                    f"(roulement {roulement_quota:.2f} EUR + prorata appel en cours {current_prorata:.2f} EUR)"
                 ),
                 "lines": lines,
                 "total_debit": total_transfer,
@@ -699,7 +770,7 @@ def create_properties_router(db):
             await db.journal_entries.insert_one(entry)
             entry_id = entry["id"]
 
-        # ---- 4) Maj du lot + historique ----
+        # ---- Maj du lot + historique ----
         mutation_record = {
             "id": str(uuid.uuid4()),
             "date": sale_date,
@@ -708,13 +779,23 @@ def create_properties_router(db):
             "new_owner_id": data.new_owner_id,
             "new_owner_name": new_owner.get("name", ""),
             "roulement_quota": roulement_quota,
-            "prorata_provisions": prorata_total,
+            # Prorata sur l'appel en cours uniquement (compatible legacy)
+            "prorata_provisions": current_prorata,
+            "current_period_prorata": current_prorata,
+            "current_period_details": breakdown["current_period_details"],
+            # Appels futurs (informatif, non transferes via OD)
+            "future_calls": breakdown["future_calls"],
+            "future_calls_total": breakdown["future_calls_total"],
+            "budget_frequency": breakdown["budget_frequency"],
+            "budget_frequency_label": breakdown["budget_frequency_label"],
+            # Total transfert OD
             "total_transfer": total_transfer,
             "sale_price": float(data.sale_price or 0),
             "note": data.note or "",
             "journal_entry_id": entry_id,
             "created_at": datetime.now(timezone.utc).isoformat(),
-            "prorata_details": prorata_details,
+            # Alias legacy
+            "prorata_details": breakdown["current_period_details"],
         }
         await db.lots.update_one(
             {"id": lot_id},
@@ -773,8 +854,12 @@ def create_properties_router(db):
 
     @router.post("/lots/{lot_id}/mutate-preview")
     async def mutate_lot_preview(lot_id: str, data: LotMutationInput):
-        """Preview du calcul de mutation sans rien ecrire en base."""
-        # Reuse the same logic but avoid persistence. We implement a small variant:
+        """Preview du calcul de mutation sans rien ecrire en base.
+        Retourne le decompte structure en 3 sections :
+        - Fonds de roulement (quote-part sur quotites, JAMAIS au prorata temporel)
+        - Prorata appel en cours (provisions, portion apres la vente)
+        - Appels de provisions futurs (informatif, montant complet a l'acquereur)
+        """
         lot = await db.lots.find_one({"id": lot_id}, {"_id": 0})
         if not lot:
             raise HTTPException(404, "Lot non trouve")
@@ -788,69 +873,7 @@ def create_properties_router(db):
         except Exception:
             raise HTTPException(400, "sale_date doit etre au format YYYY-MM-DD")
 
-        # Fonds de roulement
-        roul_pipeline = [
-            {"$match": {"copropriete_id": copro_id}},
-            {"$unwind": "$lines"},
-            {"$match": {"lines.account_number": "100"}},
-            {"$group": {"_id": None,
-                        "credit": {"$sum": "$lines.credit"},
-                        "debit": {"$sum": "$lines.debit"}}},
-        ]
-        agg = await db.journal_entries.aggregate(roul_pipeline).to_list(1)
-        fonds_roul_total = round((agg[0]["credit"] - agg[0]["debit"]) if agg else 0.0, 2)
-        all_lots = await db.lots.find({"copropriete_id": copro_id}, {"_id": 0, "quotity": 1}).to_list(10000)
-        total_quotity = round(sum(float(l.get("quotity", 0) or 0) for l in all_lots), 6)
-        lot_quotity = float(lot.get("quotity", 0) or 0)
-        roulement_quota = round(fonds_roul_total * (lot_quotity / total_quotity), 2) if (total_quotity > 0 and lot_quotity > 0 and fonds_roul_total > 0) else 0.0
-
-        # Prorata provisions
-        calls = await db.fund_calls.find({"copropriete_id": copro_id}, {"_id": 0}).sort("date", 1).to_list(10000)
-        calls = [c for c in calls if (c.get("call_type") or "provisions") == "provisions"]
-        prorata_total = 0.0
-        prorata_details = []
-        from datetime import timedelta as _td
-        for c in calls:
-            try:
-                c_start = datetime.strptime(c.get("date", ""), "%Y-%m-%d").date()
-                c_end = datetime.strptime(c.get("due_date") or c.get("date"), "%Y-%m-%d").date()
-            except Exception:
-                continue
-            if c_end <= c_start:
-                c_end = c_start + _td(days=90)
-            if not (c_start <= sale_dt <= c_end):
-                continue
-            owner_line = next((d for d in (c.get("distribution") or []) if d.get("owner_id") == old_owner_id), None)
-            if not owner_line:
-                continue
-            amount_owner = float(owner_line.get("amount", 0) or 0)
-            if amount_owner <= 0:
-                continue
-            total_days = (c_end - c_start).days + 1
-            days_after = (c_end - sale_dt).days + 1
-            prorata = round(amount_owner * (days_after / total_days), 2)
-            if prorata >= 0.01:
-                prorata_total += prorata
-                prorata_details.append({
-                    "fund_call_id": c.get("id"),
-                    "fund_call_name": c.get("name", ""),
-                    "period_start": c_start.isoformat(),
-                    "period_end": c_end.isoformat(),
-                    "owner_amount": amount_owner,
-                    "prorata": prorata,
-                    "days_after": days_after,
-                    "total_days": total_days,
-                })
-        prorata_total = round(prorata_total, 2)
-        return {
-            "fonds_roulement_total": fonds_roul_total,
-            "lot_quotity": lot_quotity,
-            "total_quotity": total_quotity,
-            "roulement_quota": roulement_quota,
-            "prorata_provisions": prorata_total,
-            "prorata_details": prorata_details,
-            "total_transfer": round(roulement_quota + prorata_total, 2),
-        }
+        return await _compute_mutation_breakdown(lot, old_owner_id, sale_dt)
 
     # ---- TENANTS ----
     class TenantInput(BaseModel):

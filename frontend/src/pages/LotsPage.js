@@ -265,44 +265,133 @@ function MutationDialog({ lot, owners, ownersRefresh, onClose, onDone }) {
           {/* Preview */}
           {loading && <div className="text-sm text-slate-500">Calcul en cours...</div>}
           {preview && !loading && (
-            <div className="rounded-md border border-[#0055FF]/30 bg-[#0055FF]/5 p-4 space-y-2" data-testid="mutation-preview">
-              <div className="text-xs font-semibold text-[#0055FF] uppercase tracking-wider">Apercu de l&apos;ecriture comptable</div>
-              <div className="grid grid-cols-2 gap-2 text-sm">
-                <div className="text-slate-600">Fonds de roulement (cpt 100, ACP total)</div>
-                <div className="text-right font-mono">{preview.fonds_roulement_total?.toFixed(2)} EUR</div>
-                <div className="text-slate-600">Quotites lot / ACP</div>
-                <div className="text-right font-mono">{preview.lot_quotity} / {preview.total_quotity}</div>
-                <div className="text-slate-900 font-semibold">Quote-part roulement transferee</div>
-                <div className="text-right font-mono font-semibold text-[#0055FF]">{preview.roulement_quota?.toFixed(2)} EUR</div>
-                <div className="text-slate-900 font-semibold">Prorata provisions (jours posterieurs vente)</div>
-                <div className="text-right font-mono font-semibold text-[#0055FF]">{preview.prorata_provisions?.toFixed(2)} EUR</div>
-                <div className="text-slate-900 font-semibold border-t pt-2 col-span-1">Total transfert</div>
-                <div className="text-right font-mono font-bold border-t pt-2 text-[#0055FF]">{preview.total_transfer?.toFixed(2)} EUR</div>
+            <div className="space-y-3" data-testid="mutation-preview">
+              {/* BLOC 1 : Fonds de roulement (jamais au prorata, sur quotites) */}
+              <div className="rounded-md border border-emerald-300 bg-emerald-50 p-4 space-y-2" data-testid="mutation-block-roulement">
+                <div className="flex items-center justify-between">
+                  <div className="text-xs font-bold text-emerald-800 uppercase tracking-wider">
+                    Bloc 1 - Transfert du fonds de roulement
+                  </div>
+                  <div className="text-[10px] text-emerald-700 font-medium">
+                    Quote-part sur quotites (non temporel)
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-2 text-sm">
+                  <div className="text-slate-600">Solde fonds de roulement (cpt 100, ACP)</div>
+                  <div className="text-right font-mono">{preview.fonds_roulement_total?.toFixed(2)} EUR</div>
+                  <div className="text-slate-600">Quotites lot / total ACP</div>
+                  <div className="text-right font-mono">{preview.lot_quotity} / {preview.total_quotity}</div>
+                  <div className="text-slate-900 font-semibold border-t pt-2">Quote-part transferee</div>
+                  <div className="text-right font-mono font-bold border-t pt-2 text-emerald-700" data-testid="mutation-roulement-quota">
+                    {preview.roulement_quota?.toFixed(2)} EUR
+                  </div>
+                </div>
+                <div className="text-[11px] text-slate-500 italic">
+                  Capital permanent transfere du vendeur a l&apos;acquereur (compte 100).
+                </div>
               </div>
-              {(preview.prorata_details || []).length > 0 && (
-                <details className="text-xs text-slate-600 mt-2">
-                  <summary className="cursor-pointer text-slate-500 hover:text-slate-900">Detail prorata ({preview.prorata_details.length} appel(s))</summary>
-                  <table className="w-full mt-2 text-[11px]">
-                    <thead className="text-slate-500">
-                      <tr><th className="text-left">Appel</th><th className="text-right">Periode</th><th className="text-right">Mt vendeur</th><th className="text-right">Jours apres</th><th className="text-right">Prorata</th></tr>
-                    </thead>
-                    <tbody>
-                      {preview.prorata_details.map((d, i) => (
-                        <tr key={i} className="border-t border-slate-200">
-                          <td className="py-1">{d.fund_call_name}</td>
-                          <td className="text-right">{d.period_start} - {d.period_end}</td>
-                          <td className="text-right font-mono">{d.owner_amount.toFixed(2)}</td>
-                          <td className="text-right font-mono">{d.days_after}/{d.total_days}</td>
-                          <td className="text-right font-mono font-semibold">{d.prorata.toFixed(2)}</td>
+
+              {/* BLOC 2 : Appels de provisions a prevoir (prorata appel en cours + futurs) */}
+              <div className="rounded-md border border-[#0055FF]/30 bg-[#0055FF]/5 p-4 space-y-3" data-testid="mutation-block-provisions">
+                <div className="flex items-center justify-between">
+                  <div className="text-xs font-bold text-[#0055FF] uppercase tracking-wider">
+                    Bloc 2 - Appels de provisions a prevoir
+                  </div>
+                  {preview.budget_frequency_label && (
+                    <div className="text-[10px] text-[#0055FF] font-medium">
+                      Periodicite : {preview.budget_frequency_label}
+                    </div>
+                  )}
+                </div>
+
+                {/* 2a : Prorata sur l'appel en cours */}
+                <div>
+                  <div className="text-xs font-semibold text-slate-700 mb-1">
+                    a) Prorata appel en cours (portion apres la vente, transferee a l&apos;acquereur)
+                  </div>
+                  {(preview.current_period_details || []).length === 0 ? (
+                    <div className="text-xs text-slate-500 italic">Aucun appel en cours a cette date.</div>
+                  ) : (
+                    <table className="w-full text-[11px]">
+                      <thead className="text-slate-500">
+                        <tr><th className="text-left">Appel</th><th className="text-right">Periode</th><th className="text-right">Mt vendeur</th><th className="text-right">Jours apres</th><th className="text-right">Prorata</th></tr>
+                      </thead>
+                      <tbody>
+                        {(preview.current_period_details || []).map((d, i) => (
+                          <tr key={i} className="border-t border-slate-200">
+                            <td className="py-1">{d.fund_call_name}</td>
+                            <td className="text-right">{d.period_start} -&gt; {d.period_end}</td>
+                            <td className="text-right font-mono">{d.owner_amount.toFixed(2)}</td>
+                            <td className="text-right font-mono">{d.days_after}/{d.total_days}</td>
+                            <td className="text-right font-mono font-semibold">{d.prorata.toFixed(2)}</td>
+                          </tr>
+                        ))}
+                        <tr className="border-t-2 border-slate-300 bg-white">
+                          <td colSpan="4" className="py-1 text-right font-semibold">Sous-total prorata appel courant</td>
+                          <td className="text-right font-mono font-bold text-[#0055FF]" data-testid="mutation-current-prorata">
+                            {preview.current_period_prorata?.toFixed(2)} EUR
+                          </td>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </details>
-              )}
-              <div className="text-[11px] text-slate-500 italic">
-                Ecriture OD : Dr compte acquereur / Cr compte vendeur pour {preview.total_transfer?.toFixed(2)} EUR.
-                Le fonds de reserve n&apos;est PAS impacte. Le lot sera reaffecte a l&apos;acquereur.
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+
+                {/* 2b : Appels futurs */}
+                <div>
+                  <div className="text-xs font-semibold text-slate-700 mb-1">
+                    b) Appels de provisions futurs (information - factures normalement a l&apos;acquereur)
+                  </div>
+                  {(preview.future_calls || []).length === 0 ? (
+                    <div className="text-xs text-slate-500 italic">Aucun appel futur planifie apres la date de mutation.</div>
+                  ) : (
+                    <table className="w-full text-[11px]">
+                      <thead className="text-slate-500">
+                        <tr><th className="text-left">Appel</th><th className="text-right">Periode</th><th className="text-right">Echeance</th><th className="text-right">Montant (acquereur)</th></tr>
+                      </thead>
+                      <tbody>
+                        {(preview.future_calls || []).map((fc, i) => (
+                          <tr key={i} className="border-t border-slate-200">
+                            <td className="py-1">{fc.fund_call_name}</td>
+                            <td className="text-right">{fc.period_start} -&gt; {fc.period_end}</td>
+                            <td className="text-right">{fc.due_date || '-'}</td>
+                            <td className="text-right font-mono">{fc.amount.toFixed(2)}</td>
+                          </tr>
+                        ))}
+                        <tr className="border-t-2 border-slate-300 bg-white">
+                          <td colSpan="3" className="py-1 text-right font-semibold">Total appels futurs ({preview.future_calls.length})</td>
+                          <td className="text-right font-mono font-bold text-[#0055FF]" data-testid="mutation-future-calls-total">
+                            {preview.future_calls_total?.toFixed(2)} EUR
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  )}
+                  <div className="text-[10px] text-slate-500 italic mt-1">
+                    Ces montants ne sont PAS inclus dans l&apos;ecriture OD - ils seront appeles normalement par le syndic a l&apos;acquereur.
+                  </div>
+                </div>
+              </div>
+
+              {/* SYNTHESE - Ecriture OD */}
+              <div className="rounded-md border-2 border-slate-700 bg-slate-50 p-4 space-y-1" data-testid="mutation-block-summary">
+                <div className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
+                  Synthese - Ecriture comptable OD
+                </div>
+                <div className="grid grid-cols-2 gap-2 text-sm">
+                  <div className="text-slate-700">Fonds de roulement (Bloc 1)</div>
+                  <div className="text-right font-mono">{preview.roulement_quota?.toFixed(2)} EUR</div>
+                  <div className="text-slate-700">+ Prorata appel en cours (Bloc 2.a)</div>
+                  <div className="text-right font-mono">{preview.current_period_prorata?.toFixed(2)} EUR</div>
+                  <div className="text-slate-900 font-bold border-t border-slate-700 pt-2">= Total transfert OD</div>
+                  <div className="text-right font-mono font-bold border-t border-slate-700 pt-2 text-slate-900 text-base" data-testid="mutation-total-transfer">
+                    {preview.total_transfer?.toFixed(2)} EUR
+                  </div>
+                </div>
+                <div className="text-[11px] text-slate-500 italic mt-2">
+                  Ecriture : Dr compte acquereur / Cr compte vendeur pour {preview.total_transfer?.toFixed(2)} EUR.
+                  Le fonds de reserve n&apos;est PAS impacte. Le lot sera reaffecte a l&apos;acquereur.
+                </div>
               </div>
             </div>
           )}
@@ -331,8 +420,21 @@ function MutationDialog({ lot, owners, ownersRefresh, onClose, onDone }) {
                       <div className="flex items-start justify-between gap-2">
                         <div className="flex-1">
                           <div className="font-medium text-slate-900">{fmtDate(m.date)} : {m.old_owner_name} -&gt; {m.new_owner_name}</div>
-                          <div className="text-[11px]">Roulement {m.roulement_quota?.toFixed(2)} EUR + Prorata {m.prorata_provisions?.toFixed(2)} EUR = <b>{m.total_transfer?.toFixed(2)} EUR</b></div>
-                          {m.note && <div className="text-[11px] italic text-slate-500">{m.note}</div>}
+                          <div className="text-[11px] grid grid-cols-2 gap-x-2">
+                            <span className="text-slate-500">Fonds de roulement :</span>
+                            <span className="font-mono text-right">{m.roulement_quota?.toFixed(2)} EUR</span>
+                            <span className="text-slate-500">Prorata appel courant :</span>
+                            <span className="font-mono text-right">{(m.current_period_prorata ?? m.prorata_provisions)?.toFixed(2)} EUR</span>
+                            <span className="font-semibold border-t pt-1">Total OD :</span>
+                            <span className="font-mono text-right font-bold border-t pt-1">{m.total_transfer?.toFixed(2)} EUR</span>
+                            {m.future_calls_total > 0 && (
+                              <>
+                                <span className="text-slate-500 italic">Appels futurs ({m.future_calls?.length || 0}) :</span>
+                                <span className="font-mono text-right italic text-slate-500">{m.future_calls_total?.toFixed(2)} EUR</span>
+                              </>
+                            )}
+                          </div>
+                          {m.note && <div className="text-[11px] italic text-slate-500 mt-1">{m.note}</div>}
                         </div>
                         {isLast && (
                           <Button
