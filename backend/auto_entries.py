@@ -161,18 +161,48 @@ async def generate_purchase_entry(db, invoice: dict) -> dict | None:
             await db.journal_entries.insert_one(od_doc)
             return {k: v for k, v in ac_doc.items() if k != "_id"}
 
-    # ---- ECRITURE STANDARD : 2 lignes ----
-    lines = [
-        {"account_number": expense_acc,
-         "account_name": pcmn_names.get(expense_acc, ""),
-         "debit": amount, "credit": 0.0,
-         "third_party_id": None, "third_party_name": ""},
-        {"account_number": supplier_acc,
-         "account_name": pcmn_names.get(supplier_acc, supplier_name),
-         "debit": 0.0, "credit": amount,
-         "third_party_id": (supplier_doc or {}).get("id"),
-         "third_party_name": supplier_name},
-    ]
+    # ---- ECRITURE STANDARD ----
+    # Mode multi-lignes : 1 ecriture avec N debits (1 par ligne) + 1 credit fournisseur.
+    # Mode 1-ligne : 1 debit + 1 credit (legacy).
+    invoice_lines = invoice.get("lines") or []
+    if invoice_lines:
+        # Pre-fetch des noms PCMN pour toutes les natures
+        line_accounts = list({ln.get("account_number", "") for ln in invoice_lines if ln.get("account_number")})
+        pcmn_q_multi = {"number": {"$in": line_accounts + [supplier_acc]}, "copropriete_id": copro_id}
+        pcmns_multi = await db.pcmn_accounts.find(pcmn_q_multi, {"_id": 0}).to_list(50)
+        pcmn_names_multi = {p["number"]: p["name"] for p in pcmns_multi}
+        lines = []
+        for ln in invoice_lines:
+            acc = ln.get("account_number", "")
+            amt = round(float(ln.get("amount", 0) or 0), 2)
+            if amt <= 0 or not acc:
+                continue
+            desc = (ln.get("description") or "").strip()
+            lines.append({
+                "account_number": acc,
+                "account_name": pcmn_names_multi.get(acc, "") + (f" - {desc}" if desc else ""),
+                "debit": amt, "credit": 0.0,
+                "third_party_id": None, "third_party_name": "",
+            })
+        lines.append({
+            "account_number": supplier_acc,
+            "account_name": pcmn_names_multi.get(supplier_acc, supplier_name),
+            "debit": 0.0, "credit": amount,
+            "third_party_id": (supplier_doc or {}).get("id"),
+            "third_party_name": supplier_name,
+        })
+    else:
+        lines = [
+            {"account_number": expense_acc,
+             "account_name": pcmn_names.get(expense_acc, ""),
+             "debit": amount, "credit": 0.0,
+             "third_party_id": None, "third_party_name": ""},
+            {"account_number": supplier_acc,
+             "account_name": pcmn_names.get(supplier_acc, supplier_name),
+             "debit": 0.0, "credit": amount,
+             "third_party_id": (supplier_doc or {}).get("id"),
+             "third_party_name": supplier_name},
+        ]
     if not _balanced(lines):
         return None
     doc = {

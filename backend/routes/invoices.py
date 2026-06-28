@@ -29,6 +29,17 @@ class DistKeyInput(BaseModel):
     copropriete_id: Optional[str] = ""
 
 
+class InvoiceLineInput(BaseModel):
+    """Une ligne de detail de facture (split entre plusieurs natures/comptes).
+    Si lines=[] (ou None) sur la facture, on reste en mode 1-ligne legacy.
+    """
+    account_number: str
+    expense_category_id: Optional[str] = ""
+    distribution_key_id: Optional[str] = ""
+    amount: float
+    description: Optional[str] = ""
+
+
 class InvoiceInput(BaseModel):
     number: str
     date: str
@@ -52,6 +63,10 @@ class InvoiceInput(BaseModel):
     # Somme doit etre 100.
     occupant_pct: Optional[float] = None  # None = inherit from category
     proprietaire_pct: Optional[float] = None
+    # Lignes multiples (split par nature de depense). Si fourni et non-vide,
+    # le total des lignes doit egal total_amount. Une ecriture comptable
+    # unique sera generee avec N debits (un par ligne) + 1 credit fournisseur.
+    lines: Optional[List[InvoiceLineInput]] = None
 
 
 def create_invoices_router(db):
@@ -181,11 +196,87 @@ def create_invoices_router(db):
         invoices = await db.invoices.find(query, {"_id": 0}).sort("date", -1).to_list(2000)
         return invoices
 
+    async def _resolve_invoice_lines(data: InvoiceInput) -> tuple:
+        """Resolve and validate multi-line invoice payload.
+        Returns (resolved_lines, merged_distribution_lines) where:
+          - resolved_lines : list of dicts with normalized fields (account_number
+            resolved from expense_category if applicable), or [] in single-line mode.
+          - merged_distribution_lines : list of {lot_id, lot_number, owner_name,
+            share, amount} aggregated across all lines that carry a distribution_key.
+        Raises HTTPException if total mismatch or empty/invalid lines.
+        """
+        if not data.lines:
+            return [], None
+        if data.is_private_fee:
+            raise HTTPException(400, "Une facture frais privatif ne peut pas etre splittee en lignes multiples")
+
+        resolved = []
+        total = 0.0
+        for idx, ln in enumerate(data.lines, start=1):
+            amt = float(ln.amount or 0)
+            if amt <= 0:
+                raise HTTPException(400, f"Ligne {idx}: montant doit etre > 0")
+            acc = (ln.account_number or "").strip()
+            # Si une categorie est fournie, derive le compte
+            if ln.expense_category_id:
+                cat = await db.expense_categories.find_one({"id": ln.expense_category_id}, {"_id": 0})
+                if cat and cat.get("account_number"):
+                    acc = cat["account_number"]
+            if not acc:
+                raise HTTPException(400, f"Ligne {idx}: compte PCMN requis")
+            resolved.append({
+                "account_number": acc,
+                "expense_category_id": ln.expense_category_id or "",
+                "distribution_key_id": ln.distribution_key_id or "",
+                "amount": round(amt, 2),
+                "description": ln.description or "",
+            })
+            total += amt
+
+        if abs(round(total, 2) - round(float(data.total_amount or 0), 2)) > 0.01:
+            raise HTTPException(
+                400,
+                f"Somme des lignes ({round(total, 2):.2f}) different du total facture "
+                f"({round(float(data.total_amount or 0), 2):.2f})"
+            )
+
+        # Agrege les distribution_lines par lot (somme des amounts cles confondues)
+        merged = {}  # lot_id -> {lot_number, owner_name, share, amount}
+        for ln in resolved:
+            if not ln["distribution_key_id"]:
+                continue
+            key = await db.distribution_keys.find_one({"id": ln["distribution_key_id"]}, {"_id": 0})
+            if not key:
+                continue
+            total_shares = sum(l_["share"] for l_ in key["lots"]) if key["lots"] else 1
+            for lot_entry in key["lots"]:
+                lot_doc = await db.lots.find_one({"id": lot_entry["lot_id"]}, {"_id": 0})
+                owner_name = ""
+                if lot_doc and lot_doc.get("owner_id"):
+                    owner_doc = await db.owners.find_one({"id": lot_doc["owner_id"]}, {"_id": 0})
+                    owner_name = owner_doc["name"] if owner_doc else ""
+                share_ratio = lot_entry["share"] / total_shares if total_shares > 0 else 0
+                amt = round(ln["amount"] * share_ratio, 2)
+                if lot_entry["lot_id"] in merged:
+                    merged[lot_entry["lot_id"]]["amount"] = round(merged[lot_entry["lot_id"]]["amount"] + amt, 2)
+                else:
+                    merged[lot_entry["lot_id"]] = {
+                        "lot_id": lot_entry["lot_id"],
+                        "lot_number": lot_entry["lot_number"],
+                        "owner_name": owner_name,
+                        "share": lot_entry["share"],
+                        "amount": amt,
+                    }
+        merged_list = list(merged.values())
+        return resolved, merged_list
+
     @router.post("/invoices")
     async def create_invoice(data: InvoiceInput):
         from fiscal_lock import ensure_period_open
         # Verrou fiscal : la date de la facture doit etre dans une periode ouverte
         await ensure_period_open(db, data.copropriete_id or "", data.date, context="facture")
+        # Resolve multi-line first (raises if invalid)
+        resolved_lines, merged_dist = await _resolve_invoice_lines(data)
         # If expense_category_id provided, derive/override account_number
         account_number = data.account_number
         cat_default_occupant = None
@@ -207,9 +298,12 @@ def create_invoices_router(db):
             if not owner:
                 raise HTTPException(404, "Proprietaire non trouve")
             account_number = "643"
-        # Compute distribution lines if key provided (skipped for private fees)
+        # Compute distribution lines if key provided (skipped for private fees,
+        # remplaced by merged_dist in multi-line mode)
         distribution_lines = []
-        if data.distribution_key_id and not data.is_private_fee:
+        if resolved_lines:
+            distribution_lines = merged_dist or []
+        elif data.distribution_key_id and not data.is_private_fee:
             key = await db.distribution_keys.find_one({"id": data.distribution_key_id}, {"_id": 0})
             if key:
                 total_shares = sum(l["share"] for l in key["lots"]) if key["lots"] else 1
@@ -255,6 +349,7 @@ def create_invoices_router(db):
             "expense_category_id": data.expense_category_id or "",
             "distribution_key_id": "" if data.is_private_fee else data.distribution_key_id,
             "distribution_lines": distribution_lines,
+            "lines": resolved_lines,  # [] = mode 1-ligne legacy
             "status": data.status,
             "copropriete_id": data.copropriete_id or "",
             "is_private_fee": bool(data.is_private_fee),
@@ -289,6 +384,8 @@ def create_invoices_router(db):
             # Verrou : la date d'origine ET la nouvelle doivent etre dans un exercice ouvert
             await ensure_period_open(db, existing_for_lock.get("copropriete_id", ""), existing_for_lock.get("date"), context="facture")
         await ensure_period_open(db, data.copropriete_id or (existing_for_lock or {}).get("copropriete_id", ""), data.date, context="facture")
+        # Resolve multi-line first
+        resolved_lines, merged_dist = await _resolve_invoice_lines(data)
         account_number = data.account_number
         cat_default_occupant = None
         if data.expense_category_id:
@@ -322,6 +419,7 @@ def create_invoices_router(db):
             "account_number": account_number,
             "expense_category_id": data.expense_category_id or "",
             "distribution_key_id": "" if data.is_private_fee else data.distribution_key_id,
+            "lines": resolved_lines,
             "status": data.status,
             "is_private_fee": bool(data.is_private_fee),
             "private_fee_owner_id": data.private_fee_owner_id or "",
@@ -330,9 +428,13 @@ def create_invoices_router(db):
             "occupant_amount": round(data.total_amount * occupant_pct / 100, 2),
             "proprietaire_amount": round(data.total_amount * proprietaire_pct / 100, 2),
         }
-        # If switching to private fee, clear distribution_lines
+        # If switching to private fee, clear distribution_lines (and lines)
         if data.is_private_fee:
             update["distribution_lines"] = []
+            update["lines"] = []
+        elif resolved_lines:
+            # Multi-line: replace distribution_lines with merged aggregation
+            update["distribution_lines"] = merged_dist or []
         result = await db.invoices.update_one({"id": invoice_id}, {"$set": update})
         if result.matched_count == 0:
             raise HTTPException(404, "Facture non trouvee")

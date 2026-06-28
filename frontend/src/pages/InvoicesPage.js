@@ -28,7 +28,7 @@ export default function InvoicesPage() {
   const [lots, setLots] = useState([]);
   const [invoiceDialog, setInvoiceDialog] = useState(false);
   const [keyDialog, setKeyDialog] = useState(false);
-  const [invForm, setInvForm] = useState({ number: '', date: '', due_date: '', supplier: '', description: '', total_amount: 0, vat_amount: 0, account_number: '', expense_category_id: '', distribution_key_id: '', status: 'unpaid', is_private_fee: false, private_fee_owner_id: '', occupant_pct: 0, proprietaire_pct: 100 });
+  const [invForm, setInvForm] = useState({ number: '', date: '', due_date: '', supplier: '', description: '', total_amount: 0, vat_amount: 0, account_number: '', expense_category_id: '', distribution_key_id: '', status: 'unpaid', is_private_fee: false, private_fee_owner_id: '', occupant_pct: 0, proprietaire_pct: 100, lines: [] });
   const [owners, setOwners] = useState([]);
   const [ownerSearch, setOwnerSearch] = useState('');
   const [suggestCreateSupplier, setSuggestCreateSupplier] = useState(null); // {name, vat, bce, iban}
@@ -74,7 +74,7 @@ export default function InvoicesPage() {
   // Invoice handlers
   const openCreateInvoice = () => {
     setEditingInvoice(null);
-    setInvForm({ number: `F-${Date.now().toString().slice(-6)}`, date: new Date().toISOString().split('T')[0], due_date: '', supplier: '', description: '', total_amount: 0, vat_amount: 0, account_number: '', expense_category_id: '', distribution_key_id: '', status: 'unpaid', is_private_fee: false, private_fee_owner_id: '', occupant_pct: 0, proprietaire_pct: 100 });
+    setInvForm({ number: `F-${Date.now().toString().slice(-6)}`, date: new Date().toISOString().split('T')[0], due_date: '', supplier: '', description: '', total_amount: 0, vat_amount: 0, account_number: '', expense_category_id: '', distribution_key_id: '', status: 'unpaid', is_private_fee: false, private_fee_owner_id: '', occupant_pct: 0, proprietaire_pct: 100, lines: [] });
     setAiHint(''); setPendingPdf(null); setOwnerSearch('');
     setInvoiceDialog(true);
   };
@@ -93,6 +93,13 @@ export default function InvoicesPage() {
       private_fee_owner_id: inv.private_fee_owner_id || '',
       occupant_pct: inv.occupant_pct ?? 0,
       proprietaire_pct: inv.proprietaire_pct ?? 100,
+      lines: (inv.lines || []).map(l => ({
+        account_number: l.account_number || '',
+        expense_category_id: l.expense_category_id || '',
+        distribution_key_id: l.distribution_key_id || '',
+        amount: l.amount || 0,
+        description: l.description || '',
+      })),
     });
     setAiHint(''); setPendingPdf(null); setOwnerSearch('');
     setInvoiceDialog(true);
@@ -152,7 +159,36 @@ export default function InvoicesPage() {
 
   const saveInvoice = async () => {
     try {
-      const payload = { ...invForm, total_amount: Number(invForm.total_amount), vat_amount: Number(invForm.vat_amount) };
+      // Validation cote front : si mode multi-lignes, somme = total
+      const usesMultiLines = (invForm.lines || []).length > 0;
+      if (usesMultiLines) {
+        if (invForm.is_private_fee) {
+          toast.error('Frais privatif incompatible avec lignes multiples'); return;
+        }
+        const sum = invForm.lines.reduce((s, l) => s + (Number(l.amount) || 0), 0);
+        if (Math.abs(sum - Number(invForm.total_amount || 0)) > 0.01) {
+          toast.error(`Somme des lignes (${sum.toFixed(2)}) different du total facture (${Number(invForm.total_amount).toFixed(2)})`);
+          return;
+        }
+        // Verifie que chaque ligne a un compte + montant > 0
+        for (let i = 0; i < invForm.lines.length; i++) {
+          const ln = invForm.lines[i];
+          if (!ln.account_number) { toast.error(`Ligne ${i + 1} : compte PCMN requis`); return; }
+          if (!Number(ln.amount) || Number(ln.amount) <= 0) { toast.error(`Ligne ${i + 1} : montant > 0 requis`); return; }
+        }
+      }
+      const payload = {
+        ...invForm,
+        total_amount: Number(invForm.total_amount),
+        vat_amount: Number(invForm.vat_amount),
+        lines: usesMultiLines ? invForm.lines.map(l => ({
+          account_number: l.account_number,
+          expense_category_id: l.expense_category_id || '',
+          distribution_key_id: (l.distribution_key_id && l.distribution_key_id !== 'none') ? l.distribution_key_id : '',
+          amount: Number(l.amount),
+          description: l.description || '',
+        })) : null,
+      };
       let invoiceId;
       if (editingInvoice) {
         await api.put(`/invoices/${editingInvoice.id}`, payload);
@@ -646,7 +682,7 @@ export default function InvoicesPage() {
                 </div>
               )}
             </div>
-            <div className={`grid grid-cols-3 gap-4 ${invForm.is_private_fee ? 'opacity-50 pointer-events-none' : ''}`}>
+            <div className={`grid grid-cols-3 gap-4 ${invForm.is_private_fee || (invForm.lines && invForm.lines.length > 0) ? 'opacity-50 pointer-events-none' : ''}`}>
               <div><label className="form-label">Nature de depense</label>
                 <Select
                   value={invForm.expense_category_id || 'none'}
@@ -695,6 +731,195 @@ export default function InvoicesPage() {
                 </Select>
               </div>
             </div>
+
+            {/* Bouton bascule vers le mode lignes multiples */}
+            {!invForm.is_private_fee && (!invForm.lines || invForm.lines.length === 0) && (
+              <div className="-mt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    // Initialise avec la ligne courante (si compte rempli) + une ligne vide
+                    const firstLine = invForm.account_number ? [{
+                      account_number: invForm.account_number,
+                      expense_category_id: invForm.expense_category_id || '',
+                      distribution_key_id: invForm.distribution_key_id && invForm.distribution_key_id !== 'none' ? invForm.distribution_key_id : '',
+                      amount: Number(invForm.total_amount) || 0,
+                      description: '',
+                    }] : [];
+                    setInvForm(f => ({ ...f, lines: [...firstLine, { account_number: '', expense_category_id: '', distribution_key_id: '', amount: 0, description: '' }] }));
+                  }}
+                  className="text-xs text-[#0055FF] hover:text-[#0040CC] underline"
+                  data-testid="enable-multi-lines-btn"
+                >
+                  <Plus size={11} className="inline mr-1" /> Splitter en plusieurs natures de depense
+                </button>
+              </div>
+            )}
+
+            {/* Bloc lignes multiples */}
+            {!invForm.is_private_fee && invForm.lines && invForm.lines.length > 0 && (() => {
+              const linesSum = invForm.lines.reduce((s, l) => s + (Number(l.amount) || 0), 0);
+              const totalAmt = Number(invForm.total_amount) || 0;
+              const diff = +(linesSum - totalAmt).toFixed(2);
+              const ok = Math.abs(diff) < 0.01;
+              return (
+                <div className="rounded-md border-2 border-[#0055FF]/30 bg-[#0055FF]/5 p-3 space-y-2" data-testid="multi-lines-block">
+                  <div className="flex items-center justify-between">
+                    <div className="text-xs font-bold text-[#0055FF] uppercase tracking-wider">
+                      Lignes multiples ({invForm.lines.length})
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setInvForm(f => ({ ...f, lines: [] }))}
+                      className="text-[11px] text-slate-500 hover:text-red-600 underline"
+                      data-testid="disable-multi-lines-btn"
+                    >
+                      Revenir au mode 1 nature
+                    </button>
+                  </div>
+                  <div className="space-y-1.5">
+                    {invForm.lines.map((ln, idx) => (
+                      <div key={idx} className="grid grid-cols-12 gap-2 items-end bg-white rounded border border-slate-200 px-2 py-1.5" data-testid={`invoice-line-${idx}`}>
+                        <div className="col-span-3">
+                          {idx === 0 && <label className="form-label text-[10px]">Nature</label>}
+                          <Select
+                            value={ln.expense_category_id || 'none'}
+                            onValueChange={v => {
+                              setInvForm(f => {
+                                const newLines = [...f.lines];
+                                if (v === 'none') {
+                                  newLines[idx] = { ...newLines[idx], expense_category_id: '' };
+                                } else {
+                                  const cat = categories.find(c => c.id === v);
+                                  newLines[idx] = {
+                                    ...newLines[idx],
+                                    expense_category_id: v,
+                                    account_number: cat?.account_number || newLines[idx].account_number,
+                                  };
+                                }
+                                return { ...f, lines: newLines };
+                              });
+                            }}
+                          >
+                            <SelectTrigger className="h-8 text-xs" data-testid={`invoice-line-cat-${idx}`}><SelectValue placeholder="Categorie" /></SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="none">—</SelectItem>
+                              {categories.map(c => <SelectItem key={c.id} value={c.id}>{c.name} <span className="text-slate-400 ml-1 font-mono text-[10px]">({c.account_number})</span></SelectItem>)}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div className="col-span-3">
+                          {idx === 0 && <label className="form-label text-[10px]">Compte PCMN *</label>}
+                          <AccountSearchSelect
+                            accounts={accounts}
+                            value={ln.account_number}
+                            onChange={v => {
+                              setInvForm(f => {
+                                const newLines = [...f.lines];
+                                newLines[idx] = { ...newLines[idx], account_number: v };
+                                return { ...f, lines: newLines };
+                              });
+                            }}
+                            placeholder="Compte..."
+                            classFilter={6}
+                            allowClear
+                            testId={`invoice-line-acc-${idx}`}
+                          />
+                        </div>
+                        <div className="col-span-2">
+                          {idx === 0 && <label className="form-label text-[10px]">Cle</label>}
+                          <Select
+                            value={ln.distribution_key_id || 'none'}
+                            onValueChange={v => {
+                              setInvForm(f => {
+                                const newLines = [...f.lines];
+                                newLines[idx] = { ...newLines[idx], distribution_key_id: v === 'none' ? '' : v };
+                                return { ...f, lines: newLines };
+                              });
+                            }}
+                          >
+                            <SelectTrigger className="h-8 text-xs" data-testid={`invoice-line-key-${idx}`}><SelectValue placeholder="Cle" /></SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="none">—</SelectItem>
+                              {distKeys.map(k => <SelectItem key={k.id} value={k.id}>{k.name}</SelectItem>)}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div className="col-span-2">
+                          {idx === 0 && <label className="form-label text-[10px]">Description</label>}
+                          <Input
+                            value={ln.description || ''}
+                            onChange={e => {
+                              const v = e.target.value;
+                              setInvForm(f => {
+                                const newLines = [...f.lines];
+                                newLines[idx] = { ...newLines[idx], description: v };
+                                return { ...f, lines: newLines };
+                              });
+                            }}
+                            className="h-8 text-xs"
+                            placeholder="Libelle"
+                            data-testid={`invoice-line-desc-${idx}`}
+                          />
+                        </div>
+                        <div className="col-span-1">
+                          {idx === 0 && <label className="form-label text-[10px]">Montant *</label>}
+                          <Input
+                            type="number" step="0.01"
+                            value={ln.amount}
+                            onChange={e => {
+                              const v = e.target.value;
+                              setInvForm(f => {
+                                const newLines = [...f.lines];
+                                newLines[idx] = { ...newLines[idx], amount: v };
+                                return { ...f, lines: newLines };
+                              });
+                            }}
+                            className="h-8 text-xs text-right font-mono"
+                            data-testid={`invoice-line-amount-${idx}`}
+                          />
+                        </div>
+                        <div className="col-span-1 flex items-center justify-end">
+                          <button
+                            type="button"
+                            onClick={() => setInvForm(f => ({ ...f, lines: f.lines.filter((_, i) => i !== idx) }))}
+                            className="p-1 rounded hover:bg-red-50 text-red-500"
+                            title="Supprimer la ligne"
+                            data-testid={`invoice-line-remove-${idx}`}
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="flex items-center justify-between pt-2 border-t border-[#0055FF]/20">
+                    <button
+                      type="button"
+                      onClick={() => setInvForm(f => ({ ...f, lines: [...f.lines, { account_number: '', expense_category_id: '', distribution_key_id: '', amount: 0, description: '' }] }))}
+                      className="text-xs text-[#0055FF] hover:text-[#0040CC] font-semibold"
+                      data-testid="invoice-line-add"
+                    >
+                      <Plus size={12} className="inline mr-1" /> Ajouter une ligne
+                    </button>
+                    <div className="text-xs flex items-center gap-3">
+                      <span className="text-slate-600">Somme :</span>
+                      <span className={`font-mono font-bold ${ok ? 'text-emerald-700' : 'text-red-600'}`} data-testid="invoice-lines-sum">
+                        {linesSum.toFixed(2)} EUR
+                      </span>
+                      <span className="text-slate-500">/ Total :</span>
+                      <span className="font-mono">{totalAmt.toFixed(2)} EUR</span>
+                      {!ok && (
+                        <span className="text-[10px] text-red-600 font-semibold">
+                          {diff > 0 ? `(+${diff.toFixed(2)})` : `(${diff.toFixed(2)})`}
+                        </span>
+                      )}
+                      {ok && <span className="text-[10px] text-emerald-600">OK</span>}
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
 
             {/* Repartition occupant / proprietaire (decompte locataire) */}
             <div className="rounded-md border border-amber-200 bg-amber-50/40 p-3 space-y-2" data-testid="invoice-occupant-section">

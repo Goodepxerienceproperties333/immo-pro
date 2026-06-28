@@ -11,7 +11,7 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 ## Implemented
-### Iter83 (Feb 2026) - Mutation lot decomposee + Apercu facture + CORS deployment fix
+### Iter83 (Feb 2026) - Mutation lot decomposee + Apercu facture + Lignes multiples + Animation IA + CORS deployment fix
 
 **Demande user** : (1) "lors d'une mutation de lot, separer explicitement le
 transfert du fonds de roulement et les proratas des appels de provisions
@@ -69,16 +69,46 @@ permet de voir la facture" (3) deployment readiness check
      conserve pour l'auth cookie JWT.
    - Login + cookies verifies : 200 OK avec set-cookie access_token+refresh_token.
 
+5. **Lignes multiples sur facture** (`routes/invoices.py` + `auto_entries.py` + `pages/InvoicesPage.js`) :
+   - **Backend** :
+     * Nouveau model `InvoiceLineInput` (account_number, expense_category_id,
+       distribution_key_id, amount, description).
+     * `InvoiceInput.lines: Optional[List[InvoiceLineInput]]` (None ou [] = mode legacy 1-ligne).
+     * Helper `_resolve_invoice_lines()` valide somme == total_amount (0.01 tolerance),
+       resolve account_number depuis expense_category, agrege distribution_lines
+       par lot a travers toutes les cles utilisees.
+     * `auto_entries.generate_purchase_entry` : si invoice.lines existe, genere
+       UNE ecriture AC avec N debits (1 par ligne) + 1 credit fournisseur.
+     * Refus de combinaison lines + is_private_fee (400).
+   - **Frontend** :
+     * Bouton "+ Splitter en plusieurs natures de depense" sous le bloc
+       Nature/PCMN/Cle (mode 1-ligne par defaut).
+     * Bloc bleu "LIGNES MULTIPLES (N)" avec table dynamique :
+       Nature select / Compte PCMN / Cle / Description / Montant / Trash par ligne.
+     * Validation visuelle : Somme vs Total, OK vert ou ecart rouge en temps reel.
+     * "Revenir au mode 1 nature" pour retour rapide.
+     * Bloc Nature/PCMN/Cle du dessus grise automatiquement en mode multi.
+     * Validation cote front : refus si somme != total ou ligne sans compte avant POST.
+
+6. **Animation de chargement IA** (`pages/InvoicesPage.js` + `index.css`) :
+   - Bouton "Importer facture PDF (IA)" affiche `Loader2` avec `animate-spin` pendant extraction.
+   - Banniere "Analyse de la facture par IA" en haut du dialogue avec :
+     * Spinner Loader2 + Sparkles pulsing
+     * Texte avec points animes (.) defilants
+     * Progress bar indeterminee glissant horizontalement
+   - Animations CSS dans `index.css` : `ai-progress-slide` + `ai-dot-bounce`.
+
 **Tests** :
-- `tests/test_iter82_mutation_split.py` : 3 tests E2E (breakdown 3 sections,
-  no future_calls quand vente apres Q4, only future_calls quand vente avant Q1).
-- `tests/test_iter76_mutation_prorata.py` : 6 tests anciens passent toujours
-  (alias retrocompatibles fonctionnent).
-- Tous tests mutation : 9/9 passent.
+- `tests/test_iter82_mutation_split.py` : 3/3 (mutation 3 sections).
+- `tests/test_iter83_invoice_multi_lines.py` : 3/3 (create multi-line, total
+  mismatch rejected, legacy single-line unchanged).
+- Tous tests d'integration regression : 23/23 pass.
 
 **Smoke test screenshots** :
 - Dialogue facture avec PDF charge -> Eye + X visibles a droite du bandeau.
 - Clic Eye -> viewer plein ecran ouvre avec iframe du PDF + bouton Telecharger.
+- Mode multi-lignes -> bloc bleu "LIGNES MULTIPLES (1)" + bouton Ajouter ligne
+  + indicateur somme vs total.
 
 **Deployment check** : FAIL -> WARN. Seuls les warnings de query optimization
 restent (preexistants, non-bloquants). CORS pass.
