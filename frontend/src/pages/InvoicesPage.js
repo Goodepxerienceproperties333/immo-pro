@@ -9,7 +9,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { Plus, Trash2, Key, Receipt, Sparkles, Paperclip, Download, X, Pencil, AlertTriangle, Filter, FolderInput } from 'lucide-react';
+import { Plus, Trash2, Key, Receipt, Sparkles, Paperclip, Download, X, Pencil, AlertTriangle, Filter, FolderInput, Eye } from 'lucide-react';
 import AccountSearchSelect from '@/components/AccountSearchSelect';
 import BundleImportDialog from '@/components/BundleImportDialog';
 import { fmtDate } from '@/lib/dateFmt';
@@ -460,9 +460,25 @@ export default function InvoicesPage() {
               </div>
             )}
             {pendingPdf && (
-              <div className="text-xs px-3 py-2 rounded bg-blue-50 border border-blue-200 text-blue-800 flex items-center justify-between">
-                <span><Paperclip size={12} className="inline mr-1" /> PDF a attacher: <b>{pendingPdf.filename}</b></span>
-                <button type="button" onClick={() => setPendingPdf(null)} className="text-blue-600 hover:text-blue-800"><X size={14} /></button>
+              <div className="text-xs px-3 py-2 rounded bg-blue-50 border border-blue-200 text-blue-800 flex items-center justify-between gap-2" data-testid="pending-pdf-row">
+                <span className="truncate"><Paperclip size={12} className="inline mr-1" /> PDF a attacher: <b>{pendingPdf.filename}</b></span>
+                <div className="flex items-center gap-1 shrink-0">
+                  <button
+                    type="button"
+                    title="Apercu de la facture"
+                    onClick={() => {
+                      const url = URL.createObjectURL(pendingPdf.file);
+                      setViewerAttachment({ url, filename: pendingPdf.filename, isBlob: true });
+                    }}
+                    className="p-1.5 rounded hover:bg-blue-100 text-blue-700"
+                    data-testid="preview-pending-pdf-btn"
+                  >
+                    <Eye size={14} />
+                  </button>
+                  <button type="button" onClick={() => setPendingPdf(null)} className="p-1.5 rounded hover:bg-blue-100 text-blue-600" title="Retirer la piece jointe">
+                    <X size={14} />
+                  </button>
+                </div>
               </div>
             )}
             {!pendingPdf && (
@@ -472,6 +488,34 @@ export default function InvoicesPage() {
                 <button type="button" className="text-slate-500 hover:text-[#0055FF] underline" onClick={() => document.getElementById('manual-pdf-input').click()} data-testid="manual-attach-btn">
                   <Paperclip size={11} className="inline mr-1" /> Joindre la facture PDF / image (optionnel)
                 </button>
+              </div>
+            )}
+            {/* Pieces jointes existantes (mode edition) : apercu rapide */}
+            {editingInvoice && (editingInvoice.attachments || []).length > 0 && (
+              <div className="rounded-md border border-slate-200 bg-slate-50 p-2 space-y-1" data-testid="existing-attachments-block">
+                <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-600 px-1">
+                  Pieces jointes ({editingInvoice.attachments.length})
+                </div>
+                {editingInvoice.attachments.map((a) => {
+                  const coproId = localStorage.getItem('copropriete_id') || '';
+                  const inlineUrl = `${API}/api/invoices/${editingInvoice.id}/attachments/${a.id}/download?disposition=inline&copropriete_id=${coproId}`;
+                  return (
+                    <div key={a.id} className="flex items-center justify-between gap-2 text-xs bg-white rounded border px-2 py-1">
+                      <span className="truncate flex items-center gap-1 text-slate-700">
+                        <Paperclip size={11} /> {a.filename}
+                      </span>
+                      <button
+                        type="button"
+                        title="Apercu de la facture"
+                        onClick={() => setViewerAttachment({ url: inlineUrl, filename: a.filename })}
+                        className="p-1 rounded hover:bg-blue-50 text-blue-700"
+                        data-testid={`preview-attachment-${a.id}`}
+                      >
+                        <Eye size={14} />
+                      </button>
+                    </div>
+                  );
+                })}
               </div>
             )}
             <div className="grid grid-cols-3 gap-4">
@@ -829,13 +873,25 @@ export default function InvoicesPage() {
       </Dialog>
 
       {/* PDF / Image viewer modal */}
-      <Dialog open={!!viewerAttachment} onOpenChange={(o) => { if (!o) setViewerAttachment(null); }}>
+      <Dialog open={!!viewerAttachment} onOpenChange={(o) => {
+        if (!o) {
+          // Revoke blob URL to free memory when previewing a pending file
+          if (viewerAttachment?.isBlob && viewerAttachment?.url) {
+            try { URL.revokeObjectURL(viewerAttachment.url); } catch { /* noop */ }
+          }
+          setViewerAttachment(null);
+        }
+      }}>
         <DialogContent className="max-w-6xl w-[95vw] h-[92vh] p-0 flex flex-col overflow-hidden" data-testid="attachment-viewer">
           <DialogHeader className="px-4 py-2 border-b">
             <DialogTitle className="text-sm font-medium flex items-center justify-between gap-2 pr-8">
               <span className="truncate flex items-center gap-2"><Paperclip size={14} />{viewerAttachment?.filename}</span>
               {viewerAttachment && (
-                <a href={viewerAttachment.url.replace('disposition=inline', 'disposition=attachment')} target="_blank" rel="noreferrer">
+                <a
+                  href={viewerAttachment.isBlob ? viewerAttachment.url : viewerAttachment.url.replace('disposition=inline', 'disposition=attachment')}
+                  download={viewerAttachment.isBlob ? viewerAttachment.filename : undefined}
+                  target="_blank" rel="noreferrer"
+                >
                   <Button variant="outline" size="sm" data-testid="viewer-download-btn"><Download size={14} className="mr-1" /> Télécharger</Button>
                 </a>
               )}
