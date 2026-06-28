@@ -677,12 +677,34 @@ def create_fiscal_router(db):
                 inv_q["date"]["$gte"] = date_from
             if date_to:
                 inv_q["date"]["$lte"] = date_to
+        # Filtres : pour les factures multi-lignes, on accepte aussi un match
+        # sur une des lines[]. On filtre au niveau document via $or pour les
+        # 3 champs concernes.
         if account_number:
-            inv_q["account_number"] = account_number
+            inv_q["$or"] = [
+                {"account_number": account_number},
+                {"lines.account_number": account_number},
+            ]
         if distribution_key_id:
-            inv_q["distribution_key_id"] = distribution_key_id
+            key_or = [
+                {"distribution_key_id": distribution_key_id},
+                {"lines.distribution_key_id": distribution_key_id},
+            ]
+            if "$or" in inv_q:
+                inv_q = {"$and": [inv_q, {"$or": key_or}]}
+            else:
+                inv_q["$or"] = key_or
         if expense_category_id:
-            inv_q["expense_category_id"] = expense_category_id
+            cat_or = [
+                {"expense_category_id": expense_category_id},
+                {"lines.expense_category_id": expense_category_id},
+            ]
+            if "$and" in inv_q:
+                inv_q["$and"].append({"$or": cat_or})
+            elif "$or" in inv_q:
+                inv_q = {"$and": [inv_q, {"$or": cat_or}]}
+            else:
+                inv_q["$or"] = cat_or
         invoices = await db.invoices.find(inv_q, {"_id": 0}).sort("date", 1).to_list(50000)
 
         # 2) Bank txns matched to filter by bank_account
@@ -739,9 +761,68 @@ def create_fiscal_router(db):
         # les doublons quand on parcourra les ecritures.
         invoice_ids_done = set()
         for inv in invoices:
+            invoice_ids_done.add(inv["id"])
+            inv_lines = inv.get("lines") or []
+            # Mode multi-lignes : on "eclate" la facture en N rows, une par ligne,
+            # de facon a ce que chaque nature/compte/cle apparaisse separement
+            # dans la liste des depenses (P0 user request iter83).
+            if inv_lines:
+                inv_total = float(inv.get("total_amount", 0) or 0)
+                for li_idx, li in enumerate(inv_lines):
+                    li_acc = li.get("account_number", "")
+                    li_key_id = li.get("distribution_key_id", "")
+                    li_cat = cat_by_id.get(li.get("expense_category_id", "")) or cat_by_acc.get(li_acc) or {}
+                    li_amt = float(li.get("amount", 0) or 0)
+                    # Si un filtre est actif, on filtre ICI au niveau de la ligne
+                    # (le $or Mongo a deja matche le doc, mais peut inclure les
+                    # autres lignes de la meme facture)
+                    if account_number and li_acc != account_number:
+                        continue
+                    if distribution_key_id and li_key_id != distribution_key_id:
+                        continue
+                    if expense_category_id and li.get("expense_category_id", "") != expense_category_id and li_cat.get("id", "") != expense_category_id:
+                        continue
+                    # Repartition occupant/proprietaire : on conserve les % de
+                    # la facture et on les applique au montant de la ligne.
+                    occ_pct = float(inv.get("occupant_pct", 0) or 0)
+                    prop_pct = float(inv.get("proprietaire_pct", 100) or 100) if inv.get("proprietaire_pct") is not None else 100
+                    rows.append({
+                        "id": f"{inv['id']}::line-{li_idx}",
+                        "invoice_id": inv["id"],
+                        "is_invoice_line": True,
+                        "line_index": li_idx,
+                        "line_count": len(inv_lines),
+                        "date": inv.get("date", ""),
+                        "number": inv.get("number", ""),
+                        "supplier": inv.get("supplier", ""),
+                        "description": (li.get("description") or inv.get("description", "")).strip(),
+                        "account_number": li_acc,
+                        "account_name": acc_names.get(li_acc, ""),
+                        "expense_category_id": li_cat.get("id", ""),
+                        "expense_category_name": li_cat.get("name", ""),
+                        "expense_category_code": li_cat.get("code", ""),
+                        "distribution_key_id": li_key_id,
+                        "distribution_key_name": keys_map.get(li_key_id, "—"),
+                        "vat_amount": 0,  # TVA reste au niveau facture, non eclatee
+                        "total_amount": round(li_amt, 2),
+                        "status": inv.get("status", "unpaid"),
+                        "paid": inv["id"] in paid_map,
+                        "paid_info": paid_map.get(inv["id"]),
+                        "attachments_count": len(inv.get("attachments", []) or []),
+                        "occupant_pct": occ_pct,
+                        "proprietaire_pct": prop_pct,
+                        "occupant_amount": round(li_amt * occ_pct / 100, 2),
+                        "proprietaire_amount": round(li_amt * prop_pct / 100, 2),
+                        "source": "invoice",
+                        "journal_type": "AC",
+                        # Sous-total facture pour affichage UI
+                        "invoice_total_amount": inv_total,
+                    })
+                continue
+
+            # Mode 1-ligne (legacy)
             acc = inv.get("account_number", "")
             key_id = inv.get("distribution_key_id", "")
-            invoice_ids_done.add(inv["id"])
             cat = cat_by_id.get(inv.get("expense_category_id", "")) or cat_by_acc.get(acc) or {}
             rows.append({
                 "id": inv["id"],
