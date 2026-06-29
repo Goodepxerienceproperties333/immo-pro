@@ -141,11 +141,65 @@ export default function FundCallsPage() {
     }
   };
 
+  // Detection des appels avec distribution vide (lines presents mais distribution[]==0)
+  const brokenCalls = calls.filter(c => {
+    const dist = c.distribution || [];
+    const hasUseful = dist.some(d => Number(d.amount || 0) > 0.001);
+    const hasLines = (c.lines || []).length > 0;
+    return hasLines && !hasUseful;
+  });
+
+  const repairEmptyDistributions = async () => {
+    const copro = localStorage.getItem('selectedCopro') || localStorage.getItem('copropriete_id') || '';
+    if (!copro || copro === 'all') { toast.error('Selectionnez une ACP'); return; }
+    if (!window.confirm(
+      `Reparer la distribution de ${brokenCalls.length} appel(s) ?\n\n`
+      + `Les appels ayant des lignes budget mais aucune repartition par lot/proprietaire `
+      + `seront recalcules a partir des cles de repartition. Les appels avec paiements sont preserves.`
+    )) return;
+    try {
+      const { data } = await api.post(`/fund-calls/regenerate-empty-distributions?copropriete_id=${copro}`);
+      toast.success(data.message, {
+        description: data.fixed_count > 0
+          ? `${data.fixed.length} appel(s) repare(s) : ${data.fixed.map(f => f.name).join(', ')}`
+          : 'Aucun appel reparable trouve',
+        duration: 8000,
+      });
+      load();
+      if (selectedCall) viewCall(selectedCall.id);
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur lors de la reparation');
+    }
+  };
+
+  const regenerateSingleDistribution = async (callId) => {
+    if (!window.confirm('Regenerer la distribution de cet appel a partir de ses lignes budget ?')) return;
+    try {
+      const { data } = await api.post(`/fund-calls/${callId}/regenerate-distribution`);
+      toast.success(data.message);
+      load();
+      if (selectedCall?.id === callId) viewCall(callId);
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur');
+    }
+  };
+
   return (
     <div data-testid="fund-calls-page">
       <div className="page-header flex items-center justify-between">
         <div><h1 className="page-title"><Megaphone size={24} className="inline mr-2" />Appels de Fonds</h1><p className="page-subtitle">Appels de provisions et fonds de reserve</p></div>
         <div className="flex gap-2">
+          {brokenCalls.length > 0 && (
+            <Button
+              onClick={repairEmptyDistributions}
+              variant="outline"
+              className="border-amber-400 text-amber-700 hover:bg-amber-50"
+              data-testid="repair-distributions-btn"
+              title="Repare les appels dont la distribution par lot/proprietaire est manquante"
+            >
+              <AlertTriangle size={16} className="mr-2" /> Reparer distribution ({brokenCalls.length})
+            </Button>
+          )}
           {calls.length > 0 && (
             <Button
               onClick={regenerateEntries}
@@ -170,6 +224,35 @@ export default function FundCallsPage() {
           <Button onClick={openCreate} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="create-call-btn"><Plus size={16} className="mr-2" /> Nouvel appel</Button>
         </div>
       </div>
+
+      {brokenCalls.length > 0 && (
+        <div className="rounded-md border border-amber-300 bg-amber-50 p-3 mb-4 text-sm text-amber-900" data-testid="broken-distributions-banner">
+          <div className="flex items-start gap-2">
+            <AlertTriangle size={16} className="shrink-0 mt-0.5 text-amber-600" />
+            <div className="flex-1">
+              <div className="font-semibold">
+                {brokenCalls.length} appel(s) sans distribution detecte(s)
+              </div>
+              <div className="text-xs mt-1">
+                Ces appels ont des <b>lignes budget</b> definies mais aucune <b>repartition par lot/proprietaire</b>.
+                Ils n&apos;apparaitront pas correctement dans les decomptes ni dans les mutations. Cliquez sur
+                <b> &quot;Reparer distribution&quot;</b> pour les recalculer automatiquement a partir des cles de repartition.
+              </div>
+              <details className="mt-2 text-xs">
+                <summary className="cursor-pointer underline">Voir les appels concernes ({brokenCalls.length})</summary>
+                <ul className="mt-2 ml-4 list-disc">
+                  {brokenCalls.slice(0, 10).map(c => (
+                    <li key={c.id} data-testid={`broken-call-${c.id}`}>
+                      <span className="font-mono text-[11px]">{fmtDate(c.date)}</span> - {c.name} <span className="text-amber-700">({(c.total_amount || 0).toFixed(2)} EUR)</span>
+                    </li>
+                  ))}
+                  {brokenCalls.length > 10 && <li>... et {brokenCalls.length - 10} autre(s)</li>}
+                </ul>
+              </details>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="space-y-3">
@@ -203,6 +286,18 @@ export default function FundCallsPage() {
                 )}
                 <div className="flex gap-1 mt-2">
                   <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); generateEntries(c.id); }} title="Generer ecritures"><FileText size={12} /></Button>
+                  {brokenCalls.some(bc => bc.id === c.id) && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={(e) => { e.stopPropagation(); regenerateSingleDistribution(c.id); }}
+                      className="text-amber-600 hover:bg-amber-50"
+                      title="Cet appel n'a aucune distribution - cliquez pour la regenerer depuis les lignes budget"
+                      data-testid={`repair-single-${c.id}`}
+                    >
+                      <AlertTriangle size={12} />
+                    </Button>
+                  )}
                   <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); deleteCall(c.id); }} className="text-red-400"><Trash2 size={12} /></Button>
                 </div>
               </CardContent>
@@ -262,31 +357,146 @@ export default function FundCallsPage() {
                     </table>
                   </div>
                 )}
-                <Table>
-                  <TableHeader><TableRow>
-                    {(selectedCall.distribution || []).some(d => d.lot_number) && <TableHead>Lot</TableHead>}
-                    <TableHead>Proprietaire</TableHead><TableHead>VCS</TableHead>
-                    <TableHead className="text-right">Quote-part</TableHead><TableHead className="text-right">Montant</TableHead>
-                    <TableHead>Statut</TableHead><TableHead className="w-20"></TableHead>
-                  </TableRow></TableHeader>
-                  <TableBody>
-                    {(selectedCall.distribution || []).map((d, i) => (
-                      <TableRow key={i} className="hover:bg-slate-50/50">
-                        {(selectedCall.distribution || []).some(x => x.lot_number) && <TableCell className="font-mono text-sm">{d.lot_number || '-'}</TableCell>}
-                        <TableCell className="font-medium">{d.owner_name}</TableCell>
-                        <TableCell className="font-mono text-xs text-[#0055FF]">{d.vcs_code}</TableCell>
-                        <TableCell className="text-right font-mono text-sm">{d.share}</TableCell>
-                        <TableCell className="text-right font-mono font-semibold">{d.amount.toFixed(2)} EUR</TableCell>
-                        <TableCell>
-                          {d.paid ? <Badge className="bg-green-50 text-green-700 border-green-200" variant="outline">Paye {fmtDate(d.paid_date)}</Badge> : <Badge variant="outline" className="text-slate-400">Impaye</Badge>}
-                        </TableCell>
-                        <TableCell>
-                          {!d.paid && <Button variant="ghost" size="sm" onClick={() => markPaid(selectedCall.id, d.owner_id)} className="text-green-600" title="Marquer paye" data-testid={`mark-paid-${d.owner_id}`}><Check size={14} /></Button>}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                {/* Distribution groupee par proprietaire (depuis iter84) */}
+                {(() => {
+                  const dist = selectedCall.distribution || [];
+                  if (dist.length === 0) {
+                    return (
+                      <div className="text-center text-slate-400 italic py-8 text-sm">
+                        Aucune distribution - utilisez &quot;Reparer distribution&quot; pour la recalculer depuis les lignes budget.
+                      </div>
+                    );
+                  }
+                  // Regroupe par owner_id (les entries sans lot sont groupees ensemble)
+                  const groups = new Map();
+                  dist.forEach((d, idx) => {
+                    const key = d.owner_id || `__no_owner_${idx}`;
+                    if (!groups.has(key)) {
+                      groups.set(key, {
+                        owner_id: d.owner_id || '',
+                        owner_name: d.owner_name || '(sans proprietaire)',
+                        vcs_code: d.vcs_code || '',
+                        lots: [],
+                        total_amount: 0,
+                        total_share: 0,
+                        paid_amount: 0,
+                      });
+                    }
+                    const g = groups.get(key);
+                    g.lots.push(d);
+                    g.total_amount += Number(d.amount || 0);
+                    g.total_share += Number(d.share || 0);
+                    if (d.paid) g.paid_amount += Number(d.amount || 0);
+                  });
+                  const groupsArr = Array.from(groups.values()).sort((a, b) =>
+                    (a.owner_name || '').localeCompare(b.owner_name || '')
+                  );
+                  const grandTotal = groupsArr.reduce((s, g) => s + g.total_amount, 0);
+                  return (
+                    <div className="border rounded-md overflow-hidden" data-testid="call-distribution-grouped">
+                      <div className="bg-slate-50 px-3 py-2 text-xs uppercase tracking-wide text-slate-600 font-semibold border-b flex items-center justify-between">
+                        <span>Distribution par proprietaire ({groupsArr.length} proprietaires - {dist.length} lots)</span>
+                        <span className="font-mono normal-case text-slate-700">Total: <b>{grandTotal.toFixed(2)} EUR</b></span>
+                      </div>
+                      <div className="divide-y divide-slate-100">
+                        {groupsArr.map(g => {
+                          const isPaidFully = g.paid_amount >= g.total_amount - 0.01 && g.total_amount > 0;
+                          const isPartial = g.paid_amount > 0.01 && !isPaidFully;
+                          return (
+                            <div key={g.owner_id || g.owner_name} data-testid={`owner-group-${g.owner_id || 'noid'}`}>
+                              {/* Header proprietaire */}
+                              <div className={`flex items-center justify-between px-3 py-2 ${isPaidFully ? 'bg-emerald-50' : isPartial ? 'bg-amber-50' : 'bg-slate-50/40'}`}>
+                                <div className="flex items-center gap-3 min-w-0">
+                                  <div className="text-sm font-semibold text-slate-900 truncate">{g.owner_name}</div>
+                                  {g.vcs_code && (
+                                    <span className="text-[10px] font-mono text-[#0055FF] bg-blue-50 border border-blue-100 px-1.5 py-0.5 rounded">
+                                      {g.vcs_code}
+                                    </span>
+                                  )}
+                                  <span className="text-[10px] text-slate-500">{g.lots.length} lot{g.lots.length > 1 ? 's' : ''}</span>
+                                  {isPaidFully && (
+                                    <Badge className="bg-emerald-50 text-emerald-700 border-emerald-200 text-[10px]" variant="outline">
+                                      <Check size={9} className="mr-0.5" /> Paye integralement
+                                    </Badge>
+                                  )}
+                                  {isPartial && (
+                                    <Badge className="bg-amber-50 text-amber-700 border-amber-200 text-[10px]" variant="outline">
+                                      Partiel {g.paid_amount.toFixed(2)} / {g.total_amount.toFixed(2)} EUR
+                                    </Badge>
+                                  )}
+                                </div>
+                                <div className="flex items-center gap-3 shrink-0">
+                                  <div className="text-right">
+                                    <div className="font-mono font-bold text-sm text-slate-900">
+                                      {g.total_amount.toFixed(2)} EUR
+                                    </div>
+                                    <div className="text-[10px] text-slate-500 font-mono">
+                                      quote-part {g.total_share.toFixed(2)}
+                                    </div>
+                                  </div>
+                                  {!isPaidFully && g.owner_id && (
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      onClick={() => markPaid(selectedCall.id, g.owner_id)}
+                                      className="text-green-600 h-7"
+                                      title="Marquer toutes les lignes de ce proprietaire comme payees"
+                                      data-testid={`mark-paid-${g.owner_id}`}
+                                    >
+                                      <Check size={14} />
+                                    </Button>
+                                  )}
+                                </div>
+                              </div>
+                              {/* Detail des lots du proprietaire (masque si 1 seule ligne sans lot_number) */}
+                              {(() => {
+                                const hasAnyLot = g.lots.some(d => d.lot_number);
+                                if (!hasAnyLot && g.lots.length === 1) return null;
+                                return (
+                                  <table className="w-full text-xs">
+                                    <tbody>
+                                      {g.lots.map((d, i) => (
+                                        <tr key={i} className="border-t border-slate-50 hover:bg-slate-50/50">
+                                          <td className="px-3 py-1.5 pl-8 w-[100px]">
+                                            {d.lot_number ? (
+                                              <span className="font-mono text-[11px] text-slate-700">Lot {d.lot_number}</span>
+                                            ) : (
+                                              <span className="text-[10px] text-slate-400 italic">part owner</span>
+                                            )}
+                                          </td>
+                                          <td className="px-3 py-1.5 text-right font-mono text-[10px] text-slate-500 w-[80px]">
+                                            {Number(d.share || 0).toFixed(2)}
+                                          </td>
+                                          <td className="px-3 py-1.5 text-right font-mono text-[11px] text-slate-700 w-[120px]">
+                                            {Number(d.amount || 0).toFixed(2)} EUR
+                                          </td>
+                                          <td className="px-3 py-1.5 w-[140px]">
+                                            {d.paid ? (
+                                              <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 text-[9px]">
+                                                Paye {d.paid_date ? fmtDate(d.paid_date) : ''}
+                                              </Badge>
+                                            ) : (
+                                              <span className="text-[10px] text-slate-400 italic">Impaye</span>
+                                            )}
+                                          </td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                );
+                              })()}
+                            </div>
+                          );
+                        })}
+                      </div>
+                      {/* Total general */}
+                      <div className="bg-slate-100 px-3 py-2 border-t-2 border-slate-300 flex items-center justify-between font-bold text-sm">
+                        <span>TOTAL APPEL</span>
+                        <span className="font-mono">{grandTotal.toFixed(2)} EUR</span>
+                      </div>
+                    </div>
+                  );
+                })()}
               </CardContent>
             </Card>
           );})() : (

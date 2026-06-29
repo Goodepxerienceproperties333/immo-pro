@@ -673,4 +673,194 @@ def create_fund_calls_router(db):
         result["preserved_count"] = preserved
         return result
 
+    # ---- REGENERATE DISTRIBUTION FROM EXISTING LINES ----
+    async def _rebuild_distribution_from_lines(call: dict) -> tuple:
+        """Reconstruit la distribution d'un appel a partir de ses `lines` (budget
+        categories avec distribution_key_id). Ne modifie PAS le call lui-meme.
+
+        Retourne (distribution_list, lot_total_map) :
+          - distribution_list : [{lot_id, lot_number, owner_id, owner_name, vcs_code,
+                                  share, amount, paid, paid_date}]
+          - lot_total_map : {lot_id: amount_total} pour debug
+        """
+        lines = call.get("lines") or []
+        if not lines:
+            return [], {}
+
+        copro_id = call.get("copropriete_id", "")
+        lots = await db.lots.find({"copropriete_id": copro_id}, {"_id": 0}).to_list(5000)
+        owners = await db.owners.find({}, {"_id": 0}).to_list(5000)
+        owners_map = {o["id"]: o for o in owners}
+
+        # Accumulateur par lot_id
+        lot_amounts: dict = {}  # lot_id -> total
+        lot_shares: dict = {}   # lot_id -> sum of shares (pour info)
+
+        # Cache cles
+        keys_cache: dict = {}
+        total_quotity_global = sum(float(lt.get("quotity", 0) or 0) for lt in lots)
+
+        for ln in lines:
+            key_id = ln.get("distribution_key_id", "")
+            line_amt = float(ln.get("amount", 0) or 0)
+            if line_amt <= 0:
+                continue
+            if key_id:
+                if key_id not in keys_cache:
+                    keys_cache[key_id] = await db.distribution_keys.find_one(
+                        {"id": key_id}, {"_id": 0}
+                    )
+                key = keys_cache[key_id]
+                if not key or not key.get("lots"):
+                    continue
+                total_shares = sum(float(kl.get("share", 0) or 0) for kl in key["lots"])
+                if total_shares <= 0:
+                    continue
+                for kl in key["lots"]:
+                    lot_id = kl.get("lot_id")
+                    if not lot_id:
+                        continue
+                    share = float(kl.get("share", 0) or 0)
+                    if share <= 0:
+                        continue
+                    portion = line_amt * (share / total_shares)
+                    lot_amounts[lot_id] = lot_amounts.get(lot_id, 0.0) + portion
+                    lot_shares[lot_id] = lot_shares.get(lot_id, 0.0) + share
+            else:
+                # Fallback : repartition aux quotites globales
+                if total_quotity_global <= 0:
+                    continue
+                for lt in lots:
+                    lot_q = float(lt.get("quotity", 0) or 0)
+                    if lot_q <= 0:
+                        continue
+                    portion = line_amt * (lot_q / total_quotity_global)
+                    lot_amounts[lt["id"]] = lot_amounts.get(lt["id"], 0.0) + portion
+                    lot_shares[lt["id"]] = lot_shares.get(lt["id"], 0.0) + lot_q
+
+        # Build distribution list (1 entry par lot avec montant > 0)
+        distribution = []
+        lots_by_id = {lt["id"]: lt for lt in lots}
+        for lot_id, amt in lot_amounts.items():
+            if amt <= 0.001:
+                continue
+            lot = lots_by_id.get(lot_id)
+            if not lot:
+                continue
+            owner_id = lot.get("owner_id") or ""
+            owner = owners_map.get(owner_id) if owner_id else None
+            distribution.append({
+                "lot_id": lot_id,
+                "lot_number": lot.get("number", ""),
+                "owner_id": owner_id,
+                "owner_name": owner.get("name", "") if owner else "",
+                "vcs_code": owner.get("vcs_code", "") if owner else "",
+                "share": round(lot_shares.get(lot_id, 0.0), 4),
+                "amount": round(amt, 2),
+                "paid": False,
+                "paid_date": "",
+            })
+        distribution.sort(key=lambda d: (d["owner_name"], d["lot_number"]))
+        return distribution, lot_amounts
+
+    @router.post("/{call_id}/regenerate-distribution")
+    async def regenerate_call_distribution(call_id: str):
+        """Recalcule la distribution d'UN appel a partir de ses `lines`.
+
+        Utile pour reparer les appels Q2/Q3/Q4 dont la distribution s'est
+        retrouvee vide suite a une regeneration partielle ou un bug.
+
+        Refuse si au moins une distribution row existe avec paid=true (protection
+        historique).
+        """
+        call = await db.fund_calls.find_one({"id": call_id}, {"_id": 0})
+        if not call:
+            raise HTTPException(404, "Appel introuvable")
+        existing_dist = call.get("distribution") or []
+        if any(d.get("paid") for d in existing_dist):
+            raise HTTPException(
+                400,
+                "Cet appel contient des paiements - regenerer la distribution detruirait l'historique."
+            )
+        new_dist, _ = await _rebuild_distribution_from_lines(call)
+        if not new_dist:
+            raise HTTPException(
+                400,
+                "Impossible de reconstruire la distribution : "
+                "verifiez que les cles de repartition referencees existent et contiennent des lots."
+            )
+        new_total = round(sum(d["amount"] for d in new_dist), 2)
+        await db.fund_calls.update_one(
+            {"id": call_id},
+            {"$set": {"distribution": new_dist}},
+        )
+        return {
+            "status": "ok",
+            "call_id": call_id,
+            "distribution_count": len(new_dist),
+            "recalculated_total": new_total,
+            "stored_total": call.get("total_amount", 0),
+            "delta": round(new_total - float(call.get("total_amount", 0) or 0), 2),
+            "message": f"{len(new_dist)} ligne(s) de distribution regeneree(s) pour un total de {new_total:.2f} EUR.",
+        }
+
+    @router.post("/regenerate-empty-distributions")
+    async def regenerate_empty_distributions(
+        request: Request, copropriete_id: Optional[str] = None,
+    ):
+        """Scan une ACP et regenere la distribution pour TOUS les appels dont
+        la distribution est vide (ou tous les montants = 0) ET dont les `lines`
+        sont presentes. Les appels avec paiements sont preserves.
+
+        Endpoint de reparation suite a une regeneration partielle.
+        """
+        if not copropriete_id:
+            copropriete_id = request.headers.get("X-Copropriete-Id") or None
+        if not copropriete_id or copropriete_id == "all":
+            raise HTTPException(400, "copropriete_id requis - chinese wall strict")
+        calls = await db.fund_calls.find(
+            {"copropriete_id": copropriete_id}, {"_id": 0}
+        ).to_list(10000)
+        fixed = []
+        skipped_paid = []
+        skipped_no_lines = []
+        for c in calls:
+            dist = c.get("distribution") or []
+            has_useful = any(float(d.get("amount", 0) or 0) > 0.001 for d in dist)
+            if has_useful:
+                continue  # distribution OK, on ne touche pas
+            if any(d.get("paid") for d in dist):
+                skipped_paid.append({"id": c["id"], "name": c.get("name", "")})
+                continue
+            if not (c.get("lines") or []):
+                skipped_no_lines.append({"id": c["id"], "name": c.get("name", "")})
+                continue
+            new_dist, _ = await _rebuild_distribution_from_lines(c)
+            if not new_dist:
+                continue
+            await db.fund_calls.update_one(
+                {"id": c["id"]},
+                {"$set": {"distribution": new_dist}},
+            )
+            fixed.append({
+                "id": c["id"],
+                "name": c.get("name", ""),
+                "date": c.get("date", ""),
+                "lines_count": len(new_dist),
+                "total": round(sum(d["amount"] for d in new_dist), 2),
+            })
+        return {
+            "status": "ok",
+            "scanned": len(calls),
+            "fixed_count": len(fixed),
+            "fixed": fixed,
+            "skipped_paid": skipped_paid,
+            "skipped_no_lines": skipped_no_lines,
+            "message": (
+                f"{len(fixed)} appel(s) repare(s)."
+                + (f" {len(skipped_paid)} ignore(s) car contient des paiements." if skipped_paid else "")
+                + (f" {len(skipped_no_lines)} ignore(s) car aucune ligne budget." if skipped_no_lines else "")
+            ),
+        }
+
     return router
