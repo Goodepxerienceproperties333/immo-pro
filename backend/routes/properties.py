@@ -864,6 +864,149 @@ def create_properties_router(db):
 
         all_lots = [lot] + children
 
+        # ----- Helper iter84++ : regeneration des appels FUTURS apres mutation -----
+        async def _regenerate_future_calls_after_mutation(
+            lot_id: str, copro_id: str, sale_date_str: str,
+            old_owner_id: str, new_owner_id: str,
+        ) -> dict:
+            """Met a jour les appels FUTURS (date > sale_date) pour cette ACP/FY :
+
+            - PROVISIONS (et autres types courants) : remplace old_owner par
+              new_owner dans la distribution + regenere l'ecriture comptable.
+            - RESERVE / ROULEMENT (alimentations de fonds permanents classe 1) :
+              si un appel du MEME type a deja ete emis AVANT sale_date pour ce
+              lot dans la meme FY, le lot est EXCLU de la distribution des
+              appels futurs (le vendeur a deja paye, l'acheteur le rembourse
+              via la mutation - pas de double ecriture).
+
+            Les appels avec paiement deja recu sont preserves (pas de
+            destruction d'historique).
+            """
+            from auto_entries import generate_sale_entry, _delete_auto_entries
+            try:
+                sale_dt_local = datetime.strptime(sale_date_str, "%Y-%m-%d").date()
+            except Exception:
+                return {"error": "sale_date invalide", "fixed": 0}
+
+            # Identifie la FY couvrant la date de vente
+            fys = await db.fiscal_years.find({"copropriete_id": copro_id}, {"_id": 0}).to_list(100)
+            current_fy = None
+            for fy in fys:
+                try:
+                    fs = datetime.strptime(fy.get("start_date", ""), "%Y-%m-%d").date()
+                    fe = datetime.strptime(fy.get("end_date", ""), "%Y-%m-%d").date()
+                    if fs <= sale_dt_local <= fe:
+                        current_fy = fy
+                        break
+                except Exception:
+                    continue
+            if not current_fy:
+                return {"info": "Aucune FY couvrant la date de vente", "fixed": 0}
+
+            fy_start_str = current_fy.get("start_date", "")
+            fy_end_str = current_fy.get("end_date", "")
+
+            # Tous les appels de la FY pour cette ACP
+            calls = await db.fund_calls.find({
+                "copropriete_id": copro_id,
+                "date": {"$gte": fy_start_str, "$lte": fy_end_str},
+            }, {"_id": 0}).sort("date", 1).to_list(2000)
+
+            # Types alimentant un fonds permanent (classe 1) -> exclusion si paye avant
+            CAPITAL_TYPES = {"reserve", "roulement"}
+
+            # Pour chaque type "capital", verifie si ce lot a deja eu un appel
+            # AVANT sale_date dans cette FY (peu importe paid ou non - le vendeur
+            # est legalement engage car l'appel a ete emis avant la vente).
+            had_prior_capital_call: dict = {"reserve": False, "roulement": False}
+            for c in calls:
+                ctype = c.get("call_type", "")
+                if ctype not in CAPITAL_TYPES:
+                    continue
+                if c.get("date", "") > sale_date_str:
+                    continue
+                # Verifie que LE LOT etait inclus dans la distribution
+                for d in (c.get("distribution") or []):
+                    if d.get("lot_id") == lot_id:
+                        had_prior_capital_call[ctype] = True
+                        break
+
+            updated_calls = []
+            excluded_calls = []
+            skipped_paid = []
+
+            for c in calls:
+                # Ne touche que les appels strictement FUTURS
+                if c.get("date", "") <= sale_date_str:
+                    continue
+                ctype = c.get("call_type", "")
+                dist = list(c.get("distribution") or [])
+
+                # Cherche les rows concernant CE lot
+                lot_rows_idx = [i for i, d in enumerate(dist) if d.get("lot_id") == lot_id]
+                if not lot_rows_idx:
+                    continue  # Lot pas concerne par cet appel
+
+                # Si AU MOINS une row a deja ete payee : on ne touche pas
+                # (preserver historique comptable).
+                if any(dist[i].get("paid") for i in lot_rows_idx):
+                    skipped_paid.append({"id": c["id"], "name": c.get("name", ""), "date": c.get("date", "")})
+                    continue
+
+                if ctype in CAPITAL_TYPES and had_prior_capital_call.get(ctype):
+                    # Regle "fonds permanent deja paye par vendeur" : exclure le lot
+                    excluded_amount = sum(float(dist[i].get("amount", 0) or 0) for i in lot_rows_idx)
+                    for i in sorted(lot_rows_idx, reverse=True):
+                        dist.pop(i)
+                    new_total = round(sum(float(d.get("amount", 0) or 0) for d in dist), 2)
+                    await db.fund_calls.update_one(
+                        {"id": c["id"]},
+                        {"$set": {"distribution": dist, "total_amount": new_total}},
+                    )
+                    excluded_calls.append({
+                        "id": c["id"], "name": c.get("name", ""), "date": c.get("date", ""),
+                        "call_type": ctype, "excluded_amount": round(excluded_amount, 2),
+                        "new_total": new_total,
+                    })
+                else:
+                    # Remplace owner_id (et eventuellement vcs_code/owner_name) pour ce lot
+                    new_owner = await db.owners.find_one({"id": new_owner_id}, {"_id": 0})
+                    new_name = (new_owner or {}).get("name", "") if new_owner else ""
+                    new_vcs = (new_owner or {}).get("vcs_code", "") if new_owner else ""
+                    for i in lot_rows_idx:
+                        dist[i]["owner_id"] = new_owner_id
+                        if new_name:
+                            dist[i]["owner_name"] = new_name
+                        if new_vcs:
+                            dist[i]["vcs_code"] = new_vcs
+                    await db.fund_calls.update_one(
+                        {"id": c["id"]},
+                        {"$set": {"distribution": dist}},
+                    )
+                    updated_calls.append({
+                        "id": c["id"], "name": c.get("name", ""), "date": c.get("date", ""),
+                        "call_type": ctype, "rows_migrated": len(lot_rows_idx),
+                    })
+
+                # Regenere l'ecriture comptable (delete + create)
+                try:
+                    fresh = await db.fund_calls.find_one({"id": c["id"]}, {"_id": 0})
+                    if fresh:
+                        await _delete_auto_entries(db, "fund_call", c["id"])
+                        await generate_sale_entry(db, fresh)
+                except Exception as e:
+                    print(f"[mutation-regen] entry regen failed for {c.get('name')}: {e}")
+
+            return {
+                "fy_name": current_fy.get("name", ""),
+                "fixed": len(updated_calls) + len(excluded_calls),
+                "migrated_owner": updated_calls,
+                "excluded_capital": excluded_calls,
+                "skipped_paid": skipped_paid,
+                "had_prior_reserve": had_prior_capital_call["reserve"],
+                "had_prior_roulement": had_prior_capital_call["roulement"],
+            }
+
         async def _apply_to_lot(lt: dict) -> dict:
             """Applique la mutation a un seul lot et retourne le mutation_record.
 
@@ -996,6 +1139,24 @@ def create_properties_router(db):
                 {"$set": {"owner_id": data.new_owner_id, "owner_ids": [data.new_owner_id]},
                  "$push": {"mutations": mut_rec}}
             )
+
+            # iter84++ : Regenere les ecritures comptables des appels FUTURS pour
+            # cette ACP+FY apres la mutation. Regle reserve : un lot ayant deja
+            # ete appele en reserve AVANT la vente est EXCLU des appels de
+            # reserve generes apres la vente (vendeur a deja paye).
+            try:
+                regen_summary = await _regenerate_future_calls_after_mutation(
+                    lot_id=lt["id"],
+                    copro_id=copro_id,
+                    sale_date_str=sale_date,
+                    old_owner_id=old_owner_id,
+                    new_owner_id=data.new_owner_id,
+                )
+                mut_rec["regenerated_calls"] = regen_summary
+            except Exception as e:
+                print(f"[mutation] post-regen failed for lot {lt.get('number')}: {e}")
+                mut_rec["regenerated_calls"] = {"error": str(e), "fixed": 0}
+
             return mut_rec
 
         all_mutations = []
