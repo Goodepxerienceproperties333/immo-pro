@@ -7,7 +7,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { Plus, Pencil, Trash2, Search, X, ArrowRightLeft, UserPlus, Link2, Link2Off } from 'lucide-react';
+import { Plus, Pencil, Trash2, Search, X, ArrowRightLeft, UserPlus, Link2, Link2Off, FileDown } from 'lucide-react';
 import { fmtDate } from '@/lib/dateFmt';
 
 const LOT_TYPES = [
@@ -646,16 +646,82 @@ function MutationDialog({ lot, owners, ownersRefresh, onClose, onDone }) {
                           {m.note && <div className="text-[11px] italic text-slate-500 mt-1">{m.note}</div>}
                         </div>
                         {isLast && (
+                          <div className="flex flex-col gap-1">
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              className="text-blue-700 border-blue-200 hover:bg-blue-50 h-7 text-[11px]"
+                              onClick={async () => {
+                                try {
+                                  const res = await api.get(
+                                    `/lots/${lot.id}/mutations/${m.id || 'last'}/decompte.pdf`,
+                                    { responseType: 'blob' }
+                                  );
+                                  const url = window.URL.createObjectURL(
+                                    new Blob([res.data], { type: 'application/pdf' })
+                                  );
+                                  const a = document.createElement('a');
+                                  a.href = url;
+                                  a.download = `decompte_mutation_lot_${(lot.number || '').replace(/[\/ ]/g, '_')}_${(m.date || '').replace(/-/g, '')}.pdf`;
+                                  document.body.appendChild(a);
+                                  a.click();
+                                  a.remove();
+                                  window.URL.revokeObjectURL(url);
+                                  toast.success('PDF telecharge');
+                                } catch (err) {
+                                  toast.error('Erreur de generation du PDF');
+                                }
+                              }}
+                              data-testid={`download-mutation-pdf-${m.id || 'last'}`}
+                              disabled={busy}
+                            >
+                              <FileDown size={12} className="mr-1" /> PDF
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              className="text-red-600 border-red-200 hover:bg-red-50 h-7 text-[11px]"
+                              onClick={() => handleCancelMutation(m.id || 'last')}
+                              data-testid={`cancel-mutation-${m.id || 'last'}`}
+                              disabled={busy}
+                            >
+                              Annuler
+                            </Button>
+                          </div>
+                        )}
+                        {!isLast && (
                           <Button
                             type="button"
                             size="sm"
                             variant="outline"
-                            className="text-red-600 border-red-200 hover:bg-red-50 h-7 text-[11px]"
-                            onClick={() => handleCancelMutation(m.id || 'last')}
-                            data-testid={`cancel-mutation-${m.id || 'last'}`}
+                            className="text-blue-700 border-blue-200 hover:bg-blue-50 h-7 text-[11px]"
+                            onClick={async () => {
+                              try {
+                                const res = await api.get(
+                                  `/lots/${lot.id}/mutations/${m.id}/decompte.pdf`,
+                                  { responseType: 'blob' }
+                                );
+                                const url = window.URL.createObjectURL(
+                                  new Blob([res.data], { type: 'application/pdf' })
+                                );
+                                const a = document.createElement('a');
+                                a.href = url;
+                                a.download = `decompte_mutation_lot_${(lot.number || '').replace(/[\/ ]/g, '_')}_${(m.date || '').replace(/-/g, '')}.pdf`;
+                                document.body.appendChild(a);
+                                a.click();
+                                a.remove();
+                                window.URL.revokeObjectURL(url);
+                                toast.success('PDF telecharge');
+                              } catch (err) {
+                                toast.error('Erreur de generation du PDF');
+                              }
+                            }}
+                            data-testid={`download-mutation-pdf-${m.id}`}
                             disabled={busy}
                           >
-                            Annuler
+                            <FileDown size={12} className="mr-1" /> PDF
                           </Button>
                         )}
                       </div>

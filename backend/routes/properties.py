@@ -1311,6 +1311,67 @@ def create_properties_router(db):
             "cancelled_lots": cancelled,
         }
 
+    @router.get("/lots/{lot_id}/mutations/{mutation_id}/decompte.pdf")
+    async def download_mutation_decompte_pdf(lot_id: str, mutation_id: str):
+        """Genere le PDF "Decompte de mutation" pour une mutation donnee.
+
+        Reprend les 3 blocs comptables (fonds de roulement + prorata appel en
+        cours + appels futurs) stockes dans le mutation_record. Format
+        notarial, joint a l'acte de vente.
+        """
+        from fastapi.responses import StreamingResponse
+        from io import BytesIO
+        from pdf_mutation_decompte import build_mutation_decompte_pdf
+
+        lot = await db.lots.find_one({"id": lot_id}, {"_id": 0})
+        if not lot:
+            raise HTTPException(404, "Lot non trouve")
+        muts = lot.get("mutations") or []
+        # mutation_id == "last" -> derniere mutation
+        if mutation_id == "last":
+            mut = muts[-1] if muts else None
+        else:
+            mut = next((m for m in muts if m.get("id") == mutation_id), None)
+        if not mut:
+            raise HTTPException(404, "Mutation non trouvee pour ce lot")
+
+        copro = await db.coproprietes.find_one(
+            {"id": lot.get("copropriete_id", "")}, {"_id": 0}
+        ) or {}
+        seller = await db.owners.find_one(
+            {"id": mut.get("old_owner_id", "")}, {"_id": 0}
+        ) or {}
+        buyer = await db.owners.find_one(
+            {"id": mut.get("new_owner_id", "")}, {"_id": 0}
+        ) or {}
+
+        # Reconstruit breakdown depuis mut_rec (champs persistes lors de la mutation)
+        breakdown = {
+            "roulement_quota": mut.get("roulement_quota", 0),
+            "current_period_prorata": mut.get("current_period_prorata", mut.get("prorata_provisions", 0)),
+            "current_period_details": mut.get("current_period_details") or mut.get("prorata_details") or [],
+            "future_calls": mut.get("future_calls") or [],
+            "future_calls_total": mut.get("future_calls_total", 0),
+            "budget_frequency": mut.get("budget_frequency"),
+            "budget_frequency_label": mut.get("budget_frequency_label", ""),
+            "total_transfer": mut.get("total_transfer", 0),
+        }
+
+        pdf_bytes = build_mutation_decompte_pdf(
+            copropriete=copro, lot=lot,
+            seller=seller, buyer=buyer,
+            mutation=mut, breakdown=breakdown,
+        )
+
+        sale_date = (mut.get("date", "") or "").replace("-", "")
+        lot_num = (lot.get("number", "") or "").replace("/", "_").replace(" ", "_")
+        filename = f"decompte_mutation_lot_{lot_num}_{sale_date}.pdf"
+        return StreamingResponse(
+            BytesIO(pdf_bytes),
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
     @router.post("/lots/{lot_id}/mutate-preview")
     async def mutate_lot_preview(lot_id: str, data: LotMutationInput):
         """Preview du calcul de mutation sans rien ecrire en base.

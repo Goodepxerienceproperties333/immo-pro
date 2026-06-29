@@ -11,6 +11,40 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 ## Implemented
+### Iter85b (Feb 2026) - Endpoint PDF "Decompte de mutation" expose
+
+**Demande user** : "Endpoint GET /api/lots/{lot_id}/mutations/{mutation_id}/
+decompte.pdf + bouton frontend (le builder PDF pdf_mutation_decompte.py est
+deja complet, manque juste l'exposition route)."
+
+**Implementation backend** (`routes/properties.py`) :
+- Nouveau endpoint `GET /api/lots/{lot_id}/mutations/{mutation_id}/decompte.pdf`
+- Accepte `mutation_id = "last"` ou un UUID exact
+- Recupere lot + mutation_record + copropriete + vendeur + acheteur
+- Reconstruit le breakdown depuis le mutation_record persiste (roulement_quota,
+  current_period_prorata, future_calls, etc.)
+- Appelle `pdf_mutation_decompte.build_mutation_decompte_pdf` et retourne
+  StreamingResponse avec `Content-Disposition: attachment`
+- Filename pattern : `decompte_mutation_lot_{number}_{YYYYMMDD}.pdf`
+- 404 si lot ou mutation introuvables
+
+**Frontend** (`pages/LotsPage.js`) :
+- Bouton bleu "PDF" (icone FileDown) ajoute a CHAQUE mutation dans l'historique
+  (la derniere mutation a "PDF" + "Annuler", les anciennes ont juste "PDF")
+- Telechargement via blob + lien <a download> (pattern identique a Decomptes locataires)
+- data-testid : `download-mutation-pdf-{mutation_id}`
+
+**Tests** (4 tests PASSED) :
+- `test_iter85_pdf_decompte_valid_pdf` : 200 + magic bytes %PDF + >2000 bytes
+- `test_iter85_pdf_decompte_mutation_id_last` : "last" resoud derniere mutation
+- `test_iter85_pdf_decompte_invalid_lot_404`
+- `test_iter85_pdf_decompte_invalid_mutation_404`
+
+**Fichiers** :
+- `/app/backend/routes/properties.py` (nouvel endpoint)
+- `/app/backend/tests/test_iter85_pdf_decompte_mutation.py` (NEW)
+- `/app/frontend/src/pages/LotsPage.js` (bouton PDF + import FileDown)
+
 ### Iter85 (Feb 2026) - Mutation : OD futures aux dates des appels (refonte)
 
 **Demande user** : "La balance de tier doit lister chaque appel de provision a
