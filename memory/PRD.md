@@ -11,6 +11,49 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 ## Implemented
+### Iter85c (Feb 2026) - PDF futurs : montants reels + wrap + sous-totaux trimestre + cascade lots
+
+**Demandes user** :
+  1. BUG : montants des appels futurs a 0,00 EUR dans le PDF (lecture cle "lot_amount" inexistante)
+  2. BUG : colonne "Appel" deborde sur "Date appel" sur libelles longs
+  3. Sous-totaux par trimestre dans le bloc 3 du PDF
+  4. Cascade par lot (parent/enfants) dans FundCallsPage
+
+**Fixes PDF** (`pdf_mutation_decompte.py`) :
+- Lecture montant : `f.get("amount", f.get("lot_amount", f.get("owner_amount", 0)))` (la cle reelle stockee est "amount", cf. `_compute_mutation_breakdown`)
+- Wrap automatique : toutes les cellules du bloc 3 sont enveloppees dans des `Paragraph(text, style)` (style cell_left/cell_right) pour activer le retour a la ligne
+- colWidths ajustees : `[56*mm, 24*mm, 58*mm, 40*mm]` (plus de marge sur la colonne Appel)
+- Sous-totaux par trimestre :
+  - Detection T1/T2/T3/T4 via regex "trimestriel X/4" OU mois de period_start
+  - Insertion d'une ligne fond SLATE_100 "Sous-total TX ... montant" apres chaque groupe
+  - Sous-total general "Sous-total appels futurs" conserve en fin (fond BLUE_BG)
+
+**Fixes backend** (`routes/fund_calls.py`) :
+- `create_fund_call` (distribution manuelle) : ajout du champ `parent_lot_id` issu de `lot.get("parent_lot_id", "")` dans chaque entry de distribution
+- `_distribute_amount` refactor : retourne maintenant une LISTE d'entrees par LOT (avec `lot_id`, `lot_number`, `parent_lot_id`, `owner_id`, `owner_name`, `vcs_code`, `amount`, `share`) au lieu d'un dict agrege par owner
+- Boucle d'agregation dans `generate_from_budget` : utilise `lot_agg` (indexe par lot_id) pour preserver le detail par lot. La distribution finale a 1 entree par LOT (et non par owner) avec `parent_lot_id`
+- Idem pour `_generate_independent_series` (reserve/roulement avec frequency propre)
+
+**Fixes frontend** (`pages/FundCallsPage.js`) :
+- Helper `sortLotsCascade` : tri parents d'abord (alphanumerique), enfants ensuite avec `_depth=1`
+- Affichage tableau : `pl-14` pour les enfants (vs `pl-8` parents), icone `└─` et badge "(secondaire)"
+- Retrait de la condition `if (!hasAnyLot && g.lots.length === 1) return null;` -> le detail est toujours visible
+- Comportement retrocompatible : si parent_lot_id absent (anciens fund_calls), tous les lots sont consideres parents (pas de cascade)
+
+**Tests** (`tests/test_iter85b_cascade_and_pdf.py` - 4/4 PASSED) :
+- `test_iter85b_create_fund_call_parent_lot_id` : verifie parent_lot_id dans la distribution
+- `test_iter85b_pdf_uses_amount_key` : "500,00" apparait 3+ fois (texte extrait via pypdf)
+- `test_iter85b_pdf_subtotals_per_trimester` : "Sous-total T2/T3/T4" + "Sous-total appels futurs" presents
+- `test_iter85b_pdf_long_appel_wraps` : libelle long encode et lisible
+
+**Regression complete** : 38/38 PASS sur stack iter82-85.
+
+**Fichiers** :
+- `/app/backend/pdf_mutation_decompte.py` (bloc 3 refait)
+- `/app/backend/routes/fund_calls.py` (_distribute_amount par lot + parent_lot_id partout)
+- `/app/frontend/src/pages/FundCallsPage.js` (cascade UI)
+- `/app/backend/tests/test_iter85b_cascade_and_pdf.py` (NEW - 4 tests)
+
 ### Iter85b (Feb 2026) - Endpoint PDF "Decompte de mutation" expose
 
 **Demande user** : "Endpoint GET /api/lots/{lot_id}/mutations/{mutation_id}/

@@ -306,32 +306,93 @@ def build_mutation_decompte_pdf(
             small,
         ))
     else:
+        # iter85b fix : key = "amount" (et fallbacks). iter85b enhance : Paragraph
+        # wrap + sous-totaux par trimestre.
+        import re as _re
+
+        def _trimester_label(fc_name: str, period_start: str) -> str:
+            """Deduit T1/T2/T3/T4 depuis 'Trimestriel X/4 ...' ou period_start."""
+            m = _re.search(r"trimestriel\s*(\d+)\s*/\s*4", (fc_name or "").lower())
+            if m:
+                return f"T{m.group(1)}"
+            try:
+                mon = datetime.strptime((period_start or "")[:10], "%Y-%m-%d").month
+                return f"T{((mon - 1) // 3) + 1}"
+            except Exception:
+                return "Autres"
+
         bloc3_data = [["Appel", "Date appel", "Periode", "Quote-part lot"]]
+        # Style cellule pour wrap automatique
+        cell_left = ParagraphStyle("cell_left", parent=small, alignment=0, leading=10)
+        cell_right = ParagraphStyle("cell_right", parent=small, alignment=2, leading=10)
+        cell_bold = ParagraphStyle("cell_bold", parent=small, fontName="Helvetica-Bold",
+                                     alignment=0, leading=10)
+        cell_bold_right = ParagraphStyle("cell_bold_right", parent=small, fontName="Helvetica-Bold",
+                                           alignment=2, leading=10)
+
+        # Pre-tri : grouper par trimestre tout en preservant l'ordre chronologique
+        grouped: dict = {}
+        order: list = []
         for f in futures:
+            tri = _trimester_label(f.get("fund_call_name", ""), f.get("period_start", ""))
+            if tri not in grouped:
+                grouped[tri] = []
+                order.append(tri)
+            grouped[tri].append(f)
+
+        subtotal_row_indexes: list = []  # pour styling apres construction
+        for tri in order:
+            items = grouped[tri]
+            sub_total = 0.0
+            for f in items:
+                amt = float(
+                    f.get("amount", f.get("lot_amount", f.get("owner_amount", 0))) or 0
+                )
+                sub_total += amt
+                bloc3_data.append([
+                    Paragraph(f.get("fund_call_name", ""), cell_left),
+                    Paragraph(_fmt_date(f.get("date", "")), cell_left),
+                    Paragraph(
+                        f"{_fmt_date(f.get('period_start',''))} -> {_fmt_date(f.get('period_end',''))}",
+                        cell_left,
+                    ),
+                    Paragraph(_fmt_eur(amt), cell_right),
+                ])
+            # Sous-total trimestre (fond SLATE_100)
             bloc3_data.append([
-                f.get("fund_call_name", ""),
-                _fmt_date(f.get("date", "")),
-                f"{_fmt_date(f.get('period_start',''))} -> {_fmt_date(f.get('period_end',''))}",
-                _fmt_eur(f.get("lot_amount", f.get("owner_amount", 0))),
+                Paragraph(f"Sous-total {tri}", cell_bold),
+                Paragraph("", cell_left),
+                Paragraph("", cell_left),
+                Paragraph(_fmt_eur(sub_total), cell_bold_right),
             ])
+            subtotal_row_indexes.append(len(bloc3_data) - 1)
+
+        # Ligne finale : sous-total general
         bloc3_data.append([
-            "", "", "Sous-total appels futurs",
-            _fmt_eur(futures_total),
+            Paragraph("", cell_left),
+            Paragraph("", cell_left),
+            Paragraph("Sous-total appels futurs", cell_bold),
+            Paragraph(_fmt_eur(futures_total), cell_bold_right),
         ])
-        bloc3_tbl = Table(bloc3_data, colWidths=[44 * mm, 24 * mm, 70 * mm, 40 * mm])
-        bloc3_tbl.setStyle(TableStyle([
+
+        bloc3_tbl = Table(bloc3_data, colWidths=[56 * mm, 24 * mm, 58 * mm, 40 * mm])
+        style_cmds = [
             ("BACKGROUND", (0, 0), (-1, 0), SLATE_100),
             ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
             ("FONTSIZE", (0, 0), (-1, -1), 7.5),
             ("GRID", (0, 0), (-1, -1), 0.4, SLATE_300),
-            ("ALIGN", (3, 1), (-1, -1), "RIGHT"),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
             ("BACKGROUND", (0, -1), (-1, -1), BLUE_BG),
             ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
             ("LEFTPADDING", (0, 0), (-1, -1), 4),
             ("RIGHTPADDING", (0, 0), (-1, -1), 4),
             ("TOPPADDING", (0, 0), (-1, -1), 3),
             ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
-        ]))
+        ]
+        # Styling des lignes sous-total trimestre
+        for rid in subtotal_row_indexes:
+            style_cmds.append(("BACKGROUND", (0, rid), (-1, rid), SLATE_100))
+        bloc3_tbl.setStyle(TableStyle(style_cmds))
         elements.append(bloc3_tbl)
 
     # ----- MENTIONS LEGALES + SIGNATURES -----

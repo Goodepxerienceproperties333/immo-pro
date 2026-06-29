@@ -368,6 +368,8 @@ export default function FundCallsPage() {
                     );
                   }
                   // Regroupe par owner_id (les entries sans lot sont groupees ensemble)
+                  // iter85b : cascade parent/enfant - les lots sont tries avec
+                  // les parents en premier, puis les enfants indentes sous leur parent.
                   const groups = new Map();
                   dist.forEach((d, idx) => {
                     const key = d.owner_id || `__no_owner_${idx}`;
@@ -388,6 +390,32 @@ export default function FundCallsPage() {
                     g.total_share += Number(d.share || 0);
                     if (d.paid) g.paid_amount += Number(d.amount || 0);
                   });
+                  // Tri cascade parent/enfant dans chaque groupe owner
+                  const sortLotsCascade = (lots) => {
+                    const byId = new Map();
+                    lots.forEach(l => { if (l.lot_id) byId.set(l.lot_id, l); });
+                    // Parents = ceux qui n'ont pas de parent_lot_id OU dont le parent n'est pas dans ce groupe
+                    const isParent = (l) => !l.parent_lot_id || !byId.has(l.parent_lot_id);
+                    const parents = lots.filter(isParent).sort((a, b) =>
+                      (a.lot_number || '').localeCompare(b.lot_number || '', undefined, { numeric: true })
+                    );
+                    const childrenByParent = new Map();
+                    lots.filter(l => !isParent(l)).forEach(l => {
+                      const arr = childrenByParent.get(l.parent_lot_id) || [];
+                      arr.push(l);
+                      childrenByParent.set(l.parent_lot_id, arr);
+                    });
+                    const out = [];
+                    parents.forEach(p => {
+                      out.push({ ...p, _depth: 0 });
+                      const kids = (childrenByParent.get(p.lot_id) || []).sort((a, b) =>
+                        (a.lot_number || '').localeCompare(b.lot_number || '', undefined, { numeric: true })
+                      );
+                      kids.forEach(k => out.push({ ...k, _depth: 1 }));
+                    });
+                    return out;
+                  };
+                  groups.forEach(g => { g.lots = sortLotsCascade(g.lots); });
                   const groupsArr = Array.from(groups.values()).sort((a, b) =>
                     (a.owner_name || '').localeCompare(b.owner_name || '')
                   );
@@ -448,21 +476,30 @@ export default function FundCallsPage() {
                                   )}
                                 </div>
                               </div>
-                              {/* Detail des lots du proprietaire (masque si 1 seule ligne sans lot_number) */}
-                              {(() => {
-                                const hasAnyLot = g.lots.some(d => d.lot_number);
-                                if (!hasAnyLot && g.lots.length === 1) return null;
-                                return (
-                                  <table className="w-full text-xs">
-                                    <tbody>
-                                      {g.lots.map((d, i) => (
+                              {/* Detail des lots du proprietaire avec cascade
+                                  parent/enfant (iter85b). Toujours affiche, meme
+                                  quand l'owner n'a qu'un seul lot. */}
+                              {g.lots.length > 0 && (
+                                <table className="w-full text-xs">
+                                  <tbody>
+                                    {g.lots.map((d, i) => {
+                                      const isChild = d._depth === 1;
+                                      return (
                                         <tr key={i} className="border-t border-slate-50 hover:bg-slate-50/50">
-                                          <td className="px-3 py-1.5 pl-8 w-[100px]">
-                                            {d.lot_number ? (
-                                              <span className="font-mono text-[11px] text-slate-700">Lot {d.lot_number}</span>
-                                            ) : (
-                                              <span className="text-[10px] text-slate-400 italic">part owner</span>
-                                            )}
+                                          <td className={`px-3 py-1.5 ${isChild ? 'pl-14' : 'pl-8'} w-[160px]`}>
+                                            <span className="font-mono text-[11px] text-slate-700 inline-flex items-center gap-1">
+                                              {isChild && (
+                                                <span className="text-slate-400" aria-hidden="true">└─</span>
+                                              )}
+                                              {d.lot_number ? (
+                                                <>Lot {d.lot_number}</>
+                                              ) : (
+                                                <span className="text-[10px] text-slate-400 italic">part owner</span>
+                                              )}
+                                              {isChild && (
+                                                <span className="text-[9px] text-slate-400 italic">(secondaire)</span>
+                                              )}
+                                            </span>
                                           </td>
                                           <td className="px-3 py-1.5 text-right font-mono text-[10px] text-slate-500 w-[80px]">
                                             {Number(d.share || 0).toFixed(2)}
@@ -480,11 +517,11 @@ export default function FundCallsPage() {
                                             )}
                                           </td>
                                         </tr>
-                                      ))}
-                                    </tbody>
-                                  </table>
-                                );
-                              })()}
+                                      );
+                                    })}
+                                  </tbody>
+                                </table>
+                              )}
                             </div>
                           );
                         })}

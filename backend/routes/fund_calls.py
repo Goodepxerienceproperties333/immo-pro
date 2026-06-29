@@ -109,17 +109,20 @@ def create_fund_calls_router(db):
 
         # Compute distribution
         distribution = []
+        # Map des lots scopes a l'ACP pour resoudre parent_lot_id
+        lots_by_id = {lt["id"]: lt for lt in lots}
         if data.distribution_key_id:
             key = await db.distribution_keys.find_one({"id": data.distribution_key_id}, {"_id": 0})
             if key:
                 total_shares = sum(l["share"] for l in key.get("lots", []))
                 for kl in key.get("lots", []):
-                    lot = next((l for l in lots if l["id"] == kl["lot_id"]), None)
+                    lot = lots_by_id.get(kl["lot_id"])
                     owner = owners_map.get(lot["owner_id"]) if lot else None
                     share_ratio = kl["share"] / total_shares if total_shares > 0 else 0
                     distribution.append({
                         "lot_id": kl["lot_id"],
                         "lot_number": kl["lot_number"],
+                        "parent_lot_id": (lot or {}).get("parent_lot_id", "") or "",
                         "owner_id": lot.get("owner_id", "") if lot else "",
                         "owner_name": owner["name"] if owner else "",
                         "vcs_code": owner.get("vcs_code", "") if owner else "",
@@ -139,6 +142,7 @@ def create_fund_calls_router(db):
                 distribution.append({
                     "lot_id": lot["id"],
                     "lot_number": lot["number"],
+                    "parent_lot_id": lot.get("parent_lot_id", "") or "",
                     "owner_id": lot["owner_id"],
                     "owner_name": owner["name"] if owner else "",
                     "vcs_code": owner.get("vcs_code", "") if owner else "",
@@ -352,9 +356,14 @@ def create_fund_calls_router(db):
         keys_map = {k["id"]: k for k in keys}
 
         def _distribute_amount(amount: float, key_id: str) -> list:
-            """Distribute amount on owners according to the given distribution key.
-            Fallback to quotities if key not found."""
-            dist = {}  # owner_id -> {amount, lot_ids, share, owner}
+            """Distribute amount on LOTS according to the given distribution key.
+            Fallback to quotities if key not found.
+            Retourne une LISTE de dicts {lot_id, lot_number, parent_lot_id,
+            owner_id, owner_name, vcs_code, amount, share}. Plusieurs entrees
+            peuvent partager le meme owner si l'owner a plusieurs lots, ce qui
+            permet la cascade parent/enfant cote frontend.
+            """
+            entries: list = []
             if key_id and key_id in keys_map:
                 key = keys_map[key_id]
                 total_shares = sum(l["share"] for l in key.get("lots", []))
@@ -362,22 +371,36 @@ def create_fund_calls_router(db):
                     lot = next((l for l in lots if l["id"] == kl["lot_id"]), None)
                     if not lot or not lot.get("owner_id"):
                         continue
-                    owner_id = lot["owner_id"]
+                    owner = owners_map.get(lot["owner_id"]) or {}
                     share_ratio = kl["share"] / total_shares if total_shares > 0 else 0
-                    dist.setdefault(owner_id, {"amount": 0.0, "share": 0.0})
-                    dist[owner_id]["amount"] += amount * share_ratio
-                    dist[owner_id]["share"] += kl["share"]
+                    entries.append({
+                        "lot_id": lot["id"],
+                        "lot_number": lot.get("number", ""),
+                        "parent_lot_id": lot.get("parent_lot_id", "") or "",
+                        "owner_id": lot["owner_id"],
+                        "owner_name": owner.get("name", ""),
+                        "vcs_code": owner.get("vcs_code", ""),
+                        "amount": amount * share_ratio,
+                        "share": float(kl["share"]),
+                    })
             else:
                 total_quotity = sum(l.get("quotity", 0) for l in lots if l.get("owner_id"))
                 for lot in lots:
                     if not lot.get("owner_id"):
                         continue
-                    owner_id = lot["owner_id"]
+                    owner = owners_map.get(lot["owner_id"]) or {}
                     share_ratio = lot.get("quotity", 0) / total_quotity if total_quotity > 0 else 0
-                    dist.setdefault(owner_id, {"amount": 0.0, "share": 0.0})
-                    dist[owner_id]["amount"] += amount * share_ratio
-                    dist[owner_id]["share"] += lot.get("quotity", 0)
-            return dist
+                    entries.append({
+                        "lot_id": lot["id"],
+                        "lot_number": lot.get("number", ""),
+                        "parent_lot_id": lot.get("parent_lot_id", "") or "",
+                        "owner_id": lot["owner_id"],
+                        "owner_name": owner.get("name", ""),
+                        "vcs_code": owner.get("vcs_code", ""),
+                        "amount": amount * share_ratio,
+                        "share": float(lot.get("quotity", 0)),
+                    })
+            return entries
 
         # Compute schedule
         interval_months = 12 // data.frequency
@@ -401,8 +424,32 @@ def create_fund_calls_router(db):
             else:
                 period_end = fy_end or (datetime.strptime(call_date, "%Y-%m-%d")
                                         + timedelta(days=interval_months * 30 - 1)).strftime("%Y-%m-%d")
-            # Aggregate distribution by owner combining all budget lines
-            owner_agg = {}  # owner_id -> {amount, breakdown_by_line[]}
+            # Aggregate distribution by LOT combining all budget lines (iter85b)
+            # Permet la cascade parent/enfant cote frontend.
+            lot_agg: dict = {}  # lot_id -> {meta, amount, share}
+
+            def _merge_into_lot_agg(entries: list) -> None:
+                for e in entries:
+                    lid = e.get("lot_id") or ""
+                    if not lid:
+                        continue
+                    if lid not in lot_agg:
+                        lot_agg[lid] = {
+                            "lot_id": lid,
+                            "lot_number": e.get("lot_number", ""),
+                            "parent_lot_id": e.get("parent_lot_id", "") or "",
+                            "owner_id": e.get("owner_id", ""),
+                            "owner_name": e.get("owner_name", ""),
+                            "vcs_code": e.get("vcs_code", ""),
+                            "amount": 0.0,
+                            "share": 0.0,
+                        }
+                    lot_agg[lid]["amount"] += e.get("amount", 0)
+                    # share : on prend le max plutot que la somme (sinon on
+                    # multiplie quand plusieurs budget_lines partagent la meme cle)
+                    if e.get("share", 0) > lot_agg[lid]["share"]:
+                        lot_agg[lid]["share"] = float(e.get("share", 0))
+
             call_total = 0.0
             line_details = []
             for bl in budget_lines:
@@ -418,10 +465,7 @@ def create_fund_calls_router(db):
                     "amount": bl_per_call,
                 })
                 call_total += bl_per_call
-                for oid, d in line_dist.items():
-                    owner_agg.setdefault(oid, {"amount": 0.0, "share": 0.0})
-                    owner_agg[oid]["amount"] += d["amount"]
-                    owner_agg[oid]["share"] += d["share"]
+                _merge_into_lot_agg(line_dist)
 
             # Reserve fund injecte sur appel #1 SEULEMENT si fonds reserve sans frequency propre.
             # Si frequency reserve definie, le fonds genere sa propre serie d'appels (plus bas).
@@ -442,10 +486,7 @@ def create_fund_calls_router(db):
                 })
                 call_total += reserve_amount
                 reserve_added = reserve_amount
-                for oid, d in reserve_dist.items():
-                    owner_agg.setdefault(oid, {"amount": 0.0, "share": 0.0})
-                    owner_agg[oid]["amount"] += d["amount"]
-                    owner_agg[oid]["share"] += d["share"]
+                _merge_into_lot_agg(reserve_dist)
 
             # Fonds de roulement injecte sur appel #1 SEULEMENT si pas de frequency propre.
             roulement_added = 0.0
@@ -468,26 +509,23 @@ def create_fund_calls_router(db):
                 })
                 call_total += roul_amount
                 roulement_added = roul_amount
-                for oid, d in roul_dist.items():
-                    owner_agg.setdefault(oid, {"amount": 0.0, "share": 0.0})
-                    owner_agg[oid]["amount"] += d["amount"]
-                    owner_agg[oid]["share"] += d["share"]
+                _merge_into_lot_agg(roul_dist)
 
             distribution = []
-            for oid, d in owner_agg.items():
-                owner = owners_map.get(oid)
-                if not owner:
-                    continue
+            for lid, agg in lot_agg.items():
                 distribution.append({
-                    "owner_id": oid,
-                    "owner_name": owner.get("name", ""),
-                    "vcs_code": owner.get("vcs_code", ""),
-                    "share": round(d["share"], 4),
-                    "amount": round(d["amount"], 2),
+                    "lot_id": lid,
+                    "lot_number": agg["lot_number"],
+                    "parent_lot_id": agg["parent_lot_id"],
+                    "owner_id": agg["owner_id"],
+                    "owner_name": agg["owner_name"],
+                    "vcs_code": agg["vcs_code"],
+                    "share": round(agg["share"], 4),
+                    "amount": round(agg["amount"], 2),
                     "paid": False,
                     "paid_date": "",
                 })
-            distribution.sort(key=lambda x: x["owner_name"])
+            distribution.sort(key=lambda x: (x["owner_name"] or "", x["lot_number"] or ""))
 
             call_label = ["Annuel", "Semestriel", "Quadrimestriel", "Trimestriel", "Bi-mensuel", "Mensuel"][
                 {1: 0, 2: 1, 3: 2, 4: 3, 6: 4, 12: 5}[n_calls]
@@ -542,21 +580,22 @@ def create_fund_calls_router(db):
                     pend = ((fy or {}).get("end_date") or
                             (datetime.strptime(cd, "%Y-%m-%d") + timedelta(days=interval * 30 - 1)).strftime("%Y-%m-%d"))
                 dist = _distribute_amount(per_call, fund.distribution_key_id or "")
+                # iter85b : distribution par lot (cascade parent/enfant)
                 distribution = []
-                for oid, d in dist.items():
-                    owner = owners_map.get(oid)
-                    if not owner:
-                        continue
+                for e in dist:
                     distribution.append({
-                        "owner_id": oid,
-                        "owner_name": owner.get("name", ""),
-                        "vcs_code": owner.get("vcs_code", ""),
-                        "share": round(d["share"], 4),
-                        "amount": round(d["amount"], 2),
+                        "lot_id": e.get("lot_id", ""),
+                        "lot_number": e.get("lot_number", ""),
+                        "parent_lot_id": e.get("parent_lot_id", "") or "",
+                        "owner_id": e.get("owner_id", ""),
+                        "owner_name": e.get("owner_name", ""),
+                        "vcs_code": e.get("vcs_code", ""),
+                        "share": round(float(e.get("share", 0)), 4),
+                        "amount": round(float(e.get("amount", 0)), 2),
                         "paid": False,
                         "paid_date": "",
                     })
-                distribution.sort(key=lambda x: x["owner_name"])
+                distribution.sort(key=lambda x: (x["owner_name"] or "", x["lot_number"] or ""))
                 line_tag = {"account_number": account_tag,
                             "account_name": base_label,
                             "distribution_key_id": fund.distribution_key_id or "",
