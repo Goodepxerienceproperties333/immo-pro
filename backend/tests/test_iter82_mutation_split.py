@@ -220,17 +220,18 @@ async def _test_breakdown_e2e():
         assert mut["budget_frequency_label"] == "Trimestriel"
         assert abs(mut["total_transfer"] - 1300.0) < 0.01
 
-        # Verifie les ecritures OD : depuis iter84, l'OD est ECLATEE par date :
+        # Verifie les ecritures OD : depuis iter85, l'OD est ECLATEE en 5 :
         #   - 1 entry "fonds_roulement" datee sale_date (1000 EUR)
-        #   - 1 entry "prorata" datee call_date originale (300 EUR)
-        # Total cumule = 1300 (PAS 3100 qui inclurait les futurs)
+        #   - 1 entry "prorata" datee call_date originale Q1 (300 EUR)
+        #   - 3 entries "future_call" datees Q2/Q3/Q4 (600 EUR chacune)
+        # Total cumule = 1000 + 300 + 1800 = 3100 EUR (FR + prorata + futurs)
         jes = await db.journal_entries.find(
             {"source_id": ctx["lot_id"], "source_type": "lot_mutation"}, {"_id": 0}
         ).to_list(10)
-        assert len(jes) == 2, f"Attendu 2 ecritures OD (split iter84), recu {len(jes)}"
+        assert len(jes) == 5, f"Attendu 5 ecritures OD (iter85 incl. futures), recu {len(jes)}"
         sum_debit = sum(j.get("total_debit", 0) for j in jes)
-        assert abs(sum_debit - 1300.0) < 0.01, (
-            f"Somme OD attendue 1300, recu {sum_debit}"
+        assert abs(sum_debit - 3100.0) < 0.01, (
+            f"Somme OD attendue 3100 (FR 1000 + prorata 300 + 3 futures 1800), recu {sum_debit}"
         )
 
     finally:

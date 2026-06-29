@@ -186,8 +186,9 @@ async def _test_split_dates():
 
 
 async def _test_split_only_roulement_when_no_prorata():
-    """Vente AVANT le Q1 (31/12/2025) : pas de prorata, mais roulement.
-    -> 1 seule ecriture OD fonds_roulement datee sale_date.
+    """Vente AVANT le Q1 (31/12/2025) : pas de prorata appel en cours.
+    iter85 : 2 ecritures attendues - FR datee sale_date + 1 OD future_call
+    datee Q1 (l'appel Q1 devient un appel FUTUR car period_start > sale_date).
     """
     ctx = await _setup_acp()
     db = ctx["db"]
@@ -201,10 +202,13 @@ async def _test_split_only_roulement_when_no_prorata():
         result = await mutate_fn(lot_id=ctx["lot_id"], data=payload)
         mut = result["mutation"]
         ids = mut.get("journal_entry_ids") or []
-        assert len(ids) == 1, f"Attendu 1 seule OD (roulement), recu {len(ids)}"
-        entries = mut.get("entries_created") or []
-        assert entries[0]["kind"] == "fonds_roulement"
-        assert entries[0]["date"] == "2025-12-31"
+        # iter85 : FR + future_call Q1 (appel futur car period_start > sale_date)
+        assert len(ids) == 2, f"Attendu 2 OD (roulement + future Q1), recu {len(ids)}"
+        kinds = sorted([e["kind"] for e in (mut.get("entries_created") or [])])
+        assert kinds == ["fonds_roulement", "future_call"]
+        by_kind = {e["kind"]: e for e in mut.get("entries_created", [])}
+        assert by_kind["fonds_roulement"]["date"] == "2025-12-31"
+        assert by_kind["future_call"]["date"] == "2026-01-15"
     finally:
         await _cleanup(ctx)
 
@@ -266,6 +270,143 @@ async def _test_cancel_deletes_all_entries():
         await _cleanup(ctx)
 
 
+async def _test_quarterly_mutation_5_ods():
+    """Scenario iter85 : mutation le 15/02/2026, 4 appels trimestriels existants
+    aux 01.01, 01.04, 01.07, 01.10. Quote-part du lot = 500 EUR par appel.
+
+    Attendu : 5 ecritures OD :
+      - 1 OD fonds_roulement datee sale_date (15/02/2026)
+      - 1 OD prorata datee 01/01/2026 (Q1 contient sale_date)
+      - 3 OD future_call datees 01/04, 01/07, 01/10 (Q2/Q3/Q4 futurs)
+    La distribution des appels futurs reste au vendeur (volonte iter85).
+    La balance de tier vendeur doit montrer 5 credits, acheteur 5 debits.
+    """
+    ctx = await _setup_acp()
+    db = ctx["db"]
+    try:
+        await _insert_fr_balance(db, ctx["cid"], 2000.0)
+        # 4 appels trimestriels (Q1 contient sale_date, Q2/Q3/Q4 sont futurs)
+        for i, (d, ps, pe) in enumerate([
+            ("2026-01-01", "2026-01-01", "2026-03-31"),
+            ("2026-04-01", "2026-04-01", "2026-06-30"),
+            ("2026-07-01", "2026-07-01", "2026-09-30"),
+            ("2026-10-01", "2026-10-01", "2026-12-31"),
+        ]):
+            await db.fund_calls.insert_one({
+                "id": f"fc-{i+1}-{uuid.uuid4()}",
+                "name": f"Trimestriel {i+1}/4 - 2026",
+                "date": d, "due_date": d,
+                "period_start": ps, "period_end": pe,
+                "fiscal_year_id": ctx["fy_id"], "copropriete_id": ctx["cid"],
+                "call_type": "provisions",
+                "total_amount": 500.0,
+                "distribution": [
+                    {"lot_id": ctx["lot_id"], "lot_number": "A1",
+                     "owner_id": ctx["o1"], "owner_name": "Vendeur V",
+                     "share": 500, "amount": 500.0, "paid": False},
+                ],
+            })
+
+        mutate_fn = _get_endpoint(db, "/api/lots/{lot_id}/mutate")
+        LotMutationInput = mutate_fn.__annotations__.get("data")
+        payload = LotMutationInput(
+            new_owner_id=ctx["o2"], sale_date="2026-02-15", sale_price=200000.0,
+        )
+        result = await mutate_fn(lot_id=ctx["lot_id"], data=payload)
+        mut = result["mutation"]
+
+        ids = mut.get("journal_entry_ids") or []
+        assert len(ids) == 5, f"Attendu 5 OD (FR + prorata Q1 + 3 futures), recu {len(ids)}"
+
+        # Verification dates et kinds
+        entries = mut.get("entries_created") or []
+        by_date = {e["date"]: e for e in entries}
+        assert by_date["2026-02-15"]["kind"] == "fonds_roulement"
+        assert by_date["2026-01-01"]["kind"] == "prorata"
+        assert by_date["2026-04-01"]["kind"] == "future_call"
+        assert by_date["2026-07-01"]["kind"] == "future_call"
+        assert by_date["2026-10-01"]["kind"] == "future_call"
+
+        # Quote-part du lot par appel futur = 500 EUR
+        for d in ("2026-04-01", "2026-07-01", "2026-10-01"):
+            assert abs(by_date[d]["amount"] - 500.0) < 0.01, (
+                f"Future call {d} : attendu 500.0, recu {by_date[d]['amount']}"
+            )
+
+        # Verifie en DB que les lignes OD sont bien DR acheteur / CR vendeur
+        jes = await db.journal_entries.find(
+            {"source_id": ctx["lot_id"], "source_type": "lot_mutation"}, {"_id": 0}
+        ).to_list(10)
+        assert len(jes) == 5
+        for je in jes:
+            debit_line = next(ln for ln in je["lines"] if ln["debit"] > 0)
+            credit_line = next(ln for ln in je["lines"] if ln["credit"] > 0)
+            assert debit_line["account_number"] == "4100002", "DR doit etre acheteur (4100002)"
+            assert debit_line["third_party_id"] == ctx["o2"]
+            assert credit_line["account_number"] == "4100001", "CR doit etre vendeur (4100001)"
+            assert credit_line["third_party_id"] == ctx["o1"]
+
+        # La distribution des appels futurs n'est PAS modifiee : owner reste vendeur
+        for fc in await db.fund_calls.find({"copropriete_id": ctx["cid"]}, {"_id": 0}).to_list(10):
+            for d in fc["distribution"]:
+                if d["lot_id"] == ctx["lot_id"]:
+                    assert d["owner_id"] == ctx["o1"], (
+                        f"Distribution {fc['name']} : owner doit rester vendeur (iter85 - "
+                        f"pas de migration owner_id), recu {d['owner_id']}"
+                    )
+
+        # regenerated_calls est neutralise
+        regen = mut.get("regenerated_calls") or {}
+        assert regen.get("fixed") == 0
+
+        # Balance de tier : 5 mouvements pour vendeur (5 credits) et acheteur (5 debits)
+        from routes.reports import create_reports_router
+        rep_router = create_reports_router(db)
+        sit_owner_fn = None
+        for r in rep_router.routes:
+            if r.path == "/api/reports/balance-tiers/owners/{owner_id}":
+                sit_owner_fn = r.endpoint
+                break
+        assert sit_owner_fn is not None
+
+        # Mock minimal Request (chinese wall override via copropriete_id query)
+        class _Req:
+            state = type("S", (), {"copropriete_id": ctx["cid"]})()
+        seller_stmt = await sit_owner_fn(
+            owner_id=ctx["o1"], request=_Req(),
+            copropriete_id=ctx["cid"],
+            start_date="2026-01-01", end_date="2026-12-31",
+            show_all=False,
+        )
+        # Seller : doit avoir 5 credits aux 5 dates
+        seller_credits_by_date = {}
+        for m in seller_stmt.get("movements", []):
+            if m.get("source_type") == "lot_mutation" or m.get("reference", "").startswith("MUT-"):
+                seller_credits_by_date.setdefault(m["date"], 0.0)
+                seller_credits_by_date[m["date"]] += float(m.get("credit", 0))
+        # Doit contenir les 5 dates avec credit > 0
+        for d in ("2026-01-01", "2026-02-15", "2026-04-01", "2026-07-01", "2026-10-01"):
+            assert d in seller_credits_by_date, f"Date {d} manquante dans situation vendeur"
+            assert seller_credits_by_date[d] > 0, f"Credit attendu sur {d} pour vendeur"
+
+        buyer_stmt = await sit_owner_fn(
+            owner_id=ctx["o2"], request=_Req(),
+            copropriete_id=ctx["cid"],
+            start_date="2026-01-01", end_date="2026-12-31",
+            show_all=False,
+        )
+        buyer_debits_by_date = {}
+        for m in buyer_stmt.get("movements", []):
+            if m.get("source_type") == "lot_mutation" or m.get("reference", "").startswith("MUT-"):
+                buyer_debits_by_date.setdefault(m["date"], 0.0)
+                buyer_debits_by_date[m["date"]] += float(m.get("debit", 0))
+        for d in ("2026-01-01", "2026-02-15", "2026-04-01", "2026-07-01", "2026-10-01"):
+            assert d in buyer_debits_by_date, f"Date {d} manquante dans situation acheteur"
+            assert buyer_debits_by_date[d] > 0, f"Debit attendu sur {d} pour acheteur"
+    finally:
+        await _cleanup(ctx)
+
+
 def test_iter84_split_dates():
     asyncio.run(_test_split_dates())
 
@@ -280,3 +421,7 @@ def test_iter84_only_prorata_when_no_roulement():
 
 def test_iter84_cancel_deletes_all_entries():
     asyncio.run(_test_cancel_deletes_all_entries())
+
+
+def test_iter85_quarterly_mutation_5_ods():
+    asyncio.run(_test_quarterly_mutation_5_ods())

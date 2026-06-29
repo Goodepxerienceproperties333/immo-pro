@@ -1105,6 +1105,45 @@ def create_properties_router(db):
                     "fund_call_ids": [d.get("fund_call_id") for d in details],
                 })
 
+            # 3) Appels futurs : 1 OD par appel futur, datee a la DATE DE L'APPEL.
+            #    Le VE des appels futurs reste au nom du proprietaire ORIGINAL
+            #    (vendeur) dans la distribution. La mutation cree une ecriture OD
+            #    (DR acheteur / CR vendeur) a la date de chaque appel futur, pour
+            #    le montant de la quote-part du lot mute.
+            #    Cela permet a la balance de tier de refleter la mutation a chaque
+            #    date d'appel (01.01, 01.04, 01.07, 01.10 etc.) peu importe la
+            #    date de mutation.
+            future_by_date: dict = defaultdict(list)
+            for f in (bd.get("future_calls") or []):
+                fd = f.get("date") or ""
+                if not fd:
+                    continue
+                future_by_date[fd].append(f)
+            for entry_date, details in future_by_date.items():
+                subtotal = round(
+                    sum(float(d.get("amount", d.get("lot_amount", d.get("owner_amount", 0))) or 0) for d in details),
+                    2,
+                )
+                if subtotal <= 0.001:
+                    continue
+                call_names = ", ".join(d.get("fund_call_name", "?") for d in details)
+                entry = _build_entry(
+                    amount=subtotal,
+                    entry_date=entry_date,
+                    kind="future_call",
+                    label=f"Appel futur ({call_names})",
+                    ref_suffix="F",
+                )
+                await db.journal_entries.insert_one(entry)
+                journal_entry_ids.append(entry["id"])
+                entries_created.append({
+                    "kind": "future_call",
+                    "id": entry["id"],
+                    "date": entry_date,
+                    "amount": subtotal,
+                    "fund_call_ids": [d.get("fund_call_id") for d in details],
+                })
+
             mut_rec = {
                 "id": str(uuid.uuid4()),
                 "date": sale_date,
@@ -1140,22 +1179,16 @@ def create_properties_router(db):
                  "$push": {"mutations": mut_rec}}
             )
 
-            # iter84++ : Regenere les ecritures comptables des appels FUTURS pour
-            # cette ACP+FY apres la mutation. Regle reserve : un lot ayant deja
-            # ete appele en reserve AVANT la vente est EXCLU des appels de
-            # reserve generes apres la vente (vendeur a deja paye).
-            try:
-                regen_summary = await _regenerate_future_calls_after_mutation(
-                    lot_id=lt["id"],
-                    copro_id=copro_id,
-                    sale_date_str=sale_date,
-                    old_owner_id=old_owner_id,
-                    new_owner_id=data.new_owner_id,
-                )
-                mut_rec["regenerated_calls"] = regen_summary
-            except Exception as e:
-                print(f"[mutation] post-regen failed for lot {lt.get('number')}: {e}")
-                mut_rec["regenerated_calls"] = {"error": str(e), "fixed": 0}
+            # iter85 : NEUTRALISATION de la regeneration des appels futurs.
+            # La nouvelle approche cree une OD (DR acheteur / CR vendeur) a la date
+            # de CHAQUE appel futur (cf. bloc "3) Appels futurs" ci-dessus). On ne
+            # modifie donc PLUS le owner_id dans la distribution, pour eviter le
+            # double comptage avec les ODs futures.
+            # Pour les fonds permanents (reserve / roulement) : la logique de
+            # capital est portee par l'ecriture "fonds_roulement" datee sale_date.
+            # Les appels reserve/roulement futurs restent donc tels quels au nom
+            # du vendeur dans la distribution (volonte expresse user iter85).
+            mut_rec["regenerated_calls"] = {"info": "future calls now booked via OD per call date (iter85)", "fixed": 0}
 
             return mut_rec
 

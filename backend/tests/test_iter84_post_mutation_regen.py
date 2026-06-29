@@ -1,29 +1,17 @@
-"""Regression test - iter84 - Regen appels apres mutation + regles fonds permanents.
+"""Regression test - iter85 - Nouvelle logique appels futurs apres mutation.
 
-Demande user :
-  1) "Une fois qu'une mutation est faite il faut regenerer les ecritures
-     d'appels pour les provisions pour charges sur toute la periode comptable"
-  2) "Si un fonds de reserve est appele avant la vente l'acheteur ne doit pas
-     le payer, donc si des appels sont generes par la suite, le fonds de
-     reserve reste au vendeur, il n'y a pas d'appel pour les lots concernes"
-  3) "Idem pour les appels-augmentation fonds de roulement, c'est le vendeur
-     qui les a payes via l'appel et l'acheteur le rembourse dans le cadre de
-     la mutation, il ne faut pas creer de double ecriture"
-
-Comportement attendu apres mutation (date 15/06) :
-  - PROVISIONS Q3, Q4 (futurs) : owner remplace par new_owner sur ce lot
-  - RESERVE Q3 (futur) si reserve Q1 existait AVANT mutation : lot exclu
-  - ROULEMENT Q3 (futur) si roulement Q1 existait AVANT mutation : lot exclu
-  - Appels avec rows deja payees : preserves (pas de regression)
-  - Ecritures comptables regenerees automatiquement
+Demande user iter85 :
+  La mutation NE MODIFIE PLUS le owner_id dans la distribution des appels
+  futurs. Elle cree une ecriture OD (DR acheteur / CR vendeur) a la date de
+  chaque appel futur, pour la quote-part du lot mute. Cela permet a la
+  balance de tier de refleter la mutation a chaque date d'appel (01.01,
+  01.04, 01.07, 01.10 etc.) peu importe la date de mutation.
 
 Tests :
-  1. Provisions futures : owner migre new_owner
-  2. Reserve future apres reserve pre-vente : lot exclu + total reduit
-  3. Roulement future apres roulement pre-vente : lot exclu + total reduit
-  4. Reserve future SANS reserve pre-vente : owner migre new_owner (buyer paye)
-  5. Provisions passees : NON touchees (historique preserve)
-  6. Appel avec row paye : skipped (preservation)
+  1. Distribution des appels futurs INTACTE (owner_id reste vendeur)
+  2. Une OD est creee a la date de chaque appel futur (DR acheteur / CR vendeur)
+  3. regenerated_calls.fixed == 0 (logique neutralisee)
+  4. Cancellation de la mutation supprime aussi les OD futures
 """
 import os
 import sys
@@ -40,7 +28,7 @@ async def _setup():
     from motor.motor_asyncio import AsyncIOMotorClient
     client = AsyncIOMotorClient(os.environ["MONGO_URL"])
     db = client[os.environ["DB_NAME"]]
-    cid = f"itr84m-{uuid.uuid4()}"
+    cid = f"itr85m-{uuid.uuid4()}"
     fy_id = f"fy-{uuid.uuid4()}"
     o_seller = f"os-{uuid.uuid4()}"
     o_buyer = f"ob-{uuid.uuid4()}"
@@ -48,7 +36,7 @@ async def _setup():
     lot_target = f"lt-{uuid.uuid4()}"
     lot_other = f"lo-{uuid.uuid4()}"
 
-    await db.coproprietes.insert_one({"id": cid, "name": "MIGR84", "status": "active"})
+    await db.coproprietes.insert_one({"id": cid, "name": "MIGR85", "status": "active"})
     await db.fiscal_years.insert_one({
         "id": fy_id, "name": "2026", "start_date": "2026-01-01", "end_date": "2026-12-31",
         "copropriete_id": cid,
@@ -96,8 +84,9 @@ async def _cleanup(ctx):
     await db.journal_entries.delete_many({"copropriete_id": ctx["cid"]})
 
 
-async def _insert_call(db, ctx, name, date, call_type, lot_amounts: dict):
-    """Cree un appel avec distribution {lot_id -> amount} (assume 1 owner/lot)."""
+async def _insert_call(db, ctx, name, date, call_type, lot_amounts: dict,
+                        period_start=None, period_end=None):
+    """Cree un appel avec distribution {lot_id -> amount}."""
     distribution = []
     lots = await db.lots.find({"id": {"$in": list(lot_amounts.keys())}}, {"_id": 0}).to_list(10)
     owner_by_lot = {lt["id"]: lt["owner_id"] for lt in lots}
@@ -117,12 +106,17 @@ async def _insert_call(db, ctx, name, date, call_type, lot_amounts: dict):
             "paid_date": "",
         })
     call_id = f"c-{uuid.uuid4()}"
-    await db.fund_calls.insert_one({
+    doc = {
         "id": call_id, "name": name, "date": date, "due_date": date,
         "fiscal_year_id": ctx["fy_id"], "copropriete_id": ctx["cid"],
         "call_type": call_type, "total_amount": sum(lot_amounts.values()),
         "distribution": distribution,
-    })
+    }
+    if period_start:
+        doc["period_start"] = period_start
+    if period_end:
+        doc["period_end"] = period_end
+    await db.fund_calls.insert_one(doc)
     return call_id
 
 
@@ -131,6 +125,15 @@ def _get_mutate_fn(db):
     router = create_properties_router(db)
     for r in router.routes:
         if r.path == "/api/lots/{lot_id}/mutate":
+            return r.endpoint
+    return None
+
+
+def _get_cancel_fn(db):
+    from routes.properties import create_properties_router
+    router = create_properties_router(db)
+    for r in router.routes:
+        if r.path == "/api/lots/{lot_id}/mutate/{mutation_id}":
             return r.endpoint
     return None
 
@@ -144,184 +147,139 @@ async def _do_mutation(ctx, sale_date="2026-06-15"):
     return await mutate_fn(lot_id=ctx["lot_target"], data=payload)
 
 
-async def _test_provisions_future_migrate_owner():
-    """Provisions Q1 (Jan, payee) + Q2 (Apr) + Q3 (Jul) + Q4 (Oct).
-    Mutation 15/06. Q3 et Q4 doivent etre migres vers buyer.
-    """
+async def _test_distribution_not_modified():
+    """Apres mutation, la distribution des appels FUTURS reste au vendeur."""
     ctx = await _setup()
     db = ctx["db"]
     try:
-        # Provisions Q1 (avant mutation, PAYEE par seller)
-        q1 = await _insert_call(db, ctx, "Prov Q1", "2026-01-15", "provisions",
-                                 {ctx["lot_target"]: 100.0, ctx["lot_other"]: 100.0})
-        await db.fund_calls.update_one(
-            {"id": q1},
-            {"$set": {"distribution.$[el].paid": True, "distribution.$[el].paid_date": "2026-01-20"}},
-            array_filters=[{"el.lot_id": ctx["lot_target"]}],
-        )
-        # Provisions Q2 (avant mutation, NON payee)
-        q2 = await _insert_call(db, ctx, "Prov Q2", "2026-04-15", "provisions",
-                                 {ctx["lot_target"]: 100.0, ctx["lot_other"]: 100.0})
-        # Provisions Q3 (futur, NON payee)
-        q3 = await _insert_call(db, ctx, "Prov Q3", "2026-07-15", "provisions",
-                                 {ctx["lot_target"]: 100.0, ctx["lot_other"]: 100.0})
-        # Provisions Q4 (futur)
-        q4 = await _insert_call(db, ctx, "Prov Q4", "2026-10-15", "provisions",
-                                 {ctx["lot_target"]: 100.0, ctx["lot_other"]: 100.0})
-
-        result = await _do_mutation(ctx)
-        mut = result["mutation"]
-        regen = mut.get("regenerated_calls") or {}
-
-        # Q1 et Q2 : passes/payes/avant-vente -> non touches
-        q1_after = await db.fund_calls.find_one({"id": q1}, {"_id": 0})
-        assert next(d for d in q1_after["distribution"] if d["lot_id"] == ctx["lot_target"])["owner_id"] == ctx["o_seller"]
-        q2_after = await db.fund_calls.find_one({"id": q2}, {"_id": 0})
-        # Q2 est AVANT mutation, ne doit PAS etre migre
-        assert next(d for d in q2_after["distribution"] if d["lot_id"] == ctx["lot_target"])["owner_id"] == ctx["o_seller"]
-
-        # Q3, Q4 : owner migre vers buyer pour lot_target uniquement
-        for call_id in (q3, q4):
-            after = await db.fund_calls.find_one({"id": call_id}, {"_id": 0})
-            target_row = next(d for d in after["distribution"] if d["lot_id"] == ctx["lot_target"])
-            assert target_row["owner_id"] == ctx["o_buyer"], f"Q3/Q4 lot_target doit etre migre vers buyer"
-            assert target_row["owner_name"] == "Acheteur"
-            other_row = next(d for d in after["distribution"] if d["lot_id"] == ctx["lot_other"])
-            assert other_row["owner_id"] == ctx["o_other"], "Autre lot doit rester inchange"
-
-        # regen summary contient Q3 et Q4
-        assert regen["fixed"] >= 2
-        assert any(c["id"] == q3 for c in regen.get("migrated_owner", []))
-        assert any(c["id"] == q4 for c in regen.get("migrated_owner", []))
-        print("OK - Provisions Q3/Q4 migrees vers buyer")
-    finally:
-        await _cleanup(ctx)
-
-
-async def _test_reserve_excluded_when_prior_call():
-    """Reserve Q1 (avant vente) + Reserve Q3 (futur) -> Q3 exclut le lot."""
-    ctx = await _setup()
-    db = ctx["db"]
-    try:
-        res1 = await _insert_call(db, ctx, "Reserve Q1", "2026-02-01", "reserve",
-                                   {ctx["lot_target"]: 500.0, ctx["lot_other"]: 500.0})
-        res3 = await _insert_call(db, ctx, "Reserve Q3", "2026-08-01", "reserve",
-                                   {ctx["lot_target"]: 300.0, ctx["lot_other"]: 300.0})
-
-        result = await _do_mutation(ctx)
-        regen = result["mutation"].get("regenerated_calls") or {}
-
-        # Reserve Q1 : avant vente, non touche
-        res1_after = await db.fund_calls.find_one({"id": res1}, {"_id": 0})
-        assert len(res1_after["distribution"]) == 2
-
-        # Reserve Q3 : lot_target EXCLU
-        res3_after = await db.fund_calls.find_one({"id": res3}, {"_id": 0})
-        ids = [d["lot_id"] for d in res3_after["distribution"]]
-        assert ctx["lot_target"] not in ids, "Lot vendu doit etre EXCLU de la reserve future"
-        assert ctx["lot_other"] in ids
-        # Total reduit de 300
-        assert abs(res3_after["total_amount"] - 300.0) < 0.01
-
-        assert regen["had_prior_reserve"] is True
-        assert any(c["id"] == res3 and c["excluded_amount"] == 300.0
-                   for c in regen.get("excluded_capital", []))
-        print("OK - Reserve Q3 exclut lot_target (vendeur a deja paye reserve Q1)")
-    finally:
-        await _cleanup(ctx)
-
-
-async def _test_reserve_migrated_when_no_prior():
-    """Pas de reserve avant vente -> Reserve Q3 (futur) est migre owner (buyer paye)."""
-    ctx = await _setup()
-    db = ctx["db"]
-    try:
-        # AUCUN appel reserve avant vente
-        res3 = await _insert_call(db, ctx, "Reserve Q3", "2026-08-01", "reserve",
-                                   {ctx["lot_target"]: 300.0, ctx["lot_other"]: 300.0})
+        # Provisions trimestrielles : Q3 + Q4 sont futurs apres 15/06
+        q3 = await _insert_call(db, ctx, "Prov Q3", "2026-07-01", "provisions",
+                                 {ctx["lot_target"]: 100.0, ctx["lot_other"]: 100.0},
+                                 period_start="2026-07-01", period_end="2026-09-30")
+        q4 = await _insert_call(db, ctx, "Prov Q4", "2026-10-01", "provisions",
+                                 {ctx["lot_target"]: 100.0, ctx["lot_other"]: 100.0},
+                                 period_start="2026-10-01", period_end="2026-12-31")
 
         await _do_mutation(ctx)
 
-        res3_after = await db.fund_calls.find_one({"id": res3}, {"_id": 0})
-        target_row = next(d for d in res3_after["distribution"] if d["lot_id"] == ctx["lot_target"])
-        assert target_row["owner_id"] == ctx["o_buyer"], "Sans reserve anterieure, lot doit etre migre buyer"
-        assert len(res3_after["distribution"]) == 2  # Pas d'exclusion
-        print("OK - Reserve Q3 migre buyer (pas de reserve anterieure)")
+        # iter85 : distribution Q3/Q4 du lot_target DOIT rester au vendeur
+        for call_id in (q3, q4):
+            after = await db.fund_calls.find_one({"id": call_id}, {"_id": 0})
+            target_row = next(d for d in after["distribution"] if d["lot_id"] == ctx["lot_target"])
+            assert target_row["owner_id"] == ctx["o_seller"], (
+                f"iter85 : owner du lot dans Q3/Q4 doit RESTER vendeur. Recu : {target_row['owner_id']}"
+            )
+            # Distribution complete (pas de retrait du lot)
+            assert len(after["distribution"]) == 2
+        print("OK - iter85 : distribution des appels futurs intacte")
     finally:
         await _cleanup(ctx)
 
 
-async def _test_roulement_excluded_when_prior_call():
-    """Augmentation roulement Q1 (avant) + Q3 (futur) -> Q3 exclut le lot."""
+async def _test_one_od_per_future_call_date():
+    """1 OD (DR acheteur / CR vendeur) creee a chaque date d'appel futur."""
     ctx = await _setup()
     db = ctx["db"]
     try:
-        r1 = await _insert_call(db, ctx, "Aug. Roulement Q1", "2026-02-01", "roulement",
-                                 {ctx["lot_target"]: 1000.0, ctx["lot_other"]: 1000.0})
-        r3 = await _insert_call(db, ctx, "Aug. Roulement Q3", "2026-08-01", "roulement",
-                                 {ctx["lot_target"]: 500.0, ctx["lot_other"]: 500.0})
+        await _insert_call(db, ctx, "Prov Q3", "2026-07-01", "provisions",
+                            {ctx["lot_target"]: 100.0, ctx["lot_other"]: 100.0},
+                            period_start="2026-07-01", period_end="2026-09-30")
+        await _insert_call(db, ctx, "Prov Q4", "2026-10-01", "provisions",
+                            {ctx["lot_target"]: 100.0, ctx["lot_other"]: 100.0},
+                            period_start="2026-10-01", period_end="2026-12-31")
+
+        result = await _do_mutation(ctx)
+        mut = result["mutation"]
+        entries = mut.get("entries_created") or []
+
+        # 2 OD future_call attendues (Q3 et Q4)
+        future_ods = [e for e in entries if e["kind"] == "future_call"]
+        assert len(future_ods) == 2, f"Attendu 2 OD future_call, recu {len(future_ods)}"
+        dates = sorted([e["date"] for e in future_ods])
+        assert dates == ["2026-07-01", "2026-10-01"]
+        for e in future_ods:
+            assert abs(e["amount"] - 100.0) < 0.01, f"Quote-part 100 attendue, recu {e['amount']}"
+
+        # En DB, ces OD ont DR acheteur (4100002) / CR vendeur (4100001)
+        jes = await db.journal_entries.find(
+            {"source_id": ctx["lot_target"], "source_type": "lot_mutation",
+             "source_subtype": "future_call"}, {"_id": 0}
+        ).to_list(10)
+        assert len(jes) == 2
+        for je in jes:
+            dl = next(ln for ln in je["lines"] if ln["debit"] > 0)
+            cl = next(ln for ln in je["lines"] if ln["credit"] > 0)
+            assert dl["account_number"] == "4100002" and dl["third_party_id"] == ctx["o_buyer"]
+            assert cl["account_number"] == "4100001" and cl["third_party_id"] == ctx["o_seller"]
+        print("OK - iter85 : OD futures aux dates correctes avec DR/CR corrects")
+    finally:
+        await _cleanup(ctx)
+
+
+async def _test_regenerate_is_neutralized():
+    """`regenerated_calls.fixed` doit etre 0 (logique neutralisee iter85)."""
+    ctx = await _setup()
+    db = ctx["db"]
+    try:
+        await _insert_call(db, ctx, "Prov Q3", "2026-07-01", "provisions",
+                            {ctx["lot_target"]: 100.0, ctx["lot_other"]: 100.0},
+                            period_start="2026-07-01", period_end="2026-09-30")
 
         result = await _do_mutation(ctx)
         regen = result["mutation"].get("regenerated_calls") or {}
-
-        # R1 : avant vente, intact
-        r1_after = await db.fund_calls.find_one({"id": r1}, {"_id": 0})
-        assert len(r1_after["distribution"]) == 2
-
-        # R3 : lot EXCLU (vendeur a paye R1 -> mutation gere via fonds_roulement)
-        r3_after = await db.fund_calls.find_one({"id": r3}, {"_id": 0})
-        ids = [d["lot_id"] for d in r3_after["distribution"]]
-        assert ctx["lot_target"] not in ids
-        assert abs(r3_after["total_amount"] - 500.0) < 0.01
-        assert regen["had_prior_roulement"] is True
-        print("OK - Augmentation roulement Q3 exclut lot (anti-double-ecriture)")
-    finally:
-        await _cleanup(ctx)
-
-
-async def _test_paid_call_preserved():
-    """Provisions Q3 avec row deja PAYEE doit etre preservee (skipped)."""
-    ctx = await _setup()
-    db = ctx["db"]
-    try:
-        q3 = await _insert_call(db, ctx, "Prov Q3 paid", "2026-07-15", "provisions",
-                                 {ctx["lot_target"]: 100.0, ctx["lot_other"]: 100.0})
-        # Paid pre-mutation (cas hypothetique : pre-paiement)
-        await db.fund_calls.update_one(
-            {"id": q3},
-            {"$set": {"distribution.$[el].paid": True, "distribution.$[el].paid_date": "2026-07-01"}},
-            array_filters=[{"el.lot_id": ctx["lot_target"]}],
+        assert regen.get("fixed") == 0, (
+            f"iter85 : regenerated_calls.fixed doit etre 0, recu {regen.get('fixed')}"
         )
-        result = await _do_mutation(ctx)
-        regen = result["mutation"].get("regenerated_calls") or {}
-
-        q3_after = await db.fund_calls.find_one({"id": q3}, {"_id": 0})
-        target_row = next(d for d in q3_after["distribution"] if d["lot_id"] == ctx["lot_target"])
-        # Doit RESTER seller car deja paye
-        assert target_row["owner_id"] == ctx["o_seller"]
-        assert target_row["paid"] is True
-        # Et figurer dans skipped_paid
-        assert any(c["id"] == q3 for c in regen.get("skipped_paid", []))
-        print("OK - Provisions Q3 deja payee preservee (skipped)")
+        print("OK - iter85 : regenerated_calls neutralise")
     finally:
         await _cleanup(ctx)
 
 
-def test_iter84_provisions_future_migrate():
-    asyncio.run(_test_provisions_future_migrate_owner())
+async def _test_cancel_deletes_future_ods():
+    """Annulation de la mutation doit supprimer aussi les OD futures."""
+    ctx = await _setup()
+    db = ctx["db"]
+    try:
+        await _insert_call(db, ctx, "Prov Q3", "2026-07-01", "provisions",
+                            {ctx["lot_target"]: 100.0, ctx["lot_other"]: 100.0},
+                            period_start="2026-07-01", period_end="2026-09-30")
+        await _insert_call(db, ctx, "Prov Q4", "2026-10-01", "provisions",
+                            {ctx["lot_target"]: 100.0, ctx["lot_other"]: 100.0},
+                            period_start="2026-10-01", period_end="2026-12-31")
+
+        result = await _do_mutation(ctx)
+        mut_id = result["mutation"]["id"]
+        n_before = await db.journal_entries.count_documents(
+            {"source_id": ctx["lot_target"], "source_type": "lot_mutation"}
+        )
+        assert n_before == 2, f"Attendu 2 ODs futures, recu {n_before}"
+
+        cancel_fn = _get_cancel_fn(db)
+        await cancel_fn(lot_id=ctx["lot_target"], mutation_id=mut_id)
+
+        n_after = await db.journal_entries.count_documents(
+            {"source_id": ctx["lot_target"], "source_type": "lot_mutation"}
+        )
+        assert n_after == 0, f"Toutes les OD doivent etre supprimees, restant {n_after}"
+        # Owner restaure
+        lt = await db.lots.find_one({"id": ctx["lot_target"]}, {"_id": 0})
+        assert lt["owner_id"] == ctx["o_seller"]
+        print("OK - iter85 : cancel supprime toutes les OD (incl. futures)")
+    finally:
+        await _cleanup(ctx)
 
 
-def test_iter84_reserve_excluded_when_prior():
-    asyncio.run(_test_reserve_excluded_when_prior_call())
+def test_iter85_distribution_not_modified():
+    asyncio.run(_test_distribution_not_modified())
 
 
-def test_iter84_reserve_migrated_when_no_prior():
-    asyncio.run(_test_reserve_migrated_when_no_prior())
+def test_iter85_one_od_per_future_call_date():
+    asyncio.run(_test_one_od_per_future_call_date())
 
 
-def test_iter84_roulement_excluded_when_prior():
-    asyncio.run(_test_roulement_excluded_when_prior_call())
+def test_iter85_regenerate_is_neutralized():
+    asyncio.run(_test_regenerate_is_neutralized())
 
 
-def test_iter84_paid_call_preserved():
-    asyncio.run(_test_paid_call_preserved())
+def test_iter85_cancel_deletes_future_ods():
+    asyncio.run(_test_cancel_deletes_future_ods())

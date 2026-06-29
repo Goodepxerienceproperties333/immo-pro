@@ -11,7 +11,54 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 ## Implemented
-### Iter83 (Feb 2026) - Mutation lot decomposee + Apercu facture + Lignes multiples + Animation IA + CORS deployment fix
+### Iter85 (Feb 2026) - Mutation : OD futures aux dates des appels (refonte)
+
+**Demande user** : "La balance de tier doit lister chaque appel de provision a
+sa date d'appel (01.01, 01.04, 01.07, 01.10), peu importe la date de mutation.
+Le VE des appels futurs reste au nom du proprietaire original (vendeur) dans la
+distribution. La mutation cree une ecriture OD (DR acheteur / CR vendeur) a la
+date de chaque appel futur, pour le montant de la quote-part du lot mute."
+
+**Refonte de `_apply_to_lot` dans `routes/properties.py`** :
+
+1. **Nouveau bloc "3) Appels futurs"** (apres prorata) :
+   - Itere sur `bd["future_calls"]` (groupes par date)
+   - Cree 1 ecriture OD par DATE d'appel futur (DR `new_acc` / CR `old_acc`)
+   - `source_subtype = "future_call"`
+   - Quote-part du lot = `f["amount"]` (sortie de `_compute_lot_amount_in_call`)
+   - Push de tous les IDs dans `journal_entry_ids`
+   - Ajout au breakdown `entries_created`
+
+2. **Neutralisation de `_regenerate_future_calls_after_mutation`** :
+   - L'appel a la fonction est remplace par `mut_rec["regenerated_calls"] = {"fixed": 0, "info": "future calls now booked via OD per call date (iter85)"}`
+   - La distribution des appels FUTURS reste INTACTE (owner_id = vendeur)
+   - Pas de double comptage : la quote-part est portee par les OD futures
+
+**Effet sur les rapports** :
+- `situation_compte` du vendeur : 1 ligne credit par appel futur a la bonne date
+- `situation_compte` de l'acheteur : 1 ligne debit par appel futur a la bonne date
+- Balance de tier reflete correctement le transfert a chaque date d'appel
+- Les ODs "MUT-XXX-F" (suffix F pour future) sont supprimees par `cancel_mutation`
+  (qui itere sur `journal_entry_ids`)
+
+**Tests** :
+- `tests/test_iter84_mutation_split_dates.py::test_iter85_quarterly_mutation_5_ods`
+  (mutation 15/02/2026, 4 appels trimestriels -> 5 OD : FR + prorata Q1 + 3 futures Q2/Q3/Q4)
+- `tests/test_iter84_post_mutation_regen.py` reecrit (4 tests) :
+  - distribution_not_modified : owner_id reste vendeur dans la distribution
+  - one_od_per_future_call_date : 1 OD par date d'appel futur avec DR/CR corrects
+  - regenerate_is_neutralized : `regenerated_calls.fixed == 0`
+  - cancel_deletes_future_ods : annulation supprime aussi les OD futures
+- `tests/test_iter82_mutation_split.py` mis a jour : attendu 5 entries (FR + prorata + 3 futures)
+- 30/30 tests passent (iter82-iter85 stack mutation).
+
+**Fichiers** :
+- `/app/backend/routes/properties.py` (bloc "3) Appels futurs" + neutralisation regen)
+- `/app/backend/tests/test_iter84_mutation_split_dates.py` (+1 test trimestriel)
+- `/app/backend/tests/test_iter84_post_mutation_regen.py` (reecrit pour nouvelle logique)
+- `/app/backend/tests/test_iter82_mutation_split.py` (mise a jour assertions)
+
+### Iter84 (Feb 2026) - Mutation lot decomposee + Apercu facture + Lignes multiples + Animation IA + CORS deployment fix
 
 **Demande user** : (1) "lors d'une mutation de lot, separer explicitement le
 transfert du fonds de roulement et les proratas des appels de provisions
