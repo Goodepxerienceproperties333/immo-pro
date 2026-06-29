@@ -745,14 +745,16 @@ export default function InvoicesPage() {
                     if (v === '__create__') { setNewCatDialog(true); return; }
                     if (v === 'none') { setInvForm(f => ({...f, expense_category_id: ''})); return; }
                     const cat = categories.find(c => c.id === v);
-                    // Auto-pre-rempli les % occupant/proprietaire depuis la categorie selectionnee
+                    // Auto-pre-rempli les % occupant/proprietaire + la cle de repartition depuis la categorie selectionnee
                     const occ = cat?.default_occupant_pct ?? null;
+                    const defKey = cat?.default_distribution_key_id || '';
                     setInvForm(f => ({
                       ...f,
                       expense_category_id: v,
                       account_number: cat?.account_number || f.account_number,
                       occupant_pct: occ != null ? Number(occ) : f.occupant_pct,
                       proprietaire_pct: occ != null ? +(100 - Number(occ)).toFixed(2) : f.proprietaire_pct,
+                      distribution_key_id: defKey || f.distribution_key_id,
                     }));
                   }}
                 >
@@ -850,6 +852,8 @@ export default function InvoicesPage() {
                                     ...newLines[idx],
                                     expense_category_id: v,
                                     account_number: cat?.account_number || newLines[idx].account_number,
+                                    // Auto-pre-rempli la cle de repartition par defaut de la nature
+                                    distribution_key_id: cat?.default_distribution_key_id || newLines[idx].distribution_key_id || '',
                                   };
                                 }
                                 return { ...f, lines: newLines };

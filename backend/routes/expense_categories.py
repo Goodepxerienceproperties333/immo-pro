@@ -27,6 +27,10 @@ class ExpenseCategoryInput(BaseModel):
     # "charge" (classe 6) ou "produit" (classe 7). Auto-derive depuis le compte
     # si non fourni cote backend.
     kind: Optional[str] = ""
+    # Cle de repartition par DEFAUT pour cette nature.
+    # Pre-rempli automatiquement sur les nouvelles lignes de facture/budget
+    # quand on selectionne cette nature. Vide = pas de defaut (tantiemes).
+    default_distribution_key_id: Optional[str] = ""
 
 
 def create_expense_categories_router(db):
@@ -50,6 +54,16 @@ def create_expense_categories_router(db):
             amap = {a["number"]: a["name"] for a in accs}
             for c in cats:
                 c["account_name"] = amap.get(c.get("account_number", ""), "")
+        # Resolve default_distribution_key NAME for display
+        key_ids = list({c.get("default_distribution_key_id", "") for c in cats if c.get("default_distribution_key_id")})
+        if key_ids:
+            keys = await db.distribution_keys.find(
+                {"id": {"$in": key_ids}}, {"_id": 0, "id": 1, "name": 1}
+            ).to_list(500)
+            kmap = {k["id"]: k["name"] for k in keys}
+            for c in cats:
+                k = c.get("default_distribution_key_id", "")
+                c["default_distribution_key_name"] = kmap.get(k, "") if k else ""
         # Compute usage count (invoices referencing this category)
         ids = [c["id"] for c in cats]
         if ids:

@@ -13,26 +13,29 @@ import { Command, CommandInput, CommandList, CommandEmpty, CommandGroup, Command
 export default function ExpenseCategoriesPage() {
   const [cats, setCats] = useState([]);
   const [pcmnAccounts, setPcmnAccounts] = useState([]);
+  const [distKeys, setDistKeys] = useState([]);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState(null);
-  const [form, setForm] = useState({ name: '', code: '', vat_code: '', account_number: '', description: '', default_occupant_pct: 0, default_proprietaire_pct: 100 });
+  const [form, setForm] = useState({ name: '', code: '', vat_code: '', account_number: '', description: '', default_occupant_pct: 0, default_proprietaire_pct: 100, default_distribution_key_id: '' });
   const [search, setSearch] = useState('');
   const [accountPopoverOpen, setAccountPopoverOpen] = useState(false);
 
   const load = useCallback(async () => {
-    const [c, p6, p7] = await Promise.all([
+    const [c, p6, p7, dk] = await Promise.all([
       api.get('/expense-categories'),
       api.get('/accounting/pcmn', { params: { class_num: 6 } }),
       api.get('/accounting/pcmn', { params: { class_num: 7 } }),
+      api.get('/distribution-keys'),
     ]);
     setCats(c.data);
     setPcmnAccounts([...p6.data, ...p7.data].sort((a, b) => a.number.localeCompare(b.number)));
+    setDistKeys(dk.data || []);
   }, []);
   useEffect(() => { load(); }, [load]);
 
   const openCreate = () => {
     setEditing(null);
-    setForm({ name: '', code: '', vat_code: '', account_number: '', description: '', default_occupant_pct: 0, default_proprietaire_pct: 100 });
+    setForm({ name: '', code: '', vat_code: '', account_number: '', description: '', default_occupant_pct: 0, default_proprietaire_pct: 100, default_distribution_key_id: '' });
     setDialogOpen(true);
   };
   const openEdit = (c) => {
@@ -45,6 +48,7 @@ export default function ExpenseCategoriesPage() {
       description: c.description || '',
       default_occupant_pct: c.default_occupant_pct ?? 0,
       default_proprietaire_pct: c.default_proprietaire_pct ?? 100,
+      default_distribution_key_id: c.default_distribution_key_id || '',
     });
     setDialogOpen(true);
   };
@@ -101,13 +105,14 @@ export default function ExpenseCategoriesPage() {
             <TableHead>Nature</TableHead><TableHead>Compte PCMN</TableHead>
             <TableHead className="w-20">TVA</TableHead>
             <TableHead className="w-20">Type</TableHead>
+            <TableHead>Cle defaut</TableHead>
             <TableHead className="text-right">Factures liees</TableHead>
             <TableHead className="text-right">Total facture</TableHead>
             <TableHead className="w-24">Actions</TableHead>
           </TableRow></TableHeader>
           <TableBody>
             {filtered.length === 0 ? (
-              <TableRow><TableCell colSpan={8} className="text-center py-10 text-slate-400">Aucune nature - creez-en une pour faciliter la saisie des factures</TableCell></TableRow>
+              <TableRow><TableCell colSpan={9} className="text-center py-10 text-slate-400">Aucune nature - creez-en une pour faciliter la saisie des factures</TableCell></TableRow>
             ) : filtered.map(c => (
               <TableRow key={c.id} className="hover:bg-slate-50/50" data-testid={`category-row-${c.id}`}>
                 <TableCell className="font-mono text-xs text-slate-500">{c.code || '-'}</TableCell>
@@ -122,6 +127,13 @@ export default function ExpenseCategoriesPage() {
                     ? <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200">Produit</Badge>
                     : <Badge variant="outline" className="bg-slate-50 text-slate-600 border-slate-200">Charge</Badge>
                   }
+                </TableCell>
+                <TableCell className="text-xs">
+                  {c.default_distribution_key_name ? (
+                    <Badge variant="outline" className="bg-blue-50 text-[#0055FF] border-blue-200">{c.default_distribution_key_name}</Badge>
+                  ) : (
+                    <span className="text-slate-300">Tantiemes</span>
+                  )}
                 </TableCell>
                 <TableCell className="text-right">{c.invoice_count > 0 ? <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200">{c.invoice_count}</Badge> : <span className="text-slate-300">0</span>}</TableCell>
                 <TableCell className="text-right font-mono text-sm">{(c.invoice_total || 0).toFixed(2)} EUR</TableCell>
@@ -221,6 +233,31 @@ export default function ExpenseCategoriesPage() {
               <div className="text-[11px] text-slate-500">
                 Exemples : <strong>Chauffage commun</strong> = 100% occupant ; <strong>Toiture</strong> = 100% proprietaire ; <strong>Salaire concierge</strong> = 50/50
               </div>
+            </div>
+
+            {/* Cle de repartition par defaut */}
+            <div className="rounded-md border border-blue-200 bg-blue-50/40 p-3 space-y-2">
+              <div className="text-xs font-semibold uppercase tracking-wide text-[#0055FF] flex items-center gap-1.5">
+                Cle de repartition par defaut
+              </div>
+              <p className="text-[11px] text-slate-600">
+                Quand vous selectionnez cette nature sur une facture ou ligne de budget,
+                la cle de repartition est <b>automatiquement pre-remplie</b> avec celle-ci.
+                Laissez vide pour utiliser les tantiemes generaux par defaut.
+              </p>
+              <select
+                value={form.default_distribution_key_id || ''}
+                onChange={e => setForm({ ...form, default_distribution_key_id: e.target.value })}
+                className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm bg-white"
+                data-testid="cat-default-key"
+              >
+                <option value="">Tantiemes generaux (aucun defaut)</option>
+                {distKeys.map(k => (
+                  <option key={k.id} value={k.id}>
+                    {k.name} ({(k.lots || []).length} lot{(k.lots || []).length > 1 ? 's' : ''})
+                  </option>
+                ))}
+              </select>
             </div>
 
             <div className="flex gap-3 justify-end">
