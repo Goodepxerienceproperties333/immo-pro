@@ -1325,9 +1325,21 @@ def create_reports_router(db):
         # (b) Les ecritures AN dans la periode (OD d'ouverture du Bilan)
         # Les 2 sources sont agregees en UNE SEULE ligne synthetique au sommet,
         # datee du 1er jour de la periode visualisee (= start_date).
+        # iter85d : EXCLURE les ODs de mutation (source_type='lot_mutation') de
+        # l'agregation -> elles apparaissent comme lignes distinctes datees a
+        # leur date d'origine (transparence comptable pour acheteur/vendeur).
         an_debit = 0.0
         an_credit = 0.0
         an_account = ""
+        # Collecte les lignes de mutation pre-periode pour les ajouter en
+        # mouvements distincts apres la ligne Reprise.
+        pre_mutation_movements: list = []
+
+        def _is_mutation_entry(entry: dict) -> bool:
+            if (entry.get("source_type") or "") == "lot_mutation":
+                return True
+            ref = (entry.get("reference") or "")
+            return ref.startswith("MUT-")
 
         # (a) Cumul des mouvements anterieurs au start_date
         if start_date:
@@ -1335,10 +1347,26 @@ def create_reports_router(db):
             _exclude_reversals(pre_q)
             pre_entries = await db.journal_entries.find(pre_q, {"_id": 0}).to_list(100000)
             for pe in pre_entries:
+                is_mut = _is_mutation_entry(pe)
                 for pln in pe.get("lines", []) or []:
                     p_acc = pln.get("account_number", "")
                     p_tpid = pln.get("third_party_id")
                     if p_acc not in valid_accs and p_tpid != owner_id:
+                        continue
+                    if is_mut:
+                        # Ligne distincte avec date originale (pas dans Reprise)
+                        pre_mutation_movements.append({
+                            "date": pe.get("date", ""),
+                            "description": f"[{pe.get('journal_type','OD')}] {(pln.get('line_description') or pe.get('description') or '').strip()}".strip(),
+                            "debit": float(pln.get("debit", 0) or 0),
+                            "credit": float(pln.get("credit", 0) or 0),
+                            "type": (pe.get("journal_type") or "OD").lower(),
+                            "reference": pe.get("reference") or pe.get("id", ""),
+                            "account_number": p_acc,
+                            "journal_type": pe.get("journal_type", "OD"),
+                            "source_type": "lot_mutation",
+                            "is_pre_period_mutation": True,
+                        })
                         continue
                     an_debit += float(pln.get("debit", 0) or 0)
                     an_credit += float(pln.get("credit", 0) or 0)
@@ -1376,6 +1404,10 @@ def create_reports_router(db):
                 "journal_type": "AN",
                 "is_reprise": True,
             })
+        # iter85d : ajoute les ODs de mutation pre-periode en mouvements
+        # distincts (datees a leur vraie date) juste apres la Reprise.
+        for m in pre_mutation_movements:
+            movements.append(m)
         for e in entries:
             for ln in e.get("lines", []) or []:
                 acc = ln.get("account_number", "")
@@ -1877,9 +1909,20 @@ def create_reports_router(db):
         # ---- Reprise comptable : 2 sources combinees ----
         # (a) Toutes les ecritures AVANT start_date (cumul des exercices clos)
         # (b) Les ecritures AN dans la periode (OD d'ouverture du Bilan)
+        # iter85d : EXCLURE les ODs de mutation (source_type='lot_mutation') de
+        # l'agregation -> elles apparaissent comme lignes distinctes (par
+        # securite, meme si en pratique les mutations ne touchent que les
+        # comptes proprietaire 4100xxx).
         an_debit = 0.0
         an_credit = 0.0
         an_account = ""
+        pre_mutation_movements_sup: list = []
+
+        def _is_mutation_entry_sup(entry: dict) -> bool:
+            if (entry.get("source_type") or "") == "lot_mutation":
+                return True
+            ref = (entry.get("reference") or "")
+            return ref.startswith("MUT-")
 
         # (a) Cumul des mouvements anterieurs au start_date
         if start_date:
@@ -1888,8 +1931,23 @@ def create_reports_router(db):
             _exclude_reversals(pre_q)
             pre_entries = await db.journal_entries.find(pre_q, {"_id": 0}).to_list(100000)
             for pe in pre_entries:
+                is_mut = _is_mutation_entry_sup(pe)
                 for pln in pe.get("lines", []) or []:
                     if not _line_matches(pln):
+                        continue
+                    if is_mut:
+                        pre_mutation_movements_sup.append({
+                            "date": pe.get("date", ""),
+                            "description": f"[{pe.get('journal_type','OD')}] {(pln.get('line_description') or pe.get('description') or '').strip()}".strip(),
+                            "debit": float(pln.get("debit", 0) or 0),
+                            "credit": float(pln.get("credit", 0) or 0),
+                            "type": (pe.get("journal_type") or "OD").lower(),
+                            "reference": pe.get("reference") or pe.get("id", ""),
+                            "account_number": pln.get("account_number", ""),
+                            "journal_type": pe.get("journal_type", "OD"),
+                            "source_type": "lot_mutation",
+                            "is_pre_period_mutation": True,
+                        })
                         continue
                     an_debit += float(pln.get("debit", 0) or 0)
                     an_credit += float(pln.get("credit", 0) or 0)
@@ -1921,6 +1979,8 @@ def create_reports_router(db):
                 "journal_type": "AN",
                 "is_reprise": True,
             })
+        for m in pre_mutation_movements_sup:
+            movements.append(m)
 
         for e in entries:
             for ln in e.get("lines", []) or []:

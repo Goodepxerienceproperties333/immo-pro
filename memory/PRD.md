@@ -11,6 +11,50 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 ## Implemented
+### Iter85d (Feb 2026) - Reprise comptable : ODs de mutation pre-periode exclues
+
+**Bug user** : "Une mutation n'est PAS une reprise comptable tu as completement
+foire la". Les ODs de mutation (datees AVANT le start_date du rapport) etaient
+agregees dans la ligne "Reprise comptable" synthetique, ce qui masquait
+totalement le transfert vendeur -> acheteur du fonds de roulement et du prorata.
+
+**Fix** (`routes/reports.py`) - 2 endpoints touches :
+- `situation_compte_owner` (lignes ~1323+) :
+  - Helper `_is_mutation_entry` : detecte `source_type='lot_mutation'` OU `reference` commence par `MUT-`
+  - Pendant le scan des `pre_entries` (date < start_date) : si l'entry est une
+    mutation, ses lignes sont collectees dans `pre_mutation_movements` (datees
+    a leur jour d'origine) au lieu d'etre agregees dans `an_debit/an_credit`
+  - Apres l'insertion de la ligne "Reprise comptable", on ajoute les lignes
+    de mutation pre-periode comme mouvements distincts avec :
+    * `date` = date d'origine (ex. 2025-12-15)
+    * `source_type` = "lot_mutation"
+    * `is_pre_period_mutation` = true (pour styling frontend potentiel)
+    * description complete avec [OD] + libelle
+- `situation_compte_supplier` (lignes ~1916+) : meme fix par coherence
+
+**Resultat user-visible** :
+- Vendeur : situation de compte FY 2026 montre les CREDITS de mutation datees
+  2025-12-15 (au lieu d'etre noyes dans une ligne Reprise opaque)
+- Acheteur : situation de compte FY 2026 montre les DEBITS de mutation datees
+  2025-12-15 distinctement
+- Les A-Nouveau (cloture exercice anterieur) restent dans la Reprise (regle
+  inchangee : ils sont une vraie ouverture comptable, pas une mutation)
+
+**Tests** (`tests/test_iter85d_reprise_excludes_mutations.py` - 3/3 PASS) :
+- `mutation_pre_period_not_in_reprise` : 2 ODs mutation au 2025-12-15 sur FY 2026
+  -> 0 ligne Reprise, 2 lignes mutation distinctes datees 2025-12-15
+  (CR 1300 vendeur, DR 1300 acheteur)
+- `an_entry_remains_in_reprise_alongside_mutation` : AN 500 + mutation 800
+  pre-periode -> Reprise = 500 + 1 ligne mutation distincte = 800
+- `mutation_in_period_still_in_movements` : mutation IN-period reste dans
+  mouvements normaux (pas marquee `is_pre_period_mutation`)
+
+**Regression complete** : 41/41 PASS sur stack iter82-85.
+
+**Fichiers** :
+- `/app/backend/routes/reports.py` (2 sections Reprise modifiees)
+- `/app/backend/tests/test_iter85d_reprise_excludes_mutations.py` (NEW)
+
 ### Iter85c (Feb 2026) - PDF futurs : montants reels + wrap + sous-totaux trimestre + cascade lots
 
 **Demandes user** :
