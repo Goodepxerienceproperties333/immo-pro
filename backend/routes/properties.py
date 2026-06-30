@@ -165,6 +165,11 @@ def create_properties_router(db):
         # Aussi accepter le header X-Copropriete-Id pour homogeneiser
         if not copropriete_id:
             copropriete_id = request.headers.get("X-Copropriete-Id") or None
+        # iter85k : "all" est une valeur sentinelle indiquant "TOUS les owners"
+        # (utilisee par CoproprietesPage pour creer une nouvelle ACP et lier
+        # des proprietaires existants). On la traite comme None.
+        if copropriete_id == "all":
+            copropriete_id = None
         is_super, allowed_copros = await _get_user_scope(request)
         # Helper to also fetch orphan owners (copropriete_id == "" or missing) when requested
         async def _fetch_orphans():

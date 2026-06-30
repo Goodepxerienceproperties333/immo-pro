@@ -203,6 +203,76 @@ async def _test_validation_sum_mismatch_returns_400():
         await _cleanup(ctx)
 
 
+async def _test_validation_one_cent_off_returns_400():
+    """iter85j : 90.01 vs 90.02 (ecart 0.01 EUR exact) doit etre detecte
+    et bloquer la creation. Avant fix : passait a cause d'erreur flottante.
+    """
+    from fastapi import HTTPException
+    ctx = await _setup()
+    db = ctx["db"]
+    try:
+        create_fn = _get_endpoint(db, "/api/invoices", "POST")
+        InvoiceInput = create_fn.__annotations__.get("data")
+        import routes.invoices as inv_mod
+        PrivateFeeAllocation = inv_mod.PrivateFeeAllocation
+        # Total = 90.02, allocations 6 x 15.00 = 90.00 + 1 x 15.01 = 90.01
+        # Ecart = 0.01 exact
+        payload = InvoiceInput(
+            number="FA-CENT-001", date="2026-03-15",
+            supplier="FOURNISSEUR Test", description="6 owners 90.01 vs 90.02",
+            total_amount=90.02, copropriete_id=ctx["cid"],
+            is_private_fee=True,
+            private_fee_allocations=[
+                PrivateFeeAllocation(owner_id=ctx["o1"], amount=15.00),
+                PrivateFeeAllocation(owner_id=ctx["o2"], amount=15.00),
+                # Pour avoir 1 cent exact d'ecart : on peut juste utiliser
+                # 1 alloc qui somme a 90.01 alors que total = 90.02
+            ],
+        )
+        # Reconfigure pour avoir le bon scenario : 2 owners, somme = 90.01,
+        # total = 90.02 -> ecart 0.01 doit etre detecte
+        payload.private_fee_allocations = [
+            PrivateFeeAllocation(owner_id=ctx["o1"], amount=45.00),
+            PrivateFeeAllocation(owner_id=ctx["o2"], amount=45.01),
+        ]
+        try:
+            await create_fn(data=payload)
+            assert False, "Devrait lever HTTPException 400 (ecart 1 cent)"
+        except HTTPException as exc:
+            assert exc.status_code == 400
+            # Le message doit mentionner l'ecart precis
+            assert "ecart" in exc.detail.lower() or "egaler" in exc.detail.lower()
+        print("OK - iter85j : ecart 0.01 exact detecte (comparison en centimes)")
+    finally:
+        await _cleanup(ctx)
+
+
+async def _test_validation_exactly_balanced_passes():
+    """iter85j : 45.01 + 44.99 = 90.00 exact - doit passer sans erreur flottant."""
+    ctx = await _setup()
+    db = ctx["db"]
+    try:
+        create_fn = _get_endpoint(db, "/api/invoices", "POST")
+        InvoiceInput = create_fn.__annotations__.get("data")
+        import routes.invoices as inv_mod
+        PrivateFeeAllocation = inv_mod.PrivateFeeAllocation
+        payload = InvoiceInput(
+            number="FA-OK-001", date="2026-03-15",
+            supplier="FOURNISSEUR Test", description="Test equilibre",
+            total_amount=90.00, copropriete_id=ctx["cid"],
+            is_private_fee=True,
+            private_fee_allocations=[
+                PrivateFeeAllocation(owner_id=ctx["o1"], amount=45.01),
+                PrivateFeeAllocation(owner_id=ctx["o2"], amount=44.99),
+            ],
+        )
+        result = await create_fn(data=payload)
+        assert result["id"]
+        print("OK - iter85j : 45.01 + 44.99 = 90.00 passe sans probleme")
+    finally:
+        await _cleanup(ctx)
+
+
 async def _test_backward_compat_single_owner():
     """Legacy : private_fee_owner_id seul (sans allocations) -> 1 allocation derivee."""
     ctx = await _setup()
@@ -340,6 +410,14 @@ def test_iter85e_create_multi_allocations():
 
 def test_iter85e_validation_sum_mismatch():
     asyncio.run(_test_validation_sum_mismatch_returns_400())
+
+
+def test_iter85j_validation_one_cent_off_blocks():
+    asyncio.run(_test_validation_one_cent_off_returns_400())
+
+
+def test_iter85j_validation_exactly_balanced_passes():
+    asyncio.run(_test_validation_exactly_balanced_passes())
 
 
 def test_iter85e_backward_compat_single_owner():

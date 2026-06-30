@@ -59,7 +59,7 @@ export default function BundleImportDialog({
     try {
       const fd = new FormData();
       fd.append('file', f);
-      const copro = localStorage.getItem('copropriete_id') || '';
+      const copro = localStorage.getItem('selectedCopro') || localStorage.getItem('copropriete_id') || '';
       if (copro) fd.append('copropriete_id', copro);
       const { data } = await api.post('/invoices/bundle-analyze', fd, {
         headers: { 'Content-Type': 'multipart/form-data' },
@@ -106,7 +106,7 @@ export default function BundleImportDialog({
       expense_category_id: '',
       distribution_key_id: '',
       status: 'unpaid',
-      copropriete_id: localStorage.getItem('copropriete_id') || '',
+      copropriete_id: localStorage.getItem('selectedCopro') || localStorage.getItem('copropriete_id') || '',
       is_private_fee: false,
       private_fee_owner_id: '',
     };

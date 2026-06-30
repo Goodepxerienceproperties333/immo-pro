@@ -11,6 +11,110 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 ## Implemented
+### Iter85k (Feb 2026) - Scope owners par ACP + event copropriete-changed + sentinelle 'all'
+
+**Probleme** : OwnersPage maintenait son propre state `selectedCopro` initialise depuis
+localStorage, et ecoutait un event `copropriete-changed` jamais emis par AuthContext.
+Resultat : la liste restait sur l'ancienne ACP au changement, ou partait avec
+selectedCopro vide -> tous les owners (toutes ACPs) affiches.
+
+**1. AuthContext** (`contexts/AuthContext.js`) :
+- `setSelectedCopro(id)` dispatche desormais `window.dispatchEvent(new CustomEvent('copropriete-changed', { detail: { copropriete_id: id } }))`
+- Permet aux pages avec listener legacy de se rafraichir (filet de securite).
+
+**2. OwnersPage** (`pages/OwnersPage.js`) :
+- **Option propre adoptee** : lecture directe de `selectedCopro` depuis
+  `useAuth()` (plus de useState local + listener).
+- `load()` n'appelle PAS `/owners` tant que `selectedCopro` est vide.
+- Etat visuel **"Selectionnez une ACP"** (icone AlertTriangle + texte explicatif
+  sur le chinese wall) affiche quand aucune ACP n'est selectionnee.
+- Quand `selectedCopro` defini : `GET /owners?copropriete_id=<id>` (backend scope
+  via jointure sur lots).
+
+**3. api.js** (`lib/api.js`) :
+- `/owners` **retire** de `GLOBAL_PATH_PREFIXES` -> auto-injection du
+  `copropriete_id` et du header `X-Copropriete-Id` par l'intercepteur.
+- Filet de securite : meme si une page oublie de passer le param, l'intercepteur
+  l'ajoute automatiquement.
+
+**4. Backend** (`routes/properties.py::list_owners`) :
+- Nouvelle sentinelle `copropriete_id == 'all'` traitee comme `None` :
+  retourne TOUS les owners (vue plateforme). Utilisee par CoproprietesPage
+  pour creer une nouvelle ACP et lier des owners existants (eviter doublons).
+- Le header `X-Copropriete-Id` est deja utilise comme fallback du query param.
+
+**5. CoproprietesPage** (`pages/CoproprietesPage.js`) :
+- Tous les `api.get('/owners', ...)` (6 occurrences : load, refreshOwnersIfStale,
+  PDF import, autres) passent maintenant explicitement `copropriete_id: 'all'`
+  pour conserver l'acces cross-ACP necessaire a la creation d'ACP.
+
+**Tests** (`tests/test_iter85k_owners_scope_acp.py` - 4/4 PASS) :
+1. `copro_id="all"` -> tous les owners (cross-ACP + orphans pour superadmin)
+2. `copro_id=cid1` -> scope strict (o1, o3 dans cid1 ; o2 exclu)
+3. Header `X-Copropriete-Id` utilise quand query vide
+4. `include_unassigned=true` ajoute les orphans (pour CoproprietesPage)
+
+**Regression complete** : 62/62 PASS sur stack iter82-85.
+
+**Fichiers** :
+- `/app/frontend/src/contexts/AuthContext.js` (event dispatch)
+- `/app/frontend/src/pages/OwnersPage.js` (useAuth + etat vide + scope)
+- `/app/frontend/src/lib/api.js` (retrait /owners de GLOBAL_PATH_PREFIXES)
+- `/app/backend/routes/properties.py` (sentinelle 'all')
+- `/app/frontend/src/pages/CoproprietesPage.js` (explicite 'all' x6)
+- `/app/backend/tests/test_iter85k_owners_scope_acp.py` (NEW)
+
+### Iter85i-j (Feb 2026) - Allocations privatifs : recherche + arrondi en centimes + chinese wall
+
+**Bugs critiques resolus en cascade** :
+
+**1. Bug arrondi flottant (iter85j) - "OK equilibre" trompeur** :
+   - Cas : total facture 90.02 EUR / somme allocations 90.01 EUR -> badge VERT "OK equilibre" alors qu'il y a un ecart de 0.01 EUR.
+   - Cause : `Math.abs(0.02 - 0.01) = 0.00999...` < 0.01 en flottant JavaScript.
+   - Fix : comparaison en **CENTIMES (entiers)** partout (frontend + backend).
+     - `sumCents = allocs.reduce((s,a) => s + Math.round(amount * 100), 0)`
+     - `balanced = (totalCents === sumCents)`
+   - Bouton **"Equilibrer"** ajoute pour repartir le cent manquant sur la derniere ligne en 1 click.
+   - Validation backend POST + PUT aussi en centimes, message d'erreur expose l'ecart precis.
+
+**2. Recherche dans le dropdown owner (iter85i)** :
+   - Cas : ACP Acacia a 60+ proprietaires, le `Select` shadcn etait inutilisable (pas de recherche, scroll geant).
+   - Fix : nouveau composant `OwnerComboboxAlloc` (Popover + Command shadcn) :
+     - Champ recherche libre : filtre par nom + prenom + VCS code + email
+     - Display "Rechercher un proprietaire (nom, VCS, email)..."
+     - Affiche le proprietaire choisi avec son VCS en mono
+     - Exclut les owners deja selectionnes dans les autres lignes
+     - data-testid : `alloc-owner-combo-{idx}`, `alloc-owner-combo-{idx}-input`,
+       `alloc-owner-combo-{idx}-option-{owner_id}`
+
+**3. Bug chinese wall (iter85h fix) - propriétaires d'autres ACPs visibles** :
+   - Cause : la cle localStorage correcte est `'selectedCopro'` (cf. `lib/api.js`)
+     mais mon code iter85e utilisait `'copropriete_id'` -> toujours null -> backend
+     sans scope -> tous les owners retournes.
+   - Fix : pattern `localStorage.getItem('selectedCopro') || localStorage.getItem('copropriete_id') || ''`
+     applique dans :
+     - `pages/InvoicesPage.js` : load owners (chinese wall), aiExtractFromPdf,
+       createSupplierWithHomonymCheck, 2 inline URLs attachments
+     - `pages/SuppliersPage.js` : handleSave (check-duplicate)
+     - `pages/ReportsPage.js`
+     - `components/BundleImportDialog.js`
+   - Frontend envoie maintenant aussi le header `X-Copropriete-Id` explicitement
+     pour `/owners` dans le contexte facture.
+
+**Tests** (etendus dans `test_iter85e_private_fee_multi_allocations.py`) :
+- `test_iter85j_validation_one_cent_off_blocks` : 45.00 + 45.01 != 90.02 detecte
+- `test_iter85j_validation_exactly_balanced_passes` : 45.01 + 44.99 = 90.00 passe
+
+**Regression complete** : 58/58 PASS sur stack iter82-85.
+
+**Fichiers** :
+- `/app/backend/routes/invoices.py` (validation en centimes POST + PUT)
+- `/app/frontend/src/pages/InvoicesPage.js` (combobox + centimes + bouton Equilibrer + localStorage fix)
+- `/app/frontend/src/pages/SuppliersPage.js` (localStorage fix)
+- `/app/frontend/src/pages/ReportsPage.js` (localStorage fix)
+- `/app/frontend/src/components/BundleImportDialog.js` (localStorage fix)
+- `/app/backend/tests/test_iter85e_private_fee_multi_allocations.py` (+2 tests)
+
 ### Iter85h (Feb 2026) - Detection homonymes etendue au dialog facture
 
 **Demande user** : "Etendre la detection au champ Fournisseur du dialog

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import api from '@/lib/api';
+import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -11,33 +12,33 @@ import { Plus, Pencil, Trash2, Search, AlertTriangle } from 'lucide-react';
 const emptyForm = { first_name: '', last_name: '', address: '', postal_code: '', city: '', country: 'Belgique', email: '', email2: '', phone: '', phone2: '' };
 
 export default function OwnersPage() {
+  // iter85k : selectedCopro vient du AuthContext (source de verite unique).
+  // Plus de listener legacy 'copropriete-changed' ni de useState local.
+  const { selectedCopro } = useAuth();
   const [owners, setOwners] = useState([]);
   const [search, setSearch] = useState('');
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState(emptyForm);
   const [duplicates, setDuplicates] = useState([]);
-
-  const [selectedCopro, setSelectedCopro] = useState(typeof window !== 'undefined' ? localStorage.getItem('selectedCopro') || '' : '');
   const [showAll, setShowAll] = useState(false);
+
   const load = useCallback(async () => {
-    const params = {};
-    if (!showAll && selectedCopro && selectedCopro !== 'all') params.copropriete_id = selectedCopro;
+    // Tant que selectedCopro est vide, ne pas appeler /owners
+    if (!selectedCopro || selectedCopro === 'all') {
+      if (showAll && selectedCopro === 'all') {
+        const { data } = await api.get('/owners', { params: {} });
+        setOwners(data);
+      } else {
+        setOwners([]);
+      }
+      return;
+    }
+    const params = { copropriete_id: selectedCopro };
     const { data } = await api.get('/owners', { params });
     setOwners(data);
   }, [selectedCopro, showAll]);
   useEffect(() => { load(); }, [load]);
-
-  // React to ACP change in the header selector (custom event or storage)
-  useEffect(() => {
-    const handler = () => setSelectedCopro(localStorage.getItem('selectedCopro') || '');
-    window.addEventListener('storage', handler);
-    window.addEventListener('copropriete-changed', handler);
-    return () => {
-      window.removeEventListener('storage', handler);
-      window.removeEventListener('copropriete-changed', handler);
-    };
-  }, []);
 
   const filtered = owners.filter(o => {
     const s = search.toLowerCase();
@@ -92,6 +93,16 @@ export default function OwnersPage() {
         </Badge>
       </div>
       <div className="bg-white rounded-md border border-slate-200 overflow-hidden">
+        {!selectedCopro || selectedCopro === '' ? (
+          <div className="text-center py-12 px-6" data-testid="owners-no-acp-selected">
+            <AlertTriangle size={32} className="mx-auto text-amber-500 mb-3" />
+            <p className="text-sm text-slate-700 font-medium">Selectionnez une ACP</p>
+            <p className="text-xs text-slate-500 mt-1">
+              La liste des proprietaires est cloisonnee par ACP (chinese wall).
+              Utilisez le selecteur en haut a droite pour choisir une ACP.
+            </p>
+          </div>
+        ) : (
         <Table>
           <TableHeader><TableRow>
             <TableHead>Nom</TableHead><TableHead>Prenom</TableHead><TableHead>VCS</TableHead>
@@ -114,6 +125,7 @@ export default function OwnersPage() {
             ))}
           </TableBody>
         </Table>
+        )}
       </div>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>

@@ -24,6 +24,13 @@ export function AuthProvider({ children }) {
   const setSelectedCopro = (id) => {
     setSelectedCoproState(id);
     try { localStorage.setItem('selectedCopro', id || ''); } catch { /* noop */ }
+    // iter85k : informe les pages qui ne sont pas directement abonnees au
+    // context (ex. OwnersPage avec son listener legacy) du changement d'ACP.
+    try {
+      window.dispatchEvent(new CustomEvent('copropriete-changed', {
+        detail: { copropriete_id: id || '' },
+      }));
+    } catch { /* noop */ }
   };
 
   const setSelectedFiscalYearId = (id) => {

@@ -343,11 +343,13 @@ def create_invoices_router(db):
         # Frais privatif: force compte 643, ignore distribution_key
         # iter85e : supporte multi-allocations (plusieurs proprietaires avec
         # montants fixes en EUR) en plus du legacy single-owner.
+        # iter85j : comparaison en CENTIMES (entiers) pour eviter les erreurs
+        # d'arrondi flottants (ex. 90.02 - 90.01 != 0.01 en flottant).
         resolved_private_allocs: list = []
         if data.is_private_fee:
             if data.private_fee_allocations:
                 # Multi-owners
-                total_alloc = 0.0
+                total_alloc_cents = 0
                 for idx, alloc in enumerate(data.private_fee_allocations, start=1):
                     if not alloc.owner_id:
                         raise HTTPException(400, f"Allocation {idx}: owner_id requis")
@@ -357,12 +359,13 @@ def create_invoices_router(db):
                     amt = float(alloc.amount or 0)
                     if amt <= 0:
                         raise HTTPException(400, f"Allocation {idx}: montant doit etre > 0")
-                    total_alloc += amt
+                    total_alloc_cents += round(amt * 100)
                     resolved_private_allocs.append({"owner_id": alloc.owner_id, "amount": round(amt, 2)})
-                if abs(total_alloc - float(data.total_amount)) > 0.01:
+                total_invoice_cents = round(float(data.total_amount) * 100)
+                if total_alloc_cents != total_invoice_cents:
                     raise HTTPException(
                         400,
-                        f"Somme des allocations ({total_alloc:.2f}) doit egaler le total de la facture ({data.total_amount:.2f})",
+                        f"Somme des allocations ({total_alloc_cents/100:.2f}) doit egaler le total de la facture ({total_invoice_cents/100:.2f}). Ecart : {(total_invoice_cents - total_alloc_cents)/100:.2f} EUR",
                     )
             elif data.private_fee_owner_id:
                 # Legacy single-owner
@@ -484,10 +487,11 @@ def create_invoices_router(db):
         occupant_pct = max(0.0, min(100.0, occupant_pct))
         proprietaire_pct = round(100.0 - occupant_pct, 2)
         # iter85e : supporte multi-allocations en PUT aussi
+        # iter85j : comparaison en CENTIMES (entiers)
         resolved_private_allocs_upd: list = []
         if data.is_private_fee:
             if data.private_fee_allocations:
-                total_alloc = 0.0
+                total_alloc_cents = 0
                 for idx, alloc in enumerate(data.private_fee_allocations, start=1):
                     if not alloc.owner_id:
                         raise HTTPException(400, f"Allocation {idx}: owner_id requis")
@@ -497,12 +501,13 @@ def create_invoices_router(db):
                     amt = float(alloc.amount or 0)
                     if amt <= 0:
                         raise HTTPException(400, f"Allocation {idx}: montant doit etre > 0")
-                    total_alloc += amt
+                    total_alloc_cents += round(amt * 100)
                     resolved_private_allocs_upd.append({"owner_id": alloc.owner_id, "amount": round(amt, 2)})
-                if abs(total_alloc - float(data.total_amount)) > 0.01:
+                total_invoice_cents = round(float(data.total_amount) * 100)
+                if total_alloc_cents != total_invoice_cents:
                     raise HTTPException(
                         400,
-                        f"Somme des allocations ({total_alloc:.2f}) doit egaler le total de la facture ({data.total_amount:.2f})",
+                        f"Somme des allocations ({total_alloc_cents/100:.2f}) doit egaler le total de la facture ({total_invoice_cents/100:.2f}). Ecart : {(total_invoice_cents - total_alloc_cents)/100:.2f} EUR",
                     )
             elif data.private_fee_owner_id:
                 owner = await db.owners.find_one({"id": data.private_fee_owner_id}, {"_id": 0})

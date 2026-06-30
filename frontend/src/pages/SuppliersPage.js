@@ -48,7 +48,7 @@ export default function SuppliersPage() {
         return;
       }
       // Creation : pre-verifie les homonymes pour proposer un dialog explicite
-      const copro = localStorage.getItem('copropriete_id') || '';
+      const copro = localStorage.getItem('selectedCopro') || localStorage.getItem('copropriete_id') || '';
       const { data } = await api.post('/suppliers/check-duplicate', {
         name: form.name,
         vat_number: form.vat_number || '',

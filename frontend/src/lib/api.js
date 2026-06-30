@@ -8,8 +8,13 @@ const api = axios.create({
 });
 
 // Chinese-wall interceptor: scope every request by the currently selected ACP.
-// Global resources (owners, suppliers, users) are excluded from auto-scoping.
-const GLOBAL_PATH_PREFIXES = ['/owners', '/suppliers', '/users', '/auth', '/coproprietes', '/banking/lookup'];
+// Global resources (suppliers, users) are excluded from auto-scoping.
+// iter85k : /owners RETIRE de cette liste -> est desormais scopa par defaut
+// sur l'ACP courante (filet de securite pour OwnersPage et tout autre consumer).
+// Si un appelant a besoin de TOUS les owners (ex. CoproprietesPage pour
+// l'autocomplete a la creation d'ACP), il doit passer explicitement
+// `params.copropriete_id = 'all'` ou retirer l'header X-Copropriete-Id.
+const GLOBAL_PATH_PREFIXES = ['/suppliers', '/users', '/auth', '/coproprietes', '/banking/lookup'];
 const isGlobalPath = (url = '') => GLOBAL_PATH_PREFIXES.some(p => url === p || url.startsWith(p + '/') || url.startsWith(p + '?'));
 
 api.interceptors.request.use((config) => {

@@ -48,7 +48,7 @@ export default function CoproprietesPage() {
     // include_unassigned=true : also returns orphan owners (no lot yet), needed
     // for the lot-assignment dropdown to show freshly-imported owners that
     // aren't tied to any ACP/lot yet.
-    api.get('/owners', { params: { include_unassigned: true } }).then(r => setOwners(r.data)).catch(() => {});
+    api.get('/owners', { params: { include_unassigned: true, copropriete_id: 'all' } }).then(r => setOwners(r.data)).catch(() => {});
   }, [dialogOpen]);
 
   const filtered = coproprietes.filter(c => c.name.toLowerCase().includes(search.toLowerCase()) || (c.reference || '').toLowerCase().includes(search.toLowerCase()) || (c.bce || '').includes(search));
@@ -124,7 +124,7 @@ export default function CoproprietesPage() {
   // include_unassigned=true to also see owners not yet linked to any lot/ACP.
   const refreshOwnersIfStale = async () => {
     try {
-      const r = await api.get('/owners', { params: { include_unassigned: true } });
+      const r = await api.get('/owners', { params: { include_unassigned: true, copropriete_id: 'all' } });
       setOwners(r.data);
     } catch { /* ignore */ }
   };
@@ -398,7 +398,7 @@ export default function CoproprietesPage() {
                               onClick={async () => {
                                 let nextOwners = owners;
                                 try {
-                                  const r = await api.get('/owners', { params: { include_unassigned: true } });
+                                  const r = await api.get('/owners', { params: { include_unassigned: true, copropriete_id: 'all' } });
                                   nextOwners = r.data || [];
                                   setOwners(nextOwners);
                                 } catch (_e) { /* keep cache */ }
@@ -648,7 +648,7 @@ export default function CoproprietesPage() {
           // Reload owners so the lot autocomplete sees them
           let nextOwners = owners;
           try {
-            const r = await api.get('/owners', { params: { include_unassigned: true } });
+            const r = await api.get('/owners', { params: { include_unassigned: true, copropriete_id: 'all' } });
             nextOwners = r.data || [];
             setOwners(nextOwners);
           } catch (_e) {
@@ -734,7 +734,7 @@ export default function CoproprietesPage() {
           // Re-fetch the full list so the local state is consistent
           let nextOwners = owners;
           try {
-            const rr = await api.get('/owners', { params: { include_unassigned: true } });
+            const rr = await api.get('/owners', { params: { include_unassigned: true, copropriete_id: 'all' } });
             nextOwners = rr.data || [];
             setOwners(nextOwners);
           } catch (_e) {
@@ -796,7 +796,7 @@ export default function CoproprietesPage() {
           // owners (from a prior PDF/CSV import) are visible.
           let availableOwners = owners;
           try {
-            const rr = await api.get('/owners', { params: { include_unassigned: true } });
+            const rr = await api.get('/owners', { params: { include_unassigned: true, copropriete_id: 'all' } });
             availableOwners = rr.data || [];
             setOwners(availableOwners);
           } catch (_e) {

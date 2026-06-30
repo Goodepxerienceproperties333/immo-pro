@@ -164,7 +164,7 @@ export default function ReportsPage() {
     a.click();
     a.remove();
   };
-  const copro = typeof window !== 'undefined' ? localStorage.getItem('copropriete_id') || '' : '';
+  const copro = typeof window !== 'undefined' ? (localStorage.getItem('selectedCopro') || localStorage.getItem('copropriete_id') || '') : '';
   const xlsxParam = copro ? `?copropriete_id=${copro}` : '';
   const exportBilanXlsx = () => window.open(`${API}/api/exports/bilan.xlsx${xlsxParam}${dateTo ? (xlsxParam ? '&' : '?') + 'date_to=' + dateTo : ''}`, '_blank');
   const exportBalanceTiersXlsx = () => window.open(`${API}/api/exports/balance-tiers/owners.xlsx${xlsxParam}`, '_blank');

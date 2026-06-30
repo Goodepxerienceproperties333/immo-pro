@@ -4,6 +4,9 @@ import api from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
+import { Check, ChevronsUpDown } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -53,7 +56,7 @@ export default function InvoicesPage() {
   // Si exact match -> erreur (toast). Si similaires -> dialog confirmation.
   // Si force=true (apres confirmation utilisateur) -> POST avec force_create_despite_similar.
   const createSupplierWithHomonymCheck = (payload) => new Promise((resolve) => {
-    const copro = localStorage.getItem('copropriete_id') || '';
+    const copro = localStorage.getItem('selectedCopro') || localStorage.getItem('copropriete_id') || '';
     const doActualPost = async (forceDespite) => {
       try {
         const { data: created } = await api.post('/suppliers', {
@@ -121,14 +124,18 @@ export default function InvoicesPage() {
   });
 
   const load = useCallback(async () => {
-    const copro = localStorage.getItem('copropriete_id') || '';
+    const copro = localStorage.getItem('selectedCopro') || localStorage.getItem('copropriete_id') || '';
     const supplierParams = copro ? { copropriete_id: copro } : {};
-    // iter85e chinese wall : owners filtres par ACP courante
+    // iter85g chinese wall : owners filtres par ACP courante. La cle localStorage
+    // correcte est 'selectedCopro' (cf. /app/frontend/src/lib/api.js ligne 17).
     const ownersParams = copro ? { copropriete_id: copro } : {};
+    const ownersConfig = copro
+      ? { params: ownersParams, headers: { 'X-Copropriete-Id': copro } }
+      : { params: ownersParams };
     const [inv, dk, acc, lt, cat, ow, sup] = await Promise.all([
       api.get('/invoices', { params: fyParams }), api.get('/distribution-keys'),
       api.get('/accounting/pcmn', { params: { class_num: 6 } }), api.get('/lots'),
-      api.get('/expense-categories'), api.get('/owners', { params: ownersParams }),
+      api.get('/expense-categories'), api.get('/owners', ownersConfig),
       api.get('/suppliers', { params: supplierParams }),
     ]);
     setInvoices(inv.data); setDistKeys(dk.data); setAccounts(acc.data); setLots(lt.data);
@@ -194,7 +201,7 @@ export default function InvoicesPage() {
     try {
       const fd = new FormData();
       fd.append('file', file);
-      const copro = localStorage.getItem('copropriete_id') || '';
+      const copro = localStorage.getItem('selectedCopro') || localStorage.getItem('copropriete_id') || '';
       if (copro) fd.append('copropriete_id', copro);
       const { data } = await api.post('/invoices-ai/extract', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       const ext = data.extracted || {};
@@ -280,7 +287,8 @@ export default function InvoicesPage() {
           if (!Number(ln.amount) || Number(ln.amount) <= 0) { toast.error(`Ligne ${i + 1} : montant > 0 requis`); return; }
         }
       }
-      // iter85e : validation allocations frais privatif
+      // iter85e : validation allocations frais privatif (centimes pour eviter
+      // les erreurs d'arrondi flottants)
       let cleanedAllocs = null;
       if (invForm.is_private_fee) {
         const allocs = (invForm.private_fee_allocations || []).filter(a => a.owner_id && Number(a.amount) > 0);
@@ -288,9 +296,11 @@ export default function InvoicesPage() {
           toast.error('Frais privatif : au moins un proprietaire avec un montant > 0 requis');
           return;
         }
-        const sumA = allocs.reduce((s, a) => s + Number(a.amount), 0);
-        if (Math.abs(sumA - Number(invForm.total_amount || 0)) > 0.01) {
-          toast.error(`Somme des allocations (${sumA.toFixed(2)}) different du total facture (${Number(invForm.total_amount).toFixed(2)})`);
+        const sumCents = allocs.reduce((s, a) => s + Math.round(Number(a.amount) * 100), 0);
+        const totalCents = Math.round(Number(invForm.total_amount || 0) * 100);
+        if (sumCents !== totalCents) {
+          const diff = (totalCents - sumCents) / 100;
+          toast.error(`Somme des allocations (${(sumCents/100).toFixed(2)}) different du total facture (${(totalCents/100).toFixed(2)}). Ecart : ${diff.toFixed(2)} EUR`);
           return;
         }
         // Pas de doublons d'owner
@@ -714,7 +724,7 @@ export default function InvoicesPage() {
                   Pieces jointes ({editingInvoice.attachments.length})
                 </div>
                 {editingInvoice.attachments.map((a) => {
-                  const coproId = localStorage.getItem('copropriete_id') || '';
+                  const coproId = localStorage.getItem('selectedCopro') || localStorage.getItem('copropriete_id') || '';
                   const inlineUrl = `${API}/api/invoices/${editingInvoice.id}/attachments/${a.id}/download?disposition=inline&copropriete_id=${coproId}`;
                   return (
                     <div key={a.id} className="flex items-center justify-between gap-2 text-xs bg-white rounded border px-2 py-1">
@@ -805,11 +815,16 @@ export default function InvoicesPage() {
               </label>
               {invForm.is_private_fee && (() => {
                 // iter85e : tableau dynamique d'allocations (owner + montant)
+                // iter85j : comparaison en CENTIMES (entiers) pour eviter les
+                //          erreurs d'arrondi flottants (ex. 90.02 - 90.01 != 0.01)
                 const allocs = invForm.private_fee_allocations || [];
                 const total = Number(invForm.total_amount || 0);
-                const sum = allocs.reduce((s, a) => s + (Number(a.amount) || 0), 0);
-                const diff = total - sum;
-                const balanced = Math.abs(diff) < 0.01;
+                const sumCents = allocs.reduce((s, a) => s + Math.round((Number(a.amount) || 0) * 100), 0);
+                const totalCents = Math.round(total * 100);
+                const diffCents = totalCents - sumCents;
+                const sum = sumCents / 100;
+                const diff = diffCents / 100;
+                const balanced = diffCents === 0;
                 const addAlloc = () => {
                   setInvForm(f => ({
                     ...f,
@@ -847,26 +862,19 @@ export default function InvoicesPage() {
                     )}
                     {allocs.map((a, idx) => {
                       const selOwner = owners.find(o => o.id === a.owner_id);
+                      // iter85i : combobox avec recherche (nom, prenom, VCS, email)
+                      // au lieu du Select shadcn (inutilisable au-dela de 20 owners).
+                      const excludedIds = allocs.filter((b, j) => j !== idx && b.owner_id).map(b => b.owner_id);
                       return (
                         <div key={idx} className="flex gap-2 items-start bg-white border border-amber-100 rounded p-2">
                           <div className="flex-1">
-                            <Select
+                            <OwnerComboboxAlloc
+                              owners={owners}
                               value={a.owner_id || ''}
-                              onValueChange={(v) => updateAlloc(idx, { owner_id: v })}
-                            >
-                              <SelectTrigger className="text-xs h-8" data-testid={`alloc-owner-select-${idx}`}>
-                                <SelectValue placeholder="Choisir un proprietaire (filtre ACP)" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                {owners
-                                  .filter(o => !allocs.some((b, j) => j !== idx && b.owner_id === o.id))
-                                  .map(o => (
-                                    <SelectItem key={o.id} value={o.id}>
-                                      {o.name} {o.vcs_code ? <span className="text-slate-400 font-mono text-[10px] ml-1">{o.vcs_code}</span> : ''}
-                                    </SelectItem>
-                                  ))}
-                              </SelectContent>
-                            </Select>
+                              excludeIds={excludedIds}
+                              onChange={(oid) => updateAlloc(idx, { owner_id: oid })}
+                              testId={`alloc-owner-combo-${idx}`}
+                            />
                             {selOwner?.email && <div className="text-[10px] text-slate-400 mt-1">{selOwner.email}</div>}
                           </div>
                           <div className="w-32">
@@ -894,8 +902,31 @@ export default function InvoicesPage() {
                     {allocs.length > 0 && (
                       <div className={`flex justify-between items-center text-xs px-2 py-1.5 rounded border ${balanced ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-rose-50 border-rose-200 text-rose-700'}`}>
                         <span>Somme allocations : <b>{sum.toFixed(2)} EUR</b> / Total facture : <b>{total.toFixed(2)} EUR</b></span>
-                        <span data-testid="alloc-balance-status">
-                          {balanced ? <>OK - equilibre</> : <>Ecart : <b>{diff.toFixed(2)} EUR</b></>}
+                        <span className="flex items-center gap-2" data-testid="alloc-balance-status">
+                          {balanced ? <>OK - equilibre</> : (
+                            <>
+                              <span>Ecart : <b>{diff.toFixed(2)} EUR</b></span>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  // Ajoute / retire le cent manquant sur la DERNIERE ligne
+                                  setInvForm(f => {
+                                    const arr = [...(f.private_fee_allocations || [])];
+                                    if (arr.length === 0) return f;
+                                    const last = arr.length - 1;
+                                    const newAmt = Math.round((Number(arr[last].amount) || 0) * 100 + diffCents) / 100;
+                                    arr[last] = { ...arr[last], amount: newAmt };
+                                    return { ...f, private_fee_allocations: arr };
+                                  });
+                                }}
+                                className="text-[11px] underline text-rose-700 hover:text-rose-900"
+                                data-testid="alloc-auto-balance"
+                                title="Ajuste le cent manquant sur la derniere ligne"
+                              >
+                                Equilibrer
+                              </button>
+                            </>
+                          )}
                         </span>
                       </div>
                     )}
@@ -1344,7 +1375,7 @@ export default function InvoicesPage() {
               {(attachDialogInv?.attachments || []).length === 0 ? (
                 <div className="text-sm text-slate-400 text-center py-3">Aucune piece jointe</div>
               ) : attachDialogInv.attachments.map((a) => {
-                const coproId = localStorage.getItem('copropriete_id') || '';
+                const coproId = localStorage.getItem('selectedCopro') || localStorage.getItem('copropriete_id') || '';
                 const inlineUrl = `${API}/api/invoices/${attachDialogInv.id}/attachments/${a.id}/download?disposition=inline&copropriete_id=${coproId}`;
                 const downloadUrl = `${API}/api/invoices/${attachDialogInv.id}/attachments/${a.id}/download?copropriete_id=${coproId}`;
                 return (
@@ -1548,3 +1579,73 @@ export default function InvoicesPage() {
     </div>
   );
 }
+
+// iter85i : Combobox proprietaire avec recherche pour le tableau d'allocations
+// frais privatifs. Filtre par nom, prenom, VCS code, email. Exclut les owners
+// deja selectionnes dans d'autres lignes (excludeIds).
+function OwnerComboboxAlloc({ owners, value, excludeIds = [], onChange, testId = '' }) {
+  const [open, setOpen] = useState(false);
+  const selected = owners.find(o => o.id === value);
+  const available = owners.filter(o => !excludeIds.includes(o.id));
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          role="combobox"
+          aria-expanded={open}
+          className="w-full justify-between text-xs h-8 font-normal"
+          data-testid={testId || 'alloc-owner-combo'}
+        >
+          {selected ? (
+            <span className="truncate flex items-center gap-1">
+              {selected.name}
+              {selected.vcs_code && <span className="text-slate-400 font-mono text-[10px]">{selected.vcs_code}</span>}
+            </span>
+          ) : (
+            <span className="text-slate-400">Rechercher un proprietaire (nom, VCS, email)...</span>
+          )}
+          <ChevronsUpDown size={14} className="ml-2 shrink-0 opacity-50" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-[380px] p-0" align="start">
+        <Command
+          filter={(itemValue, search) => {
+            // itemValue contient le nom + vcs + email concatenes en lowercase
+            return itemValue.toLowerCase().includes(search.toLowerCase()) ? 1 : 0;
+          }}
+        >
+          <CommandInput placeholder="Tapez le nom, VCS ou email..." className="text-xs h-9" data-testid={`${testId || 'alloc-owner-combo'}-input`} />
+          <CommandList className="max-h-72">
+            <CommandEmpty className="text-xs text-slate-500 py-4 text-center">Aucun proprietaire trouve.</CommandEmpty>
+            <CommandGroup>
+              {available.map(o => {
+                const haystack = `${o.name || ''} ${o.vcs_code || ''} ${o.email || ''}`.toLowerCase();
+                return (
+                  <CommandItem
+                    key={o.id}
+                    value={haystack}
+                    onSelect={() => { onChange(o.id); setOpen(false); }}
+                    className="text-xs cursor-pointer"
+                    data-testid={`${testId || 'alloc-owner-combo'}-option-${o.id}`}
+                  >
+                    <Check size={12} className={`mr-2 ${value === o.id ? 'opacity-100' : 'opacity-0'}`} />
+                    <div className="flex-1 min-w-0">
+                      <div className="truncate">{o.name}</div>
+                      <div className="text-[10px] text-slate-400 truncate space-x-2">
+                        {o.vcs_code && <span className="font-mono">{o.vcs_code}</span>}
+                        {o.email && <span>{o.email}</span>}
+                      </div>
+                    </div>
+                  </CommandItem>
+                );
+              })}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
