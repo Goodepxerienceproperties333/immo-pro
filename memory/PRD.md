@@ -11,6 +11,77 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 ## Implemented
+### Iter89 (Feb 2026) - Portail proprietaire self-service : modif coords + locataires + notif syndic
+
+**Demande user** : "Creer une interface permettant aux proprietaires d'avoir
+acces a leur compte [...]. Le proprietaire doit pouvoir modifier ses coordonnees
+et ajouter ses locataires, en cas de modification le syndic est averti par email."
+
+**Existant (avant iter89)** : portail read-only complet (dashboard, ACPs, lots,
+appels, charges, documents, decompte annuel PDF, VCS copy). Rien a refaire.
+
+**iter89 ajoute** :
+
+**Backend `routes/owner_portal.py`** :
+- `PUT /api/owner/me` : update self-service des coords proprio. Champs
+  whitelistes (`first_name`, `last_name`, `address`, `postal_code`, `city`,
+  `country`, `email`, `email2`, `phone`, `phone2`). Les champs sensibles
+  (`vcs_code`, `auxiliary_code`, `tier_accounts`) sont LOCKED. Recompute
+  automatique du `name` quand last/first change.
+- `GET /api/owner/tenants` : liste les locataires des lots du proprio
+  uniquement (scope strict, retourne aussi `lots[]` pour le selecteur UI)
+- `POST/PUT/DELETE /api/owner/tenants` : CRUD self-service. Le `lot_id`
+  passe doit appartenir au proprio (verif sur `lots.owner_id` OR
+  `lots.owner_ids`), sinon 403.
+
+**Helper `owner_self_notify.py`** :
+- Fonction `notify_syndic_of_owner_change(db, owner, change_type, summary_lines, ...)`
+- 2 phases :
+  1. PERSISTE TOUJOURS la notification dans `db.owner_notifications`
+     (le syndic la verra dans l'UI meme si l'email echoue)
+  2. Best-effort send via Microsoft Graph (`graph_email.send_html_email`)
+     si configure (AZURE_TENANT_ID + GRAPH_SENDER_UPN dans .env)
+- Recipients : tous les users avec role syndic/gestionnaire/superadmin
+  ayant acces a au moins une des ACPs du proprio
+- Email HTML stylise avec le diff exact des modifications
+
+**Frontend `OwnerPortalPage.js`** :
+- 2 nouveaux onglets : **"Mon profil"** (formulaire editable complet)
+  et **"Mes locataires"** (table + dialog create/edit + delete)
+- Toast "Coordonnees mises a jour - votre syndic a ete averti par email"
+  apres save profile
+- Toast "Locataire ajoute/modifie/supprime - syndic averti" apres CRUD
+- Selecteur de lot dans le dialog tenant (limite a ses propres lots)
+- Bouton "Ajouter" disabled si le proprio n'a aucun lot
+- Dialog avec dates bail (input type=date) + loyer (input number step=0.01)
+
+**Tests** (`tests/test_iter89_owner_portal_self_service.py` - 7/7 PASS) :
+1. PUT /me : update + notification persisted
+2. PUT /me : pas de modif -> pas de notification
+3. PUT /me : champs whitelistes + recompute du name
+4. GET /tenants : scope strict (uniquement lots du proprio)
+5. POST /tenants : sur son lot OK + notification creee
+6. POST /tenants : sur lot d'un autre proprio -> 403
+7. PUT + DELETE /tenants/{id} : update + delete + 2 notifications creees
+
+**Regression complete iter85-iter89** : tous tests pertinents PASS.
+
+**Smoke UI** : verifie via login owner (sophie.martin@example.be) -> portail
+charge correctement avec les 6 onglets + formulaire profil pre-rempli + onglet
+locataires fonctionnel.
+
+**Securite** :
+- RBAC middleware deja permettait `/api/owner/*` pour role `owner` (toutes methodes)
+- Verification ownership via `_resolve_owner` (par email) + checks lot
+  (`owner_id` OR `owner_ids`)
+- Aucune fuite cross-owner possible
+
+**Fichiers** :
+- `/app/backend/routes/owner_portal.py` (+200 lignes : PUT /me + CRUD tenants)
+- `/app/backend/owner_self_notify.py` (NEW - helper notification)
+- `/app/frontend/src/pages/OwnerPortalPage.js` (+250 lignes : 2 tabs + dialog)
+- `/app/backend/tests/test_iter89_owner_portal_self_service.py` (NEW - 7 tests)
+
 ### Iter88e (Feb 2026) - CODA parser : precision decimale corrigee (millimes au lieu de centimes)
 
 **Bug carry-over depuis iter85** : `coda_parser.py::parse_amount` divisait par

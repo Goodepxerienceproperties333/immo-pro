@@ -1,8 +1,25 @@
 """Owner portal: routes scopees automatiquement au proprietaire connecte.
 Le lien user<->owner se fait par email (les owners sont globaux).
-Toutes les donnees sont en lecture seule (RBAC enforce write-block sur role=owner)."""
+Toutes les donnees sont en lecture seule (RBAC enforce write-block sur role=owner).
+
+iter89 : ajout de PUT /me (modif coords par le proprio) et CRUD locataires
+self-service depuis le portail, avec notification automatique au syndic.
+"""
 from fastapi import APIRouter, HTTPException, Request
-from typing import Optional
+from pydantic import BaseModel
+from typing import Optional, List
+import uuid
+from datetime import datetime, timezone
+from owner_self_notify import notify_syndic_of_owner_change
+
+
+# Champs qu'un proprio est AUTORISE a modifier via le portail
+# (les autres - vcs_code, auxiliary_code, name, tier_accounts - sont locked
+# car ils ont un impact comptable et identitaire).
+OWNER_SELF_EDITABLE = {
+    "first_name", "last_name", "address", "postal_code", "city",
+    "country", "email", "email2", "phone", "phone2",
+}
 
 
 async def _resolve_owner(db, request: Request) -> dict:
@@ -416,5 +433,229 @@ def create_owner_portal_router(db):
             {"copropriete_id": copropriete_id}, {"_id": 0}
         ).sort("start_date", -1).to_list(50)
         return years
+
+    # ====================================================================
+    # iter89 : SELF-SERVICE - le proprio peut modifier ses coords et gerer
+    # ses locataires depuis son espace. Le syndic est averti par email.
+    # ====================================================================
+
+    class OwnerSelfUpdate(BaseModel):
+        first_name: Optional[str] = None
+        last_name: Optional[str] = None
+        address: Optional[str] = None
+        postal_code: Optional[str] = None
+        city: Optional[str] = None
+        country: Optional[str] = None
+        email: Optional[str] = None
+        email2: Optional[str] = None
+        phone: Optional[str] = None
+        phone2: Optional[str] = None
+
+    async def _owner_copropriete_ids(owner_id: str) -> List[str]:
+        lots = await db.lots.find(
+            {"$or": [{"owner_id": owner_id}, {"owner_ids": owner_id}]},
+            {"_id": 0, "copropriete_id": 1}
+        ).to_list(1000)
+        return list({l["copropriete_id"] for l in lots if l.get("copropriete_id")})
+
+    @router.put("/me")
+    async def update_my_profile(data: OwnerSelfUpdate, request: Request):
+        """Owner self-updates his coordinates. Trigger syndic email notification."""
+        owner = await _resolve_owner(db, request)
+        owner_id = owner["id"]
+        # Build update payload : only whitelisted fields, only non-None values
+        update = {}
+        diffs = []
+        for field, new_val in data.model_dump(exclude_none=True).items():
+            if field not in OWNER_SELF_EDITABLE:
+                continue
+            old_val = owner.get(field, "") or ""
+            new_val_str = (new_val or "").strip() if isinstance(new_val, str) else new_val
+            if (new_val_str or "") != (old_val or ""):
+                update[field] = new_val_str
+                diffs.append(f"{field} : '{old_val}' -> '{new_val_str}'")
+        if not update:
+            return {"updated": False, "message": "Aucune modification detectee", "owner": owner}
+        # Recompute `name` if last/first changed
+        new_last = update.get("last_name", owner.get("last_name", "")) or ""
+        new_first = update.get("first_name", owner.get("first_name", "")) or ""
+        if "last_name" in update or "first_name" in update:
+            update["name"] = f"{new_last} {new_first}".strip()
+        await db.owners.update_one({"id": owner_id}, {"$set": update})
+        updated_owner = await db.owners.find_one({"id": owner_id}, {"_id": 0})
+        # Notify syndic
+        copro_ids = await _owner_copropriete_ids(owner_id)
+        notif_result = await notify_syndic_of_owner_change(
+            db, updated_owner,
+            change_type="modifier ses coordonnees",
+            summary_lines=diffs,
+            copropriete_ids=copro_ids,
+        )
+        return {"updated": True, "owner": updated_owner, "notification": notif_result}
+
+    @router.get("/tenants")
+    async def my_tenants(request: Request):
+        """Tenants associated to the owner's lots only (scope strict)."""
+        owner = await _resolve_owner(db, request)
+        owner_id = owner["id"]
+        lots = await db.lots.find(
+            {"$or": [{"owner_id": owner_id}, {"owner_ids": owner_id}]},
+            {"_id": 0, "id": 1, "number": 1, "copropriete_id": 1, "description": 1}
+        ).to_list(1000)
+        lot_ids = [l["id"] for l in lots]
+        if not lot_ids:
+            return {"tenants": [], "lots": []}
+        tenants = await db.tenants.find(
+            {"lot_id": {"$in": lot_ids}}, {"_id": 0}
+        ).sort("created_at", -1).to_list(1000)
+        return {"tenants": tenants, "lots": lots}
+
+    class TenantInput(BaseModel):
+        name: str
+        email: Optional[str] = ""
+        phone: Optional[str] = ""
+        lot_id: str
+        lease_start: Optional[str] = ""
+        lease_end: Optional[str] = ""
+        rent_amount: Optional[float] = 0.0
+
+    @router.post("/tenants")
+    async def create_my_tenant(data: TenantInput, request: Request):
+        """Owner creates a tenant - the tenant MUST be linked to one of his lots."""
+        owner = await _resolve_owner(db, request)
+        owner_id = owner["id"]
+        lot = await db.lots.find_one(
+            {"id": data.lot_id,
+             "$or": [{"owner_id": owner_id}, {"owner_ids": owner_id}]},
+            {"_id": 0}
+        )
+        if not lot:
+            raise HTTPException(403, "Le lot ne vous appartient pas")
+        doc = {
+            "id": str(uuid.uuid4()),
+            "name": data.name.strip(),
+            "email": (data.email or "").strip(),
+            "phone": (data.phone or "").strip(),
+            "lot_id": data.lot_id,
+            "lease_start": data.lease_start or "",
+            "lease_end": data.lease_end or "",
+            "rent_amount": float(data.rent_amount or 0),
+            "copropriete_id": lot.get("copropriete_id", ""),
+            "created_by_owner_id": owner_id,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        await db.tenants.insert_one(doc)
+        # Notify syndic
+        copro = await db.coproprietes.find_one(
+            {"id": lot.get("copropriete_id", "")}, {"_id": 0, "name": 1}
+        )
+        await notify_syndic_of_owner_change(
+            db, owner,
+            change_type="ajouter un locataire",
+            summary_lines=[
+                f"Locataire : {doc['name']}",
+                f"Lot : {lot.get('number','')} {(lot.get('description') or '').strip()}".strip(),
+                f"Email : {doc['email'] or '-'}",
+                f"GSM : {doc['phone'] or '-'}",
+                f"Bail : {doc['lease_start'] or '-'} -> {doc['lease_end'] or '-'}",
+                f"Loyer : {doc['rent_amount']:.2f} EUR" if doc['rent_amount'] else "Loyer : non renseigne",
+            ],
+            copropriete_ids=[lot.get("copropriete_id", "")] if lot.get("copropriete_id") else [],
+            copropriete_name=(copro or {}).get("name", ""),
+        )
+        return {k: v for k, v in doc.items() if k != "_id"}
+
+    @router.put("/tenants/{tenant_id}")
+    async def update_my_tenant(tenant_id: str, data: TenantInput, request: Request):
+        owner = await _resolve_owner(db, request)
+        owner_id = owner["id"]
+        existing = await db.tenants.find_one({"id": tenant_id}, {"_id": 0})
+        if not existing:
+            raise HTTPException(404, "Locataire non trouve")
+        # Ownership check via lot
+        lot = await db.lots.find_one(
+            {"id": existing.get("lot_id", ""),
+             "$or": [{"owner_id": owner_id}, {"owner_ids": owner_id}]},
+            {"_id": 0}
+        )
+        if not lot:
+            raise HTTPException(403, "Ce locataire n'est pas dans l'un de vos lots")
+        # New lot must also belong to owner (if changed)
+        new_lot = lot
+        if data.lot_id and data.lot_id != existing.get("lot_id"):
+            new_lot = await db.lots.find_one(
+                {"id": data.lot_id,
+                 "$or": [{"owner_id": owner_id}, {"owner_ids": owner_id}]},
+                {"_id": 0}
+            )
+            if not new_lot:
+                raise HTTPException(403, "Le nouveau lot ne vous appartient pas")
+        diffs = []
+        new_email = (data.email or "").strip()
+        new_phone = (data.phone or "").strip()
+        new_rent = float(data.rent_amount or 0)
+        for k, old, new in [
+            ("name", existing.get("name", ""), data.name.strip()),
+            ("email", existing.get("email", ""), new_email),
+            ("phone", existing.get("phone", ""), new_phone),
+            ("lease_start", existing.get("lease_start", ""), data.lease_start or ""),
+            ("lease_end", existing.get("lease_end", ""), data.lease_end or ""),
+            ("rent_amount", existing.get("rent_amount", 0), new_rent),
+            ("lot_id", existing.get("lot_id", ""), data.lot_id or existing.get("lot_id", "")),
+        ]:
+            if old != new:
+                diffs.append(f"{k} : '{old}' -> '{new}'")
+        update = {
+            "name": data.name.strip(), "email": new_email, "phone": new_phone,
+            "lot_id": data.lot_id or existing.get("lot_id", ""),
+            "lease_start": data.lease_start or "",
+            "lease_end": data.lease_end or "",
+            "rent_amount": new_rent,
+            "copropriete_id": new_lot.get("copropriete_id", existing.get("copropriete_id", "")),
+        }
+        await db.tenants.update_one({"id": tenant_id}, {"$set": update})
+        updated = await db.tenants.find_one({"id": tenant_id}, {"_id": 0})
+        if diffs:
+            copro = await db.coproprietes.find_one(
+                {"id": update["copropriete_id"]}, {"_id": 0, "name": 1}
+            )
+            await notify_syndic_of_owner_change(
+                db, owner,
+                change_type=f"modifier le locataire {updated['name']}",
+                summary_lines=diffs,
+                copropriete_ids=[update["copropriete_id"]] if update.get("copropriete_id") else [],
+                copropriete_name=(copro or {}).get("name", ""),
+            )
+        return updated
+
+    @router.delete("/tenants/{tenant_id}")
+    async def delete_my_tenant(tenant_id: str, request: Request):
+        owner = await _resolve_owner(db, request)
+        owner_id = owner["id"]
+        existing = await db.tenants.find_one({"id": tenant_id}, {"_id": 0})
+        if not existing:
+            raise HTTPException(404, "Locataire non trouve")
+        lot = await db.lots.find_one(
+            {"id": existing.get("lot_id", ""),
+             "$or": [{"owner_id": owner_id}, {"owner_ids": owner_id}]},
+            {"_id": 0, "number": 1, "copropriete_id": 1}
+        )
+        if not lot:
+            raise HTTPException(403, "Ce locataire n'est pas dans l'un de vos lots")
+        await db.tenants.delete_one({"id": tenant_id})
+        copro = await db.coproprietes.find_one(
+            {"id": lot.get("copropriete_id", "")}, {"_id": 0, "name": 1}
+        )
+        await notify_syndic_of_owner_change(
+            db, owner,
+            change_type=f"supprimer le locataire {existing.get('name','')}",
+            summary_lines=[
+                f"Locataire supprime : {existing.get('name','')}",
+                f"Lot : {lot.get('number','')}",
+            ],
+            copropriete_ids=[lot.get("copropriete_id", "")] if lot.get("copropriete_id") else [],
+            copropriete_name=(copro or {}).get("name", ""),
+        )
+        return {"message": "Locataire supprime"}
 
     return router

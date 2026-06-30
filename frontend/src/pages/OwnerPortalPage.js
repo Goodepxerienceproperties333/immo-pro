@@ -4,10 +4,12 @@ import api from '@/lib/api';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { toast } from 'sonner';
-import { LogOut, Home, Wallet, FileText, Receipt, Megaphone, Building2, User, AlertCircle, CheckCircle2, ArrowDownToLine, Copy } from 'lucide-react';
+import { LogOut, Home, Wallet, FileText, Receipt, Megaphone, Building2, User, AlertCircle, CheckCircle2, ArrowDownToLine, Copy, UserCog, Users, Plus, Pencil, Trash2, Save } from 'lucide-react';
 
 const fmt = (n) => new Intl.NumberFormat('fr-BE', { style: 'currency', currency: 'EUR' }).format(n || 0);
 const fmtDate = (s) => s ? new Date(s).toLocaleDateString('fr-BE') : '-';
@@ -22,6 +24,22 @@ export default function OwnerPortalPage() {
   const [selectedAcp, setSelectedAcp] = useState('all');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  // iter89 : profil editable + tenants self-service
+  const [profileForm, setProfileForm] = useState(null);
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [tenants, setTenants] = useState([]);
+  const [myLots, setMyLots] = useState([]);
+  const [tenantDialog, setTenantDialog] = useState(false);
+  const [editingTenant, setEditingTenant] = useState(null);
+  const [tenantForm, setTenantForm] = useState({ name: '', email: '', phone: '', lot_id: '', lease_start: '', lease_end: '', rent_amount: 0 });
+
+  const loadTenants = async () => {
+    try {
+      const { data } = await api.get('/owner/tenants');
+      setTenants(data.tenants || []);
+      setMyLots(data.lots || []);
+    } catch { /* silent : pas de droit ou pas de lot */ }
+  };
 
   useEffect(() => {
     (async () => {
@@ -38,6 +56,16 @@ export default function OwnerPortalPage() {
         setFundCalls(fc.data);
         setCharges(inv.data);
         setDocuments(docs.data);
+        // iter89 : init profile form from owner data
+        const o = dash.data?.owner || {};
+        setProfileForm({
+          first_name: o.first_name || '', last_name: o.last_name || '',
+          address: o.address || '', postal_code: o.postal_code || '',
+          city: o.city || '', country: o.country || 'Belgique',
+          email: o.email || '', email2: o.email2 || '',
+          phone: o.phone || '', phone2: o.phone2 || '',
+        });
+        await loadTenants();
       } catch (err) {
         setError(err.response?.data?.detail || 'Erreur de chargement');
       } finally {
@@ -51,6 +79,69 @@ export default function OwnerPortalPage() {
   const copyVcs = (vcs) => {
     navigator.clipboard.writeText(vcs);
     toast.success('VCS copie dans le presse-papier');
+  };
+
+  // iter89 : sauvegarde du profil + notification syndic automatique
+  const saveProfile = async () => {
+    setSavingProfile(true);
+    try {
+      const { data } = await api.put('/owner/me', profileForm);
+      if (data.updated) {
+        toast.success('Coordonnees mises a jour - votre syndic a ete averti par email');
+        // Reload dashboard pour rafraichir l'identite affichee
+        const dash = await api.get('/owner/dashboard');
+        setDashboard(dash.data);
+      } else {
+        toast.info('Aucune modification a enregistrer');
+      }
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur lors de la sauvegarde');
+    } finally {
+      setSavingProfile(false);
+    }
+  };
+
+  // iter89 : CRUD locataires self-service
+  const openCreateTenant = () => {
+    setEditingTenant(null);
+    setTenantForm({ name: '', email: '', phone: '', lot_id: myLots[0]?.id || '', lease_start: '', lease_end: '', rent_amount: 0 });
+    setTenantDialog(true);
+  };
+  const openEditTenant = (t) => {
+    setEditingTenant(t);
+    setTenantForm({
+      name: t.name || '', email: t.email || '', phone: t.phone || '',
+      lot_id: t.lot_id || '', lease_start: t.lease_start || '',
+      lease_end: t.lease_end || '', rent_amount: t.rent_amount || 0,
+    });
+    setTenantDialog(true);
+  };
+  const saveTenant = async () => {
+    if (!tenantForm.name?.trim()) { toast.error('Nom obligatoire'); return; }
+    if (!tenantForm.lot_id) { toast.error('Lot obligatoire'); return; }
+    try {
+      if (editingTenant) {
+        await api.put(`/owner/tenants/${editingTenant.id}`, tenantForm);
+        toast.success('Locataire modifie - syndic averti');
+      } else {
+        await api.post('/owner/tenants', tenantForm);
+        toast.success('Locataire ajoute - syndic averti');
+      }
+      setTenantDialog(false);
+      await loadTenants();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur');
+    }
+  };
+  const deleteTenant = async (t) => {
+    if (!window.confirm(`Supprimer le locataire "${t.name}" ?`)) return;
+    try {
+      await api.delete(`/owner/tenants/${t.id}`);
+      toast.success('Locataire supprime - syndic averti');
+      await loadTenants();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur');
+    }
   };
 
   if (loading) return <div className="min-h-screen flex items-center justify-center text-slate-500">Chargement de votre espace...</div>;
@@ -170,6 +261,8 @@ export default function OwnerPortalPage() {
               <TabsTrigger value="fund-calls" data-testid="tab-fund-calls"><Megaphone size={14} className="mr-1.5" /> Appels de fonds</TabsTrigger>
               <TabsTrigger value="charges" data-testid="tab-charges"><Receipt size={14} className="mr-1.5" /> Charges</TabsTrigger>
               <TabsTrigger value="documents" data-testid="tab-documents"><FileText size={14} className="mr-1.5" /> Documents</TabsTrigger>
+              <TabsTrigger value="profile" data-testid="tab-profile"><UserCog size={14} className="mr-1.5" /> Mon profil</TabsTrigger>
+              <TabsTrigger value="tenants" data-testid="tab-tenants"><Users size={14} className="mr-1.5" /> Mes locataires</TabsTrigger>
             </TabsList>
             {coproprietes.length > 1 && (
               <select value={selectedAcp} onChange={e => setSelectedAcp(e.target.value)} className="text-sm border border-slate-200 rounded-md px-3 py-1.5 bg-white">
@@ -311,8 +404,189 @@ export default function OwnerPortalPage() {
               </div>
             )}
           </TabsContent>
+
+          {/* iter89 : Mon profil - modification self-service */}
+          <TabsContent value="profile" className="mt-0">
+            <Card data-testid="profile-card">
+              <CardHeader>
+                <CardTitle className="text-base" style={{fontFamily:'Chivo,sans-serif'}}>Mes coordonnees</CardTitle>
+                <p className="text-xs text-slate-500">Modifiez vos informations. Toute modification est automatiquement transmise par email a votre syndic.</p>
+              </CardHeader>
+              <CardContent>
+                {profileForm && (
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-[10px] uppercase tracking-wider text-slate-500 mb-1 block">Nom</label>
+                        <Input value={profileForm.last_name} onChange={e => setProfileForm({...profileForm, last_name: e.target.value})} data-testid="profile-last-name" />
+                      </div>
+                      <div>
+                        <label className="text-[10px] uppercase tracking-wider text-slate-500 mb-1 block">Prenom</label>
+                        <Input value={profileForm.first_name} onChange={e => setProfileForm({...profileForm, first_name: e.target.value})} data-testid="profile-first-name" />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="text-[10px] uppercase tracking-wider text-slate-500 mb-1 block">Adresse</label>
+                      <Input value={profileForm.address} onChange={e => setProfileForm({...profileForm, address: e.target.value})} data-testid="profile-address" />
+                    </div>
+                    <div className="grid grid-cols-3 gap-3">
+                      <div>
+                        <label className="text-[10px] uppercase tracking-wider text-slate-500 mb-1 block">Code postal</label>
+                        <Input value={profileForm.postal_code} onChange={e => setProfileForm({...profileForm, postal_code: e.target.value})} data-testid="profile-postal" />
+                      </div>
+                      <div>
+                        <label className="text-[10px] uppercase tracking-wider text-slate-500 mb-1 block">Ville</label>
+                        <Input value={profileForm.city} onChange={e => setProfileForm({...profileForm, city: e.target.value})} data-testid="profile-city" />
+                      </div>
+                      <div>
+                        <label className="text-[10px] uppercase tracking-wider text-slate-500 mb-1 block">Pays</label>
+                        <Input value={profileForm.country} onChange={e => setProfileForm({...profileForm, country: e.target.value})} data-testid="profile-country" />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-[10px] uppercase tracking-wider text-slate-500 mb-1 block">Email principal</label>
+                        <Input value={profileForm.email} onChange={e => setProfileForm({...profileForm, email: e.target.value})} data-testid="profile-email" />
+                      </div>
+                      <div>
+                        <label className="text-[10px] uppercase tracking-wider text-slate-500 mb-1 block">Email secondaire</label>
+                        <Input value={profileForm.email2} onChange={e => setProfileForm({...profileForm, email2: e.target.value})} data-testid="profile-email2" />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-[10px] uppercase tracking-wider text-slate-500 mb-1 block">GSM</label>
+                        <Input value={profileForm.phone} onChange={e => setProfileForm({...profileForm, phone: e.target.value})} data-testid="profile-phone" />
+                      </div>
+                      <div>
+                        <label className="text-[10px] uppercase tracking-wider text-slate-500 mb-1 block">GSM 2</label>
+                        <Input value={profileForm.phone2} onChange={e => setProfileForm({...profileForm, phone2: e.target.value})} data-testid="profile-phone2" />
+                      </div>
+                    </div>
+                    <div className="pt-3 border-t border-slate-100">
+                      <Button onClick={saveProfile} disabled={savingProfile} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="profile-save-btn">
+                        <Save size={14} className="mr-1.5" />
+                        {savingProfile ? 'Enregistrement...' : 'Enregistrer mes modifications'}
+                      </Button>
+                      <p className="text-[11px] text-slate-500 italic mt-2">
+                        Pour modifier votre VCS ou votre code auxiliaire (impacts comptables), contactez directement votre syndic.
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* iter89 : Mes locataires - CRUD self-service */}
+          <TabsContent value="tenants" className="mt-0">
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
+                <div>
+                  <CardTitle className="text-base" style={{fontFamily:'Chivo,sans-serif'}}>Mes locataires</CardTitle>
+                  <p className="text-xs text-slate-500">Toute modification est notifiee a votre syndic par email.</p>
+                </div>
+                <Button onClick={openCreateTenant} size="sm" className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="add-tenant-btn" disabled={myLots.length === 0}>
+                  <Plus size={14} className="mr-1.5" /> Ajouter
+                </Button>
+              </CardHeader>
+              <CardContent className="p-0">
+                {tenants.length === 0 ? (
+                  <div className="p-8 text-center text-slate-400 text-sm">
+                    {myLots.length === 0 ? "Aucun lot enregistre - contactez votre syndic" : "Aucun locataire. Cliquez sur Ajouter pour en creer un."}
+                  </div>
+                ) : (
+                  <Table>
+                    <TableHeader><TableRow>
+                      <TableHead>Locataire</TableHead><TableHead>Lot</TableHead>
+                      <TableHead>Email</TableHead><TableHead>GSM</TableHead>
+                      <TableHead>Bail</TableHead><TableHead className="text-right">Loyer</TableHead>
+                      <TableHead className="w-24">Actions</TableHead>
+                    </TableRow></TableHeader>
+                    <TableBody>
+                      {tenants.map(t => {
+                        const lot = myLots.find(l => l.id === t.lot_id);
+                        return (
+                          <TableRow key={t.id} data-testid={`tenant-row-${t.id}`}>
+                            <TableCell className="font-medium text-sm">{t.name}</TableCell>
+                            <TableCell className="text-xs">
+                              {lot ? `${lot.number}${lot.description ? ' - ' + lot.description : ''}` : '-'}
+                            </TableCell>
+                            <TableCell className="text-xs font-mono text-slate-600">{t.email || '-'}</TableCell>
+                            <TableCell className="text-xs font-mono text-slate-600">{t.phone || '-'}</TableCell>
+                            <TableCell className="text-xs text-slate-600">
+                              {t.lease_start ? fmtDate(t.lease_start) : '-'} - {t.lease_end ? fmtDate(t.lease_end) : '-'}
+                            </TableCell>
+                            <TableCell className="text-right font-mono text-sm">{t.rent_amount ? fmt(t.rent_amount) : '-'}</TableCell>
+                            <TableCell>
+                              <div className="flex gap-1">
+                                <Button variant="ghost" size="sm" onClick={() => openEditTenant(t)} data-testid={`edit-tenant-${t.id}`}><Pencil size={13} /></Button>
+                                <Button variant="ghost" size="sm" onClick={() => deleteTenant(t)} className="text-red-500" data-testid={`delete-tenant-${t.id}`}><Trash2 size={13} /></Button>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
         </Tabs>
       </div>
+
+      {/* iter89 : Dialog locataire (create / edit) */}
+      <Dialog open={tenantDialog} onOpenChange={setTenantDialog}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle style={{fontFamily:'Chivo,sans-serif'}}>{editingTenant ? 'Modifier le locataire' : 'Nouveau locataire'}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div>
+              <label className="text-[10px] uppercase tracking-wider text-slate-500 mb-1 block">Nom complet *</label>
+              <Input value={tenantForm.name} onChange={e => setTenantForm({...tenantForm, name: e.target.value})} data-testid="tenant-name" />
+            </div>
+            <div>
+              <label className="text-[10px] uppercase tracking-wider text-slate-500 mb-1 block">Lot *</label>
+              <select value={tenantForm.lot_id} onChange={e => setTenantForm({...tenantForm, lot_id: e.target.value})} data-testid="tenant-lot" className="w-full border border-slate-200 rounded-md px-3 py-2 text-sm bg-white">
+                <option value="">Selectionner un lot</option>
+                {myLots.map(l => <option key={l.id} value={l.id}>Lot {l.number}{l.description ? ' - ' + l.description : ''}</option>)}
+              </select>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-[10px] uppercase tracking-wider text-slate-500 mb-1 block">Email</label>
+                <Input value={tenantForm.email} onChange={e => setTenantForm({...tenantForm, email: e.target.value})} data-testid="tenant-email" />
+              </div>
+              <div>
+                <label className="text-[10px] uppercase tracking-wider text-slate-500 mb-1 block">GSM</label>
+                <Input value={tenantForm.phone} onChange={e => setTenantForm({...tenantForm, phone: e.target.value})} data-testid="tenant-phone" />
+              </div>
+            </div>
+            <div className="grid grid-cols-3 gap-3">
+              <div>
+                <label className="text-[10px] uppercase tracking-wider text-slate-500 mb-1 block">Debut bail</label>
+                <Input type="date" value={tenantForm.lease_start} onChange={e => setTenantForm({...tenantForm, lease_start: e.target.value})} data-testid="tenant-lease-start" />
+              </div>
+              <div>
+                <label className="text-[10px] uppercase tracking-wider text-slate-500 mb-1 block">Fin bail</label>
+                <Input type="date" value={tenantForm.lease_end} onChange={e => setTenantForm({...tenantForm, lease_end: e.target.value})} data-testid="tenant-lease-end" />
+              </div>
+              <div>
+                <label className="text-[10px] uppercase tracking-wider text-slate-500 mb-1 block">Loyer (EUR)</label>
+                <Input type="number" step="0.01" value={tenantForm.rent_amount} onChange={e => setTenantForm({...tenantForm, rent_amount: parseFloat(e.target.value) || 0})} data-testid="tenant-rent" />
+              </div>
+            </div>
+            <div className="flex gap-2 justify-end pt-2 border-t border-slate-100">
+              <Button variant="outline" onClick={() => setTenantDialog(false)}>Annuler</Button>
+              <Button onClick={saveTenant} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="tenant-save-btn">
+                {editingTenant ? 'Enregistrer' : 'Ajouter'}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
