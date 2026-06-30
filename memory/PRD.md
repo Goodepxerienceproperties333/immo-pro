@@ -11,6 +11,50 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 ## Implemented
+### Iter88e (Feb 2026) - CODA parser : precision decimale corrigee (millimes au lieu de centimes)
+
+**Bug carry-over depuis iter85** : `coda_parser.py::parse_amount` divisait par
+100 (centimes) au lieu de 1000 (millimes - 3 decimales fixes).
+
+**Reference** : Febelfin "Standard CODA v2.6" - field "Bedrag/Amount" :
+    Format = N15(3) -> 15 chars, 3 decimales fixes
+    Exemple : 1234.56 EUR -> "000000001234560"
+    Exemple : 310.00 EUR  -> "000000000310000"
+
+**Impact du bug** : tous les montants imports CODA etaient multiplies par 10.
+Un debit de 310.00 EUR etait enregistre comme 3100.00 EUR. Erreur catastrophique
+sur les soldes et les rapprochements bancaires.
+
+**Fix** : `parse_amount` divise maintenant par 1000.0 (1 ligne de code).
+
+**Side-effect** : les fichiers CODA deja imports AVANT iter88e sont a re-importer
+(ou corriger manuellement). Sur la preview : 0 statement CODA en base -> rien
+a corriger. **En prod** : verifier via :
+```python
+db.bank_statements.count_documents({"source": "CODA"})
+```
+S'il y a des statements, refaire l'import du fichier .cod original (en
+supprimant d'abord les transactions polluees).
+
+**Tests** (`tests/test_iter88e_coda_amount_precision.py` - 10/10 PASS) :
+1. parse_amount basique : "000000000310000" -> 310.00 EUR (cas user du handoff)
+2. Sign credit (0) -> positif
+3. Sign debit (1) -> negatif
+4. Precision 3 decimales : 0.123 EUR
+5. Gros montant : 12345678.901
+6. Zero : 0.00
+7. Edge cases (vide, None, non-numerique) -> 0.0
+8. Cas reel facture syndic 315.72 EUR
+9. Cas reel provision 1500.00 EUR
+10. End-to-end : fichier CODA minimal -> mouvement 310.00 debit + soldes
+    coherents (5000 -> 4690)
+
+**Regression complete iter85-iter88e** : **62/62 PASS**.
+
+**Fichiers** :
+- `/app/backend/coda_parser.py` (1 ligne : `/ 100.0` -> `/ 1000.0` + doc CODA 2.6)
+- `/app/backend/tests/test_iter88e_coda_amount_precision.py` (NEW - 10 tests)
+
 ### Iter88d (Feb 2026) - Doublon proprietaire selectionnable
 
 **Demande user** (screenshot) : "En cas de doublons de proprietaire detecte,

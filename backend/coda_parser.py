@@ -68,14 +68,24 @@ def parse_date(date_str):
 
 
 def parse_amount(sign_and_amount):
-    """Parse CODA amount: first char is sign (0=credit, 1=debit), rest is amount in cents."""
+    """Parse CODA amount: first char is sign (0=credit, 1=debit), rest is 15-digit
+    amount with **3 fixed decimals** (millimes), per Belgian CODA 2.6 standard.
+
+    Reference : Febelfin "Standard CODA v2.6" - field "Bedrag" / "Amount" :
+        Format = N15(3) - 15 chars, 3 fixed decimals.
+        Example : 1234.56 EUR -> "000000001234560"
+
+    iter88e fix : the previous implementation divided by 100 (centimes) which
+    caused a x10 error on every imported amount (e.g. "0000000000310000" was
+    parsed as 3100.00 EUR instead of the correct 310.00 EUR).
+    """
     if not sign_and_amount or len(sign_and_amount) < 2:
         return 0.0
     sign = sign_and_amount[0]
     amount_str = sign_and_amount[1:].strip()
     if not amount_str.isdigit():
         return 0.0
-    amount = int(amount_str) / 100.0
+    amount = int(amount_str) / 1000.0
     return -amount if sign == '1' else amount
 
 
