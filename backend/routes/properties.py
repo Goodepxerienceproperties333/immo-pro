@@ -273,28 +273,54 @@ def create_properties_router(db):
         """Check if email or phone already exists.
         Pour un syndic : cherche UNIQUEMENT dans les owners de ses ACPs (RGPD).
         Pour un superadmin : cherche dans tous les owners.
+
+        iter88d : la response inclut maintenant owner_id + details (email, phone,
+        vcs, first/last name, ACPs liees) pour permettre a l'UI de proposer de
+        SELECTIONNER ce proprio existant au lieu d'en creer un nouveau.
         """
         is_super, allowed_copros = await _get_user_scope(request)
         allowed_owner_ids = await _allowed_owner_ids(allowed_copros) if not is_super else None
         duplicates = []
-        def _filter_owner(owner_id):
+        seen_ids = set()  # dedupe : meme owner_id peut matcher 2 fois (email + phone)
+        proj = {"_id": 0, "id": 1, "name": 1, "first_name": 1, "last_name": 1,
+                "email": 1, "email2": 1, "phone": 1, "phone2": 1,
+                "vcs_code": 1, "copropriete_id": 1, "copropriete_ids": 1}
+
+        def _allowed(owner_id):
             return is_super or (allowed_owner_ids is not None and owner_id in allowed_owner_ids)
+
+        def _make_row(field, value, doc):
+            return {
+                "field": field, "value": value,
+                "owner_id": doc.get("id", ""),
+                "owner_name": doc.get("name", "") or f"{doc.get('first_name','')} {doc.get('last_name','')}".strip(),
+                "owner_first_name": doc.get("first_name", ""),
+                "owner_last_name": doc.get("last_name", ""),
+                "owner_email": doc.get("email", ""),
+                "owner_phone": doc.get("phone", ""),
+                "owner_vcs_code": doc.get("vcs_code", ""),
+                "copropriete_id": doc.get("copropriete_id", ""),
+                "copropriete_ids": doc.get("copropriete_ids", []) or [],
+            }
+
         if email and email.strip():
             found = await db.owners.find(
-                {"$or": [{"email": email.strip()}, {"email2": email.strip()}]},
-                {"_id": 0, "id": 1, "name": 1, "email": 1, "phone": 1, "copropriete_id": 1}
+                {"$or": [{"email": email.strip()}, {"email2": email.strip()}]}, proj
             ).to_list(50)
             for f in found:
-                if _filter_owner(f.get("id", "")):
-                    duplicates.append({"field": "email", "value": email, "owner_name": f.get("name", ""), "copropriete_id": f.get("copropriete_id", "")})
+                oid = f.get("id", "")
+                if _allowed(oid) and oid not in seen_ids:
+                    seen_ids.add(oid)
+                    duplicates.append(_make_row("email", email, f))
         if phone and phone.strip():
             found = await db.owners.find(
-                {"$or": [{"phone": phone.strip()}, {"phone2": phone.strip()}]},
-                {"_id": 0, "id": 1, "name": 1, "email": 1, "phone": 1, "copropriete_id": 1}
+                {"$or": [{"phone": phone.strip()}, {"phone2": phone.strip()}]}, proj
             ).to_list(50)
             for f in found:
-                if _filter_owner(f.get("id", "")):
-                    duplicates.append({"field": "phone", "value": phone, "owner_name": f.get("name", ""), "copropriete_id": f.get("copropriete_id", "")})
+                oid = f.get("id", "")
+                if _allowed(oid) and oid not in seen_ids:
+                    seen_ids.add(oid)
+                    duplicates.append(_make_row("phone", phone, f))
         return {"duplicates": duplicates, "has_duplicates": len(duplicates) > 0}
 
     @router.get("/owners/lookup-vcs")

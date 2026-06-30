@@ -69,6 +69,36 @@ export default function OwnersPage() {
     } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); }
   };
   const handleDelete = async (id) => { if (!window.confirm('Supprimer ce proprietaire ?')) return; await api.delete(`/owners/${id}`); toast.success('Supprime'); load(); };
+
+  // iter88d : "selectionner" un proprio doublon -> on bascule en mode edition
+  // sur lui (sans creer un nouveau). Utile quand on a tape un email et qu'un
+  // proprio existe deja avec cet email (eviter le doublon dans la DB).
+  const handleUseDuplicate = async (dup) => {
+    try {
+      const { data } = await api.get(`/owners/${dup.owner_id}`);
+      if (!data) {
+        toast.error('Proprietaire introuvable');
+        return;
+      }
+      // Ferme le dialog de creation, recharge la liste, ouvre l'edition
+      setDialogOpen(false);
+      setDuplicates([]);
+      // Si on est dans une ACP precise mais le doublon est dans une autre ACP,
+      // on previent l'utilisateur
+      const dupCopros = dup.copropriete_ids || (dup.copropriete_id ? [dup.copropriete_id] : []);
+      if (selectedCopro && selectedCopro !== 'all' && dupCopros.length > 0 && !dupCopros.includes(selectedCopro)) {
+        toast.warning(`Ce proprietaire appartient a une autre ACP (${dupCopros.length})`);
+      } else {
+        toast.success(`Proprietaire ${data.name || `${data.last_name} ${data.first_name}`} selectionne`);
+      }
+      // Ouvrir la fiche en mode edition (sans dependre du load() qui peut
+      // ne pas inclure le proprio si scope ACP different).
+      openEdit(data);
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur lors du chargement');
+    }
+  };
+
   const F = (field, label, props = {}) => (<div {...(props.className ? {className: props.className} : {})}><label className="form-label">{label}</label><Input value={form[field]} onChange={e => setForm({...form, [field]: e.target.value})} data-testid={`owner-${field}-input`} {...props} /></div>);
 
   return (
@@ -153,13 +183,47 @@ export default function OwnersPage() {
               <div><label className="form-label">GSM 2</label><Input value={form.phone2} onChange={e => setForm({...form, phone2: e.target.value})} data-testid="owner-phone2-input" /></div>
             </div>
             {duplicates.length > 0 && (
-              <div className="bg-yellow-50 border border-yellow-200 rounded-md p-3 flex items-start gap-2">
-                <AlertTriangle size={16} className="text-yellow-600 flex-shrink-0 mt-0.5" />
-                <div className="text-sm">
+              <div className="bg-yellow-50 border border-yellow-300 rounded-md p-3" data-testid="duplicate-warning">
+                <div className="flex items-start gap-2 mb-2">
+                  <AlertTriangle size={16} className="text-yellow-600 flex-shrink-0 mt-0.5" />
                   <div className="font-semibold text-yellow-800">Doublon detecte !</div>
-                  {duplicates.map((d, i) => (
-                    <div key={i} className="text-yellow-700">{d.field === 'email' ? 'Email' : 'GSM'} "{d.value}" existe deja pour <strong>{d.owner_name}</strong></div>
-                  ))}
+                </div>
+                {/* iter88d : dedupliquer par owner_id (un meme proprio peut matcher
+                    sur email ET phone, on l'affiche 1 seule fois avec tous les champs) */}
+                {(() => {
+                  const byId = {};
+                  duplicates.forEach(d => {
+                    if (!d.owner_id) return;
+                    if (!byId[d.owner_id]) byId[d.owner_id] = { ...d, matches: [] };
+                    byId[d.owner_id].matches.push(`${d.field === 'email' ? 'Email' : 'GSM'} "${d.value}"`);
+                  });
+                  const groups = Object.values(byId);
+                  return groups.map((d, i) => (
+                    <div key={d.owner_id || i} className="bg-white rounded border border-yellow-200 p-3 mt-2 first:mt-0">
+                      <div className="flex items-start justify-between gap-3 flex-wrap">
+                        <div className="flex-1 min-w-0">
+                          <div className="text-yellow-800 font-semibold text-sm">{d.owner_name || `${d.owner_last_name || ''} ${d.owner_first_name || ''}`.trim()}</div>
+                          <div className="text-xs text-slate-600 mt-1 space-y-0.5">
+                            {d.owner_email && <div>Email : <span className="font-mono">{d.owner_email}</span></div>}
+                            {d.owner_phone && <div>GSM : <span className="font-mono">{d.owner_phone}</span></div>}
+                            {d.owner_vcs_code && <div>VCS : <span className="font-mono">{d.owner_vcs_code}</span></div>}
+                            <div className="text-yellow-700 italic">Correspondance : {d.matches.join(', ')}</div>
+                          </div>
+                        </div>
+                        <Button
+                          size="sm"
+                          onClick={() => handleUseDuplicate(d)}
+                          className="bg-yellow-600 hover:bg-yellow-700 text-white whitespace-nowrap"
+                          data-testid={`use-duplicate-${d.owner_id}`}
+                        >
+                          Utiliser ce proprietaire
+                        </Button>
+                      </div>
+                    </div>
+                  ));
+                })()}
+                <div className="text-[11px] text-yellow-700 italic mt-2 pl-1">
+                  Cliquez sur &laquo;&nbsp;Utiliser ce proprietaire&nbsp;&raquo; pour ouvrir sa fiche, ou poursuivez la creation en cliquant sur &laquo;&nbsp;Creer&nbsp;&raquo;.
                 </div>
               </div>
             )}

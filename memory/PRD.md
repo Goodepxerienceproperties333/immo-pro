@@ -11,6 +11,54 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 ## Implemented
+### Iter88d (Feb 2026) - Doublon proprietaire selectionnable
+
+**Demande user** (screenshot) : "En cas de doublons de proprietaire detecte,
+permettre de le selectionner"
+
+**Avant** : le warning "Doublon detecte" affichait juste un message texte sans
+moyen d'action. L'utilisateur etait force soit d'annuler et de chercher
+manuellement le proprio existant, soit de creer un doublon en DB.
+
+**Backend** (`routes/properties.py::check_duplicate_owner`) :
+- Ajout de `owner_id` + details complets (email/phone/vcs/first_name/last_name/
+  copropriete_ids) dans chaque entree de `duplicates[]`
+- Dedup via `seen_ids` : un meme proprio qui match sur email ET phone n'est
+  retourne qu'une seule fois
+- Conserve le scoping RGPD (syndic = ses ACPs seulement)
+
+**Frontend** (`OwnersPage.js`) :
+- Nouvelle UI : carte detaillee par doublon avec :
+  * Nom + prenom du proprio existant
+  * Email/GSM/VCS en font-mono pour scannabilite
+  * Liste des champs qui ont match (italic)
+  * **Bouton "Utiliser ce proprietaire"** (orange) qui :
+    1. GET /owners/{id} pour recuperer la fiche complete
+    2. Ferme le dialog de creation
+    3. Bascule en mode edition sur le doublon (openEdit)
+    4. Toast warning si le doublon est dans une autre ACP
+- Dedup cote frontend (au cas ou) : groupe par `owner_id` et combine les matches
+- Helper text en bas : "Cliquez sur << Utiliser ce proprietaire >> ou
+  poursuivez la creation en cliquant sur << Creer >>"
+- data-testid : `duplicate-warning`, `use-duplicate-{owner_id}`
+
+**Tests** (`tests/test_iter88d_duplicate_owner_selection.py` - 4/4 PASS) :
+1. Match par email -> owner_id + tous les details retournes
+2. Match par phone -> idem
+3. Dedup : meme owner match email + phone -> 1 seule entree (seen_ids backend)
+4. Pas de match -> liste vide
+
+**Regression complete iter85-iter88d** : **42/42 PASS**.
+
+**Smoke UI** : verifie via screenshot - dialog "Nouveau proprietaire" avec
+champ email rempli affiche la carte de doublon avec tous les details + bouton
+"Utiliser ce proprietaire" fonctionnel.
+
+**Fichiers** :
+- `/app/backend/routes/properties.py` (endpoint enrichi)
+- `/app/frontend/src/pages/OwnersPage.js` (carte cliquable + handler)
+- `/app/backend/tests/test_iter88d_duplicate_owner_selection.py` (NEW - 4 tests)
+
 ### Iter88c (Feb 2026) - Montants non tronques / non casses sur 2 lignes dans TOUS les tableaux
 
 **Demande user** (avec screenshot) : "donner assez de largeur pour que les
