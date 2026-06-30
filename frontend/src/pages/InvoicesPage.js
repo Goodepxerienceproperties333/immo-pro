@@ -12,7 +12,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { Plus, Trash2, Key, Receipt, Sparkles, Paperclip, Download, X, Pencil, AlertTriangle, Filter, FolderInput, Eye, Loader2, ArrowUp, ArrowDown, ArrowUpDown } from 'lucide-react';
+import { Plus, Trash2, Key, Receipt, Sparkles, Paperclip, Download, X, Pencil, AlertTriangle, Filter, FolderInput, Eye, Loader2, ArrowUp, ArrowDown, ArrowUpDown, Star } from 'lucide-react';
 import AccountSearchSelect from '@/components/AccountSearchSelect';
 import SupplierSearchSelect from '@/components/SupplierSearchSelect';
 import BundleImportDialog from '@/components/BundleImportDialog';
@@ -39,7 +39,7 @@ export default function InvoicesPage() {
   const [owners, setOwners] = useState([]);
   const [ownerSearch, setOwnerSearch] = useState('');
   const [suggestCreateSupplier, setSuggestCreateSupplier] = useState(null); // {name, vat, bce, iban}
-  const [keyForm, setKeyForm] = useState({ name: '', description: '', key_type: 'quotity', lots: [] });
+  const [keyForm, setKeyForm] = useState({ name: '', code: '', description: '', key_type: 'quotity', lots: [], is_default: false });
   const [aiExtracting, setAiExtracting] = useState(false);
   const [aiHint, setAiHint] = useState('');
   const [pendingPdf, setPendingPdf] = useState(null); // {file, filename} captured for later attach
@@ -385,12 +385,12 @@ export default function InvoicesPage() {
 
   const openCreateKey = () => {
     setEditingKey(null); setKeyUsage(null);
-    setKeyForm({ name: '', description: '', key_type: 'quotity', lots: lots.map(l => ({ lot_id: l.id, lot_number: l.number, share: l.quotity || 0 })) });
+    setKeyForm({ name: '', code: '', description: '', key_type: 'quotity', lots: lots.map(l => ({ lot_id: l.id, lot_number: l.number, share: l.quotity || 0 })), is_default: false });
     setKeyDialog(true);
   };
   const openEditKey = async (k) => {
     setEditingKey(k);
-    setKeyForm({ name: k.name, description: k.description || '', key_type: k.key_type, lots: (k.lots || []).map(l => ({ ...l })) });
+    setKeyForm({ name: k.name, code: k.code || '', description: k.description || '', key_type: k.key_type, lots: (k.lots || []).map(l => ({ ...l })), is_default: !!k.is_default });
     try {
       const { data } = await api.get(`/distribution-keys/${k.id}/usage`);
       setKeyUsage(data);
@@ -415,6 +415,19 @@ export default function InvoicesPage() {
       } else {
         toast.error(err.response?.data?.detail || 'Erreur');
       }
+    }
+  };
+
+  // iter88 : toggle direct du flag "par defaut" sur une cle depuis la liste
+  // (sans ouvrir le dialog d'edition). 1 seule cle par defaut par ACP.
+  const toggleDefaultKey = async (k, makeDefault) => {
+    try {
+      const endpoint = makeDefault ? 'set-default' : 'unset-default';
+      await api.post(`/distribution-keys/${k.id}/${endpoint}`);
+      toast.success(makeDefault ? `'${k.name}' definie comme cle par defaut` : `'${k.name}' n'est plus la cle par defaut`);
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur');
     }
   };
 
@@ -640,15 +653,17 @@ export default function InvoicesPage() {
           <div className="bg-white rounded-md border border-slate-200 overflow-hidden">
             <Table>
               <TableHeader><TableRow>
+                <TableHead className="w-24">N&deg;</TableHead>
                 <TableHead>Nom</TableHead><TableHead>Description</TableHead><TableHead>Type</TableHead>
                 <TableHead>Lots</TableHead>
                 <TableHead className="text-right">Total quotites</TableHead>
                 <TableHead>Coherence</TableHead>
+                <TableHead className="w-28 text-center">Defaut</TableHead>
                 <TableHead className="w-20">Actions</TableHead>
               </TableRow></TableHeader>
               <TableBody>
                 {distKeys.length === 0 ? (
-                  <TableRow><TableCell colSpan={7} className="text-center py-8 text-slate-400">Aucune cle</TableCell></TableRow>
+                  <TableRow><TableCell colSpan={9} className="text-center py-8 text-slate-400">Aucune cle</TableCell></TableRow>
                 ) : distKeys.map(k => {
                   const total = (k.lots || []).reduce((s, l) => s + (Number(l.share) || 0), 0);
                   const hasZero = (k.lots || []).some(l => !Number(l.share));
@@ -660,14 +675,45 @@ export default function InvoicesPage() {
                   else if (isRound) { coherenceColor = 'bg-green-50 text-green-700 border-green-200'; coherenceLabel = 'OK'; }
                   else if (total > 0) { coherenceColor = 'bg-blue-50 text-blue-700 border-blue-200'; coherenceLabel = 'Custom'; }
                   return (
-                    <TableRow key={k.id} className="hover:bg-slate-50/50">
-                      <TableCell className="font-medium">{k.name}</TableCell>
+                    <TableRow key={k.id} className={`hover:bg-slate-50/50 ${k.is_default ? 'bg-amber-50/40' : ''}`}>
+                      <TableCell className="font-mono text-xs text-slate-600" data-testid={`key-code-${k.id}`}>{k.code || <span className="text-slate-300">—</span>}</TableCell>
+                      <TableCell className="font-medium">
+                        <div className="flex items-center gap-2">
+                          {k.name}
+                          {k.is_default && <Star size={12} className="text-amber-500 fill-amber-400" />}
+                        </div>
+                      </TableCell>
                       <TableCell>{k.description}</TableCell>
                       <TableCell><Badge variant="outline">{k.key_type}</Badge></TableCell>
                       <TableCell className="text-sm">{k.lots?.length || 0} lots</TableCell>
                       <TableCell className="text-right font-mono text-sm" data-testid={`key-total-${k.id}`}>{total.toFixed(2)}</TableCell>
                       <TableCell>
                         <Badge variant="outline" className={coherenceColor}>{coherenceLabel}</Badge>
+                      </TableCell>
+                      <TableCell className="text-center">
+                        {k.is_default ? (
+                          <button
+                            type="button"
+                            onClick={() => toggleDefaultKey(k, false)}
+                            className="inline-flex items-center gap-1 text-amber-600 hover:text-amber-700"
+                            title="Retirer le statut par defaut"
+                            data-testid={`key-default-on-${k.id}`}
+                          >
+                            <Star size={14} className="fill-amber-400" />
+                            <span className="text-[10px] font-semibold">Par defaut</span>
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => toggleDefaultKey(k, true)}
+                            className="inline-flex items-center gap-1 text-slate-400 hover:text-amber-600"
+                            title="Definir comme cle par defaut"
+                            data-testid={`key-default-off-${k.id}`}
+                          >
+                            <Star size={14} />
+                            <span className="text-[10px]">Definir</span>
+                          </button>
+                        )}
                       </TableCell>
                       <TableCell><div className="flex gap-1">
                         <Button variant="ghost" size="sm" onClick={() => openEditKey(k)} data-testid={`edit-key-${k.id}`}><Pencil size={14} /></Button>
@@ -1320,7 +1366,17 @@ export default function InvoicesPage() {
                 )}
               </div>
             )}
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-3 gap-4">
+              <div>
+                <label className="form-label">N&deg; (optionnel)</label>
+                <Input
+                  value={keyForm.code}
+                  onChange={e => setKeyForm({...keyForm, code: e.target.value})}
+                  placeholder="ex: 001"
+                  data-testid="key-code"
+                  className="font-mono"
+                />
+              </div>
               <div><label className="form-label">Nom *</label><Input value={keyForm.name} onChange={e => setKeyForm({...keyForm, name: e.target.value})} data-testid="key-name" /></div>
               <div><label className="form-label">Type</label>
                 <Select value={keyForm.key_type} onValueChange={v => setKeyForm({...keyForm, key_type: v})}>
@@ -1334,6 +1390,18 @@ export default function InvoicesPage() {
               </div>
             </div>
             <div><label className="form-label">Description</label><Input value={keyForm.description} onChange={e => setKeyForm({...keyForm, description: e.target.value})} /></div>
+            <label className="flex items-center gap-2 p-3 rounded-md border border-amber-200 bg-amber-50/50 cursor-pointer hover:bg-amber-50">
+              <input
+                type="checkbox"
+                checked={!!keyForm.is_default}
+                onChange={e => setKeyForm({...keyForm, is_default: e.target.checked})}
+                data-testid="key-is-default"
+                className="w-4 h-4 accent-amber-500"
+              />
+              <Star size={14} className={keyForm.is_default ? "text-amber-500 fill-amber-400" : "text-slate-400"} />
+              <span className="text-sm font-medium text-slate-700">Definir comme cle par defaut pour cette ACP</span>
+              <span className="ml-auto text-[11px] text-slate-500 italic">1 seule cle par defaut par ACP - utilisee comme fallback</span>
+            </label>
             {keyForm.lots.length > 0 && (() => {
               const totalShare = keyForm.lots.reduce((s, l) => s + (Number(l.share) || 0), 0);
               const lotsAtZero = keyForm.lots.filter(l => !Number(l.share)).length;

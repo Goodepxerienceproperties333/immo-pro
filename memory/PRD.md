@@ -11,6 +11,54 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 ## Implemented
+### Iter88 (Feb 2026) - Cles de repartition : numero + cle par defaut selectionnable
+
+**Demande user** : "Ajouter un numero aux cles de repartition et permettre de
+definir manuellement quelle cle est la cle par defaut"
+
+**Backend** (`routes/invoices.py`) :
+- `DistKeyInput` enrichi : `code` (str optionnel) + `is_default` (bool)
+- Validation unicite du code dans l'ACP (scope strict : meme code OK dans 2 ACPs)
+- Mutex `is_default` : 1 seule cle par defaut par ACP (les autres repassent
+  automatiquement a False quand on en marque une nouvelle)
+- 2 endpoints dedies :
+  * `POST /distribution-keys/{id}/set-default` : bascule rapide sans rouvrir
+    le dialog d'edition (1 click depuis la liste)
+  * `POST /distribution-keys/{id}/unset-default` : retire le flag
+- `GET /distribution-keys` : tri par `(code, name)` (les sans-code en fin)
+
+**Frontend** (`InvoicesPage.js`) :
+- Dialog d'edition de cle :
+  * Nouveau champ "N° (optionnel)" placeholder "ex: 001"
+  * Checkbox "Definir comme cle par defaut pour cette ACP" (avec icone Star
+    + bg amber + helper text)
+- Liste des cles :
+  * Nouvelle colonne "N°" en font-mono (a gauche)
+  * Nouvelle colonne "Defaut" (centree) avec bouton Star :
+    - Cle par defaut -> Star pleine + "Par defaut" + clic = unset
+    - Autres cles -> Star vide + "Definir" + clic = set
+  * Row teintee `bg-amber-50/40` pour la cle par defaut (visibilite immediate)
+  * Icone Star plein a cote du nom de la cle par defaut
+- Handler `toggleDefaultKey(k, makeDefault)` : 1 click pour set/unset, sans dialog
+- `data-testid` : `key-code`, `key-is-default`, `key-default-on-{id}`,
+  `key-default-off-{id}`, `key-code-{id}`
+
+**Tests** (`tests/test_iter88_dist_keys_code_and_default.py` - 7/7 PASS) :
+1. Create avec code + is_default=True
+2. Mutex 1 seule cle default par ACP (la 2e set ramene la 1ere a False)
+3. Code unique par ACP -> 409 si doublon
+4. Meme code OK dans 2 ACPs differentes (scope strict)
+5. Endpoint /set-default et /unset-default
+6. Tri GET par code asc puis name asc
+7. PUT update : champs name/desc/lots conserves + code/is_default appliques
+
+**Regression complete iter82-iter88** : tous tests pertinents PASS.
+
+**Fichiers** :
+- `/app/backend/routes/invoices.py` (modele + endpoints + helpers)
+- `/app/frontend/src/pages/InvoicesPage.js` (form + table + handler toggle)
+- `/app/backend/tests/test_iter88_dist_keys_code_and_default.py` (NEW - 7 tests)
+
 ### Iter87 (Feb 2026) - Migration storage filesystem -> MongoDB GridFS (PERSISTANT)
 
 **Probleme critique resolu** : "Les PDFs uploades sont TOUJOURS perdus apres un deploiement"

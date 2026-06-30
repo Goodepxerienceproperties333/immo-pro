@@ -11,6 +11,7 @@ import { toast } from 'sonner';
 import { Plus, Trash2, Check, Megaphone, FileText, Sparkles, ShieldCheck, Wallet, Banknote, AlertTriangle, RefreshCcw } from 'lucide-react';
 import { fmtDate } from '@/lib/dateFmt';
 import { useFiscalYearParams } from '@/hooks/useFiscalYearParams';
+import { useAuth } from '@/contexts/AuthContext';
 
 // Configuration des 4 types d'appels de fonds (label + couleurs + icone + description)
 const CALL_TYPES = {

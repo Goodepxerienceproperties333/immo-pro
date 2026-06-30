@@ -36,6 +36,13 @@ class DistKeyInput(BaseModel):
     key_type: Optional[str] = "quotity"  # quotity, equal, custom
     lots: Optional[List[DistKeyLot]] = []
     copropriete_id: Optional[str] = ""
+    # iter88 : numero alphanumerique unique par ACP (optionnel mais recommande)
+    # Permet de classer les cles (ex: "001 - General", "002 - Ascenseur").
+    code: Optional[str] = ""
+    # iter88 : clé par defaut pour cette ACP. Une seule peut etre True par ACP.
+    # Utilisee comme fallback quand une nature de depense n'a pas de cle
+    # explicite et que la facture n'en specifie pas non plus.
+    is_default: Optional[bool] = False
 
 
 class InvoiceLineInput(BaseModel):
@@ -100,21 +107,50 @@ def create_invoices_router(db):
         q = {}
         if copropriete_id:
             q["copropriete_id"] = copropriete_id
-        keys = await db.distribution_keys.find(q, {"_id": 0}).sort("name", 1).to_list(1000)
+        # iter88 : tri par code (si present) puis par name
+        keys = await db.distribution_keys.find(q, {"_id": 0}).to_list(1000)
+        keys.sort(key=lambda k: ((k.get("code") or "~~~"), k.get("name", "")))
         return keys
+
+    async def _validate_code_uniqueness(copro_id: str, code: str, exclude_id: str = ""):
+        """iter88 : verifie qu'aucune autre cle de cette ACP n'a deja ce code."""
+        if not code:
+            return
+        q = {"copropriete_id": copro_id, "code": code}
+        if exclude_id:
+            q["id"] = {"$ne": exclude_id}
+        clash = await db.distribution_keys.find_one(q, {"_id": 0, "id": 1, "name": 1})
+        if clash:
+            raise HTTPException(
+                409, f"Le numero '{code}' est deja utilise par la cle '{clash.get('name', '')}' dans cette ACP."
+            )
+
+    async def _unset_other_defaults(copro_id: str, exclude_id: str = ""):
+        """iter88 : passe is_default=False sur toutes les autres cles de l'ACP."""
+        q = {"copropriete_id": copro_id, "is_default": True}
+        if exclude_id:
+            q["id"] = {"$ne": exclude_id}
+        await db.distribution_keys.update_many(q, {"$set": {"is_default": False}})
 
     @router.post("/distribution-keys")
     async def create_dist_key(data: DistKeyInput):
+        code = (data.code or "").strip()
+        copro_id = data.copropriete_id or ""
+        await _validate_code_uniqueness(copro_id, code)
         doc = {
             "id": str(uuid.uuid4()),
             "name": data.name,
             "description": data.description,
             "key_type": data.key_type,
             "lots": [l.model_dump() for l in data.lots],
-            "copropriete_id": data.copropriete_id or "",
+            "copropriete_id": copro_id,
+            "code": code,
+            "is_default": bool(data.is_default),
             "created_at": datetime.now(timezone.utc).isoformat()
         }
         await db.distribution_keys.insert_one(doc)
+        if doc["is_default"]:
+            await _unset_other_defaults(copro_id, exclude_id=doc["id"])
         return {k: v for k, v in doc.items() if k != "_id"}
 
     @router.get("/distribution-keys/{key_id}/usage")
@@ -143,11 +179,18 @@ def create_invoices_router(db):
                 409,
                 f"{linked_inv} facture(s) utilisent cette cle. Detachez-les avant ou utilisez ?force=true",
             )
+        code = (data.code or "").strip()
+        copro_id = existing.get("copropriete_id", "") or (data.copropriete_id or "")
+        await _validate_code_uniqueness(copro_id, code, exclude_id=key_id)
         update = {
             "name": data.name, "description": data.description,
-            "key_type": data.key_type, "lots": [l.model_dump() for l in data.lots]
+            "key_type": data.key_type, "lots": [l.model_dump() for l in data.lots],
+            "code": code,
+            "is_default": bool(data.is_default),
         }
         await db.distribution_keys.update_one({"id": key_id}, {"$set": update})
+        if update["is_default"]:
+            await _unset_other_defaults(copro_id, exclude_id=key_id)
         if force and linked_inv > 0:
             # Detach: set distribution_key_id="" and clear distribution_lines
             await db.invoices.update_many(
@@ -156,6 +199,29 @@ def create_invoices_router(db):
             )
         return {"updated": True, "detached_invoices": linked_inv if force else 0,
                 "key": await db.distribution_keys.find_one({"id": key_id}, {"_id": 0})}
+
+    @router.post("/distribution-keys/{key_id}/set-default")
+    async def set_default_dist_key(key_id: str):
+        """iter88 : marque cette cle comme cle par defaut pour son ACP.
+        Toutes les autres cles de la meme ACP repassent a is_default=False.
+        Endpoint dedie : ne modifie que le flag is_default (pas de validation
+        sur facture liees, contrairement au PUT classique)."""
+        existing = await db.distribution_keys.find_one({"id": key_id}, {"_id": 0})
+        if not existing:
+            raise HTTPException(404, "Cle non trouvee")
+        copro_id = existing.get("copropriete_id", "")
+        await _unset_other_defaults(copro_id, exclude_id=key_id)
+        await db.distribution_keys.update_one({"id": key_id}, {"$set": {"is_default": True}})
+        return {"updated": True, "key_id": key_id}
+
+    @router.post("/distribution-keys/{key_id}/unset-default")
+    async def unset_default_dist_key(key_id: str):
+        """iter88 : retire le flag default (l'ACP n'a plus de cle par defaut)."""
+        existing = await db.distribution_keys.find_one({"id": key_id}, {"_id": 0})
+        if not existing:
+            raise HTTPException(404, "Cle non trouvee")
+        await db.distribution_keys.update_one({"id": key_id}, {"$set": {"is_default": False}})
+        return {"updated": True, "key_id": key_id}
 
     @router.delete("/distribution-keys/{key_id}")
     async def delete_dist_key(key_id: str):
