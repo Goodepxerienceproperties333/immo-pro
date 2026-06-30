@@ -11,6 +11,47 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 ## Implemented
+### Iter85h (Feb 2026) - Detection homonymes etendue au dialog facture
+
+**Demande user** : "Etendre la detection au champ Fournisseur du dialog
+facture (creation auto via texte libre depuis InvoicesPage) - actuellement
+seule la page Fournisseurs beneficie de la confirmation."
+
+**Frontend** (`pages/InvoicesPage.js`) :
+- Nouvelle fonction helper `createSupplierWithHomonymCheck(payload)` :
+  - Promise-based, gere le flux complet : pre-check -> dialog si similaires -> POST avec force
+  - Pre-appel `/suppliers/check-duplicate` avant tout POST
+  - Si `exact` : toast d'erreur + pre-remplit le champ Fournisseur avec le sup existant
+  - Si `similar` : ouvre dialog modal `<Dialog data-testid="invoice-supplier-homonyms-dialog">`
+  - Si aucun : POST direct (force=false)
+- 2 chemins de creation utilisent maintenant ce helper :
+  1. Bouton "Creer la fiche" du bandeau `suggestCreateSupplier` (suggestion IA / extraction PDF)
+  2. `SupplierSearchSelect.onCreateSupplier` (autocomplete dialog facture)
+- Dialog "Homonymes potentiels detectes" identique a celui de SuppliersPage :
+  - Liste les sup similaires avec score %, TVA, ville, IBAN
+  - Bouton "Utiliser celui-ci" : remplit le champ `invForm.supplier` avec le sup existant + ferme dialog
+  - Bouton "Creer quand meme" (amber) : POST avec `force_create_despite_similar=true`
+  - Bouton "Annuler"
+- data-testid : `invoice-supplier-homonyms-dialog`, `inv-similar-supplier-{i}`,
+  `inv-use-existing-supplier-{i}`, `inv-similar-cancel-btn`, `inv-similar-force-create-btn`
+
+**Effet user-visible** :
+- Lors de la saisie d'une facture, si l'utilisateur essaie de creer un nouveau
+  fournisseur (via autocomplete ou suggestion IA post-extraction PDF), le systeme
+  detecte les homonymes proches AVANT la creation et propose :
+  - Soit reutiliser un fournisseur existant (1 click "Utiliser celui-ci")
+  - Soit confirmer la creation malgre la similitude (1 click "Creer quand meme")
+- En cas de doublon strict (meme nom/TVA/IBAN), le champ Fournisseur de la
+  facture est auto-rempli avec le sup existant (pas de creation, ni de toast bloquant).
+
+**Pas de changement backend** : reutilise l'endpoint `/suppliers/check-duplicate`
+et le flag `force_create_despite_similar` introduits dans iter85g.
+
+**Regression** : 17/17 PASS sur tests backend touches (iter84/85e/85g).
+
+**Fichier modifie** :
+- `/app/frontend/src/pages/InvoicesPage.js` (helper + dialog + 2 callsites)
+
 ### Iter85g (Feb 2026) - Detection homonymes fournisseurs avec confirmation
 
 **Demande user** : "il faut eviter les doublons de fournisseur verifier les

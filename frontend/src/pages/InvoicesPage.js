@@ -43,7 +43,82 @@ export default function InvoicesPage() {
   const [newCatForm, setNewCatForm] = useState({ name: '', account_number: '', description: '' });
   const [bundleDialog, setBundleDialog] = useState(false);
   const [viewerAttachment, setViewerAttachment] = useState(null); // {url, filename}
+  // iter85g : dialog de confirmation homonymes lors de la creation supplier
+  // depuis InvoicesPage. State : { payload, similar, onConfirm } ou null.
+  const [supplierHomonymsDialog, setSupplierHomonymsDialog] = useState(null);
   const fyParams = useFiscalYearParams();
+
+  // iter85g : helper de creation supplier avec pre-check homonymes.
+  // Renvoie le supplier cree (ou null si l'utilisateur annule).
+  // Si exact match -> erreur (toast). Si similaires -> dialog confirmation.
+  // Si force=true (apres confirmation utilisateur) -> POST avec force_create_despite_similar.
+  const createSupplierWithHomonymCheck = (payload) => new Promise((resolve) => {
+    const copro = localStorage.getItem('copropriete_id') || '';
+    const doActualPost = async (forceDespite) => {
+      try {
+        const { data: created } = await api.post('/suppliers', {
+          ...payload, copropriete_id: copro,
+          force_create_despite_similar: !!forceDespite,
+        });
+        setSuppliers(prev => [...prev, created].sort((a, b) => (a.name || '').localeCompare(b.name || '')));
+        toast.success(`Fiche fournisseur creee : ${created.name}`);
+        resolve(created);
+      } catch (err) {
+        toast.error(err.response?.data?.detail || 'Erreur creation fournisseur');
+        resolve(null);
+      }
+    };
+    (async () => {
+      try {
+        const { data: check } = await api.post('/suppliers/check-duplicate', {
+          name: payload.name || '',
+          vat_number: payload.vat_number || '',
+          bce_number: payload.bce_number || '',
+          iban: payload.iban || '',
+          copropriete_id: copro,
+        });
+        if (check.exact) {
+          const e = check.exact;
+          const label = ({ bce_number: 'numero BCE', vat_number: 'numero TVA', iban: 'IBAN', name: 'nom' })[e.field] || e.field;
+          toast.error(`Doublon strict : un fournisseur avec le meme ${label} existe deja (${e.supplier?.name || ''}).`);
+          // Pre-remplit le champ Fournisseur de la facture avec le sup existant
+          if (e.supplier?.name) {
+            setInvForm(f => ({ ...f, supplier: e.supplier.name }));
+          }
+          resolve(null);
+          return;
+        }
+        if (check.similar && check.similar.length > 0) {
+          // Ouvre le dialog de confirmation
+          setSupplierHomonymsDialog({
+            payload,
+            similar: check.similar,
+            onConfirm: (forceDespite) => {
+              setSupplierHomonymsDialog(null);
+              doActualPost(forceDespite);
+            },
+            onCancel: () => {
+              setSupplierHomonymsDialog(null);
+              resolve(null);
+            },
+            onUseExisting: (existing) => {
+              // Pre-remplit le champ Fournisseur de la facture
+              setInvForm(f => ({ ...f, supplier: existing.name }));
+              setSupplierHomonymsDialog(null);
+              toast.success(`Fournisseur existant reutilise : ${existing.name}`);
+              resolve(existing);
+            },
+          });
+          return;
+        }
+        // Aucune similitude -> creation directe
+        await doActualPost(false);
+      } catch (err) {
+        toast.error(err.response?.data?.detail || 'Erreur verification doublon');
+        resolve(null);
+      }
+    })();
+  });
 
   const load = useCallback(async () => {
     const copro = localStorage.getItem('copropriete_id') || '';
@@ -595,14 +670,8 @@ export default function InvoicesPage() {
                 <div className="flex gap-2 shrink-0">
                   <Button type="button" size="sm" variant="outline" onClick={() => setSuggestCreateSupplier(null)} data-testid="suggest-supplier-dismiss">Ignorer</Button>
                   <Button type="button" size="sm" className="bg-amber-600 hover:bg-amber-700 text-white" onClick={async () => {
-                    try {
-                      const copro = localStorage.getItem('copropriete_id') || '';
-                      const { data } = await api.post('/suppliers', { ...suggestCreateSupplier, copropriete_id: copro });
-                      toast.success(`Fiche fournisseur creee : ${data.name}`);
-                      // Ajoute le nouveau fournisseur dans la liste locale pour l'autocomplete
-                      setSuppliers(prev => [...prev, data].sort((a, b) => (a.name || '').localeCompare(b.name || '')));
-                      setSuggestCreateSupplier(null);
-                    } catch (err) { toast.error(err.response?.data?.detail || 'Erreur creation'); }
+                    const created = await createSupplierWithHomonymCheck(suggestCreateSupplier);
+                    if (created) setSuggestCreateSupplier(null);
                   }} data-testid="suggest-supplier-create">Creer la fiche</Button>
                 </div>
               </div>
@@ -689,10 +758,7 @@ export default function InvoicesPage() {
                   value={invForm.supplier}
                   onChange={(name) => setInvForm({ ...invForm, supplier: name })}
                   onCreateSupplier={async (data) => {
-                    const copro = localStorage.getItem('copropriete_id') || '';
-                    const { data: created } = await api.post('/suppliers', { ...data, copropriete_id: copro });
-                    setSuppliers(prev => [...prev, created].sort((a, b) => (a.name || '').localeCompare(b.name || '')));
-                    toast.success(`Fiche fournisseur creee : ${created.name}`);
+                    const created = await createSupplierWithHomonymCheck(data);
                     return created;
                   }}
                   testId="inv-supplier"
@@ -1417,6 +1483,66 @@ export default function InvoicesPage() {
               </Button>
             </div>
           </div>
+        </DialogContent>
+      </Dialog>
+      {/* iter85g : Dialog de confirmation homonymes lors de creation supplier
+          depuis le dialog facture (suggestion IA ou autocomplete) */}
+      <Dialog open={!!supplierHomonymsDialog} onOpenChange={(o) => { if (!o && supplierHomonymsDialog) supplierHomonymsDialog.onCancel(); }}>
+        <DialogContent className="max-w-2xl" data-testid="invoice-supplier-homonyms-dialog">
+          <DialogHeader>
+            <DialogTitle style={{fontFamily:'Chivo,sans-serif'}} className="flex items-center gap-2 text-amber-700">
+              <Sparkles size={18} /> Homonymes potentiels detectes
+            </DialogTitle>
+          </DialogHeader>
+          {supplierHomonymsDialog && (
+            <div className="space-y-4 mt-2">
+              <p className="text-sm text-slate-700">
+                Vous etes sur le point de creer le fournisseur <b>&quot;{supplierHomonymsDialog.payload.name}&quot;</b>.
+                Des fournisseurs existent deja avec un nom similaire :
+              </p>
+              <div className="bg-amber-50 border border-amber-200 rounded p-3 space-y-2 max-h-72 overflow-auto">
+                {supplierHomonymsDialog.similar.map((m, i) => (
+                  <div key={i} className="flex items-center justify-between bg-white border border-amber-100 rounded p-2" data-testid={`inv-similar-supplier-${i}`}>
+                    <div className="flex-1">
+                      <div className="font-medium text-sm">{m.supplier.name}</div>
+                      <div className="text-[11px] text-slate-500 space-x-3">
+                        {m.supplier.vat_number && <span>TVA: {m.supplier.vat_number}</span>}
+                        {m.supplier.city && <span>{m.supplier.city}</span>}
+                        {m.supplier.iban && <span className="font-mono">{m.supplier.iban}</span>}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[11px] font-mono text-amber-700">{Math.round(m.score * 100)}% similarite</span>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="text-blue-700 border-blue-200 h-7 text-[11px]"
+                        onClick={() => supplierHomonymsDialog.onUseExisting(m.supplier)}
+                        data-testid={`inv-use-existing-supplier-${i}`}
+                      >
+                        Utiliser celui-ci
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <p className="text-[11px] text-slate-500 italic">
+                Le fait de cliquer &laquo;Utiliser celui-ci&raquo; remplit automatiquement le champ Fournisseur de la facture.
+              </p>
+              <div className="flex gap-3 justify-end">
+                <Button variant="outline" onClick={() => supplierHomonymsDialog.onCancel()} data-testid="inv-similar-cancel-btn">
+                  Annuler
+                </Button>
+                <Button
+                  onClick={() => supplierHomonymsDialog.onConfirm(true)}
+                  className="bg-amber-600 hover:bg-amber-700 text-white"
+                  data-testid="inv-similar-force-create-btn"
+                >
+                  Creer quand meme
+                </Button>
+              </div>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
     </div>
