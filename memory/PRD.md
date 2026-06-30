@@ -11,6 +11,58 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 ## Implemented
+### Iter85e (Feb 2026) - Frais privatifs multi-allocations + chinese wall owners
+
+**Demande user** :
+  - Repartir une facture frais privatif sur PLUSIEURS proprietaires
+  - Mode : montants fixes en EUR par owner (somme = total facture)
+  - Dropdown owners filtre par ACP courante (chinese wall strict)
+  - Comportement : 100% proprietaire (pas d'occupant)
+  - Affichage : quote-part par owner dans sa situation de compte
+
+**Backend** (`routes/invoices.py`) :
+- Nouveau modele `PrivateFeeAllocation(owner_id, amount)`
+- `InvoiceInput.private_fee_allocations: Optional[List[PrivateFeeAllocation]]`
+- Validation POST + PUT : somme == total_amount (tolerance 0.01), owners existent
+- Rétrocompat : `private_fee_owner_id` legacy converti en 1-element allocation
+- Persistance du champ `private_fee_allocations` sur la facture
+
+**Backend** (`auto_entries.py::generate_purchase_entry`) :
+- Refonte du bloc frais privatif :
+  - AC : Dr 643 (total) / Cr 44000XXX fournisseur (total) - inchangee
+  - OD : N lignes (1 DR 4100XXX owner + 1 CR 643) PAR allocation
+  - Resolution des comptes owner via `assign_owner_accounts` + `get_owner_accounts`
+- Equilibre par construction : `total_debit = total_credit = somme allocations`
+
+**Frontend** (`pages/InvoicesPage.js`) :
+- Load owners : ajout du parametre `?copropriete_id=X` (chinese wall)
+- Dialog frais privatif : remplace single owner picker par tableau dynamique
+  d'allocations [{owner_id, amount}] :
+  - Bouton "+ Ajouter un proprietaire"
+  - Select scope ACP (chinese wall) avec filtrage des owners deja choisis
+  - Input montant EUR par ligne
+  - Live total : "Somme allocations X.XX / Total facture Y.YY" (vert si OK, rouge sinon)
+  - Bouton Trash pour supprimer une ligne
+- Validation cote front avant submit : somme = total, pas de doublon, montants > 0
+- data-testid : `private-fee-allocations`, `alloc-owner-select-{idx}`,
+  `alloc-amount-{idx}`, `alloc-remove-{idx}`, `add-private-fee-allocation`,
+  `alloc-balance-status`
+
+**Tests** (`tests/test_iter85e_private_fee_multi_allocations.py` - 5/5 PASS) :
+1. Create avec 2 allocations 600/400 -> AC 2 lignes + OD 4 lignes equilibrees
+2. Validation somme mismatch (700 vs 1000) -> 400
+3. Retrocompat private_fee_owner_id legacy -> 1 allocation derivee + OD 2 lignes
+4. Update single -> multi : OD regeneree avec 4 lignes (montants corrects)
+5. Chinese wall : `GET /api/owners?copropriete_id=X` exclut owners d'autres ACPs
+
+**Regression complete** : 46/46 PASS sur stack iter82-85.
+
+**Fichiers modifies** :
+- `/app/backend/routes/invoices.py` (PrivateFeeAllocation + validation + persistance POST/PUT)
+- `/app/backend/auto_entries.py` (refonte bloc frais privatif multi-owners)
+- `/app/frontend/src/pages/InvoicesPage.js` (UI tableau d'allocations + chinese wall)
+- `/app/backend/tests/test_iter85e_private_fee_multi_allocations.py` (NEW)
+
 ### Iter85d (Feb 2026) - Reprise comptable : ODs de mutation pre-periode exclues
 
 **Bug user** : "Une mutation n'est PAS une reprise comptable tu as completement

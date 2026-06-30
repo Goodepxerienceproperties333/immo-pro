@@ -85,23 +85,48 @@ async def generate_purchase_entry(db, invoice: dict) -> dict | None:
     # ---- FRAIS PRIVATIF : 2 ecritures separees ----
     # Ecriture 1 (AC - Achats) : Facture fournisseur
     #   Dr 643 Frais privatif  | Cr 44000XXX Fournisseur
-    # Ecriture 2 (OD - Operations Diverses) : Refacturation au proprietaire
-    #   Dr 40000XXX Proprietaire | Cr 643 Frais privatif (imputation)
-    # Net 643 = 0, fournisseur credite, proprietaire debite.
-    if invoice.get("is_private_fee") and invoice.get("private_fee_owner_id"):
-        owner_id = invoice["private_fee_owner_id"]
-        owner_doc = await db.owners.find_one({"id": owner_id}, {"_id": 0})
-        if owner_doc:
+    # Ecriture 2 (OD - Operations Diverses) : Refacturation au(x) proprietaire(s)
+    #   Dr 4100XXX Proprietaire | Cr 643 Frais privatif (imputation)
+    # iter85e : si private_fee_allocations contient N owners, l'OD a N debits
+    # owner + N credits 643 (1 par owner) -> chaque copro voit sa quote-part.
+    # Net 643 = 0, fournisseur credite, proprietaires debites.
+    is_private = invoice.get("is_private_fee")
+    allocations = list(invoice.get("private_fee_allocations") or [])
+    # Retro-compat : si allocations vide mais private_fee_owner_id existe,
+    # on construit une allocation single-owner avec le total.
+    if is_private and not allocations and invoice.get("private_fee_owner_id"):
+        allocations = [{"owner_id": invoice["private_fee_owner_id"], "amount": amount}]
+
+    if is_private and allocations:
+        # Pre-resoud chaque owner + son compte de provisions 4100XXX
+        owner_rows = []  # [{owner_id, owner_name, owner_prov, amount}]
+        for a in allocations:
+            oid = a.get("owner_id", "")
+            a_amount = float(a.get("amount") or 0)
+            if not oid or a_amount <= 0:
+                continue
+            owner_doc = await db.owners.find_one({"id": oid}, {"_id": 0})
+            if not owner_doc:
+                continue
             owner_doc = await assign_owner_accounts(db, owner_doc, copro_id)
             owner_accs = get_owner_accounts(owner_doc, copro_id)
             owner_prov = owner_accs.get("provisions", "") or "400000"
-            owner_name = owner_doc.get("name", "")
-            # Re-fetch PCMN names including 643
-            pcmn_q2 = {"number": {"$in": ["643", supplier_acc, owner_prov]}, "copropriete_id": copro_id}
-            pcmns2 = await db.pcmn_accounts.find(pcmn_q2, {"_id": 0}).to_list(10)
+            owner_rows.append({
+                "owner_id": oid,
+                "owner_name": owner_doc.get("name", ""),
+                "owner_prov": owner_prov,
+                "amount": round(a_amount, 2),
+            })
+        if owner_rows:
+            # Re-fetch PCMN names including 643 + tous les owner_prov + supplier
+            all_accs = ["643", supplier_acc] + list({r["owner_prov"] for r in owner_rows})
+            pcmn_q2 = {"number": {"$in": all_accs}, "copropriete_id": copro_id}
+            pcmns2 = await db.pcmn_accounts.find(pcmn_q2, {"_id": 0}).to_list(50)
             pcmn_names2 = {p["number"]: p["name"] for p in pcmns2}
 
-            # --- Ecriture 1 : AC (Achats) ---
+            owner_names_str = ", ".join(r["owner_name"] for r in owner_rows)
+
+            # --- Ecriture 1 : AC (Achats) : Dr 643 / Cr fournisseur ---
             ac_lines = [
                 {"account_number": "643",
                  "account_name": pcmn_names2.get("643", "Frais privatifs"),
@@ -118,7 +143,7 @@ async def generate_purchase_entry(db, invoice: dict) -> dict | None:
                 "journal_type": "AC",
                 "date": invoice.get("date") or datetime.now(timezone.utc).date().isoformat(),
                 "reference": f"FA-{invoice.get('number','')}",
-                "description": f"Frais privatif {owner_name} - {invoice.get('supplier','')} - {invoice.get('description','')}".strip(" -"),
+                "description": f"Frais privatif {owner_names_str} - {invoice.get('supplier','')} - {invoice.get('description','')}".strip(" -"),
                 "lines": ac_lines,
                 "total_debit": amount,
                 "total_credit": amount,
@@ -130,28 +155,36 @@ async def generate_purchase_entry(db, invoice: dict) -> dict | None:
             }
             await db.journal_entries.insert_one(ac_doc)
 
-            # --- Ecriture 2 : OD (Operations Diverses) - refacturation au proprietaire ---
-            od_lines = [
-                {"account_number": owner_prov,
-                 "account_name": pcmn_names2.get(owner_prov, f"Prov. - {owner_name}"),
-                 "debit": amount, "credit": 0.0,
-                 "third_party_id": owner_id,
-                 "third_party_name": owner_name},
-                {"account_number": "643",
-                 "account_name": pcmn_names2.get("643", "Frais privatifs"),
-                 "debit": 0.0, "credit": amount,
-                 "third_party_id": None,
-                 "third_party_name": f"Imputation - {owner_name}"},
-            ]
+            # --- Ecriture 2 : OD (Operations Diverses) - refacturation N owners ---
+            # N x DR owner_prov + N x CR 643. Equilibre par construction.
+            od_lines = []
+            for r in owner_rows:
+                od_lines.append({
+                    "account_number": r["owner_prov"],
+                    "account_name": pcmn_names2.get(r["owner_prov"], f"Prov. - {r['owner_name']}"),
+                    "debit": r["amount"], "credit": 0.0,
+                    "third_party_id": r["owner_id"],
+                    "third_party_name": r["owner_name"],
+                    "line_description": f"Frais privatif - {r['owner_name']}",
+                })
+                od_lines.append({
+                    "account_number": "643",
+                    "account_name": pcmn_names2.get("643", "Frais privatifs"),
+                    "debit": 0.0, "credit": r["amount"],
+                    "third_party_id": None,
+                    "third_party_name": f"Imputation - {r['owner_name']}",
+                    "line_description": f"Imputation frais privatif - {r['owner_name']}",
+                })
+            total_od = round(sum(r["amount"] for r in owner_rows), 2)
             od_doc = {
                 "id": str(uuid.uuid4()),
                 "journal_type": "OD",
                 "date": invoice.get("date") or datetime.now(timezone.utc).date().isoformat(),
                 "reference": f"OD-PRIV-{invoice.get('number','')}",
-                "description": f"Refacturation frais privatif a {owner_name} - {invoice.get('supplier','')}".strip(" -"),
+                "description": f"Refacturation frais privatif a {owner_names_str} - {invoice.get('supplier','')}".strip(" -"),
                 "lines": od_lines,
-                "total_debit": amount,
-                "total_credit": amount,
+                "total_debit": total_od,
+                "total_credit": total_od,
                 "copropriete_id": copro_id,
                 "auto_generated": True,
                 "source_type": "invoice",

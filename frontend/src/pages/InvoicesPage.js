@@ -30,7 +30,7 @@ export default function InvoicesPage() {
   const [lots, setLots] = useState([]);
   const [invoiceDialog, setInvoiceDialog] = useState(false);
   const [keyDialog, setKeyDialog] = useState(false);
-  const [invForm, setInvForm] = useState({ number: '', date: '', due_date: '', supplier: '', description: '', total_amount: 0, vat_amount: 0, account_number: '', expense_category_id: '', distribution_key_id: '', status: 'unpaid', is_private_fee: false, private_fee_owner_id: '', occupant_pct: 0, proprietaire_pct: 100, lines: [] });
+  const [invForm, setInvForm] = useState({ number: '', date: '', due_date: '', supplier: '', description: '', total_amount: 0, vat_amount: 0, account_number: '', expense_category_id: '', distribution_key_id: '', status: 'unpaid', is_private_fee: false, private_fee_owner_id: '', private_fee_allocations: [], occupant_pct: 0, proprietaire_pct: 100, lines: [] });
   const [owners, setOwners] = useState([]);
   const [ownerSearch, setOwnerSearch] = useState('');
   const [suggestCreateSupplier, setSuggestCreateSupplier] = useState(null); // {name, vat, bce, iban}
@@ -48,10 +48,12 @@ export default function InvoicesPage() {
   const load = useCallback(async () => {
     const copro = localStorage.getItem('copropriete_id') || '';
     const supplierParams = copro ? { copropriete_id: copro } : {};
+    // iter85e chinese wall : owners filtres par ACP courante
+    const ownersParams = copro ? { copropriete_id: copro } : {};
     const [inv, dk, acc, lt, cat, ow, sup] = await Promise.all([
       api.get('/invoices', { params: fyParams }), api.get('/distribution-keys'),
       api.get('/accounting/pcmn', { params: { class_num: 6 } }), api.get('/lots'),
-      api.get('/expense-categories'), api.get('/owners'),
+      api.get('/expense-categories'), api.get('/owners', { params: ownersParams }),
       api.get('/suppliers', { params: supplierParams }),
     ]);
     setInvoices(inv.data); setDistKeys(dk.data); setAccounts(acc.data); setLots(lt.data);
@@ -79,7 +81,7 @@ export default function InvoicesPage() {
   // Invoice handlers
   const openCreateInvoice = () => {
     setEditingInvoice(null);
-    setInvForm({ number: `F-${Date.now().toString().slice(-6)}`, date: new Date().toISOString().split('T')[0], due_date: '', supplier: '', description: '', total_amount: 0, vat_amount: 0, account_number: '', expense_category_id: '', distribution_key_id: '', status: 'unpaid', is_private_fee: false, private_fee_owner_id: '', occupant_pct: 0, proprietaire_pct: 100, lines: [] });
+    setInvForm({ number: `F-${Date.now().toString().slice(-6)}`, date: new Date().toISOString().split('T')[0], due_date: '', supplier: '', description: '', total_amount: 0, vat_amount: 0, account_number: '', expense_category_id: '', distribution_key_id: '', status: 'unpaid', is_private_fee: false, private_fee_owner_id: '', private_fee_allocations: [], occupant_pct: 0, proprietaire_pct: 100, lines: [] });
     setAiHint(''); setPendingPdf(null); setOwnerSearch('');
     setInvoiceDialog(true);
   };
@@ -96,6 +98,7 @@ export default function InvoicesPage() {
       status: inv.status || 'unpaid',
       is_private_fee: !!inv.is_private_fee,
       private_fee_owner_id: inv.private_fee_owner_id || '',
+      private_fee_allocations: Array.isArray(inv.private_fee_allocations) ? inv.private_fee_allocations.map(a => ({ owner_id: a.owner_id, amount: a.amount })) : [],
       occupant_pct: inv.occupant_pct ?? 0,
       proprietaire_pct: inv.proprietaire_pct ?? 100,
       lines: (inv.lines || []).map(l => ({
@@ -202,10 +205,32 @@ export default function InvoicesPage() {
           if (!Number(ln.amount) || Number(ln.amount) <= 0) { toast.error(`Ligne ${i + 1} : montant > 0 requis`); return; }
         }
       }
+      // iter85e : validation allocations frais privatif
+      let cleanedAllocs = null;
+      if (invForm.is_private_fee) {
+        const allocs = (invForm.private_fee_allocations || []).filter(a => a.owner_id && Number(a.amount) > 0);
+        if (allocs.length === 0) {
+          toast.error('Frais privatif : au moins un proprietaire avec un montant > 0 requis');
+          return;
+        }
+        const sumA = allocs.reduce((s, a) => s + Number(a.amount), 0);
+        if (Math.abs(sumA - Number(invForm.total_amount || 0)) > 0.01) {
+          toast.error(`Somme des allocations (${sumA.toFixed(2)}) different du total facture (${Number(invForm.total_amount).toFixed(2)})`);
+          return;
+        }
+        // Pas de doublons d'owner
+        const ids = allocs.map(a => a.owner_id);
+        if (new Set(ids).size !== ids.length) {
+          toast.error('Frais privatif : un meme proprietaire est present plusieurs fois');
+          return;
+        }
+        cleanedAllocs = allocs.map(a => ({ owner_id: a.owner_id, amount: Number(a.amount) }));
+      }
       const payload = {
         ...invForm,
         total_amount: Number(invForm.total_amount),
         vat_amount: Number(invForm.vat_amount),
+        private_fee_allocations: cleanedAllocs,
         lines: usesMultiLines ? invForm.lines.map(l => ({
           account_number: l.account_number,
           expense_category_id: l.expense_category_id || '',
@@ -712,55 +737,109 @@ export default function InvoicesPage() {
                   </span>
                 )}
               </label>
-              {invForm.is_private_fee && (
-                <div className="mt-3 space-y-1">
-                  <label className="form-label text-xs">Proprietaire concerne *</label>
-                  <Input
-                    placeholder="Rechercher par nom, prenom ou email..."
-                    value={ownerSearch}
-                    onChange={e => setOwnerSearch(e.target.value)}
-                    data-testid="private-fee-owner-search"
-                  />
-                  <div className="max-h-40 overflow-auto border border-amber-200 rounded bg-white">
-                    {owners
-                      .filter(o => {
-                        const q = ownerSearch.toLowerCase();
-                        if (!q) return true;
-                        return (o.name||'').toLowerCase().includes(q) ||
-                               (o.email||'').toLowerCase().includes(q) ||
-                               (o.vcs_code||'').toLowerCase().includes(q);
-                      })
-                      .slice(0, 12)
-                      .map(o => {
-                        const isSel = o.id === invForm.private_fee_owner_id;
-                        return (
+              {invForm.is_private_fee && (() => {
+                // iter85e : tableau dynamique d'allocations (owner + montant)
+                const allocs = invForm.private_fee_allocations || [];
+                const total = Number(invForm.total_amount || 0);
+                const sum = allocs.reduce((s, a) => s + (Number(a.amount) || 0), 0);
+                const diff = total - sum;
+                const balanced = Math.abs(diff) < 0.01;
+                const addAlloc = () => {
+                  setInvForm(f => ({
+                    ...f,
+                    private_fee_owner_id: '',
+                    private_fee_allocations: [...(f.private_fee_allocations || []), { owner_id: '', amount: 0 }]
+                  }));
+                };
+                const updateAlloc = (idx, patch) => {
+                  setInvForm(f => ({
+                    ...f,
+                    private_fee_allocations: (f.private_fee_allocations || []).map((a, i) => i === idx ? { ...a, ...patch } : a)
+                  }));
+                };
+                const removeAlloc = (idx) => {
+                  setInvForm(f => ({
+                    ...f,
+                    private_fee_allocations: (f.private_fee_allocations || []).filter((_, i) => i !== idx)
+                  }));
+                };
+                return (
+                  <div className="mt-3 space-y-2" data-testid="private-fee-allocations">
+                    <div className="flex items-center justify-between">
+                      <label className="form-label text-xs">Repartition par proprietaire * (somme = total facture)</label>
+                      <button
+                        type="button"
+                        onClick={addAlloc}
+                        className="text-[11px] text-amber-700 hover:text-amber-900 underline"
+                        data-testid="add-private-fee-allocation"
+                      >+ Ajouter un proprietaire</button>
+                    </div>
+                    {allocs.length === 0 && (
+                      <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
+                        Aucun proprietaire selectionne. Cliquez sur &laquo;+ Ajouter un proprietaire&raquo; pour repartir la facture.
+                      </div>
+                    )}
+                    {allocs.map((a, idx) => {
+                      const selOwner = owners.find(o => o.id === a.owner_id);
+                      return (
+                        <div key={idx} className="flex gap-2 items-start bg-white border border-amber-100 rounded p-2">
+                          <div className="flex-1">
+                            <Select
+                              value={a.owner_id || ''}
+                              onValueChange={(v) => updateAlloc(idx, { owner_id: v })}
+                            >
+                              <SelectTrigger className="text-xs h-8" data-testid={`alloc-owner-select-${idx}`}>
+                                <SelectValue placeholder="Choisir un proprietaire (filtre ACP)" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {owners
+                                  .filter(o => !allocs.some((b, j) => j !== idx && b.owner_id === o.id))
+                                  .map(o => (
+                                    <SelectItem key={o.id} value={o.id}>
+                                      {o.name} {o.vcs_code ? <span className="text-slate-400 font-mono text-[10px] ml-1">{o.vcs_code}</span> : ''}
+                                    </SelectItem>
+                                  ))}
+                              </SelectContent>
+                            </Select>
+                            {selOwner?.email && <div className="text-[10px] text-slate-400 mt-1">{selOwner.email}</div>}
+                          </div>
+                          <div className="w-32">
+                            <Input
+                              type="number" step="0.01"
+                              value={a.amount}
+                              onChange={(e) => updateAlloc(idx, { amount: e.target.value })}
+                              placeholder="Montant EUR"
+                              className="text-xs h-8 text-right"
+                              data-testid={`alloc-amount-${idx}`}
+                            />
+                          </div>
                           <button
                             type="button"
-                            key={o.id}
-                            onClick={() => setInvForm(f => ({ ...f, private_fee_owner_id: o.id }))}
-                            className={`w-full text-left px-3 py-1.5 text-xs border-b last:border-b-0 border-slate-100 hover:bg-amber-50 ${isSel ? 'bg-amber-100 font-medium' : ''}`}
-                            data-testid={`private-fee-owner-${o.id}`}
+                            onClick={() => removeAlloc(idx)}
+                            className="text-slate-400 hover:text-red-600 mt-1.5"
+                            data-testid={`alloc-remove-${idx}`}
+                            title="Supprimer cette ligne"
                           >
-                            <div className="flex items-center justify-between">
-                              <span>{o.name}</span>
-                              <span className="text-slate-400 font-mono text-[10px]">{o.vcs_code || ''}</span>
-                            </div>
-                            {o.email && <div className="text-slate-400 text-[10px]">{o.email}</div>}
+                            <Trash2 size={14} />
                           </button>
-                        );
-                      })}
-                    {owners.length === 0 && (
-                      <div className="px-3 py-2 text-xs text-slate-400">Aucun proprietaire en base</div>
+                        </div>
+                      );
+                    })}
+                    {allocs.length > 0 && (
+                      <div className={`flex justify-between items-center text-xs px-2 py-1.5 rounded border ${balanced ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-rose-50 border-rose-200 text-rose-700'}`}>
+                        <span>Somme allocations : <b>{sum.toFixed(2)} EUR</b> / Total facture : <b>{total.toFixed(2)} EUR</b></span>
+                        <span data-testid="alloc-balance-status">
+                          {balanced ? <>OK - equilibre</> : <>Ecart : <b>{diff.toFixed(2)} EUR</b></>}
+                        </span>
+                      </div>
                     )}
-                  </div>
-                  {invForm.private_fee_owner_id && (
                     <p className="text-[10px] text-amber-700">
-                      Selectionne : <b>{owners.find(o => o.id === invForm.private_fee_owner_id)?.name || '-'}</b>.
-                      Comptabilisation auto : Dr 643 / Cr Fournisseur + Dr 40000XXX (owner) / Cr 643.
+                      Chaque proprietaire sera debite de son montant via une OD (Dr 4100XXX owner / Cr 643).
+                      Le fournisseur est credite du total via une AC (Dr 643 / Cr 44000XXX).
                     </p>
-                  )}
-                </div>
-              )}
+                  </div>
+                );
+              })()}
             </div>
             <div className={`grid grid-cols-3 gap-4 ${invForm.is_private_fee || (invForm.lines && invForm.lines.length > 0) ? 'opacity-50 pointer-events-none' : ''}`}>
               <div><label className="form-label">Nature de depense</label>
