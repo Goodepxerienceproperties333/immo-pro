@@ -11,6 +11,56 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 ## Implemented
+### Iter85g (Feb 2026) - Detection homonymes fournisseurs avec confirmation
+
+**Demande user** : "il faut eviter les doublons de fournisseur verifier les
+noms ou les possibles homonyme et demander confirmation avant la creation."
+
+**Etat avant** : detection STRICTE (BCE/TVA/IBAN/nom normalise) existait deja
+mais aucune detection des coquilles / homonymes proches (ex. "ELEC PLUS SRL"
+vs "ELEC PLUSE SRL").
+
+**Backend** (`routes/suppliers.py`) :
+- Nouvelle fonction `find_similar_suppliers(name, copro_id, threshold=0.80)`
+  utilisant `difflib.SequenceMatcher` sur les noms normalises (mots tries).
+  Exclut les matches strictement identiques (geres par `find_duplicate_supplier`)
+  pour eviter le double-traitement. Scope ACP strict.
+- Nouveau endpoint `POST /api/suppliers/check-duplicate` qui retourne
+  `{exact: {...} | null, similar: [{supplier, score}]}`. Appele par le
+  frontend AVANT le POST de creation.
+- `create_supplier` bloque desormais aussi sur les similaires sauf si
+  `force_create_despite_similar=true` (HTTP 409 avec liste des homonymes).
+- `SupplierInput.force_create_despite_similar: bool = False` ajoute. Le flag
+  est exclu de `model_dump()` lors de la persistance (jamais stocke en base).
+
+**Frontend** (`pages/SuppliersPage.js`) :
+- `handleSave` (creation) : pre-appelle `/suppliers/check-duplicate` avant
+  POST. Si `exact` -> toast d'erreur. Si `similar` non vide -> ouvre un
+  Dialog de confirmation.
+- Nouveau Dialog "Homonymes potentiels detectes" :
+  - Liste les fournisseurs similaires avec leur score (%), TVA, ville, IBAN
+  - Bouton "Utiliser celui-ci" sur chaque ligne -> ouvre l'edit du sup existant
+  - Bouton "Creer quand meme" (amber) -> POST avec force_create_despite_similar=true
+  - Bouton "Annuler"
+- data-testid : `similar-suppliers-dialog`, `similar-supplier-{i}`,
+  `use-existing-supplier-{i}`, `similar-cancel-btn`, `similar-force-create-btn`
+
+**Tests** (`tests/test_iter85g_supplier_homonyms.py` - 7/7 PASS) :
+1. check-duplicate detecte exact match
+2. check-duplicate detecte coquille (score >= 0.80)
+3. check-duplicate ne match pas noms tres differents
+4. POST sans force -> 409 sur similaire
+5. POST avec force=true cree quand meme + flag non stocke
+6. Scope ACP : sup d'une autre ACP n'apparait pas
+7. find_similar exclut les matches stricts (deduplication)
+
+**Regression complete** : 56/56 PASS sur stack iter82-85.
+
+**Fichiers** :
+- `/app/backend/routes/suppliers.py` (find_similar_suppliers + check-duplicate + force flag)
+- `/app/frontend/src/pages/SuppliersPage.js` (pre-check + dialog confirmation)
+- `/app/backend/tests/test_iter85g_supplier_homonyms.py` (NEW)
+
 ### Iter85f (Feb 2026) - Descriptions de lignes de factures propagees aux decomptes
 
 **Demande user** : "permettre d'ajouter un commentaire sur les lignes de

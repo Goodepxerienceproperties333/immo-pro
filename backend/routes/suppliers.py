@@ -1,9 +1,10 @@
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime, timezone
 import re
 import uuid
+from difflib import SequenceMatcher
 from tier_accounts import assign_supplier_account
 
 
@@ -25,6 +26,49 @@ def _norm_id(value: str) -> str:
     Ex: 'BE 0123.456.789' -> 'BE0123456789', 'BE12 3456 7890 1234' -> 'BE12345678901234'.
     """
     return re.sub(r"[^A-Za-z0-9]", "", (value or "")).upper()
+
+
+async def find_similar_suppliers(
+    db, *, name: str, copro_id: str = "", exclude_id: Optional[str] = None,
+    threshold: float = 0.80, limit: int = 5,
+) -> List[dict]:
+    """Recherche les fournisseurs avec un nom SIMILAIRE (homonymes / coquilles).
+
+    Utilise `difflib.SequenceMatcher` sur les noms normalises (mots tries).
+    Retourne les top `limit` matches avec ratio >= `threshold`, tries par
+    score decroissant. Exclut les matches strictement identiques (qui sont
+    deja captures par `find_duplicate_supplier`).
+
+    Scope ACP identique a `find_duplicate_supplier`.
+    """
+    norm_query = _norm_name(name)
+    if not norm_query or len(norm_query) < 2:
+        return []
+
+    base_query: dict = {}
+    if copro_id:
+        base_query["$or"] = [
+            {"copropriete_id": copro_id},
+            {f"tier_accounts.{copro_id}": {"$exists": True}},
+        ]
+    if exclude_id:
+        base_query["id"] = {"$ne": exclude_id}
+
+    candidates = await db.suppliers.find(base_query, {"_id": 0}).to_list(5000)
+
+    scored: list = []
+    for s in candidates:
+        norm_other = _norm_name(s.get("name", ""))
+        if not norm_other:
+            continue
+        # On exclut les matches exacts (geres par find_duplicate_supplier).
+        if norm_other == norm_query:
+            continue
+        ratio = SequenceMatcher(None, norm_query, norm_other).ratio()
+        if ratio >= threshold:
+            scored.append({"supplier": s, "score": round(ratio, 3)})
+    scored.sort(key=lambda x: x["score"], reverse=True)
+    return scored[:limit]
 
 
 async def find_duplicate_supplier(
@@ -94,6 +138,21 @@ class SupplierInput(BaseModel):
     bic: Optional[str] = ""
     default_account: Optional[str] = ""
     notes: Optional[str] = ""
+    copropriete_id: Optional[str] = ""
+    # iter85g : ignorer la detection de similarites (l'utilisateur a deja confirme
+    # via le dialog frontend). N'a aucun effet sur la detection EXACTE (BCE/TVA/IBAN/nom
+    # strict) qui reste bloquante.
+    force_create_despite_similar: Optional[bool] = False
+
+
+class SupplierCheckDuplicateInput(BaseModel):
+    """Payload pour pre-verifier la presence de doublons / homonymes avant
+    de creer un fournisseur. Ne cree rien en base.
+    """
+    name: str
+    vat_number: Optional[str] = ""
+    bce_number: Optional[str] = ""
+    iban: Optional[str] = ""
     copropriete_id: Optional[str] = ""
 
 
@@ -167,6 +226,43 @@ def create_suppliers_router(db):
             return all_suppliers
         return [s for s in all_suppliers if _supplier_in_scope(s, allowed_copros)]
 
+    @router.post("/check-duplicate")
+    async def check_duplicate_supplier(request: Request, data: SupplierCheckDuplicateInput):
+        """Pre-verifie la presence de doublons EXACTS et d'homonymes proches.
+
+        Retourne :
+          - `exact`: dict {supplier, field, value} si doublon strict trouve
+            (BCE/TVA/IBAN/nom normalise), ou null
+          - `similar`: liste [{supplier, score}] des fournisseurs avec un nom
+            SIMILAIRE (ratio Levenshtein >= 0.80), tries par score decroissant
+            (max 5)
+
+        Le frontend appelle ce endpoint AVANT le POST de creation pour decider :
+          - exact != null -> bloquer (le POST renverrait de toute facon 409)
+          - similar non vide -> demander confirmation a l'utilisateur
+          - sinon -> creation autorisee
+        """
+        is_super, allowed_copros = await _get_user_scope(request)
+        copro_id = data.copropriete_id or getattr(request.state, "copropriete_id", "") or ""
+        if not is_super and copro_id and copro_id not in (allowed_copros or []):
+            raise HTTPException(403, "Vous ne pouvez verifier que pour vos ACPs")
+
+        exact = await find_duplicate_supplier(
+            db,
+            name=data.name,
+            bce_number=data.bce_number or "",
+            vat_number=data.vat_number or "",
+            iban=data.iban or "",
+            copro_id=copro_id,
+        )
+        similar = await find_similar_suppliers(
+            db, name=data.name, copro_id=copro_id,
+        ) if data.name else []
+        return {
+            "exact": exact,  # peut etre None
+            "similar": similar,  # liste de {supplier, score}
+        }
+
     @router.post("")
     async def create_supplier(request: Request, data: SupplierInput):
         is_super, allowed_copros = await _get_user_scope(request)
@@ -200,9 +296,21 @@ def create_suppliers_router(db):
                 f"({existing.get('name', '')} - {dup['value']}). "
                 f"Utilisez l'existant ou modifiez les criteres uniques.",
             )
+        # iter85g : detection homonymes (Levenshtein >= 0.80) - bloquant sauf
+        # si l'utilisateur a confirme via force_create_despite_similar=True
+        if not data.force_create_despite_similar:
+            similar = await find_similar_suppliers(db, name=data.name, copro_id=copro_id)
+            if similar:
+                names = ", ".join(f"\"{s['supplier'].get('name','')}\" ({int(s['score']*100)}%)" for s in similar[:3])
+                raise HTTPException(
+                    409,
+                    f"Homonymes potentiels detectes : {names}. "
+                    f"Verifiez si l'un correspond avant de creer un nouveau fournisseur "
+                    f"(force_create_despite_similar=true pour passer outre).",
+                )
         doc = {
             "id": str(uuid.uuid4()),
-            **data.model_dump(),
+            **data.model_dump(exclude={"force_create_despite_similar"}),
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
         await db.suppliers.insert_one(doc)
@@ -256,7 +364,10 @@ def create_suppliers_router(db):
                 f"Doublon detecte : un autre fournisseur avec le meme {field_label} existe deja "
                 f"({existing_dup.get('name', '')} - {dup['value']}).",
             )
-        result = await db.suppliers.update_one({"id": supplier_id}, {"$set": data.model_dump()})
+        result = await db.suppliers.update_one(
+            {"id": supplier_id},
+            {"$set": data.model_dump(exclude={"force_create_despite_similar"})},
+        )
         if result.matched_count == 0:
             raise HTTPException(404, "Fournisseur non trouve")
         s = await db.suppliers.find_one({"id": supplier_id}, {"_id": 0})
