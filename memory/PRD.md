@@ -11,6 +11,48 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 ## Implemented
+### Iter90 (Feb 2026) - Gestion manuelle de l'acces propriete + reset password
+
+**Demande user** : Le syndic doit pouvoir activer/desactiver l'acces du
+proprietaire a la plateforme depuis sa fiche. Le proprietaire reçoit
+une invitation par email, definit son propre mot de passe, et peut
+demander un reset par "mot de passe oublie" si besoin. Si le syndic
+n'active pas l'acces -> aucun acces.
+
+**Backend** :
+- Nouveau `/app/backend/routes/owner_access.py` avec :
+  - `GET /api/owners/{id}/access-status` -> none / pending / active / suspended
+  - `POST /api/owners/{id}/grant-access` -> cree user `role=owner`
+    avec `must_change_password=True` + envoi invitation MSGRAPH ;
+    si user existant -> linkage (1a : compte unique multi-ACP).
+  - `POST /api/owners/{id}/resend-invitation` (uniquement si pending)
+  - `POST /api/owners/{id}/revoke-access` -> `is_suspended=True`
+  - `POST /api/owners/{id}/reactivate-access`
+- `server.py` :
+  - `POST /api/auth/forgot-password` (public, enumeration-safe,
+    rate-limit 5/h par IP, token sha256 stocke, TTL 1h via index Mongo)
+  - `POST /api/auth/reset-password` (single-use, expire 1h,
+    invalide les autres tokens du user)
+  - Middleware bloque les users `is_suspended=True` sur tous les
+    endpoints + check explicite au login (403)
+- `graph_email.py` : `build_password_reset_email(...)` ajoute
+  un template HTML conforme branding.
+
+**Frontend** :
+- Nouvelles pages publiques : `/forgot-password`, `/reset-password?token=...`
+- LoginPage : lien "Mot de passe oublie ?"
+- OwnersPage : nouveau composant `OwnerAccessSection` integre dans le
+  dialog d'edition d'un proprio (4 etats, boutons contextuels).
+
+**Tests** :
+- `tests/test_iter90_owner_access_and_password_reset.py` : 17 sous-flows
+  orchestres dans un test pytest (acces lifecycle complet,
+  suspended user blocked at login + by middleware, enumeration safety,
+  rate limit, token expire/consume, mot de passe oublie multi-ACP).
+- E2E curl validation OK (envoi MSGRAPH reel a selimabed@protonmail.com).
+
+
+## Implemented
 ### Iter89c (Feb 2026) - Validation page Doublons potentiels (P0)
 
 **Etat** : feature complete deja en place (frontend + backend + tests).

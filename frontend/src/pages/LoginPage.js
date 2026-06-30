@@ -211,6 +211,15 @@ export default function LoginPage() {
               </button>
             )}
             {mode === 'login' && (
+              <a
+                href="/forgot-password"
+                className="text-sm text-slate-600 hover:text-[#0055FF] hover:underline block w-full"
+                data-testid="forgot-password-link"
+              >
+                Mot de passe oublie ?
+              </a>
+            )}
+            {mode === 'login' && (
               <button
                 onClick={() => switchTo('first-set')}
                 className="text-sm text-slate-600 hover:text-[#0055FF] hover:underline block w-full"

@@ -8,6 +8,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
 import { Plus, Pencil, Trash2, Search, AlertTriangle } from 'lucide-react';
+import OwnerAccessSection from '@/components/OwnerAccessSection';
 
 const emptyForm = { first_name: '', last_name: '', address: '', postal_code: '', city: '', country: 'Belgique', email: '', email2: '', phone: '', phone2: '' };
 
@@ -159,7 +160,7 @@ export default function OwnersPage() {
       </div>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="max-w-2xl" data-testid="owner-dialog">
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto" data-testid="owner-dialog">
           <DialogHeader><DialogTitle style={{fontFamily:'Chivo,sans-serif'}}>{editing ? 'Modifier proprietaire' : 'Nouveau proprietaire'}</DialogTitle>
             {editing?.vcs_code && <p className="font-mono text-sm text-[#0055FF] mt-1">VCS: {editing.vcs_code}</p>}
           </DialogHeader>
@@ -226,6 +227,9 @@ export default function OwnersPage() {
                   Cliquez sur &laquo;&nbsp;Utiliser ce proprietaire&nbsp;&raquo; pour ouvrir sa fiche, ou poursuivez la creation en cliquant sur &laquo;&nbsp;Creer&nbsp;&raquo;.
                 </div>
               </div>
+            )}
+            {editing && (
+              <OwnerAccessSection ownerId={editing.id} ownerEmail={form.email} />
             )}
             <div className="flex gap-3 justify-end">
               <Button variant="outline" onClick={() => setDialogOpen(false)} data-testid="owner-cancel-btn">Annuler</Button>

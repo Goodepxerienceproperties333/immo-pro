@@ -155,3 +155,54 @@ def build_invitation_email(
   </table>
 </body></html>"""
     return subject, html
+
+
+def build_password_reset_email(
+    *,
+    recipient_name: str,
+    reset_url: str,
+    expires_minutes: int = 60,
+) -> tuple[str, str]:
+    """Build (subject, html_body) for the password reset email."""
+    subject = "Reinitialisation de votre mot de passe CoproManager"
+    html = f"""<!DOCTYPE html>
+<html><body style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;background:#F5F7FA;margin:0;padding:0">
+  <table cellpadding="0" cellspacing="0" border="0" width="100%" style="padding:32px 0">
+    <tr><td align="center">
+      <table cellpadding="0" cellspacing="0" border="0" width="600" style="background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.06)">
+        <tr><td style="background:linear-gradient(135deg,#0055FF 0%,#0040CC 100%);padding:32px 32px 28px">
+          <h1 style="color:#fff;margin:0;font-size:24px;font-weight:700;letter-spacing:-0.02em">CoproManager</h1>
+          <p style="color:rgba(255,255,255,0.85);margin:4px 0 0;font-size:14px">Reinitialisation de mot de passe</p>
+        </td></tr>
+        <tr><td style="padding:32px">
+          <h2 style="color:#0F172A;margin:0 0 16px;font-size:20px">Bonjour {recipient_name},</h2>
+          <p style="color:#334155;font-size:15px;line-height:1.6;margin:0 0 16px">
+            Vous avez demande la reinitialisation de votre mot de passe. Cliquez sur le bouton ci-dessous
+            pour definir un nouveau mot de passe :
+          </p>
+          <table cellpadding="0" cellspacing="0" border="0" style="margin:24px auto">
+            <tr><td style="background:#0055FF;border-radius:8px">
+              <a href="{reset_url}" style="display:inline-block;padding:14px 28px;color:#fff;text-decoration:none;font-weight:600;font-size:15px">Reinitialiser mon mot de passe</a>
+            </td></tr>
+          </table>
+          <p style="color:#64748B;font-size:13px;line-height:1.5;margin:24px 0 0;padding-top:20px;border-top:1px solid #E2E8F0">
+            Si le bouton ne fonctionne pas, copiez ce lien dans votre navigateur :<br>
+            <a href="{reset_url}" style="color:#0055FF;word-break:break-all;font-size:12px">{reset_url}</a>
+          </p>
+          <p style="color:#94A3B8;font-size:12px;line-height:1.5;margin:24px 0 0">
+            Ce lien est valable {expires_minutes} minutes et ne peut etre utilise qu'une seule fois.
+            Si vous n'avez pas demande cette reinitialisation, ignorez simplement cet email
+            &mdash; votre mot de passe actuel reste inchange.
+          </p>
+        </td></tr>
+        <tr><td style="background:#F8FAFC;padding:20px 32px;border-top:1px solid #E2E8F0">
+          <p style="color:#94A3B8;font-size:11px;margin:0;text-align:center">
+            CoproManager &middot; Conforme PCMN belge &middot; Chinese wall RGPD strict
+          </p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body></html>"""
+    return subject, html
+

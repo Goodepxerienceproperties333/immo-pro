@@ -4,6 +4,8 @@ import { AuthProvider, useAuth } from "@/contexts/AuthContext";
 import { Toaster } from "@/components/ui/sonner";
 import Layout from "@/components/Layout";
 import LoginPage from "@/pages/LoginPage";
+import ForgotPasswordPage from "@/pages/ForgotPasswordPage";
+import ResetPasswordPage from "@/pages/ResetPasswordPage";
 import DashboardPage from "@/pages/DashboardPage";
 import OwnersPage from "@/pages/OwnersPage";
 import LotsPage from "@/pages/LotsPage";
@@ -56,6 +58,8 @@ function AppRoutes() {
   return (
     <Routes>
       <Route path="/login" element={user ? <Navigate to={defaultPath} replace /> : <LoginPage />} />
+      <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+      <Route path="/reset-password" element={<ResetPasswordPage />} />
       <Route path="/portal" element={<ProtectedRoute><OwnerPortalPage /></ProtectedRoute>} />
       <Route path="/" element={<ProtectedRoute>{isOwnerRole ? <Navigate to="/portal" replace /> : <Layout />}</ProtectedRoute>}>
         <Route index element={<DashboardPage />} />

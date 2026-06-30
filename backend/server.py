@@ -60,6 +60,8 @@ AUTH_EXEMPT_PATHS = {
     "/api/auth/logout",
     "/api/auth/first-set-password",
     "/api/auth/check-must-change-password",
+    "/api/auth/forgot-password",
+    "/api/auth/reset-password",
 }
 
 # RBAC: paths that require admin role (superadmin/syndic) for any write/destructive action.
@@ -120,13 +122,20 @@ async def auth_middleware(request: Request, call_next):
     try:
         user_doc = await db.users.find_one(
             {"_id": ObjectId(request.state.user_id)},
-            {"_id": 0, "role": 1, "copropriete_ids": 1, "email": 1}
+            {"_id": 0, "role": 1, "copropriete_ids": 1, "email": 1, "is_suspended": 1}
         )
     except Exception:
         user_doc = None
     if not user_doc:
         from fastapi.responses import JSONResponse
         return JSONResponse(status_code=401, content={"detail": "User not found"})
+    # ---- ACCESS REVOCATION : block all API calls for suspended users ----
+    if user_doc.get("is_suspended"):
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            status_code=403,
+            content={"detail": "Votre acces a la plateforme a ete suspendu. Contactez votre syndic."}
+        )
     role = user_doc.get("role", "owner")
     request.state.user_role = role
     request.state.user_copropriete_ids = user_doc.get("copropriete_ids", [])
@@ -306,6 +315,13 @@ async def login(data: LoginInput, request: Request, response: Response):
     if not user:
         await _record_login_attempt(email, None, request, success=False, reason="user_not_found")
         raise HTTPException(status_code=401, detail="Identifiants invalides")
+    # Block login for suspended accounts (access revoked by syndic / superadmin)
+    if user.get("is_suspended"):
+        await _record_login_attempt(email, user, request, success=False, reason="suspended")
+        raise HTTPException(
+            status_code=403,
+            detail="Votre acces a la plateforme a ete suspendu. Contactez votre syndic."
+        )
     # Block login if the user must define their password first
     if user.get("must_change_password"):
         raise HTTPException(
@@ -393,6 +409,8 @@ async def first_set_password(data: FirstSetPasswordInput, response: Response):
     user = await db.users.find_one({"email": email})
     if not user:
         raise HTTPException(404, "Utilisateur non trouve")
+    if user.get("is_suspended"):
+        raise HTTPException(403, "Votre acces a la plateforme a ete suspendu. Contactez votre syndic.")
     if not user.get("must_change_password"):
         raise HTTPException(400, "Ce compte a deja un mot de passe defini. Utilisez la connexion classique.")
     await db.users.update_one(
@@ -488,6 +506,158 @@ async def refresh(request: Request, response: Response):
         return {"message": "Token refreshed"}
     except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
         raise HTTPException(status_code=401, detail="Invalid refresh token")
+
+
+# ---------- PASSWORD RESET (forgot password) ----------
+# Public endpoints: enumeration-safe (always return 200 OK with a generic message
+# whether the email exists or not). Tokens are single-use, 1h TTL, sha256-hashed
+# at rest. Rate-limited by IP via login_attempts collection.
+
+class ForgotPasswordInput(BaseModel):
+    email: str
+
+
+class ResetPasswordInput(BaseModel):
+    token: str
+    new_password: str
+
+
+def _hash_reset_token(raw_token: str) -> str:
+    import hashlib
+    return hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+
+
+async def _check_forgot_rate_limit(ip: str) -> bool:
+    """Returns True if the request is allowed (under 5 per hour for this IP)."""
+    if not ip:
+        return True
+    from datetime import datetime, timezone, timedelta
+    one_hour_ago = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    count = await db.password_reset_attempts.count_documents({
+        "ip": ip,
+        "created_at": {"$gte": one_hour_ago},
+    })
+    return count < 5
+
+
+@auth_router.post("/forgot-password")
+async def forgot_password(data: ForgotPasswordInput, request: Request):
+    """Always returns 200 OK with the same message regardless of whether the
+    email exists, to prevent user enumeration attacks. Sends a reset link
+    via Microsoft Graph if the email matches a real, non-suspended user."""
+    email = (data.email or "").lower().strip()
+    ip = (request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+          or (request.client.host if request.client else "")
+          or "")
+    generic = {"message": "Si cette adresse correspond a un compte, un email de reinitialisation a ete envoye."}
+    if not email or "@" not in email:
+        return generic
+    # Rate limit (5 requests / IP / hour) to prevent email spam abuse
+    allowed = await _check_forgot_rate_limit(ip)
+    await db.password_reset_attempts.insert_one({
+        "ip": ip, "email": email,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+    if not allowed:
+        # Still return generic to avoid revealing rate-limit existence
+        return generic
+    user = await db.users.find_one({"email": email})
+    if not user or user.get("is_suspended"):
+        # Do NOT reveal: just return generic (enumeration-safe)
+        return generic
+    # Generate token (raw -> sent in email, sha256 -> stored)
+    import secrets
+    raw_token = secrets.token_urlsafe(32)
+    token_hash = _hash_reset_token(raw_token)
+    expires_at = datetime.now(timezone.utc) + timedelta(hours=1)
+    await db.password_reset_tokens.insert_one({
+        "id": str(uuid.uuid4()),
+        "user_id": str(user["_id"]),
+        "token_hash": token_hash,
+        "expires_at": expires_at,  # BSON datetime so TTL index can act
+        "consumed_at": None,
+        "created_ip": ip,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+    # Build reset link + send email asynchronously
+    try:
+        from graph_email import is_configured, send_html_email, build_password_reset_email
+        import asyncio
+        if is_configured():
+            frontend_url = os.environ.get("FRONTEND_URL", "")
+            reset_url = f"{frontend_url}/reset-password?token={raw_token}"
+            subject, html = build_password_reset_email(
+                recipient_name=user.get("name", "Utilisateur"),
+                reset_url=reset_url,
+                expires_minutes=60,
+            )
+            asyncio.create_task(send_html_email([email], subject, html))
+        else:
+            logger.warning(f"MSGRAPH not configured; reset link for {email}: /reset-password?token={raw_token}")
+    except Exception as e:
+        logger.warning(f"Reset email send failed for {email}: {e}")
+    return generic
+
+
+@auth_router.post("/reset-password")
+async def reset_password(data: ResetPasswordInput, response: Response):
+    """Validates the reset token, updates the password, marks token consumed,
+    logs the user in directly."""
+    if not data.token or len(data.token) < 16:
+        raise HTTPException(400, "Lien invalide")
+    if not data.new_password or len(data.new_password) < 6:
+        raise HTTPException(400, "Le mot de passe doit contenir au moins 6 caracteres")
+    token_hash = _hash_reset_token(data.token)
+    now = datetime.now(timezone.utc)
+    token_doc = await db.password_reset_tokens.find_one({"token_hash": token_hash})
+    if not token_doc:
+        raise HTTPException(400, "Lien invalide ou expire")
+    if token_doc.get("consumed_at"):
+        raise HTTPException(400, "Ce lien a deja ete utilise")
+    expires_at = token_doc.get("expires_at")
+    # expires_at may be a BSON datetime (preferred) or ISO string (legacy)
+    if isinstance(expires_at, str):
+        try:
+            expires_at = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+        except Exception:
+            expires_at = None
+    if expires_at and expires_at.tzinfo is None:
+        # MongoDB returns naive datetimes; treat them as UTC
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if not expires_at or expires_at < now:
+        raise HTTPException(400, "Lien expire. Demandez un nouveau lien.")
+    user = await db.users.find_one({"_id": ObjectId(token_doc["user_id"])})
+    if not user:
+        raise HTTPException(400, "Lien invalide")
+    if user.get("is_suspended"):
+        raise HTTPException(403, "Votre acces a la plateforme a ete suspendu. Contactez votre syndic.")
+    # Update password and clear any "must_change_password" flag
+    await db.users.update_one(
+        {"_id": user["_id"]},
+        {"$set": {
+            "password_hash": hash_password(data.new_password),
+            "must_change_password": False,
+            "password_set_at": now.isoformat(),
+        }}
+    )
+    # Mark token consumed
+    await db.password_reset_tokens.update_one(
+        {"_id": token_doc["_id"]},
+        {"$set": {"consumed_at": now.isoformat()}}
+    )
+    # Invalidate any other unconsumed tokens for this user (defense in depth)
+    await db.password_reset_tokens.update_many(
+        {"user_id": str(user["_id"]), "consumed_at": None, "_id": {"$ne": token_doc["_id"]}},
+        {"$set": {"consumed_at": now.isoformat()}}
+    )
+    # Log the user in directly (same as first-set-password flow)
+    user_id = str(user["_id"])
+    access_token = create_access_token(user_id, user["email"])
+    refresh_token = create_refresh_token(user_id)
+    response.set_cookie(key="access_token", value=access_token, httponly=True, secure=False, samesite="lax", max_age=7200, path="/")
+    response.set_cookie(key="refresh_token", value=refresh_token, httponly=True, secure=False, samesite="lax", max_age=604800, path="/")
+    return user_response(user)
+
 
 # Dashboard
 @app.get("/api/dashboard/stats")
@@ -613,6 +783,14 @@ async def startup():
         await db.invoice_bundle_sessions.create_index("expires_at", expireAfterSeconds=0)
     except Exception:
         pass
+    # iter90 : TTL index on password_reset_tokens (auto-delete expired rows).
+    # expires_at MUST be a BSON datetime for the TTL monitor to pick it up.
+    try:
+        await db.password_reset_tokens.create_index("expires_at", expireAfterSeconds=0)
+        await db.password_reset_tokens.create_index("token_hash", unique=True)
+        await db.password_reset_attempts.create_index("created_at")
+    except Exception:
+        pass
     await seed_admin()
     await seed_pcmn()
     os.makedirs("/app/memory", exist_ok=True)
@@ -649,6 +827,7 @@ from routes.expense_categories import create_expense_categories_router
 from routes.team import create_team_router
 from routes.import_wizard import create_import_wizard_router
 from routes.duplicates import create_duplicates_router
+from routes.owner_access import create_owner_access_router
 
 app.include_router(create_properties_router(db))
 app.include_router(create_accounting_router(db))
@@ -671,3 +850,4 @@ app.include_router(create_reminders_router(db))
 app.include_router(create_invoice_ai_router(db))
 app.include_router(create_expense_categories_router(db))
 app.include_router(create_duplicates_router(db))
+app.include_router(create_owner_access_router(db))
