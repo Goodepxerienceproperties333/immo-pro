@@ -1,14 +1,18 @@
 from fastapi import APIRouter, HTTPException, UploadFile, File, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime, timezone
 from pathlib import Path
 import uuid
-import os
+from gridfs_storage import get_journal_attachments_storage
 
+# Legacy path kept ONLY for backward-compat fallback reads (iter87 migration).
 ATTACHMENTS_DIR = Path("/app/uploads/journal_attachments")
-ATTACHMENTS_DIR.mkdir(parents=True, exist_ok=True)
+try:
+    ATTACHMENTS_DIR.mkdir(parents=True, exist_ok=True)
+except Exception:
+    pass
 
 
 class JournalEntryLine(BaseModel):
@@ -342,7 +346,7 @@ def create_accounting_router(db):
     @router.delete("/entries/{entry_id}")
     async def delete_entry(entry_id: str):
         from fiscal_lock import ensure_entry_modifiable
-        # Also remove attachment files from disk
+        # Also remove attachment files from disk + GridFS
         entry = await db.journal_entries.find_one({"id": entry_id}, {"_id": 0})
         if not entry:
             raise HTTPException(404, "Ecriture non trouvee")
@@ -351,7 +355,15 @@ def create_accounting_router(db):
         # Verrou fiscal : refuse la suppression si la date tombe dans un exercice cloture
         # ou si l'ecriture est une contre-passation / deja contre-passee.
         await ensure_entry_modifiable(db, entry)
+        att_storage = get_journal_attachments_storage(db)
         for att in entry.get("attachments", []) or []:
+            # iter87 : delete from GridFS first (new), fallback to disk (legacy)
+            gid = att.get("gridfs_id")
+            if gid:
+                try:
+                    await att_storage.delete(gid)
+                except Exception:
+                    pass
             try:
                 p = att.get("stored_path")
                 if p and Path(p).exists():
@@ -366,23 +378,34 @@ def create_accounting_router(db):
     # ---- ATTACHMENTS for journal entries ----
     @router.post("/entries/{entry_id}/attachments")
     async def upload_entry_attachment(entry_id: str, file: UploadFile = File(...)):
-        """Attach a PDF document to a journal entry (Operations Diverses or any entry)."""
+        """Attach a PDF document to a journal entry (Operations Diverses or any entry).
+
+        iter87 : stored in MongoDB GridFS bucket `journal_attachments`.
+        """
         entry = await db.journal_entries.find_one({"id": entry_id}, {"_id": 0})
         if not entry:
             raise HTTPException(404, "Ecriture non trouvee")
         ext = Path(file.filename or "file").suffix.lower()
         if ext not in (".pdf", ".png", ".jpg", ".jpeg"):
             raise HTTPException(400, "Format autorise: PDF, PNG, JPG")
-        att_id = str(uuid.uuid4())
-        stored_name = f"{att_id}{ext}"
-        stored_path = ATTACHMENTS_DIR / stored_name
         content = await file.read()
-        with open(stored_path, "wb") as f:
-            f.write(content)
+        att_id = str(uuid.uuid4())
+        att_storage = get_journal_attachments_storage(db)
+        gridfs_id = await att_storage.upload(
+            filename=file.filename or f"{att_id}{ext}",
+            contents=content,
+            metadata={
+                "attachment_id": att_id,
+                "entry_id": entry_id,
+                "copropriete_id": entry.get("copropriete_id", ""),
+                "mime_type": file.content_type or "application/octet-stream",
+                "uploaded_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
         attachment = {
             "id": att_id,
             "filename": file.filename,
-            "stored_path": str(stored_path),
+            "gridfs_id": gridfs_id,
             "mime_type": file.content_type or "application/octet-stream",
             "size": len(content),
             "uploaded_at": datetime.now(timezone.utc).isoformat(),
@@ -398,13 +421,29 @@ def create_accounting_router(db):
         entry = await db.journal_entries.find_one({"id": entry_id}, {"_id": 0})
         if not entry:
             raise HTTPException(404, "Ecriture non trouvee")
+        att_storage = get_journal_attachments_storage(db)
         for att in entry.get("attachments", []) or []:
-            if att.get("id") == attachment_id:
-                path = att.get("stored_path", "")
-                if not path or not Path(path).exists():
-                    raise HTTPException(404, "Fichier introuvable sur le disque")
-                return FileResponse(path, media_type=att.get("mime_type", "application/pdf"),
-                                    filename=att.get("filename", "attachment.pdf"))
+            if att.get("id") != attachment_id:
+                continue
+            media_type = att.get("mime_type", "application/pdf")
+            filename = att.get("filename", "attachment.pdf")
+            # iter87 : prefer GridFS (new), fallback to disk (legacy)
+            gid = att.get("gridfs_id")
+            if gid:
+                try:
+                    data = await att_storage.download(gid)
+                except Exception:
+                    raise HTTPException(404, "Fichier introuvable dans GridFS")
+                safe_name = filename.replace('"', "")
+                return Response(
+                    content=data,
+                    media_type=media_type,
+                    headers={"Content-Disposition": f'attachment; filename="{safe_name}"'},
+                )
+            path = att.get("stored_path", "")
+            if path and Path(path).exists():
+                return FileResponse(path, media_type=media_type, filename=filename)
+            raise HTTPException(404, "Fichier introuvable sur le disque")
         raise HTTPException(404, "Piece jointe non trouvee")
 
     @router.delete("/entries/{entry_id}/attachments/{attachment_id}")
@@ -419,6 +458,13 @@ def create_accounting_router(db):
                 break
         if not target:
             raise HTTPException(404, "Piece jointe non trouvee")
+        att_storage = get_journal_attachments_storage(db)
+        gid = target.get("gridfs_id")
+        if gid:
+            try:
+                await att_storage.delete(gid)
+            except Exception:
+                pass
         try:
             p = target.get("stored_path")
             if p and Path(p).exists():

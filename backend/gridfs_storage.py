@@ -53,7 +53,11 @@ class GridFSStorage:
         try:
             return await stream.read()
         finally:
-            await stream.close()
+            # GridOut.close() is sync in motor's wrapper, not awaitable
+            try:
+                stream.close()
+            except Exception:
+                pass
 
     async def delete(self, file_id: str) -> None:
         """Supprime le fichier. Idempotent (silencieux si deja absent)."""
@@ -96,7 +100,10 @@ class GridFSStorage:
                         break
                     yield chunk
             finally:
-                await stream.close()
+                try:
+                    stream.close()
+                except Exception:
+                    pass
         return _gen()
 
 

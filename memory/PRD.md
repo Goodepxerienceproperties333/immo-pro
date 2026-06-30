@@ -11,6 +11,72 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 ## Implemented
+### Iter87 (Feb 2026) - Migration storage filesystem -> MongoDB GridFS (PERSISTANT)
+
+**Probleme critique resolu** : "Les PDFs uploades sont TOUJOURS perdus apres un deploiement"
+-> Le filesystem `/app/uploads/` etait EPHEMERE (efface a chaque redeploy).
+A partir d'iter87, **tout est stocke en MongoDB GridFS** (persistant + backup).
+
+**Architecture** :
+- `gridfs_storage.py` : helper unique pour tous les buckets
+  - Methodes : `upload`, `download`, `delete`, `stat`, `exists`, `stream_download`
+  - Buckets :
+    * `invoice_attachments` : PJ factures fournisseurs
+    * `invoice_bundles`     : PDF d'import multi-pages (TTL 24h)
+    * `journal_attachments` : PJ ecritures comptables (OD)
+    * `documents`           : documents legaux (PV AG, contrats, etc.)
+  - Fix motor : `stream.close()` SYNC (pas await) car `GridOut` wrapper
+- Chaque attachment porte maintenant un champ `gridfs_id` (nouveau) ET conserve
+  `stored_path` pour audit/migration.
+- Endpoints download : prefer GridFS si `gridfs_id` present, sinon fallback disque
+  (retrocompat pour PJ creees avant la migration mais non-migrees).
+
+**Migration des 1.7 GB existants** (`scripts/migrate_uploads_to_gridfs.py`) :
+- Parcourt `invoices.attachments[]`, `journal_entries.attachments[]`, `documents`
+- Upload chaque fichier disque vers son bucket GridFS, ecrit `gridfs_id`
+- Idempotent : skip si `gridfs_id` deja present
+- Mode `--dry-run` pour preview
+- **Resultat preview** : 40 PJ factures migrees = 697.82 MB (14 documents
+  "missing" car deja perdus lors d'un precedent redeploy)
+- **TODO PROD** : lancer `python /app/backend/scripts/migrate_uploads_to_gridfs.py`
+  via terminal Emergent (l'agent n'a pas acces production)
+
+**Index TTL (24h) pour les sessions bundle PDF** :
+- Au startup du backend, creation auto de l'index TTL sur
+  `invoice_bundle_sessions.expires_at` (BSON ISODate)
+- Mongo supprime automatiquement les sessions expirees + leur PDF GridFS
+- Termine donc le risque "import inacheve = PDF orphelin sur disque pour toujours"
+
+**Refactor `invoice_ai.py`** : suppression complete de l'ecriture disque.
+L'extraction IA utilise `NamedTemporaryFile(delete=False)` puis `os.unlink()` -
+zero trace sur disque ni GridFS (le user reuploadera le PDF s'il veut l'attacher).
+
+**Refactor `coproprietes.py` (suppression ACP)** : la cascade delete supprime
+maintenant aussi les fichiers GridFS de tous les buckets (invoice, journal,
+documents) en plus du disque legacy.
+
+**Tests** (`tests/test_iter87_gridfs_migration.py` - 6/6 PASS) :
+1. Upload + download d'une PJ facture via GridFS (gridfs_id present, stored_path absent)
+2. Delete d'une facture -> cascade GridFS (les 2 PJ disparaissent du bucket)
+3. Upload + download + delete d'une PJ ecriture comptable (OD)
+4. Upload + download + delete d'un document
+5. Retrocompat : une PJ legacy (stored_path seul) reste lisible via fallback disque
+6. Bundle session : PDF en GridFS + metadata `expires_at` BSON pour TTL
+
+**Regression complete iter82-iter87** : **56/56 PASS** (mutations, decomptes,
+chinese wall, frais privatifs, homonymes, scope ACP, GridFS).
+
+**Fichiers** :
+- `/app/backend/gridfs_storage.py` (fix sync close + bucket helpers)
+- `/app/backend/routes/invoices.py` (GridFS upload/download/delete + bundle GridFS+TTL)
+- `/app/backend/routes/accounting.py` (GridFS pour journal_attachments)
+- `/app/backend/routes/documents.py` (GridFS pour documents + tempfile IA)
+- `/app/backend/routes/invoice_ai.py` (tempfile-only, zero persistance disque)
+- `/app/backend/routes/coproprietes.py` (cascade delete GridFS)
+- `/app/backend/server.py` (TTL index auto au startup)
+- `/app/backend/scripts/migrate_uploads_to_gridfs.py` (NEW)
+- `/app/backend/tests/test_iter87_gridfs_migration.py` (NEW - 6 tests)
+
 ### Iter86 (Feb 2026) - Frais privatifs visibles dans liste des depenses + tri par colonne factures
 
 **Demandes user** :

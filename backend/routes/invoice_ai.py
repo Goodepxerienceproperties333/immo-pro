@@ -1,13 +1,16 @@
-"""Endpoint dedie : upload facture fournisseur PDF -> extraction IA Claude -> pre-remplit le formulaire."""
+"""Endpoint dedie : upload facture fournisseur PDF -> extraction IA Claude -> pre-remplit le formulaire.
+
+iter87 : ce endpoint ne persiste plus rien sur disque. Le PDF temporaire est
+ecrit dans un NamedTemporaryFile (auto-clean) le temps de l'extraction IA,
+puis supprime. Aucune trace sur le filesystem.
+"""
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from typing import Optional
 from pathlib import Path
 import os
 import json
 import uuid
-
-UPLOAD_DIR = Path("/app/uploads/invoices")
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+import tempfile
 
 
 async def _extract_pdf_text(file_path: str, max_chars: int = 8000) -> str:
@@ -127,23 +130,35 @@ def create_invoice_ai_router(db):
         file: UploadFile = File(...),
         copropriete_id: Optional[str] = Form(""),
     ):
-        """Upload a PDF supplier invoice and return AI-extracted fields (no DB persistence)."""
+        """Upload a PDF supplier invoice and return AI-extracted fields (no DB persistence).
+
+        iter87 : the PDF is written to a NamedTemporaryFile during extraction
+        and deleted right after. Nothing is persisted on disk or in GridFS
+        (the extraction is stateless - the user will upload the PDF again
+        if they want to attach it to a real invoice).
+        """
         ext = Path(file.filename or "file").suffix.lower()
         if ext != ".pdf":
             raise HTTPException(400, "PDF requis pour l'extraction IA")
-        tmp_id = uuid.uuid4().hex
-        file_path = UPLOAD_DIR / f"{tmp_id}.pdf"
         content = await file.read()
-        with open(file_path, "wb") as f:
-            f.write(content)
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+        try:
+            tmp.write(content)
+            tmp.flush()
+            tmp.close()
 
-        # Get PCMN accounts (class 6) for this ACP to inform AI
-        q = {"class_num": 6}
-        if copropriete_id:
-            q["copropriete_id"] = copropriete_id
-        pcmn = await db.pcmn_accounts.find(q, {"_id": 0, "number": 1, "name": 1}).sort("number", 1).to_list(200)
+            # Get PCMN accounts (class 6) for this ACP to inform AI
+            q = {"class_num": 6}
+            if copropriete_id:
+                q["copropriete_id"] = copropriete_id
+            pcmn = await db.pcmn_accounts.find(q, {"_id": 0, "number": 1, "name": 1}).sort("number", 1).to_list(200)
 
-        result = await _extract_invoice_with_ai(str(file_path), "application/pdf", pcmn)
+            result = await _extract_invoice_with_ai(tmp.name, "application/pdf", pcmn)
+        finally:
+            try:
+                os.unlink(tmp.name)
+            except Exception:
+                pass
 
         # Verify suggested PCMN exists; if not, blank it
         if result.get("suggested_pcmn_account"):
@@ -231,7 +246,9 @@ def create_invoice_ai_router(db):
             "supplier_match_method": match_method,
             "supplier_suggest_create": suggest_create,
             "filename": file.filename,
-            "stored_temp_path": str(file_path),
+            # iter87 : no on-disk path anymore (tempfile cleaned). Caller
+            # re-uploads the PDF later via /invoices/{id}/attachments if needed.
+            "stored_temp_path": "",
         }
 
     return router

@@ -607,6 +607,12 @@ async def seed_pcmn():
 async def startup():
     await db.users.create_index("email", unique=True)
     await db.owners.create_index("vcs_code", sparse=True)
+    # iter87 : TTL index on invoice_bundle_sessions for auto-cleanup of bundle
+    # PDF sessions after 24h (uses `expires_at` ISODate field set on creation).
+    try:
+        await db.invoice_bundle_sessions.create_index("expires_at", expireAfterSeconds=0)
+    except Exception:
+        pass
     await seed_admin()
     await seed_pcmn()
     os.makedirs("/app/memory", exist_ok=True)

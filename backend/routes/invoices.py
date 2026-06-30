@@ -1,18 +1,27 @@
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 from typing import Optional, List
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 import uuid
-import json
-import shutil
 from auto_entries import generate_purchase_entry, _delete_auto_entries
+from gridfs_storage import (
+    get_invoice_attachments_storage,
+    get_invoice_bundles_storage,
+)
 
+# Legacy paths kept ONLY for backward-compat reads of pre-iter87 attachments.
+# All new writes go to GridFS. The migration script `migrate_uploads_to_gridfs.py`
+# moves legacy files into GridFS once for all.
 INVOICE_ATTACHMENTS_DIR = Path("/app/uploads/invoice_attachments")
-INVOICE_ATTACHMENTS_DIR.mkdir(parents=True, exist_ok=True)
 INVOICE_BUNDLES_DIR = Path("/app/uploads/invoice_attachments/_bundles")
-INVOICE_BUNDLES_DIR.mkdir(parents=True, exist_ok=True)
+try:
+    INVOICE_ATTACHMENTS_DIR.mkdir(parents=True, exist_ok=True)
+    INVOICE_BUNDLES_DIR.mkdir(parents=True, exist_ok=True)
+except Exception:
+    # Filesystem may be read-only in production - GridFS doesn't need it
+    pass
 
 
 class DistKeyLot(BaseModel):
@@ -559,7 +568,15 @@ def create_invoices_router(db):
             raise HTTPException(404, "Facture non trouvee")
         # Verrou : refuse la suppression si la facture est dans un exercice cloture
         await ensure_period_open(db, inv.get("copropriete_id", ""), inv.get("date"), context="facture")
+        att_storage = get_invoice_attachments_storage(db)
         for att in inv.get("attachments", []) or []:
+            # iter87 : delete from GridFS first (new storage), fallback to disk (legacy)
+            gid = att.get("gridfs_id")
+            if gid:
+                try:
+                    await att_storage.delete(gid)
+                except Exception:
+                    pass
             try:
                 p = att.get("stored_path")
                 if p and Path(p).exists():
@@ -578,23 +595,36 @@ def create_invoices_router(db):
     # ---- INVOICE ATTACHMENTS ----
     @router.post("/invoices/{invoice_id}/attachments")
     async def upload_invoice_attachment(invoice_id: str, file: UploadFile = File(...)):
-        """Attach a PDF or image scan of the supplier invoice."""
+        """Attach a PDF or image scan of the supplier invoice.
+
+        iter87 : stored in MongoDB GridFS bucket `invoice_attachments` (persistent
+        across redeploys). Legacy attachments with `stored_path` continue to work
+        via fallback in the download endpoint.
+        """
         inv = await db.invoices.find_one({"id": invoice_id}, {"_id": 0})
         if not inv:
             raise HTTPException(404, "Facture non trouvee")
         ext = Path(file.filename or "file").suffix.lower()
         if ext not in (".pdf", ".png", ".jpg", ".jpeg"):
             raise HTTPException(400, "Format autorise: PDF, PNG, JPG")
-        att_id = str(uuid.uuid4())
-        stored_name = f"{att_id}{ext}"
-        stored_path = INVOICE_ATTACHMENTS_DIR / stored_name
         content = await file.read()
-        with open(stored_path, "wb") as f:
-            f.write(content)
+        att_id = str(uuid.uuid4())
+        att_storage = get_invoice_attachments_storage(db)
+        gridfs_id = await att_storage.upload(
+            filename=file.filename or f"{att_id}{ext}",
+            contents=content,
+            metadata={
+                "attachment_id": att_id,
+                "invoice_id": invoice_id,
+                "copropriete_id": inv.get("copropriete_id", ""),
+                "mime_type": file.content_type or "application/octet-stream",
+                "uploaded_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
         attachment = {
             "id": att_id,
             "filename": file.filename,
-            "stored_path": str(stored_path),
+            "gridfs_id": gridfs_id,
             "mime_type": file.content_type or "application/octet-stream",
             "size": len(content),
             "uploaded_at": datetime.now(timezone.utc).isoformat(),
@@ -616,22 +646,37 @@ def create_invoices_router(db):
         inv = await db.invoices.find_one({"id": invoice_id}, {"_id": 0})
         if not inv:
             raise HTTPException(404, "Facture non trouvee")
+        att_storage = get_invoice_attachments_storage(db)
         for att in inv.get("attachments", []) or []:
-            if att.get("id") == attachment_id:
-                path = att.get("stored_path", "")
-                if not path or not Path(path).exists():
-                    raise HTTPException(404, "Fichier introuvable")
-                filename = att.get("filename", "facture.pdf")
-                media_type = att.get("mime_type", "application/pdf")
-                if disposition == "inline":
-                    # Inline -> render in browser native viewer
-                    safe_name = filename.replace('"', "")
-                    return FileResponse(
-                        path,
-                        media_type=media_type,
-                        headers={"Content-Disposition": f'inline; filename="{safe_name}"'},
-                    )
-                return FileResponse(path, media_type=media_type, filename=filename)
+            if att.get("id") != attachment_id:
+                continue
+            filename = att.get("filename", "facture.pdf")
+            media_type = att.get("mime_type", "application/pdf")
+            safe_name = filename.replace('"', "")
+            disp_header = (
+                f'inline; filename="{safe_name}"' if disposition == "inline"
+                else f'attachment; filename="{safe_name}"'
+            )
+            # iter87 : prefer GridFS (new), fallback to disk (legacy)
+            gid = att.get("gridfs_id")
+            if gid:
+                try:
+                    data = await att_storage.download(gid)
+                except Exception:
+                    raise HTTPException(404, "Fichier introuvable dans GridFS")
+                return Response(
+                    content=data,
+                    media_type=media_type,
+                    headers={"Content-Disposition": disp_header},
+                )
+            # Legacy disk fallback
+            path = att.get("stored_path", "")
+            if path and Path(path).exists():
+                return FileResponse(
+                    path, media_type=media_type,
+                    headers={"Content-Disposition": disp_header},
+                )
+            raise HTTPException(404, "Fichier introuvable")
         raise HTTPException(404, "Piece jointe non trouvee")
 
     @router.delete("/invoices/{invoice_id}/attachments/{attachment_id}")
@@ -646,6 +691,14 @@ def create_invoices_router(db):
                 break
         if not target:
             raise HTTPException(404, "Piece jointe non trouvee")
+        # iter87 : delete from GridFS (new) and from disk (legacy if any)
+        att_storage = get_invoice_attachments_storage(db)
+        gid = target.get("gridfs_id")
+        if gid:
+            try:
+                await att_storage.delete(gid)
+            except Exception:
+                pass
         try:
             p = target.get("stored_path")
             if p and Path(p).exists():
@@ -691,13 +744,23 @@ def create_invoices_router(db):
         except Exception as e:
             raise HTTPException(500, f"Echec analyse PDF : {e}")
 
-        # Persist bundle file for later page extraction
+        # iter87 : Persist bundle file in GridFS bucket `invoice_bundles` (with
+        # TTL via `expires_at` metadata - 24h). Replaces /app/uploads/_bundles/.
         session_id = str(uuid.uuid4())
-        session_dir = INVOICE_BUNDLES_DIR / session_id
-        session_dir.mkdir(parents=True, exist_ok=True)
-        bundle_path = session_dir / "bundle.pdf"
-        with open(bundle_path, "wb") as f:
-            f.write(raw)
+        bundles_storage = get_invoice_bundles_storage(db)
+        now_iso = datetime.now(timezone.utc)
+        expires_at = now_iso + timedelta(hours=24)
+        pdf_gridfs_id = await bundles_storage.upload(
+            filename=f"bundle-{session_id}.pdf",
+            contents=raw,
+            metadata={
+                "session_id": session_id,
+                "copropriete_id": copropriete_id,
+                "kind": "bundle_pdf",
+                "created_at": now_iso.isoformat(),
+                "expires_at": expires_at,
+            },
+        )
 
         # Load candidate invoices for this ACP (no need for attachments in matcher)
         invoices = await db.invoices.find(
@@ -745,7 +808,8 @@ def create_invoices_router(db):
                 ),
             })
 
-        # Persist session metadata for the commit step
+        # Persist session metadata in a regular Mongo collection
+        # (instead of a JSON file on disk). The bundle PDF binary stays in GridFS.
         meta = {
             "session_id": session_id,
             "copropriete_id": copropriete_id,
@@ -753,10 +817,13 @@ def create_invoices_router(db):
             "invoice_count": info.get("invoice_count", 0),
             "blocks": blocks_out,
             "filename": file.filename or "bundle.pdf",
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "pdf_gridfs_id": pdf_gridfs_id,
+            "created_at": now_iso.isoformat(),
+            "expires_at": expires_at,
         }
-        with open(session_dir / "meta.json", "w") as f:
-            json.dump(meta, f)
+        await db.invoice_bundle_sessions.replace_one(
+            {"session_id": session_id}, meta, upsert=True
+        )
 
         return {
             "session_id": session_id,
@@ -788,17 +855,22 @@ def create_invoices_router(db):
         if not session_id or not assignments:
             raise HTTPException(400, "session_id et assignments requis")
 
-        session_dir = INVOICE_BUNDLES_DIR / session_id
-        bundle_path = session_dir / "bundle.pdf"
-        meta_path = session_dir / "meta.json"
-        if not bundle_path.exists() or not meta_path.exists():
+        # iter87 : Load session from MongoDB + bundle PDF from GridFS
+        bundles_storage = get_invoice_bundles_storage(db)
+        att_storage = get_invoice_attachments_storage(db)
+        meta = await db.invoice_bundle_sessions.find_one(
+            {"session_id": session_id}, {"_id": 0}
+        )
+        if not meta:
             raise HTTPException(404, "Session bundle introuvable ou expiree")
-
-        with open(meta_path) as f:
-            meta = json.load(f)
         copropriete_id = meta.get("copropriete_id", "")
-        with open(bundle_path, "rb") as f:
-            raw = f.read()
+        pdf_gid = meta.get("pdf_gridfs_id", "")
+        if not pdf_gid:
+            raise HTTPException(404, "Bundle PDF introuvable dans GridFS")
+        try:
+            raw = await bundles_storage.download(pdf_gid)
+        except Exception:
+            raise HTTPException(404, "Bundle PDF introuvable ou expire")
 
         attached = 0
         created = 0
@@ -855,18 +927,28 @@ def create_invoices_router(db):
                     errors.append({"block_id": block_id, "error": f"Exercice cloture : {e}"})
                     continue
 
-                # Extract pages and save as new attachment
+                # iter87 : Extract pages and store as new attachment in GridFS
                 pdf_bytes = extract_block_pdf(raw, page_range)
                 att_id = str(uuid.uuid4())
-                stored_name = f"{att_id}.pdf"
-                stored_path = INVOICE_ATTACHMENTS_DIR / stored_name
-                with open(stored_path, "wb") as f:
-                    f.write(pdf_bytes)
                 pages_label = f"p{page_range[0]}-{page_range[-1]}" if len(page_range) > 1 else f"p{page_range[0]}"
+                filename = f"bundle-{pages_label}.pdf"
+                gridfs_id = await att_storage.upload(
+                    filename=filename,
+                    contents=pdf_bytes,
+                    metadata={
+                        "attachment_id": att_id,
+                        "invoice_id": invoice_id,
+                        "copropriete_id": copropriete_id,
+                        "mime_type": "application/pdf",
+                        "source": "bundle",
+                        "bundle_session_id": session_id,
+                        "uploaded_at": datetime.now(timezone.utc).isoformat(),
+                    },
+                )
                 attachment = {
                     "id": att_id,
-                    "filename": f"bundle-{pages_label}.pdf",
-                    "stored_path": str(stored_path),
+                    "filename": filename,
+                    "gridfs_id": gridfs_id,
                     "mime_type": "application/pdf",
                     "size": len(pdf_bytes),
                     "uploaded_at": datetime.now(timezone.utc).isoformat(),
@@ -890,11 +972,14 @@ def create_invoices_router(db):
             except Exception as e:
                 errors.append({"block_id": block_id, "error": str(e)})
 
-        # Cleanup session if all assignments are processed (no rollback strategy
-        # needed: each block is independent). Only remove the bundle PDF, keep
-        # meta.json for audit until manual cleanup.
+        # iter87 : Cleanup the GridFS bundle PDF + the Mongo session doc
+        # (each block is committed atomically - no need to keep the bundle).
         try:
-            shutil.rmtree(session_dir)
+            await bundles_storage.delete(pdf_gid)
+        except Exception:
+            pass
+        try:
+            await db.invoice_bundle_sessions.delete_one({"session_id": session_id})
         except Exception:
             pass
 

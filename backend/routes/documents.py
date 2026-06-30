@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime, timezone
@@ -7,6 +7,8 @@ from pathlib import Path
 import uuid
 import os
 import json
+import tempfile
+from gridfs_storage import get_documents_storage
 
 
 # Default categories created on ACP creation (mentioned by user)
@@ -24,8 +26,12 @@ DEFAULT_CATEGORIES = [
 ]
 
 
+# Legacy path - kept ONLY for backward-compat fallback reads (iter87 migration).
 UPLOAD_DIR = Path("/app/uploads/documents")
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+try:
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+except Exception:
+    pass
 
 
 class CategoryInput(BaseModel):
@@ -197,19 +203,34 @@ def create_documents_router(db):
         copropriete_id: Optional[str] = Form(""),
         auto_classify: Optional[bool] = Form(True),
     ):
-        """Upload a document file and optionally auto-classify it with AI."""
-        # Save file to disk with a unique name
+        """Upload a document file and optionally auto-classify it with AI.
+
+        iter87 : binary stored in MongoDB GridFS bucket `documents` (persistent).
+        AI classification still needs a local file path -> uses tempfile (cleaned).
+        """
         ext = Path(file.filename or "file").suffix.lower()
         if ext not in {".pdf", ".png", ".jpg", ".jpeg", ".webp", ".heic", ".heif"}:
             raise HTTPException(400, "Format non supporte. PDF ou image uniquement.")
         doc_id = str(uuid.uuid4())
         stored_name = f"{doc_id}{ext}"
-        file_path = UPLOAD_DIR / stored_name
         content = await file.read()
-        with open(file_path, "wb") as f:
-            f.write(content)
 
-        # Optional AI classification
+        # Upload to GridFS first
+        docs_storage = get_documents_storage(db)
+        gridfs_id = await docs_storage.upload(
+            filename=file.filename or stored_name,
+            contents=content,
+            metadata={
+                "document_id": doc_id,
+                "copropriete_id": copropriete_id or "",
+                "category_id": category_id or "",
+                "mime_type": file.content_type or "application/octet-stream",
+                "uploaded_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+
+        # Optional AI classification (uses a temp file because the AI helper
+        # expects a file path - we delete it immediately after).
         ai_result = {}
         if auto_classify and copropriete_id:
             mime_map = {
@@ -220,7 +241,17 @@ def create_documents_router(db):
             mime_type = mime_map.get(ext, "application/octet-stream")
             cats = await db.document_categories.find({"copropriete_id": copropriete_id}, {"_id": 0, "id": 1, "name": 1}).to_list(100)
             if cats:
-                ai_result = await _classify_with_ai(str(file_path), mime_type, [c["name"] for c in cats])
+                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=ext)
+                try:
+                    tmp.write(content)
+                    tmp.flush()
+                    tmp.close()
+                    ai_result = await _classify_with_ai(tmp.name, mime_type, [c["name"] for c in cats])
+                finally:
+                    try:
+                        os.unlink(tmp.name)
+                    except Exception:
+                        pass
                 # Map AI category name to category_id
                 if ai_result.get("category") and not category_id:
                     matched = next((c for c in cats if c["name"].lower() == ai_result["category"].lower()), None)
@@ -233,7 +264,7 @@ def create_documents_router(db):
             "description": description or ai_result.get("summary", ""),
             "category_id": category_id or "",
             "filename": file.filename,
-            "stored_path": str(file_path),
+            "gridfs_id": gridfs_id,
             "stored_name": stored_name,
             "mime_type": file.content_type,
             "size_bytes": len(content),
@@ -250,16 +281,28 @@ def create_documents_router(db):
     @router.get("/{doc_id}/download")
     async def download_document(doc_id: str):
         doc = await db.documents.find_one({"id": doc_id}, {"_id": 0})
-        if not doc or not doc.get("stored_path"):
-            raise HTTPException(404, "Fichier non trouve")
-        path = doc["stored_path"]
-        if not os.path.exists(path):
+        if not doc:
+            raise HTTPException(404, "Document non trouve")
+        media_type = doc.get("mime_type") or "application/octet-stream"
+        filename = doc.get("filename") or doc.get("stored_name") or "document"
+        # iter87 : prefer GridFS (new), fallback to disk (legacy)
+        gid = doc.get("gridfs_id")
+        if gid:
+            docs_storage = get_documents_storage(db)
+            try:
+                data = await docs_storage.download(gid)
+            except Exception:
+                raise HTTPException(404, "Fichier introuvable dans GridFS")
+            safe_name = filename.replace('"', "")
+            return Response(
+                content=data,
+                media_type=media_type,
+                headers={"Content-Disposition": f'attachment; filename="{safe_name}"'},
+            )
+        path = doc.get("stored_path", "")
+        if not path or not os.path.exists(path):
             raise HTTPException(404, "Fichier supprime du disque")
-        return FileResponse(
-            path,
-            media_type=doc.get("mime_type") or "application/octet-stream",
-            filename=doc.get("filename") or doc.get("stored_name"),
-        )
+        return FileResponse(path, media_type=media_type, filename=filename)
 
     @router.put("/{doc_id}")
     async def update_document(doc_id: str, data: DocumentInput):
@@ -277,7 +320,14 @@ def create_documents_router(db):
         doc = await db.documents.find_one({"id": doc_id}, {"_id": 0})
         if not doc:
             raise HTTPException(404, "Document non trouve")
-        # Best-effort delete the file from disk
+        # iter87 : remove from GridFS (new) AND legacy disk (best-effort)
+        gid = doc.get("gridfs_id")
+        if gid:
+            try:
+                docs_storage = get_documents_storage(db)
+                await docs_storage.delete(gid)
+            except Exception:
+                pass
         if doc.get("stored_path") and os.path.exists(doc["stored_path"]):
             try:
                 os.remove(doc["stored_path"])

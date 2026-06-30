@@ -338,16 +338,36 @@ def create_coproprietes_router(db):
 
         from pathlib import Path
         deleted_files = 0
-        # Cleanup pieces jointes disque (factures + journal entries)
+        deleted_gridfs = 0
+        # iter87 : Cleanup pieces jointes (factures + journal entries)
+        # via GridFS (new) + disque (legacy)
+        from gridfs_storage import (
+            get_invoice_attachments_storage,
+            get_journal_attachments_storage,
+            get_documents_storage,
+        )
+        bucket_map = {
+            "invoices": get_invoice_attachments_storage(db),
+            "journal_entries": get_journal_attachments_storage(db),
+        }
         for coll, dirname in [("invoices", "invoice_attachments"),
                               ("journal_entries", "journal_attachments")]:
+            storage = bucket_map[coll]
             cursor = db[coll].find(
                 {"copropriete_id": copro_id, "attachments": {"$exists": True, "$ne": []}},
                 {"_id": 0, "attachments": 1}
             )
             async for doc in cursor:
                 for att in doc.get("attachments", []) or []:
-                    fp = Path(f"/app/uploads/{dirname}") / (att.get("stored_filename") or "")
+                    gid = att.get("gridfs_id")
+                    if gid:
+                        try:
+                            await storage.delete(gid)
+                            deleted_gridfs += 1
+                        except Exception:
+                            pass
+                    sp = att.get("stored_path") or ""
+                    fp = Path(sp) if sp else Path(f"/app/uploads/{dirname}") / (att.get("stored_filename") or "")
                     if fp.exists() and fp.is_file():
                         try:
                             fp.unlink()
@@ -355,24 +375,46 @@ def create_coproprietes_router(db):
                         except Exception:
                             pass
         # Cleanup documents uploades
-        cursor = db.documents.find({"copropriete_id": copro_id}, {"_id": 0, "stored_filename": 1})
+        docs_storage = get_documents_storage(db)
+        cursor = db.documents.find(
+            {"copropriete_id": copro_id}, {"_id": 0, "stored_filename": 1, "gridfs_id": 1, "stored_path": 1}
+        )
         async for doc in cursor:
-            sf = doc.get("stored_filename") or ""
-            for sub in ["/app/uploads/documents", "/app/uploads"]:
-                fp = Path(sub) / sf
+            gid = doc.get("gridfs_id")
+            if gid:
+                try:
+                    await docs_storage.delete(gid)
+                    deleted_gridfs += 1
+                except Exception:
+                    pass
+            sp = doc.get("stored_path") or ""
+            if sp:
+                fp = Path(sp)
                 if fp.exists() and fp.is_file():
                     try:
                         fp.unlink()
                         deleted_files += 1
                     except Exception:
                         pass
+            sf = doc.get("stored_filename") or ""
+            if sf:
+                for sub in ["/app/uploads/documents", "/app/uploads"]:
+                    fp = Path(sub) / sf
+                    if fp.exists() and fp.is_file():
+                        try:
+                            fp.unlink()
+                            deleted_files += 1
+                        except Exception:
+                            pass
 
         collections_to_clear = [
             "invoices", "journal_entries", "fund_calls", "bank_transactions",
             "bank_statements", "budgets", "fiscal_years", "regularizations",
             "expense_categories", "documents",
         ]
-        stats = {"name": copro.get("name", ""), "deleted_files": deleted_files}
+        stats = {"name": copro.get("name", ""),
+                 "deleted_files": deleted_files,
+                 "deleted_gridfs": deleted_gridfs}
         for coll in collections_to_clear:
             res = await db[coll].delete_many({"copropriete_id": copro_id})
             stats[coll] = res.deleted_count
