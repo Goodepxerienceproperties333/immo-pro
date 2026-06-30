@@ -12,7 +12,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { Plus, Trash2, Key, Receipt, Sparkles, Paperclip, Download, X, Pencil, AlertTriangle, Filter, FolderInput, Eye, Loader2 } from 'lucide-react';
+import { Plus, Trash2, Key, Receipt, Sparkles, Paperclip, Download, X, Pencil, AlertTriangle, Filter, FolderInput, Eye, Loader2, ArrowUp, ArrowDown, ArrowUpDown } from 'lucide-react';
 import AccountSearchSelect from '@/components/AccountSearchSelect';
 import SupplierSearchSelect from '@/components/SupplierSearchSelect';
 import BundleImportDialog from '@/components/BundleImportDialog';
@@ -27,6 +27,8 @@ export default function InvoicesPage() {
   const [invoices, setInvoices] = useState([]);
   const [suppliers, setSuppliers] = useState([]);
   const [invFilters, setInvFilters] = useState({ startDate: '', endDate: '', supplier: '', reference: '', status: '' });
+  // iter86 : tri cliquable par colonne (alphabetique / chronologique / numerique)
+  const [invSort, setInvSort] = useState({ key: 'date', dir: 'desc' });
   const [distKeys, setDistKeys] = useState([]);
   const [accounts, setAccounts] = useState([]);
   const [categories, setCategories] = useState([]);
@@ -508,9 +510,41 @@ export default function InvoicesPage() {
           <div className="bg-white rounded-md border border-slate-200 overflow-hidden">
             <Table>
               <TableHeader><TableRow>
-                <TableHead>Ref. interne</TableHead><TableHead>N fournisseur</TableHead><TableHead>Date</TableHead><TableHead>Fournisseur</TableHead>
-                <TableHead>Description</TableHead><TableHead className="text-right">Montant</TableHead>
-                <TableHead>Cle</TableHead><TableHead>Statut</TableHead><TableHead className="w-20">Actions</TableHead>
+                {(() => {
+                  const toggleSort = (key) => setInvSort(s => s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' });
+                  const sortIcon = (k) => {
+                    if (invSort.key !== k) return <ArrowUpDown size={12} className="ml-1 opacity-40" />;
+                    return invSort.dir === 'asc'
+                      ? <ArrowUp size={12} className="ml-1 text-[#0055FF]" />
+                      : <ArrowDown size={12} className="ml-1 text-[#0055FF]" />;
+                  };
+                  const renderTh = (k, label, className = '', align = 'left') => (
+                    <TableHead key={k} className={className}>
+                      <button
+                        type="button"
+                        onClick={() => toggleSort(k)}
+                        className={`inline-flex items-center font-semibold hover:text-[#0055FF] transition-colors ${align === 'right' ? 'justify-end w-full' : ''}`}
+                        data-testid={`inv-sort-${k}`}
+                        title="Cliquez pour trier"
+                      >
+                        {label}{sortIcon(k)}
+                      </button>
+                    </TableHead>
+                  );
+                  return (
+                    <>
+                      {renderTh('internal_reference', 'Ref. interne')}
+                      {renderTh('number', 'N fournisseur')}
+                      {renderTh('date', 'Date')}
+                      {renderTh('supplier', 'Fournisseur')}
+                      {renderTh('description', 'Description')}
+                      {renderTh('total_amount', 'Montant', 'text-right', 'right')}
+                      <TableHead>Cle</TableHead>
+                      {renderTh('status', 'Statut')}
+                      <TableHead className="w-20">Actions</TableHead>
+                    </>
+                  );
+                })()}
               </TableRow></TableHeader>
               <TableBody>
                 {(() => {
@@ -522,8 +556,28 @@ export default function InvoicesPage() {
                     if (invFilters.status && inv.status !== invFilters.status) return false;
                     return true;
                   });
-                  if (filtered.length === 0) return <TableRow><TableCell colSpan={9} className="text-center py-8 text-slate-400">Aucune facture</TableCell></TableRow>;
-                  return filtered.map(inv => (
+                  // iter86 : tri stable par colonne
+                  const sorted = [...filtered].sort((a, b) => {
+                    const k = invSort.key;
+                    if (!k) return 0;
+                    let va = a[k];
+                    let vb = b[k];
+                    if (k === 'total_amount') {
+                      va = Number(va) || 0;
+                      vb = Number(vb) || 0;
+                    } else if (k === 'date') {
+                      va = (va || '');
+                      vb = (vb || '');
+                    } else {
+                      va = String(va || '').toLowerCase();
+                      vb = String(vb || '').toLowerCase();
+                    }
+                    if (va < vb) return invSort.dir === 'asc' ? -1 : 1;
+                    if (va > vb) return invSort.dir === 'asc' ? 1 : -1;
+                    return 0;
+                  });
+                  if (sorted.length === 0) return <TableRow><TableCell colSpan={9} className="text-center py-8 text-slate-400">Aucune facture</TableCell></TableRow>;
+                  return sorted.map(inv => (
                   <TableRow key={inv.id} className="hover:bg-slate-50/50">
                     <TableCell className="font-mono text-xs text-[#0055FF] font-semibold">{inv.internal_reference || '-'}</TableCell>
                     <TableCell className="font-mono text-sm">{inv.number}</TableCell>

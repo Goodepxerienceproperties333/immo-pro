@@ -11,6 +11,47 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 ## Implemented
+### Iter86 (Feb 2026) - Frais privatifs visibles dans liste des depenses + tri par colonne factures
+
+**Demandes user** :
+1. "Dans les factures ajouter des filtres par colonne permettant de classer par ordre chronologique ou alphabetique les differentes colonnes"
+2. "Toutes les depenses doivent etre prises en compte dans la liste des depenses meme les frais privatifs comme ici" (PDF Optipro "Liste des depenses 01/10/2025-30/06/2026" fourni)
+
+**Bug 1 - Frais privatifs invisibles dans la liste des depenses** :
+- **Root cause** : `routes/fiscal.py::list_expenses` cherchait `je.get("source_invoice_id")` (champ inexistant). Pour une facture privative :
+  - La facture etait listee avec compte 643 a +amount
+  - L'OD d'imputation (Dr owner / Cr 643) etait AUSSI listee a -amount (sur 643)
+  - Total compte 643 = 0 -> le frais privatif etait neutralise dans le total
+- **Fix** :
+  - Filtre corrige : `if je.get("source_type") == "invoice" and je.get("source_id") in invoice_ids_done: continue`
+  - Enrichissement des rows facture privative : nouveaux champs `is_private_fee`, `private_fee_allocations[]` (avec owner_name pre-resolu), `private_fee_owners_display` (CSV des noms)
+  - Resolution des owners en bulk via `owners_by_id` (1 seul find Mongo)
+- **Frontend** (`ExpensesPage.js`) :
+  - Mode flat : ligne entiere teintee `bg-purple-50/30`, description + badge violet "Privatif" + nom(s) du/des proprietaire(s)
+  - Mode hierarchique : meme badge, plus compact
+  - `data-testid` : `expense-private-{id}`
+
+**Feature 2 - Tri cliquable par colonne sur les factures** (`InvoicesPage.js`) :
+- Nouveau state `invSort = { key, dir }`, defaut `{ key: 'date', dir: 'desc' }`
+- 7 colonnes triables : Ref. interne / N fournisseur / Date / Fournisseur / Description / Montant / Statut
+- Icones lucide ArrowUp / ArrowDown / ArrowUpDown affichees a cote du label
+- Click sur entete : 1er click ASC, 2eme click DESC
+- Tri stable cote client, numerique pour Montant, lexicographique ISO pour Date
+- `data-testid` : `inv-sort-{key}` pour chaque entete cliquable
+
+**Tests** (`tests/test_iter86_private_fees_in_expenses_list.py` - 3/3 PASS) :
+1. Facture privative single-owner 155 EUR (cas notaire MATEXI/SRL Finlead reel) -> 1 row +155, total +155, owner expose
+2. Facture privative multi-allocs 600/400 -> 1 row +1000, 2 owners exposes, names dans display
+3. Facture normale 500 EUR -> non doublee, total +500 (regression)
+
+**Regression complete** : 38/38 PASS sur stack iter85+iter86 (frais privatifs, mutations, decomptes, scope ACP, homonymes).
+
+**Fichiers** :
+- `/app/backend/routes/fiscal.py` (fix source_invoice_id -> source_id + enrichissement)
+- `/app/backend/tests/test_iter86_private_fees_in_expenses_list.py` (NEW - 3 tests)
+- `/app/frontend/src/pages/ExpensesPage.js` (badge "Privatif" + display owners)
+- `/app/frontend/src/pages/InvoicesPage.js` (tri par colonne cliquable)
+
 ### Iter85k (Feb 2026) - Scope owners par ACP + event copropriete-changed + sentinelle 'all'
 
 **Probleme** : OwnersPage maintenait son propre state `selectedCopro` initialise depuis

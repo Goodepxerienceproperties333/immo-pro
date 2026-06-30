@@ -760,6 +760,25 @@ def create_fiscal_router(db):
         # Set des `source_invoice_id` deja inclus via les factures pour eviter
         # les doublons quand on parcourra les ecritures.
         invoice_ids_done = set()
+        # iter86 : resolve owner names pour les frais privatifs (pour transparence
+        # dans la liste des depenses : on veut afficher "Frais privatif - DUPONT").
+        owner_ids_needed = set()
+        for inv in invoices:
+            if inv.get("is_private_fee"):
+                for a in (inv.get("private_fee_allocations") or []):
+                    if a.get("owner_id"):
+                        owner_ids_needed.add(a["owner_id"])
+                if inv.get("private_fee_owner_id"):
+                    owner_ids_needed.add(inv["private_fee_owner_id"])
+        owners_by_id = {}
+        if owner_ids_needed:
+            owner_docs = await db.owners.find(
+                {"id": {"$in": list(owner_ids_needed)}},
+                {"_id": 0, "id": 1, "name": 1, "first_name": 1, "last_name": 1}
+            ).to_list(1000)
+            for o in owner_docs:
+                disp = (o.get("name") or f"{o.get('first_name','')} {o.get('last_name','')}").strip()
+                owners_by_id[o["id"]] = disp or o["id"]
         for inv in invoices:
             invoice_ids_done.add(inv["id"])
             inv_lines = inv.get("lines") or []
@@ -824,6 +843,22 @@ def create_fiscal_router(db):
             acc = inv.get("account_number", "")
             key_id = inv.get("distribution_key_id", "")
             cat = cat_by_id.get(inv.get("expense_category_id", "")) or cat_by_acc.get(acc) or {}
+            # iter86 : enrichissement frais privatif (transparence dans la liste)
+            is_priv = bool(inv.get("is_private_fee"))
+            priv_allocs = []
+            priv_owners_display = ""
+            if is_priv:
+                allocs_raw = inv.get("private_fee_allocations") or []
+                if not allocs_raw and inv.get("private_fee_owner_id"):
+                    allocs_raw = [{"owner_id": inv["private_fee_owner_id"], "amount": float(inv.get("total_amount", 0) or 0)}]
+                for a in allocs_raw:
+                    oid = a.get("owner_id", "")
+                    priv_allocs.append({
+                        "owner_id": oid,
+                        "owner_name": owners_by_id.get(oid, ""),
+                        "amount": round(float(a.get("amount", 0) or 0), 2),
+                    })
+                priv_owners_display = ", ".join(p["owner_name"] for p in priv_allocs if p["owner_name"])
             rows.append({
                 "id": inv["id"],
                 "date": inv.get("date", ""),
@@ -849,6 +884,10 @@ def create_fiscal_router(db):
                 "proprietaire_amount": inv.get("proprietaire_amount", 0) or inv.get("total_amount", 0),
                 "source": "invoice",
                 "journal_type": "AC",
+                # iter86 : flag + details privatifs (pour affichage badge + tooltip)
+                "is_private_fee": is_priv,
+                "private_fee_allocations": priv_allocs,
+                "private_fee_owners_display": priv_owners_display,
             })
 
         # ----- Inclure aussi les ecritures FI / OD impactant les comptes 6XX -----
@@ -886,9 +925,12 @@ def create_fiscal_router(db):
         ]
         je_entries = await db.journal_entries.find(je_q, {"_id": 0}).sort("date", 1).to_list(50000)
         for je in je_entries:
-            # Skip if linked to an invoice we already included
-            src_inv = je.get("source_invoice_id", "")
-            if src_inv and src_inv in invoice_ids_done:
+            # iter86 fix : skip JE auto-generee par une facture deja listee.
+            # Le champ correct est `source_id` (pas `source_invoice_id` qui
+            # n'existe pas). Sans ce filtre, les OD d'imputation frais privatif
+            # (Cr 643) etaient additionnees a la liste et neutralisaient la
+            # facture (+155 facture + -155 OD = 0).
+            if je.get("source_type") == "invoice" and je.get("source_id") in invoice_ids_done:
                 continue
             # Each line with a charge account contributes
             for ln in je.get("lines", []) or []:

@@ -395,11 +395,25 @@ export default function ExpensesPage() {
               {loading && <TableRow><TableCell colSpan={11} className="text-center py-8 text-slate-400">Chargement...</TableCell></TableRow>}
               {!loading && data && data.expenses.length === 0 && <TableRow><TableCell colSpan={11} className="text-center py-12 text-slate-400">Aucune depense</TableCell></TableRow>}
               {!loading && data && data.expenses.map((r, i) => (
-                <TableRow key={r.id} className="hover:bg-slate-50/50" data-testid={`expense-row-${i}`}>
+                <TableRow key={r.id} className={`hover:bg-slate-50/50 ${r.is_private_fee ? 'bg-purple-50/30' : ''}`} data-testid={`expense-row-${i}`}>
                   <TableCell className="font-mono text-xs">{fmtDate(r.date)}</TableCell>
                   <TableCell className="font-mono text-xs">{r.number}</TableCell>
                   <TableCell className="font-medium text-sm">{r.supplier}</TableCell>
-                  <TableCell className="max-w-[200px] truncate text-xs text-slate-600">{r.description}</TableCell>
+                  <TableCell className="max-w-[260px] text-xs text-slate-600">
+                    <div className="truncate">{r.description}</div>
+                    {r.is_private_fee && (
+                      <div className="mt-1 flex items-center gap-1 flex-wrap" data-testid={`expense-private-${r.id}`}>
+                        <Badge className="bg-purple-100 text-purple-700 border-purple-200 text-[10px] font-semibold" variant="outline">
+                          Privatif
+                        </Badge>
+                        {r.private_fee_owners_display && (
+                          <span className="text-[10px] text-purple-700 italic truncate" title={r.private_fee_owners_display}>
+                            {r.private_fee_owners_display}
+                          </span>
+                        )}
+                      </div>
+                    )}
+                  </TableCell>
                   <TableCell className="font-mono text-xs">{r.account_number}<br/><span className="text-[10px] text-slate-400">{r.expense_category_name || r.account_name}</span></TableCell>
                   <TableCell className="text-xs">{r.distribution_key_name}</TableCell>
                   <TableCell className="text-right text-[11px] font-mono">
@@ -503,10 +517,24 @@ export default function ExpensesPage() {
                                   </TableHeader>
                                   <TableBody>
                                     {g3.rows.map((r, ri) => (
-                                      <TableRow key={r.id} className="hover:bg-slate-50/50 text-xs" data-testid={`hier-row-${r.id}`}>
+                                      <TableRow key={r.id} className={`hover:bg-slate-50/50 text-xs ${r.is_private_fee ? 'bg-purple-50/30' : ''}`} data-testid={`hier-row-${r.id}`}>
                                         <TableCell className="font-mono">{fmtDate(r.date)}</TableCell>
                                         <TableCell className="font-medium">{r.supplier}</TableCell>
-                                        <TableCell className="max-w-[300px] truncate text-slate-600">{r.description}</TableCell>
+                                        <TableCell className="max-w-[300px] text-slate-600">
+                                          <div className="truncate">{r.description}</div>
+                                          {r.is_private_fee && (
+                                            <div className="mt-0.5 flex items-center gap-1 flex-wrap">
+                                              <Badge className="bg-purple-100 text-purple-700 border-purple-200 text-[9px] font-semibold py-0 px-1" variant="outline">
+                                                Privatif
+                                              </Badge>
+                                              {r.private_fee_owners_display && (
+                                                <span className="text-[9px] text-purple-700 italic truncate" title={r.private_fee_owners_display}>
+                                                  {r.private_fee_owners_display}
+                                                </span>
+                                              )}
+                                            </div>
+                                          )}
+                                        </TableCell>
                                         <TableCell className="text-right font-mono">
                                           {(r.occupant_pct ?? 0) > 0 && (
                                             <span className="text-amber-700 font-semibold">{(r.occupant_pct ?? 0).toFixed(0)}%</span>
