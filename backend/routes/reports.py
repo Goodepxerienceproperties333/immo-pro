@@ -964,25 +964,30 @@ def create_reports_router(db):
         date_to: str,
         distribution_key_id: Optional[str] = None,
         account_number: Optional[str] = None,
+        expense_category_id: Optional[str] = None,
     ):
         """Genere le PDF 'Liste des depenses' au format Syndic belge.
+        iter90e : aligne sur la vue UI /api/fiscal/expenses (factures expandees
+        + ecritures FI/OD classe 6) pour respecter l'invariant
+            sum(TVAC du PDF) == totals.total renvoye par /api/fiscal/expenses.
         Hierarchie: Cle de repartition -> Nature -> Compte -> lignes.
-        Colonnes: Date valeur, Libelle, Fournisseur, Ref. interne, Montant, Part proprietaire, Part occupant.
+        Colonnes: Date valeur, Libelle, Fournisseur, Ref. interne, HTVA, TVA, TVAC, Part proprietaire, Part occupant.
         """
         from pdf_liste_depenses import build_liste_depenses_pdf
+        from expense_rows import compute_expense_rows
 
         copro = await db.coproprietes.find_one({"id": copropriete_id}, {"_id": 0})
         if not copro:
             raise HTTPException(404, "Copropriete non trouvee")
 
-        # Build invoice query
-        inv_q = {"copropriete_id": copropriete_id,
-                 "date": {"$gte": date_from, "$lte": date_to}}
-        if distribution_key_id:
-            inv_q["distribution_key_id"] = distribution_key_id
-        if account_number:
-            inv_q["account_number"] = account_number
-        invoices = await db.invoices.find(inv_q, {"_id": 0}).sort("date", 1).to_list(100000)
+        # iter90e : same logic as /api/fiscal/expenses -> guarantees the invariant.
+        rows, totals = await compute_expense_rows(
+            db, copropriete_id,
+            date_from=date_from, date_to=date_to,
+            distribution_key_id=distribution_key_id,
+            account_number=account_number,
+            expense_category_id=expense_category_id,
+        )
 
         distribution_keys = await db.distribution_keys.find(
             {"copropriete_id": copropriete_id}, {"_id": 0}
@@ -998,7 +1003,7 @@ def create_reports_router(db):
         pdf_bytes = build_liste_depenses_pdf(
             copropriete=copro,
             date_from=date_from, date_to=date_to,
-            invoices=invoices,
+            invoices=rows,   # iter90e : pass already-expanded rows (not raw invoices)
             distribution_keys=distribution_keys,
             pcmn_map=pcmn_map,
             expense_categories=cats,

@@ -11,6 +11,42 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 ## Implemented
+### Iter90e (Feb 2026) - PDF "Liste des depenses" aligne sur la vue UI + colonnes HTVA/TVA/TVAC
+
+**Ticket user** : Aligner le PDF "Liste des depenses" sur la vue UI des
+depenses et inclure la TVA correctement. Invariant P0 :
+  sum(TVAC du PDF, sans filtre) == totals.total de /api/fiscal/expenses
+
+**Probleme** : la route `reports.py::liste_depenses_pdf` lisait directement
+`db.invoices` -> ratait les ecritures OD/FI classe 6 (frais bancaires,
+fin d'exercice) ET ne decomposait pas HTVA/TVA/TVAC -> divergence
+recurrente avec la vue UI et Optipro.
+
+**Backend** :
+- Nouveau `/app/backend/expense_rows.py` : helper `compute_expense_rows()`
+  reproduisant exactement la logique de `fiscal.py::list_expenses` (factures
+  expandees en N lignes + ecritures OD/FI classe 6, filtrage par
+  `$or` au niveau document + ligne pour les filtres
+  account_number/distribution_key_id/expense_category_id, TVA distribuee
+  pro-rata sur les lignes en multi-ligne). Retourne aussi
+  `total_htva` et `total_vat` dans les totaux.
+- `routes/reports.py::liste_depenses_pdf` : reecrite pour appeler le helper
+  + accepte le parametre `expense_category_id`.
+- `pdf_liste_depenses.py::build_liste_depenses_pdf` : nouvelles colonnes
+  HTVA + TVA + TVAC ; sous-totaux et grand total decomposes en 3 montants ;
+  `proprietaire_amount` / `occupant_amount` lus depuis les rows.
+
+**Tests** : `test_iter90e_liste_depenses_pdf_invariant.py` -> 4 sous-flows
+PASS : invariant TVAC=fiscal/expenses, filtre dist_key sur une ligne d'une
+multi-ligne, filtre account, colonnes HTVA/TVA/TVAC presentes dans le PDF.
+
+**Validation e2e (ACP Gaura, exercice 2025)** :
+- /api/fiscal/expenses total = **33828,43 EUR**
+- PDF "Liste des depenses" totaux : HTVA 30.470,32 / TVA 3.358,11 /
+  **TVAC 33.828,43** / Part prop. 30.572,18 / Part occ. 23.391,90
+- Match exact -> invariant respecte.
+
+
 ### Iter90c+d (Feb 2026) - Owner scope ACP-aware + frais privatifs + exports PDF
 
 **Demande user 1** : Voir les proprietaires sans lot dans l'ACP courante

@@ -54,12 +54,17 @@ def build_liste_depenses_pdf(
     copropriete: dict,
     date_from: str,
     date_to: str,
-    invoices: list,            # already filtered & in period
+    invoices: list,            # iter90e : already-expanded rows from compute_expense_rows()
+                               # Each row has: total_amount (TVAC), vat_amount (TVA),
+                               # account_number, distribution_key_id, expense_category_name,
+                               # supplier, description, number, date, occupant_amount,
+                               # proprietaire_amount.
     distribution_keys: list,
     pcmn_map: dict,            # {account_number: account_name}
     expense_categories: list,  # natures de depense
 ) -> bytes:
-    """Render le PDF 'Liste des depenses' en bytes."""
+    """Render le PDF 'Liste des depenses' en bytes. iter90e : aligned with
+    /api/fiscal/expenses (HTVA + TVA + TVAC + parts proprio/occupant)."""
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
         buf, pagesize=landscape(A4),
@@ -132,11 +137,15 @@ def build_liste_depenses_pdf(
         grouped[key_id][acc].append(inv)
 
     # Build table data
-    col_widths = [22 * mm, 70 * mm, 45 * mm, 22 * mm, 27 * mm, 27 * mm, 27 * mm]
+    # iter90e : colonnes HTVA + TVA + TVAC + Part proprio + Part occupant
+    col_widths = [18 * mm, 60 * mm, 36 * mm, 20 * mm,
+                  22 * mm, 18 * mm, 22 * mm, 22 * mm, 22 * mm]
     headers = ["Date valeur", "Libelle", "Fournisseur", "Ref. interne",
-               "Montant", "Part proprietaire", "Part occupant"]
+               "HTVA", "TVA", "TVAC", "Part prop.", "Part occ."]
 
     grand_total = 0.0
+    grand_htva = 0.0
+    grand_vat = 0.0
     grand_propr = 0.0
     grand_occ = 0.0
 
@@ -153,6 +162,8 @@ def build_liste_depenses_pdf(
         elements.append(Paragraph(f"Cle : {dk.get('code','') or '----'} - {dk_name}", key_lbl))
 
         key_total = 0.0
+        key_htva = 0.0
+        key_vat = 0.0
         key_propr = 0.0
         key_occ = 0.0
 
@@ -169,29 +180,44 @@ def build_liste_depenses_pdf(
             # Build rows
             rows = [_push_header_row()]
             acc_total = 0.0
+            acc_htva = 0.0
+            acc_vat = 0.0
             acc_propr = 0.0
             acc_occ = 0.0
             for inv in sorted(items, key=lambda x: x.get("date", "")):
-                amount = float(inv.get("total_amount", 0) or 0)
-                # Part proprietaire/occupant : si pas modelise, tout en proprietaire
-                part_occ = float(inv.get("part_occupant", 0) or 0)
-                part_propr = amount - part_occ
+                tvac = float(inv.get("total_amount", 0) or 0)
+                tva = float(inv.get("vat_amount", 0) or 0)
+                htva = round(tvac - tva, 2)
+                # iter90e : la vue UI fournit deja occupant_amount / proprietaire_amount,
+                # qu'on doit privilegier sur l'ancien `part_occupant` (deprecated).
+                if inv.get("occupant_amount") is not None or inv.get("proprietaire_amount") is not None:
+                    part_occ = float(inv.get("occupant_amount", 0) or 0)
+                    part_propr = float(inv.get("proprietaire_amount", 0) or 0)
+                else:
+                    part_occ = float(inv.get("part_occupant", 0) or 0)
+                    part_propr = tvac - part_occ
                 rows.append([
                     _fmt_date(inv.get("date", "")),
-                    (inv.get("description", "") or "")[:50],
-                    (inv.get("supplier", "") or "")[:25],
-                    inv.get("number", "") or "",
-                    _eur_be(amount),
+                    (inv.get("description", "") or "")[:45],
+                    (inv.get("supplier", "") or "")[:20],
+                    (inv.get("number", "") or "")[:12],
+                    _eur_be(htva),
+                    _eur_be(tva),
+                    _eur_be(tvac),
                     _eur_be(part_propr),
                     _eur_be(part_occ),
                 ])
-                acc_total += amount
+                acc_total += tvac
+                acc_htva += htva
+                acc_vat += tva
                 acc_propr += part_propr
                 acc_occ += part_occ
 
             # Sous-total nature
             rows.append([
                 "", "", "", Paragraph("<b>Sous-total nature</b>", small),
+                Paragraph(f"<b>{_eur_be(acc_htva)}</b>", small),
+                Paragraph(f"<b>{_eur_be(acc_vat)}</b>", small),
                 Paragraph(f"<b>{_eur_be(acc_total)}</b>", small),
                 Paragraph(f"<b>{_eur_be(acc_propr)}</b>", small),
                 Paragraph(f"<b>{_eur_be(acc_occ)}</b>", small),
@@ -200,8 +226,8 @@ def build_liste_depenses_pdf(
             tbl = Table(rows, colWidths=col_widths, repeatRows=1)
             tbl.setStyle(TableStyle([
                 ("BACKGROUND", (0, 0), (-1, 0), MID_GREY),
-                ("FONTSIZE", (0, 0), (-1, -1), 7.5),
-                ("ALIGN", (4, 0), (6, -1), "RIGHT"),
+                ("FONTSIZE", (0, 0), (-1, -1), 7),
+                ("ALIGN", (4, 0), (8, -1), "RIGHT"),
                 ("GRID", (0, 0), (-1, -1), 0.25, MID_GREY),
                 ("BACKGROUND", (0, -1), (-1, -1), LIGHT_GREY),
                 ("TOPPADDING", (0, 0), (-1, -1), 2.5),
@@ -213,6 +239,8 @@ def build_liste_depenses_pdf(
             elements.append(Spacer(1, 1.5 * mm))
 
             key_total += acc_total
+            key_htva += acc_htva
+            key_vat += acc_vat
             key_propr += acc_propr
             key_occ += acc_occ
 
@@ -220,6 +248,8 @@ def build_liste_depenses_pdf(
         key_tbl = Table(
             [[
                 "", "", "", Paragraph(f"<b>Sous-total cle {dk_name}</b>", body),
+                Paragraph(f"<b>{_eur_be(key_htva)}</b>", body),
+                Paragraph(f"<b>{_eur_be(key_vat)}</b>", body),
                 Paragraph(f"<b>{_eur_be(key_total)}</b>", body),
                 Paragraph(f"<b>{_eur_be(key_propr)}</b>", body),
                 Paragraph(f"<b>{_eur_be(key_occ)}</b>", body),
@@ -228,7 +258,7 @@ def build_liste_depenses_pdf(
         )
         key_tbl.setStyle(TableStyle([
             ("BACKGROUND", (3, 0), (-1, 0), colors.HexColor("#DDE4EE")),
-            ("ALIGN", (4, 0), (6, 0), "RIGHT"),
+            ("ALIGN", (4, 0), (8, 0), "RIGHT"),
             ("LINEABOVE", (0, 0), (-1, 0), 1.0, BRAND_BLUE),
             ("TOPPADDING", (0, 0), (-1, -1), 4),
             ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
@@ -237,6 +267,8 @@ def build_liste_depenses_pdf(
         elements.append(Spacer(1, 4 * mm))
 
         grand_total += key_total
+        grand_htva += key_htva
+        grand_vat += key_vat
         grand_propr += key_propr
         grand_occ += key_occ
 
@@ -245,6 +277,8 @@ def build_liste_depenses_pdf(
         gt = Table(
             [[
                 "", "", "", Paragraph("<b>Totaux generaux immeuble :</b>", body),
+                Paragraph(f"<b>{_eur_be(grand_htva)}</b>", body),
+                Paragraph(f"<b>{_eur_be(grand_vat)}</b>", body),
                 Paragraph(f"<b>{_eur_be(grand_total)}</b>", body),
                 Paragraph(f"<b>{_eur_be(grand_propr)}</b>", body),
                 Paragraph(f"<b>{_eur_be(grand_occ)}</b>", body),
@@ -254,7 +288,7 @@ def build_liste_depenses_pdf(
         gt.setStyle(TableStyle([
             ("BACKGROUND", (0, 0), (-1, 0), DARK_GREY),
             ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-            ("ALIGN", (4, 0), (6, 0), "RIGHT"),
+            ("ALIGN", (4, 0), (8, 0), "RIGHT"),
             ("FONTSIZE", (0, 0), (-1, 0), 10),
             ("TOPPADDING", (0, 0), (-1, -1), 6),
             ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
