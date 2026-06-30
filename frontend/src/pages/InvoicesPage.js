@@ -128,12 +128,14 @@ export default function InvoicesPage() {
   const load = useCallback(async () => {
     const copro = localStorage.getItem('selectedCopro') || localStorage.getItem('copropriete_id') || '';
     const supplierParams = copro ? { copropriete_id: copro } : {};
-    // iter85g chinese wall : owners filtres par ACP courante. La cle localStorage
-    // correcte est 'selectedCopro' (cf. /app/frontend/src/lib/api.js ligne 17).
-    const ownersParams = copro ? { copropriete_id: copro } : {};
-    const ownersConfig = copro
-      ? { params: ownersParams, headers: { 'X-Copropriete-Id': copro } }
-      : { params: ownersParams };
+    // iter90d : pour le combobox d'allocation des frais privatifs, on doit
+    // voir TOUS les proprietaires du syndic (pas juste ceux ayant un lot dans
+    // l'ACP courante), sinon l'utilisateur ne retrouve pas un proprio existant
+    // et finit par creer un doublon -> nouveau compte auxiliaire 40000XXX au
+    // lieu de reutiliser le compte principal du proprio. Le backend
+    // `assign_owner_accounts` recree idempotemment les comptes 4000/4001 dans
+    // l'ACP cible quand le proprio est selectionne, donc aucun risque de fuite.
+    const ownersConfig = { params: { syndic_wide: true } };
     const [inv, dk, acc, lt, cat, ow, sup] = await Promise.all([
       api.get('/invoices', { params: fyParams }), api.get('/distribution-keys'),
       api.get('/accounting/pcmn', { params: { class_num: 6 } }), api.get('/lots'),

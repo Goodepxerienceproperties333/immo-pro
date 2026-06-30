@@ -182,6 +182,29 @@ export default function ExpensesPage() {
     }
   };
 
+  // iter90d : exports PDF additionnels (journaux comptables + liste exhaustive factures)
+  const downloadOtherPdf = async (kind) => {
+    if (!selectedCopro) { alert('Selectionnez une copropriete'); return; }
+    const now = new Date();
+    const y = now.getFullYear();
+    const df = filters.date_from || `${y}-01-01`;
+    const dt = filters.date_to || `${y}-12-31`;
+    const params = { copropriete_id: selectedCopro, date_from: df, date_to: dt };
+    const path = kind === 'journals' ? '/reports/journals/pdf' : '/reports/invoices-list/pdf';
+    const fname = kind === 'journals' ? `journaux_${df}_au_${dt}.pdf` : `liste_factures_${df}_au_${dt}.pdf`;
+    try {
+      const res = await api.get(path, { params, responseType: 'blob' });
+      const url = URL.createObjectURL(res.data);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = fname;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      alert('Erreur generation PDF: ' + (e.response?.data?.detail || e.message));
+    }
+  };
+
   // ---- Build hierarchical groups : Cle (N1) -> Nature (N2) -> Compte (N3) -> rows ----
   // We compute this client-side from the flat expenses[] returned by the backend.
   // For each row, the grouping keys are :
@@ -271,6 +294,12 @@ export default function ExpensesPage() {
           </div>
           <Button variant="outline" onClick={downloadPdf} data-testid="expenses-pdf-btn">
             <Download size={16} className="mr-2" />Liste des depenses (PDF)
+          </Button>
+          <Button variant="outline" onClick={() => downloadOtherPdf('invoices')} data-testid="invoices-list-pdf-btn" title="Toutes les factures, tous statuts confondus">
+            <Download size={16} className="mr-2" />Liste des factures (PDF)
+          </Button>
+          <Button variant="outline" onClick={() => downloadOtherPdf('journals')} data-testid="journals-pdf-btn" title="Tous les journaux comptables (AC / OD / BQ / VE)">
+            <Download size={16} className="mr-2" />Journaux (PDF)
           </Button>
         </div>
       </div>

@@ -23,7 +23,8 @@ def create_properties_router(db):
         return False, user.get("copropriete_ids", []) or []
 
     async def _owner_in_scope(owner_id: str, allowed_copros) -> bool:
-        """True si l'owner a au moins un lot dans une ACP du scope (ou superadmin)."""
+        """True si l'owner a au moins un lot OU est rattache via copropriete_ids
+        a une ACP du scope (iter90c). Superadmin retourne toujours True."""
         if allowed_copros is None:
             return True
         if not allowed_copros:
@@ -38,17 +39,30 @@ def create_properties_router(db):
             "owner_ids": owner_id,
             "copropriete_id": {"$in": allowed_copros}
         })
-        return c2 > 0
+        if c2 > 0:
+            return True
+        # iter90c : aussi en scope via copropriete_ids (proprio rattache sans lot)
+        c3 = await db.owners.count_documents({
+            "id": owner_id,
+            "copropriete_ids": {"$in": allowed_copros},
+        })
+        return c3 > 0
 
     async def _allowed_owner_ids(allowed_copros):
-        """Retourne le set des owner_id presents dans les lots des ACPs du scope."""
+        """Retourne le set des owner_id presents dans les lots des ACPs du scope,
+        UNION les owners dont copropriete_ids contient une ACP du scope (iter90c)."""
         if allowed_copros is None:
             return None  # superadmin = pas de filtre
         if not allowed_copros:
             return set()
         ids1 = await db.lots.distinct("owner_id", {"copropriete_id": {"$in": allowed_copros}})
         ids2 = await db.lots.distinct("owner_ids", {"copropriete_id": {"$in": allowed_copros}})
-        return {x for x in (ids1 or []) if x} | {x for x in (ids2 or []) if x}
+        ids3 = await db.owners.distinct("id", {"copropriete_ids": {"$in": allowed_copros}})
+        return (
+            {x for x in (ids1 or []) if x}
+            | {x for x in (ids2 or []) if x}
+            | {x for x in (ids3 or []) if x}
+        )
 
     # ---- OWNERS ----
     class OwnerInput(BaseModel):
@@ -193,10 +207,18 @@ def create_properties_router(db):
                 {"id": {"$in": list(allowed_owner_ids)}}, {"_id": 0}
             ).sort("last_name", 1).to_list(2000)
         if copropriete_id:
-            # Cas ACP specifique : owners ayant un lot dans cette ACP
+            # Cas ACP specifique : owners ayant un lot dans cette ACP, OU lies a cette
+            # ACP via `copropriete_ids[]` (proprio cree/importe mais lot pas encore
+            # assigne) -- iter90c : evite que la creation d'un nouveau proprio
+            # cree un doublon parce que l'existant sans lot etait invisible.
             owner_ids_single = await db.lots.distinct("owner_id", {"copropriete_id": copropriete_id})
             owner_ids_multi = await db.lots.distinct("owner_ids", {"copropriete_id": copropriete_id})
-            allowed = {oid for oid in (owner_ids_single or []) if oid} | {oid for oid in (owner_ids_multi or []) if oid}
+            owner_ids_linked = await db.owners.distinct("id", {"copropriete_ids": copropriete_id})
+            allowed = (
+                {oid for oid in (owner_ids_single or []) if oid}
+                | {oid for oid in (owner_ids_multi or []) if oid}
+                | {oid for oid in (owner_ids_linked or []) if oid}
+            )
             owners = await db.owners.find({"id": {"$in": list(allowed)}}, {"_id": 0}).sort("last_name", 1).to_list(2000) if allowed else []
             if include_unassigned:
                 owners.extend(await _fetch_orphans())
@@ -435,6 +457,41 @@ def create_properties_router(db):
         if result.deleted_count == 0:
             raise HTTPException(404, "Proprietaire non trouve")
         return {"message": "Proprietaire supprime"}
+
+    # iter90c : rattachement idempotent owner -> ACP, indispensable pour
+    # la mutation et tout flow ou un proprio existant doit etre lie a une
+    # ACP sans qu'un lot soit encore assigne.
+    class AttachToCoproInput(BaseModel):
+        copropriete_id: str
+
+    @router.post("/owners/{owner_id}/attach-to-copro")
+    async def attach_owner_to_copro(owner_id: str, data: AttachToCoproInput, request: Request):
+        """Ajoute idempotemment `copropriete_id` a `owners.copropriete_ids[]`.
+        Verifie que le requester a acces a l'ACP cible. Si l'owner est deja
+        rattache, retourne 200 OK sans rien faire. Cree aussi le compte
+        auxiliaire dans l'ACP si necessaire (via assign_owner_accounts).
+        """
+        from server import get_current_user, is_superadmin_only
+        from tier_accounts import assign_owner_accounts
+        user = await get_current_user(request)
+        role = user.get("role", "")
+        is_super = is_superadmin_only(role)
+        allowed = user.get("copropriete_ids", []) or []
+        target_copro = (data.copropriete_id or "").strip()
+        if not target_copro:
+            raise HTTPException(400, "copropriete_id requis")
+        if not is_super and target_copro not in allowed:
+            raise HTTPException(403, "Acces refuse a cette ACP (chinese wall)")
+        owner = await db.owners.find_one({"id": owner_id}, {"_id": 0})
+        if not owner:
+            raise HTTPException(404, "Proprietaire non trouve")
+        # Idempotent : assign_owner_accounts gere le $addToSet sur copropriete_ids
+        await assign_owner_accounts(db, owner, target_copro)
+        refreshed = await db.owners.find_one({"id": owner_id}, {"_id": 0})
+        return {
+            "message": "Proprietaire rattache a l'ACP",
+            "owner": refreshed,
+        }
 
     # ---- LOTS ----
     class LotInput(BaseModel):

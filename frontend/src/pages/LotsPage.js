@@ -19,7 +19,7 @@ const LOT_TYPES = [
 ];
 
 // ----- Inline owner picker (search + tag + inline create) -----
-function OwnerPicker({ owners, selectedIds, onChange, multi = true, onOwnerCreated, dataTestPrefix = 'owner' }) {
+function OwnerPicker({ owners, selectedIds, onChange, multi = true, onOwnerCreated, dataTestPrefix = 'owner', coproproId = '' }) {
   const [q, setQ] = useState('');
   const [createOpen, setCreateOpen] = useState(false);
   const [newOwner, setNewOwner] = useState({ first_name: '', last_name: '', email: '', phone: '' });
@@ -39,9 +39,23 @@ function OwnerPicker({ owners, selectedIds, onChange, multi = true, onOwnerCreat
     ).slice(0, 8);
   }, [q, owners, selectedIds]);
 
-  const addOwner = (o) => {
+  // iter90c : rattache idempotemment l'owner a l'ACP courante. Ne lance jamais
+  // d'erreur silencieuse : tout 4xx/5xx est toaste.
+  const ensureAttached = async (ownerId) => {
+    if (!coproproId || !ownerId) return;
+    try {
+      await api.post(`/owners/${ownerId}/attach-to-copro`, { copropriete_id: coproproId });
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Echec du rattachement a l\'ACP courante');
+    }
+  };
+
+  const addOwner = async (o) => {
     onChange(multi ? [...selectedIds, o.id] : [o.id]);
     setQ('');
+    await ensureAttached(o.id);
+    // Force a parent refresh so the owner instantly appears under the current ACP's list
+    if (onOwnerCreated) onOwnerCreated(o);
   };
   const removeOwner = (id) => onChange(selectedIds.filter(x => x !== id));
 
@@ -53,6 +67,8 @@ function OwnerPicker({ owners, selectedIds, onChange, multi = true, onOwnerCreat
         name: `${newOwner.last_name} ${newOwner.first_name}`.trim(),
         email: newOwner.email.trim(),
         phone: newOwner.phone.trim(),
+        // iter90c : create directement rattache a l'ACP courante (pas apres)
+        ...(coproproId ? { copropriete_id: coproproId } : {}),
       };
       if (!payload.last_name && !payload.first_name) {
         toast.error('Nom ou prenom requis');
@@ -70,7 +86,7 @@ function OwnerPicker({ owners, selectedIds, onChange, multi = true, onOwnerCreat
       const detail = err.response?.data?.detail || '';
       // iter89c : si le backend refuse pour cause de doublon, on extrait l'id
       // du proprio existant (format "... id XXXX) ...") et on le selectionne.
-      // Plus aucune incoherence "Aucun proprio trouve" / "Doublon detecte".
+      // iter90c : on rattache aussi explicitement a l'ACP courante.
       const idMatch = detail.match(/id\s+([a-f0-9]{8})/i);
       if (err.response?.status === 409 && idMatch) {
         const partialId = idMatch[1];
@@ -82,12 +98,15 @@ function OwnerPicker({ owners, selectedIds, onChange, multi = true, onOwnerCreat
             toast.success(`Proprietaire existant selectionne : ${existing.name || `${existing.last_name} ${existing.first_name}`.trim()}`);
             setCreateOpen(false);
             setNewOwner({ first_name: '', last_name: '', email: '', phone: '' });
+            await ensureAttached(existing.id);
             if (onOwnerCreated) onOwnerCreated(existing);
             onChange(multi ? [...selectedIds, existing.id] : [existing.id]);
             setQ('');
             return;
           }
-        } catch { /* fallthrough */ }
+        } catch (innerErr) {
+          toast.error(innerErr.response?.data?.detail || 'Echec recherche proprio existant');
+        }
       }
       toast.error(detail || 'Erreur creation proprietaire');
     }
@@ -475,6 +494,7 @@ function MutationDialog({ lot, owners, ownersRefresh, onClose, onDone }) {
               multi={false}
               onOwnerCreated={() => ownersRefresh && ownersRefresh()}
               dataTestPrefix="mutation-owner"
+              coproproId={lot?.copropriete_id || ''}
             />
           </div>
 
@@ -980,6 +1000,7 @@ export default function LotsPage() {
                 multi
                 onOwnerCreated={load}
                 dataTestPrefix="owner"
+                coproproId={editing?.copropriete_id || form.copropriete_id || ''}
               />
             </div>
             <div className="flex gap-3 justify-end">

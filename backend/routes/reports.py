@@ -1010,6 +1010,76 @@ def create_reports_router(db):
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
 
+    # ---- iter90d : EXPORT PDF DE TOUS LES JOURNAUX COMPTABLES ----
+    @router.get("/journals/pdf")
+    async def journals_pdf(
+        copropriete_id: str,
+        date_from: str,
+        date_to: str,
+        journal_type: Optional[str] = None,
+    ):
+        """Exporte TOUS les journaux comptables (AC, OD, BQ, VE...) sur la
+        periode demandee, en un PDF unique. Format paysage A4, controle PCMN
+        (somme debits = somme credits = total general)."""
+        from pdf_journals_and_invoices import build_journals_pdf
+
+        copro = await db.coproprietes.find_one({"id": copropriete_id}, {"_id": 0})
+        if not copro:
+            raise HTTPException(404, "Copropriete non trouvee")
+
+        q = {"copropriete_id": copropriete_id,
+             "date": {"$gte": date_from, "$lte": date_to}}
+        if journal_type:
+            q["journal_type"] = journal_type.upper()
+        entries = await db.journal_entries.find(q, {"_id": 0}).sort("date", 1).to_list(100000)
+
+        pdf_bytes = build_journals_pdf(
+            copropriete=copro,
+            date_from=date_from, date_to=date_to,
+            entries=entries,
+        )
+        filename = f"journaux_{date_from}_au_{date_to}.pdf"
+        return StreamingResponse(
+            io.BytesIO(pdf_bytes),
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    # ---- iter90d : EXPORT PDF LISTE EXHAUSTIVE DES FACTURES ----
+    @router.get("/invoices-list/pdf")
+    async def invoices_list_pdf(
+        copropriete_id: str,
+        date_from: str,
+        date_to: str,
+        status: Optional[str] = None,
+    ):
+        """Exporte la LISTE EXHAUSTIVE des factures (toutes natures, tous
+        statuts) sur la periode demandee. Colonnes: Date, N piece,
+        Fournisseur, Libelle, Compte, HTVA, TVA, TVAC, Statut."""
+        from pdf_journals_and_invoices import build_invoices_list_pdf
+
+        copro = await db.coproprietes.find_one({"id": copropriete_id}, {"_id": 0})
+        if not copro:
+            raise HTTPException(404, "Copropriete non trouvee")
+
+        q = {"copropriete_id": copropriete_id,
+             "date": {"$gte": date_from, "$lte": date_to}}
+        if status:
+            q["status"] = status
+        invoices = await db.invoices.find(q, {"_id": 0}).sort("date", 1).to_list(100000)
+
+        pdf_bytes = build_invoices_list_pdf(
+            copropriete=copro,
+            date_from=date_from, date_to=date_to,
+            invoices=invoices,
+        )
+        filename = f"liste_factures_{date_from}_au_{date_to}.pdf"
+        return StreamingResponse(
+            io.BytesIO(pdf_bytes),
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
     # ---- BALANCE DE TIERS PROPRIETAIRES ----
     @router.get("/balance-tiers/owners")
     async def balance_tiers_owners(

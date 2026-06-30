@@ -23,8 +23,17 @@ def create_duplicates_router(db):
 
     # ----------------- Helpers normalisation -----------------
     def _norm_name(value: str) -> str:
-        """Lowercase + tri alphabetique des mots (tolerant a l'ordre)."""
-        words = (value or "").strip().lower().split()
+        """Lowercase + tri alphabetique des mots (tolerant a l'ordre +
+        tolerant aux caracteres de separation '-', '&', etc.). iter90d :
+        on remplace les chars non-alphanum par un espace AVANT split, ce qui
+        permet de matcher 'DEWINTER - DRAYE Jean-Claude & Evelyne' avec
+        'DEWINTER - DRAYE Jean-Claude Evelyne' (sans &)."""
+        v = (value or "").lower()
+        # Map accented chars to ascii (NFD + strip)
+        import unicodedata
+        v = "".join(c for c in unicodedata.normalize("NFD", v) if unicodedata.category(c) != "Mn")
+        v = re.sub(r"[^a-z0-9]+", " ", v).strip()
+        words = [w for w in v.split() if w]
         return " ".join(sorted(words))
 
     def _norm_alphanum(value: str) -> str:

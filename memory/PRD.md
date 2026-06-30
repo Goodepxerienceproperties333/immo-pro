@@ -11,6 +11,45 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 ## Implemented
+### Iter90c+d (Feb 2026) - Owner scope ACP-aware + frais privatifs + exports PDF
+
+**Demande user 1** : Voir les proprietaires sans lot dans l'ACP courante
+(sinon doublons crees par accident lors de la mutation/allocation privative).
+**Demande user 2** : Lors d'affectation de frais privatif, imputer sur le
+compte principal du proprio existant, pas creer un nouveau proprio.
+**Demande user 3** : Exporter PDF de TOUS les journaux comptables + PDF de
+la liste exhaustive des factures.
+
+**Backend** :
+- `list_owners` et `_allowed_owner_ids` : UNION lots + `copropriete_ids[]`
+  -> un proprio rattache mais sans lot est visible dans le scope.
+- `_owner_in_scope` etend la verification (chinese-wall preserve).
+- Nouveau `POST /api/owners/{id}/attach-to-copro` : rattachement idempotent
+  via `assign_owner_accounts` ; verifie le scope syndic.
+- `_norm_name` (matching doublons) : supprime '&', tirets, accents avant
+  tri alphabetique des mots -> matche "X & Y" avec "X Y".
+- 2 nouveaux PDF endpoints :
+  * `GET /api/reports/journals/pdf` -> Tous les journaux (AC/OD/BQ/VE)
+    avec controle PCMN (sum debits = sum credits).
+  * `GET /api/reports/invoices-list/pdf` -> Liste exhaustive factures
+    (HTVA / TVA / TVAC / statut), trie par date.
+- Nouveau module `pdf_journals_and_invoices.py` (paysage A4, branding bleu).
+
+**Frontend** :
+- `OwnerPicker` (LotsPage) : prop `coproproId`, payload de creation inclut
+  `copropriete_id`, et `attach-to-copro` est appele apres select/create.
+  Toast propre des 4xx/5xx (plus d'erreurs silencieuses).
+- `InvoicesPage` : owners charges en `syndic_wide=true` -> le combobox
+  d'allocation des frais privatifs montre TOUS les proprios du syndic,
+  empechant la creation accidentelle de doublons.
+- `ExpensesPage` : 2 nouveaux boutons (`invoices-list-pdf-btn`,
+  `journals-pdf-btn`) a cote de `Liste des depenses (PDF)`.
+
+**Tests** : `test_iter90cd_owner_scope_duplicates_pdfs.py` -> 4 sous-flows
+passent : visibilite owner sans lot, detection doublon avec '&',
+idempotence attach-to-copro, PDFs valides (header %PDF-, > 2KB).
+
+
 ### Iter90b (Feb 2026) - Journal d'audit des operations d'acces proprietaire
 
 **Demande user** : Tracer qui active/suspend/reactive l'acces d'un proprietaire,
