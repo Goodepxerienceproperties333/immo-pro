@@ -5,7 +5,7 @@ import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
 import {
   KeyRound, MailCheck, Ban, RotateCcw, Loader2,
-  AlertCircle, CheckCircle2, Clock, ShieldOff,
+  AlertCircle, CheckCircle2, Clock, ShieldOff, Trash2,
   History, ChevronDown, ChevronUp,
 } from 'lucide-react';
 import { fmtDate } from '@/lib/dateFmt';
@@ -15,6 +15,7 @@ const ACTION_LABELS = {
   resend: { label: 'Invitation renvoyee', cls: 'text-blue-700 bg-blue-50', Icon: MailCheck },
   revoke: { label: 'Acces suspendu', cls: 'text-red-700 bg-red-50', Icon: Ban },
   reactivate: { label: 'Acces reactive', cls: 'text-emerald-700 bg-emerald-50', Icon: RotateCcw },
+  delete: { label: 'Acces supprime', cls: 'text-red-800 bg-red-100 font-bold', Icon: Trash2 },
 };
 
 function fmtDateTime(iso) {
@@ -100,6 +101,31 @@ export default function OwnerAccessSection({ ownerId, ownerEmail }) {
       if (auditOpen) loadAudit();
     } catch (e) {
       toast.error(e.response?.data?.detail || `Echec : ${label}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  // iter90g : suppression complete (DELETE) de l'acces. Idempotent cote
+  // backend mais demande une confirmation visuelle.
+  const deleteAccess = async () => {
+    if (!window.confirm(
+      'Supprimer DEFINITIVEMENT le compte d\'acces du proprietaire ?\n\n' +
+      '- Son compte sera detruit\n' +
+      '- Toutes ses sessions seront invalidees\n' +
+      '- L\'historique d\'audit est conserve\n\n' +
+      'Vous pourrez recreer l\'acces plus tard depuis "Activer l\'acces".'
+    )) return;
+    setBusy('delete');
+    try {
+      const { data } = await api.delete(`/owners/${ownerId}/access`);
+      toast.success(data.message || 'Acces supprime', { duration: 6000 });
+      if (data.status) setStatus(data.status);
+      else load();
+      setAuditEntries(null);
+      if (auditOpen) loadAudit();
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Echec de la suppression');
     } finally {
       setBusy(null);
     }
@@ -224,6 +250,21 @@ export default function OwnerAccessSection({ ownerId, ownerEmail }) {
           >
             {busy === 'reactivate' ? <Loader2 size={14} className="mr-1 animate-spin" /> : <RotateCcw size={14} className="mr-1" />}
             Reactiver l&apos;acces
+          </Button>
+        )}
+        {/* iter90g : bouton "Supprimer l'acces" (destructif) - dispo des qu'un compte est lie */}
+        {s !== 'none' && (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={deleteAccess}
+            disabled={busy === 'delete'}
+            className="text-red-700 hover:bg-red-100 border-red-300"
+            data-testid="owner-delete-access-btn"
+            title="Supprimer definitivement le compte d'acces du proprietaire"
+          >
+            {busy === 'delete' ? <Loader2 size={14} className="mr-1 animate-spin" /> : <Trash2 size={14} className="mr-1" />}
+            Supprimer l&apos;acces
           </Button>
         )}
       </div>

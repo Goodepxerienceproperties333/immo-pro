@@ -11,6 +11,40 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 ## Implemented
+### Iter90g (Feb 2026) - Suppression complete de l'acces proprietaire (DELETE)
+
+**Demande user** : Pouvoir supprimer (pas juste suspendre) l'acces d'un
+proprietaire a la plateforme. Cas d'usage : vente definitive, erreur
+d'invitation a purger pour recommencer a zero.
+
+**Backend** :
+- Nouveau `DELETE /api/owners/{owner_id}/access` :
+  * Supprime le user account (role=owner uniquement)
+  * Detache `owner.user_id`
+  * Invalide les tokens reset actifs
+  * Log audit avec action='delete' (target_email preserve pour tracabilite)
+- Idempotent : 200 OK si aucun acces a supprimer.
+- Securite : si l'email est partage avec un compte syndic/admin/gestionnaire,
+  le compte est PRESERVE (seule la fiche owner est detachee).
+- Session existante du proprio : son JWT devient 401 immediatement
+  (user not found in DB).
+
+**Frontend** :
+- `OwnerAccessSection` : nouveau bouton "Supprimer l'acces" (rouge, icone
+  Trash2), visible des qu'un compte est lie (status != 'none').
+- Confirmation native window.confirm() avec explication claire des
+  consequences (suppression + invalidation sessions + historique conserve).
+- L'historique d'audit affiche la nouvelle action 'delete' avec son
+  badge color-code rouge gras.
+
+**Tests** : `test_iter90g_delete_owner_access.py` -> 5 sous-flows PASS :
+suppression full, idempotence, preservation non-owner, invalidation
+reset tokens, invalidation session existante.
+
+**E2E preview** : selimabed@protonmail.com supprime, audit log mis a jour,
+2e DELETE retourne "Aucun acces a supprimer".
+
+
 ### Iter90f (Feb 2026) - Vue UI Depenses + PDF unifies sur source unique
 
 **Ticket user** : Aligner la vue UI "Depenses de l'exercice" sur la meme

@@ -326,10 +326,67 @@ def create_owner_access_router(db):
             "status": _serialize_status(owner, refreshed),
         }
 
+    # ---------- DELETE access (destructive, suppression du compte user) ----------
+    # iter90g : suppression complete de l'acces (vs. revoke qui suspend).
+    # Cas d'usage : un proprio quitte definitivement, ou erreur d'invitation
+    # qu'on veut purger pour recommencer a zero. Idempotent : 200 OK si rien a faire.
+    @router.delete("/{owner_id}/access")
+    async def delete_access(owner_id: str, request: Request):
+        actor, is_super, allowed_copros = await _get_admin_scope(request)
+        owner = await _load_owner_or_404(owner_id, is_super, allowed_copros)
+        user = await _find_linked_user(owner)
+        if not user:
+            # Detacher le user_id residuel et retourner OK (idempotent)
+            await db.owners.update_one({"id": owner_id}, {"$unset": {"user_id": ""}})
+            return {
+                "message": "Aucun acces a supprimer",
+                "deleted": False,
+                "status": _serialize_status(owner, None),
+            }
+        # Securite : interdire la suppression d'un user qui n'est pas role=owner
+        # (un syndic / gestionnaire / superadmin partage le meme email -> on ne
+        # touche jamais a son compte ; on detache simplement la fiche owner).
+        user_role = user.get("role", "")
+        if user_role != "owner":
+            await db.owners.update_one({"id": owner_id}, {"$unset": {"user_id": ""}})
+            await _log_audit(
+                action="delete", actor=actor, owner=owner, user_doc=user, request=request,
+                details={"deleted_user": False, "reason": f"role={user_role}, detache uniquement"},
+            )
+            return {
+                "message": f"Compte {user.get('email')} preserve (role {user_role}). Fiche detachee.",
+                "deleted": False,
+                "detached": True,
+                "status": _serialize_status(owner, None),
+            }
+        target_email = user.get("email", "")
+        target_uid = str(user["_id"])
+        # Invalider les sessions actives et les tokens reset
+        await db.password_reset_tokens.update_many(
+            {"user_id": target_uid, "consumed_at": None},
+            {"$set": {"consumed_at": datetime.now(timezone.utc).isoformat()}}
+        )
+        # Snapshot user pour l'audit avant suppression
+        snapshot = {"_id": user["_id"], "email": user.get("email"),
+                    "role": user_role, "name": user.get("name", "")}
+        await db.users.delete_one({"_id": user["_id"]})
+        # Detacher la fiche owner
+        await db.owners.update_one({"id": owner_id}, {"$unset": {"user_id": ""}})
+        # Audit log
+        await _log_audit(
+            action="delete", actor=actor, owner=owner, user_doc=snapshot, request=request,
+            details={"deleted_user": True, "target_email": target_email},
+        )
+        return {
+            "message": f"Acces supprime ({target_email}). Le proprietaire ne peut plus se connecter.",
+            "deleted": True,
+            "status": _serialize_status(owner, None),
+        }
+
     # ---------- GET access-audit (history) ----------
     @router.get("/{owner_id}/access-audit")
     async def get_access_audit(owner_id: str, request: Request, limit: int = 50):
-        """Returns the access-events history (grant/resend/revoke/reactivate)
+        """Returns the access-events history (grant/resend/revoke/reactivate/delete)
         for a specific owner. Scoped by chinese wall : the requester must
         have access to this owner. Most recent first."""
         _, is_super, allowed_copros = await _get_admin_scope(request)
