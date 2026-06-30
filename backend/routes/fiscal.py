@@ -698,6 +698,81 @@ def create_fiscal_router(db):
         }
         return {"expenses": rows, "totals": totals, "filters": filters}
 
+    # iter90h : endpoint debug pour identifier les anomalies de coherence
+    # qui causent des ecarts entre la UI et un export comptable externe (Optipro).
+    @router.get("/expenses-diff")
+    async def expenses_diff(request: Request,
+                            copropriete_id: str,
+                            date_from: str,
+                            date_to: str):
+        """Liste les anomalies de coherence sur la periode :
+        - Factures `is_private_fee=true` avec compte non-643 (compte tampon 44xxx)
+        - OD-PRIV avec source_id pointant vers une facture inexistante
+        - Factures sans OD de refacturation (privatives non comptabilisees)
+        - Comptes PCMN classe 4 marques class_num=6 (mal classes)
+        - Ecritures journal classe 6 avec total debit != credit
+        """
+        if not copropriete_id:
+            copropriete_id = request.headers.get("X-Copropriete-Id") or ""
+        if not copropriete_id:
+            raise HTTPException(400, "copropriete_id requis")
+        anomalies = {"copropriete_id": copropriete_id, "period": [date_from, date_to]}
+
+        # 1) Factures privatives sur compte non-643
+        privatives_wrong_account = await db.invoices.find({
+            "copropriete_id": copropriete_id, "is_private_fee": True,
+            "date": {"$gte": date_from, "$lte": date_to},
+            "account_number": {"$nin": ["643", "643000"]},
+        }, {"_id": 0, "id": 1, "number": 1, "date": 1, "supplier": 1,
+            "account_number": 1, "total_amount": 1}).to_list(1000)
+        anomalies["private_fees_on_wrong_account"] = {
+            "count": len(privatives_wrong_account),
+            "total_amount": round(sum(float(p.get("total_amount", 0) or 0) for p in privatives_wrong_account), 2),
+            "items": privatives_wrong_account[:30],
+        }
+
+        # 2) Comptes PCMN classe 4 marques class_num=6 (mal classes)
+        misclass = await db.pcmn_accounts.find({
+            "copropriete_id": copropriete_id,
+            "class_num": {"$in": [6, 7]},
+            "number": {"$regex": "^4"},
+        }, {"_id": 0, "number": 1, "name": 1, "class_num": 1}).to_list(100)
+        anomalies["misclassified_class4_as_6"] = {
+            "count": len(misclass), "items": misclass,
+        }
+
+        # 3) OD-PRIV avec source_id orphelin (facture inexistante)
+        od_priv = await db.journal_entries.find({
+            "copropriete_id": copropriete_id,
+            "journal_type": "OD",
+            "source_type": "invoice",
+            "date": {"$gte": date_from, "$lte": date_to},
+        }, {"_id": 0, "id": 1, "reference": 1, "source_id": 1, "date": 1}).to_list(5000)
+        orphan_ods = []
+        for od in od_priv:
+            sid = od.get("source_id")
+            if sid:
+                exists = await db.invoices.count_documents({"id": sid})
+                if exists == 0:
+                    orphan_ods.append(od)
+        anomalies["orphan_od_entries"] = {"count": len(orphan_ods), "items": orphan_ods[:30]}
+
+        # 4) Factures privatives sans OD de refacturation
+        privatives = await db.invoices.find({
+            "copropriete_id": copropriete_id, "is_private_fee": True,
+            "date": {"$gte": date_from, "$lte": date_to},
+        }, {"_id": 0, "id": 1, "number": 1, "supplier": 1, "total_amount": 1}).to_list(5000)
+        missing_od = []
+        for p in privatives:
+            has = await db.journal_entries.count_documents({
+                "source_id": p["id"], "journal_type": "OD",
+            })
+            if has == 0:
+                missing_od.append(p)
+        anomalies["private_fees_without_od"] = {"count": len(missing_od), "items": missing_od[:30]}
+
+        return anomalies
+
     # ---- BUDGETS ----
     @router.get("/budgets")
     async def list_budgets(fiscal_year_id: Optional[str] = None, copropriete_id: Optional[str] = None):

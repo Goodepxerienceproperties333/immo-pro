@@ -248,8 +248,15 @@ async def compute_expense_rows(
     charge_acc_names = {a["number"]: a["name"] for a in charge_accs}
 
     def _is_charge_account(num: str) -> bool:
+        """True si le compte est une vraie charge (classe 6 ou 75).
+        iter90h : protection defensive - les comptes commençant par 44 (frais
+        privatifs en passage, comptes tampon fournisseur, etc.) ne sont JAMAIS
+        consideres comme charges meme si le PCMN les marque class_num=6.
+        Cela evite le double comptage avec les OD-PRIV de refacturation."""
         if not num:
             return False
+        if num.startswith("44") or num.startswith("40") or num.startswith("41") or num.startswith("42"):
+            return False  # classe 4 = comptes de tiers, jamais une charge
         if num in charge_acc_set:
             return True
         return num.startswith("6") or num.startswith("75")
