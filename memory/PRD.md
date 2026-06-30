@@ -10,6 +10,40 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 2. RBAC path-based: admin only sur /api/admin/* + /api/users; owner restreint a /api/owner/*, /api/auth/*, GET /api/coproprietes(+sous-paths), GET /api/documents/.../download.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
+
+## Implemented
+### Iter90i (Feb 2026) - Exclusion des frais privatifs du total "Dépenses"
+
+**Ticket user** : Sur l'ACP Acacia (production), 9 factures
+`is_private_fee=true` totalisant 800,02 EUR (compte 643) étaient incluses
+dans le total "Dépenses de l'exercice" (12 128,74 EUR au lieu de 11 328,72 EUR).
+Le sur-comptage venait de l'absence de filtre `is_private_fee` dans la
+requête Mongo de `compute_expense_rows`.
+
+**Backend** (`/app/backend/expense_rows.py`) :
+1. **Requête invoices** : ajout du filtre `"is_private_fee": {"$ne": True}`
+   pour exclure dès le départ les factures privatives. Elles sont
+   refacturées via OD au compte 643 mais ne sont PAS des charges communes.
+2. **`_is_charge_account`** : ajout d'une protection défensive — tout compte
+   commençant par `643*` est exclu, même si marqué `class_num=6` dans le PCMN.
+   Cela bloque le double comptage via la pass FI/OD (les OD-PRIV de
+   refacturation posent un débit sur 643).
+
+**Invariants vérifiés** :
+- `sum(TVAC PDF)` == `totals.total UI` == charges communes uniquement
+- Widgets "Par Nature" / "Par Clé" / "Par Banque" = même total
+- Cas Acacia simulé : 5 privatives 160€ + 1 commune 500€ → total = 500€
+
+**Tests** : `test_iter90i_private_fees_excluded_from_expenses.py` → 3 flows :
+exclusion facture privative, exclusion ligne OD-643, scénario Acacia-like.
+Test invariant `test_iter90e_liste_depenses_pdf_invariant.py` toujours vert.
+
+**Endpoint diagnostic** (déjà existant, iter90h) :
+`GET /api/fiscal/expenses-diff?copropriete_id=&date_from=&date_to=`
+détecte les comptes 4xxx mal classés en classe 6 et les factures
+privatives sur compte ≠ 643.
+
+
 ## Implemented
 ### Iter90g (Feb 2026) - Suppression complete de l'acces proprietaire (DELETE)
 

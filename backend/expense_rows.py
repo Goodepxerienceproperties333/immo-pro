@@ -29,7 +29,16 @@ async def compute_expense_rows(
         return [], {"total": 0.0, "count": 0, "by_account": {}, "by_key": {}, "by_bank": {}}
 
     # 1) Invoices
-    inv_q: dict = {"copropriete_id": copropriete_id}
+    # iter90i : EXCLURE les factures privatives (is_private_fee=true) du
+    # total des charges communes. Elles sont refacturees au compte 643
+    # mais ne sont PAS une charge commune de la copropriete : elles sont
+    # ventilees directement aux proprietaires concernes via le decompte
+    # de mutation et/ou l'OD-PRIV. Les inclure ici cree un sur-comptage
+    # systematique du total "Dépenses de l'exercice".
+    inv_q: dict = {
+        "copropriete_id": copropriete_id,
+        "is_private_fee": {"$ne": True},
+    }
     if date_from or date_to:
         inv_q["date"] = {}
         if date_from:
@@ -248,15 +257,20 @@ async def compute_expense_rows(
     charge_acc_names = {a["number"]: a["name"] for a in charge_accs}
 
     def _is_charge_account(num: str) -> bool:
-        """True si le compte est une vraie charge (classe 6 ou 75).
+        """True si le compte est une vraie charge COMMUNE (classe 6 ou 75).
         iter90h : protection defensive - les comptes commençant par 44 (frais
         privatifs en passage, comptes tampon fournisseur, etc.) ne sont JAMAIS
         consideres comme charges meme si le PCMN les marque class_num=6.
-        Cela evite le double comptage avec les OD-PRIV de refacturation."""
+        iter90i : exclure aussi 643* (Frais privatifs) - ce sont des charges
+        privatives refacturees aux proprietaires, jamais des charges communes.
+        Cela evite le double comptage via la pass FI/OD (l'OD-PRIV de
+        refacturation pose un debit sur 643)."""
         if not num:
             return False
         if num.startswith("44") or num.startswith("40") or num.startswith("41") or num.startswith("42"):
             return False  # classe 4 = comptes de tiers, jamais une charge
+        if num.startswith("643"):
+            return False  # frais privatifs, jamais une charge commune
         if num in charge_acc_set:
             return True
         return num.startswith("6") or num.startswith("75")
