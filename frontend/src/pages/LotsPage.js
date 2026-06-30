@@ -67,7 +67,29 @@ function OwnerPicker({ owners, selectedIds, onChange, multi = true, onOwnerCreat
       onChange(multi ? [...selectedIds, data.id] : [data.id]);
       setQ('');
     } catch (err) {
-      toast.error(err.response?.data?.detail || 'Erreur creation proprietaire');
+      const detail = err.response?.data?.detail || '';
+      // iter89c : si le backend refuse pour cause de doublon, on extrait l'id
+      // du proprio existant (format "... id XXXX) ...") et on le selectionne.
+      // Plus aucune incoherence "Aucun proprio trouve" / "Doublon detecte".
+      const idMatch = detail.match(/id\s+([a-f0-9]{8})/i);
+      if (err.response?.status === 409 && idMatch) {
+        const partialId = idMatch[1];
+        try {
+          // Recherche le proprio existant via syndic-wide
+          const { data: allOwners } = await api.get('/owners', { params: { syndic_wide: true } });
+          const existing = allOwners.find(o => (o.id || '').toLowerCase().startsWith(partialId.toLowerCase()));
+          if (existing) {
+            toast.success(`Proprietaire existant selectionne : ${existing.name || `${existing.last_name} ${existing.first_name}`.trim()}`);
+            setCreateOpen(false);
+            setNewOwner({ first_name: '', last_name: '', email: '', phone: '' });
+            if (onOwnerCreated) onOwnerCreated(existing);
+            onChange(multi ? [...selectedIds, existing.id] : [existing.id]);
+            setQ('');
+            return;
+          }
+        } catch { /* fallthrough */ }
+      }
+      toast.error(detail || 'Erreur creation proprietaire');
     }
   };
 
@@ -761,7 +783,16 @@ export default function LotsPage() {
   const lotById = useMemo(() => Object.fromEntries(lots.map(l => [l.id, l])), [lots]);
 
   const load = useCallback(async () => {
-    const [lotsRes, ownersRes] = await Promise.all([api.get('/lots'), api.get('/owners')]);
+    // iter89b : owners en mode syndic-wide pour que le MutationDialog puisse
+    // trouver un acquereur deja proprio dans une AUTRE ACP du syndic. Sans
+    // ca, l'utilisateur cree un doublon car le picker ne voit que les proprios
+    // ayant deja un lot dans l'ACP courante (chinese wall iter85k).
+    // Le backend assign_owner_accounts() ajoute automatiquement l'ACP a
+    // owner.copropriete_ids[] au moment de la mutation -> integration propre.
+    const [lotsRes, ownersRes] = await Promise.all([
+      api.get('/lots'),
+      api.get('/owners', { params: { syndic_wide: true } }),
+    ]);
     setLots(lotsRes.data);
     setOwners(ownersRes.data);
   }, []);

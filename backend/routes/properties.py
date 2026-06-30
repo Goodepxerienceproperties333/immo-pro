@@ -150,7 +150,7 @@ def create_properties_router(db):
         return None
 
     @router.get("/owners")
-    async def list_owners(request: Request, copropriete_id: Optional[str] = None, include_unassigned: bool = False):
+    async def list_owners(request: Request, copropriete_id: Optional[str] = None, include_unassigned: bool = False, syndic_wide: bool = False):
         """Liste des proprietaires - chinese wall STRICT (RGPD).
 
         - Superadmin/admin : voit tout.
@@ -161,6 +161,11 @@ def create_properties_router(db):
           qui ont ete crees mais pas encore lies a un lot. Indispensable pour
           l'assistant de creation d'ACP (drop-down d'affectation lot->owner) afin
           que les owners juste importes via PdfImportDialog soient visibles.
+        - iter89b : `syndic_wide=true` : retourne TOUS les proprios accessibles
+          au syndic (toutes ses ACPs confondues), IGNORANT le param `copropriete_id`
+          et l'header `X-Copropriete-Id`. Indispensable pour le picker de
+          mutation (l'acquereur peut etre un proprio existant dans une AUTRE
+          ACP du meme syndic). Sans ca, on force l'utilisateur a creer un doublon.
         """
         # Aussi accepter le header X-Copropriete-Id pour homogeneiser
         if not copropriete_id:
@@ -176,6 +181,16 @@ def create_properties_router(db):
             return await db.owners.find(
                 {"$or": [{"copropriete_id": ""}, {"copropriete_id": {"$exists": False}}, {"copropriete_id": None}]},
                 {"_id": 0},
+            ).sort("last_name", 1).to_list(2000)
+        # iter89b : syndic_wide -> ignorer le scope ACP courant
+        if syndic_wide:
+            if is_super:
+                return await db.owners.find({}, {"_id": 0}).sort("last_name", 1).to_list(2000)
+            allowed_owner_ids = await _allowed_owner_ids(allowed_copros)
+            if not allowed_owner_ids:
+                return []
+            return await db.owners.find(
+                {"id": {"$in": list(allowed_owner_ids)}}, {"_id": 0}
             ).sort("last_name", 1).to_list(2000)
         if copropriete_id:
             # Cas ACP specifique : owners ayant un lot dans cette ACP

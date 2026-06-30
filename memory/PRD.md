@@ -11,6 +11,57 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 ## Implemented
+### Iter89b (Feb 2026) - Mutation : trouver les proprios syndic-wide + lier auto a l'ACP
+
+**Demande user** (2 screenshots) :
+1. "Lors de mutation il faut pouvoir retrouver les proprietaires lies a l'ACP"
+   (le picker affichait "Aucun proprietaire trouve" alors que ABED existait
+   dans une autre ACP du syndic)
+2. "En cas de doublons de proprietaire une fois qu'il est selectionne il faut
+   qu'il soit sauve en tant que proprietaire dans l'ACP"
+
+**Bug** : Chinese Wall iter85k filtrait /owners?copropriete_id=X strict ->
+proprios sans lot dans cette ACP -> INVISIBLES au picker. Mais le backend
+detectait quand meme le doublon a la creation -> impasse UI ("Aucun trouve"
++ "Doublon detecte").
+
+**Fix backend** :
+- `GET /owners?syndic_wide=true` : nouveau parametre qui IGNORE le scope ACP
+  et retourne tous les owners accessibles au syndic via ses ACPs (RBAC
+  respecte). Pour superadmin : tous les owners de la DB.
+- `assign_owner_accounts(db, owner, copro_id)` (`tier_accounts.py`) :
+  ajoute idempotemment `copro_id` a `owner.copropriete_ids[]` ($addToSet).
+  Cela couvre TOUS les cas ou un proprio "entre" dans une ACP :
+    * Mutation de lot (POST /lots/{id}/mutate appelle assign_owner_accounts)
+    * Creation d'une facture impliquant le proprio
+    * Toute operation qui necessite un compte tiers
+  -> Apres mutation, le nouvel acquereur EST officiellement dans l'ACP
+  (visible dans /owners?copropriete_id=X scope normal).
+
+**Fix frontend** :
+- `LotsPage.load()` : charge les owners avec `params: { syndic_wide: true }`
+  -> Le picker mutation voit TOUS les proprios accessibles, plus uniquement
+  ceux deja lies a l'ACP courante.
+- `OwnerPicker.handleCreateOwner()` : si le backend renvoie 409 (doublon
+  detecte), extrait l'id du proprio existant depuis le detail, refetch via
+  syndic_wide, et le selectionne directement avec un toast clair
+  "Proprietaire existant selectionne".
+  -> Plus aucune incoherence "Aucun trouve" + "Doublon" simultanee.
+
+**Tests** (`tests/test_iter89b_owner_picker_syndic_wide_and_link.py` - 4/4 PASS) :
+1. syndic_wide=true sur ACP B retourne aussi ABED (qui est dans ACP A)
+2. Scope normal (sans syndic_wide) continue a filtrer par ACP (regression)
+3. assign_owner_accounts ajoute idempotemment l'ACP a copropriete_ids
+4. Superadmin syndic_wide=true voit TOUS les owners
+
+**Regression complete iter85-iter89b** : **67/67 PASS**.
+
+**Fichiers** :
+- `/app/backend/routes/properties.py` (param `syndic_wide` sur GET /owners)
+- `/app/backend/tier_accounts.py` ($addToSet copropriete_ids dans assign_owner_accounts)
+- `/app/frontend/src/pages/LotsPage.js` (load() syndic_wide + handleCreateOwner gere 409)
+- `/app/backend/tests/test_iter89b_owner_picker_syndic_wide_and_link.py` (NEW - 4 tests)
+
 ### Iter89 (Feb 2026) - Portail proprietaire self-service : modif coords + locataires + notif syndic
 
 **Demande user** : "Creer une interface permettant aux proprietaires d'avoir

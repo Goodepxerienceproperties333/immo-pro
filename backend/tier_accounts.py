@@ -54,10 +54,25 @@ async def _ensure_account(db, copro_id: str, number: str, name: str, class_num: 
 
 async def assign_owner_accounts(db, owner: dict, copro_id: Optional[str] = None) -> dict:
     """Ensure the owner has provisions + reserve PCMN accounts in the given ACP.
-    Updates the owner doc in DB. Returns the updated owner."""
+    Updates the owner doc in DB. Returns the updated owner.
+
+    iter89b : ensures the ACP is ALSO present in `owner.copropriete_ids[]`
+    (idempotent $addToSet). Otherwise the owner wouldn't be visible in the
+    /owners scoped queries after a mutation (chinese wall would hide him).
+    """
     target_copro = copro_id or owner.get("copropriete_id", "")
     if not target_copro:
         return owner
+    # iter89b : always link the owner to this ACP (whatever the state of
+    # tier_accounts). Safe to call multiple times ($addToSet).
+    current_ids = list(owner.get("copropriete_ids") or [])
+    if target_copro not in current_ids:
+        await db.owners.update_one(
+            {"id": owner["id"]},
+            {"$addToSet": {"copropriete_ids": target_copro}}
+        )
+        current_ids.append(target_copro)
+        owner["copropriete_ids"] = current_ids
     # Per-ACP per-owner mapping stored as dict: {copro_id: {provisions, reserve}}
     accounts_map = owner.get("tier_accounts", {}) or {}
     if target_copro in accounts_map:
