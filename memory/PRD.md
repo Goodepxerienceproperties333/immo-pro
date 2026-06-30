@@ -11,6 +11,49 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 ## Implemented
+### Iter85f (Feb 2026) - Descriptions de lignes de factures propagees aux decomptes
+
+**Demande user** : "permettre d'ajouter un commentaire sur les lignes de
+factures qui seront visibles dans la description de la liste de depenses
+et decomptes"
+
+**Etat avant fix** :
+- Saisie : OK (champ `description` par ligne deja present dans InvoicesPage,
+  data-testid `invoice-line-desc-{idx}`)
+- Liste des depenses (`fiscal.py::list_expenses`) : OK depuis iter83
+  (priorise `li.description or inv.description`)
+- Decomptes : **BUG** - utilisait toujours `inv.description` (globale)
+
+**Fix** :
+- `pdf_decompte.py` : quand on stocke `acc_bucket["invoices"]`, on cherche les
+  lignes de la facture qui touchent le compte courant. Si une/plusieurs lignes
+  ont une description, on les concatene avec " - ". Sinon fallback sur
+  `inv.description` globale.
+- `routes/reports.py::decompte_annuel` (endpoint JSON) : agregation similaire,
+  toutes les descriptions de lignes de la facture concatenees.
+
+**Effet user-visible** :
+- Decompte PDF (sous "1. Detail de vos charges") : affiche les libelles precis
+  des lignes (ex. "Honoraires reunion AG du 12/03 - Nettoyage hall - operation
+  ponctuelle") au lieu d'une description generique de facture
+- Decompte JSON (utilise par le frontend pour preview) : pareil
+- Liste des depenses (deja OK) : 1 ligne par item avec sa description
+
+**Tests** (`tests/test_iter85f_line_descriptions_in_decomptes.py` - 3/3 PASS) :
+1. `decompte_annuel_uses_line_descriptions` : 2 lignes avec descriptions
+   distinctes -> les 2 libelles apparaissent dans charges[].description
+2. `decompte_annuel_single_line_legacy` : facture sans `lines[]` conserve
+   description globale (retrocompat)
+3. `pdf_decompte_includes_line_description` : libelle ligne present dans le
+   PDF (extrait via pypdf)
+
+**Regression complete** : 49/49 PASS sur stack iter82-85.
+
+**Fichiers** :
+- `/app/backend/pdf_decompte.py` (acc_bucket invoices append - desc enrichie)
+- `/app/backend/routes/reports.py` (decompte_annuel - desc enrichie)
+- `/app/backend/tests/test_iter85f_line_descriptions_in_decomptes.py` (NEW)
+
 ### Iter85e (Feb 2026) - Frais privatifs multi-allocations + chinese wall owners
 
 **Demande user** :

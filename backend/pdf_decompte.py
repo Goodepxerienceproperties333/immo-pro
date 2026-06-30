@@ -280,10 +280,24 @@ def build_decompte_pdf(
             acc_bucket["owner_prop"] += amt_prop
 
             # Store invoice detail for line-by-line breakdown under each account
+            # iter85f : pour les factures multi-lignes, si une ligne touche ce
+            # compte (acc) et a une description, on l'affiche au lieu de la
+            # description globale. Plusieurs lignes sur le meme compte ->
+            # descriptions concatenees par " - ".
+            inv_lines_raw = inv.get("lines") or []
+            line_descs = []
+            for _li in inv_lines_raw:
+                if _li.get("account_number") == acc:
+                    _d = (_li.get("description") or "").strip()
+                    if _d:
+                        line_descs.append(_d)
+            base_desc = inv.get("description", "") or ""
+            final_desc = " - ".join(line_descs) if line_descs else base_desc
+
             acc_bucket["invoices"].append({
                 "date": inv.get("date", ""),
                 "supplier": inv.get("supplier", "") or "",
-                "description": inv.get("description", "") or "",
+                "description": final_desc,
                 "reference": inv.get("reference", "") or inv.get("invoice_number", "") or "",
                 "total_amount": inv_total,
                 "owner_amt": amt_owner,

@@ -760,12 +760,24 @@ def create_reports_router(db):
             charges = []
             total_owner_charges = 0
             for inv in invoices:
+                # iter85f : pour multi-lignes, on agrege les descriptions de
+                # lignes par facture (separees par " - ") pour les afficher
+                # dans le decompte.
+                inv_lines_raw = inv.get("lines") or []
+                line_descs = [
+                    (li.get("description") or "").strip()
+                    for li in inv_lines_raw
+                    if (li.get("description") or "").strip()
+                ]
+                desc_combined = " - ".join(line_descs) if line_descs else (inv.get("description", "") or "")
+                desc_label = f"{inv.get('supplier', '')} - {desc_combined}".strip(" -")
+
                 dist_lines = inv.get("distribution_lines", [])
                 for dl in dist_lines:
                     if dl.get("lot_id") in [l["id"] for l in owner_lots]:
                         charges.append({
                             "date": inv["date"],
-                            "description": f"{inv.get('supplier', '')} - {inv.get('description', '')}",
+                            "description": desc_label,
                             "invoice_number": inv.get("number", ""),
                             "amount": dl.get("amount", 0),
                         })
@@ -775,7 +787,7 @@ def create_reports_router(db):
                     owner_amount = round(inv.get("total_amount", 0) * share, 2)
                     charges.append({
                         "date": inv["date"],
-                        "description": f"{inv.get('supplier', '')} - {inv.get('description', '')}",
+                        "description": desc_label,
                         "invoice_number": inv.get("number", ""),
                         "amount": owner_amount,
                     })
