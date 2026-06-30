@@ -11,6 +11,52 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 ## Implemented
+### Iter88b (Feb 2026) - Chinese Wall complet : migration localStorage -> useAuth sur les 3 dernieres pages
+
+**Demande user** : "Remplacer les derniers `localStorage.getItem('selectedCopro')` par
+`useAuth().selectedCopro` dans BankingPage, ReportsPage, FundCallsPage"
+
+**Pourquoi** : la migration vers `AuthContext` (iter85k) etait incomplete.
+Ces 3 pages utilisaient encore le pattern legacy localStorage qui :
+- Ne reagissait pas au changement d'ACP (necessitait F5)
+- Permettait des fuites entre ACPs si la cle localStorage etait obsolete
+
+**Changements** :
+
+1. **FundCallsPage** :
+   - Import `useAuth`, destructuring `const { selectedCopro } = useAuth()`
+   - 3 occurrences de `localStorage.getItem` remplacees (deleteAllCalls,
+     regenerateEntries, repairEmptyDistributions)
+   - useEffect : ajout de `selectedCopro` aux dependencies pour reload auto
+
+2. **BankingPage** : deja utilisait `useAuth().selectedCopro` mais avait
+   2 fallbacks legacy `|| localStorage.getItem('copropriete_id') || ''` :
+   - handleCodaImport : suppression du fallback
+   - CodaImportDialog prop : suppression du fallback
+
+3. **ReportsPage** :
+   - Import `useAuth`, destructuring
+   - Variable `copro` : remplacement du `typeof window... localStorage` par
+     `selectedCopro || ''`
+   - useEffect : ajout `[selectedCopro]` aux dependencies + reset des donnees
+     (`setBalance/setBilan/setResultat/setDecomptes` a null) au changement d'ACP
+     pour eviter d'afficher le bilan d'une autre copro
+
+**Effet user-visible** :
+- Changement d'ACP -> les 3 pages se rafraichissent instantanement (sans F5)
+- Les rapports d'une ACP A ne restent JAMAIS visibles apres bascule sur ACP B
+- Plus aucun risque de fuite via une cle localStorage obsolete
+
+**Tests** : pas de nouveau test (verifie par lint + smoke screenshot
+FundCallsPage qui affiche bien les appels de l'ACP courante).
+
+**Lint** : OK sur les 3 fichiers.
+
+**Fichiers** :
+- `/app/frontend/src/pages/FundCallsPage.js`
+- `/app/frontend/src/pages/BankingPage.js`
+- `/app/frontend/src/pages/ReportsPage.js`
+
 ### Iter88 (Feb 2026) - Cles de repartition : numero + cle par defaut selectionnable
 
 **Demande user** : "Ajouter un numero aux cles de repartition et permettre de

@@ -56,6 +56,7 @@ const CALL_TYPES = {
 const getCallTypeMeta = (t) => CALL_TYPES[t] || CALL_TYPES.provisions;
 
 export default function FundCallsPage() {
+  const { selectedCopro } = useAuth();
   const [calls, setCalls] = useState([]);
   const [years, setYears] = useState([]);
   const [distKeys, setDistKeys] = useState([]);
@@ -74,7 +75,8 @@ export default function FundCallsPage() {
     ]);
     setCalls(c.data); setYears(y.data); setDistKeys(dk.data); setBudgets(b.data);
   }, [fyParams.date_from, fyParams.date_to]);
-  useEffect(() => { load(); }, [load]);
+  // iter88b : reload sur changement d'ACP (chinese wall reactif)
+  useEffect(() => { load(); }, [load, selectedCopro]);
 
   const budgetName = (id) => budgets.find(b => b.id === id)?.name || '';
 
@@ -116,7 +118,7 @@ export default function FundCallsPage() {
   };
 
   const deleteAllCalls = async () => {
-    const copro = localStorage.getItem('selectedCopro') || localStorage.getItem('copropriete_id') || '';
+    const copro = selectedCopro || '';
     if (!copro || copro === 'all') { toast.error('Selectionnez une ACP'); return; }
     if (!window.confirm(`Supprimer TOUS les appels de fonds de cette ACP (${calls.length}) ET leurs ecritures comptables ? Cette action est irreversible.`)) return;
     try {
@@ -130,7 +132,7 @@ export default function FundCallsPage() {
   };
 
   const regenerateEntries = async () => {
-    const copro = localStorage.getItem('selectedCopro') || localStorage.getItem('copropriete_id') || '';
+    const copro = selectedCopro || '';
     if (!copro || copro === 'all') { toast.error('Selectionnez une ACP'); return; }
     if (!window.confirm(`Regenerer les ecritures comptables des ${calls.length} appel(s) de fonds ? Les libelles seront mis a jour selon le type d'appel.`)) return;
     try {
@@ -151,7 +153,7 @@ export default function FundCallsPage() {
   });
 
   const repairEmptyDistributions = async () => {
-    const copro = localStorage.getItem('selectedCopro') || localStorage.getItem('copropriete_id') || '';
+    const copro = selectedCopro || '';
     if (!copro || copro === 'all') { toast.error('Selectionnez une ACP'); return; }
     if (!window.confirm(
       `Reparer la distribution de ${brokenCalls.length} appel(s) ?\n\n`

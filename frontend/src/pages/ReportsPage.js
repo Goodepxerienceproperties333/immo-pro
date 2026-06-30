@@ -11,11 +11,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { toast } from 'sonner';
 import { BarChart3, Download, FileText, Eye, X } from 'lucide-react';
 import { fmtDate } from '@/lib/dateFmt';
+import { useAuth } from '@/contexts/AuthContext';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 const VALID_TABS = ['balance', 'bilan', 'resultat', 'decomptes'];
 
 export default function ReportsPage() {
+  const { selectedCopro } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const initialTab = VALID_TABS.includes(searchParams.get('tab')) ? searchParams.get('tab') : 'balance';
   const [tab, setTab] = useState(initialTab);
@@ -37,7 +39,10 @@ export default function ReportsPage() {
 
   useEffect(() => {
     api.get('/fiscal/years').then(r => setYears(r.data || [])).catch(() => {});
-  }, []);
+    // iter88b : reset des rapports affiches quand on change d'ACP (chinese wall)
+    // pour eviter de laisser visible le bilan/balance d'une autre copropriete.
+    setBalance(null); setBilan(null); setResultat(null); setDecomptes(null);
+  }, [selectedCopro]);
 
   const loadBalance = async () => { setLoading(true); try { const params = {}; if (dateFrom) params.date_from = dateFrom; if (dateTo) params.date_to = dateTo; const { data } = await api.get('/reports/balance', { params }); setBalance(data); } catch { toast.error('Erreur'); } finally { setLoading(false); } };
   const loadBilan = async () => {
@@ -164,7 +169,8 @@ export default function ReportsPage() {
     a.click();
     a.remove();
   };
-  const copro = typeof window !== 'undefined' ? (localStorage.getItem('selectedCopro') || localStorage.getItem('copropriete_id') || '') : '';
+  // iter88b : scope ACP via useAuth (chinese wall reactif) au lieu de localStorage
+  const copro = selectedCopro || '';
   const xlsxParam = copro ? `?copropriete_id=${copro}` : '';
   const exportBilanXlsx = () => window.open(`${API}/api/exports/bilan.xlsx${xlsxParam}${dateTo ? (xlsxParam ? '&' : '?') + 'date_to=' + dateTo : ''}`, '_blank');
   const exportBalanceTiersXlsx = () => window.open(`${API}/api/exports/balance-tiers/owners.xlsx${xlsxParam}`, '_blank');

@@ -76,7 +76,7 @@ export default function BankingPage() {
     try {
       const fd = new FormData();
       fd.append('file', file);
-      const coproId = selectedCopro || localStorage.getItem('copropriete_id') || '';
+      const coproId = selectedCopro || '';
       if (coproId) fd.append('copropriete_id', coproId);
       // Step 1 : preview only - no DB write yet
       const { data } = await api.post('/banking/coda/preview', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
@@ -902,7 +902,7 @@ export default function BankingPage() {
         open={codaDialogOpen}
         onClose={() => setCodaDialogOpen(false)}
         preview={codaPreview}
-        copropriete_id={selectedCopro || localStorage.getItem('copropriete_id') || ''}
+        copropriete_id={selectedCopro || ''}
         owners={owners}
         suppliers={suppliers}
         invoices={invoices}
