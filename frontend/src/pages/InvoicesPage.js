@@ -1047,7 +1047,17 @@ export default function InvoicesPage() {
 
             <div className="flex gap-3 justify-end">
               <Button variant="outline" onClick={() => setInvoiceDialog(false)}>Annuler</Button>
-              <Button onClick={saveInvoice} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="inv-save-btn">Enregistrer</Button>
+              <Button
+                onClick={saveInvoice}
+                disabled={aiExtracting}
+                className="bg-[#0055FF] hover:bg-[#0040CC] disabled:opacity-50 disabled:cursor-not-allowed"
+                title={aiExtracting ? "Extraction IA en cours - patientez..." : ""}
+                data-testid="inv-save-btn"
+              >
+                {aiExtracting ? (
+                  <><Loader2 size={14} className="mr-2 animate-spin" /> Extraction en cours...</>
+                ) : 'Enregistrer'}
+              </Button>
             </div>
           </div>
         </DialogContent>

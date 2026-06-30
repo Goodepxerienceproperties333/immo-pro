@@ -40,6 +40,15 @@ class InvoiceLineInput(BaseModel):
     description: Optional[str] = ""
 
 
+class PrivateFeeAllocation(BaseModel):
+    """Repartition d'un frais privatif sur un proprietaire.
+    Plusieurs allocations -> la facture est imputee a N proprietaires avec
+    leurs montants respectifs (somme = total_amount).
+    """
+    owner_id: str
+    amount: float
+
+
 class InvoiceInput(BaseModel):
     number: str
     date: str
@@ -53,11 +62,15 @@ class InvoiceInput(BaseModel):
     distribution_key_id: Optional[str] = ""
     status: Optional[str] = "unpaid"
     copropriete_id: Optional[str] = ""
-    # Frais privatifs: la facture est imputee a UN seul proprietaire
+    # Frais privatifs: la facture est imputee a UN OU PLUSIEURS proprietaires
     # via le compte 643. Si is_private_fee=true, distribution_key_id est ignore
     # et account_number force a 643.
+    # - private_fee_owner_id (legacy single-owner) : conserve pour retrocompat
+    # - private_fee_allocations (iter85e) : repartition multi-owners avec
+    #   montants fixes en EUR (somme = total_amount, tolerance 0.01)
     is_private_fee: Optional[bool] = False
     private_fee_owner_id: Optional[str] = ""
+    private_fee_allocations: Optional[List[PrivateFeeAllocation]] = None
     # Repartition occupant/proprietaire (pour decompte locataire).
     # Defaut : herite de la catégorie de dépense si non fourni.
     # Somme doit etre 100.
@@ -328,12 +341,37 @@ def create_invoices_router(db):
         occupant_pct = max(0.0, min(100.0, float(occupant_pct)))
         proprietaire_pct = round(100.0 - occupant_pct, 2)
         # Frais privatif: force compte 643, ignore distribution_key
+        # iter85e : supporte multi-allocations (plusieurs proprietaires avec
+        # montants fixes en EUR) en plus du legacy single-owner.
+        resolved_private_allocs: list = []
         if data.is_private_fee:
-            if not data.private_fee_owner_id:
-                raise HTTPException(400, "Un proprietaire doit etre selectionne pour un frais privatif")
-            owner = await db.owners.find_one({"id": data.private_fee_owner_id}, {"_id": 0})
-            if not owner:
-                raise HTTPException(404, "Proprietaire non trouve")
+            if data.private_fee_allocations:
+                # Multi-owners
+                total_alloc = 0.0
+                for idx, alloc in enumerate(data.private_fee_allocations, start=1):
+                    if not alloc.owner_id:
+                        raise HTTPException(400, f"Allocation {idx}: owner_id requis")
+                    owner = await db.owners.find_one({"id": alloc.owner_id}, {"_id": 0})
+                    if not owner:
+                        raise HTTPException(404, f"Allocation {idx}: proprietaire non trouve")
+                    amt = float(alloc.amount or 0)
+                    if amt <= 0:
+                        raise HTTPException(400, f"Allocation {idx}: montant doit etre > 0")
+                    total_alloc += amt
+                    resolved_private_allocs.append({"owner_id": alloc.owner_id, "amount": round(amt, 2)})
+                if abs(total_alloc - float(data.total_amount)) > 0.01:
+                    raise HTTPException(
+                        400,
+                        f"Somme des allocations ({total_alloc:.2f}) doit egaler le total de la facture ({data.total_amount:.2f})",
+                    )
+            elif data.private_fee_owner_id:
+                # Legacy single-owner
+                owner = await db.owners.find_one({"id": data.private_fee_owner_id}, {"_id": 0})
+                if not owner:
+                    raise HTTPException(404, "Proprietaire non trouve")
+                resolved_private_allocs = [{"owner_id": data.private_fee_owner_id, "amount": round(float(data.total_amount), 2)}]
+            else:
+                raise HTTPException(400, "Au moins un proprietaire doit etre selectionne pour un frais privatif")
             account_number = "643"
         # Compute distribution lines if key provided (skipped for private fees,
         # remplaced by merged_dist in multi-line mode)
@@ -391,6 +429,7 @@ def create_invoices_router(db):
             "copropriete_id": data.copropriete_id or "",
             "is_private_fee": bool(data.is_private_fee),
             "private_fee_owner_id": data.private_fee_owner_id or "",
+            "private_fee_allocations": resolved_private_allocs if data.is_private_fee else [],
             # Repartition occupant/proprietaire pour decompte locataire
             "occupant_pct": occupant_pct,
             "proprietaire_pct": proprietaire_pct,
@@ -444,12 +483,34 @@ def create_invoices_router(db):
             occupant_pct = cat_default_occupant or 0.0
         occupant_pct = max(0.0, min(100.0, occupant_pct))
         proprietaire_pct = round(100.0 - occupant_pct, 2)
+        # iter85e : supporte multi-allocations en PUT aussi
+        resolved_private_allocs_upd: list = []
         if data.is_private_fee:
-            if not data.private_fee_owner_id:
-                raise HTTPException(400, "Un proprietaire doit etre selectionne pour un frais privatif")
-            owner = await db.owners.find_one({"id": data.private_fee_owner_id}, {"_id": 0})
-            if not owner:
-                raise HTTPException(404, "Proprietaire non trouve")
+            if data.private_fee_allocations:
+                total_alloc = 0.0
+                for idx, alloc in enumerate(data.private_fee_allocations, start=1):
+                    if not alloc.owner_id:
+                        raise HTTPException(400, f"Allocation {idx}: owner_id requis")
+                    owner = await db.owners.find_one({"id": alloc.owner_id}, {"_id": 0})
+                    if not owner:
+                        raise HTTPException(404, f"Allocation {idx}: proprietaire non trouve")
+                    amt = float(alloc.amount or 0)
+                    if amt <= 0:
+                        raise HTTPException(400, f"Allocation {idx}: montant doit etre > 0")
+                    total_alloc += amt
+                    resolved_private_allocs_upd.append({"owner_id": alloc.owner_id, "amount": round(amt, 2)})
+                if abs(total_alloc - float(data.total_amount)) > 0.01:
+                    raise HTTPException(
+                        400,
+                        f"Somme des allocations ({total_alloc:.2f}) doit egaler le total de la facture ({data.total_amount:.2f})",
+                    )
+            elif data.private_fee_owner_id:
+                owner = await db.owners.find_one({"id": data.private_fee_owner_id}, {"_id": 0})
+                if not owner:
+                    raise HTTPException(404, "Proprietaire non trouve")
+                resolved_private_allocs_upd = [{"owner_id": data.private_fee_owner_id, "amount": round(float(data.total_amount), 2)}]
+            else:
+                raise HTTPException(400, "Au moins un proprietaire doit etre selectionne pour un frais privatif")
             account_number = "643"
         update = {
             "number": data.number, "date": data.date, "due_date": data.due_date,
@@ -462,6 +523,7 @@ def create_invoices_router(db):
             "status": data.status,
             "is_private_fee": bool(data.is_private_fee),
             "private_fee_owner_id": data.private_fee_owner_id or "",
+            "private_fee_allocations": resolved_private_allocs_upd if data.is_private_fee else [],
             "occupant_pct": occupant_pct,
             "proprietaire_pct": proprietaire_pct,
             "occupant_amount": round(data.total_amount * occupant_pct / 100, 2),
