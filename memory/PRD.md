@@ -12,6 +12,38 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 ## Implemented
+### Iter90j (Feb 2026) - Fix flakiness "Event loop is closed" sur la suite tests
+
+**Ticket** : `test_iter90cd_owner_scope_duplicates_pdfs.py` (et d'autres tests
+basés sur `asyncio.run`) échouaient en suite complète avec
+`RuntimeError: Event loop is closed`, alors qu'ils passaient en isolation.
+
+**Cause racine** : Le client Motor (`db`) est créé à l'import de `server.py`
+et se lie au PREMIER event loop sur lequel il opère. Chaque `asyncio.run()`
+crée puis ferme son propre loop → après le premier test, Motor reste
+référencé à un loop fermé et tous les tests `asyncio.run`-based suivants
+crashent dans le bridge PyMongo.
+
+**Fix** : Nouveau `/app/backend/tests/conftest.py`
+- Crée un event loop UNIQUE persistant à scope session.
+- Monkey-patch `asyncio.run(coro)` → dispatch sur ce loop persistent
+  via `loop.run_until_complete(coro)`.
+- Tous les tests utilisent automatiquement le même loop → Motor reste lié
+  à ce loop toute la session → plus aucun "Event loop is closed".
+- Zéro modification dans les 133 occurrences `asyncio.run` des tests.
+
+**Validation** :
+- `test_iter90*.py` (5 fichiers) : 5/5 PASS en suite.
+- Mix iter76+77+83+85+87+89+90 (33 tests asyncio) : 33/33 PASS.
+- 3 runs successifs confirment la stabilité.
+- Suite complète : 436 PASS (vs 433 avant le fix).
+- Les 136 failed/106 errors restants sont des tests d'intégration HTTP
+  (BASE_URL manquante, exercices fiscaux non seedés) — antérieurs et hors
+  périmètre P1.
+
+
+
+## Implemented
 ### Iter90i (Feb 2026) - Exclusion des frais privatifs du total "Dépenses"
 
 **Ticket user** : Sur l'ACP Acacia (production), 9 factures
