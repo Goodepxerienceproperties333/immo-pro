@@ -421,7 +421,32 @@ export default function InvoicesPage() {
                     <TableCell className="font-medium">{inv.supplier}</TableCell>
                     <TableCell className="max-w-[200px] truncate">{inv.description}</TableCell>
                     <TableCell className="text-right font-mono">{inv.total_amount?.toFixed(2)} EUR</TableCell>
-                    <TableCell className="text-xs">{distKeys.find(k => k.id === inv.distribution_key_id)?.name || '-'}</TableCell>
+                    <TableCell className="text-xs">{(() => {
+                      // iter85e : affichage cascade de la cle de repartition
+                      //   1. invoice.distribution_key_id direct
+                      //   2. distinct keys utilisees dans invoice.lines
+                      //   3. default_distribution_key_id de la nature de depense
+                      //   4. '-' si vraiment aucune cle
+                      const directKey = distKeys.find(k => k.id === inv.distribution_key_id);
+                      if (directKey) return directKey.name;
+                      const lineKeys = Array.from(new Set(
+                        (inv.lines || []).map(l => l.distribution_key_id).filter(Boolean)
+                      )).map(kid => distKeys.find(k => k.id === kid)?.name).filter(Boolean);
+                      if (lineKeys.length === 1) return lineKeys[0];
+                      if (lineKeys.length > 1) return `${lineKeys.length} cles`;
+                      const cat = categories.find(c => c.id === inv.expense_category_id);
+                      if (cat?.default_distribution_key_id) {
+                        const defKey = distKeys.find(k => k.id === cat.default_distribution_key_id);
+                        if (defKey) {
+                          return (
+                            <span className="text-slate-500 italic" title="Cle par defaut (via nature de depense)">
+                              {defKey.name}
+                            </span>
+                          );
+                        }
+                      }
+                      return '-';
+                    })()}</TableCell>
                     <TableCell>
                       <Badge className={inv.status === 'paid' ? 'bg-green-50 text-green-700 border-green-200' : inv.status === 'unpaid' ? 'bg-red-50 text-red-700 border-red-200' : 'bg-slate-50 text-slate-600'} variant="outline">
                         {inv.status === 'paid' ? 'Payee' : inv.status === 'unpaid' ? 'Impayee' : 'Brouillon'}
