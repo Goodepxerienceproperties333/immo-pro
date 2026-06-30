@@ -11,6 +11,27 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 ## Implemented
+### Iter89c (Feb 2026) - Validation page Doublons potentiels (P0)
+
+**Etat** : feature complete deja en place (frontend + backend + tests).
+- Backend `/app/backend/routes/duplicates.py` : 3 endpoints GET (suppliers,
+  owners, users) + 1 POST /owners/merge + delegation a /api/suppliers/merge
+  pour la fusion fournisseurs. Chinese wall respecte.
+- Frontend `/app/frontend/src/pages/AdminDuplicatesPage.js` : tabs
+  Fournisseurs / Proprietaires / Utilisateurs, filtre ACP, cartes
+  cliquables avec selection visuelle, badges "match: IBAN/TVA/nom/email/
+  adresse/BCE/telephone", bouton "Fusionner (N a absorber)" desactive
+  tant qu'aucune fiche "a conserver" n'est selectionnee.
+- Route enregistree dans `App.js` (`/admin/duplicates`) + carte d'acces
+  dans `AdminDashboardPage.js`.
+
+**Validation P0 (Feb 2026)** :
+- Pytest doublons (iter78, 79, 81, 84, 88d) : **25/25 passed**.
+- Smoke test UI live : 35 groupes detectes sur 173 fournisseurs scannes,
+  badges et boutons fonctionnels en mode superadmin (scope Plateforme).
+
+
+## Implemented
 ### Iter89b (Feb 2026) - Mutation : trouver les proprios syndic-wide + lier auto a l'ACP
 
 **Demande user** (2 screenshots) :
