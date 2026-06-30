@@ -11,6 +11,31 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 ## Implemented
+### Iter90b (Feb 2026) - Journal d'audit des operations d'acces proprietaire
+
+**Demande user** : Tracer qui active/suspend/reactive l'acces d'un proprietaire,
+pour quel proprio, et quand (RGPD + litige).
+
+**Backend** :
+- Nouvelle collection `owner_access_audit` (indexes : owner_id, (owner_id, created_at desc))
+- Helper `_log_audit(...)` dans `routes/owner_access.py` (best-effort,
+  capture : action, owner_id/name/email, target_user_id/email,
+  actor_user_id/email/name/role, ip, user_agent, details, created_at)
+- Loggage automatique dans les 4 endpoints : `grant`, `resend`, `revoke`, `reactivate`
+- Nouvel endpoint `GET /api/owners/{owner_id}/access-audit?limit=50`
+  (scoped chinese-wall, tri DESC par date)
+
+**Frontend** :
+- `OwnerAccessSection` : section dépliable « Historique des actions d&apos;acces »
+  qui charge l'historique a la demande, affiche les badges color-coded
+  (grant=vert, revoke=rouge, etc.), l'acteur, la cible, l'IP, et les
+  details (compte existant lie / email non envoye).
+
+**Validation e2e** : revoke + reactivate via curl loguent bien 2 entrees
+avec actor=admin@copro.be, target_user_email=selimabed@protonmail.com,
+ip captured, tri DESC OK.
+
+
 ### Iter90 (Feb 2026) - Gestion manuelle de l'acces propriete + reset password
 
 **Demande user** : Le syndic doit pouvoir activer/desactiver l'acces du

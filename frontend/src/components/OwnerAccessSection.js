@@ -4,10 +4,29 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
 import {
-  KeyRound, MailCheck, Ban, RotateCcw, ShieldCheck, Loader2,
+  KeyRound, MailCheck, Ban, RotateCcw, Loader2,
   AlertCircle, CheckCircle2, Clock, ShieldOff,
+  History, ChevronDown, ChevronUp,
 } from 'lucide-react';
 import { fmtDate } from '@/lib/dateFmt';
+
+const ACTION_LABELS = {
+  grant: { label: 'Acces active', cls: 'text-emerald-700 bg-emerald-50', Icon: KeyRound },
+  resend: { label: 'Invitation renvoyee', cls: 'text-blue-700 bg-blue-50', Icon: MailCheck },
+  revoke: { label: 'Acces suspendu', cls: 'text-red-700 bg-red-50', Icon: Ban },
+  reactivate: { label: 'Acces reactive', cls: 'text-emerald-700 bg-emerald-50', Icon: RotateCcw },
+};
+
+function fmtDateTime(iso) {
+  if (!iso) return '';
+  try {
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return iso;
+    return d.toLocaleString('fr-BE', { dateStyle: 'short', timeStyle: 'short' });
+  } catch {
+    return iso;
+  }
+}
 
 /**
  * OwnerAccessSection — Manages platform access for an owner.
@@ -22,6 +41,9 @@ export default function OwnerAccessSection({ ownerId, ownerEmail }) {
   const [status, setStatus] = useState(null);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(null); // 'grant' | 'resend' | 'revoke' | 'reactivate'
+  const [auditOpen, setAuditOpen] = useState(false);
+  const [auditEntries, setAuditEntries] = useState(null);
+  const [auditLoading, setAuditLoading] = useState(false);
 
   const load = useCallback(async () => {
     if (!ownerId) return;
@@ -39,6 +61,28 @@ export default function OwnerAccessSection({ ownerId, ownerEmail }) {
 
   useEffect(() => { load(); }, [load]);
 
+  const loadAudit = useCallback(async () => {
+    if (!ownerId) return;
+    setAuditLoading(true);
+    try {
+      const { data } = await api.get(`/owners/${ownerId}/access-audit`, { params: { limit: 50 } });
+      setAuditEntries(data.entries || []);
+    } catch (e) {
+      setAuditEntries([]);
+      toast.error(e.response?.data?.detail || 'Impossible de charger l\'historique');
+    } finally {
+      setAuditLoading(false);
+    }
+  }, [ownerId]);
+
+  const toggleAudit = async () => {
+    const next = !auditOpen;
+    setAuditOpen(next);
+    if (next && auditEntries === null) {
+      await loadAudit();
+    }
+  };
+
   const callAction = async (path, label, busyKey) => {
     setBusy(busyKey);
     try {
@@ -51,6 +95,9 @@ export default function OwnerAccessSection({ ownerId, ownerEmail }) {
       });
       if (data.status) setStatus(data.status);
       else load();
+      // Force-refresh audit list next time it's opened
+      setAuditEntries(null);
+      if (auditOpen) loadAudit();
     } catch (e) {
       toast.error(e.response?.data?.detail || `Echec : ${label}`);
     } finally {
@@ -186,6 +233,73 @@ export default function OwnerAccessSection({ ownerId, ownerEmail }) {
           <AlertCircle size={12} /> Saisissez d&apos;abord une adresse email valide pour le proprietaire.
         </p>
       )}
+
+      {/* ---- Audit journal (collapsible) ---- */}
+      <div className="mt-4 pt-3 border-t border-slate-200">
+        <button
+          type="button"
+          onClick={toggleAudit}
+          className="text-xs text-slate-600 hover:text-slate-900 flex items-center gap-1.5"
+          data-testid="owner-access-audit-toggle"
+        >
+          <History size={13} />
+          <span>Historique des actions d&apos;acces</span>
+          {auditOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+        </button>
+        {auditOpen && (
+          <div className="mt-3" data-testid="owner-access-audit-list">
+            {auditLoading ? (
+              <div className="text-xs text-slate-500 flex items-center gap-2 py-2">
+                <Loader2 size={12} className="animate-spin" /> Chargement de l&apos;historique...
+              </div>
+            ) : !auditEntries || auditEntries.length === 0 ? (
+              <p className="text-xs text-slate-400 italic py-2">
+                Aucune action enregistree pour ce proprietaire.
+              </p>
+            ) : (
+              <ul className="space-y-1.5">
+                {auditEntries.map((e) => {
+                  const cfg = ACTION_LABELS[e.action] || { label: e.action, cls: 'text-slate-700 bg-slate-100', Icon: History };
+                  const ActIcon = cfg.Icon;
+                  return (
+                    <li
+                      key={e.id}
+                      className="flex items-start gap-2 text-[11px] bg-white border border-slate-200 rounded-md px-2 py-1.5"
+                      data-testid={`owner-access-audit-entry-${e.id}`}
+                    >
+                      <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded ${cfg.cls} flex-shrink-0`}>
+                        <ActIcon size={10} /> {cfg.label}
+                      </span>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-slate-700">
+                          <b>{e.actor_name || e.actor_email || 'syndic'}</b>
+                          <span className="text-slate-400 ml-1.5">({e.actor_role})</span>
+                          {e.target_user_email && (
+                            <>
+                              <span className="text-slate-400"> &rarr; </span>
+                              <span className="font-mono text-[10px]">{e.target_user_email}</span>
+                            </>
+                          )}
+                        </div>
+                        <div className="text-slate-400 text-[10px] mt-0.5">
+                          {fmtDateTime(e.created_at)}
+                          {e.ip && <span className="ml-2">IP : <span className="font-mono">{e.ip}</span></span>}
+                          {e.details?.invitation_sent === false && (
+                            <span className="ml-2 text-amber-600">(email non envoye)</span>
+                          )}
+                          {e.details?.linked_existing_user === true && (
+                            <span className="ml-2 text-blue-600">(compte existant lie)</span>
+                          )}
+                        </div>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

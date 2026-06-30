@@ -789,6 +789,9 @@ async def startup():
         await db.password_reset_tokens.create_index("expires_at", expireAfterSeconds=0)
         await db.password_reset_tokens.create_index("token_hash", unique=True)
         await db.password_reset_attempts.create_index("created_at")
+        # iter90b : audit journal for owner access operations
+        await db.owner_access_audit.create_index("owner_id")
+        await db.owner_access_audit.create_index([("owner_id", 1), ("created_at", -1)])
     except Exception:
         pass
     await seed_admin()

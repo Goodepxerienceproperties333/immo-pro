@@ -37,6 +37,39 @@ def create_owner_access_router(db):
             raise HTTPException(403, "Acces reserve a l'administration")
         return user, is_superadmin_only(user.get("role", "")), user.get("copropriete_ids", []) or []
 
+    async def _log_audit(
+        *, action: str, actor: dict, owner: dict, user_doc: dict | None = None,
+        details: dict | None = None, request: Request | None = None,
+    ):
+        """Insert an entry in owner_access_audit. Best-effort (logs but never raises)."""
+        try:
+            ip = ""
+            ua = ""
+            if request is not None:
+                ip = (request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+                      or (request.client.host if request.client else "")
+                      or "")
+                ua = (request.headers.get("user-agent") or "")[:300]
+            await db.owner_access_audit.insert_one({
+                "id": str(uuid.uuid4()),
+                "action": action,  # 'grant' | 'resend' | 'revoke' | 'reactivate'
+                "owner_id": owner.get("id"),
+                "owner_name": owner.get("name") or "",
+                "owner_email": (owner.get("email") or "").lower(),
+                "target_user_id": (str(user_doc["_id"]) if user_doc and user_doc.get("_id") else None),
+                "target_user_email": (user_doc or {}).get("email", "").lower() if user_doc else None,
+                "actor_user_id": str(actor.get("_id") or actor.get("id") or ""),
+                "actor_email": actor.get("email", ""),
+                "actor_name": actor.get("name", ""),
+                "actor_role": actor.get("role", ""),
+                "ip": ip,
+                "user_agent": ua,
+                "details": details or {},
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            })
+        except Exception as e:
+            logger.warning(f"owner_access_audit insert failed: {e}")
+
     async def _owner_in_scope(owner_id: str, allowed_copros) -> bool:
         c1 = await db.lots.count_documents({
             "owner_id": owner_id,
@@ -173,6 +206,11 @@ def create_owner_access_router(db):
                 invitation_sent = await _send_invitation_email(email, name, inviter)
             refreshed = await db.users.find_one({"_id": existing["_id"]})
             owner_after = await db.owners.find_one({"id": owner_id}, {"_id": 0})
+            await _log_audit(
+                action="grant", actor=inviter, owner=owner_after or owner,
+                user_doc=refreshed, request=request,
+                details={"linked_existing_user": True, "invitation_sent": invitation_sent},
+            )
             return {
                 "message": "Acces active (compte existant lie)",
                 "linked_existing_user": True,
@@ -203,6 +241,11 @@ def create_owner_access_router(db):
         invitation_sent = await _send_invitation_email(email, name, inviter)
         new_user = await db.users.find_one({"_id": result.inserted_id})
         owner_after = await db.owners.find_one({"id": owner_id}, {"_id": 0})
+        await _log_audit(
+            action="grant", actor=inviter, owner=owner_after or owner,
+            user_doc=new_user, request=request,
+            details={"linked_existing_user": False, "invitation_sent": invitation_sent},
+        )
         return {
             "message": "Acces active. Invitation envoyee.",
             "linked_existing_user": False,
@@ -227,12 +270,16 @@ def create_owner_access_router(db):
         email = user.get("email")
         name = user.get("name") or owner.get("name") or "Proprietaire"
         sent = await _send_invitation_email(email, name, inviter)
+        await _log_audit(
+            action="resend", actor=inviter, owner=owner, user_doc=user,
+            request=request, details={"invitation_sent": sent},
+        )
         return {"message": "Invitation renvoyee" if sent else "Invitation enregistree (envoi differe)", "invitation_sent": sent}
 
     # ---------- POST revoke-access ----------
     @router.post("/{owner_id}/revoke-access")
     async def revoke_access(owner_id: str, request: Request):
-        _, is_super, allowed_copros = await _get_admin_scope(request)
+        actor, is_super, allowed_copros = await _get_admin_scope(request)
         owner = await _load_owner_or_404(owner_id, is_super, allowed_copros)
         user = await _find_linked_user(owner)
         if not user:
@@ -248,6 +295,9 @@ def create_owner_access_router(db):
             {"$set": {"consumed_at": datetime.now(timezone.utc).isoformat()}}
         )
         refreshed = await db.users.find_one({"_id": user["_id"]})
+        await _log_audit(
+            action="revoke", actor=actor, owner=owner, user_doc=refreshed, request=request,
+        )
         return {
             "message": "Acces suspendu",
             "status": _serialize_status(owner, refreshed),
@@ -256,7 +306,7 @@ def create_owner_access_router(db):
     # ---------- POST reactivate-access ----------
     @router.post("/{owner_id}/reactivate-access")
     async def reactivate_access(owner_id: str, request: Request):
-        _, is_super, allowed_copros = await _get_admin_scope(request)
+        actor, is_super, allowed_copros = await _get_admin_scope(request)
         owner = await _load_owner_or_404(owner_id, is_super, allowed_copros)
         user = await _find_linked_user(owner)
         if not user:
@@ -268,9 +318,27 @@ def create_owner_access_router(db):
              "$unset": {"suspended_at": ""}}
         )
         refreshed = await db.users.find_one({"_id": user["_id"]})
+        await _log_audit(
+            action="reactivate", actor=actor, owner=owner, user_doc=refreshed, request=request,
+        )
         return {
             "message": "Acces reactive",
             "status": _serialize_status(owner, refreshed),
         }
+
+    # ---------- GET access-audit (history) ----------
+    @router.get("/{owner_id}/access-audit")
+    async def get_access_audit(owner_id: str, request: Request, limit: int = 50):
+        """Returns the access-events history (grant/resend/revoke/reactivate)
+        for a specific owner. Scoped by chinese wall : the requester must
+        have access to this owner. Most recent first."""
+        _, is_super, allowed_copros = await _get_admin_scope(request)
+        await _load_owner_or_404(owner_id, is_super, allowed_copros)
+        limit = max(1, min(int(limit or 50), 200))
+        entries = await db.owner_access_audit.find(
+            {"owner_id": owner_id},
+            {"_id": 0},
+        ).sort("created_at", -1).limit(limit).to_list(limit)
+        return {"entries": entries, "count": len(entries)}
 
     return router
