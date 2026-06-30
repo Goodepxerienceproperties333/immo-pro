@@ -551,7 +551,7 @@ export default function InvoicesPage() {
                       {renderTh('date', 'Date')}
                       {renderTh('supplier', 'Fournisseur')}
                       {renderTh('description', 'Description')}
-                      {renderTh('total_amount', 'Montant', 'text-right', 'right')}
+                      {renderTh('total_amount', 'Montant', 'text-right whitespace-nowrap min-w-[110px]', 'right')}
                       <TableHead>Cle</TableHead>
                       {renderTh('status', 'Statut')}
                       <TableHead className="w-20">Actions</TableHead>
@@ -597,7 +597,7 @@ export default function InvoicesPage() {
                     <TableCell>{fmtDate(inv.date)}</TableCell>
                     <TableCell className="font-medium">{inv.supplier}</TableCell>
                     <TableCell className="max-w-[200px] truncate">{inv.description}</TableCell>
-                    <TableCell className="text-right font-mono">{inv.total_amount?.toFixed(2)} EUR</TableCell>
+                    <TableCell className="text-right font-mono whitespace-nowrap">{inv.total_amount?.toFixed(2)} EUR</TableCell>
                     <TableCell className="text-xs">{(() => {
                       // iter85e : affichage cascade de la cle de repartition
                       //   1. invoice.distribution_key_id direct

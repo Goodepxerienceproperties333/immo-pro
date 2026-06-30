@@ -11,6 +11,38 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 ## Implemented
+### Iter88c (Feb 2026) - Montants non tronques / non casses sur 2 lignes dans TOUS les tableaux
+
+**Demande user** (avec screenshot) : "donner assez de largeur pour que les
+montants ne soient pas tronqués ou passés à la ligne dans les tableaux ceci
+doit s'appliquer partout"
+
+Le screenshot montrait "1144.29 EUR" casse en "1144.29" / "EUR" sur 2 lignes
+dans le tableau Factures.
+
+**Fix global via CSS** (`frontend/src/App.css`) :
+```css
+table td.text-right,
+table th.text-right,
+.data-table td.text-right,
+.data-table th.text-right { white-space: nowrap; }
+table td.font-mono, .data-table td.font-mono { white-space: nowrap; }
+.amount-nowrap { white-space: nowrap; }
+```
+
+**Effet** : 
+- Toutes les cellules `text-right` (montants, totaux) restent sur 1 ligne
+- Toutes les cellules `font-mono` (codes, refs, dates) idem
+- Couvre TOUS les tableaux de l'app sans modifier chaque fichier :
+  InvoicesPage, ExpensesPage, BankingPage, ReportsPage, FundCallsPage,
+  BalanceTiersPage, BudgetsPage, AccountingPage, LotsPage, etc.
+
+**Renforcement explicite** sur la colonne Montant des factures (defense en
+profondeur) : `min-w-[110px]` sur le header + `whitespace-nowrap` sur le td.
+
+**Tests** : verifie via screenshot que la colonne Montant a maintenant assez
+d'espace. Lint clean.
+
 ### Iter88b (Feb 2026) - Chinese Wall complet : migration localStorage -> useAuth sur les 3 dernieres pages
 
 **Demande user** : "Remplacer les derniers `localStorage.getItem('selectedCopro')` par

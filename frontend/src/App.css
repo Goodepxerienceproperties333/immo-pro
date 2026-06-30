@@ -44,3 +44,26 @@
 .btn-secondary {
     @apply bg-white text-slate-700 border border-slate-200 font-semibold rounded-md px-4 py-2 hover:bg-slate-50 transition-colors text-sm;
 }
+
+/* iter88c : Tableaux - empecher les retours a la ligne sur les montants/dates/refs.
+ * Regle globale appliquee a tous les tableaux de l'app (shadcn Table + .data-table).
+ * Cible :
+ *  - colonnes text-right (presque toujours des montants)
+ *  - cellules en font-mono (codes, dates, ref factures)
+ *  - cellules contenant un span/badge de montant
+ * Resultat : "1144.29 EUR" ne se casse plus jamais en "1144.29" / "EUR".
+ */
+table td.text-right,
+table th.text-right,
+.data-table td.text-right,
+.data-table th.text-right {
+    white-space: nowrap;
+}
+table td.font-mono,
+.data-table td.font-mono {
+    white-space: nowrap;
+}
+/* Classe utility a appliquer manuellement quand le montant n'est pas .text-right */
+.amount-nowrap {
+    white-space: nowrap;
+}
