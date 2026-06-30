@@ -655,8 +655,11 @@ def create_fiscal_router(db):
                             distribution_key_id: Optional[str] = None,
                             expense_category_id: Optional[str] = None,
                             bank_account: Optional[str] = None):
-        """Liste les depenses (factures + ecritures OD classe 6) filtrables.
+        """Liste les depenses (factures expandees + ecritures FI/OD classe 6).
+        iter90f : refactore -> utilise compute_expense_rows() comme single
+        source of truth (memes rows que le PDF "Liste des depenses").
         Chinese walls STRICT : copropriete_id requis (param ou header)."""
+        from expense_rows import compute_expense_rows
         if not copropriete_id:
             copropriete_id = request.headers.get("X-Copropriete-Id") or None
         if fiscal_year_id and not (date_from and date_to):
@@ -667,352 +670,31 @@ def create_fiscal_router(db):
         if not copropriete_id or copropriete_id == "all":
             raise HTTPException(400, "copropriete_id requis - chinese walls strict.")
 
-        # 1) Invoices (frais reels comptabilises via AC)
-        inv_q = {}
-        if copropriete_id:
-            inv_q["copropriete_id"] = copropriete_id
-        if date_from or date_to:
-            inv_q["date"] = {}
-            if date_from:
-                inv_q["date"]["$gte"] = date_from
-            if date_to:
-                inv_q["date"]["$lte"] = date_to
-        # Filtres : pour les factures multi-lignes, on accepte aussi un match
-        # sur une des lines[]. On filtre au niveau document via $or pour les
-        # 3 champs concernes.
-        if account_number:
-            inv_q["$or"] = [
-                {"account_number": account_number},
-                {"lines.account_number": account_number},
-            ]
-        if distribution_key_id:
-            key_or = [
-                {"distribution_key_id": distribution_key_id},
-                {"lines.distribution_key_id": distribution_key_id},
-            ]
-            if "$or" in inv_q:
-                inv_q = {"$and": [inv_q, {"$or": key_or}]}
-            else:
-                inv_q["$or"] = key_or
-        if expense_category_id:
-            cat_or = [
-                {"expense_category_id": expense_category_id},
-                {"lines.expense_category_id": expense_category_id},
-            ]
-            if "$and" in inv_q:
-                inv_q["$and"].append({"$or": cat_or})
-            elif "$or" in inv_q:
-                inv_q = {"$and": [inv_q, {"$or": cat_or}]}
-            else:
-                inv_q["$or"] = cat_or
-        invoices = await db.invoices.find(inv_q, {"_id": 0}).sort("date", 1).to_list(50000)
+        rows, totals = await compute_expense_rows(
+            db, copropriete_id,
+            date_from=date_from, date_to=date_to,
+            account_number=account_number,
+            distribution_key_id=distribution_key_id,
+            expense_category_id=expense_category_id,
+            bank_account=bank_account,
+        )
 
-        # 2) Bank txns matched to filter by bank_account
-        if bank_account:
-            bank_matches = await db.bank_transactions.find(
-                {"matched": True, "match_type": "invoice",
-                 "account_number": bank_account,
-                 **({"copropriete_id": copropriete_id} if copropriete_id else {})},
-                {"_id": 0, "matched_to": 1}
-            ).to_list(10000)
-            paid_ids = {b["matched_to"] for b in bank_matches}
-            invoices = [i for i in invoices if i["id"] in paid_ids]
-
-        # 3) Resolve names for dist keys
-        keys = await db.distribution_keys.find(
-            {"copropriete_id": copropriete_id} if copropriete_id else {}, {"_id": 0}
-        ).to_list(1000)
-        keys_map = {k["id"]: k["name"] for k in keys}
-
-        # 3b) Resolve expense categories (natures de depense)
-        cats = await db.expense_categories.find(
-            {"copropriete_id": copropriete_id} if copropriete_id else {}, {"_id": 0}
-        ).to_list(2000)
-        cat_by_id = {c["id"]: c for c in cats}
-        cat_by_acc = {}
-        for c in cats:
-            acc = c.get("account_number", "")
-            if acc:
-                cat_by_acc.setdefault(acc, c)
-
-        # 4) Resolve PCMN names + bank accounts
-        accs = await db.pcmn_accounts.find(
-            {"class_num": 6, **({"copropriete_id": copropriete_id} if copropriete_id else {})},
-            {"_id": 0, "number": 1, "name": 1}
-        ).to_list(1000)
-        acc_names = {a["number"]: a["name"] for a in accs}
-
-        # Resolve payment info per invoice
-        all_inv_ids = [i["id"] for i in invoices]
-        bank_q = {"matched": True, "match_type": "invoice", "matched_to": {"$in": all_inv_ids}}
-        if copropriete_id:
-            bank_q["copropriete_id"] = copropriete_id
-        bank_txns = await db.bank_transactions.find(bank_q, {"_id": 0}).to_list(50000)
-        paid_map = {}  # inv_id -> {amount, date, account}
-        for t in bank_txns:
-            paid_map[t["matched_to"]] = {
-                "amount": abs(t.get("amount", 0)),
-                "date": t.get("date", ""),
-                "bank_account": t.get("account_number", ""),
-            }
-
-        rows = []
-        # Set des `source_invoice_id` deja inclus via les factures pour eviter
-        # les doublons quand on parcourra les ecritures.
-        invoice_ids_done = set()
-        # iter86 : resolve owner names pour les frais privatifs (pour transparence
-        # dans la liste des depenses : on veut afficher "Frais privatif - DUPONT").
-        owner_ids_needed = set()
-        for inv in invoices:
-            if inv.get("is_private_fee"):
-                for a in (inv.get("private_fee_allocations") or []):
-                    if a.get("owner_id"):
-                        owner_ids_needed.add(a["owner_id"])
-                if inv.get("private_fee_owner_id"):
-                    owner_ids_needed.add(inv["private_fee_owner_id"])
-        owners_by_id = {}
-        if owner_ids_needed:
-            owner_docs = await db.owners.find(
-                {"id": {"$in": list(owner_ids_needed)}},
-                {"_id": 0, "id": 1, "name": 1, "first_name": 1, "last_name": 1}
-            ).to_list(1000)
-            for o in owner_docs:
-                disp = (o.get("name") or f"{o.get('first_name','')} {o.get('last_name','')}").strip()
-                owners_by_id[o["id"]] = disp or o["id"]
-        for inv in invoices:
-            invoice_ids_done.add(inv["id"])
-            inv_lines = inv.get("lines") or []
-            # Mode multi-lignes : on "eclate" la facture en N rows, une par ligne,
-            # de facon a ce que chaque nature/compte/cle apparaisse separement
-            # dans la liste des depenses (P0 user request iter83).
-            if inv_lines:
-                inv_total = float(inv.get("total_amount", 0) or 0)
-                for li_idx, li in enumerate(inv_lines):
-                    li_acc = li.get("account_number", "")
-                    li_key_id = li.get("distribution_key_id", "")
-                    li_cat = cat_by_id.get(li.get("expense_category_id", "")) or cat_by_acc.get(li_acc) or {}
-                    li_amt = float(li.get("amount", 0) or 0)
-                    # Si un filtre est actif, on filtre ICI au niveau de la ligne
-                    # (le $or Mongo a deja matche le doc, mais peut inclure les
-                    # autres lignes de la meme facture)
-                    if account_number and li_acc != account_number:
-                        continue
-                    if distribution_key_id and li_key_id != distribution_key_id:
-                        continue
-                    if expense_category_id and li.get("expense_category_id", "") != expense_category_id and li_cat.get("id", "") != expense_category_id:
-                        continue
-                    # Repartition occupant/proprietaire : on conserve les % de
-                    # la facture et on les applique au montant de la ligne.
-                    occ_pct = float(inv.get("occupant_pct", 0) or 0)
-                    prop_pct = float(inv.get("proprietaire_pct", 100) or 100) if inv.get("proprietaire_pct") is not None else 100
-                    rows.append({
-                        "id": f"{inv['id']}::line-{li_idx}",
-                        "invoice_id": inv["id"],
-                        "is_invoice_line": True,
-                        "line_index": li_idx,
-                        "line_count": len(inv_lines),
-                        "date": inv.get("date", ""),
-                        "number": inv.get("number", ""),
-                        "supplier": inv.get("supplier", ""),
-                        "description": (li.get("description") or inv.get("description", "")).strip(),
-                        "account_number": li_acc,
-                        "account_name": acc_names.get(li_acc, ""),
-                        "expense_category_id": li_cat.get("id", ""),
-                        "expense_category_name": li_cat.get("name", ""),
-                        "expense_category_code": li_cat.get("code", ""),
-                        "distribution_key_id": li_key_id,
-                        "distribution_key_name": keys_map.get(li_key_id, "—"),
-                        "vat_amount": 0,  # TVA reste au niveau facture, non eclatee
-                        "total_amount": round(li_amt, 2),
-                        "status": inv.get("status", "unpaid"),
-                        "paid": inv["id"] in paid_map,
-                        "paid_info": paid_map.get(inv["id"]),
-                        "attachments_count": len(inv.get("attachments", []) or []),
-                        "occupant_pct": occ_pct,
-                        "proprietaire_pct": prop_pct,
-                        "occupant_amount": round(li_amt * occ_pct / 100, 2),
-                        "proprietaire_amount": round(li_amt * prop_pct / 100, 2),
-                        "source": "invoice",
-                        "journal_type": "AC",
-                        # Sous-total facture pour affichage UI
-                        "invoice_total_amount": inv_total,
-                    })
-                continue
-
-            # Mode 1-ligne (legacy)
-            acc = inv.get("account_number", "")
-            key_id = inv.get("distribution_key_id", "")
-            cat = cat_by_id.get(inv.get("expense_category_id", "")) or cat_by_acc.get(acc) or {}
-            # iter86 : enrichissement frais privatif (transparence dans la liste)
-            is_priv = bool(inv.get("is_private_fee"))
-            priv_allocs = []
-            priv_owners_display = ""
-            if is_priv:
-                allocs_raw = inv.get("private_fee_allocations") or []
-                if not allocs_raw and inv.get("private_fee_owner_id"):
-                    allocs_raw = [{"owner_id": inv["private_fee_owner_id"], "amount": float(inv.get("total_amount", 0) or 0)}]
-                for a in allocs_raw:
-                    oid = a.get("owner_id", "")
-                    priv_allocs.append({
-                        "owner_id": oid,
-                        "owner_name": owners_by_id.get(oid, ""),
-                        "amount": round(float(a.get("amount", 0) or 0), 2),
-                    })
-                priv_owners_display = ", ".join(p["owner_name"] for p in priv_allocs if p["owner_name"])
-            rows.append({
-                "id": inv["id"],
-                "date": inv.get("date", ""),
-                "number": inv.get("number", ""),
-                "supplier": inv.get("supplier", ""),
-                "description": inv.get("description", ""),
-                "account_number": acc,
-                "account_name": acc_names.get(acc, ""),
-                "expense_category_id": cat.get("id", ""),
-                "expense_category_name": cat.get("name", ""),
-                "expense_category_code": cat.get("code", ""),
-                "distribution_key_id": key_id,
-                "distribution_key_name": keys_map.get(key_id, "—"),
-                "vat_amount": inv.get("vat_amount", 0),
-                "total_amount": inv.get("total_amount", 0),
-                "status": inv.get("status", "unpaid"),
-                "paid": inv["id"] in paid_map,
-                "paid_info": paid_map.get(inv["id"]),
-                "attachments_count": len(inv.get("attachments", []) or []),
-                "occupant_pct": inv.get("occupant_pct", 0) or 0,
-                "proprietaire_pct": inv.get("proprietaire_pct", 100) if inv.get("proprietaire_pct") is not None else 100,
-                "occupant_amount": inv.get("occupant_amount", 0) or 0,
-                "proprietaire_amount": inv.get("proprietaire_amount", 0) or inv.get("total_amount", 0),
-                "source": "invoice",
-                "journal_type": "AC",
-                # iter86 : flag + details privatifs (pour affichage badge + tooltip)
-                "is_private_fee": is_priv,
-                "private_fee_allocations": priv_allocs,
-                "private_fee_owners_display": priv_owners_display,
-            })
-
-        # ----- Inclure aussi les ecritures FI / OD impactant les comptes 6XX -----
-        # (frais bancaires, produits financiers, regularisations) afin d'aligner
-        # la "Liste des depenses" avec la vue Optipro (qui regroupe AC + FI sur
-        # les charges).
-        # Resoudre tous les comptes PCMN classe 6, 65 (frais financiers), 75 (produits financiers)
-        all_charge_accs_q = {"class_num": {"$in": [6, 7]}}
-        if copropriete_id:
-            all_charge_accs_q["copropriete_id"] = copropriete_id
-        charge_accs = await db.pcmn_accounts.find(all_charge_accs_q, {"_id": 0, "number": 1, "name": 1, "class_num": 1}).to_list(2000)
-        charge_acc_set = {a["number"] for a in charge_accs}
-        charge_acc_names = {a["number"]: a["name"] for a in charge_accs}
-        # Heuristique : tout compte commencant par "6" ou "75" est considere comme charge/produit financier
-        def _is_charge_account(num: str) -> bool:
-            if not num:
-                return False
-            if num in charge_acc_set:
-                return True
-            return num.startswith("6") or num.startswith("75")
-
-        je_q = {"journal_type": {"$in": ["FI", "OD"]}}
-        if copropriete_id:
-            je_q["copropriete_id"] = copropriete_id
-        if date_from or date_to:
-            je_q["date"] = {}
-            if date_from:
-                je_q["date"]["$gte"] = date_from
-            if date_to:
-                je_q["date"]["$lte"] = date_to
-        # Exclude reversals + entries already represented by invoice
-        je_q["$and"] = [
-            {"reverses_id": {"$exists": False}},
-            {"reversed_by_id": {"$exists": False}},
-        ]
-        je_entries = await db.journal_entries.find(je_q, {"_id": 0}).sort("date", 1).to_list(50000)
-        for je in je_entries:
-            # iter86 fix : skip JE auto-generee par une facture deja listee.
-            # Le champ correct est `source_id` (pas `source_invoice_id` qui
-            # n'existe pas). Sans ce filtre, les OD d'imputation frais privatif
-            # (Cr 643) etaient additionnees a la liste et neutralisaient la
-            # facture (+155 facture + -155 OD = 0).
-            if je.get("source_type") == "invoice" and je.get("source_id") in invoice_ids_done:
-                continue
-            # Each line with a charge account contributes
-            for ln in je.get("lines", []) or []:
-                acc = (ln.get("account_number") or "").strip()
-                if not _is_charge_account(acc):
-                    continue
-                if account_number and acc != account_number:
-                    continue
-                # Line-level overrides (set via PUT /entries/{id}/line-quick)
-                ln_cat_id = ln.get("expense_category_id") or ""
-                ln_key_id = ln.get("distribution_key_id") or ""
-                # Resolve via account if no override
-                cat = cat_by_id.get(ln_cat_id) or cat_by_acc.get(acc) or {}
-                if expense_category_id and cat.get("id", "") != expense_category_id:
-                    continue
-                if distribution_key_id and ln_key_id != distribution_key_id:
-                    continue
-                # Signed amount : debit - credit (positive = expense, negative = product)
-                debit = float(ln.get("debit", 0) or 0)
-                credit = float(ln.get("credit", 0) or 0)
-                amount = debit - credit
-                if abs(amount) < 0.005:
-                    continue
-                desc = (ln.get("description") or je.get("description", "") or "").strip()
-                occ_pct = ln.get("occupant_pct")
-                prop_pct = ln.get("proprietaire_pct")
-                if occ_pct is None:
-                    occ_pct = 0
-                if prop_pct is None:
-                    prop_pct = 100
-                rows.append({
-                    "id": je.get("id", ""),
-                    "date": je.get("date", ""),
-                    "number": je.get("reference", "") or "",
-                    "supplier": ln.get("counterparty_name", "") or je.get("description", "")[:50] or "—",
-                    "description": desc,
-                    "account_number": acc,
-                    "account_name": charge_acc_names.get(acc, "") or ln.get("account_name", ""),
-                    "expense_category_id": cat.get("id", ""),
-                    "expense_category_name": cat.get("name", "") or charge_acc_names.get(acc, ""),
-                    "expense_category_code": cat.get("code", ""),
-                    "distribution_key_id": ln_key_id,
-                    "distribution_key_name": keys_map.get(ln_key_id, "—"),
-                    "vat_amount": 0,
-                    "total_amount": round(amount, 2),
-                    "status": "comptabilise",
-                    "paid": True,
-                    "paid_info": None,
-                    "attachments_count": 0,
-                    "occupant_pct": float(occ_pct),
-                    "proprietaire_pct": float(prop_pct),
-                    "occupant_amount": round(amount * float(occ_pct) / 100, 2),
-                    "proprietaire_amount": round(amount * float(prop_pct) / 100, 2),
-                    "source": "journal",
-                    "source_account": acc,  # used by the line-quick endpoint to identify the line
-                    "journal_type": je.get("journal_type", ""),
-                })
-
-        # Re-sort all rows by date for clean rendering
-        rows.sort(key=lambda r: (r.get("date", ""), r.get("number", "")))
-
-        totals = {
-            "by_account": {},
-            "by_key": {},
-            "by_bank": {},
-            "total": round(sum(r["total_amount"] for r in rows), 2),
-            "count": len(rows),
-        }
+        # iter90f : ajoute totals.by_nature (N2) = somme par nature de depense.
+        # Invariant : sum(by_nature) == sum(by_account) == sum(by_key) == total.
+        totals["by_nature"] = {}
         for r in rows:
-            acc = r["account_number"] or "—"
-            totals["by_account"][acc] = round(totals["by_account"].get(acc, 0) + r["total_amount"], 2)
-            kn = r["distribution_key_name"]
-            totals["by_key"][kn] = round(totals["by_key"].get(kn, 0) + r["total_amount"], 2)
-            if r["paid"] and r["paid_info"]:
-                ba = r["paid_info"]["bank_account"] or "—"
-                totals["by_bank"][ba] = round(totals["by_bank"].get(ba, 0) + r["paid_info"]["amount"], 2)
+            nature_label = r.get("expense_category_name") or "Sans nature"
+            totals["by_nature"][nature_label] = round(
+                totals["by_nature"].get(nature_label, 0) + r["total_amount"], 2
+            )
 
-        # List available filter values
+        # List available filter values (memes que l'ancienne version)
         filters = {
             "accounts": sorted({r["account_number"] for r in rows if r["account_number"]}),
-            "keys": sorted({r["distribution_key_name"] for r in rows if r["distribution_key_name"] and r["distribution_key_name"] != "—"}),
-            "banks": sorted({r["paid_info"]["bank_account"] for r in rows if r.get("paid_info") and r["paid_info"]["bank_account"]}),
+            "keys": sorted({r["distribution_key_name"] for r in rows
+                            if r["distribution_key_name"] and r["distribution_key_name"] != "—" and r["distribution_key_name"] != "Sans cle"}),
+            "banks": sorted({r["paid_info"]["bank_account"] for r in rows
+                             if r.get("paid_info") and r["paid_info"]["bank_account"]}),
         }
         return {"expenses": rows, "totals": totals, "filters": filters}
 

@@ -375,33 +375,71 @@ export default function ExpensesPage() {
       </Card>
 
       {/* Totals */}
-      {data && (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
-          <Card className="border-[#0055FF] bg-blue-50/40">
-            <CardContent className="p-4">
-              <div className="text-xs uppercase tracking-wider text-blue-700">Total filtre</div>
-              <div className="text-2xl font-black text-[#0055FF] font-mono mt-1" style={{ fontFamily: 'Chivo,sans-serif' }} data-testid="expenses-total">{data.totals.total.toFixed(2)} EUR</div>
-              <div className="text-[11px] text-slate-500 mt-1">{data.totals.count} depenses</div>
-            </CardContent>
-          </Card>
-          <Card><CardContent className="p-3">
-            <div className="text-[10px] uppercase tracking-wider text-slate-500">Par nature (top 3)</div>
-            <div className="space-y-1 mt-1">
-              {Object.entries(data.totals.by_account).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, v]) => (
-                <div key={k} className="flex justify-between text-xs"><span className="font-mono">{k}</span><span className="font-mono font-semibold">{v.toFixed(2)}</span></div>
-              ))}
-            </div>
-          </CardContent></Card>
-          <Card><CardContent className="p-3">
-            <div className="text-[10px] uppercase tracking-wider text-slate-500">Par cle (top 3)</div>
-            <div className="space-y-1 mt-1">
-              {Object.entries(data.totals.by_key).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, v]) => (
-                <div key={k} className="flex justify-between text-xs"><span className="truncate max-w-[120px]">{k}</span><span className="font-mono font-semibold">{v.toFixed(2)}</span></div>
-              ))}
-            </div>
-          </CardContent></Card>
-        </div>
-      )}
+      {data && (() => {
+        // iter90f : Top 3 + bucket "Autres" + footer "Total" => somme widget = Total filtre
+        const buildBreakdown = (mapping) => {
+          const entries = Object.entries(mapping || {}).sort((a, b) => b[1] - a[1]);
+          const top3 = entries.slice(0, 3);
+          const restSum = entries.slice(3).reduce((s, [, v]) => s + v, 0);
+          const widgetTotal = entries.reduce((s, [, v]) => s + v, 0);
+          return { top3, restSum: Math.round(restSum * 100) / 100, widgetTotal: Math.round(widgetTotal * 100) / 100 };
+        };
+        const byNature = buildBreakdown(data.totals.by_nature || {});
+        const byKey = buildBreakdown(data.totals.by_key || {});
+        return (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+            <Card className="border-[#0055FF] bg-blue-50/40">
+              <CardContent className="p-4">
+                <div className="text-xs uppercase tracking-wider text-blue-700">Total filtre</div>
+                <div className="text-2xl font-black text-[#0055FF] font-mono mt-1" style={{ fontFamily: 'Chivo,sans-serif' }} data-testid="expenses-total">{data.totals.total.toFixed(2)} EUR</div>
+                <div className="text-[11px] text-slate-500 mt-1">{data.totals.count} depenses</div>
+              </CardContent>
+            </Card>
+            <Card data-testid="widget-by-nature"><CardContent className="p-3">
+              <div className="text-[10px] uppercase tracking-wider text-slate-500">Par nature (top 3)</div>
+              <div className="space-y-1 mt-1">
+                {byNature.top3.map(([k, v]) => (
+                  <div key={k} className="flex justify-between text-xs" data-testid={`widget-nature-row-${k}`}>
+                    <span className="truncate max-w-[170px]" title={k}>{k}</span>
+                    <span className="font-mono font-semibold">{v.toFixed(2)}</span>
+                  </div>
+                ))}
+                {byNature.restSum > 0.005 && (
+                  <div className="flex justify-between text-xs text-slate-500 italic" data-testid="widget-nature-others">
+                    <span>Autres</span>
+                    <span className="font-mono">{byNature.restSum.toFixed(2)}</span>
+                  </div>
+                )}
+                <div className="flex justify-between text-xs pt-1 mt-1 border-t border-slate-200 font-semibold" data-testid="widget-nature-total">
+                  <span className="uppercase text-[10px] tracking-wider">Total</span>
+                  <span className="font-mono">{byNature.widgetTotal.toFixed(2)}</span>
+                </div>
+              </div>
+            </CardContent></Card>
+            <Card data-testid="widget-by-key"><CardContent className="p-3">
+              <div className="text-[10px] uppercase tracking-wider text-slate-500">Par cle (top 3)</div>
+              <div className="space-y-1 mt-1">
+                {byKey.top3.map(([k, v]) => (
+                  <div key={k} className="flex justify-between text-xs" data-testid={`widget-key-row-${k}`}>
+                    <span className="truncate max-w-[170px]" title={k}>{k}</span>
+                    <span className="font-mono font-semibold">{v.toFixed(2)}</span>
+                  </div>
+                ))}
+                {byKey.restSum > 0.005 && (
+                  <div className="flex justify-between text-xs text-slate-500 italic" data-testid="widget-key-others">
+                    <span>Autres</span>
+                    <span className="font-mono">{byKey.restSum.toFixed(2)}</span>
+                  </div>
+                )}
+                <div className="flex justify-between text-xs pt-1 mt-1 border-t border-slate-200 font-semibold" data-testid="widget-key-total">
+                  <span className="uppercase text-[10px] tracking-wider">Total</span>
+                  <span className="font-mono">{byKey.widgetTotal.toFixed(2)}</span>
+                </div>
+              </div>
+            </CardContent></Card>
+          </div>
+        );
+      })()}
 
       {/* Hierarchical or flat table */}
       {viewMode === 'flat' ? (

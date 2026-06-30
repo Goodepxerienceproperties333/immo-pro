@@ -11,6 +11,42 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 ## Implemented
+### Iter90f (Feb 2026) - Vue UI Depenses + PDF unifies sur source unique
+
+**Ticket user** : Aligner la vue UI "Depenses de l'exercice" sur la meme
+source que le PDF + widgets coherents avec Total filtre + bucket "Autres"
++ footer "Total" + label "Sans cle" et by_nature au lieu de by_account.
+
+**Backend** :
+- `routes/fiscal.py::list_expenses` refactore : 350 lignes de logique
+  dupliquee supprimees, remplacees par un appel a
+  `expense_rows.compute_expense_rows()`. Single source of truth garantie
+  pour la UI et le PDF.
+- `totals.by_nature` ajoute en plus de `by_account` (N3) et `by_key` (N1).
+  Cle = `expense_category_name` (ou "Sans nature").
+- Invariant verifie e2e :
+  sum(by_nature) == sum(by_account) == sum(by_key) == total = 33828.43.
+- `distribution_key_name` retourne "Sans cle" au lieu de "—" pour les
+  rows sans cle de repartition.
+
+**Frontend** :
+- `ExpensesPage.js` widgets "Par Nature" et "Par Cle" :
+  * Top 3 + bucket "Autres" (somme du reste) + footer "Total".
+  * Le widget Par Nature lit `data.totals.by_nature` (N2) au lieu de
+    `by_account` (N3).
+  * Le label "—" remplace par "Sans cle" dans la hierarchie (par defaut
+    via `r.distribution_key_name || 'Sans cle'`).
+  * data-testid : `widget-by-nature`, `widget-by-key`,
+    `widget-nature-total`, `widget-key-total`, etc.
+
+**Validation e2e (ACP Gaura, exercice 2025)** :
+- Total filtre = 33.828,43 EUR (120 depenses)
+- Widget Nature : Top 3 + Autres 13168,12 = TOTAL 33828,43
+- Widget Cle : "Charges communes" 32608,06 + "Sans cle" 1220,37 = TOTAL 33828,43
+- PDF "Liste des depenses" TVAC = 33.828,43
+- Tous matchent au centime.
+
+
 ### Iter90e (Feb 2026) - PDF "Liste des depenses" aligne sur la vue UI + colonnes HTVA/TVA/TVAC
 
 **Ticket user** : Aligner le PDF "Liste des depenses" sur la vue UI des
