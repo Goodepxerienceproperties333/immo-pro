@@ -257,23 +257,29 @@ async def compute_expense_rows(
     charge_acc_names = {a["number"]: a["name"] for a in charge_accs}
 
     def _is_charge_account(num: str) -> bool:
-        """True si le compte est une vraie charge COMMUNE (classe 6 ou 75).
+        """True si le compte est une charge (classe 6) ou un produit (classe 7)
+        legitime a apparaitre dans la liste des depenses / flux d'exercice.
+
         iter90h : protection defensive - les comptes commençant par 44 (frais
         privatifs en passage, comptes tampon fournisseur, etc.) ne sont JAMAIS
         consideres comme charges meme si le PCMN les marque class_num=6.
         iter90i : exclure aussi 643* (Frais privatifs) - ce sont des charges
         privatives refacturees aux proprietaires, jamais des charges communes.
-        Cela evite le double comptage via la pass FI/OD (l'OD-PRIV de
-        refacturation pose un debit sur 643)."""
+        iter90k : exclure 70* (Chiffre d'affaires / Provisions / Appels de
+        fonds) car ce sont des recettes de copropriete natives (Ventes),
+        deja tracees dans les appels de fonds — pas dans le flux "depenses".
+        On accepte tous les 6* et 7* SAUF ces cas."""
         if not num:
             return False
-        if num.startswith("44") or num.startswith("40") or num.startswith("41") or num.startswith("42"):
+        if num.startswith(("44", "40", "41", "42")):
             return False  # classe 4 = comptes de tiers, jamais une charge
         if num.startswith("643"):
             return False  # frais privatifs, jamais une charge commune
+        if num.startswith("70"):
+            return False  # provisions / appels de fonds : hors flux depenses
         if num in charge_acc_set:
             return True
-        return num.startswith("6") or num.startswith("75")
+        return num.startswith("6") or num.startswith("7")
 
     je_q: dict = {"journal_type": {"$in": ["FI", "OD"]}, "copropriete_id": copropriete_id}
     if date_from or date_to:

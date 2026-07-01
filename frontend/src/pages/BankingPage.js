@@ -10,7 +10,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { toast } from 'sonner';
-import { Plus, Trash2, Upload, Link2, Unlink, Search, Landmark, PlusCircle, Save, Pencil, X, CheckCircle2, AlertTriangle, Eye } from 'lucide-react';
+import { Plus, Trash2, Upload, Link2, Unlink, Search, Landmark, PlusCircle, Save, Pencil, X, CheckCircle2, AlertTriangle, Eye, Tag } from 'lucide-react';
 import { useFiscalYearParams } from '@/hooks/useFiscalYearParams';
 import { useAuth } from '@/contexts/AuthContext';
 import CounterpartySearchSelect from '@/components/CounterpartySearchSelect';
@@ -48,6 +48,12 @@ export default function BankingPage() {
   const [batchInvoiceSearch, setBatchInvoiceSearch] = useState('');
   // 1 txn -> N invoices (multi-selection des factures dans le dialog lettrage de transaction)
   const [selectedInvoiceIds, setSelectedInvoiceIds] = useState(new Set());
+  // ----- iter90k : Categorisation par nature de depense/revenu -----
+  const [expenseCategories, setExpenseCategories] = useState([]);
+  const [distributionKeys, setDistributionKeys] = useState([]);
+  const [categorizeDialog, setCategorizeDialog] = useState(false);
+  const [categorizeTarget, setCategorizeTarget] = useState(null);
+  const [categorizeSplits, setCategorizeSplits] = useState([]);
 
   const load = useCallback(async () => {
     const promises = [
@@ -55,11 +61,15 @@ export default function BankingPage() {
       api.get('/banking/transactions', { params: fyParams }),
       api.get('/owners'),
       api.get('/invoices', { params: fyParams }),
-      api.get('/suppliers')
+      api.get('/suppliers'),
+      api.get('/expense-categories').catch(() => ({ data: [] })),
+      api.get('/distribution-keys').catch(() => ({ data: [] })),
     ];
     if (selectedCopro) promises.push(api.get(`/coproprietes/${selectedCopro}`));
-    const [s, t, o, inv, sup, c] = await Promise.all(promises);
+    const [s, t, o, inv, sup, cats, dks, c] = await Promise.all(promises);
     setStatements(s.data); setTransactions(t.data); setOwners(o.data); setInvoices(inv.data); setSuppliers(sup.data);
+    setExpenseCategories(cats.data || []);
+    setDistributionKeys(dks.data || []);
     setBankAccounts(c?.data?.bank_accounts || []);
   }, [selectedCopro, fyParams.date_from, fyParams.date_to]);
   useEffect(() => { load(); }, [load]);
@@ -165,6 +175,35 @@ export default function BankingPage() {
   const doLettrage = async (id, type) => { try { await api.post('/banking/lettrage', { transaction_id: lettrageTarget.id, match_to_id: id, match_type: type }); toast.success('Lettre'); setLettrageDialog(false); if (selectedStmt) loadStmtTxns(selectedStmt); else load(); load(); } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); } };
   const unlettrage = async (id) => { await api.post(`/banking/unlettrage/${id}`); toast.success('Delettrage'); if (selectedStmt) loadStmtTxns(selectedStmt); else load(); load(); };
   const unlettrageByInvoice = async (invId) => { try { await api.post(`/banking/unlettrage-by-invoice/${invId}`); toast.success('Facture delettree'); if (selectedStmt) loadStmtTxns(selectedStmt); load(); } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); } };
+
+  // ----- iter90k : CATEGORISATION -----
+  const openCategorize = (txn) => {
+    setCategorizeTarget(txn);
+    setCategorizeSplits([{ expense_category_id: '', distribution_key_id: '', amount: Math.abs(Number(txn.amount) || 0), description: '' }]);
+    setCategorizeDialog(true);
+  };
+  const addCatSplit = () => setCategorizeSplits([...categorizeSplits, { expense_category_id: '', distribution_key_id: '', amount: 0, description: '' }]);
+  const removeCatSplit = (i) => setCategorizeSplits(categorizeSplits.filter((_, idx) => idx !== i));
+  const updateCatSplit = (i, f, v) => { const s = [...categorizeSplits]; s[i] = { ...s[i], [f]: v }; setCategorizeSplits(s); };
+  const doCategorize = async () => {
+    if (!categorizeTarget) return;
+    const payload = { splits: categorizeSplits.map(s => ({ ...s, amount: Number(s.amount) })) };
+    try {
+      await api.post(`/banking/transactions/${categorizeTarget.id}/categorize`, payload);
+      toast.success(`Categorisation OK (${payload.splits.length} nature${payload.splits.length > 1 ? 's' : ''})`);
+      setCategorizeDialog(false);
+      if (selectedStmt) loadStmtTxns(selectedStmt); else load();
+    } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); }
+  };
+  const uncategorize = async (id) => {
+    if (!window.confirm('Retirer la nature de cette transaction ?')) return;
+    try {
+      await api.delete(`/banking/transactions/${id}/categorize`);
+      toast.success('Categorisation retiree');
+      if (selectedStmt) loadStmtTxns(selectedStmt); else load();
+    } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); }
+  };
+
   // 1 txn -> N factures : multi-selection dans le dialog Lettrage
   const toggleInvoiceSelected = (id) => {
     setSelectedInvoiceIds(prev => {
@@ -525,12 +564,33 @@ export default function BankingPage() {
                         <TableCell className="text-sm break-words" style={{wordBreak: 'break-word'}}>{txn.counterparty_name}</TableCell>
                         <TableCell className="text-sm break-words" style={{wordBreak: 'break-word'}}>{txn.communication}</TableCell>
                         <TableCell className={`text-right font-mono font-semibold ${txn.amount >= 0 ? 'text-green-700' : 'text-red-700'}`}>{txn.amount >= 0 ? '+' : ''}{txn.amount?.toFixed(2)}</TableCell>
-                        <TableCell>{txn.matched ? <Badge className="bg-green-50 text-green-700 border-green-200 text-[10px]" variant="outline">{txn.match_type === 'owner_payment' ? 'Proprio' : txn.match_type === 'supplier_payment' ? 'Fourn.' : 'Fact.'}</Badge> : <Badge variant="outline" className="text-slate-400 text-[10px]">-</Badge>}</TableCell>
+                        <TableCell>{txn.matched ? <Badge className={
+                            txn.match_type === 'expense_category'
+                              ? "bg-purple-50 text-purple-700 border-purple-200 text-[10px]"
+                              : "bg-green-50 text-green-700 border-green-200 text-[10px]"
+                          } variant="outline">{
+                            txn.match_type === 'owner_payment' ? 'Proprio' :
+                            txn.match_type === 'supplier_payment' ? 'Fourn.' :
+                            txn.match_type === 'expense_category' ? (
+                              (txn.category_splits && txn.category_splits.length > 1)
+                                ? `Nature (${txn.category_splits.length})`
+                                : 'Nature'
+                            ) :
+                            'Fact.'
+                          }</Badge> : <Badge variant="outline" className="text-slate-400 text-[10px]">-</Badge>}</TableCell>
                         <TableCell>
                           <div className="flex gap-0">
                             <Button variant="ghost" size="sm" onClick={() => startEdit(txn)} className="h-6 w-6 p-0 text-slate-400" title="Editer" data-testid={`edit-txn-${txn.id}`}><Pencil size={11} /></Button>
-                            {txn.matched ? <Button variant="ghost" size="sm" onClick={() => unlettrage(txn.id)} className="text-orange-500 h-6 w-6 p-0" title="Delettrer"><Unlink size={11} /></Button>
-                              : <Button variant="ghost" size="sm" onClick={() => openLettrage(txn)} className="text-[#0055FF] h-6 w-6 p-0" title="Lettrer" data-testid={`lettrage-${txn.id}`}><Link2 size={11} /></Button>}
+                            {txn.matched ? (
+                              txn.match_type === 'expense_category'
+                                ? <Button variant="ghost" size="sm" onClick={() => uncategorize(txn.id)} className="text-purple-600 h-6 w-6 p-0" title="Retirer la nature" data-testid={`uncategorize-${txn.id}`}><Unlink size={11} /></Button>
+                                : <Button variant="ghost" size="sm" onClick={() => unlettrage(txn.id)} className="text-orange-500 h-6 w-6 p-0" title="Delettrer"><Unlink size={11} /></Button>
+                            ) : (
+                              <>
+                                <Button variant="ghost" size="sm" onClick={() => openLettrage(txn)} className="text-[#0055FF] h-6 w-6 p-0" title="Lettrer" data-testid={`lettrage-${txn.id}`}><Link2 size={11} /></Button>
+                                <Button variant="ghost" size="sm" onClick={() => openCategorize(txn)} className="text-purple-600 h-6 w-6 p-0" title="Categoriser (nature de depense/revenu)" data-testid={`categorize-${txn.id}`}><Tag size={11} /></Button>
+                              </>
+                            )}
                             <Button variant="ghost" size="sm" onClick={() => deleteTxn(txn.id)} className="h-6 w-6 p-0 text-red-400" title="Supprimer" data-testid={`delete-txn-${txn.id}`}><Trash2 size={11} /></Button>
                           </div>
                         </TableCell>
@@ -908,6 +968,130 @@ export default function BankingPage() {
         invoices={invoices}
         onSuccess={() => { setCodaPreview(null); load(); }}
       />
+
+      {/* iter90k : Categorize dialog (nature de depense / revenu) */}
+      <Dialog open={categorizeDialog} onOpenChange={setCategorizeDialog}>
+        <DialogContent className="max-w-2xl" data-testid="categorize-dialog">
+          <DialogHeader>
+            <DialogTitle className="text-base font-semibold m-0">Categoriser la transaction</DialogTitle>
+          </DialogHeader>
+          {categorizeTarget && (() => {
+            const txnAmt = Math.abs(Number(categorizeTarget.amount) || 0);
+            const isCredit = Number(categorizeTarget.amount) > 0;
+            const sumSplits = categorizeSplits.reduce((a, s) => a + Number(s.amount || 0), 0);
+            const diff = Math.round((sumSplits - txnAmt) * 100) / 100;
+            const filteredCats = expenseCategories.filter(c => {
+              // Si credit -> proposer produits (classe 7) en priorite; sinon charges (6).
+              // On laisse tout visible pour flexibilite mais on tri.
+              return true;
+            }).sort((a, b) => {
+              const isProdA = (a.kind === 'produit') || (a.account_number || '').startsWith('7');
+              const isProdB = (b.kind === 'produit') || (b.account_number || '').startsWith('7');
+              if (isCredit) return (isProdB ? 1 : 0) - (isProdA ? 1 : 0);
+              return (isProdA ? 1 : 0) - (isProdB ? 1 : 0);
+            });
+            return (
+              <div className="space-y-3">
+                <div className="text-xs text-slate-600 bg-slate-50 border border-slate-200 rounded px-3 py-2">
+                  <div className="flex justify-between items-center">
+                    <span><b>{fmtDate(categorizeTarget.date)}</b> — {categorizeTarget.counterparty_name || <em className="text-slate-400">Sans contrepartie</em>}</span>
+                    <span className={`font-mono font-semibold ${isCredit ? 'text-green-700' : 'text-red-700'}`}>
+                      {isCredit ? '+' : '−'}{txnAmt.toFixed(2)} EUR
+                    </span>
+                  </div>
+                  {categorizeTarget.communication && (
+                    <div className="mt-1 text-slate-500 truncate">{categorizeTarget.communication}</div>
+                  )}
+                </div>
+
+                <div className="space-y-2 max-h-[50vh] overflow-y-auto pr-1">
+                  {categorizeSplits.map((split, i) => (
+                    <div key={i} className="border border-slate-200 rounded p-2 grid grid-cols-12 gap-2 items-end" data-testid={`cat-split-${i}`}>
+                      <div className="col-span-5">
+                        <label className="text-[10px] text-slate-500 uppercase tracking-wide">Nature {isCredit ? '(produit/charge)' : '(charge/produit)'}</label>
+                        <Select value={split.expense_category_id} onValueChange={(v) => updateCatSplit(i, 'expense_category_id', v)}>
+                          <SelectTrigger className="h-8 text-xs" data-testid={`cat-split-nature-${i}`}><SelectValue placeholder="Choisir..." /></SelectTrigger>
+                          <SelectContent>
+                            {filteredCats.length === 0 && <div className="px-3 py-2 text-xs text-slate-400">Aucune nature configuree — creez-en dans Configuration</div>}
+                            {filteredCats.map(c => {
+                              const isProd = (c.kind === 'produit') || (c.account_number || '').startsWith('7');
+                              return (
+                                <SelectItem key={c.id} value={c.id}>
+                                  <span className={isProd ? 'text-emerald-700' : ''}>
+                                    {c.name} <span className="text-slate-400 text-[10px]">({c.account_number}{isProd ? ' • produit' : ''})</span>
+                                  </span>
+                                </SelectItem>
+                              );
+                            })}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="col-span-3">
+                        <label className="text-[10px] text-slate-500 uppercase tracking-wide">Cle</label>
+                        <Select value={split.distribution_key_id} onValueChange={(v) => updateCatSplit(i, 'distribution_key_id', v)}>
+                          <SelectTrigger className="h-8 text-xs" data-testid={`cat-split-key-${i}`}><SelectValue placeholder="Cle..." /></SelectTrigger>
+                          <SelectContent>
+                            {distributionKeys.map(k => (
+                              <SelectItem key={k.id} value={k.id}>{k.name}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="col-span-3">
+                        <label className="text-[10px] text-slate-500 uppercase tracking-wide">Montant</label>
+                        <Input type="number" step="0.01" className="h-8 text-xs font-mono" value={split.amount}
+                          onChange={(e) => updateCatSplit(i, 'amount', e.target.value)}
+                          data-testid={`cat-split-amount-${i}`} />
+                      </div>
+                      <div className="col-span-1 flex justify-end">
+                        {categorizeSplits.length > 1 && (
+                          <Button variant="ghost" size="sm" onClick={() => removeCatSplit(i)}
+                            className="h-8 w-8 p-0 text-red-400 hover:text-red-600"
+                            data-testid={`cat-split-remove-${i}`}
+                            title="Supprimer ce split"><X size={13} /></Button>
+                        )}
+                      </div>
+                      <div className="col-span-12">
+                        <Input placeholder="Description (facultatif)" className="h-7 text-xs"
+                          value={split.description || ''}
+                          onChange={(e) => updateCatSplit(i, 'description', e.target.value)}
+                          data-testid={`cat-split-desc-${i}`} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <Button variant="outline" size="sm" onClick={addCatSplit} className="h-7 text-xs" data-testid="cat-split-add">
+                  <PlusCircle size={13} className="mr-1" /> Ajouter un split (multi-natures)
+                </Button>
+
+                <div className="flex justify-between items-center border-t border-slate-200 pt-2 text-xs">
+                  <div className="text-slate-600">
+                    Somme des splits : <span className="font-mono font-semibold">{sumSplits.toFixed(2)}</span> / <span className="font-mono">{txnAmt.toFixed(2)} EUR</span>
+                  </div>
+                  <div>
+                    {Math.abs(diff) < 0.01 ? (
+                      <Badge className="bg-green-50 text-green-700 border-green-200 text-[10px]" variant="outline"><CheckCircle2 size={11} className="mr-1" /> Equilibre</Badge>
+                    ) : (
+                      <Badge className="bg-orange-50 text-orange-700 border-orange-200 text-[10px]" variant="outline"><AlertTriangle size={11} className="mr-1" /> Ecart {diff > 0 ? '+' : ''}{diff.toFixed(2)}</Badge>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex justify-end gap-2 pt-2">
+                  <Button variant="outline" size="sm" onClick={() => setCategorizeDialog(false)} className="h-8 text-xs">Annuler</Button>
+                  <Button size="sm" onClick={doCategorize}
+                    disabled={Math.abs(diff) >= 0.01 || categorizeSplits.some(s => !s.expense_category_id || !s.distribution_key_id || Number(s.amount) <= 0)}
+                    className="bg-purple-600 hover:bg-purple-700 text-white h-8 text-xs"
+                    data-testid="cat-confirm-btn">
+                    <Tag size={12} className="mr-1" /> Categoriser
+                  </Button>
+                </div>
+              </div>
+            );
+          })()}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

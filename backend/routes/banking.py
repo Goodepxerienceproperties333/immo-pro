@@ -73,6 +73,22 @@ class AddLinesInput(BaseModel):
     copropriete_id: Optional[str] = ""
 
 
+class CategorySplitInput(BaseModel):
+    """Un split de categorisation d'une transaction bancaire (iter90k).
+    Ex : facture bancaire trimestrielle 100EUR splittee en 80EUR frais + 20EUR
+    commission. Chaque split cible une nature (expense_category) avec sa
+    cle de repartition."""
+    expense_category_id: str
+    distribution_key_id: str
+    amount: float
+    description: Optional[str] = ""
+
+
+class CategorizeTransactionInput(BaseModel):
+    """Body pour POST /transactions/{txn_id}/categorize."""
+    splits: List[CategorySplitInput]
+
+
 def create_banking_router(db):
     router = APIRouter(prefix="/api/banking")
 
@@ -1104,6 +1120,125 @@ def create_banking_router(db):
              "$unset": {"paid_at": "", "paid_by_transaction_id": ""}}
         )
         return {"message": f"{len(txns)} transaction(s) delettree(s)", "count": len(txns)}
+
+    # ---- CATEGORIZATION (iter90k) ----
+    # Attacher une nature (expense_category + distribution_key) a une
+    # transaction bancaire non lettree. Support des splits multi-natures
+    # (une transaction = plusieurs lignes de charge/produit). Genere
+    # automatiquement une ecriture FI multi-lignes qui apparait ensuite
+    # dans /api/fiscal/expenses via la pass FI/OD de compute_expense_rows.
+    @router.post("/transactions/{txn_id}/categorize")
+    async def categorize_transaction(txn_id: str, data: CategorizeTransactionInput):
+        txn = await db.bank_transactions.find_one({"id": txn_id}, {"_id": 0})
+        if not txn:
+            raise HTTPException(404, "Transaction non trouvee")
+        if txn.get("matched") and txn.get("match_type") != "expense_category":
+            raise HTTPException(400,
+                "Transaction deja lettree a un tiers - delettrez d'abord")
+        if not data.splits:
+            raise HTTPException(422, "Au moins un split (nature) est requis")
+
+        copro_id = txn.get("copropriete_id", "")
+        txn_amt = round(abs(float(txn.get("amount", 0) or 0)), 2)
+        if txn_amt <= 0:
+            raise HTTPException(400, "Montant de la transaction est nul")
+
+        total_split = round(sum(float(s.amount or 0) for s in data.splits), 2)
+        if abs(total_split - txn_amt) > 0.01:
+            raise HTTPException(400,
+                f"Somme des splits ({total_split:.2f}) doit egaler le montant "
+                f"de la transaction ({txn_amt:.2f})")
+
+        resolved: List[dict] = []
+        for i, s in enumerate(data.splits):
+            if float(s.amount or 0) <= 0:
+                raise HTTPException(400, f"Split #{i+1}: montant doit etre > 0")
+            if not s.expense_category_id:
+                raise HTTPException(400, f"Split #{i+1}: nature manquante")
+            if not s.distribution_key_id:
+                raise HTTPException(400, f"Split #{i+1}: cle de repartition manquante")
+            cat = await db.expense_categories.find_one(
+                {"id": s.expense_category_id, "copropriete_id": copro_id},
+                {"_id": 0},
+            )
+            if not cat:
+                raise HTTPException(400, f"Split #{i+1}: nature inconnue")
+            pcmn = await db.pcmn_accounts.find_one(
+                {"number": cat["account_number"], "copropriete_id": copro_id},
+                {"_id": 0},
+            )
+            if not pcmn or pcmn.get("class_num") not in (6, 7):
+                raise HTTPException(400,
+                    f"Split #{i+1}: le compte {cat.get('account_number')} "
+                    f"doit etre de classe 6 (charge) ou 7 (produit)")
+            dk = await db.distribution_keys.find_one(
+                {"id": s.distribution_key_id, "copropriete_id": copro_id},
+                {"_id": 0},
+            )
+            if not dk:
+                raise HTTPException(400, f"Split #{i+1}: cle inconnue")
+            resolved.append({
+                "expense_category_id": s.expense_category_id,
+                "expense_category_name": cat.get("name", ""),
+                "account_number": cat["account_number"],
+                "account_name": pcmn.get("name", ""),
+                "account_class": pcmn.get("class_num"),
+                "distribution_key_id": s.distribution_key_id,
+                "distribution_key_name": dk.get("name", ""),
+                "amount": round(float(s.amount), 2),
+                "description": (s.description or "").strip(),
+            })
+
+        await db.bank_transactions.update_one(
+            {"id": txn_id},
+            {"$set": {
+                "matched": True,
+                "match_type": "expense_category",
+                "matched_to": "",
+                "category_splits": resolved,
+            }}
+        )
+        fresh = await db.bank_transactions.find_one({"id": txn_id}, {"_id": 0})
+        entry = None
+        try:
+            entry = await generate_bank_entry(db, fresh)
+        except Exception as e:
+            print(f"[categorize] generate_bank_entry failed: {e}")
+        return {
+            "message": f"Transaction categorisee en {len(resolved)} nature(s)",
+            "splits": resolved,
+            "journal_entry_id": entry.get("id") if entry else None,
+        }
+
+    @router.delete("/transactions/{txn_id}/categorize")
+    async def uncategorize_transaction(txn_id: str):
+        txn = await db.bank_transactions.find_one({"id": txn_id}, {"_id": 0})
+        if not txn:
+            raise HTTPException(404, "Transaction non trouvee")
+        if txn.get("match_type") != "expense_category":
+            raise HTTPException(400, "Transaction n'est pas categorisee")
+        try:
+            await _delete_auto_entries(db, "bank_txn", txn_id)
+        except Exception:
+            pass
+        await db.bank_transactions.update_one(
+            {"id": txn_id},
+            {"$set": {"matched": False, "match_type": "", "matched_to": ""},
+             "$unset": {"category_splits": ""}}
+        )
+        # Regenere l'ecriture FI en compte d'attente si l'extrait est comptabilise
+        if txn.get("statement_id"):
+            stmt = await db.bank_statements.find_one(
+                {"id": txn["statement_id"]}, {"_id": 0, "status": 1}
+            )
+            if stmt and stmt.get("status") == "posted":
+                fresh = await db.bank_transactions.find_one({"id": txn_id}, {"_id": 0})
+                if fresh:
+                    try:
+                        await generate_bank_entry(db, fresh)
+                    except Exception as e:
+                        print(f"[uncategorize] regen FI failed: {e}")
+        return {"message": "Categorisation annulee"}
 
     # ---- CODA IMPORT ----
     @router.post("/coda/import")

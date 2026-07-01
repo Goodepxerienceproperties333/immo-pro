@@ -485,6 +485,77 @@ async def generate_bank_entry(db, txn: dict) -> dict | None:
             counterpart_acc = get_supplier_account(supplier, copro_id)
             counterpart_name = supplier.get("name", "")
             third_party_id = supplier["id"]
+    elif match_type == "expense_category":
+        # iter90k : catégorisation d'une transaction par nature(s) de charge/produit.
+        # Support multi-splits. Structure de la ligne bancaire (banque) + N
+        # lignes de contreparties (comptes 6xxx charges ou 7xxx produits).
+        splits = txn.get("category_splits") or []
+        if splits:
+            pcmn_bank_q = {"number": bank_acc, "copropriete_id": copro_id}
+            pcmn_bank = await db.pcmn_accounts.find_one(pcmn_bank_q, {"_id": 0})
+            bank_name = (pcmn_bank or {}).get("name") or bank_label
+            if is_credit:
+                # Money in (ex intérêt créditeur) : Dr banque + Cr N x produit
+                lines = [{
+                    "account_number": bank_acc, "account_name": bank_name,
+                    "debit": amount, "credit": 0.0,
+                    "third_party_id": None, "third_party_name": "",
+                }]
+                for s in splits:
+                    lines.append({
+                        "account_number": s.get("account_number", ""),
+                        "account_name": s.get("account_name", ""),
+                        "debit": 0.0, "credit": round(float(s.get("amount", 0) or 0), 2),
+                        "distribution_key_id": s.get("distribution_key_id", ""),
+                        "expense_category_id": s.get("expense_category_id", ""),
+                        "line_description": s.get("description")
+                            or s.get("expense_category_name", ""),
+                        "third_party_id": None, "third_party_name": "",
+                    })
+            else:
+                # Money out (ex frais bancaires) : Dr N x charge + Cr banque
+                lines = []
+                for s in splits:
+                    lines.append({
+                        "account_number": s.get("account_number", ""),
+                        "account_name": s.get("account_name", ""),
+                        "debit": round(float(s.get("amount", 0) or 0), 2),
+                        "credit": 0.0,
+                        "distribution_key_id": s.get("distribution_key_id", ""),
+                        "expense_category_id": s.get("expense_category_id", ""),
+                        "line_description": s.get("description")
+                            or s.get("expense_category_name", ""),
+                        "third_party_id": None, "third_party_name": "",
+                    })
+                lines.append({
+                    "account_number": bank_acc, "account_name": bank_name,
+                    "debit": 0.0, "credit": amount,
+                    "third_party_id": None, "third_party_name": "",
+                })
+            comm = (txn.get("communication") or "").strip()
+            cp = (txn.get("counterparty_name") or "").strip()
+            desc = f"Categorisation {cp}".strip()
+            if comm:
+                desc = f"{desc} - {comm}" if desc else comm
+            desc = desc.strip(" -") or "Transaction categorisee"
+            await _delete_auto_entries(db, "bank_txn", txn["id"])
+            doc = {
+                "id": str(uuid.uuid4()),
+                "journal_type": "FI",
+                "date": txn.get("date") or datetime.now(timezone.utc).date().isoformat(),
+                "reference": f"FI-CAT-{txn['id'][:8]}",
+                "description": desc,
+                "lines": lines,
+                "total_debit": amount,
+                "total_credit": amount,
+                "copropriete_id": copro_id,
+                "auto_generated": True,
+                "source_type": "bank_txn",
+                "source_id": txn["id"],
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            await db.journal_entries.insert_one(doc)
+            return doc
 
     # Fallback : transaction non lettree -> compte d'attente 499000
     # Permet au compte bancaire d'apparaitre dans le bilan meme avant le lettrage.
