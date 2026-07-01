@@ -1070,17 +1070,21 @@ export default function BankingPage() {
                   {categorizeSplits.map((split, i) => (
                     <div key={i} className="border border-slate-200 rounded p-2 grid grid-cols-12 gap-2 items-end" data-testid={`cat-split-${i}`}>
                       <div className="col-span-5">
-                        <label className="text-[10px] text-slate-500 uppercase tracking-wide">Nature {isCredit ? '(produit/charge)' : '(charge/produit)'}</label>
+                        <label className="text-[10px] text-slate-500 uppercase tracking-wide">Nature {isCredit ? '(produit/charge/virement)' : '(charge/produit/virement)'}</label>
                         <Select value={split.expense_category_id} onValueChange={(v) => updateCatSplit(i, 'expense_category_id', v)}>
                           <SelectTrigger className="h-8 text-xs" data-testid={`cat-split-nature-${i}`}><SelectValue placeholder="Choisir..." /></SelectTrigger>
                           <SelectContent>
-                            {filteredCats.length === 0 && <div className="px-3 py-2 text-xs text-slate-400">Aucune nature configuree — creez-en dans Configuration</div>}
+                            {filteredCats.length === 0 && <div className="px-3 py-2 text-xs text-slate-400">Aucune nature configuree — creez-en dans Configuration (compte 6*, 7* ou 58 Virements internes)</div>}
                             {filteredCats.map(c => {
-                              const isProd = (c.kind === 'produit') || (c.account_number || '').startsWith('7');
+                              const acc = c.account_number || '';
+                              const isTransfer = c.kind === 'transfer' || acc.startsWith('58');
+                              const isProd = !isTransfer && (c.kind === 'produit' || acc.startsWith('7'));
+                              const badge = isTransfer ? ' • virement' : (isProd ? ' • produit' : '');
+                              const cls = isTransfer ? 'text-indigo-700' : (isProd ? 'text-emerald-700' : '');
                               return (
                                 <SelectItem key={c.id} value={c.id}>
-                                  <span className={isProd ? 'text-emerald-700' : ''}>
-                                    {c.name} <span className="text-slate-400 text-[10px]">({c.account_number}{isProd ? ' • produit' : ''})</span>
+                                  <span className={cls}>
+                                    {c.name} <span className="text-slate-400 text-[10px]">({acc}{badge})</span>
                                   </span>
                                 </SelectItem>
                               );

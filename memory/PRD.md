@@ -12,6 +12,46 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 ## Implemented
+### Iter90m (Feb 2026) - Categorisation d'extraits avec compte 58 Virements internes
+
+**Ticket user** : Permettre dans la catégorisation d'extraits de mentionner
+le compte 58 (Virements internes, PCMN belge, classe 5) pour les transferts
+entre compte à vue et compte épargne. Ces mouvements ne sont ni des
+charges ni des produits — ils utilisent 58 comme compte de passage qui
+revient à zéro une fois les 2 transactions du transfert saisies.
+
+**Backend** :
+- `/app/backend/routes/expense_categories.py` : autorise classe 5 dans la
+  création/édition d'une nature MAIS uniquement pour les comptes `58*`.
+  Nouveau `kind='transfer'` auto-derivé pour la classe 5. Erreurs
+  explicites si compte classe 5 non-58.
+- `/app/backend/routes/banking.py` catégorisation : accepte classe
+  5 (58*), 6, 7. Rejette classe 5 non-58 avec message clair.
+- `/app/backend/expense_rows.py::_is_charge_account` : garde-fou defensif
+  `if num.startswith("58"): return False` — le compte 58 n'apparait JAMAIS
+  dans la liste des dépenses (invariant critique).
+- L'écriture FI générée pour un débit "virement interne" :
+  `Dr 58 + Cr 550/551/552` — quand la transaction contrepartie arrive
+  sur l'autre extrait, le compte 58 s'équilibre naturellement à zéro.
+
+**Frontend** :
+- `BankingPage.js` dropdown Nature : nouveau badge "• virement" (indigo)
+  pour les natures 58*, tri distinct des charges/produits.
+- `ExpenseCategoriesPage.js` : charge aussi les comptes classe 5 mais
+  filtre côté client pour n'exposer QUE les `58*`.
+- Label mis a jour : "Compte PCMN (classe 6, 7 ou 58 Virements internes)".
+
+**PCMN par défaut** : le compte "58" (Virements internes) est déjà dans
+le template `/app/backend/pcmn_data.py:116`.
+
+**Tests** : `test_iter90m_internal_transfers_58.py` — 5 scenarios
+(création OK sur 58*, rejet classe 5 non-58, catégorisation FI correcte
+Dr 58 / Cr 55x, invariant 58 hors expenses, équilibrage symétrique).
+Non-régression : 14/14 iter90 PASS en suite.
+
+
+
+## Implemented
 ### Iter90l (Feb 2026) - Import PDF/CSV d'extraits bancaires -> creation auto en brouillon
 
 **Ticket user** : Dans les extraits de compte, permettre d'uploader un ou

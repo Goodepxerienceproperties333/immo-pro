@@ -277,6 +277,8 @@ async def compute_expense_rows(
             return False  # frais privatifs, jamais une charge commune
         if num.startswith("70"):
             return False  # provisions / appels de fonds : hors flux depenses
+        if num.startswith("58"):
+            return False  # iter90m : virements internes (tresorerie), jamais une charge
         if num in charge_acc_set:
             return True
         return num.startswith("6") or num.startswith("7")

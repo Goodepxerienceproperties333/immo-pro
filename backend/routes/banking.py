@@ -1168,10 +1168,13 @@ def create_banking_router(db):
                 {"number": cat["account_number"], "copropriete_id": copro_id},
                 {"_id": 0},
             )
-            if not pcmn or pcmn.get("class_num") not in (6, 7):
+            if not pcmn or pcmn.get("class_num") not in (5, 6, 7):
                 raise HTTPException(400,
                     f"Split #{i+1}: le compte {cat.get('account_number')} "
-                    f"doit etre de classe 6 (charge) ou 7 (produit)")
+                    f"doit etre de classe 5 (58 Virements internes), 6 (charge) ou 7 (produit)")
+            if pcmn.get("class_num") == 5 and not (cat.get("account_number") or "").startswith("58"):
+                raise HTTPException(400,
+                    f"Split #{i+1}: en classe 5, seul le compte 58* (Virements internes) est accepte")
             dk = await db.distribution_keys.find_one(
                 {"id": s.distribution_key_id, "copropriete_id": copro_id},
                 {"_id": 0},

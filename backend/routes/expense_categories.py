@@ -102,10 +102,18 @@ def create_expense_categories_router(db):
         }, {"_id": 0})
         if not pcmn:
             raise HTTPException(400, "Compte PCMN inexistant pour cette ACP")
-        if pcmn.get("class_num") not in (6, 7):
-            raise HTTPException(400, "Le compte doit etre de classe 6 (Charges) ou 7 (Produits)")
+        # iter90m : classe 5 autorisee UNIQUEMENT pour les comptes 58*
+        # (Virements internes PCMN belge - transfert compte a vue <-> epargne)
+        cls = pcmn.get("class_num")
+        num = (data.account_number or "").strip()
+        if cls not in (5, 6, 7):
+            raise HTTPException(400, "Le compte doit etre de classe 5 (58 Virements internes), 6 (Charges) ou 7 (Produits)")
+        if cls == 5 and not num.startswith("58"):
+            raise HTTPException(400, "En classe 5, seuls les comptes 58* (Virements internes) sont acceptes comme nature")
         # Auto-derive kind from class_num if not explicitly set
-        kind = data.kind or ("produit" if pcmn.get("class_num") == 7 else "charge")
+        kind = data.kind or (
+            "transfer" if cls == 5 else ("produit" if cls == 7 else "charge")
+        )
         doc = {
             "id": str(uuid.uuid4()),
             **data.model_dump(),
@@ -146,8 +154,10 @@ def create_expense_categories_router(db):
                 "number": data.account_number,
                 "copropriete_id": data.copropriete_id or existing.get("copropriete_id", ""),
             }, {"_id": 0})
-            if not pcmn or pcmn.get("class_num") not in (6, 7):
-                raise HTTPException(400, "Compte invalide (classe 6 ou 7 obligatoire)")
+            if not pcmn or pcmn.get("class_num") not in (5, 6, 7):
+                raise HTTPException(400, "Compte invalide (classe 5-58*, 6 ou 7 obligatoire)")
+            if pcmn.get("class_num") == 5 and not (data.account_number or "").startswith("58"):
+                raise HTTPException(400, "En classe 5, seuls les comptes 58* (Virements internes) sont acceptes")
         await db.expense_categories.update_one(
             {"id": cat_id}, {"$set": data.model_dump()}
         )

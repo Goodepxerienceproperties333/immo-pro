@@ -21,14 +21,17 @@ export default function ExpenseCategoriesPage() {
   const [accountPopoverOpen, setAccountPopoverOpen] = useState(false);
 
   const load = useCallback(async () => {
-    const [c, p6, p7, dk] = await Promise.all([
+    const [c, p6, p7, p58, dk] = await Promise.all([
       api.get('/expense-categories'),
       api.get('/accounting/pcmn', { params: { class_num: 6 } }),
       api.get('/accounting/pcmn', { params: { class_num: 7 } }),
+      api.get('/accounting/pcmn', { params: { class_num: 5 } }).catch(() => ({ data: [] })),
       api.get('/distribution-keys'),
     ]);
     setCats(c.data);
-    setPcmnAccounts([...p6.data, ...p7.data].sort((a, b) => a.number.localeCompare(b.number)));
+    // iter90m : classe 5 autorisee UNIQUEMENT pour les comptes 58* (Virements internes)
+    const p58Filtered = (p58.data || []).filter(a => (a.number || '').startsWith('58'));
+    setPcmnAccounts([...p6.data, ...p7.data, ...p58Filtered].sort((a, b) => a.number.localeCompare(b.number)));
     setDistKeys(dk.data || []);
   }, []);
   useEffect(() => { load(); }, [load]);
@@ -168,7 +171,7 @@ export default function ExpenseCategoriesPage() {
               <Input value={form.name} onChange={e => setForm({...form, name: e.target.value})} placeholder="Ex: Entretien ascenseur cage A" data-testid="category-name-input" />
             </div>
             <div>
-              <label className="form-label">Compte PCMN (classe 6 ou 7) *</label>
+              <label className="form-label">Compte PCMN (classe 6, 7 ou 58 Virements internes) *</label>
               <Popover open={accountPopoverOpen} onOpenChange={setAccountPopoverOpen}>
                 <PopoverTrigger asChild>
                   <Button variant="outline" role="combobox" className="w-full justify-between font-normal" data-testid="account-lookup-btn">
