@@ -12,6 +12,61 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 ## Implemented
+### Iter90k (Feb 2026) - Categoriser une transaction bancaire par nature de depense/revenu
+
+**Ticket user** : Dans les extraits de compte, permettre d'attribuer une
+nature (`expense_category`) a une transaction bancaire non lettree —
+typiquement les frais bancaires (compte 650000), commissions, intérêts
+créditeurs (compte 750000), charges financières... Support des splits
+multi-natures (une transaction = plusieurs lignes). Les montants doivent
+apparaître dans la "Liste des dépenses" (positifs pour classe 6, négatifs
+pour classe 7).
+
+**User choices** : UI dans la ligne d'extrait • classes 6+7 • splits ON •
+revenus dans liste dépenses ON (flux) • clé de répartition obligatoire.
+
+**Backend** :
+- `POST /api/banking/transactions/{txn_id}/categorize` — body :
+  `{"splits":[{"expense_category_id","distribution_key_id","amount","description"}]}`
+  Génère une écriture journal **FI** multi-lignes (banque + N contreparties
+  6xxx/7xxx). Valide : classe PCMN in (6,7), somme==|txn.amount| (0.01), clé
+  obligatoire. Retourne `journal_entry_id`.
+- `DELETE /api/banking/transactions/{txn_id}/categorize` — supprime le FI,
+  remet la txn en état non-lettré, regénère un FI d'attente 499000 si
+  l'extrait est `posted`.
+- `expense_rows.py::_is_charge_account` — accepte désormais TOUS les
+  comptes classe 6 et 7 sauf `70*` (Provisions/appels de fonds, garde-fou
+  anti-double-comptage), `44*`/`40*`/`41*`/`42*` (tiers), et `643*` (frais
+  privatifs).
+- `auto_entries.py::generate_bank_entry` — nouveau branch pour
+  `match_type="expense_category"` avec écriture FI multi-lignes, source_type
+  =`bank_txn` (traçabilité).
+
+**Frontend** (`BankingPage.js`) :
+- Icône Tag (purple) sur chaque txn non-lettrée → ouvre le dialog
+  `data-testid="categorize-dialog"`.
+- Dialog : entête récap txn (montant signé + contrepartie) + N splits
+  (nature + clé + montant + description), bouton "Ajouter un split", badge
+  "Équilibré" / "Écart X" en direct, tri des natures produits en tête pour
+  les crédits.
+- Bouton "Catégoriser" disabled tant que somme != txn.amount ou champ
+  manquant.
+- Ligne catégorisée affiche badge "Nature" ou "Nature (N)" (purple) +
+  bouton "Retirer la nature".
+
+**Tests** :
+- `test_iter90k_categorize_bank_transaction.py` — 7 scenarios (débit
+  charge, crédit produit négatif, multi-splits, erreurs somme/DK, uncateg
+  supprime FI, provisions 70* hors expenses).
+- `test_iter90k_extra_validation.py` — 2 scenarios ajoutés par testing
+  agent (nature inconnue, compte non 6/7 rejeté).
+- **9/9 sous-tests PASS**. Non-régression iter90 : 6/6 PASS en suite.
+- Testing agent : Backend 100% success rate. Frontend structure DOM
+  validée (tous les data-testids en place).
+
+
+
+## Implemented
 ### Iter90j (Feb 2026) - Fix flakiness "Event loop is closed" sur la suite tests
 
 **Ticket** : `test_iter90cd_owner_scope_duplicates_pdfs.py` (et d'autres tests
