@@ -234,10 +234,10 @@ export default function BankingPage() {
   // ----- iter90k : CATEGORISATION -----
   const openCategorize = (txn) => {
     setCategorizeTarget(txn);
-    setCategorizeSplits([{ expense_category_id: '', distribution_key_id: '', amount: Math.abs(Number(txn.amount) || 0), description: '' }]);
+    setCategorizeSplits([{ expense_category_id: '', account_number: '', distribution_key_id: '', amount: Math.abs(Number(txn.amount) || 0), description: '' }]);
     setCategorizeDialog(true);
   };
-  const addCatSplit = () => setCategorizeSplits([...categorizeSplits, { expense_category_id: '', distribution_key_id: '', amount: 0, description: '' }]);
+  const addCatSplit = () => setCategorizeSplits([...categorizeSplits, { expense_category_id: '', account_number: '', distribution_key_id: '', amount: 0, description: '' }]);
   const removeCatSplit = (i) => setCategorizeSplits(categorizeSplits.filter((_, idx) => idx !== i));
   const updateCatSplit = (i, f, v) => { const s = [...categorizeSplits]; s[i] = { ...s[i], [f]: v }; setCategorizeSplits(s); };
   const doCategorize = async () => {
@@ -1140,6 +1140,19 @@ export default function BankingPage() {
                           onChange={(e) => updateCatSplit(i, 'description', e.target.value)}
                           data-testid={`cat-split-desc-${i}`} />
                       </div>
+                      {/* iter90q : saisie directe d'un n° de compte PCMN (fallback si aucune nature configuree, ex compte 58 Virements internes) */}
+                      <div className="col-span-12 flex items-center gap-2 pt-1 border-t border-slate-100">
+                        <span className="text-[10px] text-slate-400 uppercase tracking-wide shrink-0">ou compte direct</span>
+                        <Input
+                          placeholder="Ex : 58 (Virement interne) — remplit la nature ci-dessus"
+                          className="h-7 text-xs font-mono"
+                          value={split.account_number || ''}
+                          onChange={(e) => {
+                            updateCatSplit(i, 'account_number', e.target.value);
+                            if (e.target.value) updateCatSplit(i, 'expense_category_id', '');
+                          }}
+                          data-testid={`cat-split-account-${i}`} />
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -1164,7 +1177,7 @@ export default function BankingPage() {
                 <div className="flex justify-end gap-2 pt-2">
                   <Button variant="outline" size="sm" onClick={() => setCategorizeDialog(false)} className="h-8 text-xs">Annuler</Button>
                   <Button size="sm" onClick={doCategorize}
-                    disabled={Math.abs(diff) >= 0.01 || categorizeSplits.some(s => !s.expense_category_id || !s.distribution_key_id || Number(s.amount) <= 0)}
+                    disabled={Math.abs(diff) >= 0.01 || categorizeSplits.some(s => (!s.expense_category_id && !(s.account_number || '').trim()) || !s.distribution_key_id || Number(s.amount) <= 0)}
                     className="bg-purple-600 hover:bg-purple-700 text-white h-8 text-xs"
                     data-testid="cat-confirm-btn">
                     <Tag size={12} className="mr-1" /> Categoriser

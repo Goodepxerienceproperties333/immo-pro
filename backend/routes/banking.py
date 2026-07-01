@@ -77,9 +77,11 @@ class AddLinesInput(BaseModel):
 class CategorySplitInput(BaseModel):
     """Un split de categorisation d'une transaction bancaire (iter90k).
     Ex : facture bancaire trimestrielle 100EUR splittee en 80EUR frais + 20EUR
-    commission. Chaque split cible une nature (expense_category) avec sa
-    cle de repartition."""
-    expense_category_id: str
+    commission. Chaque split cible une nature (expense_category) OU un
+    numero de compte PCMN direct (iter90q : virements internes rapides
+    sans passer par la creation d'une nature)."""
+    expense_category_id: Optional[str] = ""
+    account_number: Optional[str] = ""  # iter90q : alternative au dropdown
     distribution_key_id: str
     amount: float
     description: Optional[str] = ""
@@ -1174,27 +1176,60 @@ def create_banking_router(db):
         for i, s in enumerate(data.splits):
             if float(s.amount or 0) <= 0:
                 raise HTTPException(400, f"Split #{i+1}: montant doit etre > 0")
-            if not s.expense_category_id:
-                raise HTTPException(400, f"Split #{i+1}: nature manquante")
+            if not s.expense_category_id and not (s.account_number or "").strip():
+                raise HTTPException(400,
+                    f"Split #{i+1}: une nature OU un n° de compte PCMN est requis")
             if not s.distribution_key_id:
                 raise HTTPException(400, f"Split #{i+1}: cle de repartition manquante")
-            cat = await db.expense_categories.find_one(
-                {"id": s.expense_category_id, "copropriete_id": copro_id},
-                {"_id": 0},
-            )
-            if not cat:
-                raise HTTPException(400, f"Split #{i+1}: nature inconnue")
-            pcmn = await db.pcmn_accounts.find_one(
-                {"number": cat["account_number"], "copropriete_id": copro_id},
-                {"_id": 0},
-            )
-            if not pcmn or pcmn.get("class_num") not in (5, 6, 7):
-                raise HTTPException(400,
-                    f"Split #{i+1}: le compte {cat.get('account_number')} "
-                    f"doit etre de classe 5 (58 Virements internes), 6 (charge) ou 7 (produit)")
-            if pcmn.get("class_num") == 5 and not (cat.get("account_number") or "").startswith("58"):
-                raise HTTPException(400,
-                    f"Split #{i+1}: en classe 5, seul le compte 58* (Virements internes) est accepte")
+
+            # iter90q : resolution via account_number direct OU expense_category
+            cat_id = ""
+            cat_name = ""
+            if (s.account_number or "").strip():
+                # Compte PCMN direct (mode "virement interne rapide")
+                num = s.account_number.strip()
+                pcmn = await db.pcmn_accounts.find_one(
+                    {"number": num, "copropriete_id": copro_id},
+                    {"_id": 0},
+                )
+                if not pcmn:
+                    raise HTTPException(400,
+                        f"Split #{i+1}: compte PCMN {num} introuvable pour cette ACP")
+                if pcmn.get("class_num") not in (5, 6, 7):
+                    raise HTTPException(400,
+                        f"Split #{i+1}: le compte {num} doit etre de classe 5 (58*), 6 ou 7")
+                if pcmn.get("class_num") == 5 and not num.startswith("58"):
+                    raise HTTPException(400,
+                        f"Split #{i+1}: en classe 5, seul un compte 58* est accepte")
+                acc_number = num
+                acc_name = pcmn.get("name", "")
+                acc_class = pcmn.get("class_num")
+                cat_name = f"Compte {num} (direct)"
+            else:
+                # Nature (expense_category) traditionnelle
+                cat = await db.expense_categories.find_one(
+                    {"id": s.expense_category_id, "copropriete_id": copro_id},
+                    {"_id": 0},
+                )
+                if not cat:
+                    raise HTTPException(400, f"Split #{i+1}: nature inconnue")
+                pcmn = await db.pcmn_accounts.find_one(
+                    {"number": cat["account_number"], "copropriete_id": copro_id},
+                    {"_id": 0},
+                )
+                if not pcmn or pcmn.get("class_num") not in (5, 6, 7):
+                    raise HTTPException(400,
+                        f"Split #{i+1}: le compte {cat.get('account_number')} "
+                        f"doit etre de classe 5 (58 Virements internes), 6 (charge) ou 7 (produit)")
+                if pcmn.get("class_num") == 5 and not (cat.get("account_number") or "").startswith("58"):
+                    raise HTTPException(400,
+                        f"Split #{i+1}: en classe 5, seul le compte 58* (Virements internes) est accepte")
+                cat_id = s.expense_category_id
+                cat_name = cat.get("name", "")
+                acc_number = cat["account_number"]
+                acc_name = pcmn.get("name", "")
+                acc_class = pcmn.get("class_num")
+
             dk = await db.distribution_keys.find_one(
                 {"id": s.distribution_key_id, "copropriete_id": copro_id},
                 {"_id": 0},
@@ -1202,11 +1237,11 @@ def create_banking_router(db):
             if not dk:
                 raise HTTPException(400, f"Split #{i+1}: cle inconnue")
             resolved.append({
-                "expense_category_id": s.expense_category_id,
-                "expense_category_name": cat.get("name", ""),
-                "account_number": cat["account_number"],
-                "account_name": pcmn.get("name", ""),
-                "account_class": pcmn.get("class_num"),
+                "expense_category_id": cat_id,
+                "expense_category_name": cat_name,
+                "account_number": acc_number,
+                "account_name": acc_name,
+                "account_class": acc_class,
                 "distribution_key_id": s.distribution_key_id,
                 "distribution_key_name": dk.get("name", ""),
                 "amount": round(float(s.amount), 2),
