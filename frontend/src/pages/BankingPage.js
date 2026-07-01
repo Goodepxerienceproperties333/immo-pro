@@ -151,18 +151,27 @@ export default function BankingPage() {
       if (editingStmtId) {
         await api.put(`/banking/statements/${editingStmtId}`, payload);
         toast.success('Extrait modifie');
-        // Recharge le selected pour mettre a jour le bandeau equilibre
+        // iter90p : maj locale du statement (sidebar + panel) sans reload total
         const refreshed = await api.get(`/banking/statements/${editingStmtId}`);
-        if (refreshed.data && selectedStmt?.id === editingStmtId) {
-          setSelectedStmt({ ...selectedStmt, ...refreshed.data });
+        if (refreshed.data) {
+          patchSidebarStmt(editingStmtId, {
+            number: refreshed.data.number,
+            date: refreshed.data.date,
+            account_number: refreshed.data.account_number,
+            opening_balance: refreshed.data.opening_balance,
+            closing_balance: refreshed.data.closing_balance,
+          });
         }
+        setEditingStmtId(null);
+        setStmtDialog(false);
       } else {
         await api.post('/banking/statements', payload);
         toast.success('Extrait cree');
+        setEditingStmtId(null);
+        setStmtDialog(false);
+        // Nouveau statement -> reload pour l'ajouter a la sidebar
+        load();
       }
-      setEditingStmtId(null);
-      setStmtDialog(false);
-      load();
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Erreur');
     }
@@ -210,11 +219,17 @@ export default function BankingPage() {
     try { await api.delete(`/banking/transactions/${id}`); toast.success('Transaction supprimee'); loadStmtTxns(selectedStmt); } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); }
   };
 
+  // iter90p : local sidebar update (avoid full reload after every action).
+  const patchSidebarStmt = (stmtId, patch) => {
+    setStatements(prev => prev.map(s => s.id === stmtId ? { ...s, ...patch } : s));
+    setSelectedStmt(prev => (prev && prev.id === stmtId) ? { ...prev, ...patch } : prev);
+  };
+
   // LETTRAGE
   const openLettrage = (txn) => { setLettrageTarget(txn); setLettrageDialog(true); setLookupQuery(''); setSelectedInvoiceIds(new Set()); };
-  const doLettrage = async (id, type) => { try { await api.post('/banking/lettrage', { transaction_id: lettrageTarget.id, match_to_id: id, match_type: type }); toast.success('Lettre'); setLettrageDialog(false); if (selectedStmt) loadStmtTxns(selectedStmt); else load(); load(); } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); } };
-  const unlettrage = async (id) => { await api.post(`/banking/unlettrage/${id}`); toast.success('Delettrage'); if (selectedStmt) loadStmtTxns(selectedStmt); else load(); load(); };
-  const unlettrageByInvoice = async (invId) => { try { await api.post(`/banking/unlettrage-by-invoice/${invId}`); toast.success('Facture delettree'); if (selectedStmt) loadStmtTxns(selectedStmt); load(); } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); } };
+  const doLettrage = async (id, type) => { try { await api.post('/banking/lettrage', { transaction_id: lettrageTarget.id, match_to_id: id, match_type: type }); toast.success('Lettre'); setLettrageDialog(false); if (selectedStmt) loadStmtTxns(selectedStmt); else load(); } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); } };
+  const unlettrage = async (id) => { await api.post(`/banking/unlettrage/${id}`); toast.success('Delettrage'); if (selectedStmt) loadStmtTxns(selectedStmt); else load(); };
+  const unlettrageByInvoice = async (invId) => { try { await api.post(`/banking/unlettrage-by-invoice/${invId}`); toast.success('Facture delettree'); if (selectedStmt) loadStmtTxns(selectedStmt); else load(); } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); } };
 
   // ----- iter90k : CATEGORISATION -----
   const openCategorize = (txn) => {
@@ -269,7 +284,6 @@ export default function BankingPage() {
       setLettrageDialog(false);
       setSelectedInvoiceIds(new Set());
       if (selectedStmt) loadStmtTxns(selectedStmt); else load();
-      load();
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Erreur lettrage multi-factures');
     }
@@ -303,7 +317,6 @@ export default function BankingPage() {
       setBatchLettrageDialog(false);
       clearSelection();
       if (selectedStmt) loadStmtTxns(selectedStmt); else load();
-      load();
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Erreur lettrage en lot');
     }
@@ -429,8 +442,8 @@ export default function BankingPage() {
                           try {
                             await api.post(`/banking/statements/${selectedStmt.id}/unpost`);
                             toast.success('Extrait repasse en brouillon');
+                            patchSidebarStmt(selectedStmt.id, { status: 'draft' });
                             loadStmtTxns({ ...selectedStmt, status: 'draft' });
-                            load();
                           } catch (e) { toast.error(e.response?.data?.detail || 'Erreur'); }
                         }} data-testid="unpost-stmt-btn">Repasser brouillon</Button>
                       );
@@ -441,8 +454,8 @@ export default function BankingPage() {
                             try {
                               await api.post(`/banking/statements/${selectedStmt.id}/post`);
                               toast.success('Extrait comptabilise');
+                              patchSidebarStmt(selectedStmt.id, { status: 'posted' });
                               loadStmtTxns({ ...selectedStmt, status: 'posted' });
-                              load();
                             } catch (e) { toast.error(e.response?.data?.detail || 'Erreur'); }
                           }}
                           disabled={!balanced || transactions.length === 0}
