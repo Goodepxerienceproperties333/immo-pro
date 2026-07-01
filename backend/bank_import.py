@@ -10,7 +10,7 @@ persister les documents.
 
 Format retourne :
 {
-    "extraction_method": "csv_smart" | "llm_vision" | "csv_llm_fallback",
+    "extraction_method": "csv_smart" | "llm_text" | "csv_llm_fallback",
     "account_number": "BE12...",  # peut etre vide
     "period_from": "YYYY-MM-DD" | "",
     "period_to": "YYYY-MM-DD" | "",
@@ -268,7 +268,7 @@ def parse_csv_smart(content: bytes, filename: str = "") -> Dict[str, Any]:
     }
 
 
-# ---------- LLM Vision (Gemini) ----------
+# ---- LLM Vision (Gemini) ----
 
 
 _LLM_SYSTEM_MESSAGE = (
@@ -299,33 +299,91 @@ _LLM_USER_PROMPT = """Extrait TOUTES les transactions du document. Renvoie stric
 
 Regles :
 - amount : signe positif si credit (entree d'argent), negatif si debit (sortie).
+  Astuce : dans les extraits Fortis, le montant est suivi de "+" (credit) ou "-" (debit).
 - date : format ISO YYYY-MM-DD, date de valeur si disponible sinon date operation.
-- Ne pas inclure les lignes de solde initial / final / total.
+- Ne pas inclure les lignes de solde initial / final / total / report.
+- Regrouper les lignes multi-lignes (date, numero de mouvement, communication, reference banque) en UNE seule transaction.
 - Ne pas ajouter de champs supplementaires. Aucun commentaire, aucun markdown."""
 
 
+def _extract_pdf_text(file_path: str) -> str:
+    """Extraction texte via pdfplumber (tableaux bancaires optimaux).
+    Fallback pypdf si pdfplumber echoue. Retourne texte concatene multi-pages."""
+    text_parts: List[str] = []
+    try:
+        import pdfplumber
+        with pdfplumber.open(file_path) as pdf:
+            for page in pdf.pages:
+                t = page.extract_text() or ""
+                if t:
+                    text_parts.append(t)
+    except Exception:
+        try:
+            from pypdf import PdfReader
+            reader = PdfReader(file_path)
+            for page in reader.pages:
+                t = page.extract_text() or ""
+                if t:
+                    text_parts.append(t)
+        except Exception as e:
+            raise RuntimeError(f"Impossible d'extraire le texte du PDF : {e}")
+    return "\n".join(text_parts).strip()
+
+
 async def parse_with_llm(file_path: str, mime_type: str) -> Dict[str, Any]:
-    """Extraction LLM Vision via Gemini pour PDF ou CSV non reconnu.
-    Retourne la meme structure que parse_csv_smart (extraction_method='llm_vision')."""
-    from emergentintegrations.llm.chat import (
-        LlmChat, UserMessage, FileContentWithMimeType,
-    )
+    """Extraction LLM text-only via Claude Sonnet 4.5 pour PDF ou CSV non
+    reconnu. La cle EMERGENT_LLM_KEY autorise Claude text uniquement (pas
+    Gemini Vision), donc :
+    - PDF : on extrait le texte via pdfplumber avant l'envoi au LLM.
+    - CSV : le contenu texte est envoye directement.
+    Retour : meme structure que parse_csv_smart, extraction_method='llm_text'."""
+    from emergentintegrations.llm.chat import LlmChat, UserMessage
     api_key = os.environ.get("EMERGENT_LLM_KEY", "")
     if not api_key:
-        raise RuntimeError("EMERGENT_LLM_KEY absent — impossible d'extraire avec IA")
+        raise RuntimeError("EMERGENT_LLM_KEY absent - impossible d'extraire avec IA")
+
+    # 1) Preparer le texte a envoyer au LLM
+    if mime_type == "application/pdf" or file_path.lower().endswith(".pdf"):
+        source_text = _extract_pdf_text(file_path)
+        if not source_text:
+            raise RuntimeError(
+                "PDF sans texte extractible (probablement scanne). "
+                "L'OCR n'est pas encore supporte."
+            )
+        source_label = "extrait de compte PDF"
+    else:
+        # CSV / texte brut
+        with open(file_path, "rb") as fh:
+            raw = fh.read()
+        source_text = None
+        for enc in ("utf-8", "utf-8-sig", "cp1252", "latin-1"):
+            try:
+                source_text = raw.decode(enc)
+                break
+            except UnicodeDecodeError:
+                continue
+        if source_text is None:
+            raise RuntimeError("Impossible de decoder le fichier CSV")
+        source_label = "extrait de compte CSV"
+
+    # Limite de securite (~120K caracteres = ~30K tokens, marge confortable
+    # pour Claude Sonnet 200K context).
+    if len(source_text) > 120000:
+        source_text = source_text[:120000] + "\n[...TRONQUE...]"
+
     session_id = f"bank-import-{uuid.uuid4().hex[:12]}"
     chat = LlmChat(
         api_key=api_key,
         session_id=session_id,
         system_message=_LLM_SYSTEM_MESSAGE,
-    ).with_model("gemini", "gemini-2.5-flash")
+    ).with_model("anthropic", "claude-sonnet-4-5-20250929")
 
-    file_content = FileContentWithMimeType(
-        file_path=file_path, mime_type=mime_type,
+    user_text = (
+        _LLM_USER_PROMPT
+        + f"\n\n--- CONTENU DU {source_label.upper()} ---\n"
+        + source_text
     )
-    resp = await chat.send_message(UserMessage(
-        text=_LLM_USER_PROMPT, file_contents=[file_content],
-    ))
+    resp = await chat.send_message(UserMessage(text=user_text))
     text = (resp or "").strip()
     # Nettoyer d'eventuels blocs markdown ```json ... ```
     if text.startswith("```"):
@@ -334,10 +392,9 @@ async def parse_with_llm(file_path: str, mime_type: str) -> Dict[str, Any]:
     try:
         data = json.loads(text)
     except json.JSONDecodeError:
-        # Essayer de trouver un JSON dans la reponse
         m = re.search(r"\{.*\}", text, re.DOTALL)
         if not m:
-            raise RuntimeError(f"Reponse IA non-JSON : {text[:200]}")
+            raise RuntimeError(f"Reponse IA non-JSON : {text[:300]}")
         data = json.loads(m.group(0))
 
     # Normalisation
@@ -356,7 +413,7 @@ async def parse_with_llm(file_path: str, mime_type: str) -> Dict[str, Any]:
             "communication": (t.get("communication") or "").strip(),
         })
     return {
-        "extraction_method": "llm_vision",
+        "extraction_method": "llm_text",
         "account_number": (data.get("account_number") or "").strip(),
         "period_from": _parse_date(data.get("period_from")) or "",
         "period_to": _parse_date(data.get("period_to")) or "",

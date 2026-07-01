@@ -228,12 +228,53 @@ async def _t_e2e_empty_file():
         assert body["results"][0]["status"] == "error"
 
 
+async def _t_e2e_pdf_import_fortis():
+    """E2E : PDF Fortis reel -> extraction Claude via LLM text-only,
+    creation statement + N transactions. Necessite EMERGENT_LLM_KEY."""
+    import os as _os
+    fortis_path = "/tmp/fortis1.pdf"
+    if not _os.path.exists(fortis_path):
+        # Skip si le fichier de test n'a pas ete telecharge
+        return
+    await _wipe()
+    cid = await _seed_acp()
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test",
+                           timeout=180.0) as c:
+        await _login(c)
+        with open(fortis_path, "rb") as fh:
+            pdf_bytes = fh.read()
+        files = [("files", ("fortis.pdf", io.BytesIO(pdf_bytes), "application/pdf"))]
+        r = await c.post("/api/banking/statements/import-files",
+                         files=files, data={"copropriete_id": cid})
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["total_statements"] == 1, body
+        result = body["results"][0]
+        assert result["status"] == "ok", result
+        assert result["extraction_method"] == "llm_text"
+        assert result["transactions_count"] >= 5, \
+            f"Fortis PDF doit avoir au moins 5 txns, got {result['transactions_count']}"
+        # Verifier integrite : somme signee des montants = delta soldes
+        stmt = await db.bank_statements.find_one(
+            {"id": result["statement_id"]}, {"_id": 0}
+        )
+        txns = await db.bank_transactions.find(
+            {"statement_id": result["statement_id"]}, {"_id": 0},
+        ).to_list(1000)
+        sum_amt = round(sum(t["amount"] for t in txns), 2)
+        delta = round(stmt["closing_balance"] - stmt["opening_balance"], 2)
+        assert abs(sum_amt - delta) < 0.02, \
+            f"Integrite comptable violee: sum={sum_amt} vs delta={delta}"
+
+
 async def _run_all():
     await _t_e2e_import_single_csv()
     await _t_e2e_multi_files()
     await _t_e2e_source_file_download()
     await _t_e2e_missing_copro()
     await _t_e2e_empty_file()
+    await _t_e2e_pdf_import_fortis()
 
 
 def test_iter90l_import_pdf_csv_e2e():
