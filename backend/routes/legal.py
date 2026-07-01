@@ -309,6 +309,12 @@ class DeleteAccountInput(BaseModel):
     confirm: str  # doit valoir "SUPPRIMER MON COMPTE"
 
 
+class UpdateDocumentInput(BaseModel):
+    title: Optional[str] = None
+    content: str
+    bump_version: bool = False  # If True, increment version and force user re-acceptance
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -544,5 +550,97 @@ def create_legal_router(db):
             "timestamp": _now(),
         })
         return {"message": "Demande de suppression annulee"}
+
+    # === Admin endpoints (superadmin only) ===================================
+
+    async def _require_superadmin(request: Request):
+        from server import get_current_user, is_superadmin_only
+        user = await get_current_user(request)
+        if not is_superadmin_only(user.get("role", "")):
+            raise HTTPException(403,
+                "Seul un super administrateur peut gerer les documents legaux")
+        return user
+
+    @router.get("/admin/documents")
+    async def admin_list_documents(request: Request):
+        """Liste complete des documents legaux (avec contenu) pour edition."""
+        await _require_superadmin(request)
+        await _ensure_defaults(db)
+        docs = await db.legal_documents.find({}, {"_id": 0}).to_list(50)
+        docs.sort(key=lambda d: ["cgu", "privacy", "mentions", "cookies", "disclaimer"].index(d.get("slug", "cgu")) if d.get("slug") in ["cgu", "privacy", "mentions", "cookies", "disclaimer"] else 999)
+        return docs
+
+    @router.put("/admin/documents/{slug}")
+    async def admin_update_document(slug: str, data: UpdateDocumentInput, request: Request):
+        """Met a jour le contenu d'un document. Si bump_version=True, incremente
+        la version et force les utilisateurs a re-accepter les CGU/Privacy."""
+        admin_user = await _require_superadmin(request)
+        await _ensure_defaults(db)
+        existing = await db.legal_documents.find_one({"slug": slug}, {"_id": 0})
+        if not existing:
+            raise HTTPException(404, "Document introuvable")
+
+        content = (data.content or "").strip()
+        if not content:
+            raise HTTPException(400, "Le contenu ne peut pas etre vide")
+        if len(content) > 200_000:
+            raise HTTPException(400, "Contenu trop volumineux (max 200 000 caracteres)")
+
+        old_version = int(existing.get("version", 1))
+        new_version = old_version + 1 if data.bump_version else old_version
+        update_set = {
+            "content": content,
+            "updated_at": _now(),
+            "version": new_version,
+        }
+        if data.title:
+            update_set["title"] = data.title[:200]
+        # Audit trail preserve la version precedente
+        await db.legal_document_history.insert_one({
+            "id": str(uuid.uuid4()),
+            "slug": slug,
+            "version_before": old_version,
+            "version_after": new_version,
+            "bumped": data.bump_version,
+            "title_before": existing.get("title", ""),
+            "content_before": existing.get("content", ""),
+            "edited_by_user_id": str(admin_user.get("_id") or admin_user.get("id", "")),
+            "edited_by_email": admin_user.get("email", ""),
+            "edited_at": _now(),
+        })
+        await db.legal_documents.update_one({"slug": slug}, {"$set": update_set})
+
+        # Log dans l'audit trail general
+        await db.audit_log.insert_one({
+            "id": str(uuid.uuid4()),
+            "user_id": str(admin_user.get("_id") or admin_user.get("id", "")),
+            "user_email": admin_user.get("email", ""),
+            "action": "legal.admin_edit_document",
+            "details": {
+                "slug": slug,
+                "version_before": old_version,
+                "version_after": new_version,
+                "bumped": data.bump_version,
+            },
+            "timestamp": _now(),
+        })
+
+        return {
+            "message": ("Document mis a jour et nouvelle version publiee. Les utilisateurs devront re-accepter."
+                       if data.bump_version and slug in ("cgu", "privacy")
+                       else "Document mis a jour"),
+            "slug": slug,
+            "version": new_version,
+            "bumped": data.bump_version,
+        }
+
+    @router.get("/admin/documents/{slug}/history")
+    async def admin_document_history(slug: str, request: Request):
+        """Historique des modifications d'un document (versions precedentes)."""
+        await _require_superadmin(request)
+        history = await db.legal_document_history.find(
+            {"slug": slug}, {"_id": 0, "content_before": 0},
+        ).sort("edited_at", -1).to_list(100)
+        return history
 
     return router

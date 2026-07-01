@@ -12,6 +12,46 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 ## Implemented
+### Iter90t (Feb 2026) - Admin UI edition des documents legaux
+
+**Ticket user** : P3 - Ecran admin pour modifier CGU/Privacy sans passer par
+mongo shell (bump automatique de version force reacceptation).
+
+**Backend** (`routes/legal.py`) :
+- `GET /api/legal/admin/documents` — liste avec contenu (superadmin only, 403 sinon)
+- `PUT /api/legal/admin/documents/{slug}` — edit contenu + titre. Param
+  `bump_version=true` incrementе la version → force re-acceptance obligatoire
+  quand slug in ('cgu', 'privacy'). Rejette contenu vide ou > 200 000 chars.
+- `GET /api/legal/admin/documents/{slug}/history` — historique versions dans
+  collection `legal_document_history` (snapshot avant modification).
+- Audit trail complet dans `audit_log` (action: `legal.admin_edit_document`).
+
+**Frontend** :
+- `pages/AdminLegalDocsPage.js` route `/admin/legal` (superadmin only).
+- Tabs pour les 5 documents avec badge version courante.
+- Split-view editeur (titre + textarea markdown monospace) / preview live
+  (react-markdown + remark-gfm).
+- 2 boutons :
+  - "Sauvegarder (sans bump)" : PATCH sans changer version
+  - "Publier nouvelle version (vN+1)" avec dialog de confirmation qui
+    alerte de l'impact sur la re-acceptation pour cgu/privacy.
+- Bouton "Historique" affiche panel avec liste des modifications
+  (version_before → version_after, badge bump, email editeur, date).
+- Confirmation "Modifications non enregistrees" au changement d'onglet.
+- Sidebar admin : lien "Documents legaux" (icone FileCheck).
+
+**Tests** :
+- `test_iter90t_legal_admin_edit.py` — 5 tests PASS :
+  1. Owner obtient 403 sur endpoints admin
+  2. Superadmin liste les 5 docs avec contenu
+  3. Edit sans bump preserve la version
+  4. Edit CGU avec bump : version+1, my-acceptance renvoie needs_accept=true
+  5. Rejet contenu vide et > 200 000 chars
+
+Total pytest iter90s+90t : 12/12 PASS.
+
+
+## Implemented
 ### Iter90s (Feb 2026) - Systeme legalement blinde (CGU, RGPD, cookies)
 
 **Ticket user** : Systeme legalement blinde couvrant CGU/Confidentialite/
