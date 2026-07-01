@@ -78,14 +78,34 @@ def create_owner_portal_router(db):
         ).to_list(1000)
         copro_ids = list({l["copropriete_id"] for l in lots if l.get("copropriete_id")})
 
-        # Compute aggregate balance across all ACPs
+        # Compute aggregate balance across all ACPs (batch fetch: fix N+1)
         total_called = 0.0
         total_paid = 0.0
         pending_calls = []
 
-        for copro_id in copro_ids:
-            fund_calls = await db.fund_calls.find({"copropriete_id": copro_id}, {"_id": 0}).to_list(1000)
-            for fc in fund_calls:
+        if copro_ids:
+            all_fund_calls = await db.fund_calls.find(
+                {"copropriete_id": {"$in": copro_ids}}, {"_id": 0}
+            ).to_list(10000)
+            paid_txns = await db.bank_transactions.find(
+                {"copropriete_id": {"$in": copro_ids}, "matched": True,
+                 "match_type": "owner_payment", "matched_to": owner_id},
+                {"_id": 0, "amount": 1},
+            ).to_list(50000)
+            total_paid += sum(abs(t.get("amount", 0)) for t in paid_txns)
+
+            if owner.get("vcs_digits"):
+                unmatched_all = await db.bank_transactions.find(
+                    {"copropriete_id": {"$in": copro_ids}, "matched": False},
+                    {"_id": 0, "amount": 1, "communication": 1},
+                ).to_list(50000)
+                for t in unmatched_all:
+                    comm = (t.get("communication") or "").replace("+", "").replace("/", "").replace(" ", "")
+                    if comm == owner["vcs_digits"]:
+                        total_paid += abs(t.get("amount", 0))
+
+            for fc in all_fund_calls:
+                copro_id = fc.get("copropriete_id", "")
                 for d in fc.get("distribution", []):
                     if d.get("owner_id") == owner_id:
                         total_called += d.get("amount", 0)
@@ -97,23 +117,6 @@ def create_owner_portal_router(db):
                                 "vcs_code": d.get("vcs_code", owner.get("vcs_code", "")),
                                 "copropriete_id": copro_id,
                             })
-
-            # Bank transactions matched to this owner
-            txns = await db.bank_transactions.find(
-                {"copropriete_id": copro_id, "matched": True, "match_type": "owner_payment", "matched_to": owner_id},
-                {"_id": 0}
-            ).to_list(10000)
-            total_paid += sum(abs(t.get("amount", 0)) for t in txns)
-
-            # Unmatched txns with VCS hint
-            if owner.get("vcs_digits"):
-                unmatched = await db.bank_transactions.find(
-                    {"copropriete_id": copro_id, "matched": False}, {"_id": 0}
-                ).to_list(1000)
-                for t in unmatched:
-                    comm = (t.get("communication") or "").replace("+", "").replace("/", "").replace(" ", "")
-                    if comm == owner["vcs_digits"]:
-                        total_paid += abs(t.get("amount", 0))
 
         balance = round(total_called - total_paid, 2)
         return {
@@ -139,13 +142,21 @@ def create_owner_portal_router(db):
         if copropriete_id:
             q["copropriete_id"] = copropriete_id
         all_calls = await db.fund_calls.find(q, {"_id": 0}).sort("date", -1).to_list(1000)
+        # Batch fetch des coproprietes (fix N+1)
+        copro_ids_needed = list({fc.get("copropriete_id", "") for fc in all_calls if fc.get("copropriete_id")})
+        copro_map: dict = {}
+        if copro_ids_needed:
+            copros = await db.coproprietes.find(
+                {"id": {"$in": copro_ids_needed}},
+                {"_id": 0, "id": 1, "name": 1, "reference": 1},
+            ).to_list(len(copro_ids_needed))
+            copro_map = {c["id"]: c for c in copros}
         result = []
         for fc in all_calls:
             my_share = next((d for d in fc.get("distribution", []) if d.get("owner_id") == owner_id), None)
             if not my_share:
                 continue
-            # Try to fetch ACP name
-            copro = await db.coproprietes.find_one({"id": fc.get("copropriete_id", "")}, {"_id": 0, "name": 1, "reference": 1})
+            copro = copro_map.get(fc.get("copropriete_id", "")) or {}
             result.append({
                 "id": fc["id"],
                 "name": fc.get("name", ""),
@@ -153,8 +164,8 @@ def create_owner_portal_router(db):
                 "due_date": fc.get("due_date", ""),
                 "call_type": fc.get("call_type", ""),
                 "copropriete_id": fc.get("copropriete_id", ""),
-                "copropriete_name": (copro or {}).get("name", ""),
-                "copropriete_ref": (copro or {}).get("reference", ""),
+                "copropriete_name": copro.get("name", ""),
+                "copropriete_ref": copro.get("reference", ""),
                 "my_amount": my_share.get("amount", 0),
                 "my_share": my_share.get("share", 0),
                 "vcs_code": my_share.get("vcs_code", owner.get("vcs_code", "")),
