@@ -593,7 +593,7 @@ async def forgot_password(data: ForgotPasswordInput, request: Request):
             )
             asyncio.create_task(send_html_email([email], subject, html))
         else:
-            logger.warning(f"MSGRAPH not configured; reset link for {email}: /reset-password?token={raw_token}")
+            logger.warning(f"MSGRAPH not configured; password-reset requested for {email} but email cannot be sent")
     except Exception as e:
         logger.warning(f"Reset email send failed for {email}: {e}")
     return generic

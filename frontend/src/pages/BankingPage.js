@@ -380,8 +380,11 @@ export default function BankingPage() {
         {/* Main panel */}
         <div className="lg:col-span-3">
           {selectedStmt ? (
-            <Card className="border-slate-200">
-              <CardHeader className="pb-2">
+            <Card className="border-slate-200 overflow-visible">
+              <CardHeader
+                className="pb-2 sticky top-2 z-20 bg-white/95 backdrop-blur-sm border-b border-slate-100 rounded-t-lg shadow-sm"
+                data-testid="stmt-sticky-header"
+              >
                 <div className="flex flex-row items-start justify-between gap-3">
                   <div className="flex-1">
                     <CardTitle className="text-base flex items-center gap-2" style={{fontFamily:'Chivo,sans-serif'}}>

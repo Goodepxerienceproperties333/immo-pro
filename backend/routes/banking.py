@@ -90,6 +90,24 @@ class CategorizeTransactionInput(BaseModel):
     splits: List[CategorySplitInput]
 
 
+def _ensure_copro_access(request: Request, copro_id: str) -> None:
+    """SEC-001 (iter90n) : Enforce chinese wall on by-id / by-body banking
+    endpoints where the middleware's query/header check does not apply.
+    Superadmin/admin bypass; all other roles must have `copro_id` in their
+    `copropriete_ids`. Raises 403 otherwise."""
+    if not copro_id:
+        return  # nothing to check
+    role = getattr(request.state, "user_role", "")
+    if role in ("superadmin", "admin"):
+        return
+    user_copros = getattr(request.state, "user_copropriete_ids", []) or []
+    if copro_id not in user_copros:
+        raise HTTPException(
+            status_code=403,
+            detail="Acces refuse a cette copropriete (chinese wall)",
+        )
+
+
 def create_banking_router(db):
     router = APIRouter(prefix="/api/banking")
 
@@ -506,10 +524,11 @@ def create_banking_router(db):
         return {k: v for k, v in doc.items() if k != "_id"}
 
     @router.get("/statements/{stmt_id}")
-    async def get_statement(stmt_id: str):
+    async def get_statement(stmt_id: str, request: Request):
         stmt = await db.bank_statements.find_one({"id": stmt_id}, {"_id": 0})
         if not stmt:
             raise HTTPException(404, "Extrait non trouve")
+        _ensure_copro_access(request, stmt.get("copropriete_id", ""))
         txns = await db.bank_transactions.find({"statement_id": stmt_id}, {"_id": 0}).sort("date", 1).to_list(1000)
         stmt["transactions"] = txns
         # Calcul de l'equilibre
@@ -1129,10 +1148,11 @@ def create_banking_router(db):
     # automatiquement une ecriture FI multi-lignes qui apparait ensuite
     # dans /api/fiscal/expenses via la pass FI/OD de compute_expense_rows.
     @router.post("/transactions/{txn_id}/categorize")
-    async def categorize_transaction(txn_id: str, data: CategorizeTransactionInput):
+    async def categorize_transaction(txn_id: str, data: CategorizeTransactionInput, request: Request):
         txn = await db.bank_transactions.find_one({"id": txn_id}, {"_id": 0})
         if not txn:
             raise HTTPException(404, "Transaction non trouvee")
+        _ensure_copro_access(request, txn.get("copropriete_id", ""))
         if txn.get("matched") and txn.get("match_type") != "expense_category":
             raise HTTPException(400,
                 "Transaction deja lettree a un tiers - delettrez d'abord")
@@ -1215,10 +1235,11 @@ def create_banking_router(db):
         }
 
     @router.delete("/transactions/{txn_id}/categorize")
-    async def uncategorize_transaction(txn_id: str):
+    async def uncategorize_transaction(txn_id: str, request: Request):
         txn = await db.bank_transactions.find_one({"id": txn_id}, {"_id": 0})
         if not txn:
             raise HTTPException(404, "Transaction non trouvee")
+        _ensure_copro_access(request, txn.get("copropriete_id", ""))
         if txn.get("match_type") != "expense_category":
             raise HTTPException(400, "Transaction n'est pas categorisee")
         try:
@@ -1247,6 +1268,7 @@ def create_banking_router(db):
     # ---- CODA IMPORT ----
     @router.post("/statements/import-files")
     async def import_statement_files(
+        request: Request,
         files: List[UploadFile] = File(...),
         copropriete_id: str = Form(""),
     ):
@@ -1260,15 +1282,11 @@ def create_banking_router(db):
         Le fichier original est stocke en GridFS (bucket 'bank_statement_sources')
         et référencé dans bank_statements.source_file_id pour audit.
 
-        Retour :
-            {
-              "results": [
-                {"filename", "statement_id", "status", "transactions_count",
-                 "extraction_method", "warnings"}
-              ],
-              "total_statements": N,
-              "total_transactions": N
-            }
+        Securite (iter90n) :
+        - Chinese wall enforced sur copropriete_id (SEC-001)
+        - Max 20 fichiers par upload, max 10 MB par fichier (SEC-002)
+        - Total 100 MB agrege par upload
+        - Content-type sniffing : uniquement PDF (%PDF-) et texte imprimable
         """
         from bank_import import extract_bank_statement
         from gridfs_storage import get_bank_statement_sources_storage
@@ -1280,6 +1298,20 @@ def create_banking_router(db):
         if not copropriete_id:
             raise HTTPException(400, "copropriete_id est obligatoire")
 
+        # iter90n : SEC-001 : chinese wall
+        _ensure_copro_access(request, copropriete_id)
+
+        # iter90n : SEC-002 : bornes anti-abus
+        MAX_FILES = 20
+        MAX_FILE_BYTES = 10 * 1024 * 1024      # 10 MB par fichier
+        MAX_TOTAL_BYTES = 100 * 1024 * 1024    # 100 MB agrege
+        if len(files) > MAX_FILES:
+            raise HTTPException(
+                413,
+                f"Trop de fichiers ({len(files)} > {MAX_FILES}). "
+                "Limitez a 20 fichiers par upload.",
+            )
+
         # Verifier que la copro existe
         copro = await db.coproprietes.find_one({"id": copropriete_id}, {"_id": 0, "id": 1})
         if not copro:
@@ -1289,17 +1321,51 @@ def create_banking_router(db):
         results: list[dict] = []
         total_stmts = 0
         total_txns = 0
+        total_bytes_read = 0
 
         for uf in files:
             fname = uf.filename or "extrait.pdf"
             mime = uf.content_type or mimetypes.guess_type(fname)[0] or "application/octet-stream"
             content = await uf.read()
+            # iter90n : SEC-002 : bornes taille et content-type sniffing
             if not content:
                 results.append({
                     "filename": fname, "status": "error",
                     "error": "Fichier vide",
                 })
                 continue
+            if len(content) > MAX_FILE_BYTES:
+                results.append({
+                    "filename": fname, "status": "error",
+                    "error": f"Fichier trop volumineux ({len(content) // 1024} KB > {MAX_FILE_BYTES // 1024} KB max)",
+                })
+                continue
+            total_bytes_read += len(content)
+            if total_bytes_read > MAX_TOTAL_BYTES:
+                results.append({
+                    "filename": fname, "status": "error",
+                    "error": "Volume total depasse (100 MB max par upload)",
+                })
+                continue
+            # Content-type sniffing : verifier magic bytes / texte imprimable
+            is_pdf = content[:5] == b"%PDF-"
+            lower_name = fname.lower()
+            if not is_pdf and not (lower_name.endswith(".csv") or lower_name.endswith(".txt")):
+                results.append({
+                    "filename": fname, "status": "error",
+                    "error": "Format non supporte (attendu PDF ou CSV)",
+                })
+                continue
+            if not is_pdf:
+                # CSV/TXT : verifier que le contenu est textuel imprimable
+                sample = content[:4096]
+                non_printable = sum(1 for b in sample if b < 0x09 or (0x0e <= b < 0x20 and b not in (0x0a, 0x0d)))
+                if non_printable > len(sample) * 0.1:
+                    results.append({
+                        "filename": fname, "status": "error",
+                        "error": "Fichier CSV binaire ou corrompu",
+                    })
+                    continue
             # Persister l'original en GridFS
             try:
                 gid = await storage.upload(
@@ -1420,13 +1486,14 @@ def create_banking_router(db):
         }
 
     @router.get("/statements/{stmt_id}/source-file")
-    async def download_statement_source(stmt_id: str):
+    async def download_statement_source(stmt_id: str, request: Request):
         """Retourne le PDF/CSV original importe (audit)."""
         from gridfs_storage import get_bank_statement_sources_storage
         from fastapi.responses import Response
         stmt = await db.bank_statements.find_one({"id": stmt_id}, {"_id": 0})
         if not stmt:
             raise HTTPException(404, "Extrait introuvable")
+        _ensure_copro_access(request, stmt.get("copropriete_id", ""))
         gid = stmt.get("source_file_id")
         if not gid:
             raise HTTPException(404, "Aucun fichier source attache")

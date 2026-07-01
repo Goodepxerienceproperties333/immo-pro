@@ -12,6 +12,48 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 ## Implemented
+### Iter90n (Feb 2026) - Security hardening + Sticky header extrait
+
+**Ticket security audit** :
+- SEC-001 [HIGH] : Cross-building bypass sur endpoints banking by-id/by-body
+- SEC-002 [MEDIUM] : Upload PDF/CSV sans limites -> DoS LLM
+- SEC-003 [LOW] : Password-reset token logge quand MS Graph absent
+
+**Ticket UX** : Le header du panneau extrait (titre + boutons Comptabiliser
+/ Repasser brouillon + bandeau de solde) reste flottant en haut du panneau
+quand l'utilisateur scrolle la liste des transactions.
+
+**Fixes securite** :
+- Nouveau helper `_ensure_copro_access(request, copro_id)` dans banking.py
+  qui verifie que le role est superadmin/admin OU que `copro_id` est
+  dans `user_copropriete_ids`. Applique sur :
+  - `GET /statements/{id}` (SEC-001)
+  - `GET /statements/{id}/source-file` (SEC-001)
+  - `POST /transactions/{id}/categorize` (SEC-001)
+  - `DELETE /transactions/{id}/categorize` (SEC-001)
+  - `POST /statements/import-files` (SEC-001)
+- Bornes anti-abus sur `import-files` (SEC-002) :
+  - Max 20 fichiers par upload (retourne 413)
+  - Max 10 MB par fichier
+  - Max 100 MB total agrege par upload
+  - Content-type sniffing : PDF verifie via magic bytes (%PDF-), CSV/TXT
+    via ratio de bytes imprimables
+- SEC-003 : `server.py:596` — supprime le raw_token du log warning
+  (garde uniquement l'evenement + email destinataire).
+
+**Fix UX sticky** :
+- `BankingPage.js` CardHeader : `sticky top-2 z-20 bg-white/95
+  backdrop-blur-sm border-b shadow-sm rounded-t-lg` avec `data-testid
+  "stmt-sticky-header"`. Le titre, les boutons Comptabiliser/Repasser
+  brouillon, le bandeau equilibre restent visibles pendant le scroll.
+
+**Tests** : `test_iter90n_security_hardening.py` - 8 scenarios (5 sur
+chinese wall + 3 sur bornes upload). Non-regression : **15/15 iter90
+PASS en suite**.
+
+
+
+## Implemented
 ### Iter90m (Feb 2026) - Categorisation d'extraits avec compte 58 Virements internes
 
 **Ticket user** : Permettre dans la catégorisation d'extraits de mentionner
