@@ -587,6 +587,18 @@ export default function OwnerPortalPage() {
           </div>
         </DialogContent>
       </Dialog>
+
+      <footer className="max-w-6xl mx-auto pt-6 pb-4 border-t border-slate-200 mt-8">
+        <div className="flex flex-wrap justify-center gap-x-3 gap-y-1 text-[10px] text-slate-400" data-testid="owner-portal-legal-footer">
+          <a href="/legal/cgu" target="_blank" rel="noopener noreferrer" className="hover:text-[#0055FF] hover:underline">CGU</a>
+          <span>·</span>
+          <a href="/legal/privacy" target="_blank" rel="noopener noreferrer" className="hover:text-[#0055FF] hover:underline">Confidentialite</a>
+          <span>·</span>
+          <a href="/legal/mentions" target="_blank" rel="noopener noreferrer" className="hover:text-[#0055FF] hover:underline">Mentions Legales</a>
+          <span>·</span>
+          <a href="/legal/cookies" target="_blank" rel="noopener noreferrer" className="hover:text-[#0055FF] hover:underline">Cookies</a>
+        </div>
+      </footer>
     </div>
   );
 }

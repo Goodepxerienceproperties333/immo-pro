@@ -64,6 +64,12 @@ AUTH_EXEMPT_PATHS = {
     "/api/auth/reset-password",
 }
 
+# Prefix-based exemption for public legal document reads (unauthenticated users
+# must be able to read CGU/Privacy/Cookies/Mentions before login).
+AUTH_EXEMPT_PREFIXES = (
+    "/api/legal/documents",
+)
+
 # RBAC: paths that require admin role (superadmin/syndic) for any write/destructive action.
 ADMIN_ONLY_PATHS = (
     "/api/users",         # user management
@@ -92,6 +98,9 @@ async def auth_middleware(request: Request, call_next):
         return await call_next(request)
     # Exempt list (auth flow)
     if path in AUTH_EXEMPT_PATHS:
+        return await call_next(request)
+    # Public prefixes (e.g. legal documents readable without login)
+    if method == "GET" and path.startswith(AUTH_EXEMPT_PREFIXES):
         return await call_next(request)
 
     # Verify access token (cookie or Authorization Bearer)
@@ -172,7 +181,7 @@ async def auth_middleware(request: Request, call_next):
         # GET on /api/coproprietes (so they can see ACP names referenced in their portal).
         # Anything else returns 403 (no leaking other owners' info, no admin tools).
         elif role == "owner":
-            allowed_owner_prefixes = ("/api/owner/", "/api/auth/")
+            allowed_owner_prefixes = ("/api/owner/", "/api/auth/", "/api/legal/")
             allowed_owner_exact_get = {"/api/coproprietes"}
             is_allowed = False
             if path.startswith(allowed_owner_prefixes):
@@ -295,6 +304,8 @@ def user_response(user_doc):
         "role": user_doc["role"],
         "copropriete_ids": user_doc.get("copropriete_ids", []),
         "onboarding_completed": bool(user_doc.get("onboarding_completed", False)),
+        "deletion_requested_at": user_doc.get("deletion_requested_at"),
+        "deletion_purge_at_ts": user_doc.get("deletion_purge_at_ts"),
     }
 
 @auth_router.post("/onboarding-complete")
@@ -857,3 +868,4 @@ app.include_router(create_expense_categories_router(db))
 app.include_router(create_duplicates_router(db))
 app.include_router(create_owner_access_router(db))
 app.include_router(create_support_router(db))
+app.include_router(create_legal_router(db))

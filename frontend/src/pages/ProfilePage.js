@@ -6,7 +6,9 @@ import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { UserCog, Save, KeyRound, Mail, Shield } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { UserCog, Save, KeyRound, Mail, Shield, FileText, ScrollText, Cookie } from 'lucide-react';
+import RgpdSection from '@/components/RgpdSection';
 
 const ROLE_META = {
   superadmin: { label: 'Super Administrateur', color: 'bg-purple-100 text-purple-800 border-purple-300', desc: "Gere les acces a la plateforme (creation/modification des utilisateurs)." },
@@ -145,6 +147,40 @@ export default function ProfilePage() {
             <Button onClick={changePassword} disabled={savingPwd} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="profile-change-pwd-btn">
               <KeyRound size={14} className="mr-2" /> {savingPwd ? 'Modification...' : 'Modifier le mot de passe'}
             </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* RGPD - Mes donnees */}
+      <div className="mt-6">
+        <RgpdSection />
+      </div>
+
+      {/* Liens documents legaux */}
+      <Card className="mt-6 border-slate-200">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base flex items-center gap-2" style={{fontFamily:'Chivo,sans-serif'}}>
+            <FileText size={16} className="text-slate-500" />
+            Documents legaux
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          <div className="flex flex-wrap gap-2">
+            <Link to="/legal/cgu" target="_blank" data-testid="profile-link-cgu" className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded border border-slate-200 hover:border-[#0055FF] hover:text-[#0055FF] transition-colors">
+              <ScrollText size={12} /> CGU
+            </Link>
+            <Link to="/legal/privacy" target="_blank" data-testid="profile-link-privacy" className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded border border-slate-200 hover:border-[#0055FF] hover:text-[#0055FF] transition-colors">
+              <Shield size={12} /> Politique de Confidentialite
+            </Link>
+            <Link to="/legal/mentions" target="_blank" data-testid="profile-link-mentions" className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded border border-slate-200 hover:border-[#0055FF] hover:text-[#0055FF] transition-colors">
+              <FileText size={12} /> Mentions Legales
+            </Link>
+            <Link to="/legal/cookies" target="_blank" data-testid="profile-link-cookies" className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded border border-slate-200 hover:border-[#0055FF] hover:text-[#0055FF] transition-colors">
+              <Cookie size={12} /> Cookies
+            </Link>
+            <Link to="/legal/disclaimer" target="_blank" data-testid="profile-link-disclaimer" className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded border border-slate-200 hover:border-[#0055FF] hover:text-[#0055FF] transition-colors">
+              <FileText size={12} /> Disclaimer
+            </Link>
           </div>
         </CardContent>
       </Card>

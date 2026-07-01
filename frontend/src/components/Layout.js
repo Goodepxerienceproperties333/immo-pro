@@ -313,7 +313,21 @@ export default function Layout() {
           </NavLink>
           <button onClick={handleLogout} className="text-slate-400 hover:text-red-400 transition-colors" data-testid="logout-btn-top"><LogOut size={16} /></button>
         </header>
-        <main className="flex-1 overflow-auto p-6"><div className="max-w-[1400px] mx-auto"><Outlet /></div></main>
+        <main className="flex-1 overflow-auto p-6"><div className="max-w-[1400px] mx-auto"><Outlet /></div>
+          <footer className="max-w-[1400px] mx-auto pt-6 pb-2 border-t border-slate-200 mt-6">
+            <div className="flex flex-wrap justify-center gap-x-3 gap-y-1 text-[10px] text-slate-400" data-testid="layout-legal-footer">
+              <a href="/legal/cgu" target="_blank" rel="noopener noreferrer" className="hover:text-[#0055FF] hover:underline">CGU</a>
+              <span>·</span>
+              <a href="/legal/privacy" target="_blank" rel="noopener noreferrer" className="hover:text-[#0055FF] hover:underline">Confidentialite</a>
+              <span>·</span>
+              <a href="/legal/mentions" target="_blank" rel="noopener noreferrer" className="hover:text-[#0055FF] hover:underline">Mentions Legales</a>
+              <span>·</span>
+              <a href="/legal/cookies" target="_blank" rel="noopener noreferrer" className="hover:text-[#0055FF] hover:underline">Cookies</a>
+              <span>·</span>
+              <a href="/legal/disclaimer" target="_blank" rel="noopener noreferrer" className="hover:text-[#0055FF] hover:underline">Disclaimer</a>
+            </div>
+          </footer>
+        </main>
         <OnboardingDialog />
       </div>
     );
@@ -378,7 +392,21 @@ export default function Layout() {
             </div>
           </NavLink>
         </header>
-        <main className="flex-1 overflow-auto p-4 lg:p-6"><div className="max-w-[1600px] mx-auto"><Outlet /></div></main>
+        <main className="flex-1 overflow-auto p-4 lg:p-6"><div className="max-w-[1600px] mx-auto"><Outlet /></div>
+          <footer className="max-w-[1600px] mx-auto pt-6 pb-2 border-t border-slate-200 mt-6">
+            <div className="flex flex-wrap justify-center gap-x-3 gap-y-1 text-[10px] text-slate-400" data-testid="layout-legal-footer">
+              <a href="/legal/cgu" target="_blank" rel="noopener noreferrer" className="hover:text-[#0055FF] hover:underline">CGU</a>
+              <span>·</span>
+              <a href="/legal/privacy" target="_blank" rel="noopener noreferrer" className="hover:text-[#0055FF] hover:underline">Confidentialite</a>
+              <span>·</span>
+              <a href="/legal/mentions" target="_blank" rel="noopener noreferrer" className="hover:text-[#0055FF] hover:underline">Mentions Legales</a>
+              <span>·</span>
+              <a href="/legal/cookies" target="_blank" rel="noopener noreferrer" className="hover:text-[#0055FF] hover:underline">Cookies</a>
+              <span>·</span>
+              <a href="/legal/disclaimer" target="_blank" rel="noopener noreferrer" className="hover:text-[#0055FF] hover:underline">Disclaimer</a>
+            </div>
+          </footer>
+        </main>
         <OnboardingDialog />
       </div>
     </div>

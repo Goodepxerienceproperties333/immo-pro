@@ -238,6 +238,19 @@ export default function LoginPage() {
               </button>
             )}
           </div>
+
+          {/* Legal footer links */}
+          <div className="mt-6 pt-4 border-t border-slate-100">
+            <div className="flex flex-wrap justify-center gap-x-3 gap-y-1 text-[11px] text-slate-400">
+              <a href="/legal/cgu" target="_blank" rel="noopener noreferrer" className="hover:text-[#0055FF] hover:underline" data-testid="login-link-cgu">CGU</a>
+              <span>·</span>
+              <a href="/legal/privacy" target="_blank" rel="noopener noreferrer" className="hover:text-[#0055FF] hover:underline" data-testid="login-link-privacy">Confidentialite</a>
+              <span>·</span>
+              <a href="/legal/mentions" target="_blank" rel="noopener noreferrer" className="hover:text-[#0055FF] hover:underline" data-testid="login-link-mentions">Mentions Legales</a>
+              <span>·</span>
+              <a href="/legal/cookies" target="_blank" rel="noopener noreferrer" className="hover:text-[#0055FF] hover:underline" data-testid="login-link-cookies">Cookies</a>
+            </div>
+          </div>
         </div>
       </div>
 

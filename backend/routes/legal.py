@@ -7,7 +7,7 @@ re-accepter (interstitiel a la connexion).
 Endpoints :
 - GET  /api/legal/documents           -> liste des documents publics
 - GET  /api/legal/documents/{slug}    -> contenu d'un doc (CGU, privacy, ...)
-- GET  /api/legal/current-version     -> version courante des CGU / privacy
+- GET  /api/legal/current-versions    -> versions courantes des CGU / privacy
 - POST /api/legal/accept              -> user accepte les CGU (marque acceptation)
 - GET  /api/legal/my-acceptance       -> statut acceptation CGU du user courant
 - POST /api/legal/rgpd/export         -> export RGPD (art. 20 portabilite)
@@ -20,11 +20,19 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional
 
+from bson import ObjectId
 from fastapi import APIRouter, HTTPException, Request, BackgroundTasks
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
+
+
+def _oid(user_id: str) -> Optional[ObjectId]:
+    try:
+        return ObjectId(user_id)
+    except Exception:
+        return None
 
 
 # Contenu par defaut (V1) - stocke en base au premier demarrage.
@@ -49,7 +57,7 @@ Les présentes Conditions Générales d'Utilisation (« CGU ») régissent l'acc
 - N° BCE : **[NUMERO_BCE]**
 - N° TVA : **[NUMERO_TVA]**
 - Représentant légal : **[NOM_REPRESENTANT], [FONCTION]**
-- Email contact : **[EMAIL_CONTACT]**
+- Email contact : **welcome@goodexperienceproperties.be**
 
 ## 3. Acceptation des CGU
 L'utilisation de la Plateforme implique l'acceptation pleine et entière des présentes CGU. L'Utilisateur atteste être majeur, avoir la capacité juridique de contracter et agir soit en son nom personnel, soit au nom d'une entité qu'il représente valablement.
@@ -102,7 +110,7 @@ Les présentes CGU sont régies par le **droit belge**. Tout litige relatif à l
 Si l'une des clauses des présentes CGU était déclarée nulle ou inapplicable, les autres clauses conserveront leur pleine force et effet.
 
 ## 15. Contact
-Pour toute question : **[EMAIL_CONTACT]**
+Pour toute question : **welcome@goodexperienceproperties.be**
 """.strip(),
     },
     "privacy": {
@@ -119,8 +127,8 @@ Conforme au Règlement Général sur la Protection des Données (RGPD — UE 201
 - **[SOCIETE]**, [FORME_JURIDIQUE]
 - Siège : [ADRESSE_COMPLETE]
 - N° BCE : [NUMERO_BCE]
-- Contact : [EMAIL_CONTACT]
-- DPO / Délégué à la protection : **[DPO_EMAIL]** (ex : dpo@[DOMAINE])
+- Contact : welcome@goodexperienceproperties.be
+- DPO / Délégué à la protection : **welcome@goodexperienceproperties.be** (à préciser si un DPO externe est désigné)
 
 ## 2. Données collectées
 
@@ -175,7 +183,7 @@ Vous disposez des droits suivants sur vos données :
 - **Limitation** (art. 18) — restreindre temporairement le traitement
 - **Réclamation** auprès de l'**Autorité de Protection des Données belge** (APD, www.autoriteprotectiondonnees.be)
 
-Pour exercer ces droits : **[DPO_EMAIL]** ou via votre profil (bouton « Exporter mes données » / « Supprimer mon compte »).
+Pour exercer ces droits : **welcome@goodexperienceproperties.be** ou via votre profil (bouton « Exporter mes données » / « Supprimer mon compte »).
 
 ## 8. Sécurité
 - Chiffrement HTTPS (TLS 1.2+) pour tous les transferts
@@ -195,7 +203,7 @@ Les données peuvent être traitées par Anthropic (USA) pour le fonctionnement 
 Toute modification substantielle sera notifiée par email et interstitiel dans la Plateforme au moins 30 jours avant application.
 
 ## 12. Contact
-Toute question : **[DPO_EMAIL]**
+Toute question : **welcome@goodexperienceproperties.be**
 Réclamation autorité : APD Belgique — Rue de la Presse 35 — 1000 Bruxelles — contact@apd-gba.be
 """.strip(),
     },
@@ -212,7 +220,7 @@ Réclamation autorité : APD Belgique — Rue de la Presse 35 — 1000 Bruxelles
 - **N° d'entreprise (BCE)** : [NUMERO_BCE]
 - **N° TVA** : [NUMERO_TVA]
 - **Représentant légal** : [NOM_REPRESENTANT], [FONCTION]
-- **Email** : [EMAIL_CONTACT]
+- **Email** : welcome@goodexperienceproperties.be
 - **Téléphone** : [TELEPHONE]
 
 ## Directeur de la publication
@@ -228,7 +236,7 @@ Le contenu, la structure, la charte graphique et le code source de CoproManager 
 Les informations diffusées sont fournies « en l'état ». L'Éditeur s'efforce d'assurer leur exactitude mais ne garantit pas leur exhaustivité ni leur mise à jour permanente. L'utilisation de la Plateforme se fait sous la seule responsabilité de l'Utilisateur.
 
 ## Contact
-Pour toute réclamation ou question : [EMAIL_CONTACT]
+Pour toute réclamation ou question : welcome@goodexperienceproperties.be
 """.strip(),
     },
     "cookies": {
@@ -255,7 +263,7 @@ Ces cookies sont **indispensables** au fonctionnement de la Plateforme et **exem
 Vous pouvez à tout moment désactiver les cookies dans les paramètres de votre navigateur. **Cependant, la désactivation empêche l'accès à la Plateforme** (impossibilité de vous authentifier).
 
 ## 4. Contact
-Pour toute question : [EMAIL_CONTACT]
+Pour toute question : welcome@goodexperienceproperties.be
 """.strip(),
     },
     "disclaimer": {
@@ -354,9 +362,10 @@ def create_legal_router(db):
     @router.get("/my-acceptance")
     async def my_acceptance(request: Request):
         user_id = getattr(request.state, "user_id", "")
-        if not user_id:
+        oid = _oid(user_id) if user_id else None
+        if not oid:
             raise HTTPException(401, "Authentification requise")
-        user = await db.users.find_one({"id": user_id}, {"_id": 0, "legal_accepted": 1})
+        user = await db.users.find_one({"_id": oid}, {"_id": 0, "legal_accepted": 1})
         legal = (user or {}).get("legal_accepted", {}) or {}
         current = await current_versions()
         needs_accept = (
@@ -369,7 +378,8 @@ def create_legal_router(db):
     @router.post("/accept")
     async def accept(data: AcceptTermsInput, request: Request):
         user_id = getattr(request.state, "user_id", "")
-        if not user_id:
+        oid = _oid(user_id) if user_id else None
+        if not oid:
             raise HTTPException(401, "Authentification requise")
         current = await current_versions()
         if data.cgu_version != current["cgu_version"] or data.privacy_version != current["privacy_version"]:
@@ -379,7 +389,7 @@ def create_legal_router(db):
         ip = request.client.host if request.client else ""
         ua = request.headers.get("user-agent", "")[:300]
         await db.users.update_one(
-            {"id": user_id},
+            {"_id": oid},
             {"$set": {"legal_accepted": {
                 "cgu_version": data.cgu_version,
                 "privacy_version": data.privacy_version,
@@ -388,9 +398,11 @@ def create_legal_router(db):
             }}}
         )
         # Log audit trail
+        user_email = getattr(request.state, "user_email", "")
         await db.audit_log.insert_one({
             "id": str(uuid.uuid4()),
             "user_id": user_id,
+            "user_email": user_email,
             "action": "legal.accept",
             "details": {"cgu_version": data.cgu_version,
                         "privacy_version": data.privacy_version},
@@ -404,26 +416,29 @@ def create_legal_router(db):
         """RGPD art. 20 - portabilite. Renvoie un JSON complet des donnees
         du user courant."""
         user_id = getattr(request.state, "user_id", "")
-        if not user_id:
+        oid = _oid(user_id) if user_id else None
+        if not oid:
             raise HTTPException(401, "Authentification requise")
-        user = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
+        user = await db.users.find_one({"_id": oid}, {"password_hash": 0})
         if not user:
             raise HTTPException(404, "Utilisateur introuvable")
+        user["_id"] = str(user["_id"])
         # Collecter les donnees liees a cet user (support conversations,
         # audit logs, owners linked, etc.)
         support_convs = await db.support_conversations.find(
             {"user_id": user_id}, {"_id": 0},
         ).to_list(1000)
-        support_msgs = await db.support_messages.find(
-            {"conversation_id": {"$in": [c["id"] for c in support_convs]}},
-            {"_id": 0},
-        ).to_list(10000) if support_convs else []
+        support_msgs = []
+        if support_convs:
+            conv_ids = [c.get("id") for c in support_convs if c.get("id")]
+            if conv_ids:
+                support_msgs = await db.support_messages.find(
+                    {"conversation_id": {"$in": conv_ids}},
+                    {"_id": 0},
+                ).to_list(10000)
         audit_logs = await db.audit_log.find(
             {"user_id": user_id}, {"_id": 0},
         ).sort("timestamp", -1).to_list(5000)
-        owner_access = await db.owner_access.find(
-            {"user_id": user_id}, {"_id": 0, "password_hash": 0, "reset_token_hash": 0},
-        ).to_list(100)
         # Owner-side data (si user est aussi proprietaire)
         owner = None
         if user.get("email"):
@@ -435,7 +450,6 @@ def create_legal_router(db):
             "profile": user,
             "support_conversations": support_convs,
             "support_messages": support_msgs,
-            "owner_access": owner_access,
             "linked_owner_record": owner,
             "audit_logs": audit_logs,
             "note": "Fichier exporte au titre du droit a la portabilite (art. 20 RGPD)",
@@ -444,6 +458,7 @@ def create_legal_router(db):
         await db.audit_log.insert_one({
             "id": str(uuid.uuid4()),
             "user_id": user_id,
+            "user_email": user.get("email", ""),
             "action": "legal.rgpd_export",
             "details": {},
             "timestamp": _now(),
@@ -463,45 +478,71 @@ def create_legal_router(db):
         legales (7 ans pour donnees comptables belges - art. III.86 CDE).
         """
         user_id = getattr(request.state, "user_id", "")
-        if not user_id:
+        oid = _oid(user_id) if user_id else None
+        if not oid:
             raise HTTPException(401, "Authentification requise")
         if data.confirm != "SUPPRIMER MON COMPTE":
             raise HTTPException(400,
                 'Pour confirmer, envoyez le champ "confirm" avec la valeur exacte "SUPPRIMER MON COMPTE".')
-        user = await db.users.find_one({"id": user_id}, {"_id": 0})
+        user = await db.users.find_one({"_id": oid})
         if not user:
             raise HTTPException(404, "Utilisateur introuvable")
         # Refuser la suppression pour le superadmin sans en avoir un autre
-        if user.get("role") == "superadmin":
-            others = await db.users.count_documents({"role": "superadmin", "id": {"$ne": user_id}})
+        if user.get("role") in ("superadmin", "admin"):
+            others = await db.users.count_documents({
+                "role": {"$in": ["superadmin", "admin"]},
+                "_id": {"$ne": oid},
+            })
             if others == 0:
                 raise HTTPException(403,
-                    "Impossible de supprimer le dernier compte superadmin. Contactez le support.")
+                    "Impossible de supprimer le dernier compte super administrateur. Contactez le support.")
         purge_at = datetime.now(timezone.utc).timestamp() + 30 * 24 * 3600
         await db.users.update_one(
-            {"id": user_id},
+            {"_id": oid},
             {"$set": {
                 "deletion_requested_at": _now(),
                 "deletion_purge_at_ts": purge_at,
-                "active": False,
             }}
         )
         await db.audit_log.insert_one({
             "id": str(uuid.uuid4()),
             "user_id": user_id,
+            "user_email": user.get("email", ""),
             "action": "legal.rgpd_delete_request",
             "details": {"purge_at": purge_at},
             "timestamp": _now(),
         })
-        # Note : la purge effective se fera par job asynchrone. Les donnees
-        # comptables/factures liees sont conservees 7 ans (obligation legale).
         return {
             "message": "Demande de suppression enregistree",
             "purge_in_days": 30,
-            "note": ("Votre compte est desactive immediatement. La suppression "
-                     "definitive interviendra sous 30 jours. Les donnees "
-                     "comptables lies au syndic (factures, journaux) sont "
+            "note": ("Votre demande de suppression est enregistree. La suppression "
+                     "definitive interviendra sous 30 jours. Vous pouvez encore "
+                     "annuler pendant cette periode via le support. Les donnees "
+                     "comptables liees au syndic (factures, journaux) sont "
                      "conservees 7 ans conformement a l'article III.86 CDE."),
         }
+
+    @router.post("/rgpd/cancel-deletion")
+    async def cancel_deletion(request: Request):
+        """Annule une demande de suppression enregistree (dans les 30 jours)."""
+        user_id = getattr(request.state, "user_id", "")
+        oid = _oid(user_id) if user_id else None
+        if not oid:
+            raise HTTPException(401, "Authentification requise")
+        result = await db.users.update_one(
+            {"_id": oid, "deletion_requested_at": {"$exists": True}},
+            {"$unset": {"deletion_requested_at": "", "deletion_purge_at_ts": ""}},
+        )
+        if result.modified_count == 0:
+            return {"message": "Aucune demande de suppression a annuler"}
+        await db.audit_log.insert_one({
+            "id": str(uuid.uuid4()),
+            "user_id": user_id,
+            "user_email": getattr(request.state, "user_email", ""),
+            "action": "legal.rgpd_delete_cancel",
+            "details": {},
+            "timestamp": _now(),
+        })
+        return {"message": "Demande de suppression annulee"}
 
     return router

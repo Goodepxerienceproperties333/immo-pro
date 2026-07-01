@@ -37,6 +37,9 @@ import OwnerPortalPage from "@/pages/OwnerPortalPage";
 import RemindersPage from "@/pages/RemindersPage";
 import ExpensesPage from "@/pages/ExpensesPage";
 import ExpenseCategoriesPage from "@/pages/ExpenseCategoriesPage";
+import LegalDocPage from "@/pages/LegalDocPage";
+import CookieBanner from "@/components/CookieBanner";
+import LegalAcceptanceModal from "@/components/LegalAcceptanceModal";
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
@@ -60,6 +63,8 @@ function AppRoutes() {
       <Route path="/login" element={user ? <Navigate to={defaultPath} replace /> : <LoginPage />} />
       <Route path="/forgot-password" element={<ForgotPasswordPage />} />
       <Route path="/reset-password" element={<ResetPasswordPage />} />
+      <Route path="/legal/:slug" element={<LegalDocPage />} />
+      <Route path="/legal" element={<Navigate to="/legal/cgu" replace />} />
       <Route path="/portal" element={<ProtectedRoute><OwnerPortalPage /></ProtectedRoute>} />
       <Route path="/" element={<ProtectedRoute>{isOwnerRole ? <Navigate to="/portal" replace /> : <Layout />}</ProtectedRoute>}>
         <Route index element={<DashboardPage />} />
@@ -102,6 +107,8 @@ function App() {
     <BrowserRouter>
       <AuthProvider>
         <AppRoutes />
+        <LegalAcceptanceModal />
+        <CookieBanner />
         <Toaster position="top-right" />
       </AuthProvider>
     </BrowserRouter>
