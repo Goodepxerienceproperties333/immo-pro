@@ -125,3 +125,9 @@ def get_journal_attachments_storage(db) -> GridFSStorage:
 
 def get_invoice_ai_tmp_storage(db) -> GridFSStorage:
     return GridFSStorage(db, bucket_name="invoice_ai_tmp")
+
+
+def get_bank_statement_sources_storage(db) -> GridFSStorage:
+    """iter90l : stockage des PDF/CSV originaux d'extraits de compte
+    importes par l'utilisateur (audit et retraitement)."""
+    return GridFSStorage(db, bucket_name="bank_statement_sources")

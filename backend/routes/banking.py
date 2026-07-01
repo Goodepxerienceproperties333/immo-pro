@@ -3,6 +3,7 @@ from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime, timezone
 import hashlib
+import os
 import uuid
 from auto_entries import generate_bank_entry, _delete_auto_entries
 
@@ -1241,7 +1242,204 @@ def create_banking_router(db):
         return {"message": "Categorisation annulee"}
 
     # ---- CODA IMPORT ----
-    @router.post("/coda/import")
+    @router.post("/statements/import-files")
+    async def import_statement_files(
+        files: List[UploadFile] = File(...),
+        copropriete_id: str = Form(""),
+    ):
+        """iter90l : Import multi-fichiers PDF/CSV -> creation auto de
+        bank_statements + bank_transactions en status='draft'.
+
+        Strategie d'extraction :
+        - PDF : IA Vision (Gemini) directement
+        - CSV : parser generique (detection auto de colonnes) avec fallback IA
+
+        Le fichier original est stocke en GridFS (bucket 'bank_statement_sources')
+        et référencé dans bank_statements.source_file_id pour audit.
+
+        Retour :
+            {
+              "results": [
+                {"filename", "statement_id", "status", "transactions_count",
+                 "extraction_method", "warnings"}
+              ],
+              "total_statements": N,
+              "total_transactions": N
+            }
+        """
+        from bank_import import extract_bank_statement
+        from gridfs_storage import get_bank_statement_sources_storage
+        import tempfile
+        import mimetypes
+
+        if not files:
+            raise HTTPException(400, "Aucun fichier fourni")
+        if not copropriete_id:
+            raise HTTPException(400, "copropriete_id est obligatoire")
+
+        # Verifier que la copro existe
+        copro = await db.coproprietes.find_one({"id": copropriete_id}, {"_id": 0, "id": 1})
+        if not copro:
+            raise HTTPException(400, "Copropriete inconnue")
+
+        storage = get_bank_statement_sources_storage(db)
+        results: list[dict] = []
+        total_stmts = 0
+        total_txns = 0
+
+        for uf in files:
+            fname = uf.filename or "extrait.pdf"
+            mime = uf.content_type or mimetypes.guess_type(fname)[0] or "application/octet-stream"
+            content = await uf.read()
+            if not content:
+                results.append({
+                    "filename": fname, "status": "error",
+                    "error": "Fichier vide",
+                })
+                continue
+            # Persister l'original en GridFS
+            try:
+                gid = await storage.upload(
+                    filename=fname, contents=content,
+                    metadata={"copropriete_id": copropriete_id, "mime": mime,
+                              "uploaded_at": datetime.now(timezone.utc).isoformat()},
+                )
+            except Exception as e:
+                results.append({
+                    "filename": fname, "status": "error",
+                    "error": f"Persistance GridFS echouee: {e}",
+                })
+                continue
+
+            # Ecrire un fichier temp pour LlmChat (necessaire pour Gemini)
+            suffix = ".pdf" if (fname.lower().endswith(".pdf")
+                                or "pdf" in mime) else ".csv"
+            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                tmp.write(content)
+                tmp_path = tmp.name
+
+            try:
+                extracted = await extract_bank_statement(
+                    content=content, filename=fname,
+                    mime_type=mime, tmp_path=tmp_path,
+                )
+            except Exception as e:
+                # Nettoyer et enregistrer l'erreur
+                try:
+                    os.unlink(tmp_path)
+                except Exception:
+                    pass
+                await storage.delete(gid)
+                results.append({
+                    "filename": fname, "status": "error",
+                    "error": f"Extraction echouee: {str(e)[:200]}",
+                })
+                continue
+            finally:
+                try:
+                    os.unlink(tmp_path)
+                except Exception:
+                    pass
+
+            txns_data = extracted.get("transactions") or []
+            if not txns_data:
+                await storage.delete(gid)
+                results.append({
+                    "filename": fname, "status": "error",
+                    "error": "Aucune transaction extraite",
+                    "warnings": extracted.get("warnings", []),
+                    "extraction_method": extracted.get("extraction_method"),
+                })
+                continue
+
+            # Creer statement en draft
+            stmt_id = str(uuid.uuid4())
+            period_from = extracted.get("period_from") or txns_data[0].get("date", "")
+            period_to = extracted.get("period_to") or txns_data[-1].get("date", "")
+            stmt_doc = {
+                "id": stmt_id,
+                "number": f"IMP-{fname[:30]}",
+                "date": period_to or datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+                "period_from": period_from,
+                "period_to": period_to,
+                "account_number": extracted.get("account_number") or "",
+                "opening_balance": float(extracted.get("opening_balance") or 0),
+                "closing_balance": float(extracted.get("closing_balance") or 0),
+                "status": "draft",
+                "source": "PDF" if fname.lower().endswith(".pdf") else "CSV",
+                "source_extraction_method": extracted.get("extraction_method", ""),
+                "source_file_id": gid,
+                "source_file_name": fname,
+                "filename": fname,
+                "warnings": extracted.get("warnings", []),
+                "copropriete_id": copropriete_id,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            await db.bank_statements.insert_one(stmt_doc)
+
+            # Creer transactions non lettrees
+            txns_docs = []
+            for t in txns_data:
+                amt = float(t.get("amount", 0) or 0)
+                txns_docs.append({
+                    "id": str(uuid.uuid4()),
+                    "statement_id": stmt_id,
+                    "date": t.get("date", ""),
+                    "amount": amt,
+                    "counterparty_name": (t.get("counterparty_name") or "").strip(),
+                    "counterparty_account": (t.get("counterparty_account") or "").strip(),
+                    "communication": (t.get("communication") or "").strip(),
+                    "transaction_type": t.get("transaction_type")
+                                        or ("credit" if amt >= 0 else "debit"),
+                    "account_number": extracted.get("account_number") or "",
+                    "matched": False, "matched_to": "", "match_type": "",
+                    "copropriete_id": copropriete_id,
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                })
+            if txns_docs:
+                await db.bank_transactions.insert_many(txns_docs)
+
+            total_stmts += 1
+            total_txns += len(txns_docs)
+            results.append({
+                "filename": fname, "status": "ok",
+                "statement_id": stmt_id,
+                "transactions_count": len(txns_docs),
+                "extraction_method": extracted.get("extraction_method"),
+                "warnings": extracted.get("warnings", []),
+                "period_from": period_from, "period_to": period_to,
+            })
+
+        return {
+            "results": results,
+            "total_statements": total_stmts,
+            "total_transactions": total_txns,
+        }
+
+    @router.get("/statements/{stmt_id}/source-file")
+    async def download_statement_source(stmt_id: str):
+        """Retourne le PDF/CSV original importe (audit)."""
+        from gridfs_storage import get_bank_statement_sources_storage
+        from fastapi.responses import Response
+        stmt = await db.bank_statements.find_one({"id": stmt_id}, {"_id": 0})
+        if not stmt:
+            raise HTTPException(404, "Extrait introuvable")
+        gid = stmt.get("source_file_id")
+        if not gid:
+            raise HTTPException(404, "Aucun fichier source attache")
+        storage = get_bank_statement_sources_storage(db)
+        try:
+            data = await storage.download(gid)
+            info = await storage.stat(gid)
+        except Exception:
+            raise HTTPException(404, "Fichier introuvable en GridFS")
+        fname = (info or {}).get("filename") or stmt.get("source_file_name") or "extrait.pdf"
+        mime = (info or {}).get("metadata", {}).get("mime") or "application/octet-stream"
+        return Response(content=data, media_type=mime, headers={
+            "Content-Disposition": f'attachment; filename="{fname}"',
+        })
+
+    # ---- CODA IMPORT (legacy) ----
     async def import_coda(file: UploadFile = File(...), copropriete_id: Optional[str] = Form("")):
         from coda_parser import parse_coda_file
 

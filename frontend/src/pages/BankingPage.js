@@ -38,6 +38,9 @@ export default function BankingPage() {
   const codaRef = useRef(null);
   const [codaPreview, setCodaPreview] = useState(null);
   const [codaDialogOpen, setCodaDialogOpen] = useState(false);
+  // iter90l : import PDF/CSV multi-fichiers d'extraits (IA + regex CSV)
+  const importRef = useRef(null);
+  const [importUploading, setImportUploading] = useState(false);
   const [stmtForm, setStmtForm] = useState({ number: '', date: '', account_number: '', opening_balance: 0, closing_balance: 0 });
   const [bankAccounts, setBankAccounts] = useState([]);
   const [inlineLines, setInlineLines] = useState([]);
@@ -103,6 +106,43 @@ export default function BankingPage() {
     }
     catch (err) { toast.error(err.response?.data?.detail || 'Erreur CODA'); }
     finally { setCodaUploading(false); if (codaRef.current) codaRef.current.value = ''; }
+  };
+
+  // iter90l : Import PDF/CSV multi-fichiers (IA Vision + regex CSV)
+  const handleImportFiles = async (e) => {
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
+    if (!selectedCopro) { toast.error('Selectionnez d\'abord une copropriete'); return; }
+    setImportUploading(true);
+    try {
+      const fd = new FormData();
+      files.forEach(f => fd.append('files', f));
+      fd.append('copropriete_id', selectedCopro);
+      const { data } = await api.post('/banking/statements/import-files', fd, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        timeout: 300000,
+      });
+      const okCount = data.results.filter(r => r.status === 'ok').length;
+      const errCount = data.results.filter(r => r.status === 'error').length;
+      if (okCount > 0) {
+        toast.success(
+          `${okCount} extrait${okCount > 1 ? 's' : ''} importe${okCount > 1 ? 's' : ''} en brouillon`,
+          { description: `${data.total_transactions} transaction${data.total_transactions > 1 ? 's' : ''} au total${errCount ? ` — ${errCount} fichier(s) en erreur` : ''}`, duration: 6000 }
+        );
+      }
+      if (errCount > 0 && !okCount) {
+        toast.error(`${errCount} fichier(s) en erreur`, {
+          description: data.results.filter(r => r.status === 'error').map(r => `${r.filename}: ${r.error || 'inconnu'}`).join(' • '),
+          duration: 8000,
+        });
+      }
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur lors de l\'import');
+    } finally {
+      setImportUploading(false);
+      if (importRef.current) importRef.current.value = '';
+    }
   };
 
   const saveStmt = async () => {
@@ -288,6 +328,16 @@ export default function BankingPage() {
           </Button>
           <input type="file" ref={codaRef} accept=".cod,.coda,.txt" onChange={handleCodaImport} className="hidden" />
           <Button onClick={() => codaRef.current?.click()} variant="outline" disabled={codaUploading} data-testid="coda-import-btn"><Upload size={16} className="mr-2" /> {codaUploading ? 'Import...' : 'Import CODA'}</Button>
+          {/* iter90l : Import PDF / CSV multi-fichiers (IA Vision + regex smart) */}
+          <input type="file" ref={importRef} accept=".pdf,.csv" multiple onChange={handleImportFiles} className="hidden" data-testid="import-files-input" />
+          <Button onClick={() => importRef.current?.click()}
+            variant="outline"
+            disabled={importUploading || !selectedCopro}
+            title={selectedCopro ? "Importer un ou plusieurs extraits PDF / CSV (creation auto en brouillon)" : "Selectionnez une copropriete"}
+            data-testid="import-files-btn"
+            className="border-purple-200 text-purple-700 hover:bg-purple-50">
+            <Upload size={16} className="mr-2" /> {importUploading ? 'Extraction IA en cours...' : 'Importer PDF/CSV'}
+          </Button>
           <Button onClick={() => {
             const def = bankAccounts.find(b => b.is_default) || bankAccounts[0];
             setStmtForm({ number: '', date: new Date().toISOString().split('T')[0], account_number: def?.iban || '', opening_balance: 0, closing_balance: 0 });
@@ -308,8 +358,20 @@ export default function BankingPage() {
                 <div className="flex justify-between mt-1 text-[10px] font-mono"><span>O:{s.opening_balance?.toFixed(2)}</span><span>F:{s.closing_balance?.toFixed(2)}</span></div>
                 <div className="flex gap-1 mt-1 flex-wrap">
                   {s.status === 'posted' && <Badge className="text-[9px] bg-green-100 text-green-700 border-green-300">Comptabilise</Badge>}
+                  {s.status === 'draft' && <Badge className="text-[9px] bg-amber-50 text-amber-700 border-amber-300" variant="outline" data-testid={`stmt-badge-draft-${s.id}`}>Brouillon</Badge>}
                   {s.source === 'CODA' && <Badge className="text-[9px]" variant="outline">CODA</Badge>}
+                  {s.source === 'PDF' && <Badge className="text-[9px] bg-purple-50 text-purple-700 border-purple-200" variant="outline">PDF IA</Badge>}
+                  {s.source === 'CSV' && <Badge className="text-[9px] bg-blue-50 text-blue-700 border-blue-200" variant="outline">CSV</Badge>}
                 </div>
+                {s.source_file_id && (
+                  <a
+                    href={`${(process.env.REACT_APP_BACKEND_URL || '') || ''}/api/banking/statements/${s.id}/source-file`}
+                    onClick={e => e.stopPropagation()}
+                    target="_blank" rel="noreferrer"
+                    className="mt-1 text-[10px] text-purple-600 hover:text-purple-800 hover:underline inline-block"
+                    data-testid={`stmt-source-${s.id}`}
+                  >Voir fichier source</a>
+                )}
               </CardContent>
             </Card>
           ))}
