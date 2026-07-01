@@ -13,6 +13,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import OnboardingDialog from '@/components/OnboardingDialog';
+import SupportChatBubble from '@/components/SupportChatBubble';
 
 const sections = [
   { title: 'Gestion', items: [
@@ -248,6 +249,7 @@ export default function Layout() {
             <div className="flex-1" />
             <span className="text-[11px] text-amber-700 font-semibold uppercase tracking-wider">Administration plateforme</span>
             <Separator orientation="vertical" className="h-5 bg-slate-200" />
+            <SupportChatBubble />
             <NavLink
               to="/profile"
               className="flex items-center gap-2 px-2 py-1 rounded hover:bg-slate-100 transition-colors group"
@@ -296,6 +298,7 @@ export default function Layout() {
             <Home size={14} /> Gerer les ACP
           </NavLink>
           <Separator orientation="vertical" className="h-6 bg-slate-700" />
+          <SupportChatBubble />
           <NavLink
             to="/profile"
             className="flex items-center gap-2 px-2 py-1 rounded hover:bg-slate-800 transition-colors group"
@@ -361,6 +364,7 @@ export default function Layout() {
             </Select>
           )}
           <div className="flex-1" />
+          <SupportChatBubble />
           <NavLink
             to="/profile"
             className="flex items-center gap-2 px-2 py-1 rounded hover:bg-slate-100 transition-colors group"

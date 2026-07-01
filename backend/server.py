@@ -831,6 +831,7 @@ from routes.team import create_team_router
 from routes.import_wizard import create_import_wizard_router
 from routes.duplicates import create_duplicates_router
 from routes.owner_access import create_owner_access_router
+from routes.support import create_support_router
 
 app.include_router(create_properties_router(db))
 app.include_router(create_accounting_router(db))
@@ -854,3 +855,4 @@ app.include_router(create_invoice_ai_router(db))
 app.include_router(create_expense_categories_router(db))
 app.include_router(create_duplicates_router(db))
 app.include_router(create_owner_access_router(db))
+app.include_router(create_support_router(db))

@@ -12,6 +12,54 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 ## Implemented
+### Iter90r (Feb 2026) - Support chatbot IA + escalade email
+
+**Ticket user** : Bouton "?" dans l'interface qui ouvre un chatbot pouvant
+repondre aux questions classiques d'un syndic sur les fonctionnalites.
+Si la reponse depasse ses capacites, un email est envoye au support
+(welcome@goudexperienceproperties.be).
+
+**Backend** :
+- `/app/backend/routes/support.py` — 6 endpoints :
+  - `GET /api/support/conversations` — liste des convs de l'user
+  - `POST /api/support/conversations` — nouvelle conv
+  - `GET /api/support/conversations/{id}/messages` — historique
+  - `POST /api/support/conversations/{id}/chat` — envoi message + reponse IA
+  - `POST /api/support/conversations/{id}/escalate` — envoi manuel au support
+  - `DELETE /api/support/conversations/{id}` — supprime conv + messages
+- IA : Claude Sonnet 4.5 via `emergentintegrations.LlmChat` + system prompt
+  detaille sur les fonctionnalites CoproManager (10 modules documentes).
+- Escalade automatique : l'IA marque `[[NEEDS_ESCALATION]]` en fin de reponse
+  quand elle detecte un bug/diagnostic technique/demande hors scope. Email
+  envoye en background via MS Graph, `replyTo` = email du syndic (le support
+  peut repondre directement).
+- Modeles MongoDB : `support_conversations`, `support_messages`
+- Chinese wall : chaque user ne voit QUE ses propres conversations (403 sinon)
+- Var d'env : `SUPPORT_EMAIL=Welcome@goudexperienceproperties.be`
+- `graph_email.send_html_email` etendu avec parametre `reply_to`
+
+**Frontend** (`/app/frontend/src/components/SupportChatBubble.js`) :
+- Bouton `HelpCircle` (`data-testid="support-open-btn"`) dans les 3 headers
+  du Layout (admin plateforme / superadmin sans copro / syndic normal)
+- Panneau lateral droit (`fixed right-0 h-full w-520px z-50`) avec :
+  - Liste des conversations passees (preview + date + badge escalade)
+  - Bouton "Nouvelle question"
+  - Fenetre de chat active avec bulles utilisateur/assistant
+  - Bouton "Envoyer cette conversation au support" (escalade manuelle)
+  - Toast auto quand IA declenche l'escalade automatique
+- Historique persistant, suppression conv, retour a la liste, close panel
+
+**Tests** : `test_iter90r_support_chatbot.py` — 6 sous-tests (creation, list,
+chinese wall cross-user, delete cascade, message empty/too-long, escalation
+flag). Tous PASS.
+
+**Verdict test manuel** : IA Claude Sonnet 4.5 repond correctement aux
+questions fonctionnelles (import PDF, workflow appels de fonds, PCMN...) et
+escalade automatiquement les diagnostics techniques.
+
+
+
+## Implemented
 ### Iter90n (Feb 2026) - Security hardening + Sticky header extrait
 
 **Ticket security audit** :

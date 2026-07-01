@@ -62,10 +62,13 @@ async def send_html_email(
     html_body: str,
     sender_upn: Optional[str] = None,
     save_to_sent: bool = True,
+    reply_to: Optional[str] = None,
 ) -> None:
     """Send an HTML email via Microsoft Graph (sendMail).
 
     Raises RuntimeError on failure. Use within a background task to avoid blocking.
+    iter90r : `reply_to` sets the Reply-To header so support can respond
+    directly to the requester (e.g. syndic asking a support question).
     """
     sender = sender_upn or _SENDER_UPN
     if not sender:
@@ -78,14 +81,14 @@ async def send_html_email(
     if not to_list:
         return
     url = f"{_GRAPH_ENDPOINT}/users/{sender}/sendMail"
-    payload = {
-        "message": {
-            "subject": subject,
-            "body": {"contentType": "HTML", "content": html_body},
-            "toRecipients": to_list,
-        },
-        "saveToSentItems": save_to_sent,
+    message: dict = {
+        "subject": subject,
+        "body": {"contentType": "HTML", "content": html_body},
+        "toRecipients": to_list,
     }
+    if reply_to:
+        message["replyTo"] = [{"emailAddress": {"address": str(reply_to)}}]
+    payload = {"message": message, "saveToSentItems": save_to_sent}
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     async with httpx.AsyncClient(timeout=15.0) as client:
         resp = await client.post(url, headers=headers, json=payload)
