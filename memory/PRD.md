@@ -12,6 +12,59 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 ## Implemented
+### Iter90l (Feb 2026) - Import PDF/CSV d'extraits bancaires -> creation auto en brouillon
+
+**Ticket user** : Dans les extraits de compte, permettre d'uploader un ou
+plusieurs PDF/CSV d'extraits bancaires belges. L'application extrait
+automatiquement les transactions et cree les extraits en brouillon que
+le syndic n'a plus qu'a valider. Choix user : IA + regex CSV smart +
+creation directe brouillon + multi-fichiers + persistance GridFS des
+originaux (audit).
+
+**Backend** :
+- Nouveau module `/app/backend/bank_import.py` :
+  - `parse_csv_smart(content, filename)` : detection auto separateur
+    (`;` / `,` / `\t` / `|` via `csv.Sniffer`), header identification par
+    alias multi-banques (FR + NL), colonnes reconnues :
+    date/montant OU debit+credit/communication/contrepartie/iban. Support
+    des montants `1.234,56`, `1,234.56`, `-25,00`, `25,00-`, `(100,00)`.
+  - `parse_with_llm(file_path, mime_type)` : appel `LlmChat` avec
+    `FileContentWithMimeType` (Gemini 2.5 Flash) et prompt JSON strict.
+  - `extract_bank_statement(...)` : dispatcher (PDF -> IA, CSV -> smart
+    puis fallback IA si non reconnu).
+- Endpoint `POST /api/banking/statements/import-files` :
+  - multipart, `files: List[UploadFile]`, `copropriete_id: Form`
+  - Persiste chaque fichier original en GridFS bucket
+    `bank_statement_sources` (audit) puis appelle le dispatcher.
+  - Cree `bank_statement` en `status='draft'` + `source_extraction_method`
+    (`csv_smart` / `csv_llm_fallback` / `llm_vision`) + `source_file_id`.
+  - Cree les `bank_transactions` non lettrees.
+  - Retourne un rapport par fichier avec `status`, `transactions_count`,
+    `warnings`.
+- Endpoint `GET /api/banking/statements/{id}/source-file` : telecharge le
+  PDF/CSV original.
+
+**Frontend** (`BankingPage.js`) :
+- Bouton "Importer PDF/CSV" (purple, testid `import-files-btn`) a cote de
+  Import CODA. Disabled tant qu'aucune ACP selectionnee, tooltip explicite.
+- Input file multiple accept `.pdf,.csv`.
+- Toast "X extrait(s) importe(s) en brouillon — N transactions au total".
+- Statements draft affichent badge "Brouillon" (amber), "PDF IA" (purple),
+  "CSV" (blue).
+- Lien "Voir fichier source" par statement importe.
+
+**Tests** : `test_iter90l_import_bank_statements_pdf_csv.py` — 8 sous-tests
+(unites parse_amount/parse_date/csv_smart-BNPP/csv_smart-Belfius/csv_unrecognized
++ E2E single/multi/GridFS-download/copro-manquant/fichier-vide). Tous PASS.
+Regression iter90 : 13/13 PASS en 15.87s.
+
+**Integration LLM** : Emergent LLM Key + Gemini 2.5 Flash via
+`emergentintegrations.llm.chat.LlmChat`. Cle deja en `.env`
+(`EMERGENT_LLM_KEY`).
+
+
+
+## Implemented
 ### Iter90k (Feb 2026) - Categoriser une transaction bancaire par nature de depense/revenu
 
 **Ticket user** : Dans les extraits de compte, permettre d'attribuer une
