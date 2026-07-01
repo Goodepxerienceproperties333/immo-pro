@@ -377,12 +377,13 @@ export default function BankingPage() {
           ))}
         </div>
 
-        {/* Main panel */}
-        <div className="lg:col-span-3">
+        {/* Main panel - sticky whole panel so it stays in view while
+            user scrolls the left statements list */}
+        <div className="lg:col-span-3 lg:sticky lg:top-4 lg:self-start lg:max-h-[calc(100vh-6rem)] lg:overflow-y-auto">
           {selectedStmt ? (
             <Card className="border-slate-200 overflow-visible">
               <CardHeader
-                className="pb-2 sticky top-2 z-20 bg-white/95 backdrop-blur-sm border-b border-slate-100 rounded-t-lg shadow-sm"
+                className="pb-2 sticky top-0 z-20 bg-white/95 backdrop-blur-sm border-b border-slate-100 rounded-t-lg"
                 data-testid="stmt-sticky-header"
               >
                 <div className="flex flex-row items-start justify-between gap-3">
