@@ -12,6 +12,71 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 ## Implemented
+### Iter90s (Feb 2026) - Systeme legalement blinde (CGU, RGPD, cookies)
+
+**Ticket user** : Systeme legalement blinde couvrant CGU/Confidentialite/
+Mentions/Cookies/Disclaimer + acceptation utilisateur + RGPD (export + delete).
+
+**Backend** (`routes/legal.py` - complet, ~500 lignes) :
+- Collection `legal_documents` (auto-seed au demarrage via `_ensure_defaults`)
+  avec 5 slugs : `cgu`, `privacy`, `mentions`, `cookies`, `disclaimer`.
+  Chaque doc a une version incrementale (bump manuel force re-acceptation).
+- Endpoints :
+  - `GET /api/legal/documents` — liste publique (sans auth)
+  - `GET /api/legal/documents/{slug}` — contenu markdown public
+  - `GET /api/legal/current-versions` — versions courantes CGU + Privacy
+  - `GET /api/legal/my-acceptance` — statut acceptation du user + needs_accept
+  - `POST /api/legal/accept` — enregistre acceptation (persiste ip/ua/date + audit log)
+  - `POST /api/legal/rgpd/export` — JSON attachment: profile (sans password_hash),
+    audit_logs, support_conversations, linked_owner_record. Log l'export dans audit.
+  - `POST /api/legal/rgpd/delete-account` — exige phrase EXACTE 'SUPPRIMER MON COMPTE',
+    protection dernier superadmin, marque `deletion_requested_at` + `deletion_purge_at_ts`
+    (30 jours).
+  - `POST /api/legal/rgpd/cancel-deletion` — annule la demande dans le delai.
+- Middleware :
+  - `AUTH_EXEMPT_PREFIXES = ('/api/legal/documents',)` pour lecture publique
+  - `role=owner` autorise sur `/api/legal/*` (modal + RGPD self-service)
+- Placeholders `[SOCIETE]`, `[NUMERO_BCE]`, `[NUMERO_TVA]`, `[ADRESSE_COMPLETE]`,
+  `[FORME_JURIDIQUE]`, `[NOM_REPRESENTANT]`, `[TELEPHONE]`, `[DATE_MISE_EN_LIGNE]`
+  laisses tels quels pour completion avocat. Email contact pre-rempli
+  `welcome@goodexperienceproperties.be` partout.
+
+**Frontend** :
+- `pages/LegalDocPage.js` : rendu markdown (react-markdown + remark-gfm)
+  avec nav pills entre les 5 slugs. Route `/legal/:slug` + `/legal` redirige
+  vers `/legal/cgu`. Accessible sans authentification.
+- `components/LegalAcceptanceModal.js` : modal bloquant apres login si
+  `needs_accept=true`. 2 checkboxes CGU + Privacy, submit disabled tant qu'aucune
+  cochee, liens externes vers `/legal/{slug}` en nouveau tab.
+- `components/CookieBanner.js` : banner bas-droit, cookies techniques
+  uniquement, un bouton "J'ai compris" qui pose `localStorage
+  copromgr_cookie_ack_v1`. Lien "En savoir plus" vers `/legal/cookies`.
+- `components/RgpdSection.js` : integre dans `/profile`. Export JSON (blob
+  download), Supprimer avec dialog + confirm phrase exacte, section "pending"
+  si `deletion_requested_at` present avec bouton "Annuler ma demande".
+- Footers legaux : `login-link-{slug}` sur `/login`, `layout-legal-footer` dans
+  les 2 modes Layout (avec/sans ACP), `owner-portal-legal-footer` sur `/portal`,
+  `profile-link-{slug}` (5 badges) sur `/profile`.
+- `App.js` : CookieBanner et LegalAcceptanceModal montes au niveau global.
+- `api.js` : `/legal` ajoute a `GLOBAL_PATH_PREFIXES` (pas de scope ACP).
+
+**Tests** :
+- `test_iter90s_legal_compliance.py` — 7 sous-flows PASS :
+  1. Docs publics (5 slugs listes + contenus lisibles sans auth)
+  2. Endpoints prives 401 sans token
+  3. Cycle accept complet (needs_accept true -> false, version 999 -> 400 obsoletes)
+  4. Export RGPD (Content-Disposition attachment, profile sans password_hash, audit_logs)
+  5. Delete-account exige phrase exacte 'SUPPRIMER MON COMPTE'
+  6. Protection dernier superadmin (403 'dernier')
+  7. Owner delete+cancel cycle 200
+- Testing agent E2E : 100% BE + FE (iteration_38.json). Regression iter89+90n+90r : 9/9 PASS.
+- `_ensure_defaults` idempotent (n'ecrase pas les docs deja en base pour permettre
+  edition future via UI admin).
+
+**Dependances** : `react-markdown`, `remark-gfm`, `@tailwindcss/typography` (prose).
+
+
+## Implemented
 ### Iter90r (Feb 2026) - Support chatbot IA + escalade email
 
 **Ticket user** : Bouton "?" dans l'interface qui ouvre un chatbot pouvant
