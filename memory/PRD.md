@@ -12,6 +12,45 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 ## Implemented
+### Iter90w (Feb 2026) - Correction derive d'arrondi dans les appels de fonds
+
+**Ticket user** : Balance de tiers affiche 25700.04 EUR au lieu de 25700.00 EUR
+(0,04 EUR de trop, soit 1 centime par appel trimestriel).
+
+**Cause identifiee** : Le calcul `round(total * quotity/total_quotity, 2)` par
+lot ne garantit pas que `sum(lots) == total_amount` (drift naturel de +/- 0,01
+EUR par appel selon les quotites). Sur 4 appels trimestriels + 1 fonds de
+roulement, le drift peut atteindre 0,04 EUR.
+
+**Fix backend** (`routes/fund_calls.py`) :
+- Nouveau helper `_snap_distribution_to_total(distribution, target)` qui
+  applique la methode des plus grands restes : les lots avec les shares les
+  plus eleves recoivent 1 centime supplementaire (ou perdent 1 centime) pour
+  que `sum(distribution.amount) == target` exactement.
+- Applique dans 3 endroits :
+  1. `create_fund_call` (appels manuels)
+  2. `_generate_from_budget` -> pour chaque call trimestriel + reserve + roulement
+  3. `_rebuild_distribution_from_lines` (regeneration depuis les budgets)
+- Nouvel endpoint `POST /api/fund-calls/fix-rounding-drift?copropriete_id=X` :
+  corrige les appels EXISTANTS (non payes) dans une ACP. Regenere aussi les
+  journal entries auto-generees (VE) via `generate_sale_entry` pour synchroniser
+  la balance de tiers.
+
+**Fix frontend** (`pages/FundCallsPage.js`) :
+- Nouveau bouton "Corriger arrondis" (icone RefreshCcw, style emerald) qui
+  appelle l'endpoint fix-rounding-drift avec confirmation dialog.
+- Toast avec detail des appels corriges et de leur drift respectif (en centimes).
+
+**Tests** :
+- `test_iter90w_fund_call_no_drift.py` - 3 tests PASS :
+  1. Generation depuis budget (7 lots x 4 trimestres) : chaque appel a
+     sum(distribution) == total_amount exactement.
+  2. Appel manuel avec 7 lots : distribution parfaite, JE equilibree.
+  3. Endpoint fix-rounding-drift : corrige 2 appels drifteds injectes en base.
+- 24/24 tests pass en regression complete (iter73 bilan, iter90s-v).
+
+
+## Implemented
 ### Iter90v (Feb 2026) - Comptes tiers PCMN + garde-fou suppression + n° comptes au bilan
 
 **Ticket user** :

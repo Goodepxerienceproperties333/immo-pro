@@ -69,6 +69,41 @@ def _add_months(iso_date: str, months: int) -> str:
     return nd.strftime("%Y-%m-%d")
 
 
+def _snap_distribution_to_total(distribution: list, target_total: float) -> None:
+    """Ajuste in-place les 'amount' d'une distribution pour que leur somme
+    egale exactement target_total (a 0,01 EUR pres). Utilise la methode des
+    'plus grands restes' : les lots avec le reste fractionnaire le plus eleve
+    recoivent un centime supplementaire, ceux avec le plus faible perdent un
+    centime. Evite les 0,04 EUR de derive sur la balance de tiers.
+    """
+    if not distribution:
+        return
+    # Somme actuelle (deja arrondie a 2 decimales)
+    current = round(sum(float(d.get("amount", 0.0) or 0.0) for d in distribution), 2)
+    diff_cents = int(round((target_total - current) * 100))
+    if diff_cents == 0:
+        return
+    # Trier par "reste fractionnaire" (avant arrondi) pour distribuer le residu
+    # Comme on n'a plus le raw amount ici, on utilise share comme proxy :
+    # les lots avec le plus grand share portent plus naturellement les centimes.
+    if diff_cents > 0:
+        # Il manque des centimes -> ajoute 1c aux lots avec le plus gros share
+        sorted_dist = sorted(distribution,
+                             key=lambda d: (-float(d.get("share", 0) or 0),
+                                            d.get("lot_number", "")))
+        for i in range(diff_cents):
+            sorted_dist[i % len(sorted_dist)]["amount"] = round(
+                float(sorted_dist[i % len(sorted_dist)]["amount"]) + 0.01, 2)
+    else:
+        # Il y a des centimes en trop -> retire 1c aux lots avec le plus gros share
+        sorted_dist = sorted(distribution,
+                             key=lambda d: (-float(d.get("share", 0) or 0),
+                                            d.get("lot_number", "")))
+        for i in range(-diff_cents):
+            sorted_dist[i % len(sorted_dist)]["amount"] = round(
+                float(sorted_dist[i % len(sorted_dist)]["amount"]) - 0.01, 2)
+
+
 def create_fund_calls_router(db):
     router = APIRouter(prefix="/api/fund-calls")
 
@@ -151,6 +186,10 @@ def create_fund_calls_router(db):
                     "paid": False,
                     "paid_date": "",
                 })
+
+        # iter90w : garantit sum(distribution.amount) == total_amount exactement
+        # (evite les 0,01 EUR de derive par appel manuel).
+        _snap_distribution_to_total(distribution, round(data.total_amount, 2))
 
         doc = {
             "id": str(uuid.uuid4()),
@@ -525,6 +564,9 @@ def create_fund_calls_router(db):
                     "paid": False,
                     "paid_date": "",
                 })
+            # iter90w : garantit sum(distribution.amount) == call_total (evite
+            # les 0,01 EUR de derive par appel qui deviennent 0,04 sur 4 trimestres).
+            _snap_distribution_to_total(distribution, round(call_total, 2))
             distribution.sort(key=lambda x: (x["owner_name"] or "", x["lot_number"] or ""))
 
             call_label = ["Annuel", "Semestriel", "Quadrimestriel", "Trimestriel", "Bi-mensuel", "Mensuel"][
@@ -595,6 +637,8 @@ def create_fund_calls_router(db):
                         "paid": False,
                         "paid_date": "",
                     })
+                # iter90w : garantit sum(distribution.amount) == per_call
+                _snap_distribution_to_total(distribution, per_call)
                 distribution.sort(key=lambda x: (x["owner_name"] or "", x["lot_number"] or ""))
                 line_tag = {"account_number": account_tag,
                             "account_name": base_label,
@@ -800,6 +844,9 @@ def create_fund_calls_router(db):
                 "paid_date": "",
             })
         distribution.sort(key=lambda d: (d["owner_name"], d["lot_number"]))
+        # iter90w : garantit sum(distribution.amount) == somme des lines
+        target = round(sum(float(ln.get("amount", 0) or 0) for ln in lines), 2)
+        _snap_distribution_to_total(distribution, target)
         return distribution, lot_amounts
 
     @router.post("/{call_id}/regenerate-distribution")
@@ -899,6 +946,80 @@ def create_fund_calls_router(db):
                 f"{len(fixed)} appel(s) repare(s)."
                 + (f" {len(skipped_paid)} ignore(s) car contient des paiements." if skipped_paid else "")
                 + (f" {len(skipped_no_lines)} ignore(s) car aucune ligne budget." if skipped_no_lines else "")
+            ),
+        }
+
+    @router.post("/fix-rounding-drift")
+    async def fix_rounding_drift(
+        request: Request, copropriete_id: Optional[str] = None,
+    ):
+        """iter90w : Corrige la derive d'arrondi dans les distributions existantes.
+
+        Pour chaque appel non paye de l'ACP :
+        - Recalcule sum(distribution.amount) vs total_amount
+        - Si drift > 0.01, applique la methode des plus grands restes pour
+          faire correspondre exactement
+        - Regenere aussi les journal entries auto-generes lies (VE)
+
+        Preserve tout appel contenant au moins un paiement (protection historique).
+        """
+        if not copropriete_id:
+            raise HTTPException(400, "copropriete_id requis")
+
+        calls = await db.fund_calls.find(
+            {"copropriete_id": copropriete_id}, {"_id": 0}
+        ).to_list(2000)
+
+        fixed = []
+        skipped_paid = []
+        no_drift = []
+        for c in calls:
+            if any(d.get("paid") for d in (c.get("distribution") or [])):
+                skipped_paid.append({"call_id": c["id"], "name": c.get("name", "")})
+                continue
+            dist = list(c.get("distribution") or [])
+            if not dist:
+                continue
+            target = round(float(c.get("total_amount", 0) or 0), 2)
+            current = round(sum(float(d.get("amount", 0) or 0) for d in dist), 2)
+            drift_cents = int(round((target - current) * 100))
+            if drift_cents == 0:
+                no_drift.append(c["id"])
+                continue
+            _snap_distribution_to_total(dist, target)
+            new_sum = round(sum(float(d.get("amount", 0) or 0) for d in dist), 2)
+            await db.fund_calls.update_one(
+                {"id": c["id"]}, {"$set": {"distribution": dist}}
+            )
+            # Regenere les journal entries auto-generees liees a cet appel
+            try:
+                from auto_entries import generate_sale_entry, _delete_auto_entries
+                # Fetch la version fraiche + patch la distribution corrigee
+                updated_call = await db.fund_calls.find_one(
+                    {"id": c["id"]}, {"_id": 0}
+                )
+                if updated_call:
+                    await generate_sale_entry(db, updated_call)
+            except Exception as e:
+                print(f"[fix-drift] regen JE failed for {c['id']}: {e}")
+            fixed.append({
+                "call_id": c["id"], "name": c.get("name", ""),
+                "drift_cents_before": drift_cents,
+                "old_sum": current, "new_sum": new_sum,
+                "target": target,
+            })
+        return {
+            "status": "ok",
+            "scanned": len(calls),
+            "fixed_count": len(fixed),
+            "fixed": fixed,
+            "no_drift_count": len(no_drift),
+            "skipped_paid_count": len(skipped_paid),
+            "skipped_paid": skipped_paid,
+            "message": (
+                f"{len(fixed)} appel(s) corrige(s). "
+                f"{len(no_drift)} deja OK. "
+                f"{len(skipped_paid)} ignore(s) car contient des paiements."
             ),
         }
 

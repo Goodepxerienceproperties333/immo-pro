@@ -187,6 +187,31 @@ export default function FundCallsPage() {
     }
   };
 
+  const fixRoundingDrift = async () => {
+    const copro = selectedCopro || '';
+    if (!copro || copro === 'all') { toast.error('Selectionnez une ACP'); return; }
+    if (!window.confirm(
+      'Corriger la derive d\'arrondi (0,01 EUR) dans les appels non payes ?\n\n'
+      + 'Chaque appel dont la somme des distributions ne correspond pas exactement '
+      + 'au total sera ajuste (methode des plus grands restes). Les ecritures '
+      + 'comptables seront regenerees automatiquement.\n\n'
+      + 'Les appels contenant au moins un paiement sont preserves.'
+    )) return;
+    try {
+      const { data } = await api.post(`/fund-calls/fix-rounding-drift?copropriete_id=${copro}`);
+      toast.success(data.message, {
+        description: data.fixed_count > 0
+          ? `${data.fixed.length} appel(s) corrige(s) : ${data.fixed.map(f => `${f.name} (${f.drift_cents_before > 0 ? '+' : ''}${f.drift_cents_before}c)`).join(', ')}`
+          : 'Aucun appel avec derive.',
+        duration: 10000,
+      });
+      load();
+      if (selectedCall) viewCall(selectedCall.id);
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur lors de la correction');
+    }
+  };
+
   return (
     <div data-testid="fund-calls-page">
       <div className="page-header flex items-center justify-between">
@@ -201,6 +226,17 @@ export default function FundCallsPage() {
               title="Repare les appels dont la distribution par lot/proprietaire est manquante"
             >
               <AlertTriangle size={16} className="mr-2" /> Reparer distribution ({brokenCalls.length})
+            </Button>
+          )}
+          {calls.length > 0 && (
+            <Button
+              onClick={fixRoundingDrift}
+              variant="outline"
+              className="border-emerald-300 text-emerald-700 hover:bg-emerald-50"
+              data-testid="fix-drift-btn"
+              title="Corrige la derive d'arrondi (0,01 EUR) dans les distributions existantes"
+            >
+              <RefreshCcw size={16} className="mr-2" /> Corriger arrondis
             </Button>
           )}
           {calls.length > 0 && (
