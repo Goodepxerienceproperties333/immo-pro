@@ -12,6 +12,76 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 ## Implemented
+### Iter90v (Feb 2026) - Comptes tiers PCMN + garde-fou suppression + n° comptes au bilan
+
+**Ticket user** :
+1. A la creation d'un proprietaire, 2 comptes comptables (fonds de roulement + fonds
+   de reserve) doivent toujours etre assignes automatiquement, avec les codes PCMN
+   belges officiels (4101XXXX / 4100XXXX).
+2. Un proprietaire ne peut pas etre supprime tant qu'une ecriture comptable le
+   reference (securite comptable, anti-orphelins).
+3. Le bilan doit afficher le n° de compte (commencant par 410) pour chaque
+   proprietaire ET la somme des soldes (roulement + reserve).
+
+**Backend** :
+- `tier_accounts.py` :
+  - Nouveaux prefixes PCMN standard (arrete royal 12/07/2012 modifie 2018) :
+    - `PROVISIONS_PREFIX = "4101"` (fonds de roulement appele)
+    - `RESERVE_PREFIX = "4100"` (fonds de reserve appele)
+  - Anciens prefixes conserves pour les 230 proprietaires existants
+    (`40000XXX / 40010XXX`).
+  - Nouveaux comptes generes avec largeur 4 (`41010001` / `41000001`, max 9999
+    par ACP).
+  - Comptes maitres `4100` et `4101` crees par ACP avec libelles conformes.
+  - Comptes auxiliaires libelles :
+    "Acompte de fonds de roulement appele - Nom" / "Acompte de fonds de reserve appele - Nom".
+  - Helpers `is_provisions_account` / `is_reserve_account` acceptent les 2
+    formats (longueur >= 8 pour eviter les faux positifs sur les comptes maitres
+    ou les imports Optipro courts).
+- `routes/properties.py :: DELETE /api/owners/{owner_id}` :
+  Refuse 409 si le proprietaire est reference par :
+  - Ecritures dans les journaux (journal_entries.lines.third_party_id)
+  - Lots encore assignes
+  - Appels de fonds (fund_calls.details.owner_id)
+  - Factures (invoices.third_party_id)
+  Message d'erreur detaille listant le nombre d'items bloquants et suggerant
+  la fusion via l'outil Doublons.
+- `routes/duplicates.py :: POST /api/duplicates/owners/merge` :
+  Ajout de la reassignation ANTI-ORPHELIN des `journal_entries.lines[].third_party_id`
+  et `fund_calls.details.owner_id` vers le proprietaire conserve avant la
+  suppression des doublons.
+- `routes/reports.py :: bilan` :
+  - Chaque ligne agregee proprietaire expose le n° de compte "primaire"
+    (fonds de roulement 4101XXXX ou legacy 40000XXX) via le champ
+    `display_account`, remonte dans `account_number` du bucket
+    `V_creances_coproprietaires` / `VI_dettes_coproprietaires`.
+  - La somme (debit-credit) sur les 2 comptes tiers du proprietaire etait
+    deja calculee via le merge par owner_id (`merged` dict) - pas de
+    changement metier.
+  - Classification etendue aux prefixes `410` / `411` (PCMN belge officiel)
+    en plus de `400 / 401 / 416` (legacy).
+- `routes/fiscal.py` : le check hardcode `startswith("40000")` remplace par
+  `is_provisions_account(acc)` pour supporter les 2 formats.
+- `pcmn_data.py` : ajout des comptes maitres `4100` et `4101` dans PCMN_COMPAT.
+
+**Tests** :
+- `test_iter90v_owner_pcmn_accounts.py` — 4 tests PASS :
+  1. Creation owner : `tier_accounts.provisions` commence par `4101` et
+     `tier_accounts.reserve` par `4100`, comptes maitres crees avec le libelle
+     PCMN officiel.
+  2. Delete refuse 409 si une ecriture comptable existe (message contenant
+     "1 ecriture").
+  3. Delete refuse 409 si un lot est encore assigne.
+  4. Bilan : le proprietaire apparait avec le n° de compte 4101... et le
+     montant est la somme des soldes provisions + reserve (test : 100 + 50 = 150).
+- 21/21 tests PASS incluant regression iter73 (bilan apres repartition), iter90s (legal), iter90t (admin legal), iter90u (RGPD register).
+
+**Verification manuelle sur donnees reelles (ACP Gaura)** :
+V.A Coproprietaires debiteurs affiche 10 lignes avec n° comptes visibles :
+`41011988, 41001996, 4101987, 4101989, 4101984, ...` (mix de tous formats).
+
+
+## Implemented
 ### Iter90u (Feb 2026) - Registre des traitements RGPD (art. 30) + PDF
 
 **Ticket user** : Fiche registre RGPD art. 30 - liste des traitements, sous-traitants,

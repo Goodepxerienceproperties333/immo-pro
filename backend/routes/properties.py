@@ -453,6 +453,45 @@ def create_properties_router(db):
         is_super, allowed_copros = await _get_user_scope(request)
         if not is_super and not await _owner_in_scope(owner_id, allowed_copros):
             raise HTTPException(404, "Proprietaire non trouve")
+
+        # === Garde-fou : refuser la suppression si des ecritures comptables ===
+        # === ou des donnees liees existent (securite comptable / anti-orphelins).
+        blocking = []
+        # 1. Ecritures comptables (journal_entries.lines[].third_party_id)
+        je_count = await db.journal_entries.count_documents(
+            {"lines.third_party_id": owner_id}
+        )
+        if je_count > 0:
+            blocking.append(f"{je_count} ecriture(s) comptable(s) dans les journaux")
+        # 2. Lots encore assignes
+        lot_count = await db.lots.count_documents(
+            {"$or": [{"owner_id": owner_id}, {"owner_ids": owner_id}]}
+        )
+        if lot_count > 0:
+            blocking.append(f"{lot_count} lot(s) encore assigne(s) a ce proprietaire")
+        # 3. Appels de fonds referencant l'owner (par lot possede)
+        fc_count = await db.fund_calls.count_documents(
+            {"details.owner_id": owner_id}
+        )
+        if fc_count > 0:
+            blocking.append(f"{fc_count} appel(s) de fonds")
+        # 4. Factures fournisseurs avec third_party_id (rare mais possible)
+        inv_count = await db.invoices.count_documents(
+            {"third_party_id": owner_id}
+        )
+        if inv_count > 0:
+            blocking.append(f"{inv_count} facture(s) liee(s)")
+
+        if blocking:
+            raise HTTPException(
+                409,
+                "Suppression refusee (securite comptable) : ce proprietaire est reference par "
+                + ", ".join(blocking)
+                + ". Pour supprimer un proprietaire, il faut d'abord annuler / reaffecter "
+                + "toutes les ecritures liees, ou fusionner ce compte avec un autre proprietaire "
+                + "(outil Doublons)."
+            )
+
         result = await db.owners.delete_one({"id": owner_id})
         if result.deleted_count == 0:
             raise HTTPException(404, "Proprietaire non trouve")

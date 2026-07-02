@@ -216,6 +216,7 @@ def create_reports_router(db):
         # au lieu de "Prov. charges - Dubois" + "Fonds reserve - Dubois" separes.
         owners_acp = await db.owners.find({}, {"_id": 0}).to_list(10000)
         owner_acc_map = {}  # acc_number -> {owner_id, owner_name}
+        owner_primary_acc = {}  # owner_id -> account number to DISPLAY on the bilan line
         for o in owners_acp:
             tier_accs = ((o.get("tier_accounts") or {}).get(copropriete_id, {}) or {})
             for key in ("provisions", "reserve"):
@@ -223,6 +224,11 @@ def create_reports_router(db):
                 if acc_n:
                     owner_acc_map[acc_n] = {
                         "owner_id": o["id"], "owner_name": o.get("name", "")}
+            # Le n° de compte affiche sur la ligne bilan = compte "provisions"
+            # (fonds de roulement = 41010XXX ou legacy 40000XXX), sinon reserve.
+            display_acc = tier_accs.get("provisions") or tier_accs.get("reserve") or ""
+            if display_acc:
+                owner_primary_acc[o["id"]] = display_acc
 
         # Aggreger par owner_id
         merged = {}  # owner_id -> {debit, credit, name}
@@ -249,6 +255,8 @@ def create_reports_router(db):
                 "debit": m["debit"],
                 "credit": m["credit"],
                 "is_owner_aggregated": True,
+                # iter90v : compte comptable a afficher sur la ligne bilan
+                "display_account": owner_primary_acc.get(oid, ""),
             }
 
         def _rub(label, accounts):
@@ -298,9 +306,12 @@ def create_reports_router(db):
         def _classify_account(acc, solde, balances_dict):
             """Classe un compte dans le bon bucket selon son numero et son solde."""
             is_aggregated_owner = balances_dict[acc].get("is_owner_aggregated", False)
-            # Pour les comptes agreges proprietaires : on affiche juste le nom (pas de numero)
+            # Pour les comptes agreges proprietaires : afficher le compte
+            # "principal" (fonds de roulement = 41010XXX ou legacy 40000XXX)
+            # avec le nom, plutot que le numero virtuel OWNER_xxx.
+            display_acc = balances_dict[acc].get("display_account", "") if is_aggregated_owner else acc
             item = {
-                "account_number": "" if is_aggregated_owner else acc,
+                "account_number": display_acc if is_aggregated_owner else acc,
                 "account_name": _clean_account_name(acc, balances_dict[acc]["account_name"]),
                 "amount": abs(solde),
             }
@@ -316,7 +327,8 @@ def create_reports_router(db):
                     actif_buckets["III_immo_financieres"].append(item)
                 elif acc.startswith("3"):
                     actif_buckets["IV_stocks"].append(item)
-                elif acc.startswith("400") or acc.startswith("401") or acc.startswith("416"):
+                elif acc.startswith(("400", "401", "410", "411", "416")):
+                    # Coproprietaires debiteurs : PCMN belge (410x) + legacy (400/401) + doutes (416)
                     actif_buckets["V_creances_coproprietaires"].append(item)
                 elif acc.startswith("440"):
                     actif_buckets["V_creances_fournisseurs_acompte"].append(item)
@@ -344,7 +356,8 @@ def create_reports_router(db):
                     passif_buckets["IV_subsides"].append(item)
                 elif acc.startswith("17"):
                     passif_buckets["V_dettes_long"].append(item)
-                elif acc.startswith("400") or acc.startswith("401"):
+                elif acc.startswith(("400", "401", "410", "411")):
+                    # Coproprietaires crediteurs (excedents)
                     passif_buckets["VI_dettes_coproprietaires"].append(item)
                 elif acc.startswith("440"):
                     passif_buckets["VI_dettes_fournisseurs"].append(item)

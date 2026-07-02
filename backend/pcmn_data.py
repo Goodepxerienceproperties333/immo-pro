@@ -351,6 +351,9 @@ PCMN_ACCOUNTS = [
 PCMN_COMPAT_ACCOUNTS = [
     {"number": "400000", "name": "Coproprietaires - Master provisions", "class_num": 4, "parent": "410", "type": "balance"},
     {"number": "400100", "name": "Coproprietaires - Master fonds de reserve", "class_num": 4, "parent": "410", "type": "balance"},
+    # PCMN belge officiel (arrete royal 12/07/2012) - nouveaux comptes maitres
+    {"number": "4100", "name": "Acompte de fonds de reserve appele", "class_num": 4, "parent": "410", "type": "balance"},
+    {"number": "4101", "name": "Acompte de fonds de roulement appele", "class_num": 4, "parent": "410", "type": "balance"},
     {"number": "440000", "name": "Fournisseurs - Master", "class_num": 4, "parent": "440", "type": "balance"},
     {"number": "550000", "name": "Banque - Compte courant (compat)", "class_num": 5, "parent": "550", "type": "balance"},
     {"number": "550100", "name": "Banque - Compte epargne (compat)", "class_num": 5, "parent": "550", "type": "balance"},

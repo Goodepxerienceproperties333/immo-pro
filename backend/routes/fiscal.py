@@ -453,10 +453,12 @@ def create_fiscal_router(db):
         ve_entries = await db.journal_entries.find(ve_q, {"_id": 0}).to_list(50000)
         provisions_called_by_owner = defaultdict(float)  # owner_id -> amount
         provisions_called_total = 0.0
+        from tier_accounts import is_provisions_account
         for e in ve_entries:
             for line in e.get("lines", []):
                 acc = line.get("account_number", "")
-                if acc.startswith("40000"):  # provisions only, not reserve (40010)
+                # provisions only (legacy 40000XXX OR new 4101XXXX), not reserve
+                if is_provisions_account(acc):
                     amt = line.get("debit", 0) - line.get("credit", 0)
                     if amt > 0 and line.get("third_party_id"):
                         provisions_called_by_owner[line["third_party_id"]] += amt

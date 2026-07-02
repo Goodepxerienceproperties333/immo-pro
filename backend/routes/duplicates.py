@@ -428,6 +428,22 @@ def create_duplicates_router(db):
             {"$set": {"to_owner_id": data.keep_id}},
         )
 
+        # 5b) Ecritures comptables (journal_entries.lines[].third_party_id)
+        # ANTI-ORPHELIN : reassigner les references dans les journaux comptables
+        # avant de supprimer les owners, sinon les lignes pointeraient dans le vide.
+        je_updated = await db.journal_entries.update_many(
+            {"lines.third_party_id": {"$in": data.remove_ids}},
+            {"$set": {"lines.$[elem].third_party_id": data.keep_id}},
+            array_filters=[{"elem.third_party_id": {"$in": data.remove_ids}}],
+        )
+
+        # 5c) Fund calls details (owner_id dans le detail par lot)
+        fc_updated = await db.fund_calls.update_many(
+            {"details.owner_id": {"$in": data.remove_ids}},
+            {"$set": {"details.$[elem].owner_id": data.keep_id}},
+            array_filters=[{"elem.owner_id": {"$in": data.remove_ids}}],
+        )
+
         # 6) Suppression
         deleted = await db.owners.delete_many({"id": {"$in": data.remove_ids}})
 
@@ -441,6 +457,8 @@ def create_duplicates_router(db):
             "bank_transactions_migrated": txns_updated.modified_count,
             "mutations_from_migrated": mut_from.modified_count,
             "mutations_to_migrated": mut_to.modified_count,
+            "journal_entries_migrated": je_updated.modified_count,
+            "fund_calls_migrated": fc_updated.modified_count,
         }
 
     return router
