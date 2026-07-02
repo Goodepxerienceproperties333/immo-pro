@@ -1319,14 +1319,17 @@ def create_banking_router(db):
 
     @router.post("/unlettrage-by-invoice/{invoice_id}")
     async def unlettrage_by_invoice(invoice_id: str):
-        """Delettre la (ou les) transaction(s) bancaire(s) lettree(s) a une facture."""
+        """Delettre la (ou les) transaction(s) bancaire(s) lettree(s) a une facture.
+
+        iter90x'' : tolerance aux factures marquees "paid" sans lettrage bancaire
+        (paiement manuel, import legacy). Dans ce cas, remet simplement la facture
+        en unpaid et renvoie un message adapte au lieu de 404.
+        """
         cursor = db.bank_transactions.find(
             {"match_type": "invoice", "matched_to": invoice_id, "matched": True},
             {"_id": 0},
         )
         txns = await cursor.to_list(50)
-        if not txns:
-            raise HTTPException(404, "Aucune transaction lettree a cette facture")
         for t in txns:
             try:
                 await _delete_auto_entries(db, "bank_txn", t["id"])
@@ -1336,12 +1339,41 @@ def create_banking_router(db):
                 {"id": t["id"]},
                 {"$set": {"matched": False, "matched_to": "", "match_type": ""}}
             )
+        # Cherche la facture pour repondre proprement
+        inv = await db.invoices.find_one({"id": invoice_id}, {"_id": 0})
+        if not inv:
+            raise HTTPException(404, "Facture introuvable")
+
+        # Si aucun lettrage bancaire mais que la facture est "paid" (paiement manuel
+        # ou legacy), on la remet en unpaid quand meme.
+        was_paid = inv.get("status") in ("paid", "partially_paid")
         await db.invoices.update_one(
             {"id": invoice_id},
             {"$set": {"status": "unpaid"},
-             "$unset": {"paid_at": "", "paid_by_transaction_id": ""}}
+             "$unset": {"paid_at": "", "paid_by_transaction_id": "",
+                        "paid_by_transaction_ids": "", "amount_paid": "",
+                        "lettrage_code": ""}}
         )
-        return {"message": f"{len(txns)} transaction(s) delettree(s)", "count": len(txns)}
+
+        if txns:
+            return {
+                "message": f"{len(txns)} transaction(s) delettree(s)",
+                "count": len(txns),
+                "manual_reset": False,
+            }
+        if was_paid:
+            return {
+                "message": ("Facture remise en attente de paiement (aucun lettrage "
+                            "bancaire trouve - paiement manuel ou import legacy)"),
+                "count": 0,
+                "manual_reset": True,
+            }
+        # Facture deja unpaid + aucun lettrage : rien a faire
+        return {
+            "message": "Facture deja non lettree, aucune action necessaire",
+            "count": 0,
+            "manual_reset": False,
+        }
 
     # ---- CATEGORIZATION (iter90k) ----
     # Attacher une nature (expense_category + distribution_key) a une

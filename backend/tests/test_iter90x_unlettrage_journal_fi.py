@@ -236,9 +236,67 @@ def test_unlettrage_candidates_endpoint():
         asyncio.run(_cleanup(acp_id))
 
 
+def test_unlettrage_by_invoice_tolerant_to_legacy_paid():
+    """iter90x'' : facture marquee 'paid' SANS lettrage bancaire (legacy/manuel) :
+    l'endpoint doit la remettre en unpaid sans crasher (avant : 404 'Aucune
+    transaction lettree a cette facture')."""
+    async def setup():
+        client = AsyncIOMotorClient(MONGO_URL)
+        db = client[DB_NAME]
+        acp_id = f'iter90x2-{uuid.uuid4()}'
+        await db.coproprietes.insert_one({'id': acp_id, 'name': 'X', 'active': True})
+        inv_id = str(uuid.uuid4())
+        await db.invoices.insert_one({
+            'id': inv_id, 'copropriete_id': acp_id,
+            'number': 'LEGACY001', 'supplier': 'Legacy Sup',
+            'amount_ttc': 100.0, 'status': 'paid',
+            'paid_at': '2026-01-01T00:00:00Z',
+        })
+        client.close()
+        return acp_id, inv_id
+
+    async def cleanup(acp_id):
+        client = AsyncIOMotorClient(MONGO_URL)
+        db = client[DB_NAME]
+        for c in ['coproprietes', 'invoices', 'bank_transactions']:
+            await db[c].delete_many({'copropriete_id': acp_id})
+        await db.coproprietes.delete_many({'id': acp_id})
+        client.close()
+
+    acp_id, inv_id = asyncio.run(setup())
+    try:
+        s = _login()
+        r = s.post(f'{BASE}/api/banking/unlettrage-by-invoice/{inv_id}',
+                   headers={'X-Copropriete-Id': acp_id})
+        assert r.status_code == 200, f'expected 200 tolerance, got {r.status_code}: {r.text}'
+        body = r.json()
+        assert body['count'] == 0
+        assert body['manual_reset'] is True
+
+        async def check():
+            client = AsyncIOMotorClient(MONGO_URL)
+            db = client[DB_NAME]
+            inv = await db.invoices.find_one({'id': inv_id})
+            client.close()
+            return inv
+        inv = asyncio.run(check())
+        assert inv['status'] == 'unpaid'
+        assert 'paid_at' not in inv or not inv.get('paid_at')
+
+        # Deuxieme appel : facture deja unpaid -> 200 avec message different
+        r2 = s.post(f'{BASE}/api/banking/unlettrage-by-invoice/{inv_id}',
+                    headers={'X-Copropriete-Id': acp_id})
+        assert r2.status_code == 200
+        assert r2.json()['manual_reset'] is False
+        assert r2.json()['count'] == 0
+    finally:
+        asyncio.run(cleanup(acp_id))
+
+
 if __name__ == '__main__':
     test_fi_entries_enriched_with_linked_invoice(); print('.', end='', flush=True)
     test_unlettrage_via_journal_financier_flow(); print('.', end='', flush=True)
     test_relettrage_atomic_flow(); print('.', end='', flush=True)
     test_unlettrage_candidates_endpoint(); print('.', end='', flush=True)
-    print(' 4/4 OK')
+    test_unlettrage_by_invoice_tolerant_to_legacy_paid(); print('.', end='', flush=True)
+    print(' 5/5 OK')
