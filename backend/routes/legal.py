@@ -643,4 +643,100 @@ def create_legal_router(db):
         ).sort("edited_at", -1).to_list(100)
         return history
 
+    # === RGPD Register (art. 30) ===============================================
+
+    @router.get("/admin/rgpd-register")
+    async def get_rgpd_register(request: Request):
+        """Renvoie les donnees editables du registre des traitements RGPD."""
+        await _require_superadmin(request)
+        doc = await db.legal_rgpd_register.find_one({"_id": "default"}, {"_id": 0})
+        if not doc:
+            # Return defaults so the UI can pre-fill
+            from pdf_rgpd_register import (
+                DEFAULT_PROCESSINGS, DEFAULT_SUBPROCESSORS, DEFAULT_SECURITY_MEASURES,
+            )
+            doc = {
+                "controller": {
+                    "societe": "[SOCIETE]",
+                    "forme_juridique": "[FORME_JURIDIQUE]",
+                    "adresse": "[ADRESSE_COMPLETE]",
+                    "bce": "[NUMERO_BCE]",
+                    "tva": "[NUMERO_TVA]",
+                    "representant": "[NOM_REPRESENTANT]",
+                    "email": "welcome@goodexperienceproperties.be",
+                    "telephone": "[TELEPHONE]",
+                    "dpo_email": "welcome@goodexperienceproperties.be",
+                },
+                "processings": DEFAULT_PROCESSINGS,
+                "subprocessors": DEFAULT_SUBPROCESSORS,
+                "security_measures": DEFAULT_SECURITY_MEASURES,
+                "updated_at": None,
+            }
+        return doc
+
+    class RgpdRegisterInput(BaseModel):
+        controller: dict
+        processings: list
+        subprocessors: list
+        security_measures: list
+
+    @router.put("/admin/rgpd-register")
+    async def update_rgpd_register(data: RgpdRegisterInput, request: Request):
+        """Met a jour les donnees editables du registre RGPD."""
+        admin_user = await _require_superadmin(request)
+        payload = {
+            "controller": data.controller or {},
+            "processings": data.processings or [],
+            "subprocessors": data.subprocessors or [],
+            "security_measures": data.security_measures or [],
+            "updated_at": _now(),
+            "updated_by_email": admin_user.get("email", ""),
+        }
+        await db.legal_rgpd_register.update_one(
+            {"_id": "default"}, {"$set": payload}, upsert=True,
+        )
+        await db.audit_log.insert_one({
+            "id": str(uuid.uuid4()),
+            "user_id": str(admin_user.get("_id") or admin_user.get("id", "")),
+            "user_email": admin_user.get("email", ""),
+            "action": "legal.rgpd_register_update",
+            "details": {"processings_count": len(payload["processings"]),
+                        "subprocessors_count": len(payload["subprocessors"])},
+            "timestamp": _now(),
+        })
+        return {"message": "Registre mis a jour", "updated_at": payload["updated_at"]}
+
+    @router.get("/admin/rgpd-register/pdf")
+    async def download_rgpd_register_pdf(request: Request):
+        """Genere le PDF du registre des traitements (art. 30 RGPD) pret pour l'APD."""
+        admin_user = await _require_superadmin(request)
+        from fastapi.responses import Response
+        from pdf_rgpd_register import build_rgpd_register_pdf
+
+        register = await db.legal_rgpd_register.find_one({"_id": "default"}, {"_id": 0})
+        if not register:
+            # Use defaults
+            register = await get_rgpd_register(request)
+
+        pdf_bytes = build_rgpd_register_pdf(register)
+
+        await db.audit_log.insert_one({
+            "id": str(uuid.uuid4()),
+            "user_id": str(admin_user.get("_id") or admin_user.get("id", "")),
+            "user_email": admin_user.get("email", ""),
+            "action": "legal.rgpd_register_pdf_download",
+            "details": {"size_bytes": len(pdf_bytes)},
+            "timestamp": _now(),
+        })
+
+        filename = f"registre-rgpd-copromanager-{datetime.now(timezone.utc).strftime('%Y%m%d')}.pdf"
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                "Cache-Control": "no-store",
+            },
+        )
+
     return router

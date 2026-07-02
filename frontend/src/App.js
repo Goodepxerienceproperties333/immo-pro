@@ -39,6 +39,7 @@ import ExpensesPage from "@/pages/ExpensesPage";
 import ExpenseCategoriesPage from "@/pages/ExpenseCategoriesPage";
 import LegalDocPage from "@/pages/LegalDocPage";
 import AdminLegalDocsPage from "@/pages/AdminLegalDocsPage";
+import AdminRgpdRegisterPage from "@/pages/AdminRgpdRegisterPage";
 import CookieBanner from "@/components/CookieBanner";
 import LegalAcceptanceModal from "@/components/LegalAcceptanceModal";
 
@@ -93,6 +94,7 @@ function AppRoutes() {
         <Route path="admin/unlock" element={<AdminUnlockEntryPage />} />
         <Route path="admin/audit" element={<AdminAuditLogPage />} />
         <Route path="admin/legal" element={<AdminLegalDocsPage />} />
+        <Route path="admin/rgpd-register" element={<AdminRgpdRegisterPage />} />
         <Route path="admin/login-history" element={<AdminLoginHistoryPage />} />
         <Route path="import-wizard" element={<ImportWizardPage />} />
         <Route path="admin/role-templates" element={<AdminRoleTemplatesPage />} />

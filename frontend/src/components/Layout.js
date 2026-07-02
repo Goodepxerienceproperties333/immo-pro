@@ -6,7 +6,7 @@ import {
   LayoutDashboard, Users, Building2, UserCheck, BookOpen, FileText,
   Receipt, Gauge, Landmark, FolderOpen, LogOut, ChevronLeft, ChevronRight,
   Menu, Shield, Home, Truck, Calendar, BookMarked, Megaphone, BarChart3, Bell, Wallet, Tag, UserCog, Pencil,
-  ShieldAlert, Unlock, ScrollText, IdCard, Activity, FileCheck
+  ShieldAlert, Unlock, ScrollText, IdCard, Activity, FileCheck, FileArchive
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -107,6 +107,10 @@ export default function Layout() {
             className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''} ${collapsed ? 'justify-center px-2' : ''}`}
             data-testid="adm-nav-legal"
           ><FileCheck size={16} strokeWidth={1.5} />{!collapsed && <span className="text-[13px]">Documents legaux</span>}</NavLink>
+          <NavLink to="/admin/rgpd-register" onClick={() => setMobileOpen(false)}
+            className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''} ${collapsed ? 'justify-center px-2' : ''}`}
+            data-testid="adm-nav-rgpd-register"
+          ><FileArchive size={16} strokeWidth={1.5} />{!collapsed && <span className="text-[13px]">Registre RGPD</span>}</NavLink>
         </div>
       </ScrollArea>
       {/* Bottom: switch to syndic mode */}

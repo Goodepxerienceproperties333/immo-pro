@@ -12,6 +12,50 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 ## Implemented
+### Iter90u (Feb 2026) - Registre des traitements RGPD (art. 30) + PDF
+
+**Ticket user** : Fiche registre RGPD art. 30 - liste des traitements, sous-traitants,
+base legale, duree de conservation. PDF pret a envoyer a l'APD en cas de controle.
+
+**Backend** (`routes/legal.py` + `pdf_rgpd_register.py`) :
+- Collection `legal_rgpd_register` (document unique `_id="default"`).
+- 3 endpoints (superadmin only) :
+  - `GET /api/legal/admin/rgpd-register` — donnees editables (renvoie defauts si jamais sauvegarde)
+  - `PUT /api/legal/admin/rgpd-register` — persiste controller / processings / subprocessors / security_measures + audit log
+  - `GET /api/legal/admin/rgpd-register/pdf` — genere le PDF (reportlab, A4, 2+ pages) + audit log download
+- PDF (`pdf_rgpd_register.py`) genere via reportlab avec :
+  - En-tete responsable de traitement (societe, BCE, TVA, DPO, ...)
+  - Table 7 colonnes activites de traitement (finalite, base legale, categories, subjects, destinataires, retention)
+  - Table sous-traitants (Emergent LLM, Microsoft Graph, hebergeur)
+  - Mesures techniques et organisationnelles (bcrypt, TLS, RBAC, chinese walls, audit, backup, verrous fiscaux)
+  - Droits des personnes (art. 15-22)
+  - Encart autorite de controle APD (Bruxelles)
+  - Zone signature responsable + cachet
+  - Footer avec date de generation + pagination
+- Contenu par defaut precomplete : 6 activites de traitement, 3 sous-traitants, 10 mesures de securite (base solide pour un SaaS de gestion de copropriete).
+
+**Frontend** (`pages/AdminRgpdRegisterPage.js`) :
+- Route `/admin/rgpd-register` (superadmin only).
+- 4 sections editables :
+  1. Responsable de traitement (grille 9 champs)
+  2. Activites de traitement (liste dynamique, ajouter/supprimer, 7 champs par entree)
+  3. Sous-traitants (liste dynamique, 4 champs par entree)
+  4. Mesures techniques et organisationnelles (liste texte simple ajouter/supprimer)
+- Sticky bottom bar avec "Sauvegarder" + "Telecharger PDF" + date derniere sauvegarde.
+- Sidebar admin : nouveau lien "Registre RGPD" (icone FileArchive).
+
+**Tests** :
+- `test_iter90u_rgpd_register.py` — 4 tests PASS :
+  1. ACL : owner obtient 403 sur GET/PUT/PDF
+  2. GET renvoie defauts avec >= 3 traitements + 2 sous-traitants + 3 mesures
+  3. PUT persiste + audit log (action `legal.rgpd_register_update`)
+  4. PDF valide : Content-Type application/pdf, magic bytes %PDF-, > 3 Ko, texte "Registre des traitements" + "article 30" + "APD" retrouvable via pypdf, audit log `legal.rgpd_register_pdf_download`
+
+Total legal pytest suite (iter90s + 90t + 90u) : **16 tests PASS**.
+Total avec regression (iter89 owner portal + iter90n security + iter90r support) : **25 tests PASS**.
+
+
+## Implemented
 ### Iter90t (Feb 2026) - Admin UI edition des documents legaux
 
 **Ticket user** : P3 - Ecran admin pour modifier CGU/Privacy sans passer par
