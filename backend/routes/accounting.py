@@ -213,6 +213,46 @@ def create_accounting_router(db):
             query["reversed"] = {"$ne": True}
             query["is_reversal"] = {"$ne": True}
         entries = await db.journal_entries.find(query, {"_id": 0}).sort("date", -1).to_list(5000)
+        # iter90x : enrichit les FI entries avec l'info de la facture liee
+        # (utile pour le bouton "Delettrer" dans le journal financier).
+        if journal_type == "FI":
+            bank_txn_ids = [e.get("source_id", "") for e in entries
+                            if e.get("source_type") == "bank_txn" and e.get("source_id")]
+            if bank_txn_ids:
+                txns = await db.bank_transactions.find(
+                    {"id": {"$in": bank_txn_ids}},
+                    {"_id": 0, "id": 1, "matched": 1, "matched_to": 1,
+                     "match_type": 1, "lettrage_code": 1},
+                ).to_list(len(bank_txn_ids))
+                txn_by_id = {t["id"]: t for t in txns}
+                # Pre-fetch invoices for matched txns
+                inv_ids = [t.get("matched_to") for t in txns
+                           if t.get("match_type") == "invoice" and t.get("matched_to")]
+                inv_map = {}
+                if inv_ids:
+                    invs = await db.invoices.find(
+                        {"id": {"$in": list(set(inv_ids))}},
+                        {"_id": 0, "id": 1, "invoice_number": 1, "supplier_name": 1,
+                         "amount_ttc": 1, "total_amount": 1, "amount": 1},
+                    ).to_list(len(inv_ids))
+                    inv_map = {i["id"]: i for i in invs}
+                for e in entries:
+                    if e.get("source_type") != "bank_txn":
+                        continue
+                    t = txn_by_id.get(e.get("source_id", ""))
+                    if not t or not t.get("matched"):
+                        continue
+                    e["bank_txn_matched"] = True
+                    e["bank_txn_match_type"] = t.get("match_type", "")
+                    if t.get("match_type") == "invoice" and t.get("matched_to") in inv_map:
+                        inv = inv_map[t["matched_to"]]
+                        amt = inv.get("amount_ttc") or inv.get("total_amount") or inv.get("amount") or 0
+                        e["linked_invoice"] = {
+                            "id": inv["id"],
+                            "invoice_number": inv.get("invoice_number", ""),
+                            "supplier_name": inv.get("supplier_name", ""),
+                            "amount_ttc": float(amt) if amt else 0,
+                        }
         return entries
 
     async def _enrich_lines_with_occupant_pct(lines: list, copro_id: str) -> list:

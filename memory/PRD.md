@@ -12,6 +12,54 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 ## Implemented
+### Iter90x (Feb 2026) - Delettrage des factures via le journal financier
+
+**Ticket user** : "Copropriete Acacia a des factures deja lettrees et j'aimerais
+les delettrer afin de me permettre d'affecter le bon mouvement financier a
+cette facture" — solution pragmatique et economique.
+
+**Constat** : Les endpoints backend existent deja (`POST /banking/unlettrage/{txn_id}`
+et `POST /banking/unlettrage-by-invoice/{invoice_id}`), mais aucune exposition
+UI dans le Journal Financier. L'utilisateur devait aller dans BankingPage
+pour delettrer, ce qui n'est pas naturel quand on regarde une ecriture FI.
+
+**Backend** (`routes/accounting.py`) :
+- Enrichissement de `GET /api/accounting/entries?journal_type=FI` : pour chaque
+  ecriture FI avec `source_type=bank_txn`, ajoute `bank_txn_matched`,
+  `bank_txn_match_type` et `linked_invoice` (id, invoice_number,
+  supplier_name, amount_ttc) si la txn est lettree a une facture.
+- Zero nouvel endpoint : reutilise l'existant `POST /banking/unlettrage/{txn_id}`
+  qui gere deja : reset matched/matched_to, invoice status -> unpaid,
+  regeneration de l'ecriture FI en compte d'attente 499000, recalcul du statut
+  pour les lettrages N->1.
+
+**Frontend** (`pages/JournalsPage.js`) :
+- Badge vert emeraude "Facture <numero> - <fournisseur>" affiche a cote de la
+  description dans le journal FI, pour chaque ecriture liee a une facture
+  (tooltip avec le montant TVAC).
+- Nouveau bouton "Delettrer" (icone Unlink, orange) dans la colonne Actions,
+  visible uniquement sur les ecritures FI dont la transaction bancaire est
+  lettree (a une facture, un proprietaire, un fournisseur, etc.).
+- Confirmation dialog contextuelle qui rappelle a quelle facture la
+  transaction est actuellement lettree.
+- Sur clic : call `POST /banking/unlettrage/{source_id}`, toast de confirmation,
+  reload de la liste. La facture redevient "en attente de paiement" et la
+  transaction est disponible pour un nouveau lettrage.
+
+**Verification live** :
+- ACP Gaura : 324 ecritures FI dont 53 lettrees a des factures + 84 lettrees
+  au total (owner/supplier/invoice). Toutes s'affichent avec le badge et le
+  bouton delettrer.
+
+**Tests** :
+- `test_iter90x_unlettrage_journal_fi.py` - 2 tests PASS :
+  1. GET /accounting/entries?journal_type=FI expose bien `linked_invoice`
+  2. Flow complet unlettrage : facture repasse en `unpaid`, transaction
+     redevient `matched=False`
+- 26/26 tests pass en regression (iter73 bilan, iter90s-w compliance/PCMN/drift).
+
+
+## Implemented
 ### Iter90w (Feb 2026) - Correction derive d'arrondi dans les appels de fonds
 
 **Ticket user** : Balance de tiers affiche 25700.04 EUR au lieu de 25700.00 EUR

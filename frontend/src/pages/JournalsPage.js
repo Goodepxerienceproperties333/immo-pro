@@ -9,7 +9,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { Plus, Trash2, Eye, Paperclip, Download, Pencil } from 'lucide-react';
+import { Plus, Trash2, Eye, Paperclip, Download, Pencil, Unlink } from 'lucide-react';
 import AccountSearchSelect from '@/components/AccountSearchSelect';
 import { fmtDate } from '@/lib/dateFmt';
 import { useFiscalYearParams } from '@/hooks/useFiscalYearParams';
@@ -170,6 +170,26 @@ export default function JournalsPage() {
     load();
   };
 
+  const handleUnlettrage = async (entry) => {
+    // Delettre la transaction bancaire liee a cette ecriture FI
+    const inv = entry.linked_invoice;
+    const msg = inv
+      ? `Delettrer cette transaction de la facture "${inv.invoice_number || inv.supplier_name}" (${inv.amount_ttc?.toFixed(2)} EUR) ?\n\n`
+        + 'La transaction bancaire redeviendra "a lettrer". Vous pourrez ensuite la relier a la bonne facture.'
+      : 'Delettrer cette transaction bancaire ?\n\n'
+        + 'La transaction redeviendra disponible pour un nouveau lettrage.';
+    if (!window.confirm(msg)) return;
+    try {
+      await api.post(`/banking/unlettrage/${entry.source_id}`);
+      toast.success(inv
+        ? `Delettrage effectue. La facture "${inv.invoice_number || inv.supplier_name}" est de nouveau en attente de paiement.`
+        : 'Lettrage annule.');
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur delettrage');
+    }
+  };
+
   return (
     <div data-testid="journals-page">
       <div className="page-header flex items-center justify-between">
@@ -212,7 +232,14 @@ export default function JournalsPage() {
                       {e.is_reversal && <Badge variant="outline" className="ml-2 text-[10px] bg-amber-100 border-amber-300 text-amber-800" data-testid={`reversal-badge-${e.id}`}>Contre-passation</Badge>}
                       {e.reversed && <Badge variant="outline" className="ml-2 text-[10px] bg-red-100 border-red-300 text-red-700" data-testid={`reversed-badge-${e.id}`}>Extournee</Badge>}
                     </TableCell>
-                    <TableCell className="font-medium">{e.description}</TableCell>
+                    <TableCell className="font-medium">
+                      {e.description}
+                      {e.linked_invoice && (
+                        <Badge variant="outline" className="ml-2 text-[10px] bg-emerald-50 border-emerald-300 text-emerald-800" data-testid={`linked-invoice-${e.id}`} title={`Facture liee : ${e.linked_invoice.invoice_number || ''} - ${e.linked_invoice.supplier_name || ''} (${(e.linked_invoice.amount_ttc || 0).toFixed(2)} EUR)`}>
+                          Facture {e.linked_invoice.invoice_number || e.linked_invoice.supplier_name || ''}
+                        </Badge>
+                      )}
+                    </TableCell>
                     <TableCell className="text-right font-mono">{e.total_debit?.toFixed(2)}</TableCell>
                     <TableCell className="text-right font-mono">{e.total_credit?.toFixed(2)}</TableCell>
                     <TableCell>
@@ -222,6 +249,20 @@ export default function JournalsPage() {
                         <Button variant="ghost" size="sm" onClick={() => setAttachDialogEntry(e)} data-testid={`entry-attach-${e.id}`} title="Pieces jointes">
                           <Paperclip size={14} />{(e.attachments?.length || 0) > 0 && <span className="ml-1 text-xs">{e.attachments.length}</span>}
                         </Button>
+                        {e.source_type === 'bank_txn' && e.bank_txn_matched && !e.is_reversal && !e.reversed && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleUnlettrage(e)}
+                            className="text-amber-600 hover:bg-amber-50"
+                            data-testid={`unlettrage-btn-${e.id}`}
+                            title={e.linked_invoice
+                              ? `Delettrer de la facture "${e.linked_invoice.invoice_number || e.linked_invoice.supplier_name}"`
+                              : 'Delettrer la transaction bancaire'}
+                          >
+                            <Unlink size={14} />
+                          </Button>
+                        )}
                         {(!e.auto_generated || e.manually_edited) && !e.is_reversal && !e.reversed && <Button variant="ghost" size="sm" onClick={() => handleDelete(e.id)} className="text-red-500"><Trash2 size={14} /></Button>}
                       </div>
                     </TableCell>
