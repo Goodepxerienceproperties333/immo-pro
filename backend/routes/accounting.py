@@ -232,7 +232,8 @@ def create_accounting_router(db):
                 if inv_ids:
                     invs = await db.invoices.find(
                         {"id": {"$in": list(set(inv_ids))}},
-                        {"_id": 0, "id": 1, "invoice_number": 1, "supplier_name": 1,
+                        {"_id": 0, "id": 1, "number": 1, "invoice_number": 1,
+                         "supplier": 1, "supplier_name": 1,
                          "amount_ttc": 1, "total_amount": 1, "amount": 1},
                     ).to_list(len(inv_ids))
                     inv_map = {i["id"]: i for i in invs}
@@ -249,8 +250,8 @@ def create_accounting_router(db):
                         amt = inv.get("amount_ttc") or inv.get("total_amount") or inv.get("amount") or 0
                         e["linked_invoice"] = {
                             "id": inv["id"],
-                            "invoice_number": inv.get("invoice_number", ""),
-                            "supplier_name": inv.get("supplier_name", ""),
+                            "invoice_number": inv.get("number") or inv.get("invoice_number") or "",
+                            "supplier_name": inv.get("supplier") or inv.get("supplier_name") or "",
                             "amount_ttc": float(amt) if amt else 0,
                         }
         return entries

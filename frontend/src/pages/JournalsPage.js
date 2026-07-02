@@ -11,6 +11,7 @@ import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
 import { Plus, Trash2, Eye, Paperclip, Download, Pencil, Unlink } from 'lucide-react';
 import AccountSearchSelect from '@/components/AccountSearchSelect';
+import UnlettrageDialog from '@/components/UnlettrageDialog';
 import { fmtDate } from '@/lib/dateFmt';
 import { useFiscalYearParams } from '@/hooks/useFiscalYearParams';
 
@@ -170,25 +171,11 @@ export default function JournalsPage() {
     load();
   };
 
-  const handleUnlettrage = async (entry) => {
-    // Delettre la transaction bancaire liee a cette ecriture FI
-    const inv = entry.linked_invoice;
-    const msg = inv
-      ? `Delettrer cette transaction de la facture "${inv.invoice_number || inv.supplier_name}" (${inv.amount_ttc?.toFixed(2)} EUR) ?\n\n`
-        + 'La transaction bancaire redeviendra "a lettrer". Vous pourrez ensuite la relier a la bonne facture.'
-      : 'Delettrer cette transaction bancaire ?\n\n'
-        + 'La transaction redeviendra disponible pour un nouveau lettrage.';
-    if (!window.confirm(msg)) return;
-    try {
-      await api.post(`/banking/unlettrage/${entry.source_id}`);
-      toast.success(inv
-        ? `Delettrage effectue. La facture "${inv.invoice_number || inv.supplier_name}" est de nouveau en attente de paiement.`
-        : 'Lettrage annule.');
-      load();
-    } catch (err) {
-      toast.error(err.response?.data?.detail || 'Erreur delettrage');
-    }
+  const handleUnlettrage = (entry) => {
+    // Ouvre le dialog qui permet de choisir : Delettrer seulement OU Relettrer
+    setUnlettrageEntry(entry);
   };
+  const [unlettrageEntry, setUnlettrageEntry] = useState(null);
 
   return (
     <div data-testid="journals-page">
@@ -444,6 +431,14 @@ export default function JournalsPage() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* iter90x' : Delettrer / Relettrer directement */}
+      <UnlettrageDialog
+        entry={unlettrageEntry}
+        open={!!unlettrageEntry}
+        onClose={() => setUnlettrageEntry(null)}
+        onSuccess={load}
+      />
     </div>
   );
 }

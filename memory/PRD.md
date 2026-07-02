@@ -12,6 +12,53 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 ## Implemented
+### Iter90x' (Feb 2026) - Relettrage direct depuis le journal financier
+
+**Ticket user** : Bouton "Relettrer directement" dans le meme dialog de delettrage,
+qui ouvre en un clic la liste des factures du meme fournisseur pour choisir la
+bonne, sans passer par la page Banque. Reduction du flow de 3 clics + navigation
+a 1 clic + selection.
+
+**Backend** (`routes/banking.py`) :
+- `GET /api/banking/unlettrage-candidates/{txn_id}` : retourne les factures
+  candidates a un re-lettrage pour la transaction, avec :
+  - transaction : amount_abs, date, description
+  - current_supplier : fournisseur de la facture actuellement lettree
+  - candidates : liste triee par score (meme fournisseur > montant exact > date recente),
+    chaque entree porte `exact_match`, `same_supplier`, `remaining` (solde du),
+    `amount_paid`, `status`
+- `POST /api/banking/relettrage/{txn_id}` avec body `{new_invoice_id}` :
+  operation atomique qui :
+  1. Delettre l'ancienne facture (recalcul status : unpaid ou partially_paid)
+  2. Lettre la nouvelle facture avec nouveau lettrage_code
+  3. Regenere l'ecriture FI vers le compte fournisseur correct
+  4. Verifie que la nouvelle facture est dans la meme ACP (chinese walls)
+
+**Frontend** (`components/UnlettrageDialog.js` - nouveau) :
+- Dialog modal 3xl remplace l'ancien `window.confirm`.
+- Recap : transaction + facture actuellement lettree (badge vert emeraude).
+- Section "Delettrer seulement" : carte orange avec bouton unlettrage direct.
+- Section "Relettrer directement" :
+  - Recherche live (N° / fournisseur)
+  - Toggle "Meme fournisseur uniquement" / "Tous fournisseurs"
+  - Tableau des candidates avec colonnes : N° facture (badge "Match exact"
+    ou "Meme fournisseur"), Fournisseur, Date, Solde du (+ montant paye si
+    partially_paid)
+  - Bouton "Relettrer" par ligne (vert emeraude si match exact, bleu sinon)
+  - Confirmation avant execution
+- Integration dans `pages/JournalsPage.js` : le bouton "Delettrer" du journal FI
+  ouvre desormais ce dialog au lieu d'un confirm brut.
+
+**Tests** (`test_iter90x_unlettrage_journal_fi.py`) :
+- 4 tests PASS (2 nouveaux) :
+  3. `test_relettrage_atomic_flow` : POST relettrage delettre l'ancienne facture
+     (status=unpaid) et lettre la nouvelle (status=paid), atomique.
+  4. `test_unlettrage_candidates_endpoint` : GET candidates retourne les factures
+     triees par score, 1ere = meme supplier + montant exact.
+- 28/28 tests pass en regression complete.
+
+
+## Implemented
 ### Iter90x (Feb 2026) - Delettrage des factures via le journal financier
 
 **Ticket user** : "Copropriete Acacia a des factures deja lettrees et j'aimerais

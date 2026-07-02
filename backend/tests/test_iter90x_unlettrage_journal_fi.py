@@ -155,7 +155,90 @@ def test_unlettrage_via_journal_financier_flow():
         asyncio.run(_cleanup(acp_id))
 
 
+def test_relettrage_atomic_flow():
+    """POST /banking/relettrage/{txn_id} delettre l'ancienne facture ET
+    lettre la nouvelle en une seule operation."""
+    acp_id, invoice_id, txn_id, _ = asyncio.run(_setup())
+    # Cree une 2eme facture non payee (candidate a relettrer)
+    async def create_second_invoice():
+        client = AsyncIOMotorClient(MONGO_URL)
+        db = client[DB_NAME]
+        inv2_id = str(uuid.uuid4())
+        await db.invoices.insert_one({
+            'id': inv2_id, 'copropriete_id': acp_id,
+            'number': 'INV-90X-002', 'invoice_number': 'INV-90X-002',
+            'supplier': 'Test Supplier', 'supplier_name': 'Test Supplier',
+            'amount_ttc': 500.0, 'total_amount': 500.0,
+            'status': 'unpaid',
+        })
+        client.close()
+        return inv2_id
+    inv2_id = asyncio.run(create_second_invoice())
+    try:
+        s = _login()
+        r = s.post(f'{BASE}/api/banking/relettrage/{txn_id}',
+                   json={'new_invoice_id': inv2_id},
+                   headers={'X-Copropriete-Id': acp_id})
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body['previous_invoice_id'] == invoice_id
+        assert body['new_invoice_id'] == inv2_id
+
+        async def check():
+            client = AsyncIOMotorClient(MONGO_URL)
+            db = client[DB_NAME]
+            i1 = await db.invoices.find_one({'id': invoice_id})
+            i2 = await db.invoices.find_one({'id': inv2_id})
+            t = await db.bank_transactions.find_one({'id': txn_id})
+            client.close()
+            return i1, i2, t
+        i1, i2, t = asyncio.run(check())
+        assert i1['status'] == 'unpaid', f"old status = {i1['status']}"
+        assert i2['status'] == 'paid', f"new status = {i2['status']}"
+        assert t['matched'] is True
+        assert t['matched_to'] == inv2_id
+    finally:
+        asyncio.run(_cleanup(acp_id))
+
+
+def test_unlettrage_candidates_endpoint():
+    """GET /banking/unlettrage-candidates/{txn_id} liste les factures compatibles."""
+    acp_id, invoice_id, txn_id, _ = asyncio.run(_setup())
+    # Cree quelques factures : meme supplier, autre supplier
+    async def add_invoices():
+        client = AsyncIOMotorClient(MONGO_URL)
+        db = client[DB_NAME]
+        await db.invoices.insert_many([
+            {'id': str(uuid.uuid4()), 'copropriete_id': acp_id,
+             'number': 'INV-90X-A', 'supplier': 'Test Supplier',
+             'amount_ttc': 500.0, 'status': 'unpaid'},
+            {'id': str(uuid.uuid4()), 'copropriete_id': acp_id,
+             'number': 'INV-90X-B', 'supplier': 'Autre Fournisseur',
+             'amount_ttc': 800.0, 'status': 'unpaid'},
+        ])
+        client.close()
+    asyncio.run(add_invoices())
+    try:
+        s = _login()
+        r = s.get(f'{BASE}/api/banking/unlettrage-candidates/{txn_id}',
+                  headers={'X-Copropriete-Id': acp_id})
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body['current_supplier'] == 'Test Supplier'
+        assert body['transaction']['amount_abs'] == 500.0
+        assert len(body['candidates']) >= 2
+        # La 1ere candidate doit etre la meme supplier + montant exact
+        top = body['candidates'][0]
+        assert top['same_supplier'] is True
+        assert top['exact_match'] is True
+        assert top['invoice_number'] == 'INV-90X-A'
+    finally:
+        asyncio.run(_cleanup(acp_id))
+
+
 if __name__ == '__main__':
     test_fi_entries_enriched_with_linked_invoice(); print('.', end='', flush=True)
     test_unlettrage_via_journal_financier_flow(); print('.', end='', flush=True)
-    print(' 2/2 OK')
+    test_relettrage_atomic_flow(); print('.', end='', flush=True)
+    test_unlettrage_candidates_endpoint(); print('.', end='', flush=True)
+    print(' 4/4 OK')

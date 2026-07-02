@@ -1117,6 +1117,206 @@ def create_banking_router(db):
             print(f"[unlettrage] regen FI failed: {e}")
         return {"message": "Lettrage annule"}
 
+    class RelettrageInput(BaseModel):
+        new_invoice_id: str
+
+    @router.get("/unlettrage-candidates/{txn_id}")
+    async def unlettrage_candidates(txn_id: str):
+        """Retourne les factures candidates pour un re-lettrage d'une transaction :
+        - Meme ACP que la txn
+        - Statut unpaid ou partially_paid
+        - Meme fournisseur (si connu depuis la facture actuellement lettree ou depuis le libelle txn)
+        - Bonus : montant TVAC = |montant txn| (mis en tete de liste)
+        """
+        txn = await db.bank_transactions.find_one({"id": txn_id}, {"_id": 0})
+        if not txn:
+            raise HTTPException(404, "Transaction non trouvee")
+        copro_id = txn.get("copropriete_id", "")
+        if not copro_id:
+            raise HTTPException(400, "Transaction sans ACP")
+        amt_abs = round(abs(float(txn.get("amount", 0) or 0)), 2)
+        # Fournisseur : depuis la facture actuelle si lettree, sinon on renvoie
+        # toutes les factures non payees de l'ACP.
+        supplier_filter = None
+        if txn.get("matched") and txn.get("match_type") == "invoice" and txn.get("matched_to"):
+            current_inv = await db.invoices.find_one(
+                {"id": txn["matched_to"]},
+                {"_id": 0, "supplier": 1, "supplier_name": 1},
+            )
+            if current_inv:
+                supplier_filter = current_inv.get("supplier") or current_inv.get("supplier_name") or None
+        query = {
+            "copropriete_id": copro_id,
+            "status": {"$in": ["unpaid", "partially_paid"]},
+        }
+        candidates = await db.invoices.find(
+            query,
+            {"_id": 0, "id": 1, "number": 1, "invoice_number": 1,
+             "supplier": 1, "supplier_name": 1, "date": 1, "due_date": 1,
+             "amount_ttc": 1, "total_amount": 1, "amount": 1,
+             "amount_paid": 1, "status": 1},
+        ).sort("date", -1).to_list(500)
+
+        def _amount(i):
+            return float(i.get("amount_ttc") or i.get("total_amount") or i.get("amount") or 0)
+
+        def _remaining(i):
+            return round(_amount(i) - float(i.get("amount_paid", 0) or 0), 2)
+
+        def _supplier(i):
+            return (i.get("supplier") or i.get("supplier_name") or "").strip()
+
+        # Score : meme fournisseur > montant proche > date recente
+        def _score(i):
+            s = 0
+            if supplier_filter and _supplier(i).lower() == supplier_filter.lower():
+                s += 1000
+            rem = _remaining(i)
+            if abs(rem - amt_abs) < 0.01:
+                s += 500
+            elif abs(rem - amt_abs) < 1.0:
+                s += 100
+            elif amt_abs > 0 and abs(rem - amt_abs) / max(amt_abs, 1) < 0.1:
+                s += 20
+            return s
+
+        sorted_cands = sorted(candidates, key=lambda i: -_score(i))
+        # Normalise le format retourne
+        out = []
+        for i in sorted_cands[:100]:
+            out.append({
+                "id": i["id"],
+                "invoice_number": i.get("number") or i.get("invoice_number") or "",
+                "supplier": _supplier(i),
+                "date": i.get("date", ""),
+                "due_date": i.get("due_date", ""),
+                "amount_ttc": _amount(i),
+                "amount_paid": float(i.get("amount_paid", 0) or 0),
+                "remaining": _remaining(i),
+                "status": i.get("status", ""),
+                "exact_match": abs(_remaining(i) - amt_abs) < 0.01,
+                "same_supplier": bool(
+                    supplier_filter and _supplier(i).lower() == supplier_filter.lower()),
+            })
+        return {
+            "transaction": {
+                "id": txn["id"],
+                "amount": float(txn.get("amount", 0) or 0),
+                "amount_abs": amt_abs,
+                "date": txn.get("date", ""),
+                "description": txn.get("description", ""),
+            },
+            "current_supplier": supplier_filter or "",
+            "candidates": out,
+        }
+
+    @router.post("/relettrage/{txn_id}")
+    async def relettrage(txn_id: str, data: RelettrageInput):
+        """Delettre la transaction de sa facture actuelle et la relettre a une
+        nouvelle facture, en une seule operation atomique."""
+        txn = await db.bank_transactions.find_one({"id": txn_id}, {"_id": 0})
+        if not txn:
+            raise HTTPException(404, "Transaction non trouvee")
+        new_inv = await db.invoices.find_one({"id": data.new_invoice_id}, {"_id": 0})
+        if not new_inv:
+            raise HTTPException(404, "Nouvelle facture non trouvee")
+        # Verif ACP identique (chinese walls)
+        if new_inv.get("copropriete_id") != txn.get("copropriete_id"):
+            raise HTTPException(400, "La facture appartient a une autre ACP")
+
+        prev_invoice_id = txn.get("matched_to") if txn.get("match_type") == "invoice" else None
+
+        # 1) Delettrage de l'ancienne facture (si applicable)
+        try:
+            await _delete_auto_entries(db, "bank_txn", txn_id)
+        except Exception:
+            pass
+        if prev_invoice_id and prev_invoice_id != data.new_invoice_id:
+            # Recalculer le statut de l'ancienne facture
+            remaining_txns = await db.bank_transactions.find(
+                {"match_type": "invoice", "matched_to": prev_invoice_id,
+                 "matched": True, "id": {"$ne": txn_id}},
+                {"_id": 0, "id": 1, "amount": 1},
+            ).to_list(100)
+            if not remaining_txns:
+                await db.invoices.update_one(
+                    {"id": prev_invoice_id},
+                    {"$set": {"status": "unpaid"},
+                     "$unset": {"paid_at": "", "paid_by_transaction_id": "",
+                                "paid_by_transaction_ids": "", "amount_paid": "",
+                                "lettrage_code": ""}},
+                )
+            else:
+                total_paid = round(
+                    sum(abs(float(r.get("amount", 0) or 0)) for r in remaining_txns), 2)
+                prev_inv = await db.invoices.find_one(
+                    {"id": prev_invoice_id}, {"_id": 0})
+                inv_amt = round(float(
+                    (prev_inv or {}).get("amount_ttc") or
+                    (prev_inv or {}).get("total_amount") or
+                    (prev_inv or {}).get("amount") or 0), 2)
+                is_full = inv_amt > 0 and abs(total_paid - inv_amt) < 0.01
+                await db.invoices.update_one(
+                    {"id": prev_invoice_id},
+                    {"$set": {"status": "paid" if is_full else "partially_paid",
+                              "amount_paid": total_paid,
+                              "paid_by_transaction_ids": [r["id"] for r in remaining_txns]}}
+                )
+
+        # 2) Lettrage sur la nouvelle facture
+        now_iso = datetime.now(timezone.utc).isoformat()
+        lettrage_code = str(uuid.uuid4())[:8].upper()
+        await db.bank_transactions.update_one(
+            {"id": txn_id},
+            {"$set": {
+                "matched": True,
+                "matched_to": data.new_invoice_id,
+                "match_type": "invoice",
+                "lettrage_code": lettrage_code,
+                "lettrage_at": now_iso,
+            }},
+        )
+
+        # Recalcul du statut de la nouvelle facture
+        related_txns = await db.bank_transactions.find(
+            {"match_type": "invoice", "matched_to": data.new_invoice_id,
+             "matched": True},
+            {"_id": 0, "id": 1, "amount": 1},
+        ).to_list(100)
+        total_paid = round(
+            sum(abs(float(r.get("amount", 0) or 0)) for r in related_txns), 2)
+        inv_amt = round(float(
+            new_inv.get("amount_ttc") or new_inv.get("total_amount") or
+            new_inv.get("amount") or 0), 2)
+        is_full = inv_amt > 0 and abs(total_paid - inv_amt) < 0.01
+        update = {
+            "amount_paid": total_paid,
+            "lettrage_code": lettrage_code,
+            "status": "paid" if is_full else "partially_paid",
+            "paid_by_transaction_ids": [r["id"] for r in related_txns],
+        }
+        if is_full:
+            update["paid_at"] = now_iso
+            update["paid_by_transaction_id"] = txn_id
+        await db.invoices.update_one({"id": data.new_invoice_id},
+                                     {"$set": update})
+
+        # 3) Regenere l'ecriture FI vers le compte fournisseur correct
+        try:
+            fresh = await db.bank_transactions.find_one({"id": txn_id}, {"_id": 0})
+            if fresh:
+                await generate_bank_entry(db, fresh)
+        except Exception as e:
+            print(f"[relettrage] regen FI failed: {e}")
+
+        return {
+            "message": "Re-lettrage effectue",
+            "previous_invoice_id": prev_invoice_id or "",
+            "new_invoice_id": data.new_invoice_id,
+            "new_status": update["status"],
+            "amount_paid": total_paid,
+        }
+
     @router.post("/unlettrage-by-invoice/{invoice_id}")
     async def unlettrage_by_invoice(invoice_id: str):
         """Delettre la (ou les) transaction(s) bancaire(s) lettree(s) a une facture."""
