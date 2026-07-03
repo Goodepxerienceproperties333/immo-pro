@@ -246,6 +246,60 @@ export default function DashboardPage() {
                     }`}>
                       <div className="font-semibold text-slate-700">{a.title}</div>
                       <div className="text-slate-500">Categorie : <span className="font-mono">{a.category}</span></div>
+                      {Array.isArray(a.items) && a.items.length > 0 && (
+                        <ul className="mt-1.5 space-y-0.5" data-testid={`health-items-${a.category}`}>
+                          {a.items.map((it, j) => (
+                            <li key={j} className="text-slate-600 pl-2 border-l border-slate-200">
+                              {a.category === 'orphans' && (
+                                <span>
+                                  <span className="font-mono font-semibold text-slate-800">{it.account}</span>
+                                  {it.name ? ` - ${it.name}` : ''}
+                                  {typeof it.balance === 'number' && (
+                                    <span className="ml-1 text-slate-500">
+                                      (solde : {it.balance.toFixed(2)} EUR, {it.type === 'supplier' ? 'fournisseur' : 'proprietaire'})
+                                    </span>
+                                  )}
+                                </span>
+                              )}
+                              {a.category === 'duplicates' && (
+                                <span>
+                                  <span className="font-semibold">{it.name || it.title || 'Doublon'}</span>
+                                  {it.count > 1 && <span className="ml-1 text-slate-500">({it.count} occurrences)</span>}
+                                </span>
+                              )}
+                              {a.category === 'unbalanced' && (
+                                <span>
+                                  <span className="font-mono">{it.reference || it.id}</span>
+                                  {it.date && <span className="ml-1 text-slate-500">{it.date}</span>}
+                                  <span className="ml-1">- ecart {it.ecart?.toFixed?.(2)} EUR</span>
+                                </span>
+                              )}
+                              {a.category === 'invoices_over_60d' && (
+                                <span>
+                                  <span className="font-semibold">{it.supplier_name || 'Fournisseur'}</span>
+                                  {it.invoice_number && <span className="ml-1 font-mono">#{it.invoice_number}</span>}
+                                  {typeof it.amount === 'number' && <span className="ml-1">- {it.amount.toFixed(2)} EUR</span>}
+                                  {it.days_overdue && <span className="ml-1 text-orange-700">({it.days_overdue}j)</span>}
+                                </span>
+                              )}
+                              {a.category === 'owners_overdue' && (
+                                <span>
+                                  <span className="font-semibold">{it.name || it.owner_name}</span>
+                                  {typeof it.balance === 'number' && <span className="ml-1">- {it.balance.toFixed(2)} EUR</span>}
+                                </span>
+                              )}
+                              {!['orphans','duplicates','unbalanced','invoices_over_60d','owners_overdue'].includes(a.category) && (
+                                <span className="font-mono text-slate-500">{JSON.stringify(it)}</span>
+                              )}
+                            </li>
+                          ))}
+                          {typeof a.count === 'number' && a.count > a.items.length && (
+                            <li className="text-slate-400 italic pl-2">
+                              ... et {a.count - a.items.length} autre(s)
+                            </li>
+                          )}
+                        </ul>
+                      )}
                     </div>
                   ))}
                 </div>
