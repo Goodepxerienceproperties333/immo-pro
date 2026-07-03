@@ -126,6 +126,12 @@ async def _test_mutation_prorata_e2e():
         "id": lot_id, "number": "A1", "owner_id": o1_id, "owner_ids": [o1_id],
         "copropriete_id": cid, "quotity": 1000.0,
     })
+    # iter90ab : mutation exige une cle de repartition par defaut avec le lot dedans
+    await db.distribution_keys.insert_one({
+        "id": "dk-iter76-default", "copropriete_id": cid, "name": "Generale",
+        "is_default": True, "key_type": "quotity",
+        "lots": [{"lot_id": lot_id, "share": 1000.0}],
+    })
     # Fund call trimestriel Q1 2026 (01/01 - 31/03), montant vendeur 600 EUR
     await db.fund_calls.insert_one({
         "id": fc_id,

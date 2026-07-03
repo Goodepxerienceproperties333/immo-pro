@@ -55,6 +55,16 @@ async def _run_grouped_cancel():
             {"id": cave, "number": "C1", "owner_id": o1_id, "owner_ids": [o1_id], "copropriete_id": cid, "quotity": 100.0, "parent_lot_id": appt},
             {"id": park, "number": "P1", "owner_id": o1_id, "owner_ids": [o1_id], "copropriete_id": cid, "quotity": 100.0, "parent_lot_id": appt},
         ])
+        # iter90ab : cle de repartition par defaut (obligatoire pour mutation)
+        await db.distribution_keys.insert_one({
+            "id": f"dk-iter83-{cid[:8]}", "copropriete_id": cid, "name": "Generale",
+            "is_default": True, "key_type": "quotity",
+            "lots": [
+                {"lot_id": appt, "share": 800.0},
+                {"lot_id": cave, "share": 100.0},
+                {"lot_id": park, "share": 100.0},
+            ],
+        })
         # Solde 100 = 1000 EUR
         await db.journal_entries.insert_one({
             "id": str(uuid.uuid4()), "journal_type": "OD", "date": "2026-01-01", "copropriete_id": cid,

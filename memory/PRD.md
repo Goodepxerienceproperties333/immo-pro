@@ -12,6 +12,50 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 ## Implemented
+### Iter90ab (Feb 2026) - Mutation : fonds de roulement calcule sur la cle par defaut
+
+**Regle metier appliquee** :
+- **Provisions** -> cle par ligne budgetaire (via `_compute_lot_amount_in_call`)
+  INCHANGE.
+- **Fonds de roulement / reserve** -> cle de repartition GENERALE (celle
+  marquee `is_default=true`), avec possibilite de derogation future via
+  distribution_key_id override.
+- `lot.quotity` n'est plus la source de verite pour la mutation.
+
+**Backend** (`routes/properties.py::_compute_mutation_breakdown`) :
+- Lookup de la cle `is_default=true` sur la copropriete. Levee d'erreur 400
+  claire si absente ("Marquez une cle comme 'par defaut' dans Factures >
+  Cles de repartition").
+- Verification que le lot est dans la cle. Sinon 400 avec message identifiant
+  le lot et la cle.
+- `roulement_quota = fonds_roul_total * (lot_share_in_key / key_total_quotity)`.
+- Retour : `lot_share_in_key`, `key_total_quotity`, `default_key_name`
+  (au lieu de `lot_quotity`, `total_quotity` supprimes).
+
+**Frontend** (`pages/LotsPage.js`) :
+- Preview simple : "Part du lot dans la cle par defaut ({default_key_name})"
+  au lieu de "Quotites lot / total ACP".
+- Preview groupee (cascade parent+enfants) : colonne "Part / cle" au lieu
+  de "Quotite".
+
+**Tests** :
+- `/app/backend/tests/test_iter90ab_mutation_roulement_default_key.py` (3/3) :
+  * `test_roulement_uses_default_key_not_quotity` : lot quotity 1000 mais
+    share=500/1500 dans la cle -> 3000 * 500/1500 = 1000 EUR (et non 2000
+    qui serait le calcul quotity). Verifie aussi que les anciens champs
+    `lot_quotity`/`total_quotity` ne sont plus exposes.
+  * `test_roulement_400_when_no_default_key` : absence de is_default = 400.
+  * `test_roulement_400_when_lot_absent_from_default_key` : lot pas dans
+    la cle = 400 avec identification du lot.
+
+**Regression** : Tests iter76/iter83/iter85 (mutation prorata + grouped
+cancel + PDF decompte) mis a jour pour creer une cle par defaut dans leur
+fixture. 11/11 verts. Total 14/14 tests mutation passent.
+
+**Evolution future prevue** : parametre optionnel `distribution_key_id` sur
+l'endpoint de mutation pour derogation ponctuelle (a implementer si
+demande par l'utilisateur).
+
 ### Iter90aa (Feb 2026) - Dropdowns cles de repartition : filtrage + pre-selection is_default
 
 **Ticket user** : "Ne reprendre dans le drop down du budget et des factures

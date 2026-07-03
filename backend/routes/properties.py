@@ -832,13 +832,45 @@ def create_properties_router(db):
         ]
         agg = await db.journal_entries.aggregate(roul_pipeline).to_list(1)
         fonds_roul_total = round((agg[0]["credit"] - agg[0]["debit"]) if agg else 0.0, 2)
-        all_lots = await db.lots.find({"copropriete_id": copro_id}, {"_id": 0, "quotity": 1, "id": 1, "owner_id": 1}).to_list(10000)
-        total_quotity = round(sum(float(lt.get("quotity", 0) or 0) for lt in all_lots), 6)
-        lot_quotity = float(lot.get("quotity", 0) or 0)
-        if total_quotity > 0 and lot_quotity > 0 and fonds_roul_total > 0:
-            roulement_quota = round(fonds_roul_total * (lot_quotity / total_quotity), 2)
+
+        # iter90ab : fonds de roulement / reserve = cle de repartition GENERALE
+        # (celle marquee is_default=true), et non plus lot.quotity.
+        # Regle metier : provisions -> cle par ligne budgetaire (via
+        # _compute_lot_amount_in_call, INCHANGE). Roulement/reserve -> cle par
+        # defaut, avec possibilite d'exception future.
+        default_key = await db.distribution_keys.find_one(
+            {"copropriete_id": copro_id, "is_default": True},
+            {"_id": 0},
+        )
+        if not default_key or not default_key.get("lots"):
+            raise HTTPException(
+                400,
+                "Aucune cle de repartition par defaut trouvee (ou cle sans lots). "
+                "Marquez une cle comme 'par defaut' dans Factures > Cles de repartition.",
+            )
+        lot_entry_in_key = next(
+            (kl for kl in default_key["lots"] if kl.get("lot_id") == lot_id_this),
+            None,
+        )
+        if not lot_entry_in_key:
+            raise HTTPException(
+                400,
+                f"Le lot {lot.get('number', '?')} n'est pas dans la cle par defaut "
+                f"\u00ab {default_key.get('name', '?')} \u00bb. Ajoutez-le a la cle ou "
+                f"definissez une exception pour cette mutation.",
+            )
+        lot_share_in_key = float(lot_entry_in_key.get("share", 0) or 0)
+        key_total_quotity = round(
+            sum(float(kl.get("share", 0) or 0) for kl in default_key["lots"]),
+            6,
+        )
+        if key_total_quotity > 0 and lot_share_in_key > 0 and fonds_roul_total > 0:
+            roulement_quota = round(fonds_roul_total * (lot_share_in_key / key_total_quotity), 2)
         else:
             roulement_quota = 0.0
+
+        # conservé pour la suite (prorata appels, etc.)
+        all_lots = await db.lots.find({"copropriete_id": copro_id}, {"_id": 0, "quotity": 1, "id": 1, "owner_id": 1}).to_list(10000)
 
         # Pre-fetch fiscal years for period resolution
         fy_by_id: dict = {}
@@ -928,10 +960,11 @@ def create_properties_router(db):
         total_transfer = round(roulement_quota + current_prorata_total, 2)
 
         return {
-            # Section 1 : Fonds de roulement
+            # Section 1 : Fonds de roulement (base = cle de repartition par defaut)
             "fonds_roulement_total": fonds_roul_total,
-            "lot_quotity": lot_quotity,
-            "total_quotity": total_quotity,
+            "lot_share_in_key": lot_share_in_key,
+            "key_total_quotity": key_total_quotity,
+            "default_key_name": default_key.get("name", ""),
             "roulement_quota": roulement_quota,
             # Section 2 : Prorata appel en cours (portion apres vente, transferee
             # de l'acquereur vers le vendeur via OD)

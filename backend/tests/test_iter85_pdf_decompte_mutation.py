@@ -69,6 +69,12 @@ async def _setup():
         "id": f"ghost-{uuid.uuid4()}", "number": "B3",
         "copropriete_id": cid, "quotity": 500.0,
     })
+    # iter90ab : cle de repartition par defaut (obligatoire pour mutation)
+    await db.distribution_keys.insert_one({
+        "id": f"dk-iter85-{cid[:8]}", "copropriete_id": cid, "name": "Generale",
+        "is_default": True, "key_type": "quotity",
+        "lots": [{"lot_id": lot_id, "share": 500.0}],
+    })
     # Solde fonds de roulement et appel Q1 pour avoir un prorata
     await db.journal_entries.insert_one({
         "id": str(uuid.uuid4()), "journal_type": "OD", "date": "2026-01-01",
@@ -103,6 +109,7 @@ async def _cleanup(ctx):
     await db.fund_calls.delete_many({"copropriete_id": ctx["cid"]})
     await db.pcmn_accounts.delete_many({"copropriete_id": ctx["cid"]})
     await db.journal_entries.delete_many({"copropriete_id": ctx["cid"]})
+    await db.distribution_keys.delete_many({"copropriete_id": ctx["cid"]})
 
 
 def _get_endpoint(db, route_path: str):

@@ -461,13 +461,13 @@ function MutationDialog({ lot, owners, ownersRefresh, onClose, onDone }) {
               {preview.per_lot_breakdowns && preview.per_lot_breakdowns.length > 0 && (
                 <table className="w-full mt-2 text-[11px] bg-white rounded">
                   <thead className="text-slate-500">
-                    <tr><th className="text-left px-2 py-1">Lot</th><th className="text-right px-2 py-1">Quotite</th><th className="text-right px-2 py-1">Roulement</th><th className="text-right px-2 py-1">Prorata courant</th><th className="text-right px-2 py-1">Transfert OD</th></tr>
+                    <tr><th className="text-left px-2 py-1">Lot</th><th className="text-right px-2 py-1">Part / cle</th><th className="text-right px-2 py-1">Roulement</th><th className="text-right px-2 py-1">Prorata courant</th><th className="text-right px-2 py-1">Transfert OD</th></tr>
                   </thead>
                   <tbody>
                     {preview.per_lot_breakdowns.map((b, i) => (
                       <tr key={i} className="border-t border-slate-100">
                         <td className="px-2 py-1 font-mono">{b.lot_number}</td>
-                        <td className="text-right px-2 py-1 font-mono">{b.lot_quotity}</td>
+                        <td className="text-right px-2 py-1 font-mono">{b.lot_share_in_key}</td>
                         <td className="text-right px-2 py-1 font-mono">{b.roulement_quota?.toFixed(2)}</td>
                         <td className="text-right px-2 py-1 font-mono">{b.current_period_prorata?.toFixed(2)}</td>
                         <td className="text-right px-2 py-1 font-mono font-semibold text-indigo-700">{b.total_transfer?.toFixed(2)}</td>
@@ -525,8 +525,8 @@ function MutationDialog({ lot, owners, ownersRefresh, onClose, onDone }) {
                 <div className="grid grid-cols-2 gap-2 text-sm">
                   <div className="text-slate-600">Solde fonds de roulement (cpt 100, ACP)</div>
                   <div className="text-right font-mono">{preview.fonds_roulement_total?.toFixed(2)} EUR</div>
-                  <div className="text-slate-600">Quotites lot / total ACP</div>
-                  <div className="text-right font-mono">{preview.lot_quotity} / {preview.total_quotity}</div>
+                  <div className="text-slate-600">Part du lot dans la cle par defaut ({preview.default_key_name || 'Generale'})</div>
+                  <div className="text-right font-mono">{preview.lot_share_in_key} / {preview.key_total_quotity}</div>
                   <div className="text-slate-900 font-semibold border-t pt-2">Quote-part transferee</div>
                   <div className="text-right font-mono font-bold border-t pt-2 text-emerald-700" data-testid="mutation-roulement-quota">
                     {preview.roulement_quota?.toFixed(2)} EUR
