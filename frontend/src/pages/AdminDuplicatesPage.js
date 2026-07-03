@@ -22,7 +22,16 @@ const TAB_LABELS = {
 
 export default function AdminDuplicatesPage() {
   const { isSuperadmin, isAdmin, user } = useAuth();
-  const [tab, setTab] = useState('suppliers');
+  // iter90ad : accepte ?tab=owners ou ?tab=suppliers en query pour deep-link
+  // depuis les pages Proprietaires / Fournisseurs.
+  const initialTab = (() => {
+    try {
+      const p = new URLSearchParams(window.location.search).get('tab');
+      if (p === 'owners' || p === 'suppliers' || p === 'users') return p;
+    } catch (e) { /* noop */ }
+    return 'suppliers';
+  })();
+  const [tab, setTab] = useState(initialTab);
   const [copros, setCopros] = useState([]);
   const [copropro, setCoproId] = useState(''); // '' = toutes mes ACPs
   const [loading, setLoading] = useState(false);

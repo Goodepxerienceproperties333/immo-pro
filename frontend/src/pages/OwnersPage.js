@@ -25,14 +25,16 @@ export default function OwnersPage() {
   const [showAll, setShowAll] = useState(false);
 
   const load = useCallback(async () => {
-    // Tant que selectedCopro est vide, ne pas appeler /owners
+    // iter90ad : "Afficher tous" = ignore selectedCopro et charge en global.
+    // Utilise `syndic_wide=true` pour bypasser aussi le header X-Copropriete-Id
+    // injecte par le middleware (indispensable, sinon retour du scope ACP seul).
+    if (showAll) {
+      const { data } = await api.get('/owners', { params: { syndic_wide: true } });
+      setOwners(data);
+      return;
+    }
     if (!selectedCopro || selectedCopro === 'all') {
-      if (showAll && selectedCopro === 'all') {
-        const { data } = await api.get('/owners', { params: {} });
-        setOwners(data);
-      } else {
-        setOwners([]);
-      }
+      setOwners([]);
       return;
     }
     const params = { copropriete_id: selectedCopro };
@@ -113,24 +115,32 @@ export default function OwnersPage() {
           <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
           <Input placeholder="Rechercher nom, email, VCS..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9" data-testid="owners-search" />
         </div>
-        {selectedCopro && selectedCopro !== 'all' && (
-          <label className="flex items-center gap-2 text-xs text-slate-600 cursor-pointer" data-testid="owners-show-all-toggle">
-            <input type="checkbox" checked={showAll} onChange={e => setShowAll(e.target.checked)} className="rounded" />
-            <span>Afficher tous les proprietaires (toutes ACPs)</span>
-          </label>
-        )}
+        <label className="flex items-center gap-2 text-xs text-slate-600 cursor-pointer" data-testid="owners-show-all-toggle">
+          <input type="checkbox" checked={showAll} onChange={e => setShowAll(e.target.checked)} className="rounded" />
+          <span>Afficher tous les proprietaires (toutes ACPs)</span>
+        </label>
         <Badge variant="outline" className="text-[11px] bg-slate-50">
-          {filtered.length} proprietaire{filtered.length > 1 ? 's' : ''}{!showAll && selectedCopro && selectedCopro !== 'all' ? ' (ACP active)' : ''}
+          {filtered.length} proprietaire{filtered.length > 1 ? 's' : ''}{!showAll && selectedCopro && selectedCopro !== 'all' ? ' (ACP active)' : ' (toutes ACPs)'}
         </Badge>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => window.location.assign('/admin/duplicates?tab=owners')}
+          className="text-xs border-orange-300 text-orange-700 hover:bg-orange-50"
+          data-testid="owners-detect-duplicates-btn"
+        >
+          <AlertTriangle size={13} className="mr-1.5" /> Detecter les doublons
+        </Button>
       </div>
       <div className="bg-white rounded-md border border-slate-200 overflow-hidden">
-        {!selectedCopro || selectedCopro === '' ? (
+        {(!showAll && (!selectedCopro || selectedCopro === '')) ? (
           <div className="text-center py-12 px-6" data-testid="owners-no-acp-selected">
             <AlertTriangle size={32} className="mx-auto text-amber-500 mb-3" />
             <p className="text-sm text-slate-700 font-medium">Selectionnez une ACP</p>
             <p className="text-xs text-slate-500 mt-1">
               La liste des proprietaires est cloisonnee par ACP (chinese wall).
-              Utilisez le selecteur en haut a droite pour choisir une ACP.
+              Utilisez le selecteur en haut a droite pour choisir une ACP,
+              ou cochez &laquo; Afficher tous &raquo; pour une vue globale.
             </p>
           </div>
         ) : (

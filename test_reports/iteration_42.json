@@ -1,0 +1,36 @@
+{
+  "summary": "iter90ad : Detection et fusion doublons owners/suppliers - Backend + Frontend testes. Backend: 6/6 nouveaux tests passent (detection global scope, merge owners avec migration lots, merge suppliers, guard keep_id != remove_ids). Frontend: 11/11 assertions passent (toggle 'Afficher tous', bouton 'Detecter doublons' + navigation avec tab correct sur /owners et /suppliers, pas d'auto-injection copropriete_id sur /api/admin/duplicates). Confirme visuellement 35 groupes doublons fournisseurs (AXA Belgium x13) et 466 proprietaires dans le scope superadmin. Regression: 52/56 tests iter76/83/85/90ab/90ac passent - 4 tests iter83 pre-existants echouent (unrelated a iter90ad, probleme setup 'Aucune cle de repartition par defaut').",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "test_iter83_acacia_teuwen_scenario, test_iter83_linked_lots, test_iter83_pdf_3_lots_via_key, test_iter83_prorata_lot_share", "issue": "Tests echouent avec HTTPException 400 'Aucune cle de repartition par defaut trouvee'. Pre-existant, non lie a iter90ad. A investiguer separement (setup DB de test manquant une cle default)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter90ad_duplicates.py",
+    "/app/test_reports/pytest/iter90ad.xml",
+    "/app/test_reports/pytest/iter90ad_regression.xml"
+  ],
+  "action_items": [
+    "Investiguer les 4 tests iter83 en echec (Aucune cle de repartition par defaut) - non bloquant pour iter90ad mais regression pre-existante a corriger."
+  ],
+  "critical_code_review_comments": [
+    "duplicates.py::merge_owners est bien structure (5 etapes reassign + suppression + enrichissement + chinese wall check). RAS.",
+    "suppliers.py::merge_suppliers ne migre PAS les journal_entries.lines[].third_party_id contrairement a owners/merge. Documente dans le docstring comme volontaire ('preserver ecritures historiques') - a valider avec le user car pourrait laisser orphelins sur les comptes tiers.",
+    "GLOBAL_PATH_PREFIXES dans api.js inclut bien '/admin/duplicates' -> plus d'auto-injection copropriete_id (confirme via network capture)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter90ad_duplicates.py (nouveau)"
+  ],
+  "success_rate": {"backend": "100% (6/6 nouveaux) + 93% regression (52/56)", "frontend": "100% (11/11)"},
+  "test_credentials": "admin@copro.be / admin123 (superadmin)",
+  "seed_data_creation": "Chaque test cree une ACP temporaire (TEST_iter90ad_<uuid>) + 2 owners/suppliers + 1 lot. Fixture module-scoped supprime l'ACP en fin de suite. Aucun impact sur les vrais doublons AXA Belgium/Vendeur.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Feature iter90ad (detection + fusion doublons) est operationnelle en front et back. Les 4 tests iter83 en echec sont pre-existants (probleme setup 'Aucune cle de repartition par defaut'), a investiguer separement. La page /admin/duplicates fonctionne bien en superadmin (466 owners, 202 suppliers, 35 groupes doublons detectes)."
+}

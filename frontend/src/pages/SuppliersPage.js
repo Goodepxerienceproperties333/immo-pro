@@ -82,9 +82,23 @@ export default function SuppliersPage() {
         <div><h1 className="page-title"><Truck size={24} className="inline mr-2" />Fournisseurs</h1><p className="page-subtitle">Gestion des fournisseurs et prestataires</p></div>
         <Button onClick={openCreate} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="create-supplier-btn"><Plus size={16} className="mr-2" /> Nouveau</Button>
       </div>
-      <div className="mb-4 relative max-w-sm">
-        <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-        <Input placeholder="Rechercher..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9" data-testid="suppliers-search" />
+      <div className="mb-4 flex items-center gap-3 flex-wrap">
+        <div className="relative max-w-sm flex-1">
+          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <Input placeholder="Rechercher..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9" data-testid="suppliers-search" />
+        </div>
+        <span className="text-[11px] text-slate-500 italic hidden md:inline">
+          Vue globale : tous les fournisseurs de vos ACPs
+        </span>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => window.location.assign('/admin/duplicates?tab=suppliers')}
+          className="text-xs border-orange-300 text-orange-700 hover:bg-orange-50"
+          data-testid="suppliers-detect-duplicates-btn"
+        >
+          <AlertTriangle size={13} className="mr-1.5" /> Detecter les doublons
+        </Button>
       </div>
       <div className="bg-white rounded-md border border-slate-200 overflow-hidden">
         <Table>
