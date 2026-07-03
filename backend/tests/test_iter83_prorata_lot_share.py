@@ -63,6 +63,14 @@ async def _run():
         {"id": a102, "number": "A102", "owner_id": o1_id, "owner_ids": [o1_id], "copropriete_id": cid, "quotity": 300.0},
         {"id": a103, "number": "A103", "owner_id": o1_id, "owner_ids": [o1_id], "copropriete_id": cid, "quotity": 100.0},
     ])
+    # iter90ab : cle par defaut obligatoire pour mutation
+    await db.distribution_keys.insert_one({
+        "id": f"dk-prorata-{cid[:8]}", "copropriete_id": cid, "name": "Generale",
+        "is_default": True, "key_type": "quotity",
+        "lots": [{"lot_id": a101, "share": 600.0},
+                 {"lot_id": a102, "share": 300.0},
+                 {"lot_id": a103, "share": 100.0}],
+    })
     # 1 appel Q1 (jan-mar 2026) avec distribution PAR LOT
     await db.fund_calls.insert_one({
         "id": f"fc-{uuid.uuid4()}",

@@ -68,6 +68,14 @@ async def _setup_acp_with_3_lots():
         {"id": cave_id, "number": "C10", "owner_id": o1_id, "owner_ids": [o1_id], "copropriete_id": cid, "quotity": 100.0, "lot_type": "Cave"},
         {"id": park_id, "number": "P5", "owner_id": o1_id, "owner_ids": [o1_id], "copropriete_id": cid, "quotity": 100.0, "lot_type": "Parking"},
     ])
+    # iter90ab : cle par defaut obligatoire pour mutation
+    await db.distribution_keys.insert_one({
+        "id": f"dk-link-{cid[:8]}", "copropriete_id": cid, "name": "Generale",
+        "is_default": True, "key_type": "quotity",
+        "lots": [{"lot_id": appt_id, "share": 800.0},
+                 {"lot_id": cave_id, "share": 100.0},
+                 {"lot_id": park_id, "share": 100.0}],
+    })
     # Solde fonds de roulement = 5000 EUR -> appt 4000 + cave 500 + park 500 (quote-parts proportionnelles aux quotities)
     await db.journal_entries.insert_one({
         "id": str(uuid.uuid4()), "journal_type": "OD", "date": "2026-01-01", "copropriete_id": cid,

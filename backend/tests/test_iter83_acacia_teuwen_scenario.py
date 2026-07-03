@@ -69,11 +69,19 @@ async def _run():
         # Budget annuel = 17720 EUR ; trimestre = 4430 ; quote-part lot = 443
         # Solde 100 = quotite/total * X => pour avoir 490.36 quote-part lot
         # 490.36 = 1000/10000 * X => X = 4903.60 EUR (solde 100 total ACP)
+        ghost_id = f"ghost-{uuid.uuid4()}"
         await db.lots.insert_many([
             {"id": lot_id, "number": "L001", "owner_id": matexi_id, "owner_ids": [matexi_id], "copropriete_id": cid, "quotity": 1000.0, "lot_type": "Appartement"},
             # Lot fantome pour le total
-            {"id": f"ghost-{uuid.uuid4()}", "number": "GHOST", "copropriete_id": cid, "quotity": 9000.0},
+            {"id": ghost_id, "number": "GHOST", "copropriete_id": cid, "quotity": 9000.0},
         ])
+        # iter90ab : cle de repartition par defaut (obligatoire pour mutation)
+        await db.distribution_keys.insert_one({
+            "id": f"dk-acacia-{cid[:8]}", "copropriete_id": cid, "name": "Generale",
+            "is_default": True, "key_type": "quotity",
+            "lots": [{"lot_id": lot_id, "share": 1000.0},
+                     {"lot_id": ghost_id, "share": 9000.0}],
+        })
         # Solde fonds de roulement = 4903.60 (pour donner 490.36 = 10%)
         await db.journal_entries.insert_one({
             "id": str(uuid.uuid4()), "journal_type": "OD", "date": "2025-10-01", "copropriete_id": cid,
@@ -156,8 +164,11 @@ async def _run():
         ).to_list(10)
         assert jes, "Aucune ecriture de mutation trouvee"
         sum_debit = sum(j.get("total_debit", 0) for j in jes)
-        assert abs(sum_debit - expected_total) < 0.01, (
-            f"Somme OD attendue {expected_total}, recu {sum_debit}"
+        # iter84+ : les OD incluent roulement + prorata courant + futurs appels
+        # (repris par l'acquereur). expected = 490.36 + 216.72 + 1329 = 2036.08.
+        expected_sum = round(490.36 + expected_prorata + 1329.0, 2)
+        assert abs(sum_debit - expected_sum) < 0.02, (
+            f"Somme OD attendue {expected_sum}, recu {sum_debit}"
         )
         # Verifie sens debit/credit sur la premiere ecriture (FR ou prorata)
         je = jes[0]

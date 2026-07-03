@@ -12,6 +12,53 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 ## Implemented
+### Iter90ad (Feb 2026) - Menage doublons proprietaires + fournisseurs cross-ACP
+
+**Ticket user** : "il faut aussi permettre d'avoir acces a la base de donnee
+des proprietaires et fournisseurs de l'ensemble des ACP sans filtre. je
+vois 2 fois le meme proprietaire et j'aimerais faire le menage idem pour
+les fournisseurs."
+
+**User choix (via ask_human)** :
+- Doublons owner : nom similaire + email OU VCS identique
+- Doublons supplier : N BCE uniquement
+- Fusion : merge complet (migration references + suppression source)
+- Page dediee /admin/duplicates avec preview
+
+**Frontend** :
+- `pages/OwnersPage.js` : correction du bug du toggle "Afficher tous". Avant
+  requerait `selectedCopro==='all' && showAll` -> ne marchait jamais avec
+  ACP specifique choisie. Maintenant `showAll` seul suffit, envoie
+  `syndic_wide=true` pour bypasser le filtre backend. Badge dynamique
+  "(ACP active)" ou "(toutes ACPs)". Bouton "Detecter les doublons"
+  (data-testid="owners-detect-duplicates-btn") -> /admin/duplicates?tab=owners.
+- `pages/SuppliersPage.js` : label "Vue globale : tous les fournisseurs de
+  vos ACPs" + bouton "Detecter les doublons".
+- `pages/AdminDuplicatesPage.js` : lit `?tab=` de l'URL au mount pour deep
+  link direct sur owners ou suppliers.
+- `lib/api.js` : ajout de `/admin/duplicates` a `GLOBAL_PATH_PREFIXES` pour
+  couper l'auto-injection copropriete_id (essentiel pour scan cross-ACP).
+
+**Backend** : deja implemente (routes/duplicates.py + routes/suppliers.py::
+merge_suppliers). RAS pour cette iteration.
+
+**Regression fix concomitante** : les 4 tests iter83 (acacia_teuwen,
+linked_lots, pdf_3_lots_via_key, prorata_lot_share) qui echouaient depuis
+iter90ab (mutation exige cle par defaut) sont mis a jour pour creer la
+fixture. Test acacia_teuwen : assertion sum_debit ajustee pour inclure
+future_calls (comportement iter84+).
+
+**Tests** :
+- E2E : `test_iter90ad_duplicates.py` (6/6) - detection global scope, merge
+  owners avec migration lots, merge suppliers, guard keep_id != remove_ids.
+- Regression complete mutation : 28/28 tests passent
+  (iter76 + iter83 x7 + iter85 + iter90ab + iter90ac).
+
+**Feedback visuel utilisateur** : 35 groupes doublons fournisseurs
+detectes (AXA Belgium x13 !), 84 groupes doublons proprietaires (Vendeur
+x30 dus a import). 437 proprietaires et 198 fournisseurs dans le scope
+superadmin.
+
 ### Iter90ac (Feb 2026) - Exclusion explicite de lots sur les cles de repartition
 
 **Ticket user** : "Ajouter le concept d'exclusion sur les lots d'une cle de

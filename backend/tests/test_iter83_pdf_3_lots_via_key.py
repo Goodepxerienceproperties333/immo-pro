@@ -80,27 +80,30 @@ async def _run():
         # Quotites dans le BATIMENT (pour fonds de roulement) :
         #   appt = 870, cave = 50, park = 80  -> total 1000 sur 10000 (groupe Matexi)
         # On ajoute des "autres lots" pour completer a 10000 (autres proprietaires)
+        ghost_id = f"o-{uuid.uuid4()}"
         await db.lots.insert_many([
             {"id": appt_id, "number": "001", "owner_id": matexi_id, "owner_ids": [matexi_id], "copropriete_id": cid, "quotity": 870.0, "lot_type": "Appartement"},
             {"id": cave_id, "number": "C1", "owner_id": matexi_id, "owner_ids": [matexi_id], "copropriete_id": cid, "quotity": 50.0, "lot_type": "Cave"},
             {"id": park_id, "number": "Pe01", "owner_id": matexi_id, "owner_ids": [matexi_id], "copropriete_id": cid, "quotity": 80.0, "lot_type": "Parking"},
             # Autres lots dans l'ACP (proprietaires fictifs) pour atteindre 10000 quotites totales
-            {"id": f"o-{uuid.uuid4()}", "number": "GHOST", "copropriete_id": cid, "quotity": 9000.0},
+            {"id": ghost_id, "number": "GHOST", "copropriete_id": cid, "quotity": 9000.0},
         ])
 
         # Cle "Charges communes generales" qui couvre TOUS les lots
         # Repartition specifique :
         #   appt = 870, cave = 50, park = 80, ghost = 9000  (= meme que quotites)
+        # iter90ab : marquee is_default=True pour permettre les mutations
         await db.distribution_keys.insert_one({
             "id": key_id,
             "name": "Charges communes generales",
             "copropriete_id": cid,
             "key_type": "manual",
+            "is_default": True,
             "lots": [
                 {"lot_id": appt_id, "lot_number": "001", "share": 870},
                 {"lot_id": cave_id, "lot_number": "C1", "share": 50},
                 {"lot_id": park_id, "lot_number": "Pe01", "share": 80},
-                {"lot_id": "GHOST", "lot_number": "GHOST", "share": 9000},
+                {"lot_id": ghost_id, "lot_number": "GHOST", "share": 9000},
             ],
         })
 
