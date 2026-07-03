@@ -12,6 +12,33 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 ## Implemented
+### Iter90aa (Feb 2026) - Dropdowns cles de repartition : filtrage + pre-selection is_default
+
+**Ticket user** : "Ne reprendre dans le drop down du budget et des factures
+que les cles de repartitions crees et mettre la cle selectionne par defaut
+en tant que par defaut dans le champ."
+
+**Frontend** :
+- `FiscalYearPage.js` : useMemo `defaultKeyId` (is_default || premiere cle) ;
+  `addBudgetLine` pre-remplit avec defaultKeyId ; dropdown des lignes de
+  budget retire l'option hardcodee "Tantiemes (defaut)" ; suffixe " (defaut)"
+  affiche sur la cle is_default.
+- `InvoicesPage.js` : useMemo `defaultKeyId` ; openCreateInvoice initialise
+  invForm.distribution_key_id avec defaultKeyId ; dropdown header
+  (inv-dist-key) et dropdown lignes multi-natures (invoice-line-key-*)
+  retirent les options "Aucune" et "—" hardcodees ; extraction IA multi-
+  lignes utilise defaultKeyId.
+- `BudgetWizard.js` : useMemo `defaultKeyId` + useEffect qui auto-remplit
+  reserveKeyId & roulKeyId (idempotent : ne remplace pas la saisie user) ;
+  dropdowns reserve/roulement retirent "Tantiemes (defaut)" hardcode ;
+  suffixe " (defaut)" affiche.
+
+**Comportement pour copro sans cle** : placeholder "Aucune cle - creez-en
+une" (option desactivee) au lieu d'un fallback trompeur.
+
+**Test coverage** : Testing agent - 15/15 UI checks passed (Iter40).
+Setup fixture : copro 9e1dbd5a, "Charges communes" set as is_default.
+
 ### Iter90z (Feb 2026) - OCR Tesseract fallback pour PDFs bancaires scannes
 
 **Ticket user (P3)** : Certains extraits de compte bancaires sont fournis en
