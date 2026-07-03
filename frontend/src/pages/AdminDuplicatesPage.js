@@ -1,3 +1,4 @@
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { useEffect, useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import api from '@/lib/api';
@@ -39,6 +40,10 @@ export default function AdminDuplicatesPage() {
   // Selection par groupe : { [groupIdx]: keepMemberId }
   const [picks, setPicks] = useState({});
   const [merging, setMerging] = useState(null); // groupIdx en cours de fusion
+  // iter90ae : preview de fusion avant confirmation (evite les degats sur gros clusters)
+  const [preview, setPreview] = useState(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [pendingMerge, setPendingMerge] = useState(null); // {groupIdx, keepId, removeIds}
 
   // Charge la liste des ACPs accessibles au user
   useEffect(() => {
@@ -103,8 +108,26 @@ export default function AdminDuplicatesPage() {
       toast.info('La fusion des utilisateurs doit etre faite manuellement depuis la page Utilisateurs (auth-critique).');
       return;
     }
+    // Etape 1 : PREVIEW - obtenir les compteurs de references AVANT fusion
+    const previewUrl = tab === 'suppliers' ? '/suppliers/merge/preview' : '/admin/duplicates/owners/merge/preview';
+    setPreviewLoading(true);
+    try {
+      const { data: p } = await api.post(previewUrl, { keep_id: keepId, remove_ids: removeIds });
+      setPreview(p);
+      setPendingMerge({ groupIdx, keepId, removeIds });
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Echec de la prevision de fusion');
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
+  const confirmMerge = async () => {
+    if (!pendingMerge) return;
+    const { groupIdx, keepId, removeIds } = pendingMerge;
     const url = tab === 'suppliers' ? '/suppliers/merge' : '/admin/duplicates/owners/merge';
     setMerging(groupIdx);
+    setPreview(null); setPendingMerge(null);
     try {
       const { data: r } = await api.post(url, { keep_id: keepId, remove_ids: removeIds });
       toast.success(r.message || 'Fusion effectuee', {
@@ -120,6 +143,11 @@ export default function AdminDuplicatesPage() {
     } finally {
       setMerging(null);
     }
+  };
+
+  const cancelMerge = () => {
+    setPreview(null);
+    setPendingMerge(null);
   };
 
   const renderSupplierMember = (m, isKeep, onPick) => (
@@ -341,13 +369,15 @@ export default function AdminDuplicatesPage() {
                             {tab !== 'users' ? (
                               <Button
                                 size="sm"
-                                disabled={!canMerge || isMerging}
+                                disabled={!canMerge || isMerging || previewLoading}
                                 onClick={() => doMerge(idx, g)}
                                 className="bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50"
                                 data-testid={`dup-merge-btn-${idx}`}
                               >
                                 {isMerging ? (
                                   <><Loader2 size={12} className="mr-1 animate-spin" /> Fusion...</>
+                                ) : previewLoading && pendingMerge?.groupIdx === idx ? (
+                                  <><Loader2 size={12} className="mr-1 animate-spin" /> Analyse...</>
                                 ) : (
                                   <><Merge size={12} className="mr-1" /> Fusionner ({g.members.length - 1} a absorber)</>
                                 )}
@@ -373,6 +403,109 @@ export default function AdminDuplicatesPage() {
           )}
         </TabsContent>
       </Tabs>
+
+      {/* iter90ae : Dialog de confirmation avec preview des migrations */}
+      <Dialog open={!!preview} onOpenChange={(open) => { if (!open) cancelMerge(); }}>
+        <DialogContent className="max-w-2xl" data-testid="merge-preview-dialog">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangle size={20} className="text-amber-600" />
+              Confirmer la fusion
+            </DialogTitle>
+          </DialogHeader>
+          {preview && (
+            <div className="space-y-4 text-sm">
+              <div className="bg-emerald-50 border border-emerald-200 rounded-md p-3">
+                <div className="text-xs text-emerald-700 font-semibold mb-1">FICHE CONSERVEE</div>
+                <div className="font-semibold text-emerald-900">{preview.keep.name || '(sans nom)'}</div>
+                <div className="text-xs text-slate-600 mt-1 font-mono">
+                  {preview.keep.email || preview.keep.bce_number || preview.keep.vcs_code || 'id: ' + (preview.keep.id || '').slice(0, 8)}
+                </div>
+              </div>
+
+              <div className="bg-red-50 border border-red-200 rounded-md p-3">
+                <div className="text-xs text-red-700 font-semibold mb-1">
+                  {preview.remove_count} FICHE(S) SUPPRIMEE(S) DEFINITIVEMENT
+                </div>
+                <ul className="text-xs text-slate-700 space-y-0.5 mt-1 max-h-32 overflow-y-auto">
+                  {preview.removes.map(r => (
+                    <li key={r.id} className="truncate">- {r.name || '(sans nom)'} <span className="text-slate-400 font-mono">({(r.id || '').slice(0, 8)})</span></li>
+                  ))}
+                </ul>
+              </div>
+
+              <div className="bg-blue-50 border border-blue-200 rounded-md p-3">
+                <div className="text-xs text-blue-700 font-semibold mb-2">
+                  {preview.total_refs > 0 ? (
+                    <>{preview.total_refs} REFERENCE(S) MIGREE(S) VERS LA FICHE CONSERVEE</>
+                  ) : (
+                    <>Aucune reference a migrer (fiches inutilisees)</>
+                  )}
+                </div>
+                {preview.total_refs > 0 && (
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs" data-testid="merge-preview-counts">
+                    {Object.entries(preview.migrations).map(([k, v]) => {
+                      if (!v) return null;
+                      const labels = {
+                        lots_as_sole_owner: 'Lots (proprietaire unique)',
+                        lots_as_co_owner: 'Lots (indivision)',
+                        bank_transactions_matched: 'Transactions bancaires',
+                        mutations_as_seller: 'Mutations (vendeur)',
+                        mutations_as_buyer: 'Mutations (acheteur)',
+                        journal_entry_lines: 'Ecritures comptables',
+                        fund_call_details: 'Details d\'appel de fonds',
+                        invoices: 'Factures',
+                      };
+                      return (
+                        <div key={k} className="flex justify-between">
+                          <span className="text-slate-600">{labels[k] || k}</span>
+                          <span className="font-mono font-semibold text-blue-700">{v}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {preview.will_enrich_fields && preview.will_enrich_fields.length > 0 && (
+                <div className="bg-amber-50 border border-amber-200 rounded-md p-3">
+                  <div className="text-xs text-amber-700 font-semibold mb-2">
+                    {preview.will_enrich_fields.length} champ(s) enrichi(s) automatiquement
+                  </div>
+                  <div className="text-[11px] text-slate-600 space-y-0.5 max-h-24 overflow-y-auto">
+                    {preview.will_enrich_fields.map((e, i) => (
+                      <div key={i} className="truncate">
+                        <span className="font-mono">{e.field}</span> = &laquo; {String(e.value).slice(0, 40)} &raquo; (depuis {e.from})
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="text-xs text-slate-500 italic">
+                ⚠ Action irreversible : les fiches supprimees ne pourront pas etre restaurees.
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={cancelMerge} data-testid="merge-preview-cancel">
+              Annuler
+            </Button>
+            <Button
+              onClick={confirmMerge}
+              className="bg-red-600 hover:bg-red-700 text-white"
+              data-testid="merge-preview-confirm"
+              disabled={merging !== null}
+            >
+              {merging !== null ? (
+                <><Loader2 size={14} className="mr-1.5 animate-spin" /> Fusion en cours...</>
+              ) : (
+                <><Merge size={14} className="mr-1.5" /> Confirmer la fusion</>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -12,6 +12,48 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 ## Implemented
+### Iter90ae (Feb 2026) - Prevision de fusion avant execution (safety net)
+
+**Ticket user** : "Voulez-vous que j'ajoute une prevision avant fusion ? Vu
+le volume detecte (35+84 groupes), une confirmation renforcee eviterait
+tout risque de fusion accidentelle sur les gros clusters comme AXA
+Belgium x13." -> OUI.
+
+**Backend** :
+- `routes/duplicates.py::preview_owner_merge` (POST /api/admin/duplicates/
+  owners/merge/preview) : compte lots (simple/multi), tx bancaires
+  matchees, mutations (vendeur/acheteur), lignes de journal, details
+  d'appel de fonds, champs qui seront enrichis. AUCUNE modification en base.
+- `routes/suppliers.py::preview_supplier_merge` (POST /api/suppliers/merge/
+  preview) : compte factures + tx bancaires matchees. AUCUNE modification.
+- Meme validation que le merge reel : 400 si keep_id in remove_ids, 404 si
+  IDs inconnus, 403 si chinese wall enfreint.
+
+**Frontend** (`pages/AdminDuplicatesPage.js`) :
+- Le bouton "Fusionner" declenche desormais POST /merge/preview d'abord.
+- Nouveau Dialog `merge-preview-dialog` avec sections codees par couleur :
+  * Vert = fiche a CONSERVER (nom + email/BCE/id)
+  * Rouge = N fiches SUPPRIMEES DEFINITIVEMENT (liste tronquee scroll)
+  * Bleu = X REFERENCES MIGREES avec breakdown par type
+    (factures, lots, tx, mutations, ecritures comptables, etc.)
+  * Orange = champs enrichis automatiquement (source + valeur)
+- 2 boutons : "Annuler" (outline) + "Confirmer la fusion" (rouge).
+- Etat 'previewLoading' propage sur le bouton "Analyse..." pour retour visuel.
+
+**Tests** (`test_iter90ae_merge_preview.py` - 3/3) :
+- test_owner_merge_preview_counts_correctly : owners avec lots + tx +
+  mutations + journal + fund_call -> compteurs corrects, DB inchangee.
+- test_supplier_merge_preview_counts_correctly : 5 factures + 2 tx ->
+  counts corrects, iban+email enriches, DB inchangee.
+- test_preview_rejects_keep_id_in_remove_ids : 400 avec message clair.
+
+**Regression complete** : 64/64 tests passent (iter76 + iter83 x7 +
+iter85 + iter90ab + iter90ac + iter90ae).
+
+**Verification manuelle** : Screenshot dialog affiche 12 AXA Belgium a
+supprimer, 3 references migrees (1 facture + 2 tx), 4 champs enrichis
+(vat_number, iban, bic, email).
+
 ### Iter90ad (Feb 2026) - Menage doublons proprietaires + fournisseurs cross-ACP
 
 **Ticket user** : "il faut aussi permettre d'avoir acces a la base de donnee

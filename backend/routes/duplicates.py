@@ -315,6 +315,98 @@ def create_duplicates_router(db):
         keep_id: str
         remove_ids: list[str]
 
+    @router.post("/owners/merge/preview")
+    async def preview_owner_merge(data: OwnerMergeInput, request: Request):
+        """Prevision de fusion : retourne les compteurs de references qui seront
+        migrees vers keep_id, SANS modification en base. Utilise par le frontend
+        pour afficher un dialog de confirmation avant fusion definitive."""
+        is_super, allowed_copros = await _get_user_scope(request)
+        if data.keep_id in data.remove_ids:
+            raise HTTPException(400, "keep_id ne peut pas etre dans remove_ids")
+        if not data.remove_ids:
+            raise HTTPException(400, "Aucun proprietaire a fusionner")
+
+        keep = await db.owners.find_one({"id": data.keep_id}, {"_id": 0})
+        if not keep:
+            raise HTTPException(404, f"Proprietaire a conserver introuvable : {data.keep_id}")
+
+        removes = await db.owners.find({"id": {"$in": data.remove_ids}}, {"_id": 0}).to_list(50)
+        found_ids = {r["id"] for r in removes}
+        missing = set(data.remove_ids) - found_ids
+        if missing:
+            raise HTTPException(404, f"Proprietaire(s) introuvable(s) : {', '.join(missing)}")
+
+        # Chinese wall check (identique a merge_owners)
+        if not is_super:
+            allowed_set = set(allowed_copros or [])
+
+            async def _in_scope(owner_id: str) -> bool:
+                lots_copros = await db.lots.distinct("copropriete_id", {
+                    "$or": [{"owner_id": owner_id}, {"owner_ids": owner_id}]
+                })
+                return bool(set(lots_copros) & allowed_set)
+            if not await _in_scope(data.keep_id):
+                raise HTTPException(403, "Acces refuse au proprietaire a conserver")
+            for r in removes:
+                if not await _in_scope(r["id"]):
+                    raise HTTPException(403, f"Acces refuse au proprietaire {r.get('name','')}")
+
+        # Comptage des references qui seront migrees (aucune modification)
+        lots_simple = await db.lots.count_documents({"owner_id": {"$in": data.remove_ids}})
+        lots_multi = await db.lots.count_documents({"owner_ids": {"$in": data.remove_ids}})
+        txns = await db.bank_transactions.count_documents(
+            {"match_type": "owner_payment", "matched_to": {"$in": data.remove_ids}}
+        )
+        mut_from = await db.mutations.count_documents({"from_owner_id": {"$in": data.remove_ids}})
+        mut_to = await db.mutations.count_documents({"to_owner_id": {"$in": data.remove_ids}})
+        journals = await db.journal_entries.count_documents(
+            {"lines.third_party_id": {"$in": data.remove_ids}}
+        )
+        fund_calls = await db.fund_calls.count_documents(
+            {"details.owner_id": {"$in": data.remove_ids}}
+        )
+
+        # Champs qui seront enrichis (par premier non-vide de removes)
+        enrich_fields = [
+            "first_name", "last_name", "name", "email", "email2", "phone", "phone2",
+            "address", "postal_code", "city", "country", "iban", "bce_number",
+            "vcs_code", "vcs_digits", "auxiliary_code", "identifier", "civility",
+        ]
+        will_enrich = []
+        for f in enrich_fields:
+            if not (str(keep.get(f) or "")).strip():
+                for r in removes:
+                    if (str(r.get(f) or "")).strip():
+                        will_enrich.append({
+                            "field": f, "from": r.get("name", "?"), "value": r[f]
+                        })
+                        break
+
+        return {
+            "keep": {
+                "id": keep["id"],
+                "name": keep.get("name", ""),
+                "email": keep.get("email", ""),
+                "vcs_code": keep.get("vcs_code", ""),
+            },
+            "remove_count": len(removes),
+            "removes": [
+                {"id": r["id"], "name": r.get("name", ""), "email": r.get("email", "")}
+                for r in removes
+            ],
+            "migrations": {
+                "lots_as_sole_owner": lots_simple,
+                "lots_as_co_owner": lots_multi,
+                "bank_transactions_matched": txns,
+                "mutations_as_seller": mut_from,
+                "mutations_as_buyer": mut_to,
+                "journal_entry_lines": journals,
+                "fund_call_details": fund_calls,
+            },
+            "total_refs": lots_simple + lots_multi + txns + mut_from + mut_to + journals + fund_calls,
+            "will_enrich_fields": will_enrich,
+        }
+
     @router.post("/owners/merge")
     async def merge_owners(data: OwnerMergeInput, request: Request):
         """Fusion de proprietaires : keep_id conserve, remove_ids absorbes.

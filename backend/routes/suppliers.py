@@ -389,6 +389,75 @@ def create_suppliers_router(db):
             raise HTTPException(404, "Fournisseur non trouve")
         return {"message": "Fournisseur supprime"}
 
+    @router.post("/merge/preview")
+    async def preview_supplier_merge(data: SupplierMergeInput, request: Request):
+        """Prevision de fusion supplier : retourne les compteurs de references
+        qui seront migrees vers keep_id, SANS modification en base."""
+        is_super, allowed_copros = await _get_user_scope(request)
+        keep = await db.suppliers.find_one({"id": data.keep_id}, {"_id": 0})
+        if not keep:
+            raise HTTPException(404, f"Fournisseur a conserver introuvable : {data.keep_id}")
+        if not is_super and not _supplier_in_scope(keep, allowed_copros):
+            raise HTTPException(403, "Acces refuse au fournisseur a conserver")
+
+        if data.keep_id in data.remove_ids:
+            raise HTTPException(400, "keep_id ne peut pas etre dans remove_ids")
+        if not data.remove_ids:
+            raise HTTPException(400, "Aucun fournisseur a fusionner")
+
+        removes = await db.suppliers.find(
+            {"id": {"$in": data.remove_ids}}, {"_id": 0}
+        ).to_list(50)
+        found_ids = {r["id"] for r in removes}
+        missing = set(data.remove_ids) - found_ids
+        if missing:
+            raise HTTPException(404, f"Fournisseur(s) introuvable(s) : {', '.join(missing)}")
+        if not is_super:
+            for r in removes:
+                if not _supplier_in_scope(r, allowed_copros):
+                    raise HTTPException(403, f"Acces refuse au fournisseur {r.get('name', '')}")
+
+        # Compteurs (aucune modification)
+        invoices = await db.invoices.count_documents({"supplier_id": {"$in": data.remove_ids}})
+        txns = await db.bank_transactions.count_documents(
+            {"match_type": "supplier_payment", "matched_to": {"$in": data.remove_ids}}
+        )
+
+        # Enrichissement previsionnel
+        enrich_fields = [
+            "bce_number", "vat_number", "iban", "bic", "email", "phone",
+            "address", "postal_code", "city", "country", "notes",
+        ]
+        will_enrich = []
+        for f in enrich_fields:
+            if not (keep.get(f) or "").strip():
+                for r in removes:
+                    if (r.get(f) or "").strip():
+                        will_enrich.append({
+                            "field": f, "from": r.get("name", "?"), "value": r[f]
+                        })
+                        break
+
+        return {
+            "keep": {
+                "id": keep["id"],
+                "name": keep.get("name", ""),
+                "bce_number": keep.get("bce_number", ""),
+                "vat_number": keep.get("vat_number", ""),
+            },
+            "remove_count": len(removes),
+            "removes": [
+                {"id": r["id"], "name": r.get("name", ""), "bce_number": r.get("bce_number", "")}
+                for r in removes
+            ],
+            "migrations": {
+                "invoices": invoices,
+                "bank_transactions_matched": txns,
+            },
+            "total_refs": invoices + txns,
+            "will_enrich_fields": will_enrich,
+        }
+
     @router.post("/merge")
     async def merge_suppliers(data: SupplierMergeInput, request: Request):
         """Fusion de N fournisseurs : keep_id conserve, remove_ids absorbes.
