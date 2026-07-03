@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import api from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -80,9 +80,15 @@ export default function FundCallsPage() {
 
   const budgetName = (id) => budgets.find(b => b.id === id)?.name || '';
 
+  // iter90ah : cle par defaut pre-selectionnee (is_default ou premiere cle)
+  const defaultKeyId = useMemo(() => {
+    if (!distKeys.length) return '';
+    return (distKeys.find(k => k.is_default) || distKeys[0]).id;
+  }, [distKeys]);
+
   const openCreate = () => {
     const now = new Date().toISOString().split('T')[0];
-    setForm({ name: '', date: now, due_date: '', fiscal_year_id: years.find(y => y.status === 'open')?.id || '', description: '', total_amount: 0, call_type: 'provisions', distribution_key_id: '' });
+    setForm({ name: '', date: now, due_date: '', fiscal_year_id: years.find(y => y.status === 'open')?.id || '', description: '', total_amount: 0, call_type: 'provisions', distribution_key_id: defaultKeyId });
     setDialogOpen(true);
   };
 
@@ -618,11 +624,14 @@ export default function FundCallsPage() {
               <div><label className="form-label">Montant total *</label><Input type="number" step="0.01" value={form.total_amount} onChange={e => setForm({...form, total_amount: e.target.value})} data-testid="call-amount" /></div>
             </div>
             <div><label className="form-label">Cle de repartition</label>
-              <Select value={form.distribution_key_id || 'default'} onValueChange={v => setForm({...form, distribution_key_id: v === 'default' ? '' : v})}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
+              <Select value={form.distribution_key_id} onValueChange={v => setForm({...form, distribution_key_id: v})}>
+                <SelectTrigger data-testid="call-key-select"><SelectValue placeholder={distKeys.length ? "Selectionner une cle" : "Aucune cle - creez-en une"} /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="default">Par tantiemes (defaut)</SelectItem>
-                  {distKeys.map(k => <SelectItem key={k.id} value={k.id}>{k.name}</SelectItem>)}
+                  {distKeys.map(k => (
+                    <SelectItem key={k.id} value={k.id}>
+                      {k.name}{k.is_default ? ' (defaut)' : ''}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>

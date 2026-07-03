@@ -285,6 +285,16 @@ async def generate_sale_entry(db, fund_call: dict) -> dict | None:
     if full_total <= 0:
         return None
 
+    # iter90ah : Appels manuels standalone (call_type='reserve' ou 'roulement'
+    # sans reserve_amount/roulement_amount injecte). Redirige la totalite du
+    # montant sur la bonne categorie pour que les comptes de credit soient
+    # 160 (reserve) ou 100 (roulement), et non 700000 (provisions).
+    ct = fund_call.get("call_type", "")
+    if ct == "reserve" and reserve_total <= 0:
+        reserve_total = full_total
+    elif ct == "roulement" and roulement_total <= 0:
+        roulement_total = full_total
+
     # Compute per-owner reserve/roulement share: prorate.
     # Libelles differencies par ligne selon ce qu'elle represente
     _type_labels_call = {

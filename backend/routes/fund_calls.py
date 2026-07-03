@@ -258,6 +258,7 @@ def create_fund_calls_router(db):
         account_map = {
             "provisions": ("400000", "700000"),
             "reserve": ("401000", "160"),
+            "roulement": ("400000", "100"),
             "special": ("405000", "710000"),
         }
         debit_acc, credit_acc = account_map.get(fc.get("call_type", "provisions"), ("400000", "700000"))

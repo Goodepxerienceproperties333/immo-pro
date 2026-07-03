@@ -12,6 +12,50 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 ## Implemented
+### Iter90ah (Feb 2026) - Appels de fonds standalone (reserve / roulement / special)
+
+**Ticket user** : "Il faut pouvoir creer que des appels de fonds de reserve,
+fonds de roulement ou des fonds specifique dans la parties des appels. Ces
+appels ne sont pas bases sur un budget mais sur une somme donc il faut juste
+la calculer sur la cle choisie."
+
+**Etat existant** : le formulaire "Nouvel appel de fonds" exposait deja les
+4 types (provisions, reserve, roulement, special) via `call_type`, et le
+backend POST /api/fund-calls distribuait sur la cle. Mais :
+
+1. **Bug comptable** : pour `call_type='reserve'` standalone (sans reserve_amount
+   injecte via budget), l'ecriture VE creditait 700000 (provisions) au lieu
+   de 160 (Fonds reserve). Idem pour roulement (creditait 700000 au lieu de 100).
+2. **UI incoherente** : dropdown "Cle de repartition" utilisait "Par tantiemes
+   (defaut)" hardcode au lieu d'aligner avec iter90aa.
+3. Le mapping `account_map` de `generate_journal_entries` (endpoint manuel)
+   n'avait pas d'entree pour `roulement`.
+
+**Backend** :
+- `auto_entries.py::generate_sale_entry` : detecte call_type='reserve' /
+  'roulement' sans reserve_amount/roulement_amount injecte -> redirige la
+  totalite du montant sur la bonne categorie. Le prorata par owner utilise
+  alors accs["reserve"] (40010XXX) ou accs["provisions"] (40000XXX) pour
+  le debit, credit 160 ou 100 respectivement.
+- `routes/fund_calls.py::generate_journal_entries` : ajout du mapping
+  `"roulement": ("400000", "100")`.
+
+**Frontend** (`pages/FundCallsPage.js`) :
+- `useMemo defaultKeyId` (is_default sinon premiere cle).
+- `openCreate` initialise `distribution_key_id` avec `defaultKeyId`.
+- Dropdown cle : retire "Par tantiemes (defaut)" hardcode, affiche
+  uniquement les cles creees avec suffixe " (defaut)" sur is_default.
+  Placeholder "Aucune cle - creez-en une" si vide.
+
+**Tests** (`test_iter90ah_standalone_reserve_roulement.py` - 3/3) :
+- Reserve standalone 10000 EUR sur cle 40/60 -> debits tier reserve
+  4001001/4001002 (4000+6000), credit unique 160 = 10000. Assertion
+  explicite "aucun credit sur 700000".
+- Roulement standalone 5000 EUR -> debits tier provisions, credit unique 100.
+- Provisions standalone 1000 EUR -> regression : credit 700000 comme avant.
+
+**Regression complete** : 131/131 tests passent.
+
 ### Iter90ag (Feb 2026) - Prorata mutation temporis pour provisions
 
 **Ticket user** : "Il faut appliquer les appels sur base du prorata pour les
