@@ -325,7 +325,8 @@ def _extract_pdf_text_ocr(file_path: str) -> str:
     try:
         doc = fitz.open(file_path)
         try:
-            # Zoom 300 DPI = 300/72 ~= 4.17 ; on limite a ~2.5 pour la RAM.
+            # 300 DPI (zoom = 300/72 ≈ 4.17) : compromis qualite OCR / RAM.
+            # Extraits bancaires typiques = 1-3 pages, RAM reste raisonnable.
             zoom = 300 / 72
             mat = fitz.Matrix(zoom, zoom)
             for page in doc:

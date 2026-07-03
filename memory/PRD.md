@@ -12,6 +12,46 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 ## Implemented
+### Iter90z (Feb 2026) - OCR Tesseract fallback pour PDFs bancaires scannes
+
+**Ticket user (P3)** : Certains extraits de compte bancaires sont fournis en
+PDF scanne (image seule, sans couche texte). Avant, l'import remontait
+`PDF sans texte extractible (probablement scanne). L'OCR n'est pas encore
+supporte`. Il faut basculer automatiquement sur un OCR pour permettre
+l'extraction.
+
+**Backend** (`bank_import.py`) :
+- Nouvelle fonction `_extract_pdf_text_ocr(file_path)` : rasterise chaque
+  page via PyMuPDF (fitz) @ 300 DPI, applique Tesseract avec langues
+  `fra+eng` et PSM 6 (bloc uniforme, adapte aux tableaux bancaires).
+- `_extract_pdf_text` : si pdfplumber + pypdf retournent < 40 caracteres,
+  bascule automatiquement sur l'OCR. Sinon comportement inchange.
+- `parse_with_llm` : detecte le mode OCR et propage :
+  - `extraction_method="llm_text_ocr"`
+  - Warning explicite : "PDF scanne detecte : extraction via OCR Tesseract
+    (fra+eng). Verifiez chaque transaction, la reconnaissance de caracteres
+    peut introduire des erreurs sur montants ou dates."
+
+**Dependances** :
+- pip : `pytesseract==0.3.13`, `PyMuPDF==1.24.14`
+- apt (Dockerfile) : `tesseract-ocr`, `tesseract-ocr-fra`, `tesseract-ocr-eng`
+- Dockerfile mis a jour pour installer les paquets apt avant le pip install.
+
+**Tests** :
+- Unit : `/app/backend/tests/test_iter90z_ocr_bank_pdf_fallback.py` (3/3)
+  * test_ocr_extracts_scanned_pdf
+  * test_text_pdf_does_not_use_ocr (verifie qu'un PDF natif ne declenche PAS
+    l'OCR via mock)
+  * test_ocr_direct_returns_text_from_scan
+- E2E HTTP : `/app/backend/tests/test_iter90z_ocr_e2e_http.py` (2/2) - PIL
+  image-only PDF uploade via `/api/banking/statements/import-files` ->
+  extraction_method="llm_text_ocr" + 2 transactions extraites correctement
+  par Claude Sonnet 4.5 a partir du texte OCR.
+
+**Non-regression** : path natif (reportlab PDF avec couche texte) ->
+`extraction_method="llm_text"` inchange, pas d'appel a Tesseract (mock
+verifie).
+
 ### Iter90y (Feb 2026) - Bouton "+ Ajouter un lot" au bas du tableau des lots
 
 **Ticket user** : "Lors de la creation des lots manuelles, ajouter le bouton
