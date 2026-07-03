@@ -834,14 +834,64 @@ def create_fiscal_router(db):
         return await db.budgets.find_one({"id": budget_id}, {"_id": 0})
 
     @router.delete("/budgets/{budget_id}")
-    async def delete_budget(budget_id: str):
+    async def delete_budget(budget_id: str, force: Optional[bool] = False):
+        """iter90af : Suppression cascade budget -> fund_calls -> journal_entries.
+
+        Regle metier :
+        - DELETE budget doit supprimer aussi les appels lies (fund_calls.budget_id)
+          et leurs ecritures auto-generees (journal_entries source_type=fund_call).
+        - Sinon les balances de tiers restent faussees.
+        - Si des appels ont deja recu des paiements, refuse sauf force=true.
+        - force=true : delettre les bank_transactions matchees puis supprime.
+        """
+        from auto_entries import _delete_auto_entries
         existing = await db.budgets.find_one({"id": budget_id}, {"_id": 0})
         if not existing:
             raise HTTPException(404, "Budget non trouve")
-        if existing.get("status") == "approved":
-            raise HTTPException(400, "Budget approuve - suppression interdite.")
+
+        linked_calls = await db.fund_calls.find(
+            {"budget_id": budget_id}, {"_id": 0}
+        ).to_list(10000)
+        paid_calls = [
+            c for c in linked_calls
+            if any(d.get("paid") for d in c.get("distribution", []))
+        ]
+        if paid_calls and not force:
+            paid_names = [c.get("name", "?") for c in paid_calls]
+            suffix = "..." if len(paid_names) > 3 else ""
+            raise HTTPException(
+                400,
+                f"Impossible de supprimer : {len(paid_calls)} appel(s) ont deja "
+                f"recu des paiements ({', '.join(paid_names[:3])}{suffix}). "
+                "Utilisez `force=true` pour forcer la suppression."
+            )
+
+        unlettre_count = 0
+        if force and paid_calls:
+            for c in paid_calls:
+                await db.bank_transactions.update_many(
+                    {"matched_fund_call_id": c["id"]},
+                    {"$set": {"matched": False, "matched_fund_call_id": None}}
+                )
+                unlettre_count += 1
+
+        for c in linked_calls:
+            try:
+                await _delete_auto_entries(db, "fund_call", c["id"])
+            except Exception as e:
+                print(f"[budget-delete] delete auto entries failed for fund_call {c['id']}: {e}")
+
+        deleted_calls = 0
+        if linked_calls:
+            res = await db.fund_calls.delete_many({"budget_id": budget_id})
+            deleted_calls = res.deleted_count
+
         await db.budgets.delete_one({"id": budget_id})
-        return {"message": "Budget supprime"}
+        return {
+            "message": f"Budget supprime avec {deleted_calls} appel(s) de fonds et leurs ecritures.",
+            "deleted_fund_calls": deleted_calls,
+            "unlettred_transactions": unlettre_count,
+        }
 
     @router.post("/budgets/{budget_id}/approve")
     async def approve_budget(request: Request, budget_id: str):

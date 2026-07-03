@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo, Fragment } from 'react';
 import api from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
@@ -189,10 +189,39 @@ export default function FiscalYearPage() {
     }
   };
 
-  const deleteBudget = async (b) => {
-    if (!window.confirm('Supprimer ce budget ?')) return;
-    try { await api.delete(`/fiscal/budgets/${b.id}`); toast.success('Budget supprime'); load(); }
-    catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); }
+  const [deleteConfirm, setDeleteConfirm] = useState(null);
+
+  const prepareDeleteBudget = async (b) => {
+    // iter90af : preview d'impact avant suppression cascade (fund_calls + VE + balances)
+    try {
+      const { data: calls } = await api.get(`/fund-calls?budget_id=${b.id}`);
+      const ownerIds = new Set();
+      let totalAmount = 0;
+      (calls || []).forEach(c => {
+        totalAmount += c.total_amount || 0;
+        (c.distribution || []).forEach(d => { if (d.owner_id) ownerIds.add(d.owner_id); });
+      });
+      setDeleteConfirm({
+        budget: b,
+        callCount: (calls || []).length,
+        totalAmount,
+        ownerCount: ownerIds.size,
+      });
+    } catch {
+      setDeleteConfirm({ budget: b, callCount: 0, totalAmount: 0, ownerCount: 0 });
+    }
+  };
+
+  const confirmDeleteBudget = async () => {
+    if (!deleteConfirm) return;
+    try {
+      await api.delete(`/fiscal/budgets/${deleteConfirm.budget.id}?force=true`);
+      toast.success(`Budget supprime avec ${deleteConfirm.callCount} appel(s)`);
+      setDeleteConfirm(null);
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur');
+    }
   };
 
   const loadComparison = async (yearId) => {
@@ -273,7 +302,7 @@ export default function FiscalYearPage() {
                       {approved && <Button size="sm" variant="outline" onClick={() => { setWizardMode('create'); setWizardBudget(b); }} data-testid={`wizard-budget-${b.id}`}><Send size={14} className="mr-1" />Lancer appels</Button>}
                       {approved && <Button size="sm" variant="outline" className="border-amber-300 text-amber-700 hover:bg-amber-50" onClick={() => { setWizardMode('regenerate'); setWizardBudget(b); }} data-testid={`regenerate-budget-${b.id}`}><RotateCcw size={14} className="mr-1" />Regenerer non-echus</Button>}
                       {approved && <Button size="sm" variant="ghost" onClick={() => revokeBudget(b)} title="Revoquer approbation"><Unlock size={14} /></Button>}
-                      {!approved && <Button size="sm" variant="ghost" className="text-red-500" onClick={() => deleteBudget(b)}><Trash2 size={14} /></Button>}
+                      {!approved && <Button size="sm" variant="ghost" className="text-red-500" onClick={() => prepareDeleteBudget(b)} data-testid={`budget-delete-btn-${b.id}`}><Trash2 size={14} /></Button>}
                     </div>
                   </CardContent>
                 </Card>
@@ -460,6 +489,32 @@ export default function FiscalYearPage() {
         onClose={() => setRegulFy(null)}
         onDone={() => { setRegulFy(null); load(); }}
       />
+
+      {/* iter90af : Confirmation cascade suppression budget */}
+      {deleteConfirm && (
+        <Dialog open onOpenChange={() => setDeleteConfirm(null)}>
+          <DialogContent data-testid="budget-delete-dialog">
+            <DialogHeader><DialogTitle>Supprimer le budget ?</DialogTitle></DialogHeader>
+            <div className="space-y-2 text-sm">
+              <p><strong>{deleteConfirm.budget.name}</strong></p>
+              {deleteConfirm.callCount > 0 ? (
+                <>
+                  <p><span className="font-mono">{deleteConfirm.callCount}</span> appel(s) de fonds seront supprimes</p>
+                  <p>Montant total : <span className="font-mono">{deleteConfirm.totalAmount.toFixed(2)} EUR</span></p>
+                  <p><span className="font-mono">{deleteConfirm.ownerCount}</span> proprietaire(s) impacte(s)</p>
+                  <p className="text-red-600 font-medium">Les ecritures comptables associees seront supprimees definitivement (balances de tiers recalculees).</p>
+                </>
+              ) : (
+                <p className="text-slate-600 italic">Aucun appel de fonds lie a ce budget. Suppression sans impact comptable.</p>
+              )}
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setDeleteConfirm(null)} data-testid="budget-delete-cancel">Annuler</Button>
+              <Button variant="destructive" onClick={confirmDeleteBudget} data-testid="budget-delete-confirm">Confirmer la suppression</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
     </div>
   );
 }

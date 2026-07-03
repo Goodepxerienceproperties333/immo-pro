@@ -12,6 +12,56 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 ## Implemented
+### Iter90af (Feb 2026) - DELETE budget en cascade : fund_calls + journal_entries + balances
+
+**Ticket user (PROD Acacia)** : "Une fois que des appels sont supprimes les
+balances de tiers doivent s'adapter a cette realite. Concretement une fois
+que le budget est remis en brouillon, les appels lies a ce budget sont
+supprimes et le bilan et balance de tiers s'ajuste. Dans ce cas tu ne
+met pas les balances de tiers a jour."
+
+**Bug racine** : `DELETE /api/fiscal/budgets/{id}` supprimait seulement le
+document `budget`. Les `fund_calls` (FK `budget_id`) et leurs ecritures
+auto-generees (`journal_entries` source_type='fund_call') restaient en base
+-> balances de tiers faussees (21987 EUR fantomes sur ACP Acacia).
+
+**Backend** (`routes/fiscal.py::delete_budget`) :
+- Signature : `delete_budget(budget_id, force=False)`.
+- Fetch `fund_calls.budget_id=budget_id` -> detecte les appels payes ;
+  refuse si non-force. Message clair listant les appels payes.
+- `force=True` + payes : delettre `bank_transactions.matched_fund_call_id`
+  puis proceder.
+- Pour chaque fund_call lie : `_delete_auto_entries(db, "fund_call", fc.id)`
+  supprime les VE (delete_many, hard delete, aucune contrepassation).
+- `db.fund_calls.delete_many({"budget_id": budget_id})` puis
+  `db.budgets.delete_one(...)`.
+- Retour : `deleted_fund_calls`, `unlettred_transactions`.
+- Balance des tiers (`balance_tiers_owners`) etant calcul dynamique
+  depuis journal_entries, elle se re-ajuste automatiquement.
+
+**Frontend** (`pages/FiscalYearPage.js`) :
+- Nouveau state `deleteConfirm` + fonctions `prepareDeleteBudget` et
+  `confirmDeleteBudget`.
+- `prepareDeleteBudget` : GET `/fund-calls?budget_id=X` -> compte les
+  appels, somme le total, extrait le nombre de proprietaires impactes.
+  Populate le state pour affichage.
+- Dialog de confirmation `budget-delete-dialog` : nom du budget, nombre
+  d'appels + montant + proprietaires impactes + warning rouge sur la
+  suppression des ecritures. Ou message "aucun appel de fonds lie" si vide.
+- Boutons Annuler + Confirmer (destructive).
+- Bouton poubelle sur les budgets draft utilise le nouveau flow.
+
+**Tests** (`test_iter90af_delete_budget_cascade.py` - 5/5) :
+- test_delete_cascade_clears_calls_and_entries : cascade complete verifiee
+  au niveau MongoDB.
+- test_delete_paid_without_force_rejected : 400 clair avec message.
+- test_delete_paid_with_force_unlettres_and_deletes : force delettre les
+  bank_transactions puis supprime tout.
+- test_delete_idempotence_returns_404 : re-suppression = 404.
+- test_delete_without_calls_succeeds_trivially : deleted_fund_calls=0.
+
+**Total tests : 69/69** (64 existants + 5 nouveaux iter90af).
+
 ### Iter90ae (Feb 2026) - Prevision de fusion avant execution (safety net)
 
 **Ticket user** : "Voulez-vous que j'ajoute une prevision avant fusion ? Vu
