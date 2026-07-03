@@ -11,6 +11,57 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 
+### Iter90aj (Feb 2026) - Appel de fonds retroactif : owner = proprietaire a la DATE de l'appel
+
+**Ticket user (PROD Acacia)** : "le fonds de reserve est bien assigne a Mme
+Teuwen alors que l'appartement etait encore a Matexi au 01.10.2025, date de
+la mutation le 17/11/2025 !!"
+
+**Bug racine** : `_distribute_amount` utilisait `lot.owner_id` (proprietaire
+courant post-mutation = Teuwen). Quand le budget 2026 etait vote APRES la
+mutation avec des appels dates 01/10/2025 (retroactifs), la VE reserve/
+roulement/provisions etait debitee au current owner (Teuwen) au lieu du
+proprietaire en place a la date de l'appel (Matexi).
+
+Ce bug est distinct d'iter90ai (qui excluait la reserve du decompte de mutation
+OD, mais ne corrigeait pas l'affectation initiale de la VE lors de la creation
+de l'appel).
+
+**Backend** (`routes/fund_calls.py`) :
+- Nouveau helper `_resolve_owner_at_date(lot_id, target_date, fallback)` :
+  marche dans `mutations_by_lot` pour trouver le proprietaire a la date cible
+  (from_owner du premier segment, switche vers to_owner a chaque
+  `mutation.sale_date <= target`).
+- Nouveau helper `_rebind_owner_at_call_date(entries, call_date)` : reprend
+  les entries de `_distribute_amount` et re-affecte `owner_id`/`owner_name`/
+  `vcs_code` au proprietaire correct. PAS de proratisation (regle metier :
+  reserve/roulement = injection one-shot).
+- Applique aux 3 chemins :
+  1. `reserve_dist` / `roul_dist` inline dans `_generate_from_budget` (appel #1)
+  2. `dist` dans `_generate_independent_series` (fonds avec frequency propre) --
+     c'est le path utilise par ACP Acacia (VE reserve/roulement Annuel 1/1)
+  3. `distribution` dans `POST /api/fund-calls` pour call_type in
+     (reserve, roulement, special) -- appels standalone
+
+**Tests** (`test_iter90aj_reserve_owner_at_call_date.py` - 4/4) :
+- `test_standalone_reserve_before_mutation_uses_seller` : reserve 01/10/2025
+  (pre-mutation 17/11/2025) -> owner_id = Matexi (seller).
+- `test_standalone_reserve_after_mutation_uses_buyer` : reserve 15/12/2025
+  (post-mutation) -> owner_id = Teuwen (buyer, current owner).
+- `test_standalone_roulement_before_mutation_uses_seller` : roulement pre-mutation
+  -> Matexi.
+- `test_no_mutation_uses_current_owner_regression` : sans mutation, comportement
+  inchange -> Teuwen (current owner).
+
+**Regression cumulative** : 13/13 tests iter90 mutation-related passent
+(iter90aj + iter90ai + iter90ah + iter90ag).
+
+**Action prod ACP Acacia** : apres redeploiement, les appels de fonds
+existants avec mauvaise attribution doivent etre supprimes puis regeneres
+(via bouton "Regenerer" du budget) pour beneficier du fix. Les VE journal
+entries sont automatiquement recreees a partir de la nouvelle distribution.
+
+
 ### Iter90ai (Feb 2026) - Fonds de reserve exclu du decompte de mutation
 
 **Regle metier validee** :

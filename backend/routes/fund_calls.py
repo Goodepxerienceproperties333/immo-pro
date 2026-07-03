@@ -150,8 +150,8 @@ def create_fund_calls_router(db):
             key = await db.distribution_keys.find_one({"id": data.distribution_key_id}, {"_id": 0})
             if key:
                 # iter90ac : exclut les lots marques excluded=True
-                active_kls = [l for l in key.get("lots", []) if not l.get("excluded")]
-                total_shares = sum(l["share"] for l in active_kls)
+                active_kls = [kle for kle in key.get("lots", []) if not kle.get("excluded")]
+                total_shares = sum(kle["share"] for kle in active_kls)
                 for kl in active_kls:
                     lot = lots_by_id.get(kl["lot_id"])
                     owner = owners_map.get(lot["owner_id"]) if lot else None
@@ -170,7 +170,7 @@ def create_fund_calls_router(db):
                     })
         else:
             # Default: distribute by tantiemes
-            total_quotity = sum(l.get("quotity", 0) for l in lots)
+            total_quotity = sum(lt.get("quotity", 0) for lt in lots)
             for lot in lots:
                 if not lot.get("owner_id"):
                     continue
@@ -188,6 +188,46 @@ def create_fund_calls_router(db):
                     "paid": False,
                     "paid_date": "",
                 })
+
+        # iter90aj : pour reserve/roulement, rebind owner a la date de l'appel
+        # (regle metier : injection one-shot au proprietaire en place a la date).
+        # Cas courant : appel retroactif cree apres une mutation.
+        if (data.call_type or "provisions") in ("reserve", "roulement", "special"):
+            try:
+                from datetime import date as _dt_cls
+                target = _dt_cls.fromisoformat(data.date)
+                muts_all = await db.mutations.find(
+                    {"copropriete_id": copro_id}, {"_id": 0}
+                ).to_list(10000)
+                muts_by_lot: dict = {}
+                for _m in muts_all:
+                    _lid = _m.get("lot_id")
+                    if _lid and _m.get("sale_date") and _m.get("from_owner_id") and _m.get("to_owner_id"):
+                        muts_by_lot.setdefault(_lid, []).append(_m)
+                for _lid in muts_by_lot:
+                    muts_by_lot[_lid].sort(key=lambda x: x.get("sale_date") or "")
+                for entry in distribution:
+                    _lid = entry.get("lot_id") or ""
+                    _muts = muts_by_lot.get(_lid, [])
+                    if not _muts:
+                        continue
+                    _current = _muts[0].get("from_owner_id") or entry.get("owner_id")
+                    for _m in _muts:
+                        try:
+                            _sd = _dt_cls.fromisoformat(_m.get("sale_date") or "")
+                        except Exception:
+                            continue
+                        if _sd <= target:
+                            _current = _m.get("to_owner_id") or _current
+                        else:
+                            break
+                    if _current and _current != entry.get("owner_id"):
+                        _own = owners_map.get(_current) or {}
+                        entry["owner_id"] = _current
+                        entry["owner_name"] = _own.get("name", "")
+                        entry["vcs_code"] = _own.get("vcs_code", "")
+            except Exception as _e:
+                print(f"[iter90aj] Rebind owner_at_date skipped: {_e}")
 
         # iter90w : garantit sum(distribution.amount) == total_amount exactement
         # (evite les 0,01 EUR de derive par appel manuel).
@@ -519,6 +559,55 @@ def create_fund_calls_router(db):
             })
             return result
 
+        def _resolve_owner_at_date(lot_id: str, target_date_iso: str, fallback_owner_id: str) -> str:
+            """iter90aj : Retourne le proprietaire du lot a la date cible en
+            marchant dans l'historique des mutations. Utilise pour reserve/
+            roulement quand l'appel est cree avec une date retroactive (ex.
+            budget 2026 vote apres une mutation, avec date d'appel 01/10/2025
+            anterieure a la mutation 17/11/2025)."""
+            muts = mutations_by_lot.get(lot_id, [])
+            if not muts:
+                return fallback_owner_id
+            try:
+                target = _date_cls.fromisoformat(target_date_iso)
+            except Exception:
+                return fallback_owner_id
+            current = muts[0].get("from_owner_id") or fallback_owner_id
+            for m in muts:
+                try:
+                    sd = _date_cls.fromisoformat(m.get("sale_date") or "")
+                except Exception:
+                    continue
+                if sd <= target:
+                    current = m.get("to_owner_id") or current
+                else:
+                    break
+            return current
+
+        def _rebind_owner_at_call_date(entries: list, call_date_iso: str) -> list:
+            """iter90aj : Reserve/roulement -> re-affecte chaque entree au
+            proprietaire qui detenait le lot a la DATE DE L'APPEL. Regle
+            metier : reserve/roulement sont des injections one-shot,
+            appartiennent au proprietaire en place a la date de l'appel
+            (vendeur si l'appel est anterieur a la mutation, acheteur sinon).
+            PAS de proratisation, contrairement aux provisions."""
+            result = []
+            for e in entries:
+                lid = e.get("lot_id") or ""
+                current_oid = e.get("owner_id") or ""
+                correct_oid = _resolve_owner_at_date(lid, call_date_iso, current_oid)
+                if correct_oid == current_oid:
+                    result.append(e)
+                    continue
+                own = owners_map.get(correct_oid) or {}
+                result.append({
+                    **e,
+                    "owner_id": correct_oid,
+                    "owner_name": own.get("name", ""),
+                    "vcs_code": own.get("vcs_code", ""),
+                })
+            return result
+
         def _distribute_amount(amount: float, key_id: str) -> list:
             """Distribute amount on LOTS according to the given distribution key.
             Fallback to quotities if key not found.
@@ -531,10 +620,10 @@ def create_fund_calls_router(db):
             if key_id and key_id in keys_map:
                 key = keys_map[key_id]
                 # iter90ac : exclut les lots marques excluded=True
-                active_kls = [l for l in key.get("lots", []) if not l.get("excluded")]
-                total_shares = sum(l["share"] for l in active_kls)
+                active_kls = [kle for kle in key.get("lots", []) if not kle.get("excluded")]
+                total_shares = sum(kle["share"] for kle in active_kls)
                 for kl in active_kls:
-                    lot = next((l for l in lots if l["id"] == kl["lot_id"]), None)
+                    lot = next((lt for lt in lots if lt["id"] == kl["lot_id"]), None)
                     if not lot or not lot.get("owner_id"):
                         continue
                     owner = owners_map.get(lot["owner_id"]) or {}
@@ -550,7 +639,7 @@ def create_fund_calls_router(db):
                         "share": float(kl["share"]),
                     })
             else:
-                total_quotity = sum(l.get("quotity", 0) for l in lots if l.get("owner_id"))
+                total_quotity = sum(lt.get("quotity", 0) for lt in lots if lt.get("owner_id"))
                 for lot in lots:
                     if not lot.get("owner_id"):
                         continue
@@ -572,7 +661,7 @@ def create_fund_calls_router(db):
         interval_months = 12 // data.frequency
         n_calls = data.frequency
         budget_lines = budget.get("lines", [])
-        budget_total = round(sum(l.get("amount", 0) for l in budget_lines), 2)
+        budget_total = round(sum(bl.get("amount", 0) for bl in budget_lines), 2)
         # Fiscal year end for the last call's period_end
         fy_end = (fy or {}).get("end_date", "") or ""
         # Per call portion of each budget line
@@ -655,6 +744,8 @@ def create_fund_calls_router(db):
             if i == 0 and data.reserve_fund and data.reserve_fund.enabled and data.reserve_fund.amount > 0 and not reserve_has_own_schedule:
                 reserve_amount = float(data.reserve_fund.amount)
                 reserve_dist = _distribute_amount(reserve_amount, data.reserve_fund.distribution_key_id or "")
+                # iter90aj : rebind owner a la date de l'appel (retroactif si necessaire)
+                reserve_dist = _rebind_owner_at_call_date(reserve_dist, call_date)
                 line_details.append({
                     "account_number": "RESERVE",
                     "account_name": data.reserve_fund.label or "Fonds de reserve",
@@ -675,6 +766,8 @@ def create_fund_calls_router(db):
             if i == 0 and data.roulement_fund and data.roulement_fund.enabled and data.roulement_fund.amount > 0 and not roul_has_own_schedule:
                 roul_amount = float(data.roulement_fund.amount)
                 roul_dist = _distribute_amount(roul_amount, data.roulement_fund.distribution_key_id or "")
+                # iter90aj : rebind owner a la date de l'appel (retroactif si necessaire)
+                roul_dist = _rebind_owner_at_call_date(roul_dist, call_date)
                 lbl = data.roulement_fund.label or "Fonds de roulement"
                 mode_lbl = "(creation)" if (data.roulement_fund.mode or "create") == "create" else "(augmentation)"
                 line_details.append({
@@ -767,6 +860,11 @@ def create_fund_calls_router(db):
                     pend = ((fy or {}).get("end_date") or
                             (datetime.strptime(cd, "%Y-%m-%d") + timedelta(days=interval * 30 - 1)).strftime("%Y-%m-%d"))
                 dist = _distribute_amount(per_call, fund.distribution_key_id or "")
+                # iter90aj : rebind owner a la date de l'appel courant `cd`.
+                # Cas courant : budget 2026 vote apres une mutation, appel #1
+                # date 01/10/2025 anterieure a mutation 17/11/2025 -> le
+                # vendeur doit recevoir la VE, pas l'acheteur.
+                dist = _rebind_owner_at_call_date(dist, cd)
                 # iter85b : distribution par lot (cascade parent/enfant)
                 distribution = []
                 for e in dist:
