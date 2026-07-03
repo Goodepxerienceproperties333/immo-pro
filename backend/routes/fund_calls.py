@@ -396,6 +396,128 @@ def create_fund_calls_router(db):
         keys = await db.distribution_keys.find({"copropriete_id": copro_id}, {"_id": 0}).to_list(1000)
         keys_map = {k["id"]: k for k in keys}
 
+        # iter90ag : prorata mutation pour PROVISIONS uniquement.
+        # On charge une fois toutes les mutations de l'ACP pour eviter N+1 queries.
+        # Groupe par lot_id, tri par sale_date ASC pour la construction de segments.
+        from datetime import date as _date_cls
+        mutations_by_lot: dict = {}
+        mutations_all = await db.mutations.find(
+            {"copropriete_id": copro_id}, {"_id": 0}
+        ).to_list(10000)
+        for m in mutations_all:
+            lid = m.get("lot_id")
+            if lid and m.get("sale_date") and m.get("from_owner_id") and m.get("to_owner_id"):
+                mutations_by_lot.setdefault(lid, []).append(m)
+        for lid in mutations_by_lot:
+            mutations_by_lot[lid].sort(key=lambda x: x.get("sale_date") or "")
+
+        def _split_lot_entry_by_mutations(entry: dict, period_start: str, period_end: str) -> list:
+            """iter90ag : Split un lot_entry en plusieurs entrees prorata temporis
+            en fonction des mutations survenues dans [period_start, period_end].
+
+            Regle : si mutation le jour D, le vendeur (from_owner) supporte
+            jusqu'au jour D exclu, l'acheteur (to_owner) supporte a partir de D.
+            Exemple : periode 01-01 -> 31-03 (90 jours), mutation le 15-03 :
+                vendeur = 73 jours (01-01 -> 14-03), acheteur = 17 jours (15-03 -> 31-03).
+
+            Retourne une liste d'entries clonees avec owner_id et amount ajustes.
+            Preserve l'entree originale si aucune mutation dans la periode.
+            """
+            lid = entry.get("lot_id")
+            muts_all = mutations_by_lot.get(lid, [])
+            if not muts_all:
+                return [entry]
+            try:
+                p_start = _date_cls.fromisoformat(period_start)
+                p_end = _date_cls.fromisoformat(period_end)
+            except Exception:
+                return [entry]
+            if p_end < p_start:
+                return [entry]
+
+            in_period = []
+            for m in muts_all:
+                try:
+                    sd = _date_cls.fromisoformat(m["sale_date"])
+                except Exception:
+                    continue
+                if p_start <= sd <= p_end:
+                    in_period.append((sd, m))
+            if not in_period:
+                return [entry]
+
+            total_days = (p_end - p_start).days + 1
+            if total_days <= 0:
+                return [entry]
+
+            # Construction des segments temporels
+            segments: list = []  # list of (owner_id, days)
+            cursor = p_start
+            current_owner = in_period[0][1]["from_owner_id"]
+            for sd, m in in_period:
+                if sd <= cursor:
+                    # Mutation avant/au curseur -> shift owner sans creer de segment
+                    current_owner = m["to_owner_id"]
+                    continue
+                days_before = (sd - cursor).days  # exclusif de sd
+                if days_before > 0 and current_owner:
+                    segments.append((current_owner, days_before))
+                cursor = sd
+                current_owner = m["to_owner_id"]
+            # Segment final (curseur -> p_end inclus)
+            final_days = (p_end - cursor).days + 1
+            if final_days > 0 and current_owner:
+                segments.append((current_owner, final_days))
+
+            if not segments:
+                return [entry]
+            # Dedupe : si tous les segments pointent vers le meme owner (mutations
+            # qui se compensent), ne rien splitter.
+            distinct_owners = {oid for oid, _ in segments}
+            if len(distinct_owners) == 1:
+                # Meme owner sur toute la periode -> juste corriger l'owner
+                if segments[0][0] == entry.get("owner_id"):
+                    return [entry]
+                new_entry = dict(entry)
+                new_entry["owner_id"] = segments[0][0]
+                own = owners_map.get(segments[0][0]) or {}
+                new_entry["owner_name"] = own.get("name", "")
+                new_entry["vcs_code"] = own.get("vcs_code", "")
+                new_entry["prorata_days"] = final_days
+                new_entry["prorata_total_days"] = total_days
+                return [new_entry]
+
+            base_amount = float(entry.get("amount", 0) or 0)
+            result: list = []
+            allocated = 0.0
+            for owner_id, days in segments[:-1]:
+                slice_amount = round(base_amount * days / total_days, 2)
+                own = owners_map.get(owner_id) or {}
+                result.append({
+                    **entry,
+                    "owner_id": owner_id,
+                    "owner_name": own.get("name", ""),
+                    "vcs_code": own.get("vcs_code", ""),
+                    "amount": slice_amount,
+                    "prorata_days": days,
+                    "prorata_total_days": total_days,
+                })
+                allocated += slice_amount
+            # Dernier segment absorbe le reste (evite le drift d'arrondi)
+            last_owner, last_days = segments[-1]
+            last_amount = round(base_amount - allocated, 2)
+            own = owners_map.get(last_owner) or {}
+            result.append({
+                **entry,
+                "owner_id": last_owner,
+                "owner_name": own.get("name", ""),
+                "vcs_code": own.get("vcs_code", ""),
+                "amount": last_amount,
+                "prorata_days": last_days,
+                "prorata_total_days": total_days,
+            })
+            return result
+
         def _distribute_amount(amount: float, key_id: str) -> list:
             """Distribute amount on LOTS according to the given distribution key.
             Fallback to quotities if key not found.
@@ -468,30 +590,36 @@ def create_fund_calls_router(db):
                 period_end = fy_end or (datetime.strptime(call_date, "%Y-%m-%d")
                                         + timedelta(days=interval_months * 30 - 1)).strftime("%Y-%m-%d")
             # Aggregate distribution by LOT combining all budget lines (iter85b)
-            # Permet la cascade parent/enfant cote frontend.
-            lot_agg: dict = {}  # lot_id -> {meta, amount, share}
+            # iter90ag : cle d'agregation = (lot_id, owner_id) pour permettre
+            # le prorata mutation (plusieurs owners sur le meme lot dans une meme
+            # periode). Reserve/roulement gardent l'owner courant (pas de split).
+            lot_agg: dict = {}  # (lot_id, owner_id) -> {meta, amount, share}
 
             def _merge_into_lot_agg(entries: list) -> None:
                 for e in entries:
                     lid = e.get("lot_id") or ""
+                    oid = e.get("owner_id") or ""
                     if not lid:
                         continue
-                    if lid not in lot_agg:
-                        lot_agg[lid] = {
+                    key = (lid, oid)
+                    if key not in lot_agg:
+                        lot_agg[key] = {
                             "lot_id": lid,
                             "lot_number": e.get("lot_number", ""),
                             "parent_lot_id": e.get("parent_lot_id", "") or "",
-                            "owner_id": e.get("owner_id", ""),
+                            "owner_id": oid,
                             "owner_name": e.get("owner_name", ""),
                             "vcs_code": e.get("vcs_code", ""),
                             "amount": 0.0,
                             "share": 0.0,
+                            "prorata_days": e.get("prorata_days"),
+                            "prorata_total_days": e.get("prorata_total_days"),
                         }
-                    lot_agg[lid]["amount"] += e.get("amount", 0)
+                    lot_agg[key]["amount"] += e.get("amount", 0)
                     # share : on prend le max plutot que la somme (sinon on
                     # multiplie quand plusieurs budget_lines partagent la meme cle)
-                    if e.get("share", 0) > lot_agg[lid]["share"]:
-                        lot_agg[lid]["share"] = float(e.get("share", 0))
+                    if e.get("share", 0) > lot_agg[key]["share"]:
+                        lot_agg[key]["share"] = float(e.get("share", 0))
 
             call_total = 0.0
             line_details = []
@@ -500,6 +628,13 @@ def create_fund_calls_router(db):
                 if abs(bl_per_call) < 0.01:
                     continue
                 line_dist = _distribute_amount(bl_per_call, bl.get("distribution_key_id", ""))
+                # iter90ag : split prorata mutation sur la periode [call_date, period_end]
+                # Ne s'applique QUE aux provisions (pas reserve/roulement).
+                line_dist = [
+                    split
+                    for e in line_dist
+                    for split in _split_lot_entry_by_mutations(e, call_date, period_end)
+                ]
                 line_details.append({
                     "account_number": bl.get("account_number", ""),
                     "account_name": bl.get("account_name", ""),
@@ -555,8 +690,8 @@ def create_fund_calls_router(db):
                 _merge_into_lot_agg(roul_dist)
 
             distribution = []
-            for lid, agg in lot_agg.items():
-                distribution.append({
+            for (lid, _oid), agg in lot_agg.items():
+                dist_entry = {
                     "lot_id": lid,
                     "lot_number": agg["lot_number"],
                     "parent_lot_id": agg["parent_lot_id"],
@@ -567,7 +702,12 @@ def create_fund_calls_router(db):
                     "amount": round(agg["amount"], 2),
                     "paid": False,
                     "paid_date": "",
-                })
+                }
+                # iter90ag : trace du prorata sur les lignes issues d'une mutation
+                if agg.get("prorata_days") is not None:
+                    dist_entry["prorata_days"] = agg["prorata_days"]
+                    dist_entry["prorata_total_days"] = agg["prorata_total_days"]
+                distribution.append(dist_entry)
             # iter90w : garantit sum(distribution.amount) == call_total (evite
             # les 0,01 EUR de derive par appel qui deviennent 0,04 sur 4 trimestres).
             _snap_distribution_to_total(distribution, round(call_total, 2))

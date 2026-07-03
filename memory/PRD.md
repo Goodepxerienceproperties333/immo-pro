@@ -12,6 +12,47 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 ## Implemented
+### Iter90ag (Feb 2026) - Prorata mutation temporis pour provisions
+
+**Ticket user** : "Il faut appliquer les appels sur base du prorata pour les
+provision pour charges donc meme si un budget est realise apres une mutation,
+le calcul se fait sur le bon proprietaire (vendeur et acheteur) sur base
+de la date de la mutation."
+
+**Regle metier validee** :
+- Si un lot subit une mutation V -> A pendant la periode couverte par un
+  appel de provision, l'amount est splitte prorata TEMPORIS jour-a-jour :
+  * V paye pour la periode `[period_start, mutation_date - 1]`
+  * A paye pour la periode `[mutation_date, period_end]`
+- Exemple canonique validee : mutation 15-03-2026 sur Q1 (01-01 -> 31-03,
+  90 jours), montant lot 900 EUR -> V=73/90*900=730.00 EUR, A=17/90*900=170.00 EUR.
+- S'applique UNIQUEMENT aux provisions (call_type='provisions', budget_lines).
+- NE s'applique PAS a la reserve/roulement (injections one-shot).
+
+**Backend** (`routes/fund_calls.py::_generate_from_budget`) :
+- Pre-fetch de toutes les `mutations` de l'ACP en 1 query, group by lot_id
+  trie par sale_date ASC.
+- Nouvelle fonction `_split_lot_entry_by_mutations(entry, period_start,
+  period_end)` : construction de segments (owner_id, days) avec cursor
+  incremental. Dernier segment absorbe le drift d'arrondi.
+- Applique `_split_lot_entry_by_mutations` sur les line_dist des
+  budget_lines (provisions). PAS applique sur reserve_dist / roul_dist.
+- Refactor de `_merge_into_lot_agg` : cle d'agregation passe de `lot_id`
+  a `(lot_id, owner_id)` pour permettre plusieurs owners par lot dans
+  une meme periode.
+- Distribution serialise avec `prorata_days` + `prorata_total_days` sur
+  les entrees issues d'une mutation (trace metier pour PDF appel de fonds).
+
+**Tests** (`test_iter90ag_prorata_mutation_provisions.py` - 3/3) :
+- test_prorata_mutation_mid_q1 : validation exacte 730/170 EUR sur Q1
+  + Q2-Q4 = 100% acheteur.
+- test_mutation_before_period_no_prorata : mutation antebellum -> V absent
+  de toute la distribution, A prend 100%.
+- test_no_mutation_single_entry : sans mutation, distribution reste
+  identique a l'ancien comportement.
+
+**Regression complete** : 128/128 tests passent (iter76 -> iter90ag).
+
 ### Iter90af (Feb 2026) - DELETE budget en cascade : fund_calls + journal_entries + balances
 
 **Ticket user (PROD Acacia)** : "Une fois que des appels sont supprimes les

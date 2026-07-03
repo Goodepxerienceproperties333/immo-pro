@@ -12,8 +12,12 @@ import os
 import uuid
 import pytest
 import requests
+from dotenv import load_dotenv
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL").rstrip("/")
+load_dotenv("/app/frontend/.env")
+load_dotenv("/app/backend/.env")
+
+BASE_URL = (os.environ.get("REACT_APP_BACKEND_URL") or "http://localhost:8001").rstrip("/")
 ADMIN_EMAIL = "admin@copro.be"
 ADMIN_PASSWORD = "admin123"
 
