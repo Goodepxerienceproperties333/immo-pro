@@ -1321,6 +1321,60 @@ def create_reports_router(db):
         # Hide ex-proprietaires that have a zero balance and no movement
         result = [r for r in result if not (r.get("is_former_owner") and abs(r["balance"]) < 0.01 and r["movements_count"] == 0)]
 
+        # iter90ak : ajouter des lignes synthetiques pour les comptes tiers
+        # avec solde non nul mais qui ne sont rattaches a AUCUN proprietaire
+        # (ex. ancien proprietaire supprime de la collection owners, ou
+        # tier_accounts jamais renseigne). Sans ce fallback, ces soldes sont
+        # invisibles ici alors que la Sante comptable les detecte comme
+        # "comptes tier orphelins".
+        acc_names = {}
+        try:
+            _pcmn = await db.pcmn_accounts.find(
+                {"copropriete_id": copropriete_id},
+                {"_id": 0, "number": 1, "name": 1},
+            ).to_list(10000)
+            for _a in _pcmn:
+                acc_names[_a.get("number", "")] = _a.get("name", "")
+        except Exception:
+            pass
+        for _acc, _b in list(cumul_per_acc.items()):
+            if not _acc:
+                continue
+            if not (_acc.startswith("4100") or _acc.startswith("4000") or _acc.startswith("4001")):
+                continue
+            _solde = round(float(_b.get("debit", 0)) - float(_b.get("credit", 0)), 2)
+            if abs(_solde) < 0.01:
+                continue
+            # Recuperer les mouvements associes pour l'expand-details
+            _mvts_period = per_acc_lines.get(_acc, [])
+            # Detecter provisions vs reserve via prefixe (bilan belge PCMN)
+            _is_reserve = _acc.startswith("4001") or _acc.startswith("40010")
+            _prov_d = 0.0 if _is_reserve else float(_b.get("debit", 0))
+            _prov_c = 0.0 if _is_reserve else float(_b.get("credit", 0))
+            _res_d = float(_b.get("debit", 0)) if _is_reserve else 0.0
+            _res_c = float(_b.get("credit", 0)) if _is_reserve else 0.0
+            result.append({
+                "owner_id": "",
+                "owner_name": acc_names.get(_acc) or f"Ancien proprietaire (compte {_acc})",
+                "vcs_code": "",
+                "account_provisions": "" if _is_reserve else _acc,
+                "account_reserve": _acc if _is_reserve else "",
+                "provisions_debit": round(_prov_d, 2),
+                "provisions_credit": round(_prov_c, 2),
+                "provisions_balance": round(_prov_d - _prov_c, 2),
+                "reserve_debit": round(_res_d, 2),
+                "reserve_credit": round(_res_c, 2),
+                "reserve_balance": round(_res_d - _res_c, 2),
+                "unmatched_paid": 0.0,
+                "total_called": round(_prov_d + _res_d, 2),
+                "total_paid": round(_prov_c + _res_c, 2),
+                "balance": _solde,
+                "status": "debiteur" if _solde > 0.01 else ("crediteur" if _solde < -0.01 else "solde"),
+                "movements_count": len(_mvts_period),
+                "is_former_owner": True,
+                "is_orphan_account": True,
+            })
+
         total_debiteurs = round(sum(r["balance"] for r in result if r["balance"] > 0), 2)
         total_crediteurs = round(sum(abs(r["balance"]) for r in result if r["balance"] < 0), 2)
         return {"owners": result, "total_debiteurs": total_debiteurs, "total_crediteurs": total_crediteurs}

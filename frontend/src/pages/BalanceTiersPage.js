@@ -263,11 +263,15 @@ export default function BalanceTiersPage() {
                     <TableHead className="text-right">Solde</TableHead><TableHead>Statut</TableHead><TableHead className="w-16"></TableHead>
                   </TableRow></TableHeader>
                   <TableBody>
-                    {applyTextFilter(ownersData.owners).map(o => (
-                      <TableRow key={o.owner_id} className="hover:bg-slate-50/50">
+                    {applyTextFilter(ownersData.owners).map((o, idx) => (
+                      <TableRow key={o.owner_id || `orphan-${o.account_provisions || o.account_reserve}-${idx}`} className="hover:bg-slate-50/50">
                         <TableCell className="font-medium">
                           {o.owner_name}
-                          {o.is_former_owner && (
+                          {o.is_orphan_account ? (
+                            <Badge variant="outline" className="ml-2 bg-red-50 border-red-200 text-red-700 text-[10px]" title="Compte tier sans proprietaire rattache. Rattacher le compte a un proprietaire existant ou nettoyer les ecritures orphelines depuis la page Coproprietes.">
+                              Orphelin
+                            </Badge>
+                          ) : o.is_former_owner && (
                             <Badge variant="outline" className="ml-2 bg-amber-50 border-amber-200 text-amber-700 text-[10px]" title="Ancien proprietaire avec solde residuel apres mutation">
                               Ex-prop.
                             </Badge>
@@ -289,24 +293,32 @@ export default function BalanceTiersPage() {
                         </TableCell>
                         <TableCell>
                           <div className="flex items-center gap-1">
-                            <Button variant="ghost" size="sm" onClick={() => viewOwnerDetail(o.owner_id)} data-testid={`view-owner-${o.owner_id}`} title="Detail"><Eye size={14} /></Button>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => {
-                                const c = localStorage.getItem('selectedCopro') || localStorage.getItem('copropriete_id') || '';
-                                if (!c || c === 'all') { toast.error('Selectionnez une ACP specifique en haut de page'); return; }
-                                const params = new URLSearchParams({ copropriete_id: c });
-                                if (filters.startDate) params.set('start_date', filters.startDate);
-                                if (filters.endDate) params.set('end_date', filters.endDate);
-                                window.open(`${API}/api/reports/situation-compte/${o.owner_id}/pdf?${params.toString()}`, '_blank');
-                              }}
-                              data-testid={`pdf-situation-${o.owner_id}`}
-                              title={(filters.startDate || filters.endDate) ? `Situation de compte PDF (periode ${filters.startDate || '…'} - ${filters.endDate || '…'})` : "Situation de compte PDF (envoi email/postal)"}
-                              className="text-[#0055FF] hover:text-[#0040CC]"
-                            >
-                              <FileText size={14} />
-                            </Button>
+                            {o.owner_id ? (
+                              <>
+                                <Button variant="ghost" size="sm" onClick={() => viewOwnerDetail(o.owner_id)} data-testid={`view-owner-${o.owner_id}`} title="Detail"><Eye size={14} /></Button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => {
+                                    const c = localStorage.getItem('selectedCopro') || localStorage.getItem('copropriete_id') || '';
+                                    if (!c || c === 'all') { toast.error('Selectionnez une ACP specifique en haut de page'); return; }
+                                    const params = new URLSearchParams({ copropriete_id: c });
+                                    if (filters.startDate) params.set('start_date', filters.startDate);
+                                    if (filters.endDate) params.set('end_date', filters.endDate);
+                                    window.open(`${API}/api/reports/situation-compte/${o.owner_id}/pdf?${params.toString()}`, '_blank');
+                                  }}
+                                  data-testid={`pdf-situation-${o.owner_id}`}
+                                  title={(filters.startDate || filters.endDate) ? `Situation de compte PDF (periode ${filters.startDate || '…'} - ${filters.endDate || '…'})` : "Situation de compte PDF (envoi email/postal)"}
+                                  className="text-[#0055FF] hover:text-[#0040CC]"
+                                >
+                                  <FileText size={14} />
+                                </Button>
+                              </>
+                            ) : (
+                              <span className="text-[10px] text-slate-400 italic" title="Compte orphelin : rattacher a un proprietaire ou nettoyer via la page Coproprietes (bouton baguette magique)">
+                                Rattacher
+                              </span>
+                            )}
                           </div>
                         </TableCell>
                       </TableRow>
