@@ -949,6 +949,16 @@ export default function LotsPage() {
             ))}
           </TableBody>
         </Table>
+        {filtered.length > 0 && (
+          <button
+            onClick={openCreate}
+            data-testid="add-lot-footer-btn"
+            className="w-full py-3 flex items-center justify-center gap-2 text-sm font-medium text-slate-500 hover:text-[#0055FF] hover:bg-slate-50 border-t border-slate-200 border-dashed transition-colors"
+            title="Ajouter un lot sans remonter en haut"
+          >
+            <Plus size={16} /> Ajouter un lot
+          </button>
+        )}
       </div>
 
       {/* Create / Edit dialog */}

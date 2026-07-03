@@ -12,6 +12,20 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 ## Implemented
+### Iter90y (Feb 2026) - Bouton "+ Ajouter un lot" au bas du tableau des lots
+
+**Ticket user** : "Lors de la creation des lots manuelles, ajouter le bouton
+aussi a cet endroit pour eviter de devoir toujours remonter au dessus pour
+ajouter un lot manuel..."
+
+**Frontend** (`pages/LotsPage.js`) :
+- Ajout d'un bouton "+ Ajouter un lot" plein largeur, discret (bordure
+  superieure en pointille, texte gris hover bleu), affiche sous le tableau
+  des lots (uniquement si la liste filtree n'est pas vide).
+- data-testid : `add-lot-footer-btn`.
+- Ouvre le meme dialog de creation via `openCreate()`.
+- Lint OK, verifie visuellement en preview (Cascade ACP-202606-053).
+
 ### Iter90x' (Feb 2026) - Relettrage direct depuis le journal financier
 
 **Ticket user** : Bouton "Relettrer directement" dans le meme dialog de delettrage,
