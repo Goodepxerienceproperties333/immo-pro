@@ -149,8 +149,10 @@ def create_fund_calls_router(db):
         if data.distribution_key_id:
             key = await db.distribution_keys.find_one({"id": data.distribution_key_id}, {"_id": 0})
             if key:
-                total_shares = sum(l["share"] for l in key.get("lots", []))
-                for kl in key.get("lots", []):
+                # iter90ac : exclut les lots marques excluded=True
+                active_kls = [l for l in key.get("lots", []) if not l.get("excluded")]
+                total_shares = sum(l["share"] for l in active_kls)
+                for kl in active_kls:
                     lot = lots_by_id.get(kl["lot_id"])
                     owner = owners_map.get(lot["owner_id"]) if lot else None
                     share_ratio = kl["share"] / total_shares if total_shares > 0 else 0
@@ -405,8 +407,10 @@ def create_fund_calls_router(db):
             entries: list = []
             if key_id and key_id in keys_map:
                 key = keys_map[key_id]
-                total_shares = sum(l["share"] for l in key.get("lots", []))
-                for kl in key.get("lots", []):
+                # iter90ac : exclut les lots marques excluded=True
+                active_kls = [l for l in key.get("lots", []) if not l.get("excluded")]
+                total_shares = sum(l["share"] for l in active_kls)
+                for kl in active_kls:
                     lot = next((l for l in lots if l["id"] == kl["lot_id"]), None)
                     if not lot or not lot.get("owner_id"):
                         continue
@@ -796,10 +800,12 @@ def create_fund_calls_router(db):
                 key = keys_cache[key_id]
                 if not key or not key.get("lots"):
                     continue
-                total_shares = sum(float(kl.get("share", 0) or 0) for kl in key["lots"])
+                # iter90ac : exclut les lots marques excluded=True
+                active_kls = [kl for kl in key["lots"] if not kl.get("excluded")]
+                total_shares = sum(float(kl.get("share", 0) or 0) for kl in active_kls)
                 if total_shares <= 0:
                     continue
-                for kl in key["lots"]:
+                for kl in active_kls:
                     lot_id = kl.get("lot_id")
                     if not lot_id:
                         continue

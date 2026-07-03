@@ -1,0 +1,33 @@
+{
+  "summary": "Backend-only tests iter90ac (exclusion des lots sur cle de repartition). 21/21 tests passent : 16 regressions unitaires (iter76/83/85/90ab/90ac) + 5 nouveaux tests e2e HTTP couvrant POST /api/distribution-keys, /api/lots/{id}/mutate-preview, /api/invoices, /api/fund-calls avec un lot excluded=True. Comportement metier valide : field 'excluded' persist et retourne, mutation sur lot exclu renvoie roulement_quota=0 sans HTTP 400, denominateur ignore les exclus (1000 au lieu de 1500), distribution_lines invoice + fund_call ne contiennent pas le lot exclu, montant total redistribue sur les lots restants.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter90ac_e2e_exclusion_http.py",
+    "/app/backend/tests/test_iter90ac_lot_exclusion.py",
+    "/app/test_reports/pytest/iter90ac_e2e.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "invoices.py lignes 344/469 et fund_calls.py ligne 153 : filtre 'active_kls = [l for l in key[\"lots\"] if not l.get(\"excluded\")]' est duplique 3 fois - candidat a une helper function util (DRY).",
+    "properties.py: la logique 'excluded' est bien centralisee dans _compute_mutation_breakdown, aucun code duplique.",
+    "Backward compat verifie : cles legacy sans champ excluded fonctionnent comme avant (test_legacy_keys_without_excluded_field_still_work PASSED)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter90ac_e2e_exclusion_http.py (nouveau, 5 tests e2e HTTP)"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "N/A (skipped per request)"},
+  "test_credentials": "admin@copro.be / admin123 (superadmin) via /api/auth/login cookie-based auth",
+  "seed_data_creation": "Chaque test crée une ACP temporaire (iter90ac-e2e-<uuid>) + FY 2026 + 2 owners + 2 lots + JE roulement 3000 EUR via motor direct. Cleanup module-scoped fixture supprime tout par copropriete_id en fin de suite. Aucun impact sur ACP 9e1dbd5a (TER).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Feature iter90ac (exclusion lots sur cles) validee backend e2e. Frontend a valider manuellement selon la review_request. Le PDF decompte (pdf_decompte.py dk_index) n'a PAS ete teste par un e2e HTTP dedie mais test_iter85_pdf_decompte_mutation reste vert - un test explicite avec cle contenant un lot excluded pourrait etre ajoute pour couvrir explicitement le point 4 du CDC.",
+  "rca of the issue": "N/A - pas de bug detecte."
+}

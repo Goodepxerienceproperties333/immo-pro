@@ -190,6 +190,9 @@ def build_decompte_pdf(
         items = dk.get("lots", []) or []
         lots_map = {}
         for it in items:
+            # iter90ac : ignorer les lots explicitement exclus de la cle
+            if it.get("excluded"):
+                continue
             lot_id = it.get("lot_id")
             # Try "share" first (real schema), fall back to "quotity" for safety
             q = it.get("share")

@@ -393,12 +393,13 @@ export default function InvoicesPage() {
 
   const openCreateKey = () => {
     setEditingKey(null); setKeyUsage(null);
-    setKeyForm({ name: '', code: '', description: '', key_type: 'quotity', lots: lots.map(l => ({ lot_id: l.id, lot_number: l.number, share: l.quotity || 0 })), is_default: false });
+    setKeyForm({ name: '', code: '', description: '', key_type: 'quotity', lots: lots.map(l => ({ lot_id: l.id, lot_number: l.number, share: l.quotity || 0, excluded: false })), is_default: false });
     setKeyDialog(true);
   };
   const openEditKey = async (k) => {
     setEditingKey(k);
-    setKeyForm({ name: k.name, code: k.code || '', description: k.description || '', key_type: k.key_type, lots: (k.lots || []).map(l => ({ ...l })), is_default: !!k.is_default });
+    // iter90ac : preserver excluded lors de l'edition, defaut false pour compat legacy
+    setKeyForm({ name: k.name, code: k.code || '', description: k.description || '', key_type: k.key_type, lots: (k.lots || []).map(l => ({ ...l, excluded: !!l.excluded })), is_default: !!k.is_default });
     try {
       const { data } = await api.get(`/distribution-keys/${k.id}/usage`);
       setKeyUsage(data);
@@ -673,8 +674,11 @@ export default function InvoicesPage() {
                 {distKeys.length === 0 ? (
                   <TableRow><TableCell colSpan={9} className="text-center py-8 text-slate-400">Aucune cle</TableCell></TableRow>
                 ) : distKeys.map(k => {
-                  const total = (k.lots || []).reduce((s, l) => s + (Number(l.share) || 0), 0);
-                  const hasZero = (k.lots || []).some(l => !Number(l.share));
+                  // iter90ac : ignorer les lots explicitement exclus du calcul
+                  const activeLots = (k.lots || []).filter(l => !l.excluded);
+                  const excludedCount = (k.lots || []).length - activeLots.length;
+                  const total = activeLots.reduce((s, l) => s + (Number(l.share) || 0), 0);
+                  const hasZero = activeLots.some(l => !Number(l.share));
                   // "ronds" frequents en copro belge : 1000 / 10000 / 100 / 1
                   const isRound = [1, 100, 1000, 10000].some(t => Math.abs(total - t) < 0.005);
                   let coherenceColor = 'bg-slate-50 text-slate-500 border-slate-200';
@@ -693,7 +697,14 @@ export default function InvoicesPage() {
                       </TableCell>
                       <TableCell>{k.description}</TableCell>
                       <TableCell><Badge variant="outline">{k.key_type}</Badge></TableCell>
-                      <TableCell className="text-sm">{k.lots?.length || 0} lots</TableCell>
+                      <TableCell className="text-sm">
+                        {activeLots.length} lots
+                        {excludedCount > 0 && (
+                          <span className="ml-1 text-[10px] text-slate-400" title={`${excludedCount} lot(s) exclu(s)`}>
+                            (+{excludedCount} exclu{excludedCount > 1 ? 's' : ''})
+                          </span>
+                        )}
+                      </TableCell>
                       <TableCell className="text-right font-mono text-sm" data-testid={`key-total-${k.id}`}>{total.toFixed(2)}</TableCell>
                       <TableCell>
                         <Badge variant="outline" className={coherenceColor}>{coherenceLabel}</Badge>
@@ -1417,8 +1428,11 @@ export default function InvoicesPage() {
               <span className="ml-auto text-[11px] text-slate-500 italic">1 seule cle par defaut par ACP - utilisee comme fallback</span>
             </label>
             {keyForm.lots.length > 0 && (() => {
-              const totalShare = keyForm.lots.reduce((s, l) => s + (Number(l.share) || 0), 0);
-              const lotsAtZero = keyForm.lots.filter(l => !Number(l.share)).length;
+              // iter90ac : le total et l'avertissement "lots a 0" ignorent les exclus
+              const activeLots = keyForm.lots.filter(l => !l.excluded);
+              const excludedCount = keyForm.lots.length - activeLots.length;
+              const totalShare = activeLots.reduce((s, l) => s + (Number(l.share) || 0), 0);
+              const lotsAtZero = activeLots.filter(l => !Number(l.share)).length;
               const isRound = [1, 100, 1000, 10000].some(t => Math.abs(totalShare - t) < 0.005);
               let badgeColor = 'bg-slate-100 text-slate-700 border-slate-300';
               let badgeLabel = `Total : ${totalShare.toFixed(2)}`;
@@ -1427,24 +1441,24 @@ export default function InvoicesPage() {
               else if (totalShare > 0) { badgeColor = 'bg-blue-50 text-blue-700 border-blue-300'; badgeLabel = `Total : ${totalShare.toFixed(2)}`; }
 
               const fillEqual = () => {
-                const n = keyForm.lots.length || 1;
+                const n = activeLots.length || 1;
                 const share = +(1000 / n).toFixed(4);
-                setKeyForm({...keyForm, lots: keyForm.lots.map(l => ({ ...l, share }))});
+                setKeyForm({...keyForm, lots: keyForm.lots.map(l => l.excluded ? l : ({ ...l, share }))});
               };
               const fillFromQuotities = () => {
                 const byNumber = Object.fromEntries((lots || []).map(x => [x.number, x.quotity || 0]));
-                setKeyForm({...keyForm, lots: keyForm.lots.map(l => ({ ...l, share: byNumber[l.lot_number] || 0 }))});
+                setKeyForm({...keyForm, lots: keyForm.lots.map(l => l.excluded ? l : ({ ...l, share: byNumber[l.lot_number] || 0 }))});
               };
               const normalize1000 = () => {
                 if (totalShare <= 0) return;
                 const factor = 1000 / totalShare;
-                setKeyForm({...keyForm, lots: keyForm.lots.map(l => ({ ...l, share: +((Number(l.share) || 0) * factor).toFixed(4) }))});
+                setKeyForm({...keyForm, lots: keyForm.lots.map(l => l.excluded ? l : ({ ...l, share: +((Number(l.share) || 0) * factor).toFixed(4) }))});
               };
 
               return (
                 <div>
                   <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
-                    <label className="form-label mb-0">Repartition par lot</label>
+                    <label className="form-label mb-0">Repartition par lot{excludedCount > 0 && <span className="ml-2 text-[10px] text-slate-400 font-normal">({excludedCount} exclu{excludedCount > 1 ? 's' : ''})</span>}</label>
                     <div className="flex gap-1.5">
                       <Button type="button" size="sm" variant="outline" className="text-[11px] h-7" onClick={fillFromQuotities} data-testid="key-fill-from-quotities">Reprendre tantiemes lots</Button>
                       <Button type="button" size="sm" variant="outline" className="text-[11px] h-7" onClick={fillEqual} data-testid="key-fill-equal">Repartir egalement (=1000)</Button>
@@ -1454,24 +1468,39 @@ export default function InvoicesPage() {
                   <div className="border rounded-md overflow-hidden max-h-60 overflow-y-auto">
                     <table className="w-full text-sm">
                       <thead className="bg-slate-50 text-xs text-slate-600 sticky top-0">
-                        <tr><th className="p-2 text-left">Lot</th><th className="p-2 text-right">Quote-part</th><th className="p-2 text-right w-20">% du total</th></tr>
+                        <tr>
+                          <th className="p-2 text-left">Lot</th>
+                          <th className="p-2 text-center w-16" title="Un lot exclu ne participe pas au calcul de la cle">Exclu</th>
+                          <th className="p-2 text-right">Quote-part</th>
+                          <th className="p-2 text-right w-20">% du total</th>
+                        </tr>
                       </thead>
                       <tbody>
                         {keyForm.lots.map((l, i) => {
                           const share = Number(l.share) || 0;
-                          const pct = totalShare > 0 ? (share / totalShare * 100) : 0;
+                          const pct = (!l.excluded && totalShare > 0) ? (share / totalShare * 100) : 0;
                           return (
-                            <tr key={i} className={`border-t border-slate-100 ${!share ? 'bg-amber-50/40' : ''}`}>
+                            <tr key={i} className={`border-t border-slate-100 ${l.excluded ? 'bg-slate-100 opacity-50' : (!share ? 'bg-amber-50/40' : '')}`}>
                               <td className="p-2">Lot {l.lot_number}</td>
-                              <td className="p-2"><Input type="number" step="0.01" min="0" className={`w-24 ml-auto text-right h-7 text-sm ${!share ? 'border-amber-300' : ''}`} value={l.share} onChange={e => updateKeyLot(i, 'share', e.target.value)} data-testid={`key-lot-share-${i}`} /></td>
-                              <td className="p-2 text-right font-mono text-xs text-slate-500">{pct.toFixed(2)}%</td>
+                              <td className="p-2 text-center">
+                                <input
+                                  type="checkbox"
+                                  checked={!!l.excluded}
+                                  onChange={e => updateKeyLot(i, 'excluded', e.target.checked)}
+                                  className="h-4 w-4 accent-slate-600"
+                                  data-testid={`key-lot-excluded-${i}`}
+                                  title="Exclure ce lot de la cle (ex : lot commercial exclu des ascenseurs)"
+                                />
+                              </td>
+                              <td className="p-2"><Input type="number" step="0.01" min="0" disabled={!!l.excluded} className={`w-24 ml-auto text-right h-7 text-sm ${(!l.excluded && !share) ? 'border-amber-300' : ''}`} value={l.share} onChange={e => updateKeyLot(i, 'share', e.target.value)} data-testid={`key-lot-share-${i}`} /></td>
+                              <td className="p-2 text-right font-mono text-xs text-slate-500">{l.excluded ? '—' : pct.toFixed(2) + '%'}</td>
                             </tr>
                           );
                         })}
                       </tbody>
                       <tfoot>
                         <tr className="bg-slate-50 border-t-2 border-slate-300 text-xs font-semibold">
-                          <td className="p-2">Total</td>
+                          <td className="p-2" colSpan={2}>Total (hors exclus)</td>
                           <td className="p-2 text-right font-mono" data-testid="key-form-total">{totalShare.toFixed(2)}</td>
                           <td className="p-2 text-right font-mono">{totalShare > 0 ? '100.00%' : '0%'}</td>
                         </tr>

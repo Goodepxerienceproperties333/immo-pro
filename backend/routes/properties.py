@@ -859,15 +859,24 @@ def create_properties_router(db):
                 f"\u00ab {default_key.get('name', '?')} \u00bb. Ajoutez-le a la cle ou "
                 f"definissez une exception pour cette mutation.",
             )
-        lot_share_in_key = float(lot_entry_in_key.get("share", 0) or 0)
+        # iter90ac : denominateur = somme des shares des lots NON exclus.
+        # Un lot exclu ne participe pas au calcul de cette cle.
         key_total_quotity = round(
-            sum(float(kl.get("share", 0) or 0) for kl in default_key["lots"]),
+            sum(float(kl.get("share", 0) or 0)
+                for kl in default_key["lots"] if not kl.get("excluded")),
             6,
         )
-        if key_total_quotity > 0 and lot_share_in_key > 0 and fonds_roul_total > 0:
-            roulement_quota = round(fonds_roul_total * (lot_share_in_key / key_total_quotity), 2)
-        else:
+        lot_excluded_from_key = bool(lot_entry_in_key.get("excluded"))
+        if lot_excluded_from_key:
+            # Lot explicitement exclu -> aucune quote-part de roulement transferee.
+            lot_share_in_key = 0.0
             roulement_quota = 0.0
+        else:
+            lot_share_in_key = float(lot_entry_in_key.get("share", 0) or 0)
+            if key_total_quotity > 0 and lot_share_in_key > 0 and fonds_roul_total > 0:
+                roulement_quota = round(fonds_roul_total * (lot_share_in_key / key_total_quotity), 2)
+            else:
+                roulement_quota = 0.0
 
         # conservé pour la suite (prorata appels, etc.)
         all_lots = await db.lots.find({"copropriete_id": copro_id}, {"_id": 0, "quotity": 1, "id": 1, "owner_id": 1}).to_list(10000)
@@ -965,6 +974,7 @@ def create_properties_router(db):
             "lot_share_in_key": lot_share_in_key,
             "key_total_quotity": key_total_quotity,
             "default_key_name": default_key.get("name", ""),
+            "lot_excluded_from_key": lot_excluded_from_key,
             "roulement_quota": roulement_quota,
             # Section 2 : Prorata appel en cours (portion apres vente, transferee
             # de l'acquereur vers le vendeur via OD)

@@ -28,6 +28,10 @@ class DistKeyLot(BaseModel):
     lot_id: str
     lot_number: str
     share: float
+    # iter90ac : exclusion explicite. Un lot exclu ne participe pas au calcul
+    # de cette cle (ex : lot commercial exclu des charges d'ascenseur).
+    # Compatible avec les donnees existantes (defaut False = comportement inchange).
+    excluded: bool = False
 
 
 class DistKeyInput(BaseModel):
@@ -336,8 +340,10 @@ def create_invoices_router(db):
             key = await db.distribution_keys.find_one({"id": ln["distribution_key_id"]}, {"_id": 0})
             if not key:
                 continue
-            total_shares = sum(l_["share"] for l_ in key["lots"]) if key["lots"] else 1
-            for lot_entry in key["lots"]:
+            # iter90ac : exclut les lots marques excluded=True
+            active_kls = [l_ for l_ in key["lots"] if not l_.get("excluded")]
+            total_shares = sum(l_["share"] for l_ in active_kls) if active_kls else 1
+            for lot_entry in active_kls:
                 lot_doc = await db.lots.find_one({"id": lot_entry["lot_id"]}, {"_id": 0})
                 owner_name = ""
                 if lot_doc and lot_doc.get("owner_id"):
@@ -459,8 +465,10 @@ def create_invoices_router(db):
         elif data.distribution_key_id and not data.is_private_fee:
             key = await db.distribution_keys.find_one({"id": data.distribution_key_id}, {"_id": 0})
             if key:
-                total_shares = sum(l["share"] for l in key["lots"]) if key["lots"] else 1
-                for lot_entry in key["lots"]:
+                # iter90ac : exclut les lots marques excluded=True
+                active_kls = [l for l in key["lots"] if not l.get("excluded")]
+                total_shares = sum(l["share"] for l in active_kls) if active_kls else 1
+                for lot_entry in active_kls:
                     owner = await db.lots.find_one({"id": lot_entry["lot_id"]}, {"_id": 0})
                     owner_name = ""
                     if owner and owner.get("owner_id"):

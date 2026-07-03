@@ -41,10 +41,12 @@ async def main():
         key_lots = key.get("lots") or []
         if not key_lots:
             continue
-        total_shares = sum(float(l.get("share") or 0) for l in key_lots) or 1
+        # iter90ac : les lots excluded=True ne participent pas a la cle
+        active_lots = [l for l in key_lots if not l.get("excluded")]
+        total_shares = sum(float(l.get("share") or 0) for l in active_lots) or 1
         total_amount = float(inv.get("total_amount") or 0)
         new_lines = []
-        for lot_entry in key_lots:
+        for lot_entry in active_lots:
             lot_id = lot_entry.get("lot_id", "")
             share = float(lot_entry.get("share") or 0)
             if share <= 0:
