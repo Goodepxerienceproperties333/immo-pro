@@ -11,6 +11,34 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 
+### Iter90ai (Feb 2026) - Fonds de reserve exclu du decompte de mutation
+
+**Regle metier validee** :
+- A) Fonds de reserve vote avant la mutation -> 100% a charge vendeur, jamais transferable a l'acheteur.
+- B) Fonds de reserve : JAMAIS de transfert V/A (ni via OD MUT-P prorata, ni via MUT-F futurs).
+- C) Fonds de roulement : transfert unique a date de mutation, jamais proratise (deja conforme).
+- D) Seules les provisions pour charges sont proratisees.
+
+**Bug initial** : quand `call_type='provisions'` contient `reserve_amount > 0`
+(cas legacy : injection reserve dans un appel provisions), la part reserve etait
+incluse dans les OD MUT-P (prorata) et MUT-F (futurs).
+
+**Backend** (`routes/properties.py::_compute_mutation_breakdown`) :
+- Apres calcul de `amount_lot` pour un call `provisions`, si `c_reserve > 0` et
+  `c_total > 0` : `amount_lot = amount_lot * ((c_total - c_reserve) / c_total)`.
+- Applique avant le calcul du prorata (OD MUT-P) et avant la reference dans
+  `future_calls` (OD MUT-F).
+- Appels standalone `call_type='reserve'` deja filtres en amont (L893).
+
+**Tests** (`test_iter90ai_mutation_exclude_reserve.py` - 3/3) :
+- `test_pure_provisions_unchanged` : reserve_amount=0 -> prorata=1013.33 (regression, comportement inchange).
+- `test_provisions_with_reserve_excluded` : reserve_amount=200/1200 -> quote-part ajustee a 1000 -> prorata acheteur = 844.44 (au lieu de 1013.33).
+- `test_standalone_reserve_ignored` : call_type='reserve' seul -> aucun prorata ni appel futur.
+
+**Convention prorata** : `days_after = (period_end - sale_dt).days + 1` -> la date
+de vente est comptee cote acheteur (buyer inclut sale_dt).
+
+
 ## Implemented
 ### Iter90ah (Feb 2026) - Appels de fonds standalone (reserve / roulement / special)
 

@@ -890,6 +890,9 @@ def create_properties_router(db):
         calls = await db.fund_calls.find(
             {"copropriete_id": copro_id}, {"_id": 0}
         ).sort("date", 1).to_list(10000)
+        # Regle metier : seules les PROVISIONS participent au prorata et aux appels futurs.
+        # Fonds de reserve : jamais de transfert vendeur/acheteur.
+        # Fonds de roulement : traite via le bloc 1 (transfert capital, date mutation).
         calls = [c for c in calls if (c.get("call_type") or "provisions") == "provisions"]
 
         # Caches pour eviter de recharger les cles a chaque iteration
@@ -910,6 +913,18 @@ def create_properties_router(db):
             amount_lot = await _compute_lot_amount_in_call(c, lot_id_this, lot, keys_cache, all_lots_cache)
             if amount_lot <= 0.001:
                 continue
+
+            # iter90ai : exclure la part fonds de reserve de la quote-part lot AVANT
+            # prorata et appel futur. Regle metier : le fonds de reserve ne fait JAMAIS
+            # l'objet d'un transfert entre vendeur et acheteur (ni via OD de mutation,
+            # ni via prorata). Cas legacy : appel call_type='provisions' avec
+            # reserve_amount > 0 injecte -> soustraire prorata de la part reserve.
+            c_reserve = float(c.get("reserve_amount", 0) or 0)
+            c_total = float(c.get("total_amount", 0) or 0)
+            if c_reserve > 0 and c_total > 0:
+                amount_lot = round(amount_lot * ((c_total - c_reserve) / c_total), 2)
+                if amount_lot <= 0.001:
+                    continue
 
             if c_start <= sale_dt <= c_end:
                 total_days = (c_end - c_start).days + 1
