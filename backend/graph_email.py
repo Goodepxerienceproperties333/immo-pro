@@ -19,6 +19,7 @@ _TENANT_ID = os.environ.get("AZURE_TENANT_ID", "")
 _CLIENT_ID = os.environ.get("AZURE_CLIENT_ID", "")
 _CLIENT_SECRET = os.environ.get("AZURE_CLIENT_SECRET", "")
 _SENDER_UPN = os.environ.get("GRAPH_SENDER_UPN", "")
+_MAIL_ENABLED = os.environ.get("MAIL_ENABLED", "false").lower() in ("true", "1", "yes")
 _GRAPH_ENDPOINT = "https://graph.microsoft.com/v1.0"
 _AUTHORITY = f"https://login.microsoftonline.com/{_TENANT_ID}" if _TENANT_ID else ""
 _SCOPE = "https://graph.microsoft.com/.default"
@@ -70,6 +71,12 @@ async def send_html_email(
     iter90r : `reply_to` sets the Reply-To header so support can respond
     directly to the requester (e.g. syndic asking a support question).
     """
+    if not _MAIL_ENABLED:
+        logger.info(
+            "[DRY-RUN] Email suppressed (MAIL_ENABLED=false). To: %s, Subject: %s",
+            list(recipients), subject,
+        )
+        return
     sender = sender_upn or _SENDER_UPN
     if not sender:
         raise RuntimeError("GRAPH_SENDER_UPN not configured")

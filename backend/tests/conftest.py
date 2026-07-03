@@ -22,7 +22,14 @@ This is non-invasive : zero changes required in test files, and the rest
 of production code is untouched.
 """
 import asyncio
+import os
 import pytest
+from dotenv import load_dotenv
+
+# Load env vars BEFORE any test module is imported so that module-level
+# `os.environ.get("REACT_APP_BACKEND_URL").rstrip("/")` works everywhere.
+load_dotenv("/app/frontend/.env")
+load_dotenv("/app/backend/.env")
 
 
 _persistent_loop: asyncio.AbstractEventLoop | None = None
