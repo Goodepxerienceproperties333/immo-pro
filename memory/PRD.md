@@ -12,6 +12,49 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 ## Implemented
+### Iter90ac (Feb 2026) - Exclusion explicite de lots sur les cles de repartition
+
+**Ticket user** : "Ajouter le concept d'exclusion sur les lots d'une cle de
+repartition [...] certains lots ne participent pas a certaines categories
+de charges (ex. lot commercial au rez exclu des charges d'ascenseur).
+L'exclusion doit etre explicite, pas deduite d'un share=0."
+
+**Backend** :
+- `routes/invoices.py::DistKeyLot` : nouveau champ `excluded: bool = False`
+  (backward compat).
+- `routes/properties.py::_compute_mutation_breakdown` : `key_total_quotity`
+  ignore les lots `excluded=True` ; si le lot mute est exclu ->
+  `lot_share_in_key=0`, `roulement_quota=0`, `lot_excluded_from_key=True`
+  (pas d'erreur HTTP 400). Nouveau champ retourne : `lot_excluded_from_key`.
+- `routes/fund_calls.py` : 3 endroits patches (POST fund_call classique,
+  fund_call auto-generated, compute per-lot amounts) - filtrent
+  `excluded=True`.
+- `routes/invoices.py` : 2 endroits patches (distribution auto invoice
+  + direct dispatch) - `active_kls = [l for l in key["lots"] if not
+  l.get("excluded")]`.
+- `pdf_decompte.py::dk_index` : construction ignore les lots exclus.
+- `scripts/recompute_invoice_distribution_lines.py` : `active_lots`
+  exclut les `excluded=True`.
+
+**Frontend** (`pages/InvoicesPage.js`) :
+- Init form clef : `excluded: false` par defaut a la creation ; preserve
+  la valeur a l'edition.
+- Colonne "Exclu" (checkbox) dans le form d'edition des cles avec
+  `data-testid="key-lot-excluded-{i}"`.
+- Ligne excluee : `bg-slate-100 opacity-50`, Input share disable, pct = "—".
+- Total en pied de table : "Total (hors exclus)" - ignore les exclus.
+- Badge coherence + hasZero : ne se declenchent QUE sur les lots non exclus.
+- Liste des cles : "3 lots (+1 exclu)" au lieu de "4 lots".
+- Boutons "Repartir egalement", "Reprendre tantiemes", "Normaliser /1000"
+  ne modifient PAS les lots exclus.
+
+**Tests** :
+- Unit : `test_iter90ac_lot_exclusion.py` (2/2) - scenario lot exclu +
+  backward compat cle legacy sans champ excluded.
+- E2E HTTP : `test_iter90ac_e2e_exclusion_http.py` (5/5) - POST
+  distribution-keys, mutate-preview, invoices, fund-calls.
+- Total : 21/21 tests passent (16 regressions iter76/83/85/90ab + 5 e2e).
+
 ### Iter90ab (Feb 2026) - Mutation : fonds de roulement calcule sur la cle par defaut
 
 **Regle metier appliquee** :
