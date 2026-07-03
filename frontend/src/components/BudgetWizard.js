@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import api from '@/lib/api';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
@@ -21,6 +21,12 @@ const FREQ_OPTIONS = [
 ];
 
 export default function BudgetWizard({ budget, distKeys = [], onClose, onDone, mode = 'create' }) {
+  // Cle de repartition par defaut (marquee is_default=true, sinon premiere cle)
+  const defaultKeyId = useMemo(() => {
+    if (!distKeys.length) return '';
+    return (distKeys.find(k => k.is_default) || distKeys[0]).id;
+  }, [distKeys]);
+
   const [step, setStep] = useState(1);
   const [frequency, setFrequency] = useState(4);
   const [startDate, setStartDate] = useState(() => {
@@ -45,6 +51,14 @@ export default function BudgetWizard({ budget, distKeys = [], onClose, onDone, m
   const [roulFreq, setRoulFreq] = useState(0);
   const [roulStartDate, setRoulStartDate] = useState('');
   const [roulDueOffset, setRoulDueOffset] = useState(30);
+
+  // iter90aa : quand distKeys arrive, pre-remplir la cle par defaut si aucune choisie
+  useEffect(() => {
+    if (defaultKeyId) {
+      setReserveKeyId(prev => prev || defaultKeyId);
+      setRoulKeyId(prev => prev || defaultKeyId);
+    }
+  }, [defaultKeyId]);
 
   const [preview, setPreview] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -228,11 +242,14 @@ export default function BudgetWizard({ budget, distKeys = [], onClose, onDone, m
                       </div>
                       <div>
                         <label className="form-label">Cle de repartition</label>
-                        <Select value={reserveKeyId || 'default'} onValueChange={v => setReserveKeyId(v === 'default' ? '' : v)}>
-                          <SelectTrigger data-testid="wizard-reserve-key"><SelectValue placeholder="Tantiemes (defaut)" /></SelectTrigger>
+                        <Select value={reserveKeyId} onValueChange={setReserveKeyId}>
+                          <SelectTrigger data-testid="wizard-reserve-key"><SelectValue placeholder={distKeys.length ? "Selectionner une cle" : "Aucune cle - creez-en une"} /></SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="default">Tantiemes (defaut)</SelectItem>
-                            {distKeys.map(k => <SelectItem key={k.id} value={k.id}>{k.name}</SelectItem>)}
+                            {distKeys.map(k => (
+                              <SelectItem key={k.id} value={k.id}>
+                                {k.name}{k.is_default ? ' (defaut)' : ''}
+                              </SelectItem>
+                            ))}
                           </SelectContent>
                         </Select>
                       </div>
@@ -331,11 +348,14 @@ export default function BudgetWizard({ budget, distKeys = [], onClose, onDone, m
                       </div>
                       <div>
                         <label className="text-xs text-slate-600 mb-1 block">Cle de repartition</label>
-                        <Select value={roulKeyId || 'default'} onValueChange={v => setRoulKeyId(v === 'default' ? '' : v)}>
-                          <SelectTrigger data-testid="wizard-roul-key"><SelectValue placeholder="Tantiemes (defaut)" /></SelectTrigger>
+                        <Select value={roulKeyId} onValueChange={setRoulKeyId}>
+                          <SelectTrigger data-testid="wizard-roul-key"><SelectValue placeholder={distKeys.length ? "Selectionner une cle" : "Aucune cle - creez-en une"} /></SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="default">Tantiemes (defaut)</SelectItem>
-                            {distKeys.map(k => <SelectItem key={k.id} value={k.id}>{k.name}</SelectItem>)}
+                            {distKeys.map(k => (
+                              <SelectItem key={k.id} value={k.id}>
+                                {k.name}{k.is_default ? ' (defaut)' : ''}
+                              </SelectItem>
+                            ))}
                           </SelectContent>
                         </Select>
                       </div>

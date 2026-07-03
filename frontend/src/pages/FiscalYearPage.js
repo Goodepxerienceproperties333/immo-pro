@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, Fragment } from 'react';
+import { useState, useEffect, useCallback, useMemo, Fragment } from 'react';
 import api from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -42,6 +42,12 @@ export default function FiscalYearPage() {
     setYears(y.data); setBudgets(b.data); setAccounts(a.data); setDistKeys(dk.data);
   }, []);
   useEffect(() => { load(); }, [load]);
+
+  // Cle de repartition par defaut (marquee is_default=true, sinon premiere cle)
+  const defaultKeyId = useMemo(() => {
+    if (!distKeys.length) return '';
+    return (distKeys.find(k => k.is_default) || distKeys[0]).id;
+  }, [distKeys]);
 
   const openCreateYear = () => {
     const now = new Date().getFullYear();
@@ -113,7 +119,7 @@ export default function FiscalYearPage() {
     const lines = prevExp.lines.map(l => ({
       account_number: l.account_number,
       account_name: l.account_name,
-      distribution_key_id: l.distribution_key_id || '',
+      distribution_key_id: l.distribution_key_id || defaultKeyId,
       amount: l.amount_total,
     }));
     setBudgetForm(f => ({ ...f, lines }));
@@ -122,7 +128,7 @@ export default function FiscalYearPage() {
 
   const addBudgetLine = () => setBudgetForm(f => ({
     ...f,
-    lines: [...f.lines, { account_number: '', account_name: '', distribution_key_id: '', amount: 0 }],
+    lines: [...f.lines, { account_number: '', account_name: '', distribution_key_id: defaultKeyId, amount: 0 }],
   }));
   const removeBudgetLine = (i) => setBudgetForm(f => ({ ...f, lines: f.lines.filter((_, j) => j !== i) }));
   const updateBudgetLine = (i, field, value) => {
@@ -388,8 +394,14 @@ export default function FiscalYearPage() {
                         onChange={e => updateBudgetLine(i, 'distribution_key_id', e.target.value)}
                         data-testid={`budget-line-key-${i}`}
                       >
-                        <option value="">Tantiemes (defaut)</option>
-                        {distKeys.map(k => <option key={k.id} value={k.id}>{k.name}</option>)}
+                        {distKeys.length === 0 && (
+                          <option value="" disabled>Aucune cle - creez-en une</option>
+                        )}
+                        {distKeys.map(k => (
+                          <option key={k.id} value={k.id}>
+                            {k.name}{k.is_default ? ' (defaut)' : ''}
+                          </option>
+                        ))}
                       </select>
                     </div>
                     <div className="col-span-2">

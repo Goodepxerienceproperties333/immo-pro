@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import api from '@/lib/api';
 import { Button } from '@/components/ui/button';
@@ -148,6 +148,12 @@ export default function InvoicesPage() {
 
   useEffect(() => { load(); }, [load]);
 
+  // Cle de repartition par defaut (marquee is_default=true, sinon premiere cle)
+  const defaultKeyId = useMemo(() => {
+    if (!distKeys.length) return '';
+    return (distKeys.find(k => k.is_default) || distKeys[0]).id;
+  }, [distKeys]);
+
   // Open edit dialog if ?edit=<invoice_id> in URL (deep-link from Expenses page)
   useEffect(() => {
     const editId = searchParams.get('edit');
@@ -167,7 +173,7 @@ export default function InvoicesPage() {
   // Invoice handlers
   const openCreateInvoice = () => {
     setEditingInvoice(null);
-    setInvForm({ number: `F-${Date.now().toString().slice(-6)}`, date: new Date().toISOString().split('T')[0], due_date: '', supplier: '', description: '', total_amount: 0, vat_amount: 0, account_number: '', expense_category_id: '', distribution_key_id: '', status: 'unpaid', is_private_fee: false, private_fee_owner_id: '', private_fee_allocations: [], occupant_pct: 0, proprietaire_pct: 100, lines: [] });
+    setInvForm({ number: `F-${Date.now().toString().slice(-6)}`, date: new Date().toISOString().split('T')[0], due_date: '', supplier: '', description: '', total_amount: 0, vat_amount: 0, account_number: '', expense_category_id: '', distribution_key_id: defaultKeyId, status: 'unpaid', is_private_fee: false, private_fee_owner_id: '', private_fee_allocations: [], occupant_pct: 0, proprietaire_pct: 100, lines: [] });
     setAiHint(''); setPendingPdf(null); setOwnerSearch('');
     setInvoiceDialog(true);
   };
@@ -235,7 +241,7 @@ export default function InvoicesPage() {
             lines: useMulti ? aiLines.map(ln => ({
               account_number: ln.suggested_pcmn_account || '',
               expense_category_id: '',
-              distribution_key_id: '',
+              distribution_key_id: defaultKeyId,
               amount: Number(ln.amount) || 0,
               description: ln.description || '',
             })) : [],
@@ -1083,10 +1089,13 @@ export default function InvoicesPage() {
               </div>
               <div><label className="form-label">Cle de repartition</label>
                 <Select value={invForm.distribution_key_id} onValueChange={v => setInvForm({...invForm, distribution_key_id: v})}>
-                  <SelectTrigger><SelectValue placeholder="Selectionner une cle" /></SelectTrigger>
+                  <SelectTrigger data-testid="inv-dist-key"><SelectValue placeholder={distKeys.length ? "Selectionner une cle" : "Aucune cle - creez-en une"} /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="none">Aucune</SelectItem>
-                    {distKeys.map(k => <SelectItem key={k.id} value={k.id}>{k.name}</SelectItem>)}
+                    {distKeys.map(k => (
+                      <SelectItem key={k.id} value={k.id}>
+                        {k.name}{k.is_default ? ' (defaut)' : ''}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
@@ -1102,11 +1111,11 @@ export default function InvoicesPage() {
                     const firstLine = invForm.account_number ? [{
                       account_number: invForm.account_number,
                       expense_category_id: invForm.expense_category_id || '',
-                      distribution_key_id: invForm.distribution_key_id && invForm.distribution_key_id !== 'none' ? invForm.distribution_key_id : '',
+                      distribution_key_id: invForm.distribution_key_id || defaultKeyId,
                       amount: Number(invForm.total_amount) || 0,
                       description: '',
                     }] : [];
-                    setInvForm(f => ({ ...f, lines: [...firstLine, { account_number: '', expense_category_id: '', distribution_key_id: '', amount: 0, description: '' }] }));
+                    setInvForm(f => ({ ...f, lines: [...firstLine, { account_number: '', expense_category_id: '', distribution_key_id: defaultKeyId, amount: 0, description: '' }] }));
                   }}
                   className="text-xs text-[#0055FF] hover:text-[#0040CC] underline"
                   data-testid="enable-multi-lines-btn"
@@ -1191,19 +1200,22 @@ export default function InvoicesPage() {
                         <div className="col-span-2">
                           {idx === 0 && <label className="form-label text-[10px]">Cle</label>}
                           <Select
-                            value={ln.distribution_key_id || 'none'}
+                            value={ln.distribution_key_id || ''}
                             onValueChange={v => {
                               setInvForm(f => {
                                 const newLines = [...f.lines];
-                                newLines[idx] = { ...newLines[idx], distribution_key_id: v === 'none' ? '' : v };
+                                newLines[idx] = { ...newLines[idx], distribution_key_id: v };
                                 return { ...f, lines: newLines };
                               });
                             }}
                           >
-                            <SelectTrigger className="h-8 text-xs" data-testid={`invoice-line-key-${idx}`}><SelectValue placeholder="Cle" /></SelectTrigger>
+                            <SelectTrigger className="h-8 text-xs" data-testid={`invoice-line-key-${idx}`}><SelectValue placeholder={distKeys.length ? "Cle" : "—"} /></SelectTrigger>
                             <SelectContent>
-                              <SelectItem value="none">—</SelectItem>
-                              {distKeys.map(k => <SelectItem key={k.id} value={k.id}>{k.name}</SelectItem>)}
+                              {distKeys.map(k => (
+                                <SelectItem key={k.id} value={k.id}>
+                                  {k.name}{k.is_default ? ' (defaut)' : ''}
+                                </SelectItem>
+                              ))}
                             </SelectContent>
                           </Select>
                         </div>
@@ -1258,7 +1270,7 @@ export default function InvoicesPage() {
                   <div className="flex items-center justify-between pt-2 border-t border-[#0055FF]/20">
                     <button
                       type="button"
-                      onClick={() => setInvForm(f => ({ ...f, lines: [...f.lines, { account_number: '', expense_category_id: '', distribution_key_id: '', amount: 0, description: '' }] }))}
+                      onClick={() => setInvForm(f => ({ ...f, lines: [...f.lines, { account_number: '', expense_category_id: '', distribution_key_id: defaultKeyId, amount: 0, description: '' }] }))}
                       className="text-xs text-[#0055FF] hover:text-[#0040CC] font-semibold"
                       data-testid="invoice-line-add"
                     >

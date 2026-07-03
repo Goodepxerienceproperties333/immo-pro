@@ -1,0 +1,24 @@
+{
+  "summary": "Frontend UI wiring verified: distribution key dropdowns in Invoice dialog (header + multi-lines), Budget line dialog and BudgetWizard (Reserve + Roulement) now (a) pre-populate with the is_default key, (b) list ONLY the created distribution keys (no hardcoded 'Aucune' / 'Tantiemes (defaut)' / '—' fallback), and (c) show ' (defaut)' suffix on the is_default entry. 15/15 UI checks passed on real data (ACP 9e1dbd5a with 12 dist keys; 'Charges communes' set as is_default via POST /api/distribution-keys/{id}/set-default).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "InvoicesPage.js:1091 - inv-dist-key <Select> has no 'Aucune' clear option anymore : correct par la review, mais si l'utilisateur veut effacer la cle une fois qu'il en a mis une, il n'y a plus de moyen UI (il doit changer pour une autre). Comportement conforme a la demande utilisateur.",
+    "BudgetWizard.js:56-61 - useEffect avec dep [defaultKeyId] est bien idempotent (prev || defaultKeyId), donc si l'utilisateur change manuellement la cle, elle ne sera pas ecrasee au re-render. OK.",
+    "FiscalYearPage.js:391 - budget-line-key est un <select> natif (pas shadcn), evaluation via el.value fonctionne mais UX moins consistante avec le reste de l'app. Non-bloquant."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A", "frontend": "100% (15/15)"},
+  "test_credentials": "admin@copro.be / admin123 (superadmin)",
+  "seed_data_creation": "POST /api/distribution-keys/afe22eed-2782-4d7b-94b4-872d4a7fed21/set-default sur copro 9e1dbd5a-31ea-4fe1-9107-e85637cd81dc (TER ACP, 12 cles existantes). 'Charges communes' est maintenant la cle par defaut de cette ACP. Aucune cle creee, aucun cleanup necessaire (etat coherent, benefique pour l'app).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Feature de pre-population par defaut + filtrage strict des cles de repartition (aucun fallback 'Tantiemes', 'Aucune' ou '—') est 100% verte cote UI. Testee sur InvoicesPage (inv-dist-key + invoice-line-key-*), FiscalYearPage (budget-line-key-*), BudgetWizard (wizard-reserve-key + wizard-roul-key). Setup: copro 9e1dbd5a-31ea-4fe1-9107-e85637cd81dc, cle par defaut = 'Charges communes' (afe22eed-2782-4d7b-94b4-872d4a7fed21). Superadmin admin@copro.be atterrit sur /admin ; il faut set localStorage.selectedCopro puis goto /invoices ou /fiscal directement (pas besoin de cliquer 'Mode syndic').",
+  "rca_of_the_issue": "N/A - Feature correctement implementee."
+}
