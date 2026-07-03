@@ -306,9 +306,48 @@ Regles :
 - Ne pas ajouter de champs supplementaires. Aucun commentaire, aucun markdown."""
 
 
+def _extract_pdf_text_ocr(file_path: str) -> str:
+    """Fallback OCR pour PDFs scannes (sans couche texte).
+
+    - Rasterise chaque page via PyMuPDF (fitz) a 300 DPI (compromis qualite / RAM).
+    - Applique Tesseract avec les langues fra+eng (extraits bancaires belges).
+    - Retourne le texte concatene de toutes les pages. Vide si tout echoue.
+    """
+    try:
+        import fitz  # PyMuPDF
+        import pytesseract
+        from PIL import Image
+        import io as _io
+    except Exception as e:
+        raise RuntimeError(f"OCR indisponible (dependances manquantes) : {e}")
+
+    parts: List[str] = []
+    try:
+        doc = fitz.open(file_path)
+        try:
+            # Zoom 300 DPI = 300/72 ~= 4.17 ; on limite a ~2.5 pour la RAM.
+            zoom = 300 / 72
+            mat = fitz.Matrix(zoom, zoom)
+            for page in doc:
+                pix = page.get_pixmap(matrix=mat, alpha=False)
+                img = Image.open(_io.BytesIO(pix.tobytes("png")))
+                # PSM 6 = bloc uniforme (tableaux bancaires); langues FR+EN.
+                txt = pytesseract.image_to_string(img, lang="fra+eng", config="--psm 6") or ""
+                if txt.strip():
+                    parts.append(txt)
+        finally:
+            doc.close()
+    except Exception as e:
+        raise RuntimeError(f"Echec OCR Tesseract : {e}")
+
+    return "\n".join(parts).strip()
+
+
 def _extract_pdf_text(file_path: str) -> str:
     """Extraction texte via pdfplumber (tableaux bancaires optimaux).
-    Fallback pypdf si pdfplumber echoue. Retourne texte concatene multi-pages."""
+    Fallback pypdf si pdfplumber echoue. Si le PDF n'a aucune couche texte
+    (typiquement scan), bascule automatiquement sur l'OCR Tesseract.
+    Retourne texte concatene multi-pages."""
     text_parts: List[str] = []
     try:
         import pdfplumber
@@ -327,7 +366,18 @@ def _extract_pdf_text(file_path: str) -> str:
                     text_parts.append(t)
         except Exception as e:
             raise RuntimeError(f"Impossible d'extraire le texte du PDF : {e}")
-    return "\n".join(text_parts).strip()
+    joined = "\n".join(text_parts).strip()
+    # Heuristique : moins de 40 caracteres utiles -> le PDF est probablement
+    # un scan sans couche texte. On tente l'OCR Tesseract.
+    if len(joined) < 40:
+        try:
+            ocr_text = _extract_pdf_text_ocr(file_path)
+            if ocr_text and len(ocr_text) > len(joined):
+                return ocr_text
+        except Exception:
+            # OCR indisponible ou en erreur : on retourne ce qu'on a
+            pass
+    return joined
 
 
 async def parse_with_llm(file_path: str, mime_type: str) -> Dict[str, Any]:
@@ -343,14 +393,26 @@ async def parse_with_llm(file_path: str, mime_type: str) -> Dict[str, Any]:
         raise RuntimeError("EMERGENT_LLM_KEY absent - impossible d'extraire avec IA")
 
     # 1) Preparer le texte a envoyer au LLM
+    used_ocr = False
     if mime_type == "application/pdf" or file_path.lower().endswith(".pdf"):
+        # Tentative extraction texte normale (pdfplumber -> pypdf -> OCR fallback)
         source_text = _extract_pdf_text(file_path)
         if not source_text:
             raise RuntimeError(
-                "PDF sans texte extractible (probablement scanne). "
-                "L'OCR n'est pas encore supporte."
+                "PDF sans texte extractible meme apres OCR. "
+                "Verifiez que le fichier n'est pas vide ou corrompu."
             )
-        source_label = "extrait de compte PDF"
+        # Detection : si le PDF n'avait pas de couche texte, _extract_pdf_text
+        # a bascule sur OCR. On refait un check rapide pour tagger l'origine.
+        try:
+            import pdfplumber
+            with pdfplumber.open(file_path) as _pdf:
+                _plain = "\n".join((p.extract_text() or "") for p in _pdf.pages).strip()
+            if len(_plain) < 40:
+                used_ocr = True
+        except Exception:
+            pass
+        source_label = "extrait de compte PDF" + (" (OCR)" if used_ocr else "")
     else:
         # CSV / texte brut
         with open(file_path, "rb") as fh:
@@ -412,15 +474,22 @@ async def parse_with_llm(file_path: str, mime_type: str) -> Dict[str, Any]:
             "counterparty_account": (t.get("counterparty_account") or "").strip(),
             "communication": (t.get("communication") or "").strip(),
         })
+    warnings = [] if txns else ["IA n'a extrait aucune transaction"]
+    if used_ocr:
+        warnings.append(
+            "PDF scanne detecte : extraction via OCR Tesseract (fra+eng). "
+            "Verifiez chaque transaction, la reconnaissance de caracteres peut "
+            "introduire des erreurs sur montants ou dates."
+        )
     return {
-        "extraction_method": "llm_text",
+        "extraction_method": "llm_text_ocr" if used_ocr else "llm_text",
         "account_number": (data.get("account_number") or "").strip(),
         "period_from": _parse_date(data.get("period_from")) or "",
         "period_to": _parse_date(data.get("period_to")) or "",
         "opening_balance": float(_parse_amount(data.get("opening_balance")) or 0),
         "closing_balance": float(_parse_amount(data.get("closing_balance")) or 0),
         "transactions": txns,
-        "warnings": [] if txns else ["IA n'a extrait aucune transaction"],
+        "warnings": warnings,
     }
 
 

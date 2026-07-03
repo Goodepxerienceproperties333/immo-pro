@@ -1,0 +1,37 @@
+{
+  "summary": "iter90z (OCR Tesseract fallback pour PDFs bancaires scannes) fully validated. Backend: 5/5 tests pass. Unit tests (3/3): test_ocr_extracts_scanned_pdf, test_text_pdf_does_not_use_ocr, test_ocr_direct_returns_text_from_scan. E2E HTTP tests (2/2): scanned PDF via POST /api/banking/statements/import-files -> HTTP 200, status='ok', extraction_method='llm_text_ocr', warning 'PDF scanne detecte : extraction via OCR Tesseract (fra+eng)' present, 2 transactions extraites correctement par le LLM Claude a partir du texte OCR. PDF natif (reportlab) -> extraction_method='llm_text' (pas 'llm_text_ocr'), aucun warning OCR, transactions extraites normalement. L'ancien message 'L'OCR n'est pas encore supporte' n'apparait plus. Note: l'endpoint reel est /api/banking/statements/import-files (pas /preview-import comme mentionne dans la review request) et copropriete_id est un Form field (pas un header X-Copropriete-Id).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter90z_ocr_bank_pdf_fallback.py",
+    "/app/backend/tests/test_iter90z_ocr_e2e_http.py",
+    "/app/test_reports/pytest/iter39_ocr.xml"
+  ],
+  "action_items": [
+    "(Informationnel) La review request mentionnait l'endpoint /api/banking/statements/preview-import mais l'endpoint reel est /api/banking/statements/import-files. Aucun endpoint 'preview-import' n'existe. A clarifier dans la doc si un vrai preview (dry-run sans insertion draft) est prevu ulterieurement."
+  ],
+  "critical_code_review_comments": [
+    "bank_import.py _extract_pdf_text_ocr : rasterisation @ 300 DPI (zoom = 300/72 ~= 4.17) - le commentaire mentionne 'on limite a ~2.5 pour la RAM' mais le code applique bien 300/72=4.17. Commentaire trompeur mais code correct. Peut consommer beaucoup de RAM sur PDFs multi-pages haute resolution ; ok pour extraits bancaires typiques (1-3 pages).",
+    "parse_with_llm re-ouvre le PDF avec pdfplumber pour detecter used_ocr (re-parse du texte natif) apres deja avoir appele _extract_pdf_text. Double parsing pdfplumber = surcout ~200-500ms par PDF. Optimisable en faisant _extract_pdf_text retourner un tuple (text, used_ocr) au lieu de re-parser. Non-bloquant.",
+    "L'heuristique 'moins de 40 caracteres = scan' est correcte pour la plupart des cas mais un PDF avec juste un logo + 1 ligne de texte natif court pourrait etre a tort classe comme scan. Seuil raisonnable.",
+    "Endpoint /statements/import-files bien securise : SEC-001 chinese wall via _ensure_copro_access, SEC-002 max 20 fichiers/10 MB/100 MB total, content-type sniffing sur magic bytes %PDF-. Correct.",
+    "Le LLM Claude Sonnet 4.5 gere tres bien le texte OCR (meme avec erreurs) et extrait correctement les transactions dans le test e2e (2/2 transactions retrouvees a partir du scan PIL/DejaVuSans a 150 DPI)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter90z_ocr_e2e_http.py (new file : e2e HTTP tests)"
+  ],
+  "success_rate": {"backend": "100% (5/5)", "frontend": "N/A (skipped par requete)"},
+  "test_credentials": "admin@copro.be / admin123 (superadmin, per /app/memory/test_credentials.md)",
+  "seed_data_creation": "2 bank_statements + 4 bank_transactions crees par les tests e2e (iter90z_scan.pdf, iter90z_native.pdf). Cleanup effectue : delete_many({'filename': {'$regex':'^iter90z_'}}) + txns lies. 0 residu.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "iter90z (OCR fallback) 100% vert. Le systeme detecte automatiquement les PDFs scannes (<40 chars extraits par pdfplumber/pypdf) et bascule sur PyMuPDF (fitz) rasterisation @300 DPI + pytesseract lang='fra+eng' psm=6. Le LLM Claude Sonnet 4.5 recoit ensuite le texte OCR et extrait les transactions. extraction_method='llm_text_ocr' + warning explicite pour prevenir l'utilisateur des erreurs OCR possibles. E2E round-trip valide : PIL image-only PDF -> OCR -> LLM -> transactions parsees. Tesseract 5.3 + langs fra+eng installes dans le Dockerfile. Pas de regression sur le path natif (reportlab PDF -> extraction_method='llm_text' inchange).",
+  "rca_of_the_issue": "N/A - Feature implemente correctement. Aucun bug identifie."
+}
