@@ -254,6 +254,11 @@ export default function InvoicesPage() {
         if (ext.bce_number) parts.push(`BCE: ${ext.bce_number}`);
         if (ext.iban) parts.push(`IBAN: ${ext.iban}`);
         if (ext.vat_rate) parts.push(`Taux TVA: ${ext.vat_rate}%`);
+        // iter90ap : avertissement dates suspectes signale par le backend
+        if (ext._date_warning) {
+          parts.push(`⚠️ ${ext._date_warning}`);
+          toast.warning(`Dates a verifier : ${ext._date_warning}`, { duration: 10000 });
+        }
         if (data.supplier_match) {
           const m = data.supplier_match_method === 'bce' ? 'par BCE' : 'par nom';
           parts.push(`Fournisseur reconnu (${m}): ${data.supplier_match.name}`);

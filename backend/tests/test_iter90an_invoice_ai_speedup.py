@@ -83,23 +83,25 @@ async def _run_cache_hit_avoids_refetch():
 
 
 async def _run_model_selection_by_use_vision():
-    """Verifie le choix de modele selon use_vision (Haiku texte, Sonnet vision)."""
-    # On teste indirectement le fait que le code source contient les 2 modeles.
+    """Verifie le choix de modele selon use_vision (Sonnet 4.6 texte, Sonnet 4.5 vision).
+
+    iter90ap : bascule Haiku -> Sonnet 4.6 pour ameliorer la precision (dates
+    belges DD/MM/YYYY, ambiguites, formats non standards).
+    """
     src_path = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
         "routes", "invoice_ai.py",
     )
     with open(src_path) as f:
         src = f.read()
-    assert "claude-haiku-4-5-20251001" in src, (
-        "Iter90an : le path texte doit utiliser Claude Haiku 4.5"
+    assert "claude-sonnet-4-6" in src, (
+        "Iter90ap : le path texte doit utiliser Claude Sonnet 4.6 (recommande)"
     )
     assert "claude-sonnet-4-5-20250929" in src, (
         "Le path vision doit conserver Claude Sonnet 4.5"
     )
     # Verifie la logique ternaire
-    assert 'use_vision else "claude-haiku-4-5-20251001"' in src or \
-           '"claude-sonnet-4-5-20250929" if use_vision else "claude-haiku-4-5-20251001"' in src
+    assert '"claude-sonnet-4-5-20250929" if use_vision else "claude-sonnet-4-6"' in src
 
 
 async def _run_pcmn_list_limit_40():

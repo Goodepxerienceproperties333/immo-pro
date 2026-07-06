@@ -94,8 +94,8 @@ async def _extract_invoice_with_ai(file_path: str, mime_type: str, known_pcmn: l
                 "Schema: {"
                 '"supplier_name": "<exact supplier name>", '
                 '"number": "<invoice number>", '
-                '"date": "<YYYY-MM-DD>", '
-                '"due_date": "<YYYY-MM-DD or empty>", '
+                '"date": "<YYYY-MM-DD, invoice issue date>", '
+                '"due_date": "<YYYY-MM-DD, payment due date, empty if not present>", '
                 '"total_amount": <float TTC>, '
                 '"vat_amount": <float VAT amount>, '
                 '"net_amount": <float HT>, '
@@ -108,6 +108,22 @@ async def _extract_invoice_with_ai(file_path: str, mime_type: str, known_pcmn: l
                 '"communication": "<structured comm or empty>", '
                 '"lines": [<line objects, see below>]'
                 "}\n\n"
+                "CRITICAL - BELGIAN DATE FORMAT RULES:\n"
+                "- Belgian invoices ALWAYS use DAY/MONTH/YEAR format (DD/MM/YYYY, DD-MM-YYYY, DD.MM.YYYY).\n"
+                "- NEVER assume US format (MM/DD/YYYY). If you see '05/06/2026', it means 5 June 2026, NOT May 6.\n"
+                "- French month names : janvier=01, fevrier=02, mars=03, avril=04, mai=05, juin=06, "
+                "  juillet=07, aout=08, septembre=09, octobre=10, novembre=11, decembre=12.\n"
+                "- Dutch month names : januari=01, februari=02, maart=03, april=04, mei=05, juni=06, "
+                "  juli=07, augustus=08, september=09, oktober=10, november=11, december=12.\n"
+                "- If the year is 2-digit (e.g. '15/06/25'), assume 20XX (2025).\n"
+                "- Output MUST be ISO 8601: YYYY-MM-DD (e.g. 2026-06-15). NEVER other formats.\n"
+                "- If the invoice shows MULTIPLE dates (invoice date, due date, service period, "
+                "  reference date), pick :\n"
+                "  * `date` = the invoice ISSUE date (usually labeled 'Date facture', 'Datum factuur', "
+                "    'Invoice date', 'Facture du', 'Date d'emission', 'Factuurdatum').\n"
+                "  * `due_date` = the PAYMENT deadline (labeled 'Echeance', 'A payer avant', "
+                "    'Vervaldatum', 'Vervaldag', 'Payment due', 'Date d'echeance').\n"
+                "- If NO clear date is found, return empty string \"\" for that field. DO NOT invent.\n\n"
                 "Each detail line in `lines` MUST have shape: "
                 '{"description": "<short label of the line>", '
                 '"amount": <float TTC for this line>, '
@@ -123,14 +139,15 @@ async def _extract_invoice_with_ai(file_path: str, mime_type: str, known_pcmn: l
                 "  frais admin -> 612xxx or 613xxx, entretien -> 611xxx, electricite -> 612xxx, etc.).\n\n"
                 "Available PCMN accounts (class 6 only, choose the most appropriate):\n"
                 f"{pcmn_hint}\n"
-                "Use 0 or empty strings if unknown. Date format ISO YYYY-MM-DD only."
+                "Use 0 or empty strings if unknown. Never invent values."
             ),
-        # iter90an : Haiku 4.5 pour le path texte (3-4x plus rapide que Sonnet
-        # sur du JSON structure, qualite equivalente pour cette tache).
+        # iter90ap : Sonnet 4.6 pour le path texte (recommande, meilleur ratio
+        # vitesse/precision que Haiku 4.5 - dates belges ambigues necessitent
+        # plus de "raisonnement" que le format US par defaut).
         # Sonnet 4.5 conserve pour la vision (OCR de PDF scanne, qualite critique).
         ).with_model(
             "anthropic",
-            "claude-sonnet-4-5-20250929" if use_vision else "claude-haiku-4-5-20251001",
+            "claude-sonnet-4-5-20250929" if use_vision else "claude-sonnet-4-6",
         )
 
         if use_vision:
@@ -209,6 +226,48 @@ def create_invoice_ai_router(db):
             # Utilise le set du cache : lookup en memoire O(1), pas de round-trip Mongo.
             if acc not in valid_accs:
                 result["suggested_pcmn_account"] = ""
+
+        # iter90ap : validation post-extraction des dates (sanity check).
+        # Signale les dates aberrantes (annee < 2020 ou > 2035, format non ISO,
+        # due_date < date). Ne bloque pas la creation, mais avertit l'UI via
+        # `_date_warning` pour que le syndic verifie manuellement.
+        def _validate_dates():
+            from datetime import date as _dt_cls
+            warnings = []
+            date_val = (result.get("date") or "").strip()
+            due_val = (result.get("due_date") or "").strip()
+            parsed_date = None
+            parsed_due = None
+            if date_val:
+                try:
+                    parsed_date = _dt_cls.fromisoformat(date_val)
+                    y = parsed_date.year
+                    if y < 2020 or y > 2035:
+                        warnings.append(f"Date facture suspecte ({date_val}) : annee hors plage 2020-2035")
+                        result["date"] = ""
+                except (ValueError, TypeError):
+                    warnings.append(f"Date facture illisible : '{date_val}' (format non ISO YYYY-MM-DD)")
+                    result["date"] = ""
+            if due_val:
+                try:
+                    parsed_due = _dt_cls.fromisoformat(due_val)
+                    y = parsed_due.year
+                    if y < 2020 or y > 2035:
+                        warnings.append(f"Date echeance suspecte ({due_val}) : annee hors plage 2020-2035")
+                        result["due_date"] = ""
+                except (ValueError, TypeError):
+                    warnings.append(f"Date echeance illisible : '{due_val}' (format non ISO YYYY-MM-DD)")
+                    result["due_date"] = ""
+            # Coherence : due_date >= date
+            if parsed_date and parsed_due and parsed_due < parsed_date:
+                warnings.append(
+                    f"Incoherence : echeance ({due_val}) anterieure a date facture ({date_val}). "
+                    f"L'IA a probablement inverse jour/mois - a verifier."
+                )
+            if warnings:
+                result["_date_warning"] = " ; ".join(warnings)
+
+        _validate_dates()
 
         # Normalize BCE/VAT numbers (strip dots, spaces; uppercase prefix)
         def _norm_bce(v: str) -> str:

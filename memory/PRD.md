@@ -11,6 +11,53 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 
+### Iter90ap (Feb 2026) - Fiabilite reconnaissance IA dates factures
+
+**Ticket utilisateur** : "la reconnaissance des documents n'est pas toujours
+correcte attention aux dates" (regression apres bascule iter90an vers Haiku 4.5).
+
+**Diagnostic** : Haiku 4.5 est rapide mais moins fiable sur les dates belges
+DD/MM/YYYY ambigues avec le format US MM/DD/YYYY. Une facture 05/06/2026 (5 juin)
+pouvait etre interpretee comme 6 mai.
+
+**Corrections** (`routes/invoice_ai.py`) :
+
+1. **Haiku 4.5 -> Sonnet 4.6** (recommande par playbook) : meilleur ratio
+   vitesse/precision, plus robuste sur les cas ambigus. Le path vision garde
+   Sonnet 4.5 (qualite OCR critique).
+
+2. **System prompt enrichi** avec section "CRITICAL - BELGIAN DATE FORMAT RULES" :
+   - DD/MM/YYYY inconditionnel (jamais US MM/DD/YYYY)
+   - Mois FR : janvier..decembre + NL : januari..december
+   - Distinguer explicitement `date` (issue) vs `due_date` (echeance)
+     avec labels typiques FR/NL/EN
+   - Sortie ISO YYYY-MM-DD obligatoire
+   - `""` si absent, NE PAS inventer
+
+3. **Validation post-extraction** (nouveau `_validate_dates()` dans l'endpoint) :
+   - Annee hors [2020, 2035] -> reset a "" + entree dans `_date_warning`
+   - Format non parseable ISO -> reset a "" + entree dans `_date_warning`
+   - `due_date < date` -> entree "IA a probablement inverse jour/mois"
+   - Warnings agreges dans `result["_date_warning"]` (string separee par " ; ")
+
+4. **Frontend** (`InvoicesPage.js`) :
+   - Toast d'alerte 10s : "Dates a verifier : ..."
+   - Warning ajoute au hint textuel affiche dans le formulaire
+
+**Tests** (`test_iter90ap_invoice_date_validation.py` - 7/7) :
+- Marqueurs de validation presents dans le code source.
+- Prompt contient toutes les regles de date belge.
+- Annee < 2020 ou > 2035 -> flag + reset.
+- Format non-ISO ("15/06/2026") -> flag + reset.
+- `due_date < date` -> flag "inverse jour/mois".
+- Dates valides et coherentes -> pas de warning.
+- Dates absentes -> pas de warning.
+
+**Trade-off** : Sonnet 4.6 est ~2x plus lent que Haiku (mais 2x plus rapide
+que Sonnet 4.5). Le gain de precision sur les dates justifie largement le cout
+en latence supplementaire (evite les corrections manuelles apres coup).
+
+
 ### Iter90ao (Feb 2026) - Anti-doublon facture enrichi (supplier + numero + montant)
 
 **Demande utilisateur** : "il faut qu'il y ait une verification anti doublon
