@@ -11,6 +11,40 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 
+### Iter90am (Feb 2026) - Sidebar syndic redesigne avec accents colores
+
+**Demande** : sidebar plus design, plus dynamique, plus grand avec des couleurs,
+visuellement attractif.
+
+**Changements** :
+- **Ajout d'un champ `accent`** sur chaque section dans `Layout.js` :
+  - Gestion -> blue
+  - Comptabilite -> violet
+  - Finance -> emerald
+  - Rapports -> amber
+  - Plateforme (superadmin) -> amber
+  - Compte -> slate
+- **`sidebar-link` enrichi dans `App.css`** :
+  - Icone dans wrapper `w-8 h-8` (au lieu de nue), prend la couleur d'accent au hover et active
+  - Icone plus grande : 16px -> 18px, strokeWidth 1.5 -> 2
+  - Label plus grand : 13px -> 13.5px, font-medium
+  - Padding plus genereux : `py-2` -> `py-2.5`
+  - Rounded plus prononce : `rounded-md` -> `rounded-lg`
+  - Transition sur `transform` et `padding-left` (slide de 2px au hover)
+  - Etat actif : barre laterale gauche coloree 4px + gradient horizontal de fond
+    + icone dans cercle avec shadow
+- **Section headers** enrichis : petite pastille lumineuse (glow effect) a la
+  couleur d'accent + label toujours en `tracking-[0.2em]` uppercase.
+
+**Fichiers** :
+- `frontend/src/components/Layout.js` (rendu nav + array sections)
+- `frontend/src/App.css` (variants `.sidebar-link-{color}` + `.sidebar-accent-dot-{color}`)
+
+**Impact visuel** : chaque section a maintenant une identite chromatique claire,
+l'utilisateur voit du premier coup d'oeil ou il est (barre laterale + icone
+coloree), l'ensemble reste sobre grace au fond dark slate.
+
+
 ### Iter90al (Feb 2026) - Actions rapides adaptatives (dashboard syndic)
 
 **Demande** : rendre la carte "Actions rapides" du tableau de bord syndic

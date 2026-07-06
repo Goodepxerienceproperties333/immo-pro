@@ -16,28 +16,28 @@ import OnboardingDialog from '@/components/OnboardingDialog';
 import SupportChatBubble from '@/components/SupportChatBubble';
 
 const sections = [
-  { title: 'Gestion', items: [
+  { title: 'Gestion', accent: 'blue', items: [
     { to: '/', icon: LayoutDashboard, label: 'Tableau de bord', end: true },
     { to: '/owners', icon: Users, label: 'Proprietaires' },
     { to: '/lots', icon: Building2, label: 'Lots' },
     { to: '/tenants', icon: UserCheck, label: 'Locataires' },
     { to: '/suppliers', icon: Truck, label: 'Fournisseurs' },
   ]},
-  { title: 'Comptabilite', items: [
+  { title: 'Comptabilite', accent: 'violet', items: [
     { to: '/accounting', icon: BookOpen, label: 'Plan Comptable' },
     { to: '/fiscal', icon: Calendar, label: 'Exercices' },
     { to: '/journals', icon: FileText, label: 'Journaux' },
     { to: '/grand-livre', icon: BookMarked, label: 'Grand Livre' },
     { to: '/expense-categories', icon: Tag, label: 'Natures de depense' },
   ]},
-  { title: 'Finance', items: [
+  { title: 'Finance', accent: 'emerald', items: [
     { to: '/invoices', icon: Receipt, label: 'Facturation' },
     { to: '/expenses', icon: Wallet, label: 'Depenses' },
     { to: '/fund-calls', icon: Megaphone, label: 'Appels de fonds' },
     { to: '/banking', icon: Landmark, label: 'Banque' },
     { to: '/meters', icon: Gauge, label: 'Compteurs' },
   ]},
-  { title: 'Rapports', items: [
+  { title: 'Rapports', accent: 'amber', items: [
     { to: '/reports', icon: BarChart3, label: 'Bilan & Resultats' },
     { to: '/balance-tiers', icon: Users, label: 'Balance de Tiers' },
     { to: '/reminders', icon: Bell, label: 'Rappels paiement' },
@@ -162,55 +162,72 @@ export default function Layout() {
       <ScrollArea className="flex-1 px-2 py-2">
         <nav>
           {sections.map((section, si) => (
-            <div key={si} className="mb-2">
-              {!collapsed && <div className="px-3 py-1 mt-1 text-[10px] uppercase tracking-[0.2em] text-slate-500 font-semibold">{section.title}</div>}
+            <div key={si} className="mb-3" data-accent={section.accent}>
+              {!collapsed && (
+                <div className="px-3 pt-2 pb-1 flex items-center gap-2">
+                  <span className={`h-1.5 w-1.5 rounded-full sidebar-accent-dot-${section.accent}`} />
+                  <span className="text-[10px] uppercase tracking-[0.2em] text-slate-400 font-semibold">{section.title}</span>
+                </div>
+              )}
               <div className="space-y-0.5">
                 {section.items.map(item => (
                   <NavLink key={item.to} to={item.to} end={item.end} onClick={() => setMobileOpen(false)}
-                    className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''} ${collapsed ? 'justify-center px-2' : ''}`}
+                    className={({ isActive }) => `sidebar-link sidebar-link-${section.accent} ${isActive ? 'active' : ''} ${collapsed ? 'justify-center px-2' : ''}`}
                     data-testid={`nav-${item.to.replace(/\//g, '') || 'dashboard'}`}
                   >
-                    <item.icon size={16} strokeWidth={1.5} />
-                    {!collapsed && <span className="text-[13px]">{item.label}</span>}
+                    <span className="sidebar-icon-wrap">
+                      <item.icon size={18} strokeWidth={2} />
+                    </span>
+                    {!collapsed && <span className="text-[13.5px] font-medium">{item.label}</span>}
                   </NavLink>
                 ))}
               </div>
             </div>
           ))}
           {isSuperadmin && (
-            <div className="mb-2">
-              {!collapsed && <div className="px-3 py-1 mt-1 text-[10px] uppercase tracking-[0.2em] text-amber-400 font-semibold">Plateforme</div>}
+            <div className="mb-3" data-accent="amber">
+              {!collapsed && (
+                <div className="px-3 pt-2 pb-1 flex items-center gap-2">
+                  <span className="h-1.5 w-1.5 rounded-full sidebar-accent-dot-amber" />
+                  <span className="text-[10px] uppercase tracking-[0.2em] text-amber-400 font-semibold">Plateforme</span>
+                </div>
+              )}
               <NavLink to="/admin" onClick={() => setMobileOpen(false)}
-                className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''} ${collapsed ? 'justify-center px-2' : ''}`}
+                className={({ isActive }) => `sidebar-link sidebar-link-amber ${isActive ? 'active' : ''} ${collapsed ? 'justify-center px-2' : ''}`}
                 data-testid="nav-admin-dashboard"
-              ><Shield size={16} strokeWidth={1.5} />{!collapsed && <span className="text-[13px]">Tableau admin</span>}</NavLink>
+              ><span className="sidebar-icon-wrap"><Shield size={18} strokeWidth={2} /></span>{!collapsed && <span className="text-[13.5px] font-medium">Tableau admin</span>}</NavLink>
               <NavLink to="/admin/users" onClick={() => setMobileOpen(false)}
-                className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''} ${collapsed ? 'justify-center px-2' : ''}`}
+                className={({ isActive }) => `sidebar-link sidebar-link-amber ${isActive ? 'active' : ''} ${collapsed ? 'justify-center px-2' : ''}`}
                 data-testid="nav-admin-users"
-              ><Shield size={16} strokeWidth={1.5} />{!collapsed && <span className="text-[13px]">Utilisateurs</span>}</NavLink>
+              ><span className="sidebar-icon-wrap"><Shield size={18} strokeWidth={2} /></span>{!collapsed && <span className="text-[13.5px] font-medium">Utilisateurs</span>}</NavLink>
               <NavLink to="/admin/unlock" onClick={() => setMobileOpen(false)}
-                className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''} ${collapsed ? 'justify-center px-2' : ''}`}
+                className={({ isActive }) => `sidebar-link sidebar-link-amber ${isActive ? 'active' : ''} ${collapsed ? 'justify-center px-2' : ''}`}
                 data-testid="nav-admin-unlock"
-              ><Shield size={16} strokeWidth={1.5} />{!collapsed && <span className="text-[13px]">Outils deblocage</span>}</NavLink>
+              ><span className="sidebar-icon-wrap"><Shield size={18} strokeWidth={2} /></span>{!collapsed && <span className="text-[13.5px] font-medium">Outils deblocage</span>}</NavLink>
               <NavLink to="/admin/audit" onClick={() => setMobileOpen(false)}
-                className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''} ${collapsed ? 'justify-center px-2' : ''}`}
+                className={({ isActive }) => `sidebar-link sidebar-link-amber ${isActive ? 'active' : ''} ${collapsed ? 'justify-center px-2' : ''}`}
                 data-testid="nav-admin-audit"
-              ><Shield size={16} strokeWidth={1.5} />{!collapsed && <span className="text-[13px]">Journal d'audit</span>}</NavLink>
+              ><span className="sidebar-icon-wrap"><Shield size={18} strokeWidth={2} /></span>{!collapsed && <span className="text-[13.5px] font-medium">Journal d'audit</span>}</NavLink>
             </div>
           )}
           {/* "Mon profil" accessible a TOUS les utilisateurs authentifies */}
-          <div className="mb-2">
-            {!collapsed && <div className="px-3 py-1 mt-1 text-[10px] uppercase tracking-[0.2em] text-slate-500 font-semibold">Compte</div>}
+          <div className="mb-2" data-accent="slate">
+            {!collapsed && (
+              <div className="px-3 pt-2 pb-1 flex items-center gap-2">
+                <span className="h-1.5 w-1.5 rounded-full sidebar-accent-dot-slate" />
+                <span className="text-[10px] uppercase tracking-[0.2em] text-slate-400 font-semibold">Compte</span>
+              </div>
+            )}
             {(user?.role === 'syndic' || user?.role === 'admin' || user?.role === 'superadmin') && (
               <NavLink to="/team" onClick={() => setMobileOpen(false)}
-                className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''} ${collapsed ? 'justify-center px-2' : ''}`}
+                className={({ isActive }) => `sidebar-link sidebar-link-slate ${isActive ? 'active' : ''} ${collapsed ? 'justify-center px-2' : ''}`}
                 data-testid="nav-team"
-              ><Users size={16} strokeWidth={1.5} />{!collapsed && <span className="text-[13px]">Mon equipe</span>}</NavLink>
+              ><span className="sidebar-icon-wrap"><Users size={18} strokeWidth={2} /></span>{!collapsed && <span className="text-[13.5px] font-medium">Mon equipe</span>}</NavLink>
             )}
             <NavLink to="/profile" onClick={() => setMobileOpen(false)}
-              className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''} ${collapsed ? 'justify-center px-2' : ''}`}
+              className={({ isActive }) => `sidebar-link sidebar-link-slate ${isActive ? 'active' : ''} ${collapsed ? 'justify-center px-2' : ''}`}
               data-testid="nav-profile"
-            ><UserCog size={16} strokeWidth={1.5} />{!collapsed && <span className="text-[13px]">Mon profil</span>}</NavLink>
+            ><span className="sidebar-icon-wrap"><UserCog size={18} strokeWidth={2} /></span>{!collapsed && <span className="text-[13.5px] font-medium">Mon profil</span>}</NavLink>
           </div>
         </nav>
       </ScrollArea>

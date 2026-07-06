@@ -1,13 +1,72 @@
 /* CoproManager custom styles */
+/* iter90am : Sidebar plus design - couleurs par section, icons plus grands,
+ * hover animation, active state avec barre laterale coloree.
+ * Chaque section (Gestion, Comptabilite, Finance, Rapports, Plateforme, Compte)
+ * a son accent : blue, violet, emerald, amber, amber, slate.
+ */
 .sidebar-link {
-    @apply flex items-center gap-3 px-3 py-2 rounded-md text-sm text-slate-300 transition-colors duration-200;
+    @apply relative flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-slate-300;
+    transition: background-color 200ms ease, color 200ms ease, transform 180ms ease, padding-left 180ms ease;
+}
+.sidebar-link .sidebar-icon-wrap {
+    @apply flex items-center justify-center flex-shrink-0 w-8 h-8 rounded-md;
+    transition: background-color 200ms ease, color 200ms ease, transform 200ms ease;
+    color: rgb(148 163 184); /* slate-400 */
+    background: transparent;
 }
 .sidebar-link:hover {
-    @apply bg-slate-800 text-white;
+    @apply bg-slate-800/70 text-white;
+    transform: translateX(2px);
+}
+.sidebar-link:hover .sidebar-icon-wrap {
+    transform: scale(1.05);
 }
 .sidebar-link.active {
-    @apply bg-slate-800 text-white font-medium;
+    @apply text-white font-semibold bg-slate-800/60;
 }
+.sidebar-link.active::before {
+    content: '';
+    @apply absolute left-0 top-1.5 bottom-1.5 w-1 rounded-r-full;
+}
+.sidebar-link.active .sidebar-icon-wrap {
+    box-shadow: 0 4px 12px -2px rgba(0, 0, 0, 0.35);
+}
+
+/* --- Accent variants --- */
+/* Blue (Gestion) */
+.sidebar-link-blue:hover .sidebar-icon-wrap { color: rgb(96 165 250); background: rgba(59, 130, 246, 0.15); }
+.sidebar-link-blue.active { background: linear-gradient(90deg, rgba(59,130,246,0.18) 0%, rgba(59,130,246,0.05) 100%); }
+.sidebar-link-blue.active::before { background: rgb(96 165 250); }
+.sidebar-link-blue.active .sidebar-icon-wrap { color: rgb(147 197 253); background: rgba(59, 130, 246, 0.25); }
+.sidebar-accent-dot-blue { background: rgb(96 165 250); box-shadow: 0 0 8px rgba(96, 165, 250, 0.6); }
+
+/* Violet (Comptabilite) */
+.sidebar-link-violet:hover .sidebar-icon-wrap { color: rgb(167 139 250); background: rgba(139, 92, 246, 0.15); }
+.sidebar-link-violet.active { background: linear-gradient(90deg, rgba(139,92,246,0.18) 0%, rgba(139,92,246,0.05) 100%); }
+.sidebar-link-violet.active::before { background: rgb(167 139 250); }
+.sidebar-link-violet.active .sidebar-icon-wrap { color: rgb(196 181 253); background: rgba(139, 92, 246, 0.25); }
+.sidebar-accent-dot-violet { background: rgb(167 139 250); box-shadow: 0 0 8px rgba(167, 139, 250, 0.6); }
+
+/* Emerald (Finance) */
+.sidebar-link-emerald:hover .sidebar-icon-wrap { color: rgb(52 211 153); background: rgba(16, 185, 129, 0.15); }
+.sidebar-link-emerald.active { background: linear-gradient(90deg, rgba(16,185,129,0.18) 0%, rgba(16,185,129,0.05) 100%); }
+.sidebar-link-emerald.active::before { background: rgb(52 211 153); }
+.sidebar-link-emerald.active .sidebar-icon-wrap { color: rgb(110 231 183); background: rgba(16, 185, 129, 0.25); }
+.sidebar-accent-dot-emerald { background: rgb(52 211 153); box-shadow: 0 0 8px rgba(52, 211, 153, 0.6); }
+
+/* Amber (Rapports / Plateforme) */
+.sidebar-link-amber:hover .sidebar-icon-wrap { color: rgb(251 191 36); background: rgba(245, 158, 11, 0.15); }
+.sidebar-link-amber.active { background: linear-gradient(90deg, rgba(245,158,11,0.18) 0%, rgba(245,158,11,0.05) 100%); }
+.sidebar-link-amber.active::before { background: rgb(251 191 36); }
+.sidebar-link-amber.active .sidebar-icon-wrap { color: rgb(252 211 77); background: rgba(245, 158, 11, 0.25); }
+.sidebar-accent-dot-amber { background: rgb(251 191 36); box-shadow: 0 0 8px rgba(251, 191, 36, 0.6); }
+
+/* Slate (Compte) */
+.sidebar-link-slate:hover .sidebar-icon-wrap { color: rgb(203 213 225); background: rgba(148, 163, 184, 0.15); }
+.sidebar-link-slate.active { background: linear-gradient(90deg, rgba(148,163,184,0.18) 0%, rgba(148,163,184,0.05) 100%); }
+.sidebar-link-slate.active::before { background: rgb(203 213 225); }
+.sidebar-link-slate.active .sidebar-icon-wrap { color: rgb(226 232 240); background: rgba(148, 163, 184, 0.25); }
+.sidebar-accent-dot-slate { background: rgb(203 213 225); }
 
 .page-header {
     @apply mb-6;
