@@ -159,9 +159,7 @@ frontend/node_modules/.cache/default-development/156.pack
 frontend/node_modules/.cache/default-development/157.pack
 frontend/node_modules/.cache/default-development/158.pack
 frontend/node_modules/.cache/default-development/161.pack
-.env
-.env.*
-*.env
+# .env files must be committed for Emergent deployment (env vars are set via dashboard, files are auto-updated)
 credentials.json
 *.key
 .credentials
