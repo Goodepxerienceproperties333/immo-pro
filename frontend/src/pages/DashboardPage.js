@@ -5,11 +5,12 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
-import { Users, Building2, UserCheck, Receipt, AlertCircle, TrendingUp, Home, ArrowLeft, Landmark, FileText, Megaphone, Sparkles, Loader2 } from 'lucide-react';
+import { Users, Building2, UserCheck, Receipt, AlertCircle, TrendingUp, Home, ArrowLeft, Landmark, FileText, Megaphone, Sparkles, Loader2, Scale, ArrowLeftRight, GitMerge, FileBarChart } from 'lucide-react';
 import { fmtDate } from '@/lib/dateFmt';
+import AdaptiveQuickActions from '@/components/AdaptiveQuickActions';
 
 export default function DashboardPage() {
-  const { selectedCopro, setSelectedCopro, isSuperadmin } = useAuth();
+  const { selectedCopro, setSelectedCopro, isSuperadmin, user } = useAuth();
   const [coproprietes, setCoproprietes] = useState([]);
   const [stats, setStats] = useState(null);
   const [health, setHealth] = useState(null);
@@ -327,19 +328,25 @@ export default function DashboardPage() {
         </Card>
         <Card className="border-slate-200">
           <CardContent className="p-6">
-            <h3 className="text-lg font-semibold text-slate-900 mb-4" style={{fontFamily:'Chivo,sans-serif'}}>Actions rapides</h3>
-            <div className="grid grid-cols-2 gap-3">
-              {[
-                { label: 'Facture', href: '/invoices', color: 'bg-orange-50 text-orange-700 border-orange-200', icon: Receipt },
-                { label: 'Ecriture', href: '/journals', color: 'bg-green-50 text-green-700 border-green-200', icon: FileText },
-                { label: 'Extrait', href: '/banking', color: 'bg-blue-50 text-blue-700 border-blue-200', icon: Landmark },
-                { label: 'Appel fonds', href: '/fund-calls', color: 'bg-purple-50 text-purple-700 border-purple-200', icon: Megaphone },
-              ].map((a, i) => (
-                <a key={i} href={a.href} className={`${a.color} rounded-md border px-3 py-3 text-sm font-medium text-center hover:opacity-80 transition-opacity flex items-center justify-center gap-2`}>
-                  <a.icon size={14} /> {a.label}
-                </a>
-              ))}
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-lg font-semibold text-slate-900" style={{fontFamily:'Chivo,sans-serif'}}>Actions rapides</h3>
+              <span className="text-[10px] text-slate-400 uppercase tracking-wider">Adapte a votre usage</span>
             </div>
+            <AdaptiveQuickActions
+              scopeKey={`u:${user?.id || 'anon'}-c:${selectedCopro || 'all'}`}
+              actions={[
+                { id: 'invoice',   label: 'Facture',        href: '/invoices',      color: 'bg-orange-50 text-orange-700 border-orange-200',  icon: Receipt },
+                { id: 'entry',     label: 'Ecriture',       href: '/journals',      color: 'bg-green-50 text-green-700 border-green-200',     icon: FileText },
+                { id: 'banking',   label: 'Extrait',        href: '/banking',       color: 'bg-blue-50 text-blue-700 border-blue-200',        icon: Landmark },
+                { id: 'funds',     label: 'Appel fonds',    href: '/fund-calls',    color: 'bg-purple-50 text-purple-700 border-purple-200',  icon: Megaphone },
+                { id: 'tiers',     label: 'Balance tiers',  href: '/balance-tiers', color: 'bg-teal-50 text-teal-700 border-teal-200',        icon: Scale },
+                { id: 'mutation',  label: 'Mutation lot',   href: '/coproprietes',  color: 'bg-rose-50 text-rose-700 border-rose-200',        icon: ArrowLeftRight },
+                { id: 'owners',    label: 'Proprietaires',  href: '/owners',        color: 'bg-indigo-50 text-indigo-700 border-indigo-200',  icon: Users },
+                { id: 'suppliers', label: 'Fournisseurs',   href: '/suppliers',     color: 'bg-cyan-50 text-cyan-700 border-cyan-200',        icon: Building2 },
+                { id: 'reports',   label: 'Rapports',       href: '/reports',       color: 'bg-slate-50 text-slate-700 border-slate-200',     icon: FileBarChart },
+                { id: 'duplicates',label: 'Doublons',       href: '/admin/duplicates', color: 'bg-amber-50 text-amber-700 border-amber-200', icon: GitMerge },
+              ]}
+            />
           </CardContent>
         </Card>
       </div>

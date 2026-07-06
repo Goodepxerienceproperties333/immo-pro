@@ -11,6 +11,36 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 
+### Iter90al (Feb 2026) - Actions rapides adaptatives (dashboard syndic)
+
+**Demande** : rendre la carte "Actions rapides" du tableau de bord syndic
+plus intuitive, les tuiles doivent s'adapter automatiquement selon l'usage
+du gestionnaire.
+
+**Design** : composant reutilisable `AdaptiveQuickActions.js` sans dependance
+supplementaire (framer-motion pas installe, CSS transitions natives).
+
+- **Traking usage** : localStorage cle `qa-stats:u:{userId}-c:{acpId}` (segmentation
+  utilisateur + ACP -> chaque syndic voit son propre ordre par ACP).
+- **Scoring** : `score = count * (1 + recency_boost)` avec `recency_boost = max(0, 14-days)/14`
+  (favorise les actions recentes, decay lineaire 2 semaines).
+- **UX visuelle** :
+  - Top 1 : anneau dore + etoile pleine dans le coin (badge "Favori")
+  - Autres tuiles utilisees : compteur discret opacite 40% dans le coin
+  - Hover : scale 1.03 + translate-y-[-0.5] + shadow-md
+  - Fade-in staggered a l'entree
+- **Catalogue** : 10 actions courantes du workflow syndic (Facture, Ecriture,
+  Extrait, Appel fonds, Balance tiers, Mutation lot, Proprietaires, Fournisseurs,
+  Rapports, Doublons)
+- **Progressive disclosure** : 6 tuiles visibles par defaut + toggle "Voir toutes
+  les actions ({N} de plus)" pour reveler les 4 autres
+- **Grille responsive** : `grid-cols-2 sm:grid-cols-3`
+
+**Test manuel** : reorder valide en injectant `qa-stats` dans localStorage, la
+tuile en #1 apparait avec anneau dore + etoile, les compteurs sont visibles sur
+les autres, expand/reduce fonctionne.
+
+
 ### Iter90aj (Feb 2026) - Appel de fonds retroactif : owner = proprietaire a la DATE de l'appel
 
 **Ticket user (PROD Acacia)** : "le fonds de reserve est bien assigne a Mme
