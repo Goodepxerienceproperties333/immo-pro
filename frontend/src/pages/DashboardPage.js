@@ -236,73 +236,148 @@ export default function DashboardPage() {
               ))}
             </div>
             {health.anomalies.length > 0 && (
-              <details className="mt-2">
-                <summary className="text-xs font-semibold text-slate-600 cursor-pointer hover:text-slate-900 select-none" data-testid="health-anomalies-toggle">
+              <details className="mt-3" open>
+                <summary className="text-xs font-semibold text-slate-700 cursor-pointer hover:text-slate-900 select-none flex items-center gap-1.5" data-testid="health-anomalies-toggle">
+                  <span className="inline-block w-1.5 h-1.5 rounded-full bg-orange-500 animate-pulse" />
                   Voir les {health.anomalies.length} anomalie(s) detectee(s)
                 </summary>
-                <div className="mt-2 space-y-2">
-                  {health.anomalies.map((a, i) => (
-                    <div key={i} className={`text-xs border-l-4 pl-3 py-1 ${
-                      a.severity === 'high' ? 'border-red-500 bg-red-50/30' : 'border-orange-400 bg-orange-50/30'
-                    }`}>
-                      <div className="font-semibold text-slate-700">{a.title}</div>
-                      <div className="text-slate-500">Categorie : <span className="font-mono">{a.category}</span></div>
-                      {Array.isArray(a.items) && a.items.length > 0 && (
-                        <ul className="mt-1.5 space-y-0.5" data-testid={`health-items-${a.category}`}>
-                          {a.items.map((it, j) => (
-                            <li key={j} className="text-slate-600 pl-2 border-l border-slate-200">
-                              {a.category === 'orphans' && (
-                                <span>
-                                  <span className="font-mono font-semibold text-slate-800">{it.account}</span>
-                                  {it.name ? ` - ${it.name}` : ''}
-                                  {typeof it.balance === 'number' && (
-                                    <span className="ml-1 text-slate-500">
-                                      (solde : {it.balance.toFixed(2)} EUR, {it.type === 'supplier' ? 'fournisseur' : 'proprietaire'})
-                                    </span>
-                                  )}
-                                </span>
-                              )}
-                              {a.category === 'duplicates' && (
-                                <span>
-                                  <span className="font-semibold">{it.name || it.title || 'Doublon'}</span>
-                                  {it.count > 1 && <span className="ml-1 text-slate-500">({it.count} occurrences)</span>}
-                                </span>
-                              )}
-                              {a.category === 'unbalanced' && (
-                                <span>
-                                  <span className="font-mono">{it.reference || it.id}</span>
-                                  {it.date && <span className="ml-1 text-slate-500">{it.date}</span>}
-                                  <span className="ml-1">- ecart {it.ecart?.toFixed?.(2)} EUR</span>
-                                </span>
-                              )}
-                              {a.category === 'invoices_over_60d' && (
-                                <span>
-                                  <span className="font-semibold">{it.supplier_name || 'Fournisseur'}</span>
-                                  {it.invoice_number && <span className="ml-1 font-mono">#{it.invoice_number}</span>}
-                                  {typeof it.amount === 'number' && <span className="ml-1">- {it.amount.toFixed(2)} EUR</span>}
-                                  {it.days_overdue && <span className="ml-1 text-orange-700">({it.days_overdue}j)</span>}
-                                </span>
-                              )}
-                              {a.category === 'owners_overdue' && (
-                                <span>
-                                  <span className="font-semibold">{it.name || it.owner_name}</span>
-                                  {typeof it.balance === 'number' && <span className="ml-1">- {it.balance.toFixed(2)} EUR</span>}
-                                </span>
-                              )}
-                              {!['orphans','duplicates','unbalanced','invoices_over_60d','owners_overdue'].includes(a.category) && (
-                                <span className="font-mono text-slate-500">{JSON.stringify(it)}</span>
-                              )}
-                            </li>
-                          ))}
-                          {typeof a.count === 'number' && a.count > a.items.length && (
-                            <li className="text-slate-400 italic pl-2">
-                              ... et {a.count - a.items.length} autre(s)
-                            </li>
-                          )}
-                        </ul>
-                      )}
-                    </div>
-                  ))}
+                <div className="mt-3 space-y-3">
+                  {health.anomalies.map((a, i) => {
+                    // Configuration visuelle par categorie
+                    const catCfg = {
+                      invoices_overdue: { icon: '📄', color: 'red', label: 'Factures impayees' },
+                      owners_late:      { icon: '👤', color: 'red', label: 'Proprietaires en retard' },
+                      owners_pending:   { icon: '⏳', color: 'orange', label: 'En attente de traitement' },
+                      duplicates:       { icon: '⚠️', color: 'orange', label: 'Doublons potentiels' },
+                      orphans:          { icon: '🔗', color: 'orange', label: 'Comptes tier orphelins' },
+                      unbalanced:       { icon: '⚖️', color: 'red', label: 'Ecritures non equilibrees' },
+                    }[a.category] || { icon: '❓', color: 'slate', label: a.category };
+                    const badgeCls = {
+                      red:    'bg-red-50 text-red-700 border-red-200',
+                      orange: 'bg-orange-50 text-orange-700 border-orange-200',
+                      slate:  'bg-slate-50 text-slate-700 border-slate-200',
+                    }[catCfg.color];
+
+                    return (
+                      <div key={i} className={`text-xs border rounded-lg overflow-hidden ${badgeCls}`}>
+                        {/* Header categorie */}
+                        <div className={`px-3 py-2 border-b border-current/20 flex items-center gap-2 font-semibold`}>
+                          <span className="text-sm">{catCfg.icon}</span>
+                          <span>{a.title}</span>
+                          <span className="ml-auto text-[10px] uppercase tracking-wider opacity-60">{catCfg.label}</span>
+                        </div>
+                        {/* Items details */}
+                        {Array.isArray(a.items) && a.items.length > 0 && (
+                          <div className="bg-white/70 p-2" data-testid={`health-items-${a.category}`}>
+                            {/* Factures impayees */}
+                            {a.category === 'invoices_overdue' && (
+                              <div className="overflow-x-auto">
+                                <table className="w-full text-[11px]">
+                                  <thead className="text-slate-500">
+                                    <tr><th className="text-left pb-1">Fournisseur</th><th className="text-left pb-1">N°</th><th className="text-right pb-1">Montant</th><th className="text-right pb-1">Echeance</th><th className="text-right pb-1">Retard</th></tr>
+                                  </thead>
+                                  <tbody>
+                                    {a.items.map((it, j) => (
+                                      <tr key={j} className="border-t border-slate-100">
+                                        <td className="py-1 truncate max-w-[180px]" title={it.supplier}>{it.supplier}</td>
+                                        <td className="py-1 font-mono text-slate-600">{it.number}</td>
+                                        <td className="py-1 text-right font-mono text-red-700">{Number(it.amount || 0).toFixed(2)}</td>
+                                        <td className="py-1 text-right font-mono text-slate-500">{fmtDate(it.due_date)}</td>
+                                        <td className="py-1 text-right font-semibold text-red-700">{it.age_days}j</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            )}
+                            {/* Proprietaires en retard */}
+                            {(a.category === 'owners_late' || a.category === 'owners_pending') && (
+                              <div className="overflow-x-auto">
+                                <table className="w-full text-[11px]">
+                                  <thead className="text-slate-500">
+                                    <tr><th className="text-left pb-1">Proprietaire</th><th className="text-right pb-1">Total du</th><th className="text-right pb-1">Nb appels</th><th className="text-right pb-1">Retard max</th></tr>
+                                  </thead>
+                                  <tbody>
+                                    {a.items.map((it, j) => (
+                                      <tr key={j} className="border-t border-slate-100">
+                                        <td className="py-1 truncate max-w-[220px] font-semibold" title={it.owner_name}>{it.owner_name || '(sans nom)'}</td>
+                                        <td className="py-1 text-right font-mono text-red-700">{Number(it.total_due || 0).toFixed(2)} EUR</td>
+                                        <td className="py-1 text-right text-slate-600">{it.calls?.length || 0}</td>
+                                        <td className="py-1 text-right font-semibold text-red-700">{it.max_age}j</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                                {a.category === 'owners_pending' && (
+                                  <div className="text-[10px] text-orange-700 mt-1.5 italic px-1">
+                                    Ces proprietaires ont un appel non paye MAIS leur solde tier n&apos;est pas debiteur.
+                                    Cause probable : (a) l&apos;ecriture VE de l&apos;appel n&apos;a pas encore ete generee, ou
+                                    (b) un paiement a ete recu mais l&apos;extrait bancaire n&apos;est pas encore lettre.
+                                    Une fois les extraits comptabilises, ils basculeront soit en {'"regles"'} soit en {'"retard confirme"'}.
+                                  </div>
+                                )}
+                                {a.category === 'owners_late' && (
+                                  <div className="text-[10px] text-slate-500 mt-1.5 italic px-1">
+                                    Retard confirme : appel non paye ET compte tier debiteur. Ces montants sont dus.
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                            {/* Doublons */}
+                            {a.category === 'duplicates' && (
+                              <ul className="space-y-1">
+                                {a.items.map((it, j) => (
+                                  <li key={j} className="flex items-center gap-2">
+                                    <span className="font-semibold">{it.supplier || 'Fournisseur'}</span>
+                                    <span className="text-slate-500">·</span>
+                                    <span className="font-mono text-red-700">{Number(it.amount || 0).toFixed(2)} EUR</span>
+                                    {Array.isArray(it.invoices) && (
+                                      <span className="text-slate-500">
+                                        · {it.invoices.map(x => x.number).filter(Boolean).join(', ')}
+                                      </span>
+                                    )}
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
+                            {/* Orphelins */}
+                            {a.category === 'orphans' && (
+                              <ul className="space-y-1">
+                                {a.items.map((it, j) => (
+                                  <li key={j} className="flex items-center gap-2">
+                                    <span className="font-mono font-semibold text-slate-800">{it.account}</span>
+                                    {it.name && <span className="text-slate-500">- {it.name}</span>}
+                                    {typeof it.balance === 'number' && (
+                                      <span className="font-mono text-red-700 ml-auto">{it.balance.toFixed(2)} EUR</span>
+                                    )}
+                                    <span className="text-[10px] text-slate-400 uppercase">{it.type === 'supplier' ? 'fourn.' : 'prop.'}</span>
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
+                            {/* Ecritures non equilibrees */}
+                            {a.category === 'unbalanced' && (
+                              <ul className="space-y-1">
+                                {a.items.map((it, j) => (
+                                  <li key={j} className="flex items-center gap-2">
+                                    <span className="font-mono text-slate-700">{it.reference || it.id}</span>
+                                    {it.date && <span className="text-slate-500">- {fmtDate(it.date)}</span>}
+                                    <span className="ml-auto font-mono text-red-700">ecart {Number(it.ecart || 0).toFixed(2)} EUR</span>
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
+                            {/* Compteur restant */}
+                            {typeof a.count === 'number' && a.count > a.items.length && (
+                              <div className="text-[10px] text-slate-400 italic mt-2 text-center">
+                                ... et {a.count - a.items.length} autre(s) non affiche(s)
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               </details>
             )}

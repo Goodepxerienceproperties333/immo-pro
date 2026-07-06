@@ -230,6 +230,11 @@ async def compute_health_audit(db, copropriete_id: str, days_threshold: int = 60
                     break
 
     late_owners = {}
+    # iter90ar : deuxieme piste - proprietaires avec appels non payes mais
+    # sans solde tier debiteur (VE non generee OU extraits bancaires non
+    # comptabilises). Le tableau de bord doit refleter la situation
+    # comptable reelle : ces proprietaires sont "en attente de traitement".
+    pending_owners = {}
     for fc in fund_calls:
         for ds in (fc.get("distribution") or []):
             if ds.get("paid"):
@@ -243,20 +248,20 @@ async def compute_health_audit(db, copropriete_id: str, days_threshold: int = 60
                     oid = ds.get("owner_id")
                     if not oid:
                         continue
-                    # Exclusion : si le solde comptable n'est PAS debiteur, c'est paye
-                    # (ou en avance). Tolerance 1 centime pour les arrondis.
-                    if owner_balance.get(oid, 0.0) <= 0.01:
-                        continue
-                    if oid not in late_owners:
-                        late_owners[oid] = {
+                    balance = owner_balance.get(oid, 0.0)
+                    # Rule : solde tier debiteur > 0.01 -> retard confirme
+                    # Sinon (=0 ou credit) -> retard en attente de comptabilisation
+                    target = late_owners if balance > 0.01 else pending_owners
+                    if oid not in target:
+                        target[oid] = {
                             "owner_id": oid,
                             "owner_name": ds.get("owner_name", ""),
                             "total_due": 0.0, "calls": [], "max_age": 0,
-                            "tier_balance": round(owner_balance.get(oid, 0.0), 2),
+                            "tier_balance": round(balance, 2),
                         }
-                    late_owners[oid]["total_due"] += float(ds.get("amount", 0) or 0)
-                    late_owners[oid]["max_age"] = max(late_owners[oid]["max_age"], age)
-                    late_owners[oid]["calls"].append({
+                    target[oid]["total_due"] += float(ds.get("amount", 0) or 0)
+                    target[oid]["max_age"] = max(target[oid]["max_age"], age)
+                    target[oid]["calls"].append({
                         "name": fc.get("name", ""),
                         "amount": ds.get("amount", 0),
                         "due_date": due,
@@ -265,6 +270,7 @@ async def compute_health_audit(db, copropriete_id: str, days_threshold: int = 60
             except Exception:
                 continue
     stats["owners_late"] = len(late_owners)
+    stats["owners_pending"] = len(pending_owners)
     if late_owners:
         score -= min(20, len(late_owners) * 4)
         anomalies.append({
@@ -276,6 +282,23 @@ async def compute_health_audit(db, copropriete_id: str, days_threshold: int = 60
                 for v in sorted(late_owners.values(), key=lambda x: -x["max_age"])
             ][:10],
             "count": len(late_owners),
+        })
+
+    # iter90ar : anomalie "medium" pour les pending (VE non generee ou extraits
+    # non lettres). Aide le syndic a comprendre pourquoi certains proprietaires
+    # n'apparaissent pas dans "owners_late" alors que le budget est cense les
+    # avoir facturees.
+    if pending_owners:
+        score -= min(10, len(pending_owners) * 1)
+        anomalies.append({
+            "severity": "medium",
+            "category": "owners_pending",
+            "title": f"{len(pending_owners)} proprietaire(s) avec appel non paye et solde tier non debiteur",
+            "items": [
+                {**v, "total_due": round(v["total_due"], 2)}
+                for v in sorted(pending_owners.values(), key=lambda x: -x["max_age"])
+            ][:10],
+            "count": len(pending_owners),
         })
 
     score = max(0, min(100, score))

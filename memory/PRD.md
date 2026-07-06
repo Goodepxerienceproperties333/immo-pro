@@ -11,6 +11,47 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 
+### Iter90ar (Feb 2026) - Sante comptable : rendu lisible + adaptation situation
+
+**Ticket utilisateur** :
+- "rendre cette vue plus lisible et hestetique c'est tres moche et complique"
+- "il considere toujours qu'il n'y a qu'un proprietaire alors que tous les
+  proprietaires sont en retard etant donne que je n'ai pas comptabilise les
+  extraits de compte. Le tableau de bords doit s'adapter a la situation comptable"
+
+**Bug 1 - Rendu moche (iter90ak avait un mismatch de noms de categories)** :
+- Backend emet `owners_late` et `invoices_overdue`
+- Frontend attendait `owners_overdue` et `invoices_over_60d`
+- Consequence : chute sur le fallback `JSON.stringify(it)` -> affichage JSON brut.
+
+**Fix 1** (`DashboardPage.js`) : refonte complete du rendu :
+- Categories correctement mappees (owners_late, invoices_overdue, duplicates,
+  orphans, unbalanced, + nouveau owners_pending).
+- Cartes visuelles avec icone emoji + couleur par categorie (rouge/orange).
+- Tables HTML propres au lieu de listes JSON.
+- Header categorie avec libelle et badge.
+- Compteur "... et N autre(s) non affiche(s)" style separe.
+
+**Bug 2 - Tableau de bord ne reflete pas la situation comptable** :
+- Regle existante : owner apparait "en retard" SEULEMENT si solde tier > 0.01.
+- Cas de figure : appels de fonds emis, VE non encore generees ou extraits non
+  lettres -> solde tier = 0 -> proprietaire absent du dashboard.
+
+**Fix 2** (`health_audit.py`) : ajout d'une seconde piste `owners_pending` :
+- Owner avec appel non paye ET solde tier <= 0.01 (0 ou credit).
+- Anomalie de severite "medium" (vs "high" pour les retards confirmes).
+- Score impact reduit (-1 pt/owner max -10, vs -4/owner max -20).
+- Champ `stats.owners_pending` ajoute a la reponse.
+
+**Frontend** : nouvelle categorie `owners_pending` avec icone hourglass, couleur
+orange, message explicatif : "solde tier n'est pas debiteur, cause probable :
+VE non generee OU extrait bancaire pas encore lettre".
+
+**Note pedagogique** : chaque section d'anomalie affiche maintenant un texte
+italique en dessous expliquant le critere metier pour aider le syndic a
+comprendre la donnee (transparence + pedagogie).
+
+
 ### Iter90aq (Feb 2026) - Template appris par fournisseur (skip IA)
 
 **Idee** : monitorer les corrections manuelles pour construire un "template
