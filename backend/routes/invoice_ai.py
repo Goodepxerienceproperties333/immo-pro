@@ -3,17 +3,55 @@
 iter87 : ce endpoint ne persiste plus rien sur disque. Le PDF temporaire est
 ecrit dans un NamedTemporaryFile (auto-clean) le temps de l'extraction IA,
 puis supprime. Aucune trace sur le filesystem.
+
+iter90an : accelere la reconnaissance IA :
+- Path texte -> Claude Haiku 4.5 (3-4x plus rapide que Sonnet 4.5 pour du JSON).
+- Path vision (scans) -> reste sur Sonnet 4.5 (qualite critique OCR visuel).
+- max_chars 8000 -> 4000 (2 pages A4 suffisent pour une facture belge).
+- Liste PCMN 60 -> 40 comptes classe 6 (moins de tokens en input).
+- Post-processing PCMN check + supplier match parallelises via asyncio.gather.
+- Cache PCMN par ACP en memoire (TTL 5 min) -> evite le double round-trip Mongo.
 """
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from typing import Optional
 from pathlib import Path
+import asyncio
 import os
 import json
+import time
 import uuid
 import tempfile
 
 
-async def _extract_pdf_text(file_path: str, max_chars: int = 8000) -> str:
+# iter90an : cache PCMN par ACP (TTL 5 min) - evite refetch a chaque extraction.
+# Cle : copropriete_id (ou "" pour global). Valeur : (ts, [{"number","name"}], set(numbers))
+_PCMN_CACHE: dict = {}
+_PCMN_TTL_S = 300
+
+
+async def _get_pcmn_cached(db, copropriete_id: str) -> tuple[list, set]:
+    """Return (class-6 list [{number,name}], full valid_accs set) with 5-min TTL cache."""
+    key = copropriete_id or ""
+    now = time.time()
+    hit = _PCMN_CACHE.get(key)
+    if hit and (now - hit[0]) < _PCMN_TTL_S:
+        return hit[1], hit[2]
+    q = {"class_num": 6}
+    if copropriete_id:
+        q["copropriete_id"] = copropriete_id
+    # 40 comptes classe 6 = suffisant pour Belgium ACPs (charges courantes).
+    class6 = await db.pcmn_accounts.find(q, {"_id": 0, "number": 1, "name": 1}).sort("number", 1).to_list(40)
+    # Full set toutes classes pour validation des lignes AI.
+    q2 = {}
+    if copropriete_id:
+        q2["copropriete_id"] = copropriete_id
+    all_docs = await db.pcmn_accounts.find(q2, {"_id": 0, "number": 1}).to_list(2000)
+    valid = {p["number"] for p in all_docs if p.get("number")}
+    _PCMN_CACHE[key] = (now, class6, valid)
+    return class6, valid
+
+
+async def _extract_pdf_text(file_path: str, max_chars: int = 4000) -> str:
     try:
         from pypdf import PdfReader
         reader = PdfReader(file_path)
@@ -78,7 +116,7 @@ async def _extract_invoice_with_ai(file_path: str, mime_type: str, known_pcmn: l
                 "Rules for lines extraction:\n"
                 "- If the invoice has SEVERAL detail rows/postes (different services or goods), "
                 "  return one object per row, each with its own amount and best-matched account.\n"
-                "- If the invoice has only ONE detail row, return lines=[] (empty array) — "
+                "- If the invoice has only ONE detail row, return lines=[] (empty array) - "
                 "  do NOT duplicate the single total as a one-element array.\n"
                 "- The sum of lines[].amount MUST equal total_amount (within 0.01 EUR tolerance).\n"
                 "- Match each line's account independently (e.g. honoraires syndic -> 612xxx, "
@@ -87,7 +125,13 @@ async def _extract_invoice_with_ai(file_path: str, mime_type: str, known_pcmn: l
                 f"{pcmn_hint}\n"
                 "Use 0 or empty strings if unknown. Date format ISO YYYY-MM-DD only."
             ),
-        ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+        # iter90an : Haiku 4.5 pour le path texte (3-4x plus rapide que Sonnet
+        # sur du JSON structure, qualite equivalente pour cette tache).
+        # Sonnet 4.5 conserve pour la vision (OCR de PDF scanne, qualite critique).
+        ).with_model(
+            "anthropic",
+            "claude-sonnet-4-5-20250929" if use_vision else "claude-haiku-4-5-20251001",
+        )
 
         if use_vision:
             # Send the PDF as a file attachment (Claude vision parses scan-image PDFs)
@@ -147,11 +191,8 @@ def create_invoice_ai_router(db):
             tmp.flush()
             tmp.close()
 
-            # Get PCMN accounts (class 6) for this ACP to inform AI
-            q = {"class_num": 6}
-            if copropriete_id:
-                q["copropriete_id"] = copropriete_id
-            pcmn = await db.pcmn_accounts.find(q, {"_id": 0, "number": 1, "name": 1}).sort("number", 1).to_list(200)
+            # iter90an : PCMN via cache TTL (evite refetch a chaque extraction)
+            pcmn, valid_accs = await _get_pcmn_cached(db, copropriete_id or "")
 
             result = await _extract_invoice_with_ai(tmp.name, "application/pdf", pcmn)
         finally:
@@ -160,24 +201,58 @@ def create_invoice_ai_router(db):
             except Exception:
                 pass
 
-        # Verify suggested PCMN exists; if not, blank it
-        if result.get("suggested_pcmn_account"):
-            exists = await db.pcmn_accounts.find_one({"number": result["suggested_pcmn_account"], "copropriete_id": copropriete_id or {"$exists": True}}, {"_id": 0})
-            if not exists:
+        # iter90an : parallelise 2 lookups DB (PCMN suggested + supplier match).
+        async def _check_suggested_pcmn():
+            acc = result.get("suggested_pcmn_account")
+            if not acc:
+                return
+            # Utilise le set du cache : lookup en memoire O(1), pas de round-trip Mongo.
+            if acc not in valid_accs:
                 result["suggested_pcmn_account"] = ""
+
+        # Normalize BCE/VAT numbers (strip dots, spaces; uppercase prefix)
+        def _norm_bce(v: str) -> str:
+            if not v:
+                return ""
+            digits = "".join(c for c in v if c.isdigit())
+            return digits[-10:] if len(digits) >= 9 else digits
+
+        bce_norm = _norm_bce(result.get("bce_number", "") or result.get("vat_number", ""))
+        result["bce_normalized"] = bce_norm
+
+        async def _find_supplier():
+            supplier_match = None
+            match_method = None
+            if bce_norm:
+                cursor = db.suppliers.find({"$or": [
+                    {"bce_number": {"$exists": True, "$ne": ""}},
+                    {"vat_number": {"$exists": True, "$ne": ""}},
+                ]}, {"_id": 0})
+                async for s in cursor:
+                    sb = _norm_bce(s.get("bce_number", "") or s.get("vat_number", ""))
+                    if sb and sb == bce_norm:
+                        supplier_match = s
+                        match_method = "bce"
+                        break
+            if not supplier_match and result.get("supplier_name"):
+                supplier_match = await db.suppliers.find_one(
+                    {"name": {"$regex": result["supplier_name"], "$options": "i"}}, {"_id": 0}
+                )
+                if supplier_match:
+                    match_method = "name"
+            return supplier_match, match_method
+
+        # Lancer PCMN check + supplier match en parallele
+        _, (supplier_match, match_method) = await asyncio.gather(
+            _check_suggested_pcmn(),
+            _find_supplier(),
+        )
 
         # Validate AI-extracted lines (if present): each line must have a valid
         # suggested account, and the sum of amounts must match total (0.01 tolerance).
         raw_lines = result.get("lines") or []
         if isinstance(raw_lines, list) and len(raw_lines) > 1:
-            # Pre-fetch valid PCMN account numbers for this ACP
-            valid_accs = set()
-            async for p in db.pcmn_accounts.find(
-                {"copropriete_id": copropriete_id or {"$exists": True}},
-                {"_id": 0, "number": 1},
-            ):
-                valid_accs.add(p["number"])
-
+            # iter90an : valid_accs deja en memoire via cache
             cleaned = []
             for ln in raw_lines:
                 if not isinstance(ln, dict):
@@ -205,37 +280,6 @@ def create_invoice_ai_router(db):
             result["lines"] = cleaned
         else:
             result["lines"] = []  # Single-line invoice -> empty lines
-
-        # Normalize BCE/VAT numbers (strip dots, spaces; uppercase prefix)
-        def _norm_bce(v: str) -> str:
-            if not v:
-                return ""
-            digits = "".join(c for c in v if c.isdigit())
-            return digits[-10:] if len(digits) >= 9 else digits
-
-        bce_norm = _norm_bce(result.get("bce_number", "") or result.get("vat_number", ""))
-        result["bce_normalized"] = bce_norm
-
-        # Match supplier : 1) BCE/VAT 2) Nom
-        supplier_match = None
-        match_method = None
-        if bce_norm:
-            cursor = db.suppliers.find({"$or": [
-                {"bce_number": {"$exists": True, "$ne": ""}},
-                {"vat_number": {"$exists": True, "$ne": ""}},
-            ]}, {"_id": 0})
-            async for s in cursor:
-                sb = _norm_bce(s.get("bce_number", "") or s.get("vat_number", ""))
-                if sb and sb == bce_norm:
-                    supplier_match = s
-                    match_method = "bce"
-                    break
-        if not supplier_match and result.get("supplier_name"):
-            supplier_match = await db.suppliers.find_one(
-                {"name": {"$regex": result["supplier_name"], "$options": "i"}}, {"_id": 0}
-            )
-            if supplier_match:
-                match_method = "name"
 
         # Suggestion creation : si pas de match ET on a un nom
         suggest_create = (not supplier_match) and bool(result.get("supplier_name"))

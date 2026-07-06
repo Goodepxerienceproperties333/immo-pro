@@ -375,29 +375,72 @@ def create_invoices_router(db):
         return " ".join(n.upper().split()).strip(" -.")
 
     async def _check_invoice_duplicate(data: InvoiceInput, exclude_id: str = ""):
-        """Anti-doublon strict : meme (fournisseur normalise, numero normalise, ACP).
-        Leve HTTPException 409 si une autre facture matche. Le N° interne
-        FA-AAAA-NNNN n'est jamais utilise (c'est le N° FOURNISSEUR qui compte)."""
+        """Anti-doublon strict, 2 regles cumulatives :
+        - Regle 1 : meme (fournisseur normalise, numero normalise, ACP)
+          -> facture certainement identique, HTTPException 409.
+        - Regle 2 (iter90ao) : meme (fournisseur normalise, montant a 0.01 EUR pres,
+          ACP, date +/- 3 jours) -> tres probable duplicata avec numero OCR
+          mal lu ou saisie manuelle divergente, HTTPException 409.
+
+        Le N° interne FA-AAAA-NNNN n'est jamais utilise (c'est le N°
+        FOURNISSEUR qui compte)."""
         norm_num = _norm(data.number)
         norm_sup = _norm(data.supplier)
-        if not norm_num or not norm_sup:
-            return  # Si l'un manque, on laisse passer (validation des champs ailleurs)
+        if not norm_sup:
+            return  # Sans fournisseur on ne peut pas dedupliquer
         copro_id = (data.copropriete_id or "").strip()
         q: dict = {}
         if copro_id:
             q["copropriete_id"] = copro_id
         if exclude_id:
             q["id"] = {"$ne": exclude_id}
-        async for inv in db.invoices.find(q, {"_id": 0, "id": 1, "number": 1, "supplier": 1, "date": 1, "total_amount": 1}):
-            if (_norm(inv.get("number", "")) == norm_num and
-                    _norm(inv.get("supplier", "")) == norm_sup):
+
+        # Parse la date de reference pour la fenetre a +/- 3 jours (Regle 2)
+        from datetime import date as _dt_cls, timedelta as _td_cls
+        ref_date = None
+        try:
+            ref_date = _dt_cls.fromisoformat((data.date or "").strip()[:10])
+        except (ValueError, TypeError):
+            ref_date = None
+        ref_total = round(float(data.total_amount or 0), 2)
+
+        async for inv in db.invoices.find(
+            q,
+            {"_id": 0, "id": 1, "number": 1, "supplier": 1, "date": 1, "total_amount": 1},
+        ):
+            existing_num = _norm(inv.get("number", ""))
+            existing_sup = _norm(inv.get("supplier", ""))
+            if existing_sup != norm_sup:
+                continue
+
+            # Regle 1 : meme numero
+            if norm_num and existing_num == norm_num:
                 raise HTTPException(
                     409,
-                    f"Facture en doublon : numero '{data.number}' du fournisseur "
-                    f"'{data.supplier}' existe deja (date {inv.get('date','?')}, "
+                    f"Facture en doublon (numero identique) : numero '{data.number}' du "
+                    f"fournisseur '{data.supplier}' existe deja (date {inv.get('date','?')}, "
                     f"montant {inv.get('total_amount','?')} EUR). "
                     f"Si c'est une facture distincte, modifiez le numero pour le rendre unique."
                 )
+
+            # Regle 2 : meme montant a +/- 0.01 EUR ET date proche (+/- 3 jours)
+            if ref_total > 0 and ref_date:
+                existing_total = round(float(inv.get("total_amount", 0) or 0), 2)
+                if abs(existing_total - ref_total) < 0.01:
+                    try:
+                        existing_date = _dt_cls.fromisoformat((inv.get("date") or "").strip()[:10])
+                    except (ValueError, TypeError):
+                        existing_date = None
+                    if existing_date and abs((existing_date - ref_date).days) <= 3:
+                        raise HTTPException(
+                            409,
+                            f"Facture probablement en doublon (montant + fournisseur + date proche) : "
+                            f"une facture de {ref_total:.2f} EUR du fournisseur "
+                            f"'{data.supplier}' existe deja au {inv.get('date','?')} "
+                            f"(numero '{inv.get('number','?')}'). "
+                            f"Si c'est bien une facture distincte, ajustez le montant, la date ou "
+                            f"passez par l'edition de la facture existante."
+                        )
 
     @router.post("/invoices")
     async def create_invoice(data: InvoiceInput):

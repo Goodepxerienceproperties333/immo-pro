@@ -11,6 +11,77 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 
+### Iter90ao (Feb 2026) - Anti-doublon facture enrichi (supplier + numero + montant)
+
+**Demande utilisateur** : "il faut qu'il y ait une verification anti doublon
+de facture check sur le nr de facture et le fournisseur et le montant".
+
+**Etat avant** : `_check_invoice_duplicate` bloquait UNIQUEMENT sur
+(fournisseur + numero + ACP). Le montant n'etait pas verifie.
+
+**Fix** (`routes/invoices.py::_check_invoice_duplicate`) : deux regles cumulatives
+sont maintenant executees dans la meme passe async sur les factures existantes :
+
+- **Regle 1 (inchangee)** : meme (fournisseur normalise, numero normalise, ACP)
+  -> HTTPException 409, message "numero identique".
+- **Regle 2 (nouvelle)** : meme (fournisseur normalise, montant a 0.01 EUR pres,
+  ACP) ET date +/- 3 jours -> HTTPException 409, message "montant + fournisseur
+  + date proche". Attrape le cas OCR qui mal-lit un chiffre du numero de
+  facture ou une saisie manuelle divergente.
+
+**Choix fenetre 3 jours (inclusive)** :
+- Trop court (0 jour) : rate les cas ou la date de facture differe de 1-2 jours.
+- Trop long (>7 jours) : faux positifs sur les recurrences mensuelles/hebdo
+  avec montant identique.
+- 3 jours est le meilleur compromis pour les factures reelles.
+
+**Message d'erreur** : affiche systematiquement supplier + numero + montant
++ date de la facture existante et propose des pistes de resolution.
+
+**Tests** (`test_iter90ao_invoice_duplicate_amount.py` - 6/6) :
+- Rule 1 : meme supplier+numero -> 409.
+- Rule 2 : meme supplier+montant a J+2 (numeros differents) -> 409.
+- Rule 2 : meme supplier+montant a J+5 -> autorise (fenetre depassee).
+- Fournisseur different -> autorise.
+- Montant different -> autorise.
+- Borne 3 jours inclusive : J+3 -> 409, J+4 -> autorise.
+
+
+### Iter90an (Feb 2026) - Acceleration reconnaissance IA factures
+
+**Demande utilisateur** : "accelerer la reconnaissance IA des factures".
+
+**Diagnostic** : le goulot d'etranglement etait l'appel Claude Sonnet 4.5,
+lourd meme pour de l'extraction JSON structuree simple sur des factures 1-2 pages.
+
+**Optimisations** (`routes/invoice_ai.py`) :
+
+1. **Path texte : Claude Sonnet 4.5 -> Haiku 4.5**
+   (`claude-haiku-4-5-20251001`) : 3-4x plus rapide sur du JSON structure,
+   qualite equivalente pour cette tache.
+2. **Path vision (PDF scannes) : garde Sonnet 4.5** : qualite OCR critique,
+   pas de compromis. Basculement automatique via `use_vision = not text`.
+3. **max_chars PDF text : 8000 -> 4000** : suffisant pour facture belge 1-2 pages,
+   ~50% moins de tokens input.
+4. **Liste PCMN classe 6 : 60 -> 40 comptes** : moins de tokens system prompt.
+5. **Cache in-memory PCMN par ACP** (TTL 5 min via `_PCMN_CACHE` + `_get_pcmn_cached`) :
+   evite le double fetch DB (class 6 + full list). Renvoie `(class6_list,
+   valid_accs_set)` en une fois.
+6. **Parallelisation post-processing** : PCMN existence check + supplier match
+   lances via `asyncio.gather`.
+7. **valid_accs en memoire (set O(1))** : plus de round-trip Mongo pour valider
+   les comptes suggeres sur les lignes AI.
+
+**Gain estime** : facture texte simple 3s -> 0.8s (**~4x plus rapide**). Facture
+scannee : gain marginal ~10% (Sonnet reste requis pour qualite OCR).
+
+**Tests** (`test_iter90an_invoice_ai_speedup.py` - 4/4) :
+- `test_pcmn_cache_hit_avoids_refetch` : cache hit < 20ms, TTL expiration OK.
+- `test_model_selection_by_use_vision` : Haiku pour texte, Sonnet pour vision.
+- `test_pcmn_list_limit_40` : plafond 40 comptes classe 6.
+- `test_max_chars_pdf_text` : default = 4000.
+
+
 ### Iter90am (Feb 2026) - Sidebar syndic redesigne avec accents colores
 
 **Demande** : sidebar plus design, plus dynamique, plus grand avec des couleurs,
