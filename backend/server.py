@@ -837,6 +837,7 @@ from routes.demo_seed import create_demo_router
 from routes.owner_portal import create_owner_portal_router
 from routes.exports import create_exports_router, create_reminders_router
 from routes.invoice_ai import create_invoice_ai_router
+from routes.invoice_templates import create_invoice_templates_router, try_apply_supplier_template
 from routes.expense_categories import create_expense_categories_router
 from routes.team import create_team_router
 from routes.import_wizard import create_import_wizard_router
@@ -864,6 +865,7 @@ app.include_router(create_owner_portal_router(db))
 app.include_router(create_exports_router(db))
 app.include_router(create_reminders_router(db))
 app.include_router(create_invoice_ai_router(db))
+app.include_router(create_invoice_templates_router(db))
 app.include_router(create_expense_categories_router(db))
 app.include_router(create_duplicates_router(db))
 app.include_router(create_owner_access_router(db))

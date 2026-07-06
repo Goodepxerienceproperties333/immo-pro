@@ -11,6 +11,72 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 
+### Iter90aq (Feb 2026) - Template appris par fournisseur (skip IA)
+
+**Idee** : monitorer les corrections manuelles pour construire un "template
+appris" par fournisseur -> a la Nieme facture du meme emetteur, l'IA n'est
+plus necessaire, extraction quasi 100% fiable en <100ms.
+
+**Backend** :
+
+- Nouveau fichier `routes/invoice_templates.py` :
+  - Collection Mongo `invoice_templates` clef par (supplier_id, copropriete_id).
+  - `learn_template()` : trouve chaque valeur user dans le texte brut via ses
+    variantes (dates DD/MM/YYYY belge, montants europeens/anglais avec point
+    ou virgule decimale, espaces milliers) et memorise les 6 derniers mots
+    avant la valeur comme `anchor`.
+  - `apply_template()` : cherche l'anchor dans le nouveau texte, regex par
+    type de champ dans les 120 chars suivants -> extrait valeur normalisee.
+  - `try_apply_supplier_template()` : point d'entree pour invoice_ai.py.
+  - Endpoint HTTP `POST /api/invoice-templates/learn` +
+    `GET /api/invoice-templates/{supplier_id}`.
+
+- `routes/invoice_ai.py` modifie :
+  - Extrait raw_text du PDF AVANT l'appel IA.
+  - Detecte le supplier via BCE/VAT dans le texte (regex `BE 0xxx.xxx.xxx`)
+    + lookup DB.
+  - Si supplier trouve + template existe : applique.
+  - Si `number` + `date` + `total_amount` tous trouves par template ->
+    `_extraction_source="template"`, aucun appel Claude.
+  - Sinon : appel IA + injection des champs du template en priorite (le
+    template a une confiance plus haute quand il matche).
+  - Reponse enrichie avec `raw_text` + `supplier_id_guess` pour le learn cote UI.
+
+**Frontend** (`InvoicesPage.js`) :
+
+- Nouveau state : `lastAiRawText`, `lastAiSupplierIdGuess`, `lastAiValues`,
+  `lastAiExtractionSource`.
+- Apres extract, ces states sont peuples.
+- Toast contextualise :
+  - "⚡ Extraction template : donnees reprises du profil fournisseur (rapide, sans IA)"
+  - vs "Donnees extraites par IA - verifiez avant enregistrement."
+- Apres save reussi d'une NOUVELLE facture (pas edit) : POST /learn avec
+  `{supplier_id, raw_text, user_values: {number, date, due_date, total_amount, vat_amount}}`.
+- Best-effort : erreur learn silencieuse (console.warn).
+
+**Formats de nombre supportes** :
+- `1234.56` / `1234,56` / `1234` (arrondi)
+- `1 234,56` (europeen espace milliers)
+- `1,234.56` (anglais)
+- `1.234,56` (belge/europeen classique) - critique, ajoute au fix
+
+**Tests** (`test_iter90aq_invoice_template_learning.py` - 9/9) :
+- Extract pattern date DD/MM/YYYY belge -> anchor "date facture" capture.
+- Extract pattern montant "1.234,56" avec point milliers.
+- Valeur absente du texte -> None.
+- Apply template : anchor "Date facture" trouve nouvelle date sur nouveau texte.
+- Apply template : anchor "Total TTC" trouve nouveau montant.
+- Apply template : anchor absent -> champ omis (pas d'erreur).
+- Endpoint /learn : POST 200, template cree.
+- Endpoint /learn : appels multiples -> sample_count incremente (3).
+- Endpoint /learn : sans supplier_id -> 400.
+
+**Cycle vertueux** : plus le syndic importe des factures d'un meme fournisseur
+(ex. syndic professionnel avec 3 factures/mois de la meme SPRL d'entretien),
+plus le template devient precis. Apres 3-4 factures corrigees, l'IA n'est
+quasi plus appelee pour ce fournisseur.
+
+
 ### Iter90ap (Feb 2026) - Fiabilite reconnaissance IA dates factures
 
 **Ticket utilisateur** : "la reconnaissance des documents n'est pas toujours

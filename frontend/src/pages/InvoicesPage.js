@@ -42,6 +42,11 @@ export default function InvoicesPage() {
   const [keyForm, setKeyForm] = useState({ name: '', code: '', description: '', key_type: 'quotity', lots: [], is_default: false });
   const [aiExtracting, setAiExtracting] = useState(false);
   const [aiHint, setAiHint] = useState('');
+  // iter90aq : conservees pour le "learn" post-save (envoi diff aux templates)
+  const [lastAiRawText, setLastAiRawText] = useState('');
+  const [lastAiSupplierIdGuess, setLastAiSupplierIdGuess] = useState('');
+  const [lastAiValues, setLastAiValues] = useState(null);
+  const [lastAiExtractionSource, setLastAiExtractionSource] = useState('');
   const [pendingPdf, setPendingPdf] = useState(null); // {file, filename} captured for later attach
   const [attachDialogInv, setAttachDialogInv] = useState(null); // invoice being managed
   const [newCatDialog, setNewCatDialog] = useState(false);
@@ -215,6 +220,21 @@ export default function InvoicesPage() {
       if (copro) fd.append('copropriete_id', copro);
       const { data } = await api.post('/invoices-ai/extract', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       const ext = data.extracted || {};
+      // iter90aq : conserve raw_text + supplier_id_guess + ai_values pour post-save learning
+      setLastAiRawText(data.raw_text || '');
+      setLastAiSupplierIdGuess(data.supplier_id_guess || data.supplier_match?.id || '');
+      setLastAiValues({
+        number: ext.number || '',
+        date: ext.date || '',
+        due_date: ext.due_date || '',
+        total_amount: ext.total_amount || 0,
+        vat_amount: ext.vat_amount || 0,
+        net_amount: ext.net_amount || 0,
+        vat_rate: ext.vat_rate || 0,
+        iban: ext.iban || '',
+        communication: ext.communication || '',
+      });
+      setLastAiExtractionSource(ext._extraction_source || 'ai');
       // Si le backend retourne un warning explicite (PDF illisible, pas de cle LLM, etc.)
       if (ext._warning) {
         setAiHint(ext._warning);
@@ -274,7 +294,12 @@ export default function InvoicesPage() {
           parts.push(`Nouveau fournisseur a creer: ${ext.supplier_name}`);
         }
         setAiHint(parts.join(' - '));
-        toast.success('Donnees extraites par IA - verifiez avant enregistrement.');
+        // iter90aq : feedback visuel selon source d'extraction
+        if (ext._extraction_source === 'template') {
+          toast.success('⚡ Extraction template : donnees reprises du profil fournisseur (rapide, sans IA)');
+        } else {
+          toast.success('Donnees extraites par IA - verifiez avant enregistrement.');
+        }
       }
       setPendingPdf({ file, filename: file.name });
     } catch (err) {
@@ -357,7 +382,30 @@ export default function InvoicesPage() {
           await api.post(`/invoices/${invoiceId}/attachments`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
         } catch (e) { console.warn('Attachment failed', e); }
       }
-      setInvoiceDialog(false); setPendingPdf(null); setEditingInvoice(null); load();
+      // iter90aq : apprendre le template fournisseur si l'IA/template a ete utilise
+      // et qu'on a le texte brut + supplier_id resolu.
+      if (lastAiRawText && lastAiSupplierIdGuess && invoiceId && !editingInvoice) {
+        try {
+          const copro = localStorage.getItem('selectedCopro') || localStorage.getItem('copropriete_id') || '';
+          await api.post('/invoice-templates/learn', {
+            supplier_id: lastAiSupplierIdGuess,
+            supplier_name: invForm.supplier || '',
+            copropriete_id: copro,
+            raw_text: lastAiRawText,
+            user_values: {
+              number: invForm.number || '',
+              date: invForm.date || '',
+              due_date: invForm.due_date || '',
+              total_amount: Number(invForm.total_amount) || 0,
+              vat_amount: Number(invForm.vat_amount) || 0,
+            },
+          });
+        } catch (e) { console.warn('Template learn failed', e); }
+      }
+      setInvoiceDialog(false); setPendingPdf(null); setEditingInvoice(null);
+      // Reset des state IA
+      setLastAiRawText(''); setLastAiSupplierIdGuess(''); setLastAiValues(null); setLastAiExtractionSource('');
+      load();
     } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); }
   };
 

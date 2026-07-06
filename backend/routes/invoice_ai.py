@@ -203,6 +203,9 @@ def create_invoice_ai_router(db):
             raise HTTPException(400, "PDF requis pour l'extraction IA")
         content = await file.read()
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+        raw_text = ""  # iter90aq : conserve pour le "learn" post-save
+        supplier_id_guess = None
+        supplier_name_guess = ""
         try:
             tmp.write(content)
             tmp.flush()
@@ -211,7 +214,77 @@ def create_invoice_ai_router(db):
             # iter90an : PCMN via cache TTL (evite refetch a chaque extraction)
             pcmn, valid_accs = await _get_pcmn_cached(db, copropriete_id or "")
 
-            result = await _extract_invoice_with_ai(tmp.name, "application/pdf", pcmn)
+            # iter90aq : template appris - extraction rapide sans IA si supplier connu.
+            # 1) Extraire le texte brut du PDF
+            raw_text = await _extract_pdf_text(tmp.name, max_chars=6000)
+            # 2) Deviner le supplier via BCE/VAT (bien plus fiable que le nom)
+            template_result = None
+            if raw_text and copropriete_id:
+                from routes.invoice_templates import try_apply_supplier_template
+                import re as _re
+                bce_matches = _re.findall(
+                    r"BE\s*0?\d{3}[.\s]?\d{3}[.\s]?\d{3}|0\d{3}[.\s]\d{3}[.\s]\d{3}",
+                    raw_text,
+                )
+                for bce_raw in bce_matches:
+                    bce_digits = "".join(c for c in bce_raw if c.isdigit())
+                    if len(bce_digits) < 9:
+                        continue
+                    bce_norm = bce_digits[-10:] if len(bce_digits) >= 10 else bce_digits
+                    async for _s in db.suppliers.find(
+                        {"$or": [{"bce_number": {"$exists": True}}, {"vat_number": {"$exists": True}}]},
+                        {"_id": 0, "id": 1, "name": 1, "bce_number": 1, "vat_number": 1},
+                    ):
+                        sb = "".join(c for c in (_s.get("bce_number", "") or _s.get("vat_number", "")) if c.isdigit())
+                        sb_norm = sb[-10:] if len(sb) >= 10 else sb
+                        if sb_norm and sb_norm == bce_norm:
+                            supplier_id_guess = _s.get("id")
+                            supplier_name_guess = _s.get("name", "")
+                            break
+                    if supplier_id_guess:
+                        break
+
+                if supplier_id_guess:
+                    template_result = await try_apply_supplier_template(
+                        db, supplier_id_guess, copropriete_id or "", raw_text,
+                    )
+
+            # 3) Si le template a rempli les 3 champs critiques -> skip IA
+            crit_fields = {"number", "date", "total_amount"}
+            template_fields = (template_result or {}).get("fields", {}) if template_result else {}
+            template_covers_critical = crit_fields.issubset(template_fields.keys()) if template_fields else False
+
+            if template_covers_critical:
+                # Extraction rapide par template - pas d'appel IA
+                result = {
+                    "supplier_name": supplier_name_guess,
+                    "number": template_fields.get("number", ""),
+                    "date": template_fields.get("date", ""),
+                    "due_date": template_fields.get("due_date", ""),
+                    "total_amount": template_fields.get("total_amount", 0),
+                    "vat_amount": template_fields.get("vat_amount", 0),
+                    "net_amount": template_fields.get("net_amount", 0),
+                    "vat_rate": template_fields.get("vat_rate", 0),
+                    "iban": template_fields.get("iban", ""),
+                    "communication": template_fields.get("communication", ""),
+                    "description": "",
+                    "suggested_pcmn_account": "",
+                    "vat_number": "",
+                    "bce_number": "",
+                    "lines": [],
+                    "_extraction_source": "template",
+                    "_template_id": template_result.get("template_id", ""),
+                }
+            else:
+                # Fallback : appel Claude Sonnet 4.6 classique
+                result = await _extract_invoice_with_ai(tmp.name, "application/pdf", pcmn)
+                result["_extraction_source"] = "ai"
+                # Injecter les champs du template en priorite sur ce que l'IA a extrait
+                if template_fields:
+                    for k, v in template_fields.items():
+                        if v not in (None, "", 0):
+                            result[k] = v
+                    result["_template_partial"] = list(template_fields.keys())
         finally:
             try:
                 os.unlink(tmp.name)
@@ -352,6 +425,10 @@ def create_invoice_ai_router(db):
             # iter87 : no on-disk path anymore (tempfile cleaned). Caller
             # re-uploads the PDF later via /invoices/{id}/attachments if needed.
             "stored_temp_path": "",
+            # iter90aq : texte brut renvoye au frontend pour le "learn" post-save
+            # (frontend le renvoie via POST /invoice-templates/learn quand user save).
+            "raw_text": raw_text,
+            "supplier_id_guess": supplier_id_guess or "",
         }
 
     return router
