@@ -786,8 +786,17 @@ async def seed_pcmn():
 
 @app.on_event("startup")
 async def startup():
-    await db.users.create_index("email", unique=True)
-    await db.owners.create_index("vcs_code", sparse=True)
+    # iter90as : chaque create_index dans son propre try pour eviter qu'un
+    # echec (index existant avec definition differente, timeout Atlas, etc.)
+    # crash tout le startup event et bloque la readiness probe K8s.
+    try:
+        await db.users.create_index("email", unique=True)
+    except Exception as _e:
+        print(f"[startup] users.email index skipped: {_e}")
+    try:
+        await db.owners.create_index("vcs_code", sparse=True)
+    except Exception as _e:
+        print(f"[startup] owners.vcs_code index skipped: {_e}")
     # iter87 : TTL index on invoice_bundle_sessions for auto-cleanup of bundle
     # PDF sessions after 24h (uses `expires_at` ISODate field set on creation).
     try:
@@ -805,14 +814,26 @@ async def startup():
         await db.owner_access_audit.create_index([("owner_id", 1), ("created_at", -1)])
     except Exception:
         pass
-    await seed_admin()
-    await seed_pcmn()
-    os.makedirs("/app/memory", exist_ok=True)
-    with open("/app/memory/test_credentials.md", "w") as f:
-        f.write("# Test Credentials\n\n")
-        f.write(f"## Super Admin\n- Email: {os.environ.get('ADMIN_EMAIL', 'admin@copro.be')}\n- Password: {os.environ.get('ADMIN_PASSWORD', 'admin123')}\n- Role: superadmin\n\n")
-        f.write("## Roles: superadmin, syndic, owner\n\n")
-        f.write("## Auth Endpoints\n- POST /api/auth/login\n- POST /api/auth/register\n- GET /api/auth/me\n- POST /api/auth/logout\n")
+    try:
+        await seed_admin()
+    except Exception as _e:
+        print(f"[startup] seed_admin failed: {_e}")
+    try:
+        await seed_pcmn()
+    except Exception as _e:
+        print(f"[startup] seed_pcmn failed: {_e}")
+    # iter90as : ecriture test_credentials.md en dev/preview UNIQUEMENT.
+    # En production K8s, /app/memory peut ne pas etre writable (filesystem
+    # hardened, volume ephemere) -> le crash faisait timeout le readiness probe.
+    try:
+        os.makedirs("/app/memory", exist_ok=True)
+        with open("/app/memory/test_credentials.md", "w") as f:
+            f.write("# Test Credentials\n\n")
+            f.write(f"## Super Admin\n- Email: {os.environ.get('ADMIN_EMAIL', 'admin@copro.be')}\n- Password: {os.environ.get('ADMIN_PASSWORD', 'admin123')}\n- Role: superadmin\n\n")
+            f.write("## Roles: superadmin, syndic, owner\n\n")
+            f.write("## Auth Endpoints\n- POST /api/auth/login\n- POST /api/auth/register\n- GET /api/auth/me\n- POST /api/auth/logout\n")
+    except Exception as _e:
+        print(f"[startup] memory/test_credentials.md write skipped: {_e}")
 
 @app.on_event("shutdown")
 async def shutdown():
