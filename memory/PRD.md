@@ -11,6 +11,64 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 
+### Iter90as/at (Feb 2026) - Deploiement K8s robuste + Hardening securite P0
+
+**Iter90as - Fix deploiement K8s** :
+- Startup event : chaque `create_index` + `seed_admin` + `seed_pcmn` + write
+  `/app/memory/test_credentials.md` enveloppes dans un try/except individuel.
+- Cause racine du timeout de readiness probe en prod : ecriture de
+  `/app/memory/test_credentials.md` sur un filesystem read-only ou volume
+  ephemere en Kubernetes -> exception -> pod ne devient jamais ready.
+- Corrections idempotentes : preview + prod n'ont plus d'impact sur le startup.
+
+**Iter90at - Hardening securite P0 (5 protections)** :
+
+1. **Rate limiting** (slowapi) :
+   - Global : 100 req/min/IP par defaut (anti-DDoS applicatif).
+   - `/api/auth/login` : 10/min/IP.
+   - `/api/auth/register`, `/api/auth/forgot-password`, `/api/auth/reset-password`
+     : 5/min/IP.
+   - Detecte l'IP via `get_remote_address` (compatible reverse-proxy).
+
+2. **Security headers** (middleware `@app.middleware("http")` place APRES
+   auth_middleware pour etre outermost, wrap les 401/403 early returns) :
+   - `X-Frame-Options: SAMEORIGIN` (anti-clickjacking)
+   - `X-Content-Type-Options: nosniff` (anti-MIME sniffing)
+   - `Strict-Transport-Security: max-age=31536000; includeSubDomains` (HSTS 1 an)
+   - `Referrer-Policy: strict-origin-when-cross-origin`
+   - `Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=()`
+   - `Content-Security-Policy: default-src 'self'; ...` (CSP basique)
+
+3. **CORS restreint** : `_build_cors_origins()` deja env-driven, plus de fallback `*`.
+
+4. **Cookies auth durcis** :
+   - Helper `_set_auth_cookie()` unifie (login, register, refresh, oauth).
+   - `COOKIE_SECURE` env-driven (false preview localhost, **true prod HTTPS**).
+   - `COOKIE_SAMESITE=lax` par defaut (CSRF-safe + compat redirects).
+   - Toutes les occurrences `set_cookie(secure=False, ...)` remplacees.
+
+5. **Body size limit** : `BodySizeLimitMiddleware` renvoie 413 si
+   Content-Length > `MAX_BODY_MB` (defaut 20 MB) - refuse tout upload DoS
+   avant meme la lecture du body par Starlette.
+
+**Nouvelles env vars** (backend/.env) :
+- `COOKIE_SECURE=false` (mettre `true` en production HTTPS)
+- `COOKIE_SAMESITE=lax`
+- `MAX_BODY_MB=20`
+
+**Dependance ajoutee** : `slowapi==0.1.10` (+ `limits`, `wrapt`, `Deprecated`).
+
+**Tests** (`test_iter90at_security_hardening.py` - 4/4) :
+- 6 security headers presents sur `/api/health`.
+- Payload 25 MB -> HTTP 413.
+- 12 login rapides -> HTTP 429 declenche.
+- Cookie access_token contient HttpOnly + SameSite + Path=/.
+
+**⚠️ Action prod** : lors du redeploiement, ajouter `COOKIE_SECURE=true` dans
+le Deployment Panel Emergent (Secrets) pour que les cookies auth soient
+transmissibles uniquement en HTTPS.
+
+
 ### Iter90ar (Feb 2026) - Sante comptable : rendu lisible + adaptation situation
 
 **Ticket utilisateur** :

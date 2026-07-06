@@ -6,6 +6,12 @@ load_dotenv(ROOT_DIR / '.env')
 
 from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, UploadFile, File
 from starlette.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response as StarletteResponse
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
 import logging
@@ -24,6 +30,63 @@ client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 
 app = FastAPI(title="CoproManager")
+
+# iter90at : Rate limiting global (anti-DDoS + anti-brute-force).
+# - Global : 100 req/min/IP par defaut (protege contre le scraping / DDoS applicatif).
+# - Endpoints sensibles (login, register, password reset) : 5 req/min/IP.
+#   Chaque route sensible utilise @limiter.limit("5/minute") dans son handler.
+# Utilise l'adresse IP source (X-Forwarded-For gere par slowapi via
+# get_remote_address si le reverse-proxy K8s forwarde correctement l'header).
+limiter = Limiter(key_func=get_remote_address, default_limits=["100/minute"])
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
+
+
+# iter90at : Security headers - HSTS, X-Frame-Options, X-Content-Type-Options,
+# Referrer-Policy, Permissions-Policy, CSP basique.
+# NOTE : sera enregistre en `@app.middleware("http")` APRES auth_middleware
+# pour devenir outermost (afin de wrapper les 401 early returns de l'auth).
+_SECURITY_HEADERS = {
+    "X-Frame-Options": "SAMEORIGIN",
+    "X-Content-Type-Options": "nosniff",
+    "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+    "Content-Security-Policy": (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "font-src 'self' https://fonts.gstatic.com data:; "
+        "img-src 'self' data: blob: https:; "
+        "connect-src 'self' https:; "
+        "frame-ancestors 'self';"
+    ),
+}
+
+
+# iter90at : Body size limit - refuse tout upload > 20 MB des le middleware
+# (avant lecture par Starlette / uvicorn). Protege contre les uploads DoS.
+_MAX_BODY_BYTES = int(os.environ.get("MAX_BODY_MB", "20")) * 1024 * 1024
+
+
+class BodySizeLimitMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        cl = request.headers.get("content-length")
+        if cl:
+            try:
+                if int(cl) > _MAX_BODY_BYTES:
+                    return StarletteResponse(
+                        content='{"detail":"Requete trop volumineuse (max %d MB)"}' % (_MAX_BODY_BYTES // (1024*1024)),
+                        status_code=413,
+                        media_type="application/json",
+                    )
+            except (TypeError, ValueError):
+                pass
+        return await call_next(request)
+
+
+app.add_middleware(BodySizeLimitMiddleware)
 
 # CORS - cookie-based auth needs explicit origins (allow_credentials=True is
 # incompatible with allow_origins=["*"]). We honor CORS_ORIGINS if it lists
@@ -205,6 +268,19 @@ async def auth_middleware(request: Request, call_next):
 
     return await call_next(request)
 
+
+# iter90at : Security headers middleware - PLACE APRES auth_middleware
+# donc s'execute en OUTERMOST (wrap tous les 401/403 early returns).
+@app.middleware("http")
+async def security_headers_middleware(request: Request, call_next):
+    response = await call_next(request)
+    for k, v in _SECURITY_HEADERS.items():
+        # setdefault : ne pas ecraser si un endpoint a deja mis une valeur specifique
+        if k not in response.headers:
+            response.headers[k] = v
+    return response
+
+
 JWT_ALGORITHM = "HS256"
 ROLES = ["superadmin", "syndic", "gestionnaire", "owner"]
 
@@ -295,6 +371,27 @@ class MeUpdateInput(BaseModel):
 # Auth Router
 auth_router = APIRouter(prefix="/api/auth")
 
+# iter90at : Configuration cookies auth durcie.
+# En prod HTTPS : COOKIE_SECURE=true (le navigateur n'envoie le cookie que via HTTPS).
+# En preview/local (http://localhost) : COOKIE_SECURE=false pour compat dev.
+# SameSite=Lax protege contre les CSRF cross-site tout en laissant les redirects
+# normaux fonctionner.
+_COOKIE_SECURE = os.environ.get("COOKIE_SECURE", "false").lower() in ("true", "1", "yes")
+_COOKIE_SAMESITE = os.environ.get("COOKIE_SAMESITE", "lax").lower()
+
+
+def _set_auth_cookie(response: Response, key: str, value: str, max_age: int):
+    """Helper unifie pour poser un cookie auth avec les bons flags de securite."""
+    response.set_cookie(
+        key=key, value=value,
+        httponly=True,
+        secure=_COOKIE_SECURE,
+        samesite=_COOKIE_SAMESITE,
+        max_age=max_age,
+        path="/",
+    )
+
+
 def user_response(user_doc):
     """Build a safe user response dict from a MongoDB user document."""
     return {
@@ -320,6 +417,7 @@ async def mark_onboarding_complete(request: Request):
     return {"status": "ok"}
 
 @auth_router.post("/login")
+@limiter.limit("10/minute")
 async def login(data: LoginInput, request: Request, response: Response):
     email = data.email.lower().strip()
     user = await db.users.find_one({"email": email})
@@ -346,8 +444,8 @@ async def login(data: LoginInput, request: Request, response: Response):
     user_id = str(user["_id"])
     access_token = create_access_token(user_id, email)
     refresh_token = create_refresh_token(user_id)
-    response.set_cookie(key="access_token", value=access_token, httponly=True, secure=False, samesite="lax", max_age=7200, path="/")
-    response.set_cookie(key="refresh_token", value=refresh_token, httponly=True, secure=False, samesite="lax", max_age=604800, path="/")
+    _set_auth_cookie(response, "access_token", access_token, 7200)
+    _set_auth_cookie(response, "refresh_token", refresh_token, 604800)
     # Trace the successful login (history visible by superadmin)
     await _record_login_attempt(email, user, request, success=True)
     # Update last_login_at on the user document
@@ -433,12 +531,13 @@ async def first_set_password(data: FirstSetPasswordInput, response: Response):
     user_id = str(user["_id"])
     access_token = create_access_token(user_id, email)
     refresh_token = create_refresh_token(user_id)
-    response.set_cookie(key="access_token", value=access_token, httponly=True, secure=False, samesite="lax", max_age=7200, path="/")
-    response.set_cookie(key="refresh_token", value=refresh_token, httponly=True, secure=False, samesite="lax", max_age=604800, path="/")
+    _set_auth_cookie(response, "access_token", access_token, 7200)
+    _set_auth_cookie(response, "refresh_token", refresh_token, 604800)
     return user_response(user)
 
 @auth_router.post("/register")
-async def register(data: RegisterInput, response: Response):
+@limiter.limit("5/minute")
+async def register(data: RegisterInput, request: Request, response: Response):
     email = data.email.lower().strip()
     existing = await db.users.find_one({"email": email})
     if existing:
@@ -455,8 +554,8 @@ async def register(data: RegisterInput, response: Response):
     user_id = str(result.inserted_id)
     access_token = create_access_token(user_id, email)
     refresh_token = create_refresh_token(user_id)
-    response.set_cookie(key="access_token", value=access_token, httponly=True, secure=False, samesite="lax", max_age=7200, path="/")
-    response.set_cookie(key="refresh_token", value=refresh_token, httponly=True, secure=False, samesite="lax", max_age=604800, path="/")
+    _set_auth_cookie(response, "access_token", access_token, 7200)
+    _set_auth_cookie(response, "refresh_token", refresh_token, 604800)
     return {"id": user_id, "email": email, "name": data.name, "role": "owner", "copropriete_ids": []}
 
 @auth_router.get("/me")
@@ -513,7 +612,7 @@ async def refresh(request: Request, response: Response):
         if not user:
             raise HTTPException(status_code=401, detail="User not found")
         access_token = create_access_token(str(user["_id"]), user["email"])
-        response.set_cookie(key="access_token", value=access_token, httponly=True, secure=False, samesite="lax", max_age=7200, path="/")
+        _set_auth_cookie(response, "access_token", access_token, 7200)
         return {"message": "Token refreshed"}
     except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
         raise HTTPException(status_code=401, detail="Invalid refresh token")
@@ -552,6 +651,7 @@ async def _check_forgot_rate_limit(ip: str) -> bool:
 
 
 @auth_router.post("/forgot-password")
+@limiter.limit("5/minute")
 async def forgot_password(data: ForgotPasswordInput, request: Request):
     """Always returns 200 OK with the same message regardless of whether the
     email exists, to prevent user enumeration attacks. Sends a reset link
@@ -611,7 +711,8 @@ async def forgot_password(data: ForgotPasswordInput, request: Request):
 
 
 @auth_router.post("/reset-password")
-async def reset_password(data: ResetPasswordInput, response: Response):
+@limiter.limit("5/minute")
+async def reset_password(data: ResetPasswordInput, request: Request, response: Response):
     """Validates the reset token, updates the password, marks token consumed,
     logs the user in directly."""
     if not data.token or len(data.token) < 16:
@@ -665,8 +766,8 @@ async def reset_password(data: ResetPasswordInput, response: Response):
     user_id = str(user["_id"])
     access_token = create_access_token(user_id, user["email"])
     refresh_token = create_refresh_token(user_id)
-    response.set_cookie(key="access_token", value=access_token, httponly=True, secure=False, samesite="lax", max_age=7200, path="/")
-    response.set_cookie(key="refresh_token", value=refresh_token, httponly=True, secure=False, samesite="lax", max_age=604800, path="/")
+    _set_auth_cookie(response, "access_token", access_token, 7200)
+    _set_auth_cookie(response, "refresh_token", refresh_token, 604800)
     return user_response(user)
 
 
