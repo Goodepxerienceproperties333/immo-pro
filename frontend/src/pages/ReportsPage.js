@@ -44,6 +44,17 @@ export default function ReportsPage() {
     setBalance(null); setBilan(null); setResultat(null); setDecomptes(null);
   }, [selectedCopro]);
 
+  // Auto-remplit dateFrom/dateTo quand un exercice fiscal est selectionne.
+  // Simplifie la saisie : plus besoin d'ouvrir 2 date pickers pour un exercice
+  // complet. L'utilisateur peut toujours affiner manuellement apres.
+  useEffect(() => {
+    if (!fiscalYearId) return;
+    const fy = years.find(y => y.id === fiscalYearId);
+    if (!fy) return;
+    if (fy.start_date) setDateFrom(fy.start_date);
+    if (fy.end_date) setDateTo(fy.end_date);
+  }, [fiscalYearId, years]);
+
   const loadBalance = async () => { setLoading(true); try { const params = {}; if (dateFrom) params.date_from = dateFrom; if (dateTo) params.date_to = dateTo; const { data } = await api.get('/reports/balance', { params }); setBalance(data); } catch { toast.error('Erreur'); } finally { setLoading(false); } };
   const loadBilan = async () => {
     setLoading(true);
@@ -212,42 +223,78 @@ export default function ReportsPage() {
         </TabsContent>
 
         <TabsContent value="bilan" className="mt-0">
-          <DateFilters onLoad={loadBilan} label="Charger bilan" />
-          <div className="flex flex-wrap items-end gap-3 mb-3">
-            <div>
-              <label className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold block mb-1">Exercice fiscal</label>
-              <select
-                className="border border-slate-200 rounded-md px-3 py-2 text-sm bg-white min-w-[220px]"
-                value={fiscalYearId}
-                onChange={e => setFiscalYearId(e.target.value)}
-                data-testid="bilan-fiscal-year-select"
+          {/* Simplification : le bilan est un arrete a date, donc un seul
+              champ "Arrete au" (pas de "Du"). L'exercice fiscal auto-remplit
+              la date (fin d'exercice). Modifiable pour un arrete intermediaire. */}
+          <Card className="border-slate-200 mb-4"><CardContent className="p-4">
+            <div className="flex flex-wrap items-end gap-3">
+              <div>
+                <label className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold block mb-1">Exercice fiscal</label>
+                <select
+                  className="border border-slate-200 rounded-md px-3 py-2 text-sm bg-white min-w-[220px]"
+                  value={fiscalYearId}
+                  onChange={e => setFiscalYearId(e.target.value)}
+                  data-testid="bilan-fiscal-year-select"
+                >
+                  <option value="">— Situation a date libre —</option>
+                  {years.map(y => <option key={y.id} value={y.id}>{y.name} ({y.status === 'closed' ? 'cloture' : 'ouvert'})</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold block mb-1">Arrete au</label>
+                <Input
+                  type="date"
+                  value={dateTo}
+                  onChange={e => setDateTo(e.target.value)}
+                  className="w-40"
+                  data-testid="bilan-date-to"
+                />
+              </div>
+              <div>
+                <label className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold block mb-1">Vue du bilan</label>
+                <select
+                  className="border border-slate-200 rounded-md px-3 py-2 text-sm bg-white min-w-[260px]"
+                  value={viewMode}
+                  onChange={e => setViewMode(e.target.value)}
+                  data-testid="bilan-view-mode"
+                >
+                  <option value="before_distribution">Avant repartition (compte 499 visible)</option>
+                  <option value="after_distribution">Apres repartition (499 reparti aux proprietaires)</option>
+                </select>
+              </div>
+              <Button
+                onClick={loadBilan}
+                className="bg-[#0055FF] hover:bg-[#0040CC]"
+                disabled={loading}
+                data-testid="load-bilan-btn"
               >
-                <option value="">— Tous (situation a date) —</option>
-                {years.map(y => <option key={y.id} value={y.id}>{y.name} ({y.status === 'closed' ? 'cloture' : 'ouvert'})</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold block mb-1">Vue du bilan</label>
-              <select
-                className="border border-slate-200 rounded-md px-3 py-2 text-sm bg-white min-w-[260px]"
-                value={viewMode}
-                onChange={e => setViewMode(e.target.value)}
-                data-testid="bilan-view-mode"
+                <BarChart3 size={16} className="mr-2" />Charger le bilan
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={downloadBilanPdf}
+                data-testid="download-bilan-pdf"
               >
-                <option value="before_distribution">Avant repartition (compte 499 visible)</option>
-                <option value="after_distribution">Apres repartition (499 reparti aux proprietaires)</option>
-              </select>
+                <FileText size={14} className="mr-1" /> PDF Bilan
+              </Button>
             </div>
-            <Button
-              variant="default"
-              size="sm"
-              onClick={downloadBilanPdf}
-              className="bg-[#0055FF] hover:bg-[#0040CC] text-white"
-              data-testid="download-bilan-pdf"
-            >
-              <FileText size={14} className="mr-1" /> PDF Bilan
-            </Button>
-          </div>
+            {(() => {
+              const fy = years.find(y => y.id === fiscalYearId);
+              if (!fy) return null;
+              return (
+                <div className="mt-3 text-[11px] text-slate-500" data-testid="bilan-period-info">
+                  Exercice <span className="font-semibold text-slate-700">{fy.name}</span> :
+                  {' '}du {fmtDate(fy.start_date)} au {fmtDate(fy.end_date)}
+                  {dateTo && dateTo !== fy.end_date && (
+                    <span className="ml-2 italic text-amber-600">
+                      (arrete intermediaire au {fmtDate(dateTo)})
+                    </span>
+                  )}
+                </div>
+              );
+            })()}
+          </CardContent></Card>
           {bilan && (<>
             <div className="flex justify-between items-center mb-3">
               <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${bilan.equilibre ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>

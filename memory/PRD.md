@@ -11,6 +11,23 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 
+### Iter90ba (Feb 2026) - Simplification date picker Bilan
+
+- **Probleme UX** : sur l'onglet Bilan (ReportsPage), 2 date pickers (Du/Au)
+  etaient affiches, alors que le bilan est un arrete a date (utilise
+  UNIQUEMENT `date_to` cote backend). L'user devait cliquer 4+ fois pour
+  saisir 2 dates identiques.
+- **Solution** :
+  1. Auto-remplissage : quand l'user selectionne un exercice fiscal,
+     `dateFrom` = fy.start_date et `dateTo` = fy.end_date sont pre-remplis
+     automatiquement (utile aussi pour Balance / Resultat).
+  2. Onglet Bilan : DateFilters remplace par un layout unique en ligne
+     (Exercice fiscal -> Arrete au -> Vue -> Charger le bilan -> PDF Bilan)
+     avec **un seul** input date "Arrete au".
+  3. Badge d'info sous les champs : "Exercice YYYY : du DD/MM/YYYY au
+     DD/MM/YYYY" pour clarifier la periode. Warning "arrete intermediaire"
+     si l'user modifie manuellement la date d'arrete.
+
 ### Iter90az (Feb 2026) - Auto-apprentissage nature de depense par fournisseur
 
 - **Nouvel endpoint** : `GET /api/invoices/supplier-suggestion?supplier=X&copropriete_id=Y`
