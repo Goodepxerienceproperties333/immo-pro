@@ -60,6 +60,40 @@ export default function BankingPage() {
   const [categorizeTarget, setCategorizeTarget] = useState(null);
   const [categorizeSplits, setCategorizeSplits] = useState([]);
 
+  // iter90bg : mapping compte -> badge visuel distinctif
+  //   Recherche le bank_account correspondant au statement (via
+  //   account_number matchant iban ou pcmn_number). Retourne { label, color }.
+  //   Les couleurs sont deterministes (hash du pcmn_number) pour rester
+  //   stables entre les rechargements et coherentes visuellement.
+  const _BA_COLORS = [
+    { bg: 'bg-blue-100',    text: 'text-blue-800',    border: 'border-blue-300' },
+    { bg: 'bg-emerald-100', text: 'text-emerald-800', border: 'border-emerald-300' },
+    { bg: 'bg-purple-100',  text: 'text-purple-800',  border: 'border-purple-300' },
+    { bg: 'bg-amber-100',   text: 'text-amber-800',   border: 'border-amber-300' },
+    { bg: 'bg-rose-100',    text: 'text-rose-800',    border: 'border-rose-300' },
+    { bg: 'bg-cyan-100',    text: 'text-cyan-800',    border: 'border-cyan-300' },
+    { bg: 'bg-fuchsia-100', text: 'text-fuchsia-800', border: 'border-fuchsia-300' },
+    { bg: 'bg-indigo-100',  text: 'text-indigo-800',  border: 'border-indigo-300' },
+  ];
+  const getBankAccountBadge = (stmt) => {
+    const accNum = (stmt.account_number || '').trim();
+    if (!accNum) return null;
+    const ba = bankAccounts.find(b => b.iban === accNum || b.pcmn_number === accNum);
+    // Label : label defini ou "vue/epargne + IBAN 4 derniers" en fallback
+    let label = ba?.label?.trim() || '';
+    if (!label) {
+      const type = ba?.account_type || '';
+      const last4 = (ba?.iban || accNum).slice(-4);
+      label = (type ? `${type.charAt(0).toUpperCase()}${type.slice(1)}` : 'Compte') + ' •' + last4;
+    }
+    // Couleur deterministe : hash simple du pcmn_number ou iban
+    const key = ba?.pcmn_number || ba?.iban || accNum;
+    let h = 0;
+    for (let i = 0; i < key.length; i++) h = ((h << 5) - h + key.charCodeAt(i)) | 0;
+    const c = _BA_COLORS[Math.abs(h) % _BA_COLORS.length];
+    return { label, ...c };
+  };
+
   const load = useCallback(async () => {
     const promises = [
       api.get('/banking/statements', { params: fyParams }),
@@ -371,9 +405,16 @@ export default function BankingPage() {
         {/* Statements sidebar */}
         <div className="space-y-2 lg:col-span-1">
           <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold px-1">Extraits</div>
-          {statements.length === 0 ? <p className="text-sm text-slate-400 text-center py-4">Aucun extrait</p> : statements.map(s => (
-            <Card key={s.id} className={`cursor-pointer transition-all border text-sm ${selectedStmt?.id === s.id ? 'border-[#0055FF] shadow-md' : 'border-slate-200 hover:border-slate-300'}`} onClick={() => loadStmtTxns(s)} data-testid={`stmt-card-${s.id}`}>
+          {statements.length === 0 ? <p className="text-sm text-slate-400 text-center py-4">Aucun extrait</p> : statements.map(s => {
+            const baBadge = getBankAccountBadge(s);
+            return (
+            <Card key={s.id} className={`cursor-pointer transition-all border-l-4 text-sm ${selectedStmt?.id === s.id ? 'border-[#0055FF] shadow-md' : `${baBadge?.border || 'border-slate-200'} hover:border-slate-400`}`} onClick={() => loadStmtTxns(s)} data-testid={`stmt-card-${s.id}`}>
               <CardContent className="p-3">
+                {baBadge && (
+                  <div className={`inline-block px-1.5 py-0.5 rounded text-[9px] font-semibold uppercase tracking-wide mb-1.5 ${baBadge.bg} ${baBadge.text}`} title={s.account_number} data-testid={`stmt-ba-badge-${s.id}`}>
+                    {baBadge.label}
+                  </div>
+                )}
                 <div className="flex items-center justify-between gap-1">
                   <span className="font-mono font-semibold text-[11px] truncate min-w-0" title={s.number}>N {s.number}</span>
                   <Button variant="ghost" size="sm" onClick={e => { e.stopPropagation(); deleteStmt(s.id); }} className="text-red-400 h-5 w-5 p-0 shrink-0"><Trash2 size={10} /></Button>
@@ -398,7 +439,7 @@ export default function BankingPage() {
                 )}
               </CardContent>
             </Card>
-          ))}
+          );})}
         </div>
 
         {/* Main panel - sticky whole panel so it stays in view while
