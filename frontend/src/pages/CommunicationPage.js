@@ -258,6 +258,7 @@ function SendActionDialog({
         subject: subject || defaultsFor.subject,
         body_html: body_html || defaultsFor.body,
         include_signature,
+        template_id: template_id || '',
         ...(action === 'situation' ? { start_date, end_date } : {}),
         ...(action === 'decompte' ? { fiscal_year_id } : {}),
       };
@@ -301,7 +302,28 @@ function SendActionDialog({
               <SelectTrigger data-testid={`select-from-${action}`}><SelectValue placeholder="Choisir une boite" /></SelectTrigger>
               <SelectContent>
                 {mailboxes.map(b => (
-                  <SelectItem key={b.address} value={b.address}>{b.address}</SelectItem>
+                  <SelectItem key={b.address} value={b.address}>
+                    {b.address}{b.default ? ' (defaut)' : ''}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          {/* iter90aw : Selecteur de template */}
+          <div>
+            <Label className="text-xs flex items-center justify-between">
+              Modele email <span className="text-slate-400">(optionnel - remplit sujet + corps)</span>
+            </Label>
+            <Select value={template_id || 'none'} onValueChange={(v) => applyTemplate(v === 'none' ? '' : v)}>
+              <SelectTrigger data-testid={`select-template-${action}`}>
+                <SelectValue placeholder="Aucun modele - texte manuel" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">Aucun modele (texte manuel)</SelectItem>
+                {templates.map(t => (
+                  <SelectItem key={t.id} value={t.id}>
+                    {t.name} {t.category ? `- ${t.category}` : ''}
+                  </SelectItem>
                 ))}
               </SelectContent>
             </Select>

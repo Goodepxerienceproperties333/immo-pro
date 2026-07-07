@@ -5283,3 +5283,37 @@ Interface complete pour l'envoi d'emails aux proprietaires avec PDF attaches.
 - Chaque user a sa signature perso (`signature_html`). Modifier la sienne ne change pas celle des autres.
 - Les envois cross-cabinet sont bloques (403).
 
+
+---
+
+## iter90aw + iter90ax + iter90ay (Feb 2026)
+
+### iter90aw — Modeles emails reutilisables
+- 4 templates par defaut (relance amiable J+15, mise en demeure J+45, accuse reglement, envoi decompte)
+- Variables dynamiques : `{owner_name}`, `{abs_balance}`, `{copropriete_name}`, `{vcs_code}`, `{iban}`, `{today}`, etc.
+- CRUD complet + preview + override des defaults
+- Page `/email-templates` + dropdown template dans les dialogues d'envoi de `/communication`
+- Endpoints `/api/email-templates/*` (list/create/update/delete/preview/variables)
+
+### iter90ax — Systeme de backup ACP
+- Backup quotidien automatique 00h00 Europe/Brussels via APScheduler
+- ZIP par ACP contenant : copropriete + owners + 13 collections scopees (lots, journal_entries, invoices, ...)
+- Stockage GridFS `acp_backups` avec index `backups_index`
+- Retention : 30 quotidiens + 12 mensuels + tous les manuels par ACP
+- Page admin `/admin/backups` : liste + stats + trigger manuel + download + restore (dry-run)
+- Endpoint syndic `/coproprietes/{id}/archive-download` : ZIP structure par annee fiscale (CSV + PDF optionnels)
+- Bouton "Telecharger archive" dans `/coproprietes` (icone Download, tous statuts)
+
+### iter90ay — Anti-doublon soft contournable
+- Regle 1 (meme numero fournisseur) : blocage DUR meme avec force=true
+- Regle 2 (montant+fournisseur+date proches) : blocage SOFT contournable via ?force=true
+- Message backend prefixe `[SOFT_DUPLICATE]` pour differencier
+- Frontend `saveInvoice` intercepte le 409, propose "Enregistrer quand meme ?", retry avec force=true
+- Tests : 3/3 nouveaux + 6 existants iter90ao restent verts
+
+### Preconfiguration MS Graph
+- Finlead Properties (welcome@goodexperienceproperties.be) + gerald@gep.be
+- Tenant `5b245644-0340-4928-b1a9-d83441344aeb`, Client `f41c7b44-f2c2-4e1e-94cf-5d71fdda63bb`
+- Client secret chiffre AES/Fernet en base (EMAIL_CONFIG_KEY)
+- Token Azure valide, boite `welcome@...` marquee `default=true` pour les 2 users
+

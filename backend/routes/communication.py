@@ -435,15 +435,25 @@ def create_communication_router(db):
             raise HTTPException(400, "Aucun proprietaire selectionne")
 
         from routes.reports import _build_decompte_annuel_pdf
+        from routes.email_templates import get_template_by_id, render_template, build_owner_email_context
+        from bson import ObjectId as _oid
+
+        # iter90aw : template optionnel
+        tpl = None
+        if payload.template_id:
+            _, syndic_uid = await _resolve_syndic_scope(db, request)
+            tpl = await get_template_by_id(db, syndic_uid, payload.template_id)
+            if not tpl:
+                raise HTTPException(404, f"Template '{payload.template_id}' non trouve")
+        current_user = await db.users.find_one({"_id": _oid(request.state.user_id)})
 
         sent = 0
         failed: List[dict] = []
-        subj = payload.subject.strip() or "Decompte annuel de charges - Copropriete"
-        body = payload.body_html.strip() or (
+        subj_default = "Decompte annuel de charges - Copropriete"
+        body_default = (
             "Bonjour,<br><br>Veuillez trouver en piece jointe votre decompte annuel de charges.<br><br>"
             "N'hesitez pas a nous contacter en cas de question.<br><br>Cordialement,"
         )
-        html = await _build_html_with_signature(request, body, payload.include_signature)
 
         for oid in payload.owner_ids:
             owner = await db.owners.find_one({"id": oid}, {"_id": 0, "email": 1, "name": 1})
@@ -451,6 +461,14 @@ def create_communication_router(db):
                 failed.append({"owner_id": oid, "reason": "email manquant"})
                 continue
             try:
+                if tpl:
+                    ctx = await build_owner_email_context(db, oid, payload.copropriete_id, current_user)
+                    subj = render_template(tpl.get("subject", "") or subj_default, ctx)
+                    body_rendered = render_template(tpl.get("body_html", "") or body_default, ctx)
+                else:
+                    subj = payload.subject.strip() or subj_default
+                    body_rendered = payload.body_html.strip() or body_default
+                html = await _build_html_with_signature(request, body_rendered, payload.include_signature)
                 pdf_bytes = await _build_decompte_annuel_pdf(
                     db, oid, payload.copropriete_id, payload.fiscal_year_id,
                 )
