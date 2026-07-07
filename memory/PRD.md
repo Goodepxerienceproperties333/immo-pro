@@ -11,6 +11,29 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 
+### Iter90az (Feb 2026) - Auto-apprentissage nature de depense par fournisseur
+
+- **Nouvel endpoint** : `GET /api/invoices/supplier-suggestion?supplier=X&copropriete_id=Y`
+  - Retourne la nature de depense la plus utilisee historiquement pour ce
+    fournisseur au sein de l'ACP (Chinese walls STRICT).
+  - Comptage : factures mode 1-nature (+1) et factures mode multi-lignes
+    (+1 par ligne). Nature majoritaire renvoyee avec `account_number` et
+    `distribution_key_id` associes.
+- **UI Invoices form** : quand le user selectionne / saisit un fournisseur,
+  le formulaire interroge l'endpoint et **pre-remplit automatiquement** la
+  nature de depense (+ compte PCMN + cle de repartition).
+  - **Non-destructif** : si l'utilisateur a deja choisi une nature manuellement,
+    la suggestion est ignoree. Idem sur la 1ere ligne du mode multi-lignes.
+  - Toast informatif : "Nature apprise : X (N factures de Y)".
+- **Champ Commentaire par ligne (renommage UX)** : le libelle "Description"
+  des lignes multiples a ete renomme "Commentaire" avec un placeholder qui
+  affiche un extrait de la description generale. Comportement backend inchange :
+  vide -> heritage de la description generale ; rempli -> remplace uniquement
+  pour cette ligne dans la liste des depenses (`expense_rows.py`).
+- Tests : `tests/test_iter90az_supplier_learning.py` (6 scenarios : sans
+  historique, majorite simple, egalite, case-insensitive, chinese walls, vide).
+
+
 ### Iter90as/at (Feb 2026) - Deploiement K8s robuste + Hardening securite P0
 
 **Iter90as - Fix deploiement K8s** :

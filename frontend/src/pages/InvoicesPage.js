@@ -210,6 +210,58 @@ export default function InvoicesPage() {
     setInvoiceDialog(true);
   };
 
+  // Auto-apprentissage fournisseur -> nature : quand le user selectionne un
+  // fournisseur, on interroge l'historique et pre-remplit la nature de
+  // depense la plus utilisee pour ce fournisseur au sein de l'ACP.
+  // Chinese walls STRICT : uniquement pour l'ACP courante.
+  // Non-destructif : n'ecrase JAMAIS un choix manuel du user.
+  const applySupplierSuggestion = async (supplierName) => {
+    const name = (supplierName || '').trim();
+    if (!name) return;
+    const copro = localStorage.getItem('selectedCopro') || localStorage.getItem('copropriete_id') || '';
+    if (!copro || copro === 'all') return;
+    try {
+      const { data } = await api.get('/invoices/supplier-suggestion', {
+        params: { supplier: name, copropriete_id: copro },
+      });
+      const sug = data?.suggestion;
+      if (!sug) return;
+      setInvForm(f => {
+        // Mode multi-lignes : ne pre-remplir que si la 1ere ligne est vide
+        // (pas de nature ET pas de compte). Sinon l'utilisateur a deja
+        // saisi quelque chose, on ne l'ecrase pas.
+        if (f.lines && f.lines.length > 0) {
+          const first = f.lines[0];
+          if (!first.expense_category_id && !first.account_number) {
+            const newLines = [...f.lines];
+            newLines[0] = {
+              ...first,
+              expense_category_id: sug.expense_category_id,
+              account_number: sug.account_number || first.account_number,
+              distribution_key_id: sug.distribution_key_id || first.distribution_key_id,
+            };
+            toast.success(`Nature apprise : ${sug.expense_category_name} (${sug.usage_count} facture${sug.usage_count > 1 ? 's' : ''} de ${name})`);
+            return { ...f, lines: newLines };
+          }
+          return f;
+        }
+        // Mode 1-nature : ne pre-remplir que si nature ET compte sont vides
+        if (!f.expense_category_id && !f.account_number) {
+          toast.success(`Nature apprise : ${sug.expense_category_name} (${sug.usage_count} facture${sug.usage_count > 1 ? 's' : ''} de ${name})`);
+          return {
+            ...f,
+            expense_category_id: sug.expense_category_id,
+            account_number: sug.account_number || f.account_number,
+            distribution_key_id: sug.distribution_key_id || f.distribution_key_id,
+          };
+        }
+        return f;
+      });
+    } catch {
+      // Silencieux : la suggestion est un bonus, pas un bloqueur
+    }
+  };
+
   const aiExtractFromPdf = async (file) => {
     setAiExtracting(true);
     setAiHint('');
@@ -953,7 +1005,12 @@ export default function InvoicesPage() {
                   suppliers={suppliers}
                   usedNames={[...new Set(invoices.map(i => (i.supplier || '').trim()).filter(Boolean))]}
                   value={invForm.supplier}
-                  onChange={(name) => setInvForm({ ...invForm, supplier: name })}
+                  onChange={(name) => {
+                    setInvForm(f => ({ ...f, supplier: name }));
+                    // Auto-apprentissage : pre-remplit la nature de depense
+                    // la plus utilisee pour ce fournisseur (non-destructif).
+                    if (name) applySupplierSuggestion(name);
+                  }}
                   onCreateSupplier={async (data) => {
                     const created = await createSupplierWithHomonymCheck(data);
                     return created;
@@ -1299,7 +1356,14 @@ export default function InvoicesPage() {
                           </Select>
                         </div>
                         <div className="col-span-2">
-                          {idx === 0 && <label className="form-label text-[10px]">Description</label>}
+                          {idx === 0 && (
+                            <label
+                              className="form-label text-[10px]"
+                              title="Optionnel. Si vide, la description generale de la facture est utilisee pour cette ligne. Sinon, ce commentaire la remplace uniquement pour cette ligne dans la liste des depenses."
+                            >
+                              Commentaire
+                            </label>
+                          )}
                           <Input
                             value={ln.description || ''}
                             onChange={e => {
@@ -1311,7 +1375,8 @@ export default function InvoicesPage() {
                               });
                             }}
                             className="h-8 text-xs"
-                            placeholder="Libelle"
+                            placeholder={invForm.description ? `« ${invForm.description.slice(0, 24)}${invForm.description.length > 24 ? '…' : ''} »` : 'Optionnel'}
+                            title="Vide = herite de la description generale. Rempli = remplace pour cette ligne."
                             data-testid={`invoice-line-desc-${idx}`}
                           />
                         </div>

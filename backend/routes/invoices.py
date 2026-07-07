@@ -576,6 +576,98 @@ def create_invoices_router(db):
             print(f"[auto-entry] purchase failed: {e}")
         return clean
 
+    @router.get("/invoices/supplier-suggestion")
+    async def supplier_suggestion(
+        request: Request,
+        supplier: str,
+        copropriete_id: Optional[str] = None,
+    ):
+        """Retourne la nature de depense la plus utilisee pour ce fournisseur
+        au sein d'une ACP (Chinese walls STRICT). Auto-apprentissage pour
+        pre-remplir la nature/compte/cle lors de la saisie d'une nouvelle
+        facture.
+
+        Comptage :
+          - factures mode 1-nature -> +1 pour inv.expense_category_id
+          - factures mode multi-lignes -> +1 par ligne pour son
+            line.expense_category_id (permet a un fournisseur avec split
+            recurrent de proposer la nature la plus souvent utilisee)
+
+        Match fournisseur : exact insensible a la casse (regex ancre).
+        Retourne None si aucun historique."""
+        if not copropriete_id:
+            copropriete_id = request.headers.get("X-Copropriete-Id") or None
+        if not copropriete_id or copropriete_id == "all":
+            return {"suggestion": None}
+        supp = (supplier or "").strip()
+        if not supp:
+            return {"suggestion": None}
+        import re as _re
+        query = {
+            "copropriete_id": copropriete_id,
+            "supplier": {"$regex": f"^{_re.escape(supp)}$", "$options": "i"},
+        }
+        invoices = await db.invoices.find(
+            query,
+            {"_id": 0, "expense_category_id": 1, "account_number": 1,
+             "distribution_key_id": 1, "lines": 1},
+        ).to_list(5000)
+        if not invoices:
+            return {"suggestion": None}
+        # Comptage par expense_category_id (ignore les valeurs vides)
+        counts: dict = {}
+        # Memorise le dernier (account_number, distribution_key_id) associe
+        # a chaque nature -> pour proposer aussi un compte / cle par defaut.
+        last_meta: dict = {}
+        for inv in invoices:
+            lines = inv.get("lines") or []
+            if lines:
+                for ln in lines:
+                    cid = (ln.get("expense_category_id") or "").strip()
+                    if not cid:
+                        continue
+                    counts[cid] = counts.get(cid, 0) + 1
+                    last_meta[cid] = {
+                        "account_number": (ln.get("account_number") or "").strip(),
+                        "distribution_key_id": (ln.get("distribution_key_id") or "").strip(),
+                    }
+            else:
+                cid = (inv.get("expense_category_id") or "").strip()
+                if not cid:
+                    continue
+                counts[cid] = counts.get(cid, 0) + 1
+                last_meta[cid] = {
+                    "account_number": (inv.get("account_number") or "").strip(),
+                    "distribution_key_id": (inv.get("distribution_key_id") or "").strip(),
+                }
+        if not counts:
+            return {"suggestion": None}
+        # Nature la plus utilisee
+        top_cid = max(counts, key=lambda k: counts[k])
+        cat = await db.expense_categories.find_one(
+            {"id": top_cid, "copropriete_id": copropriete_id}, {"_id": 0}
+        )
+        if not cat:
+            return {"suggestion": None}
+        meta = last_meta.get(top_cid, {})
+        # Compte : priorite au compte de la nature elle-meme si defini,
+        # sinon le dernier compte utilise avec cette nature pour ce fournisseur.
+        account_number = (cat.get("account_number") or "").strip() or meta.get("account_number", "")
+        distribution_key_id = (
+            (cat.get("default_distribution_key_id") or "").strip()
+            or meta.get("distribution_key_id", "")
+        )
+        return {
+            "suggestion": {
+                "expense_category_id": top_cid,
+                "expense_category_name": cat.get("name", ""),
+                "account_number": account_number,
+                "distribution_key_id": distribution_key_id,
+                "usage_count": counts[top_cid],
+                "invoices_matched": len(invoices),
+            }
+        }
+
     @router.get("/invoices/{invoice_id}")
     async def get_invoice(invoice_id: str):
         inv = await db.invoices.find_one({"id": invoice_id}, {"_id": 0})
