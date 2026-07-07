@@ -65,7 +65,12 @@ export default function LegalAcceptanceModal() {
     <div
       data-testid="legal-acceptance-modal"
       className="fixed inset-0 bg-slate-900/70 backdrop-blur-sm z-[10000] flex items-center justify-center p-4"
-      style={{ fontFamily: 'Inter, system-ui, sans-serif' }}
+      // iter90bo : pointer-events: auto force en inline pour bypass tout
+      // "pointer-events: none" pose par un Radix Dialog concurrent ouvert
+      // en meme temps (ex: OnboardingDialog) qui desactive les clics sur
+      // <body>. Sans ca, l'user ne peut PAS cliquer les checkboxes ou le
+      // bouton "J'accepte" -> bug prod signale.
+      style={{ fontFamily: 'Inter, system-ui, sans-serif', pointerEvents: 'auto' }}
     >
       <div className="bg-white rounded-lg shadow-2xl max-w-2xl w-full max-h-[90vh] flex flex-col overflow-hidden">
         <div className="px-6 py-4 border-b border-slate-200 bg-gradient-to-r from-[#0055FF]/5 to-slate-50">

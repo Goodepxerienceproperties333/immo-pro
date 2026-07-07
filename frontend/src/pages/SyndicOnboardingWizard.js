@@ -68,9 +68,26 @@ export default function SyndicOnboardingWizard() {
     // iter90av : Auto-open pour syndic sans onboarding.
     // ATTENTION : attend que le welcome tour (user.onboarding_completed=true)
     // soit termine pour eviter les modaux qui se superposent (iter44 report).
+    // iter90bo : ATTEND AUSSI l'acceptation des CGU. Sinon le Radix Dialog
+    // de ce wizard desactive pointer-events sur <body>, ce qui bloque tous
+    // les clics du LegalAcceptanceModal (div custom, hors portal Radix).
+    // Bug prod : "syndic ne peuvent pas cliquer pour accepter les conditions".
     const platformTourDone = user?.onboarding_completed === true;
     if (user?.role === 'syndic' && platformTourDone && !syndicConfig.onboarding_completed) {
-      setOpen(true);
+      let cancelled = false;
+      (async () => {
+        try {
+          const r = await api.get('/legal/my-acceptance');
+          if (cancelled) return;
+          // N'ouvre le wizard QUE si les conditions legales sont a jour.
+          // Sinon le LegalAcceptanceModal doit passer en premier.
+          if (!r.data?.needs_accept) setOpen(true);
+        } catch {
+          // Fail-open : si l'endpoint plante, on n'ouvre pas le wizard
+          // (mieux vaut laisser passer que bloquer les CGU).
+        }
+      })();
+      return () => { cancelled = true; };
     }
   }, [syndicConfig, user]);
 

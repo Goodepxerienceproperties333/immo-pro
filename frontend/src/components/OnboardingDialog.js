@@ -211,9 +211,23 @@ export default function OnboardingDialog() {
 
   useEffect(() => {
     if (user && user.onboarding_completed === false) {
-      // Petit delay pour laisser le UI se monter
-      const t = setTimeout(() => setOpen(true), 500);
-      return () => clearTimeout(t);
+      // iter90bo : ne pas ouvrir avant que les CGU soient acceptees.
+      // Un Radix Dialog ouvert desactive pointer-events sur <body> ->
+      // bloque tous les clics sur le LegalAcceptanceModal (div custom).
+      let cancelled = false;
+      (async () => {
+        try {
+          const r = await api.get('/legal/my-acceptance');
+          if (cancelled) return;
+          if (r.data?.needs_accept) return; // CGU en attente, on attend
+          // Petit delay pour laisser le UI se monter
+          setTimeout(() => { if (!cancelled) setOpen(true); }, 500);
+        } catch {
+          // Fail-open : ouvrir quand meme apres un delai
+          setTimeout(() => { if (!cancelled) setOpen(true); }, 500);
+        }
+      })();
+      return () => { cancelled = true; };
     }
   }, [user]);
 
