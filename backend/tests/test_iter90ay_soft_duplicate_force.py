@@ -1,8 +1,16 @@
-"""iter90ay : Le blocage anti-doublon "montant+fournisseur+date proche" doit
-etre CONTOURNABLE via ?force=true lorsque le numero de facture differe.
+"""iter90bp (ex-iter90ay) : Anti-doublon revise a la demande utilisateur.
 
-- Regle 1 (meme numero fournisseur) : HARD BLOCK, meme avec force=true
-- Regle 2 (montant+date+fournisseur similaires) : SOFT BLOCK, contournable
+Regle unique (iter90bp) :
+- Meme numero fournisseur (normalise) + meme fournisseur + meme ACP
+  -> HARD block (HTTP 409). Non contournable meme avec force=true.
+
+Regle SOFT precedente (montant + date +/- 3j avec numero different) est
+SUPPRIMEE. Deux factures avec numeros differents ne sont JAMAIS des
+doublons, quels que soient montant et date (cas legitime : abonnements
+recurrents, achats identiques a jours differents, factures fractionnees).
+
+Le parametre `?force=true` est conserve pour la compatibilite API mais
+n'a plus d'effet.
 """
 from __future__ import annotations
 
@@ -14,7 +22,6 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 import jwt
-import pytest
 from dotenv import load_dotenv
 from motor.motor_asyncio import AsyncIOMotorClient
 
@@ -42,7 +49,7 @@ async def _setup_context():
     db = await _mongo()
     admin = await db.users.find_one({"role": {"$in": ["superadmin", "admin"]}})
     assert admin
-    copro_id = f"iter90ay-{uuid.uuid4().hex[:8]}"
+    copro_id = f"iter90bp-{uuid.uuid4().hex[:8]}"
     await db.coproprietes.insert_one({"id": copro_id, "name": "T", "status": "active"})
     await db.fiscal_years.insert_one({
         "id": f"fy-{uuid.uuid4().hex[:6]}", "copropriete_id": copro_id,
@@ -59,7 +66,9 @@ async def _cleanup(copro_id: str):
     await db.coproprietes.delete_one({"id": copro_id})
 
 
-async def _scenario_soft_duplicate_can_be_forced():
+async def _scenario_different_number_never_duplicate():
+    """Deux factures avec numeros DIFFERENTS ne sont JAMAIS doublons,
+    meme si tout le reste est identique (fournisseur, montant, date)."""
     admin_id, copro_id = await _setup_context()
     try:
         headers = {"Authorization": f"Bearer {_make_token(admin_id)}"}
@@ -73,25 +82,26 @@ async def _scenario_soft_duplicate_can_be_forced():
             r = await c.post("/api/invoices", json=base, headers=headers)
             assert r.status_code == 200, r.text
 
-            # 2e avec numero different mais tout le reste identique -> SOFT block
+            # 2e avec NUMERO DIFFERENT (mais meme fournisseur / montant / date)
+            # -> DOIT PASSER SANS PROMPT SOFT
             base2 = {**base, "number": "INV/0027"}
             r = await c.post("/api/invoices", json=base2, headers=headers)
-            assert r.status_code == 409, r.text
-            assert "[SOFT_DUPLICATE]" in r.text, r.text
+            assert r.status_code == 200, r.text
 
-            # 2e avec force=true -> passe
-            r = await c.post("/api/invoices?force=true", json=base2, headers=headers)
+            # 3e : encore un numero different, meme date, meme montant
+            base3 = {**base, "number": "INV/0028"}
+            r = await c.post("/api/invoices", json=base3, headers=headers)
             assert r.status_code == 200, r.text
     finally:
         await _cleanup(copro_id)
 
 
-def test_soft_duplicate_can_be_forced():
-    asyncio.run(_scenario_soft_duplicate_can_be_forced())
+def test_different_number_never_duplicate():
+    asyncio.run(_scenario_different_number_never_duplicate())
 
 
-async def _scenario_hard_duplicate_cannot_be_forced():
-    """Le blocage numero identique doit persister meme avec force=true."""
+async def _scenario_same_number_hard_block():
+    """Meme numero fournisseur -> HARD block, meme avec ?force=true."""
     admin_id, copro_id = await _setup_context()
     try:
         headers = {"Authorization": f"Bearer {_make_token(admin_id)}"}
@@ -104,21 +114,25 @@ async def _scenario_hard_duplicate_cannot_be_forced():
             r = await c.post("/api/invoices", json=base, headers=headers)
             assert r.status_code == 200
 
-            # Meme numero -> HARD block meme avec force
+            # Meme numero -> HARD block
+            r = await c.post("/api/invoices", json=base, headers=headers)
+            assert r.status_code == 409, r.text
+            assert "numero" in r.text.lower()
+
+            # Meme numero + force=true -> toujours HARD block (integrite)
             r = await c.post("/api/invoices?force=true", json=base, headers=headers)
             assert r.status_code == 409, r.text
-            assert "[SOFT_DUPLICATE]" not in r.text, "Should be a hard duplicate error"
-            assert "numero identique" in r.text.lower() or "numero" in r.text.lower()
     finally:
         await _cleanup(copro_id)
 
 
-def test_hard_duplicate_cannot_be_forced():
-    asyncio.run(_scenario_hard_duplicate_cannot_be_forced())
+def test_same_number_hard_block():
+    asyncio.run(_scenario_same_number_hard_block())
 
 
-async def _scenario_update_supports_force():
-    """PUT /invoices/{id}?force=true doit aussi contourner le SOFT block."""
+async def _scenario_update_with_different_number_ok():
+    """PUT vers un autre numero (existant ou pas) ne genere pas de SOFT
+    duplicate meme si montant/date coincident avec une autre facture."""
     admin_id, copro_id = await _setup_context()
     try:
         headers = {"Authorization": f"Bearer {_make_token(admin_id)}"}
@@ -135,18 +149,14 @@ async def _scenario_update_supports_force():
             assert r2.status_code == 200
             inv2_id = r2.json()["id"]
 
-            # PUT : essayer de rendre inv2 identique a inv1 (montant+date) -> SOFT block
-            update = {**base, "number": "INV/0028"}  # meme montant que inv1, meme date
+            # PUT : essaie de rendre inv2 identique a inv1 en MONTANT+DATE
+            # mais garde le numero different (INV/0028) -> DOIT PASSER
+            update = {**base, "number": "INV/0028"}
             r = await c.put(f"/api/invoices/{inv2_id}", json=update, headers=headers)
-            assert r.status_code == 409, r.text
-            assert "[SOFT_DUPLICATE]" in r.text
-
-            # PUT avec force=true : OK
-            r = await c.put(f"/api/invoices/{inv2_id}?force=true", json=update, headers=headers)
             assert r.status_code == 200, r.text
     finally:
         await _cleanup(copro_id)
 
 
-def test_update_supports_force():
-    asyncio.run(_scenario_update_supports_force())
+def test_update_with_different_number_ok():
+    asyncio.run(_scenario_update_with_different_number_ok())
