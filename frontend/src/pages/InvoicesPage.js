@@ -195,10 +195,18 @@ export default function InvoicesPage() {
       status: inv.status || 'unpaid',
       is_private_fee: !!inv.is_private_fee,
       private_fee_owner_id: inv.private_fee_owner_id || '',
-      private_fee_allocations: Array.isArray(inv.private_fee_allocations) ? inv.private_fee_allocations.map(a => ({ owner_id: a.owner_id, amount: a.amount })) : [],
+      // iter90bn : _key stable pour React (chaque ligne/allocation charge en
+      // edition recoit un identifiant client, evite index-as-key collisions).
+      private_fee_allocations: Array.isArray(inv.private_fee_allocations)
+        ? inv.private_fee_allocations.map(a => ({
+            _key: (crypto?.randomUUID?.() || `k-${Date.now()}-${Math.random()}`),
+            owner_id: a.owner_id, amount: a.amount,
+          }))
+        : [],
       occupant_pct: inv.occupant_pct ?? 0,
       proprietaire_pct: inv.proprietaire_pct ?? 100,
       lines: (inv.lines || []).map(l => ({
+        _key: (crypto?.randomUUID?.() || `k-${Date.now()}-${Math.random()}`),
         account_number: l.account_number || '',
         expense_category_id: l.expense_category_id || '',
         distribution_key_id: l.distribution_key_id || '',
@@ -1073,7 +1081,10 @@ export default function InvoicesPage() {
                   setInvForm(f => ({
                     ...f,
                     private_fee_owner_id: '',
-                    private_fee_allocations: [...(f.private_fee_allocations || []), { owner_id: '', amount: 0 }]
+                    // iter90bn : _key stable pour eviter les collisions React
+                    // (index-as-key -> perte de state / focus lors add/remove).
+                    private_fee_allocations: [...(f.private_fee_allocations || []),
+                      { _key: (crypto?.randomUUID?.() || `k-${Date.now()}-${Math.random()}`), owner_id: '', amount: 0 }]
                   }));
                 };
                 const updateAlloc = (idx, patch) => {
@@ -1110,7 +1121,7 @@ export default function InvoicesPage() {
                       // au lieu du Select shadcn (inutilisable au-dela de 20 owners).
                       const excludedIds = allocs.filter((b, j) => j !== idx && b.owner_id).map(b => b.owner_id);
                       return (
-                        <div key={idx} className="flex gap-2 items-start bg-white border border-amber-100 rounded p-2">
+                        <div key={a._key || idx} className="flex gap-2 items-start bg-white border border-amber-100 rounded p-2">
                           <div className="flex-1">
                             <OwnerComboboxAlloc
                               owners={owners}
@@ -1251,7 +1262,7 @@ export default function InvoicesPage() {
                       amount: Number(invForm.total_amount) || 0,
                       description: '',
                     }] : [];
-                    setInvForm(f => ({ ...f, lines: [...firstLine, { account_number: '', expense_category_id: '', distribution_key_id: defaultKeyId, amount: 0, description: '' }] }));
+                    setInvForm(f => ({ ...f, lines: [...firstLine, { _key: (crypto?.randomUUID?.() || `k-${Date.now()}-${Math.random()}`), account_number: '', expense_category_id: '', distribution_key_id: defaultKeyId, amount: 0, description: '' }] }));
                   }}
                   className="text-xs text-[#0055FF] hover:text-[#0040CC] underline"
                   data-testid="enable-multi-lines-btn"
@@ -1284,7 +1295,7 @@ export default function InvoicesPage() {
                   </div>
                   <div className="space-y-1.5">
                     {invForm.lines.map((ln, idx) => (
-                      <div key={idx} className="grid grid-cols-12 gap-2 items-end bg-white rounded border border-slate-200 px-2 py-1.5" data-testid={`invoice-line-${idx}`}>
+                      <div key={ln._key || idx} className="grid grid-cols-12 gap-2 items-end bg-white rounded border border-slate-200 px-2 py-1.5" data-testid={`invoice-line-${idx}`}>
                         <div className="col-span-3">
                           {idx === 0 && <label className="form-label text-[10px]">Nature</label>}
                           <Select
@@ -1414,7 +1425,7 @@ export default function InvoicesPage() {
                   <div className="flex items-center justify-between pt-2 border-t border-[#0055FF]/20">
                     <button
                       type="button"
-                      onClick={() => setInvForm(f => ({ ...f, lines: [...f.lines, { account_number: '', expense_category_id: '', distribution_key_id: defaultKeyId, amount: 0, description: '' }] }))}
+                      onClick={() => setInvForm(f => ({ ...f, lines: [...f.lines, { _key: (crypto?.randomUUID?.() || `k-${Date.now()}-${Math.random()}`), account_number: '', expense_category_id: '', distribution_key_id: defaultKeyId, amount: 0, description: '' }] }))}
                       className="text-xs text-[#0055FF] hover:text-[#0040CC] font-semibold"
                       data-testid="invoice-line-add"
                     >

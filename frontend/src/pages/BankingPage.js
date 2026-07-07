@@ -309,10 +309,10 @@ export default function BankingPage() {
   // ----- iter90k : CATEGORISATION -----
   const openCategorize = (txn) => {
     setCategorizeTarget(txn);
-    setCategorizeSplits([{ expense_category_id: '', account_number: '', distribution_key_id: '', amount: Math.abs(Number(txn.amount) || 0), description: '' }]);
+    setCategorizeSplits([{ _key: (crypto?.randomUUID?.() || `k-${Date.now()}`), expense_category_id: '', account_number: '', distribution_key_id: '', amount: Math.abs(Number(txn.amount) || 0), description: '' }]);
     setCategorizeDialog(true);
   };
-  const addCatSplit = () => setCategorizeSplits([...categorizeSplits, { expense_category_id: '', account_number: '', distribution_key_id: '', amount: 0, description: '' }]);
+  const addCatSplit = () => setCategorizeSplits([...categorizeSplits, { _key: (crypto?.randomUUID?.() || `k-${Date.now()}-${Math.random()}`), expense_category_id: '', account_number: '', distribution_key_id: '', amount: 0, description: '' }]);
   const removeCatSplit = (i) => setCategorizeSplits(categorizeSplits.filter((_, idx) => idx !== i));
   const updateCatSplit = (i, f, v) => setCategorizeSplits(prev => {
     const s = [...prev];
@@ -321,7 +321,9 @@ export default function BankingPage() {
   });
   const doCategorize = async () => {
     if (!categorizeTarget) return;
-    const payload = { splits: categorizeSplits.map(s => ({ ...s, amount: Number(s.amount) })) };
+    // iter90bn : on retire le champ client `_key` avant l'envoi (backend
+    // n'en a pas besoin et Pydantic ignore mais restons propre).
+    const payload = { splits: categorizeSplits.map(({ _key, ...s }) => ({ ...s, amount: Number(s.amount) })) };
     try {
       await api.post(`/banking/transactions/${categorizeTarget.id}/categorize`, payload);
       toast.success(`Categorisation OK (${payload.splits.length} nature${payload.splits.length > 1 ? 's' : ''})`);
@@ -1181,7 +1183,7 @@ export default function BankingPage() {
 
                 <div className="space-y-2 max-h-[50vh] overflow-y-auto pr-1">
                   {categorizeSplits.map((split, i) => (
-                    <div key={i} className="border border-slate-200 rounded p-2 grid grid-cols-12 gap-2 items-end" data-testid={`cat-split-${i}`}>
+                    <div key={split._key || i} className="border border-slate-200 rounded p-2 grid grid-cols-12 gap-2 items-end" data-testid={`cat-split-${i}`}>
                       <div className="col-span-5">
                         <label className="text-[10px] text-slate-500 uppercase tracking-wide">Nature {isCredit ? '(produit/charge/virement)' : '(charge/produit/virement)'}</label>
                         <Select value={split.expense_category_id} onValueChange={(v) => updateCatSplit(i, 'expense_category_id', v)}>
