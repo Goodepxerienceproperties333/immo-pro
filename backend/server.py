@@ -936,8 +936,45 @@ async def startup():
     except Exception as _e:
         print(f"[startup] memory/test_credentials.md write skipped: {_e}")
 
+    # iter90ax : Scheduler backup quotidien 00h00 Europe/Brussels
+    try:
+        from apscheduler.schedulers.asyncio import AsyncIOScheduler
+        from apscheduler.triggers.cron import CronTrigger
+        from backup_service import create_backup_all_acps
+
+        # Skip scheduler dans les tests (evite les jobs parallels non-desires)
+        if not os.environ.get("BACKUP_SCHEDULER_DISABLED"):
+            global _backup_scheduler
+            _backup_scheduler = AsyncIOScheduler(timezone="Europe/Brussels")
+
+            async def _backup_job():
+                try:
+                    summary = await create_backup_all_acps(db, source="scheduler")
+                    print(f"[backup] daily done: {summary['success']}/{summary['total']}")
+                except Exception as e:  # noqa: BLE001
+                    print(f"[backup] daily FAILED: {e}")
+
+            _backup_scheduler.add_job(
+                _backup_job,
+                trigger=CronTrigger(hour=0, minute=0, timezone="Europe/Brussels"),
+                id="acp_daily_backup",
+                replace_existing=True,
+            )
+            _backup_scheduler.start()
+            print("[startup] backup scheduler started (00:00 Europe/Brussels)")
+    except Exception as _e:
+        print(f"[startup] backup scheduler skipped: {_e}")
+
+_backup_scheduler = None
+
 @app.on_event("shutdown")
 async def shutdown():
+    global _backup_scheduler
+    if _backup_scheduler:
+        try:
+            _backup_scheduler.shutdown(wait=False)
+        except Exception:
+            pass
     client.close()
 
 # Include routers
@@ -970,6 +1007,7 @@ from routes.legal import create_legal_router
 from routes.communication import create_communication_router
 from routes.syndic_config import create_syndic_config_router
 from routes.email_templates import create_email_templates_router
+from routes.backups import create_backups_router
 
 app.include_router(create_properties_router(db))
 app.include_router(create_accounting_router(db))
@@ -999,3 +1037,4 @@ app.include_router(create_legal_router(db))
 app.include_router(create_communication_router(db))
 app.include_router(create_syndic_config_router(db))
 app.include_router(create_email_templates_router(db))
+app.include_router(create_backups_router(db))

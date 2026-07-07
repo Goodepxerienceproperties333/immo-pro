@@ -365,15 +365,30 @@ export default function InvoicesPage() {
         })) : null,
       };
       let invoiceId;
-      if (editingInvoice) {
-        await api.put(`/invoices/${editingInvoice.id}`, payload);
-        invoiceId = editingInvoice.id;
-        toast.success('Facture modifiee');
-      } else {
-        const { data: created } = await api.post('/invoices', payload);
-        invoiceId = created?.id;
-        toast.success('Facture creee');
+      // iter90ay : retry avec ?force=true si SOFT_DUPLICATE (montant+date proche mais numero different)
+      const saveOnce = async (force = false) => {
+        const suffix = force ? '?force=true' : '';
+        if (editingInvoice) {
+          await api.put(`/invoices/${editingInvoice.id}${suffix}`, payload);
+          return editingInvoice.id;
+        }
+        const { data: created } = await api.post(`/invoices${suffix}`, payload);
+        return created?.id;
+      };
+      try {
+        invoiceId = await saveOnce(false);
+      } catch (err) {
+        const detail = err.response?.data?.detail || '';
+        if (err.response?.status === 409 && typeof detail === 'string' && detail.includes('[SOFT_DUPLICATE]')) {
+          const cleanMsg = detail.replace('[SOFT_DUPLICATE] ', '');
+          const ok = window.confirm(`${cleanMsg}\n\nEnregistrer quand meme ?`);
+          if (!ok) return;
+          invoiceId = await saveOnce(true);
+        } else {
+          throw err;
+        }
       }
+      toast.success(editingInvoice ? 'Facture modifiee' : 'Facture creee');
       // If we have a pending PDF, attach it to the invoice
       if (pendingPdf && pendingPdf.file && invoiceId) {
         try {

@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { Plus, Pencil, Trash2, Home, Search, Archive, RotateCcw, Landmark, PlusCircle, X, Eraser, Wand2, Upload, UserPlus, FileText } from 'lucide-react';
+import { Plus, Pencil, Trash2, Home, Search, Archive, RotateCcw, Landmark, PlusCircle, X, Eraser, Wand2, Upload, UserPlus, FileText, Download } from 'lucide-react';
 import BulkCsvImportDialog from '@/components/BulkCsvImportDialog';
 import PdfImportDialog from '@/components/PdfImportDialog';
 
@@ -167,6 +167,34 @@ export default function CoproprietesPage() {
   const handleDelete = async (id) => { if (!window.confirm('Supprimer cette copropriete ?')) return; try { await api.delete(`/coproprietes/${id}`); toast.success('Supprimee'); load(); } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); } };
   const handleArchive = async (id) => { try { await api.post(`/coproprietes/${id}/archive`); toast.success('Archivee'); load(); } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); } };
   const handleUnarchive = async (id) => { try { await api.post(`/coproprietes/${id}/unarchive`); toast.success('Reactivee'); load(); } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); } };
+
+  const handleDownloadArchive = async (c) => {
+    // iter90ax : Confirmation prealable + option include_pdfs
+    const includePdfs = window.confirm(
+      `Telecharger l'archive complete de ${c.name} (ZIP structure par annee) ?\n\n` +
+      `OK = inclure les PDF (bilans...) - plus volumineux\n` +
+      `Annuler = sortir sans telecharger\n\n` +
+      `Note : cliquez OK pour la version complete. Pour CSV uniquement, decochez plus tard.`
+    );
+    if (includePdfs === false && !window.confirm('Confirmez le telechargement (version CSV uniquement, sans PDF) ?')) return;
+    try {
+      toast.info('Preparation de l\'archive... (peut prendre 30-60s)');
+      const r = await api.post(
+        `/coproprietes/${c.id}/archive-download?include_pdfs=${includePdfs}`,
+        {},
+        { responseType: 'blob' }
+      );
+      const url = URL.createObjectURL(new Blob([r.data]));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `archive_${(c.name || 'acp').replace(/\s+/g, '_')}_${new Date().toISOString().slice(0, 10)}.zip`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success('Archive telechargee');
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur telechargement archive');
+    }
+  };
   const handleCleanupOrphans = async (c) => {
     if (!window.confirm(`Nettoyer les ecritures orphelines de "${c.name}" ?\n\nSupprime les ecritures auto-generees dont la source (facture, appel, transaction bancaire) a ete supprimee. Resynchronise le grand livre, le bilan et la balance des tiers.`)) return;
     try {
@@ -242,6 +270,7 @@ export default function CoproprietesPage() {
                   {isSuperadmin && <Button variant="outline" size="sm" onClick={() => handleResetData(c)} className="text-amber-700 border-amber-300 hover:bg-amber-50 mr-1" title="Vider TOUTES les donnees comptables (factures, ecritures, exercices, budgets...)" data-testid={`reset-data-${c.id}`}><Eraser size={13} className="mr-1" /> Vider</Button>}
                   {isManager && c.status !== 'archived' && <Button variant="ghost" size="sm" onClick={() => handleArchive(c.id)} className="text-orange-500" title="Archiver"><Archive size={13} /></Button>}
                   {isManager && c.status === 'archived' && <Button variant="ghost" size="sm" onClick={() => handleUnarchive(c.id)} className="text-green-600" title="Reactiver"><RotateCcw size={13} /></Button>}
+                  {isManager && <Button variant="ghost" size="sm" onClick={() => handleDownloadArchive(c)} className="text-blue-600" title="Telecharger archive ZIP complete par annee" data-testid={`archive-dl-${c.id}`}><Download size={13} /></Button>}
                   {isAdmin && <Button variant="ghost" size="sm" onClick={() => handleDelete(c.id)} className="text-red-500" title="Supprimer (cascade)"><Trash2 size={13} /></Button>}
                 </div></TableCell>
               </TableRow>

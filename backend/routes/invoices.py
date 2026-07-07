@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Request
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Request, Query
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 from typing import Optional, List
@@ -374,7 +374,7 @@ def create_invoices_router(db):
         n = "".join(c for c in n if not _u.combining(c))
         return " ".join(n.upper().split()).strip(" -.")
 
-    async def _check_invoice_duplicate(data: InvoiceInput, exclude_id: str = ""):
+    async def _check_invoice_duplicate(data: InvoiceInput, exclude_id: str = "", allow_soft_duplicate: bool = False):
         """Anti-doublon strict, 2 regles cumulatives :
         - Regle 1 : meme (fournisseur normalise, numero normalise, ACP)
           -> facture certainement identique, HTTPException 409.
@@ -424,6 +424,9 @@ def create_invoices_router(db):
                 )
 
             # Regle 2 : meme montant a +/- 0.01 EUR ET date proche (+/- 3 jours)
+            # iter90ay : bloc SOFT - peut etre outrepasse via ?force=true
+            if allow_soft_duplicate:
+                continue
             if ref_total > 0 and ref_date:
                 existing_total = round(float(inv.get("total_amount", 0) or 0), 2)
                 if abs(existing_total - ref_total) < 0.01:
@@ -434,21 +437,20 @@ def create_invoices_router(db):
                     if existing_date and abs((existing_date - ref_date).days) <= 3:
                         raise HTTPException(
                             409,
-                            f"Facture probablement en doublon (montant + fournisseur + date proche) : "
+                            f"[SOFT_DUPLICATE] Facture probablement en doublon (montant + fournisseur + date proche) : "
                             f"une facture de {ref_total:.2f} EUR du fournisseur "
                             f"'{data.supplier}' existe deja au {inv.get('date','?')} "
                             f"(numero '{inv.get('number','?')}'). "
-                            f"Si c'est bien une facture distincte, ajustez le montant, la date ou "
-                            f"passez par l'edition de la facture existante."
+                            f"Si c'est bien une facture distincte, cochez 'Ignorer le doublon' et reessayez."
                         )
 
     @router.post("/invoices")
-    async def create_invoice(data: InvoiceInput):
+    async def create_invoice(data: InvoiceInput, force: bool = Query(default=False)):
         from fiscal_lock import ensure_period_open
         # Verrou fiscal : la date de la facture doit etre dans une periode ouverte
         await ensure_period_open(db, data.copropriete_id or "", data.date, context="facture")
-        # Anti-doublon strict avant toute persistance
-        await _check_invoice_duplicate(data)
+        # Anti-doublon strict avant toute persistance (soft duplicate ignore si force=true)
+        await _check_invoice_duplicate(data, allow_soft_duplicate=force)
         # Resolve multi-line first (raises if invalid)
         resolved_lines, merged_dist = await _resolve_invoice_lines(data)
         # If expense_category_id provided, derive/override account_number
@@ -582,15 +584,15 @@ def create_invoices_router(db):
         return inv
 
     @router.put("/invoices/{invoice_id}")
-    async def update_invoice(invoice_id: str, data: InvoiceInput):
+    async def update_invoice(invoice_id: str, data: InvoiceInput, force: bool = Query(default=False)):
         from fiscal_lock import ensure_period_open
         existing_for_lock = await db.invoices.find_one({"id": invoice_id}, {"_id": 0})
         if existing_for_lock:
             # Verrou : la date d'origine ET la nouvelle doivent etre dans un exercice ouvert
             await ensure_period_open(db, existing_for_lock.get("copropriete_id", ""), existing_for_lock.get("date"), context="facture")
         await ensure_period_open(db, data.copropriete_id or (existing_for_lock or {}).get("copropriete_id", ""), data.date, context="facture")
-        # Anti-doublon (excluant cette facture elle-meme)
-        await _check_invoice_duplicate(data, exclude_id=invoice_id)
+        # Anti-doublon (excluant cette facture elle-meme, soft duplicate ignore si force=true)
+        await _check_invoice_duplicate(data, exclude_id=invoice_id, allow_soft_duplicate=force)
         # Resolve multi-line first
         resolved_lines, merged_dist = await _resolve_invoice_lines(data)
         account_number = data.account_number

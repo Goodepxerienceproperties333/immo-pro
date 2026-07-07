@@ -6,7 +6,7 @@ import {
   LayoutDashboard, Users, Building2, UserCheck, BookOpen, FileText,
   Receipt, Gauge, Landmark, FolderOpen, LogOut, ChevronLeft, ChevronRight,
   Menu, Shield, Home, Truck, Calendar, BookMarked, Megaphone, BarChart3, Bell, Wallet, Tag, UserCog, Pencil,
-  ShieldAlert, Unlock, ScrollText, IdCard, Activity, FileCheck, FileArchive, Mail
+  ShieldAlert, Unlock, ScrollText, IdCard, Activity, FileCheck, FileArchive, Mail, HardDrive
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -117,6 +117,10 @@ export default function Layout() {
             className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''} ${collapsed ? 'justify-center px-2' : ''}`}
             data-testid="adm-nav-syndic-config"
           ><Building2 size={16} strokeWidth={1.5} />{!collapsed && <span className="text-[13px]">Config cabinets syndics</span>}</NavLink>
+          <NavLink to="/admin/backups" onClick={() => setMobileOpen(false)}
+            className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''} ${collapsed ? 'justify-center px-2' : ''}`}
+            data-testid="adm-nav-backups"
+          ><HardDrive size={16} strokeWidth={1.5} />{!collapsed && <span className="text-[13px]">Sauvegardes ACP</span>}</NavLink>
         </div>
       </ScrollArea>
       {/* Bottom: switch to syndic mode */}
