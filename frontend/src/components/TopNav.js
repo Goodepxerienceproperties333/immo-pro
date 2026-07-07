@@ -25,13 +25,34 @@ export default function TopNav({ sections, extraSections = [] }) {
   const allSections = [...sections, ...extraSections];
 
   const accentClass = (accent, isActive) => {
-    if (!isActive) return 'text-slate-700 hover:text-slate-900 hover:bg-slate-100';
+    // iter90bl : chaque section a une couleur distinctive PERSISTANTE (texte
+    // + petit dot color-coded), meme quand pas active. L'active ajoute un
+    // background plus prononce et une bordure.
+    const baseMap = {
+      blue: 'text-[#0055FF]',
+      violet: 'text-violet-700',
+      emerald: 'text-emerald-700',
+      amber: 'text-amber-700',
+      slate: 'text-slate-700',
+    };
+    const activeMap = {
+      blue: 'text-[#0055FF] bg-blue-50 shadow-inner ring-1 ring-inset ring-[#0055FF]/20',
+      violet: 'text-violet-800 bg-violet-50 shadow-inner ring-1 ring-inset ring-violet-500/20',
+      emerald: 'text-emerald-800 bg-emerald-50 shadow-inner ring-1 ring-inset ring-emerald-500/20',
+      amber: 'text-amber-800 bg-amber-50 shadow-inner ring-1 ring-inset ring-amber-500/20',
+      slate: 'text-slate-900 bg-slate-100 shadow-inner ring-1 ring-inset ring-slate-400/20',
+    };
+    if (isActive) return activeMap[accent] || activeMap.blue;
+    return `${baseMap[accent] || baseMap.blue} hover:bg-slate-50`;
+  };
+  const dotClass = (accent) => {
+    // Dot color-coded avant le titre (visible en permanence)
     const map = {
-      blue: 'text-[#0055FF] bg-blue-50',
-      violet: 'text-violet-700 bg-violet-50',
-      emerald: 'text-emerald-700 bg-emerald-50',
-      amber: 'text-amber-700 bg-amber-50',
-      slate: 'text-slate-800 bg-slate-100',
+      blue: 'bg-[#0055FF]',
+      violet: 'bg-violet-500',
+      emerald: 'bg-emerald-500',
+      amber: 'bg-amber-500',
+      slate: 'bg-slate-400',
     };
     return map[accent] || map.blue;
   };
@@ -42,6 +63,27 @@ export default function TopNav({ sections, extraSections = [] }) {
       emerald: 'data-[highlighted]:bg-emerald-50 data-[highlighted]:text-emerald-700',
       amber: 'data-[highlighted]:bg-amber-50 data-[highlighted]:text-amber-700',
       slate: 'data-[highlighted]:bg-slate-100',
+    };
+    return map[accent] || map.blue;
+  };
+  const contentAccentClass = (accent) => {
+    // Bordure gauche coloree du dropdown menu (rappel visuel de la section)
+    const map = {
+      blue: 'border-l-4 border-l-[#0055FF]',
+      violet: 'border-l-4 border-l-violet-500',
+      emerald: 'border-l-4 border-l-emerald-500',
+      amber: 'border-l-4 border-l-amber-500',
+      slate: 'border-l-4 border-l-slate-400',
+    };
+    return map[accent] || map.blue;
+  };
+  const labelAccentClass = (accent) => {
+    const map = {
+      blue: 'text-[#0055FF]',
+      violet: 'text-violet-700',
+      emerald: 'text-emerald-700',
+      amber: 'text-amber-700',
+      slate: 'text-slate-600',
     };
     return map[accent] || map.blue;
   };
@@ -60,15 +102,16 @@ export default function TopNav({ sections, extraSections = [] }) {
           <DropdownMenu key={sec.title}>
             <DropdownMenuTrigger asChild>
               <button
-                className={`inline-flex items-center gap-1 h-8 px-3 rounded text-[13px] font-medium transition-colors ${accentClass(sec.accent, containsActive)}`}
+                className={`inline-flex items-center gap-2 h-8 px-3 rounded text-[13px] font-medium transition-colors ${accentClass(sec.accent, containsActive)}`}
                 data-testid={`top-nav-trigger-${sec.title.toLowerCase()}`}
               >
+                <span className={`h-2 w-2 rounded-full ${dotClass(sec.accent)}`} />
                 {sec.title}
-                <ChevronDown size={14} className="opacity-60" />
+                <ChevronDown size={13} className="opacity-60" />
               </button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="min-w-[220px]">
-              <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold py-1">
+            <DropdownMenuContent align="start" className={`min-w-[220px] ${contentAccentClass(sec.accent)}`}>
+              <DropdownMenuLabel className={`text-[10px] uppercase tracking-wider font-semibold py-1 ${labelAccentClass(sec.accent)}`}>
                 {sec.title}
               </DropdownMenuLabel>
               <DropdownMenuSeparator />
