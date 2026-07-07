@@ -5237,3 +5237,49 @@ Score = 100 - penalites par anomalie. Labels : Excellent/Bon/Moyen/Critique.
 - `/app/frontend/src/pages/BalanceTiersPage.js`: bouton Excel
 - `/app/frontend/src/pages/OwnerPortalPage.js`: portail proprietaire
 - `/app/frontend/src/App.js` + `/app/frontend/src/components/Layout.js`: routes + sidebar
+
+---
+
+## iter90au — Module Communication (Feb 2026)
+
+### Feature livree
+Interface complete pour l'envoi d'emails aux proprietaires avec PDF attaches.
+
+**Backend (`/api/communication/*`)**
+- `GET /mailboxes` : liste des boites autorisees du cabinet (heritage `parent_syndic_id`)
+- `POST/DELETE /mailboxes` : gestion (syndic/admin uniquement)
+- `GET/PUT /signature` : signature HTML per-user
+- `GET /owners-balances?copropriete_id=X` : proprietaires + solde pour selection
+- `POST /send/situation` : PDF situation compte + envoi Graph (dry-run si `MAIL_ENABLED != 'true'`)
+- `POST /send/decompte` : PDF decompte annuel + envoi
+- `POST /send/mutation` : PDF decompte mutation + envoi (emails saisis manuellement)
+- `POST /send/generic` : email libre + PJ PDF (multipart)
+
+**Helpers module-level extraits** (reutilisables backend)
+- `reports.py::_build_situation_compte_pdf(db, owner_id, copropriete_id, ...)`
+- `reports.py::_build_decompte_annuel_pdf(db, owner_id, copropriete_id, fiscal_year_id, preview=True)`
+- `reports.py::_compute_balance_tiers_for_ui(db, copropriete_id)`
+- `properties.py::_build_mutation_decompte_context(db, lot_id, mutation_id)`
+
+**Frontend** : `/app/frontend/src/pages/CommunicationPage.js`
+- Tabs "Envois" / "Email libre" / "Boites & signature"
+- Multi-select proprietaires avec badges de balance colores (rouge/vert)
+- 4 filtres (Tous, Debiteurs, Crediteurs, Avec email)
+- Composer email libre avec upload PDF
+- MailboxesSection (cabinet-scoped, syndic-only pour edition)
+- SignatureSection (per-user, HTML + apercu)
+
+**Tests** : `/app/backend/tests/test_iter90au_communication.py` (6/6 pass) +
+`test_iter90au_extra_communication.py` (testing agent, 5/5 pass) = **11/11 verts**.
+
+**Correctifs P0 dans le meme iter**
+- Fix build backend casse par refactor precedent : `_end_helper_pdf` dangling function retirée,
+  `_build_situation_compte` remonte au niveau module dans `reports.py`.
+- Fix E741 (variable `l` ambiguë) et F401 (`timedelta` inutilise) dans `reports.py`.
+
+### Chinese Wall
+- Chaque cabinet (`user.role=syndic`) gere sa liste `authorized_mailboxes`.
+- Les gestionnaires enfants (`parent_syndic_id`) heritent en lecture seule.
+- Chaque user a sa signature perso (`signature_html`). Modifier la sienne ne change pas celle des autres.
+- Les envois cross-cabinet sont bloques (403).
+
