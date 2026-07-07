@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import api, { extractApiError } from '@/lib/api';
+import { sanitizeHtml } from '@/lib/sanitizeHtml';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -166,7 +167,7 @@ function TemplateEditor({ template, onSaved, onClose, variables }) {
                 <CardHeader className="pb-2"><CardTitle className="text-sm">Preview</CardTitle></CardHeader>
                 <CardContent className="space-y-2 text-sm">
                   <div><b>Sujet :</b> {preview.subject}</div>
-                  <div className="border-t pt-2" dangerouslySetInnerHTML={{ __html: preview.body_html }} />
+                  <div className="border-t pt-2" dangerouslySetInnerHTML={{ __html: sanitizeHtml(preview.body_html) }} />
                 </CardContent>
               </Card>
             )}
@@ -310,7 +311,7 @@ export default function EmailTemplatesPage() {
               <CardContent className="space-y-2">
                 <div className="text-xs text-slate-600 line-clamp-1"><b>{t.subject}</b></div>
                 <div className="text-xs text-slate-500 line-clamp-3"
-                     dangerouslySetInnerHTML={{ __html: t.body_html }} />
+                     dangerouslySetInnerHTML={{ __html: sanitizeHtml(t.body_html) }} />
                 <div className="flex gap-1 pt-2">
                   <Button size="sm" variant="outline" onClick={() => setEditing(t)}
                           data-testid={`tpl-btn-edit-${t.id}`}>

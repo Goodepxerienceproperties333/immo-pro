@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import api, { extractApiError } from '@/lib/api';
+import { sanitizeHtml } from '@/lib/sanitizeHtml';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -178,7 +179,7 @@ function SignatureSection() {
         />
         <div className="p-3 border rounded-md bg-slate-50">
           <div className="text-xs text-slate-500 mb-1">Apercu :</div>
-          <div className="text-sm" dangerouslySetInnerHTML={{ __html: html || '<em>Signature vide</em>' }} />
+          <div className="text-sm" dangerouslySetInnerHTML={{ __html: sanitizeHtml(html || '<em>Signature vide</em>') }} />
         </div>
         <Button onClick={save} disabled={saving} data-testid="btn-save-signature">
           <FileSignature className="h-4 w-4 mr-1" /> Enregistrer
