@@ -214,7 +214,26 @@ export default function BankingPage() {
       toast.error(err.response?.data?.detail || 'Erreur');
     }
   };
-  const deleteStmt = async (id) => { if (!window.confirm('Supprimer cet extrait ?')) return; await api.delete(`/banking/statements/${id}`); toast.success('Supprime'); load(); if (selectedStmt?.id === id) { setSelectedStmt(null); setTransactions([]); } };
+  const deleteStmt = async (id) => {
+    const stmt = statements.find(s => s.id === id);
+    if (stmt?.status === 'posted') {
+      toast.error("Extrait comptabilise", {
+        description: "Devalidez-le d'abord via 'Repasser brouillon' pour contrepasser les ecritures, puis vous pourrez le supprimer.",
+        duration: 6000,
+      });
+      return;
+    }
+    if (!window.confirm('Supprimer cet extrait ?')) return;
+    try {
+      await api.delete(`/banking/statements/${id}`);
+      toast.success('Supprime');
+      load();
+      if (selectedStmt?.id === id) { setSelectedStmt(null); setTransactions([]); }
+    } catch (err) {
+      const detail = err.response?.data?.detail || 'Erreur lors de la suppression';
+      toast.error(detail, { duration: 6000 });
+    }
+  };
 
   // INLINE LINES
   const addInlineLine = () => setInlineLines([...inlineLines, { date: new Date().toISOString().split('T')[0], amount: 0, counterparty_name: '', counterparty_account: '', communication: '', transaction_type: 'credit', counterparty_id: '', counterparty_type: '' }]);
@@ -266,8 +285,26 @@ export default function BankingPage() {
   // LETTRAGE
   const openLettrage = (txn) => { setLettrageTarget(txn); setLettrageDialog(true); setLookupQuery(''); setSelectedInvoiceIds(new Set()); };
   const doLettrage = async (id, type) => { try { await api.post('/banking/lettrage', { transaction_id: lettrageTarget.id, match_to_id: id, match_type: type }); toast.success('Lettre'); setLettrageDialog(false); if (selectedStmt) loadStmtTxns(selectedStmt); else load(); } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); } };
-  const unlettrage = async (id) => { await api.post(`/banking/unlettrage/${id}`); toast.success('Delettrage'); if (selectedStmt) loadStmtTxns(selectedStmt); else load(); };
-  const unlettrageByInvoice = async (invId) => { try { await api.post(`/banking/unlettrage-by-invoice/${invId}`); toast.success('Facture delettree'); if (selectedStmt) loadStmtTxns(selectedStmt); else load(); } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); } };
+  const unlettrage = async (id) => {
+    await api.post(`/banking/unlettrage/${id}`);
+    toast.success('Delettrage');
+    // iter90bj : toujours recharger les invoices pour refleter le nouveau
+    // statut dans le dialog de lettrage (sinon les cartes gardent "PAYE").
+    if (selectedStmt) await loadStmtTxns(selectedStmt);
+    await load();
+  };
+  const unlettrageByInvoice = async (invId) => {
+    try {
+      await api.post(`/banking/unlettrage-by-invoice/${invId}`);
+      toast.success('Facture delettree');
+      if (selectedStmt) await loadStmtTxns(selectedStmt);
+      // iter90bj : toujours recharger les invoices (source de verite du
+      // dialog de lettrage) meme si un statement est selectionne.
+      await load();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur');
+    }
+  };
 
   // ----- iter90k : CATEGORISATION -----
   const openCategorize = (txn) => {
@@ -417,7 +454,14 @@ export default function BankingPage() {
                 )}
                 <div className="flex items-center justify-between gap-1">
                   <span className="font-mono font-semibold text-[11px] truncate min-w-0" title={s.number}>N {s.number}</span>
-                  <Button variant="ghost" size="sm" onClick={e => { e.stopPropagation(); deleteStmt(s.id); }} className="text-red-400 h-5 w-5 p-0 shrink-0"><Trash2 size={10} /></Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={e => { e.stopPropagation(); deleteStmt(s.id); }}
+                    className={`h-5 w-5 p-0 shrink-0 ${s.status === 'posted' ? 'text-slate-300 cursor-not-allowed' : 'text-red-400 hover:text-red-600'}`}
+                    title={s.status === 'posted' ? "Devalider d'abord (Repasser brouillon) pour pouvoir supprimer" : 'Supprimer'}
+                    data-testid={`stmt-del-${s.id}`}
+                  ><Trash2 size={10} /></Button>
                 </div>
                 <div className="text-xs text-slate-500">{fmtDate(s.date)}</div>
                 <div className="flex justify-between mt-1 text-[10px] font-mono"><span>O:{s.opening_balance?.toFixed(2)}</span><span>F:{s.closing_balance?.toFixed(2)}</span></div>

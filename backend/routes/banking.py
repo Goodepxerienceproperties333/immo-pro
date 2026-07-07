@@ -646,6 +646,19 @@ def create_banking_router(db):
 
     @router.put("/statements/{stmt_id}")
     async def update_statement(stmt_id: str, data: StatementInput):
+        # iter90bh : impossible de modifier un extrait comptabilise. L'user
+        # doit d'abord "Devalider" (unpost) qui contrepasse toutes les
+        # ecritures FI generees. Enforce l'integrite comptable.
+        stmt = await db.bank_statements.find_one({"id": stmt_id}, {"_id": 0, "status": 1})
+        if not stmt:
+            raise HTTPException(404, "Extrait non trouve")
+        if stmt.get("status") == "posted":
+            raise HTTPException(
+                409,
+                "Extrait deja comptabilise. Devalidez-le d'abord "
+                "(bouton 'Repasser brouillon') pour contrepasser les ecritures, "
+                "puis modifiez-le.",
+            )
         update = {
             "number": data.number,
             "date": data.date,
@@ -660,6 +673,19 @@ def create_banking_router(db):
 
     @router.delete("/statements/{stmt_id}")
     async def delete_statement(stmt_id: str):
+        # iter90bh : impossible de supprimer un extrait comptabilise. L'user
+        # doit d'abord "Devalider" pour contrepasser les ecritures FI. Sinon
+        # on laisserait des ecritures orphelines dans le journal financier.
+        stmt = await db.bank_statements.find_one({"id": stmt_id}, {"_id": 0, "status": 1})
+        if not stmt:
+            raise HTTPException(404, "Extrait non trouve")
+        if stmt.get("status") == "posted":
+            raise HTTPException(
+                409,
+                "Extrait deja comptabilise. Devalidez-le d'abord "
+                "(bouton 'Repasser brouillon') qui contrepasse toutes les "
+                "ecritures en une fois, puis vous pourrez le supprimer.",
+            )
         # Recupere les txns du statement pour supprimer leurs ecritures auto
         txns = await db.bank_transactions.find({"statement_id": stmt_id}, {"_id": 0, "id": 1}).to_list(10000)
         for t in txns:
@@ -1618,6 +1644,14 @@ def create_banking_router(db):
         total_txns = 0
         total_bytes_read = 0
 
+        # iter90bi : parallelisme controle de l'extraction IA (Claude ~10-30s
+        # par fichier). Sur 5-20 fichiers, gain 3-5x en attendant.
+        # Phase 1 : validation + persistance GridFS + ecriture temp (rapide,
+        # sequentiel car ces operations sont peu couteuses en I/O).
+        # Phase 2 : extraction IA en PARALLELE (max 5 concurrent).
+        # Phase 3 : insertion Mongo (sequentielle, ordre preserve).
+
+        prepared: list[dict] = []
         for uf in files:
             fname = uf.filename or "extrait.pdf"
             mime = uf.content_type or mimetypes.guess_type(fname)[0] or "application/octet-stream"
@@ -1682,32 +1716,57 @@ def create_banking_router(db):
                 tmp.write(content)
                 tmp_path = tmp.name
 
-            try:
-                extracted = await extract_bank_statement(
-                    content=content, filename=fname,
-                    mime_type=mime, tmp_path=tmp_path,
-                )
-            except Exception as e:
-                # Nettoyer et enregistrer l'erreur
+            prepared.append({
+                "fname": fname, "mime": mime, "content": content,
+                "tmp_path": tmp_path, "gid": gid,
+            })
+
+        # Phase 2 : extraction IA en parallele (max 5 concurrent)
+        import asyncio as _aio
+        sem = _aio.Semaphore(5)
+
+        async def _extract_one(job: dict) -> dict:
+            async with sem:
                 try:
-                    os.unlink(tmp_path)
+                    extracted = await extract_bank_statement(
+                        content=job["content"], filename=job["fname"],
+                        mime_type=job["mime"], tmp_path=job["tmp_path"],
+                    )
+                    return {"ok": True, "extracted": extracted, "job": job}
+                except Exception as e:
+                    return {"ok": False, "error": str(e)[:200], "job": job}
+                finally:
+                    try:
+                        os.unlink(job["tmp_path"])
+                    except Exception:
+                        pass
+
+        extractions = await _aio.gather(*(_extract_one(j) for j in prepared)) if prepared else []
+
+        # Phase 3 : insertion Mongo (sequentielle, ordre preserve)
+        for r in extractions:
+            job = r["job"]
+            fname = job["fname"]
+            gid = job["gid"]
+            if not r["ok"]:
+                # Nettoyer GridFS pour ce fichier
+                try:
+                    await storage.delete(gid)
                 except Exception:
                     pass
-                await storage.delete(gid)
                 results.append({
                     "filename": fname, "status": "error",
-                    "error": f"Extraction echouee: {str(e)[:200]}",
+                    "error": f"Extraction echouee: {r['error']}",
                 })
                 continue
-            finally:
-                try:
-                    os.unlink(tmp_path)
-                except Exception:
-                    pass
 
+            extracted = r["extracted"]
             txns_data = extracted.get("transactions") or []
             if not txns_data:
-                await storage.delete(gid)
+                try:
+                    await storage.delete(gid)
+                except Exception:
+                    pass
                 results.append({
                     "filename": fname, "status": "error",
                     "error": "Aucune transaction extraite",
