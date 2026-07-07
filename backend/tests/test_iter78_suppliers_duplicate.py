@@ -43,13 +43,19 @@ async def _cleanup(db, cid):
 
 def test_normalize_helpers():
     from routes.suppliers import _norm_name, _norm_id
-    # Name : casse + espaces + tri alphabetique des mots (tolere l'ordre)
-    assert _norm_name("Engie  SA  ") == "engie sa"
-    assert _norm_name("ENGIE SA") == "engie sa"
-    assert _norm_name("engie sa") == "engie sa"
-    # Reorder : "Finlead srl" == "SRL Finlead" apres tri
+    # iter90be : particules juridiques (sa, sprl, srl, ...) sont maintenant
+    # FILTREES pour capturer les vrais doublons "Finlead" vs "SRL Finlead".
+    assert _norm_name("Engie  SA  ") == "engie"
+    assert _norm_name("ENGIE SA") == "engie"
+    assert _norm_name("engie sa") == "engie"
+    assert _norm_name("Engie") == "engie"  # match Engie sans particule
+    # Reorder : "Finlead srl" == "SRL Finlead" apres tri + filtre particules
     assert _norm_name("Finlead srl") == _norm_name("SRL Finlead")
-    assert _norm_name("Finlead srl") == "finlead srl"
+    assert _norm_name("Finlead srl") == "finlead"
+    # Ponctuation dans les particules : "S.A.", "s.a." -> "sa" -> filtre
+    assert _norm_name("AXA S.A.") == _norm_name("AXA SA") == "axa"
+    # Fallback si le nom est UNIQUEMENT une particule : ne pas vider la chaine
+    assert _norm_name("SRL") != ""
     # BCE/IBAN : alphanumerique
     assert _norm_id("BE 0123.456.789") == "BE0123456789"
     assert _norm_id("BE0123456789") == "BE0123456789"

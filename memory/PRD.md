@@ -11,6 +11,23 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 
+### Iter90be (Feb 2026) - Detection stricte doublons fournisseurs avec particules juridiques
+
+- **Bug** : "Finlead" et "SRL Finlead" (meme entite) coexistaient en base (44000002
+  et 44000004 dans le bilan PASSIF). Cause : `_norm_name` NE FILTRAIT PAS
+  les particules juridiques (sa, sprl, srl, sarl, sas, scrl, asbl, ...).
+  Ratio SequenceMatcher = 0.78 < seuil 0.80 => aucun blocage.
+- **Fix** : ajout de `_LEGAL_PARTICLES` (constantes fr/nl/en). `_norm_name`
+  filtre les particules AVANT tri alphabetique + gestion ponctuation ("S.A."
+  -> "sa" -> filtre). Fallback si nom uniquement particule (garde-fou).
+- **Effet immediat** : "Finlead" ↔ "SRL Finlead" ↔ "Finlead SRL" ↔ "AXA S.A."
+  ↔ "AXA SA" => tous EXACT match via `find_duplicate_supplier`.
+- **Doublons existants** : l'user peut fusionner via `/admin/duplicates` (UI
+  deja implementee - iter79). Les groupes seront maintenant correctement
+  detectes grace au nouveau normalizer.
+- Tests : `test_iter90be_supplier_legal_particles.py` (E2E API) +
+  `test_iter78_suppliers_duplicate.py::test_normalize_helpers` mis a jour.
+
 ### Iter90ba (Feb 2026) - Simplification date picker Bilan
 
 - **Probleme UX** : sur l'onglet Bilan (ReportsPage), 2 date pickers (Du/Au)

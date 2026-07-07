@@ -8,17 +8,37 @@ from difflib import SequenceMatcher
 from tier_accounts import assign_supplier_account
 
 
+_LEGAL_PARTICLES = frozenset({
+    "sa", "sprl", "srl", "sarl", "sas", "scrl", "asbl", "scs", "snc",
+    "nv", "bv", "bvba", "cvba", "vzw", "sc", "sca", "sepa",
+    "sci", "gmbh", "ag", "ltd", "llc", "inc",
+})
+
+
 def _norm_name(value: str) -> str:
     """Normalise un nom : minuscules, espaces multiples reduits, trim, MOTS TRIES.
 
     Le tri alphabetique des mots permet de detecter les doublons type
     "Finlead srl" vs "SRL Finlead" (meme entreprise, ordre des mots different).
-    Les particules generiques (sa, sprl, srl, sarl, sas, scrl, asbl, scs, snc,
-    nv, bv, bvba) ne sont pas filtrees mais incluses dans le tri.
+
+    iter90be : les particules juridiques generiques (sa, sprl, srl, sarl, sas,
+    scrl, asbl, scs, snc, nv, bv, bvba, cvba, vzw, sc, sca, sci, gmbh, ag,
+    ltd, llc, inc) sont MAINTENANT filtrees pour capturer les vrais doublons
+    ("Finlead" vs "SRL Finlead" -> meme entite). La ponctuation dans les
+    particules est aussi ignoree ("S.A.", "s.a" -> "sa" -> filtre).
+    Si apres filtrage la chaine devient vide (ex: "SRL"), on retombe sur le
+    nom d'origine trie (garde-fou).
     """
     words = (value or "").strip().lower().split()
-    # Tri alphabetique pour egaliser "finlead srl" et "srl finlead"
-    return " ".join(sorted(words))
+    # Pour chaque mot, on determine si c'est une particule juridique en
+    # retirant TOUS les caracteres non-alphanumeriques avant comparaison.
+    def _is_particle(w: str) -> bool:
+        core = re.sub(r"[^a-z0-9]", "", w)
+        return core in _LEGAL_PARTICLES
+    filtered = [w for w in words if not _is_particle(w)]
+    if not filtered:
+        filtered = words
+    return " ".join(sorted(filtered))
 
 
 def _norm_id(value: str) -> str:
