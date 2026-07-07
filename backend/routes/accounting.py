@@ -65,10 +65,16 @@ def create_accounting_router(db):
 
     # ---- PCMN ----
     @router.get("/pcmn")
-    async def list_pcmn(search: Optional[str] = None, class_num: Optional[int] = None,
+    async def list_pcmn(request: Request,
+                        search: Optional[str] = None, class_num: Optional[int] = None,
                         copropriete_id: Optional[str] = None, only_active: Optional[bool] = False):
+        # iter90bf : Chinese walls - si pas de copropriete_id en param, lire
+        # depuis le header X-Copropriete-Id. Evite le melange des PCMNs
+        # entre ACPs (bug : 1000 premiers comptes de toutes les ACPs).
+        if not copropriete_id:
+            copropriete_id = request.headers.get("X-Copropriete-Id") or None
         query = {}
-        if copropriete_id:
+        if copropriete_id and copropriete_id != "all":
             query["copropriete_id"] = copropriete_id
         if only_active:
             query["active"] = True
@@ -79,7 +85,8 @@ def create_accounting_router(db):
             ]
         if class_num is not None:
             query["class_num"] = class_num
-        accounts = await db.pcmn_accounts.find(query, {"_id": 0}).sort("number", 1).to_list(1000)
+        # Limite elargie a 5000 pour couvrir un PCMN complet + comptes de tiers
+        accounts = await db.pcmn_accounts.find(query, {"_id": 0}).sort("number", 1).to_list(5000)
         return accounts
 
     @router.post("/pcmn")

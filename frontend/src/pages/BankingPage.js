@@ -69,7 +69,7 @@ export default function BankingPage() {
       api.get('/suppliers'),
       api.get('/expense-categories').catch(() => ({ data: [] })),
       api.get('/distribution-keys').catch(() => ({ data: [] })),
-      api.get('/accounting/pcmn', { params: { only_active: true } }).catch(() => ({ data: [] })),
+      api.get('/accounting/pcmn').catch(() => ({ data: [] })),
     ];
     if (selectedCopro) promises.push(api.get(`/coproprietes/${selectedCopro}`));
     const [s, t, o, inv, sup, cats, dks, pcmn, c] = await Promise.all(promises);
@@ -1151,9 +1151,11 @@ export default function BankingPage() {
                           onChange={(e) => updateCatSplit(i, 'description', e.target.value)}
                           data-testid={`cat-split-desc-${i}`} />
                       </div>
-                      {/* iter90q + iter90bd : selection PCMN via dropdown de recherche
-                          (plus de saisie libre non-conforme). Filtre sur classes 5/6/7
-                          pour rester coherent avec la validation backend. */}
+                      {/* iter90q + iter90bd + iter90bf : selection PCMN via dropdown
+                          de recherche (plus de saisie libre non-conforme). Aucun
+                          classFilter -> le user voit TOUS les comptes de son plan
+                          comptable. La validation backend restera stricte (classes
+                          5/6/7 acceptees pour categoriser une transaction). */}
                       <div className="col-span-12 flex items-center gap-2 pt-1 border-t border-slate-100">
                         <span className="text-[10px] text-slate-400 uppercase tracking-wide shrink-0">ou compte direct</span>
                         <div className="flex-1">
@@ -1171,8 +1173,7 @@ export default function BankingPage() {
                                 return s;
                               });
                             }}
-                            placeholder="Chercher un compte PCMN (ex : 58 Virements internes, 611 Entretien...)"
-                            classFilter={[5, 6, 7]}
+                            placeholder="Chercher un compte PCMN (numero ou nom)"
                             allowClear
                             testId={`cat-split-account-${i}`}
                           />
