@@ -239,7 +239,11 @@ export default function BankingPage() {
   };
   const addCatSplit = () => setCategorizeSplits([...categorizeSplits, { expense_category_id: '', account_number: '', distribution_key_id: '', amount: 0, description: '' }]);
   const removeCatSplit = (i) => setCategorizeSplits(categorizeSplits.filter((_, idx) => idx !== i));
-  const updateCatSplit = (i, f, v) => { const s = [...categorizeSplits]; s[i] = { ...s[i], [f]: v }; setCategorizeSplits(s); };
+  const updateCatSplit = (i, f, v) => setCategorizeSplits(prev => {
+    const s = [...prev];
+    s[i] = { ...s[i], [f]: v };
+    return s;
+  });
   const doCategorize = async () => {
     if (!categorizeTarget) return;
     const payload = { splits: categorizeSplits.map(s => ({ ...s, amount: Number(s.amount) })) };
@@ -1050,7 +1054,7 @@ export default function BankingPage() {
 
       {/* iter90k : Categorize dialog (nature de depense / revenu) */}
       <Dialog open={categorizeDialog} onOpenChange={setCategorizeDialog}>
-        <DialogContent className="max-w-2xl" data-testid="categorize-dialog">
+        <DialogContent className="max-w-4xl" data-testid="categorize-dialog">
           <DialogHeader>
             <DialogTitle className="text-base font-semibold m-0">Categoriser la transaction</DialogTitle>
           </DialogHeader>
@@ -1177,7 +1181,19 @@ export default function BankingPage() {
                 <div className="flex justify-end gap-2 pt-2">
                   <Button variant="outline" size="sm" onClick={() => setCategorizeDialog(false)} className="h-8 text-xs">Annuler</Button>
                   <Button size="sm" onClick={doCategorize}
-                    disabled={Math.abs(diff) >= 0.01 || categorizeSplits.some(s => (!s.expense_category_id && !(s.account_number || '').trim()) || !s.distribution_key_id || Number(s.amount) <= 0)}
+                    disabled={Math.abs(diff) >= 0.01 || categorizeSplits.some(s => {
+                      const missingNat = !s.expense_category_id && !(s.account_number || '').trim();
+                      if (missingNat) return true;
+                      if (Number(s.amount) <= 0) return true;
+                      // Cle facultative si compte 58 (virement interne) : ni account
+                      // direct 58, ni nature dont le compte commence par 58.
+                      const acc = (s.account_number || '').trim();
+                      const cat = expenseCategories.find(c => c.id === s.expense_category_id);
+                      const catAcc = (cat?.account_number || '');
+                      const isTransfer = acc.startsWith('58') || catAcc.startsWith('58') || cat?.kind === 'transfer';
+                      if (isTransfer) return false;
+                      return !s.distribution_key_id;
+                    })}
                     className="bg-purple-600 hover:bg-purple-700 text-white h-8 text-xs"
                     data-testid="cat-confirm-btn">
                     <Tag size={12} className="mr-1" /> Categoriser

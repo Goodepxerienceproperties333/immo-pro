@@ -82,7 +82,9 @@ class CategorySplitInput(BaseModel):
     sans passer par la creation d'une nature)."""
     expense_category_id: Optional[str] = ""
     account_number: Optional[str] = ""  # iter90q : alternative au dropdown
-    distribution_key_id: str
+    # iter90bb : optionnel si le split cible un compte 58 (virement interne),
+    # car un virement interne ne se repartit pas sur les proprietaires.
+    distribution_key_id: Optional[str] = ""
     amount: float
     description: Optional[str] = ""
 
@@ -1411,7 +1413,24 @@ def create_banking_router(db):
             if not s.expense_category_id and not (s.account_number or "").strip():
                 raise HTTPException(400,
                     f"Split #{i+1}: une nature OU un n° de compte PCMN est requis")
-            if not s.distribution_key_id:
+            # Determine if the split targets a class-5 (58) transfer account BEFORE
+            # requiring a distribution key : virements internes 58 don't need a
+            # distribution key since they don't reparted to owners.
+            is_transfer_split = False
+            direct_num = (s.account_number or "").strip()
+            if direct_num.startswith("58"):
+                is_transfer_split = True
+            elif s.expense_category_id and not direct_num:
+                _cat_probe = await db.expense_categories.find_one(
+                    {"id": s.expense_category_id, "copropriete_id": copro_id},
+                    {"_id": 0, "account_number": 1, "kind": 1},
+                )
+                if _cat_probe and (
+                    (_cat_probe.get("account_number") or "").startswith("58")
+                    or _cat_probe.get("kind") == "transfer"
+                ):
+                    is_transfer_split = True
+            if not s.distribution_key_id and not is_transfer_split:
                 raise HTTPException(400, f"Split #{i+1}: cle de repartition manquante")
 
             # iter90q : resolution via account_number direct OU expense_category
@@ -1462,20 +1481,29 @@ def create_banking_router(db):
                 acc_name = pcmn.get("name", "")
                 acc_class = pcmn.get("class_num")
 
-            dk = await db.distribution_keys.find_one(
-                {"id": s.distribution_key_id, "copropriete_id": copro_id},
-                {"_id": 0},
-            )
-            if not dk:
-                raise HTTPException(400, f"Split #{i+1}: cle inconnue")
+            dk = None
+            dk_id = ""
+            dk_name = ""
+            if s.distribution_key_id:
+                dk = await db.distribution_keys.find_one(
+                    {"id": s.distribution_key_id, "copropriete_id": copro_id},
+                    {"_id": 0},
+                )
+                if not dk:
+                    raise HTTPException(400, f"Split #{i+1}: cle inconnue")
+                dk_id = s.distribution_key_id
+                dk_name = dk.get("name", "")
+            elif not is_transfer_split:
+                # Defensive : deja verifie plus haut, mais on garde le garde-fou.
+                raise HTTPException(400, f"Split #{i+1}: cle de repartition manquante")
             resolved.append({
                 "expense_category_id": cat_id,
                 "expense_category_name": cat_name,
                 "account_number": acc_number,
                 "account_name": acc_name,
                 "account_class": acc_class,
-                "distribution_key_id": s.distribution_key_id,
-                "distribution_key_name": dk.get("name", ""),
+                "distribution_key_id": dk_id,
+                "distribution_key_name": dk_name,
                 "amount": round(float(s.amount), 2),
                 "description": (s.description or "").strip(),
             })
