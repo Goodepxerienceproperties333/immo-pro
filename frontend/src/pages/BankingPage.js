@@ -363,14 +363,17 @@ export default function BankingPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
         {/* Statements sidebar */}
-        <div className="space-y-2">
+        <div className="space-y-2 lg:col-span-1">
           <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold px-1">Extraits</div>
           {statements.length === 0 ? <p className="text-sm text-slate-400 text-center py-4">Aucun extrait</p> : statements.map(s => (
             <Card key={s.id} className={`cursor-pointer transition-all border text-sm ${selectedStmt?.id === s.id ? 'border-[#0055FF] shadow-md' : 'border-slate-200 hover:border-slate-300'}`} onClick={() => loadStmtTxns(s)} data-testid={`stmt-card-${s.id}`}>
               <CardContent className="p-3">
-                <div className="flex items-center justify-between"><span className="font-mono font-semibold">N {s.number}</span><Button variant="ghost" size="sm" onClick={e => { e.stopPropagation(); deleteStmt(s.id); }} className="text-red-400 h-5 w-5 p-0"><Trash2 size={10} /></Button></div>
+                <div className="flex items-center justify-between gap-1">
+                  <span className="font-mono font-semibold text-[11px] truncate min-w-0" title={s.number}>N {s.number}</span>
+                  <Button variant="ghost" size="sm" onClick={e => { e.stopPropagation(); deleteStmt(s.id); }} className="text-red-400 h-5 w-5 p-0 shrink-0"><Trash2 size={10} /></Button>
+                </div>
                 <div className="text-xs text-slate-500">{fmtDate(s.date)}</div>
                 <div className="flex justify-between mt-1 text-[10px] font-mono"><span>O:{s.opening_balance?.toFixed(2)}</span><span>F:{s.closing_balance?.toFixed(2)}</span></div>
                 <div className="flex gap-1 mt-1 flex-wrap">
@@ -396,7 +399,7 @@ export default function BankingPage() {
 
         {/* Main panel - sticky whole panel so it stays in view while
             user scrolls the left statements list */}
-        <div className="lg:col-span-3 lg:sticky lg:top-4 lg:self-start lg:max-h-[calc(100vh-6rem)] lg:overflow-y-auto">
+        <div className="lg:col-span-4 lg:sticky lg:top-4 lg:self-start lg:max-h-[calc(100vh-6rem)] lg:overflow-y-auto">
           {selectedStmt ? (
             <Card className="border-slate-200 overflow-visible">
               <CardHeader
