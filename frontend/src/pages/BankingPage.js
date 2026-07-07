@@ -14,6 +14,7 @@ import { Plus, Trash2, Upload, Link2, Unlink, Search, Landmark, PlusCircle, Save
 import { useFiscalYearParams } from '@/hooks/useFiscalYearParams';
 import { useAuth } from '@/contexts/AuthContext';
 import CounterpartySearchSelect from '@/components/CounterpartySearchSelect';
+import AccountSearchSelect from '@/components/AccountSearchSelect';
 import CodaImportDialog from '@/components/CodaImportDialog';
 import { fmtDate } from '@/lib/dateFmt';
 
@@ -54,6 +55,7 @@ export default function BankingPage() {
   // ----- iter90k : Categorisation par nature de depense/revenu -----
   const [expenseCategories, setExpenseCategories] = useState([]);
   const [distributionKeys, setDistributionKeys] = useState([]);
+  const [pcmnAccounts, setPcmnAccounts] = useState([]);
   const [categorizeDialog, setCategorizeDialog] = useState(false);
   const [categorizeTarget, setCategorizeTarget] = useState(null);
   const [categorizeSplits, setCategorizeSplits] = useState([]);
@@ -67,12 +69,14 @@ export default function BankingPage() {
       api.get('/suppliers'),
       api.get('/expense-categories').catch(() => ({ data: [] })),
       api.get('/distribution-keys').catch(() => ({ data: [] })),
+      api.get('/accounting/pcmn', { params: { only_active: true } }).catch(() => ({ data: [] })),
     ];
     if (selectedCopro) promises.push(api.get(`/coproprietes/${selectedCopro}`));
-    const [s, t, o, inv, sup, cats, dks, c] = await Promise.all(promises);
+    const [s, t, o, inv, sup, cats, dks, pcmn, c] = await Promise.all(promises);
     setStatements(s.data); setTransactions(t.data); setOwners(o.data); setInvoices(inv.data); setSuppliers(sup.data);
     setExpenseCategories(cats.data || []);
     setDistributionKeys(dks.data || []);
+    setPcmnAccounts(pcmn.data || []);
     setBankAccounts(c?.data?.bank_accounts || []);
   }, [selectedCopro, fyParams.date_from, fyParams.date_to]);
   useEffect(() => { load(); }, [load]);
@@ -1147,18 +1151,32 @@ export default function BankingPage() {
                           onChange={(e) => updateCatSplit(i, 'description', e.target.value)}
                           data-testid={`cat-split-desc-${i}`} />
                       </div>
-                      {/* iter90q : saisie directe d'un n° de compte PCMN (fallback si aucune nature configuree, ex compte 58 Virements internes) */}
+                      {/* iter90q + iter90bd : selection PCMN via dropdown de recherche
+                          (plus de saisie libre non-conforme). Filtre sur classes 5/6/7
+                          pour rester coherent avec la validation backend. */}
                       <div className="col-span-12 flex items-center gap-2 pt-1 border-t border-slate-100">
                         <span className="text-[10px] text-slate-400 uppercase tracking-wide shrink-0">ou compte direct</span>
-                        <Input
-                          placeholder="Ex : 58 (Virement interne) — remplit la nature ci-dessus"
-                          className="h-7 text-xs font-mono"
-                          value={split.account_number || ''}
-                          onChange={(e) => {
-                            updateCatSplit(i, 'account_number', e.target.value);
-                            if (e.target.value) updateCatSplit(i, 'expense_category_id', '');
-                          }}
-                          data-testid={`cat-split-account-${i}`} />
+                        <div className="flex-1">
+                          <AccountSearchSelect
+                            accounts={pcmnAccounts}
+                            value={split.account_number || ''}
+                            onChange={(num) => {
+                              setCategorizeSplits(prev => {
+                                const s = [...prev];
+                                s[i] = {
+                                  ...s[i],
+                                  account_number: num || '',
+                                  expense_category_id: num ? '' : s[i].expense_category_id,
+                                };
+                                return s;
+                              });
+                            }}
+                            placeholder="Chercher un compte PCMN (ex : 58 Virements internes, 611 Entretien...)"
+                            classFilter={[5, 6, 7]}
+                            allowClear
+                            testId={`cat-split-account-${i}`}
+                          />
+                        </div>
                       </div>
                     </div>
                   ))}
