@@ -969,6 +969,7 @@ from routes.support import create_support_router
 from routes.legal import create_legal_router
 from routes.communication import create_communication_router
 from routes.syndic_config import create_syndic_config_router
+from routes.email_templates import create_email_templates_router
 
 app.include_router(create_properties_router(db))
 app.include_router(create_accounting_router(db))
@@ -997,3 +998,4 @@ app.include_router(create_support_router(db))
 app.include_router(create_legal_router(db))
 app.include_router(create_communication_router(db))
 app.include_router(create_syndic_config_router(db))
+app.include_router(create_email_templates_router(db))

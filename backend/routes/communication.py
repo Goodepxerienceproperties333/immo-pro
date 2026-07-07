@@ -119,6 +119,7 @@ class SendSituation(BaseModel):
     include_signature: bool = True
     start_date: str = ""
     end_date: str = ""
+    template_id: str = ""  # iter90aw : substitue subject/body_html si renseigne
 
 
 class SendDecompteAnnuel(BaseModel):
@@ -129,6 +130,7 @@ class SendDecompteAnnuel(BaseModel):
     subject: str = ""
     body_html: str = ""
     include_signature: bool = True
+    template_id: str = ""
 
 
 class SendDecompteMutation(BaseModel):
@@ -139,6 +141,7 @@ class SendDecompteMutation(BaseModel):
     subject: str = ""
     body_html: str = ""
     include_signature: bool = True
+    template_id: str = ""
 
 
 # ---------- Router ----------
@@ -361,15 +364,30 @@ def create_communication_router(db):
             raise HTTPException(400, "Aucun proprietaire selectionne")
 
         # Import lazy pour eviter la circularite de routes
-        from routes.reports import _build_situation_compte_pdf
+        from routes.reports import _build_situation_compte_pdf, _compute_balance_tiers_for_ui
+        from routes.email_templates import get_template_by_id, render_template, build_owner_email_context
+
+        # iter90aw : charge le template si demande (une seule fois)
+        tpl = None
+        if payload.template_id:
+            _, syndic_uid = await _resolve_syndic_scope(db, request)
+            tpl = await get_template_by_id(db, syndic_uid, payload.template_id)
+            if not tpl:
+                raise HTTPException(404, f"Template '{payload.template_id}' non trouve")
+
+        # Precharge les balances pour substituer {balance} dans les templates
+        balances_map = {}
+        if tpl:
+            bal_data = await _compute_balance_tiers_for_ui(db, payload.copropriete_id)
+            balances_map = {b["owner_id"]: b["balance"] for b in bal_data.get("owners", [])}
+
+        from bson import ObjectId as _oid
+        current_user = await db.users.find_one({"_id": _oid(request.state.user_id)})
 
         sent = 0
         failed: List[dict] = []
         subject_default = "Situation de votre compte - Copropriete"
         body_default = "Bonjour,<br><br>Veuillez trouver en piece jointe la situation actuelle de votre compte.<br><br>Cordialement,"
-        subj = payload.subject.strip() or subject_default
-        body = payload.body_html.strip() or body_default
-        html = await _build_html_with_signature(request, body, payload.include_signature)
 
         for oid in payload.owner_ids:
             owner = await db.owners.find_one({"id": oid}, {"_id": 0, "email": 1, "name": 1})
@@ -377,6 +395,18 @@ def create_communication_router(db):
                 failed.append({"owner_id": oid, "reason": "email manquant"})
                 continue
             try:
+                # Compute subject + body per-owner (template rendering ou fallback)
+                if tpl:
+                    ctx = await build_owner_email_context(db, oid, payload.copropriete_id, current_user)
+                    ctx["balance"] = f"{balances_map.get(oid, 0.0):.2f}"
+                    ctx["abs_balance"] = f"{abs(balances_map.get(oid, 0.0)):.2f}"
+                    ctx["balance_status"] = "debiteur" if balances_map.get(oid, 0) > 0 else ("crediteur" if balances_map.get(oid, 0) < 0 else "solde")
+                    subj = render_template(tpl.get("subject", "") or subject_default, ctx)
+                    body_rendered = render_template(tpl.get("body_html", "") or body_default, ctx)
+                else:
+                    subj = payload.subject.strip() or subject_default
+                    body_rendered = payload.body_html.strip() or body_default
+                html = await _build_html_with_signature(request, body_rendered, payload.include_signature)
                 pdf_bytes = await _build_situation_compte_pdf(
                     db, oid, payload.copropriete_id,
                     payload.start_date or None, payload.end_date or None,

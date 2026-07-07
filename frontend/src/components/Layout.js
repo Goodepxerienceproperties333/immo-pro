@@ -42,6 +42,7 @@ const sections = [
     { to: '/balance-tiers', icon: Users, label: 'Balance de Tiers' },
     { to: '/reminders', icon: Bell, label: 'Rappels paiement' },
     { to: '/communication', icon: Mail, label: 'Communication' },
+    { to: '/email-templates', icon: FileText, label: 'Modeles emails' },
     { to: '/documents', icon: FolderOpen, label: 'Documents' },
   ]},
 ];

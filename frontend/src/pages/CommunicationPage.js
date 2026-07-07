@@ -206,10 +206,30 @@ function SendActionDialog({
   const [end_date, setEnd] = useState('');
   const [fiscal_year_id, setFy] = useState('');
   const [sending, setSending] = useState(false);
+  // iter90aw : template
+  const [templates, setTemplates] = useState([]);
+  const [template_id, setTemplateId] = useState('');
 
   useEffect(() => {
     if (mailboxes.length && !from_mailbox) setFrom(mailboxes[0].address);
   }, [mailboxes, from_mailbox]);
+
+  // Charger les templates a l'ouverture
+  useEffect(() => {
+    if (!open) return;
+    api.get('/email-templates').then(r => setTemplates(r.data.templates || [])).catch(() => {});
+  }, [open]);
+
+  // Auto-remplit subject/body a la selection d'un template
+  const applyTemplate = (tid) => {
+    setTemplateId(tid);
+    if (!tid) return;
+    const tpl = templates.find(t => t.id === tid);
+    if (tpl) {
+      setSubject(tpl.subject || '');
+      setBody(tpl.body_html || '');
+    }
+  };
 
   const defaultsFor = {
     situation: {

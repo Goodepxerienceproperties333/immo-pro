@@ -65,8 +65,11 @@ export default function SyndicOnboardingWizard() {
       smtp_username: syndicConfig.smtp_username || '',
       smtp_use_tls: syndicConfig.smtp_use_tls !== false,
     }));
-    // Auto-open pour syndic sans onboarding
-    if (user?.role === 'syndic' && !syndicConfig.onboarding_completed) {
+    // iter90av : Auto-open pour syndic sans onboarding.
+    // ATTENTION : attend que le welcome tour (user.onboarding_completed=true)
+    // soit termine pour eviter les modaux qui se superposent (iter44 report).
+    const platformTourDone = user?.onboarding_completed === true;
+    if (user?.role === 'syndic' && platformTourDone && !syndicConfig.onboarding_completed) {
       setOpen(true);
     }
   }, [syndicConfig, user]);
