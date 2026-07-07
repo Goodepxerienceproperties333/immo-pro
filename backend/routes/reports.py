@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from typing import Optional
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 import uuid
 import io
 
@@ -37,6 +37,319 @@ def _exclude_reversals(q: dict) -> dict:
     q["is_reversal"] = {"$ne": True}
     q["reversed"] = {"$ne": True}
     return q
+
+
+async def _build_situation_compte_pdf(db, owner_id, copropriete_id, start_date=None, end_date=None):
+    """iter90au : helper reutilisable qui construit les bytes PDF de la situation
+    de compte + le nom de fichier. Utilise par le download endpoint et par le
+    communication router (/api/communication/send/situation)."""
+    from pdf_situation_compte import build_situation_compte_pdf
+
+    owner = await db.owners.find_one({"id": owner_id}, {"_id": 0})
+    if not owner:
+        raise HTTPException(404, "Proprietaire non trouve")
+    copro = await db.coproprietes.find_one({"id": copropriete_id}, {"_id": 0})
+    if not copro:
+        raise HTTPException(404, "Copropriete non trouvee")
+
+    tier_acc = (owner.get("tier_accounts") or {}).get(copropriete_id, {}) or {}
+    acc_prov = tier_acc.get("provisions", "")
+    acc_res = tier_acc.get("reserve", "")
+    valid_accs = {a for a in (acc_prov, acc_res) if a}
+
+    entries = await db.journal_entries.find(
+        {"copropriete_id": copropriete_id}, {"_id": 0}
+    ).to_list(100000)
+
+    opening = 0.0
+    movements = []
+    seen = set()
+
+    def _date_in_range(d):
+        if start_date and d < start_date:
+            return "before"
+        if end_date and d > end_date:
+            return "after"
+        return "in"
+
+    for e in entries:
+        for ln in e.get("lines", []) or []:
+            acc = ln.get("account_number", "")
+            tpid = ln.get("third_party_id")
+            if acc not in valid_accs and tpid != owner_id:
+                continue
+            key = (e.get("id"), acc, ln.get("debit", 0), ln.get("credit", 0), tpid)
+            if key in seen:
+                continue
+            seen.add(key)
+            d_val = float(ln.get("debit", 0) or 0)
+            c_val = float(ln.get("credit", 0) or 0)
+            date_str = e.get("date", "")
+            position = _date_in_range(date_str)
+            if position == "before":
+                opening += d_val - c_val
+            elif position == "in":
+                line_desc = (ln.get("line_description") or "").strip()
+                entry_desc = (e.get("description", "") or "").strip()
+                movements.append({
+                    "date": date_str,
+                    "description": line_desc or entry_desc,
+                    "reference": e.get("reference", "") or "",
+                    "account_number": acc,
+                    "account_name": ln.get("account_name", ""),
+                    "debit": d_val,
+                    "credit": c_val,
+                    "journal_type": e.get("journal_type", ""),
+                })
+
+    all_bank_txns = await db.bank_transactions.find(
+        {"copropriete_id": copropriete_id}, {"_id": 0}
+    ).to_list(100000)
+    for txn in all_bank_txns:
+        if txn.get("matched"):
+            continue
+        comm = (txn.get("communication", "") or "").replace("+", "").replace("/", "").replace(" ", "")
+        if comm != owner.get("vcs_digits") and comm != owner.get("vcs_code"):
+            continue
+        date_str = txn.get("date", "")
+        position = _date_in_range(date_str)
+        if position == "before":
+            opening -= abs(float(txn.get("amount", 0) or 0))
+        elif position == "in":
+            movements.append({
+                "date": date_str,
+                "description": f"Paiement non lettre: {txn.get('counterparty_name','') or comm}",
+                "reference": txn.get("id", "")[:10],
+                "account_number": acc_prov,
+                "account_name": "Banque (a lettrer)",
+                "debit": 0,
+                "credit": abs(float(txn.get("amount", 0) or 0)),
+                "journal_type": "BANK",
+            })
+
+    movements.sort(key=lambda x: (x["date"], x.get("reference", "")))
+
+    syndic_info = {
+        "name": copro.get("syndic_name") or copro.get("name", "Syndic"),
+        "address": copro.get("syndic_address", ""),
+        "postal_code": copro.get("syndic_postal_code", ""),
+        "city": copro.get("syndic_city", ""),
+        "country": copro.get("syndic_country", "Belgique"),
+        "email": copro.get("syndic_email", ""),
+        "phone": copro.get("syndic_phone", ""),
+        "bce": copro.get("syndic_bce", ""),
+    }
+    iban = ""
+    bic = ""
+    for ba in (copro.get("bank_accounts") or []):
+        if ba.get("iban"):
+            iban = ba["iban"]
+            bic = ba.get("bic", "")
+            break
+
+    owner_view = {**owner, "account_provisions": acc_prov, "account_reserve": acc_res}
+
+    pdf_bytes = build_situation_compte_pdf(
+        syndic_info=syndic_info,
+        copropriete=copro,
+        owner=owner_view,
+        movements=movements,
+        period_start=start_date or "",
+        period_end=end_date or datetime.now(timezone.utc).date().isoformat(),
+        opening_balance=opening,
+        iban=iban,
+        bic=bic,
+    )
+    safe_name = (owner.get("name", "owner") or "owner").replace(" ", "_").replace("/", "_")
+    suffix = end_date or datetime.now(timezone.utc).date().isoformat()
+    filename = f"situation-{safe_name}-{suffix}.pdf"
+    return pdf_bytes, filename
+
+
+async def _build_decompte_annuel_pdf(db, owner_id, copropriete_id, fiscal_year_id=None, preview=True):
+    """iter90au : helper reutilisable qui construit les bytes PDF du decompte
+    annuel + le nom de fichier. Utilise par le download endpoint et par le
+    communication router. `preview=True` par defaut pour permettre l'envoi meme
+    si l'exercice n'est pas cloture (le PDF sera alors marque "APERCU")."""
+    from pdf_decompte import build_decompte_pdf
+
+    owner = await db.owners.find_one({"id": owner_id}, {"_id": 0})
+    if not owner:
+        raise HTTPException(404, "Proprietaire non trouve")
+    if not copropriete_id or copropriete_id == "all":
+        raise HTTPException(400, "copropriete_id requis - chinese walls strict")
+
+    fy = None
+    if fiscal_year_id:
+        fy = await db.fiscal_years.find_one({"id": fiscal_year_id}, {"_id": 0})
+        if fy and fy.get("copropriete_id") and fy["copropriete_id"] != copropriete_id:
+            raise HTTPException(400, "Exercice appartient a une autre ACP")
+    if not fy:
+        today = datetime.now(timezone.utc)
+        fy = {
+            "name": f"Exercice {today.year}",
+            "start_date": f"{today.year}-01-01",
+            "end_date": f"{today.year}-12-31",
+        }
+
+    copro = await db.coproprietes.find_one({"id": copropriete_id}, {"_id": 0})
+    if not copro:
+        raise HTTPException(404, "Copropriete non trouvee")
+
+    owner_lots = await db.lots.find(
+        {"copropriete_id": copropriete_id,
+         "$or": [{"owner_id": owner_id}, {"owner_ids": owner_id}]},
+        {"_id": 0}
+    ).to_list(100)
+    all_lots = await db.lots.find({"copropriete_id": copropriete_id}, {"_id": 0}).to_list(1000)
+
+    invoices = await db.invoices.find(
+        {"copropriete_id": copropriete_id,
+         "date": {"$gte": fy["start_date"], "$lte": fy["end_date"]}},
+        {"_id": 0}
+    ).sort("date", 1).to_list(10000)
+
+    distribution_keys = await db.distribution_keys.find(
+        {"copropriete_id": copropriete_id}, {"_id": 0}
+    ).to_list(1000)
+
+    fund_calls = await db.fund_calls.find(
+        {"copropriete_id": copropriete_id,
+         "date": {"$gte": fy["start_date"], "$lte": fy["end_date"]}},
+        {"_id": 0}
+    ).sort("date", 1).to_list(10000)
+
+    owner_vcs_digits = owner.get("vcs_digits", "")
+    all_txns = await db.bank_transactions.find(
+        {"copropriete_id": copropriete_id,
+         "date": {"$gte": fy["start_date"], "$lte": fy["end_date"]}},
+        {"_id": 0}
+    ).sort("date", 1).to_list(100000)
+    payments = []
+    for t in all_txns:
+        is_owner = False
+        if t.get("matched") and t.get("match_type") == "owner_payment" and t.get("matched_to") == owner_id:
+            is_owner = True
+        elif not t.get("matched") and owner_vcs_digits:
+            comm = (t.get("communication") or "").replace("+", "").replace("/", "").replace(" ", "")
+            if comm == owner_vcs_digits:
+                is_owner = True
+        if is_owner:
+            payments.append(t)
+
+    cats = await db.expense_categories.find(
+        {"copropriete_id": copro["id"]} if copro.get("id") else {}, {"_id": 0}
+    ).to_list(1000)
+    pcmn_acc = await db.pcmn_accounts.find(
+        {"class_num": 6, "copropriete_id": copro.get("id", "")}, {"_id": 0}
+    ).to_list(1000)
+    nature_map = {a["number"]: a.get("name", "") for a in pcmn_acc}
+    for c in cats:
+        nature_map[c["account_number"]] = c["name"]
+
+    pdf_bytes = build_decompte_pdf(
+        owner=owner, copropriete=copro, fiscal_year=fy,
+        owner_lots=owner_lots, all_lots=all_lots,
+        invoices=invoices, distribution_keys=distribution_keys,
+        fund_calls=fund_calls, payments=payments,
+        expense_accounts_map=nature_map,
+        preview=preview,
+    )
+    safe_name = (owner.get("name", "owner") or "owner").replace(" ", "_").replace("/", "_")
+    fy_name = (fy.get("name", "") or "").replace(" ", "_")
+    filename = f"decompte_{safe_name}_{fy_name}.pdf"
+    return pdf_bytes, filename
+
+
+async def _compute_balance_tiers_for_ui(db, copropriete_id):
+    """iter90au : version legere de balance_tiers_owners destinee a l'UI de
+    selection des proprietaires (module communication). Retourne pour chaque
+    proprietaire de l'ACP : {owner_id, owner_name, email, phone, balance, status,
+    account_provisions, account_reserve}. Le solde est CUMULATIF (toutes dates,
+    hors extournes)."""
+    if not copropriete_id or copropriete_id == "all":
+        return {"owners": [], "total_debiteurs": 0.0, "total_crediteurs": 0.0}
+
+    lots = await db.lots.find({"copropriete_id": copropriete_id}, {"_id": 0}).to_list(10000)
+    owner_ids = set(lt.get("owner_id") for lt in lots if lt.get("owner_id"))
+
+    third_party_ids_in_je = await db.journal_entries.distinct(
+        "lines.third_party_id", {"copropriete_id": copropriete_id}
+    )
+    for tpid in third_party_ids_in_je:
+        if tpid:
+            owner_ids.add(tpid)
+    owner_ids = list(owner_ids)
+    owners = (
+        await db.owners.find({"id": {"$in": owner_ids}}, {"_id": 0}).sort("name", 1).to_list(1000)
+        if owner_ids else []
+    )
+    current_owner_ids = set(lt.get("owner_id") for lt in lots if lt.get("owner_id"))
+
+    # Cumul entries (toutes dates, hors extournes)
+    je_q = {"copropriete_id": copropriete_id}
+    _exclude_reversals(je_q)
+    entries = await db.journal_entries.find(je_q, {"_id": 0}).to_list(200000)
+
+    # Aggregation : par owner_id via third_party_id + fallback par compte tier
+    cumul_by_owner = {}  # oid -> debit - credit
+    cumul_by_acc = {}   # account_number -> debit - credit
+    for e in entries:
+        for ln in e.get("lines", []) or []:
+            d_val = float(ln.get("debit", 0) or 0)
+            c_val = float(ln.get("credit", 0) or 0)
+            tpid = ln.get("third_party_id")
+            acc = ln.get("account_number", "")
+            if tpid:
+                cumul_by_owner[tpid] = cumul_by_owner.get(tpid, 0.0) + (d_val - c_val)
+            else:
+                cumul_by_acc[acc] = cumul_by_acc.get(acc, 0.0) + (d_val - c_val)
+
+    # Bank txns non lettres reconnus par VCS -> credit additionnel
+    vcs_to_owner = {}
+    for owner in owners:
+        if owner.get("vcs_digits"):
+            vcs_to_owner[owner["vcs_digits"]] = owner["id"]
+        if owner.get("vcs_code"):
+            vcs_to_owner[owner["vcs_code"]] = owner["id"]
+    all_bank_txns = await db.bank_transactions.find(
+        {"copropriete_id": copropriete_id, "matched": {"$ne": True}}, {"_id": 0}
+    ).to_list(100000)
+    for txn in all_bank_txns:
+        comm = (txn.get("communication") or "").replace("+", "").replace("/", "").replace(" ", "")
+        oid = vcs_to_owner.get(comm) or vcs_to_owner.get(txn.get("communication") or "")
+        if oid:
+            cumul_by_owner[oid] = cumul_by_owner.get(oid, 0.0) - abs(float(txn.get("amount", 0) or 0))
+
+    result = []
+    for owner in owners:
+        oid = owner["id"]
+        tier_acc = (owner.get("tier_accounts") or {}).get(copropriete_id, {}) or {}
+        acc_prov = tier_acc.get("provisions", "")
+        acc_res = tier_acc.get("reserve", "")
+        balance = cumul_by_owner.get(oid, 0.0)
+        # Fallback : lignes sur les comptes de l'owner sans third_party_id
+        for acc in (acc_prov, acc_res):
+            if acc and acc in cumul_by_acc:
+                balance += cumul_by_acc[acc]
+                cumul_by_acc[acc] = 0.0
+        balance = round(balance, 2)
+        result.append({
+            "owner_id": oid,
+            "owner_name": owner.get("name", ""),
+            "email": owner.get("email", ""),
+            "phone": owner.get("phone", ""),
+            "account_provisions": acc_prov,
+            "account_reserve": acc_res,
+            "balance": balance,
+            "status": "debiteur" if balance > 0.01 else ("crediteur" if balance < -0.01 else "solde"),
+            "is_former_owner": oid not in current_owner_ids,
+        })
+    # Sort by name
+    result.sort(key=lambda x: (x["owner_name"] or "").lower())
+    total_debiteurs = round(sum(r["balance"] for r in result if r["balance"] > 0), 2)
+    total_crediteurs = round(sum(abs(r["balance"]) for r in result if r["balance"] < 0), 2)
+    return {"owners": result, "total_debiteurs": total_debiteurs, "total_crediteurs": total_crediteurs}
 
 
 def create_reports_router(db):
@@ -756,18 +1069,18 @@ def create_reports_router(db):
         # Owners are global, but lots/invoices are ACP-scoped (chinese wall)
         lots_q = _apply_copro({}, copropriete_id)
         lots = await db.lots.find(lots_q, {"_id": 0}).to_list(1000)
-        owner_ids_in_acp = list({l.get("owner_id") for l in lots if l.get("owner_id")})
+        owner_ids_in_acp = list({lt.get("owner_id") for lt in lots if lt.get("owner_id")})
         owners = await db.owners.find({"id": {"$in": owner_ids_in_acp}}, {"_id": 0}).sort("name", 1).to_list(1000) if owner_ids_in_acp else []
 
         inv_q = _apply_copro({"date": {"$gte": date_from or "2000-01-01", "$lte": date_to or "2099-12-31"}}, copropriete_id)
         invoices = await db.invoices.find(inv_q, {"_id": 0}).to_list(10000)
 
-        total_quotity = sum(l.get("quotity", 0) for l in lots)
+        total_quotity = sum(lt.get("quotity", 0) for lt in lots)
 
         decomptes = []
         for owner in owners:
-            owner_lots = [l for l in lots if l.get("owner_id") == owner["id"]]
-            owner_quotity = sum(l.get("quotity", 0) for l in owner_lots)
+            owner_lots = [lt for lt in lots if lt.get("owner_id") == owner["id"]]
+            owner_quotity = sum(lt.get("quotity", 0) for lt in owner_lots)
             share = owner_quotity / total_quotity if total_quotity > 0 else 0
 
             charges = []
@@ -787,7 +1100,7 @@ def create_reports_router(db):
 
                 dist_lines = inv.get("distribution_lines", [])
                 for dl in dist_lines:
-                    if dl.get("lot_id") in [l["id"] for l in owner_lots]:
+                    if dl.get("lot_id") in [lt["id"] for lt in owner_lots]:
                         charges.append({
                             "date": inv["date"],
                             "description": desc_label,
@@ -810,7 +1123,7 @@ def create_reports_router(db):
                 "owner_id": owner["id"],
                 "owner_name": owner["name"],
                 "vcs_code": owner.get("vcs_code", ""),
-                "lots": [{"number": l["number"], "quotity": l.get("quotity", 0)} for l in owner_lots],
+                "lots": [{"number": lt["number"], "quotity": lt.get("quotity", 0)} for lt in owner_lots],
                 "share_pct": round(share * 100, 2),
                 "charges": charges,
                 "total_charges": round(total_owner_charges, 2),
@@ -1121,7 +1434,7 @@ def create_reports_router(db):
             return {"owners": [], "total_debiteurs": 0, "total_crediteurs": 0}
 
         lots = await db.lots.find({"copropriete_id": copropriete_id}, {"_id": 0}).to_list(10000)
-        owner_ids = set(l.get("owner_id") for l in lots if l.get("owner_id"))
+        owner_ids = set(lt.get("owner_id") for lt in lots if lt.get("owner_id"))
 
         # Aussi inclure les anciens proprietaires (vendus) qui ont encore un
         # mouvement / solde sur leurs comptes tiers dans cette ACP.
@@ -1137,7 +1450,7 @@ def create_reports_router(db):
         owner_ids = list(owner_ids)
         owners = await db.owners.find({"id": {"$in": owner_ids}}, {"_id": 0}).sort("name", 1).to_list(1000) if owner_ids else []
         # Set of owners that still hold at least one lot in this ACP
-        current_owner_ids = set(l.get("owner_id") for l in lots if l.get("owner_id"))
+        current_owner_ids = set(lt.get("owner_id") for lt in lots if lt.get("owner_id"))
 
         # Charge journal entries ACP-scoped (un seul fetch) + filtre periode
         # SECURISATION : exclure les contre-passations et leurs ecritures
@@ -1691,7 +2004,7 @@ def create_reports_router(db):
         Periode optionnelle [start_date, end_date]. Retourne application/pdf
         en streaming (filename : `situation-{owner_name}-{end_date|today}.pdf`)."""
         from fastapi.responses import Response as FastAPIResponse
-        pdf_bytes, filename = await _build_situation_compte(
+        pdf_bytes, filename = await _build_situation_compte_pdf(
             db, owner_id, copropriete_id, start_date, end_date,
         )
         return FastAPIResponse(
@@ -1699,140 +2012,6 @@ def create_reports_router(db):
             media_type="application/pdf",
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
-
-
-async def _build_situation_compte(db, owner_id, copropriete_id, start_date=None, end_date=None):
-    """iter90au : helper reutilisable qui builds les bytes PDF de la situation
-    de compte + le nom de fichier. Utilise par le download endpoint et par
-    le communication router (/api/communication/send/situation)."""
-    from pdf_situation_compte import build_situation_compte_pdf
-    from datetime import datetime, timezone
-
-    owner = await db.owners.find_one({"id": owner_id}, {"_id": 0})
-    if not owner:
-        raise HTTPException(404, "Proprietaire non trouve")
-    copro = await db.coproprietes.find_one({"id": copropriete_id}, {"_id": 0})
-    if not copro:
-        raise HTTPException(404, "Copropriete non trouvee")
-
-    tier_acc = (owner.get("tier_accounts") or {}).get(copropriete_id, {}) or {}
-    acc_prov = tier_acc.get("provisions", "")
-    acc_res = tier_acc.get("reserve", "")
-    valid_accs = {a for a in (acc_prov, acc_res) if a}
-
-    entries = await db.journal_entries.find(
-        {"copropriete_id": copropriete_id}, {"_id": 0}
-    ).to_list(100000)
-
-    opening = 0.0
-    movements = []
-    seen = set()
-
-    def _date_in_range(d):
-        if start_date and d < start_date:
-            return "before"
-        if end_date and d > end_date:
-            return "after"
-        return "in"
-
-    for e in entries:
-        for ln in e.get("lines", []) or []:
-            acc = ln.get("account_number", "")
-            tpid = ln.get("third_party_id")
-            if acc not in valid_accs and tpid != owner_id:
-                continue
-            key = (e.get("id"), acc, ln.get("debit", 0), ln.get("credit", 0), tpid)
-            if key in seen:
-                continue
-            seen.add(key)
-            d = float(ln.get("debit", 0) or 0)
-            c = float(ln.get("credit", 0) or 0)
-            date_str = e.get("date", "")
-            position = _date_in_range(date_str)
-            if position == "before":
-                opening += d - c
-            elif position == "in":
-                line_desc = (ln.get("line_description") or "").strip()
-                entry_desc = (e.get("description", "") or "").strip()
-                movements.append({
-                    "date": date_str,
-                    "description": line_desc or entry_desc,
-                    "reference": e.get("reference", "") or "",
-                    "account_number": acc,
-                    "account_name": ln.get("account_name", ""),
-                    "debit": d,
-                    "credit": c,
-                    "journal_type": e.get("journal_type", ""),
-                })
-
-    all_bank_txns = await db.bank_transactions.find(
-        {"copropriete_id": copropriete_id}, {"_id": 0}
-    ).to_list(100000)
-    for txn in all_bank_txns:
-        if txn.get("matched"):
-            continue
-        comm = (txn.get("communication", "") or "").replace("+", "").replace("/", "").replace(" ", "")
-        if comm != owner.get("vcs_digits") and comm != owner.get("vcs_code"):
-            continue
-        date_str = txn.get("date", "")
-        position = _date_in_range(date_str)
-        if position == "before":
-            opening -= abs(float(txn.get("amount", 0) or 0))
-        elif position == "in":
-            movements.append({
-                "date": date_str,
-                "description": f"Paiement non lettre: {txn.get('counterparty_name','') or comm}",
-                "reference": txn.get("id", "")[:10],
-                "account_number": acc_prov,
-                "account_name": "Banque (a lettrer)",
-                "debit": 0,
-                "credit": abs(float(txn.get("amount", 0) or 0)),
-                "journal_type": "BANK",
-            })
-
-    movements.sort(key=lambda x: (x["date"], x.get("reference", "")))
-
-    syndic_info = {
-        "name": copro.get("syndic_name") or copro.get("name", "Syndic"),
-        "address": copro.get("syndic_address", ""),
-        "postal_code": copro.get("syndic_postal_code", ""),
-        "city": copro.get("syndic_city", ""),
-        "country": copro.get("syndic_country", "Belgique"),
-        "email": copro.get("syndic_email", ""),
-        "phone": copro.get("syndic_phone", ""),
-        "bce": copro.get("syndic_bce", ""),
-    }
-    iban = ""
-    bic = ""
-    for ba in (copro.get("bank_accounts") or []):
-        if ba.get("iban"):
-            iban = ba["iban"]
-            bic = ba.get("bic", "")
-            break
-
-    owner_view = {**owner, "account_provisions": acc_prov, "account_reserve": acc_res}
-
-    pdf_bytes = build_situation_compte_pdf(
-        syndic_info=syndic_info,
-        copropriete=copro,
-        owner=owner_view,
-        movements=movements,
-        period_start=start_date or "",
-        period_end=end_date or datetime.now(timezone.utc).date().isoformat(),
-        opening_balance=opening,
-        iban=iban,
-        bic=bic,
-    )
-    safe_name = (owner.get("name", "owner") or "owner").replace(" ", "_").replace("/", "_")
-    suffix = end_date or datetime.now(timezone.utc).date().isoformat()
-    filename = f"situation-{safe_name}-{suffix}.pdf"
-    return pdf_bytes, filename
-
-
-def _end_helper_pdf():
-    pass
-
-
 
     # ---- BALANCE DE TIERS FOURNISSEURS ----
     @router.get("/balance-tiers/suppliers")

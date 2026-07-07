@@ -7,6 +7,55 @@ import uuid
 from tier_accounts import assign_owner_accounts
 
 
+async def _build_mutation_decompte_context(db, lot_id: str, mutation_id: str) -> dict:
+    """iter90au : helper reutilisable qui prepare le contexte pour
+    build_mutation_decompte_pdf. Utilise par le download endpoint et par le
+    communication router (/api/communication/send/mutation).
+
+    Retourne un dict avec les kwargs pour build_mutation_decompte_pdf :
+    {copropriete, lot, seller, buyer, mutation, breakdown}.
+    """
+    lot = await db.lots.find_one({"id": lot_id}, {"_id": 0})
+    if not lot:
+        raise HTTPException(404, "Lot non trouve")
+    muts = lot.get("mutations") or []
+    if mutation_id == "last":
+        mut = muts[-1] if muts else None
+    else:
+        mut = next((m for m in muts if m.get("id") == mutation_id), None)
+    if not mut:
+        raise HTTPException(404, "Mutation non trouvee pour ce lot")
+
+    copro = await db.coproprietes.find_one(
+        {"id": lot.get("copropriete_id", "")}, {"_id": 0}
+    ) or {}
+    seller = await db.owners.find_one(
+        {"id": mut.get("old_owner_id", "")}, {"_id": 0}
+    ) or {}
+    buyer = await db.owners.find_one(
+        {"id": mut.get("new_owner_id", "")}, {"_id": 0}
+    ) or {}
+
+    breakdown = {
+        "roulement_quota": mut.get("roulement_quota", 0),
+        "current_period_prorata": mut.get("current_period_prorata", mut.get("prorata_provisions", 0)),
+        "current_period_details": mut.get("current_period_details") or mut.get("prorata_details") or [],
+        "future_calls": mut.get("future_calls") or [],
+        "future_calls_total": mut.get("future_calls_total", 0),
+        "budget_frequency": mut.get("budget_frequency"),
+        "budget_frequency_label": mut.get("budget_frequency_label", ""),
+        "total_transfer": mut.get("total_transfer", 0),
+    }
+    return {
+        "copropriete": copro,
+        "lot": lot,
+        "seller": seller,
+        "buyer": buyer,
+        "mutation": mut,
+        "breakdown": breakdown,
+    }
+
+
 def create_properties_router(db):
     router = APIRouter(prefix="/api")
 

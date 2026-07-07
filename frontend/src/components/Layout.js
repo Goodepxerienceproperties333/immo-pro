@@ -6,7 +6,7 @@ import {
   LayoutDashboard, Users, Building2, UserCheck, BookOpen, FileText,
   Receipt, Gauge, Landmark, FolderOpen, LogOut, ChevronLeft, ChevronRight,
   Menu, Shield, Home, Truck, Calendar, BookMarked, Megaphone, BarChart3, Bell, Wallet, Tag, UserCog, Pencil,
-  ShieldAlert, Unlock, ScrollText, IdCard, Activity, FileCheck, FileArchive
+  ShieldAlert, Unlock, ScrollText, IdCard, Activity, FileCheck, FileArchive, Mail
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -41,6 +41,7 @@ const sections = [
     { to: '/reports', icon: BarChart3, label: 'Bilan & Resultats' },
     { to: '/balance-tiers', icon: Users, label: 'Balance de Tiers' },
     { to: '/reminders', icon: Bell, label: 'Rappels paiement' },
+    { to: '/communication', icon: Mail, label: 'Communication' },
     { to: '/documents', icon: FolderOpen, label: 'Documents' },
   ]},
 ];
