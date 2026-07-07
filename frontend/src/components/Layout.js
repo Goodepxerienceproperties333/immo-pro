@@ -12,6 +12,7 @@ import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import TopNav from '@/components/TopNav';
 import OnboardingDialog from '@/components/OnboardingDialog';
 import SupportChatBubble from '@/components/SupportChatBubble';
 
@@ -368,82 +369,129 @@ export default function Layout() {
     );
   }
 
-  // ===== ACP SELECTED: Sidebar + content =====
+  // ===== ACP SELECTED: TopNav horizontal + content (iter90bk) =====
+  // Preparation des sections dynamiques (Plateforme si superadmin, Compte
+  // pour tous). L'ancien sidebar est conserve uniquement pour mobile (< lg)
+  // sous forme de drawer, pour ne pas casser l'UX mobile.
+  const extraSections = [];
+  if (isSuperadmin) {
+    extraSections.push({
+      title: 'Plateforme', accent: 'amber', items: [
+        { to: '/admin', icon: Shield, label: 'Tableau admin' },
+        { to: '/admin/users', icon: Shield, label: 'Utilisateurs' },
+        { to: '/admin/unlock', icon: Unlock, label: 'Outils deblocage' },
+        { to: '/admin/audit', icon: Activity, label: "Journal d'audit" },
+      ],
+    });
+  }
+  const accountItems = [];
+  if (user?.role === 'syndic' || user?.role === 'admin' || user?.role === 'superadmin') {
+    accountItems.push({ to: '/team', icon: Users, label: 'Mon equipe' });
+  }
+  accountItems.push({ to: '/profile', icon: UserCog, label: 'Mon profil' });
+  extraSections.push({ title: 'Compte', accent: 'slate', items: accountItems });
+
   return (
-    <div className="flex h-screen overflow-hidden bg-[#FAFAFA]">
+    <div className="flex flex-col h-screen overflow-hidden bg-[#FAFAFA]">
+      {/* Mobile drawer (< lg) : conserve l'ancien sidebar vertical */}
       {mobileOpen && <div className="fixed inset-0 bg-black/50 z-40 lg:hidden" onClick={() => setMobileOpen(false)} />}
-      <aside className={`fixed inset-y-0 left-0 z-50 bg-slate-950 transition-transform duration-200 lg:hidden ${mobileOpen ? 'translate-x-0' : '-translate-x-full'}`} style={{width: 256}}><SidebarContent /></aside>
-      <aside className="hidden lg:flex flex-col bg-slate-950 transition-all duration-200 flex-shrink-0" style={{width: collapsed ? 64 : 220}}>
+      <aside className={`fixed inset-y-0 left-0 z-50 bg-slate-950 transition-transform duration-200 lg:hidden ${mobileOpen ? 'translate-x-0' : '-translate-x-full'}`} style={{width: 256}}>
         <SidebarContent />
-        <button onClick={() => setCollapsed(!collapsed)} className="p-2 text-slate-400 hover:text-white transition-colors border-t border-slate-800 flex justify-center" data-testid="sidebar-toggle">
-          {collapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
-        </button>
       </aside>
-      <div className="flex-1 flex flex-col overflow-hidden">
-        <header className="bg-white border-b border-slate-200 sticky top-0 z-30 h-12 flex items-center px-4 lg:px-6 gap-3">
-          <Button variant="ghost" size="sm" className="lg:hidden" onClick={() => setMobileOpen(true)} data-testid="mobile-menu-btn"><Menu size={20} /></Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => { setSelectedCopro(''); navigate('/'); }}
-            className="h-8 px-2.5 text-[#0055FF] border-[#0055FF]/30 hover:bg-[#0055FF]/5 gap-1.5"
-            data-testid="back-to-home"
-            title="Retour a l'apercu de toutes les ACPs"
-          >
-            <Home size={14} />
-            <span className="hidden sm:inline text-xs font-medium">Retour ACPs</span>
-          </Button>
-          <Select value={selectedCopro} onValueChange={(v) => setSelectedCopro(v)}>
-            <SelectTrigger className="w-[220px] h-8 text-xs border-[#0055FF]/30" data-testid="copro-selector"><SelectValue /></SelectTrigger>
-            <SelectContent>{coproprietes.filter(c => c.status !== 'archived').map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}</SelectContent>
+
+      {/* Header (ACP selector + fiscal year + user) */}
+      <header className="bg-white border-b border-slate-200 sticky top-0 z-30 h-12 flex items-center px-4 lg:px-6 gap-3 flex-shrink-0">
+        <Button variant="ghost" size="sm" className="lg:hidden" onClick={() => setMobileOpen(true)} data-testid="mobile-menu-btn"><Menu size={20} /></Button>
+        <div className="hidden lg:flex items-center gap-2">
+          <div className="w-7 h-7 rounded bg-[#0055FF] flex items-center justify-center text-white font-bold text-[11px] flex-shrink-0">CP</div>
+          <span className="text-slate-900 font-bold text-sm tracking-tight" style={{fontFamily:'Chivo,sans-serif'}}>CoproManager</span>
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => { setSelectedCopro(''); navigate('/'); }}
+          className="h-8 px-2.5 text-[#0055FF] border-[#0055FF]/30 hover:bg-[#0055FF]/5 gap-1.5"
+          data-testid="back-to-home"
+          title="Retour a l'apercu de toutes les ACPs"
+        >
+          <Home size={14} />
+          <span className="hidden sm:inline text-xs font-medium">Retour ACPs</span>
+        </Button>
+        <Select value={selectedCopro} onValueChange={(v) => setSelectedCopro(v)}>
+          <SelectTrigger className="w-[220px] h-8 text-xs border-[#0055FF]/30" data-testid="copro-selector"><SelectValue /></SelectTrigger>
+          <SelectContent>{coproprietes.filter(c => c.status !== 'archived').map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}</SelectContent>
+        </Select>
+        {selectedCopro && fiscalYears && fiscalYears.length > 0 && (
+          <Select value={selectedFiscalYearId || '__all__'} onValueChange={(v) => setSelectedFiscalYearId(v === '__all__' ? '' : v)}>
+            <SelectTrigger className="w-[200px] h-8 text-xs border-emerald-300 bg-emerald-50/50 text-emerald-900" data-testid="fiscal-year-selector" title="Filtre par exercice comptable (applique a tous les ecrans)">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__all__" data-testid="fy-option-all">— Tous les exercices —</SelectItem>
+              {[...fiscalYears].sort((a, b) => (b.start_date || '').localeCompare(a.start_date || '')).map(y => (
+                <SelectItem key={y.id} value={y.id} data-testid={`fy-option-${y.id}`}>
+                  {y.name} {y.status === 'closed' ? '(cloture)' : ''}
+                </SelectItem>
+              ))}
+            </SelectContent>
           </Select>
-          {selectedCopro && fiscalYears && fiscalYears.length > 0 && (
-            <Select value={selectedFiscalYearId || '__all__'} onValueChange={(v) => setSelectedFiscalYearId(v === '__all__' ? '' : v)}>
-              <SelectTrigger className="w-[200px] h-8 text-xs border-emerald-300 bg-emerald-50/50 text-emerald-900" data-testid="fiscal-year-selector" title="Filtre par exercice comptable (applique a tous les ecrans)">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__all__" data-testid="fy-option-all">— Tous les exercices —</SelectItem>
-                {[...fiscalYears].sort((a, b) => (b.start_date || '').localeCompare(a.start_date || '')).map(y => (
-                  <SelectItem key={y.id} value={y.id} data-testid={`fy-option-${y.id}`}>
-                    {y.name} {y.status === 'closed' ? '(cloture)' : ''}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
-          <div className="flex-1" />
-          <SupportChatBubble />
-          <NavLink
-            to="/profile"
-            className="flex items-center gap-2 px-2 py-1 rounded hover:bg-slate-100 transition-colors group"
-            title="Mon profil"
-            data-testid="user-info-top"
+        )}
+        {selectedCoproData && (
+          <button
+            onClick={() => navigate(`/coproprietes?edit=${selectedCoproData.id}`)}
+            className="hidden md:inline-flex items-center gap-1 h-8 px-2 rounded text-slate-500 hover:text-[#0055FF] hover:bg-slate-100 text-xs"
+            title="Editer cette copropriete"
+            data-testid="header-edit-acp"
           >
-            <div className="w-7 h-7 rounded-full bg-gradient-to-br from-[#0055FF] to-[#0040CC] flex items-center justify-center text-xs font-semibold text-white">{(user?.name || 'U')[0].toUpperCase()}</div>
-            <div className="hidden md:flex flex-col items-start leading-tight">
-              <span className="text-xs font-semibold text-slate-800 group-hover:text-[#0055FF]" data-testid="user-name-display">{user?.name || 'Utilisateur'}</span>
-              <span className="text-[10px] text-slate-500">{getRoleLabel(user?.role)}</span>
-            </div>
-          </NavLink>
-        </header>
-        <main className="flex-1 overflow-auto p-4 lg:p-6"><div className="max-w-[1600px] mx-auto"><Outlet /></div>
-          <footer className="max-w-[1600px] mx-auto pt-6 pb-2 border-t border-slate-200 mt-6">
-            <div className="flex flex-wrap justify-center gap-x-3 gap-y-1 text-[10px] text-slate-400" data-testid="layout-legal-footer">
-              <a href="/legal/cgu" target="_blank" rel="noopener noreferrer" className="hover:text-[#0055FF] hover:underline">CGU</a>
-              <span>·</span>
-              <a href="/legal/privacy" target="_blank" rel="noopener noreferrer" className="hover:text-[#0055FF] hover:underline">Confidentialite</a>
-              <span>·</span>
-              <a href="/legal/mentions" target="_blank" rel="noopener noreferrer" className="hover:text-[#0055FF] hover:underline">Mentions Legales</a>
-              <span>·</span>
-              <a href="/legal/cookies" target="_blank" rel="noopener noreferrer" className="hover:text-[#0055FF] hover:underline">Cookies</a>
-              <span>·</span>
-              <a href="/legal/disclaimer" target="_blank" rel="noopener noreferrer" className="hover:text-[#0055FF] hover:underline">Disclaimer</a>
-            </div>
-          </footer>
-        </main>
-        <OnboardingDialog />
+            <Pencil size={13} />
+          </button>
+        )}
+        <div className="flex-1" />
+        <SupportChatBubble />
+        <button
+          onClick={handleLogout}
+          className="hidden md:inline-flex items-center gap-1 h-8 px-2 rounded text-slate-500 hover:text-red-500 hover:bg-red-50 text-xs"
+          data-testid="logout-btn"
+          title="Deconnexion"
+        >
+          <LogOut size={14} />
+        </button>
+        <NavLink
+          to="/profile"
+          className="flex items-center gap-2 px-2 py-1 rounded hover:bg-slate-100 transition-colors group"
+          title="Mon profil"
+          data-testid="user-info-top"
+        >
+          <div className="w-7 h-7 rounded-full bg-gradient-to-br from-[#0055FF] to-[#0040CC] flex items-center justify-center text-xs font-semibold text-white">{(user?.name || 'U')[0].toUpperCase()}</div>
+          <div className="hidden md:flex flex-col items-start leading-tight">
+            <span className="text-xs font-semibold text-slate-800 group-hover:text-[#0055FF]" data-testid="user-name-display">{user?.name || 'Utilisateur'}</span>
+            <span className="text-[10px] text-slate-500">{getRoleLabel(user?.role)}</span>
+          </div>
+        </NavLink>
+      </header>
+
+      {/* iter90bk : TopNav horizontal (desktop uniquement) */}
+      <div className="hidden lg:block">
+        <TopNav sections={sections} extraSections={extraSections} />
       </div>
+
+      <main className="flex-1 overflow-auto p-4 lg:p-6">
+        <div className="max-w-[1600px] mx-auto"><Outlet /></div>
+        <footer className="max-w-[1600px] mx-auto pt-6 pb-2 border-t border-slate-200 mt-6">
+          <div className="flex flex-wrap justify-center gap-x-3 gap-y-1 text-[10px] text-slate-400" data-testid="layout-legal-footer">
+            <a href="/legal/cgu" target="_blank" rel="noopener noreferrer" className="hover:text-[#0055FF] hover:underline">CGU</a>
+            <span>·</span>
+            <a href="/legal/privacy" target="_blank" rel="noopener noreferrer" className="hover:text-[#0055FF] hover:underline">Confidentialite</a>
+            <span>·</span>
+            <a href="/legal/mentions" target="_blank" rel="noopener noreferrer" className="hover:text-[#0055FF] hover:underline">Mentions Legales</a>
+            <span>·</span>
+            <a href="/legal/cookies" target="_blank" rel="noopener noreferrer" className="hover:text-[#0055FF] hover:underline">Cookies</a>
+            <span>·</span>
+            <a href="/legal/disclaimer" target="_blank" rel="noopener noreferrer" className="hover:text-[#0055FF] hover:underline">Disclaimer</a>
+          </div>
+        </footer>
+      </main>
+      <OnboardingDialog />
     </div>
   );
 }
