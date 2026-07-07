@@ -211,10 +211,11 @@ function SendActionDialog({
   const [template_id, setTemplateId] = useState('');
 
   useEffect(() => {
-    if (mailboxes.length && !from_mailbox) setFrom(mailboxes[0].address);
+    if (mailboxes.length && !from_mailbox) {
+      const def = mailboxes.find(b => b.default) || mailboxes[0];
+      setFrom(def.address);
+    }
   }, [mailboxes, from_mailbox]);
-
-  // Charger les templates a l'ouverture
   useEffect(() => {
     if (!open) return;
     api.get('/email-templates').then(r => setTemplates(r.data.templates || [])).catch(() => {});
@@ -377,7 +378,10 @@ function GenericComposer({ mailboxes }) {
   const [sending, setSending] = useState(false);
 
   useEffect(() => {
-    if (mailboxes.length && !from_mailbox) setFrom(mailboxes[0].address);
+    if (mailboxes.length && !from_mailbox) {
+      const def = mailboxes.find(b => b.default) || mailboxes[0];
+      setFrom(def.address);
+    }
   }, [mailboxes, from_mailbox]);
 
   const send = async () => {

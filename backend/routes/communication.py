@@ -153,10 +153,15 @@ def create_communication_router(db):
 
     @router.get("/mailboxes")
     async def list_mailboxes(request: Request):
-        """Liste les boites mail autorisees au niveau du cabinet (syndic parent)."""
+        """Liste les boites mail autorisees au niveau du cabinet (syndic parent).
+
+        La boite marquee `default: True` est renvoyee en premier (utilisee comme
+        expediteur par defaut dans l'UI). Si aucune boite n'est configuree, on
+        propose l'email du syndic lui-meme en fallback.
+        """
         _, scope_id = await _resolve_syndic_scope(db, request)
         scope_user = await _get_scope_user(db, scope_id)
-        boxes = scope_user.get("authorized_mailboxes") or []
+        boxes = [b for b in (scope_user.get("authorized_mailboxes") or []) if b.get("active", True)]
         # Fallback : si aucune boite configuree, proposer l'email du syndic lui-meme
         if not boxes and scope_user.get("email"):
             boxes = [{
@@ -165,7 +170,9 @@ def create_communication_router(db):
                 "active": True,
                 "default": True,
             }]
-        return {"mailboxes": [b for b in boxes if b.get("active", True)]}
+        # Sort : default en premier, puis alphabetique
+        boxes.sort(key=lambda b: (not b.get("default", False), b.get("address", "").lower()))
+        return {"mailboxes": boxes}
 
     @router.post("/mailboxes")
     async def add_mailbox(payload: MailboxAdd, request: Request):
