@@ -1606,10 +1606,13 @@ def create_properties_router(db):
             "total_transfer": mut.get("total_transfer", 0),
         }
 
+        from pdf_layout import resolve_syndic_pdf_context
+        syndic_pdf_ctx = await resolve_syndic_pdf_context(db, copro)
         pdf_bytes = build_mutation_decompte_pdf(
             copropriete=copro, lot=lot,
             seller=seller, buyer=buyer,
             mutation=mut, breakdown=breakdown,
+            syndic_pdf_ctx=syndic_pdf_ctx,
         )
 
         sale_date = (mut.get("date", "") or "").replace("-", "")

@@ -86,12 +86,24 @@ def build_situation_compte_pdf(
     opening_balance: float = 0.0,
     iban: str = "",
     bic: str = "",
+    syndic_pdf_ctx: dict = None,
 ) -> bytes:
+    """iter90av : `syndic_pdf_ctx` (optionnel) permet d'utiliser le nouveau
+    layout avec logo cabinet, adresse destinataire alignee pour fenetre C6
+    droite, et pied de page avec mentions legales."""
+    use_new_layout = bool(syndic_pdf_ctx and syndic_pdf_ctx.get("syndic_config"))
     buf = BytesIO()
+    from pdf_layout import (
+        build_header_with_logo, build_recipient_address_flowable,
+        make_footer_callback,
+    )
+    footer_cb = None
+    if use_new_layout:
+        footer_cb = make_footer_callback(syndic_pdf_ctx.get("legal_mentions", ""))
     doc = SimpleDocTemplate(
         buf, pagesize=A4,
         leftMargin=15 * mm, rightMargin=15 * mm,
-        topMargin=15 * mm, bottomMargin=18 * mm,
+        topMargin=15 * mm, bottomMargin=28 * mm if use_new_layout else 18 * mm,
         title=f"Situation de compte - {owner.get('name','')}",
     )
     styles = getSampleStyleSheet()
@@ -115,34 +127,45 @@ def build_situation_compte_pdf(
 
     elems = []
 
-    # ---- HEADER : 2 blocks (syndic / acp) ----
-    syndic_lines = _addr_block(
-        f"<b>{syndic_info.get('name','Syndic')}</b>",
-        [
-            syndic_info.get("address", ""),
-            f"{syndic_info.get('postal_code','')} {syndic_info.get('city','')}".strip(),
-            syndic_info.get("email", ""),
-            syndic_info.get("phone", ""),
-        ],
-    )
-    acp_lines = _addr_block(
-        f"<b>{copropriete.get('name','')}</b>",
-        [
-            copropriete.get("address", ""),
-            f"{copropriete.get('postal_code','')} {copropriete.get('city','')}".strip(),
-        ],
-    )
-    header_tbl = Table(
-        [[Paragraph(syndic_lines, small), Paragraph(acp_lines, small)]],
-        colWidths=[90 * mm, 90 * mm],
-    )
-    header_tbl.setStyle(TableStyle([
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 0),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
-    ]))
-    elems.append(header_tbl)
-    elems.append(Spacer(1, 8 * mm))
+    # ---- HEADER : logo + infos cabinet (nouveau layout iter90av) ----
+    if use_new_layout:
+        cabinet_info = syndic_pdf_ctx.get("syndic_config") or {}
+        elems.append(build_header_with_logo(
+            syndic_pdf_ctx.get("logo_bytes"), cabinet_info, small,
+        ))
+        elems.append(Spacer(1, 4 * mm))
+        # Bloc adresse destinataire alignee fenetre C6 droite
+        elems.append(build_recipient_address_flowable(owner, small))
+        elems.append(Spacer(1, 10 * mm))
+    else:
+        # ---- HEADER : 2 blocks (syndic / acp) - ancien layout ----
+        syndic_lines = _addr_block(
+            f"<b>{syndic_info.get('name','Syndic')}</b>",
+            [
+                syndic_info.get("address", ""),
+                f"{syndic_info.get('postal_code','')} {syndic_info.get('city','')}".strip(),
+                syndic_info.get("email", ""),
+                syndic_info.get("phone", ""),
+            ],
+        )
+        acp_lines = _addr_block(
+            f"<b>{copropriete.get('name','')}</b>",
+            [
+                copropriete.get("address", ""),
+                f"{copropriete.get('postal_code','')} {copropriete.get('city','')}".strip(),
+            ],
+        )
+        header_tbl = Table(
+            [[Paragraph(syndic_lines, small), Paragraph(acp_lines, small)]],
+            colWidths=[90 * mm, 90 * mm],
+        )
+        header_tbl.setStyle(TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 0),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+        ]))
+        elems.append(header_tbl)
+        elems.append(Spacer(1, 8 * mm))
 
     # ---- TITLE BIG ----
     elems.append(Paragraph("Situation de votre compte", title_style))
@@ -155,35 +178,36 @@ def build_situation_compte_pdf(
         elems.append(Paragraph(period_str, sub_style))
     elems.append(Spacer(1, 4 * mm))
 
-    # ---- DESTINATAIRE (clear address block) ----
-    owner_addr_lines = _addr_block(
-        f"<b>{owner.get('name','')}</b>",
-        [
-            owner.get("address", ""),
-            f"{owner.get('postal_code','')} {owner.get('city','')}".strip(),
-            owner.get("country", ""),
-        ],
-    )
-    info_lines = [
-        f"Edite le <b>{datetime.now().strftime('%d/%m/%Y')}</b>",
-        f"Reference communication : <font color='#0055FF'><b>{owner.get('vcs_code','')}</b></font>",
-    ]
-    info_block = Paragraph("<br/>".join(info_lines), small)
-    dest_tbl = Table(
-        [[Paragraph(owner_addr_lines, small), info_block]],
-        colWidths=[90 * mm, 90 * mm],
-    )
-    dest_tbl.setStyle(TableStyle([
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F8FAFC")),
-        ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#E2E8F0")),
-        ("LEFTPADDING", (0, 0), (-1, -1), 10),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 10),
-        ("TOPPADDING", (0, 0), (-1, -1), 10),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
-    ]))
-    elems.append(dest_tbl)
-    elems.append(Spacer(1, 8 * mm))
+    # ---- DESTINATAIRE (skip if new layout - deja affiche en haut pour C6) ----
+    if not use_new_layout:
+        owner_addr_lines = _addr_block(
+            f"<b>{owner.get('name','')}</b>",
+            [
+                owner.get("address", ""),
+                f"{owner.get('postal_code','')} {owner.get('city','')}".strip(),
+                owner.get("country", ""),
+            ],
+        )
+        info_lines = [
+            f"Edite le <b>{datetime.now().strftime('%d/%m/%Y')}</b>",
+            f"Reference communication : <font color='#0055FF'><b>{owner.get('vcs_code','')}</b></font>",
+        ]
+        info_block = Paragraph("<br/>".join(info_lines), small)
+        dest_tbl = Table(
+            [[Paragraph(owner_addr_lines, small), info_block]],
+            colWidths=[90 * mm, 90 * mm],
+        )
+        dest_tbl.setStyle(TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F8FAFC")),
+            ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#E2E8F0")),
+            ("LEFTPADDING", (0, 0), (-1, -1), 10),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+            ("TOPPADDING", (0, 0), (-1, -1), 10),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
+        ]))
+        elems.append(dest_tbl)
+        elems.append(Spacer(1, 8 * mm))
 
     # ---- COMPUTE TOTALS FIRST (for highlighted summary card) ----
     running = float(opening_balance or 0.0)
@@ -375,5 +399,8 @@ def build_situation_compte_pdf(
         small,
     ))
 
-    doc.build(elems)
+    if footer_cb:
+        doc.build(elems, onFirstPage=footer_cb, onLaterPages=footer_cb)
+    else:
+        doc.build(elems)
     return buf.getvalue()

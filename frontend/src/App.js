@@ -33,6 +33,8 @@ import AdminDuplicatesPage from "@/pages/AdminDuplicatesPage";
 import TeamMembersPage from "@/pages/TeamMembersPage";
 import ProfilePage from "@/pages/ProfilePage";
 import CommunicationPage from "@/pages/CommunicationPage";
+import AdminSyndicConfigPage from "@/pages/AdminSyndicConfigPage";
+import SyndicOnboardingWizard from "@/pages/SyndicOnboardingWizard";
 import CoproprietesPage from "@/pages/CoproprietesPage";
 import OwnerPortalPage from "@/pages/OwnerPortalPage";
 import RemindersPage from "@/pages/RemindersPage";
@@ -102,6 +104,7 @@ function AppRoutes() {
         <Route path="admin/duplicates" element={<AdminDuplicatesPage />} />
         <Route path="team" element={<TeamMembersPage />} />
         <Route path="communication" element={<CommunicationPage />} />
+        <Route path="admin/syndic-config" element={<AdminSyndicConfigPage />} />
         <Route path="profile" element={<ProfilePage />} />
       </Route>
     </Routes>
@@ -113,6 +116,7 @@ function App() {
     <BrowserRouter>
       <AuthProvider>
         <AppRoutes />
+        <SyndicOnboardingWizard />
         <LegalAcceptanceModal />
         <CookieBanner />
         <Toaster position="top-right" />

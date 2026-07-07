@@ -54,6 +54,7 @@ def build_mutation_decompte_pdf(
     *, copropriete: dict, lot: dict,
     seller: dict, buyer: dict,
     mutation: dict, breakdown: dict,
+    syndic_pdf_ctx: dict = None,
 ) -> bytes:
     """Genere le PDF Decompte de mutation.
 
@@ -65,12 +66,18 @@ def build_mutation_decompte_pdf(
         mutation: dict mutation_record (date, sale_price, total_transfer, etc.)
         breakdown: dict resultat de `_compute_mutation_breakdown` (roulement_quota,
                    current_period_details, future_calls, ...)
+        syndic_pdf_ctx: iter90av - contexte cabinet (logo + mentions legales)
     """
+    use_new_layout = bool(syndic_pdf_ctx and syndic_pdf_ctx.get("syndic_config"))
+    from pdf_layout import (
+        build_header_with_logo, build_recipient_address_flowable,
+        make_footer_callback,
+    )
     buf = BytesIO()
     doc = SimpleDocTemplate(
         buf, pagesize=A4,
         leftMargin=18 * mm, rightMargin=18 * mm,
-        topMargin=20 * mm, bottomMargin=18 * mm,
+        topMargin=20 * mm, bottomMargin=28 * mm if use_new_layout else 18 * mm,
         title=f"Decompte de mutation - Lot {lot.get('number','')}",
     )
     styles = getSampleStyleSheet()
@@ -91,6 +98,17 @@ def build_mutation_decompte_pdf(
                             backColor=AMBER_BG, borderPadding=6, leading=10)
 
     elements = []
+
+    # ----- HEADER : logo + adresse destinataire (nouveau layout iter90av) -----
+    # Destinataire mutation = acquereur (buyer) pour envoi postal
+    if use_new_layout:
+        cabinet_info = syndic_pdf_ctx.get("syndic_config") or {}
+        elements.append(build_header_with_logo(
+            syndic_pdf_ctx.get("logo_bytes"), cabinet_info, small,
+        ))
+        elements.append(Spacer(1, 4 * mm))
+        elements.append(build_recipient_address_flowable(buyer, small))
+        elements.append(Spacer(1, 6 * mm))
 
     # ----- HEADER -----
     sale_date = mutation.get("date", "")
@@ -428,7 +446,11 @@ def build_mutation_decompte_pdf(
         ),
     ]))
 
-    doc.build(elements)
+    if use_new_layout:
+        footer_cb = make_footer_callback(syndic_pdf_ctx.get("legal_mentions", ""))
+        doc.build(elements, onFirstPage=footer_cb, onLaterPages=footer_cb)
+    else:
+        doc.build(elements)
     pdf_bytes = buf.getvalue()
     buf.close()
     return pdf_bytes

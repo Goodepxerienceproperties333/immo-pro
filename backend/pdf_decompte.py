@@ -67,17 +67,23 @@ def build_decompte_pdf(
     payments: list,
     expense_accounts_map: dict = None,
     preview: bool = False,
+    syndic_pdf_ctx: dict = None,
 ) -> bytes:
     """Genere le PDF Decompte annuel pour un proprietaire.
 
     Si `preview=True`, un filigrane diagonal "APERCU - NON DEFINITIF" est
     superpose sur chaque page (couleur rouge transparente, en travers).
+
+    iter90av : `syndic_pdf_ctx` (optionnel) active le nouveau layout avec logo
+    cabinet + adresse destinataire fenetre C6 droite + mentions legales footer.
     """
+    use_new_layout = bool(syndic_pdf_ctx and syndic_pdf_ctx.get("syndic_config"))
+    from pdf_layout import build_header_with_logo, build_recipient_address_flowable, draw_legal_footer
     buf = BytesIO()
     doc = SimpleDocTemplate(
         buf, pagesize=A4,
         leftMargin=15 * mm, rightMargin=15 * mm,
-        topMargin=15 * mm, bottomMargin=18 * mm,
+        topMargin=15 * mm, bottomMargin=28 * mm if use_new_layout else 18 * mm,
         title=f"Decompte annuel - {owner.get('name','')} - {fiscal_year.get('name','')}"
               + (" (APERCU)" if preview else ""),
     )
@@ -103,7 +109,17 @@ def build_decompte_pdf(
 
     elems = []
 
-    # ---- HEADER : ACP block ----
+    # ---- HEADER : logo + cabinet (nouveau layout iter90av) ----
+    if use_new_layout:
+        cabinet_info = syndic_pdf_ctx.get("syndic_config") or {}
+        elems.append(build_header_with_logo(
+            syndic_pdf_ctx.get("logo_bytes"), cabinet_info, small,
+        ))
+        elems.append(Spacer(1, 4 * mm))
+        elems.append(build_recipient_address_flowable(owner, small))
+        elems.append(Spacer(1, 8 * mm))
+
+    # ---- HEADER : ACP block (toujours affiche, en dessous du logo si new layout) ----
     acp_lines = _addr_block(
         f"<b>{copropriete.get('name','')}</b>",
         [
@@ -951,8 +967,13 @@ def build_decompte_pdf(
         small,
     ))
 
-    doc.build(elems, onFirstPage=_make_watermark(preview),
-              onLaterPages=_make_watermark(preview))
+    def _combined_cb(canvas, doc):
+        # Watermark preview
+        _make_watermark(preview)(canvas, doc)
+        # Footer legal si new layout
+        if use_new_layout:
+            draw_legal_footer(canvas, doc, syndic_pdf_ctx.get("legal_mentions", ""))
+    doc.build(elems, onFirstPage=_combined_cb, onLaterPages=_combined_cb)
     buf.seek(0)
     return buf.read()
 

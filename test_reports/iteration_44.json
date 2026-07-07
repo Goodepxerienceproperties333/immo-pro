@@ -1,0 +1,31 @@
+{
+  "summary": "iter90av backend + frontend testing done. All 8 pytest cases in test_iter90av_syndic_config.py PASS (crypto roundtrip, syndic self config GET/PUT, manager inherits parent config, encrypted secret storage with enc:v1: prefix + masked in GET, complete-onboarding validation 400/200, test-email 400/500 fallback, admin list+edit+403 for gestionnaire, logo upload PNG->GridFS + GET bytes). Auth guards verified: /api/syndic-config/me and /api/admin/syndic-config/list return 401 without auth. Finlead Properties preseeded correctly (legal_name='Finlead Properties', email=welcome@goodexperienceproperties.be) visible in admin list. PDF e2e regression: GET /api/reports/situation-compte/{owner_id}/pdf?copropriete_id=X returns valid PDF (bytes start with %PDF, 2815 bytes). Frontend /admin/syndic-config loads, shows 4 syndics with badges (Logo/Onboarding/Config email), Editer opens dialog-syndic-detail pre-filled with legal_name/email; all admin-* testids present. SyndicOnboardingWizard renders automatically for fresh syndic (onboarding-wizard visible + 5 step indicators + onboarding-input-logo + onboarding-btn-next detected).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "First-login onboarding", "issue": "Sur un nouveau syndic, deux modaux se superposent apres acceptation CGU/RGPD: le 'Bienvenue sur CoproManager' welcome tour (Etape 1/6) apparait par-dessus le SyndicOnboardingWizard (Bienvenue ! Configurez votre cabinet syndic). Le SyndicOnboardingWizard est bien monte (data-testid=onboarding-wizard, 5 step indicators, tous les champs step1 presents) mais l'utilisateur doit fermer/traverser le welcome tour avant de pouvoir interagir avec le wizard cabinet.", "affected_selectors": ["onboarding-wizard", "onboarding-btn-next"]}
+    ],
+    "design_issues": [
+      {"screen": "AdminSyndicConfigPage dialog", "issues": ["DialogContent sans DialogTitle -> warning a11y console (deja present avant iter90av mais l'edit dialog l'aggrave)"]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_iter90av_syndic_config.py", "/app/test_reports/pytest/iter90av.xml"],
+  "action_items": [
+    "Coordonner l'affichage entre welcome tour (Bienvenue sur CoproManager) et SyndicOnboardingWizard: soit skip le welcome tour quand role=syndic + onboarding_completed=false, soit rendre le wizard cabinet apres cloture du tour.",
+    "Ajouter un DialogTitle (ou VisuallyHidden) dans AdminSyndicConfigPage dialog pour supprimer le warning a11y."
+  ],
+  "critical_code_review_comments": [
+    "Bon : secrets client_secret/smtp_password prefixes enc:v1: en base et masques ****** en GET.",
+    "Bon : resolve_syndic_user_id gere heritage parent_syndic_id pour les gestionnaires.",
+    "Bon : PDF fallback ancien layout si syndic_config vide, evite regression sur admin/tests."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100%", "frontend": "90%"},
+  "test_credentials": "admin@copro.be / admin123 (superadmin)",
+  "seed_data_creation": "Un utilisateur syndic temporaire (wiz-test-0cc8fc@t.be) a ete cree pour tester l'ouverture automatique du wizard puis supprime.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "iter90av verifie backend+frontend. Le SyndicOnboardingWizard existe et se declenche pour role=syndic + onboarding_completed=false. Attention: sur un compte fraichement cree, il faut d'abord accepter CGU/RGPD puis un welcome tour 'Bienvenue sur CoproManager' apparait ET couvre le SyndicOnboardingWizard - c'est une UX a arbitrer par le main agent. Le PDF avec syndic_pdf_ctx=None (fallback) marche - pour tester le layout avec logo, il faut un syndic ayant upload un logo + une copro dont le syndic est celui-la (pas admin).",
+  "rca of the issue": "Deux composants d'onboarding independants sont montes en meme temps dans App.js (welcome tour existant + SyndicOnboardingWizard nouveau). Le welcome tour a un z-index plus eleve. Solution : conditionner l'un a l'absence de l'autre."
+}

@@ -131,6 +131,23 @@ export function AuthProvider({ children }) {
   const isAdmin = user && (user.role === 'superadmin' || user.role === 'admin' || user.role === 'syndic');
   const isManager = user && (user.role === 'superadmin' || user.role === 'admin' || user.role === 'syndic' || user.role === 'gestionnaire');
   const isOwner = user && user.role === 'owner';
+  const isSyndic = user && user.role === 'syndic';
+
+  // iter90av : recupere la config syndic pour connaitre l'etat de l'onboarding
+  const [syndicConfig, setSyndicConfig] = useState(null);
+  const refreshSyndicConfig = useCallback(async () => {
+    if (!user || !['syndic', 'gestionnaire', 'admin', 'superadmin'].includes(user.role)) {
+      setSyndicConfig(null);
+      return;
+    }
+    try {
+      const { data } = await axios.get(`${API}/api/syndic-config/me`, { withCredentials: true });
+      setSyndicConfig(data);
+    } catch {
+      setSyndicConfig(null);
+    }
+  }, [user]);
+  useEffect(() => { refreshSyndicConfig(); }, [refreshSyndicConfig]);
 
   return (
     <AuthContext.Provider value={{
@@ -138,7 +155,8 @@ export function AuthProvider({ children }) {
       refreshUser: checkAuth,
       selectedCopro, setSelectedCopro,
       fiscalYears, selectedFiscalYearId, setSelectedFiscalYearId, selectedFiscalYear,
-      isAdmin, isSuperadmin, isManager, isOwner,
+      isAdmin, isSuperadmin, isManager, isOwner, isSyndic,
+      syndicConfig, refreshSyndicConfig,
     }}>
       {children}
     </AuthContext.Provider>

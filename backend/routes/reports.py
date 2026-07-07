@@ -44,6 +44,7 @@ async def _build_situation_compte_pdf(db, owner_id, copropriete_id, start_date=N
     de compte + le nom de fichier. Utilise par le download endpoint et par le
     communication router (/api/communication/send/situation)."""
     from pdf_situation_compte import build_situation_compte_pdf
+    from pdf_layout import resolve_syndic_pdf_context
 
     owner = await db.owners.find_one({"id": owner_id}, {"_id": 0})
     if not owner:
@@ -149,6 +150,8 @@ async def _build_situation_compte_pdf(db, owner_id, copropriete_id, start_date=N
 
     owner_view = {**owner, "account_provisions": acc_prov, "account_reserve": acc_res}
 
+    syndic_pdf_ctx = await resolve_syndic_pdf_context(db, copro)
+
     pdf_bytes = build_situation_compte_pdf(
         syndic_info=syndic_info,
         copropriete=copro,
@@ -159,6 +162,7 @@ async def _build_situation_compte_pdf(db, owner_id, copropriete_id, start_date=N
         opening_balance=opening,
         iban=iban,
         bic=bic,
+        syndic_pdf_ctx=syndic_pdf_ctx,
     )
     safe_name = (owner.get("name", "owner") or "owner").replace(" ", "_").replace("/", "_")
     suffix = end_date or datetime.now(timezone.utc).date().isoformat()
@@ -172,6 +176,7 @@ async def _build_decompte_annuel_pdf(db, owner_id, copropriete_id, fiscal_year_i
     communication router. `preview=True` par defaut pour permettre l'envoi meme
     si l'exercice n'est pas cloture (le PDF sera alors marque "APERCU")."""
     from pdf_decompte import build_decompte_pdf
+    from pdf_layout import resolve_syndic_pdf_context
 
     owner = await db.owners.find_one({"id": owner_id}, {"_id": 0})
     if not owner:
@@ -254,6 +259,7 @@ async def _build_decompte_annuel_pdf(db, owner_id, copropriete_id, fiscal_year_i
         fund_calls=fund_calls, payments=payments,
         expense_accounts_map=nature_map,
         preview=preview,
+        syndic_pdf_ctx=await resolve_syndic_pdf_context(db, copro),
     )
     safe_name = (owner.get("name", "owner") or "owner").replace(" ", "_").replace("/", "_")
     fy_name = (fy.get("name", "") or "").replace(" ", "_")

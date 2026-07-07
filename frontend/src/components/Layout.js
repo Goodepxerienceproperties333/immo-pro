@@ -112,6 +112,10 @@ export default function Layout() {
             className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''} ${collapsed ? 'justify-center px-2' : ''}`}
             data-testid="adm-nav-rgpd-register"
           ><FileArchive size={16} strokeWidth={1.5} />{!collapsed && <span className="text-[13px]">Registre RGPD</span>}</NavLink>
+          <NavLink to="/admin/syndic-config" onClick={() => setMobileOpen(false)}
+            className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''} ${collapsed ? 'justify-center px-2' : ''}`}
+            data-testid="adm-nav-syndic-config"
+          ><Building2 size={16} strokeWidth={1.5} />{!collapsed && <span className="text-[13px]">Config cabinets syndics</span>}</NavLink>
         </div>
       </ScrollArea>
       {/* Bottom: switch to syndic mode */}
