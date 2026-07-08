@@ -12,6 +12,65 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 ### Iter90bx (Feb 2026) - Contre-passation traceable des ecritures comptables (BLOQUANT LEGAL)
+### Iter90cb (Feb 2026) - Fix distribution appel avec lots orphelins (bug 3.6% Matexi)
+
+**Ticket utilisateur (ACP Acacia)** : Balance de tiers Matexi affichait Reserve
+1446 EUR et Roulement 5012.80 EUR alors que le budget prevoyait 1500 EUR et
+5200 EUR. Ecart exact de 3.6% sur les deux fonds - meme quand Matexi possedait
+100% des lots avec owner.
+
+**Cause racine identifiee** : bug asymetrique dans `fund_calls.py::_distribute_amount`
+lignes 620-640 (branche "avec cle de distribution") :
+- `total_shares` (denominateur) etait calcule sur TOUS les lots actifs de la cle
+- Boucle de distribution skip les lots sans owner_id
+- Resultat : `sum(amounts_distribues) = amount * (shares_avec_owner / total_shares) < amount`
+- Les shares des lots orphelins etaient perdues (jamais creditees a personne)
+
+**Verification numerique** : 1500 * 0.964 = 1446 EUR et 5200 * 0.964 = 5012.80 EUR
+=> ratio identique de 96.4% sur les deux fonds prouve que 3.6% des shares de la
+cle "Charges communes" pointaient vers des lots sans owner_id.
+
+**Impact avant fix** :
+- Compte 160 (Fonds de reserve) sous-alimente de 54 EUR/an
+- Compte 100 (Fonds de roulement) sous-alimente de 187.20 EUR/an
+- Sur 10 ans : ecart cumule 540 + 1872 = 2412 EUR pour l'ACP Acacia
+- Comportement asymetrique : la branche fallback quotity (ligne 642) etait deja
+  correcte car elle filtrait `if lt.get("owner_id")` AVANT le calcul du total.
+
+**Fix (option A validee par user)** :
+```python
+lots_by_id = {lt["id"]: lt for lt in lots}
+owned_kls = [
+    kle for kle in key.get("lots", [])
+    if not kle.get("excluded")
+    and lots_by_id.get(kle.get("lot_id"), {}).get("owner_id")
+]
+total_shares = sum(kle["share"] for kle in owned_kls)  # <- filtre AVANT total
+```
+Effet : les shares orphelines sont redistribuees proportionnellement sur les
+proprietaires actuels. La somme des amounts distribues == amount du budget.
+
+**Comportement post-fix** :
+- Matexi (seul owner) recoit 1500 EUR de reserve (au lieu de 1446)
+- Compte 160 accumule bien 1500 EUR/an conformement au budget
+- Balance de tiers Matexi affichera 1500.00 EUR au lieu de 1446.00
+
+**IMPORTANT - appels DEJA GENERES en PROD** : ce fix ne modifie PAS les fund_calls
+existants en base. L'utilisateur doit soit :
+  1. Supprimer + regenerer les appels affectes (les contre-passations preservent
+     l'audit trail via iter90bx)
+  2. OU attendre le prochain exercice fiscal (nouveaux appels utiliseront le fix)
+
+**Tests** (`test_iter90cb_orphan_lot_shares.py` 3/3) :
+- test_iter90cb_orphan_lot_shares_are_redistributed_to_matexi : scenario reel
+  Matexi 9 lots + 1 orphelin 3.6% => Matexi recoit 100% (1500 EUR)
+- test_iter90cb_no_orphans_regression : sans orphelin, comportement inchange
+- test_iter90cb_multi_owners_orphan_lot : 2 owners 50/50 + 1 orphelin 20%
+  chacun recoit 500 EUR (redistribution proportionnelle)
+
+**Regression** : 12/12 tests critiques passent (iter90ac, ah, ai, aj, w).
+
+
 ### Iter90bz (Feb 2026) - Agregation des mutations lot dans la situation de compte
 
 **Ticket utilisateur** : "Le rapport affiche des lignes separees pour 'mutations par

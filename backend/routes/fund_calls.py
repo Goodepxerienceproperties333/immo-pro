@@ -615,16 +615,28 @@ def create_fund_calls_router(db):
             owner_id, owner_name, vcs_code, amount, share}. Plusieurs entrees
             peuvent partager le meme owner si l'owner a plusieurs lots, ce qui
             permet la cascade parent/enfant cote frontend.
+
+            iter90cb : les lots sans owner (orphelins) sont EXCLUS du calcul du
+            denominateur `total_shares`. Leurs shares sont ainsi redistribuees
+            proportionnellement sur les proprietaires actuels. Cela garantit que
+            la somme des amounts distribues == amount (bug 3.6% Matexi).
             """
             entries: list = []
             if key_id and key_id in keys_map:
                 key = keys_map[key_id]
                 # iter90ac : exclut les lots marques excluded=True
-                active_kls = [kle for kle in key.get("lots", []) if not kle.get("excluded")]
-                total_shares = sum(kle["share"] for kle in active_kls)
-                for kl in active_kls:
-                    lot = next((lt for lt in lots if lt["id"] == kl["lot_id"]), None)
-                    if not lot or not lot.get("owner_id"):
+                # iter90cb : exclut aussi les lots orphelins (sans owner_id)
+                # pour eviter la perte de valeur sur les shares non attribuables.
+                lots_by_id = {lt["id"]: lt for lt in lots}
+                owned_kls = [
+                    kle for kle in key.get("lots", [])
+                    if not kle.get("excluded")
+                    and lots_by_id.get(kle.get("lot_id"), {}).get("owner_id")
+                ]
+                total_shares = sum(kle["share"] for kle in owned_kls)
+                for kl in owned_kls:
+                    lot = lots_by_id.get(kl.get("lot_id"))
+                    if not lot:
                         continue
                     owner = owners_map.get(lot["owner_id"]) or {}
                     share_ratio = kl["share"] / total_shares if total_shares > 0 else 0
