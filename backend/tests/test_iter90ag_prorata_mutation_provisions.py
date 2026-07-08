@@ -129,36 +129,34 @@ async def _preview_calls(ctx, frequency: int):
 
 
 async def _scenario_prorata_mutation_mid_q1():
-    """Mutation le 2026-03-15 (Q1: 01-01 -> 31-03, 90 jours).
-    Attendu : V=73/90*900=730.00, A=17/90*900=170.00 sur Q1.
-    Q2/Q3/Q4 : 100% A."""
+    """iter90cd : mutation le 2026-03-15 pendant la periode Q1 (01-01 -> 31-03).
+    Nouvelle regle metier belge : l'appel emis le 01-01 (AVANT la mutation) est
+    entierement impute au proprietaire a la DATE D'EMISSION (le Vendeur).
+    Aucune ventilation entre vendeur et acquereur n'est effectuee au niveau de
+    l'appel. La repartition prorata temporis est realisee SEPAREMENT par l'OD
+    "Mutation Prorata" lors de la mutation (properties.py) - non testee ici.
+
+    Q2/Q3/Q4 : emis apres la mutation -> 100% Acheteur.
+    """
     ctx = await _setup("iter90ag_mid_q1", mutation_date="2026-03-15")
     try:
         result = await _preview_calls(ctx, frequency=4)  # Trimestriel
         calls = result if isinstance(result, list) else result.get("calls", [])
         assert len(calls) == 4, f"Attendu 4 appels, obtenu {len(calls)}"
 
-        # Q1 (index 0) : split V/A
+        # Q1 emis 01-01 (avant mutation 15-03) -> 100% Vendeur
         q1 = calls[0]
         assert q1["date"] == "2026-01-01"
         assert q1["period_end"] == "2026-03-31"
-        # Total lot Q1 = 3600/4 = 900
         q1_entries = q1["distribution"]
-        # On doit avoir 2 entries : V et A pour ce meme lot
         by_owner = {e["owner_id"]: e for e in q1_entries}
-        assert ctx["v"] in by_owner, f"Vendeur absent: {q1_entries}"
-        assert ctx["a"] in by_owner, f"Acheteur absent: {q1_entries}"
-        # 90 jours au total, mutation le 15-03 :
-        # V = 01-01 -> 14-03 = 73 jours (janv 31 + fev 28 + mars 14)
-        # A = 15-03 -> 31-03 = 17 jours
-        assert by_owner[ctx["v"]]["amount"] == 730.00, by_owner
-        assert by_owner[ctx["a"]]["amount"] == 170.00, by_owner
-        assert by_owner[ctx["v"]]["prorata_days"] == 73
-        assert by_owner[ctx["a"]]["prorata_days"] == 17
-        # Cumul = 900
-        assert round(by_owner[ctx["v"]]["amount"] + by_owner[ctx["a"]]["amount"], 2) == 900.00
+        assert ctx["v"] in by_owner, f"Vendeur present (100%): {q1_entries}"
+        assert ctx["a"] not in by_owner, (
+            f"Acheteur ABSENT en Q1 (nouvelle regle iter90cd) : {q1_entries}"
+        )
+        assert by_owner[ctx["v"]]["amount"] == 900.00, by_owner
 
-        # Q2 (index 1) : mutation avant Q2, 100% Acheteur
+        # Q2 emis 01-04 (apres mutation) -> 100% Acheteur
         q2 = calls[1]
         by_owner_q2 = {e["owner_id"]: e for e in q2["distribution"]}
         assert ctx["v"] not in by_owner_q2, "Vendeur ne doit plus apparaitre en Q2"

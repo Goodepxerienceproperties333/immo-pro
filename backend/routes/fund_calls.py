@@ -823,13 +823,15 @@ def create_fund_calls_router(db):
                 if abs(bl_per_call) < 0.01:
                     continue
                 line_dist = _distribute_amount(bl_per_call, bl.get("distribution_key_id", ""))
-                # iter90ag : split prorata mutation sur la periode [call_date, period_end]
-                # Ne s'applique QUE aux provisions (pas reserve/roulement).
-                line_dist = [
-                    split
-                    for e in line_dist
-                    for split in _split_lot_entry_by_mutations(e, call_date, period_end)
-                ]
+                # iter90cd : PLUS DE SPLIT prorata dans l'appel lui-meme (regle
+                # metier belge : "Aucune ventilation entre vendeur et acquereur
+                # n'est effectuee pour cet appel"). On reaffecte simplement chaque
+                # entree au proprietaire qui detenait le lot a la DATE d'emission
+                # de l'appel. La repartition prorata temporis vendeur/acheteur est
+                # gere par l'OD "Mutation Prorata" (properties.py::_apply_mutation_writes)
+                # de facon SEPAREE, evitant tout double-comptage lors d'une
+                # regeneration apres mutation.
+                line_dist = _rebind_owner_at_call_date(line_dist, call_date)
                 line_details.append({
                     "account_number": bl.get("account_number", ""),
                     "account_name": bl.get("account_name", ""),

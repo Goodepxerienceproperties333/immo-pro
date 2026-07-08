@@ -12,6 +12,66 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 ### Iter90bx (Feb 2026) - Contre-passation traceable des ecritures comptables (BLOQUANT LEGAL)
+### Iter90cd (Feb 2026) - Fix regeneration appels apres mutation (double-comptage prorata)
+
+**Ticket utilisateur** : "le systeme fonctionne correctement lors de la generation
+initiale (appels a Matexi) + mutation (OD prorata correcte). Le bug est que si
+les appels sont supprimes et relances par la suite, tu ne realises pas les memes
+calculs. Il faut appliquer la meme regle de calcul que pour les mutations apres
+appels."
+
+**Regle metier belge (spec complete)** :
+1. Appels emis AVANT mutation -> integralement impute au vendeur (100%).
+2. Appels emis APRES mutation -> integralement impute a l'acquereur (100%).
+3. Modifications d'appels en cours d'exercice -> memes proprietaires que
+   l'appel initial (owner-at-date).
+4. **Aucune ventilation entre vendeur et acquereur au niveau de l'appel lui-meme.**
+   Le prorata temporis est realise SEPAREMENT par l'OD "Mutation Prorata"
+   (properties.py::_apply_mutation_writes).
+
+**Bug racine identifie** : `_split_lot_entry_by_mutations` (iter90ag) splittait
+l'appel prorata temporis entre vendeur/acquereur lors de la generation. Combine
+avec l'OD Mutation Prorata (manually_edited=True, non contre-passee), cela
+creait un DOUBLE-COMPTAGE lors d'une suppression + regeneration :
+- Suppression VE original -> contre-passation (matexi credite 400)
+- Regeneration VE -> split matexi 200 / buyer 200 (mauvais)
+- OD Mutation Prorata inchangee (credit matexi 200, debit buyer 200)
+- Balance finale INCORRECTE : matexi 0 (attendu 200), buyer 400 (attendu 200)
+
+**Fix (line 825 fund_calls.py)** : remplace `_split_lot_entry_by_mutations` par
+`_rebind_owner_at_call_date` pour les budget lines. La fonction
+`_rebind_owner_at_call_date` (deja utilisee pour reserve/roulement depuis
+iter90aj) affecte simplement chaque entree au proprietaire a la date d'emission
+de l'appel, SANS split. La fonction `_split_lot_entry_by_mutations` (~110L)
+n'est plus appelee (dead code, conservee temporairement pour rollback).
+
+**Comportement post-fix** :
+- Appel emis avant mutation -> 100% vendeur ✓
+- Appel emis apres mutation -> 100% acquereur ✓
+- OD Mutation Prorata inchangee (gere le transfert prorata temporis independamment)
+- Plus de double-comptage lors d'une regeneration
+- Reserve/roulement inchanges (utilisent deja _rebind depuis iter90aj)
+
+**Tests** (`test_iter90cd_regenerate_after_mutation.py` 3/3) :
+1. `test_iter90cd_regenerate_appel_before_mutation_stays_on_seller` : scenario
+   Matexi exact - Q4 emis 01/10, mutation 15/11, apres regeneration : Q4 100%
+   Matexi, buyer 0. Verifie que le buyer n'apparait JAMAIS dans la distribution
+   des appels emis AVANT sa mutation.
+2. `test_iter90cd_appel_after_mutation_goes_to_buyer` : appels emis en 2026
+   apres mutation 15/11/2025 -> 100% buyer.
+3. `test_iter90cd_no_mutation_uses_current_owner` : regression, sans mutation
+   le comportement standard s'applique.
+
+**Regression** : `test_iter90ag_prorata_mutation_mid_q1` mis a jour pour refleter
+la nouvelle regle (Q1 emis avant mutation -> 100% vendeur au lieu du split V/A).
+Iter90aj/ah/ai/cb/cc/bx/af : 22/22 tests critiques passent.
+
+**⚠️ Impact PROD sur donnees existantes** : les fund_calls DEJA generes avant ce
+fix (avec l'ancien split) restent inchangees. Le fix s'applique aux nouvelles
+generations. Pour reregler l'anomalie sur Acacia : redeployer + regenerer les
+appels concernes (contre-passation preserve l'audit iter90bx).
+
+
 ### Iter90cc (Feb 2026) - Preflight check lots orphelins avant emission d'appels
 
 **Contexte** : suite au bug iter90cb, ajout d'une verification pre-emission pour
