@@ -31,8 +31,119 @@ async def _delete_auto_entries(db, source_type: str, source_id: str, reason: str
 
 
 def _balanced(lines: list) -> bool:
-    return abs(sum(l.get("debit", 0) for l in lines)
-               - sum(l.get("credit", 0) for l in lines)) < 0.01
+    return abs(sum(ln.get("debit", 0) for ln in lines)
+               - sum(ln.get("credit", 0) for ln in lines)) < 0.01
+
+
+async def _resolve_or_create_supplier_account(db, supplier_name: str, copro_id: str) -> tuple[str, dict | None]:
+    """iter90by : extrait de generate_purchase_entry pour reduire la complexite.
+
+    Retourne (supplier_acc, supplier_doc). Regle Chinese walls STRICT :
+    - Match par nom (regex insensible)
+    - Si aucun fournisseur en base, cree un fiche fournisseur auto (auto_created)
+      pour eviter tout fallback vers le compte maitre 440000 qui fuiterait les
+      donnees entre ACPs.
+    - Si supplier_name est vide, cree un compte ACP-scoped "Fournisseur divers"
+      44000XXX. JAMAIS 440000.
+    """
+    supplier_acc = ""
+    supplier_doc = None
+    if supplier_name:
+        import re
+        import uuid as _uuid
+        from datetime import datetime, timezone
+        supplier_doc = await db.suppliers.find_one(
+            {"name": {"$regex": f"^{re.escape(supplier_name)}$", "$options": "i"}}, {"_id": 0}
+        )
+        if not supplier_doc:
+            supplier_doc = {
+                "id": str(_uuid.uuid4()),
+                "name": supplier_name,
+                "tier_accounts": {},
+                "auto_created": True,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            await db.suppliers.insert_one(dict(supplier_doc))
+        supplier_doc = await assign_supplier_account(db, supplier_doc, copro_id)
+        supplier_acc = get_supplier_account(supplier_doc, copro_id)
+    if not supplier_acc:
+        from tier_accounts import _next_seq, _format_seq, _ensure_account
+        seq = await _next_seq(db, copro_id, "44000")
+        supplier_acc = _format_seq("44000", seq, width=3)
+        await _ensure_account(db, copro_id, supplier_acc, "Fournisseur divers", 4)
+    return supplier_acc, supplier_doc
+
+
+async def _resolve_bank_account(db, txn: dict, copro_id: str) -> tuple[str, str]:
+    """iter90by : extrait de generate_bank_entry. Resout l'IBAN de la transaction
+    (ou du statement parent) vers le compte PCMN bancaire configure sur l'ACP.
+    Retourne (bank_acc, bank_label). Fallback "550000" / "Banque".
+    """
+    iban = (txn.get("account_number") or "").replace(" ", "").upper()
+    if not iban and txn.get("statement_id"):
+        stmt = await db.bank_statements.find_one(
+            {"id": txn["statement_id"]},
+            {"_id": 0, "account_number": 1, "iban": 1},
+        )
+        if stmt:
+            iban = (stmt.get("account_number") or stmt.get("iban") or "").replace(" ", "").upper()
+    bank_acc = "550000"
+    bank_label = "Banque"
+    if iban:
+        copro = await db.coproprietes.find_one({"id": copro_id}, {"_id": 0, "bank_accounts": 1})
+        if copro:
+            for ba in (copro.get("bank_accounts") or []):
+                ba_iban = (ba.get("iban") or "").replace(" ", "").upper()
+                if ba_iban == iban and ba.get("pcmn_number"):
+                    bank_acc = ba["pcmn_number"]
+                    bank_label = ba.get("label") or "Banque"
+                    break
+    return bank_acc, bank_label
+
+
+async def _resolve_bank_counterpart(db, txn: dict, copro_id: str) -> tuple[str, str, str | None, str]:
+    """iter90by : extrait de generate_bank_entry. Resout la contrepartie selon
+    `match_type` de la transaction.
+    Retourne (counterpart_acc, counterpart_name, third_party_id, invoice_number).
+    """
+    match_type = txn.get("match_type", "")
+    counterpart_acc = ""
+    counterpart_name = ""
+    third_party_id = None
+    invoice_number = ""
+
+    if match_type == "owner_payment":
+        owner = await db.owners.find_one({"id": txn.get("matched_to")}, {"_id": 0})
+        if owner:
+            owner = await assign_owner_accounts(db, owner, copro_id)
+            counterpart_acc = get_owner_accounts(owner, copro_id).get("provisions", "")
+            counterpart_name = owner.get("name", "")
+            third_party_id = owner["id"]
+    elif match_type == "invoice":
+        inv = await db.invoices.find_one({"id": txn.get("matched_to")}, {"_id": 0})
+        if inv:
+            invoice_number = (inv.get("number") or "").strip()
+            sname = (inv.get("supplier") or "").strip()
+            if sname:
+                import re
+                supplier = await db.suppliers.find_one(
+                    {"name": {"$regex": f"^{re.escape(sname)}$", "$options": "i"}}, {"_id": 0}
+                )
+                if supplier:
+                    supplier = await assign_supplier_account(db, supplier, copro_id)
+                    counterpart_acc = get_supplier_account(supplier, copro_id)
+                    counterpart_name = supplier.get("name", "") or sname
+                    third_party_id = supplier["id"]
+                else:
+                    counterpart_name = sname
+    elif match_type == "supplier_payment":
+        supplier = await db.suppliers.find_one({"id": txn.get("matched_to")}, {"_id": 0})
+        if supplier:
+            supplier = await assign_supplier_account(db, supplier, copro_id)
+            counterpart_acc = get_supplier_account(supplier, copro_id)
+            counterpart_name = supplier.get("name", "")
+            third_party_id = supplier["id"]
+    return counterpart_acc, counterpart_name, third_party_id, invoice_number
 
 
 async def generate_purchase_entry(db, invoice: dict) -> dict | None:
@@ -46,35 +157,10 @@ async def generate_purchase_entry(db, invoice: dict) -> dict | None:
         return None
     expense_acc = invoice.get("account_number", "") or "600000"
     supplier_name = (invoice.get("supplier") or "").strip()
-    # Resolve/ensure supplier + dedicated 44000XXX account in this ACP.
-    # Chinese walls strict: NEVER fallback on "440000" (master) which would mix ACPs.
-    supplier_acc = ""
-    supplier_doc = None
-    if supplier_name:
-        import re, uuid
-        from datetime import datetime, timezone
-        supplier_doc = await db.suppliers.find_one(
-            {"name": {"$regex": f"^{re.escape(supplier_name)}$", "$options": "i"}}, {"_id": 0}
-        )
-        if not supplier_doc:
-            # Auto-create a global supplier record so we never use 440000 master
-            supplier_doc = {
-                "id": str(uuid.uuid4()),
-                "name": supplier_name,
-                "tier_accounts": {},
-                "auto_created": True,
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            }
-            await db.suppliers.insert_one(dict(supplier_doc))
-        supplier_doc = await assign_supplier_account(db, supplier_doc, copro_id)
-        supplier_acc = get_supplier_account(supplier_doc, copro_id)
-    if not supplier_acc:
-        # As a LAST resort (no supplier name at all), create an ACP-scoped misc account
-        # but never the master 440000 (would leak across ACPs).
-        from tier_accounts import _next_seq, _format_seq, _ensure_account
-        seq = await _next_seq(db, copro_id, "44000")
-        supplier_acc = _format_seq("44000", seq, width=3)
-        await _ensure_account(db, copro_id, supplier_acc, "Fournisseur divers", 4)
+    # iter90by : resolution du compte fournisseur extraite en helper
+    supplier_acc, supplier_doc = await _resolve_or_create_supplier_account(
+        db, supplier_name, copro_id,
+    )
 
     # Pre-fetch PCMN names
     pcmn_q = {"number": {"$in": [expense_acc, supplier_acc]}, "copropriete_id": copro_id}
@@ -435,68 +521,25 @@ async def generate_bank_entry(db, txn: dict) -> dict | None:
     amount = abs(float(txn.get("amount", 0) or 0))
     if amount <= 0:
         return None
-    # Resoud IBAN -> compte PCMN via la config de l'ACP
-    # IBAN peut etre stocke sur la txn (legacy) OU sur le statement parent (cas standard)
-    iban = (txn.get("account_number") or "").replace(" ", "").upper()
-    if not iban and txn.get("statement_id"):
-        stmt = await db.bank_statements.find_one(
-            {"id": txn["statement_id"]},
-            {"_id": 0, "account_number": 1, "iban": 1},
-        )
-        if stmt:
-            iban = (stmt.get("account_number") or stmt.get("iban") or "").replace(" ", "").upper()
-    bank_acc = "550000"  # fallback compte banque generique (ne devrait JAMAIS arriver si IBAN configure)
-    bank_label = "Banque"
-    if iban:
-        copro = await db.coproprietes.find_one({"id": copro_id}, {"_id": 0, "bank_accounts": 1})
-        if copro:
-            for ba in (copro.get("bank_accounts") or []):
-                ba_iban = (ba.get("iban") or "").replace(" ", "").upper()
-                if ba_iban == iban and ba.get("pcmn_number"):
-                    bank_acc = ba["pcmn_number"]
-                    bank_label = ba.get("label") or "Banque"
-                    break
+    # iter90by : resolution IBAN -> compte PCMN bancaire extraite en helper
+    bank_acc, bank_label = await _resolve_bank_account(db, txn, copro_id)
     match_type = txn.get("match_type", "")
     txn_type = txn.get("transaction_type", "credit")
     is_credit = txn_type == "credit" or float(txn.get("amount", 0)) > 0
 
-    counterpart_acc = ""
-    counterpart_name = ""
-    third_party_id = None
-    invoice_number = ""  # libelle enrichi pour les lettrages factures
-    if match_type == "owner_payment":
-        owner = await db.owners.find_one({"id": txn.get("matched_to")}, {"_id": 0})
-        if owner:
-            owner = await assign_owner_accounts(db, owner, copro_id)
-            counterpart_acc = get_owner_accounts(owner, copro_id).get("provisions", "")
-            counterpart_name = owner.get("name", "")
-            third_party_id = owner["id"]
-    elif match_type == "invoice":
-        inv = await db.invoices.find_one({"id": txn.get("matched_to")}, {"_id": 0})
-        if inv:
-            invoice_number = (inv.get("number") or "").strip()
-            sname = (inv.get("supplier") or "").strip()
-            if sname:
-                import re
-                supplier = await db.suppliers.find_one(
-                    {"name": {"$regex": f"^{re.escape(sname)}$", "$options": "i"}}, {"_id": 0}
-                )
-                if supplier:
-                    supplier = await assign_supplier_account(db, supplier, copro_id)
-                    counterpart_acc = get_supplier_account(supplier, copro_id)
-                    counterpart_name = supplier.get("name", "") or sname
-                    third_party_id = supplier["id"]
-                else:
-                    # Pas de supplier en base : on garde le nom de la facture mais sans tier_id
-                    counterpart_name = sname
-    elif match_type == "supplier_payment":
-        supplier = await db.suppliers.find_one({"id": txn.get("matched_to")}, {"_id": 0})
-        if supplier:
-            supplier = await assign_supplier_account(db, supplier, copro_id)
-            counterpart_acc = get_supplier_account(supplier, copro_id)
-            counterpart_name = supplier.get("name", "")
-            third_party_id = supplier["id"]
-    elif match_type == "expense_category":
+    # iter90by : resolution match_type -> contrepartie extraite en helper
+    # (sauf expense_category, gere plus bas car il produit une ecriture complete)
+    if match_type != "expense_category":
+        counterpart_acc, counterpart_name, third_party_id, invoice_number = (
+            await _resolve_bank_counterpart(db, txn, copro_id)
+        )
+    else:
+        counterpart_acc = ""
+        counterpart_name = ""
+        third_party_id = None
+        invoice_number = ""
+
+    if match_type == "expense_category":
         # iter90k : catégorisation d'une transaction par nature(s) de charge/produit.
         # Support multi-splits. Structure de la ligne bancaire (banque) + N
         # lignes de contreparties (comptes 6xxx charges ou 7xxx produits).

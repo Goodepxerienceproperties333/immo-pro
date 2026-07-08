@@ -1,92 +1,18 @@
 import { useState, useEffect, useCallback } from 'react';
 import api from '@/lib/api';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { toast } from 'sonner';
-import { Users, Truck, Eye, ArrowUpRight, ArrowDownRight, Download, FileText, Filter, X, Link2 } from 'lucide-react';
-import { fmtDate } from '@/lib/dateFmt';
+import { Users, Truck, Eye, ArrowUpRight, ArrowDownRight, Download, FileText, Link2 } from 'lucide-react';
+import FilterBar from '@/components/balance-tiers/FilterBar';
+import TiersDetailDialog from '@/components/balance-tiers/TiersDetailDialog';
+import LettrerDialog from '@/components/balance-tiers/LettrerDialog';
+import SupplierMergeDialog from '@/components/balance-tiers/SupplierMergeDialog';
 
 const API = process.env.REACT_APP_BACKEND_URL;
-
-
-// ---- Period presets (re-usable) ----
-function getPreset(name) {
-  const today = new Date();
-  const iso = (d) => d.toISOString().slice(0, 10);
-  const y = today.getFullYear();
-  const m = today.getMonth();
-  switch (name) {
-    case 'today': return { start: iso(today), end: iso(today) };
-    case 'month': return { start: iso(new Date(y, m, 1)), end: iso(today) };
-    case 'prev_month': return { start: iso(new Date(y, m - 1, 1)), end: iso(new Date(y, m, 0)) };
-    case 'quarter': {
-      const qstart = Math.floor(m / 3) * 3;
-      return { start: iso(new Date(y, qstart, 1)), end: iso(today) };
-    }
-    case 'year': return { start: `${y}-01-01`, end: iso(today) };
-    case 'prev_year': return { start: `${y - 1}-01-01`, end: `${y - 1}-12-31` };
-    case 'all': return { start: '', end: '' };
-    default: return null;
-  }
-}
-
-function FilterBar({ startDate, endDate, search, onChange, storageKey }) {
-  const apply = (next) => {
-    onChange(next);
-    if (storageKey) localStorage.setItem(storageKey, JSON.stringify(next));
-  };
-  const reset = () => apply({ startDate: '', endDate: '', search: '' });
-  const setPreset = (name) => {
-    const p = getPreset(name);
-    if (!p) return;
-    apply({ startDate: p.start, endDate: p.end, search });
-  };
-  return (
-    <div className="mb-4 p-3 bg-slate-50 border border-slate-200 rounded-md flex flex-wrap items-end gap-3" data-testid="filter-bar">
-      <div className="flex items-center gap-1.5">
-        <Filter size={14} className="text-slate-500" />
-        <span className="text-xs font-semibold text-slate-600 uppercase tracking-wider">Filtres</span>
-      </div>
-      <div>
-        <label className="block text-[10px] uppercase tracking-wider text-slate-500 mb-1">Du</label>
-        <Input type="date" value={startDate} onChange={e => apply({ startDate: e.target.value, endDate, search })} className="h-8 text-xs w-36" data-testid="filter-start-date" />
-      </div>
-      <div>
-        <label className="block text-[10px] uppercase tracking-wider text-slate-500 mb-1">Au</label>
-        <Input type="date" value={endDate} onChange={e => apply({ startDate, endDate: e.target.value, search })} className="h-8 text-xs w-36" data-testid="filter-end-date" />
-      </div>
-      <div className="flex-1 min-w-[160px]">
-        <label className="block text-[10px] uppercase tracking-wider text-slate-500 mb-1">Recherche</label>
-        <Input value={search} onChange={e => apply({ startDate, endDate, search: e.target.value })} placeholder="Nom, VCS..." className="h-8 text-xs" data-testid="filter-search" />
-      </div>
-      <div className="flex flex-wrap gap-1">
-        {[
-          ['today', "Auj."],
-          ['month', 'Ce mois'],
-          ['prev_month', 'Mois -1'],
-          ['quarter', 'Trim.'],
-          ['year', 'Annee'],
-          ['prev_year', 'N-1'],
-          ['all', 'Tout'],
-        ].map(([k, l]) => (
-          <Button key={k} size="sm" variant="outline" className="h-8 text-[10px] px-2" onClick={() => setPreset(k)} data-testid={`filter-preset-${k}`}>
-            {l}
-          </Button>
-        ))}
-      </div>
-      {(startDate || endDate || search) && (
-        <Button size="sm" variant="ghost" className="h-8 text-red-600" onClick={reset} data-testid="filter-reset">
-          <X size={12} className="mr-1" /> Reset
-        </Button>
-      )}
-    </div>
-  );
-}
 
 export default function BalanceTiersPage() {
   const [tab, setTab] = useState('owners');
@@ -432,231 +358,42 @@ export default function BalanceTiersPage() {
         </TabsContent>
       </Tabs>
 
-      {/* Detail Dialog */}
-      <Dialog open={!!detail} onOpenChange={() => setDetail(null)}>
-        <DialogContent className="max-w-3xl max-h-[80vh] overflow-auto" data-testid="tiers-detail-dialog">
-          <DialogHeader>
-            <DialogTitle style={{fontFamily:'Chivo,sans-serif'}}>
-              Situation de compte: {detailType === 'owner' ? detail?.owner?.name : detail?.supplier?.name}
-            </DialogTitle>
-            {detailType === 'owner' && detail?.owner?.vcs_code && (
-              <p className="font-mono text-sm text-[#2563EB]">{detail.owner.vcs_code}</p>
-            )}
-          </DialogHeader>
-          <div className="mt-2">
-            <div className="flex gap-4 mb-4 text-sm items-center flex-wrap">
-              <div><span className="text-slate-500">Total debit:</span> <span className="font-mono font-bold">{detail?.total_debit?.toFixed(2)} EUR</span></div>
-              <div><span className="text-slate-500">Total credit:</span> <span className="font-mono font-bold">{detail?.total_credit?.toFixed(2)} EUR</span></div>
-              <div>
-                <span className="text-slate-500">Solde:</span>
-                <span className={`font-mono font-bold ml-1 ${detail?.status === 'debiteur' ? 'text-red-700' : detail?.status === 'crediteur' ? (detailType === 'owner' ? 'text-green-700' : 'text-orange-700') : 'text-slate-600'}`}>
-                  {detail?.balance?.toFixed(2)} EUR
-                </span>
-                <Badge variant="outline" className="ml-2 text-[10px]">{detail?.status === 'debiteur' ? (detailType === 'owner' ? 'Doit payer' : 'Trop-paye') : detail?.status === 'crediteur' ? (detailType === 'owner' ? 'A rembourser' : 'A payer') : 'Solde'}</Badge>
-              </div>
-              {detailType === 'owner' && (
-                <div className="ml-auto flex items-center gap-1 bg-slate-100 rounded-full p-1" data-testid="detail-view-mode-toggle">
-                  <button
-                    type="button"
-                    onClick={() => viewOwnerDetail(detailOwnerId, true)}
-                    className={`px-3 py-1 rounded-full text-xs font-medium transition ${detailGrouped ? 'bg-white text-[#2563EB] shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
-                    data-testid="detail-view-grouped-btn"
-                    title="Fusionne les lignes portant sur plusieurs lots du meme proprietaire"
-                  >
-                    Vue resumee
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => viewOwnerDetail(detailOwnerId, false)}
-                    className={`px-3 py-1 rounded-full text-xs font-medium transition ${!detailGrouped ? 'bg-white text-[#2563EB] shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
-                    data-testid="detail-view-detailed-btn"
-                    title="Affiche une ligne par lot (utile pour audit)"
-                  >
-                    Detail par lot
-                  </button>
-                </div>
-              )}
-            </div>
-            <div className="border rounded-md overflow-hidden">
-              <Table>
-                <TableHeader><TableRow>
-                  <TableHead className="w-24">Date</TableHead><TableHead>Description</TableHead><TableHead>Ref</TableHead>
-                  <TableHead className="text-right w-28">Debit</TableHead><TableHead className="text-right w-28">Credit</TableHead><TableHead className="text-right w-28">Solde</TableHead>
-                </TableRow></TableHeader>
-                <TableBody>
-                  {(detail?.movements || []).map((m, i) => (
-                    <TableRow key={i} className="hover:bg-slate-50/50">
-                      <TableCell className="font-mono text-xs">{fmtDate(m.date)}</TableCell>
-                      <TableCell className="text-sm">{m.description}</TableCell>
-                      <TableCell className="text-xs text-slate-400">{m.reference}</TableCell>
-                      <TableCell className="text-right font-mono text-sm">{m.debit > 0 ? m.debit.toFixed(2) : ''}</TableCell>
-                      <TableCell className="text-right font-mono text-sm">{m.credit > 0 ? m.credit.toFixed(2) : ''}</TableCell>
-                      <TableCell className={`text-right font-mono text-sm font-semibold ${m.running_balance > 0 ? 'text-red-700' : m.running_balance < 0 ? 'text-green-700' : ''}`}>{m.running_balance?.toFixed(2)}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
+      {/* Dialogs extraits vers /components/balance-tiers/ (iter90bv+iter90by) */}
+      <TiersDetailDialog
+        open={!!detail}
+        onClose={() => setDetail(null)}
+        detail={detail}
+        detailType={detailType}
+        detailGrouped={detailGrouped}
+        detailOwnerId={detailOwnerId}
+        viewOwnerDetail={viewOwnerDetail}
+      />
 
-      {/* ----- Lettrage manuel dialog (orphan supplier reconciliation) ----- */}
-      <Dialog open={lettrerOpen} onOpenChange={setLettrerOpen}>
-        <DialogContent className="max-w-2xl" data-testid="lettrer-dialog">
-          <DialogHeader>
-            <DialogTitle style={{fontFamily:'Chivo,sans-serif'}}>
-              Lettrer manuellement
-            </DialogTitle>
-            <p className="text-sm text-slate-600 mt-1">
-              Selectionnez le fournisseur en base auquel rattacher les factures orphelines de
-              <strong className="ml-1 text-amber-700">&laquo;{lettrerOrphan?.supplier_name}&raquo;</strong>
-              {lettrerOrphan?.invoice_count > 0 && (
-                <span className="ml-1 text-slate-500">({lettrerOrphan.invoice_count} facture(s))</span>
-              )}
-            </p>
-          </DialogHeader>
-          <div className="mt-3">
-            <Input
-              placeholder="Rechercher un fournisseur (nom, BCE, F0XXX)..."
-              value={lettrerSearch}
-              onChange={e => setLettrerSearch(e.target.value)}
-              className="mb-3"
-              data-testid="lettrer-search-input"
-              autoFocus
-            />
-            <div className="max-h-[400px] overflow-y-auto border rounded-md divide-y divide-slate-100">
-              {lettrerSuppliers
-                .filter(sp => {
-                  if (!lettrerSearch) return true;
-                  const q = lettrerSearch.toLowerCase();
-                  return ((sp.name || '').toLowerCase().includes(q)
-                    || (sp.auxiliary_code || '').toLowerCase().includes(q)
-                    || (sp.vat_number || '').toLowerCase().includes(q)
-                    || (sp.bce_number || '').toLowerCase().includes(q));
-                })
-                .slice(0, 60)
-                .map(sp => (
-                  <button
-                    key={sp.id}
-                    onClick={() => commitLettrer(sp.id)}
-                    disabled={lettrerLoading}
-                    className="w-full text-left px-3 py-2 hover:bg-amber-50 flex items-center justify-between gap-2 text-sm disabled:opacity-50"
-                    data-testid={`lettrer-pick-${sp.id}`}
-                  >
-                    <div>
-                      <div className="font-medium">{sp.name}</div>
-                      <div className="text-xs text-slate-500">{sp.bce_number || sp.vat_number || '—'}</div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      {sp.auxiliary_code && <Badge variant="outline" className="font-mono text-[10px] bg-slate-50">{sp.auxiliary_code}</Badge>}
-                      <Link2 size={14} className="text-amber-600" />
-                    </div>
-                  </button>
-                ))}
-              {lettrerSuppliers.length === 0 && (
-                <div className="px-3 py-6 text-center text-sm text-slate-500">
-                  Chargement des fournisseurs...
-                </div>
-              )}
-              {lettrerSuppliers.length > 0 && lettrerSuppliers.filter(sp => {
-                if (!lettrerSearch) return true;
-                const q = lettrerSearch.toLowerCase();
-                return ((sp.name || '').toLowerCase().includes(q));
-              }).length === 0 && (
-                <div className="px-3 py-6 text-center text-sm text-slate-500">
-                  Aucun fournisseur trouve pour &laquo;{lettrerSearch}&raquo;
-                </div>
-              )}
-            </div>
-            <div className="mt-3 p-2 bg-amber-50 border border-amber-200 rounded text-xs text-amber-800">
-              <strong>Effet du lettrage :</strong> les factures de <em>&laquo;{lettrerOrphan?.supplier_name}&raquo;</em> seront
-              rattachees au fournisseur selectionne ; les ecritures comptables AC manquantes (debit charge / credit 4400xxx)
-              seront automatiquement creees pour que le solde apparaisse dans la balance de tiers.
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
+      <LettrerDialog
+        open={lettrerOpen}
+        onOpenChange={setLettrerOpen}
+        lettrerOrphan={lettrerOrphan}
+        lettrerSuppliers={lettrerSuppliers}
+        lettrerSearch={lettrerSearch}
+        setLettrerSearch={setLettrerSearch}
+        lettrerLoading={lettrerLoading}
+        commitLettrer={commitLettrer}
+      />
 
-      {/* ----- Merge suppliers dialog ----- */}
-      <Dialog open={mergeDialogOpen} onOpenChange={setMergeDialogOpen}>
-        <DialogContent
-          className="max-w-2xl p-0 overflow-hidden"
-          data-testid="merge-suppliers-dialog"
-          onPointerDownOutside={(e) => e.preventDefault()}
-          onInteractOutside={(e) => e.preventDefault()}
-          onEscapeKeyDown={(e) => e.preventDefault()}
-        >
-          <div className="bg-gradient-to-r from-orange-600 to-orange-500 text-white px-5 py-4">
-            <DialogTitle className="text-base font-semibold m-0">Fusionner {selectedSupplierIds.size} fournisseurs</DialogTitle>
-            <div className="mt-1 text-xs opacity-90">
-              Choisissez le fournisseur a conserver. Les autres seront absorbes (factures, transactions reassociees, infos manquantes copiees), puis supprimes.
-            </div>
-          </div>
-          <div className="p-5 space-y-3">
-            <p className="text-xs text-slate-700 font-medium">Conserver ce fournisseur :</p>
-            <div className="space-y-1.5 max-h-[360px] overflow-y-auto">
-              {suppliersData && suppliersData.suppliers
-                .filter(s => selectedSupplierIds.has(s.supplier_id))
-                .map(s => {
-                  const isKept = s.supplier_id === mergeKeepId;
-                  return (
-                    <label
-                      key={s.supplier_id}
-                      className={`flex items-center gap-3 border rounded-md px-3 py-2 cursor-pointer ${isKept ? 'border-orange-400 bg-orange-50' : 'border-slate-200 hover:border-slate-300'}`}
-                    >
-                      <input
-                        type="radio"
-                        name="merge-keep"
-                        checked={isKept}
-                        onChange={() => setMergeKeepId(s.supplier_id)}
-                        data-testid={`merge-keep-${s.supplier_id}`}
-                      />
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="font-medium text-sm">{s.supplier_name}</span>
-                          {s.vat_number && <Badge variant="outline" className="text-[10px] font-mono bg-blue-50 text-blue-700 border-blue-200">TVA {s.vat_number}</Badge>}
-                          <Badge variant="outline" className="text-[10px] font-mono">{s.tier_account || '—'}</Badge>
-                        </div>
-                        <div className="text-[11px] text-slate-500 mt-0.5">
-                          Facture: {s.total_invoiced.toFixed(2)} EUR &middot; Paye: {s.total_paid.toFixed(2)} EUR &middot; Solde: {s.balance.toFixed(2)} EUR
-                        </div>
-                      </div>
-                      {isKept && <Badge className="bg-orange-600 text-white text-[10px]">A CONSERVER</Badge>}
-                    </label>
-                  );
-                })}
-            </div>
-            <div className="mt-3 p-2 bg-amber-50 border border-amber-200 rounded text-xs text-amber-800">
-              <strong>Attention :</strong> les fournisseurs absorbes seront supprimes apres reassociation des factures et transactions. Les ecritures comptables historiques restent inchangees.
-            </div>
-            <div className="flex justify-end gap-2 pt-2">
-              <Button variant="ghost" onClick={() => setMergeDialogOpen(false)} data-testid="merge-cancel-btn">Annuler</Button>
-              <Button
-                onClick={async () => {
-                  const removeIds = Array.from(selectedSupplierIds).filter(id => id !== mergeKeepId);
-                  if (!mergeKeepId || removeIds.length === 0) {
-                    toast.error('Selection invalide');
-                    return;
-                  }
-                  try {
-                    const r = await api.post('/suppliers/merge', { keep_id: mergeKeepId, remove_ids: removeIds });
-                    toast.success(`Fusion OK : ${r.data.invoices_migrated} facture(s), ${r.data.bank_transactions_migrated} transaction(s) reassociees, ${r.data.removed_ids.length} fournisseur(s) absorbe(s)`);
-                    setMergeDialogOpen(false);
-                    setMergeMode(false);
-                    setSelectedSupplierIds(new Set());
-                    load();
-                  } catch (err) {
-                    toast.error(err.response?.data?.detail || 'Erreur fusion');
-                  }
-                }}
-                className="bg-orange-600 hover:bg-orange-700 text-white"
-                data-testid="merge-confirm-btn"
-              >Confirmer la fusion</Button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
+      <SupplierMergeDialog
+        open={mergeDialogOpen}
+        onOpenChange={setMergeDialogOpen}
+        suppliersData={suppliersData}
+        selectedSupplierIds={selectedSupplierIds}
+        mergeKeepId={mergeKeepId}
+        setMergeKeepId={setMergeKeepId}
+        onSuccess={() => {
+          setMergeDialogOpen(false);
+          setMergeMode(false);
+          setSelectedSupplierIds(new Set());
+          load();
+        }}
+      />
     </div>
   );
 }

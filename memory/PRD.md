@@ -12,6 +12,41 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 ### Iter90bx (Feb 2026) - Contre-passation traceable des ecritures comptables (BLOQUANT LEGAL)
+### Iter90by (Feb 2026) - Refactor P5 (frontend + backend, dette technique)
+
+**Frontend** (`BalanceTiersPage.js` : 665 -> 399 lignes, -40%) :
+- `components/balance-tiers/FilterBar.js` (77L) : composant reutilisable de
+  filtres periode + presets (aujourd'hui/mois/trimestre/annee/N-1/tout).
+  Export nomme `FilterBar` + helper `getPreset(name)`.
+- `components/balance-tiers/TiersDetailDialog.js` (86L) : dialog situation de
+  compte proprietaire/fournisseur avec toggle Vue resumee / Detail par lot
+  (iter90bv).
+- `components/balance-tiers/LettrerDialog.js` (93L) : dialog de rattachement
+  manuel d'un fournisseur orphelin (nom sans fiche) a un fournisseur en base.
+- `components/balance-tiers/SupplierMergeDialog.js` (96L) : dialog de fusion
+  multi-fournisseurs avec choix radio du fournisseur a conserver.
+- Imports allegees : plus de `Dialog*`, `Filter`, `X`, `Input`, `fmtDate` dans
+  la page principale. Tous les data-testid preserves pour tests E2E.
+
+**Backend** (`auto_entries.py`) - 3 helpers extraits pour reduire la complexite :
+- `_resolve_or_create_supplier_account(db, supplier_name, copro_id)` (37L) :
+  isole la logique Chinese-walls-safe de creation auto de fiche fournisseur
+  + assignation du compte 44000XXX (jamais 440000 master).
+- `_resolve_bank_account(db, txn, copro_id)` (25L) : IBAN -> compte PCMN
+  bancaire configure sur l'ACP. Fallback "550000".
+- `_resolve_bank_counterpart(db, txn, copro_id)` (43L) : match_type ->
+  (counterpart_acc, counterpart_name, third_party_id, invoice_number).
+  Supporte owner_payment / invoice / supplier_payment.
+- `generate_purchase_entry` : 221 -> 196 lignes (-11%).
+- `generate_bank_entry` : 234 -> 191 lignes (-18%).
+
+**Bonus** : correction pre-existante `E741 Ambiguous variable name 'l'` dans
+`_balanced` (renomme `l` -> `ln`).
+
+**Tests** : 50/51 tests unit critiques passent (le seul echec est un 429
+rate-limit transitoire sur test HTTP). Aucune regression fonctionnelle.
+
+
 ### Iter90bw (Feb 2026) - Backup legal 10 ans enrichi (Art. III.86 CDE)
 
 **Ticket utilisateur** : "P1 Finaliser le backup legal 10 ans (backup_service.py) :
