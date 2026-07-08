@@ -6,7 +6,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { Users, Truck, Eye, ArrowUpRight, ArrowDownRight, Download, FileText, Link2 } from 'lucide-react';
+import { Users, Truck, Eye, ArrowUpRight, ArrowDownRight, Download, FileText, Link2, EyeOff } from 'lucide-react';
 import FilterBar from '@/components/balance-tiers/FilterBar';
 import TiersDetailDialog from '@/components/balance-tiers/TiersDetailDialog';
 import LettrerDialog from '@/components/balance-tiers/LettrerDialog';
@@ -41,6 +41,16 @@ export default function BalanceTiersPage() {
     } catch { /* ignore parse error */ }
     return { startDate: '', endDate: '', search: '' };
   });
+  const [hideZeroBalance, setHideZeroBalance] = useState(() => {
+    try {
+      return localStorage.getItem('balance-tiers-hide-zero') === 'true';
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    try { localStorage.setItem('balance-tiers-hide-zero', String(hideZeroBalance)); } catch { /* ignore */ }
+  }, [hideZeroBalance]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -134,6 +144,14 @@ export default function BalanceTiersPage() {
     );
   };
 
+  // iter90cg : filtre "masquer les soldes a zero" pour faciliter la lecture
+  // Applique apres le filtre texte. status === 'solde' est defini backend par |balance| < 0.01
+  const applyZeroFilter = (list) => {
+    if (!hideZeroBalance) return list;
+    return list.filter(x => x.status !== 'solde');
+  };
+  const applyFilters = (list) => applyZeroFilter(applyTextFilter(list));
+
   return (
     <div data-testid="balance-tiers-page">
       <div className="page-header flex items-start justify-between">
@@ -183,6 +201,28 @@ export default function BalanceTiersPage() {
                   </div>
                 </CardContent></Card>
               </div>
+              <div className="flex items-center justify-between mb-2 gap-2 flex-wrap">
+                <div className="text-[11px] text-slate-500">
+                  {(() => {
+                    const total = ownersData.owners.length;
+                    const visible = applyFilters(ownersData.owners).length;
+                    const zeros = ownersData.owners.filter(o => o.status === 'solde').length;
+                    return hideZeroBalance
+                      ? `${visible} affiche(s) sur ${total} - ${zeros} solde(s) a zero masque(s)`
+                      : `${visible} proprietaire(s) - dont ${zeros} avec solde a zero`;
+                  })()}
+                </div>
+                <Button
+                  variant={hideZeroBalance ? 'default' : 'outline'}
+                  size="sm"
+                  onClick={() => setHideZeroBalance(v => !v)}
+                  data-testid="toggle-hide-zero-owners-btn"
+                  title={hideZeroBalance ? 'Afficher tous les proprietaires' : 'Masquer les proprietaires avec solde a zero'}
+                >
+                  {hideZeroBalance ? <Eye size={13} className="mr-1.5" /> : <EyeOff size={13} className="mr-1.5" />}
+                  {hideZeroBalance ? 'Afficher les soldes a zero' : 'Masquer les soldes a zero'}
+                </Button>
+              </div>
               <div className="bg-white rounded-md border border-slate-200 overflow-hidden">
                 <Table>
                   <TableHeader><TableRow>
@@ -194,7 +234,7 @@ export default function BalanceTiersPage() {
                     <TableHead className="text-right">Solde</TableHead><TableHead>Statut</TableHead><TableHead className="w-16"></TableHead>
                   </TableRow></TableHeader>
                   <TableBody>
-                    {applyTextFilter(ownersData.owners).map((o, idx) => (
+                    {applyFilters(ownersData.owners).map((o, idx) => (
                       <TableRow key={o.owner_id || `orphan-${o.account_provisions || o.account_reserve}-${idx}`} className="hover:bg-slate-50/50">
                         <TableCell className="font-medium">
                           {o.owner_name}
@@ -297,6 +337,28 @@ export default function BalanceTiersPage() {
                   )}
                 </div>
               </CardContent></Card>
+              <div className="flex items-center justify-between mb-2 gap-2 flex-wrap">
+                <div className="text-[11px] text-slate-500">
+                  {(() => {
+                    const total = suppliersData.suppliers.length;
+                    const visible = applyFilters(suppliersData.suppliers).length;
+                    const zeros = suppliersData.suppliers.filter(s => s.status === 'solde').length;
+                    return hideZeroBalance
+                      ? `${visible} affiche(s) sur ${total} - ${zeros} solde(s) a zero masque(s)`
+                      : `${visible} fournisseur(s) - dont ${zeros} avec solde a zero`;
+                  })()}
+                </div>
+                <Button
+                  variant={hideZeroBalance ? 'default' : 'outline'}
+                  size="sm"
+                  onClick={() => setHideZeroBalance(v => !v)}
+                  data-testid="toggle-hide-zero-suppliers-btn"
+                  title={hideZeroBalance ? 'Afficher tous les fournisseurs' : 'Masquer les fournisseurs avec solde a zero'}
+                >
+                  {hideZeroBalance ? <Eye size={13} className="mr-1.5" /> : <EyeOff size={13} className="mr-1.5" />}
+                  {hideZeroBalance ? 'Afficher les soldes a zero' : 'Masquer les soldes a zero'}
+                </Button>
+              </div>
               <div className="bg-white rounded-md border border-slate-200 overflow-hidden">
                 <Table>
                   <TableHeader><TableRow>
@@ -308,7 +370,7 @@ export default function BalanceTiersPage() {
                     <TableHead className="text-right">Solde</TableHead><TableHead>Statut</TableHead><TableHead className="w-16"></TableHead>
                   </TableRow></TableHeader>
                   <TableBody>
-                    {applyTextFilter(suppliersData.suppliers).map((s, i) => (
+                    {applyFilters(suppliersData.suppliers).map((s, i) => (
                       <TableRow key={s.supplier_id || `orphan-${i}`} className={`hover:bg-slate-50/50 ${selectedSupplierIds.has(s.supplier_id) ? 'bg-orange-50/50' : ''}`}>
                         {mergeMode && (
                           <TableCell className="px-1">

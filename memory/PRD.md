@@ -11,6 +11,36 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 
+### Iter90cg (Feb 2026) - Toggle "Masquer les soldes a zero" dans Balance de Tiers
+
+**Ticket utilisateur** : "Dans la balance de tiers, il faut voir tous les
+proprietaires debiteurs crediteur ou solde a zero ajouter un bouton masquer
+les solde a zero pour faciliter la lecture"
+
+**Etat existant** : le backend renvoyait deja tous les proprietaires actuels
+(y compris solde=0). Seuls les ex-proprietaires avec solde=0 ET zero
+mouvement etaient filtres, ainsi que les comptes orphelins avec solde=0.
+La demande utilisateur ne concernait donc que l'UX.
+
+**Fix (frontend uniquement)** :
+- `BalanceTiersPage.js` : nouveau state `hideZeroBalance` persiste dans
+  localStorage (`balance-tiers-hide-zero`) - defaut false (tous visibles).
+- Helper `applyZeroFilter(list)` filtre `x.status === 'solde'` (defini
+  backend par `|balance| < 0.01`, coherent avec le badge Statut).
+- Toggle affiche dans les 2 onglets (Proprietaires + Fournisseurs) :
+  * data-testid="toggle-hide-zero-owners-btn" + "toggle-hide-zero-suppliers-btn"
+  * Bouton outline / default (rempli) selon l'etat
+  * Icone `EyeOff` -> `Eye` selon l'etat
+  * Label "Masquer les soldes a zero" -> "Afficher les soldes a zero"
+- Compteur informatif au-dessus de la table : "N proprietaire(s) - dont X
+  avec solde a zero" ou "N affiche(s) sur M - X solde(s) a zero masque(s)".
+- Etat partage entre les 2 onglets (les fournisseurs sont impactes en meme
+  temps que les proprietaires).
+
+**Verification manuelle** : screenshots avant/apres montrent le compteur qui
+change et le bouton qui bascule (outline <-> default). Lint : 0 erreur.
+
+
 ### Iter90bx (Feb 2026) - Contre-passation traceable des ecritures comptables (BLOQUANT LEGAL)
 ### Iter90cd (Feb 2026) - Fix regeneration appels apres mutation (double-comptage prorata)
 ### Iter90ce (Feb 2026) - Verrou regression : fonds de reserve JAMAIS transferes en mutation
