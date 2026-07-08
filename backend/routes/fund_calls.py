@@ -104,6 +104,214 @@ def _snap_distribution_to_total(distribution: list, target_total: float) -> None
                 float(sorted_dist[i % len(sorted_dist)]["amount"]) - 0.01, 2)
 
 
+async def generate_prorata_mut_ods_for_call(db, call_doc: dict) -> dict:
+    """
+    iter90cf : Genere retroactivement les OD 'Mutation - Prorata' pour un
+    appel de provisions dont la periode chevauche une ou plusieurs mutations
+    existantes.
+
+    Contexte : quand un appel est cree APRES une mutation, la logique de
+    mutate_lot (properties.py) n'a pas pu creer l'OD MUT-P car l'appel
+    n'existait pas encore. Cette fonction rattrape le coup en :
+    1. Detectant, pour chaque ligne de distribution, si une mutation existe
+       dans la periode [period_start, period_end].
+    2. Calculant les segments (owner, jours) et generant une OD par segment
+       dont l'owner differe de l'owner de la distribution (DR nouvel owner /
+       CR distribution.owner_id) pour le montant prorata.
+
+    Regle metier (iter90cd) :
+    - Distribution.owner_id = owner-at-call-date (100% pour cet owner).
+    - Prorata temporis pour les jours 'apres mutation' : porte par OD
+      SEPAREE. Ce mecanisme evite le double-comptage vs mutate_lot.
+
+    Idempotence : verifie qu'aucune OD source_type='lot_mutation' avec
+    source_subtype='prorata' n'existe deja pour (source_id=lot_id,
+    call_date=call.date, mutation_id in reference).
+
+    Retourne : {"created": n, "skipped": n, "details": [...]}
+    """
+    from datetime import date as _date_cls
+    from tier_accounts import assign_owner_accounts
+
+    stats = {"created": 0, "skipped": 0, "details": []}
+
+    # Ne s'applique qu'aux appels de provisions
+    if (call_doc.get("call_type") or "provisions") != "provisions":
+        return stats
+
+    period_start_iso = call_doc.get("period_start") or ""
+    period_end_iso = call_doc.get("period_end") or ""
+    call_date_iso = call_doc.get("date") or ""
+    call_id = call_doc.get("id") or ""
+    copro_id = call_doc.get("copropriete_id") or ""
+
+    if not (period_start_iso and period_end_iso and call_date_iso and call_id and copro_id):
+        return stats
+    try:
+        p_start = _date_cls.fromisoformat(period_start_iso)
+        p_end = _date_cls.fromisoformat(period_end_iso)
+    except Exception:
+        return stats
+    if p_end <= p_start:
+        return stats
+    total_days = (p_end - p_start).days + 1
+
+    # Charge toutes les mutations de l'ACP indexees par lot_id
+    muts_by_lot: dict = {}
+    async for m in db.mutations.find(
+        {"copropriete_id": copro_id}, {"_id": 0}
+    ):
+        lid = m.get("lot_id")
+        if lid and m.get("sale_date") and m.get("from_owner_id") and m.get("to_owner_id"):
+            muts_by_lot.setdefault(lid, []).append(m)
+    for lid in muts_by_lot:
+        muts_by_lot[lid].sort(key=lambda x: x.get("sale_date") or "")
+
+    if not muts_by_lot:
+        return stats
+
+    # Pour eviter les I/O redondants
+    owners_cache: dict = {}
+
+    async def _get_owner(owner_id: str) -> dict:
+        if owner_id in owners_cache:
+            return owners_cache[owner_id]
+        own = await db.owners.find_one({"id": owner_id}, {"_id": 0}) or {}
+        owners_cache[owner_id] = own
+        return own
+
+    for entry in (call_doc.get("distribution") or []):
+        lot_id = entry.get("lot_id") or ""
+        base_amount = float(entry.get("amount", 0) or 0)
+        if base_amount <= 0.01 or not lot_id:
+            continue
+        muts = muts_by_lot.get(lot_id, [])
+        if not muts:
+            continue
+        # Ne considere que les mutations dans la periode (exclues period_start
+        # car sale_date == period_start -> tout apres la mutation = buyer,
+        # deja capture par owner-at-call-date).
+        in_period = []
+        for m in muts:
+            try:
+                sd = _date_cls.fromisoformat(m["sale_date"])
+            except Exception:
+                continue
+            if p_start < sd <= p_end:
+                in_period.append((sd, m))
+        if not in_period:
+            continue
+
+        # Construction des segments temporels
+        # current_owner initial = owner detenteur AVANT la 1ere mutation en periode
+        first_mut = in_period[0][1]
+        current_owner = first_mut.get("from_owner_id")
+        segments: list = []  # (owner_id, days)
+        cursor = p_start
+        for sd, m in in_period:
+            if sd <= cursor:
+                current_owner = m.get("to_owner_id") or current_owner
+                continue
+            days_before = (sd - cursor).days  # exclusif de sd
+            if days_before > 0 and current_owner:
+                segments.append((current_owner, days_before))
+            cursor = sd
+            current_owner = m.get("to_owner_id")
+        final_days = (p_end - cursor).days + 1
+        if final_days > 0 and current_owner:
+            segments.append((current_owner, final_days))
+
+        if not segments:
+            continue
+
+        # owner de la distribution = owner-at-call-date. On genere les OD
+        # pour tous les segments dont l'owner differe.
+        dist_owner_id = entry.get("owner_id") or ""
+
+        # Pour chaque segment != dist_owner_id, une OD transfert dist_owner -> segment_owner
+        # Aggregation par (from_owner, to_owner) pour eviter les OD multiples
+        transfers: dict = {}
+        for seg_owner, seg_days in segments:
+            if seg_owner == dist_owner_id:
+                continue
+            seg_amount = round(base_amount * seg_days / total_days, 2)
+            if seg_amount < 0.01:
+                continue
+            key = (dist_owner_id, seg_owner)
+            transfers[key] = transfers.get(key, 0.0) + seg_amount
+
+        # Idempotence : verifier qu'aucune OD MUT-P n'existe deja pour ce lot
+        # + cet appel + ce transfert (from -> to).
+        for (from_owner, to_owner), amount in transfers.items():
+            if amount < 0.01:
+                continue
+            # Reference unique : MUTP-{lot_number}-{call_id_short}
+            ref = f"MUTP-POST-{entry.get('lot_number','')[:12]}-{call_id[:8]}-{to_owner[:6]}"
+            existing = await db.journal_entries.find_one({
+                "copropriete_id": copro_id,
+                "reference": ref,
+            }, {"_id": 0})
+            if existing:
+                stats["skipped"] += 1
+                continue
+
+            # Resoudre les comptes tiers
+            from_own = await _get_owner(from_owner)
+            to_own = await _get_owner(to_owner)
+            from_own = await assign_owner_accounts(db, from_own, copro_id)
+            to_own = await assign_owner_accounts(db, to_own, copro_id)
+            from_acc = (from_own.get("tier_accounts", {}) or {}).get(copro_id, {}).get("provisions")
+            to_acc = (to_own.get("tier_accounts", {}) or {}).get(copro_id, {}).get("provisions")
+            if not from_acc or not to_acc:
+                print(f"[iter90cf] compte tier manquant pour lot {entry.get('lot_number')}: from={from_acc} to={to_acc}")
+                continue
+
+            od_entry = {
+                "id": str(uuid.uuid4()),
+                "journal_type": "OD",
+                "date": call_date_iso,
+                "reference": ref,
+                "description": (
+                    f"Mutation lot {entry.get('lot_number','')} - Prorata (appel post-mutation): "
+                    f"{from_own.get('name','')} -> {to_own.get('name','')} ({amount:.2f} EUR)"
+                ),
+                "lines": [
+                    {"account_number": to_acc,
+                     "account_name": f"Mutation - {to_own.get('last_name') or to_own.get('name')}",
+                     "debit": amount, "credit": 0.0,
+                     "third_party_id": to_owner,
+                     "third_party_name": to_own.get("name", "")},
+                    {"account_number": from_acc,
+                     "account_name": f"Mutation - {from_own.get('last_name') or from_own.get('name')}",
+                     "debit": 0.0, "credit": amount,
+                     "third_party_id": from_owner,
+                     "third_party_name": from_own.get("name", "")},
+                ],
+                "total_debit": amount,
+                "total_credit": amount,
+                "copropriete_id": copro_id,
+                "auto_generated": True,
+                "manually_edited": True,
+                "source_type": "lot_mutation",
+                "source_id": lot_id,
+                "source_subtype": "prorata_post_mutation",
+                "fund_call_id": call_id,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            await db.journal_entries.insert_one(od_entry)
+            stats["created"] += 1
+            stats["details"].append({
+                "lot_id": lot_id,
+                "lot_number": entry.get("lot_number", ""),
+                "from_owner": from_owner,
+                "to_owner": to_owner,
+                "amount": amount,
+                "reference": ref,
+                "entry_id": od_entry["id"],
+            })
+    return stats
+
+
 def create_fund_calls_router(db):
     router = APIRouter(prefix="/api/fund-calls")
 
@@ -189,55 +397,82 @@ def create_fund_calls_router(db):
                     "paid_date": "",
                 })
 
-        # iter90aj : pour reserve/roulement, rebind owner a la date de l'appel
-        # (regle metier : injection one-shot au proprietaire en place a la date).
-        # Cas courant : appel retroactif cree apres une mutation.
-        if (data.call_type or "provisions") in ("reserve", "roulement", "special"):
-            try:
-                from datetime import date as _dt_cls
-                target = _dt_cls.fromisoformat(data.date)
-                muts_all = await db.mutations.find(
-                    {"copropriete_id": copro_id}, {"_id": 0}
-                ).to_list(10000)
-                muts_by_lot: dict = {}
-                for _m in muts_all:
-                    _lid = _m.get("lot_id")
-                    if _lid and _m.get("sale_date") and _m.get("from_owner_id") and _m.get("to_owner_id"):
-                        muts_by_lot.setdefault(_lid, []).append(_m)
-                for _lid in muts_by_lot:
-                    muts_by_lot[_lid].sort(key=lambda x: x.get("sale_date") or "")
-                for entry in distribution:
-                    _lid = entry.get("lot_id") or ""
-                    _muts = muts_by_lot.get(_lid, [])
-                    if not _muts:
+        # iter90aj/iter90cf : rebind owner a la date de l'appel pour TOUS les
+        # call_types (regle metier iter90cd : appel = 100% owner-at-call-date,
+        # aucun split. Le prorata temporis est gere en OD SEPAREE pour les
+        # provisions dont la periode chevauche une mutation).
+        try:
+            from datetime import date as _dt_cls
+            target = _dt_cls.fromisoformat(data.date)
+            muts_all = await db.mutations.find(
+                {"copropriete_id": copro_id}, {"_id": 0}
+            ).to_list(10000)
+            muts_by_lot: dict = {}
+            for _m in muts_all:
+                _lid = _m.get("lot_id")
+                if _lid and _m.get("sale_date") and _m.get("from_owner_id") and _m.get("to_owner_id"):
+                    muts_by_lot.setdefault(_lid, []).append(_m)
+            for _lid in muts_by_lot:
+                muts_by_lot[_lid].sort(key=lambda x: x.get("sale_date") or "")
+            for entry in distribution:
+                _lid = entry.get("lot_id") or ""
+                _muts = muts_by_lot.get(_lid, [])
+                if not _muts:
+                    continue
+                _current = _muts[0].get("from_owner_id") or entry.get("owner_id")
+                for _m in _muts:
+                    try:
+                        _sd = _dt_cls.fromisoformat(_m.get("sale_date") or "")
+                    except Exception:
                         continue
-                    _current = _muts[0].get("from_owner_id") or entry.get("owner_id")
-                    for _m in _muts:
-                        try:
-                            _sd = _dt_cls.fromisoformat(_m.get("sale_date") or "")
-                        except Exception:
-                            continue
-                        if _sd <= target:
-                            _current = _m.get("to_owner_id") or _current
-                        else:
-                            break
-                    if _current and _current != entry.get("owner_id"):
-                        _own = owners_map.get(_current) or {}
-                        entry["owner_id"] = _current
-                        entry["owner_name"] = _own.get("name", "")
-                        entry["vcs_code"] = _own.get("vcs_code", "")
-            except Exception as _e:
-                print(f"[iter90aj] Rebind owner_at_date skipped: {_e}")
+                    if _sd <= target:
+                        _current = _m.get("to_owner_id") or _current
+                    else:
+                        break
+                if _current and _current != entry.get("owner_id"):
+                    _own = owners_map.get(_current) or {}
+                    entry["owner_id"] = _current
+                    entry["owner_name"] = _own.get("name", "")
+                    entry["vcs_code"] = _own.get("vcs_code", "")
+        except Exception as _e:
+            print(f"[iter90aj/cf] Rebind owner_at_date skipped: {_e}")
 
         # iter90w : garantit sum(distribution.amount) == total_amount exactement
         # (evite les 0,01 EUR de derive par appel manuel).
         _snap_distribution_to_total(distribution, round(data.total_amount, 2))
+
+        # iter90cf : deduire period_start/period_end pour permettre le calcul
+        # retroactif d'OD de prorata mutation (uniquement pour provisions).
+        period_start = ""
+        period_end = ""
+        if (data.call_type or "provisions") == "provisions":
+            try:
+                # Utilise le meme heuristique que migrate_fund_calls_periods
+                import sys
+                if "/app/backend/scripts" not in sys.path:
+                    sys.path.insert(0, "/app/backend/scripts")
+                from migrate_fund_calls_periods import _compute_period  # type: ignore
+                fy = None
+                if data.fiscal_year_id:
+                    fy = await db.fiscal_years.find_one({"id": data.fiscal_year_id}, {"_id": 0})
+                fy_by_id = {fy["id"]: fy} if fy else {}
+                ps, pe = _compute_period({
+                    "name": data.name,
+                    "date": data.date,
+                    "fiscal_year_id": data.fiscal_year_id,
+                }, fy_by_id)
+                period_start = ps or ""
+                period_end = pe or ""
+            except Exception as _e:
+                print(f"[iter90cf] period computation skipped: {_e}")
 
         doc = {
             "id": str(uuid.uuid4()),
             "name": data.name,
             "date": data.date,
             "due_date": data.due_date,
+            "period_start": period_start,
+            "period_end": period_end,
             "fiscal_year_id": data.fiscal_year_id,
             "description": data.description,
             "total_amount": data.total_amount,
@@ -254,6 +489,14 @@ def create_fund_calls_router(db):
             await generate_sale_entry(db, clean)
         except Exception as e:
             print(f"[auto-entry] sale create failed: {e}")
+        # iter90cf : genere retroactivement les OD MUT-P si periode straddle
+        # une mutation existante (uniquement pour provisions).
+        try:
+            _mut_stats = await generate_prorata_mut_ods_for_call(db, clean)
+            if _mut_stats.get("created"):
+                print(f"[iter90cf] {_mut_stats['created']} OD MUT-P retroactives creees pour {data.name}")
+        except Exception as _e:
+            print(f"[iter90cf] retroactive OD generation skipped: {_e}")
         return clean
 
     @router.get("/{call_id}")
@@ -336,6 +579,21 @@ def create_fund_calls_router(db):
             await _delete_auto_entries(db, "fund_call", call_id)
         except Exception:
             pass
+        # iter90cf : contre-passe egalement les OD MUT-P retroactives liees a
+        # cet appel (source_type='lot_mutation' + source_subtype='prorata_post_mutation'
+        # + fund_call_id=call_id) pour eviter les orphelins comptables.
+        try:
+            from journal_reversals import reverse_journal_entry
+            post_muts = await db.journal_entries.find({
+                "fund_call_id": call_id,
+                "source_subtype": "prorata_post_mutation",
+                "reversed": {"$ne": True},
+                "is_reversal": {"$ne": True},
+            }, {"_id": 0}).to_list(1000)
+            for pm in post_muts:
+                await reverse_journal_entry(db, pm, reason=f"Suppression appel {call_id}")
+        except Exception as _e:
+            print(f"[iter90cf] reversal of post-mutation ODs skipped: {_e}")
         result = await db.fund_calls.delete_one({"id": call_id})
         if result.deleted_count == 0:
             raise HTTPException(404, "Appel non trouve")
@@ -1064,6 +1322,15 @@ def create_fund_calls_router(db):
                 await generate_sale_entry(db, doc)
             except Exception as e:
                 print(f"[auto-entry] sale bulk failed: {e}")
+            # iter90cf : genere retroactivement les OD MUT-P si l'appel est
+            # cree apres une mutation dont la sale_date tombe dans la periode
+            # couverte par cet appel.
+            try:
+                _mut_stats = await generate_prorata_mut_ods_for_call(db, doc)
+                if _mut_stats.get("created"):
+                    print(f"[iter90cf] {_mut_stats['created']} OD MUT-P retroactives pour {doc.get('name','?')}")
+            except Exception as _e:
+                print(f"[iter90cf] retroactive OD (budget) skipped: {_e}")
             created_ids.append(doc["id"])
 
         return {"calls": results, "summary": summary, "persisted": True, "created_ids": created_ids}

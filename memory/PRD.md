@@ -14,6 +14,54 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 ### Iter90bx (Feb 2026) - Contre-passation traceable des ecritures comptables (BLOQUANT LEGAL)
 ### Iter90cd (Feb 2026) - Fix regeneration appels apres mutation (double-comptage prorata)
 ### Iter90ce (Feb 2026) - Verrou regression : fonds de reserve JAMAIS transferes en mutation
+### Iter90cf (Feb 2026) - Fix appels crees APRES mutation + double-ecriture db.mutations
+
+**Ticket utilisateur** : "les OD n'apparaissent plus suite a tes corrections
+le total n'est pas bon!! Lors des mutations apres appels tout se passe bien
+mais lors des appels apres mutation tout ne fonctionne pas".
+
+**Root cause identifiee (double bug)** :
+1. `mutate_lot` ecrivait UNIQUEMENT dans `lot.mutations` array. Jamais dans la
+   collection `db.mutations`. Or `_rebind_owner_at_call_date` (fund_calls.py)
+   lit dans `db.mutations`. Consequence : les mutations effectuees en prod
+   etaient invisibles pour toute la logique iter90aj / iter90cd.
+2. Meme si (1) etait resolu, la logique de mutate_lot ne creait les OD MUT-P
+   / MUT-F qu'au moment de la mutation. Si les appels etaient generes APRES,
+   aucune OD n'etait creee -> le prorata temporis manquait.
+
+**Cas reel (ACP Acacia, mutation Matexi -> DEGRANDE 10/06/2026)** :
+- Appel Q2 2026 (01/04, periode 01/04-30/06) genere apres la mutation.
+- Distribution 100% Matexi (correct : owner-at-call-date).
+- MAIS aucune OD MUT-P pour transferer les 21 jours (10/06-30/06) a DEGRANDE.
+- Balance de tiers faussee de ~85.85 EUR.
+
+**Fix (3 volets)** :
+1. `properties.py::mutate_lot` : ajoute double-ecriture `db.mutations.insert_one`
+   avec sync symetrique dans `cancel_mutation`.
+2. `server.py::startup` : sync idempotent `db.mutations` <- `lot.mutations`
+   au demarrage. Peuple la collection existante en prod au 1er redeploy.
+3. `fund_calls.py` : nouvelle fonction `generate_prorata_mut_ods_for_call(db, call)`
+   appelee apres chaque creation d'appel provisions. Detecte les mutations
+   dans la periode et cree les OD MUT-P retroactivement (DR acheteur /
+   CR vendeur, ref `MUTP-POST-{lot}-{call_short}-{buyer_short}`).
+4. `fund_calls.py::delete_fund_call` : contre-passe egalement les OD MUT-P
+   retroactives associees au fund_call supprime (via reversal, pas hard delete).
+5. Rebind owner-at-call-date etendu aux **provisions** (pas seulement
+   reserve/roulement/special) dans POST /api/fund-calls single.
+
+**Script de reparation** :
+`backend/scripts/repair_post_mutation_prorata.py --dry-run|--apply`
+Detecte et corrige toutes les OD MUT-P manquantes sur la base existante.
+
+**Tests iter90cf** : 5/5 PASS
+1. Appel straddling mutation -> OD MUT-P creee correctement.
+2. Appel entierement post-mutation -> distribution.owner=acheteur, aucune OD.
+3. Appel entierement pre-mutation -> distribution.owner=vendeur, aucune OD.
+4. Idempotence : supprimer + recreer l'appel = 1 seule OD active.
+5. Multi-mutations dans la periode : plusieurs OD segmentees.
+
+**Regressions verifiees (sans nouvel echec)** :
+iter76, iter90ai, iter90aj, iter90cd, iter90ce (17/17 tests PASS).
 
 **Ticket utilisateur** : "les fonds de reserve ne sont JAMAIS transferes dans le
 cadre des mutations... Corrige".

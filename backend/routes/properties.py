@@ -1428,6 +1428,28 @@ def create_properties_router(db):
                  "$push": {"mutations": mut_rec}}
             )
 
+            # iter90cf : DOUBLE-ECRITURE dans db.mutations collection.
+            # Historiquement, mutate_lot n'ecrivait que dans lot.mutations. Mais
+            # _rebind_owner_at_call_date (fund_calls.py) lit dans db.mutations,
+            # laissant les mutations invisibles lors de la generation d'appels
+            # post-mutation. On corrige en peuplant les deux endroits.
+            try:
+                await db.mutations.insert_one({
+                    "id": mut_rec["id"],
+                    "copropriete_id": copro_id,
+                    "lot_id": lt["id"],
+                    "from_owner_id": old_owner_id,
+                    "to_owner_id": data.new_owner_id,
+                    "sale_date": sale_date,
+                    "roulement_quota": r_quota,
+                    "current_period_prorata": c_prorata,
+                    "total_transfer": t_transfer,
+                    "journal_entry_ids": journal_entry_ids,
+                    "created_at": mut_rec["created_at"],
+                })
+            except Exception as _me:
+                print(f"[iter90cf] mutations collection insert failed (soft): {_me}")
+
             # iter85 : NEUTRALISATION de la regeneration des appels futurs.
             # La nouvelle approche cree une OD (DR acheteur / CR vendeur) a la date
             # de CHAQUE appel futur (cf. bloc "3) Appels futurs" ci-dessus). On ne
@@ -1516,6 +1538,12 @@ def create_properties_router(db):
                           "owner_ids": [mutation_record.get("old_owner_id")]},
                  "$pop": {"mutations": 1}}
             )
+            # iter90cf : synchronisation avec db.mutations collection
+            try:
+                if mutation_record.get("id"):
+                    await db.mutations.delete_one({"id": mutation_record["id"]})
+            except Exception as _me:
+                print(f"[iter90cf] mutations collection delete failed (soft): {_me}")
 
         cancelled = [{"lot_id": lot_id, "lot_number": lot.get("number", ""), "mutation_id": last.get("id")}]
         # Annule le parent

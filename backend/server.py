@@ -923,6 +923,43 @@ async def startup():
         await seed_pcmn()
     except Exception as _e:
         print(f"[startup] seed_pcmn failed: {_e}")
+
+    # iter90cf : SYNC db.mutations depuis lot.mutations (idempotent).
+    # Historiquement, mutate_lot ne peuplait que lot.mutations, laissant la
+    # collection db.mutations vide. Les fonctions _rebind_owner_at_call_date
+    # et _resolve_owner_at_date (fund_calls.py) lisaient dans db.mutations,
+    # donc les mutations restaient invisibles lors de la generation d'appels
+    # post-mutation. Ce sync corrige les donnees existantes en production.
+    try:
+        synced = 0
+        async for lot_doc in db.lots.find(
+            {"mutations": {"$exists": True, "$ne": []}}, {"_id": 0, "id": 1, "copropriete_id": 1, "mutations": 1}
+        ):
+            for mr in (lot_doc.get("mutations") or []):
+                if not mr.get("id") or not mr.get("date"):
+                    continue
+                doc = {
+                    "id": mr["id"],
+                    "copropriete_id": lot_doc.get("copropriete_id", ""),
+                    "lot_id": lot_doc["id"],
+                    "from_owner_id": mr.get("old_owner_id", ""),
+                    "to_owner_id": mr.get("new_owner_id", ""),
+                    "sale_date": mr.get("date", ""),
+                    "roulement_quota": mr.get("roulement_quota", 0.0),
+                    "current_period_prorata": mr.get("current_period_prorata",
+                                                     mr.get("prorata_provisions", 0.0)),
+                    "total_transfer": mr.get("total_transfer", 0.0),
+                    "journal_entry_ids": mr.get("journal_entry_ids") or (
+                        [mr.get("journal_entry_id")] if mr.get("journal_entry_id") else []
+                    ),
+                    "created_at": mr.get("created_at", ""),
+                }
+                await db.mutations.update_one({"id": mr["id"]}, {"$set": doc}, upsert=True)
+                synced += 1
+        if synced:
+            print(f"[startup][iter90cf] db.mutations synced from lot.mutations: {synced} entries")
+    except Exception as _e:
+        print(f"[startup][iter90cf] mutation sync skipped: {_e}")
     # iter90as : ecriture test_credentials.md en dev/preview UNIQUEMENT.
     # En production K8s, /app/memory peut ne pas etre writable (filesystem
     # hardened, volume ephemere) -> le crash faisait timeout le readiness probe.
