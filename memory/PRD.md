@@ -11,6 +11,45 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 
+### Iter90bv (Feb 2026) - Regroupement multi-lots dans situation de compte
+
+**Ticket user** : "Le detail par lot dans la Balance de tiers est trop complique
+a comprendre pour les proprietaires. Il faut sommer les montants de tous les
+lots d'un meme proprietaire."
+
+**Cause racine** : quand un proprietaire possede N lots dans une ACP, un meme
+appel de fonds VE genere N lignes debit sur son compte tier (une par lot).
+Dans la vue "Situation de compte" et le PDF, cela produit N lignes visuellement
+identiques (meme date, meme description "Appel de provisions - Q1 2026"), ce
+qui est confus pour un lecteur non-comptable.
+
+**Fix backend** (`routes/reports.py`) :
+- Nouveau helper `_group_movements_by_owner(movements)` : regroupe les lignes
+  par cle `(reference|entry_id, date, account_number, description, journal_type)`
+  et somme debit/credit. Preserve l'ordre chronologique.
+- `GET /api/reports/balance-tiers/owners/{owner_id}` : nouveau parametre
+  `group_by_owner=true` (defaut) => vue resumee. `false` => detail par lot (audit).
+- `_build_situation_compte_pdf` : ajoute `group_by_owner=true` par defaut
+  (le PDF envoye aux proprietaires utilise la vue resumee).
+- `GET /api/owner/situation/{copropriete_id}` : agrege desormais les montants
+  par (fund_call.id, invoice.id) au lieu de generer 1 mouvement par lot.
+
+**Frontend** (`pages/BalanceTiersPage.js`) :
+- Toggle "Vue resumee" / "Detail par lot" dans le dialog de detail proprietaire
+  (defaut = Vue resumee). Passe `group_by_owner` a l'endpoint.
+- Le toggle n'apparait que pour les proprietaires (pas les fournisseurs).
+
+**Tests** :
+- `test_iter90bv_group_movements_by_owner.py` (6/6) : helper unit (merge,
+  fund calls distincts, comptes distincts, paiements FI, fallback entry_id).
+- `test_iter90bv_e2e_situation_compte_grouped.py` (2/2) : endpoint HTTP
+  (3 lots + 1 VE => 1 mouvement en vue groupee, 3 mouvements en detail),
+  PDF genere sans erreur en mode groupe.
+
+**Regle metier** : le PDF envoye au proprietaire est toujours en vue resumee ;
+le detail par lot reste accessible aux syndics pour audit via le toggle UI.
+
+
 ### Iter90be (Feb 2026) - Detection stricte doublons fournisseurs avec particules juridiques
 
 - **Bug** : "Finlead" et "SRL Finlead" (meme entite) coexistaient en base (44000002

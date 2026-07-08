@@ -263,31 +263,39 @@ def create_owner_portal_router(db):
         my_lot_ids = {l["id"] for l in my_lots}
 
         movements = []
-        # Fund calls
+        # Fund calls - iter90bv : aggreger par (fc_id, name) pour un proprietaire
+        # ayant plusieurs lots. Un meme appel apparait sinon N fois.
         fund_calls = await db.fund_calls.find({"copropriete_id": copropriete_id}, {"_id": 0}).to_list(10000)
         for fc in fund_calls:
+            owner_amount = 0.0
             for d in fc.get("distribution", []):
                 if d.get("owner_id") == owner_id:
-                    movements.append({
-                        "date": fc["date"],
-                        "description": f"Appel: {fc['name']}",
-                        "debit": d.get("amount", 0),
-                        "credit": 0,
-                        "type": "appel",
-                    })
+                    owner_amount += float(d.get("amount", 0) or 0)
+            if owner_amount > 0.001:
+                movements.append({
+                    "date": fc["date"],
+                    "description": f"Appel: {fc['name']}",
+                    "debit": round(owner_amount, 2),
+                    "credit": 0,
+                    "type": "appel",
+                })
 
-        # Invoice distributions
+        # Invoice distributions - iter90bv : cumuler tous les lots du proprietaire
+        # sur une meme facture en une seule ligne (sinon N lignes par lot).
         invoices = await db.invoices.find({"copropriete_id": copropriete_id}, {"_id": 0}).to_list(10000)
         for inv in invoices:
+            inv_amount = 0.0
             for dl in inv.get("distribution_lines", []):
                 if dl.get("lot_id") in my_lot_ids:
-                    movements.append({
-                        "date": inv["date"],
-                        "description": f"Charge: {inv.get('supplier', '')} - {inv.get('description', '')}",
-                        "debit": dl.get("amount", 0),
-                        "credit": 0,
-                        "type": "charge",
-                    })
+                    inv_amount += float(dl.get("amount", 0) or 0)
+            if inv_amount > 0.001:
+                movements.append({
+                    "date": inv["date"],
+                    "description": f"Charge: {inv.get('supplier', '')} - {inv.get('description', '')}",
+                    "debit": round(inv_amount, 2),
+                    "credit": 0,
+                    "type": "charge",
+                })
 
         # Bank transactions matching this owner
         txns = await db.bank_transactions.find(

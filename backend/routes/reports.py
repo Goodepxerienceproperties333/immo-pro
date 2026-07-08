@@ -39,10 +39,58 @@ def _exclude_reversals(q: dict) -> dict:
     return q
 
 
-async def _build_situation_compte_pdf(db, owner_id, copropriete_id, start_date=None, end_date=None):
+def _group_movements_by_owner(movements: list) -> list:
+    """iter90bv : regroupe les mouvements d'un meme proprietaire pour tous ses lots.
+
+    Quand un proprietaire possede plusieurs lots dans une ACP, un meme appel de fonds
+    (VE) genere N lignes debit sur son compte tier (une par lot x type). Cette fonction
+    aggregge ces lignes en UNE SEULE par (entry_id, account_number, description) en
+    sommant debit et credit.
+
+    Preserve l'ordre chronologique et la structure des mouvements (dates, references,
+    types de journal). Ne merge que les lignes du meme journal_entry (donc jamais des
+    operations distinctes).
+    """
+    if not movements:
+        return []
+    buckets = {}
+    order = []
+    for m in movements:
+        # Cle de regroupement : meme ecriture + meme compte + meme libelle de ligne
+        # => c'est la meme "operation" logique demultiplice sur plusieurs lots.
+        key = (
+            m.get("reference", "") or m.get("entry_id", "") or "",
+            m.get("date", ""),
+            m.get("account_number", "") or "",
+            (m.get("description", "") or "").strip(),
+            m.get("journal_type", "") or "",
+        )
+        if key not in buckets:
+            buckets[key] = dict(m)
+            buckets[key]["debit"] = float(m.get("debit", 0) or 0)
+            buckets[key]["credit"] = float(m.get("credit", 0) or 0)
+            order.append(key)
+        else:
+            buckets[key]["debit"] += float(m.get("debit", 0) or 0)
+            buckets[key]["credit"] += float(m.get("credit", 0) or 0)
+    result = []
+    for key in order:
+        b = buckets[key]
+        b["debit"] = round(b["debit"], 2)
+        b["credit"] = round(b["credit"], 2)
+        result.append(b)
+    return result
+
+
+async def _build_situation_compte_pdf(db, owner_id, copropriete_id, start_date=None, end_date=None, group_by_owner: bool = True):
     """iter90au : helper reutilisable qui construit les bytes PDF de la situation
     de compte + le nom de fichier. Utilise par le download endpoint et par le
-    communication router (/api/communication/send/situation)."""
+    communication router (/api/communication/send/situation).
+
+    iter90bv : `group_by_owner=True` (defaut) => les lignes d'un meme proprietaire
+    portant sur plusieurs lots sont fusionnees en une seule (vue resumee, adaptee
+    aux proprietaires non-comptables).
+    """
     from pdf_situation_compte import build_situation_compte_pdf
     from pdf_layout import resolve_syndic_pdf_context
 
@@ -96,6 +144,7 @@ async def _build_situation_compte_pdf(db, owner_id, copropriete_id, start_date=N
                     "date": date_str,
                     "description": line_desc or entry_desc,
                     "reference": e.get("reference", "") or "",
+                    "entry_id": e.get("id", "") or "",
                     "account_number": acc,
                     "account_name": ln.get("account_name", ""),
                     "debit": d_val,
@@ -129,6 +178,10 @@ async def _build_situation_compte_pdf(db, owner_id, copropriete_id, start_date=N
             })
 
     movements.sort(key=lambda x: (x["date"], x.get("reference", "")))
+
+    # iter90bv : fusion des lignes d'un meme proprietaire pour tous ses lots
+    if group_by_owner:
+        movements = _group_movements_by_owner(movements)
 
     syndic_info = {
         "name": copro.get("syndic_name") or copro.get("name", "Syndic"),
@@ -1758,6 +1811,7 @@ def create_reports_router(db):
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
         show_all: bool = False,
+        group_by_owner: bool = True,
     ):
         """Situation de compte d'un proprietaire (basee sur le grand livre).
         Chinese walls strict. Filtre periode optionnel.
@@ -1769,7 +1823,12 @@ def create_reports_router(db):
           - les paiements (FI / banque)
           - l'imputation des frais reels a la cloture (OD-REG-CHRG)
           - le report a-nouveau (AN)
-        Passer `show_all=true` pour voir aussi les annulations (mode comptable expert)."""
+        Passer `show_all=true` pour voir aussi les annulations (mode comptable expert).
+
+        iter90bv : `group_by_owner=true` (defaut) => fusionne les lignes portant sur
+        plusieurs lots d'un meme proprietaire dans une meme ecriture (vue simplifiee,
+        adaptee au proprietaire non-comptable). Passer `false` pour voir le detail
+        par lot (utile pour audit)."""
         copropriete_id = _require_copro(copropriete_id, request)
         owner = await db.owners.find_one({"id": owner_id}, {"_id": 0})
         if not owner:
@@ -1943,6 +2002,13 @@ def create_reports_router(db):
                 })
 
         movements.sort(key=lambda x: (x["date"], x.get("reference", "")))
+
+        # iter90bv : fusion des lignes d'un meme proprietaire pour tous ses lots.
+        # Un appel de fonds VE cree N lignes debit par lot ; on les cumule en 1.
+        # `group_by_owner=false` pour audit / vue detaillee par lot.
+        if group_by_owner:
+            movements = _group_movements_by_owner(movements)
+
         running = 0
         for m in movements:
             running += m["debit"] - m["credit"]

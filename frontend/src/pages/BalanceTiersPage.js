@@ -93,6 +93,8 @@ export default function BalanceTiersPage() {
   const [suppliersData, setSuppliersData] = useState(null);
   const [detail, setDetail] = useState(null);
   const [detailType, setDetailType] = useState('');
+  const [detailGrouped, setDetailGrouped] = useState(true);
+  const [detailOwnerId, setDetailOwnerId] = useState('');
   const [loading, setLoading] = useState(true);
   // ----- Manual reconciliation (lettrage manuel) state -----
   const [lettrerOpen, setLettrerOpen] = useState(false);
@@ -129,13 +131,15 @@ export default function BalanceTiersPage() {
   }, [filters.startDate, filters.endDate]);
   useEffect(() => { load(); }, [load]);
 
-  const viewOwnerDetail = async (ownerId) => {
+  const viewOwnerDetail = async (ownerId, grouped = true) => {
     try {
-      const params = {};
+      const params = { group_by_owner: grouped };
       if (filters.startDate) params.start_date = filters.startDate;
       if (filters.endDate) params.end_date = filters.endDate;
       const { data } = await api.get(`/reports/balance-tiers/owners/${ownerId}`, { params });
       setDetail(data); setDetailType('owner');
+      setDetailOwnerId(ownerId);
+      setDetailGrouped(grouped);
     } catch { toast.error('Erreur'); }
   };
   const viewSupplierDetail = async (supplierId) => {
@@ -439,7 +443,7 @@ export default function BalanceTiersPage() {
             )}
           </DialogHeader>
           <div className="mt-2">
-            <div className="flex gap-4 mb-4 text-sm">
+            <div className="flex gap-4 mb-4 text-sm items-center flex-wrap">
               <div><span className="text-slate-500">Total debit:</span> <span className="font-mono font-bold">{detail?.total_debit?.toFixed(2)} EUR</span></div>
               <div><span className="text-slate-500">Total credit:</span> <span className="font-mono font-bold">{detail?.total_credit?.toFixed(2)} EUR</span></div>
               <div>
@@ -449,6 +453,28 @@ export default function BalanceTiersPage() {
                 </span>
                 <Badge variant="outline" className="ml-2 text-[10px]">{detail?.status === 'debiteur' ? (detailType === 'owner' ? 'Doit payer' : 'Trop-paye') : detail?.status === 'crediteur' ? (detailType === 'owner' ? 'A rembourser' : 'A payer') : 'Solde'}</Badge>
               </div>
+              {detailType === 'owner' && (
+                <div className="ml-auto flex items-center gap-1 bg-slate-100 rounded-full p-1" data-testid="detail-view-mode-toggle">
+                  <button
+                    type="button"
+                    onClick={() => viewOwnerDetail(detailOwnerId, true)}
+                    className={`px-3 py-1 rounded-full text-xs font-medium transition ${detailGrouped ? 'bg-white text-[#2563EB] shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                    data-testid="detail-view-grouped-btn"
+                    title="Fusionne les lignes portant sur plusieurs lots du meme proprietaire"
+                  >
+                    Vue resumee
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => viewOwnerDetail(detailOwnerId, false)}
+                    className={`px-3 py-1 rounded-full text-xs font-medium transition ${!detailGrouped ? 'bg-white text-[#2563EB] shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                    data-testid="detail-view-detailed-btn"
+                    title="Affiche une ligne par lot (utile pour audit)"
+                  >
+                    Detail par lot
+                  </button>
+                </div>
+              )}
             </div>
             <div className="border rounded-md overflow-hidden">
               <Table>
