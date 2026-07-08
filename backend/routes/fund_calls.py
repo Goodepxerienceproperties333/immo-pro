@@ -407,8 +407,101 @@ def create_fund_calls_router(db):
     @router.post("/preview-from-budget")
     async def preview_from_budget(data: GenerateFromBudgetInput):
         """Preview N fund calls computed from a budget, WITHOUT persisting.
-        Used by the frontend wizard to show recap before confirmation."""
-        return await _generate_from_budget(data, persist=False)
+        Used by the frontend wizard to show recap before confirmation.
+
+        iter90cc : enrichi avec `orphan_lots_warning` liste tous les lots qui
+        ont des shares > 0 dans une cle utilisee mais pas d'owner_id.
+        """
+        result = await _generate_from_budget(data, persist=False)
+        result["orphan_lots_warning"] = await _detect_orphan_lots_for_budget(data)
+        return result
+
+    @router.post("/preflight-orphan-check")
+    async def preflight_orphan_check(data: GenerateFromBudgetInput):
+        """iter90cc : verification legere avant emission d'appels. Retourne
+        UNIQUEMENT les lots orphelins (share > 0 sans owner) presents dans
+        les cles utilisees par le budget + les fonds. Utilisable avant
+        d'appeler generate-from-budget pour prevenir le syndic.
+        """
+        return {"orphan_lots_warning": await _detect_orphan_lots_for_budget(data)}
+
+    async def _detect_orphan_lots_for_budget(data: GenerateFromBudgetInput) -> dict:
+        """iter90cc : detecte les lots avec share > 0 mais sans owner_id
+        parmi les cles utilisees (budget.lines + reserve_fund + roulement_fund).
+        Retourne :
+          {
+            "orphan_count": int,
+            "orphan_share_percentage": float,  # % de shares perdues avant fix
+            "keys_affected": [{"key_id","key_name","orphan_share","total_share"}],
+            "lots": [{"lot_id","lot_number","share","keys":[<key_name>...]}],
+          }
+        """
+        budget = await db.budgets.find_one({"id": data.budget_id}, {"_id": 0})
+        if not budget:
+            return {"orphan_count": 0, "orphan_share_percentage": 0.0, "keys_affected": [], "lots": []}
+        copro_id = data.copropriete_id or budget.get("copropriete_id", "")
+
+        lots = await db.lots.find({"copropriete_id": copro_id}, {"_id": 0}).to_list(10000)
+        lots_by_id = {lt["id"]: lt for lt in lots}
+        keys = await db.distribution_keys.find({"copropriete_id": copro_id}, {"_id": 0}).to_list(1000)
+        keys_map = {k["id"]: k for k in keys}
+
+        # Collect all key_ids used by this budget generation
+        used_key_ids = set()
+        for bl in budget.get("lines", []):
+            kid = bl.get("distribution_key_id")
+            if kid:
+                used_key_ids.add(kid)
+        if data.reserve_fund and data.reserve_fund.enabled and data.reserve_fund.distribution_key_id:
+            used_key_ids.add(data.reserve_fund.distribution_key_id)
+        if data.roulement_fund and data.roulement_fund.enabled and data.roulement_fund.distribution_key_id:
+            used_key_ids.add(data.roulement_fund.distribution_key_id)
+
+        keys_affected = []
+        orphan_lots_by_id: dict = {}
+        for kid in used_key_ids:
+            key = keys_map.get(kid)
+            if not key:
+                continue
+            active_kls = [kle for kle in key.get("lots", []) if not kle.get("excluded")]
+            total_share = sum(float(kle.get("share", 0) or 0) for kle in active_kls)
+            orphan_share = 0.0
+            for kle in active_kls:
+                lot = lots_by_id.get(kle.get("lot_id"))
+                if not lot or not lot.get("owner_id"):
+                    share = float(kle.get("share", 0) or 0)
+                    if share > 0:
+                        orphan_share += share
+                        # Aggreger par lot_id
+                        lid = kle.get("lot_id") or "MISSING"
+                        entry = orphan_lots_by_id.setdefault(lid, {
+                            "lot_id": lid,
+                            "lot_number": (lot or {}).get("number", "MISSING") if lot else "MISSING",
+                            "share": share,
+                            "keys": [],
+                        })
+                        entry["keys"].append(key.get("name", ""))
+            if orphan_share > 0:
+                keys_affected.append({
+                    "key_id": kid,
+                    "key_name": key.get("name", ""),
+                    "orphan_share": round(orphan_share, 4),
+                    "total_share": round(total_share, 4),
+                    "orphan_percentage": round(100.0 * orphan_share / total_share, 2) if total_share > 0 else 0.0,
+                })
+
+        # Percentage global = moyenne ponderee des cles affectees
+        if keys_affected:
+            worst_pct = max(k["orphan_percentage"] for k in keys_affected)
+        else:
+            worst_pct = 0.0
+
+        return {
+            "orphan_count": len(orphan_lots_by_id),
+            "orphan_share_percentage": worst_pct,
+            "keys_affected": keys_affected,
+            "lots": list(orphan_lots_by_id.values()),
+        }
 
     @router.post("/generate-from-budget")
     async def generate_from_budget_endpoint(data: GenerateFromBudgetInput):

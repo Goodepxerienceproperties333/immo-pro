@@ -12,6 +12,52 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 ### Iter90bx (Feb 2026) - Contre-passation traceable des ecritures comptables (BLOQUANT LEGAL)
+### Iter90cc (Feb 2026) - Preflight check lots orphelins avant emission d'appels
+
+**Contexte** : suite au bug iter90cb, ajout d'une verification pre-emission pour
+alerter le syndic quand des lots orphelins sont detectes dans une cle de
+distribution utilisee par le budget/fonds. Le fix iter90cb continue de
+redistribuer automatiquement les shares (filet de securite), mais le syndic est
+averti pour eventuellement corriger la saisie en amont.
+
+**Backend** :
+- Nouveau helper `_detect_orphan_lots_for_budget(data)` : analyse toutes les
+  cles utilisees (budget.lines + reserve_fund + roulement_fund) et retourne :
+  ```
+  {
+    orphan_count: int,
+    orphan_share_percentage: float,       # % max sur toutes les cles affectees
+    keys_affected: [{key_id, key_name, orphan_share, total_share, orphan_percentage}],
+    lots: [{lot_id, lot_number, share, keys: [key_name...]}]
+  }
+  ```
+- Nouvel endpoint `POST /api/fund-calls/preflight-orphan-check` : leger,
+  retourne uniquement le warning (utilisable pour check async avant confirmation).
+- Endpoint `POST /api/fund-calls/preview-from-budget` enrichi : la reponse
+  inclut desormais le champ `orphan_lots_warning` (auto-affiche dans le wizard).
+
+**Frontend** (`BudgetWizard.js`, step 5 "Recapitulatif") :
+- Banner amber (border-2, AlertTriangle icon) affiche automatiquement quand
+  `preview.orphan_lots_warning.orphan_count > 0`.
+- Message clair : "X lot(s) orphelin(s) detecte(s) (Y.YY% des shares). Leurs
+  shares seront redistribuees proportionnellement... Verifiez qu'il ne s'agit
+  pas d'une erreur de saisie".
+- Section `<details>` cliquable : liste lot par lot avec numero et cles impactees,
+  puis synthese par cle (orphan_share / total_share / percentage).
+- data-testid="orphan-lots-warning" pour tests E2E.
+
+**Tests** (`test_iter90cc_preflight_orphan_check.py` 3/3) :
+- test_preflight_detects_orphan_lots_with_share : detection Matexi 1 lot
+  orphelin 3.6% avec cle referencee 3x -> une seule entree keys_affected
+- test_preflight_no_orphans_returns_empty_warning : ACP saine -> 0 warning
+- test_preview_endpoint_also_includes_warning : preview inclut le warning +
+  les 4 calls normaux
+
+**Design** : le check ne BLOQUE PAS la generation (l'utilisateur peut ignorer
+l'avertissement). C'est un rappel informatif ; le fix iter90cb reste actif
+comme filet de securite.
+
+
 ### Iter90cb (Feb 2026) - Fix distribution appel avec lots orphelins (bug 3.6% Matexi)
 
 **Ticket utilisateur (ACP Acacia)** : Balance de tiers Matexi affichait Reserve

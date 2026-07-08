@@ -8,7 +8,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
 import { toast } from 'sonner';
-import { ChevronLeft, ChevronRight, Send, CheckCircle2, Calendar, Wallet, ShieldCheck, Banknote, ClipboardList } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Send, CheckCircle2, Calendar, Wallet, ShieldCheck, Banknote, ClipboardList, AlertTriangle } from 'lucide-react';
 import { fmtDate } from '@/lib/dateFmt';
 
 const FREQ_OPTIONS = [
@@ -404,6 +404,47 @@ export default function BudgetWizard({ budget, distKeys = [], onClose, onDone, m
             {loading && <div className="text-center py-8 text-slate-500">Calcul en cours...</div>}
             {preview && !loading && (
               <>
+                {/* iter90cc : warning lots orphelins detectes dans les cles */}
+                {preview.orphan_lots_warning && preview.orphan_lots_warning.orphan_count > 0 && (
+                  <div className="bg-amber-50 border-2 border-amber-400 rounded-lg p-4 flex items-start gap-3" data-testid="orphan-lots-warning">
+                    <AlertTriangle size={22} className="text-amber-600 flex-shrink-0 mt-0.5" />
+                    <div className="flex-1">
+                      <div className="font-semibold text-amber-900 text-sm">
+                        {preview.orphan_lots_warning.orphan_count} lot(s) orphelin(s) detecte(s)
+                        {' '}({preview.orphan_lots_warning.orphan_share_percentage.toFixed(2)}% des shares)
+                      </div>
+                      <div className="text-xs text-amber-800 mt-1">
+                        Ces lots ont des shares dans une cle de distribution mais aucun proprietaire assigne.
+                        Leurs shares seront <strong>redistribuees proportionnellement</strong> sur les
+                        proprietaires actuels (fix iter90cb). Verifiez qu&apos;il ne s&apos;agit pas d&apos;une erreur
+                        de saisie avant de generer les appels.
+                      </div>
+                      <details className="text-xs mt-2">
+                        <summary className="cursor-pointer text-amber-900 font-medium select-none">Voir le detail</summary>
+                        <div className="mt-2 space-y-1">
+                          {preview.orphan_lots_warning.lots.map((lot, i) => (
+                            <div key={i} className="flex items-center justify-between bg-white/60 rounded px-2 py-1">
+                              <span className="font-mono text-slate-700">Lot {lot.lot_number || lot.lot_id.slice(0, 8)}</span>
+                              <span className="text-slate-500">
+                                share = <strong>{lot.share.toFixed(4)}</strong> dans : {lot.keys.join(', ')}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                        <div className="mt-2 pt-2 border-t border-amber-300 space-y-1">
+                          {preview.orphan_lots_warning.keys_affected.map((k, i) => (
+                            <div key={i} className="text-xs text-amber-800">
+                              Cle <strong>{k.key_name}</strong> : {k.orphan_share.toFixed(4)} share orpheline
+                              {' / '}total {k.total_share.toFixed(4)}
+                              {' '}(<strong>{k.orphan_percentage.toFixed(2)}%</strong>)
+                            </div>
+                          ))}
+                        </div>
+                      </details>
+                    </div>
+                  </div>
+                )}
+
                 <div className="grid grid-cols-5 gap-3">
                   <Card><CardContent className="p-3"><div className="text-xs text-slate-500">Nombre d'appels</div><div className="text-xl font-black mt-1" style={{ fontFamily: 'Chivo,sans-serif' }}>{preview.summary.n_calls}</div></CardContent></Card>
                   <Card><CardContent className="p-3"><div className="text-xs text-slate-500">Budget annuel</div><div className="text-xl font-black mt-1 font-mono">{preview.summary.budget_total.toFixed(2)}</div></CardContent></Card>
