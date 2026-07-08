@@ -192,7 +192,7 @@ export default function OwnerAccessSection({ ownerId, ownerEmail }) {
             size="sm"
             onClick={() => callAction('grant-access', 'Acces active', 'grant')}
             disabled={busy === 'grant' || !ownerEmail}
-            className="bg-[#0055FF] hover:bg-[#0040CC] text-white"
+            className="bg-[#2563EB] hover:bg-[#1D4ED8] text-white"
             data-testid="owner-grant-access-btn"
           >
             {busy === 'grant' ? <Loader2 size={14} className="mr-1 animate-spin" /> : <KeyRound size={14} className="mr-1" />}

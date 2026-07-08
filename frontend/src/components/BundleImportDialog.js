@@ -183,7 +183,7 @@ export default function BundleImportDialog({
       >
         <DialogHeader>
           <DialogTitle style={{fontFamily:'Chivo,sans-serif'}} className="flex items-center gap-2">
-            <FolderInput size={20} className="text-[#0055FF]" />
+            <FolderInput size={20} className="text-[#2563EB]" />
             Regroupement de factures PDF
           </DialogTitle>
         </DialogHeader>
@@ -209,7 +209,7 @@ export default function BundleImportDialog({
               />
               <Button
                 onClick={() => document.getElementById('bundle-pdf-input').click()}
-                className="bg-[#0055FF] hover:bg-[#0040CC]"
+                className="bg-[#2563EB] hover:bg-[#1D4ED8]"
                 data-testid="bundle-select-file-btn"
               >
                 <FileText size={16} className="mr-2" /> Selectionner un PDF
@@ -220,7 +220,7 @@ export default function BundleImportDialog({
 
         {step === 'analyzing' && (
           <div className="py-12 text-center" data-testid="bundle-analyzing">
-            <div className="inline-block animate-spin rounded-full h-10 w-10 border-b-2 border-[#0055FF] mb-4"></div>
+            <div className="inline-block animate-spin rounded-full h-10 w-10 border-b-2 border-[#2563EB] mb-4"></div>
             <p className="text-sm text-slate-600">Analyse du PDF en cours...</p>
             <p className="text-xs text-slate-400 mt-1">Cette operation peut prendre quelques secondes pour les fichiers volumineux.</p>
           </div>
@@ -368,7 +368,7 @@ export default function BundleImportDialog({
                 <Button variant="outline" onClick={() => handleClose(false)} data-testid="bundle-cancel-btn">Annuler</Button>
                 <Button
                   onClick={commit}
-                  className="bg-[#0055FF] hover:bg-[#0040CC] font-semibold shadow-md"
+                  className="bg-[#2563EB] hover:bg-[#1D4ED8] font-semibold shadow-md"
                   data-testid="bundle-commit-btn"
                 >
                   <Check size={16} className="mr-2" /> Confirmer l import
@@ -380,7 +380,7 @@ export default function BundleImportDialog({
 
         {step === 'committing' && (
           <div className="py-12 text-center" data-testid="bundle-committing">
-            <div className="inline-block animate-spin rounded-full h-10 w-10 border-b-2 border-[#0055FF] mb-4"></div>
+            <div className="inline-block animate-spin rounded-full h-10 w-10 border-b-2 border-[#2563EB] mb-4"></div>
             <p className="text-sm text-slate-600">Decoupage et attachement en cours...</p>
           </div>
         )}
@@ -410,7 +410,7 @@ export default function BundleImportDialog({
               </div>
             )}
             <div className="flex justify-end">
-              <Button onClick={() => handleClose(false)} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="bundle-close-btn">
+              <Button onClick={() => handleClose(false)} className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="bundle-close-btn">
                 Fermer
               </Button>
             </div>

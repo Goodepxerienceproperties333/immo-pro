@@ -98,7 +98,7 @@ export default function LoginPage() {
       <div className="w-full lg:w-1/2 flex items-center justify-center p-8">
         <div className="w-full max-w-md">
           <div className="flex items-center gap-3 mb-8">
-            <div className="w-10 h-10 rounded bg-[#0055FF] flex items-center justify-center text-white font-bold">
+            <div className="w-10 h-10 rounded bg-[#2563EB] flex items-center justify-center text-white font-bold">
               <Building2 size={22} />
             </div>
             <div>
@@ -183,7 +183,7 @@ export default function LoginPage() {
               type="submit"
               data-testid="login-submit-btn"
               disabled={loading}
-              className="w-full bg-[#0055FF] hover:bg-[#0040CC] text-white font-semibold"
+              className="w-full bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-semibold"
             >
               {loading ? (
                 <span className="flex items-center gap-2">
@@ -204,7 +204,7 @@ export default function LoginPage() {
             {!isFirstSet && (
               <button
                 onClick={() => switchTo(isRegister ? 'login' : 'register')}
-                className="text-sm text-[#0055FF] hover:underline block w-full"
+                className="text-sm text-[#2563EB] hover:underline block w-full"
                 data-testid="toggle-auth-mode"
               >
                 {isRegister ? 'Deja un compte ? Se connecter' : 'Pas de compte ? Creer un compte'}
@@ -213,7 +213,7 @@ export default function LoginPage() {
             {mode === 'login' && (
               <a
                 href="/forgot-password"
-                className="text-sm text-slate-600 hover:text-[#0055FF] hover:underline block w-full"
+                className="text-sm text-slate-600 hover:text-[#2563EB] hover:underline block w-full"
                 data-testid="forgot-password-link"
               >
                 Mot de passe oublie ?
@@ -222,7 +222,7 @@ export default function LoginPage() {
             {mode === 'login' && (
               <button
                 onClick={() => switchTo('first-set')}
-                className="text-sm text-slate-600 hover:text-[#0055FF] hover:underline block w-full"
+                className="text-sm text-slate-600 hover:text-[#2563EB] hover:underline block w-full"
                 data-testid="toggle-first-set"
               >
                 1ere connexion ? Definir mon mot de passe
@@ -231,7 +231,7 @@ export default function LoginPage() {
             {isFirstSet && (
               <button
                 onClick={() => switchTo('login')}
-                className="text-sm text-slate-600 hover:text-[#0055FF] hover:underline block w-full"
+                className="text-sm text-slate-600 hover:text-[#2563EB] hover:underline block w-full"
                 data-testid="back-to-login"
               >
                 Retour a la connexion
@@ -242,13 +242,13 @@ export default function LoginPage() {
           {/* Legal footer links */}
           <div className="mt-6 pt-4 border-t border-slate-100">
             <div className="flex flex-wrap justify-center gap-x-3 gap-y-1 text-[11px] text-slate-400">
-              <a href="/legal/cgu" target="_blank" rel="noopener noreferrer" className="hover:text-[#0055FF] hover:underline" data-testid="login-link-cgu">CGU</a>
+              <a href="/legal/cgu" target="_blank" rel="noopener noreferrer" className="hover:text-[#2563EB] hover:underline" data-testid="login-link-cgu">CGU</a>
               <span>·</span>
-              <a href="/legal/privacy" target="_blank" rel="noopener noreferrer" className="hover:text-[#0055FF] hover:underline" data-testid="login-link-privacy">Confidentialite</a>
+              <a href="/legal/privacy" target="_blank" rel="noopener noreferrer" className="hover:text-[#2563EB] hover:underline" data-testid="login-link-privacy">Confidentialite</a>
               <span>·</span>
-              <a href="/legal/mentions" target="_blank" rel="noopener noreferrer" className="hover:text-[#0055FF] hover:underline" data-testid="login-link-mentions">Mentions Legales</a>
+              <a href="/legal/mentions" target="_blank" rel="noopener noreferrer" className="hover:text-[#2563EB] hover:underline" data-testid="login-link-mentions">Mentions Legales</a>
               <span>·</span>
-              <a href="/legal/cookies" target="_blank" rel="noopener noreferrer" className="hover:text-[#0055FF] hover:underline" data-testid="login-link-cookies">Cookies</a>
+              <a href="/legal/cookies" target="_blank" rel="noopener noreferrer" className="hover:text-[#2563EB] hover:underline" data-testid="login-link-cookies">Cookies</a>
             </div>
           </div>
         </div>

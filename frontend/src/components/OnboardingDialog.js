@@ -12,7 +12,7 @@ import {
 const SYNDIC_STEPS = [
   {
     icon: Sparkles,
-    color: 'from-[#0055FF] to-[#0040CC]',
+    color: 'from-[#2563EB] to-[#1D4ED8]',
     title: 'Bienvenue sur CoproManager',
     subtitle: 'Votre plateforme de gestion de copropriete selon le droit belge',
     body: (user) => (
@@ -290,7 +290,7 @@ export default function OnboardingDialog() {
         <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between">
           <div className="flex items-center gap-2 text-xs text-slate-500">
             <span>Etape {step + 1} / {steps.length}</span>
-            <button onClick={close} className="text-[#0055FF] hover:underline" data-testid="onboarding-skip">
+            <button onClick={close} className="text-[#2563EB] hover:underline" data-testid="onboarding-skip">
               Passer le guide
             </button>
           </div>
@@ -315,7 +315,7 @@ export default function OnboardingDialog() {
                 Creer un syndic
               </Button>
             )}
-            <Button onClick={next} size="sm" className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="onboarding-next">
+            <Button onClick={next} size="sm" className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="onboarding-next">
               {step === steps.length - 1 ? (
                 <>Commencer <CheckCircle2 size={14} className="ml-1" /></>
               ) : (

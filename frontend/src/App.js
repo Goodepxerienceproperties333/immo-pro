@@ -50,14 +50,14 @@ import LegalAcceptanceModal from "@/components/LegalAcceptanceModal";
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
-  if (loading) return <div className="flex h-screen items-center justify-center"><div className="h-1 w-48 bg-slate-200 rounded overflow-hidden"><div className="h-full bg-[#0055FF] animate-pulse w-1/2" /></div></div>;
+  if (loading) return <div className="flex h-screen items-center justify-center"><div className="h-1 w-48 bg-slate-200 rounded overflow-hidden"><div className="h-full bg-[#2563EB] animate-pulse w-1/2" /></div></div>;
   if (!user) return <Navigate to="/login" replace />;
   return children;
 }
 
 function AppRoutes() {
   const { user, loading } = useAuth();
-  if (loading) return <div className="flex h-screen items-center justify-center"><div className="h-1 w-48 bg-slate-200 rounded overflow-hidden"><div className="h-full bg-[#0055FF] animate-pulse w-1/2" /></div></div>;
+  if (loading) return <div className="flex h-screen items-center justify-center"><div className="h-1 w-48 bg-slate-200 rounded overflow-hidden"><div className="h-full bg-[#2563EB] animate-pulse w-1/2" /></div></div>;
 
   // Owners go directly to their dedicated portal
   const isOwnerRole = user && user.role === 'owner';

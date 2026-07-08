@@ -66,7 +66,7 @@ export default function ResetPasswordPage() {
     <div className="min-h-screen flex items-center justify-center bg-slate-50 p-6" data-testid="reset-password-page">
       <div className="w-full max-w-md bg-white rounded-xl shadow-sm border border-slate-200 p-8">
         <div className="flex items-center gap-3 mb-8">
-          <div className="w-10 h-10 rounded bg-[#0055FF] flex items-center justify-center text-white">
+          <div className="w-10 h-10 rounded bg-[#2563EB] flex items-center justify-center text-white">
             <Building2 size={22} />
           </div>
           <div>
@@ -88,7 +88,7 @@ export default function ResetPasswordPage() {
             </div>
             <button
               onClick={() => navigate('/forgot-password')}
-              className="w-full bg-[#0055FF] hover:bg-[#0040CC] text-white font-semibold rounded-md px-4 py-2"
+              className="w-full bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-semibold rounded-md px-4 py-2"
               data-testid="reset-request-new-link"
             >
               Demander un nouveau lien
@@ -147,7 +147,7 @@ export default function ResetPasswordPage() {
               <Button
                 type="submit"
                 disabled={loading || !password || !password2}
-                className="w-full bg-[#0055FF] hover:bg-[#0040CC] text-white font-semibold"
+                className="w-full bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-semibold"
                 data-testid="reset-submit-btn"
               >
                 {loading ? (
@@ -161,7 +161,7 @@ export default function ResetPasswordPage() {
               </Button>
             </form>
             <div className="mt-6 text-center">
-              <Link to="/login" className="text-sm text-slate-600 hover:text-[#0055FF] hover:underline" data-testid="back-to-login-link">
+              <Link to="/login" className="text-sm text-slate-600 hover:text-[#2563EB] hover:underline" data-testid="back-to-login-link">
                 <ArrowLeft size={14} className="inline mr-1" /> Retour a la connexion
               </Link>
             </div>

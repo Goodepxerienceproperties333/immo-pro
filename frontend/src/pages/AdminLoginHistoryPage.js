@@ -109,7 +109,7 @@ export default function AdminLoginHistoryPage() {
         </CardContent></Card>
         <Card><CardContent className="p-4">
           <div className="text-xs uppercase tracking-wider text-slate-500">Connexions reussies (30j)</div>
-          <div className="text-2xl font-bold text-[#0055FF] mt-1">{totalLogins30d}</div>
+          <div className="text-2xl font-bold text-[#2563EB] mt-1">{totalLogins30d}</div>
         </CardContent></Card>
         <Card><CardContent className="p-4">
           <div className="text-xs uppercase tracking-wider text-slate-500">Echecs (30j)</div>
@@ -133,7 +133,7 @@ export default function AdminLoginHistoryPage() {
             size="sm"
             variant={filterRole === f.v ? 'default' : 'outline'}
             onClick={() => setFilterRole(f.v)}
-            className={filterRole === f.v ? 'bg-[#0055FF] hover:bg-[#0040CC]' : ''}
+            className={filterRole === f.v ? 'bg-[#2563EB] hover:bg-[#1D4ED8]' : ''}
             data-testid={`filter-${f.v}`}
           >
             {f.l} ({f.v === 'all' ? summary.length : summary.filter(s => s.role === f.v).length})

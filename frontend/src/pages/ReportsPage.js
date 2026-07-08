@@ -198,7 +198,7 @@ export default function ReportsPage() {
     <Card className="border-slate-200 mb-6"><CardContent className="p-4"><div className="flex flex-wrap gap-4 items-end">
       <div><label className="form-label">Du</label><Input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className="w-40" /></div>
       <div><label className="form-label">Au</label><Input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} className="w-40" /></div>
-      <Button onClick={onLoad} className="bg-[#0055FF] hover:bg-[#0040CC]" disabled={loading}><BarChart3 size={16} className="mr-2" />{label}</Button>
+      <Button onClick={onLoad} className="bg-[#2563EB] hover:bg-[#1D4ED8]" disabled={loading}><BarChart3 size={16} className="mr-2" />{label}</Button>
     </div></CardContent></Card>
   );
 
@@ -264,7 +264,7 @@ export default function ReportsPage() {
               </div>
               <Button
                 onClick={loadBilan}
-                className="bg-[#0055FF] hover:bg-[#0040CC]"
+                className="bg-[#2563EB] hover:bg-[#1D4ED8]"
                 disabled={loading}
                 data-testid="load-bilan-btn"
               >
@@ -410,7 +410,7 @@ export default function ReportsPage() {
                 <div className="flex items-center justify-between mb-3">
                   <div>
                     <span className="font-semibold text-slate-900">{d.owner_name}</span>
-                    {d.vcs_code && <span className="ml-2 font-mono text-xs text-[#0055FF]">{d.vcs_code}</span>}
+                    {d.vcs_code && <span className="ml-2 font-mono text-xs text-[#2563EB]">{d.vcs_code}</span>}
                     <div className="text-xs text-slate-500">Lots: {d.lots.map(l => l.number).join(', ')} - Quote-part: {d.share_pct}%</div>
                   </div>
                   <div className="flex items-center gap-3">
@@ -419,7 +419,7 @@ export default function ReportsPage() {
                       variant="outline"
                       size="sm"
                       onClick={() => openPreview(d.owner_id, d.owner_name)}
-                      className="text-[#0055FF] border-[#0055FF]/30 hover:bg-[#0055FF]/10"
+                      className="text-[#2563EB] border-[#2563EB]/30 hover:bg-[#2563EB]/10"
                       data-testid={`preview-decompte-${d.owner_id}`}
                       title="Apercu du decompte (avec filigrane) sans cloturer l'exercice"
                     >
@@ -444,7 +444,7 @@ export default function ReportsPage() {
       {/* Preview Decompte Dialog */}
       <Dialog open={previewOpen} onOpenChange={(o) => { if (!o) closePreview(); }}>
         <DialogContent className="max-w-5xl w-[95vw] h-[90vh] p-0 overflow-hidden flex flex-col" data-testid="preview-decompte-dialog">
-          <DialogHeader className="px-6 py-3 border-b border-slate-200 bg-gradient-to-r from-[#0055FF] to-[#0040CC] text-white shrink-0">
+          <DialogHeader className="px-6 py-3 border-b border-slate-200 bg-gradient-to-r from-[#2563EB] to-[#1D4ED8] text-white shrink-0">
             <DialogTitle className="flex items-center justify-between text-white" style={{fontFamily:'Chivo,sans-serif'}}>
               <div className="flex items-center gap-2">
                 <Eye size={18} />
@@ -457,7 +457,7 @@ export default function ReportsPage() {
                   size="sm"
                   onClick={downloadFromPreview}
                   disabled={!previewUrl || previewLoading}
-                  className="bg-white text-[#0055FF] hover:bg-slate-100"
+                  className="bg-white text-[#2563EB] hover:bg-slate-100"
                   data-testid="preview-download-btn"
                 >
                   <Download size={14} className="mr-1" /> Telecharger
@@ -478,7 +478,7 @@ export default function ReportsPage() {
             {previewLoading ? (
               <div className="flex items-center justify-center h-full text-slate-500">
                 <div className="text-center">
-                  <div className="animate-spin h-10 w-10 border-4 border-[#0055FF] border-t-transparent rounded-full mx-auto mb-3" />
+                  <div className="animate-spin h-10 w-10 border-4 border-[#2563EB] border-t-transparent rounded-full mx-auto mb-3" />
                   Generation de l&apos;apercu...
                 </div>
               </div>

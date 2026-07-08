@@ -1,4 +1,5 @@
-@import url('https://fonts.googleapis.com/css2?family=Chivo:wght@300;400;700;900&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
+/* iter90bq : polices modernes — Outfit (titres) + Plus Jakarta Sans (body).
+   Chargees via public/index.html + fallback ici pour dev. */
 
 @tailwind base;
 @tailwind components;
@@ -6,14 +7,16 @@
 
 body {
     margin: 0;
-    font-family: 'IBM Plex Sans', sans-serif;
+    font-family: 'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-    background: #FAFAFA;
+    background: #F8FAFC;
+    letter-spacing: -0.01em;
 }
 
 h1, h2, h3, h4, h5, h6 {
-    font-family: 'Chivo', sans-serif;
+    font-family: 'Outfit', 'Plus Jakarta Sans', system-ui, sans-serif;
+    letter-spacing: -0.02em;
 }
 
 code {
@@ -22,13 +25,14 @@ code {
 
 @layer base {
     :root {
-        --background: 210 20% 98%;
-        --foreground: 222 84% 5%;
+        --background: 210 40% 98%;
+        --foreground: 222 47% 11%;
         --card: 0 0% 100%;
-        --card-foreground: 222 84% 5%;
+        --card-foreground: 222 47% 11%;
         --popover: 0 0% 100%;
-        --popover-foreground: 222 84% 5%;
-        --primary: 221 100% 50%;
+        --popover-foreground: 222 47% 11%;
+        /* iter90bq : primary passe de #2563EB (221 100% 50%) a #2563EB (217 91% 60%) */
+        --primary: 217 91% 60%;
         --primary-foreground: 0 0% 100%;
         --secondary: 210 40% 96%;
         --secondary-foreground: 222 47% 11%;
@@ -40,13 +44,14 @@ code {
         --destructive-foreground: 0 0% 98%;
         --border: 214 32% 91%;
         --input: 214 32% 91%;
-        --ring: 221 100% 50%;
-        --chart-1: 221 100% 50%;
+        --ring: 217 91% 60%;
+        --chart-1: 217 91% 60%;
         --chart-2: 160 60% 45%;
         --chart-3: 30 80% 55%;
         --chart-4: 280 65% 60%;
         --chart-5: 340 75% 55%;
-        --radius: 0.375rem;
+        /* iter90bq : radius plus doux (0.375rem -> 0.75rem pour le baseline card/input) */
+        --radius: 0.75rem;
     }
 }
 

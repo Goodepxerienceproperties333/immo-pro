@@ -426,7 +426,7 @@ export default function ImportWizardPage() {
           const isActive = i === stepIdx;
           return (
             <div key={s.key} className="flex items-center" data-testid={`step-${s.key}`}>
-              <div className={`flex items-center gap-2 px-3 py-2 rounded-md ${isActive ? 'bg-[#0055FF] text-white' : isDone ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'}`}>
+              <div className={`flex items-center gap-2 px-3 py-2 rounded-md ${isActive ? 'bg-[#2563EB] text-white' : isDone ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'}`}>
                 {isDone ? <CheckCircle2 size={16} /> : <Icon size={16} />}
                 <div>
                   <div className="text-xs font-semibold">{s.label}</div>
@@ -443,7 +443,7 @@ export default function ImportWizardPage() {
       <Card>
         <CardHeader className="pb-3">
           <CardTitle className="text-base flex items-center gap-2">
-            {(() => { const I = step.icon; return <I size={18} className="text-[#0055FF]" />; })()}
+            {(() => { const I = step.icon; return <I size={18} className="text-[#2563EB]" />; })()}
             Etape {stepIdx + 1} / {STEPS.length} : {step.label}
             {step.kind === 'csv' && <Badge variant="outline" className="text-[10px]">CSV</Badge>}
             {step.kind === 'pdf' && <Badge variant="outline" className="text-[10px]">PDF</Badge>}
@@ -526,7 +526,7 @@ export default function ImportWizardPage() {
                   </Button>
                 </div>
               ) : (
-                <Button onClick={() => document.getElementById('file-input').click()} disabled={sniffing} className="bg-[#0055FF] hover:bg-[#0040CC]">
+                <Button onClick={() => document.getElementById('file-input').click()} disabled={sniffing} className="bg-[#2563EB] hover:bg-[#1D4ED8]">
                   {sniffing ? <><Loader2 size={14} className="animate-spin mr-1" /> Analyse en cours...</> : <><Upload size={14} className="mr-1" /> Choisir le fichier</>}
                 </Button>
               )}
@@ -634,7 +634,7 @@ export default function ImportWizardPage() {
               <Button
                 disabled={(step.kind === 'form' ? !fyForm.name : !sniffResult) || committing}
                 onClick={handleCommit}
-                className="bg-[#0055FF] hover:bg-[#0040CC]"
+                className="bg-[#2563EB] hover:bg-[#1D4ED8]"
                 data-testid="commit-step"
               >
                 {committing ? <><Loader2 size={14} className="animate-spin mr-1" /> Import...</> : (
@@ -1488,7 +1488,7 @@ function BudgetPreview({ sections, setSections }) {
                 ))}
               </tbody>
             </table>
-            <button onClick={() => addLine(si)} className="text-xs text-[#0055FF] hover:underline px-3 py-1 flex items-center gap-1">
+            <button onClick={() => addLine(si)} className="text-xs text-[#2563EB] hover:underline px-3 py-1 flex items-center gap-1">
               <Plus size={11} /> Ajouter une ligne
             </button>
           </div>

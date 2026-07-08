@@ -97,7 +97,7 @@ export default function AdminRoleTemplatesPage() {
   return (
     <div className="space-y-4" data-testid="admin-templates-page">
       <div className="flex items-center gap-3">
-        <Link to="/admin" className="text-[#0055FF] hover:underline text-sm flex items-center gap-1" data-testid="back-to-admin"><ArrowLeft size={14} /> Retour Admin</Link>
+        <Link to="/admin" className="text-[#2563EB] hover:underline text-sm flex items-center gap-1" data-testid="back-to-admin"><ArrowLeft size={14} /> Retour Admin</Link>
       </div>
       <div className="page-header flex items-center justify-between">
         <div className="flex items-center gap-3">

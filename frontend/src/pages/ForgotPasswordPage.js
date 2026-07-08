@@ -30,7 +30,7 @@ export default function ForgotPasswordPage() {
     <div className="min-h-screen flex items-center justify-center bg-slate-50 p-6" data-testid="forgot-password-page">
       <div className="w-full max-w-md bg-white rounded-xl shadow-sm border border-slate-200 p-8">
         <div className="flex items-center gap-3 mb-8">
-          <div className="w-10 h-10 rounded bg-[#0055FF] flex items-center justify-center text-white">
+          <div className="w-10 h-10 rounded bg-[#2563EB] flex items-center justify-center text-white">
             <Building2 size={22} />
           </div>
           <div>
@@ -55,7 +55,7 @@ export default function ForgotPasswordPage() {
               Pensez a verifier votre dossier &laquo;&nbsp;courrier indesirable&nbsp;&raquo;.
               Si vous ne recevez rien, contactez votre syndic pour verifier que votre acces est bien actif.
             </p>
-            <Link to="/login" className="text-sm text-[#0055FF] hover:underline flex items-center gap-1" data-testid="back-to-login-link">
+            <Link to="/login" className="text-sm text-[#2563EB] hover:underline flex items-center gap-1" data-testid="back-to-login-link">
               <ArrowLeft size={14} /> Retour a la connexion
             </Link>
           </div>
@@ -86,14 +86,14 @@ export default function ForgotPasswordPage() {
               <Button
                 type="submit"
                 disabled={loading || !email}
-                className="w-full bg-[#0055FF] hover:bg-[#0040CC] text-white font-semibold"
+                className="w-full bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-semibold"
                 data-testid="forgot-submit-btn"
               >
                 {loading ? 'Envoi en cours...' : 'Envoyer le lien de reinitialisation'}
               </Button>
             </form>
             <div className="mt-6 text-center">
-              <Link to="/login" className="text-sm text-slate-600 hover:text-[#0055FF] hover:underline" data-testid="back-to-login-link">
+              <Link to="/login" className="text-sm text-slate-600 hover:text-[#2563EB] hover:underline" data-testid="back-to-login-link">
                 <ArrowLeft size={14} className="inline mr-1" /> Retour a la connexion
               </Link>
             </div>

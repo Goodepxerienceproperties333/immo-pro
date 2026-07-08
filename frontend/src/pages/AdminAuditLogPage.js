@@ -69,7 +69,7 @@ export default function AdminAuditLogPage() {
   return (
     <div className="space-y-4" data-testid="admin-audit-page">
       <div className="flex items-center gap-3">
-        <Link to="/admin" className="text-[#0055FF] hover:underline text-sm flex items-center gap-1" data-testid="back-to-admin"><ArrowLeft size={14} /> Retour Admin</Link>
+        <Link to="/admin" className="text-[#2563EB] hover:underline text-sm flex items-center gap-1" data-testid="back-to-admin"><ArrowLeft size={14} /> Retour Admin</Link>
       </div>
       <div className="page-header">
         <div className="flex items-center gap-3">

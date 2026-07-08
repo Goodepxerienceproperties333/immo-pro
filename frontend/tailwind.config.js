@@ -12,6 +12,17 @@ module.exports = {
   			md: 'calc(var(--radius) - 2px)',
   			sm: 'calc(var(--radius) - 4px)'
   		},
+  		fontFamily: {
+  			sans: ['"Plus Jakarta Sans"', 'system-ui', '-apple-system', 'BlinkMacSystemFont', 'sans-serif'],
+  			display: ['Outfit', '"Plus Jakarta Sans"', 'system-ui', 'sans-serif']
+  		},
+  		boxShadow: {
+  			card: '0 8px 30px rgb(0 0 0 / 0.04)',
+  			'card-hover': '0 20px 40px rgb(0 0 0 / 0.08)',
+  			dropdown: '0 10px 38px rgba(0,0,0,0.1)',
+  			modal: '0 24px 48px rgba(0,0,0,0.12)',
+  			glass: '0 4px 24px rgba(0,0,0,0.02)'
+  		},
   		colors: {
   			background: 'hsl(var(--background))',
   			foreground: 'hsl(var(--foreground))',

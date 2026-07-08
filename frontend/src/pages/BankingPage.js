@@ -414,7 +414,7 @@ export default function BankingPage() {
           <Button
             onClick={() => navigate('/reports?tab=bilan')}
             variant="outline"
-            className="text-[#0055FF] border-[#0055FF]/30 hover:bg-[#0055FF]/10"
+            className="text-[#2563EB] border-[#2563EB]/30 hover:bg-[#2563EB]/10"
             data-testid="view-bilan-btn"
             title="Ouvrir le bilan de la copropriete"
           >
@@ -436,7 +436,7 @@ export default function BankingPage() {
             const def = bankAccounts.find(b => b.is_default) || bankAccounts[0];
             setStmtForm({ number: '', date: new Date().toISOString().split('T')[0], account_number: def?.iban || '', opening_balance: 0, closing_balance: 0 });
             setStmtDialog(true);
-          }} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="create-stmt-btn"><Plus size={16} className="mr-2" /> Nouvel extrait</Button>
+          }} className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="create-stmt-btn"><Plus size={16} className="mr-2" /> Nouvel extrait</Button>
         </div>
       </div>
 
@@ -447,7 +447,7 @@ export default function BankingPage() {
           {statements.length === 0 ? <p className="text-sm text-slate-400 text-center py-4">Aucun extrait</p> : statements.map(s => {
             const baBadge = getBankAccountBadge(s);
             return (
-            <Card key={s.id} className={`cursor-pointer transition-all border-l-4 text-sm ${selectedStmt?.id === s.id ? 'border-[#0055FF] shadow-md' : `${baBadge?.border || 'border-slate-200'} hover:border-slate-400`}`} onClick={() => loadStmtTxns(s)} data-testid={`stmt-card-${s.id}`}>
+            <Card key={s.id} className={`cursor-pointer transition-all border-l-4 text-sm ${selectedStmt?.id === s.id ? 'border-[#2563EB] shadow-md' : `${baBadge?.border || 'border-slate-200'} hover:border-slate-400`}`} onClick={() => loadStmtTxns(s)} data-testid={`stmt-card-${s.id}`}>
               <CardContent className="p-3">
                 {baBadge && (
                   <div className={`inline-block px-1.5 py-0.5 rounded text-[9px] font-semibold uppercase tracking-wide mb-1.5 ${baBadge.bg} ${baBadge.text}`} title={s.account_number} data-testid={`stmt-ba-badge-${s.id}`}>
@@ -596,8 +596,8 @@ export default function BankingPage() {
               <CardContent className="p-0">
                 {/* Inline entry */}
                 {inlineLines.length > 0 && (
-                  <div className="border-b-2 border-[#0055FF] bg-blue-50/30 p-3">
-                    <div className="text-xs font-semibold text-[#0055FF] mb-2 uppercase tracking-wider">Nouvelles lignes</div>
+                  <div className="border-b-2 border-[#2563EB] bg-blue-50/30 p-3">
+                    <div className="text-xs font-semibold text-[#2563EB] mb-2 uppercase tracking-wider">Nouvelles lignes</div>
                     <table className="w-full text-xs">
                       <thead><tr className="text-[10px] text-slate-500 uppercase"><th className="p-1 text-left w-24">Date</th><th className="p-1 text-right w-24">Montant</th><th className="p-1 w-12">+/-</th><th className="p-1 text-left">Contrepartie</th><th className="p-1 text-left">Communication</th><th className="p-1 w-6"></th></tr></thead>
                       <tbody>
@@ -637,8 +637,8 @@ export default function BankingPage() {
                             <td className="p-1 relative">
                               <Input className="h-7 text-xs" value={line.communication} onChange={e => { updateLine(i, 'communication', e.target.value); doLookup(e.target.value, `cm-${i}`); }} placeholder="Communication libre ou VCS" />
                               {lookupResults && lookupResults.lineIdx === `cm-${i}` && lookupResults.owners.length > 0 && (
-                                <div className="absolute top-8 left-0 z-20 bg-white border border-[#0055FF] shadow-lg rounded-md p-2 text-xs w-56">
-                                  {lookupResults.owners.map(o => <div key={o.id} className="p-1 text-[#0055FF]"><strong>{o.name}</strong> <span className="font-mono text-[10px]">{o.vcs_code}</span><div className="text-[10px] text-green-600">Auto-lettrage VCS</div></div>)}
+                                <div className="absolute top-8 left-0 z-20 bg-white border border-[#2563EB] shadow-lg rounded-md p-2 text-xs w-56">
+                                  {lookupResults.owners.map(o => <div key={o.id} className="p-1 text-[#2563EB]"><strong>{o.name}</strong> <span className="font-mono text-[10px]">{o.vcs_code}</span><div className="text-[10px] text-green-600">Auto-lettrage VCS</div></div>)}
                                 </div>
                               )}
                             </td>
@@ -649,20 +649,20 @@ export default function BankingPage() {
                     </table>
                     <div className="flex gap-2 mt-2 justify-end">
                       <Button size="sm" variant="ghost" onClick={addInlineLine}><Plus size={12} className="mr-1" /> Ligne</Button>
-                      <Button size="sm" onClick={saveLines} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="save-inline-lines"><Save size={12} className="mr-1" /> Enregistrer</Button>
+                      <Button size="sm" onClick={saveLines} className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="save-inline-lines"><Save size={12} className="mr-1" /> Enregistrer</Button>
                     </div>
                   </div>
                 )}
 
                 {/* Toolbar selection multi-lettrage */}
                 {selectedTxnIds.size > 0 && (
-                  <div className="bg-[#0055FF]/10 border border-[#0055FF]/30 rounded-md px-3 py-2 mb-2 flex items-center justify-between text-sm" data-testid="batch-lettrage-toolbar">
+                  <div className="bg-[#2563EB]/10 border border-[#2563EB]/30 rounded-md px-3 py-2 mb-2 flex items-center justify-between text-sm" data-testid="batch-lettrage-toolbar">
                     <div className="flex items-center gap-4">
-                      <strong className="text-[#0055FF]">{selectedTxnIds.size} transaction(s) selectionnee(s)</strong>
+                      <strong className="text-[#2563EB]">{selectedTxnIds.size} transaction(s) selectionnee(s)</strong>
                       <span className="font-mono text-slate-700">Total : <strong>{selectedTotal.toFixed(2)} EUR</strong></span>
                     </div>
                     <div className="flex gap-2">
-                      <Button size="sm" onClick={() => { setBatchInvoiceSearch(''); setBatchLettrageDialog(true); }} className="bg-[#0055FF] hover:bg-[#0040CC] text-white" data-testid="batch-lettrage-open-btn">
+                      <Button size="sm" onClick={() => { setBatchInvoiceSearch(''); setBatchLettrageDialog(true); }} className="bg-[#2563EB] hover:bg-[#1D4ED8] text-white" data-testid="batch-lettrage-open-btn">
                         <Link2 size={13} className="mr-1.5" /> Lettrer la selection vers une facture
                       </Button>
                       <Button size="sm" variant="outline" onClick={clearSelection} data-testid="batch-lettrage-clear-btn">Annuler</Button>
@@ -764,7 +764,7 @@ export default function BankingPage() {
                                 : <Button variant="ghost" size="sm" onClick={() => unlettrage(txn.id)} className="text-orange-500 h-6 w-6 p-0" title="Delettrer"><Unlink size={11} /></Button>
                             ) : (
                               <>
-                                <Button variant="ghost" size="sm" onClick={() => openLettrage(txn)} className="text-[#0055FF] h-6 w-6 p-0" title="Lettrer" data-testid={`lettrage-${txn.id}`}><Link2 size={11} /></Button>
+                                <Button variant="ghost" size="sm" onClick={() => openLettrage(txn)} className="text-[#2563EB] h-6 w-6 p-0" title="Lettrer" data-testid={`lettrage-${txn.id}`}><Link2 size={11} /></Button>
                                 <Button variant="ghost" size="sm" onClick={() => openCategorize(txn)} className="text-purple-600 h-6 w-6 p-0" title="Categoriser (nature de depense/revenu)" data-testid={`categorize-${txn.id}`}><Tag size={11} /></Button>
                               </>
                             )}
@@ -869,7 +869,7 @@ export default function BankingPage() {
               <Input type="number" step="0.01" value={stmtForm.closing_balance} onChange={e => setStmtForm({...stmtForm, closing_balance: e.target.value})} data-testid="stmt-closing-balance" />
             </div>
           </div>
-          <div className="flex gap-3 justify-end"><Button variant="outline" onClick={() => { setStmtDialog(false); setEditingStmtId(null); }}>Annuler</Button><Button onClick={saveStmt} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="stmt-save-btn">{editingStmtId ? 'Enregistrer' : 'Creer'}</Button></div>
+          <div className="flex gap-3 justify-end"><Button variant="outline" onClick={() => { setStmtDialog(false); setEditingStmtId(null); }}>Annuler</Button><Button onClick={saveStmt} className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="stmt-save-btn">{editingStmtId ? 'Enregistrer' : 'Creer'}</Button></div>
         </div>
       </DialogContent></Dialog>
 
@@ -877,7 +877,7 @@ export default function BankingPage() {
       <Dialog open={lettrageDialog} onOpenChange={setLettrageDialog}>
         <DialogContent className="max-w-3xl p-0 overflow-hidden" data-testid="lettrage-dialog">
           {/* Header transaction */}
-          <div className="bg-gradient-to-r from-[#0055FF] to-[#0040CC] px-6 py-4 text-white">
+          <div className="bg-gradient-to-r from-[#2563EB] to-[#1D4ED8] px-6 py-4 text-white">
             <DialogHeader className="space-y-1">
               <DialogTitle className="text-white text-base flex items-center justify-between gap-3" style={{fontFamily:'Chivo,sans-serif'}}>
                 <span>Lettrage de la transaction</span>
@@ -907,12 +907,12 @@ export default function BankingPage() {
                 <Input placeholder="Rechercher par nom ou VCS..." value={lookupQuery} onChange={e => setLookupQuery(e.target.value)} className="mb-3" />
                 <div className="space-y-1.5 max-h-72 overflow-y-auto pr-1">
                   {owners.filter(o => !lookupQuery || (o.name || '').toLowerCase().includes(lookupQuery.toLowerCase()) || (o.vcs_code || '').includes(lookupQuery)).map(o => (
-                    <div key={o.id} className="flex items-center justify-between gap-3 border border-slate-200 rounded-md px-3 py-2.5 hover:border-[#0055FF]/40 hover:bg-slate-50 transition-colors">
+                    <div key={o.id} className="flex items-center justify-between gap-3 border border-slate-200 rounded-md px-3 py-2.5 hover:border-[#2563EB]/40 hover:bg-slate-50 transition-colors">
                       <div className="flex-1 min-w-0">
                         <div className="text-sm font-medium text-slate-900 truncate">{o.name}</div>
-                        {o.vcs_code && <div className="text-[11px] font-mono text-[#0055FF] mt-0.5">{o.vcs_code}</div>}
+                        {o.vcs_code && <div className="text-[11px] font-mono text-[#2563EB] mt-0.5">{o.vcs_code}</div>}
                       </div>
-                      <Button size="sm" onClick={() => doLettrage(o.id, 'owner_payment')} className="bg-[#0055FF] hover:bg-[#0040CC] text-white h-7 text-xs shrink-0">
+                      <Button size="sm" onClick={() => doLettrage(o.id, 'owner_payment')} className="bg-[#2563EB] hover:bg-[#1D4ED8] text-white h-7 text-xs shrink-0">
                         <Link2 size={11} className="mr-1" /> Lettrer
                       </Button>
                     </div>
@@ -935,9 +935,9 @@ export default function BankingPage() {
                 </div>
                 {/* Barre de selection multi-factures */}
                 {selectedInvoiceIds.size > 0 && (
-                  <div className="bg-[#0055FF]/10 border border-[#0055FF]/30 rounded px-3 py-2 mb-3 flex items-center justify-between text-xs" data-testid="multi-invoice-toolbar">
+                  <div className="bg-[#2563EB]/10 border border-[#2563EB]/30 rounded px-3 py-2 mb-3 flex items-center justify-between text-xs" data-testid="multi-invoice-toolbar">
                     <div>
-                      <strong className="text-[#0055FF]">{selectedInvoiceIds.size} factures selectionnees</strong>
+                      <strong className="text-[#2563EB]">{selectedInvoiceIds.size} factures selectionnees</strong>
                       <span className="ml-3 font-mono">Total : <strong>{selectedInvoicesTotal.toFixed(2)} EUR</strong></span>
                       {(() => {
                         const txnAmt = Math.abs(Number(lettrageTarget?.amount || 0));
@@ -948,7 +948,7 @@ export default function BankingPage() {
                       })()}
                     </div>
                     <div className="flex gap-2">
-                      <Button size="sm" onClick={doLettrageMultiInvoices} className="bg-[#0055FF] hover:bg-[#0040CC] text-white h-7 text-xs" data-testid="multi-invoice-confirm-btn">
+                      <Button size="sm" onClick={doLettrageMultiInvoices} className="bg-[#2563EB] hover:bg-[#1D4ED8] text-white h-7 text-xs" data-testid="multi-invoice-confirm-btn">
                         <Link2 size={11} className="mr-1" /> Lettrer ces {selectedInvoiceIds.size} factures
                       </Button>
                       <Button size="sm" variant="ghost" onClick={() => setSelectedInvoiceIds(new Set())} className="h-7 text-xs">Annuler</Button>
@@ -980,7 +980,7 @@ export default function BankingPage() {
                     return list.map(inv => {
                       const isPaid = inv.status === 'paid';
                       const isSelected = selectedInvoiceIds.has(inv.id);
-                      const borderClr = isPaid ? 'border-l-green-400 bg-green-50/40' : isSelected ? 'border-l-[#0055FF] bg-blue-50/50' : 'border-l-red-400 bg-red-50/30';
+                      const borderClr = isPaid ? 'border-l-green-400 bg-green-50/40' : isSelected ? 'border-l-[#2563EB] bg-blue-50/50' : 'border-l-red-400 bg-red-50/30';
                       return (
                         <div
                           key={inv.id}
@@ -1029,7 +1029,7 @@ export default function BankingPage() {
                                 <Button
                                   size="sm"
                                   onClick={() => doLettrage(inv.id, 'invoice')}
-                                  className="bg-[#0055FF] hover:bg-[#0040CC] text-white h-7 text-xs"
+                                  className="bg-[#2563EB] hover:bg-[#1D4ED8] text-white h-7 text-xs"
                                   data-testid={`lettrage-invoice-${inv.id}`}
                                 ><Link2 size={11} className="mr-1" /> Lettrer</Button>
                               )}
@@ -1046,12 +1046,12 @@ export default function BankingPage() {
                 <Input placeholder="Rechercher par nom ou TVA..." value={lookupQuery} onChange={e => setLookupQuery(e.target.value)} className="mb-3" />
                 <div className="space-y-1.5 max-h-72 overflow-y-auto pr-1">
                   {suppliers.filter(s => !lookupQuery || (s.name || '').toLowerCase().includes(lookupQuery.toLowerCase()) || (s.vat_number || '').includes(lookupQuery)).map(s => (
-                    <div key={s.id} className="flex items-center justify-between gap-3 border border-slate-200 rounded-md px-3 py-2.5 hover:border-[#0055FF]/40 hover:bg-slate-50 transition-colors">
+                    <div key={s.id} className="flex items-center justify-between gap-3 border border-slate-200 rounded-md px-3 py-2.5 hover:border-[#2563EB]/40 hover:bg-slate-50 transition-colors">
                       <div className="flex-1 min-w-0">
                         <div className="text-sm font-medium text-slate-900 truncate">{s.name}</div>
                         {s.vat_number && <div className="text-[11px] font-mono text-slate-500 mt-0.5">{s.vat_number}</div>}
                       </div>
-                      <Button size="sm" onClick={() => doLettrage(s.id, 'supplier_payment')} className="bg-[#0055FF] hover:bg-[#0040CC] text-white h-7 text-xs shrink-0">
+                      <Button size="sm" onClick={() => doLettrage(s.id, 'supplier_payment')} className="bg-[#2563EB] hover:bg-[#1D4ED8] text-white h-7 text-xs shrink-0">
                         <Link2 size={11} className="mr-1" /> Lettrer
                       </Button>
                     </div>
@@ -1066,7 +1066,7 @@ export default function BankingPage() {
       {/* ----- Dialog lettrage en lot (N transactions -> 1 facture) ----- */}
       <Dialog open={batchLettrageDialog} onOpenChange={setBatchLettrageDialog}>
         <DialogContent className="max-w-3xl p-0 overflow-hidden" data-testid="batch-lettrage-dialog">
-          <div className="bg-gradient-to-r from-[#0055FF] to-[#0040CC] text-white px-5 py-4">
+          <div className="bg-gradient-to-r from-[#2563EB] to-[#1D4ED8] text-white px-5 py-4">
             <DialogTitle className="text-base font-semibold m-0">Lettrer {selectedTxnIds.size} transaction(s) vers une facture</DialogTitle>
             <div className="mt-1 text-xs opacity-90">
               Total selectionne : <strong className="font-mono">{selectedTotal.toFixed(2)} EUR</strong>
@@ -1121,7 +1121,7 @@ export default function BankingPage() {
                         <Button
                           size="sm"
                           onClick={() => doBatchLettrage(inv.id)}
-                          className="bg-[#0055FF] hover:bg-[#0040CC] text-white h-7 text-xs"
+                          className="bg-[#2563EB] hover:bg-[#1D4ED8] text-white h-7 text-xs"
                           data-testid={`batch-lettrage-confirm-${inv.id}`}
                         ><Link2 size={11} className="mr-1" /> Lettrer ici</Button>
                       </div>

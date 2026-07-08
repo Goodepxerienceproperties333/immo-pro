@@ -119,9 +119,9 @@ function OwnerPicker({ owners, selectedIds, onChange, multi = true, onOwnerCreat
           {selectedIds.map(id => {
             const o = ownerById[id];
             return (
-              <Badge key={id} variant="outline" className="bg-[#0055FF]/10 border-[#0055FF]/30 text-slate-700 gap-1.5 pl-2 pr-1 py-1" data-testid={`${dataTestPrefix}-tag-${id}`}>
+              <Badge key={id} variant="outline" className="bg-[#2563EB]/10 border-[#2563EB]/30 text-slate-700 gap-1.5 pl-2 pr-1 py-1" data-testid={`${dataTestPrefix}-tag-${id}`}>
                 <span>{o?.name || '(inconnu)'}</span>
-                {o?.vcs_code && <span className="font-mono text-[9px] text-[#0055FF]">{o.vcs_code.replace(/\+/g,'').slice(0, 10)}</span>}
+                {o?.vcs_code && <span className="font-mono text-[9px] text-[#2563EB]">{o.vcs_code.replace(/\+/g,'').slice(0, 10)}</span>}
                 <button onClick={() => removeOwner(id)} className="text-slate-400 hover:text-red-500"><X size={11} /></button>
               </Badge>
             );
@@ -144,14 +144,14 @@ function OwnerPicker({ owners, selectedIds, onChange, multi = true, onOwnerCreat
                 key={o.id}
                 type="button"
                 onClick={() => addOwner(o)}
-                className="w-full text-left px-3 py-2 hover:bg-[#0055FF]/5 border-b last:border-b-0 border-slate-100 flex items-center justify-between text-sm"
+                className="w-full text-left px-3 py-2 hover:bg-[#2563EB]/5 border-b last:border-b-0 border-slate-100 flex items-center justify-between text-sm"
                 data-testid={`${dataTestPrefix}-suggestion-${o.id}`}
               >
                 <div>
                   <div className="font-medium text-slate-900">{o.name}</div>
                   {o.email && <div className="text-[11px] text-slate-500">{o.email}</div>}
                 </div>
-                {o.vcs_code && <span className="font-mono text-[10px] text-[#0055FF] flex-shrink-0">{o.vcs_code}</span>}
+                {o.vcs_code && <span className="font-mono text-[10px] text-[#2563EB] flex-shrink-0">{o.vcs_code}</span>}
               </button>
             ))}
           </div>
@@ -162,7 +162,7 @@ function OwnerPicker({ owners, selectedIds, onChange, multi = true, onOwnerCreat
             <Button
               type="button"
               size="sm"
-              className="bg-[#0055FF] hover:bg-[#0040CC] text-white"
+              className="bg-[#2563EB] hover:bg-[#1D4ED8] text-white"
               onClick={() => {
                 // Prefill name from search query if possible
                 const parts = q.trim().split(/\s+/);
@@ -181,8 +181,8 @@ function OwnerPicker({ owners, selectedIds, onChange, multi = true, onOwnerCreat
           </div>
         )}
         {createOpen && (
-          <div className="mt-2 border border-[#0055FF]/30 rounded-md bg-[#0055FF]/5 p-3 space-y-2">
-            <div className="text-xs font-semibold text-[#0055FF] uppercase tracking-wider">Nouveau proprietaire</div>
+          <div className="mt-2 border border-[#2563EB]/30 rounded-md bg-[#2563EB]/5 p-3 space-y-2">
+            <div className="text-xs font-semibold text-[#2563EB] uppercase tracking-wider">Nouveau proprietaire</div>
             <div className="grid grid-cols-2 gap-2">
               <Input placeholder="Nom" value={newOwner.last_name} onChange={e => setNewOwner({...newOwner, last_name: e.target.value})} data-testid={`${dataTestPrefix}-create-lastname`} />
               <Input placeholder="Prenom" value={newOwner.first_name} onChange={e => setNewOwner({...newOwner, first_name: e.target.value})} data-testid={`${dataTestPrefix}-create-firstname`} />
@@ -191,7 +191,7 @@ function OwnerPicker({ owners, selectedIds, onChange, multi = true, onOwnerCreat
             <Input placeholder="Telephone" value={newOwner.phone} onChange={e => setNewOwner({...newOwner, phone: e.target.value})} data-testid={`${dataTestPrefix}-create-phone`} />
             <div className="flex gap-2 justify-end">
               <Button type="button" size="sm" variant="outline" onClick={() => setCreateOpen(false)}>Annuler</Button>
-              <Button type="button" size="sm" className="bg-[#0055FF] hover:bg-[#0040CC]" onClick={handleCreateOwner} data-testid={`${dataTestPrefix}-create-submit`}>
+              <Button type="button" size="sm" className="bg-[#2563EB] hover:bg-[#1D4ED8]" onClick={handleCreateOwner} data-testid={`${dataTestPrefix}-create-submit`}>
                 Creer et selectionner
               </Button>
             </div>
@@ -538,13 +538,13 @@ function MutationDialog({ lot, owners, ownersRefresh, onClose, onDone }) {
               </div>
 
               {/* BLOC 2 : Appels de provisions a prevoir (prorata appel en cours + futurs) */}
-              <div className="rounded-md border border-[#0055FF]/30 bg-[#0055FF]/5 p-4 space-y-3" data-testid="mutation-block-provisions">
+              <div className="rounded-md border border-[#2563EB]/30 bg-[#2563EB]/5 p-4 space-y-3" data-testid="mutation-block-provisions">
                 <div className="flex items-center justify-between">
-                  <div className="text-xs font-bold text-[#0055FF] uppercase tracking-wider">
+                  <div className="text-xs font-bold text-[#2563EB] uppercase tracking-wider">
                     Bloc 2 - Appels de provisions a prevoir
                   </div>
                   {preview.budget_frequency_label && (
-                    <div className="text-[10px] text-[#0055FF] font-medium">
+                    <div className="text-[10px] text-[#2563EB] font-medium">
                       Periodicite : {preview.budget_frequency_label}
                     </div>
                   )}
@@ -575,7 +575,7 @@ function MutationDialog({ lot, owners, ownersRefresh, onClose, onDone }) {
                         ))}
                         <tr className="border-t-2 border-slate-300 bg-white">
                           <td colSpan="5" className="py-1 text-right font-semibold">Sous-total prorata appel courant</td>
-                          <td className="text-right font-mono font-bold text-[#0055FF]" data-testid="mutation-current-prorata">
+                          <td className="text-right font-mono font-bold text-[#2563EB]" data-testid="mutation-current-prorata">
                             {preview.current_period_prorata?.toFixed(2)} EUR
                           </td>
                         </tr>
@@ -611,7 +611,7 @@ function MutationDialog({ lot, owners, ownersRefresh, onClose, onDone }) {
                         ))}
                         <tr className="border-t-2 border-slate-300 bg-white">
                           <td colSpan="3" className="py-1 text-right font-semibold">Total appels futurs ({preview.future_calls.length})</td>
-                          <td className="text-right font-mono font-bold text-[#0055FF]" data-testid="mutation-future-calls-total">
+                          <td className="text-right font-mono font-bold text-[#2563EB]" data-testid="mutation-future-calls-total">
                             {preview.future_calls_total?.toFixed(2)} EUR
                           </td>
                         </tr>
@@ -652,7 +652,7 @@ function MutationDialog({ lot, owners, ownersRefresh, onClose, onDone }) {
             <Button
               onClick={handleConfirm}
               disabled={busy || !newOwnerId}
-              className="bg-[#0055FF] hover:bg-[#0040CC]"
+              className="bg-[#2563EB] hover:bg-[#1D4ED8]"
               data-testid="mutation-confirm-btn"
             >
               {busy ? 'Traitement...' : 'Confirmer la mutation'}
@@ -860,7 +860,7 @@ export default function LotsPage() {
           <h1 className="page-title">Lots</h1>
           <p className="page-subtitle">Gestion des lots de la copropriete</p>
         </div>
-        <Button onClick={openCreate} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="create-lot-btn">
+        <Button onClick={openCreate} className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="create-lot-btn">
           <Plus size={16} className="mr-2" /> Nouveau lot
         </Button>
       </div>
@@ -935,7 +935,7 @@ export default function LotsPage() {
                       variant="ghost"
                       size="sm"
                       onClick={() => setMutationLot(lot)}
-                      className="text-[#0055FF] hover:text-[#0040CC]"
+                      className="text-[#2563EB] hover:text-[#1D4ED8]"
                       title={lot.parent_lot_id ? `Lie a ${lotById[lot.parent_lot_id]?.number || '?'} - mutez le lot parent` : 'Muter (vente)'}
                       disabled={!lot.owner_id || !!lot.parent_lot_id}
                       data-testid={`mutate-lot-${lot.id}`}
@@ -953,7 +953,7 @@ export default function LotsPage() {
           <button
             onClick={openCreate}
             data-testid="add-lot-footer-btn"
-            className="w-full py-3 flex items-center justify-center gap-2 text-sm font-medium text-slate-500 hover:text-[#0055FF] hover:bg-slate-50 border-t border-slate-200 border-dashed transition-colors"
+            className="w-full py-3 flex items-center justify-center gap-2 text-sm font-medium text-slate-500 hover:text-[#2563EB] hover:bg-slate-50 border-t border-slate-200 border-dashed transition-colors"
             title="Ajouter un lot sans remonter en haut"
           >
             <Plus size={16} /> Ajouter un lot
@@ -1015,7 +1015,7 @@ export default function LotsPage() {
             </div>
             <div className="flex gap-3 justify-end">
               <Button variant="outline" onClick={() => setDialogOpen(false)}>Annuler</Button>
-              <Button onClick={handleSave} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="lot-save-btn">{editing ? 'Modifier' : 'Creer'}</Button>
+              <Button onClick={handleSave} className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="lot-save-btn">{editing ? 'Modifier' : 'Creer'}</Button>
             </div>
           </div>
         </DialogContent>

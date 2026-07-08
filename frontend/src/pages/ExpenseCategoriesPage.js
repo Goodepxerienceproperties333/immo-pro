@@ -93,7 +93,7 @@ export default function ExpenseCategoriesPage() {
           <h1 className="page-title"><Tag size={24} className="inline mr-2" />Natures de depense</h1>
           <p className="page-subtitle">Categories metier liees aux comptes PCMN (1 nature = 1 compte). Classes 6 (Charges) et 7 (Produits).</p>
         </div>
-        <Button onClick={openCreate} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="create-category-btn"><Plus size={16} className="mr-2" />Nouvelle nature</Button>
+        <Button onClick={openCreate} className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="create-category-btn"><Plus size={16} className="mr-2" />Nouvelle nature</Button>
       </div>
 
       <div className="mb-3 relative max-w-sm">
@@ -133,7 +133,7 @@ export default function ExpenseCategoriesPage() {
                 </TableCell>
                 <TableCell className="text-xs">
                   {c.default_distribution_key_name ? (
-                    <Badge variant="outline" className="bg-blue-50 text-[#0055FF] border-blue-200">{c.default_distribution_key_name}</Badge>
+                    <Badge variant="outline" className="bg-blue-50 text-[#2563EB] border-blue-200">{c.default_distribution_key_name}</Badge>
                   ) : (
                     <span className="text-slate-300">Tantiemes</span>
                   )}
@@ -240,7 +240,7 @@ export default function ExpenseCategoriesPage() {
 
             {/* Cle de repartition par defaut */}
             <div className="rounded-md border border-blue-200 bg-blue-50/40 p-3 space-y-2">
-              <div className="text-xs font-semibold uppercase tracking-wide text-[#0055FF] flex items-center gap-1.5">
+              <div className="text-xs font-semibold uppercase tracking-wide text-[#2563EB] flex items-center gap-1.5">
                 Cle de repartition par defaut
               </div>
               <p className="text-[11px] text-slate-600">
@@ -265,7 +265,7 @@ export default function ExpenseCategoriesPage() {
 
             <div className="flex gap-3 justify-end">
               <Button variant="outline" onClick={() => setDialogOpen(false)}>Annuler</Button>
-              <Button onClick={save} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="save-category-btn">Enregistrer</Button>
+              <Button onClick={save} className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="save-category-btn">Enregistrer</Button>
             </div>
           </div>
         </DialogContent>

@@ -122,7 +122,7 @@ export default function AdminLegalDocsPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold text-slate-900 flex items-center gap-2" style={{ fontFamily: 'Chivo, sans-serif' }}>
-            <ScrollText size={22} className="text-[#0055FF]" />
+            <ScrollText size={22} className="text-[#2563EB]" />
             Documents legaux
           </h1>
           <p className="text-xs text-slate-500 mt-0.5">
@@ -149,8 +149,8 @@ export default function AdminLegalDocsPage() {
               data-testid={`admin-legal-tab-${slug}`}
               className={`inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded border transition-colors ${
                 isActive
-                  ? 'bg-[#0055FF] text-white border-[#0055FF]'
-                  : `bg-white text-slate-700 border-slate-200 hover:border-[#0055FF] hover:text-[#0055FF]`
+                  ? 'bg-[#2563EB] text-white border-[#2563EB]'
+                  : `bg-white text-slate-700 border-slate-200 hover:border-[#2563EB] hover:text-[#2563EB]`
               }`}
             >
               <Icon size={12} />
@@ -229,7 +229,7 @@ export default function AdminLegalDocsPage() {
                   <AlertDialogTrigger asChild>
                     <Button
                       variant="default"
-                      className="bg-[#0055FF] hover:bg-[#0040CC] text-white flex-1"
+                      className="bg-[#2563EB] hover:bg-[#1D4ED8] text-white flex-1"
                       disabled={saving}
                       data-testid="admin-legal-bump-btn"
                     >
@@ -264,7 +264,7 @@ export default function AdminLegalDocsPage() {
                       <AlertDialogCancel data-testid="admin-legal-bump-cancel">Annuler</AlertDialogCancel>
                       <AlertDialogAction
                         onClick={(e) => { e.preventDefault(); save(true); }}
-                        className="bg-[#0055FF] hover:bg-[#0040CC] text-white"
+                        className="bg-[#2563EB] hover:bg-[#1D4ED8] text-white"
                         data-testid="admin-legal-bump-confirm"
                       >
                         <Zap size={13} className="mr-1.5" /> Publier v{activeDoc.version + 1}
@@ -321,7 +321,7 @@ export default function AdminLegalDocsPage() {
                   {editTitle || activeDoc.title}
                 </h2>
                 <article
-                  className="prose prose-slate prose-sm max-w-none prose-headings:font-semibold prose-headings:text-slate-800 prose-a:text-[#0055FF] prose-table:text-xs prose-code:text-[13px] prose-strong:text-slate-900"
+                  className="prose prose-slate prose-sm max-w-none prose-headings:font-semibold prose-headings:text-slate-800 prose-a:text-[#2563EB] prose-table:text-xs prose-code:text-[13px] prose-strong:text-slate-900"
                   data-testid="admin-legal-preview"
                 >
                   <ReactMarkdown remarkPlugins={[remarkGfm]}>{editContent || '*(vide)*'}</ReactMarkdown>

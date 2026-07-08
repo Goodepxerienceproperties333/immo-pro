@@ -111,7 +111,7 @@ export default function SupportChatBubble() {
     <>
       <button
         onClick={() => setOpen(true)}
-        className="w-7 h-7 rounded-full bg-slate-100 hover:bg-blue-100 text-slate-500 hover:text-[#0055FF] flex items-center justify-center transition-colors"
+        className="w-7 h-7 rounded-full bg-slate-100 hover:bg-blue-100 text-slate-500 hover:text-[#2563EB] flex items-center justify-center transition-colors"
         title="Aide & support"
         data-testid="support-open-btn"
       >
@@ -129,7 +129,7 @@ export default function SupportChatBubble() {
             data-testid="support-panel"
           >
             {/* Header */}
-            <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100 bg-gradient-to-r from-[#0055FF] to-[#0040CC] text-white">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100 bg-gradient-to-r from-[#2563EB] to-[#1D4ED8] text-white">
               <div className="flex items-center gap-2">
                 {activeConv && (
                   <button
@@ -156,7 +156,7 @@ export default function SupportChatBubble() {
                 <div className="p-3 border-b border-slate-100">
                   <Button
                     onClick={startNew}
-                    className="w-full bg-[#0055FF] hover:bg-[#0040CC] text-white h-9 text-xs"
+                    className="w-full bg-[#2563EB] hover:bg-[#1D4ED8] text-white h-9 text-xs"
                     data-testid="support-new-conv-btn"
                   >
                     <Plus size={14} className="mr-1" /> Poser une nouvelle question
@@ -216,10 +216,10 @@ export default function SupportChatBubble() {
                   )}
                   {msgs.map(m => (
                     <div key={m.id} className={`flex gap-2 ${m.role === 'user' ? 'flex-row-reverse' : ''}`}>
-                      <div className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 ${m.role === 'user' ? 'bg-[#0055FF] text-white' : 'bg-slate-200 text-slate-600'}`}>
+                      <div className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 ${m.role === 'user' ? 'bg-[#2563EB] text-white' : 'bg-slate-200 text-slate-600'}`}>
                         {m.role === 'user' ? <UserIcon size={12} /> : <Bot size={12} />}
                       </div>
-                      <div className={`rounded-lg p-2 max-w-[85%] text-xs leading-relaxed whitespace-pre-wrap ${m.role === 'user' ? 'bg-[#0055FF] text-white' : 'bg-white border border-slate-200 text-slate-800'}`}>
+                      <div className={`rounded-lg p-2 max-w-[85%] text-xs leading-relaxed whitespace-pre-wrap ${m.role === 'user' ? 'bg-[#2563EB] text-white' : 'bg-white border border-slate-200 text-slate-800'}`}>
                         {m.content}
                         {m.needs_escalation && (
                           <div className="mt-2 pt-2 border-t border-slate-200 flex items-center gap-1 text-[10px] text-amber-700">
@@ -251,7 +251,7 @@ export default function SupportChatBubble() {
                     <button
                       onClick={escalate}
                       disabled={escalating || msgs.length === 0}
-                      className="text-[11px] text-slate-500 hover:text-[#0055FF] flex items-center gap-1 disabled:opacity-50"
+                      className="text-[11px] text-slate-500 hover:text-[#2563EB] flex items-center gap-1 disabled:opacity-50"
                       data-testid="support-escalate-btn"
                     >
                       <Mail size={11} />
@@ -276,7 +276,7 @@ export default function SupportChatBubble() {
                     <Button
                       onClick={sendMessage}
                       disabled={sending || !input.trim()}
-                      className="bg-[#0055FF] hover:bg-[#0040CC] text-white h-9 w-9 p-0 shrink-0"
+                      className="bg-[#2563EB] hover:bg-[#1D4ED8] text-white h-9 w-9 p-0 shrink-0"
                       data-testid="support-send-btn"
                     >
                       {sending ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}

@@ -77,7 +77,7 @@ export default function MetersPage() {
     <div data-testid="meters-page">
       <div className="page-header flex items-center justify-between">
         <div><h1 className="page-title">Compteurs</h1><p className="page-subtitle">Gestion des compteurs et releves</p></div>
-        <Button onClick={openCreateMeter} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="create-meter-btn"><Plus size={16} className="mr-2" /> Nouveau compteur</Button>
+        <Button onClick={openCreateMeter} className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="create-meter-btn"><Plus size={16} className="mr-2" /> Nouveau compteur</Button>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -91,7 +91,7 @@ export default function MetersPage() {
             return (
               <Card
                 key={m.id}
-                className={`cursor-pointer transition-all border ${selectedMeter?.id === m.id ? 'border-[#0055FF] shadow-md' : 'border-slate-200 hover:border-slate-300'}`}
+                className={`cursor-pointer transition-all border ${selectedMeter?.id === m.id ? 'border-[#2563EB] shadow-md' : 'border-slate-200 hover:border-slate-300'}`}
                 onClick={() => loadReadings(m)}
                 data-testid={`meter-card-${m.id}`}
               >
@@ -123,7 +123,7 @@ export default function MetersPage() {
                   </CardTitle>
                   <p className="text-xs text-slate-500 mt-1">Unite: {selectedMeter.unit}</p>
                 </div>
-                <Button onClick={openAddReading} className="bg-[#0055FF] hover:bg-[#0040CC]" size="sm" data-testid="add-reading-btn">
+                <Button onClick={openAddReading} className="bg-[#2563EB] hover:bg-[#1D4ED8]" size="sm" data-testid="add-reading-btn">
                   <Plus size={14} className="mr-1" /> Releve
                 </Button>
               </CardHeader>
@@ -187,7 +187,7 @@ export default function MetersPage() {
             </div>
             <div className="flex gap-3 justify-end">
               <Button variant="outline" onClick={() => setMeterDialog(false)}>Annuler</Button>
-              <Button onClick={saveMeter} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="meter-save-btn">Creer</Button>
+              <Button onClick={saveMeter} className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="meter-save-btn">Creer</Button>
             </div>
           </div>
         </DialogContent>
@@ -202,7 +202,7 @@ export default function MetersPage() {
             <div><label className="form-label">Index ({selectedMeter?.unit}) *</label><Input type="number" step="0.01" value={readingForm.value} onChange={e => setReadingForm({...readingForm, value: e.target.value})} data-testid="reading-value" /></div>
             <div className="flex gap-3 justify-end">
               <Button variant="outline" onClick={() => setReadingDialog(false)}>Annuler</Button>
-              <Button onClick={saveReading} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="reading-save-btn">Enregistrer</Button>
+              <Button onClick={saveReading} className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="reading-save-btn">Enregistrer</Button>
             </div>
           </div>
         </DialogContent>

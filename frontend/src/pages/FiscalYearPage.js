@@ -246,7 +246,7 @@ export default function FiscalYearPage() {
 
         <TabsContent value="years" className="mt-0">
           <div className="flex justify-end mb-4">
-            <Button onClick={openCreateYear} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="create-year-btn"><Plus size={16} className="mr-2" />Nouvel exercice</Button>
+            <Button onClick={openCreateYear} className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="create-year-btn"><Plus size={16} className="mr-2" />Nouvel exercice</Button>
           </div>
           <div className="bg-white rounded-md border border-slate-200 overflow-hidden">
             <Table>
@@ -276,7 +276,7 @@ export default function FiscalYearPage() {
 
         <TabsContent value="budgets" className="mt-0">
           <div className="flex justify-end mb-4">
-            <Button onClick={openCreateBudget} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="create-budget-btn"><Plus size={16} className="mr-2" />Nouveau budget</Button>
+            <Button onClick={openCreateBudget} className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="create-budget-btn"><Plus size={16} className="mr-2" />Nouveau budget</Button>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {budgets.length === 0 ? <p className="text-slate-400 col-span-2 text-center py-8">Aucun budget</p> : budgets.map(b => {
@@ -292,7 +292,7 @@ export default function FiscalYearPage() {
                       </div>
                       <div className="text-right">
                         <Badge className={approved ? 'bg-green-600 text-white' : 'bg-slate-200 text-slate-700'}>{approved ? 'Approuve' : 'Brouillon'}</Badge>
-                        <div className="font-mono text-sm font-bold text-[#0055FF] mt-1">{b.total?.toFixed(2)} EUR</div>
+                        <div className="font-mono text-sm font-bold text-[#2563EB] mt-1">{b.total?.toFixed(2)} EUR</div>
                       </div>
                     </div>
                     <div className="text-xs text-slate-500 mb-3">{b.lines?.length || 0} postes budgetaires{approved && b.approved_at ? ` - approuve le ${b.approved_at.slice(0, 10)}` : ''}</div>
@@ -357,7 +357,7 @@ export default function FiscalYearPage() {
             </div>
             <div className="flex gap-3 justify-end">
               <Button variant="outline" onClick={() => setYearDialog(false)}>Annuler</Button>
-              <Button onClick={saveYear} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="year-save-btn">Creer</Button>
+              <Button onClick={saveYear} className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="year-save-btn">Creer</Button>
             </div>
           </div>
         </DialogContent>
@@ -466,7 +466,7 @@ export default function FiscalYearPage() {
 
             <div className="flex gap-3 justify-end">
               <Button variant="outline" onClick={() => setBudgetDialog(false)}>Annuler</Button>
-              <Button onClick={saveBudget} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="budget-save-btn">Enregistrer</Button>
+              <Button onClick={saveBudget} className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="budget-save-btn">Enregistrer</Button>
             </div>
           </div>
         </DialogContent>

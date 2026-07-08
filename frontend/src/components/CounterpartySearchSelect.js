@@ -133,7 +133,7 @@ export default function CounterpartySearchSelect({
                 >
                   <span className="truncate">{o.name}</span>
                   {o.vcs_code && (
-                    <span className="font-mono text-[10px] text-[#0055FF] shrink-0">{o.vcs_code}</span>
+                    <span className="font-mono text-[10px] text-[#2563EB] shrink-0">{o.vcs_code}</span>
                   )}
                 </button>
               ))}

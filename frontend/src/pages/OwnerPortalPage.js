@@ -173,7 +173,7 @@ export default function OwnerPortalPage() {
       <header className="bg-white border-b border-slate-200 sticky top-0 z-10">
         <div className="max-w-6xl mx-auto px-6 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-md bg-[#0055FF] text-white flex items-center justify-center text-xs font-bold" style={{fontFamily:'Chivo,sans-serif'}}>CP</div>
+            <div className="w-8 h-8 rounded-md bg-[#2563EB] text-white flex items-center justify-center text-xs font-bold" style={{fontFamily:'Chivo,sans-serif'}}>CP</div>
             <div>
               <h1 className="text-base font-semibold text-slate-900" style={{fontFamily:'Chivo,sans-serif'}}>Espace proprietaire</h1>
               <p className="text-[11px] text-slate-500">{owner.name}</p>
@@ -190,7 +190,7 @@ export default function OwnerPortalPage() {
           <CardContent className="p-5">
             <div className="flex items-start justify-between flex-wrap gap-4">
               <div className="flex items-center gap-3">
-                <div className="w-12 h-12 rounded-full bg-[#0055FF]/10 flex items-center justify-center text-[#0055FF]">
+                <div className="w-12 h-12 rounded-full bg-[#2563EB]/10 flex items-center justify-center text-[#2563EB]">
                   <User size={22} />
                 </div>
                 <div>
@@ -201,7 +201,7 @@ export default function OwnerPortalPage() {
               {owner.vcs_code && (
                 <div className="text-right">
                   <div className="text-[10px] uppercase tracking-wider text-slate-400 mb-0.5">Communication structuree (VCS)</div>
-                  <button onClick={() => copyVcs(owner.vcs_code)} className="font-mono text-sm text-[#0055FF] hover:bg-blue-50 px-2 py-1 rounded inline-flex items-center gap-1.5" data-testid="copy-vcs-btn">
+                  <button onClick={() => copyVcs(owner.vcs_code)} className="font-mono text-sm text-[#2563EB] hover:bg-blue-50 px-2 py-1 rounded inline-flex items-center gap-1.5" data-testid="copy-vcs-btn">
                     {owner.vcs_code}
                     <Copy size={11} />
                   </button>
@@ -242,7 +242,7 @@ export default function OwnerPortalPage() {
                     </div>
                     <div className="flex items-center gap-3">
                       <span className="font-semibold text-orange-700">{fmt(p.amount)}</span>
-                      <button onClick={() => copyVcs(p.vcs_code)} className="font-mono text-[10px] text-[#0055FF] bg-blue-50 hover:bg-blue-100 px-2 py-0.5 rounded inline-flex items-center gap-1" title="Copier VCS pour le virement">
+                      <button onClick={() => copyVcs(p.vcs_code)} className="font-mono text-[10px] text-[#2563EB] bg-blue-50 hover:bg-blue-100 px-2 py-0.5 rounded inline-flex items-center gap-1" title="Copier VCS pour le virement">
                         {p.vcs_code}<Copy size={9} />
                       </button>
                     </div>
@@ -293,7 +293,7 @@ export default function OwnerPortalPage() {
                       <div className="space-y-1 mb-3">
                         <div className="text-[11px] uppercase tracking-wider text-slate-400">Vos lots ({c.my_lots.length})</div>
                         {c.my_lots.map(l => (
-                          <div key={l.id} className="text-xs flex items-center justify-between border-l-2 border-[#0055FF]/30 pl-2 py-0.5">
+                          <div key={l.id} className="text-xs flex items-center justify-between border-l-2 border-[#2563EB]/30 pl-2 py-0.5">
                             <span className="text-slate-700">Lot {l.number} {l.description ? `- ${l.description}` : ''}</span>
                             <span className="font-mono text-slate-500">{l.quotity}</span>
                           </div>
@@ -302,7 +302,7 @@ export default function OwnerPortalPage() {
                       <a
                         href={`${process.env.REACT_APP_BACKEND_URL}/api/owner/decompte/pdf?copropriete_id=${c.id}`}
                         target="_blank" rel="noreferrer"
-                        className="inline-flex items-center gap-1.5 text-xs text-[#0055FF] hover:bg-blue-50 px-3 py-1.5 rounded-md border border-[#0055FF]/20"
+                        className="inline-flex items-center gap-1.5 text-xs text-[#2563EB] hover:bg-blue-50 px-3 py-1.5 rounded-md border border-[#2563EB]/20"
                         data-testid={`download-decompte-${c.id}`}
                       >
                         <ArrowDownToLine size={12} />
@@ -332,7 +332,7 @@ export default function OwnerPortalPage() {
                         <TableCell className="text-sm font-medium">{fc.name}</TableCell>
                         <TableCell className="text-xs">{fmtDate(fc.due_date)}</TableCell>
                         <TableCell className="text-right font-mono text-sm">{fmt(fc.my_amount)}</TableCell>
-                        <TableCell><button onClick={() => copyVcs(fc.vcs_code)} className="font-mono text-[10px] text-[#0055FF] hover:underline inline-flex items-center gap-1">{fc.vcs_code}<Copy size={9}/></button></TableCell>
+                        <TableCell><button onClick={() => copyVcs(fc.vcs_code)} className="font-mono text-[10px] text-[#2563EB] hover:underline inline-flex items-center gap-1">{fc.vcs_code}<Copy size={9}/></button></TableCell>
                         <TableCell>
                           {fc.paid ? <Badge className="bg-green-100 text-green-700 border-0 text-[10px]">Paye</Badge>
                             : <Badge className="bg-orange-100 text-orange-700 border-0 text-[10px]">A payer</Badge>}
@@ -384,7 +384,7 @@ export default function OwnerPortalPage() {
                   <Card key={d.id} className="border-slate-200 hover:shadow-sm transition-shadow" data-testid={`doc-card-${d.id}`}>
                     <CardContent className="p-3">
                       <div className="flex items-start gap-2 mb-1">
-                        <FileText size={14} className="text-[#0055FF] mt-0.5 flex-shrink-0" />
+                        <FileText size={14} className="text-[#2563EB] mt-0.5 flex-shrink-0" />
                         <div className="min-w-0 flex-1">
                           <div className="text-sm font-medium text-slate-900 truncate">{d.title}</div>
                           {d.description && <div className="text-[11px] text-slate-500 line-clamp-2">{d.description}</div>}
@@ -393,7 +393,7 @@ export default function OwnerPortalPage() {
                       <div className="flex items-center justify-between mt-2">
                         <Badge variant="outline" className="text-[10px]">{d.category_name || 'Sans categorie'}</Badge>
                         {d.filename && (
-                          <a href={`${process.env.REACT_APP_BACKEND_URL}/api/documents/${d.id}/download`} target="_blank" rel="noreferrer" className="text-[#0055FF] hover:bg-blue-50 p-1 rounded" title="Telecharger">
+                          <a href={`${process.env.REACT_APP_BACKEND_URL}/api/documents/${d.id}/download`} target="_blank" rel="noreferrer" className="text-[#2563EB] hover:bg-blue-50 p-1 rounded" title="Telecharger">
                             <ArrowDownToLine size={13} />
                           </a>
                         )}
@@ -464,7 +464,7 @@ export default function OwnerPortalPage() {
                       </div>
                     </div>
                     <div className="pt-3 border-t border-slate-100">
-                      <Button onClick={saveProfile} disabled={savingProfile} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="profile-save-btn">
+                      <Button onClick={saveProfile} disabled={savingProfile} className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="profile-save-btn">
                         <Save size={14} className="mr-1.5" />
                         {savingProfile ? 'Enregistrement...' : 'Enregistrer mes modifications'}
                       </Button>
@@ -486,7 +486,7 @@ export default function OwnerPortalPage() {
                   <CardTitle className="text-base" style={{fontFamily:'Chivo,sans-serif'}}>Mes locataires</CardTitle>
                   <p className="text-xs text-slate-500">Toute modification est notifiee a votre syndic par email.</p>
                 </div>
-                <Button onClick={openCreateTenant} size="sm" className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="add-tenant-btn" disabled={myLots.length === 0}>
+                <Button onClick={openCreateTenant} size="sm" className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="add-tenant-btn" disabled={myLots.length === 0}>
                   <Plus size={14} className="mr-1.5" /> Ajouter
                 </Button>
               </CardHeader>
@@ -580,7 +580,7 @@ export default function OwnerPortalPage() {
             </div>
             <div className="flex gap-2 justify-end pt-2 border-t border-slate-100">
               <Button variant="outline" onClick={() => setTenantDialog(false)}>Annuler</Button>
-              <Button onClick={saveTenant} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="tenant-save-btn">
+              <Button onClick={saveTenant} className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="tenant-save-btn">
                 {editingTenant ? 'Enregistrer' : 'Ajouter'}
               </Button>
             </div>
@@ -590,13 +590,13 @@ export default function OwnerPortalPage() {
 
       <footer className="max-w-6xl mx-auto pt-6 pb-4 border-t border-slate-200 mt-8">
         <div className="flex flex-wrap justify-center gap-x-3 gap-y-1 text-[10px] text-slate-400" data-testid="owner-portal-legal-footer">
-          <a href="/legal/cgu" target="_blank" rel="noopener noreferrer" className="hover:text-[#0055FF] hover:underline">CGU</a>
+          <a href="/legal/cgu" target="_blank" rel="noopener noreferrer" className="hover:text-[#2563EB] hover:underline">CGU</a>
           <span>·</span>
-          <a href="/legal/privacy" target="_blank" rel="noopener noreferrer" className="hover:text-[#0055FF] hover:underline">Confidentialite</a>
+          <a href="/legal/privacy" target="_blank" rel="noopener noreferrer" className="hover:text-[#2563EB] hover:underline">Confidentialite</a>
           <span>·</span>
-          <a href="/legal/mentions" target="_blank" rel="noopener noreferrer" className="hover:text-[#0055FF] hover:underline">Mentions Legales</a>
+          <a href="/legal/mentions" target="_blank" rel="noopener noreferrer" className="hover:text-[#2563EB] hover:underline">Mentions Legales</a>
           <span>·</span>
-          <a href="/legal/cookies" target="_blank" rel="noopener noreferrer" className="hover:text-[#0055FF] hover:underline">Cookies</a>
+          <a href="/legal/cookies" target="_blank" rel="noopener noreferrer" className="hover:text-[#2563EB] hover:underline">Cookies</a>
         </div>
       </footer>
     </div>

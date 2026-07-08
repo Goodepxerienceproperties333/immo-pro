@@ -44,7 +44,7 @@ export default function AdminUsersPage() {
             Seul le super administrateur de la plateforme peut creer les comptes syndic principaux.
           </p>
           <p className="text-sm text-slate-600">
-            Pour modifier vos propres informations (nom, mot de passe), rendez-vous sur la page <a href="/profile" className="text-[#0055FF] hover:underline font-medium">Mon profil</a>.
+            Pour modifier vos propres informations (nom, mot de passe), rendez-vous sur la page <a href="/profile" className="text-[#2563EB] hover:underline font-medium">Mon profil</a>.
           </p>
         </div>
       </div>
@@ -143,7 +143,7 @@ export default function AdminUsersPage() {
           <h1 className="page-title"><Shield size={24} className="inline mr-2" />Comptes syndic</h1>
           <p className="page-subtitle">Creez les comptes principaux des syndics. Chaque syndic gerera ensuite ses ACPs et son equipe.</p>
         </div>
-        <Button onClick={openCreate} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="create-user-btn">
+        <Button onClick={openCreate} className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="create-user-btn">
           <Plus size={16} className="mr-2" /> Nouveau syndic
         </Button>
       </div>
@@ -243,7 +243,7 @@ export default function AdminUsersPage() {
             </label>
             <div className="flex gap-3 justify-end pt-2">
               <Button variant="outline" onClick={() => setDialogOpen(false)} data-testid="user-cancel">Annuler</Button>
-              <Button onClick={handleSave} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="user-save-btn">
+              <Button onClick={handleSave} className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="user-save-btn">
                 {editing ? 'Mettre a jour' : 'Creer le compte syndic'}
               </Button>
             </div>

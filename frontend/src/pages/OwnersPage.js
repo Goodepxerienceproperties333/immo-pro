@@ -108,7 +108,7 @@ export default function OwnersPage() {
     <div data-testid="owners-page">
       <div className="page-header flex items-center justify-between">
         <div><h1 className="page-title">Proprietaires</h1><p className="page-subtitle">Gestion des coproprietaires</p></div>
-        <Button onClick={openCreate} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="create-owner-btn"><Plus size={16} className="mr-2" /> Nouveau</Button>
+        <Button onClick={openCreate} className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="create-owner-btn"><Plus size={16} className="mr-2" /> Nouveau</Button>
       </div>
       <div className="mb-4 flex items-center gap-3 flex-wrap">
         <div className="relative max-w-sm flex-1">
@@ -154,7 +154,7 @@ export default function OwnersPage() {
               <TableRow key={o.id} className="hover:bg-slate-50/50" data-testid={`owner-row-${o.id}`}>
                 <TableCell className="font-medium text-slate-900">{o.last_name || o.name}</TableCell>
                 <TableCell className="text-slate-600">{o.first_name || ''}</TableCell>
-                <TableCell className="font-mono text-xs text-[#0055FF]">{o.vcs_code || '-'}</TableCell>
+                <TableCell className="font-mono text-xs text-[#2563EB]">{o.vcs_code || '-'}</TableCell>
                 <TableCell className="text-slate-600 text-sm">{o.city || ''}{o.postal_code ? ` (${o.postal_code})` : ''}</TableCell>
                 <TableCell className="text-slate-600 text-sm">{o.email}</TableCell>
                 <TableCell className="text-slate-600 text-sm">{o.phone}</TableCell>
@@ -172,7 +172,7 @@ export default function OwnersPage() {
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto" data-testid="owner-dialog">
           <DialogHeader><DialogTitle style={{fontFamily:'Chivo,sans-serif'}}>{editing ? 'Modifier proprietaire' : 'Nouveau proprietaire'}</DialogTitle>
-            {editing?.vcs_code && <p className="font-mono text-sm text-[#0055FF] mt-1">VCS: {editing.vcs_code}</p>}
+            {editing?.vcs_code && <p className="font-mono text-sm text-[#2563EB] mt-1">VCS: {editing.vcs_code}</p>}
           </DialogHeader>
           <div className="space-y-4 mt-2">
             <div className="grid grid-cols-2 gap-4">
@@ -243,7 +243,7 @@ export default function OwnersPage() {
             )}
             <div className="flex gap-3 justify-end">
               <Button variant="outline" onClick={() => setDialogOpen(false)} data-testid="owner-cancel-btn">Annuler</Button>
-              <Button onClick={handleSave} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="owner-save-btn">{editing ? 'Modifier' : 'Creer'}</Button>
+              <Button onClick={handleSave} className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="owner-save-btn">{editing ? 'Modifier' : 'Creer'}</Button>
             </div>
           </div>
         </DialogContent>

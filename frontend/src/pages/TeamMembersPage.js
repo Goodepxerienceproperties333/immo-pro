@@ -148,13 +148,13 @@ export default function TeamMembersPage() {
     <div className="space-y-4" data-testid="team-page">
       <div className="page-header flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-md bg-[#0055FF]/10 flex items-center justify-center text-[#0055FF]"><Users size={20} /></div>
+          <div className="w-10 h-10 rounded-md bg-[#2563EB]/10 flex items-center justify-center text-[#2563EB]"><Users size={20} /></div>
           <div>
             <h1 className="page-title">Mon equipe</h1>
             <p className="page-subtitle">Gestionnaires rattaches a votre cabinet ({user?.name}). Vous pouvez attribuer un profil prefefini puis ajuster les permissions a la piece.</p>
           </div>
         </div>
-        <Button onClick={openNew} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="new-member-btn">
+        <Button onClick={openNew} className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="new-member-btn">
           <Plus size={14} className="mr-1" /> Ajouter un gestionnaire
         </Button>
       </div>
@@ -167,7 +167,7 @@ export default function TeamMembersPage() {
             <div className="text-sm text-slate-500 italic text-center py-8">
               Aucun gestionnaire dans votre equipe pour le moment.
               <br />
-              <Button onClick={openNew} variant="link" className="text-[#0055FF]">Ajouter votre premier gestionnaire</Button>
+              <Button onClick={openNew} variant="link" className="text-[#2563EB]">Ajouter votre premier gestionnaire</Button>
             </div>
           ) : (
             <div className="overflow-x-auto">
@@ -232,7 +232,7 @@ export default function TeamMembersPage() {
         <DialogContent className="max-w-3xl max-h-[90vh] overflow-hidden flex flex-col">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <Users size={16} className="text-[#0055FF]" />
+              <Users size={16} className="text-[#2563EB]" />
               {editing ? `Modifier ${editing.name}` : 'Nouveau gestionnaire'}
             </DialogTitle>
           </DialogHeader>
@@ -282,8 +282,8 @@ export default function TeamMembersPage() {
                   Coproprietes assignees ({form.copropriete_ids.length}/{copros.length})
                 </label>
                 <div className="flex gap-2">
-                  <button type="button" className="text-xs text-[#0055FF] hover:underline" onClick={() => setForm({...form, copropriete_ids: copros.map(c => c.id)})}>Toutes</button>
-                  <button type="button" className="text-xs text-[#0055FF] hover:underline" onClick={() => setForm({...form, copropriete_ids: []})}>Aucune</button>
+                  <button type="button" className="text-xs text-[#2563EB] hover:underline" onClick={() => setForm({...form, copropriete_ids: copros.map(c => c.id)})}>Toutes</button>
+                  <button type="button" className="text-xs text-[#2563EB] hover:underline" onClick={() => setForm({...form, copropriete_ids: []})}>Aucune</button>
                 </div>
               </div>
               <div className="border border-slate-200 rounded p-2 max-h-32 overflow-auto bg-slate-50">
@@ -291,7 +291,7 @@ export default function TeamMembersPage() {
                   <div className="text-xs italic text-slate-500">Aucune ACP dans votre perimetre.</div>
                 ) : copros.map(c => (
                   <label key={c.id} className="flex items-center gap-2 text-sm py-1 cursor-pointer hover:bg-white rounded px-1" data-testid={`copro-check-${c.id}`}>
-                    <input type="checkbox" checked={form.copropriete_ids.includes(c.id)} onChange={() => toggleAcp(c.id)} className="accent-[#0055FF]" />
+                    <input type="checkbox" checked={form.copropriete_ids.includes(c.id)} onChange={() => toggleAcp(c.id)} className="accent-[#2563EB]" />
                     <Building2 size={12} className="text-slate-400" />
                     <span>{c.name}</span>
                   </label>
@@ -303,8 +303,8 @@ export default function TeamMembersPage() {
               <div className="flex items-center justify-between mb-1">
                 <label className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Permissions individuelles ({form.permissions.length})</label>
                 <div className="flex gap-2">
-                  <button type="button" className="text-xs text-[#0055FF] hover:underline" onClick={() => setForm({...form, permissions: catalog.map(p => p.code)})}>Toutes</button>
-                  <button type="button" className="text-xs text-[#0055FF] hover:underline" onClick={() => setForm({...form, permissions: []})}>Aucune</button>
+                  <button type="button" className="text-xs text-[#2563EB] hover:underline" onClick={() => setForm({...form, permissions: catalog.map(p => p.code)})}>Toutes</button>
+                  <button type="button" className="text-xs text-[#2563EB] hover:underline" onClick={() => setForm({...form, permissions: []})}>Aucune</button>
                 </div>
               </div>
               <div className="border border-slate-200 rounded p-2 max-h-60 overflow-auto bg-slate-50 text-xs">
@@ -313,7 +313,7 @@ export default function TeamMembersPage() {
                     <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-600 mb-1">{group}</div>
                     {perms.map(p => (
                       <label key={p.code} className="flex items-start gap-2 py-1 cursor-pointer hover:bg-white rounded px-1">
-                        <input type="checkbox" checked={form.permissions.includes(p.code)} onChange={() => togglePerm(p.code)} className="mt-0.5 accent-[#0055FF]" />
+                        <input type="checkbox" checked={form.permissions.includes(p.code)} onChange={() => togglePerm(p.code)} className="mt-0.5 accent-[#2563EB]" />
                         <div>
                           <code className="text-[10px] text-slate-500 font-mono">{p.code}</code>
                           <div className="text-slate-700">{p.label}</div>
@@ -328,7 +328,7 @@ export default function TeamMembersPage() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDialog(false)} data-testid="member-cancel">Annuler</Button>
-            <Button onClick={save} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="member-save">
+            <Button onClick={save} className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="member-save">
               {editing ? 'Mettre a jour' : 'Creer le gestionnaire'}
             </Button>
           </DialogFooter>

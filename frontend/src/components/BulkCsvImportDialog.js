@@ -96,14 +96,14 @@ export default function BulkCsvImportDialog({ open, onClose, title, targetFields
     <Dialog open={open} onOpenChange={(o) => { if (!o) { reset(); onClose(); } }}>
       <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto" data-testid="bulk-csv-dialog">
         <DialogHeader>
-          <DialogTitle className="text-base flex items-center gap-2"><Upload size={16} className="text-[#0055FF]" /> {title}</DialogTitle>
+          <DialogTitle className="text-base flex items-center gap-2"><Upload size={16} className="text-[#2563EB]" /> {title}</DialogTitle>
         </DialogHeader>
         {!parsed && (
           <div className="border-2 border-dashed border-slate-300 rounded-md p-6 text-center">
             <FileText size={28} className="mx-auto text-slate-400 mb-2" />
             <p className="text-xs text-slate-600 mb-3">Chargez un fichier CSV exporte depuis Optipro / Sogis (ou Excel)</p>
             <input ref={inputRef} type="file" accept=".csv,.txt" className="hidden" onChange={handleFile} data-testid="bulk-csv-input" />
-            <Button onClick={() => inputRef.current?.click()} className="bg-[#0055FF] hover:bg-[#0040CC]"><Upload size={13} className="mr-1" /> Choisir le fichier</Button>
+            <Button onClick={() => inputRef.current?.click()} className="bg-[#2563EB] hover:bg-[#1D4ED8]"><Upload size={13} className="mr-1" /> Choisir le fichier</Button>
           </div>
         )}
         {parsed && (
@@ -154,7 +154,7 @@ export default function BulkCsvImportDialog({ open, onClose, title, targetFields
 
             <div className="flex justify-end gap-2">
               <Button variant="outline" size="sm" onClick={reset}>Choisir un autre fichier</Button>
-              <Button onClick={handleImport} disabled={importing} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="bulk-csv-confirm">
+              <Button onClick={handleImport} disabled={importing} className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="bulk-csv-confirm">
                 <CheckCircle2 size={13} className="mr-1" /> Importer {parsed.rows.length} ligne(s)
               </Button>
             </div>

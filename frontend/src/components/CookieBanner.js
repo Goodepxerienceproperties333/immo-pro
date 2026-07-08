@@ -50,7 +50,7 @@ export default function CookieBanner() {
         <button
           onClick={dismiss}
           data-testid="cookie-banner-accept"
-          className="bg-[#0055FF] hover:bg-[#0040CC] text-white text-xs font-semibold px-3 py-1.5 rounded transition-colors whitespace-nowrap"
+          className="bg-[#2563EB] hover:bg-[#1D4ED8] text-white text-xs font-semibold px-3 py-1.5 rounded transition-colors whitespace-nowrap"
         >
           J&apos;ai compris
         </button>

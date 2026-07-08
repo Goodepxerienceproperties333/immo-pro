@@ -152,8 +152,8 @@ export default function BudgetWizard({ budget, distKeys = [], onClose, onDone, m
             const done = step > s.n;
             return (
               <div key={s.n} className="flex items-center flex-1">
-                <div className={`flex flex-col items-center flex-1 ${active ? 'text-[#0055FF]' : done ? 'text-green-600' : 'text-slate-400'}`}>
-                  <div className={`w-9 h-9 rounded-full border-2 flex items-center justify-center ${active ? 'border-[#0055FF] bg-blue-50' : done ? 'border-green-600 bg-green-50' : 'border-slate-300'}`}>
+                <div className={`flex flex-col items-center flex-1 ${active ? 'text-[#2563EB]' : done ? 'text-green-600' : 'text-slate-400'}`}>
+                  <div className={`w-9 h-9 rounded-full border-2 flex items-center justify-center ${active ? 'border-[#2563EB] bg-blue-50' : done ? 'border-green-600 bg-green-50' : 'border-slate-300'}`}>
                     {done ? <CheckCircle2 size={18} /> : <Icon size={18} />}
                   </div>
                   <div className="text-xs mt-1 font-medium">{s.label}</div>
@@ -170,7 +170,7 @@ export default function BudgetWizard({ budget, distKeys = [], onClose, onDone, m
             <p className="text-sm text-slate-600">Combien d'appels lancer sur l'exercice ?</p>
             <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
               {FREQ_OPTIONS.map(opt => (
-                <Card key={opt.v} className={`cursor-pointer transition ${frequency === opt.v ? 'border-2 border-[#0055FF] bg-blue-50/50' : 'border-slate-200 hover:border-slate-400'}`} onClick={() => setFrequency(opt.v)} data-testid={`freq-${opt.v}`}>
+                <Card key={opt.v} className={`cursor-pointer transition ${frequency === opt.v ? 'border-2 border-[#2563EB] bg-blue-50/50' : 'border-slate-200 hover:border-slate-400'}`} onClick={() => setFrequency(opt.v)} data-testid={`freq-${opt.v}`}>
                   <CardContent className="p-4 text-center">
                     <div className="text-2xl font-black" style={{ fontFamily: 'Chivo,sans-serif' }}>{opt.v}</div>
                     <div className="text-xs text-slate-600 mt-1">{opt.l}</div>
@@ -409,7 +409,7 @@ export default function BudgetWizard({ budget, distKeys = [], onClose, onDone, m
                   <Card><CardContent className="p-3"><div className="text-xs text-slate-500">Budget annuel</div><div className="text-xl font-black mt-1 font-mono">{preview.summary.budget_total.toFixed(2)}</div></CardContent></Card>
                   <Card><CardContent className="p-3"><div className="text-xs text-slate-500">Fonds reserve</div><div className="text-xl font-black mt-1 font-mono">{preview.summary.reserve_total.toFixed(2)}</div></CardContent></Card>
                   <Card><CardContent className="p-3"><div className="text-xs text-slate-500">Fonds roulement</div><div className="text-xl font-black mt-1 font-mono">{(preview.summary.roulement_total || 0).toFixed(2)}</div></CardContent></Card>
-                  <Card className="border-[#0055FF] bg-blue-50"><CardContent className="p-3"><div className="text-xs text-slate-500">Total appele</div><div className="text-xl font-black mt-1 font-mono text-[#0055FF]">{preview.summary.grand_total.toFixed(2)}</div></CardContent></Card>
+                  <Card className="border-[#2563EB] bg-blue-50"><CardContent className="p-3"><div className="text-xs text-slate-500">Total appele</div><div className="text-xl font-black mt-1 font-mono text-[#2563EB]">{preview.summary.grand_total.toFixed(2)}</div></CardContent></Card>
                 </div>
 
                 <div className="border rounded-md overflow-hidden">
@@ -448,7 +448,7 @@ export default function BudgetWizard({ budget, distKeys = [], onClose, onDone, m
                         {preview.calls[0]?.distribution.map((d, j) => (
                           <tr key={j} className="border-t border-slate-100">
                             <td className="p-1">{d.owner_name}</td>
-                            <td className="p-1 font-mono text-[#0055FF]">{d.vcs_code}</td>
+                            <td className="p-1 font-mono text-[#2563EB]">{d.vcs_code}</td>
                             <td className="p-1 text-right font-mono">{d.amount.toFixed(2)}</td>
                           </tr>
                         ))}
@@ -467,7 +467,7 @@ export default function BudgetWizard({ budget, distKeys = [], onClose, onDone, m
             <ChevronLeft size={16} className="mr-1" />{step > 1 ? 'Precedent' : 'Annuler'}
           </Button>
           {step < 5 ? (
-            <Button onClick={() => setStep(step + 1)} disabled={!canNext()} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="wizard-next-btn">
+            <Button onClick={() => setStep(step + 1)} disabled={!canNext()} className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="wizard-next-btn">
               Suivant <ChevronRight size={16} className="ml-1" />
             </Button>
           ) : (

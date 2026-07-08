@@ -181,7 +181,7 @@ export default function JournalsPage() {
     <div data-testid="journals-page">
       <div className="page-header flex items-center justify-between">
         <div><h1 className="page-title">Journaux Comptables</h1><p className="page-subtitle">Ecritures comptables par journal</p></div>
-        <Button onClick={openCreate} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="create-entry-btn"><Plus size={16} className="mr-2" /> Nouvelle ecriture</Button>
+        <Button onClick={openCreate} className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="create-entry-btn"><Plus size={16} className="mr-2" /> Nouvelle ecriture</Button>
       </div>
 
       <Tabs value={journalType} onValueChange={setJournalType}>
@@ -194,7 +194,7 @@ export default function JournalsPage() {
               type="checkbox"
               checked={includeReversals}
               onChange={e => setIncludeReversals(e.target.checked)}
-              className="h-4 w-4 accent-[#0055FF]"
+              className="h-4 w-4 accent-[#2563EB]"
             />
             <span>Inclure les contre-passations</span>
           </label>
@@ -364,7 +364,7 @@ export default function JournalsPage() {
 
             <div className="flex gap-3 justify-end">
               <Button variant="outline" onClick={() => setDialogOpen(false)}>Annuler</Button>
-              <Button onClick={handleSave} disabled={!isBalanced} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="entry-save-btn">Enregistrer</Button>
+              <Button onClick={handleSave} disabled={!isBalanced} className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="entry-save-btn">Enregistrer</Button>
             </div>
           </div>
         </DialogContent>

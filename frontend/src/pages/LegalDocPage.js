@@ -56,7 +56,7 @@ export default function LegalDocPage() {
             <ArrowLeft size={16} /> Retour
           </button>
           <div className="flex-1" />
-          <Link to="/" className="text-[#0055FF] font-semibold text-sm hover:underline">
+          <Link to="/" className="text-[#2563EB] font-semibold text-sm hover:underline">
             CoproManager
           </Link>
         </div>
@@ -75,8 +75,8 @@ export default function LegalDocPage() {
               data-testid={`legal-nav-${s}`}
               className={`inline-flex items-center gap-1.5 text-[12px] px-2.5 py-1 rounded border transition-colors ${
                 active
-                  ? 'bg-[#0055FF] text-white border-[#0055FF]'
-                  : 'bg-white text-slate-600 border-slate-200 hover:border-[#0055FF] hover:text-[#0055FF]'
+                  ? 'bg-[#2563EB] text-white border-[#2563EB]'
+                  : 'bg-white text-slate-600 border-slate-200 hover:border-[#2563EB] hover:text-[#2563EB]'
               }`}
             >
               <I size={12} /> {M.label}
@@ -88,8 +88,8 @@ export default function LegalDocPage() {
       <main className="max-w-4xl mx-auto px-6 py-6">
         <div className="bg-white rounded-lg border border-slate-200 shadow-sm p-8">
           <div className="flex items-start gap-4 mb-6 pb-4 border-b border-slate-100">
-            <div className="w-12 h-12 rounded-full bg-[#0055FF]/10 flex items-center justify-center shrink-0">
-              <Icon size={22} className="text-[#0055FF]" />
+            <div className="w-12 h-12 rounded-full bg-[#2563EB]/10 flex items-center justify-center shrink-0">
+              <Icon size={22} className="text-[#2563EB]" />
             </div>
             <div className="flex-1">
               <h1 className="text-2xl font-semibold text-slate-900" style={{ fontFamily: 'Chivo, sans-serif' }}>
@@ -112,7 +112,7 @@ export default function LegalDocPage() {
             <div className="text-red-600 text-sm py-8 text-center">{error}</div>
           )}
           {doc && !loading && !error && (
-            <article className="prose prose-slate prose-sm max-w-none prose-headings:font-semibold prose-headings:text-slate-800 prose-a:text-[#0055FF] prose-table:text-xs prose-code:text-[13px] prose-strong:text-slate-900" data-testid="legal-doc-content">
+            <article className="prose prose-slate prose-sm max-w-none prose-headings:font-semibold prose-headings:text-slate-800 prose-a:text-[#2563EB] prose-table:text-xs prose-code:text-[13px] prose-strong:text-slate-900" data-testid="legal-doc-content">
               <ReactMarkdown remarkPlugins={[remarkGfm]}>{doc.content || ''}</ReactMarkdown>
             </article>
           )}

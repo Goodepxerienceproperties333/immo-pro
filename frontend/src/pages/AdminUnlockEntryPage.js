@@ -133,7 +133,7 @@ export default function AdminUnlockEntryPage() {
   return (
     <div className="space-y-4" data-testid="admin-unlock-page">
       <div className="flex items-center gap-3">
-        <Link to="/admin" className="text-[#0055FF] hover:underline text-sm flex items-center gap-1" data-testid="back-to-admin">
+        <Link to="/admin" className="text-[#2563EB] hover:underline text-sm flex items-center gap-1" data-testid="back-to-admin">
           <ArrowLeft size={14} /> Retour Admin
         </Link>
       </div>
@@ -206,7 +206,7 @@ export default function AdminUnlockEntryPage() {
             <Input type="date" value={filters.date_to} onChange={e => setFilters({...filters, date_to: e.target.value})} placeholder="Au" data-testid="filter-to" />
             <Input value={filters.q} onChange={e => setFilters({...filters, q: e.target.value})} placeholder="Ref / description..." data-testid="filter-q" />
           </div>
-          <Button onClick={search} disabled={loading} className="mt-3 bg-[#0055FF] hover:bg-[#0040CC]" data-testid="search-btn">
+          <Button onClick={search} disabled={loading} className="mt-3 bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="search-btn">
             <Search size={14} className="mr-2" /> {loading ? 'Recherche...' : 'Rechercher'}
           </Button>
         </CardContent>

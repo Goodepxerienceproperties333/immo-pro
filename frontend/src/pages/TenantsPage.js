@@ -48,7 +48,7 @@ export default function TenantsPage() {
     <div data-testid="tenants-page">
       <div className="page-header flex items-center justify-between">
         <div><h1 className="page-title">Locataires</h1><p className="page-subtitle">Gestion des locataires</p></div>
-        <Button onClick={openCreate} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="create-tenant-btn"><Plus size={16} className="mr-2" /> Nouveau</Button>
+        <Button onClick={openCreate} className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="create-tenant-btn"><Plus size={16} className="mr-2" /> Nouveau</Button>
       </div>
       <div className="mb-4 relative max-w-sm">
         <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
@@ -108,7 +108,7 @@ export default function TenantsPage() {
             </div>
             <div className="flex gap-3 justify-end">
               <Button variant="outline" onClick={() => setDialogOpen(false)}>Annuler</Button>
-              <Button onClick={handleSave} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="tenant-save-btn">{editing ? 'Modifier' : 'Creer'}</Button>
+              <Button onClick={handleSave} className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="tenant-save-btn">{editing ? 'Modifier' : 'Creer'}</Button>
             </div>
           </div>
         </DialogContent>

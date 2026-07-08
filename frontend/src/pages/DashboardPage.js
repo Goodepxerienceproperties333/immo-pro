@@ -76,7 +76,7 @@ export default function DashboardPage() {
               disabled={seeding}
               variant="outline"
               size="sm"
-              className="border-[#0055FF]/30 text-[#0055FF] hover:bg-[#0055FF]/5"
+              className="border-[#2563EB]/30 text-[#2563EB] hover:bg-[#2563EB]/5"
               data-testid="seed-demo-btn"
             >
               {seeding ? <Loader2 size={14} className="mr-2 animate-spin" /> : <Sparkles size={14} className="mr-2" />}
@@ -89,7 +89,7 @@ export default function DashboardPage() {
         {stats && (
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
             {[
-              { label: 'Coproprietes', value: stats.coproprietes_count || coproprietes.length, icon: Home, color: '#0055FF' },
+              { label: 'Coproprietes', value: stats.coproprietes_count || coproprietes.length, icon: Home, color: '#2563EB' },
               { label: 'Proprietaires', value: stats.owners_count || 0, icon: Users, color: '#0284C7' },
               { label: 'Lots', value: stats.lots_count || 0, icon: Building2, color: '#00A650' },
               { label: 'Factures impayees', value: stats.unpaid_invoices || 0, icon: AlertCircle, color: '#DC2626' },
@@ -116,14 +116,14 @@ export default function DashboardPage() {
             {coproprietes.filter(c => c.status !== 'archived').map(c => (
               <Card
                 key={c.id}
-                className="border-slate-200 hover:border-[#0055FF] hover:shadow-lg cursor-pointer transition-all group"
+                className="border-slate-200 hover:border-[#2563EB] hover:shadow-lg cursor-pointer transition-all group"
                 onClick={() => setSelectedCopro(c.id)}
                 data-testid={`copro-tile-${c.id}`}
               >
                 <CardContent className="p-5">
                   <div className="flex items-start justify-between mb-3">
-                    <div className="w-10 h-10 rounded-md bg-[#0055FF]/10 flex items-center justify-center group-hover:bg-[#0055FF] transition-colors">
-                      <Home size={20} className="text-[#0055FF] group-hover:text-white transition-colors" />
+                    <div className="w-10 h-10 rounded-md bg-[#2563EB]/10 flex items-center justify-center group-hover:bg-[#2563EB] transition-colors">
+                      <Home size={20} className="text-[#2563EB] group-hover:text-white transition-colors" />
                     </div>
                     {c.reference && <Badge variant="outline" className="font-mono text-[10px]">{c.reference}</Badge>}
                   </div>
@@ -132,7 +132,7 @@ export default function DashboardPage() {
                   {c.bce && <p className="text-[10px] text-slate-400 font-mono mt-1">BCE: {c.bce}</p>}
                   <div className="mt-3 pt-3 border-t border-slate-100 flex items-center justify-between">
                     <span className="text-[10px] text-slate-400 font-mono">{getDefaultIban(c)}</span>
-                    <span className="text-xs text-[#0055FF] font-medium opacity-0 group-hover:opacity-100 transition-opacity">Ouvrir</span>
+                    <span className="text-xs text-[#2563EB] font-medium opacity-0 group-hover:opacity-100 transition-opacity">Ouvrir</span>
                   </div>
                 </CardContent>
               </Card>
@@ -144,15 +144,15 @@ export default function DashboardPage() {
   }
 
   // ---- PER-ACP DASHBOARD ----
-  if (loading) return <div className="h-1 w-48 bg-slate-200 rounded overflow-hidden mx-auto mt-20"><div className="h-full bg-[#0055FF] animate-pulse w-1/2" /></div>;
+  if (loading) return <div className="h-1 w-48 bg-slate-200 rounded overflow-hidden mx-auto mt-20"><div className="h-full bg-[#2563EB] animate-pulse w-1/2" /></div>;
 
   const kpis = [
-    { label: 'Proprietaires', value: stats?.owners_count || 0, icon: Users, color: '#0055FF' },
+    { label: 'Proprietaires', value: stats?.owners_count || 0, icon: Users, color: '#2563EB' },
     { label: 'Lots', value: stats?.lots_count || 0, icon: Building2, color: '#0284C7' },
     { label: 'Locataires', value: stats?.tenants_count || 0, icon: UserCheck, color: '#00A650' },
     { label: 'Factures', value: stats?.invoices_count || 0, icon: Receipt, color: '#FF6B00' },
     { label: 'Impayees', value: stats?.unpaid_invoices || 0, icon: AlertCircle, color: '#DC2626' },
-    { label: 'Total charges', value: `${(stats?.total_charges || 0).toLocaleString('fr-BE')} EUR`, icon: TrendingUp, color: '#0055FF' },
+    { label: 'Total charges', value: `${(stats?.total_charges || 0).toLocaleString('fr-BE')} EUR`, icon: TrendingUp, color: '#2563EB' },
   ];
 
   return (

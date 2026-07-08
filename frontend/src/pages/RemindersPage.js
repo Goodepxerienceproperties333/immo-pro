@@ -58,11 +58,11 @@ export default function RemindersPage() {
             <label className="form-label">Delai de grace (j)</label>
             <Input type="number" min={0} value={graceDays} onChange={e => setGraceDays(Number(e.target.value) || 0)} className="w-24" data-testid="grace-days-input" />
           </div>
-          <Button onClick={load} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="reload-reminders-btn">Rafraichir</Button>
+          <Button onClick={load} className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="reload-reminders-btn">Rafraichir</Button>
         </div>
       </div>
 
-      {loading && <div className="h-1 w-48 bg-slate-200 rounded overflow-hidden mx-auto mt-20"><div className="h-full bg-[#0055FF] animate-pulse w-1/2" /></div>}
+      {loading && <div className="h-1 w-48 bg-slate-200 rounded overflow-hidden mx-auto mt-20"><div className="h-full bg-[#2563EB] animate-pulse w-1/2" /></div>}
 
       {!loading && data && (
         <>
@@ -98,7 +98,7 @@ export default function RemindersPage() {
                   <TableRow key={i} className="hover:bg-slate-50/50" data-testid={`reminder-row-${i}`}>
                     <TableCell><Badge className={SEVERITY_STYLE[r.severity]}>{SEVERITY_LABEL[r.severity]}</Badge></TableCell>
                     <TableCell className="font-medium">{r.owner_name}</TableCell>
-                    <TableCell className="font-mono text-xs text-[#0055FF]">{r.vcs_code}</TableCell>
+                    <TableCell className="font-mono text-xs text-[#2563EB]">{r.vcs_code}</TableCell>
                     <TableCell>{r.fund_call_name}</TableCell>
                     <TableCell className="font-mono">{fmtDate(r.due_date)}</TableCell>
                     <TableCell className="text-right font-mono">{r.days_late} j</TableCell>

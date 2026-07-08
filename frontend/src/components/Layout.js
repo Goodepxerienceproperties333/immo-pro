@@ -148,13 +148,13 @@ export default function Layout() {
   const SidebarContent = () => (
     <div className="flex flex-col h-full">
       <div className="p-4 flex items-center gap-3">
-        <div className="w-8 h-8 rounded bg-[#0055FF] flex items-center justify-center text-white font-bold text-sm flex-shrink-0">CP</div>
+        <div className="w-8 h-8 rounded bg-[#2563EB] flex items-center justify-center text-white font-bold text-sm flex-shrink-0">CP</div>
         {!collapsed && <span className="text-white font-bold text-lg tracking-tight" style={{fontFamily:'Chivo,sans-serif'}}>CoproManager</span>}
       </div>
       <Separator className="bg-slate-800" />
       {/* ACP name */}
       {!collapsed && selectedCoproData && (
-        <div className="px-4 py-2 bg-[#0055FF]/10 border-b border-slate-800 flex items-start gap-2">
+        <div className="px-4 py-2 bg-[#2563EB]/10 border-b border-slate-800 flex items-start gap-2">
           <div className="flex-1 min-w-0">
             <div className="text-[10px] uppercase tracking-wider text-slate-500">Copropriete</div>
             <div className="text-sm text-white font-semibold truncate">{selectedCoproData.name}</div>
@@ -311,7 +311,7 @@ export default function Layout() {
     return (
       <div className="flex flex-col h-screen overflow-hidden bg-[#FAFAFA]">
         <header className="bg-slate-950 sticky top-0 z-30 h-14 flex items-center px-6 gap-4">
-          <div className="w-8 h-8 rounded bg-[#0055FF] flex items-center justify-center text-white font-bold text-sm">CP</div>
+          <div className="w-8 h-8 rounded bg-[#2563EB] flex items-center justify-center text-white font-bold text-sm">CP</div>
           <span className="text-white font-bold text-lg tracking-tight" style={{fontFamily:'Chivo,sans-serif'}}>CoproManager</span>
           <div className="flex-1" />
           <NavLink to="/" end className="text-slate-400 hover:text-white text-xs flex items-center gap-1.5 transition-colors" data-testid="nav-dashboard-top">
@@ -341,7 +341,7 @@ export default function Layout() {
             title="Mon profil"
             data-testid="user-info-top-noacp"
           >
-            <div className="w-7 h-7 rounded-full bg-gradient-to-br from-[#0055FF] to-[#0040CC] flex items-center justify-center text-xs font-semibold text-white">{(user?.name || 'U')[0].toUpperCase()}</div>
+            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-blue-700 flex items-center justify-center text-xs font-bold text-white shadow-md shadow-blue-500/25 ring-2 ring-white">{(user?.name || 'U')[0].toUpperCase()}</div>
             <div className="hidden md:flex flex-col items-start leading-tight">
               <span className="text-xs font-semibold text-white group-hover:text-blue-200" data-testid="user-name-display-noacp">{user?.name || 'Utilisateur'}</span>
               <span className="text-[10px] text-slate-400">{getRoleLabel(user?.role)}</span>
@@ -352,15 +352,15 @@ export default function Layout() {
         <main className="flex-1 overflow-auto p-6"><div className="max-w-[1400px] mx-auto"><Outlet /></div>
           <footer className="max-w-[1400px] mx-auto pt-6 pb-2 border-t border-slate-200 mt-6">
             <div className="flex flex-wrap justify-center gap-x-3 gap-y-1 text-[10px] text-slate-400" data-testid="layout-legal-footer">
-              <a href="/legal/cgu" target="_blank" rel="noopener noreferrer" className="hover:text-[#0055FF] hover:underline">CGU</a>
+              <a href="/legal/cgu" target="_blank" rel="noopener noreferrer" className="hover:text-[#2563EB] hover:underline">CGU</a>
               <span>·</span>
-              <a href="/legal/privacy" target="_blank" rel="noopener noreferrer" className="hover:text-[#0055FF] hover:underline">Confidentialite</a>
+              <a href="/legal/privacy" target="_blank" rel="noopener noreferrer" className="hover:text-[#2563EB] hover:underline">Confidentialite</a>
               <span>·</span>
-              <a href="/legal/mentions" target="_blank" rel="noopener noreferrer" className="hover:text-[#0055FF] hover:underline">Mentions Legales</a>
+              <a href="/legal/mentions" target="_blank" rel="noopener noreferrer" className="hover:text-[#2563EB] hover:underline">Mentions Legales</a>
               <span>·</span>
-              <a href="/legal/cookies" target="_blank" rel="noopener noreferrer" className="hover:text-[#0055FF] hover:underline">Cookies</a>
+              <a href="/legal/cookies" target="_blank" rel="noopener noreferrer" className="hover:text-[#2563EB] hover:underline">Cookies</a>
               <span>·</span>
-              <a href="/legal/disclaimer" target="_blank" rel="noopener noreferrer" className="hover:text-[#0055FF] hover:underline">Disclaimer</a>
+              <a href="/legal/disclaimer" target="_blank" rel="noopener noreferrer" className="hover:text-[#2563EB] hover:underline">Disclaimer</a>
             </div>
           </footer>
         </main>
@@ -403,14 +403,14 @@ export default function Layout() {
       <header className="bg-white border-b border-slate-200 sticky top-0 z-30 h-12 flex items-center px-4 lg:px-6 gap-3 flex-shrink-0">
         <Button variant="ghost" size="sm" className="lg:hidden" onClick={() => setMobileOpen(true)} data-testid="mobile-menu-btn"><Menu size={20} /></Button>
         <div className="hidden lg:flex items-center gap-2">
-          <div className="w-7 h-7 rounded bg-[#0055FF] flex items-center justify-center text-white font-bold text-[11px] flex-shrink-0">CP</div>
-          <span className="text-slate-900 font-bold text-sm tracking-tight" style={{fontFamily:'Chivo,sans-serif'}}>CoproManager</span>
+          <div className="w-8 h-8 rounded-2xl bg-gradient-to-br from-blue-500 to-blue-700 flex items-center justify-center text-white font-bold text-[11px] flex-shrink-0 shadow-md shadow-blue-500/30">CP</div>
+          <span className="text-slate-900 font-bold text-sm tracking-tight font-display">CoproManager</span>
         </div>
         <Button
           variant="outline"
           size="sm"
           onClick={() => { setSelectedCopro(''); navigate('/'); }}
-          className="h-8 px-2.5 text-[#0055FF] border-[#0055FF]/30 hover:bg-[#0055FF]/5 gap-1.5"
+          className="h-8 px-2.5 text-[#2563EB] border-[#2563EB]/30 hover:bg-[#2563EB]/5 gap-1.5"
           data-testid="back-to-home"
           title="Retour a l'apercu de toutes les ACPs"
         >
@@ -418,7 +418,7 @@ export default function Layout() {
           <span className="hidden sm:inline text-xs font-medium">Retour ACPs</span>
         </Button>
         <Select value={selectedCopro} onValueChange={(v) => setSelectedCopro(v)}>
-          <SelectTrigger className="w-[220px] h-8 text-xs border-[#0055FF]/30" data-testid="copro-selector"><SelectValue /></SelectTrigger>
+          <SelectTrigger className="w-[220px] h-8 text-xs border-[#2563EB]/30" data-testid="copro-selector"><SelectValue /></SelectTrigger>
           <SelectContent>{coproprietes.filter(c => c.status !== 'archived').map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}</SelectContent>
         </Select>
         {selectedCopro && fiscalYears && fiscalYears.length > 0 && (
@@ -439,7 +439,7 @@ export default function Layout() {
         {selectedCoproData && (
           <button
             onClick={() => navigate(`/coproprietes?edit=${selectedCoproData.id}`)}
-            className="hidden md:inline-flex items-center gap-1 h-8 px-2 rounded text-slate-500 hover:text-[#0055FF] hover:bg-slate-100 text-xs"
+            className="hidden md:inline-flex items-center gap-1 h-8 px-2 rounded text-slate-500 hover:text-[#2563EB] hover:bg-slate-100 text-xs"
             title="Editer cette copropriete"
             data-testid="header-edit-acp"
           >
@@ -462,9 +462,9 @@ export default function Layout() {
           title="Mon profil"
           data-testid="user-info-top"
         >
-          <div className="w-7 h-7 rounded-full bg-gradient-to-br from-[#0055FF] to-[#0040CC] flex items-center justify-center text-xs font-semibold text-white">{(user?.name || 'U')[0].toUpperCase()}</div>
+          <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-blue-700 flex items-center justify-center text-xs font-bold text-white shadow-md shadow-blue-500/25 ring-2 ring-white">{(user?.name || 'U')[0].toUpperCase()}</div>
           <div className="hidden md:flex flex-col items-start leading-tight">
-            <span className="text-xs font-semibold text-slate-800 group-hover:text-[#0055FF]" data-testid="user-name-display">{user?.name || 'Utilisateur'}</span>
+            <span className="text-xs font-semibold text-slate-800 group-hover:text-[#2563EB]" data-testid="user-name-display">{user?.name || 'Utilisateur'}</span>
             <span className="text-[10px] text-slate-500">{getRoleLabel(user?.role)}</span>
           </div>
         </NavLink>
@@ -479,15 +479,15 @@ export default function Layout() {
         <div className="max-w-[1600px] mx-auto"><Outlet /></div>
         <footer className="max-w-[1600px] mx-auto pt-6 pb-2 border-t border-slate-200 mt-6">
           <div className="flex flex-wrap justify-center gap-x-3 gap-y-1 text-[10px] text-slate-400" data-testid="layout-legal-footer">
-            <a href="/legal/cgu" target="_blank" rel="noopener noreferrer" className="hover:text-[#0055FF] hover:underline">CGU</a>
+            <a href="/legal/cgu" target="_blank" rel="noopener noreferrer" className="hover:text-[#2563EB] hover:underline">CGU</a>
             <span>·</span>
-            <a href="/legal/privacy" target="_blank" rel="noopener noreferrer" className="hover:text-[#0055FF] hover:underline">Confidentialite</a>
+            <a href="/legal/privacy" target="_blank" rel="noopener noreferrer" className="hover:text-[#2563EB] hover:underline">Confidentialite</a>
             <span>·</span>
-            <a href="/legal/mentions" target="_blank" rel="noopener noreferrer" className="hover:text-[#0055FF] hover:underline">Mentions Legales</a>
+            <a href="/legal/mentions" target="_blank" rel="noopener noreferrer" className="hover:text-[#2563EB] hover:underline">Mentions Legales</a>
             <span>·</span>
-            <a href="/legal/cookies" target="_blank" rel="noopener noreferrer" className="hover:text-[#0055FF] hover:underline">Cookies</a>
+            <a href="/legal/cookies" target="_blank" rel="noopener noreferrer" className="hover:text-[#2563EB] hover:underline">Cookies</a>
             <span>·</span>
-            <a href="/legal/disclaimer" target="_blank" rel="noopener noreferrer" className="hover:text-[#0055FF] hover:underline">Disclaimer</a>
+            <a href="/legal/disclaimer" target="_blank" rel="noopener noreferrer" className="hover:text-[#2563EB] hover:underline">Disclaimer</a>
           </div>
         </footer>
       </main>

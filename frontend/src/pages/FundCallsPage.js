@@ -266,7 +266,7 @@ export default function FundCallsPage() {
               <Trash2 size={16} className="mr-2" /> Supprimer tous les appels
             </Button>
           )}
-          <Button onClick={openCreate} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="create-call-btn"><Plus size={16} className="mr-2" /> Nouvel appel</Button>
+          <Button onClick={openCreate} className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="create-call-btn"><Plus size={16} className="mr-2" /> Nouvel appel</Button>
         </div>
       </div>
 
@@ -305,7 +305,7 @@ export default function FundCallsPage() {
             const meta = getCallTypeMeta(c.call_type);
             const TypeIcon = meta.icon;
             return (
-            <Card key={c.id} className={`cursor-pointer transition-all border-l-4 ${selectedCall?.id === c.id ? 'border-l-[#0055FF] shadow-md border border-[#0055FF]' : `border-l-current ${meta.accent} border-slate-200 hover:border-slate-300`}`} onClick={() => viewCall(c.id)} data-testid={`call-card-${c.id}`}>
+            <Card key={c.id} className={`cursor-pointer transition-all border-l-4 ${selectedCall?.id === c.id ? 'border-l-[#2563EB] shadow-md border border-[#2563EB]' : `border-l-current ${meta.accent} border-slate-200 hover:border-slate-300`}`} onClick={() => viewCall(c.id)} data-testid={`call-card-${c.id}`}>
               <CardContent className="p-4">
                 <div className="flex items-center justify-between mb-1">
                   <span className="font-semibold text-sm">{c.name}</span>
@@ -482,7 +482,7 @@ export default function FundCallsPage() {
                                 <div className="flex items-center gap-3 min-w-0">
                                   <div className="text-sm font-semibold text-slate-900 truncate">{g.owner_name}</div>
                                   {g.vcs_code && (
-                                    <span className="text-[10px] font-mono text-[#0055FF] bg-blue-50 border border-blue-100 px-1.5 py-0.5 rounded">
+                                    <span className="text-[10px] font-mono text-[#2563EB] bg-blue-50 border border-blue-100 px-1.5 py-0.5 rounded">
                                       {g.vcs_code}
                                     </span>
                                   )}
@@ -638,7 +638,7 @@ export default function FundCallsPage() {
             <div><label className="form-label">Description</label><Input value={form.description} onChange={e => setForm({...form, description: e.target.value})} /></div>
             <div className="flex gap-3 justify-end">
               <Button variant="outline" onClick={() => setDialogOpen(false)}>Annuler</Button>
-              <Button onClick={saveCall} className="bg-[#0055FF] hover:bg-[#0040CC]" data-testid="call-save-btn">Creer</Button>
+              <Button onClick={saveCall} className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="call-save-btn">Creer</Button>
             </div>
           </div>
         </DialogContent>

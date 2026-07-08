@@ -96,10 +96,10 @@ export default function AdminDashboardPage() {
       {/* Action cards */}
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
         <Card className="hover:shadow-md transition cursor-pointer" onClick={() => navigate('/admin/users')} data-testid="card-users">
-          <CardHeader className="pb-2"><CardTitle className="text-base flex items-center gap-2 text-slate-900"><Users size={18} className="text-[#0055FF]" />Utilisateurs</CardTitle></CardHeader>
+          <CardHeader className="pb-2"><CardTitle className="text-base flex items-center gap-2 text-slate-900"><Users size={18} className="text-[#2563EB]" />Utilisateurs</CardTitle></CardHeader>
           <CardContent className="text-sm text-slate-600 pt-1">
             <p>Creer/suspendre des syndics, gestionnaires, proprietaires. Attribuer les ACPs.</p>
-            <Button variant="link" className="px-0 mt-2 text-[#0055FF]" data-testid="btn-go-users">Ouvrir <ArrowRight size={14} className="ml-1" /></Button>
+            <Button variant="link" className="px-0 mt-2 text-[#2563EB]" data-testid="btn-go-users">Ouvrir <ArrowRight size={14} className="ml-1" /></Button>
           </CardContent>
         </Card>
         <Card className="hover:shadow-md transition cursor-pointer" onClick={() => navigate('/admin/role-templates')} data-testid="card-templates">
@@ -136,7 +136,7 @@ export default function AdminDashboardPage() {
       <Card data-testid="syndics-overview">
         <CardHeader className="pb-2">
           <div className="flex items-center justify-between">
-            <CardTitle className="text-base flex items-center gap-2"><Briefcase size={18} className="text-[#0055FF]" />Vue par syndic - bases de facturation</CardTitle>
+            <CardTitle className="text-base flex items-center gap-2"><Briefcase size={18} className="text-[#2563EB]" />Vue par syndic - bases de facturation</CardTitle>
             <Badge variant="outline" className="text-xs">{syndics.length} syndic{syndics.length > 1 ? 's' : ''}</Badge>
           </div>
         </CardHeader>
@@ -170,7 +170,7 @@ export default function AdminDashboardPage() {
                         <td className="px-2 py-2 font-semibold">{s.name}{s.role === 'admin' && <Badge className="ml-2 text-[10px]" variant="outline">admin</Badge>}</td>
                         <td className="px-2 py-2 text-slate-600 text-xs font-mono">{s.email}</td>
                         <td className="px-2 py-2 text-right font-mono">{s.copros_count}</td>
-                        <td className="px-2 py-2 text-right font-mono font-semibold text-[#0055FF]">{s.total_lots}</td>
+                        <td className="px-2 py-2 text-right font-mono font-semibold text-[#2563EB]">{s.total_lots}</td>
                         <td className="px-2 py-2 text-right font-mono">{s.total_owners}</td>
                         <td className="px-2 py-2 text-right font-mono text-slate-500">{s.total_invoices}</td>
                         <td className="px-2 py-2 text-center text-xs text-slate-500">{fmtDate(s.created_at)}</td>
@@ -229,7 +229,7 @@ export default function AdminDashboardPage() {
                   <tr>
                     <td colSpan={3} className="px-2 py-2 text-right">TOTAL</td>
                     <td className="px-2 py-2 text-right font-mono">{syndics.reduce((s, x) => s + x.copros_count, 0)}</td>
-                    <td className="px-2 py-2 text-right font-mono text-[#0055FF]">{syndics.reduce((s, x) => s + x.total_lots, 0)}</td>
+                    <td className="px-2 py-2 text-right font-mono text-[#2563EB]">{syndics.reduce((s, x) => s + x.total_lots, 0)}</td>
                     <td className="px-2 py-2 text-right font-mono">{syndics.reduce((s, x) => s + x.total_owners, 0)}</td>
                     <td className="px-2 py-2 text-right font-mono">{syndics.reduce((s, x) => s + x.total_invoices, 0)}</td>
                     <td></td>
@@ -243,7 +243,7 @@ export default function AdminDashboardPage() {
 
       {/* Recent admin actions */}
       <Card data-testid="recent-audits">
-        <CardHeader className="pb-2 flex flex-row items-center justify-between"><CardTitle className="text-base">Dernieres actions d&apos;administration</CardTitle><Link to="/admin/audit" className="text-xs text-[#0055FF] hover:underline">Voir tout</Link></CardHeader>
+        <CardHeader className="pb-2 flex flex-row items-center justify-between"><CardTitle className="text-base">Dernieres actions d&apos;administration</CardTitle><Link to="/admin/audit" className="text-xs text-[#2563EB] hover:underline">Voir tout</Link></CardHeader>
         <CardContent>
           {loading ? (
             <div className="text-sm text-slate-500">Chargement...</div>
