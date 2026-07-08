@@ -343,8 +343,12 @@ async def _test_update_single_to_multi_regenerates_entries():
         )
         await update_fn(invoice_id=inv["id"], data=upd_payload)
 
+        # iter90bx : les entrees auto sont maintenant contre-passees (pas hard-delete).
+        # On cherche donc l'ecriture ACTIVE (ni reversed ni is_reversal).
         je_od_v2 = await db.journal_entries.find_one(
-            {"source_id": inv["id"], "journal_type": "OD"}, {"_id": 0},
+            {"source_id": inv["id"], "journal_type": "OD",
+             "reversed": {"$ne": True}, "is_reversal": {"$ne": True}},
+            {"_id": 0},
         )
         assert len(je_od_v2["lines"]) == 4, f"OD attendue avec 4 lignes apres update, recu {len(je_od_v2['lines'])}"
         # Verifie les nouveaux montants

@@ -35,7 +35,8 @@ export default function JournalsPage() {
   const [attachDialogEntry, setAttachDialogEntry] = useState(null);
   const [form, setForm] = useState({ journal_type: 'OD', date: '', reference: '', description: '', lines: [{ account_number: '', account_name: '', debit: 0, credit: 0 }, { account_number: '', account_name: '', debit: 0, credit: 0 }] });
   const [pendingAttachment, setPendingAttachment] = useState(null);
-  const [includeReversals, setIncludeReversals] = useState(false);
+  // iter90bx : par defaut afficher les contre-passations (audit trail legal PCMN)
+  const [includeReversals, setIncludeReversals] = useState(true);
   // iter90bt : filtres de recherche journal (periode, montant, tiers)
   const [filters, setFilters] = useState({
     date_from: '', date_to: '', search: '',
@@ -187,10 +188,24 @@ export default function JournalsPage() {
   };
 
   const handleDelete = async (id) => {
-    if (!window.confirm("Supprimer cette ecriture ?")) return;
-    await api.delete(`/accounting/entries/${id}`);
-    toast.success('Ecriture supprimee');
-    load();
+    // iter90bx : ne supprime PAS - genere une contre-passation traceable
+    const reason = window.prompt(
+      "Contre-passer cette ecriture ?\n\n" +
+      "L'ecriture originale sera conservee (audit trail legal PCMN) et une " +
+      "ecriture inverse sera creee pour l'annuler comptablement.\n\n" +
+      "Motif (optionnel) :",
+      ""
+    );
+    if (reason === null) return;  // annule
+    try {
+      const { data } = await api.delete(`/accounting/entries/${id}`, {
+        params: reason ? { reason } : {},
+      });
+      toast.success(data.message || 'Contre-passation creee');
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur');
+    }
   };
 
   const handleUnlettrage = (entry) => {

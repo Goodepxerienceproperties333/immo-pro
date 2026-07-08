@@ -191,14 +191,18 @@ def create_accounting_router(db):
         amount_max: Optional[float] = None,
         third_party_id: Optional[str] = None,
         third_party_name: Optional[str] = None,
-        include_reversals: Optional[bool] = False,
+        include_reversals: Optional[bool] = True,
     ):
         """Chinese walls STRICT : `copropriete_id` requis (param ou header
         X-Copropriete-Id). Sans scope ACP -> liste vide.
 
-        Par defaut, masque les ecritures contre-passees ET les contre-passations
-        (vue 'active' uniquement). Avec `include_reversals=true` : retourne
-        TOUTES les ecritures, marquees par les champs `reversed` / `is_reversal`.
+        iter90bx : par defaut affiche TOUTES les ecritures y compris
+        contre-passations et originales extournees (audit trail legal belge -
+        art. III.86 CDE). Chaque ecriture porte des flags `reversed` /
+        `is_reversal` que le frontend peut utiliser pour un rendu visuel
+        differencie (badges).
+        Passer `include_reversals=false` pour n'obtenir que la vue "active"
+        (utile pour verifier une nouvelle saisie).
 
         Filtres iter90bt :
           - amount_min / amount_max : filtre sur les LIGNES (debit OU credit
@@ -429,36 +433,51 @@ def create_accounting_router(db):
         return await db.journal_entries.find_one({"id": entry_id}, {"_id": 0})
 
     @router.delete("/entries/{entry_id}")
-    async def delete_entry(entry_id: str):
-        from fiscal_lock import ensure_entry_modifiable
-        # Also remove attachment files from disk + GridFS
+    async def delete_entry(entry_id: str, reason: str = ""):
+        """iter90bx : NE SUPPRIME PLUS - genere une contre-passation.
+
+        Regle metier belge (PCMN + art. III.86 CDE) : une ecriture comptable ne
+        peut jamais etre supprimee. On cree une ecriture INVERSE qui neutralise
+        les montants tout en gardant la trace audit.
+
+        Idempotent : renvoie 400 si l'ecriture est deja une contre-passation
+        ou deja extournee.
+        """
+        from journal_reversals import reverse_journal_entry
         entry = await db.journal_entries.find_one({"id": entry_id}, {"_id": 0})
         if not entry:
             raise HTTPException(404, "Ecriture non trouvee")
+        if entry.get("is_reversal"):
+            raise HTTPException(
+                400,
+                "Cette ecriture est deja une contre-passation, elle ne peut pas etre extournee.",
+            )
+        if entry.get("reversed"):
+            raise HTTPException(
+                400,
+                "Cette ecriture a deja ete contre-passee. Consultez l'ecriture inverse liee.",
+            )
+        # Ecritures auto : on autorise la contre-passation manuelle avec un warning
+        # dans le message. Historiquement on refusait ; iter90bx : le principe de
+        # traceabilite prime, l'utilisateur assume la responsabilite.
         if entry.get("auto_generated") and not entry.get("manually_edited"):
-            raise HTTPException(400, "Ecriture auto-generee - supprimez la source (facture, appel, banque) ou modifiez-la d'abord pour la detacher")
-        # Verrou fiscal : refuse la suppression si la date tombe dans un exercice cloture
-        # ou si l'ecriture est une contre-passation / deja contre-passee.
-        await ensure_entry_modifiable(db, entry)
-        att_storage = get_journal_attachments_storage(db)
-        for att in entry.get("attachments", []) or []:
-            # iter87 : delete from GridFS first (new), fallback to disk (legacy)
-            gid = att.get("gridfs_id")
-            if gid:
-                try:
-                    await att_storage.delete(gid)
-                except Exception:
-                    pass
-            try:
-                p = att.get("stored_path")
-                if p and Path(p).exists():
-                    Path(p).unlink()
-            except Exception:
-                pass
-        result = await db.journal_entries.delete_one({"id": entry_id})
-        if result.deleted_count == 0:
-            raise HTTPException(404, "Ecriture non trouvee")
-        return {"message": "Ecriture supprimee"}
+            # Cas special : on suggere plutot de supprimer la source
+            raise HTTPException(
+                400,
+                "Ecriture auto-generee : supprimez la source (facture, appel, extrait) plutot que l'ecriture. La contre-passation se fera en cascade.",
+            )
+        # Verrou fiscal : si l'ecriture est dans un exercice cloture, on utilise
+        # la date du jour pour la contre-passation (helper _resolve_reversal_date).
+        # On ne bloque plus la contre-passation elle-meme (elle est LEGITIME).
+        rev = await reverse_journal_entry(db, entry, reason=reason)
+        if not rev:
+            raise HTTPException(500, "Contre-passation impossible (etat incoherent)")
+        return {
+            "message": "Ecriture contre-passee. L'originale est preservee (audit legal).",
+            "original_id": entry_id,
+            "reversal_id": rev["id"],
+            "reversal_reference": rev.get("reference", ""),
+        }
 
     # ---- ATTACHMENTS for journal entries ----
     @router.post("/entries/{entry_id}/attachments")

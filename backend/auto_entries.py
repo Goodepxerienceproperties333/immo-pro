@@ -18,15 +18,16 @@ from tier_accounts import (
 )
 
 
-async def _delete_auto_entries(db, source_type: str, source_id: str):
-    """Remove any previously auto-generated entries for this source.
-    Skips entries that have been manually edited (preservation)."""
-    await db.journal_entries.delete_many({
-        "auto_generated": True,
-        "manually_edited": {"$ne": True},
-        "source_type": source_type,
-        "source_id": source_id,
-    })
+async def _delete_auto_entries(db, source_type: str, source_id: str, reason: str = ""):
+    """iter90bx : NE SUPPRIME PLUS - genere une contre-passation pour chaque
+    ecriture auto-generee non-editee. Preserve `manually_edited` et les
+    entrees deja `reversed`/`is_reversal`.
+
+    Nom historique conserve pour compatibilite avec les 15+ call sites.
+    Signature etendue : parametre `reason` optionnel pour la trace audit.
+    """
+    from journal_reversals import reverse_auto_entries
+    return await reverse_auto_entries(db, source_type, source_id, reason=reason)
 
 
 def _balanced(lines: list) -> bool:

@@ -143,12 +143,24 @@ async def _scenario_delete_cascade():
         assert r["deleted_fund_calls"] == 2
         assert r["unlettred_transactions"] == 0
 
-        # Post-condition : fund_calls, journal_entries et budget disparus
+        # Post-condition : fund_calls et budget disparus (hard delete OK, ce ne sont
+        # pas des ecritures comptables). Les journal_entries auto-generees sont
+        # CONSERVEES avec reversed=True + contre-passations creees (iter90bx :
+        # audit trail legal PCMN art. III.86 CDE).
         assert await ctx["db"].fund_calls.count_documents({"budget_id": ctx["budget_id"]}) == 0
-        assert await ctx["db"].journal_entries.count_documents({
+        # Les originales sont preservees, marquees reversed=True
+        originals = await ctx["db"].journal_entries.count_documents({
             "source_type": "fund_call",
-            "source_id": {"$in": [ctx["fc1"], ctx["fc2"]]}
-        }) == 0
+            "source_id": {"$in": [ctx["fc1"], ctx["fc2"]]},
+            "reversed": True,
+        })
+        assert originals == 2, f"2 originales reversed attendues, obtenu {originals}"
+        # 2 contre-passations creees (is_reversal=True, pointent vers les originales)
+        reversals = await ctx["db"].journal_entries.count_documents({
+            "copropriete_id": ctx["cid"],
+            "is_reversal": True,
+        })
+        assert reversals == 2, f"2 contre-passations attendues, obtenu {reversals}"
         assert await ctx["db"].budgets.find_one({"id": ctx["budget_id"]}) is None
     finally:
         await _cleanup(ctx)

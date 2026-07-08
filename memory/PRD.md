@@ -11,6 +11,116 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 
+### Iter90bx (Feb 2026) - Contre-passation traceable des ecritures comptables (BLOQUANT LEGAL)
+### Iter90bw (Feb 2026) - Backup legal 10 ans enrichi (Art. III.86 CDE)
+
+**Ticket utilisateur** : "P1 Finaliser le backup legal 10 ans (backup_service.py) :
+inclure PDF factures + details fournisseurs pour conformite Art. III.86 CDE"
+
+**Nouveaux fichiers ajoutes dans le ZIP archive** (`backup_service.build_acp_archive_zip`) :
+- `suppliers.csv` (racine) : id, nom, BCE, TVA, adresse, telephone, email,
+  IBAN, BIC, compte tier PCMN, compte par defaut, notes.
+- `documents.csv` (racine) : id, categorie (AG, PV, contrat...), titre,
+  description, date, uploaded_by, filename, mime_type. Les originaux PDF/
+  images sont copies dans `documents_generaux/{categorie}/{titre}.{ext}`.
+- Par exercice :
+  - `invoice_lines.csv` : lignes multi-natures des factures (compte, cle,
+    montant, description) — auparavant perdues dans le ZIP.
+  - `fund_calls_distribution.csv` : repartition PAR PROPRIETAIRE ET LOT
+    (fund_call_date, name, owner_id, owner_name, lot_id, lot_number,
+    vcs_code, share, amount, paid, paid_date).
+
+**Enrichissements CSVs existants** :
+- `owners.csv` : ajout BCE/TVA, IBAN, BIC, VCS complets, comptes tiers PCMN
+  (compte_provisions, compte_reserve), is_company, notes. Inclut aussi les
+  proprietaires HISTORIQUES (via journal_entries + fund_calls, pas seulement
+  ceux ayant encore un lot).
+- `lots.csv` : ajout adresse complete, type, floor, parent_lot_id, reference
+  cadastrale, date + notaire de l'acte notarie.
+- `invoices.csv` : ajout description, due_date, BCE/TVA/IBAN/BIC du fournisseur
+  DENORMALIZES (preuve legale : si le fournisseur change de BCE/IBAN dans 5
+  ans, l'archive conserve la valeur au moment de la facture), vat_amount,
+  expense_category_id, distribution_key_id, amount_paid, is_private_fee.
+- `fund_calls.csv` : ajout call_type, reserve_amount, roulement_amount,
+  distribution_key_id, budget_id.
+- `bank_transactions.csv` : ajout value_date, counterparty_iban, description,
+  currency, matched_to, matched_invoice_number, statement_number, reference.
+
+**README.txt** : mis a jour pour lister tous les nouveaux fichiers +
+mentions legales (10 ans art. III.86 CDE, PCMN, mode utilisation Excel).
+
+**Format version** : `1.1` -> `1.2` (dans metadata.json).
+
+**Tests** (`test_iter90bw_legal_backup_10y.py` - 10/10) : verifie chaque
+fichier requis, presence de tous les champs BCE/IBAN/tier_accounts,
+denormalisation supplier dans invoices, distribution par proprietaire,
+match bancaire, format_version, README mentions legales.
+
+
+
+**Ticket utilisateur** : "les contrepassations ne sont pas visibles, les suppressions
+d'ecritures n'arrivent jamais en comptabilite, il faut toujours garder l'ecriture
+supprimee dans la comptabilite, il faut donc pour chaque suppression effectuer une
+ecriture inverse permettant un tracing comptable."
+
+**Regle metier belge (PCMN + art. III.86 CDE)** : une ecriture comptable NE PEUT
+JAMAIS etre supprimee. Toute "suppression" doit generer une ecriture INVERSE
+(Dr<->Cr swap) qui neutralise mathematiquement l'originale tout en gardant la
+trace audit legale.
+
+**Nouveau helper** (`journal_reversals.py`) :
+- `reverse_journal_entry(db, orig, reason)` : cree une contre-passation avec
+  Dr<->Cr swappes ligne par ligne. Marque l'originale `reversed=True` +
+  `reversed_by_entry_id`. La contre-passation porte `is_reversal=True` +
+  `reverses_entry_id`.
+- Idempotent : ne fait rien si deja `reversed` ou `is_reversal`.
+- Date de contre-passation : `date_originale` si exercice ouvert, sinon
+  `today` (respect verrou fiscal, jamais de saisie dans un FY cloture).
+- `reverse_auto_entries(source_type, source_id, reason)` : cascade toutes les
+  ecritures d'une source (facture, appel, extrait).
+
+**Refactor complet des points de suppression** :
+- `auto_entries._delete_auto_entries` : nom historique conserve mais redirige
+  desormais vers `reverse_auto_entries`. Les 15+ call sites (routes/invoices.py,
+  routes/banking.py, routes/fund_calls.py, routes/fiscal.py) beneficient
+  automatiquement du nouveau comportement.
+- `DELETE /api/accounting/entries/{id}` : cree une contre-passation, retourne
+  `{original_id, reversal_id, reversal_reference}`. Refuse 400 si deja
+  `is_reversal` ou deja `reversed`. Refuse toujours les ecritures auto sans
+  edit manuel (suggere de supprimer la source).
+- `GET /api/accounting/entries` : parametre `include_reversals` par defaut
+  `TRUE` (etait `false`). Les journaux comptables affichent maintenant TOUTES
+  les ecritures, y compris les paires reversed/is_reversal (audit trail).
+  Les balances/bilan/grand livre continuent d'exclure via `_exclude_reversals`
+  (elles s'annulent mathematiquement).
+
+**Frontend** (`pages/JournalsPage.js`) :
+- Toggle "Inclure les contre-passations" par defaut coche.
+- `handleDelete` remplace `window.confirm` par un prompt "Motif (optionnel)".
+  Le message clarifie que l'originale est preservee et une inverse est creee.
+- Badges deja implementes : "Contre-passation" (amber) sur `is_reversal`,
+  "Extournee" (rouge, ligne barree) sur `reversed`.
+
+**Tests** :
+- `test_iter90bx_traceable_reversals.py` (7/7) :
+  1. Cree une inverse + marque originale immuable
+  2. Idempotence (2eme call = no-op)
+  3. Ne peut pas contre-passer une contre-passation
+  4. `_delete_auto_entries` genere des contre-passations
+  5. Endpoint DELETE HTTP : 200 + contre-passation, 2eme call = 400
+  6. GET /entries retourne les contre-passations par defaut
+  7. Date de contre-passation = today si FY cloture
+
+**Regression** :
+- `test_iter90af_delete_budget_cascade` mis a jour : verifie que les JE sont
+  preservees (`reversed=True`) et 2 contre-passations existent apres cascade
+  (au lieu de count == 0).
+- `test_iter85e_private_fee_multi_allocations` mis a jour : le
+  `find_one({source_id, journal_type})` filtre desormais sur
+  `reversed:{$ne:True}, is_reversal:{$ne:True}` pour trouver l'ecriture
+  ACTIVE apres regeneration.
+
+
 ### Iter90bv (Feb 2026) - Regroupement multi-lots dans situation de compte
 
 **Ticket user** : "Le detail par lot dans la Balance de tiers est trop complique
