@@ -104,6 +104,39 @@ def _snap_distribution_to_total(distribution: list, target_total: float) -> None
                 float(sorted_dist[i % len(sorted_dist)]["amount"]) - 0.01, 2)
 
 
+async def reverse_post_mutation_ods_for_call(db, call_id: str, reason: str = "") -> int:
+    """iter90ch : Contre-passe les OD MUT-P retroactives liees a un appel
+    (source_type='lot_mutation' + source_subtype='prorata_post_mutation' +
+    fund_call_id=call_id).
+
+    Utilisee lors de :
+    - Suppression d'un appel de fonds
+    - Suppression/dévalidation d'un budget (cascade sur les fund_calls)
+    - delete-all-fund-calls
+    - regenerate-from-budget (avant regeneration)
+
+    Retourne le nombre d'ecritures contre-passees.
+    """
+    from journal_reversals import reverse_journal_entry
+    reversed_count = 0
+    try:
+        post_muts = await db.journal_entries.find({
+            "fund_call_id": call_id,
+            "source_subtype": "prorata_post_mutation",
+            "reversed": {"$ne": True},
+            "is_reversal": {"$ne": True},
+        }, {"_id": 0}).to_list(1000)
+        for pm in post_muts:
+            rev = await reverse_journal_entry(
+                db, pm, reason=reason or f"Cleanup appel {call_id}"
+            )
+            if rev:
+                reversed_count += 1
+    except Exception as _e:
+        print(f"[iter90ch] reversal of post-mutation ODs failed for {call_id}: {_e}")
+    return reversed_count
+
+
 async def generate_prorata_mut_ods_for_call(db, call_doc: dict) -> dict:
     """
     iter90cf : Genere retroactivement les OD 'Mutation - Prorata' pour un
@@ -588,21 +621,11 @@ def create_fund_calls_router(db):
             await _delete_auto_entries(db, "fund_call", call_id)
         except Exception:
             pass
-        # iter90cf : contre-passe egalement les OD MUT-P retroactives liees a
-        # cet appel (source_type='lot_mutation' + source_subtype='prorata_post_mutation'
-        # + fund_call_id=call_id) pour eviter les orphelins comptables.
-        try:
-            from journal_reversals import reverse_journal_entry
-            post_muts = await db.journal_entries.find({
-                "fund_call_id": call_id,
-                "source_subtype": "prorata_post_mutation",
-                "reversed": {"$ne": True},
-                "is_reversal": {"$ne": True},
-            }, {"_id": 0}).to_list(1000)
-            for pm in post_muts:
-                await reverse_journal_entry(db, pm, reason=f"Suppression appel {call_id}")
-        except Exception as _e:
-            print(f"[iter90cf] reversal of post-mutation ODs skipped: {_e}")
+        # iter90cf/ch : contre-passe egalement les OD MUT-P retroactives liees a
+        # cet appel pour eviter les orphelins comptables.
+        await reverse_post_mutation_ods_for_call(
+            db, call_id, reason=f"Suppression appel {call_id}"
+        )
         result = await db.fund_calls.delete_one({"id": call_id})
         if result.deleted_count == 0:
             raise HTTPException(404, "Appel non trouve")
@@ -660,6 +683,10 @@ def create_fund_calls_router(db):
                 await _delete_auto_entries(db, "fund_call", c["id"])
             except Exception:
                 pass
+            # iter90ch : contre-passe aussi les OD MUT-P retroactives
+            await reverse_post_mutation_ods_for_call(
+                db, c["id"], reason=f"delete-all-fund-calls ACP {copropriete_id}"
+            )
         res = await db.fund_calls.delete_many({"copropriete_id": copropriete_id})
         deleted_calls = res.deleted_count
         return {
@@ -1402,6 +1429,10 @@ def create_fund_calls_router(db):
                     await _delete_auto_entries(db, "fund_call", did)
                 except Exception:
                     pass
+                # iter90ch : contre-passe aussi les OD MUT-P retroactives
+                await reverse_post_mutation_ods_for_call(
+                    db, did, reason=f"regenerate-from-budget {data.budget_id}"
+                )
         result = await _generate_from_budget(data, persist=True)
         result["deleted_count"] = len(deletable_ids)
         result["preserved_count"] = preserved

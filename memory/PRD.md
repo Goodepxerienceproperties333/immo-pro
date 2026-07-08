@@ -11,6 +11,35 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 
+### Iter90ch (Feb 2026) - Suppression/devalidation budget nettoie les OD MUT-P
+
+**Ticket utilisateur** : "Lors de la suppression ou devalidation du budget
+les OD doivent etre supprimees aussi."
+
+**Root cause** : `_delete_auto_entries(db, 'fund_call', call_id)` ne
+contre-passait que les VE (source_type='fund_call'). Les OD MUT-P
+retroactives (source_type='lot_mutation' + source_subtype=
+'prorata_post_mutation' + fund_call_id=call_id) n'etaient PAS nettoyees
+lors des operations bulk sur le budget parent -> orphelins comptables.
+
+**Fix** :
+- Nouveau helper `reverse_post_mutation_ods_for_call` (fund_calls.py module-level)
+  qui contre-passe les OD MUT-P via fund_call_id. Idempotent.
+- Utilise dans 5 endpoints :
+  * `DELETE /api/fund-calls/{id}` (delete_fund_call, refactor de code existant)
+  * `POST /api/fund-calls/delete-all` (delete_all_fund_calls)
+  * `POST /api/fund-calls/regenerate-from-budget` (regenerate_from_budget)
+  * `DELETE /api/fiscal/budgets/{id}` (delete_budget)
+  * `POST /api/fiscal/budgets/{id}/revoke` (revoke_budget)
+
+**Tests** : `tests/test_iter90ch_budget_cleanup_mut_p.py` (3 scenarios)
+- delete_budget_reverses_mut_p
+- revoke_budget_reverses_mut_p
+- delete_all_reverses_mut_p
+
+**Regression totale** : 17/17 PASS (iter90ch 3 + iter90cg 5 + iter90cf 5 + iter90ce 4).
+
+
 ### Iter90cg (Feb 2026) - Fix appels emis EN RETARD apres mutation posterieure
 
 **Bug rapporte utilisateur (PROD immo-pcmn.emergent.host, deploy 17:17)** :

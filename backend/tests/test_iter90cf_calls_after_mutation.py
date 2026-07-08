@@ -44,14 +44,19 @@ load_dotenv("/app/frontend/.env")
 load_dotenv("/app/backend/.env")
 
 BACKEND_URL = os.environ.get("REACT_APP_BACKEND_URL", "http://localhost:8001")
+_TOKEN_CACHE = {"token": None}
 
 
 async def _login(client):
+    """iter90cf : cache le token au niveau module pour eviter le rate-limit."""
+    if _TOKEN_CACHE["token"]:
+        return {"Authorization": f"Bearer {_TOKEN_CACHE['token']}"}
     resp = await client.post(f"{BACKEND_URL}/api/auth/login", json={
         "email": "admin@copro.be", "password": "admin123",
     })
     resp.raise_for_status()
     tok = resp.json().get("access_token") or resp.json().get("token")
+    _TOKEN_CACHE["token"] = tok
     return {"Authorization": f"Bearer {tok}"}
 
 

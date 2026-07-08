@@ -880,6 +880,14 @@ def create_fiscal_router(db):
                 await _delete_auto_entries(db, "fund_call", c["id"])
             except Exception as e:
                 print(f"[budget-delete] delete auto entries failed for fund_call {c['id']}: {e}")
+            # iter90ch : contre-passe aussi les OD MUT-P retroactives liees a l'appel.
+            try:
+                from routes.fund_calls import reverse_post_mutation_ods_for_call
+                await reverse_post_mutation_ods_for_call(
+                    db, c["id"], reason=f"Suppression budget {budget_id}"
+                )
+            except Exception as e:
+                print(f"[budget-delete] MUT-P reversal failed for fund_call {c['id']}: {e}")
 
         deleted_calls = 0
         if linked_calls:
@@ -968,6 +976,14 @@ def create_fiscal_router(db):
                 await _delete_auto_entries(db, "fund_call", c["id"])
             except Exception as e:
                 print(f"[budget-revoke] delete auto entries failed for fund_call {c['id']}: {e}")
+            # iter90ch : contre-passe aussi les OD MUT-P retroactives liees a l'appel.
+            try:
+                from routes.fund_calls import reverse_post_mutation_ods_for_call
+                await reverse_post_mutation_ods_for_call(
+                    db, c["id"], reason=f"Devalidation budget {budget_id}"
+                )
+            except Exception as e:
+                print(f"[budget-revoke] MUT-P reversal failed for fund_call {c['id']}: {e}")
         deleted_calls = 0
         if linked_calls:
             res = await db.fund_calls.delete_many({"budget_id": budget_id})
