@@ -11,6 +11,37 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 
+### Iter90ci (Feb 2026) - PDF situation compte : masquer les reversals
+
+**Bug rapporte utilisateur (PROD, cas ABED-STEUVE ACP Acacia)** :
+> "Ce document est completement incoherent avec la realite des journaux
+> comptables"
+
+Le PDF de situation de compte affichait CHAQUE appel modifie 3 fois :
+1. Ecriture originale (marquee reversed=True)
+2. Contre-passation (is_reversal=True) avec le meme libelle
+3. Nouvelle ecriture regeneree
+
+Resultat : le solde montait puis descendait puis remontait, les colonnes
+"A payer" / "Verse" semblaient incoherentes, montant total gonfle
+artificiellement (~3x le montant reel).
+
+**Root cause** : `_build_situation_compte_pdf` (reports.py:174) chargeait
+`db.journal_entries.find(copropriete_id=...)` SANS le filtre
+`_exclude_reversals`. Le endpoint JSON `situation_compte_owner` (l. 1918)
+l'appliquait deja correctement -> desynchronisation entre PDF et vue web.
+
+**Fix** :
+- `_build_situation_compte_pdf` applique `_exclude_reversals(q)` avant
+  find (coherent avec le JSON).
+
+**Test** : `tests/test_iter90ci_situation_pdf_excludes_reversals.py`
+- Cree un appel, le supprime (=> contre-passation), regenere
+- Verifie qu'il y a bien 3 VE en base (original+reversal+nouveau)
+- Verifie que le PDF est genere sans erreur
+- Verifie que le JSON situation retourne 1 seul mouvement (pas 3)
+
+
 ### Iter90ch (Feb 2026) - Suppression/devalidation budget nettoie les OD MUT-P
 
 **Ticket utilisateur** : "Lors de la suppression ou devalidation du budget

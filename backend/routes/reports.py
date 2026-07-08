@@ -171,9 +171,15 @@ async def _build_situation_compte_pdf(db, owner_id, copropriete_id, start_date=N
     acc_res = tier_acc.get("reserve", "")
     valid_accs = {a for a in (acc_prov, acc_res) if a}
 
-    entries = await db.journal_entries.find(
-        {"copropriete_id": copropriete_id}, {"_id": 0}
-    ).to_list(100000)
+    # iter90ci : EXCLURE les ecritures extournees (reversed=True) et les
+    # contre-passations (is_reversal=True). Les paires s'annulent comptablement,
+    # mais si on les affiche brutes, le proprietaire voit chaque appel 3 fois
+    # (original + contre-passation + regeneration) avec des soldes incoherents.
+    # Coherent avec le endpoint JSON situation_compte_owner qui utilise deja
+    # _exclude_reversals.
+    entries_q = {"copropriete_id": copropriete_id}
+    _exclude_reversals(entries_q)
+    entries = await db.journal_entries.find(entries_q, {"_id": 0}).to_list(100000)
 
     opening = 0.0
     movements = []
