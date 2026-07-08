@@ -88,12 +88,26 @@ export default function OwnerAccessSection({ ownerId, ownerEmail }) {
     setBusy(busyKey);
     try {
       const { data } = await api.post(`/owners/${ownerId}/${path}`);
-      toast.success(data.message || label, {
-        description: data.invitation_sent === false
-          ? "Le mail n'a pas pu etre envoye automatiquement (MSGRAPH non configure). Le proprietaire pourra utiliser 'mot de passe oublie' lors de sa premiere visite."
-          : undefined,
-        duration: 6000,
-      });
+      const sent = data.invitation_sent === true;
+      // iter90ca : feedback detaille selon le resultat reel de l'envoi
+      if (sent) {
+        toast.success(data.message || label, { duration: 5000 });
+      } else if (data.invitation_link) {
+        // Envoi echoue mais on a un lien -> l'admin peut le copier manuellement
+        toast.error(data.message || 'Envoi email indisponible', {
+          description: (data.invitation_detail || '') + ' Lien : ' + data.invitation_link,
+          duration: 15000,
+          action: {
+            label: 'Copier le lien',
+            onClick: () => {
+              navigator.clipboard.writeText(data.invitation_link);
+              toast.info('Lien d\'invitation copie dans le presse-papier');
+            },
+          },
+        });
+      } else {
+        toast.warning(data.message || label);
+      }
       if (data.status) setStatus(data.status);
       else load();
       // Force-refresh audit list next time it's opened

@@ -141,25 +141,63 @@ def create_owner_access_router(db):
         frontend_url = os.environ.get("FRONTEND_URL", "")
         return f"{frontend_url}/login?invite={email}"
 
-    async def _send_invitation_email(email: str, recipient_name: str, inviter: dict | None):
-        """Sends the invitation email in background (non-blocking, logs failures)."""
+    async def _send_invitation_email(email: str, recipient_name: str, inviter: dict | None) -> dict:
+        """iter90ca : envoi SYNCHRONE (await) de l'invitation avec retour detaille.
+
+        Retourne un dict :
+          - sent: bool          -> True si l'email a effectivement ete accepte par Graph
+          - reason: str         -> code : "sent" / "dry_run" / "not_configured" / "graph_error"
+          - detail: str         -> message d'erreur explicite si echec
+          - invitation_link: str -> URL a communiquer manuellement en cas d'echec
+        """
+        setup_url = _build_setup_url(email)
+        result = {"sent": False, "reason": "unknown", "detail": "", "invitation_link": setup_url}
         try:
             from graph_email import is_configured, send_html_email, build_invitation_email
             if not is_configured():
-                logger.warning(f"MSGRAPH not configured; invitation link for {email}: {_build_setup_url(email)}")
-                return False
+                logger.warning(f"MSGRAPH not configured; invitation link for {email}: {setup_url}")
+                result["reason"] = "not_configured"
+                result["detail"] = (
+                    "MS Graph n'est pas configure sur ce serveur "
+                    "(AZURE_TENANT_ID / AZURE_CLIENT_ID / AZURE_CLIENT_SECRET / GRAPH_SENDER_UPN manquants). "
+                    "Le lien d'invitation ci-dessous peut etre transmis manuellement."
+                )
+                return result
+            mail_enabled = os.environ.get("MAIL_ENABLED", "true").lower() != "false"
             subject, html = build_invitation_email(
                 recipient_name=recipient_name or "Proprietaire",
                 role_label="Proprietaire",
-                setup_url=_build_setup_url(email),
+                setup_url=setup_url,
                 inviter_name=(inviter or {}).get("name"),
                 inviter_email=(inviter or {}).get("email"),
             )
-            asyncio.create_task(send_html_email([email], subject, html))
-            return True
-        except Exception as e:
-            logger.warning(f"Owner invitation email failed for {email}: {e}")
-            return False
+            # iter90ca : await bloquant (2-3s) pour capturer l'echec eventuel
+            try:
+                await send_html_email([email], subject, html)
+            except Exception as e:
+                logger.exception(f"Owner invitation email SEND FAILED for {email}: {e}")
+                result["reason"] = "graph_error"
+                result["detail"] = f"Erreur Microsoft Graph : {str(e)[:250]}"
+                return result
+            if not mail_enabled:
+                # send_html_email a retourne sans exception mais MAIL_ENABLED=false -> dry-run
+                logger.info(f"[DRY-RUN] Invitation suppressed for {email}; link: {setup_url}")
+                result["reason"] = "dry_run"
+                result["detail"] = (
+                    "Envoi email desactive sur ce serveur (MAIL_ENABLED=false). "
+                    "Le lien d'invitation ci-dessous peut etre transmis manuellement."
+                )
+                return result
+            logger.info(f"Owner invitation email sent to {email}")
+            result["sent"] = True
+            result["reason"] = "sent"
+            result["detail"] = "Email d'invitation envoye avec succes."
+            return result
+        except Exception as e:  # pragma: no cover - safety net
+            logger.exception(f"Unexpected error preparing invitation for {email}: {e}")
+            result["reason"] = "unexpected_error"
+            result["detail"] = str(e)[:250]
+            return result
 
     # ---------- GET status ----------
     @router.get("/{owner_id}/access-status")
@@ -180,7 +218,7 @@ def create_owner_access_router(db):
         from server import hash_password
         name = owner.get("name") or f"{owner.get('first_name','')} {owner.get('last_name','')}".strip() or "Proprietaire"
         existing = await db.users.find_one({"email": email})
-        invitation_sent = False
+        invitation_result = {"sent": False, "reason": "skipped", "detail": "", "invitation_link": ""}
         if existing:
             # User already exists -> link + re-enable. (1a : single account multi-ACP)
             update = {}
@@ -203,18 +241,22 @@ def create_owner_access_router(db):
                 )
             # Resend invitation only if the user has not yet set a password.
             if existing.get("must_change_password"):
-                invitation_sent = await _send_invitation_email(email, name, inviter)
+                invitation_result = await _send_invitation_email(email, name, inviter)
             refreshed = await db.users.find_one({"_id": existing["_id"]})
             owner_after = await db.owners.find_one({"id": owner_id}, {"_id": 0})
             await _log_audit(
                 action="grant", actor=inviter, owner=owner_after or owner,
                 user_doc=refreshed, request=request,
-                details={"linked_existing_user": True, "invitation_sent": invitation_sent},
+                details={"linked_existing_user": True, "invitation_sent": invitation_result.get("sent"),
+                         "invitation_reason": invitation_result.get("reason")},
             )
             return {
                 "message": "Acces active (compte existant lie)",
                 "linked_existing_user": True,
-                "invitation_sent": invitation_sent,
+                "invitation_sent": invitation_result.get("sent", False),
+                "invitation_reason": invitation_result.get("reason", ""),
+                "invitation_detail": invitation_result.get("detail", ""),
+                "invitation_link": invitation_result.get("invitation_link", ""),
                 "status": _serialize_status(owner_after, refreshed),
             }
         # No user yet -> create one with must_change_password
@@ -238,18 +280,22 @@ def create_owner_access_router(db):
                       "access_granted_at": datetime.now(timezone.utc).isoformat(),
                       "access_granted_by": str(inviter.get("_id", ""))}}
         )
-        invitation_sent = await _send_invitation_email(email, name, inviter)
+        invitation_result = await _send_invitation_email(email, name, inviter)
         new_user = await db.users.find_one({"_id": result.inserted_id})
         owner_after = await db.owners.find_one({"id": owner_id}, {"_id": 0})
         await _log_audit(
             action="grant", actor=inviter, owner=owner_after or owner,
             user_doc=new_user, request=request,
-            details={"linked_existing_user": False, "invitation_sent": invitation_sent},
+            details={"linked_existing_user": False, "invitation_sent": invitation_result.get("sent"),
+                     "invitation_reason": invitation_result.get("reason")},
         )
         return {
-            "message": "Acces active. Invitation envoyee.",
+            "message": "Acces active. Invitation envoyee." if invitation_result.get("sent") else "Acces active. Envoi email impossible - communiquez le lien d'invitation manuellement.",
             "linked_existing_user": False,
-            "invitation_sent": invitation_sent,
+            "invitation_sent": invitation_result.get("sent", False),
+            "invitation_reason": invitation_result.get("reason", ""),
+            "invitation_detail": invitation_result.get("detail", ""),
+            "invitation_link": invitation_result.get("invitation_link", ""),
             "status": _serialize_status(owner_after, new_user),
         }
 
@@ -269,12 +315,28 @@ def create_owner_access_router(db):
             )
         email = user.get("email")
         name = user.get("name") or owner.get("name") or "Proprietaire"
-        sent = await _send_invitation_email(email, name, inviter)
+        invitation_result = await _send_invitation_email(email, name, inviter)
         await _log_audit(
             action="resend", actor=inviter, owner=owner, user_doc=user,
-            request=request, details={"invitation_sent": sent},
+            request=request, details={"invitation_sent": invitation_result.get("sent"),
+                                       "invitation_reason": invitation_result.get("reason")},
         )
-        return {"message": "Invitation renvoyee" if sent else "Invitation enregistree (envoi differe)", "invitation_sent": sent}
+        sent = invitation_result.get("sent", False)
+        if sent:
+            message = f"Invitation renvoyee a {email}"
+        elif invitation_result.get("reason") == "dry_run":
+            message = "Envoi email indisponible (mode maintenance) - transmettez le lien manuellement."
+        elif invitation_result.get("reason") == "not_configured":
+            message = "MS Graph non configure - transmettez le lien manuellement."
+        else:
+            message = f"Echec envoi email : {invitation_result.get('detail', 'erreur inconnue')}"
+        return {
+            "message": message,
+            "invitation_sent": sent,
+            "invitation_reason": invitation_result.get("reason", ""),
+            "invitation_detail": invitation_result.get("detail", ""),
+            "invitation_link": invitation_result.get("invitation_link", ""),
+        }
 
     # ---------- POST revoke-access ----------
     @router.post("/{owner_id}/revoke-access")
