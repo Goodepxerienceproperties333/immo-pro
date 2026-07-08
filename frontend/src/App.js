@@ -26,6 +26,7 @@ import AdminUsersPage from "@/pages/AdminUsersPage";
 import AdminDashboardPage from "@/pages/AdminDashboardPage";
 import AdminUnlockEntryPage from "@/pages/AdminUnlockEntryPage";
 import AdminAuditLogPage from "@/pages/AdminAuditLogPage";
+import AdminReleaseNotesPage from "@/pages/AdminReleaseNotesPage";
 import AdminLoginHistoryPage from "@/pages/AdminLoginHistoryPage";
 import ImportWizardPage from "@/pages/ImportWizardPage";
 import AdminRoleTemplatesPage from "@/pages/AdminRoleTemplatesPage";
@@ -47,6 +48,7 @@ import AdminLegalDocsPage from "@/pages/AdminLegalDocsPage";
 import AdminRgpdRegisterPage from "@/pages/AdminRgpdRegisterPage";
 import CookieBanner from "@/components/CookieBanner";
 import LegalAcceptanceModal from "@/components/LegalAcceptanceModal";
+import ReleaseNotesModal from "@/components/ReleaseNotesModal";
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
@@ -98,6 +100,7 @@ function AppRoutes() {
         <Route path="admin" element={<AdminDashboardPage />} />
         <Route path="admin/unlock" element={<AdminUnlockEntryPage />} />
         <Route path="admin/audit" element={<AdminAuditLogPage />} />
+        <Route path="admin/release-notes" element={<AdminReleaseNotesPage />} />
         <Route path="admin/legal" element={<AdminLegalDocsPage />} />
         <Route path="admin/rgpd-register" element={<AdminRgpdRegisterPage />} />
         <Route path="admin/login-history" element={<AdminLoginHistoryPage />} />
@@ -122,6 +125,7 @@ function App() {
         <AppRoutes />
         <SyndicOnboardingWizard />
         <LegalAcceptanceModal />
+        <ReleaseNotesModal />
         <CookieBanner />
         <Toaster position="top-right" />
       </AuthProvider>

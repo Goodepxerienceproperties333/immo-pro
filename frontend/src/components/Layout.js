@@ -381,6 +381,7 @@ export default function Layout() {
         { to: '/admin/users', icon: Shield, label: 'Utilisateurs' },
         { to: '/admin/unlock', icon: Unlock, label: 'Outils deblocage' },
         { to: '/admin/audit', icon: Activity, label: "Journal d'audit" },
+        { to: '/admin/release-notes', icon: FileText, label: 'Notes de version' },
       ],
     });
   }

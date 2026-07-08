@@ -1008,6 +1008,8 @@ from routes.communication import create_communication_router
 from routes.syndic_config import create_syndic_config_router
 from routes.email_templates import create_email_templates_router
 from routes.backups import create_backups_router
+from routes.release_notes import create_release_notes_router
+from routes.documentation import create_documentation_router
 
 app.include_router(create_properties_router(db))
 app.include_router(create_accounting_router(db))
@@ -1038,3 +1040,5 @@ app.include_router(create_communication_router(db))
 app.include_router(create_syndic_config_router(db))
 app.include_router(create_email_templates_router(db))
 app.include_router(create_backups_router(db))
+app.include_router(create_release_notes_router(db))
+app.include_router(create_documentation_router(db))
