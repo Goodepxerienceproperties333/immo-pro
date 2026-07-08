@@ -39,45 +39,110 @@ def _exclude_reversals(q: dict) -> dict:
     return q
 
 
+_MUTATION_LOT_RE = __import__("re").compile(
+    r"^\s*(?:\[[A-Z]{2,3}\]\s*)?"        # optionnel "[OD] "
+    r"(?:Operation\s*:\s*)?"              # optionnel "Operation : "
+    r"Mutation\s+lot\s+\S+\s*-\s*"        # "Mutation lot XXX -"
+    r"([^:]+?)"                            # groupe 1 : label stable (ex "Prorata appel (Q1/4)")
+    r"(?:\s*:.*)?$"                        # optionnel ":  <details>"
+)
+
+
+def _normalize_mutation_desc(desc: str) -> str | None:
+    """iter90bz : extrait le suffixe STABLE d'une description "Mutation lot XXX - <label>".
+
+    Retourne le label normalise ("Mutation lots - <label>") ou None si le
+    pattern ne matche pas.
+
+    Exemples :
+      "Mutation lot 001 - Prorata appel (Q1/4): Matexi -> Dewinter (206.44 EUR)"
+        -> "Mutation lots - Prorata appel (Q1/4)"
+      "Mutation lot C9 - Fonds de roulement: Matexi -> Dewinter"
+        -> "Mutation lots - Fonds de roulement"
+      "[OD] Mutation lot 302 - Appel futur (Q4/4)"
+        -> "Mutation lots - Appel futur (Q4/4)"
+    """
+    if not desc:
+        return None
+    m = _MUTATION_LOT_RE.match(desc)
+    if m:
+        label = (m.group(1) or "").strip().rstrip(" -")
+        return f"Mutation lots - {label}" if label else None
+    return None
+
+
 def _group_movements_by_owner(movements: list) -> list:
-    """iter90bv : regroupe les mouvements d'un meme proprietaire pour tous ses lots.
+    """iter90bv + iter90bz : regroupe les mouvements d'un meme proprietaire pour
+    tous ses lots.
 
-    Quand un proprietaire possede plusieurs lots dans une ACP, un meme appel de fonds
-    (VE) genere N lignes debit sur son compte tier (une par lot x type). Cette fonction
-    aggregge ces lignes en UNE SEULE par (entry_id, account_number, description) en
-    sommant debit et credit.
+    iter90bv : quand un proprietaire possede plusieurs lots dans une ACP, un
+    meme appel de fonds (VE) genere N lignes debit sur son compte tier (une
+    par lot x type). Cette fonction aggregge ces lignes en UNE SEULE par
+    (entry_id, account_number, description) en sommant debit et credit.
 
-    Preserve l'ordre chronologique et la structure des mouvements (dates, references,
-    types de journal). Ne merge que les lignes du meme journal_entry (donc jamais des
-    operations distinctes).
+    iter90bz : cas des mutations. Chaque mutation lot cree une ecriture OD
+    distincte (reference unique par lot). Pour un promoteur avec 30 lots,
+    cela genere 30 lignes visuellement identiques par trimestre. On les
+    fusionne via un pattern regex sur "Mutation lot XXX - <label>" en une
+    seule ligne "Mutations (N lots) - <label>".
+
+    Preserve l'ordre chronologique et la structure des mouvements (dates,
+    references, types de journal). Les journal_entries en base sont
+    INCHANGEES (audit trail preserve).
     """
     if not movements:
         return []
     buckets = {}
+    counts = {}
     order = []
     for m in movements:
-        # Cle de regroupement : meme ecriture + meme compte + meme libelle de ligne
-        # => c'est la meme "operation" logique demultiplice sur plusieurs lots.
-        key = (
-            m.get("reference", "") or m.get("entry_id", "") or "",
-            m.get("date", ""),
-            m.get("account_number", "") or "",
-            (m.get("description", "") or "").strip(),
-            m.get("journal_type", "") or "",
-        )
+        raw_desc = (m.get("description") or "").strip()
+        norm_mutation = _normalize_mutation_desc(raw_desc)
+        if norm_mutation:
+            # iter90bz : cle SANS reference (chaque mutation lot a une ref unique)
+            # => fusionne toutes les mutations partageant le meme label stable
+            key = (
+                "MUT-AGG",  # marqueur du bucket "mutations agregees"
+                m.get("date", ""),
+                m.get("account_number", "") or "",
+                norm_mutation,
+                m.get("journal_type", "") or "",
+                m.get("third_party_id", "") or "",
+            )
+        else:
+            # iter90bv : cle standard incluant reference (audit chronologique)
+            key = (
+                m.get("reference", "") or m.get("entry_id", "") or "",
+                m.get("date", ""),
+                m.get("account_number", "") or "",
+                raw_desc,
+                m.get("journal_type", "") or "",
+            )
         if key not in buckets:
-            buckets[key] = dict(m)
-            buckets[key]["debit"] = float(m.get("debit", 0) or 0)
-            buckets[key]["credit"] = float(m.get("credit", 0) or 0)
+            b = dict(m)
+            b["debit"] = float(m.get("debit", 0) or 0)
+            b["credit"] = float(m.get("credit", 0) or 0)
+            b["_norm_mutation_label"] = norm_mutation  # temp interne
+            buckets[key] = b
+            counts[key] = 1
             order.append(key)
         else:
             buckets[key]["debit"] += float(m.get("debit", 0) or 0)
             buckets[key]["credit"] += float(m.get("credit", 0) or 0)
+            counts[key] += 1
     result = []
     for key in order:
         b = buckets[key]
         b["debit"] = round(b["debit"], 2)
         b["credit"] = round(b["credit"], 2)
+        # iter90bz : reformater la description si mutations agregees
+        norm = b.pop("_norm_mutation_label", None)
+        if norm and counts[key] > 1:
+            # "Mutation lots - Prorata appel Q1" => "Mutations (30 lots) - Prorata appel Q1"
+            label_suffix = norm.removeprefix("Mutation lots - ")
+            b["description"] = f"Mutations ({counts[key]} lots) - {label_suffix}"
+            # Reference groupee : "MUT-AGG-{count}"
+            b["reference"] = f"MUT-AGG ({counts[key]})"
         result.append(b)
     return result
 
@@ -1846,8 +1911,10 @@ def create_reports_router(db):
         entry_q = {"copropriete_id": copropriete_id}
         if start_date or end_date:
             entry_q["date"] = {}
-            if start_date: entry_q["date"]["$gte"] = start_date
-            if end_date: entry_q["date"]["$lte"] = end_date
+            if start_date:
+                entry_q["date"]["$gte"] = start_date
+            if end_date:
+                entry_q["date"]["$lte"] = end_date
         _exclude_reversals(entry_q)
         entries = await db.journal_entries.find(entry_q, {"_id": 0}).to_list(100000)
         seen_lines = set()
@@ -2117,8 +2184,10 @@ def create_reports_router(db):
         je_q = {"copropriete_id": copropriete_id}
         if start_date or end_date:
             je_q["date"] = {}
-            if start_date: je_q["date"]["$gte"] = start_date
-            if end_date: je_q["date"]["$lte"] = end_date
+            if start_date:
+                je_q["date"]["$gte"] = start_date
+            if end_date:
+                je_q["date"]["$lte"] = end_date
         _exclude_reversals(je_q)
         entries = await db.journal_entries.find(je_q, {"_id": 0}).to_list(100000)
 
@@ -2133,8 +2202,10 @@ def create_reports_router(db):
         inv_q = {"copropriete_id": copropriete_id}
         if start_date or end_date:
             inv_q["date"] = {}
-            if start_date: inv_q["date"]["$gte"] = start_date
-            if end_date: inv_q["date"]["$lte"] = end_date
+            if start_date:
+                inv_q["date"]["$gte"] = start_date
+            if end_date:
+                inv_q["date"]["$lte"] = end_date
         invoices = await db.invoices.find(inv_q, {"_id": 0}).to_list(10000)
 
         # Map supplier -> tier account

@@ -12,6 +12,58 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 ### Iter90bx (Feb 2026) - Contre-passation traceable des ecritures comptables (BLOQUANT LEGAL)
+### Iter90bz (Feb 2026) - Agregation des mutations lot dans la situation de compte
+
+**Ticket utilisateur** : "Le rapport affiche des lignes separees pour 'mutations par
+lot' et 'appels par lot' pour chaque lot. Je souhaite une seule ligne consolidee
+par tiers, totalisant tous les lots de ce proprietaire, avec le detail par appel
+agrege sur l'ensemble des lots."
+
+**Cause racine** : chaque mutation lot cree une ecriture OD distincte dans
+`journal_entries` avec une `reference` UNIQUE (`MUT-{lot_number}-{suffix}`) et
+une `description` UNIQUE (`"Mutation lot 001 - Prorata appel (Q1/4)..."`).
+Pour un promoteur avec 30 lots, cela genere 30 lignes visuellement identiques
+par trimestre = 120 lignes sur 8 pages PDF (illisible).
+
+L'iter90bv `_group_movements_by_owner` utilisait `reference` dans sa cle de
+regroupement, ce qui empechait la fusion.
+
+**Nouvelle fonction** `_normalize_mutation_desc(desc)` :
+- Regex `r"^\s*(?:\[[A-Z]{2,3}\]\s*)?(?:Operation\s*:\s*)?Mutation\s+lot\s+\S+\s*-\s*([^:]+?)(?:\s*:.*)?$"`
+- Extrait le suffixe STABLE (label independant du lot) : "Mutation lot 001 - Prorata appel (Q1/4): Matexi -> Buyer (206.44)" -> "Mutation lots - Prorata appel (Q1/4)"
+
+**Nouvelle cle de regroupement pour mutations** (dans `_group_movements_by_owner`) :
+- `(MUT-AGG, date, account_number, normalized_label, journal_type, third_party_id)`
+- Ignore `reference` (unique par lot) et le numero de lot dans la description
+- Ne fusionne que les mutations du meme proprietaire, meme date, meme label
+
+**Post-processing** : si N > 1 mutations fusionnees :
+- description : `"Mutations (N lots) - Prorata appel (Q1/4)"`
+- reference : `"MUT-AGG (N)"`
+- Si N == 1 : description originale conservee (numero de lot visible, pas de perte d'info)
+
+**Impact** :
+- Endpoint `GET /api/reports/balance-tiers/owners/{id}?group_by_owner=true` (defaut)
+  affiche desormais 2 mouvements par trimestre (VE + Mutations agregees) au lieu de
+  1 + N. Reduction ~ -75% du volume PDF pour les promoteurs.
+- PDF "Situation de compte" utilise toujours `group_by_owner=true` par defaut.
+- Mode `group_by_owner=false` (toggle "Detail par lot" UI) conserve les N lignes
+  detaillees pour audit.
+- **Comptabilite INCHANGEE** : les 30 ecritures OD restent en base pour audit
+  trail legal (art. III.86 CDE). Seule la presentation est agregee.
+
+**Tests** :
+- `test_iter90bz_group_mutations_by_owner.py` (13/13) : normalisation, aggregation
+  Matexi 30 lots, single lot preservation, VE non fusionne, quartiers distincts,
+  proprietaires distincts, Fonds de roulement multi-lots.
+- `test_iter90bz_e2e_matexi_scenario.py` (2/2) : HTTP endpoint vue groupee (2
+  mouvements) vs detail (6 mouvements).
+- Regression iter90bv : 6/6 tests toujours passants.
+
+**Bonus** : correction lint pre-existant `E701 Multiple statements on one line`
+sur 6 lignes dans `reports.py` (blocs `if start_date/end_date`).
+
+
 ### Iter90by (Feb 2026) - Refactor P5 (frontend + backend, dette technique)
 
 **Frontend** (`BalanceTiersPage.js` : 665 -> 399 lignes, -40%) :
