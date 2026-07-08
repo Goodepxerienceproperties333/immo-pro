@@ -13,6 +13,26 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 ### Iter90bx (Feb 2026) - Contre-passation traceable des ecritures comptables (BLOQUANT LEGAL)
 ### Iter90cd (Feb 2026) - Fix regeneration appels apres mutation (double-comptage prorata)
+### Iter90ce (Feb 2026) - Verrou regression : fonds de reserve JAMAIS transferes en mutation
+
+**Ticket utilisateur** : "les fonds de reserve ne sont JAMAIS transferes dans le
+cadre des mutations... Corrige".
+
+**Verification realisee** : investigation du code (`routes/properties.py` L945
++ L966-976 + L1033) et debug scripts. Conclusion : **le systeme respecte deja
+strictement cette regle**. Ligne 945 filtre `call_type == "provisions"` avant
+le calcul du prorata et des appels futurs, et lignes 966-976 excluent la portion
+`reserve_amount` injectee dans les appels provisions legacy.
+
+**Fix** : aucune modification de code necessaire. Creation d'un test de
+regression `tests/test_iter90ce_reserve_never_transferred.py` verrouillant 4
+scenarios :
+1. Appels reserve standalone (pre + post mutation) -> zero prorata / zero OD.
+2. Provisions avec reserve_amount injecte -> portion reserve exclue du prorata.
+3. Mix provisions + reserve -> seul provisions genere une OD.
+4. Solde tier vendeur reste debiteur de 100% de la reserve apres mutation.
+
+Tests : 4/4 PASS.
 
 **Ticket utilisateur** : "le systeme fonctionne correctement lors de la generation
 initiale (appels a Matexi) + mutation (OD prorata correcte). Le bug est que si
