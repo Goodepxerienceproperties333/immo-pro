@@ -29,53 +29,89 @@ from motor.motor_asyncio import AsyncIOMotorClient
 
 
 def _compute_period(call: dict, fy_by_id: dict) -> tuple[str, str]:
-    """Return (period_start, period_end) as ISO strings. None if cannot compute."""
+    """Return (period_start, period_end) as ISO strings. None if cannot compute.
+
+    iter90cg : pour un nom "Trimestriel X/N - <FY>" et une FY connue, calcule
+    la periode CHRONOLOGIQUE reelle (X-eme intervalle de la FY) plutot que
+    d'utiliser call.date comme point de depart. Cela corrige le cas ou le
+    syndic cree un appel Q3 physiquement en retard (call.date = 20/10 mais
+    Q3 = 01/07-30/09).
+    """
     try:
         start_dt = datetime.strptime(call.get("date", ""), "%Y-%m-%d").date()
     except Exception:
         return None, None
     fy = fy_by_id.get(call.get("fiscal_year_id", ""))
+    fy_start_dt = None
     fy_end_dt = None
     if fy:
+        try:
+            fy_start_dt = datetime.strptime(fy["start_date"], "%Y-%m-%d").date()
+        except Exception:
+            pass
         try:
             fy_end_dt = datetime.strptime(fy["end_date"], "%Y-%m-%d").date()
         except Exception:
             pass
 
     n_calls = None
+    call_num = None
     m = re.search(r"(\d+)\s*/\s*(\d+)", call.get("name", "") or "")
     if m:
         try:
+            call_num = int(m.group(1))
             n_calls = int(m.group(2))
             if n_calls not in (1, 2, 3, 4, 6, 12):
                 n_calls = None
+                call_num = None
+            elif call_num < 1 or call_num > n_calls:
+                call_num = None
         except ValueError:
             n_calls = None
+            call_num = None
 
-    if n_calls and n_calls > 0:
+    period_start_dt = start_dt
+    if n_calls and call_num and fy_start_dt:
+        # iter90cg : periode chronologique X/N derivee de la FY.
+        # Ex : Trimestriel 3/4 FY 2025 (01/01-31/12) -> period_start = 01/07/2025.
         interval = 12 // n_calls
-        year = start_dt.year
-        month = start_dt.month + interval
+        year = fy_start_dt.year
+        month = fy_start_dt.month + (call_num - 1) * interval
         while month > 12:
             month -= 12
             year += 1
         try:
-            next_start = start_dt.replace(year=year, month=month)
+            period_start_dt = fy_start_dt.replace(year=year, month=month)
         except ValueError:
             last_day = monthrange(year, month)[1]
-            next_start = start_dt.replace(year=year, month=month, day=min(start_dt.day, last_day))
+            period_start_dt = fy_start_dt.replace(
+                year=year, month=month, day=min(fy_start_dt.day, last_day),
+            )
+
+    if n_calls and n_calls > 0:
+        interval = 12 // n_calls
+        year = period_start_dt.year
+        month = period_start_dt.month + interval
+        while month > 12:
+            month -= 12
+            year += 1
+        try:
+            next_start = period_start_dt.replace(year=year, month=month)
+        except ValueError:
+            last_day = monthrange(year, month)[1]
+            next_start = period_start_dt.replace(year=year, month=month, day=min(period_start_dt.day, last_day))
         end_dt = next_start - timedelta(days=1)
     elif fy_end_dt:
         # Appel sans "X/N" -> annuel -> period = [start, fy_end]
         end_dt = fy_end_dt
     else:
-        end_dt = start_dt + timedelta(days=90)
+        end_dt = period_start_dt + timedelta(days=90)
 
     # Borne max fy_end
     if fy_end_dt and end_dt > fy_end_dt:
         end_dt = fy_end_dt
 
-    return start_dt.isoformat(), end_dt.isoformat()
+    return period_start_dt.isoformat(), end_dt.isoformat()
 
 
 async def run(dry_run: bool = False):

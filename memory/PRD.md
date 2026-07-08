@@ -11,7 +11,50 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 
-### Iter90cg (Feb 2026) - Toggle "Masquer les soldes a zero" dans Balance de Tiers
+### Iter90cg (Feb 2026) - Fix appels emis EN RETARD apres mutation posterieure
+
+**Bug rapporte utilisateur (PROD immo-pcmn.emergent.host, deploy 17:17)** :
+> "Matexi vend le 01.10.2025. Le fonds de reserve emis apres cette date est
+> applique aux acheteurs. Le fonds de roulement n'est pas correctement
+> calcule."
+
+**Root cause identifiee** :
+`_compute_period` (scripts/migrate_fund_calls_periods.py) utilisait
+`call.date` comme `period_start`. Si l'utilisateur creait un appel
+"Trimestriel 3/4 - 2025" physiquement en retard (date=20/10/2025 apres la
+mutation 01/10), la periode calculee etait [20/10, 31/12] au lieu de
+[01/07, 30/09] (Q3 chronologique). Rebind sur `call_date` (20/10) attribuait
+donc au nouvel acheteur au lieu du vendeur.
+
+Bug secondaire : `_rebind_owner_at_call_date` (fund_calls.py) rebindait sur
+`call_date` sans borner a `period_end`, meme si periode < call_date.
+
+**Fix (3 parties)** :
+1. `_compute_period` : parse le NUMERATEUR X dans "X/N" (ex. Q3 = 01/07-30/09).
+   Utilise la FY pour ancrer la periode chronologique.
+2. `_rebind_owner_at_call_date` : nouveau parametre `period_end_iso`.
+   Rebind sur `effective_date = min(call_date, period_end)`.
+3. `POST /api/fund-calls` : rebind inline utilise aussi `min(call_date, period_end)`.
+
+**Tests** : `tests/test_iter90cg_late_call_before_mutation.py` (5 scenarios)
+- late_provisions_call_returns_to_seller (Q3 appel Oct -> Matexi vendeur)
+- late_reserve_call_returns_to_seller (fonds reserve Q3 -> Matexi)
+- late_roulement_call_returns_to_seller (fonds roulement Q3 -> Matexi)
+- nominal_case_unchanged (Q4 date=01/10, mutation=01/10 -> acheteur, iter90cd)
+- straddling_unchanged (Q4 date=01/10, mutation=15/11 -> Matexi + OD MUT-P)
+
+**Regression totale** : 14/14 PASS (iter90cg 5, iter90cf 5, iter90ce 4).
+
+**Script repair PROD** :
+`/app/backend/scripts/repair_iter90cg_late_calls.py`
+- Recalcule les periodes de tous les appels (via _compute_period corrige)
+- Rebind distribution.owner_id via effective_date
+- Regenere VE (delete + insert)
+- Protection : skip si au moins une ligne payee
+- Usage : `--dry-run` pour rapport, `--apply` pour execution
+
+
+
 
 **Ticket utilisateur** : "Dans la balance de tiers, il faut voir tous les
 proprietaires debiteurs crediteur ou solde a zero ajouter un bouton masquer

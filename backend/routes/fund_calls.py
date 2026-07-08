@@ -397,13 +397,47 @@ def create_fund_calls_router(db):
                     "paid_date": "",
                 })
 
-        # iter90aj/iter90cf : rebind owner a la date de l'appel pour TOUS les
-        # call_types (regle metier iter90cd : appel = 100% owner-at-call-date,
-        # aucun split. Le prorata temporis est gere en OD SEPAREE pour les
-        # provisions dont la periode chevauche une mutation).
+        # iter90cf + iter90cg : deduire period_start/period_end pour :
+        # 1. rebind owner sur la date effective (min(call_date, period_end))
+        # 2. permettre le calcul retroactif d'OD de prorata mutation (uniquement provisions).
+        # On calcule la periode pour TOUS les call_types afin que le rebind
+        # tienne compte des appels emis apres la fin de la periode (Q3 emis en
+        # retard apres mutation posterieure -> attribue au vendeur).
+        period_start = ""
+        period_end = ""
+        try:
+            import sys
+            if "/app/backend/scripts" not in sys.path:
+                sys.path.insert(0, "/app/backend/scripts")
+            from migrate_fund_calls_periods import _compute_period  # type: ignore
+            fy = None
+            if data.fiscal_year_id:
+                fy = await db.fiscal_years.find_one({"id": data.fiscal_year_id}, {"_id": 0})
+            fy_by_id = {fy["id"]: fy} if fy else {}
+            ps, pe = _compute_period({
+                "name": data.name,
+                "date": data.date,
+                "fiscal_year_id": data.fiscal_year_id,
+            }, fy_by_id)
+            period_start = ps or ""
+            period_end = pe or ""
+        except Exception as _e:
+            print(f"[iter90cf/cg] period computation skipped: {_e}")
+
+        # iter90aj + iter90cf + iter90cg : rebind owner sur date effective
+        # min(call_date, period_end) pour TOUS les call_types. Regle metier :
+        # un appel Q3 emis en retard apres une mutation posterieure a la periode
+        # doit revenir au vendeur (proprietaire durant la periode).
         try:
             from datetime import date as _dt_cls
-            target = _dt_cls.fromisoformat(data.date)
+            _cd = _dt_cls.fromisoformat(data.date)
+            _pe = None
+            if period_end:
+                try:
+                    _pe = _dt_cls.fromisoformat(period_end)
+                except Exception:
+                    _pe = None
+            target = min(_cd, _pe) if _pe else _cd
             muts_all = await db.mutations.find(
                 {"copropriete_id": copro_id}, {"_id": 0}
             ).to_list(10000)
@@ -435,36 +469,11 @@ def create_fund_calls_router(db):
                     entry["owner_name"] = _own.get("name", "")
                     entry["vcs_code"] = _own.get("vcs_code", "")
         except Exception as _e:
-            print(f"[iter90aj/cf] Rebind owner_at_date skipped: {_e}")
+            print(f"[iter90aj/cf/cg] Rebind owner_at_date skipped: {_e}")
 
         # iter90w : garantit sum(distribution.amount) == total_amount exactement
         # (evite les 0,01 EUR de derive par appel manuel).
         _snap_distribution_to_total(distribution, round(data.total_amount, 2))
-
-        # iter90cf : deduire period_start/period_end pour permettre le calcul
-        # retroactif d'OD de prorata mutation (uniquement pour provisions).
-        period_start = ""
-        period_end = ""
-        if (data.call_type or "provisions") == "provisions":
-            try:
-                # Utilise le meme heuristique que migrate_fund_calls_periods
-                import sys
-                if "/app/backend/scripts" not in sys.path:
-                    sys.path.insert(0, "/app/backend/scripts")
-                from migrate_fund_calls_periods import _compute_period  # type: ignore
-                fy = None
-                if data.fiscal_year_id:
-                    fy = await db.fiscal_years.find_one({"id": data.fiscal_year_id}, {"_id": 0})
-                fy_by_id = {fy["id"]: fy} if fy else {}
-                ps, pe = _compute_period({
-                    "name": data.name,
-                    "date": data.date,
-                    "fiscal_year_id": data.fiscal_year_id,
-                }, fy_by_id)
-                period_start = ps or ""
-                period_end = pe or ""
-            except Exception as _e:
-                print(f"[iter90cf] period computation skipped: {_e}")
 
         doc = {
             "id": str(uuid.uuid4()),
@@ -935,18 +944,40 @@ def create_fund_calls_router(db):
                     break
             return current
 
-        def _rebind_owner_at_call_date(entries: list, call_date_iso: str) -> list:
-            """iter90aj : Reserve/roulement -> re-affecte chaque entree au
-            proprietaire qui detenait le lot a la DATE DE L'APPEL. Regle
-            metier : reserve/roulement sont des injections one-shot,
-            appartiennent au proprietaire en place a la date de l'appel
-            (vendeur si l'appel est anterieur a la mutation, acheteur sinon).
-            PAS de proratisation, contrairement aux provisions."""
+        def _rebind_owner_at_call_date(entries: list, call_date_iso: str, period_end_iso: str = "") -> list:
+            """iter90aj + iter90cg : Reserve/roulement/provisions -> re-affecte
+            chaque entree au proprietaire qui detenait le lot a la DATE EFFECTIVE
+            de charge de l'appel.
+
+            Date effective = min(call_date, period_end) :
+            - Cas nominal (call_date <= period_end) : effective = call_date
+              (comportement iter90aj/iter90cd : owner-at-call-date).
+            - Cas d'un appel emis EN RETARD apres la fin de la periode
+              (call_date > period_end) : effective = period_end, pour
+              attribuer le montant au proprietaire durant la periode
+              (le vendeur si la mutation est posterieure a la periode).
+
+            Regle metier : reserve/roulement/provisions sont des charges de
+            periode. Un appel Q3 2025 (01.07-30.09) emis le 20.10 apres une
+            mutation le 01.10 doit revenir au VENDEUR (proprietaire durant
+            Q3), pas au nouvel acquereur (owner-at-call-date).
+
+            Le prorata temporis pour un appel dont la periode CHEVAUCHE une
+            mutation est toujours gere par l'OD MUT-P separee (iter90cf).
+            """
+            def _effective(cdate: str) -> str:
+                if not period_end_iso or not cdate:
+                    return cdate
+                try:
+                    return period_end_iso if period_end_iso < cdate else cdate
+                except Exception:
+                    return cdate
+            eff = _effective(call_date_iso)
             result = []
             for e in entries:
                 lid = e.get("lot_id") or ""
                 current_oid = e.get("owner_id") or ""
-                correct_oid = _resolve_owner_at_date(lid, call_date_iso, current_oid)
+                correct_oid = _resolve_owner_at_date(lid, eff, current_oid)
                 if correct_oid == current_oid:
                     result.append(e)
                     continue
@@ -1081,15 +1112,17 @@ def create_fund_calls_router(db):
                 if abs(bl_per_call) < 0.01:
                     continue
                 line_dist = _distribute_amount(bl_per_call, bl.get("distribution_key_id", ""))
-                # iter90cd : PLUS DE SPLIT prorata dans l'appel lui-meme (regle
-                # metier belge : "Aucune ventilation entre vendeur et acquereur
-                # n'est effectuee pour cet appel"). On reaffecte simplement chaque
-                # entree au proprietaire qui detenait le lot a la DATE d'emission
-                # de l'appel. La repartition prorata temporis vendeur/acheteur est
-                # gere par l'OD "Mutation Prorata" (properties.py::_apply_mutation_writes)
-                # de facon SEPAREE, evitant tout double-comptage lors d'une
-                # regeneration apres mutation.
-                line_dist = _rebind_owner_at_call_date(line_dist, call_date)
+                # iter90cd + iter90cg : PLUS DE SPLIT prorata dans l'appel lui-meme
+                # (regle metier belge : "Aucune ventilation entre vendeur et
+                # acquereur n'est effectuee pour cet appel"). On reaffecte chaque
+                # entree au proprietaire qui detenait le lot a la DATE EFFECTIVE
+                # de charge (min(call_date, period_end)) : appel en retard apres
+                # une mutation posterieure a la periode -> vendeur (proprietaire
+                # durant la periode). La repartition prorata temporis vendeur/
+                # acheteur pour un appel dont la PERIODE chevauche une mutation
+                # est gere par l'OD "Mutation Prorata" (properties.py::
+                # _apply_mutation_writes, generate_prorata_mut_ods_for_call).
+                line_dist = _rebind_owner_at_call_date(line_dist, call_date, period_end)
                 line_details.append({
                     "account_number": bl.get("account_number", ""),
                     "account_name": bl.get("account_name", ""),
@@ -1109,8 +1142,9 @@ def create_fund_calls_router(db):
             if i == 0 and data.reserve_fund and data.reserve_fund.enabled and data.reserve_fund.amount > 0 and not reserve_has_own_schedule:
                 reserve_amount = float(data.reserve_fund.amount)
                 reserve_dist = _distribute_amount(reserve_amount, data.reserve_fund.distribution_key_id or "")
-                # iter90aj : rebind owner a la date de l'appel (retroactif si necessaire)
-                reserve_dist = _rebind_owner_at_call_date(reserve_dist, call_date)
+                # iter90aj + iter90cg : rebind sur date effective = min(call_date, period_end).
+                # Cas cible : appel Q3 emis en retard apres mutation posterieure a la periode -> vendeur.
+                reserve_dist = _rebind_owner_at_call_date(reserve_dist, call_date, period_end)
                 line_details.append({
                     "account_number": "RESERVE",
                     "account_name": data.reserve_fund.label or "Fonds de reserve",
@@ -1131,8 +1165,8 @@ def create_fund_calls_router(db):
             if i == 0 and data.roulement_fund and data.roulement_fund.enabled and data.roulement_fund.amount > 0 and not roul_has_own_schedule:
                 roul_amount = float(data.roulement_fund.amount)
                 roul_dist = _distribute_amount(roul_amount, data.roulement_fund.distribution_key_id or "")
-                # iter90aj : rebind owner a la date de l'appel (retroactif si necessaire)
-                roul_dist = _rebind_owner_at_call_date(roul_dist, call_date)
+                # iter90aj + iter90cg : rebind sur date effective = min(call_date, period_end).
+                roul_dist = _rebind_owner_at_call_date(roul_dist, call_date, period_end)
                 lbl = data.roulement_fund.label or "Fonds de roulement"
                 mode_lbl = "(creation)" if (data.roulement_fund.mode or "create") == "create" else "(augmentation)"
                 line_details.append({
@@ -1225,11 +1259,11 @@ def create_fund_calls_router(db):
                     pend = ((fy or {}).get("end_date") or
                             (datetime.strptime(cd, "%Y-%m-%d") + timedelta(days=interval * 30 - 1)).strftime("%Y-%m-%d"))
                 dist = _distribute_amount(per_call, fund.distribution_key_id or "")
-                # iter90aj : rebind owner a la date de l'appel courant `cd`.
-                # Cas courant : budget 2026 vote apres une mutation, appel #1
-                # date 01/10/2025 anterieure a mutation 17/11/2025 -> le
-                # vendeur doit recevoir la VE, pas l'acheteur.
-                dist = _rebind_owner_at_call_date(dist, cd)
+                # iter90aj + iter90cg : rebind sur date effective = min(cd, pend).
+                # Cas cible : appel reserve/roulement Q3 emis en retard apres
+                # mutation posterieure a la periode -> vendeur (proprietaire
+                # durant la periode Q3), pas nouvel acheteur (owner-at-call-date).
+                dist = _rebind_owner_at_call_date(dist, cd, pend)
                 # iter85b : distribution par lot (cascade parent/enfant)
                 distribution = []
                 for e in dist:
