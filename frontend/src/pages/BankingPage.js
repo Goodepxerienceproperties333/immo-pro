@@ -162,11 +162,31 @@ export default function BankingPage() {
       });
       const okCount = data.results.filter(r => r.status === 'ok').length;
       const errCount = data.results.filter(r => r.status === 'error').length;
+      // iter90bu : detecte les doublons ignores et informe l'user
+      const dupCount = data.results.filter(r => r.status === 'duplicate').length;
       if (okCount > 0) {
+        const extras = [];
+        if (dupCount > 0) extras.push(`${dupCount} doublon${dupCount > 1 ? 's' : ''} ignore${dupCount > 1 ? 's' : ''}`);
+        if (errCount > 0) extras.push(`${errCount} erreur${errCount > 1 ? 's' : ''}`);
         toast.success(
           `${okCount} extrait${okCount > 1 ? 's' : ''} importe${okCount > 1 ? 's' : ''} en brouillon`,
-          { description: `${data.total_transactions} transaction${data.total_transactions > 1 ? 's' : ''} au total${errCount ? ` — ${errCount} fichier(s) en erreur` : ''}`, duration: 6000 }
+          {
+            description: `${data.total_transactions} transaction${data.total_transactions > 1 ? 's' : ''} au total${extras.length ? ' — ' + extras.join(', ') : ''}`,
+            duration: 6000,
+          },
         );
+      }
+      if (dupCount > 0 && !okCount && !errCount) {
+        // Tous doublons -> avertissement (pas d'erreur)
+        toast.warning(`${dupCount} extrait${dupCount > 1 ? 's' : ''} deja importe${dupCount > 1 ? 's' : ''} — rien a ajouter`, {
+          description: data.results.filter(r => r.status === 'duplicate').map(r => `${r.filename}: ${r.error || 'doublon'}`).join(' • '),
+          duration: 8000,
+        });
+      } else if (dupCount > 0 && okCount === 0) {
+        toast.warning(`${dupCount} doublon${dupCount > 1 ? 's' : ''} ignore${dupCount > 1 ? 's' : ''}`, {
+          description: data.results.filter(r => r.status === 'duplicate').map(r => `${r.filename}: ${r.error || 'doublon'}`).join(' • '),
+          duration: 8000,
+        });
       }
       if (errCount > 0 && !okCount) {
         toast.error(`${errCount} fichier(s) en erreur`, {

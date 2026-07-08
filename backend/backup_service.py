@@ -253,18 +253,28 @@ async def _apply_retention(db, storage) -> None:
 async def build_acp_archive_zip(db, copropriete_id: str, include_pdfs: bool = True) -> tuple[bytes, str]:
     """Genere un ZIP structure PAR ANNEE FISCALE pour archivage syndic.
 
+    Le ZIP est utilisable directement par le syndic sans outil special :
+    - CSV avec UTF-8 BOM -> ouverture native dans Excel / LibreOffice
+    - PDFs originaux (factures scannees, extraits bancaires) inclus
+    - README.txt explicatif a la racine
+    - Rapports PDF pre-generes (bilan, compte de resultat)
+
     Structure :
         {ACP_NAME}/
+            README.txt                    <- explique le contenu
             metadata.json
-            owners.csv
-            lots.csv
+            owners.csv                    <- UTF-8 BOM pour Excel
+            lots.csv                      <- UTF-8 BOM pour Excel
             YYYY/
-                journal_entries.csv
-                invoices.csv
-                fund_calls.csv
-                bank_transactions.csv
-                bilan.pdf (optionnel)
-                decomptes/{owner_name}.pdf (optionnel)
+                journal_entries.csv       <- UTF-8 BOM
+                invoices.csv              <- UTF-8 BOM
+                fund_calls.csv            <- UTF-8 BOM
+                bank_transactions.csv     <- UTF-8 BOM
+                bilan.pdf                 (si include_pdfs)
+                compte_resultat.pdf       (si include_pdfs)
+                documents/
+                    factures/{invoice_number}.pdf   <- originaux
+                    extraits/{stmt_number}.pdf      <- originaux
 
     Retourne (bytes, filename).
     """
@@ -280,9 +290,22 @@ async def build_acp_archive_zip(db, copropriete_id: str, include_pdfs: bool = Tr
     owner_ids = list({lt.get("owner_id") for lt in lots if lt.get("owner_id")})
     owners = await db.owners.find({"id": {"$in": owner_ids}}).to_list(5000) if owner_ids else []
 
+    # iter90bs : UTF-8 BOM devant les CSV pour ouverture native Excel FR/BE
+    def _csv_bytes(header: list, rows: list) -> bytes:
+        sio = io.StringIO()
+        w = csv.writer(sio, delimiter=";", quoting=csv.QUOTE_MINIMAL)
+        w.writerow(header)
+        for r in rows:
+            w.writerow(r)
+        return b"\xef\xbb\xbf" + sio.getvalue().encode("utf-8")
+
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as z:
-        # 1. Metadata global
+        # 1. README explicatif
+        readme = _build_readme(copro, fiscal_years, owners, lots, include_pdfs)
+        z.writestr(f"{acp_name}/README.txt", readme.encode("utf-8"))
+
+        # 2. Metadata global
         meta = {
             "copropriete_id": copropriete_id,
             "name": copro.get("name"),
@@ -293,111 +316,259 @@ async def build_acp_archive_zip(db, copropriete_id: str, include_pdfs: bool = Tr
             "fiscal_years_count": len(fiscal_years),
             "owners_count": len(owners),
             "lots_count": len(lots),
+            "format_version": "1.1",  # iter90bs
         }
         z.writestr(f"{acp_name}/metadata.json", json.dumps(meta, ensure_ascii=False, indent=2))
 
-        # 2. Owners CSV
-        owners_io = io.StringIO()
-        w = csv.writer(owners_io, delimiter=";")
-        w.writerow(["id", "name", "email", "phone", "address", "postal_code", "city", "vcs_code"])
-        for o in owners:
-            w.writerow([o.get("id"), o.get("name"), o.get("email"), o.get("phone"),
-                        o.get("address"), o.get("postal_code"), o.get("city"), o.get("vcs_code")])
-        z.writestr(f"{acp_name}/owners.csv", owners_io.getvalue())
+        # 3. Owners CSV (UTF-8 BOM)
+        z.writestr(
+            f"{acp_name}/owners.csv",
+            _csv_bytes(
+                ["id", "name", "email", "phone", "address", "postal_code", "city", "vcs_code"],
+                [[o.get("id"), o.get("name"), o.get("email"), o.get("phone"),
+                  o.get("address"), o.get("postal_code"), o.get("city"), o.get("vcs_code")]
+                 for o in owners],
+            ),
+        )
 
-        # 3. Lots CSV
-        lots_io = io.StringIO()
-        w = csv.writer(lots_io, delimiter=";")
-        w.writerow(["id", "number", "description", "quotity", "owner_id"])
-        for lt in lots:
-            w.writerow([lt.get("id"), lt.get("number"), lt.get("description"),
-                        lt.get("quotity"), lt.get("owner_id")])
-        z.writestr(f"{acp_name}/lots.csv", lots_io.getvalue())
+        # 4. Lots CSV (UTF-8 BOM)
+        z.writestr(
+            f"{acp_name}/lots.csv",
+            _csv_bytes(
+                ["id", "number", "description", "quotity", "owner_id"],
+                [[lt.get("id"), lt.get("number"), lt.get("description"),
+                  lt.get("quotity"), lt.get("owner_id")] for lt in lots],
+            ),
+        )
 
-        # 4. Par exercice fiscal
+        # 5. Par exercice fiscal
         for fy in fiscal_years:
             year_folder = fy.get("name") or fy.get("start_date", "unknown")[:4]
             year_folder = year_folder.replace("/", "_").replace(" ", "_")
+            year_prefix = f"{acp_name}/{year_folder}"
 
             start = fy.get("start_date", "")
             end = fy.get("end_date", "")
 
-            # 4a. Journal entries
+            # 5a. Journal entries
             entries = await db.journal_entries.find({
                 "copropriete_id": copropriete_id,
                 "date": {"$gte": start, "$lte": end},
             }).sort("date", 1).to_list(200000)
-            je_io = io.StringIO()
-            wj = csv.writer(je_io, delimiter=";")
-            wj.writerow(["date", "journal_type", "reference", "description",
-                         "account_number", "account_name", "third_party_id",
-                         "line_description", "debit", "credit"])
+            je_rows = []
             for e in entries:
                 for ln in e.get("lines", []) or []:
-                    wj.writerow([
+                    je_rows.append([
                         e.get("date"), e.get("journal_type"), e.get("reference"),
                         e.get("description"),
                         ln.get("account_number"), ln.get("account_name"),
                         ln.get("third_party_id"), ln.get("line_description"),
                         ln.get("debit", 0), ln.get("credit", 0),
                     ])
-            z.writestr(f"{acp_name}/{year_folder}/journal_entries.csv", je_io.getvalue())
+            z.writestr(f"{year_prefix}/journal_entries.csv", _csv_bytes(
+                ["date", "journal_type", "reference", "description",
+                 "account_number", "account_name", "third_party_id",
+                 "line_description", "debit", "credit"], je_rows))
 
-            # 4b. Invoices
+            # 5b. Invoices
             invs = await db.invoices.find({
                 "copropriete_id": copropriete_id,
                 "date": {"$gte": start, "$lte": end},
             }).to_list(50000)
-            inv_io = io.StringIO()
-            wi = csv.writer(inv_io, delimiter=";")
-            wi.writerow(["date", "invoice_number", "supplier_id", "supplier_name",
-                         "amount_total", "amount_paid", "vat", "status"])
-            for iv in invs:
-                wi.writerow([iv.get("date"), iv.get("invoice_number"),
-                             iv.get("supplier_id"), iv.get("supplier_name"),
-                             iv.get("amount_total"), iv.get("amount_paid"),
-                             iv.get("vat"), iv.get("status")])
-            z.writestr(f"{acp_name}/{year_folder}/invoices.csv", inv_io.getvalue())
+            z.writestr(f"{year_prefix}/invoices.csv", _csv_bytes(
+                ["date", "invoice_number", "supplier_id", "supplier_name",
+                 "amount_total", "amount_paid", "vat", "status"],
+                [[iv.get("date"), iv.get("invoice_number"),
+                  iv.get("supplier_id"), iv.get("supplier_name"),
+                  iv.get("amount_total"), iv.get("amount_paid"),
+                  iv.get("vat"), iv.get("status")] for iv in invs]))
 
-            # 4c. Fund calls
+            # 5c. Fund calls
             fcs = await db.fund_calls.find({
                 "copropriete_id": copropriete_id,
                 "date": {"$gte": start, "$lte": end},
             }).to_list(50000)
-            fc_io = io.StringIO()
-            wf = csv.writer(fc_io, delimiter=";")
-            wf.writerow(["date", "type", "amount", "quota_key", "period_label"])
-            for fc in fcs:
-                wf.writerow([fc.get("date"), fc.get("type"), fc.get("amount"),
-                             fc.get("quota_key"), fc.get("period_label")])
-            z.writestr(f"{acp_name}/{year_folder}/fund_calls.csv", fc_io.getvalue())
+            z.writestr(f"{year_prefix}/fund_calls.csv", _csv_bytes(
+                ["date", "type", "amount", "quota_key", "period_label"],
+                [[fc.get("date"), fc.get("type"), fc.get("amount"),
+                  fc.get("quota_key"), fc.get("period_label")] for fc in fcs]))
 
-            # 4d. Bank transactions
+            # 5d. Bank transactions
             txs = await db.bank_transactions.find({
                 "copropriete_id": copropriete_id,
                 "date": {"$gte": start, "$lte": end},
             }).to_list(200000)
-            tx_io = io.StringIO()
-            wt = csv.writer(tx_io, delimiter=";")
-            wt.writerow(["date", "counterparty_name", "communication", "amount", "matched", "match_type"])
-            for tx in txs:
-                wt.writerow([tx.get("date"), tx.get("counterparty_name"),
-                             tx.get("communication"), tx.get("amount"),
-                             tx.get("matched"), tx.get("match_type")])
-            z.writestr(f"{acp_name}/{year_folder}/bank_transactions.csv", tx_io.getvalue())
+            z.writestr(f"{year_prefix}/bank_transactions.csv", _csv_bytes(
+                ["date", "counterparty_name", "communication", "amount",
+                 "matched", "match_type"],
+                [[tx.get("date"), tx.get("counterparty_name"),
+                  tx.get("communication"), tx.get("amount"),
+                  tx.get("matched"), tx.get("match_type")] for tx in txs]))
 
-            # 4e. Bilan PDF (optionnel)
+            # 5e. Rapports PDF (bilan + compte de resultat)
             if include_pdfs:
                 try:
                     from pdf_bilan import build_bilan_pdf
                     from routes.reports import _compute_bilan
                     bilan_data = await _compute_bilan(db, copropriete_id, fy.get("id"))
-                    pdf = build_bilan_pdf(bilan_data)
-                    z.writestr(f"{acp_name}/{year_folder}/bilan.pdf", pdf)
+                    z.writestr(f"{year_prefix}/bilan.pdf", build_bilan_pdf(bilan_data))
                 except Exception as e:  # noqa: BLE001
                     logger.warning("Bilan PDF absent pour %s : %s", year_folder, e)
+                # iter90bs : ajout compte de resultat
+                try:
+                    from pdf_resultat import build_resultat_pdf
+                    from routes.reports import _compute_resultat
+                    resultat_data = await _compute_resultat(db, copropriete_id, fy.get("id"))
+                    z.writestr(f"{year_prefix}/compte_resultat.pdf", build_resultat_pdf(resultat_data))
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("Compte de resultat PDF absent pour %s : %s", year_folder, e)
+
+            # 5f. iter90bs : Documents originaux (factures + extraits) GridFS
+            if include_pdfs:
+                await _append_original_documents(
+                    db, z, year_prefix, copropriete_id, start, end
+                )
 
     data = buf.getvalue()
     buf.close()
     filename = f"archive_{acp_name}_{datetime.now(timezone.utc).strftime('%Y%m%d')}.zip"
     return data, filename
+
+
+def _build_readme(copro: dict, fiscal_years: list, owners: list, lots: list, include_pdfs: bool) -> str:
+    """Genere le README.txt explicatif du contenu du ZIP (iter90bs)."""
+    lines = [
+        "=" * 70,
+        f"ARCHIVE COPROMANAGER - {copro.get('name', 'ACP')}",
+        "=" * 70,
+        "",
+        f"Genere le : {datetime.now(timezone.utc).strftime('%d/%m/%Y a %H:%M UTC')}",
+        f"Copropriete : {copro.get('name', '')}",
+        f"Reference : {copro.get('reference', '')}",
+        f"Nombre de lots : {len(lots)}",
+        f"Nombre de proprietaires : {len(owners)}",
+        f"Nombre d'exercices fiscaux : {len(fiscal_years)}",
+        "",
+        "-" * 70,
+        "CONTENU DU ZIP",
+        "-" * 70,
+        "",
+        "  README.txt          <- Ce fichier",
+        "  metadata.json       <- Informations globales sur l'ACP",
+        "  owners.csv          <- Liste des proprietaires (Excel-ready UTF-8 BOM)",
+        "  lots.csv            <- Liste des lots et leurs quotites",
+        "",
+        "  Par annee fiscale (dossier YYYY) :",
+        "    journal_entries.csv       <- Toutes les ecritures comptables",
+        "    invoices.csv              <- Toutes les factures fournisseurs",
+        "    fund_calls.csv            <- Tous les appels de fonds",
+        "    bank_transactions.csv     <- Toutes les transactions bancaires",
+    ]
+    if include_pdfs:
+        lines.extend([
+            "    bilan.pdf                 <- Bilan comptable de l'exercice",
+            "    compte_resultat.pdf       <- Compte de resultat de l'exercice",
+            "    documents/",
+            "        factures/*.pdf        <- Factures scannees originales",
+            "        extraits/*.pdf        <- Extraits bancaires originaux",
+        ])
+    lines.extend([
+        "",
+        "-" * 70,
+        "COMMENT UTILISER CET ARCHIVE",
+        "-" * 70,
+        "",
+        "1. LECTURE EXCEL / LIBREOFFICE :",
+        "   - Tous les CSV sont encodes en UTF-8 avec BOM.",
+        "   - Ouvrez-les directement, les caracteres speciaux (e, e, e, ...) seront",
+        "     correctement affiches.",
+        "   - Le separateur est le point-virgule (;) - standard belge.",
+        "",
+        "2. IMPORTER DANS UN AUTRE LOGICIEL COMPTABLE :",
+        "   - Le fichier journal_entries.csv contient toutes les ecritures en",
+        "     double partie (colonnes debit et credit).",
+        "   - Il respecte le PCMN belge (arrete royal 21/10/2018).",
+        "   - Chaque ligne d'ecriture porte un account_number et un montant.",
+        "",
+        "3. ARCHIVER LEGALEMENT :",
+        "   - Conservez ce ZIP au moins 10 ans (obligation legale belge pour",
+        "     les documents comptables - art. III.86 CDE).",
+        "   - Les PDF (factures, extraits) sont les originaux non modifies.",
+        "",
+        "4. RESTAURER DANS COPROMANAGER (superadmin uniquement) :",
+        "   - Rendez-vous dans Plateforme > Sauvegardes ACP.",
+        "   - Cliquez sur 'Restaurer un ZIP' et selectionnez ce fichier.",
+        "",
+        "-" * 70,
+        "SUPPORT",
+        "-" * 70,
+        "",
+        "En cas de question : welcome@goodexperienceproperties.be",
+        "URL : https://immo-pcmn.emergent.host",
+        "",
+        "=" * 70,
+    ])
+    return "\n".join(lines)
+
+
+async def _append_original_documents(
+    db, zipf: "zipfile.ZipFile", year_prefix: str,
+    copropriete_id: str, start_date: str, end_date: str,
+) -> None:
+    """Ajoute au ZIP les PDF originaux (factures + extraits) de l'exercice
+    depuis GridFS (iter90bs).
+
+    Silencieux en cas d'erreur : la sauvegarde CSV est prioritaire, les
+    documents originaux sont un bonus. Les factures sans PDF (saisie
+    manuelle) sont simplement ignorees.
+    """
+    # Factures avec attachment_id
+    invs = await db.invoices.find({
+        "copropriete_id": copropriete_id,
+        "date": {"$gte": start_date, "$lte": end_date},
+        "attachments": {"$exists": True, "$ne": []},
+    }, {"_id": 0, "number": 1, "attachments": 1}).to_list(20000)
+    if invs:
+        try:
+            from gridfs_storage import GridFSStorage
+            storage = GridFSStorage(db, bucket_name="invoice_attachments")
+            for iv in invs:
+                inv_num = (iv.get("number") or "").replace("/", "_").replace(" ", "_")
+                for i, att in enumerate(iv.get("attachments") or []):
+                    file_id = att.get("id") if isinstance(att, dict) else att
+                    if not file_id:
+                        continue
+                    try:
+                        data = await storage.download(file_id)
+                        suffix = "" if i == 0 else f"-{i + 1}"
+                        zipf.writestr(
+                            f"{year_prefix}/documents/factures/{inv_num}{suffix}.pdf",
+                            data,
+                        )
+                    except Exception:
+                        pass  # facture sans pdf original ou grifs error -> skip
+        except Exception as e:  # noqa: BLE001
+            logger.warning("GridFS invoice_attachments indisponible : %s", e)
+
+    # Extraits bancaires avec source_file_id
+    stmts = await db.bank_statements.find({
+        "copropriete_id": copropriete_id,
+        "date": {"$gte": start_date, "$lte": end_date},
+        "source_file_id": {"$exists": True, "$ne": None, "$ne": ""},
+    }, {"_id": 0, "number": 1, "source_file_id": 1}).to_list(2000)
+    if stmts:
+        try:
+            from gridfs_storage import GridFSStorage
+            storage = GridFSStorage(db, bucket_name="bank_statement_sources")
+            for s in stmts:
+                stmt_num = (s.get("number") or "").replace("/", "_").replace(" ", "_")
+                try:
+                    data = await storage.download(s["source_file_id"])
+                    zipf.writestr(
+                        f"{year_prefix}/documents/extraits/{stmt_num}.pdf",
+                        data,
+                    )
+                except Exception:
+                    pass
+        except Exception as e:  # noqa: BLE001
+            logger.warning("GridFS bank_statement_sources indisponible : %s", e)

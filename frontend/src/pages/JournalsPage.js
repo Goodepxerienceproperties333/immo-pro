@@ -36,20 +36,42 @@ export default function JournalsPage() {
   const [form, setForm] = useState({ journal_type: 'OD', date: '', reference: '', description: '', lines: [{ account_number: '', account_name: '', debit: 0, credit: 0 }, { account_number: '', account_name: '', debit: 0, credit: 0 }] });
   const [pendingAttachment, setPendingAttachment] = useState(null);
   const [includeReversals, setIncludeReversals] = useState(false);
+  // iter90bt : filtres de recherche journal (periode, montant, tiers)
+  const [filters, setFilters] = useState({
+    date_from: '', date_to: '', search: '',
+    amount_min: '', amount_max: '', third_party_name: '',
+  });
   const fyParams = useFiscalYearParams();
 
   const load = useCallback(async () => {
+    // Compose les params : filtres locaux + defaut fiscal + journal type
+    const params = { journal_type: journalType, include_reversals: includeReversals, ...fyParams };
+    // Priorite aux filtres locaux (date/montant/tiers) s'ils sont remplis
+    if (filters.date_from) params.date_from = filters.date_from;
+    if (filters.date_to) params.date_to = filters.date_to;
+    if (filters.search.trim()) params.search = filters.search.trim();
+    if (filters.amount_min) params.amount_min = filters.amount_min;
+    if (filters.amount_max) params.amount_max = filters.amount_max;
+    if (filters.third_party_name.trim()) params.third_party_name = filters.third_party_name.trim();
     const [e, a, c] = await Promise.all([
-      api.get('/accounting/entries', { params: { journal_type: journalType, include_reversals: includeReversals, ...fyParams } }),
+      api.get('/accounting/entries', { params }),
       api.get('/accounting/pcmn'),
       api.get('/expense-categories').catch(() => ({ data: [] })),
     ]);
     setEntries(e.data);
     setAccounts(a.data);
     setCategories(c.data);
-  }, [journalType, includeReversals, fyParams.date_from, fyParams.date_to]);
+  }, [journalType, includeReversals, fyParams.date_from, fyParams.date_to,
+      filters.date_from, filters.date_to, filters.search,
+      filters.amount_min, filters.amount_max, filters.third_party_name]);
 
   useEffect(() => { load(); }, [load]);
+
+  const resetFilters = () => setFilters({
+    date_from: '', date_to: '', search: '',
+    amount_min: '', amount_max: '', third_party_name: '',
+  });
+  const hasActiveFilters = Object.values(filters).some(v => v && String(v).trim());
 
   const [editingEntry, setEditingEntry] = useState(null);
 
@@ -200,6 +222,87 @@ export default function JournalsPage() {
           </label>
         </div>
         <TabsContent value={journalType} className="mt-0">
+          {/* iter90bt : barre de filtres de recherche */}
+          <div className="bg-white rounded-2xl border border-slate-200/70 shadow-card p-3 mb-3 flex flex-wrap items-end gap-2" data-testid="journal-filters">
+            <div>
+              <label className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold block mb-1">Du</label>
+              <Input
+                type="date"
+                value={filters.date_from}
+                onChange={e => setFilters(f => ({ ...f, date_from: e.target.value }))}
+                className="w-36 h-9 text-xs"
+                data-testid="filter-date-from"
+              />
+            </div>
+            <div>
+              <label className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold block mb-1">Au</label>
+              <Input
+                type="date"
+                value={filters.date_to}
+                onChange={e => setFilters(f => ({ ...f, date_to: e.target.value }))}
+                className="w-36 h-9 text-xs"
+                data-testid="filter-date-to"
+              />
+            </div>
+            <div>
+              <label className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold block mb-1">Montant min</label>
+              <Input
+                type="number"
+                step="0.01"
+                value={filters.amount_min}
+                onChange={e => setFilters(f => ({ ...f, amount_min: e.target.value }))}
+                className="w-28 h-9 text-xs"
+                placeholder="0.00"
+                data-testid="filter-amount-min"
+              />
+            </div>
+            <div>
+              <label className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold block mb-1">Montant max</label>
+              <Input
+                type="number"
+                step="0.01"
+                value={filters.amount_max}
+                onChange={e => setFilters(f => ({ ...f, amount_max: e.target.value }))}
+                className="w-28 h-9 text-xs"
+                placeholder="9999.99"
+                data-testid="filter-amount-max"
+              />
+            </div>
+            <div className="flex-1 min-w-[180px]">
+              <label className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold block mb-1">Tiers (fournisseur / proprietaire)</label>
+              <Input
+                type="text"
+                value={filters.third_party_name}
+                onChange={e => setFilters(f => ({ ...f, third_party_name: e.target.value }))}
+                className="h-9 text-xs"
+                placeholder="Ex : Finlead, Dupont..."
+                data-testid="filter-third-party"
+              />
+            </div>
+            <div className="flex-1 min-w-[180px]">
+              <label className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold block mb-1">Recherche libre</label>
+              <Input
+                type="text"
+                value={filters.search}
+                onChange={e => setFilters(f => ({ ...f, search: e.target.value }))}
+                className="h-9 text-xs"
+                placeholder="Reference, description, compte..."
+                data-testid="filter-search"
+              />
+            </div>
+            {hasActiveFilters && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={resetFilters}
+                className="h-9 text-xs"
+                data-testid="filter-reset"
+              >
+                Reinitialiser
+              </Button>
+            )}
+          </div>
+
           <div className="bg-white rounded-md border border-slate-200 overflow-hidden">
             <Table>
               <TableHeader><TableRow>

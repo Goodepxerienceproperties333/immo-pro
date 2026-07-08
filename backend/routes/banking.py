@@ -1676,6 +1676,26 @@ def create_banking_router(db):
                     "error": "Volume total depasse (100 MB max par upload)",
                 })
                 continue
+
+            # iter90bu : anti-doublon par hash SHA-256 du contenu du fichier.
+            # Detecte les re-imports EXACTS (meme PDF/CSV importe 2 fois).
+            import hashlib as _hl
+            content_hash = _hl.sha256(content).hexdigest()
+            existing_by_hash = await db.bank_statements.find_one(
+                {"copropriete_id": copropriete_id, "content_hash": content_hash},
+                {"_id": 0, "id": 1, "number": 1, "date": 1},
+            )
+            if existing_by_hash:
+                results.append({
+                    "filename": fname, "status": "duplicate",
+                    "error": (
+                        f"Extrait deja importe (fichier identique) : "
+                        f"extrait '{existing_by_hash.get('number','?')}' "
+                        f"du {existing_by_hash.get('date','?')}."
+                    ),
+                    "existing_statement_id": existing_by_hash.get("id"),
+                })
+                continue
             # Content-type sniffing : verifier magic bytes / texte imprimable
             is_pdf = content[:5] == b"%PDF-"
             lower_name = fname.lower()
@@ -1719,6 +1739,7 @@ def create_banking_router(db):
             prepared.append({
                 "fname": fname, "mime": mime, "content": content,
                 "tmp_path": tmp_path, "gid": gid,
+                "content_hash": content_hash,
             })
 
         # Phase 2 : extraction IA en parallele (max 5 concurrent)
@@ -1779,21 +1800,53 @@ def create_banking_router(db):
             stmt_id = str(uuid.uuid4())
             period_from = extracted.get("period_from") or txns_data[0].get("date", "")
             period_to = extracted.get("period_to") or txns_data[-1].get("date", "")
+            account_number = extracted.get("account_number") or ""
+            closing_balance = float(extracted.get("closing_balance") or 0)
+
+            # iter90bu : check secondaire (fichier different mais MEME extrait) :
+            # meme (ACP, IBAN, periode, closing_balance) -> tres probablement
+            # le meme extrait re-genere par la banque a un autre format.
+            if period_from and period_to and account_number:
+                dup = await db.bank_statements.find_one({
+                    "copropriete_id": copropriete_id,
+                    "account_number": account_number,
+                    "period_from": period_from,
+                    "period_to": period_to,
+                    "closing_balance": closing_balance,
+                }, {"_id": 0, "id": 1, "number": 1, "date": 1})
+                if dup:
+                    try:
+                        await storage.delete(gid)
+                    except Exception:
+                        pass
+                    results.append({
+                        "filename": fname, "status": "duplicate",
+                        "error": (
+                            f"Extrait deja importe (meme IBAN, meme periode "
+                            f"{period_from} -> {period_to}, meme solde final "
+                            f"{closing_balance:.2f} EUR) : extrait "
+                            f"'{dup.get('number','?')}' du {dup.get('date','?')}."
+                        ),
+                        "existing_statement_id": dup.get("id"),
+                    })
+                    continue
+
             stmt_doc = {
                 "id": stmt_id,
                 "number": f"IMP-{fname[:30]}",
                 "date": period_to or datetime.now(timezone.utc).strftime("%Y-%m-%d"),
                 "period_from": period_from,
                 "period_to": period_to,
-                "account_number": extracted.get("account_number") or "",
+                "account_number": account_number,
                 "opening_balance": float(extracted.get("opening_balance") or 0),
-                "closing_balance": float(extracted.get("closing_balance") or 0),
+                "closing_balance": closing_balance,
                 "status": "draft",
                 "source": "PDF" if fname.lower().endswith(".pdf") else "CSV",
                 "source_extraction_method": extracted.get("extraction_method", ""),
                 "source_file_id": gid,
                 "source_file_name": fname,
                 "filename": fname,
+                "content_hash": job.get("content_hash"),  # iter90bu
                 "warnings": extracted.get("warnings", []),
                 "copropriete_id": copropriete_id,
                 "created_at": datetime.now(timezone.utc).isoformat(),
@@ -1866,6 +1919,7 @@ def create_banking_router(db):
     # ---- CODA IMPORT (legacy) ----
     async def import_coda(file: UploadFile = File(...), copropriete_id: Optional[str] = Form("")):
         from coda_parser import parse_coda_file
+        import hashlib as _hl
 
         content = await file.read()
         text = content.decode("latin-1")
@@ -1875,20 +1929,55 @@ def create_banking_router(db):
         except Exception as e:
             raise HTTPException(400, f"Erreur de parsing CODA: {str(e)}")
 
+        # iter90bu : anti-doublon CODA (hash SHA-256 + (ACP, IBAN, periode, solde))
+        content_hash = _hl.sha256(content).hexdigest()
+        if copropriete_id:
+            dup_by_hash = await db.bank_statements.find_one(
+                {"copropriete_id": copropriete_id, "content_hash": content_hash},
+                {"_id": 0, "id": 1, "number": 1, "date": 1},
+            )
+            if dup_by_hash:
+                raise HTTPException(
+                    409,
+                    f"CODA deja importe (fichier identique) : extrait "
+                    f"'{dup_by_hash.get('number','?')}' du "
+                    f"{dup_by_hash.get('date','?')}.",
+                )
+
         # Create statement
         stmt_id = str(uuid.uuid4())
         old_bal = parsed.get("old_balance", {})
         new_bal = parsed.get("new_balance", {})
+        account_num = old_bal.get("account_number", "")
+        closing_bal = new_bal.get("balance", 0)
+        stmt_date = new_bal.get("date", old_bal.get("date", datetime.now(timezone.utc).strftime("%Y-%m-%d")))
+
+        # iter90bu : check secondaire (meme IBAN + meme periode + meme solde final)
+        if copropriete_id and account_num and stmt_date:
+            dup2 = await db.bank_statements.find_one({
+                "copropriete_id": copropriete_id,
+                "account_number": account_num,
+                "date": stmt_date,
+                "closing_balance": closing_bal,
+            }, {"_id": 0, "id": 1, "number": 1})
+            if dup2:
+                raise HTTPException(
+                    409,
+                    f"CODA deja importe (meme IBAN, meme date {stmt_date}, "
+                    f"meme solde final {closing_bal:.2f} EUR) : extrait "
+                    f"'{dup2.get('number','?')}'.",
+                )
 
         statement = {
             "id": stmt_id,
             "number": old_bal.get("statement_number", ""),
-            "date": new_bal.get("date", old_bal.get("date", datetime.now(timezone.utc).strftime("%Y-%m-%d"))),
-            "account_number": old_bal.get("account_number", ""),
+            "date": stmt_date,
+            "account_number": account_num,
             "opening_balance": old_bal.get("balance", 0),
-            "closing_balance": new_bal.get("balance", 0),
+            "closing_balance": closing_bal,
             "source": "CODA",
             "filename": file.filename,
+            "content_hash": content_hash,  # iter90bu
             "copropriete_id": copropriete_id or "",
             "created_at": datetime.now(timezone.utc).isoformat()
         }
@@ -2069,6 +2158,25 @@ def create_banking_router(db):
                 f"Ce fichier CODA a deja ete importe (extrait {existing.get('number','?')} "
                 f"du {(existing.get('created_at','') or '')[:10]}). Suppression requise avant re-import."
             )
+
+        # iter90bu : check secondaire (meme IBAN, meme date, meme solde final)
+        #  -> capte le cas ou l'utilisateur re-telecharge le meme extrait
+        #  chez sa banque mais avec un fichier physiquement different.
+        if data.account_number and data.statement_date:
+            dup2 = await db.bank_statements.find_one({
+                "copropriete_id": data.copropriete_id,
+                "account_number": data.account_number,
+                "date": data.statement_date,
+                "closing_balance": float(data.closing_balance or 0),
+            }, {"_id": 0, "id": 1, "number": 1})
+            if dup2:
+                raise HTTPException(
+                    409,
+                    f"Extrait deja importe (meme IBAN, meme date "
+                    f"{data.statement_date}, meme solde final "
+                    f"{float(data.closing_balance or 0):.2f} EUR) : extrait "
+                    f"'{dup2.get('number','?')}'."
+                )
 
         stmt_id = str(uuid.uuid4())
         statement = {

@@ -186,6 +186,11 @@ def create_accounting_router(db):
         search: Optional[str] = None,
         reference: Optional[str] = None,
         account_number: Optional[str] = None,
+        # iter90bt : nouveaux filtres pour retrouver rapidement des mouvements
+        amount_min: Optional[float] = None,
+        amount_max: Optional[float] = None,
+        third_party_id: Optional[str] = None,
+        third_party_name: Optional[str] = None,
         include_reversals: Optional[bool] = False,
     ):
         """Chinese walls STRICT : `copropriete_id` requis (param ou header
@@ -194,6 +199,12 @@ def create_accounting_router(db):
         Par defaut, masque les ecritures contre-passees ET les contre-passations
         (vue 'active' uniquement). Avec `include_reversals=true` : retourne
         TOUTES les ecritures, marquees par les champs `reversed` / `is_reversal`.
+
+        Filtres iter90bt :
+          - amount_min / amount_max : filtre sur les LIGNES (debit OU credit
+            d'une ligne au moins doit tomber dans la fourchette).
+          - third_party_id : match exact sur lines.third_party_id
+          - third_party_name : match regex insensible sur lines.third_party_name
         """
         if not copropriete_id:
             copropriete_id = request.headers.get("X-Copropriete-Id") or None
@@ -215,6 +226,32 @@ def create_accounting_router(db):
             query["$or"] = [{"description": rgx}, {"reference": rgx}, {"lines.account_name": rgx}, {"lines.third_party_name": rgx}]
         if account_number:
             query["lines.account_number"] = account_number
+        # iter90bt : filtre tiers exact ou par nom
+        if third_party_id:
+            query["lines.third_party_id"] = third_party_id
+        if third_party_name:
+            import re as _re3
+            query["lines.third_party_name"] = {
+                "$regex": _re3.escape(third_party_name), "$options": "i",
+            }
+        # iter90bt : filtre montant (au moins une ligne dans la fourchette).
+        # On combine debit + credit pour couvrir les 2 sens comptables.
+        if amount_min is not None or amount_max is not None:
+            amt_conds = []
+            for side in ("debit", "credit"):
+                cond: dict = {}
+                if amount_min is not None:
+                    cond["$gte"] = float(amount_min)
+                if amount_max is not None:
+                    cond["$lte"] = float(amount_max)
+                amt_conds.append({f"lines.{side}": cond})
+            # $or dans le contexte des lignes : une ligne avec debit dans la
+            # fourchette OU credit dans la fourchette suffit
+            existing_or = query.pop("$or", None)
+            if existing_or:
+                query["$and"] = [{"$or": existing_or}, {"$or": amt_conds}]
+            else:
+                query["$or"] = amt_conds
         # Filtre contre-passations
         if not include_reversals:
             query["reversed"] = {"$ne": True}
