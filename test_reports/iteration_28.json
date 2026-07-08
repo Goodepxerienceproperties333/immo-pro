@@ -37,7 +37,7 @@
     "backend": "100% (5/5) sur les nouveautes lettrage/unlettrage iter28",
     "frontend": "CounterpartySearchSelect + auto-libelle 'Votre paiement au DATE' valides en mode inline; edit mode non aligne (mineur)"
   },
-  "test_credentials": "admin@copro.be / admin123 ; ACP_ID=6748ca1a-216d-4002-8417-799287238736 ; STATEMENT_ID=e02fc9d5-93ae-42be-bb69-48235f648e2b ; OWNER Dubois Jean=f01f889d-1057-4b15-91a1-ca3a869ccabe",
+  "test_credentials": "admin@copro.be / admin123 ; ACP_ID=gestion-immo-pcmn ; STATEMENT_ID=gestion-immo-pcmn ; OWNER Dubois Jean=gestion-immo-pcmn",
   "seed_data_creation": "4 factures TEST_Lettrage creees + 4 transactions creees pendant les tests, toutes supprimees en teardown (try/finally). Restauration manuelle du lettrage Dubois Jean -> e657e00d... (impacte UI) effectuee via curl apres test de l'icone lettrage. Aucun residu en base.",
   "retest_needed": false,
   "main_agent_can_self_test": true,

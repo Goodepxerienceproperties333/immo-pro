@@ -38,7 +38,7 @@
     "backend": "100% (11/11) sur les nouveautes iter27",
     "frontend": "Decomptes warning OK; Budget dialog OK; Banking CounterpartySearchSelect non teste runtime (pas d'extrait dispo)"
   },
-  "test_credentials": "admin@copro.be / admin123 ; ACP_ID=6748ca1a-216d-4002-8417-799287238736 ; OWNER_ID=f01f889d-1057-4b15-91a1-ca3a869ccabe (Dubois Jean)",
+  "test_credentials": "admin@copro.be / admin123 ; ACP_ID=gestion-immo-pcmn ; OWNER_ID=gestion-immo-pcmn (Dubois Jean)",
   "seed_data_creation": "3 factures TEST_priv creees puis supprimees (cascade auto-entries). Aucun residu en base.",
   "retest_needed": false,
   "main_agent_can_self_test": true,
