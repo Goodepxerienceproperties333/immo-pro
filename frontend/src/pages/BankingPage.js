@@ -306,21 +306,47 @@ export default function BankingPage() {
   const openLettrage = (txn) => { setLettrageTarget(txn); setLettrageDialog(true); setLookupQuery(''); setSelectedInvoiceIds(new Set()); };
   const doLettrage = async (id, type) => { try { await api.post('/banking/lettrage', { transaction_id: lettrageTarget.id, match_to_id: id, match_type: type }); toast.success('Lettre'); setLettrageDialog(false); if (selectedStmt) loadStmtTxns(selectedStmt); else load(); } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); } };
   const unlettrage = async (id) => {
-    await api.post(`/banking/unlettrage/${id}`);
-    toast.success('Delettrage');
-    // iter90bj : toujours recharger les invoices pour refleter le nouveau
-    // statut dans le dialog de lettrage (sinon les cartes gardent "PAYE").
-    if (selectedStmt) await loadStmtTxns(selectedStmt);
-    await load();
+    // iter90cl : optimistic patch au lieu de load() full reload pour perf batch.
+    try {
+      const { data } = await api.post(`/banking/unlettrage/${id}`);
+      toast.success('Delettrage');
+      // Patch local du transaction dans les listes
+      const patchTxn = (t) => (
+        t.id === id
+          ? { ...t, matched: false, matched_to: '', match_type: '',
+              lettrage_code: undefined, lettrage_at: undefined }
+          : t
+      );
+      setTransactions(prev => prev.map(patchTxn));
+      // Patch de la facture concernee (si delettrage etait sur invoice)
+      if (data.invoice) {
+        setInvoices(prev => prev.map(inv =>
+          inv.id === data.invoice.id ? { ...inv, ...data.invoice } : inv
+        ));
+      }
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur delettrage');
+    }
   };
   const unlettrageByInvoice = async (invId) => {
     try {
-      await api.post(`/banking/unlettrage-by-invoice/${invId}`);
+      const { data } = await api.post(`/banking/unlettrage-by-invoice/${invId}`);
       toast.success('Facture delettree');
-      if (selectedStmt) await loadStmtTxns(selectedStmt);
-      // iter90bj : toujours recharger les invoices (source de verite du
-      // dialog de lettrage) meme si un statement est selectionne.
-      await load();
+      // iter90cl : patch local des txns delettrees + facture
+      const ids = new Set((data.transactions || []).map(t => t.id));
+      if (ids.size) {
+        setTransactions(prev => prev.map(t =>
+          ids.has(t.id)
+            ? { ...t, matched: false, matched_to: '', match_type: '',
+                lettrage_code: undefined, lettrage_at: undefined }
+            : t
+        ));
+      }
+      if (data.invoice) {
+        setInvoices(prev => prev.map(inv =>
+          inv.id === data.invoice.id ? { ...inv, ...data.invoice } : inv
+        ));
+      }
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Erreur');
     }

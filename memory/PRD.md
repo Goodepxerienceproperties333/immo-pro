@@ -12,6 +12,37 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 
+### Iter90cl (Feb 2026) - Delettrage sans reload d'ecran (workflow batch)
+
+**Ticket utilisateur (video)** : "lors du delettrage l'ecran se recharge et
+ralenti le travail en batch, eviter le rechargement de l'ecran"
+
+**Symptome** : cliquer sur le bouton delettrage (Unlink orange) declenchait
+un appel `load()` qui rechargait 8-9 endpoints (statements, transactions,
+owners, invoices, suppliers, categories, keys, PCMN, copropriete). Le batch
+delettrage de N transactions = N * 9 requetes GET + N re-renders complets.
+
+**Fix (backend + frontend)** :
+
+**Backend (`banking.py`)** :
+- `POST /banking/unlettrage/{txn_id}` : retourne desormais `transaction`
+  (doc mis a jour) + `invoice` (doc de la facture affectee si applicable) +
+  `was_matched_to` / `was_match_type`.
+- `POST /banking/unlettrage-by-invoice/{invoice_id}` : retourne `transactions`
+  (liste des txns mises a jour) + `invoice` (doc final).
+
+**Frontend (`BankingPage.js`)** :
+- `unlettrage(id)` : ne fait plus `await load()`. Applique optimistic patch
+  local : `setTransactions(prev => prev.map(t => t.id===id ? {...t, matched:false, ...} : t))`.
+  Si la reponse contient `invoice`, applique aussi `setInvoices(prev => ...)`.
+- `unlettrageByInvoice(invId)` : idem, patch en masse des txns delettrees
+  via `Set` d'IDs.
+
+**Impact** : delettrage instantane (1 requete au lieu de 10, pas de scroll
+reset, pas de perte de focus). Batch delettrage de N transactions = N
+requetes GET seulement (au lieu de N * 9).
+
+
 ### Iter90ck (Feb 2026) - Backfill retroactif OD MUT-R lors de la generation d'appels post-mutation
 
 **Ticket utilisateur (Acacia)** :

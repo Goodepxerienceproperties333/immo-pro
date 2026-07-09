@@ -1143,7 +1143,21 @@ def create_banking_router(db):
                         await generate_bank_entry(db, fresh)
         except Exception as e:
             print(f"[unlettrage] regen FI failed: {e}")
-        return {"message": "Lettrage annule"}
+        # iter90cl : retourne les docs mis a jour pour permettre au frontend
+        # de patcher le state sans reload complet (perf batch delettrage).
+        updated_txn = await db.bank_transactions.find_one({"id": txn_id}, {"_id": 0})
+        updated_invoice = None
+        if prev and prev.get("match_type") == "invoice" and prev.get("matched_to"):
+            updated_invoice = await db.invoices.find_one(
+                {"id": prev["matched_to"]}, {"_id": 0}
+            )
+        return {
+            "message": "Lettrage annule",
+            "transaction": updated_txn,
+            "invoice": updated_invoice,
+            "was_matched_to": prev.get("matched_to") if prev else None,
+            "was_match_type": prev.get("match_type") if prev else None,
+        }
 
     class RelettrageInput(BaseModel):
         new_invoice_id: str
@@ -1383,11 +1397,20 @@ def create_banking_router(db):
                         "lettrage_code": ""}}
         )
 
+        # iter90cl : retourne les docs mis a jour + count pour permettre au
+        # frontend de patcher le state sans reload complet (perf batch).
+        updated_txns = await db.bank_transactions.find(
+            {"id": {"$in": [t["id"] for t in txns]}}, {"_id": 0},
+        ).to_list(100) if txns else []
+        updated_invoice = await db.invoices.find_one({"id": invoice_id}, {"_id": 0})
+
         if txns:
             return {
                 "message": f"{len(txns)} transaction(s) delettree(s)",
                 "count": len(txns),
                 "manual_reset": False,
+                "transactions": updated_txns,
+                "invoice": updated_invoice,
             }
         if was_paid:
             return {
@@ -1395,12 +1418,16 @@ def create_banking_router(db):
                             "bancaire trouve - paiement manuel ou import legacy)"),
                 "count": 0,
                 "manual_reset": True,
+                "transactions": [],
+                "invoice": updated_invoice,
             }
         # Facture deja unpaid + aucun lettrage : rien a faire
         return {
             "message": "Facture deja non lettree, aucune action necessaire",
             "count": 0,
             "manual_reset": False,
+            "transactions": [],
+            "invoice": updated_invoice,
         }
 
     # ---- CATEGORIZATION (iter90k) ----
