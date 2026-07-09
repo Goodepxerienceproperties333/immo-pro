@@ -12,6 +12,51 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 
+### Iter90cm (Feb 2026) - Audit ownership: diagnostic pour identifier les lots problematiques
+
+**Ticket utilisateur (ACP Acacia)** : ecart systematique de 3.6% (360/10000 quotites)
+entre CoproManager (1446 EUR reserve pour Matexi) et Optipro (1500 EUR attendu).
+L'utilisateur confirme "Matexi est proprietaire de l'integralite des lots au
+01.10.2025" -> l'ecart provient d'une anomalie structurelle dans les cles de
+repartition ou l'historique des mutations, pas d'un lot mal attribue.
+
+**Fix (diagnostic tool)** :
+
+**Endpoint** `GET /api/lots/ownership-audit`
+Query params :
+- `copropriete_id` (req)
+- `at_date` (ISO YYYY-MM-DD, defaut = today)
+- `founder_owner_id` (optionnel : id du fondateur attendu)
+
+Retourne :
+1. **Global gap analysis** : `total_quotity_expected_founder` vs
+   `total_quotity_actual_founder` + `gap_quotity` (le trou en quotites).
+2. **Keys audit** : pour chaque cle de repartition :
+   - `total_share_active` (somme des shares non exclues)
+   - `phantom_share` (entrees dont lot_id n'existe pas en DB)
+   - `orphan_share` (lot existe mais owner_id vide)
+   - `valid_share` (entrees correctes)
+   - `sums_to_10000` (bool : total = 10000 ?)
+   - `structural_anomaly` (bool : phantom OR orphan > 0)
+3. **Flagged lots** : liste des lots dont owner-at-date != founder OR
+   pas d'historique founder.
+4. **Detail complet** de chaque lot : owner actuel, owner-at-date, mutations,
+   shares par cle.
+
+**Frontend `LotsPage.js`** :
+- Bouton "Audit ownership" (icone ClipboardCheck) dans le header
+- Modal avec form (date cible + selection fondateur) + affichage :
+  - Bloc gap (rouge/vert selon ecart)
+  - Tableau audit cles avec highlight anomalies
+  - Tableau lots flagues (fond rouge)
+  - Details tous lots en <details> collapsible
+
+**Utilisation Acacia** : selectionner ACP Acacia, ouvrir modal, date=2025-10-01,
+fondateur=Matexi -> voir immediatement quelles cles ont phantom/orphan entries
+qui volent 360 quotites a Matexi, OU quels lots specifiques ont owner_id !=
+Matexi sans mutation retracable.
+
+
 ### Iter90cl (Feb 2026) - Delettrage sans reload d'ecran (workflow batch)
 
 **Ticket utilisateur (video)** : "lors du delettrage l'ecran se recharge et

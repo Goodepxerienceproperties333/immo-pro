@@ -7,7 +7,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { Plus, Pencil, Trash2, Search, X, ArrowRightLeft, UserPlus, Link2, Link2Off, FileDown } from 'lucide-react';
+import { Plus, Pencil, Trash2, Search, X, ArrowRightLeft, UserPlus, Link2, Link2Off, FileDown, ClipboardCheck } from 'lucide-react';
 import { fmtDate } from '@/lib/dateFmt';
 
 const LOT_TYPES = [
@@ -853,6 +853,27 @@ export default function LotsPage() {
     load();
   };
 
+  // iter90cm : Audit ownership diagnostic (identifie les lots dont l'ownership
+  // resolu a une date cible != owner attendu, + audit des cles de repartition).
+  const [auditOpen, setAuditOpen] = useState(false);
+  const [auditAt, setAuditAt] = useState(new Date().toISOString().slice(0, 10));
+  const [auditFounderId, setAuditFounderId] = useState('');
+  const [auditResult, setAuditResult] = useState(null);
+  const [auditLoading, setAuditLoading] = useState(false);
+  const runAudit = async () => {
+    const coproId = localStorage.getItem('selectedCopro') || localStorage.getItem('copropriete_id') || '';
+    if (!coproId) { toast.error('Selectionnez une copropriete'); return; }
+    setAuditLoading(true); setAuditResult(null);
+    try {
+      const { data } = await api.get('/lots/ownership-audit', {
+        params: { copropriete_id: coproId, at_date: auditAt, founder_owner_id: auditFounderId || undefined },
+      });
+      setAuditResult(data);
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur audit');
+    } finally { setAuditLoading(false); }
+  };
+
   return (
     <div data-testid="lots-page">
       <div className="page-header flex items-center justify-between">
@@ -860,9 +881,14 @@ export default function LotsPage() {
           <h1 className="page-title">Lots</h1>
           <p className="page-subtitle">Gestion des lots de la copropriete</p>
         </div>
-        <Button onClick={openCreate} className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="create-lot-btn">
-          <Plus size={16} className="mr-2" /> Nouveau lot
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => { setAuditOpen(true); setAuditResult(null); }} data-testid="audit-ownership-btn" title="Diagnostiquer l'ownership des lots a une date donnee">
+            <ClipboardCheck size={16} className="mr-2" /> Audit ownership
+          </Button>
+          <Button onClick={openCreate} className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="create-lot-btn">
+            <Plus size={16} className="mr-2" /> Nouveau lot
+          </Button>
+        </div>
       </div>
 
       <div className="mb-4 relative max-w-sm">
@@ -1042,6 +1068,126 @@ export default function LotsPage() {
           onDone={() => { load(); }}
         />
       )}
+
+      {/* iter90cm : Audit ownership dialog */}
+      <Dialog open={auditOpen} onOpenChange={setAuditOpen}>
+        <DialogContent className="max-w-5xl w-[min(95vw,1100px)] max-h-[85vh] overflow-y-auto" data-testid="audit-ownership-dialog">
+          <DialogHeader>
+            <DialogTitle style={{fontFamily:'Chivo,sans-serif'}}>Audit ownership - Diagnostic clés & mutations</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 mt-2">
+            <div className="grid grid-cols-3 gap-3 items-end">
+              <div>
+                <label className="form-label">Date cible</label>
+                <Input type="date" value={auditAt} onChange={e => setAuditAt(e.target.value)} data-testid="audit-date" />
+              </div>
+              <div>
+                <label className="form-label">Propriétaire attendu (fondateur/promoteur)</label>
+                <select
+                  className="w-full border border-slate-200 rounded-md px-3 py-2 text-sm bg-white"
+                  value={auditFounderId}
+                  onChange={e => setAuditFounderId(e.target.value)}
+                  data-testid="audit-founder"
+                >
+                  <option value="">-- Sélectionner --</option>
+                  {owners.map(o => (<option key={o.id} value={o.id}>{o.name}</option>))}
+                </select>
+              </div>
+              <Button onClick={runAudit} disabled={auditLoading} className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="audit-run-btn">
+                {auditLoading ? 'Analyse...' : 'Lancer l\'audit'}
+              </Button>
+            </div>
+            {auditResult && (
+              <div className="space-y-4">
+                {/* Bloc gap */}
+                {auditFounderId && (
+                  <div className={`rounded-md border-2 p-3 ${auditResult.gap_quotity > 0.01 ? 'border-red-300 bg-red-50' : 'border-green-300 bg-green-50'}`}>
+                    <div className="text-xs font-semibold mb-1">Quote-part {auditResult.founder_owner_name} à {auditResult.at_date}</div>
+                    <div className="grid grid-cols-4 gap-3 text-sm">
+                      <div><span className="text-slate-500">Attendu</span><div className="font-mono font-bold">{auditResult.total_quotity_expected_founder}</div></div>
+                      <div><span className="text-slate-500">Effectif</span><div className="font-mono font-bold">{auditResult.total_quotity_actual_founder}</div></div>
+                      <div><span className="text-slate-500">Écart</span><div className={`font-mono font-bold ${auditResult.gap_quotity > 0.01 ? 'text-red-600' : 'text-green-600'}`}>{auditResult.gap_quotity}</div></div>
+                      <div><span className="text-slate-500">Lots flagués</span><div className="font-mono font-bold">{auditResult.flagged_count}</div></div>
+                    </div>
+                  </div>
+                )}
+                {/* Bloc audit clés */}
+                <div>
+                  <div className="text-sm font-semibold mb-2">Audit clés de répartition</div>
+                  <table className="w-full text-xs">
+                    <thead><tr className="border-b bg-slate-50">
+                      <th className="text-left py-1 px-2">Clé</th>
+                      <th className="text-right py-1 px-2">Total</th>
+                      <th className="text-right py-1 px-2">Valide</th>
+                      <th className="text-right py-1 px-2">Phantom</th>
+                      <th className="text-right py-1 px-2">Orphelin</th>
+                      <th className="text-center py-1 px-2">10000 ?</th>
+                    </tr></thead>
+                    <tbody>
+                      {(auditResult.keys_audit || []).map(k => (
+                        <tr key={k.key_id} className={`border-b ${k.structural_anomaly ? 'bg-amber-50' : ''}`}>
+                          <td className="py-1 px-2">{k.key_name}{k.is_default ? ' (défaut)' : ''}</td>
+                          <td className="text-right font-mono">{k.total_share_active}</td>
+                          <td className="text-right font-mono text-green-700">{k.valid_share}</td>
+                          <td className={`text-right font-mono ${k.phantom_share > 0 ? 'text-red-600 font-bold' : ''}`}>{k.phantom_share}</td>
+                          <td className={`text-right font-mono ${k.orphan_share > 0 ? 'text-amber-600 font-bold' : ''}`}>{k.orphan_share}</td>
+                          <td className="text-center">{k.sums_to_10000 ? '✓' : '✗'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {/* Bloc lots flagués */}
+                {(auditResult.flagged_lots || []).length > 0 && (
+                  <div>
+                    <div className="text-sm font-semibold mb-2 text-red-700">Lots dont l&apos;ownership résolu ≠ propriétaire attendu</div>
+                    <table className="w-full text-xs">
+                      <thead><tr className="border-b bg-red-50">
+                        <th className="text-left py-1 px-2">N° lot</th>
+                        <th className="text-left py-1 px-2">Propriétaire actuel</th>
+                        <th className="text-right py-1 px-2">Quote-part défaut</th>
+                      </tr></thead>
+                      <tbody>
+                        {auditResult.flagged_lots.map(f => (
+                          <tr key={f.lot_id} className="border-b">
+                            <td className="py-1 px-2 font-medium">{f.lot_number}</td>
+                            <td className="py-1 px-2">{f.current_owner_name}</td>
+                            <td className="text-right font-mono">{f.default_key_share}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+                {/* Détail lots */}
+                <details>
+                  <summary className="text-sm font-semibold cursor-pointer">Détail tous les lots ({auditResult.total_lots})</summary>
+                  <table className="w-full text-xs mt-2">
+                    <thead><tr className="border-b bg-slate-50">
+                      <th className="text-left py-1 px-2">N°</th>
+                      <th className="text-left py-1 px-2">Propriétaire actuel</th>
+                      <th className="text-left py-1 px-2">Propriétaire à date</th>
+                      <th className="text-right py-1 px-2">Nb mutations</th>
+                      <th className="text-center py-1 px-2">Historique fondateur</th>
+                    </tr></thead>
+                    <tbody>
+                      {(auditResult.lots || []).map(l => (
+                        <tr key={l.lot_id} className={`border-b ${l.flagged ? 'bg-red-50' : ''}`}>
+                          <td className="py-1 px-2 font-medium">{l.lot_number}</td>
+                          <td className="py-1 px-2">{l.current_owner_name}</td>
+                          <td className="py-1 px-2">{l.owner_at_date_name}</td>
+                          <td className="text-right font-mono">{l.mutations.length}</td>
+                          <td className="text-center">{auditFounderId ? (l.has_founder_history ? '✓' : '✗') : '-'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </details>
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -619,28 +619,13 @@ def create_properties_router(db):
     ):
         """iter90cm : Diagnostic pour identifier les lots dont l'ownership ne
         remonte pas a un proprietaire donne (fondateur/promoteur) a une date
-        cible. Utile pour comprendre l'ecart 3.6% Acacia (360/10000 quotites
-        allouees a un owner phantom au lieu de Matexi).
+        cible + audit COMPLET des cles de repartition (entrees phantom,
+        totaux, orphelins).
 
         Query params :
         - copropriete_id : ACP a auditer (obligatoire)
         - at_date : date cible ISO YYYY-MM-DD (defaut = aujourd'hui)
         - founder_owner_id : id du proprietaire fondateur attendu (optionnel)
-
-        Retourne pour chaque lot :
-        - lot_id, lot_number, quotity, current_owner (+ nom)
-        - mutations : historique complet (from -> to + date)
-        - owner_at_date : proprietaire calcule a `at_date` (via traversee mutations)
-        - flagged : true si l'ownership a `at_date` != founder_owner_id
-                    OU si le lot n'a jamais eu founder_owner_id dans son historique
-        - per_key : share du lot dans chaque cle de repartition
-
-        Egalement un aggregate global :
-        - total_quotity_expected_founder : somme des quotites qui DEVRAIENT etre
-          rebound au founder_owner_id a at_date
-        - total_quotity_actual_founder : somme des quotites effectivement resolue
-          au founder_owner_id via _resolve_owner_at_date
-        - gap : difference (permet d'identifier immediatement l'ecart)
         """
         is_super, allowed_copros = await _get_user_scope(request)
         if not is_super and copropriete_id not in (allowed_copros or []):
@@ -656,6 +641,7 @@ def create_properties_router(db):
         lots = await db.lots.find(
             {"copropriete_id": copropriete_id}, {"_id": 0},
         ).sort("number", 1).to_list(5000)
+        lots_by_id = {lt["id"]: lt for lt in lots}
         owners = await db.owners.find(
             {"copropriete_ids": copropriete_id}, {"_id": 0},
         ).to_list(5000)
@@ -663,6 +649,67 @@ def create_properties_router(db):
         keys = await db.distribution_keys.find(
             {"copropriete_id": copropriete_id}, {"_id": 0},
         ).to_list(1000)
+
+        # --- Audit des cles de repartition ---
+        # iter90cm : detecte les anomalies structurelles qui provoquent des
+        # ecarts de calcul lors de la distribution (ex : gap 3.6% Acacia).
+        keys_audit = []
+        for k in keys:
+            key_lots = k.get("lots") or []
+            active_kls = [kl for kl in key_lots if not kl.get("excluded")]
+            total_share_active = sum(float(kl.get("share", 0) or 0) for kl in active_kls)
+
+            phantom_entries = []   # lot_id ne correspond a aucun lot en DB
+            orphan_entries = []    # lot existe mais owner_id vide
+            valid_entries = []     # lot existe + owner assigne
+            for kl in active_kls:
+                lid = kl.get("lot_id")
+                share = float(kl.get("share", 0) or 0)
+                if not lid:
+                    continue
+                lot = lots_by_id.get(lid)
+                if not lot:
+                    phantom_entries.append({
+                        "lot_id": lid,
+                        "share": share,
+                        "note": "Lot inexistant en DB (phantom entry)",
+                    })
+                    continue
+                if not lot.get("owner_id"):
+                    orphan_entries.append({
+                        "lot_id": lid,
+                        "lot_number": lot.get("number", ""),
+                        "share": share,
+                        "note": "Lot existe mais owner_id vide",
+                    })
+                    continue
+                valid_entries.append({
+                    "lot_id": lid,
+                    "lot_number": lot.get("number", ""),
+                    "share": share,
+                    "owner_id": lot["owner_id"],
+                    "owner_name": owners_map.get(lot["owner_id"], {}).get("name", ""),
+                })
+            phantom_total = round(sum(e["share"] for e in phantom_entries), 4)
+            orphan_total = round(sum(e["share"] for e in orphan_entries), 4)
+            valid_total = round(sum(e["share"] for e in valid_entries), 4)
+            keys_audit.append({
+                "key_id": k["id"],
+                "key_name": k.get("name", ""),
+                "is_default": bool(k.get("is_default", False)),
+                "total_entries": len(active_kls),
+                "total_share_active": round(total_share_active, 4),
+                "phantom_share": phantom_total,
+                "phantom_entries": phantom_entries,
+                "orphan_share": orphan_total,
+                "orphan_entries": orphan_entries,
+                "valid_share": valid_total,
+                # Anomalie majeure : phantom OU orphan provoque un ecart dans
+                # la distribution car _distribute_amount les exclut du calcul.
+                "structural_anomaly": phantom_total > 0 or orphan_total > 0,
+                "sums_to_10000": abs(total_share_active - 10000) < 0.01,
+            })
+
         # Map lot_id -> {key_id: share} pour audit rapide par lot
         lot_shares_by_key: dict = {}
         for k in keys:
@@ -679,7 +726,6 @@ def create_properties_router(db):
                 }
 
         # Prepare db.mutations synced (iter90cj sync defensif)
-        # (inline pour eviter import circulaire)
         async for lot_doc in db.lots.find(
             {"copropriete_id": copropriete_id, "mutations": {"$exists": True, "$ne": []}},
             {"_id": 0, "id": 1, "mutations": 1},
@@ -740,7 +786,6 @@ def create_properties_router(db):
             muts = mutations_by_lot.get(lid, [])
             has_founder_history = False
             if founder_owner_id:
-                # Founder a-t-il ete owner de ce lot un jour ?
                 if founder_owner_id == current:
                     has_founder_history = True
                 for m in muts:
@@ -803,6 +848,7 @@ def create_properties_router(db):
             "gap_quotity": round(total_expected - total_actual, 4),
             "flagged_count": len(flagged),
             "flagged_lots": flagged,
+            "keys_audit": keys_audit,
             "lots": result_lots,
         }
 
