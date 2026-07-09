@@ -854,19 +854,20 @@ def create_properties_router(db):
 
     class RepairFounderOwnershipInput(BaseModel):
         copropriete_id: str
-        founder_owner_id: str
-        founder_start_date: str  # ISO YYYY-MM-DD : date depuis laquelle le
-                                  # fondateur est cense etre proprietaire
+        founder_owner_id: Optional[str] = None  # iter90cp : None = auto-detection
+        founder_start_date: Optional[str] = None  # iter90cp : None = 1ere FY.start_date
         dry_run: bool = True
+        # iter90cp : ajout Case C (orphelins owner_id="")
+        fix_orphans: bool = True
 
     @router.post("/lots/repair-founder-ownership")
     async def repair_founder_ownership(
         request: Request, data: RepairFounderOwnershipInput,
     ):
-        """iter90cm-bis : Repare l'ownership retroactif des lots qui ne
-        remontent pas au fondateur/promoteur a la date de reference.
+        """iter90cm-bis + iter90cp : Repare l'ownership retroactif des lots qui
+        ne remontent pas au fondateur/promoteur a la date de reference.
 
-        Deux cas de reparation :
+        Trois cas de reparation :
         A) Lot avec mutation history dont muts[0].from_owner_id != founder :
            insere une "foundation mutation" a founder_start_date avec
            from=founder, to=muts[0].from_owner_id. La chaine de mutation
@@ -875,9 +876,21 @@ def create_properties_router(db):
            insere une mutation founder_start_date -> current_owner
            (represente l'assignation initiale du lot au buyer si le lot avait
            ete cree directement chez le buyer sans passer par mutate_lot).
+        C) iter90cp : Lot ORPHELIN (owner_id vide ou None) :
+           set lot.owner_id = founder_owner_id (le lot est repris par le
+           fondateur au premier jour de l'exercice). Aucune mutation creee
+           car il n'y a pas de transfert - c'est une simple assignation
+           initiale d'un lot "oublie" au fondateur.
+
+        Auto-detection iter90cp :
+        - founder_owner_id=None => proprietaire qui apparait le plus souvent
+          comme muts[0].from_owner_id (chain founders) ou lot.owner_id
+          (foundation direct). En cas d'egalite, prend celui qui a le plus
+          gros nombre total (mut+direct).
+        - founder_start_date=None => date de debut du 1er fiscal_year de l'ACP.
 
         dry_run=True : retourne le rapport de ce qui SERAIT fait sans commit.
-        dry_run=False : execute les inserts.
+        dry_run=False : execute les inserts + assignations orphelins.
 
         Superadmin only (modification retroactive de l'historique).
         """
@@ -885,14 +898,60 @@ def create_properties_router(db):
         is_super, _ = await _get_user_scope(request)
         if not is_super:
             raise HTTPException(403, "Superadmin uniquement")
+
+        # Preload lots et fiscal_years pour auto-detection
+        lots = await db.lots.find(
+            {"copropriete_id": data.copropriete_id}, {"_id": 0},
+        ).to_list(5000)
+
+        # iter90cp : auto-detection du fondateur si non fourni
+        founder_owner_id = data.founder_owner_id
+        auto_detected = False
+        if not founder_owner_id:
+            from collections import Counter
+            counter = Counter()
+            for lot in lots:
+                muts_sorted = sorted(
+                    lot.get("mutations") or [], key=lambda x: x.get("date") or "",
+                )
+                if muts_sorted:
+                    ff = (muts_sorted[0].get("old_owner_id")
+                          or muts_sorted[0].get("from_owner_id") or "")
+                    if ff:
+                        counter[ff] += 1
+                elif lot.get("owner_id"):
+                    counter[lot["owner_id"]] += 1
+            if not counter:
+                raise HTTPException(
+                    400,
+                    "Auto-detection impossible : aucun lot n'a d'owner_id ni de mutations",
+                )
+            founder_owner_id = counter.most_common(1)[0][0]
+            auto_detected = True
+
+        # iter90cp : auto-fallback founder_start_date si non fourni
+        founder_start_date = data.founder_start_date
+        if not founder_start_date:
+            first_fy = await db.fiscal_years.find_one(
+                {"copropriete_id": data.copropriete_id},
+                {"_id": 0, "start_date": 1},
+                sort=[("start_date", 1)],
+            )
+            if not first_fy or not first_fy.get("start_date"):
+                raise HTTPException(
+                    400,
+                    "Auto-fallback founder_start_date impossible : aucun fiscal_year defini pour cette ACP",
+                )
+            founder_start_date = first_fy["start_date"]
+
         try:
-            _date_cls.fromisoformat(data.founder_start_date)
+            _date_cls.fromisoformat(founder_start_date)
         except Exception:
             raise HTTPException(400, "founder_start_date doit etre ISO YYYY-MM-DD")
 
         # Verifie que le fondateur existe et est bien lie a l'ACP
         founder = await db.owners.find_one(
-            {"id": data.founder_owner_id}, {"_id": 0},
+            {"id": founder_owner_id}, {"_id": 0},
         )
         if not founder:
             raise HTTPException(404, "Fondateur introuvable")
@@ -900,24 +959,35 @@ def create_properties_router(db):
             # Assign automatiquement le fondateur a l'ACP si necessaire
             if not data.dry_run:
                 await db.owners.update_one(
-                    {"id": data.founder_owner_id},
+                    {"id": founder_owner_id},
                     {"$addToSet": {"copropriete_ids": data.copropriete_id}},
                 )
 
-        lots = await db.lots.find(
-            {"copropriete_id": data.copropriete_id}, {"_id": 0},
-        ).to_list(5000)
+        # (lots deja loade plus haut pour auto-detection)
 
         cases_a = []  # Prefix mutations
         cases_b = []  # Missing foundation mutation
+        cases_c = []  # iter90cp : Orphelins owner_id vide
         for lot in lots:
             muts = list(lot.get("mutations") or [])
             muts_sorted = sorted(muts, key=lambda x: x.get("date") or "")
             current_owner = lot.get("owner_id", "")
 
+            # iter90cp : Cas C prealable - lot totalement orphelin (owner_id vide)
+            # ET sans mutations : le lot n'a jamais ete assigne. Le fondateur
+            # en devient proprietaire au founder_start_date.
+            if not current_owner and not muts_sorted:
+                if data.fix_orphans:
+                    cases_c.append({
+                        "lot_id": lot["id"],
+                        "lot_number": lot.get("number", ""),
+                        "reason": "lot orphelin (owner_id vide, aucune mutation)",
+                    })
+                continue
+
             if muts_sorted:
                 first_from = muts_sorted[0].get("old_owner_id") or ""
-                if first_from and first_from != data.founder_owner_id:
+                if first_from and first_from != founder_owner_id:
                     # Cas A : prefixe une foundation mutation
                     cases_a.append({
                         "lot_id": lot["id"],
@@ -925,7 +995,7 @@ def create_properties_router(db):
                         "existing_first_from": first_from,
                         "existing_first_date": muts_sorted[0].get("date", ""),
                     })
-                elif not first_from and current_owner != data.founder_owner_id:
+                elif not first_from and current_owner != founder_owner_id:
                     # Cas rare : mutation avec from vide + owner different
                     cases_b.append({
                         "lot_id": lot["id"],
@@ -934,7 +1004,7 @@ def create_properties_router(db):
                         "reason": "first mutation from_owner_id vide",
                     })
             else:
-                if current_owner and current_owner != data.founder_owner_id:
+                if current_owner and current_owner != founder_owner_id:
                     # Cas B : lot sans mutation, owner != founder
                     cases_b.append({
                         "lot_id": lot["id"],
@@ -943,7 +1013,7 @@ def create_properties_router(db):
                         "reason": "aucune mutation, owner_id != founder",
                     })
 
-        applied = {"cases_a": 0, "cases_b": 0, "errors": []}
+        applied = {"cases_a": 0, "cases_b": 0, "cases_c": 0, "errors": []}
         if not data.dry_run:
             for case in cases_a:
                 try:
@@ -952,8 +1022,8 @@ def create_properties_router(db):
                     # date=founder_start_date (avant toutes les mutations reelles)
                     foundation_mut = {
                         "id": mut_id,
-                        "date": data.founder_start_date,
-                        "old_owner_id": data.founder_owner_id,
+                        "date": founder_start_date,
+                        "old_owner_id": founder_owner_id,
                         "new_owner_id": case["existing_first_from"],
                         "sale_price": 0.0,
                         "roulement_quota": 0.0,
@@ -977,9 +1047,9 @@ def create_properties_router(db):
                             **foundation_mut,
                             "copropriete_id": data.copropriete_id,
                             "lot_id": case["lot_id"],
-                            "from_owner_id": data.founder_owner_id,
+                            "from_owner_id": founder_owner_id,
                             "to_owner_id": case["existing_first_from"],
-                            "sale_date": data.founder_start_date,
+                            "sale_date": founder_start_date,
                         }},
                         upsert=True,
                     )
@@ -992,8 +1062,8 @@ def create_properties_router(db):
                     mut_id = str(uuid.uuid4())
                     foundation_mut = {
                         "id": mut_id,
-                        "date": data.founder_start_date,
-                        "old_owner_id": data.founder_owner_id,
+                        "date": founder_start_date,
+                        "old_owner_id": founder_owner_id,
                         "new_owner_id": case["current_owner_id"],
                         "sale_price": 0.0,
                         "roulement_quota": 0.0,
@@ -1015,9 +1085,9 @@ def create_properties_router(db):
                             **foundation_mut,
                             "copropriete_id": data.copropriete_id,
                             "lot_id": case["lot_id"],
-                            "from_owner_id": data.founder_owner_id,
+                            "from_owner_id": founder_owner_id,
                             "to_owner_id": case["current_owner_id"],
-                            "sale_date": data.founder_start_date,
+                            "sale_date": founder_start_date,
                         }},
                         upsert=True,
                     )
@@ -1025,15 +1095,35 @@ def create_properties_router(db):
                 except Exception as e:
                     applied["errors"].append({"lot_id": case["lot_id"], "err": str(e)})
 
+            # iter90cp : Cas C - orphelins owner_id vide
+            for case in cases_c:
+                try:
+                    await db.lots.update_one(
+                        {"id": case["lot_id"]},
+                        {"$set": {
+                            "owner_id": founder_owner_id,
+                            "owner_ids": [founder_owner_id],
+                            "iter90cp_repaired_orphan": True,
+                            "iter90cp_repaired_at": datetime.now(timezone.utc).isoformat(),
+                        }},
+                    )
+                    applied["cases_c"] += 1
+                except Exception as e:
+                    applied["errors"].append({"lot_id": case["lot_id"], "err": str(e)})
+
         return {
             "dry_run": data.dry_run,
             "copropriete_id": data.copropriete_id,
-            "founder_owner_id": data.founder_owner_id,
-            "founder_start_date": data.founder_start_date,
+            "founder_owner_id": founder_owner_id,
+            "founder_owner_name": (founder or {}).get("name", ""),
+            "founder_auto_detected": auto_detected,
+            "founder_start_date": founder_start_date,
             "cases_a_count": len(cases_a),
             "cases_a_detail": cases_a,
             "cases_b_count": len(cases_b),
             "cases_b_detail": cases_b,
+            "cases_c_count": len(cases_c),
+            "cases_c_detail": cases_c,
             "applied": applied,
         }
 

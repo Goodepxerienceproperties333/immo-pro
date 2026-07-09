@@ -12,6 +12,68 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 
+### Iter90cp (Feb 2026) - Reparation ownership retroactive complete (Case C + auto-detect)
+
+**Ticket utilisateur PROD (ACP Acacia)** :
+> "Le code considere que Matexi ne serait pas assigne en tant que proprietaire
+> a certains lot non identifies. Ce n'est pas logique il faut considerer que
+> le premier proprietaire d'un lot l'est toujours au premier jour de
+> l'exercice. Tiens compte de ca et corrige retroactivement les erreurs"
+
+**Cause** : Les lignes fonds de reserve/roulement du PDF situation ne
+correspondent pas aux montants des appels car certains lots :
+- ont un chain d'ownership casse (muts[0].from != Matexi) → Case A
+- n'ont pas de mutation et owner_id != Matexi → Case B
+- sont totalement orphelins (owner_id vide/None) → Case C (**nouveau**)
+
+L'endpoint `POST /api/lots/repair-founder-ownership` (iter90cm-bis) gerait
+uniquement A + B, avec `founder_owner_id` et `founder_start_date` obligatoires.
+
+**Fix iter90cp** (`properties.py::repair_founder_ownership`) :
+- **Case C ajoute** : lots orphelins (owner_id="" ou None + aucune mutation)
+  → `lot.owner_id = founder_owner_id`, `owner_ids=[founder]`, marque
+  `iter90cp_repaired_orphan=True`. Aucune mutation creee (simple assignation
+  initiale au fondateur, pas un transfert).
+- **Auto-detection du fondateur** : si `founder_owner_id=None`, le systeme
+  choisit l'owner qui apparait le plus souvent comme candidat fondateur
+  (`muts[0].from_owner_id` OU `lot.owner_id` si pas de mutations).
+- **Auto-fallback founder_start_date** : si absent, prend
+  `min(fiscal_years.start_date)` de l'ACP.
+- **Toggle fix_orphans** : desactivable si l'utilisateur ne veut pas toucher
+  les orphelins.
+- Reponse enrichie : `founder_auto_detected`, `founder_owner_name`,
+  `cases_c_count`, `cases_c_detail`, `applied.cases_c`.
+
+**Tests** (`test_iter90cp_repair_ownership_extended.py` - 4/4 PASS) :
+1. `test_auto_detect_and_repair` : 6 lots (3 baseline Matexi + 1 Dewinter
+   owner + 1 muts Matexi->Dewinter + 1 muts Dewinter->Matexi). Auto-detect
+   Matexi (4 votes vs Dewinter 2). Cases A/B correctement identifies.
+2. `test_case_c_orphans_assigned_to_founder` : 2 orphelins → `owner_id = Matexi`.
+3. `test_fix_orphans_false_disables_case_c` : `fix_orphans=False` → orphelins ignores.
+4. `test_idempotence_no_duplicates` : 2 runs consecutifs → 2e run = 0 modifications.
+
+**Script PROD** (`scripts/repair_iter90cp_acacia_ownership.py`) :
+- Script Python standalone pour executer la reparation sur PROD via la
+  console Emergent Production.
+- Auto-detection + dry-run par defaut (--commit pour appliquer).
+- Rapport detaille des lots impactes (max 20 par cas + count).
+- Idempotent : peut etre relance sans risque.
+- Usage : `python scripts/repair_iter90cp_acacia_ownership.py --dry-run`
+  puis `--commit` apres validation du rapport.
+
+**Instructions user PROD ACP Acacia** :
+1. Deployer le fix (redeploiement Emergent).
+2. Ouvrir la console PROD → `cd /app/backend`
+3. `python scripts/repair_iter90cp_acacia_ownership.py --dry-run` → voir rapport.
+4. Si OK, `python scripts/repair_iter90cp_acacia_ownership.py --commit`.
+5. Regenerer les appels de fonds Q1-Q4 2025 (ou executer un audit + repair via
+   l'UI Lots → "Auditer ownership") → constatez que Matexi porte bien 100%
+   des fonds de reserve/roulement au 01.10.2025.
+
+**Regression** : 14/14 tests iter90cb+cc+co+cp PASS. Aucun impact sur le reste.
+
+
+
 ### Iter90co (Feb 2026) - Nettoyage OD MUT-R backfillees sur revoke/delete budget
 
 **Ticket utilisateur** : "Quand le budget est repasse en brouillon les
