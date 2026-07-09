@@ -105,6 +105,13 @@ async def _base_setup(prefix: str):
         "copropriete_id": cid, "status": "approved",
         "lines": [{"account_number": "6", "account_name": "Charges",
                    "amount": 1488.0, "distribution_key_id": key_id}],
+        # iter90ck : budget doit avoir roulement_fund_amount > 0 pour que
+        # generate_prorata_mut_ods_for_call ne raise pas HTTPException 400
+        # quand une mutation est detectee dans la periode d'un appel wizard.
+        "reserve_fund_amount": 0.0,
+        "reserve_fund_key_id": key_id,
+        "roulement_fund_amount": 1000.0,
+        "roulement_fund_key_id": key_id,
     })
     return {
         "db": db, "cid": cid, "fy_id": fy_id, "lot": lot_id,

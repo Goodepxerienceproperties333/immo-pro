@@ -165,9 +165,13 @@ async def _ensure_mutations_synced_for_acp(db, copro_id: str) -> int:
 
 
 async def reverse_post_mutation_ods_for_call(db, call_id: str, reason: str = "") -> int:
-    """iter90ch : Contre-passe les OD MUT-P retroactives liees a un appel
-    (source_type='lot_mutation' + source_subtype='prorata_post_mutation' +
-    fund_call_id=call_id).
+    """iter90ch + iter90co : Contre-passe les OD retroactives liees a un appel :
+    - OD MUT-P (source_type='lot_mutation', source_subtype='prorata_post_mutation')
+    - OD MUT-R backfillees iter90ck (source_type='lot_mutation',
+      source_subtype='fonds_roulement', fund_call_id=call_id present)
+
+    Le filtre `fund_call_id=call_id` garantit qu'on NE TOUCHE PAS les OD MUT-R
+    d'origine creees par `mutate_lot` (elles n'ont pas de fund_call_id).
 
     Utilisee lors de :
     - Suppression d'un appel de fonds
@@ -175,25 +179,67 @@ async def reverse_post_mutation_ods_for_call(db, call_id: str, reason: str = "")
     - delete-all-fund-calls
     - regenerate-from-budget (avant regeneration)
 
+    iter90co : synchronise aussi db.mutations.roulement_quota = 0 pour les
+    mutations dont l'OD MUT-R backfillee a ete contre-passee (evite d'afficher
+    un transfert dans le decompte alors que le montant est retire du grand livre).
+
     Retourne le nombre d'ecritures contre-passees.
     """
     from journal_reversals import reverse_journal_entry
     reversed_count = 0
+    mutation_ids_to_reset: set = set()
     try:
         post_muts = await db.journal_entries.find({
             "fund_call_id": call_id,
-            "source_subtype": "prorata_post_mutation",
+            "source_subtype": {"$in": ["prorata_post_mutation", "fonds_roulement"]},
             "reversed": {"$ne": True},
             "is_reversal": {"$ne": True},
         }, {"_id": 0}).to_list(1000)
         for pm in post_muts:
+            # Trace de la mutation impactee (uniquement OD MUT-R backfillee)
+            if pm.get("source_subtype") == "fonds_roulement" and pm.get("backfilled_by_iter90ck"):
+                lot_id = pm.get("source_id")
+                if lot_id:
+                    mutation_ids_to_reset.add(lot_id)
             rev = await reverse_journal_entry(
                 db, pm, reason=reason or f"Cleanup appel {call_id}"
             )
             if rev:
                 reversed_count += 1
     except Exception as _e:
-        print(f"[iter90ch] reversal of post-mutation ODs failed for {call_id}: {_e}")
+        print(f"[iter90ch/co] reversal of post-mutation ODs failed for {call_id}: {_e}")
+
+    # iter90co : sync db.mutations.roulement_quota=0 pour les lots impactes.
+    # On ne touche que les mutations dont l'OD MUT-R backfillee a ete
+    # contre-passee (les autres mutations avec OD MUT-R d'origine mutate_lot
+    # restent intactes). L'utilisateur peut ainsi regenerer un nouvel appel
+    # et declencher un nouveau backfill iter90ck coherent.
+    for lot_id in mutation_ids_to_reset:
+        try:
+            # Trouve les mutations du lot dont journal_entry_ids contient
+            # un ID d'entree qui est desormais 'reversed'. Reset seulement
+            # celles-la (evite d'ecraser un OD MUT-R d'origine encore actif).
+            muts = await db.mutations.find(
+                {"lot_id": lot_id}, {"_id": 0}
+            ).to_list(100)
+            for mut in muts:
+                je_ids = mut.get("journal_entry_ids", []) or []
+                if not je_ids:
+                    continue
+                # Verifie si TOUS les JE actifs de cette mutation sont reversed
+                remaining = await db.journal_entries.count_documents({
+                    "id": {"$in": je_ids},
+                    "reversed": {"$ne": True},
+                    "is_reversal": {"$ne": True},
+                })
+                if remaining == 0:
+                    await db.mutations.update_one(
+                        {"id": mut["id"]},
+                        {"$set": {"roulement_quota": 0.0, "journal_entry_ids": []}},
+                    )
+        except Exception as _e:
+            print(f"[iter90co] db.mutations sync failed for lot {lot_id}: {_e}")
+
     return reversed_count
 
 

@@ -12,6 +12,58 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 
+### Iter90co (Feb 2026) - Nettoyage OD MUT-R backfillees sur revoke/delete budget
+
+**Ticket utilisateur** : "Quand le budget est repasse en brouillon les
+operations diverses concernant les appels doivent aussi etre supprimees"
+
+**Contexte** : iter90ch avait deja resolu le nettoyage des OD MUT-P
+(source_subtype='prorata_post_mutation'). MAIS les OD MUT-R backfillees par
+iter90ck (`source_type='lot_mutation'`, `source_subtype='fonds_roulement'`,
+`fund_call_id=call_id`, `backfilled_by_iter90ck=True`) N'ETAIENT PAS
+contre-passees lors du revoke ou du delete d'un budget parent. Consequence :
+apres devalidation, le fonds de roulement restait comptablement transfere
+du vendeur a l'acheteur alors que l'appel qui l'a declenche etait supprime
+(orphelins comptables).
+
+**Fix** (`fund_calls.py::reverse_post_mutation_ods_for_call`) :
+- Le filtre `source_subtype` passe de `"prorata_post_mutation"` a
+  `{"$in": ["prorata_post_mutation", "fonds_roulement"]}`.
+- Le filtre `fund_call_id=call_id` prealable garantit qu'on N'IMPACTE PAS
+  les OD MUT-R d'origine creees par `mutate_lot` (celles-ci n'ont pas de
+  `fund_call_id`). Seules les backfillees iter90ck sont visees.
+- Nouveau bloc de sync : reset `db.mutations.roulement_quota=0` et
+  `journal_entry_ids=[]` UNIQUEMENT pour les mutations dont TOUS les JE
+  actifs ont ete contre-passes (verification via count_documents).
+
+**Impact** : le revoke_budget, delete_budget, delete_fund_call,
+delete-all-fund-calls et regenerate-from-budget beneficient tous
+automatiquement du nouveau comportement (fonction helper partagee).
+
+**Tests** (`test_iter90co_budget_revoke_cleans_od_mutr.py` - 4/4 PASS) :
+1. `test_delete_budget_reverses_od_mutr` : DELETE budget avec OD MUT-R
+   backfillee -> OD contre-passee.
+2. `test_revoke_budget_reverses_od_mutr` : POST revoke -> OD contre-passee
+   + `db.mutations.roulement_quota=0` reset.
+3. `test_delete_fund_call_reverses_od_mutr` : DELETE appel isole -> son
+   OD MUT-R backfillee est contre-passee (mais pas celles des autres appels).
+4. `test_origin_od_mutr_untouched_on_revoke` : OD MUT-R d'ORIGINE (mutate_lot,
+   sans fund_call_id) NE DOIT PAS etre impactee par le cleanup budget.
+
+**Regression** : iter90bx (7), cb (3), cc (3), cd (3), ce (4), cf (5), cg (5),
+ch (3, avec ajout de `roulement_fund_amount=1000` dans le budget de test pour
+respecter iter90ck), ci (1), cj (3), ck (3), co (4) : 44/44 PASS.
+
+**Note utilisateur PROD (ACP Acacia)** :
+- Deploiement du fix necessaire.
+- Aucun script de reparation retroactive requis : le fix se declenche
+  automatiquement au prochain revoke/delete budget.
+- Pour verifier apres deploiement : revoke un budget existant -> constater
+  que les OD MUT-R backfillees liees aux appels supprimes sont bien
+  contre-passees (visibles avec badge "Extournee" dans les journaux).
+
+
+
 ### Iter90cm-bis + iter90cn (Feb 2026) - Reparation retroactive + prevention structurelle
 
 **Ticket utilisateur (ACP Acacia)** :
