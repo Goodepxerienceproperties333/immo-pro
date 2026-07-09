@@ -828,6 +828,47 @@ def create_fiscal_router(db):
             raise HTTPException(404, "Budget non trouve")
         return b
 
+    @router.get("/budgets/{budget_id}/pdf")
+    async def download_budget_pdf(budget_id: str):
+        """iter90cj-ter : export PDF du budget previsionnel.
+
+        Contient : entete ACP + FY, postes budgetaires (compte/nature/cle/montant),
+        total, et section "Engagement AG - Fonds permanents" (reserve + roulement).
+        """
+        import io
+        from fastapi.responses import StreamingResponse
+        from pdf_budget import build_budget_pdf
+
+        budget = await db.budgets.find_one({"id": budget_id}, {"_id": 0})
+        if not budget:
+            raise HTTPException(404, "Budget non trouve")
+        copro_id = budget.get("copropriete_id", "")
+        copropriete = await db.coproprietes.find_one({"id": copro_id}, {"_id": 0}) or {}
+        fiscal_year = await db.fiscal_years.find_one(
+            {"id": budget.get("fiscal_year_id", "")}, {"_id": 0},
+        ) or {}
+        pcmn = await db.pcmn_accounts.find(
+            {"copropriete_id": copro_id}, {"_id": 0},
+        ).to_list(10000)
+        pcmn_map = {a.get("number", ""): a.get("name", "") for a in pcmn}
+        keys = await db.distribution_keys.find(
+            {"copropriete_id": copro_id}, {"_id": 0},
+        ).to_list(1000)
+        keys_map = {k.get("id", ""): k.get("name", "") for k in keys}
+
+        pdf_bytes = build_budget_pdf(
+            copropriete=copropriete, budget=budget, fiscal_year=fiscal_year,
+            pcmn_map=pcmn_map, keys_map=keys_map,
+        )
+        safe_name = (budget.get("name", "budget") or "budget").replace(" ", "_")[:40]
+        fy_name = (fiscal_year.get("name", "") or "").replace(" ", "_")[:20]
+        filename = f"budget_{safe_name}_{fy_name}.pdf"
+        return StreamingResponse(
+            io.BytesIO(pdf_bytes),
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
     @router.put("/budgets/{budget_id}")
     async def update_budget(budget_id: str, data: BudgetInput):
         existing = await db.budgets.find_one({"id": budget_id}, {"_id": 0})

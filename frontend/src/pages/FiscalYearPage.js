@@ -9,7 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { toast } from 'sonner';
-import { Plus, Trash2, Lock, Unlock, Calendar, CheckCircle2, RotateCcw, Sparkles, Send, Calculator } from 'lucide-react';
+import { Plus, Trash2, Lock, Unlock, Calendar, CheckCircle2, RotateCcw, Sparkles, Send, Calculator, FileDown } from 'lucide-react';
 import BudgetWizard from '@/components/BudgetWizard';
 import RegularizationDialog from '@/components/RegularizationDialog';
 import AccountSearchSelect from '@/components/AccountSearchSelect';
@@ -177,6 +177,24 @@ export default function FiscalYearPage() {
     } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); }
   };
 
+  const downloadBudgetPdf = async (b) => {
+    try {
+      const r = await api.get(`/fiscal/budgets/${b.id}/pdf`, { responseType: 'blob' });
+      const url = window.URL.createObjectURL(new Blob([r.data], { type: 'application/pdf' }));
+      const a = document.createElement('a');
+      a.href = url;
+      const fy = years.find(y => y.id === b.fiscal_year_id);
+      const safeName = (b.name || 'budget').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 40);
+      const fyName = (fy?.name || '').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 20);
+      a.download = `budget_${safeName}_${fyName}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+      toast.success('PDF telecharge');
+    } catch (err) { toast.error(err.response?.data?.detail || 'Erreur telechargement PDF'); }
+  };
+
   const revokeBudget = async (b, force = false) => {
     const msg = force
       ? `FORCER la devalidation ? TOUS les appels lies a "${b.name}" (provisions, reserve, roulement, special) seront contrepasses, MEME ceux deja payes. Les paiements bancaires seront delettres.`
@@ -313,6 +331,7 @@ export default function FiscalYearPage() {
                       {!approved && b.lines?.length > 0 && <Button size="sm" className="bg-green-600 hover:bg-green-700 text-white" onClick={() => approveBudget(b)} data-testid={`approve-budget-${b.id}`}><CheckCircle2 size={14} className="mr-1" />Approuver</Button>}
                       {approved && <Button size="sm" variant="outline" onClick={() => { setWizardMode('create'); setWizardBudget(b); }} data-testid={`wizard-budget-${b.id}`}><Send size={14} className="mr-1" />Lancer appels</Button>}
                       {approved && <Button size="sm" variant="outline" className="border-amber-300 text-amber-700 hover:bg-amber-50" onClick={() => { setWizardMode('regenerate'); setWizardBudget(b); }} data-testid={`regenerate-budget-${b.id}`}><RotateCcw size={14} className="mr-1" />Regenerer non-echus</Button>}
+                      <Button size="sm" variant="outline" onClick={() => downloadBudgetPdf(b)} data-testid={`download-budget-pdf-${b.id}`} title="Exporter le budget en PDF"><FileDown size={14} className="mr-1" />PDF</Button>
                       {approved && <Button size="sm" variant="ghost" onClick={() => revokeBudget(b)} title="Revoquer approbation"><Unlock size={14} /></Button>}
                       {!approved && <Button size="sm" variant="ghost" className="text-red-500" onClick={() => prepareDeleteBudget(b)} data-testid={`budget-delete-btn-${b.id}`}><Trash2 size={14} /></Button>}
                     </div>

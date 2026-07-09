@@ -12,6 +12,40 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 
+### Iter90cj-ter (Feb 2026) - Export PDF du budget previsionnel
+
+**Ticket utilisateur** : "il faut pouvoir exporter le budget en format PDF"
+
+**Endpoint** : `GET /api/fiscal/budgets/{budget_id}/pdf`
+- Renvoie `application/pdf` avec `Content-Disposition: attachment`
+- Nom fichier : `budget_{safe_name}_{fy_name}.pdf`
+
+**Contenu du PDF** (structure A4 portrait, style CoproManager) :
+1. En-tete : "Budget previsionnel - {ACP name}" + reference ACP + exercice
+2. Bloc meta : nom budget / statut (Vote / Brouillon coloree) / total previsionnel / date de vote + approbateur
+3. Tableau des postes : Compte / Nature / Cle repartition / Montant HTVA + total
+4. Section "Engagement AG - Fonds permanents (capital classe 1)" (uniquement
+   si reserve_fund_amount OU roulement_fund_amount > 0) :
+   - Fonds de reserve (compte 160) + cle
+   - Fonds de roulement (compte 100) + cle
+   - Total engage
+5. Total GENERAL BUDGET (postes + engagements) en bleu si engagements presents
+6. Footer : date generation + reference budget/ACP
+
+**Fichiers** :
+- `backend/pdf_budget.py` (nouveau) : builder ReportLab
+- `backend/routes/fiscal.py` : endpoint `GET /budgets/{id}/pdf`
+- `frontend/src/pages/FiscalYearPage.js` : bouton "PDF" sur chaque carte budget
+  (approved ou draft), utilise responseType='blob' + createObjectURL
+  (data-testid : `download-budget-pdf-{budget_id}`)
+
+**Testing** : Verifie via curl/pdfplumber sur budget reel :
+- 3121 bytes sans engagements, structure valide
+- Avec engagements 1500/5200 : section separee bien rendue avec total 6700 +
+  total general 32700 (postes 26000 + engagements 6700)
+- Note legale art. 3.86 CDE presente
+
+
 ### Iter90cj-bis (Feb 2026) - Differenciation visuelle du formulaire d'appel manuel
 
 **Ticket utilisateur** :
