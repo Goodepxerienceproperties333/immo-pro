@@ -610,6 +610,202 @@ def create_properties_router(db):
         lots = await db.lots.find(q, {"_id": 0}).sort("number", 1).to_list(2000)
         return lots
 
+    @router.get("/lots/ownership-audit")
+    async def lots_ownership_audit(
+        request: Request,
+        copropriete_id: str,
+        at_date: Optional[str] = None,
+        founder_owner_id: Optional[str] = None,
+    ):
+        """iter90cm : Diagnostic pour identifier les lots dont l'ownership ne
+        remonte pas a un proprietaire donne (fondateur/promoteur) a une date
+        cible. Utile pour comprendre l'ecart 3.6% Acacia (360/10000 quotites
+        allouees a un owner phantom au lieu de Matexi).
+
+        Query params :
+        - copropriete_id : ACP a auditer (obligatoire)
+        - at_date : date cible ISO YYYY-MM-DD (defaut = aujourd'hui)
+        - founder_owner_id : id du proprietaire fondateur attendu (optionnel)
+
+        Retourne pour chaque lot :
+        - lot_id, lot_number, quotity, current_owner (+ nom)
+        - mutations : historique complet (from -> to + date)
+        - owner_at_date : proprietaire calcule a `at_date` (via traversee mutations)
+        - flagged : true si l'ownership a `at_date` != founder_owner_id
+                    OU si le lot n'a jamais eu founder_owner_id dans son historique
+        - per_key : share du lot dans chaque cle de repartition
+
+        Egalement un aggregate global :
+        - total_quotity_expected_founder : somme des quotites qui DEVRAIENT etre
+          rebound au founder_owner_id a at_date
+        - total_quotity_actual_founder : somme des quotites effectivement resolue
+          au founder_owner_id via _resolve_owner_at_date
+        - gap : difference (permet d'identifier immediatement l'ecart)
+        """
+        is_super, allowed_copros = await _get_user_scope(request)
+        if not is_super and copropriete_id not in (allowed_copros or []):
+            raise HTTPException(403, "Chinese wall: acces refuse")
+
+        from datetime import date as _date_cls
+        target = at_date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        try:
+            target_dt = _date_cls.fromisoformat(target)
+        except Exception:
+            raise HTTPException(400, "at_date doit etre ISO YYYY-MM-DD")
+
+        lots = await db.lots.find(
+            {"copropriete_id": copropriete_id}, {"_id": 0},
+        ).sort("number", 1).to_list(5000)
+        owners = await db.owners.find(
+            {"copropriete_ids": copropriete_id}, {"_id": 0},
+        ).to_list(5000)
+        owners_map = {o["id"]: o for o in owners}
+        keys = await db.distribution_keys.find(
+            {"copropriete_id": copropriete_id}, {"_id": 0},
+        ).to_list(1000)
+        # Map lot_id -> {key_id: share} pour audit rapide par lot
+        lot_shares_by_key: dict = {}
+        for k in keys:
+            for kl in (k.get("lots") or []):
+                if kl.get("excluded"):
+                    continue
+                lid = kl.get("lot_id")
+                if not lid:
+                    continue
+                lot_shares_by_key.setdefault(lid, {})[k["id"]] = {
+                    "key_name": k.get("name", ""),
+                    "share": float(kl.get("share", 0) or 0),
+                    "is_default": bool(k.get("is_default", False)),
+                }
+
+        # Prepare db.mutations synced (iter90cj sync defensif)
+        # (inline pour eviter import circulaire)
+        async for lot_doc in db.lots.find(
+            {"copropriete_id": copropriete_id, "mutations": {"$exists": True, "$ne": []}},
+            {"_id": 0, "id": 1, "mutations": 1},
+        ):
+            for mr in (lot_doc.get("mutations") or []):
+                mid = mr.get("id")
+                if not mid or not mr.get("date"):
+                    continue
+                existing = await db.mutations.find_one({"id": mid}, {"_id": 0, "id": 1})
+                if not existing:
+                    await db.mutations.update_one(
+                        {"id": mid},
+                        {"$set": {
+                            "id": mid, "copropriete_id": copropriete_id,
+                            "lot_id": lot_doc["id"],
+                            "from_owner_id": mr.get("old_owner_id", ""),
+                            "to_owner_id": mr.get("new_owner_id", ""),
+                            "sale_date": mr.get("date", ""),
+                            "backfilled": True,
+                        }},
+                        upsert=True,
+                    )
+
+        mutations_by_lot: dict = {}
+        async for m in db.mutations.find(
+            {"copropriete_id": copropriete_id}, {"_id": 0},
+        ):
+            lid = m.get("lot_id")
+            if lid:
+                mutations_by_lot.setdefault(lid, []).append(m)
+        for lid in mutations_by_lot:
+            mutations_by_lot[lid].sort(key=lambda x: x.get("sale_date") or "")
+
+        def _resolve_owner(lot_id: str, current_owner: str) -> str:
+            muts = mutations_by_lot.get(lot_id, [])
+            if not muts:
+                return current_owner
+            current = muts[0].get("from_owner_id") or current_owner
+            for m in muts:
+                try:
+                    sd = _date_cls.fromisoformat(m.get("sale_date") or "")
+                except Exception:
+                    continue
+                if sd <= target_dt:
+                    current = m.get("to_owner_id") or current
+                else:
+                    break
+            return current
+
+        result_lots = []
+        total_expected = 0.0
+        total_actual = 0.0
+        flagged = []
+        for lot in lots:
+            lid = lot["id"]
+            current = lot.get("owner_id", "")
+            owner_at = _resolve_owner(lid, current)
+            muts = mutations_by_lot.get(lid, [])
+            has_founder_history = False
+            if founder_owner_id:
+                # Founder a-t-il ete owner de ce lot un jour ?
+                if founder_owner_id == current:
+                    has_founder_history = True
+                for m in muts:
+                    if (m.get("from_owner_id") == founder_owner_id
+                            or m.get("to_owner_id") == founder_owner_id):
+                        has_founder_history = True
+                        break
+            is_flagged = False
+            if founder_owner_id and owner_at != founder_owner_id:
+                is_flagged = True
+            if founder_owner_id and not has_founder_history:
+                is_flagged = True
+            row = {
+                "lot_id": lid,
+                "lot_number": lot.get("number", ""),
+                "quotity": float(lot.get("quotity", 0) or 0),
+                "current_owner_id": current,
+                "current_owner_name": owners_map.get(current, {}).get("name", "MISSING"),
+                "owner_at_date": owner_at,
+                "owner_at_date_name": owners_map.get(owner_at, {}).get("name", "MISSING"),
+                "mutations": [
+                    {
+                        "date": m.get("sale_date", ""),
+                        "from_owner_id": m.get("from_owner_id", ""),
+                        "from_owner_name": owners_map.get(m.get("from_owner_id", ""), {}).get("name", ""),
+                        "to_owner_id": m.get("to_owner_id", ""),
+                        "to_owner_name": owners_map.get(m.get("to_owner_id", ""), {}).get("name", ""),
+                    } for m in muts
+                ],
+                "per_key": lot_shares_by_key.get(lid, {}),
+                "has_founder_history": has_founder_history,
+                "flagged": is_flagged,
+            }
+            result_lots.append(row)
+            # Aggregate default key quotity for gap analysis
+            default_share = 0.0
+            for kid, kinfo in (lot_shares_by_key.get(lid) or {}).items():
+                if kinfo.get("is_default"):
+                    default_share = kinfo.get("share", 0.0)
+                    break
+            if founder_owner_id:
+                total_expected += default_share
+                if owner_at == founder_owner_id:
+                    total_actual += default_share
+                else:
+                    flagged.append({
+                        "lot_id": lid,
+                        "lot_number": lot.get("number", ""),
+                        "current_owner_name": row["current_owner_name"],
+                        "default_key_share": default_share,
+                    })
+        return {
+            "copropriete_id": copropriete_id,
+            "at_date": target,
+            "founder_owner_id": founder_owner_id,
+            "founder_owner_name": (owners_map.get(founder_owner_id or "", {}) or {}).get("name", ""),
+            "total_lots": len(result_lots),
+            "total_quotity_expected_founder": round(total_expected, 4),
+            "total_quotity_actual_founder": round(total_actual, 4),
+            "gap_quotity": round(total_expected - total_actual, 4),
+            "flagged_count": len(flagged),
+            "flagged_lots": flagged,
+            "lots": result_lots,
+        }
+
     @router.post("/lots")
     async def create_lot(data: LotInput, request: Request):
         is_super, allowed_copros = await _get_user_scope(request)
