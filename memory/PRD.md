@@ -11,6 +11,76 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 3. Chinese walls: `copropriete_id` propage automatiquement (frontend interceptor) et filtre cote backend.
 
 
+
+### Iter90cj (Feb 2026) - 2 root causes fond de roulement transferable APRES mutation
+
+**Ticket utilisateur (PROD ACP Acacia)** :
+> "Matexi vend au 01.10.2025. Le fonds de roulement transferable a la
+> mutation reste a 0 EUR alors que 5200 EUR sont engages par le budget vote.
+> Attendu : transfert 549.12 EUR au 18/11/2025."
+
+**Root Cause 1 - Silent DB failure sur db.mutations** :
+`properties.py::mutate_lot` L1436 enveloppait `db.mutations.insert_one` dans
+un try/except silencieux. Si l'insert echouait (auth transitoire, unique index
+conflict...), lot.mutations[] etait peuple mais db.mutations restait vide.
+Consequence : `_rebind_owner_at_call_date` (fund_calls.py) et
+`_resolve_owner_at_date` fallback silencieusement sur `lot.owner_id` (current
+owner = acheteur), corrompant l'attribution.
+
+**Fix Root Cause 1** :
+1. `mutate_lot` : replace `insert_one` par `update_one({id}, {$set}, upsert=True)`
+   (idempotent). Log CRITICAL si echec (choix user B : ne bloque pas mais alerte).
+2. Nouveau helper `_ensure_mutations_synced_for_acp(db, copro_id)` dans
+   `fund_calls.py` : parcourt lot.mutations[] et upsert les entrees manquantes
+   dans db.mutations. Appelé en début des 3 lecteurs de db.mutations
+   (`generate_prorata_mut_ods_for_call`, `POST /api/fund-calls` single,
+   `_generate_from_budget`). Idempotent, safe multi-appels.
+
+**Root Cause 2 - Roulement quota = 0 sans appels roulement postes** :
+`properties.py::_compute_mutation_breakdown` L873-883 calculait
+`fonds_roul_total` UNIQUEMENT depuis les journal_entries (compte 100). Si
+aucun appel roulement n'etait emis avant la mutation, agrégat = 0 -> aucun
+transfert OD MUT-R. Le capital roulement engage par l'AG etait ignore.
+
+**Fix Root Cause 2** :
+1. `fiscal.py::BudgetInput` : + 4 champs `reserve_fund_amount`,
+   `reserve_fund_key_id`, `roulement_fund_amount`, `roulement_fund_key_id`.
+2. `POST /budgets` + `PUT /budgets/{id}` : persistent ces 4 champs.
+3. `_compute_mutation_breakdown` : cherche le budget vote couvrant sale_dt,
+   lit `budget.roulement_fund_amount` et applique
+   `fonds_roul_total = max(posted, budgeted)`. Applique ensuite la cle de
+   repartition par defaut sur cette base.
+4. `fund_calls.py::_generate_from_budget` (persist=True) : backfill le budget
+   avec `reserve_fund` / `roulement_fund` du wizard pour garantir la
+   coherence meme si l'utilisateur n'a pas passe par le formulaire.
+5. Frontend `FiscalYearPage.js` : ajoute une section "Engagement AG - Fonds
+   permanents" au dialogue de creation/edition de budget avec 2 champs
+   `budget-reserve-fund-amount` + `budget-roulement-fund-amount` (+ cles de
+   repartition associees, data-testid).
+
+**Tests** (`test_iter90cj_roulement_from_budget.py` - 3/3 PASS) :
+1. `test_defensive_backfill_on_missing_mutation_doc` : mutation effectuee via
+   HTTP, doc db.mutations manuellement supprime (simulation panne silencieuse),
+   verifie que l'appel Q3 roulement genere apres reste attribue au VENDEUR
+   grace au backfill defensif depuis lot.mutations[].
+2. `test_roulement_transfer_from_budget_amount` : budget vote roulement=5200,
+   aucun appel emis, mutation Matexi->DEGRANDE. Verifie OD MUT-R = 2600 EUR
+   (5200 * 500/1000) au lieu de 0.
+3. `test_e2e_acacia_matexi_budget_transfer` : cas concret 19000/1500/5200,
+   verifie OD MUT-R > 0 et transfert calcule sur la quote-part reelle.
+
+**Regression complete iter90cj** : 45/45 tests critiques PASS (iter90ab, af,
+ag, ah, ai, aj, cd, ce, cf, cg, ch, ci, cj). Aucun test existant casse.
+
+**Note utilisateur** : le fix est deploye en preview. Sur PROD, l'utilisateur
+doit :
+- Editer les budgets existants pour saisir les fonds reserve/roulement
+- OU laisser le wizard `_generate_from_budget` auto-persister au prochain lancement
+- Ancien bug PROD (Matexi->DEGRANDE 01.10.2025) : contre-passer + regenerer la
+  mutation via `DELETE /api/lots/{id}/mutate/{mutation_id}` puis
+  `POST /api/lots/{id}/mutate` pour recalculer l'OD MUT-R.
+
+
 ### Iter90ci (Feb 2026) - PDF situation compte : masquer les reversals
 
 **Bug rapporte utilisateur (PROD, cas ABED-STEUVE ACP Acacia)** :

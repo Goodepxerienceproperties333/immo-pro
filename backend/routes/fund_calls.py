@@ -104,6 +104,66 @@ def _snap_distribution_to_total(distribution: list, target_total: float) -> None
                 float(sorted_dist[i % len(sorted_dist)]["amount"]) - 0.01, 2)
 
 
+async def _ensure_mutations_synced_for_acp(db, copro_id: str) -> int:
+    """iter90cj : Backfill defensif de db.mutations depuis lot.mutations[].
+
+    Root Cause 1 : properties.py::mutate_lot ecrit dans db.mutations dans un
+    try/except silencieux. Si l'insert echoue (auth transitoire, panne
+    Mongo...), lot.mutations[] est bien peuple mais db.mutations est vide,
+    et les lecteurs (_resolve_owner_at_date, _rebind_owner_at_call_date,
+    generate_prorata_mut_ods_for_call) fallback silencieusement sur le
+    current owner (nouvel acheteur), corrompant l'attribution des appels.
+
+    Ce helper garantit que toute lecture de db.mutations est precedee d'un
+    sync a la volee : parcourt les lots de l'ACP ayant `mutations[]` peuple,
+    upsert chaque entree manquante dans db.mutations. Idempotent, safe multi-
+    appels.
+
+    Doit etre appele en debut de tous les endpoints qui lisent db.mutations.
+    Retourne le nombre d'entrees synchronisees (pour log/debug).
+    """
+    if not copro_id:
+        return 0
+    synced = 0
+    try:
+        async for lot_doc in db.lots.find(
+            {"copropriete_id": copro_id, "mutations": {"$exists": True, "$ne": []}},
+            {"_id": 0, "id": 1, "copropriete_id": 1, "mutations": 1},
+        ):
+            for mr in (lot_doc.get("mutations") or []):
+                mid = mr.get("id")
+                if not mid or not mr.get("date"):
+                    continue
+                # Verifie si l'entree existe deja
+                existing = await db.mutations.find_one({"id": mid}, {"_id": 0, "id": 1})
+                if existing:
+                    continue
+                doc = {
+                    "id": mid,
+                    "copropriete_id": lot_doc.get("copropriete_id", ""),
+                    "lot_id": lot_doc["id"],
+                    "from_owner_id": mr.get("old_owner_id", ""),
+                    "to_owner_id": mr.get("new_owner_id", ""),
+                    "sale_date": mr.get("date", ""),
+                    "roulement_quota": mr.get("roulement_quota", 0.0),
+                    "current_period_prorata": mr.get(
+                        "current_period_prorata", mr.get("prorata_provisions", 0.0)
+                    ),
+                    "total_transfer": mr.get("total_transfer", 0.0),
+                    "journal_entry_ids": mr.get("journal_entry_ids")
+                    or ([mr.get("journal_entry_id")] if mr.get("journal_entry_id") else []),
+                    "created_at": mr.get("created_at", ""),
+                    "backfilled": True,
+                }
+                await db.mutations.update_one({"id": mid}, {"$set": doc}, upsert=True)
+                synced += 1
+        if synced:
+            print(f"[iter90cj] db.mutations backfill synced {synced} entries for {copro_id}")
+    except Exception as _e:
+        print(f"[iter90cj] backfill sync failed (soft): {_e}")
+    return synced
+
+
 async def reverse_post_mutation_ods_for_call(db, call_id: str, reason: str = "") -> int:
     """iter90ch : Contre-passe les OD MUT-P retroactives liees a un appel
     (source_type='lot_mutation' + source_subtype='prorata_post_mutation' +
@@ -190,6 +250,8 @@ async def generate_prorata_mut_ods_for_call(db, call_doc: dict) -> dict:
     total_days = (p_end - p_start).days + 1
 
     # Charge toutes les mutations de l'ACP indexees par lot_id
+    # iter90cj : sync defensif avant lecture (Root Cause 1)
+    await _ensure_mutations_synced_for_acp(db, copro_id)
     muts_by_lot: dict = {}
     async for m in db.mutations.find(
         {"copropriete_id": copro_id}, {"_id": 0}
@@ -471,6 +533,8 @@ def create_fund_calls_router(db):
                 except Exception:
                     _pe = None
             target = min(_cd, _pe) if _pe else _cd
+            # iter90cj : sync defensif avant lecture (Root Cause 1)
+            await _ensure_mutations_synced_for_acp(db, copro_id)
             muts_all = await db.mutations.find(
                 {"copropriete_id": copro_id}, {"_id": 0}
             ).to_list(10000)
@@ -815,6 +879,27 @@ def create_fund_calls_router(db):
         if data.frequency not in (1, 2, 3, 4, 6, 12):
             raise HTTPException(400, "Frequence autorisee: 1, 2, 3, 4, 6, 12 appels par an")
 
+        # iter90cj (Root Cause 2) : backfill l'engagement reserve/roulement sur
+        # le budget doc a partir des inputs du wizard. Garantit que meme si
+        # l'utilisateur n'a pas re-poste le budget avec les 4 champs, le
+        # budget porte bien l'engagement pour _compute_mutation_breakdown.
+        # Uniquement en mode persist=True (evite d'ecrire pendant un preview).
+        if persist:
+            _backfill_set = {}
+            if data.reserve_fund and data.reserve_fund.enabled and data.reserve_fund.amount:
+                _backfill_set["reserve_fund_amount"] = round(float(data.reserve_fund.amount), 2)
+                if data.reserve_fund.distribution_key_id:
+                    _backfill_set["reserve_fund_key_id"] = data.reserve_fund.distribution_key_id
+            if data.roulement_fund and data.roulement_fund.enabled and data.roulement_fund.amount:
+                _backfill_set["roulement_fund_amount"] = round(float(data.roulement_fund.amount), 2)
+                if data.roulement_fund.distribution_key_id:
+                    _backfill_set["roulement_fund_key_id"] = data.roulement_fund.distribution_key_id
+            if _backfill_set:
+                await db.budgets.update_one(
+                    {"id": budget["id"]}, {"$set": _backfill_set},
+                )
+                budget.update(_backfill_set)
+
         fy = await db.fiscal_years.find_one({"id": budget["fiscal_year_id"]}, {"_id": 0})
         fy_name = fy.get("name", "") if fy else ""
 
@@ -827,6 +912,8 @@ def create_fund_calls_router(db):
         # iter90ag : prorata mutation pour PROVISIONS uniquement.
         # On charge une fois toutes les mutations de l'ACP pour eviter N+1 queries.
         # Groupe par lot_id, tri par sale_date ASC pour la construction de segments.
+        # iter90cj : sync defensif avant lecture (Root Cause 1)
+        await _ensure_mutations_synced_for_acp(db, copro_id)
         from datetime import date as _date_cls
         mutations_by_lot: dict = {}
         mutations_all = await db.mutations.find(

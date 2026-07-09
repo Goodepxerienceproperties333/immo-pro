@@ -24,6 +24,16 @@ class BudgetInput(BaseModel):
     name: Optional[str] = ""
     lines: List[BudgetLineInput]
     copropriete_id: Optional[str] = ""
+    # iter90cj : engagement AG de fonds de reserve / fonds de roulement.
+    # Ces montants sont persistes sur le budget des le vote (POST/PUT), meme
+    # avant que les appels de fonds correspondants ne soient generes.
+    # Consommes par _compute_mutation_breakdown (properties.py) pour calculer
+    # le transfert MUT-R du capital roulement engage, meme si aucun appel
+    # roulement n'a encore ete emis a la date de mutation.
+    reserve_fund_amount: Optional[float] = 0.0
+    reserve_fund_key_id: Optional[str] = ""
+    roulement_fund_amount: Optional[float] = 0.0
+    roulement_fund_key_id: Optional[str] = ""
 
 
 def create_fiscal_router(db):
@@ -802,6 +812,11 @@ def create_fiscal_router(db):
             "approved_by": None,
             "copropriete_id": data.copropriete_id or "",
             "created_at": datetime.now(timezone.utc).isoformat(),
+            # iter90cj : engagement AG reserve/roulement persiste des la creation
+            "reserve_fund_amount": round(float(data.reserve_fund_amount or 0), 2),
+            "reserve_fund_key_id": data.reserve_fund_key_id or "",
+            "roulement_fund_amount": round(float(data.roulement_fund_amount or 0), 2),
+            "roulement_fund_key_id": data.roulement_fund_key_id or "",
         }
         await db.budgets.insert_one(doc)
         return {k: v for k, v in doc.items() if k != "_id"}
@@ -829,6 +844,11 @@ def create_fiscal_router(db):
             # which writes `total_amount`. Older code may still read `total`.
             "total": round(total, 2),
             "total_amount": round(total, 2),
+            # iter90cj : engagement AG reserve/roulement mis a jour au vote
+            "reserve_fund_amount": round(float(data.reserve_fund_amount or 0), 2),
+            "reserve_fund_key_id": data.reserve_fund_key_id or "",
+            "roulement_fund_amount": round(float(data.roulement_fund_amount or 0), 2),
+            "roulement_fund_key_id": data.roulement_fund_key_id or "",
         }
         await db.budgets.update_one({"id": budget_id}, {"$set": update})
         return await db.budgets.find_one({"id": budget_id}, {"_id": 0})

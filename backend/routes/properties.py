@@ -880,7 +880,45 @@ def create_properties_router(db):
                         "debit": {"$sum": "$lines.debit"}}},
         ]
         agg = await db.journal_entries.aggregate(roul_pipeline).to_list(1)
-        fonds_roul_total = round((agg[0]["credit"] - agg[0]["debit"]) if agg else 0.0, 2)
+        fonds_roul_posted = round((agg[0]["credit"] - agg[0]["debit"]) if agg else 0.0, 2)
+
+        # iter90cj (Root Cause 2) : le fonds de roulement engage par l'AG ne
+        # correspond PAS forcement aux ecritures deja postees. Si la mutation
+        # intervient avant que les appels de roulement aient ete generes,
+        # posted_roulement = 0 alors qu'un capital est engage par le budget.
+        # Regle metier : le vendeur est engage sur le capital roulement vote,
+        # meme si l'appel n'a pas encore ete emis (art. 3.86 CDE, capital
+        # permanent). On prend donc max(posted, budgeted).
+        budgeted_roulement = 0.0
+        try:
+            sale_dt_iso = sale_dt.isoformat() if hasattr(sale_dt, "isoformat") else str(sale_dt)
+            # Trouve tous les FY (approuves/ouverts) couvrant sale_dt
+            fys_covering = [
+                fy async for fy in db.fiscal_years.find(
+                    {"copropriete_id": copro_id,
+                     "start_date": {"$lte": sale_dt_iso},
+                     "end_date": {"$gte": sale_dt_iso}},
+                    {"_id": 0, "id": 1},
+                )
+            ]
+            fy_ids = [fy["id"] for fy in fys_covering]
+            if fy_ids:
+                # Budget vote (approved) le plus recent pour cette FY
+                budget_covering = await db.budgets.find_one(
+                    {"copropriete_id": copro_id,
+                     "fiscal_year_id": {"$in": fy_ids},
+                     "status": "approved"},
+                    {"_id": 0},
+                    sort=[("approved_at", -1)],
+                )
+                if budget_covering:
+                    budgeted_roulement = float(
+                        budget_covering.get("roulement_fund_amount", 0) or 0
+                    )
+        except Exception as _e:
+            print(f"[iter90cj] budget lookup for roulement failed (soft): {_e}")
+
+        fonds_roul_total = round(max(fonds_roul_posted, budgeted_roulement), 2)
 
         # iter90ab : fonds de roulement / reserve = cle de repartition GENERALE
         # (celle marquee is_default=true), et non plus lot.quotity.
@@ -1433,22 +1471,37 @@ def create_properties_router(db):
             # _rebind_owner_at_call_date (fund_calls.py) lit dans db.mutations,
             # laissant les mutations invisibles lors de la generation d'appels
             # post-mutation. On corrige en peuplant les deux endroits.
+            # iter90cj : upsert idempotent + log critical si echec (user choix B :
+            # ne bloque pas mais alerte). Le backfill defensif dans les lecteurs
+            # (_ensure_mutations_synced_for_acp) rattrape la situation a la lecture.
+            _mutations_doc = {
+                "id": mut_rec["id"],
+                "copropriete_id": copro_id,
+                "lot_id": lt["id"],
+                "from_owner_id": old_owner_id,
+                "to_owner_id": data.new_owner_id,
+                "sale_date": sale_date,
+                "roulement_quota": r_quota,
+                "current_period_prorata": c_prorata,
+                "total_transfer": t_transfer,
+                "journal_entry_ids": journal_entry_ids,
+                "created_at": mut_rec["created_at"],
+            }
             try:
-                await db.mutations.insert_one({
-                    "id": mut_rec["id"],
-                    "copropriete_id": copro_id,
-                    "lot_id": lt["id"],
-                    "from_owner_id": old_owner_id,
-                    "to_owner_id": data.new_owner_id,
-                    "sale_date": sale_date,
-                    "roulement_quota": r_quota,
-                    "current_period_prorata": c_prorata,
-                    "total_transfer": t_transfer,
-                    "journal_entry_ids": journal_entry_ids,
-                    "created_at": mut_rec["created_at"],
-                })
+                await db.mutations.update_one(
+                    {"id": mut_rec["id"]}, {"$set": _mutations_doc}, upsert=True,
+                )
             except Exception as _me:
-                print(f"[iter90cf] mutations collection insert failed (soft): {_me}")
+                # Log CRITICAL (user choix B). Le backfill defensif dans les
+                # lecteurs rattrapera la situation en lisant lot.mutations[].
+                import logging
+                logging.critical(
+                    "[iter90cj][CRITICAL] db.mutations upsert failed for lot=%s "
+                    "sale_date=%s mutation_id=%s : %s. Fallback : lot.mutations[] "
+                    "reste peuple, _ensure_mutations_synced_for_acp backfill "
+                    "a la volee lors des reads suivants.",
+                    lt.get("id"), sale_date, mut_rec.get("id"), _me,
+                )
 
             # iter85 : NEUTRALISATION de la regeneration des appels futurs.
             # La nouvelle approche cree une OD (DR acheteur / CR vendeur) a la date

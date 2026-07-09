@@ -88,6 +88,13 @@ export default function FiscalYearPage() {
       fiscal_year_id: openFy?.id || '',
       name: 'Budget previsionnel ' + (openFy?.name || ''),
       lines: [],
+      // iter90cj : engagement AG reserve/roulement des la creation du budget.
+      // Permet a _compute_mutation_breakdown de connaitre l'engagement meme si
+      // le wizard n'a pas encore genere les appels a la date de mutation.
+      reserve_fund_amount: 0,
+      reserve_fund_key_id: '',
+      roulement_fund_amount: 0,
+      roulement_fund_key_id: '',
     });
     // Fetch previous year aggregation for hint
     try {
@@ -106,6 +113,11 @@ export default function FiscalYearPage() {
       fiscal_year_id: b.fiscal_year_id,
       name: b.name,
       lines: (b.lines || []).map(l => ({ ...l })),
+      // iter90cj : rehydrate engagement reserve/roulement pour edition
+      reserve_fund_amount: Number(b.reserve_fund_amount || 0),
+      reserve_fund_key_id: b.reserve_fund_key_id || '',
+      roulement_fund_amount: Number(b.roulement_fund_amount || 0),
+      roulement_fund_key_id: b.roulement_fund_key_id || '',
     });
     try {
       const { data } = await api.get('/fiscal/previous-year-expenses', { params: { fiscal_year_id: b.fiscal_year_id } });
@@ -460,6 +472,65 @@ export default function FiscalYearPage() {
                 <div className="flex items-center gap-3">
                   <span className="text-xs text-slate-500 uppercase tracking-wider">Total</span>
                   <span className="font-mono font-bold text-base text-slate-900">{totalBudget.toFixed(2)} EUR</span>
+                </div>
+              </div>
+            </div>
+
+            {/* iter90cj : Engagement AG Fonds de reserve + Fonds de roulement */}
+            <div className="border border-slate-200 rounded-md bg-white p-4">
+              <div className="text-[11px] uppercase tracking-wider text-slate-600 font-semibold mb-3">
+                Engagement AG - Fonds permanents (facultatif)
+              </div>
+              <div className="text-xs text-slate-500 mb-3">
+                Montants engages par l&apos;AG des le vote du budget. Ces montants seront utilises pour calculer le transfert
+                du capital roulement lors des mutations, meme avant que l&apos;assistant d&apos;appels de fonds ne soit lance.
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <label className="form-label">Fonds de reserve (EUR)</label>
+                  <Input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={budgetForm.reserve_fund_amount || 0}
+                    onChange={e => setBudgetForm({...budgetForm, reserve_fund_amount: Number(e.target.value) || 0})}
+                    data-testid="budget-reserve-fund-amount"
+                    placeholder="0.00"
+                  />
+                  <select
+                    className="w-full border border-slate-200 rounded-md px-3 py-2 text-sm bg-white hover:border-slate-300 transition"
+                    value={budgetForm.reserve_fund_key_id || ''}
+                    onChange={e => setBudgetForm({...budgetForm, reserve_fund_key_id: e.target.value})}
+                    data-testid="budget-reserve-fund-key"
+                  >
+                    <option value="">Cle de repartition (defaut = generale)</option>
+                    {distKeys.map(k => (
+                      <option key={k.id} value={k.id}>{k.name}{k.is_default ? ' (defaut)' : ''}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="space-y-2">
+                  <label className="form-label">Fonds de roulement (EUR)</label>
+                  <Input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={budgetForm.roulement_fund_amount || 0}
+                    onChange={e => setBudgetForm({...budgetForm, roulement_fund_amount: Number(e.target.value) || 0})}
+                    data-testid="budget-roulement-fund-amount"
+                    placeholder="0.00"
+                  />
+                  <select
+                    className="w-full border border-slate-200 rounded-md px-3 py-2 text-sm bg-white hover:border-slate-300 transition"
+                    value={budgetForm.roulement_fund_key_id || ''}
+                    onChange={e => setBudgetForm({...budgetForm, roulement_fund_key_id: e.target.value})}
+                    data-testid="budget-roulement-fund-key"
+                  >
+                    <option value="">Cle de repartition (defaut = generale)</option>
+                    {distKeys.map(k => (
+                      <option key={k.id} value={k.id}>{k.name}{k.is_default ? ' (defaut)' : ''}</option>
+                    ))}
+                  </select>
                 </div>
               </div>
             </div>
