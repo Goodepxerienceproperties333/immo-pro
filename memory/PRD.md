@@ -12,6 +12,44 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 
+### Iter90cj-bis (Feb 2026) - Differenciation visuelle du formulaire d'appel manuel
+
+**Ticket utilisateur** :
+> "lors de creation d'appels manuel sans le wizzard il faut differencier les
+> choses. Il est donc possible d'appeler des provisions pour charge, fonds de
+> reserve, fonds de roulement. Il n'est absolument pas necessaire de mettre
+> des natures de depenses dans cette partie de l'appel c'est juste un montant."
+
+**Etat existant** : formulaire "Nouvel appel de fonds" (FundCallsPage) exposait
+deja 4 types via dropdown `call_type` et n'exigeait deja pas de nature de
+depense. Mais visuellement rien ne differenciait les 3 types principaux -
+le syndic pouvait se sentir perdu.
+
+**Fix (frontend uniquement, FundCallsPage.js)** :
+- Remplace le dropdown Select par **3 grosses cartes cliquables** (Provisions
+  blue / Reserve purple / Roulement emerald) affichees en grille, avec icone,
+  label et description.
+- Etat actif : fond colore + border colore + shadow. Etat inactif : bordure
+  slate legere avec hover.
+- data-testid="call-type-card-provisions" / "-reserve" / "-roulement" pour
+  tests E2E.
+- **Appel special** relegue en bouton secondaire discret sous les 3 cartes
+  (usage exceptionnel, pas visuellement egal aux 3 types normaux).
+- **Banner d'info** apparait automatiquement quand reserve ou roulement est
+  selectionne : "Ce type d'appel alimente directement le compte capital
+  (classe 1). Aucune nature de depense a specifier."
+- Layout global elargi (max-w-2xl au lieu de max-w-lg) pour donner de la place
+  aux 3 cartes. Reorganisation : Type -> Nom -> Date/Echeance -> Montant ->
+  Cle -> Description.
+- Tous les data-testid preserves ou ajoutes (call-name, call-date, call-amount,
+  call-key-select, call-description, call-save-btn).
+
+**Note** : aucun changement backend. Le comportement API reste identique
+(POST /api/fund-calls avec call_type in {provisions, reserve, roulement,
+special}). La logique iter90ah continue de gerer la comptabilite correcte
+(credit 160 pour reserve, 100 pour roulement, 700000 pour provisions).
+
+
 ### Iter90cj (Feb 2026) - 2 root causes fond de roulement transferable APRES mutation
 
 **Ticket utilisateur (PROD ACP Acacia)** :

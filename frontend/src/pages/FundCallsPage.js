@@ -588,41 +588,71 @@ export default function FundCallsPage() {
       </div>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="max-w-lg" data-testid="call-dialog">
+        <DialogContent className="max-w-2xl" data-testid="call-dialog">
           <DialogHeader><DialogTitle style={{fontFamily:'Chivo,sans-serif'}}>Nouvel appel de fonds</DialogTitle></DialogHeader>
-          <div className="space-y-4 mt-2">
+          <div className="space-y-5 mt-2">
+            {/* Selection visuelle du type d'appel */}
+            <div>
+              <label className="form-label mb-2 block">Type d&apos;appel *</label>
+              <div className="grid grid-cols-3 gap-2" data-testid="call-type-cards">
+                {['provisions', 'reserve', 'roulement'].map(t => {
+                  const meta = CALL_TYPES[t];
+                  const Icon = meta.icon;
+                  const active = form.call_type === t;
+                  return (
+                    <button
+                      key={t}
+                      type="button"
+                      onClick={() => setForm({ ...form, call_type: t })}
+                      data-testid={`call-type-card-${t}`}
+                      className={`text-left rounded-lg border-2 p-3 transition ${
+                        active
+                          ? `${meta.chipBg} ${meta.color} border-current shadow-sm`
+                          : 'bg-white border-slate-200 hover:border-slate-300 hover:bg-slate-50'
+                      }`}
+                    >
+                      <div className={`flex items-center gap-2 mb-1.5 ${active ? meta.accent : 'text-slate-700'}`}>
+                        <Icon size={16} strokeWidth={2} />
+                        <span className="font-semibold text-sm">{meta.label}</span>
+                      </div>
+                      <div className={`text-[11px] leading-snug ${active ? meta.accent : 'text-slate-500'}`}>
+                        {meta.desc}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+              {/* Appel special en secondaire */}
+              <button
+                type="button"
+                onClick={() => setForm({ ...form, call_type: 'special' })}
+                data-testid="call-type-card-special"
+                className={`mt-2 w-full flex items-center gap-2 rounded-md border px-3 py-2 text-xs transition ${
+                  form.call_type === 'special'
+                    ? `${CALL_TYPES.special.chipBg} ${CALL_TYPES.special.color} border-current`
+                    : 'bg-white border-slate-200 hover:border-slate-300 text-slate-600'
+                }`}
+              >
+                <AlertTriangle size={12} />
+                <span className="font-medium">Appel special</span>
+                <span className="text-[11px] opacity-70">- {CALL_TYPES.special.desc}</span>
+              </button>
+              {/* Info : pas de nature de depense pour les fonds permanents */}
+              {(form.call_type === 'reserve' || form.call_type === 'roulement') && (
+                <div className={`mt-2 rounded-md border ${CALL_TYPES[form.call_type].color} px-3 py-2 text-[11px]`} data-testid="call-type-info">
+                  Ce type d&apos;appel alimente directement le compte capital
+                  (classe 1). Aucune nature de depense a specifier - juste un
+                  montant et une cle de repartition.
+                </div>
+              )}
+            </div>
+
             <div><label className="form-label">Nom *</label><Input value={form.name} onChange={e => setForm({...form, name: e.target.value})} data-testid="call-name" placeholder="Appel Q1 2025" /></div>
             <div className="grid grid-cols-2 gap-4">
-              <div><label className="form-label">Date *</label><Input type="date" value={form.date} onChange={e => setForm({...form, date: e.target.value})} /></div>
-              <div><label className="form-label">Echeance</label><Input type="date" value={form.due_date} onChange={e => setForm({...form, due_date: e.target.value})} /></div>
+              <div><label className="form-label">Date *</label><Input type="date" value={form.date} onChange={e => setForm({...form, date: e.target.value})} data-testid="call-date" /></div>
+              <div><label className="form-label">Echeance</label><Input type="date" value={form.due_date} onChange={e => setForm({...form, due_date: e.target.value})} data-testid="call-due-date" /></div>
             </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div><label className="form-label">Type d&apos;appel</label>
-                <Select value={form.call_type} onValueChange={v => setForm({...form, call_type: v})}>
-                  <SelectTrigger data-testid="call-type-select"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="provisions">
-                      <span className="inline-flex items-center gap-2"><Banknote size={12} className="text-blue-600" /> Provisions sur charges</span>
-                    </SelectItem>
-                    <SelectItem value="reserve">
-                      <span className="inline-flex items-center gap-2"><ShieldCheck size={12} className="text-purple-600" /> Fonds de reserve (gros travaux)</span>
-                    </SelectItem>
-                    <SelectItem value="roulement">
-                      <span className="inline-flex items-center gap-2"><Wallet size={12} className="text-emerald-600" /> Fonds de roulement (tresorerie permanente)</span>
-                    </SelectItem>
-                    <SelectItem value="special">
-                      <span className="inline-flex items-center gap-2"><AlertTriangle size={12} className="text-orange-600" /> Appel special (hors budget)</span>
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
-                {form.call_type && (
-                  <p className="text-[11px] text-slate-500 mt-1.5 leading-snug" data-testid="call-type-help">
-                    {getCallTypeMeta(form.call_type).desc}
-                  </p>
-                )}
-              </div>
-              <div><label className="form-label">Montant total *</label><Input type="number" step="0.01" value={form.total_amount} onChange={e => setForm({...form, total_amount: e.target.value})} data-testid="call-amount" /></div>
-            </div>
+            <div><label className="form-label">Montant total *</label><Input type="number" step="0.01" value={form.total_amount} onChange={e => setForm({...form, total_amount: e.target.value})} data-testid="call-amount" /></div>
             <div><label className="form-label">Cle de repartition</label>
               <Select value={form.distribution_key_id} onValueChange={v => setForm({...form, distribution_key_id: v})}>
                 <SelectTrigger data-testid="call-key-select"><SelectValue placeholder={distKeys.length ? "Selectionner une cle" : "Aucune cle - creez-en une"} /></SelectTrigger>
@@ -635,7 +665,7 @@ export default function FundCallsPage() {
                 </SelectContent>
               </Select>
             </div>
-            <div><label className="form-label">Description</label><Input value={form.description} onChange={e => setForm({...form, description: e.target.value})} /></div>
+            <div><label className="form-label">Description (facultatif)</label><Input value={form.description} onChange={e => setForm({...form, description: e.target.value})} data-testid="call-description" placeholder="Remarques, contexte..." /></div>
             <div className="flex gap-3 justify-end">
               <Button variant="outline" onClick={() => setDialogOpen(false)}>Annuler</Button>
               <Button onClick={saveCall} className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="call-save-btn">Creer</Button>
