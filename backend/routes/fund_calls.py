@@ -485,37 +485,41 @@ async def generate_prorata_mut_ods_for_call(db, call_doc: dict) -> dict:
 
                 # Recherche du budget vote couvrant sale_date
                 budget = _budget_covering(sale_date_iso)
-                if not budget:
-                    # iter90ck : aucun budget approuve couvrant sale_date -> vraie erreur.
+                budgeted_roul = float(
+                    (budget or {}).get("roulement_fund_amount", 0) or 0
+                )
+                # iter90ck-bis (user clarification Feb 2026) : la base doit
+                # TOUJOURS etre max(posted, budgeted). Le compte 100 au bilan
+                # (somme des augmentations historiques + repris du bilan
+                # precedent) prime si superieur au budget vote.
+                # Cas A (fresh ACP)         : posted=0, budget=5200  -> 5200
+                # Cas B (ACP coherente)     : posted=5200, budget=5200 -> 5200
+                # Cas C (partiellement col.) : posted=3000, budget=5200 -> 5200
+                # Cas D (roulement augmente) : posted=8000, budget=5200 -> 8000
+                # Cas E (rien engage)       : posted=0, budget=0      -> erreur
+                posted_agg = await db.journal_entries.aggregate([
+                    {"$match": {"copropriete_id": copro_id}},
+                    {"$unwind": "$lines"},
+                    {"$match": {"lines.account_number": "100"}},
+                    {"$group": {"_id": None,
+                                "credit": {"$sum": "$lines.credit"},
+                                "debit": {"$sum": "$lines.debit"}}},
+                ]).to_list(1)
+                posted_roul = float(
+                    (posted_agg[0]["credit"] - posted_agg[0]["debit"])
+                    if posted_agg else 0.0
+                )
+                budgeted_roul = max(posted_roul, budgeted_roul)
+                if budgeted_roul <= 0.001:
+                    # Cas E : ni compte 100 ni budget engage -> erreur visible
+                    # (uniquement pour appels wizard cf. check budget_id plus bas).
                     missing_budgets.append({
                         "lot_id": lot_id,
                         "sale_date": sale_date_iso,
                         "mutation_id": mut_id,
-                        "reason": "no_approved_budget",
+                        "reason": "no_engagement_no_posted",
                     })
                     continue
-                budgeted_roul = float(
-                    budget.get("roulement_fund_amount", 0) or 0
-                )
-                if budgeted_roul <= 0.001:
-                    # Budget existe mais roulement=0 : verifie posted (compte 100)
-                    posted_agg = await db.journal_entries.aggregate([
-                        {"$match": {"copropriete_id": copro_id}},
-                        {"$unwind": "$lines"},
-                        {"$match": {"lines.account_number": "100"}},
-                        {"$group": {"_id": None,
-                                    "credit": {"$sum": "$lines.credit"},
-                                    "debit": {"$sum": "$lines.debit"}}},
-                    ]).to_list(1)
-                    posted_roul = float(
-                        (posted_agg[0]["credit"] - posted_agg[0]["debit"])
-                        if posted_agg else 0.0
-                    )
-                    if posted_roul <= 0.001:
-                        # Budget avec roulement=0 ET aucun posted -> aucun
-                        # transfert legitime (choix AG). Skip silencieusement.
-                        continue
-                    budgeted_roul = posted_roul
 
                 # Calcul de la quote-part du lot dans la cle par defaut
                 if not default_key or not default_key.get("lots"):

@@ -356,6 +356,75 @@ async def _scenario_visible_error_when_no_budget_roulement():
         await _cleanup(ctx)
 
 
+# ============================================================================
+# SCENARIO 3 : Cas D - solde compte 100 > budget engage -> base = solde 100
+# ============================================================================
+async def _scenario_posted_greater_than_budget_uses_posted():
+    """User clarification Feb 2026 : la base est TOUJOURS max(posted, budgeted).
+    Si le compte 100 au bilan a un solde superieur au budget vote (cas d'un
+    roulement augmente via OD historique ou repris du bilan precedent), on
+    utilise ce solde comme base.
+
+    Cas D : posted=8000 (via OD historique) > budget=5200 -> base=8000
+    Transfert attendu pour lot 1056/10000 : 8000 * 1056/10000 = 844.80 EUR.
+    """
+    ctx = await _setup_acacia_scenario("iter90ck-case-d-posted")
+    try:
+        async with httpx.AsyncClient(timeout=45) as client:
+            hdr = await _login(client)
+            budget = await _create_approved_budget(client, hdr, ctx)
+
+            # Injecte une OD historique qui credite compte 100 pour 8000 EUR
+            # (represente une augmentation votee anterieure ou un solde
+            # d'ouverture repris du bilan precedent).
+            from uuid import uuid4
+            await ctx["db"].journal_entries.insert_one({
+                "id": str(uuid4()),
+                "journal_type": "OD",
+                "date": "2025-01-01",
+                "reference": "OD-OUV-2025",
+                "description": "Reprise solde roulement historique",
+                "lines": [
+                    {"account_number": "4100003", "account_name": "Reprise",
+                     "debit": 8000.0, "credit": 0.0},
+                    {"account_number": "100", "account_name": "Roulement",
+                     "debit": 0.0, "credit": 8000.0},
+                ],
+                "total_debit": 8000.0, "total_credit": 8000.0,
+                "copropriete_id": ctx["cid"],
+            })
+
+            await _create_legacy_mutation(ctx, sale_date="2025-11-18")
+
+            r = await client.post(f"{BACKEND_URL}/api/fund-calls/generate-from-budget",
+                                  headers=hdr, json={
+                "budget_id": budget["id"],
+                "copropriete_id": ctx["cid"],
+                "frequency": 4,
+                "start_date": "2025-01-01",
+                "due_offset_days": 30,
+                "reserve_fund": {"enabled": False, "amount": 0.0},
+                "roulement_fund": {"enabled": False, "amount": 0.0},
+            })
+            assert r.status_code == 200, r.text
+
+            mutr = await ctx["db"].journal_entries.find({
+                "copropriete_id": ctx["cid"],
+                "source_type": "lot_mutation",
+                "source_subtype": "fonds_roulement",
+            }, {"_id": 0}).to_list(100)
+            total_mutr = round(sum(float(e["total_debit"]) for e in mutr), 2)
+            # 8000 * 1056/10000 = 844.80 EUR (pas 549.12 du budget)
+            assert total_mutr == 844.80, (
+                f"REGRESSION iter90ck cas D : quand le compte 100 a un solde "
+                f"(8000) superieur au budget (5200), la base doit etre le "
+                f"SOLDE (max(posted, budgeted)). Transfert attendu : 844.80 "
+                f"EUR (8000 * 1056/10000). Obtenu : {total_mutr} EUR."
+            )
+    finally:
+        await _cleanup(ctx)
+
+
 # ============================ Tests entry points ==========================
 def test_backfill_od_mutr_from_call_generation():
     asyncio.run(_scenario_backfill_od_mutr_from_call_generation())
@@ -363,6 +432,10 @@ def test_backfill_od_mutr_from_call_generation():
 
 def test_visible_error_when_no_budget_roulement():
     asyncio.run(_scenario_visible_error_when_no_budget_roulement())
+
+
+def test_posted_greater_than_budget_uses_posted():
+    asyncio.run(_scenario_posted_greater_than_budget_uses_posted())
 
 
 if __name__ == "__main__":

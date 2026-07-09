@@ -12,6 +12,71 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 
+### Iter90ck (Feb 2026) - Backfill retroactif OD MUT-R lors de la generation d'appels post-mutation
+
+**Ticket utilisateur (Acacia)** :
+- Cas concret : mutation Matexi->buyer 18/11/2025 passee AVANT le fix iter90cj
+  (roulement_quota=0 fige dans db.mutations malgre budget engage 5200).
+- Budget vote avec 2 cles de repartition differentes :
+  - Ligne "Charges communes generales" 18800 EUR -> cle commune (Appt+Cave+Parking 1056/10000)
+  - Ligne "Charges speciales ascenseur" 200 EUR -> cle ascenseur (Appt seul 1361/10000)
+  - Roulement 5200 EUR
+- Symptomes constates : appels generes post-mutation, aucune OD MUT-R,
+  prorata trimestriel affiche 579.01 EUR au lieu de 240.57 EUR attendus.
+
+**Fix (2 volets)** :
+
+**A. Backfill OD MUT-R dans `generate_prorata_mut_ods_for_call`** (fund_calls.py) :
+- Pour chaque mutation dans [period_start, period_end] du call genere :
+  1. Verifie si OD MUT-R (source_subtype='fonds_roulement') existe pour ce
+     lot + cette date de mutation.
+  2. Si NON : calcule la base = **max(solde_compte_100, roulement_fund_amount_budget)**
+     - Solde 100 = SUM(credit lines[100]) - SUM(debit lines[100]) sur tout
+       l'historique = "somme des augmentations du fonds de roulement + le
+       montant deja repris dans le bilan" (user clarification).
+     - Cas D locked : posted=8000, budget=5200 -> base=8000 (pas 5200).
+  3. Calcule quote-part = base * lot_share/key_total_quotity (cle par defaut)
+  4. Cree OD MUT-R avec date=sale_date, source_subtype='fonds_roulement',
+     backfilled_by_iter90ck=True.
+  5. Met a jour db.mutations.roulement_quota et journal_entry_ids.
+- Si base == 0 (Cas E : ni budget engagement ni solde 100) ET l'appel provient
+  du wizard (call_doc.budget_id present) -> raise HTTPException 400 avec
+  message clair. Les appels manuels (POST /fund-calls sans budget_id) sont
+  silencieusement skipes (le syndic decide sciemment).
+
+**B. Distribution multi-cles preservee dans le calcul prorata** :
+- Le wizard `_generate_from_budget` (fund_calls.py L1224-1248) applique deja
+  correctement la cle propre a chaque budget line via `_distribute_amount`,
+  puis aggregation par (lot, owner). L'entry.amount post-agregation est donc
+  correct : 503.13 EUR pour les 3 lots Matexi (4700 * 1056/10000 + 50 * 1361/10000
+  = 496.32 + 6.81).
+- `generate_prorata_mut_ods_for_call` utilise entry.amount * seg_days/total_days
+  -> prorata buyer 44/92 jours = 503.13 * 44/92 = 240.57 EUR ✓.
+
+**Propagation HTTPException** :
+- Les 2 try/except a L826 et L1702 (dans _generate_from_budget) qui appellent
+  `generate_prorata_mut_ods_for_call` sont modifies pour propager
+  HTTPException et ne swallow que les autres exceptions (log soft).
+
+**Tests** (`test_iter90ck_retroactive_od_mutr_from_calls.py` - 3/3 PASS) :
+1. `test_backfill_od_mutr_from_call_generation` : cas Acacia (fresh ACP,
+   budget 5200) -> OD MUT-R 549.12 creee + OD MUT-P 240.57.
+2. `test_visible_error_when_no_budget_roulement` : cas E (rien engage) ->
+   HTTPException 400 avec message clair.
+3. `test_posted_greater_than_budget_uses_posted` : cas D (solde 100 = 8000,
+   budget = 5200) -> transfert = 844.80 (base=8000).
+
+**Regression** : iter90cf (5), cg (5), ch (3), ci (1), cj (3), ck (3) tous PASS.
+
+**Note utilisateur PROD (ACP Acacia)** :
+- Pour recuperer les 549.12 EUR + 240.57 EUR sur l'ancienne mutation :
+  1. Editer le budget de la FY 2025 et fixer roulement_fund_amount=5200 (via
+     le formulaire budget iter90cj).
+  2. Annuler manuellement les appels Q4 concernes (bouton supprimer).
+  3. Regenerer les appels via le wizard -> declenche le backfill iter90ck
+     qui cree l'OD MUT-R 549.12 + OD MUT-P 240.57.
+
+
 ### Iter90cj-ter (Feb 2026) - Export PDF du budget previsionnel
 
 **Ticket utilisateur** : "il faut pouvoir exporter le budget en format PDF"
