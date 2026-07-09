@@ -521,8 +521,12 @@ export default function JournalsPage() {
       </Dialog>
       {/* Attachments Dialog (per existing entry) */}
       <Dialog open={!!attachDialogEntry} onOpenChange={() => setAttachDialogEntry(null)}>
-        <DialogContent className="max-w-lg" data-testid="entry-attach-dialog">
-          <DialogHeader><DialogTitle style={{fontFamily:'Chivo,sans-serif'}}>Pieces jointes - {attachDialogEntry?.reference || attachDialogEntry?.description}</DialogTitle></DialogHeader>
+        <DialogContent className="max-w-2xl w-[min(92vw,720px)]" data-testid="entry-attach-dialog">
+          <DialogHeader>
+            <DialogTitle style={{fontFamily:'Chivo,sans-serif'}} className="truncate pr-8">
+              Pieces jointes - {attachDialogEntry?.reference || attachDialogEntry?.description}
+            </DialogTitle>
+          </DialogHeader>
           <div className="space-y-3 mt-2">
             <div className="border-2 border-dashed rounded p-4 text-center">
               <input type="file" accept="application/pdf,image/*" className="hidden" id="att-input-entry"
@@ -535,13 +539,19 @@ export default function JournalsPage() {
               {(attachDialogEntry?.attachments || []).length === 0 ? (
                 <div className="text-sm text-slate-400 text-center py-3">Aucune piece jointe</div>
               ) : attachDialogEntry.attachments.map((a) => (
-                <div key={a.id} className="flex items-center justify-between border rounded px-2 py-1.5 text-sm">
-                  <span className="truncate flex items-center gap-2"><Paperclip size={12} />{a.filename}</span>
-                  <div className="flex gap-1">
-                    <a href={`${API}/api/accounting/entries/${attachDialogEntry.id}/attachments/${a.id}/download`} target="_blank" rel="noreferrer">
+                <div key={a.id} className="flex items-center gap-2 border rounded px-2 py-1.5 text-sm min-w-0">
+                  <span
+                    className="flex-1 min-w-0 truncate flex items-center gap-2"
+                    title={a.filename}
+                  >
+                    <Paperclip size={12} className="flex-shrink-0" />
+                    <span className="truncate">{a.filename}</span>
+                  </span>
+                  <div className="flex gap-1 flex-shrink-0">
+                    <a href={`${API}/api/accounting/entries/${attachDialogEntry.id}/attachments/${a.id}/download`} target="_blank" rel="noreferrer" title="Telecharger">
                       <Button variant="ghost" size="sm"><Download size={14} /></Button>
                     </a>
-                    <Button variant="ghost" size="sm" className="text-red-500" onClick={() => deleteEntryAttachment(attachDialogEntry.id, a.id)}><Trash2 size={14} /></Button>
+                    <Button variant="ghost" size="sm" className="text-red-500" onClick={() => deleteEntryAttachment(attachDialogEntry.id, a.id)} title="Supprimer"><Trash2 size={14} /></Button>
                   </div>
                 </div>
               ))}

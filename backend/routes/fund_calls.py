@@ -199,36 +199,39 @@ async def reverse_post_mutation_ods_for_call(db, call_id: str, reason: str = "")
 
 async def generate_prorata_mut_ods_for_call(db, call_doc: dict) -> dict:
     """
-    iter90cf : Genere retroactivement les OD 'Mutation - Prorata' pour un
-    appel de provisions dont la periode chevauche une ou plusieurs mutations
-    existantes.
+    iter90cf + iter90ck : Genere retroactivement les OD 'Mutation - Prorata'
+    (compte tier provisions) ET l'OD 'Mutation - Fonds de roulement' (compte
+    100 -> tier) pour un appel dont la periode chevauche une ou plusieurs
+    mutations existantes.
 
     Contexte : quand un appel est cree APRES une mutation, la logique de
     mutate_lot (properties.py) n'a pas pu creer l'OD MUT-P car l'appel
-    n'existait pas encore. Cette fonction rattrape le coup en :
-    1. Detectant, pour chaque ligne de distribution, si une mutation existe
-       dans la periode [period_start, period_end].
-    2. Calculant les segments (owner, jours) et generant une OD par segment
-       dont l'owner differe de l'owner de la distribution (DR nouvel owner /
-       CR distribution.owner_id) pour le montant prorata.
+    n'existait pas encore. iter90ck etend ce filet a l'OD MUT-R : si la
+    mutation existante n'a jamais recu d'OD fonds_roulement (cas legacy
+    avant iter90cj), cette fonction la cree retroactivement en lisant le
+    budget approuve pour la FY couvrant sale_date.
 
-    Regle metier (iter90cd) :
-    - Distribution.owner_id = owner-at-call-date (100% pour cet owner).
-    - Prorata temporis pour les jours 'apres mutation' : porte par OD
-      SEPAREE. Ce mecanisme evite le double-comptage vs mutate_lot.
+    Regles :
+    - OD MUT-P (source_subtype='prorata_post_mutation') : idempotente sur
+      reference MUTP-POST-{lot}-{call_id}-{to_owner}.
+    - OD MUT-R (source_subtype='fonds_roulement') : idempotente sur
+      reference MUT-{lot}-R et source_id=lot_id (ne double-pas les
+      ecritures deja creees par mutate_lot ou une precedente generation).
+    - Si aucune OD MUT-R n'existe ET aucun budget approuve avec
+      roulement_fund_amount > 0 ne couvre sale_date, RAISE HTTPException
+      400 avec message clair (user choix : visible error au lieu de EUR 0
+      silencieux).
 
-    Idempotence : verifie qu'aucune OD source_type='lot_mutation' avec
-    source_subtype='prorata' n'existe deja pour (source_id=lot_id,
-    call_date=call.date, mutation_id in reference).
-
-    Retourne : {"created": n, "skipped": n, "details": [...]}
+    Retourne : {"created": n, "mutr_created": n, "skipped": n, "details": [...]}
     """
     from datetime import date as _date_cls
     from tier_accounts import assign_owner_accounts
 
-    stats = {"created": 0, "skipped": 0, "details": []}
+    stats = {"created": 0, "mutr_created": 0, "skipped": 0, "details": []}
 
-    # Ne s'applique qu'aux appels de provisions
+    # Ne s'applique qu'aux appels de provisions (les OD MUT-P sont sur
+    # tier provisions ; l'OD MUT-R backfill s'applique aussi ici car c'est
+    # a la generation post-mutation qu'on decouvre le trou).
     if (call_doc.get("call_type") or "provisions") != "provisions":
         return stats
 
@@ -404,6 +407,237 @@ async def generate_prorata_mut_ods_for_call(db, call_doc: dict) -> dict:
                 "reference": ref,
                 "entry_id": od_entry["id"],
             })
+
+    # ============================================================
+    # iter90ck : BACKFILL retroactif de l'OD MUT-R (fonds de roulement)
+    # ============================================================
+    # Pour chaque lot touche par une mutation dans la periode de l'appel,
+    # verifier qu'une OD MUT-R (source_subtype='fonds_roulement') existe.
+    # Sinon, la creer en lisant le budget approuve couvrant sale_date.
+    # Si aucun budget approuve avec roulement > 0 ne couvre sale_date,
+    # collecte les manques et raise HTTPException 400 en fin de fonction.
+    from fastapi import HTTPException
+    missing_budgets = []
+
+    # Collecte des lots touches par une mutation dans la periode de l'appel
+    lots_to_check: dict = {}  # lot_id -> [mutation_docs]
+    for entry in (call_doc.get("distribution") or []):
+        lot_id = entry.get("lot_id") or ""
+        if not lot_id:
+            continue
+        for m in muts_by_lot.get(lot_id, []):
+            try:
+                sd = _date_cls.fromisoformat(m["sale_date"])
+            except Exception:
+                continue
+            if p_start <= sd <= p_end:
+                lots_to_check.setdefault(lot_id, []).append(m)
+
+    if lots_to_check:
+        # Chargement une fois : FY, budgets, distribution_keys
+        fys_map: dict = {}
+        async for _fy in db.fiscal_years.find(
+            {"copropriete_id": copro_id}, {"_id": 0}
+        ):
+            fys_map[_fy["id"]] = _fy
+        # Charge tous les budgets approuves de l'ACP (petit N)
+        approved_budgets = await db.budgets.find(
+            {"copropriete_id": copro_id, "status": "approved"}, {"_id": 0},
+        ).sort("approved_at", -1).to_list(100)
+        default_key = await db.distribution_keys.find_one(
+            {"copropriete_id": copro_id, "is_default": True}, {"_id": 0},
+        )
+
+        def _budget_covering(sale_date_iso: str) -> dict:
+            """Retourne le budget approuve le plus recent dont la FY couvre
+            sale_date, ou {} si aucun."""
+            for b in approved_budgets:
+                fy = fys_map.get(b.get("fiscal_year_id", ""))
+                if not fy:
+                    continue
+                if (fy.get("start_date", "") <= sale_date_iso
+                        <= fy.get("end_date", "")):
+                    return b
+            return {}
+
+        for lot_id, muts_in_period in lots_to_check.items():
+            for m in muts_in_period:
+                sale_date_iso = m.get("sale_date", "")
+                mut_id = m.get("id") or ""
+                from_owner = m.get("from_owner_id") or ""
+                to_owner = m.get("to_owner_id") or ""
+                if not (sale_date_iso and from_owner and to_owner):
+                    continue
+
+                # Idempotence : cherche une OD MUT-R deja existante pour ce
+                # lot ET cette mutation (par lot_id + date + source_subtype)
+                existing_mutr = await db.journal_entries.find_one({
+                    "copropriete_id": copro_id,
+                    "source_type": "lot_mutation",
+                    "source_subtype": "fonds_roulement",
+                    "source_id": lot_id,
+                    "date": sale_date_iso,
+                    "reversed": {"$ne": True},
+                    "is_reversal": {"$ne": True},
+                }, {"_id": 0})
+                if existing_mutr:
+                    continue
+
+                # Recherche du budget vote couvrant sale_date
+                budget = _budget_covering(sale_date_iso)
+                if not budget:
+                    # iter90ck : aucun budget approuve couvrant sale_date -> vraie erreur.
+                    missing_budgets.append({
+                        "lot_id": lot_id,
+                        "sale_date": sale_date_iso,
+                        "mutation_id": mut_id,
+                        "reason": "no_approved_budget",
+                    })
+                    continue
+                budgeted_roul = float(
+                    budget.get("roulement_fund_amount", 0) or 0
+                )
+                if budgeted_roul <= 0.001:
+                    # Budget existe mais roulement=0 : verifie posted (compte 100)
+                    posted_agg = await db.journal_entries.aggregate([
+                        {"$match": {"copropriete_id": copro_id}},
+                        {"$unwind": "$lines"},
+                        {"$match": {"lines.account_number": "100"}},
+                        {"$group": {"_id": None,
+                                    "credit": {"$sum": "$lines.credit"},
+                                    "debit": {"$sum": "$lines.debit"}}},
+                    ]).to_list(1)
+                    posted_roul = float(
+                        (posted_agg[0]["credit"] - posted_agg[0]["debit"])
+                        if posted_agg else 0.0
+                    )
+                    if posted_roul <= 0.001:
+                        # Budget avec roulement=0 ET aucun posted -> aucun
+                        # transfert legitime (choix AG). Skip silencieusement.
+                        continue
+                    budgeted_roul = posted_roul
+
+                # Calcul de la quote-part du lot dans la cle par defaut
+                if not default_key or not default_key.get("lots"):
+                    missing_budgets.append({
+                        "lot_id": lot_id, "sale_date": sale_date_iso,
+                        "mutation_id": mut_id, "reason": "no_default_key",
+                    })
+                    continue
+                lot_entry_in_key = next(
+                    (kl for kl in default_key["lots"] if kl.get("lot_id") == lot_id),
+                    None,
+                )
+                if not lot_entry_in_key or lot_entry_in_key.get("excluded"):
+                    continue
+                key_total = sum(
+                    float(kl.get("share", 0) or 0)
+                    for kl in default_key["lots"] if not kl.get("excluded")
+                )
+                lot_share = float(lot_entry_in_key.get("share", 0) or 0)
+                if key_total <= 0 or lot_share <= 0:
+                    continue
+                r_quota = round(budgeted_roul * (lot_share / key_total), 2)
+                if r_quota <= 0.001:
+                    continue
+
+                # Resoudre les comptes tiers
+                from_own = await _get_owner(from_owner)
+                to_own = await _get_owner(to_owner)
+                from_own = await assign_owner_accounts(db, from_own, copro_id)
+                to_own = await assign_owner_accounts(db, to_own, copro_id)
+                from_acc = (from_own.get("tier_accounts", {}) or {}).get(
+                    copro_id, {}).get("provisions")
+                to_acc = (to_own.get("tier_accounts", {}) or {}).get(
+                    copro_id, {}).get("provisions")
+                if not from_acc or not to_acc:
+                    print(f"[iter90ck] compte tier manquant pour lot {lot_id}: from={from_acc} to={to_acc}")
+                    continue
+
+                # Recupere lot_number pour la reference
+                lot_doc = await db.lots.find_one({"id": lot_id}, {"_id": 0, "number": 1})
+                lot_number = (lot_doc or {}).get("number", lot_id[:8])
+
+                od_mutr = {
+                    "id": str(uuid.uuid4()),
+                    "journal_type": "OD",
+                    "date": sale_date_iso,
+                    "reference": f"MUT-{lot_number[:18]}-R",
+                    "description": (
+                        f"Mutation lot {lot_number} - Fonds de roulement "
+                        f"(backfill retroactif via appel {call_doc.get('name','')}): "
+                        f"{from_own.get('name','')} -> {to_own.get('name','')} "
+                        f"({r_quota:.2f} EUR)"
+                    ),
+                    "lines": [
+                        {"account_number": to_acc,
+                         "account_name": f"Mutation - {to_own.get('last_name') or to_own.get('name')}",
+                         "debit": r_quota, "credit": 0.0,
+                         "third_party_id": to_owner,
+                         "third_party_name": to_own.get("name", "")},
+                        {"account_number": from_acc,
+                         "account_name": f"Mutation - {from_own.get('last_name') or from_own.get('name')}",
+                         "debit": 0.0, "credit": r_quota,
+                         "third_party_id": from_owner,
+                         "third_party_name": from_own.get("name", "")},
+                    ],
+                    "total_debit": r_quota,
+                    "total_credit": r_quota,
+                    "copropriete_id": copro_id,
+                    "auto_generated": False,
+                    "manually_edited": True,
+                    "source_type": "lot_mutation",
+                    "source_id": lot_id,
+                    "source_subtype": "fonds_roulement",
+                    "fund_call_id": call_id,  # trace de l'appel declencheur
+                    "backfilled_by_iter90ck": True,
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                }
+                await db.journal_entries.insert_one(od_mutr)
+                stats["mutr_created"] += 1
+                stats["details"].append({
+                    "kind": "fonds_roulement",
+                    "lot_id": lot_id, "lot_number": lot_number,
+                    "sale_date": sale_date_iso,
+                    "amount": r_quota,
+                    "entry_id": od_mutr["id"],
+                    "reference": od_mutr["reference"],
+                })
+
+                # Met a jour db.mutations.roulement_quota pour refleter le
+                # transfert reel (au cas ou l'utilisateur consulte le doc).
+                try:
+                    await db.mutations.update_one(
+                        {"id": mut_id},
+                        {"$set": {"roulement_quota": r_quota,
+                                  "journal_entry_ids": [od_mutr["id"]]}},
+                    )
+                except Exception as _e:
+                    print(f"[iter90ck] db.mutations update_one failed (soft): {_e}")
+
+    # Raise HTTPException si des mutations sans budget approuve ont ete
+    # rencontrees ET l'appel a ete genere par le wizard (call.budget_id
+    # existe). Pour les appels manuels (POST /fund-calls sans budget_id),
+    # on skip silencieusement (le syndic est cense connaitre ce qu'il fait).
+    # User choix : visible error au lieu de EUR 0 silencieux, mais uniquement
+    # dans le flux wizard car c'est la que le budget doit etre coherent.
+    if missing_budgets and call_doc.get("budget_id"):
+        details = "; ".join(
+            f"lot={mb['lot_id'][:8]} mutation={mb.get('mutation_id','?')[:8]} "
+            f"sale_date={mb['sale_date']}"
+            for mb in missing_budgets[:3]
+        )
+        suffix = f" ({len(missing_budgets) - 3} autres...)" if len(missing_budgets) > 3 else ""
+        raise HTTPException(
+            400,
+            f"Impossible de creer l'OD MUT-R (fonds de roulement) pour "
+            f"{len(missing_budgets)} mutation(s) : aucun budget approuve avec "
+            f"roulement_fund_amount > 0 ne couvre la sale_date. "
+            f"Editez le budget de la FY concernee et fixez le fonds de "
+            f"roulement engage par l'AG avant de regenerer les appels. "
+            f"Details : {details}{suffix}"
+        )
+
     return stats
 
 
@@ -601,6 +835,9 @@ def create_fund_calls_router(db):
             _mut_stats = await generate_prorata_mut_ods_for_call(db, clean)
             if _mut_stats.get("created"):
                 print(f"[iter90cf] {_mut_stats['created']} OD MUT-P retroactives creees pour {data.name}")
+        except HTTPException:
+            # iter90ck : propager les erreurs visibles (budget roulement manquant).
+            raise
         except Exception as _e:
             print(f"[iter90cf] retroactive OD generation skipped: {_e}")
         return clean
@@ -1477,6 +1714,9 @@ def create_fund_calls_router(db):
                 _mut_stats = await generate_prorata_mut_ods_for_call(db, doc)
                 if _mut_stats.get("created"):
                     print(f"[iter90cf] {_mut_stats['created']} OD MUT-P retroactives pour {doc.get('name','?')}")
+            except HTTPException:
+                # iter90ck : propager les erreurs visibles (budget roulement manquant).
+                raise
             except Exception as _e:
                 print(f"[iter90cf] retroactive OD (budget) skipped: {_e}")
             created_ids.append(doc["id"])

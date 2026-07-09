@@ -1669,8 +1669,12 @@ export default function InvoicesPage() {
       </Dialog>
       {/* Attachments Dialog */}
       <Dialog open={!!attachDialogInv} onOpenChange={() => setAttachDialogInv(null)}>
-        <DialogContent className="max-w-lg" data-testid="invoice-attach-dialog">
-          <DialogHeader><DialogTitle style={{fontFamily:'Chivo,sans-serif'}}>Pieces jointes - {attachDialogInv?.number}</DialogTitle></DialogHeader>
+        <DialogContent className="max-w-2xl w-[min(92vw,720px)]" data-testid="invoice-attach-dialog">
+          <DialogHeader>
+            <DialogTitle style={{fontFamily:'Chivo,sans-serif'}} className="truncate pr-8">
+              Pieces jointes - {attachDialogInv?.number}
+            </DialogTitle>
+          </DialogHeader>
           <div className="space-y-3 mt-2">
             <div className="border-2 border-dashed rounded p-4 text-center">
               <input type="file" accept="application/pdf,image/*" className="hidden" id="att-input-inv"
@@ -1688,20 +1692,22 @@ export default function InvoicesPage() {
                 const inlineUrl = `${API}/api/invoices/${attachDialogInv.id}/attachments/${a.id}/download?disposition=inline&copropriete_id=${coproId}`;
                 const downloadUrl = `${API}/api/invoices/${attachDialogInv.id}/attachments/${a.id}/download?copropriete_id=${coproId}`;
                 return (
-                  <div key={a.id} className="flex items-center justify-between border rounded px-2 py-1.5 text-sm">
+                  <div key={a.id} className="flex items-center gap-2 border rounded px-2 py-1.5 text-sm min-w-0">
                     <button
                       type="button"
-                      className="truncate flex items-center gap-2 text-left text-blue-600 hover:text-blue-800 hover:underline cursor-pointer"
+                      className="flex-1 min-w-0 truncate flex items-center gap-2 text-left text-blue-600 hover:text-blue-800 hover:underline cursor-pointer"
                       onClick={() => setViewerAttachment({ url: inlineUrl, filename: a.filename })}
                       data-testid={`view-attachment-${a.id}`}
+                      title={a.filename}
                     >
-                      <Paperclip size={12} />{a.filename}
+                      <Paperclip size={12} className="flex-shrink-0" />
+                      <span className="truncate">{a.filename}</span>
                     </button>
-                    <div className="flex gap-1">
+                    <div className="flex gap-1 flex-shrink-0">
                       <a href={downloadUrl} target="_blank" rel="noreferrer" title="Telecharger">
                         <Button variant="ghost" size="sm"><Download size={14} /></Button>
                       </a>
-                      <Button variant="ghost" size="sm" className="text-red-500" onClick={() => deleteInvoiceAttachment(attachDialogInv.id, a.id)}><Trash2 size={14} /></Button>
+                      <Button variant="ghost" size="sm" className="text-red-500" onClick={() => deleteInvoiceAttachment(attachDialogInv.id, a.id)} title="Supprimer"><Trash2 size={14} /></Button>
                     </div>
                   </div>
                 );
