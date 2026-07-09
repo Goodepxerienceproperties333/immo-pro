@@ -863,7 +863,7 @@ export default function LotsPage() {
   const runAudit = async () => {
     const coproId = localStorage.getItem('selectedCopro') || localStorage.getItem('copropriete_id') || '';
     if (!coproId) { toast.error('Selectionnez une copropriete'); return; }
-    setAuditLoading(true); setAuditResult(null);
+    setAuditLoading(true); setAuditResult(null); setRepairResult(null);
     try {
       const { data } = await api.get('/lots/ownership-audit', {
         params: { copropriete_id: coproId, at_date: auditAt, founder_owner_id: auditFounderId || undefined },
@@ -872,6 +872,39 @@ export default function LotsPage() {
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Erreur audit');
     } finally { setAuditLoading(false); }
+  };
+
+  // iter90cm-bis : Reparation retroactive de l'ownership fondateur.
+  const [repairResult, setRepairResult] = useState(null);
+  const [repairLoading, setRepairLoading] = useState(false);
+  const [repairStartDate, setRepairStartDate] = useState('2020-01-01');
+  const runRepair = async (dryRun) => {
+    const coproId = localStorage.getItem('selectedCopro') || localStorage.getItem('copropriete_id') || '';
+    if (!coproId || !auditFounderId) { toast.error('Selectionnez copropriete + fondateur'); return; }
+    if (!dryRun && !window.confirm(
+      `Vous allez modifier retroactivement l'historique de mutations pour rendre ${
+        auditResult?.founder_owner_name || 'le fondateur'
+      } proprietaire de tous les lots problematiques a la date ${repairStartDate}.\n\nCette action est irreversible. Confirmer ?`
+    )) return;
+    setRepairLoading(true);
+    try {
+      const { data } = await api.post('/lots/repair-founder-ownership', {
+        copropriete_id: coproId,
+        founder_owner_id: auditFounderId,
+        founder_start_date: repairStartDate,
+        dry_run: dryRun,
+      });
+      setRepairResult(data);
+      toast.success(dryRun
+        ? `${data.cases_a_count + data.cases_b_count} lot(s) a reparer (simulation)`
+        : `${data.applied.cases_a + data.applied.cases_b} lot(s) repare(s)`);
+      if (!dryRun) {
+        // Refresh audit apres reparation
+        await runAudit();
+      }
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur reparation');
+    } finally { setRepairLoading(false); }
   };
 
   return (
@@ -1109,6 +1142,61 @@ export default function LotsPage() {
                       <div><span className="text-slate-500">Écart</span><div className={`font-mono font-bold ${auditResult.gap_quotity > 0.01 ? 'text-red-600' : 'text-green-600'}`}>{auditResult.gap_quotity}</div></div>
                       <div><span className="text-slate-500">Lots flagués</span><div className="font-mono font-bold">{auditResult.flagged_count}</div></div>
                     </div>
+                  </div>
+                )}
+                {/* iter90cm-bis : Bloc reparation retroactive */}
+                {auditFounderId && auditResult.gap_quotity > 0.01 && (
+                  <div className="rounded-md border-2 border-blue-300 bg-blue-50 p-3">
+                    <div className="text-sm font-semibold mb-2 text-blue-900">
+                      Réparation retroactive - Assigner {auditResult.founder_owner_name} comme propriétaire fondateur
+                    </div>
+                    <div className="text-xs text-slate-700 mb-2">
+                      Insère une &quot;foundation mutation&quot; retroactive à la date spécifiée pour chaque lot problématique.
+                      Après réparation, l&apos;audit à {auditResult.at_date} affichera gap = 0.
+                    </div>
+                    <div className="flex items-end gap-2 flex-wrap">
+                      <div>
+                        <label className="form-label text-xs">Date de fondation</label>
+                        <Input type="date" value={repairStartDate} onChange={e => setRepairStartDate(e.target.value)} data-testid="repair-founder-date" className="w-40" />
+                      </div>
+                      <Button variant="outline" onClick={() => runRepair(true)} disabled={repairLoading} data-testid="repair-dry-run-btn">
+                        Simulation (dry-run)
+                      </Button>
+                      <Button className="bg-blue-600 hover:bg-blue-700 text-white" onClick={() => runRepair(false)} disabled={repairLoading} data-testid="repair-apply-btn">
+                        {repairLoading ? 'En cours...' : 'Appliquer la réparation'}
+                      </Button>
+                    </div>
+                    {repairResult && (
+                      <div className="mt-2 text-xs bg-white rounded p-2 border">
+                        <div className="font-semibold">
+                          {repairResult.dry_run ? 'Simulation' : 'Appliqué'} :
+                          {' '}{repairResult.cases_a_count + repairResult.cases_b_count} lot(s) à réparer
+                        </div>
+                        {repairResult.cases_a_detail && repairResult.cases_a_detail.length > 0 && (
+                          <div className="mt-1">
+                            <div className="text-slate-500">Cas A (prefix mutation) : {repairResult.cases_a_count}</div>
+                            {repairResult.cases_a_detail.slice(0, 10).map((c, i) => (
+                              <div key={i} className="text-slate-600">
+                                • Lot {c.lot_number} : première mutation vient de {c.existing_first_from.slice(0, 8)}... au {c.existing_first_date}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        {repairResult.cases_b_detail && repairResult.cases_b_detail.length > 0 && (
+                          <div className="mt-1">
+                            <div className="text-slate-500">Cas B (mutation manquante) : {repairResult.cases_b_count}</div>
+                            {repairResult.cases_b_detail.slice(0, 10).map((c, i) => (
+                              <div key={i} className="text-slate-600">
+                                • Lot {c.lot_number} : {c.reason}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        {(repairResult.applied?.errors || []).length > 0 && (
+                          <div className="text-red-600 mt-1">Erreurs : {repairResult.applied.errors.length}</div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
                 {/* Bloc audit clés */}

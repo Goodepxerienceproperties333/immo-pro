@@ -89,6 +89,7 @@ export default function FundCallsPage() {
   const openCreate = () => {
     const now = new Date().toISOString().split('T')[0];
     setForm({ name: '', date: now, due_date: '', fiscal_year_id: years.find(y => y.status === 'open')?.id || '', description: '', total_amount: 0, call_type: 'provisions', distribution_key_id: defaultKeyId });
+    setOwnershipWarnings(null);
     setDialogOpen(true);
   };
 
@@ -98,6 +99,27 @@ export default function FundCallsPage() {
       toast.success('Appel de fonds cree'); setDialogOpen(false); load();
     } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); }
   };
+
+  // iter90cn : Preflight warnings quand l'utilisateur change date/cle -
+  // detecte les lots sans owner-at-date resolu.
+  const [ownershipWarnings, setOwnershipWarnings] = useState(null);
+  useEffect(() => {
+    if (!dialogOpen || !form.date || !form.distribution_key_id || !selectedCopro || selectedCopro === 'all') {
+      setOwnershipWarnings(null);
+      return;
+    }
+    const timer = setTimeout(async () => {
+      try {
+        const { data } = await api.post('/fund-calls/preflight-manual-call', {
+          copropriete_id: selectedCopro,
+          date: form.date,
+          distribution_key_id: form.distribution_key_id,
+        });
+        setOwnershipWarnings(data.ownership_at_date_warning || null);
+      } catch { setOwnershipWarnings(null); }
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [dialogOpen, form.date, form.distribution_key_id, selectedCopro]);
 
   const viewCall = async (id) => {
     try { const { data } = await api.get(`/fund-calls/${id}`); setSelectedCall(data); } catch { toast.error('Erreur'); }
@@ -666,6 +688,30 @@ export default function FundCallsPage() {
               </Select>
             </div>
             <div><label className="form-label">Description (facultatif)</label><Input value={form.description} onChange={e => setForm({...form, description: e.target.value})} data-testid="call-description" placeholder="Remarques, contexte..." /></div>
+            {/* iter90cn : warnings ownership-at-date sur appel manuel */}
+            {ownershipWarnings && ownershipWarnings.unresolved_count > 0 && (
+              <div className="bg-red-50 border-2 border-red-400 rounded-lg p-3" data-testid="manual-call-ownership-warning">
+                <div className="flex items-start gap-2">
+                  <AlertTriangle size={18} className="text-red-600 flex-shrink-0 mt-0.5" />
+                  <div className="flex-1 text-xs">
+                    <div className="font-semibold text-red-900 mb-1">
+                      Attention : {ownershipWarnings.unresolved_count} lot(s) sans propriétaire assigné au {form.date}
+                    </div>
+                    <div className="text-red-800 mb-1">Corrigez l&apos;ownership avant de créer l&apos;appel pour éviter des distributions incorrectes.</div>
+                    <details>
+                      <summary className="cursor-pointer text-red-900 font-medium select-none">Voir le détail ({ownershipWarnings.warnings.length})</summary>
+                      <div className="mt-1 space-y-0.5 max-h-40 overflow-y-auto">
+                        {ownershipWarnings.warnings.map((w, i) => (
+                          <div key={i} className="bg-white/70 rounded px-2 py-1 text-[11px]">
+                            <span className="font-mono font-medium">Lot {w.lot_number}</span> - <span className="text-red-700">{w.reason}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </details>
+                  </div>
+                </div>
+              </div>
+            )}
             <div className="flex gap-3 justify-end">
               <Button variant="outline" onClick={() => setDialogOpen(false)}>Annuler</Button>
               <Button onClick={saveCall} className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="call-save-btn">Creer</Button>

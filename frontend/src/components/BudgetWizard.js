@@ -167,7 +167,7 @@ export default function BudgetWizard({ budget, distKeys = [], onClose, onDone, m
         {/* Step 1: Frequency */}
         {step === 1 && (
           <div className="space-y-4">
-            <p className="text-sm text-slate-600">Combien d'appels lancer sur l'exercice ?</p>
+            <p className="text-sm text-slate-600">Combien d&apos;appels lancer sur l&apos;exercice ?</p>
             <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
               {FREQ_OPTIONS.map(opt => (
                 <Card key={opt.v} className={`cursor-pointer transition ${frequency === opt.v ? 'border-2 border-[#2563EB] bg-blue-50/50' : 'border-slate-200 hover:border-slate-400'}`} onClick={() => setFrequency(opt.v)} data-testid={`freq-${opt.v}`}>
@@ -296,7 +296,7 @@ export default function BudgetWizard({ budget, distKeys = [], onClose, onDone, m
         {step === 4 && (
           <div className="space-y-3">
             <p className="text-sm text-slate-600">Y a-t-il un appel pour le <b>fonds de roulement</b> ?
-              <span className="text-xs text-slate-400 ml-1">(Tresorerie permanente de l'ACP - compte 100)</span>
+              <span className="text-xs text-slate-400 ml-1">(Tresorerie permanente de l&apos;ACP - compte 100)</span>
             </p>
             <Card className="border-2 border-amber-200">
               <CardContent className="p-4">
@@ -404,6 +404,38 @@ export default function BudgetWizard({ budget, distKeys = [], onClose, onDone, m
             {loading && <div className="text-center py-8 text-slate-500">Calcul en cours...</div>}
             {preview && !loading && (
               <>
+                {/* iter90cn : warning ownership-at-date non resolu */}
+                {preview.ownership_at_date_warning && preview.ownership_at_date_warning.unresolved_count > 0 && (
+                  <div className="bg-red-50 border-2 border-red-400 rounded-lg p-4 flex items-start gap-3" data-testid="ownership-at-date-warning">
+                    <AlertTriangle size={22} className="text-red-600 flex-shrink-0 mt-0.5" />
+                    <div className="flex-1">
+                      <div className="font-semibold text-red-900 text-sm">
+                        Attention - {preview.ownership_at_date_warning.unresolved_count} lot(s) sans propriétaire assigné à la date d&apos;appel
+                      </div>
+                      <div className="text-xs text-red-800 mt-1">
+                        Ces lots seront exclus de la distribution OU attribués à un propriétaire incorrect.
+                        Corrigez l&apos;ownership (via mutation ou assignation) avant de générer les appels.
+                      </div>
+                      <details className="text-xs mt-2" open>
+                        <summary className="cursor-pointer text-red-900 font-medium select-none">Voir le détail</summary>
+                        <div className="mt-2 space-y-1 max-h-56 overflow-y-auto">
+                          {preview.ownership_at_date_warning.warnings.map((w, i) => (
+                            <div key={i} className="bg-white/60 rounded px-2 py-1.5">
+                              <div className="font-mono text-slate-800 text-[11px]">
+                                Lot <strong>{w.lot_number}</strong> à la date <strong>{w.call_date}</strong>
+                              </div>
+                              <div className="text-red-700 text-[11px] mt-0.5">{w.reason}</div>
+                              {w.current_owner_name && (
+                                <div className="text-slate-500 text-[11px]">Propriétaire actuel : {w.current_owner_name}</div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </details>
+                    </div>
+                  </div>
+                )}
+
                 {/* iter90cc : warning lots orphelins detectes dans les cles */}
                 {preview.orphan_lots_warning && preview.orphan_lots_warning.orphan_count > 0 && (
                   <div className="bg-amber-50 border-2 border-amber-400 rounded-lg p-4 flex items-start gap-3" data-testid="orphan-lots-warning">
@@ -446,7 +478,7 @@ export default function BudgetWizard({ budget, distKeys = [], onClose, onDone, m
                 )}
 
                 <div className="grid grid-cols-5 gap-3">
-                  <Card><CardContent className="p-3"><div className="text-xs text-slate-500">Nombre d'appels</div><div className="text-xl font-black mt-1" style={{ fontFamily: 'Chivo,sans-serif' }}>{preview.summary.n_calls}</div></CardContent></Card>
+                  <Card><CardContent className="p-3"><div className="text-xs text-slate-500">Nombre d&apos;appels</div><div className="text-xl font-black mt-1" style={{ fontFamily: 'Chivo,sans-serif' }}>{preview.summary.n_calls}</div></CardContent></Card>
                   <Card><CardContent className="p-3"><div className="text-xs text-slate-500">Budget annuel</div><div className="text-xl font-black mt-1 font-mono">{preview.summary.budget_total.toFixed(2)}</div></CardContent></Card>
                   <Card><CardContent className="p-3"><div className="text-xs text-slate-500">Fonds reserve</div><div className="text-xl font-black mt-1 font-mono">{preview.summary.reserve_total.toFixed(2)}</div></CardContent></Card>
                   <Card><CardContent className="p-3"><div className="text-xs text-slate-500">Fonds roulement</div><div className="text-xl font-black mt-1 font-mono">{(preview.summary.roulement_total || 0).toFixed(2)}</div></CardContent></Card>

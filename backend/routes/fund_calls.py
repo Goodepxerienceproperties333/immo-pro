@@ -1002,27 +1002,216 @@ def create_fund_calls_router(db):
             "message": f"{deleted_calls} appel(s) de fonds supprime(s) avec leurs ecritures auto.",
         }
 
+    async def _compute_call_dates_from_budget(data: GenerateFromBudgetInput) -> list:
+        """iter90cn helper : reconstitue les dates d'appel depuis les params wizard
+        sans reellement generer les appels (utilise pour warnings preview)."""
+        from datetime import date as _date_cls
+        from dateutil.relativedelta import relativedelta
+        try:
+            start = _date_cls.fromisoformat(data.start_date)
+        except Exception:
+            return []
+        step = 12 // (data.frequency or 4)
+        dates = []
+        for i in range(data.frequency or 4):
+            call_dt = start + relativedelta(months=step * i)
+            dates.append(call_dt.isoformat())
+        return dates
+
     # ---- BULK GENERATION FROM APPROVED BUDGET ----
     @router.post("/preview-from-budget")
     async def preview_from_budget(data: GenerateFromBudgetInput):
         """Preview N fund calls computed from a budget, WITHOUT persisting.
         Used by the frontend wizard to show recap before confirmation.
 
-        iter90cc : enrichi avec `orphan_lots_warning` liste tous les lots qui
-        ont des shares > 0 dans une cle utilisee mais pas d'owner_id.
+        iter90cc : orphan_lots_warning (share > 0 sans owner_id).
+        iter90cn : ownership_at_date_warning (lot dont l'owner-at-call-date
+        ne peut pas etre resolu correctement).
         """
         result = await _generate_from_budget(data, persist=False)
         result["orphan_lots_warning"] = await _detect_orphan_lots_for_budget(data)
+        # iter90cn : warning ownership-at-date
+        budget = await db.budgets.find_one({"id": data.budget_id}, {"_id": 0}) or {}
+        copro_id = data.copropriete_id or budget.get("copropriete_id", "")
+        key_ids = list({bl.get("distribution_key_id") for bl in budget.get("lines", []) if bl.get("distribution_key_id")})
+        if data.reserve_fund and data.reserve_fund.enabled and data.reserve_fund.distribution_key_id:
+            if data.reserve_fund.distribution_key_id not in key_ids:
+                key_ids.append(data.reserve_fund.distribution_key_id)
+        if data.roulement_fund and data.roulement_fund.enabled and data.roulement_fund.distribution_key_id:
+            if data.roulement_fund.distribution_key_id not in key_ids:
+                key_ids.append(data.roulement_fund.distribution_key_id)
+        call_dates = await _compute_call_dates_from_budget(data)
+        result["ownership_at_date_warning"] = await _detect_lots_unresolved_at_dates(
+            copro_id, call_dates, key_ids,
+        )
         return result
 
     @router.post("/preflight-orphan-check")
     async def preflight_orphan_check(data: GenerateFromBudgetInput):
-        """iter90cc : verification legere avant emission d'appels. Retourne
-        UNIQUEMENT les lots orphelins (share > 0 sans owner) presents dans
-        les cles utilisees par le budget + les fonds. Utilisable avant
-        d'appeler generate-from-budget pour prevenir le syndic.
+        """iter90cc + iter90cn : verification legere avant emission d'appels."""
+        budget = await db.budgets.find_one({"id": data.budget_id}, {"_id": 0}) or {}
+        copro_id = data.copropriete_id or budget.get("copropriete_id", "")
+        key_ids = list({bl.get("distribution_key_id") for bl in budget.get("lines", []) if bl.get("distribution_key_id")})
+        if data.reserve_fund and data.reserve_fund.enabled and data.reserve_fund.distribution_key_id:
+            if data.reserve_fund.distribution_key_id not in key_ids:
+                key_ids.append(data.reserve_fund.distribution_key_id)
+        if data.roulement_fund and data.roulement_fund.enabled and data.roulement_fund.distribution_key_id:
+            if data.roulement_fund.distribution_key_id not in key_ids:
+                key_ids.append(data.roulement_fund.distribution_key_id)
+        call_dates = await _compute_call_dates_from_budget(data)
+        return {
+            "orphan_lots_warning": await _detect_orphan_lots_for_budget(data),
+            "ownership_at_date_warning": await _detect_lots_unresolved_at_dates(
+                copro_id, call_dates, key_ids,
+            ),
+        }
+
+    class ManualCallPreflightInput(BaseModel):
+        copropriete_id: str
+        date: str  # ISO YYYY-MM-DD
+        distribution_key_id: str
+
+    @router.post("/preflight-manual-call")
+    async def preflight_manual_call(data: ManualCallPreflightInput):
+        """iter90cn : verification avant emission d'un appel manuel.
+        Renvoie les warnings ownership-at-date pour les lots de la cle."""
+        return {
+            "ownership_at_date_warning": await _detect_lots_unresolved_at_dates(
+                data.copropriete_id, [data.date], [data.distribution_key_id],
+            ),
+        }
+
+    async def _detect_lots_unresolved_at_dates(
+        copro_id: str, call_dates_iso: list, key_ids: list,
+    ) -> dict:
+        """iter90cn : Detecte les lots dont l'owner-at-date ne peut pas etre
+        resolu correctement pour au moins une des dates d'appel prevues.
+
+        Cas detectes :
+        - Lot avec share > 0 dans une cle utilisee mais lot.owner_id vide
+          (deja capture par _detect_orphan_lots_for_budget mais reprend ici
+          pour vue unifiee des warnings).
+        - Lot avec current_owner_id mais aucune mutation ET call_date < creation_date
+          du lot (cas rare).
+        - Lot avec mutations dont from_owner_id vide sur la premiere mutation
+          (chaine cassee).
+
+        Retourne :
+          {
+            "unresolved_count": int,
+            "warnings": [
+              {"lot_id","lot_number","call_date","current_owner_id",
+               "current_owner_name","reason"}
+            ],
+          }
         """
-        return {"orphan_lots_warning": await _detect_orphan_lots_for_budget(data)}
+        from datetime import date as _date_cls
+        if not copro_id or not call_dates_iso or not key_ids:
+            return {"unresolved_count": 0, "warnings": []}
+
+        # Sync defensif db.mutations
+        await _ensure_mutations_synced_for_acp(db, copro_id)
+
+        lots = await db.lots.find(
+            {"copropriete_id": copro_id}, {"_id": 0},
+        ).to_list(10000)
+        lots_by_id = {lt["id"]: lt for lt in lots}
+        owners_map = {}
+        async for o in db.owners.find(
+            {"copropriete_ids": copro_id}, {"_id": 0, "id": 1, "name": 1},
+        ):
+            owners_map[o["id"]] = o.get("name", "")
+        keys = await db.distribution_keys.find(
+            {"copropriete_id": copro_id, "id": {"$in": key_ids}}, {"_id": 0},
+        ).to_list(1000)
+
+        # Charge mutations groupees par lot
+        muts_by_lot: dict = {}
+        async for m in db.mutations.find(
+            {"copropriete_id": copro_id}, {"_id": 0},
+        ):
+            lid = m.get("lot_id")
+            if lid:
+                muts_by_lot.setdefault(lid, []).append(m)
+        for lid in muts_by_lot:
+            muts_by_lot[lid].sort(key=lambda x: x.get("sale_date") or "")
+
+        def _resolve(lot_id: str, target_iso: str, fallback: str) -> tuple:
+            """Retourne (owner_id, reason_if_broken)."""
+            try:
+                target = _date_cls.fromisoformat(target_iso)
+            except Exception:
+                return fallback, "call_date invalide"
+            muts = muts_by_lot.get(lot_id, [])
+            if not muts:
+                # Aucune mutation : owner-at-date = fallback (lot.owner_id)
+                if not fallback:
+                    return "", "lot sans owner_id ET sans mutation history"
+                return fallback, ""
+            first_from = muts[0].get("from_owner_id") or ""
+            if not first_from:
+                # Premiere mutation avec from_owner_id vide -> chaine cassee
+                return fallback, (
+                    "premiere mutation avec from_owner_id vide "
+                    "(historique incomplet)"
+                )
+            current = first_from
+            for m in muts:
+                try:
+                    sd = _date_cls.fromisoformat(m.get("sale_date") or "")
+                except Exception:
+                    continue
+                if sd <= target:
+                    current = m.get("to_owner_id") or current
+                else:
+                    break
+            return current, ""
+
+        # Collect lots avec share > 0 dans les cles utilisees
+        lots_in_keys: dict = {}  # lot_id -> [key_name]
+        for k in keys:
+            for kle in (k.get("lots") or []):
+                if kle.get("excluded"):
+                    continue
+                lid = kle.get("lot_id")
+                share = float(kle.get("share", 0) or 0)
+                if lid and share > 0:
+                    lots_in_keys.setdefault(lid, []).append(k.get("name", ""))
+
+        warnings = []
+        for lid, key_names in lots_in_keys.items():
+            lot = lots_by_id.get(lid)
+            if not lot:
+                warnings.append({
+                    "lot_id": lid,
+                    "lot_number": "MISSING",
+                    "call_date": call_dates_iso[0] if call_dates_iso else "",
+                    "current_owner_id": "",
+                    "current_owner_name": "",
+                    "reason": (
+                        f"lot_id {lid[:8]}... referencé dans cle(s) "
+                        f"{', '.join(key_names)} mais n'existe pas en DB (phantom)"
+                    ),
+                    "keys": key_names,
+                })
+                continue
+            current_owner = lot.get("owner_id", "") or ""
+            for cd in call_dates_iso:
+                resolved, reason = _resolve(lid, cd, current_owner)
+                if not resolved or reason:
+                    warnings.append({
+                        "lot_id": lid,
+                        "lot_number": lot.get("number", ""),
+                        "call_date": cd,
+                        "current_owner_id": current_owner,
+                        "current_owner_name": owners_map.get(current_owner, ""),
+                        "reason": reason or "aucun proprietaire resolu",
+                        "keys": key_names,
+                    })
+        return {
+            "unresolved_count": len(warnings),
+            "warnings": warnings,
+        }
 
     async def _detect_orphan_lots_for_budget(data: GenerateFromBudgetInput) -> dict:
         """iter90cc : detecte les lots avec share > 0 mais sans owner_id

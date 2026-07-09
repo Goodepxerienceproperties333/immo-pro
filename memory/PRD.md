@@ -12,6 +12,65 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 
+### Iter90cm-bis + iter90cn (Feb 2026) - Reparation retroactive + prevention structurelle
+
+**Ticket utilisateur (ACP Acacia)** :
+1. Reparer les lots dont l'ownership ne remonte pas au fondateur (Matexi)
+2. S'assurer que le probleme ne peut plus se reproduire
+
+**Fix iter90cm-bis - Endpoint de reparation retroactive** :
+
+`POST /api/lots/repair-founder-ownership` (superadmin) :
+- Input : `copropriete_id`, `founder_owner_id`, `founder_start_date`, `dry_run=true/false`
+- Detecte 2 cas :
+  - Cas A : lot avec mutation history dont `muts[0].from_owner_id != founder`
+    -> prefixe une "foundation mutation" a `founder_start_date` avec
+    from=founder, to=muts[0].from_owner (chaine complete restauree).
+  - Cas B : lot sans mutation ET `current_owner != founder`
+    -> insere mutation founder -> current_owner a founder_start_date.
+- dry_run=true : retourne le rapport sans commit.
+- dry_run=false : execute + met a jour lot.mutations[] + db.mutations.
+
+**UI LotsPage - modal audit iter90cm** :
+- Bloc "Reparation retroactive" affiche si gap > 0 :
+  - Input date de fondation
+  - Bouton "Simulation (dry-run)"
+  - Bouton "Appliquer la reparation" avec confirmation
+- Affichage du rapport (cases A/B, erreurs)
+- Re-audit automatique apres reparation reussie
+
+**Fix iter90cn - Prevention structurelle** :
+
+1. **PUT /lots/{id}** refuse les changements d'owner_id/owner_ids :
+   - HTTPException 400 avec message clair pointant vers `POST /lots/{id}/mutate`.
+   - Cas exceptionnel autorise : assignation initiale (owner passe de "" a X).
+
+2. **Helper `_detect_lots_unresolved_at_dates`** (`fund_calls.py`) :
+   - Pour chaque date d'appel + cle utilisee, resout owner-at-date pour chaque lot.
+   - Retourne warnings avec `lot_id, lot_number, call_date, current_owner,
+     reason` (raisons : orphan, phantom, mutation broken, no owner).
+
+3. **Warning propage a 3 endpoints** :
+   - `POST /fund-calls/preview-from-budget` (wizard preview) : champ
+     `ownership_at_date_warning` en plus de `orphan_lots_warning`.
+   - `POST /fund-calls/preflight-orphan-check` (wizard preflight).
+   - `POST /fund-calls/preflight-manual-call` (nouveau endpoint pour appels
+     manuels sans wizard).
+
+4. **UI warnings visibles dans 2 endroits** :
+   - `BudgetWizard.js` step preview : banniere rouge avec liste des lots
+     problematiques (data-testid="ownership-at-date-warning").
+   - `FundCallsPage.js` dialogue "Nouvel appel manuel" : preflight
+     automatique 400ms apres modif date/cle, affiche warning rouge
+     (data-testid="manual-call-ownership-warning").
+
+**Impact** :
+- Impossible desormais de creer des lots avec ownership non tracable
+  (PUT /lots refuse le changement)
+- Utilisateur alerte AVANT emission d'appel si des lots ont un ownership
+  non resolvable a la date cible (evite generations d'appels incorrects)
+
+
 ### Iter90cm (Feb 2026) - Audit ownership: diagnostic pour identifier les lots problematiques
 
 **Ticket utilisateur (ACP Acacia)** : ecart systematique de 3.6% (360/10000 quotites)

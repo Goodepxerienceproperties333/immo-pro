@@ -852,6 +852,191 @@ def create_properties_router(db):
             "lots": result_lots,
         }
 
+    class RepairFounderOwnershipInput(BaseModel):
+        copropriete_id: str
+        founder_owner_id: str
+        founder_start_date: str  # ISO YYYY-MM-DD : date depuis laquelle le
+                                  # fondateur est cense etre proprietaire
+        dry_run: bool = True
+
+    @router.post("/lots/repair-founder-ownership")
+    async def repair_founder_ownership(
+        request: Request, data: RepairFounderOwnershipInput,
+    ):
+        """iter90cm-bis : Repare l'ownership retroactif des lots qui ne
+        remontent pas au fondateur/promoteur a la date de reference.
+
+        Deux cas de reparation :
+        A) Lot avec mutation history dont muts[0].from_owner_id != founder :
+           insere une "foundation mutation" a founder_start_date avec
+           from=founder, to=muts[0].from_owner_id. La chaine de mutation
+           existante est ainsi prefixee correctement.
+        B) Lot sans mutation ET owner_id != founder :
+           insere une mutation founder_start_date -> current_owner
+           (represente l'assignation initiale du lot au buyer si le lot avait
+           ete cree directement chez le buyer sans passer par mutate_lot).
+
+        dry_run=True : retourne le rapport de ce qui SERAIT fait sans commit.
+        dry_run=False : execute les inserts.
+
+        Superadmin only (modification retroactive de l'historique).
+        """
+        from datetime import date as _date_cls
+        is_super, _ = await _get_user_scope(request)
+        if not is_super:
+            raise HTTPException(403, "Superadmin uniquement")
+        try:
+            _date_cls.fromisoformat(data.founder_start_date)
+        except Exception:
+            raise HTTPException(400, "founder_start_date doit etre ISO YYYY-MM-DD")
+
+        # Verifie que le fondateur existe et est bien lie a l'ACP
+        founder = await db.owners.find_one(
+            {"id": data.founder_owner_id}, {"_id": 0},
+        )
+        if not founder:
+            raise HTTPException(404, "Fondateur introuvable")
+        if data.copropriete_id not in (founder.get("copropriete_ids") or []):
+            # Assign automatiquement le fondateur a l'ACP si necessaire
+            if not data.dry_run:
+                await db.owners.update_one(
+                    {"id": data.founder_owner_id},
+                    {"$addToSet": {"copropriete_ids": data.copropriete_id}},
+                )
+
+        lots = await db.lots.find(
+            {"copropriete_id": data.copropriete_id}, {"_id": 0},
+        ).to_list(5000)
+
+        cases_a = []  # Prefix mutations
+        cases_b = []  # Missing foundation mutation
+        for lot in lots:
+            muts = list(lot.get("mutations") or [])
+            muts_sorted = sorted(muts, key=lambda x: x.get("date") or "")
+            current_owner = lot.get("owner_id", "")
+
+            if muts_sorted:
+                first_from = muts_sorted[0].get("old_owner_id") or ""
+                if first_from and first_from != data.founder_owner_id:
+                    # Cas A : prefixe une foundation mutation
+                    cases_a.append({
+                        "lot_id": lot["id"],
+                        "lot_number": lot.get("number", ""),
+                        "existing_first_from": first_from,
+                        "existing_first_date": muts_sorted[0].get("date", ""),
+                    })
+                elif not first_from and current_owner != data.founder_owner_id:
+                    # Cas rare : mutation avec from vide + owner different
+                    cases_b.append({
+                        "lot_id": lot["id"],
+                        "lot_number": lot.get("number", ""),
+                        "current_owner_id": current_owner,
+                        "reason": "first mutation from_owner_id vide",
+                    })
+            else:
+                if current_owner and current_owner != data.founder_owner_id:
+                    # Cas B : lot sans mutation, owner != founder
+                    cases_b.append({
+                        "lot_id": lot["id"],
+                        "lot_number": lot.get("number", ""),
+                        "current_owner_id": current_owner,
+                        "reason": "aucune mutation, owner_id != founder",
+                    })
+
+        applied = {"cases_a": 0, "cases_b": 0, "errors": []}
+        if not data.dry_run:
+            for case in cases_a:
+                try:
+                    mut_id = str(uuid.uuid4())
+                    # Founding mutation : from=founder, to=existing_first_from
+                    # date=founder_start_date (avant toutes les mutations reelles)
+                    foundation_mut = {
+                        "id": mut_id,
+                        "date": data.founder_start_date,
+                        "old_owner_id": data.founder_owner_id,
+                        "new_owner_id": case["existing_first_from"],
+                        "sale_price": 0.0,
+                        "roulement_quota": 0.0,
+                        "current_period_prorata": 0.0,
+                        "prorata_provisions": 0.0,
+                        "total_transfer": 0.0,
+                        "journal_entry_ids": [],
+                        "created_at": datetime.now(timezone.utc).isoformat(),
+                        "foundation_mutation": True,
+                        "iter90cm_bis_repair": True,
+                    }
+                    # Prepend to lot.mutations[]
+                    await db.lots.update_one(
+                        {"id": case["lot_id"]},
+                        {"$push": {"mutations": {"$each": [foundation_mut], "$position": 0}}},
+                    )
+                    # Miroir dans db.mutations
+                    await db.mutations.update_one(
+                        {"id": mut_id},
+                        {"$set": {
+                            **foundation_mut,
+                            "copropriete_id": data.copropriete_id,
+                            "lot_id": case["lot_id"],
+                            "from_owner_id": data.founder_owner_id,
+                            "to_owner_id": case["existing_first_from"],
+                            "sale_date": data.founder_start_date,
+                        }},
+                        upsert=True,
+                    )
+                    applied["cases_a"] += 1
+                except Exception as e:
+                    applied["errors"].append({"lot_id": case["lot_id"], "err": str(e)})
+
+            for case in cases_b:
+                try:
+                    mut_id = str(uuid.uuid4())
+                    foundation_mut = {
+                        "id": mut_id,
+                        "date": data.founder_start_date,
+                        "old_owner_id": data.founder_owner_id,
+                        "new_owner_id": case["current_owner_id"],
+                        "sale_price": 0.0,
+                        "roulement_quota": 0.0,
+                        "current_period_prorata": 0.0,
+                        "prorata_provisions": 0.0,
+                        "total_transfer": 0.0,
+                        "journal_entry_ids": [],
+                        "created_at": datetime.now(timezone.utc).isoformat(),
+                        "foundation_mutation": True,
+                        "iter90cm_bis_repair": True,
+                    }
+                    await db.lots.update_one(
+                        {"id": case["lot_id"]},
+                        {"$push": {"mutations": {"$each": [foundation_mut], "$position": 0}}},
+                    )
+                    await db.mutations.update_one(
+                        {"id": mut_id},
+                        {"$set": {
+                            **foundation_mut,
+                            "copropriete_id": data.copropriete_id,
+                            "lot_id": case["lot_id"],
+                            "from_owner_id": data.founder_owner_id,
+                            "to_owner_id": case["current_owner_id"],
+                            "sale_date": data.founder_start_date,
+                        }},
+                        upsert=True,
+                    )
+                    applied["cases_b"] += 1
+                except Exception as e:
+                    applied["errors"].append({"lot_id": case["lot_id"], "err": str(e)})
+
+        return {
+            "dry_run": data.dry_run,
+            "copropriete_id": data.copropriete_id,
+            "founder_owner_id": data.founder_owner_id,
+            "founder_start_date": data.founder_start_date,
+            "cases_a_count": len(cases_a),
+            "cases_a_detail": cases_a,
+            "cases_b_count": len(cases_b),
+            "cases_b_detail": cases_b,
+            "applied": applied,
+        }
+
     @router.post("/lots")
     async def create_lot(data: LotInput, request: Request):
         is_super, allowed_copros = await _get_user_scope(request)
@@ -887,11 +1072,38 @@ def create_properties_router(db):
         if not is_super and existing.get("copropriete_id", "") not in (allowed_copros or []):
             raise HTTPException(404, "Lot non trouve")
         ids = data.owner_ids if data.owner_ids else ([data.owner_id] if data.owner_id else [])
+        new_owner_id = ids[0] if ids else ""
+
+        # iter90cm : PROTECTION structurelle contre les changements d'ownership
+        # non traces. Empêche la creation retroactive de lots "phantom".
+        # Un changement d'ownership DOIT passer par POST /lots/{id}/mutate qui
+        # cree la mutation history requise pour les calculs comptables.
+        existing_owner = existing.get("owner_id", "") or ""
+        existing_owner_ids = existing.get("owner_ids") or (
+            [existing_owner] if existing_owner else []
+        )
+        new_owner_ids = ids
+        # Comparaison ensembliste (l'ordre n'importe pas mais le contenu si)
+        if (existing_owner_ids and new_owner_ids
+                and set(existing_owner_ids) != set(new_owner_ids)):
+            raise HTTPException(
+                400,
+                "Impossible de changer le proprietaire via PUT /lots. Utilisez "
+                "l'action 'Mutation' (POST /lots/{id}/mutate) qui cree "
+                "automatiquement l'historique de mutation requis pour la "
+                "coherence comptable (OD MUT-R, MUT-P, prorata provisions). "
+                f"Owner actuel : {existing_owner_ids}, tentative : {new_owner_ids}."
+            )
+        # Cas special : owner passe de "" (lot nouveau, non-assigne) a un
+        # proprietaire -> autorise sans mutation (assignation initiale).
+        # Note : si owner_ids etait rempli et devient vide, autorise aussi
+        # (retour a l'etat non-assigne, sans historique).
+
         update = {
             "number": data.number, "description": data.description,
             "lot_type": data.lot_type, "floor": data.floor,
             "area": data.area, "quotity": data.quotity,
-            "owner_id": ids[0] if ids else "",
+            "owner_id": new_owner_id,
             "owner_ids": ids,
         }
         result = await db.lots.update_one({"id": lot_id}, {"$set": update})
