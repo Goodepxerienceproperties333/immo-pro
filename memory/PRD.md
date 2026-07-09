@@ -12,6 +12,64 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 
+### Iter90cq (Feb 2026) - Scripts de migration ACP PROD -> PREVIEW
+
+**Ticket utilisateur** : Besoin d'importer les donnees production de l'ACP
+Acacia en environnement PREVIEW pour tester/debugger sans risque.
+
+**Choix confirmes par utilisateur** :
+- Perimetre : tout exporter (copie 1:1 complete)
+- Sanitization : aucune (donnees identiques)
+- Strategie : remplacement complet en PREVIEW
+- Format : JSON unique fichier
+
+**Scripts** :
+- `backend/scripts/export_acp_prod.py` : a executer sur PROD console.
+  Export ACP complete filtree par `copropriete_id` (auto-detect via `--name acacia`
+  ou `--copropriete-id`) vers un fichier JSON.
+- `backend/scripts/import_acp_preview.py` : a executer sur PREVIEW console.
+  Import du fichier JSON, avec `--dry-run` par defaut. `--commit` pour appliquer.
+  Remplacement complet : supprime toutes les donnees de l'ACP en PREVIEW puis
+  reinsere. Merge non destructif des `copropriete_ids` sur owners existants.
+  Safety check refuse si `DB_NAME` contient 'prod'.
+
+**Collections exportees (30+)** :
+- Coeur : coproprietes, fiscal_years, pcmn_accounts, distribution_keys, owners,
+  lots, mutations
+- Comptable : budgets, fund_calls, journal_entries, bank_accounts,
+  bank_transactions, bank_statements, bank_statement_lines, invoices,
+  invoice_templates, invoice_bundle_sessions, suppliers
+- Documentaire : documents, document_categories, expense_categories, meters,
+  meter_readings, ag_meetings, legal_documents, legal_document_history,
+  legal_rgpd_register
+- Audit : owner_notifications, owner_access_audit, syndic_configs,
+  release_notes_ack, audit_log
+
+**NON exporte** : GridFS files (documents.chunks/files, invoice_attachments...) -
+binaires trop volumineux, a extraire manuellement si besoin.
+
+**Test end-to-end** (`test_iter90cq_migration_roundtrip.py` - 1/1 PASS) :
+Round-trip complet : creation ACP -> export JSON -> suppression totale ->
+reimport -> verification tous compteurs restaures.
+
+**Instructions user** :
+1. Sur PROD console :
+   ```bash
+   cd /app/backend
+   python scripts/export_acp_prod.py --name acacia --out /tmp/acp_acacia_export.json
+   ```
+2. Telecharger `/tmp/acp_acacia_export.json` (via l'UI Emergent ou scp).
+3. Uploader sur PREVIEW (via l'UI Emergent).
+4. Sur PREVIEW console :
+   ```bash
+   cd /app/backend
+   python scripts/import_acp_preview.py --in /tmp/acp_acacia_export.json --dry-run
+   # Verifier le rapport, puis :
+   python scripts/import_acp_preview.py --in /tmp/acp_acacia_export.json --commit
+   ```
+
+
+
 ### Iter90cp (Feb 2026) - Reparation ownership retroactive complete (Case C + auto-detect)
 
 **Ticket utilisateur PROD (ACP Acacia)** :
