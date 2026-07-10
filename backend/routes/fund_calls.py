@@ -1592,7 +1592,35 @@ def create_fund_calls_router(db):
             denominateur `total_shares`. Leurs shares sont ainsi redistribuees
             proportionnellement sur les proprietaires actuels. Cela garantit que
             la somme des amounts distribues == amount (bug 3.6% Matexi).
+
+            iter90cr : si la cle EXISTE mais que TOUTES ses entrees sont
+            invalides (phantom lot_ids ou lots sans owner), fallback sur la
+            distribution par quotites des lots actuels de l'ACP. Evite le cas
+            "0 proprietaires" quand la cle contient uniquement des references
+            perimees (lots supprimes/recrees avec de nouveaux IDs).
             """
+
+            def _fallback_by_quotity() -> list:
+                """Distribution de secours : quotites des lots ACTUELS avec owner."""
+                _entries: list = []
+                total_quotity = sum(lt.get("quotity", 0) for lt in lots if lt.get("owner_id"))
+                for lot in lots:
+                    if not lot.get("owner_id"):
+                        continue
+                    owner = owners_map.get(lot["owner_id"]) or {}
+                    share_ratio = lot.get("quotity", 0) / total_quotity if total_quotity > 0 else 0
+                    _entries.append({
+                        "lot_id": lot["id"],
+                        "lot_number": lot.get("number", ""),
+                        "parent_lot_id": lot.get("parent_lot_id", "") or "",
+                        "owner_id": lot["owner_id"],
+                        "owner_name": owner.get("name", ""),
+                        "vcs_code": owner.get("vcs_code", ""),
+                        "amount": amount * share_ratio,
+                        "share": float(lot.get("quotity", 0)),
+                    })
+                return _entries
+
             entries: list = []
             if key_id and key_id in keys_map:
                 key = keys_map[key_id]
@@ -1606,6 +1634,9 @@ def create_fund_calls_router(db):
                     and lots_by_id.get(kle.get("lot_id"), {}).get("owner_id")
                 ]
                 total_shares = sum(kle["share"] for kle in owned_kls)
+                # iter90cr : fallback si la cle est totalement invalide
+                if not owned_kls or total_shares <= 0:
+                    return _fallback_by_quotity()
                 for kl in owned_kls:
                     lot = lots_by_id.get(kl.get("lot_id"))
                     if not lot:
@@ -1623,22 +1654,7 @@ def create_fund_calls_router(db):
                         "share": float(kl["share"]),
                     })
             else:
-                total_quotity = sum(lt.get("quotity", 0) for lt in lots if lt.get("owner_id"))
-                for lot in lots:
-                    if not lot.get("owner_id"):
-                        continue
-                    owner = owners_map.get(lot["owner_id"]) or {}
-                    share_ratio = lot.get("quotity", 0) / total_quotity if total_quotity > 0 else 0
-                    entries.append({
-                        "lot_id": lot["id"],
-                        "lot_number": lot.get("number", ""),
-                        "parent_lot_id": lot.get("parent_lot_id", "") or "",
-                        "owner_id": lot["owner_id"],
-                        "owner_name": owner.get("name", ""),
-                        "vcs_code": owner.get("vcs_code", ""),
-                        "amount": amount * share_ratio,
-                        "share": float(lot.get("quotity", 0)),
-                    })
+                entries = _fallback_by_quotity()
             return entries
 
         # Compute schedule

@@ -12,6 +12,56 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 
+### Iter90cr (Feb 2026) - Fallback distribution quand cle 100% phantom
+
+**Ticket utilisateur PROD (ACP Acacia)** :
+> "Dans la logique le premier proprietaire est toujours considere comme
+> proprietaire a la date du 1er jour de l'exercice. Des lors Matexi est
+> attribue a tous les lots donc devrait donc etre considere comme
+> proprietaire au 1er jour de l'exercice 01,10,2025 dans ce cas"
+
+**Contexte** : Screenshots utilisateur (Feb 2026) montrent :
+- 30 lots existent dans l'UI avec Matexi comme proprietaire
+- BudgetWizard affiche "30 lots orphelin (100% shares)" et "0 proprietaires"
+- Cle "Charges communes generales" contient 30 entrees phantom
+  (anciens lot_ids supprimes/recrees avec de nouveaux IDs)
+
+**Cause** : `_distribute_amount` (fund_calls.py) filtrait `owned_kls` sur les
+entrees dont le `lot_id` existe en DB + a un owner. Si TOUTES les entrees
+sont phantom, `owned_kls == []` -> `total_shares = 0` -> aucune ligne
+distribuee -> "0 proprietaires" et impossible de generer les appels.
+
+**Fix iter90cr** (`fund_calls.py::_distribute_amount`) :
+- Detecte `owned_kls == []` OR `total_shares <= 0` apres filtrage.
+- Fallback : distribution par quotites des lots ACTUELS avec owner_id
+  (meme logique que le `else` branch quand key_id n'existe pas).
+- Preserve iter90cb (redistribution partielle) quand la cle a des entrees
+  valides + phantoms/orphelins.
+
+**Tests** (`test_iter90cr_phantom_key_fallback.py` - 3/3 PASS) :
+1. `test_100pct_phantom_key_fallbacks_to_quotity` : cle 3 entrees phantom
+   -> fallback -> Matexi recoit 100% (unique owner).
+2. `test_partial_phantom_key_uses_valid_entries_only` : cle 50% phantom
+   + 50% valide -> distribution SUR LES 50% VALIDES seuls (pas de fallback
+   complet, iter90cb standard).
+3. `test_no_phantom_key_distributes_normally` : cle sans phantoms
+   -> distribution normale (regression).
+
+**Non-regression** : 14/14 tests iter90cb+cc+cf+cr PASS. Aucun impact
+sur les tests iter90co et iter90cp precedents.
+
+**Impact utilisateur PROD** : Apres deploiement, le BudgetWizard Q1 2026
+pour Acacia devrait afficher les 4 appels avec Matexi = 100% des montants
+(19000 + 1500 reserve + 5200 roulement, tous vers Matexi). Aucun script
+de reparation supplementaire requis.
+
+**Note importante** : L'iter90cr resout le probleme au RUNTIME (fallback
+au moment de la distribution). Pour un fix DEFINITIF de la cle
+(reconstruction avec les vrais lot_ids), envisager iter90cs si l'utilisateur
+souhaite nettoyer la cle en base (backlog).
+
+
+
 ### Iter90cq (Feb 2026) - Scripts de migration ACP PROD -> PREVIEW
 
 **Ticket utilisateur** : Besoin d'importer les donnees production de l'ACP
