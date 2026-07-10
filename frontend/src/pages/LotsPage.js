@@ -907,6 +907,33 @@ export default function LotsPage() {
     } finally { setRepairLoading(false); }
   };
 
+  // iter90cs : Reconstruction d'une cle de repartition contenant des entrees
+  // phantom (lot_ids ne correspondant plus a aucun lot en DB).
+  const [rebuildingKeyId, setRebuildingKeyId] = useState('');
+  const runRebuildKey = async (keyId, keyName) => {
+    setRebuildingKeyId(keyId);
+    try {
+      // 1) Dry-run pour previsualiser l'impact
+      const { data: preview } = await api.post(`/invoices/distribution-keys/${keyId}/rebuild`, {
+        mode: 'quotity', dry_run: true,
+      });
+      const msg = `Reconstruction de la cle "${keyName}" :\n\n`
+        + `- ${preview.before.phantom_count} entree(s) phantom seront supprimee(s)\n`
+        + `- ${preview.after.entries_total} lot(s) actuel(s) seront assignes (quote-parts)\n`
+        + `- Nouveau total de parts : ${preview.after.total_share}\n\n`
+        + `Cette action remplace la repartition de la cle. Confirmer ?`;
+      if (!window.confirm(msg)) return;
+      // 2) Application reelle
+      const { data } = await api.post(`/invoices/distribution-keys/${keyId}/rebuild`, {
+        mode: 'quotity', dry_run: false,
+      });
+      toast.success(`Cle "${keyName}" reconstruite : ${data.stats.phantom_removed} phantom(s) retire(s), ${data.stats.current_lots_added} lot(s) assigne(s)`);
+      await runAudit();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur reconstruction cle');
+    } finally { setRebuildingKeyId(''); }
+  };
+
   return (
     <div data-testid="lots-page">
       <div className="page-header flex items-center justify-between">
@@ -1210,6 +1237,7 @@ export default function LotsPage() {
                       <th className="text-right py-1 px-2">Phantom</th>
                       <th className="text-right py-1 px-2">Orphelin</th>
                       <th className="text-center py-1 px-2">10000 ?</th>
+                      <th className="text-center py-1 px-2">Action</th>
                     </tr></thead>
                     <tbody>
                       {(auditResult.keys_audit || []).map(k => (
@@ -1220,6 +1248,21 @@ export default function LotsPage() {
                           <td className={`text-right font-mono ${k.phantom_share > 0 ? 'text-red-600 font-bold' : ''}`}>{k.phantom_share}</td>
                           <td className={`text-right font-mono ${k.orphan_share > 0 ? 'text-amber-600 font-bold' : ''}`}>{k.orphan_share}</td>
                           <td className="text-center">{k.sums_to_10000 ? '✓' : '✗'}</td>
+                          <td className="text-center py-1 px-2">
+                            {k.phantom_share > 0 && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-6 text-xs px-2 border-red-300 text-red-700 hover:bg-red-50"
+                                disabled={rebuildingKeyId === k.key_id}
+                                onClick={() => runRebuildKey(k.key_id, k.key_name)}
+                                data-testid={`rebuild-key-btn-${k.key_id}`}
+                                title="Purge les entrees phantom et reassigne les lots actuels par quote-part"
+                              >
+                                {rebuildingKeyId === k.key_id ? 'Reconstruction...' : 'Reconstruire la clé'}
+                              </Button>
+                            )}
+                          </td>
                         </tr>
                       ))}
                     </tbody>

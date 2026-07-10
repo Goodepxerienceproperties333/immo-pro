@@ -12,6 +12,61 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 
+### Iter90cs Frontend (Feb 2026) - Bouton "Reconstruire la cle" (LotsPage.js)
+
+Backend deja teste (`POST /api/invoices/distribution-keys/{key_id}/rebuild`).
+Ajout du bouton dans le modal "Audit ownership" (`LotsPage.js`), colonne
+"Action" du tableau "Audit cles de repartition" : affiche `Reconstruire la
+cle` uniquement si `k.phantom_share > 0`. Flow : dry-run (preview compte
+phantom/lots ajoutes) -> `window.confirm` -> commit -> `runAudit()` refresh.
+Mode utilise : `quotity` (rebuild complet par quote-part des lots actuels).
+Smoke-teste (dialog + colonne Action rendus sans erreur JS sur ACP vide;
+pas de cle phantom disponible en PREVIEW pour cliquer le bouton lui-meme,
+backend deja couvert par `test_iter90cs_rebuild_distribution_key.py`).
+
+### Iter90cx (Feb 2026) - Diagnostic distributions partielles (NON RESOLU)
+
+**Contexte** : Utilisateur signale un ecart de 3.6% entre le montant appele
+et le total affiche dans la "Situation de compte" (Balance des tiers) d'un
+proprietaire sur l'ACP Acacia PROD (Fonds de reserve 1500->1446, Fonds de
+roulement 5200->5012.80), alors que le Journal comptable (VE) affiche le
+bon total (1500/5200 Debit=Credit). Cle de repartition auditee = valide
+(10000/10000, 0 phantom, 0 orphelin).
+
+**Analyse code** (`auto_entries.py::generate_sale_entry`, `reports.py::
+situation_compte_owner`) : Le total du journal (`total_debit`) est calcule
+honnetement depuis la somme reelle des lignes generees - donc si le journal
+affiche 1500, les lignes owner (third_party_id=owner_id) DEVRAIENT sommer a
+1500 aussi dans la vue Balance des tiers (qui lit live depuis
+`journal_entries.lines`, aucun cache). Aucune bug evident trouve par simple
+lecture de code. Hypothese principale non confirmee : possible 2e
+enregistrement `owner` distinct (doublon) portant sur une partie des lots
+(3.6% quotites), filtre par owner_id dans `situation_compte_owner` alors que
+l'agregat journal ne distingue pas les owners.
+
+**Bloquant** : ACP Acacia n'existe plus en PREVIEW (supprimee, cf. section
+suivante) et l'utilisateur a demande de ne plus reference PROD pour
+l'instant -> Impossible de reproduire/diagnostiquer avec certitude sans
+donnees reelles. Script de diagnostic lecture-seule pret si besoin :
+`backend/scripts/diagnose_iter90cx_partial_distribution.py --name acacia`
+(a executer sur PROD quand l'utilisateur sera pret).
+
+**Statut : EN ATTENTE** (deprioritise a la demande de l'utilisateur).
+
+### ACP Acacia supprimee en PREVIEW - Recuperation NON EFFECTUEE
+
+L'ACP "Acacia" (avancee, promoteur Matexi, 30 lots) a ete supprimee via
+`DELETE /api/coproprietes/{id}` (cascade complete, PAS une corbeille) lors
+d'une iteration precedente en PREVIEW. Aucune sauvegarde locale
+(`acp_backups.*` GridFS) ne contient ses vraies donnees (seulement des
+fixtures de test "ACP Acacia-Like"). La seule voie de recuperation fiable
+est un export PROD (`scripts/export_acp_prod.py --name acacia`) + import
+PREVIEW (`scripts/import_acp_preview.py`), mais l'utilisateur a choisi de
+**repartir de zero en PREVIEW** plutot que de restaurer via PROD pour
+l'instant. Aucune ACP "Acacia" n'a ete recreee (evite de fabriquer de
+fausses donnees). A refaire manuellement par l'utilisateur (Nouvelle ACP)
+quand il sera pret, ou via export/import si il change d'avis.
+
 ### Iter90cw (Feb 2026) - Cleanup fund_calls orphelins (distribution vide)
 
 **Ticket utilisateur PROD** :
