@@ -1,121 +1,132 @@
 <analysis>**original_problem_statement**: 
 Créer une application de gestion de copropriété basée sur le droit belge (PCMN), incluant la gestion stricte des rôles, le cloisonnement des données (Chinese Wall), la gestion des imports CODA/Optipro, et les verrous fiscaux. 
 PRODUCT REQUIREMENTS: Génération d'un PDF Décompte de mutation clair, application stricte des règles comptables belges, persistance fiable, portail propriétaire, imports IA, Système légalement blindé. 
-Recent updates: Added toggle for zero-balance tier accounts. Fixed proportional prorata for calls generated *after* a property mutation has occurred (Matexi bug). Fixed budget deletion to correctly reverse MUT-P journal entries. Fixed PDF Situation de compte to exclude reversed entries.
 
-**User's preferred language**: French (You MUST respond in French ONLY)
+**User's preferred language**: French (You MUST automatically detect the user's primary language from their messages inside the <trajectory> tag and INSTRUCT next agent to respond in the user's preferred language only)
 
 **what currently exists?** 
-A highly mature, production-ready Belgian property management application (FastAPI, React, MongoDB). It has strict PCMN accounting logic, legally bulletproof compliance, automated PDF generation, and a modern UI. Recently, the app's mutation logic, fund call attribution, budget deletion cascading, and PDF accounting exports were fortified with robust fixes and idempotency. The testing suite is comprehensive and passes successfully.
+A highly mature, production-ready Belgian property management application (FastAPI, React, MongoDB). It features strict PCMN accounting logic, automated PDF generation, and idempotency for retroactive journal entries (, ). In this session, the app was heavily fortified to handle edge cases like orphan lots, phantom distribution keys (keys pointing to deleted/legacy lots), duplicate invoice detection, and PROD to PREVIEW data migration.
 
 **Last working item**:
-    - Last item agent was working: The user requested a way to migrate/import data for the production ACP Acacia into the PREVIEW environment for testing. The agent paused this to fix a critical PDF bug the user reported immediately after. The PDF bug is now fixed, so the migration task remains the next actionable item.
-    - Status: NOT STARTED / PENDING USER CLARIFICATION
-    - Agent Testing Done: N
-    - Which testing method agent to use? Python scripts/backend testing
+    - Last item agent was working: The user reported that VE (Sales) journal entries were not being generated for fund calls in Production. The agent diagnosed that the fund calls were generated *before* a recent bug fix (Iter90cr) was deployed, resulting in an empty  array. The agent created a Python script () for the user to safely delete these corrupted calls in PROD so they can be regenerated cleanly.
+    - Status: USER VERIFICATION PENDING
+    - Agent Testing Done: Y
+    - Which testing method agent to use? Python scripts (dry-run via bash) / Backend pytest
     - User Testing Done: N
 
 **All Pending/In progress Issue list**:
-  Issue 1: PROD to PREVIEW Data Migration Scripts for ACP Acacia (P0)
-     - Attempted fixes: The agent asked the user clarifying questions about the scope of the migration (e.g., just owners/lots, or also budgets/fund_calls/journals) and whether PII data like emails and IBANs should be sanitized. 
-     - Next debug checklist: Ask the user to confirm the migration scope and sanitization preferences. Then, provide the user with an export script to run on PROD and an import script to run on PREVIEW. 
-     - Why fix this issue and what will be achieved with the fix? Allows the user to safely debug the Acacia property data in the preview environment without messing up production.
-     - Status: NOT STARTED
+  Issue 1: Re-generation of PROD Fund Calls (P0)
+     - Attempted fixes: The agent provided  to clean up the bad calls. 
+     - Next debug checklist: Await user confirmation that they successfully ran the script in PROD and re-generated the budgets/calls. Ensure the VE journal entries are now correctly created.
+     - Why fix this issue and what will be achieved with the fix? Ensures correct PCMN accounting entries (VE) exist in the ledger for Matexi/Acacia fund calls.
+     - Status: USER VERIFICATION PENDING
      - Is recurring issue? N
      - Should Test frontend/backend/both after fix? Backend
 
 **In progress Task List**:
-  - None active beyond the migration script request.
+  Task 1: Reconstruire la cle UI Button (Iter90cs Frontend)
+     - Where to resume: The backend API  is built and tested. The agent needs to wire this to the UI (likely in  inside the ownership audit table) to allow users to trigger a cleanup of phantom keys.
+     - What will be achieved with this? Allows users to visually detect and safely purge phantom entries from distribution keys without needing database access.
+     - Status: IN PROGRESS
+     - Should Test frontend/backend/both after fix? Frontend
+     - Blocked on something: None (Paused due to an urgent bug report from the user).
 
 **Upcoming and Future Tasks**
   - P1: Gestion des compteurs (eau, chauffage, électricité) - Formulaires de relevés, historisation, et calcul de répartition basé sur les consommations.
   - P2: Certificat fiscal annuel.
-  - P3: Admin tool to bulk reset legacy paid invoices (invoices marked paid manually or migrated from Optipro without a bank transaction link) back to unpaid status.
-  - P4: Automated debt collection emails (Job APScheduler quotidien qui identifie les débiteurs et envoie automatiquement une relance selon un template sélectionné).
-  - P5: Further React Component Refactoring ( is still quite large).
+  - P3: Admin tool to bulk reset legacy paid invoices.
+  - P4: Automated debt collection emails (APScheduler quotidien).
+  - P5: Refactor oversized Frontend Components (, ).
+  - P6: Refactor massive Backend Functions (, ) highlighted by the Code Quality Report.
 
 **Completed work in this session**
-- Added UI toggle to hide zero-balance accounts in  (DONE).
-- Iter90cg: Fixed bug where late fund calls straddling a mutation were attributing to the buyer instead of the seller. Rebind now uses  (DONE).
-- Created data repair script:  for the user to run on PROD (DONE).
-- Iter90ch: Ensured budget deletion/revocation properly reverses  journal entries (DONE).
-- Iter90ci: Fixed PDF Situation de compte bug where reversed entries ( and ) were showing up and corrupting the balance. Reversals are now excluded from the PDF generation (DONE).
+- Iter90co: Cleanup OD MUT-R on budget revoke/delete (, ) (DONE)
+- Iter90cp: Retroactive ownership repair for Case C (orphan lots) () (DONE)
+- Iter90cq: PROD to PREVIEW migration scripts (, ) (DONE)
+- Iter90cr: Fallback distribution for 100% phantom keys () (DONE)
+- Iter90cs (Backend): API to rebuild distribution keys () (DONE)
+- Iter90ct: Fixed duplicate invoice detection to check if invoice numbers differ () (DONE)
+- Iter90cu: Silenced false positive preflight alerts for 100% phantom keys (, ) (DONE)
+- Iter90cv: Investigated Code Quality report (Handled false positive XSS/Circular imports, fixed missing hook dependency in ) (DONE)
+- Iter90cw: Created cleanup script for empty fund calls () (DONE)
 
 **Earlier issues found/mentioned but not fixed**
-   - None clearly pending, the agent resolved all reported bugs.
+  - None.
 
 **Known issue recurrence from previous fork**
-  - Issue recurrence in previous fork: Confusion between PREVIEW vs PRODUCTION environments.
+  - Issue recurrence in previous fork: **PROD vs PREVIEW Confusion**. 
   - Recurrence count: High
   - Status: ONGOING
-  - Note: Users repeatedly encounter issues in PROD or ask the agent to apply changes/scripts to PROD. The agent DOES NOT have prod access. ALWAYS clarify if the issue is in PROD, and remind them that they must redeploy the preview code to PROD or run scripts via the Emergent Production Console themselves.
+  - Note: The user constantly uploads data/PDFs from the live PRODUCTION environment. The agent CANNOT access production. Always clarify the environment, and provide python scripts for the user to execute themselves on PROD via the Emergent Production Console.
 
 **Code Architecture**
 
 
 **Key Technical Concepts**
-- Backend: FastAPI, Async MongoDB (Motor), , Pytest, PCMN Accounting logic.
+- Backend: FastAPI, Async MongoDB (Motor), Pytest, PCMN Accounting logic.
 - Frontend: React, Tailwind CSS, Shadcn UI.
-- Integrations: Emergent LLM Key (Claude Sonnet 4.6), MS Graph (Email).
+- Accounting patterns: Retroactive Idempotency (, ), Phantom Key distribution fallbacks.
 
 **key DB schema**
   - : Kept in sync with the  array.
-  - : Strict Belgian accounting. Edits are reversals (, ).
-  - : Stores periodic billing.
+  - : Strict Belgian accounting.
+  - : Stores periodic billing. Must have a populated  array to generate VE entries.
+  - : Can contain phantom entries (lot_ids that no longer exist).
 
 **changes in tech stack**
-  - None this session.
+  - None.
 
 **All files of reference** 
-  -  (Added toggle for zero balance)
-  -  (Updated rebind logic to )
-  -  (Updated to reverse MUT-P on budget delete)
-  -  (Excluded reversals in PDF generation)
-  -  (New repair script)
-  - New test files: , , 
+  -  (Updated preflight checks and distribution fallback)
+  -  (Updated duplicate invoice logic)
+  -  (All data repair and migration scripts)
+  -  (Pending Iter90cs UI updates)
+  -  (Extensive test suite additions)
 
 **Areas that need refactoring**: 
-  -  (Still 500+ lines, could be broken down).
+  - Backend:  (massive functions > 150 lines), .
+  - Frontend:  (split into step components),  (performance bottlenecks).
 
 **key api endpoints**
-  - 
+  -  (NEW)
   - 
   - 
 
 **Critical Info for New Agent** 
 - **LANGUAGE**: Communicate entirely in **French**.
-- **PREVIEW VS PROD**: The user will ask you to run things on production. You cannot. Provide them the exact commands/scripts to run via their Production Console.
-- The immediate next step is to address the user's request (Message 202) to migrate PROD data for ACP Acacia to PREVIEW. Follow up on the scope/sanitization of this request.
+- **PROD DEBUGGING**: The user's last issue involved missing VE (Sales) entries in Production. The script  was given to them. Your next interaction should verify if they ran it successfully and if regenerating the budgets fixed the issue.
+- **ABANDONED UI**: You need to finish the UI portion of Iter90cs (wiring the Reconstruire la cle button in ).
 
 **documents and test reports created in this job** 
-  -  (Updated with iter90cg, iter90ch, iter90ci)
+  -  (Updated extensively with iter90co through iter90cw)
 
 **Last 10 User Messages and any pending HUMAN messages** 
- 1. User: Asked for a toggle to hide zero-balance accounts in the tier balance. (Completed)
- 2. User: Reported a bug where fund calls generated after a mutation for an overlapping period are assigned incorrectly.
- 3. User: Clarified details (Matexi was the seller, date confirmed, PROD env).
- 4. User: Requested deployment and script execution on PROD. (Agent provided instructions on how the user can run this).
- 5. User: Reported another issue: deleting/revoking a budget should delete associated ODs. (Completed via reversals).
- 6. User: **(PENDING)** Requested to integrate production data from ACP Acacia to preview. (Agent proposed a plan but got interrupted).
- 7. User: Uploaded a PDF Situation de compte and complained it is completely incoherent with the journals (duplicate/reversed entries were visible). (Completed: fixed PDF generation to exclude reversals).
+ 1. User: Accepted proposal to add a Reconstruire la cle UI button (Iter90cs).
+ 2. User: Interrupted with an invoice duplicate bug. Invoices with different numbers are being flagged as duplicates. (Iter90ct - Fixed)
+ 3. User: System provided a massive Code Quality Report (XSS, circular imports, hook dependencies). 
+ 4. User: Requested to immediately fix Wave 1 (Critical) items from the Code Quality Report. (Iter90cv - Fixed/debunked).
+ 5. User: Uploaded a PDF showing Matexi missing from the Balance des Tiers in PROD, and no VE entries generated.
+ 6. User: Clarified that phantom entries in keys are normal, but Matexi should still be assigned correctly.
+ 7. User: Selected Option A to clean up the bad fund calls in PROD.
+ 8. **(PENDING)** Agent provided the cleanup script (). Waiting on user to confirm execution and regeneration success.
 
 **Project Health Check:**
 - Broken: None.
 - Mocked: None.
-- Health: Excellent (Thorough pytest suite ensuring no regressions, all 17 tests passed).
+- Health: Excellent. Linter warnings audited. Extensive Pytest coverage. 
 
 **3rd Party Integrations** 
-  - Emergent LLM Key (Claude Sonnet 4.6 text-only)
+  - Emergent LLM Key (Claude Sonnet text-only)
   - Microsoft Graph (Email) — requires User Azure AD Credentials.
 
 **Testing status**
-  - Testing agent used after significant changes: NO (Self-tested via pytest strictly).
+  - Testing agent used after significant changes: NO (Self-tested via Pytest and bash curl).
   - Troubleshoot agent used after agent stuck in loop: NO
-  - Test files created: , , 
+  - Test files created: 
   - Known regressions: None.
 
 **Credentials to test flow:**
 Check 
 
 **What agent forgot to execute**
-The agent fixed the PDF bug, but has not yet returned to the user's prior request (Message 202) to build the export/import scripts for migrating ACP Acacia data from PROD to PREVIEW. The next agent must address this.</analysis>
+The agent built the backend logic and tests for Iter90cs () but forgot to implement the frontend button in  to trigger it, because the user interrupted with the invoice duplicate bug. This frontend wiring needs to be completed.</analysis>

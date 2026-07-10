@@ -5,7 +5,7 @@ import uuid
 import pytest
 import requests
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://gestion-immobiliere-2.preview.emergentagent.com").rstrip("/")
+BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://pcmn-accounting.preview.emergentagent.com").rstrip("/")
 PCMN_URL = f"{BASE_URL}/api/accounting/pcmn"
 
 ADMIN_EMAIL = "admin@copro.be"
