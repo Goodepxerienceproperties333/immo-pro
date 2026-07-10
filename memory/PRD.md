@@ -24,7 +24,46 @@ Smoke-teste (dialog + colonne Action rendus sans erreur JS sur ACP vide;
 pas de cle phantom disponible en PREVIEW pour cliquer le bouton lui-meme,
 backend deja couvert par `test_iter90cs_rebuild_distribution_key.py`).
 
-### Iter90cx (Feb 2026) - Diagnostic distributions partielles (NON RESOLU)
+### Iter90cy (Feb 2026) - FIX : dedup faux-positif Situation de compte/PDF
+
+**Root cause TROUVEE et CORRIGEE** (suite a iter90cx, l'ecart de 3.6%
+n'etait PAS un probleme de cle de repartition ni de donnees PROD, mais un
+bug de code generique) :
+
+Dans `situation_compte_owner`, `_build_situation_compte_pdf` et
+`situation_compte_supplier` (`routes/reports.py`), la protection anti-
+doublon des lignes de grand livre utilisait la cle :
+`(entry_id, account_number, debit, credit, third_party_id)` — SANS l'index
+de la ligne. Quand un proprietaire (ex: promoteur Matexi) possede plusieurs
+lots avec la MEME quote-part, l'appel de fonds genere N lignes debit
+IDENTIQUES (meme montant, meme compte, meme tiers) dans la MEME ecriture
+VE. Ces lignes distinctes etaient a tort detectees comme "doublons" et
+toutes sauf une etaient silencieusement ignorees -> le total affiche dans
+la Situation de compte (interface + PDF) etait sous-estime, alors que le
+"Solde" (recalcule independamment via `real_balance`, sans dedup) restait
+correct. D'ou l'ecart observe : Solde correct (25700) vs detail incorrect
+(24782).
+
+**Fix** : la cle de dedup inclut desormais l'index (`enumerate`) de la
+ligne dans `e.get("lines")`, ce qui distingue 2 lignes legitimement
+separees meme si leurs valeurs sont identiques, sans casser la protection
+anti-doublon AN/reprise (meme index utilise des 2 cotes).
+
+**Fichiers modifies** : `routes/reports.py` (4 boucles corrigees :
+`_build_situation_compte_pdf`, `situation_compte_owner` x2, cle interne
+supplier equivalente).
+
+**Test de regression** : `tests/test_iter90cy_multi_lot_identical_amount_dedup.py`
+(2 lignes debit identiques dans une ecriture VE -> total_debit doit sommer
+les 2, pas 1). Suite complete situation-compte/balance-tiers re-executee :
+11/11 passed (aucune regression, y compris `test_iter90bz_e2e_matexi_scenario`
+qui couvre deja un scenario multi-lots Matexi).
+
+**Note** : ceci resout le bug generiquement en base de code (applicable a
+toute ACP), independamment de la question separee "ACP Acacia supprimee en
+PREVIEW" (ci-dessous, toujours en attente).
+
+### Iter90cx (Feb 2026) - Diagnostic distributions partielles (RESOLU par iter90cy)
 
 **Contexte** : Utilisateur signale un ecart de 3.6% entre le montant appele
 et le total affiche dans la "Situation de compte" (Balance des tiers) d'un
@@ -33,25 +72,14 @@ roulement 5200->5012.80), alors que le Journal comptable (VE) affiche le
 bon total (1500/5200 Debit=Credit). Cle de repartition auditee = valide
 (10000/10000, 0 phantom, 0 orphelin).
 
-**Analyse code** (`auto_entries.py::generate_sale_entry`, `reports.py::
-situation_compte_owner`) : Le total du journal (`total_debit`) est calcule
-honnetement depuis la somme reelle des lignes generees - donc si le journal
-affiche 1500, les lignes owner (third_party_id=owner_id) DEVRAIENT sommer a
-1500 aussi dans la vue Balance des tiers (qui lit live depuis
-`journal_entries.lines`, aucun cache). Aucune bug evident trouve par simple
-lecture de code. Hypothese principale non confirmee : possible 2e
-enregistrement `owner` distinct (doublon) portant sur une partie des lots
-(3.6% quotites), filtre par owner_id dans `situation_compte_owner` alors que
-l'agregat journal ne distingue pas les owners.
+**Verdict utilisateur** (confirmation cle) : le "Solde" global de Matexi
+EST correct (25700 = 19000+1500+5200) ; seul le DETAIL (interface + PDF)
+est errone. **Voir Iter90cy ci-dessus : root cause identifiee et corrigee**
+(bug de dedup generique, pas un probleme specifique a Acacia/PROD).
 
-**Bloquant** : ACP Acacia n'existe plus en PREVIEW (supprimee, cf. section
-suivante) et l'utilisateur a demande de ne plus reference PROD pour
-l'instant -> Impossible de reproduire/diagnostiquer avec certitude sans
-donnees reelles. Script de diagnostic lecture-seule pret si besoin :
-`backend/scripts/diagnose_iter90cx_partial_distribution.py --name acacia`
-(a executer sur PROD quand l'utilisateur sera pret).
-
-**Statut : EN ATTENTE** (deprioritise a la demande de l'utilisateur).
+Script de diagnostic lecture-seule conserve si besoin (utile pour tout
+futur ecart de type "distribution incomplete" different de ce bug precis) :
+`backend/scripts/diagnose_iter90cx_partial_distribution.py --name acacia`.
 
 ### ACP Acacia supprimee en PREVIEW - Recuperation NON EFFECTUEE
 
