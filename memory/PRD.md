@@ -12,6 +12,61 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 
+### Iter90cu (Feb 2026) - Preflight ignore les cles 100% phantom (fallback iter90cr suffit)
+
+**Ticket utilisateur PROD** :
+> "en production ca ne fonctionne toujours pas ce truc il faut considerer
+> le premier proprietaire a la date de debut d'exercice"
+
+**Contexte** : Screenshots utilisateur montrent que :
+- L'audit ownership modal confirme "Proprietaire a date : Matexi" pour les
+  30 lots (colonne verte, Historique fondateur ✓)
+- Quote-part Matexi : Attendu 0 / Effectif 0 / Ecart 0 / Lots flagues 0
+- MAIS l'audit des cles indique 10000/10000 en Phantom (0 valides)
+- Le BudgetWizard affiche 2 alertes ROUGE/JAUNE tres alarmantes malgre
+  que iter90cr fait le fallback correctement
+
+Le probleme etait "cosmetique" : les alertes preflight ne prenaient pas
+en compte que iter90cr fallback resout automatiquement le cas "cle 100%
+phantom" via les quotites des lots reels.
+
+**Fix iter90cu** :
+
+1. `fund_calls.py::_detect_lots_unresolved_at_dates` :
+   - Detecte les cles ou TOUTES les entrees sont phantom (`keys_100pct_phantom`)
+   - Skip la generation de warnings pour les phantom lot_ids appartenant a
+     ces cles (fallback iter90cr les traite)
+   - Ajoute `phantom_keys_fallback` : {count, keys, phantom_lot_ids_ignored}
+
+2. `fund_calls.py::_detect_orphan_lots_for_budget` :
+   - Detecte cle 100% phantom -> skip la detection orphan
+   - Ajoute `phantom_keys_fallback` list dans la reponse
+
+3. `BudgetWizard.js` :
+   - Nouveau bandeau INFO BLEU quand `phantom_keys_fallback.length > 0`
+   - Message clair : "N cle(s) avec references perimees (auto-corrigees)"
+   - Explique que fallback iter90cr distribue via quotites, aucune perte
+   - Detail collapsible des cles impactees
+   - Reference l'endpoint iter90cs `/api/distribution-keys/{id}/rebuild`
+     pour nettoyage definitif
+
+**Tests iter90cu** (3/3 PASS) :
+1. `test_100pct_phantom_key_silences_alerts` : unresolved=0 + orphan_count=0
+   + phantom_keys_fallback.count=1
+2. `test_partial_phantom_still_warns` : phantom middle flagged, count phantom_keys_fallback=0
+3. `test_clean_key_no_warnings` : regression normale (aucun warning ni info)
+
+**Impact PROD Acacia apres deploiement** :
+- Alertes rouge "30 lot(s) sans proprietaire" et jaune "30 lot(s) orphelin"
+  disparaissent (les cles Acacia sont 100% phantom).
+- Nouveau bandeau bleu INFO : "2 cle(s) avec references perimees (auto-corrigees)"
+- Le montant est correctement distribue sur les 30 lots (Matexi = 100%)
+- L'utilisateur peut generer les appels sereinement.
+- Pour un nettoyage definitif, appeler iter90cs :
+  `POST /api/distribution-keys/{key_id}/rebuild {mode: "quotity", dry_run: false}`
+
+
+
 ### Iter90ct (Feb 2026) - Detection doublons dashboard ne doit pas flagger numeros differents
 
 **Ticket utilisateur PROD** :

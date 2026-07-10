@@ -477,6 +477,37 @@ export default function BudgetWizard({ budget, distKeys = [], onClose, onDone, m
                   </div>
                 )}
 
+                {/* iter90cu : info soft - cles 100% phantom, fallback iter90cr applique */}
+                {preview.orphan_lots_warning && preview.orphan_lots_warning.phantom_keys_fallback && preview.orphan_lots_warning.phantom_keys_fallback.length > 0 && (
+                  <div className="bg-blue-50 border-2 border-blue-300 rounded-lg p-4 flex items-start gap-3" data-testid="phantom-keys-fallback-info">
+                    <AlertTriangle size={22} className="text-blue-600 flex-shrink-0 mt-0.5" />
+                    <div className="flex-1">
+                      <div className="font-semibold text-blue-900 text-sm">
+                        {preview.orphan_lots_warning.phantom_keys_fallback.length} cle(s) de repartition avec references perimees (auto-corrigees)
+                      </div>
+                      <div className="text-xs text-blue-800 mt-1">
+                        Les entrees de ces cles pointent vers des lot_ids qui n&apos;existent plus en DB (probablement suite a une reimport).
+                        La distribution utilisera automatiquement <strong>les quotites des lots actuels</strong> (fix iter90cr).
+                        <strong> Aucune perte de shares.</strong> Pour nettoyer definitivement les cles, utilisez l&apos;endpoint
+                        <code className="mx-1 px-1 bg-blue-100 rounded">POST /api/distribution-keys/&lt;key_id&gt;/rebuild</code>.
+                      </div>
+                      <details className="text-xs mt-2">
+                        <summary className="cursor-pointer text-blue-900 font-medium select-none">Voir les cles impactees</summary>
+                        <div className="mt-2 space-y-1">
+                          {preview.orphan_lots_warning.phantom_keys_fallback.map((k, i) => (
+                            <div key={i} className="flex items-center justify-between bg-white/60 rounded px-2 py-1">
+                              <span className="font-mono text-slate-700">{k.key_name}</span>
+                              <span className="text-slate-500">
+                                {k.entries_count} entrees phantom (total share = {k.phantom_total_share.toFixed(4)})
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </details>
+                    </div>
+                  </div>
+                )}
+
                 <div className="grid grid-cols-5 gap-3">
                   <Card><CardContent className="p-3"><div className="text-xs text-slate-500">Nombre d&apos;appels</div><div className="text-xl font-black mt-1" style={{ fontFamily: 'Chivo,sans-serif' }}>{preview.summary.n_calls}</div></CardContent></Card>
                   <Card><CardContent className="p-3"><div className="text-xs text-slate-500">Budget annuel</div><div className="text-xl font-black mt-1 font-mono">{preview.summary.budget_total.toFixed(2)}</div></CardContent></Card>

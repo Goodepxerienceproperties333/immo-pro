@@ -1213,8 +1213,24 @@ def create_fund_calls_router(db):
                     break
             return current, ""
 
+        # iter90cu : Detecte les cles 100% phantom (toutes entrees pointent vers
+        # des lot_ids inexistants). Ces cles beneficient du fallback iter90cr :
+        # la distribution utilise les quotites des lots actuels. Ces phantom ne
+        # constituent PAS une erreur - juste une info.
+        keys_100pct_phantom = set()
+        for k in keys:
+            entries = [kle for kle in (k.get("lots") or []) if not kle.get("excluded")]
+            if not entries:
+                continue
+            phantom_only = all(
+                not kle.get("lot_id") or kle["lot_id"] not in lots_by_id
+                for kle in entries
+            )
+            if phantom_only:
+                keys_100pct_phantom.add(k["id"])
+
         # Collect lots avec share > 0 dans les cles utilisees
-        lots_in_keys: dict = {}  # lot_id -> [key_name]
+        lots_in_keys: dict = {}  # lot_id -> [(key_name, key_id)]
         for k in keys:
             for kle in (k.get("lots") or []):
                 if kle.get("excluded"):
@@ -1222,12 +1238,27 @@ def create_fund_calls_router(db):
                 lid = kle.get("lot_id")
                 share = float(kle.get("share", 0) or 0)
                 if lid and share > 0:
-                    lots_in_keys.setdefault(lid, []).append(k.get("name", ""))
+                    lots_in_keys.setdefault(lid, []).append((k.get("name", ""), k["id"]))
 
         warnings = []
-        for lid, key_names in lots_in_keys.items():
+        phantom_keys_fallback_info = []  # iter90cu : infos softs
+        for lid, key_infos in lots_in_keys.items():
             lot = lots_by_id.get(lid)
             if not lot:
+                # iter90cu : si TOUTES les cles referencant ce phantom sont
+                # 100% phantom, on skip le warning rouge (fallback iter90cr
+                # produira une distribution correcte via quotites des lots reels)
+                all_keys_are_100pct_phantom = all(
+                    kid in keys_100pct_phantom for _, kid in key_infos
+                )
+                key_names = [kn for kn, _ in key_infos]
+                if all_keys_are_100pct_phantom:
+                    # Info soft uniquement (regroupee cote reponse)
+                    phantom_keys_fallback_info.append({
+                        "lot_id": lid,
+                        "keys": key_names,
+                    })
+                    continue
                 warnings.append({
                     "lot_id": lid,
                     "lot_number": "MISSING",
@@ -1252,11 +1283,28 @@ def create_fund_calls_router(db):
                         "current_owner_id": current_owner,
                         "current_owner_name": owners_map.get(current_owner, ""),
                         "reason": reason or "aucun proprietaire resolu",
-                        "keys": key_names,
+                        "keys": [kn for kn, _ in key_infos],
                     })
+
+        # iter90cu : liste des cles concernees par le fallback (info soft)
+        phantom_keys_summary = []
+        for k in keys:
+            if k["id"] not in keys_100pct_phantom:
+                continue
+            phantom_keys_summary.append({
+                "key_id": k["id"],
+                "key_name": k.get("name", ""),
+                "entries_count": len(k.get("lots") or []),
+            })
+
         return {
             "unresolved_count": len(warnings),
             "warnings": warnings,
+            "phantom_keys_fallback": {
+                "count": len(phantom_keys_summary),
+                "keys": phantom_keys_summary,
+                "phantom_lot_ids_ignored": len(phantom_keys_fallback_info),
+            },
         }
 
     async def _detect_orphan_lots_for_budget(data: GenerateFromBudgetInput) -> dict:
@@ -1293,12 +1341,28 @@ def create_fund_calls_router(db):
 
         keys_affected = []
         orphan_lots_by_id: dict = {}
+        phantom_keys_summary = []  # iter90cu : cles 100% phantom (fallback iter90cr)
         for kid in used_key_ids:
             key = keys_map.get(kid)
             if not key:
                 continue
             active_kls = [kle for kle in key.get("lots", []) if not kle.get("excluded")]
             total_share = sum(float(kle.get("share", 0) or 0) for kle in active_kls)
+            # iter90cu : detecte cle 100% phantom -> iter90cr fallback distribue
+            # sur les lots reels de l'ACP avec leur quotity. AUCUNE perte de
+            # shares donc on ignore ce cas du warning orphan.
+            phantom_only = active_kls and all(
+                not lots_by_id.get(kle.get("lot_id"))
+                for kle in active_kls
+            )
+            if phantom_only:
+                phantom_keys_summary.append({
+                    "key_id": kid,
+                    "key_name": key.get("name", ""),
+                    "phantom_total_share": round(total_share, 4),
+                    "entries_count": len(active_kls),
+                })
+                continue  # skip orphan detection - fallback iter90cr applique
             orphan_share = 0.0
             for kle in active_kls:
                 lot = lots_by_id.get(kle.get("lot_id"))
@@ -1335,6 +1399,7 @@ def create_fund_calls_router(db):
             "orphan_share_percentage": worst_pct,
             "keys_affected": keys_affected,
             "lots": list(orphan_lots_by_id.values()),
+            "phantom_keys_fallback": phantom_keys_summary,  # iter90cu
         }
 
     @router.post("/generate-from-budget")
