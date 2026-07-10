@@ -12,6 +12,48 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 
+### Iter90ct (Feb 2026) - Detection doublons dashboard ne doit pas flagger numeros differents
+
+**Ticket utilisateur PROD** :
+> "si les nr de factures sont differents cela ne peut etre un doublons il
+> faut corriger"
+
+**Contexte** : PROD ACP affichait "1 doublon(s) potentiel(s) detecte(s)" pour
+2 factures : Good Experience Properties 15.00 EUR INV/0026 et INV/0028
+(numeros differents). L'endpoint CREATE invoice avait deja iter90bp
+(supprime regle 2 : soft duplicate sur montant+date+numeros differents).
+Mais `health_audit.py` (bandeau alerte dashboard) utilisait encore
+l'ancienne regle basee sur (supplier_id, amount) + date proximity, SANS
+verifier les numeros.
+
+**Fix iter90ct** (`health_audit.py::compute_health_audit`) :
+- Ajoute filtre : `if n1 and n2 and n1 != n2: continue` avant d'ajouter
+  aux doublons.
+- Preserve le flag quand au moins un numero est vide (cas import legacy
+  Optipro sans numero).
+- Preserve le flag quand les numeros sont identiques (regle stricte
+  iter90bp = doublon strict).
+
+**Tests iter90ct** (3/3 PASS) :
+1. `test_different_numbers_not_flagged` : INV/0026 vs INV/0028 (Good Exp
+   Properties 15 EUR, dates proches) -> anomaly None ou count=0.
+2. `test_identical_numbers_still_flagged` : F-2025-100 x2 -> flagge.
+3. `test_empty_number_still_flagged` : import legacy avec numero vide
+   + numero rempli -> flagge (safe fallback).
+
+**Bonus : cleanup iter90ao tests obsoletes** :
+- `test_rule2_same_amount_supplier_close_date` : maintenant expect 200
+  (accepte car numeros differents, alignes sur iter90bp).
+- `test_rule2_boundary_3_days` : maintenant expect 200 pour toutes les
+  tentatives.
+
+**Impact utilisateur** : Apres deploiement PROD, le dashboard n'affichera
+plus les faux positifs sur des factures avec numeros differents. Le count
+"Doublons potentiels" refletera fidelement les vrais doublons (numeros
+identiques uniquement) et les cas d'import legacy avec numeros manquants.
+
+
+
 ### Iter90cr (Feb 2026) - Fallback distribution quand cle 100% phantom
 
 **Ticket utilisateur PROD (ACP Acacia)** :

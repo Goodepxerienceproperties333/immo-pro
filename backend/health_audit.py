@@ -67,6 +67,11 @@ async def compute_health_audit(db, copropriete_id: str, days_threshold: int = 60
         })
 
     # 2) DOUBLONS POTENTIELS : meme fournisseur + meme montant + dates proches (<= 7j)
+    # iter90ct : Ne pas flagger comme doublon si les DEUX numeros de facture
+    # sont non-vides ET differents. Regle metier : chaque facture a un numero
+    # unique chez le fournisseur, donc numeros differents = factures reelles
+    # distinctes (jamais des doublons). On garde le flag uniquement si les
+    # numeros sont identiques OU si au moins un est vide (import legacy).
     inv_all = await db.invoices.find(
         {"copropriete_id": copropriete_id},
         {"_id": 0, "id": 1, "supplier_id": 1, "supplier": 1, "number": 1,
@@ -91,6 +96,12 @@ async def compute_health_audit(db, copropriete_id: str, days_threshold: int = 60
                 d1 = datetime.strptime(items_sorted[i - 1]["date"], "%Y-%m-%d").date()
                 d2 = datetime.strptime(items_sorted[i]["date"], "%Y-%m-%d").date()
                 if abs((d2 - d1).days) <= 7:
+                    # iter90ct : filtre supplementaire sur les numeros de facture
+                    n1 = (items_sorted[i - 1].get("number") or "").strip()
+                    n2 = (items_sorted[i].get("number") or "").strip()
+                    if n1 and n2 and n1 != n2:
+                        # Deux numeros non-vides et differents -> pas un doublon
+                        continue
                     dups.append({
                         "supplier": items_sorted[i].get("supplier", ""),
                         "amount": items_sorted[i].get("total_amount", 0),

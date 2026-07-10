@@ -113,18 +113,19 @@ async def _run_rule1_same_number_supplier():
 
 
 async def _run_rule2_same_amount_supplier_close_date():
-    """Rule 2 : meme fournisseur + meme montant + date +/- 3 jours + numeros differents -> 409."""
+    """iter90bp + iter90ct : Rule 2 SUPPRIMEE. Deux factures avec numeros
+    differents NE sont PAS des doublons, meme si supplier + montant + date
+    coincident. On attend 200 (creation acceptee).
+    """
     ctx = await _setup()
     try:
         c = await _admin_client()
         try:
             r1 = await _create_invoice(c, ctx["cid"], "ELECTRO SA", "F-2026-100", "2026-06-15", 850.50)
             assert r1.status_code == 200, r1.text
-            # Meme montant + fournisseur, numero different, date J+2
+            # Meme montant + fournisseur, numero different, date J+2 -> ACCEPTE
             r2 = await _create_invoice(c, ctx["cid"], "ELECTRO SA", "F-2026-101", "2026-06-17", 850.50)
-            assert r2.status_code == 409
-            detail = r2.json()["detail"].lower()
-            assert "montant" in detail and "date proche" in detail
+            assert r2.status_code == 200, r2.text
         finally:
             await c.aclose()
     finally:
@@ -181,7 +182,9 @@ async def _run_no_dup_when_amount_differs():
 
 
 async def _run_rule2_boundary_3_days():
-    """Rule 2 : la borne 3 jours est INCLUSIVE (|delta| = 3 -> BLOCK)."""
+    """iter90bp + iter90ct : Rule 2 SUPPRIMEE. Meme test que _run_rule2_same_amount
+    -> tous les cas sont ACCEPTES (200) car les numeros sont differents.
+    """
     ctx = await _setup()
     try:
         c = await _admin_client()
@@ -189,8 +192,7 @@ async def _run_rule2_boundary_3_days():
             r1 = await _create_invoice(c, ctx["cid"], "ELECTRO SA", "F-2026-500", "2026-06-15", 750.00)
             assert r1.status_code == 200
             r2 = await _create_invoice(c, ctx["cid"], "ELECTRO SA", "F-2026-501", "2026-06-18", 750.00)
-            assert r2.status_code == 409, r2.text
-            # J+4 -> autorise
+            assert r2.status_code == 200, r2.text  # ACCEPTE : numeros differents
             r3 = await _create_invoice(c, ctx["cid"], "ELECTRO SA", "F-2026-502", "2026-06-19", 750.00)
             assert r3.status_code == 200, r3.text
         finally:

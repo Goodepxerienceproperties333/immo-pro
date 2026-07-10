@@ -227,6 +227,173 @@ def create_invoices_router(db):
         await db.distribution_keys.update_one({"id": key_id}, {"$set": {"is_default": False}})
         return {"updated": True, "key_id": key_id}
 
+    @router.post("/distribution-keys/{key_id}/rebuild")
+    async def rebuild_dist_key(key_id: str, data: dict):
+        """iter90cs : Reconstruit une cle de repartition dont les entrees sont
+        phantom (lot_ids ne correspondant plus a aucun lot en DB) ou obsoletes.
+
+        Modes :
+        - `mode='quotity'` (defaut) : rebuild complet - les `lots` de la cle
+          sont remplaces par TOUS les lots actuels de l'ACP, avec `share`
+          egal a `quotity` de chaque lot. Total = somme des quotites (peut
+          differer de 10000 selon le parametrage). Simple et safe.
+        - `mode='match_by_number'` : pour chaque entree phantom, essaie de
+          matcher par `lot_number` (si stocke sur l'entree du key). Les entrees
+          matchees gardent leur `share` originale. Les non-matches sont
+          supprimes, les lots actuels manquants sont ajoutes avec `share=quotity`.
+        - `mode='clean_only'` : supprime seulement les entrees phantom
+          (sans ajouter les lots manquants). Utile si l'utilisateur veut
+          juste nettoyer sans reallouer.
+
+        dry_run=True : retourne le rapport de ce qui SERAIT fait.
+        dry_run=False : execute la mise a jour de la cle.
+
+        Requiert Chinese wall via _get_user_scope.
+        """
+        from datetime import datetime, timezone
+        existing = await db.distribution_keys.find_one({"id": key_id}, {"_id": 0})
+        if not existing:
+            raise HTTPException(404, "Cle non trouvee")
+
+        copro_id = existing.get("copropriete_id", "")
+        mode = (data.get("mode") or "quotity").strip()
+        if mode not in ("quotity", "match_by_number", "clean_only"):
+            raise HTTPException(400, f"mode invalide : {mode}")
+        dry_run = bool(data.get("dry_run", True))
+
+        # Chinese wall
+        req = data.get("_request")  # optionnel : injected par test
+        is_super, allowed = True, [copro_id]
+        try:
+            from routes.utils_scope import _get_user_scope
+            is_super, allowed = await _get_user_scope(req) if req else (True, [copro_id])
+        except Exception:
+            pass
+        if not is_super and copro_id not in (allowed or []):
+            raise HTTPException(403, "Chinese wall : acces refuse")
+
+        # Lots actuels de l'ACP
+        lots = await db.lots.find(
+            {"copropriete_id": copro_id}, {"_id": 0},
+        ).to_list(5000)
+        lots_by_id = {lt["id"]: lt for lt in lots}
+        lots_by_number = {str(lt.get("number", "")): lt for lt in lots}
+
+        # Analyse des entrees actuelles
+        current_lots_entries = existing.get("lots") or []
+        phantom_entries = []
+        valid_entries = []
+        for kle in current_lots_entries:
+            if kle.get("excluded"):
+                continue
+            lid = kle.get("lot_id")
+            if not lid or lid not in lots_by_id:
+                phantom_entries.append(kle)
+            else:
+                valid_entries.append(kle)
+
+        # Construction du nouveau tableau de lots
+        new_lots_entries = []
+        stats = {
+            "phantom_removed": 0,
+            "phantom_matched_by_number": 0,
+            "current_lots_added": 0,
+            "existing_preserved": 0,
+        }
+
+        if mode == "clean_only":
+            # Nettoie phantoms uniquement, garde le reste tel quel
+            for kle in current_lots_entries:
+                lid = kle.get("lot_id")
+                if not lid or lid not in lots_by_id:
+                    stats["phantom_removed"] += 1
+                    continue
+                new_lots_entries.append(kle)
+                stats["existing_preserved"] += 1
+
+        elif mode == "match_by_number":
+            # Preserve valid entries + tente de rebrancher les phantoms par
+            # lot_number si celui-ci est stocke sur l'entree du key.
+            used_lot_ids = set()
+            for kle in valid_entries:
+                new_lots_entries.append(kle)
+                used_lot_ids.add(kle.get("lot_id"))
+                stats["existing_preserved"] += 1
+            for kle in phantom_entries:
+                lot_number = str(kle.get("lot_number") or "")
+                matched = lots_by_number.get(lot_number)
+                if matched and matched["id"] not in used_lot_ids:
+                    new_lots_entries.append({
+                        "lot_id": matched["id"],
+                        "share": float(kle.get("share", 0) or 0),
+                        "lot_number": matched.get("number", ""),
+                    })
+                    used_lot_ids.add(matched["id"])
+                    stats["phantom_matched_by_number"] += 1
+                else:
+                    stats["phantom_removed"] += 1
+            # Ajout des lots actuels non couverts
+            for lot in lots:
+                if lot["id"] in used_lot_ids:
+                    continue
+                new_lots_entries.append({
+                    "lot_id": lot["id"],
+                    "share": float(lot.get("quotity", 0) or 0),
+                    "lot_number": lot.get("number", ""),
+                })
+                stats["current_lots_added"] += 1
+
+        else:  # mode == 'quotity' (defaut)
+            # Rebuild complet : remplace TOUT par lots actuels + quotites
+            stats["phantom_removed"] = len(phantom_entries)
+            stats["existing_preserved"] = 0  # tout est reconstruit
+            for lot in lots:
+                new_lots_entries.append({
+                    "lot_id": lot["id"],
+                    "share": float(lot.get("quotity", 0) or 0),
+                    "lot_number": lot.get("number", ""),
+                })
+                stats["current_lots_added"] += 1
+
+        old_total = round(
+            sum(float(kle.get("share", 0) or 0) for kle in current_lots_entries), 4,
+        )
+        new_total = round(
+            sum(float(kle.get("share", 0) or 0) for kle in new_lots_entries), 4,
+        )
+
+        response = {
+            "dry_run": dry_run,
+            "key_id": key_id,
+            "key_name": existing.get("name", ""),
+            "mode": mode,
+            "before": {
+                "entries_total": len(current_lots_entries),
+                "phantom_count": len(phantom_entries),
+                "valid_count": len(valid_entries),
+                "total_share": old_total,
+            },
+            "after": {
+                "entries_total": len(new_lots_entries),
+                "total_share": new_total,
+            },
+            "stats": stats,
+            "sample_new_entries": new_lots_entries[:5],
+        }
+
+        if not dry_run:
+            await db.distribution_keys.update_one(
+                {"id": key_id},
+                {"$set": {
+                    "lots": new_lots_entries,
+                    "iter90cs_rebuilt_at": datetime.now(timezone.utc).isoformat(),
+                    "iter90cs_rebuild_mode": mode,
+                }},
+            )
+            response["applied"] = True
+
+        return response
+
     @router.delete("/distribution-keys/{key_id}")
     async def delete_dist_key(key_id: str):
         linked_inv = await db.invoices.count_documents({"distribution_key_id": key_id})
