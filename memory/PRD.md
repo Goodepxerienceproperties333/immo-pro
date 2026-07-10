@@ -12,6 +12,58 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 
+### Iter90cw (Feb 2026) - Cleanup fund_calls orphelins (distribution vide)
+
+**Ticket utilisateur PROD** :
+> "le probleme est que tu consideres l'absence de lot comme bloquant l'appel
+> n'apparait plus dans la balance des tiers du promoteur Matexi, aucune OD
+> n'est creee au 01.10.2025 date de l'appel de provision pour charge validee
+> dans le budget"
+> "idem pour fonds de reserve et fonds de roulement rien n'apparait dans
+> les ecritures"
+
+**Cause** : Avant deploiement iter90cr sur PROD, les appels de fonds generes
+sur ACP Acacia (cles 100% phantom) aboutissaient a `distribution=[]`. En
+consequence, `generate_sale_entry` (auto_entries.py:347) retournait `None`
+au lieu de creer les VE, car:
+```python
+distribution = fund_call.get("distribution") or []
+if not distribution:
+    return None
+```
+=> aucune ligne debit/credit generee dans le grand livre => rien dans la
+balance Matexi.
+
+Le wizard PREVIEW affichait pourtant "30 PROPRIETAIRES" car il RECALCULE la
+distribution en live via iter90cr. Mais les documents fund_calls persistes
+avaient une distribution VIDE.
+
+**Solution (validee par l'utilisateur : Option A - regenerer)** :
+
+1. Utilisateur redeploie preview -> PROD (iter90cr + cu deja pretes)
+2. Utilisateur execute le script pour supprimer les appels orphelins :
+   ```bash
+   cd /app/backend
+   python scripts/repair_iter90cw_empty_calls.py --name acacia --dry-run  # rapport
+   python scripts/repair_iter90cw_empty_calls.py --name acacia --commit   # applique
+   ```
+3. Utilisateur regenere les appels via BudgetWizard : iter90cr fallback
+   populera correctement `distribution` -> `generate_sale_entry` creera les
+   VE avec 30 lignes debit Matexi (compte 4101XXXX) + 1 ligne credit 700000
+   pour les provisions, similaire pour reserve (160) et roulement (100).
+
+**Script iter90cw** (`scripts/repair_iter90cw_empty_calls.py`) :
+- Auto-detecte ACP par nom (`--name acacia`) ou id.
+- Filtre les fund_calls avec `distribution == []` OU somme(amounts) < 0.01.
+- Rapporte les VE/OD auto associees (via `_delete_auto_entries`).
+- Dry-run par defaut, `--commit` pour appliquer.
+- Idempotent : safe de rejouer.
+
+**Test rapide sur PREVIEW** : script trouve 0 appels a nettoyer (attendu, ACP
+Acacia-Like preview vide).
+
+
+
 ### Iter90cv (Feb 2026) - Code quality review response (Vague 1 + Vague 2)
 
 **Ticket** : Rapport d'audit code quality externe listant :
