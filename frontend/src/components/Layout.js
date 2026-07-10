@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import api from '@/lib/api';
@@ -62,6 +62,19 @@ export default function Layout() {
   const getRoleLabel = (role) => ({ superadmin: 'Super Admin', admin: 'Admin', syndic: 'Syndic', gestionnaire: 'Gestionnaire' }[role] || 'Proprietaire');
   const selectedCoproData = coproprietes.find(c => c.id === selectedCopro);
   const hasCopro = !!selectedCopro;
+
+  // iter90cv : memoize expensive filter/sort dans les Select pour eviter
+  // le recalcul a chaque render de Layout (impacte toutes les pages).
+  const activeCoproprietes = useMemo(
+    () => coproprietes.filter(c => c.status !== 'archived'),
+    [coproprietes],
+  );
+  const sortedFiscalYears = useMemo(
+    () => [...(fiscalYears || [])].sort(
+      (a, b) => (b.start_date || '').localeCompare(a.start_date || ''),
+    ),
+    [fiscalYears],
+  );
 
   // MODE ADMIN PLATEFORME : superadmin sur une route /admin/* voit une interface
   // dediee a l'administration de la plateforme (pas de selecteur ACP, pas de
@@ -420,7 +433,7 @@ export default function Layout() {
         </Button>
         <Select value={selectedCopro} onValueChange={(v) => setSelectedCopro(v)}>
           <SelectTrigger className="w-[220px] h-8 text-xs border-[#2563EB]/30" data-testid="copro-selector"><SelectValue /></SelectTrigger>
-          <SelectContent>{coproprietes.filter(c => c.status !== 'archived').map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}</SelectContent>
+          <SelectContent>{activeCoproprietes.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}</SelectContent>
         </Select>
         {selectedCopro && fiscalYears && fiscalYears.length > 0 && (
           <Select value={selectedFiscalYearId || '__all__'} onValueChange={(v) => setSelectedFiscalYearId(v === '__all__' ? '' : v)}>
@@ -429,7 +442,7 @@ export default function Layout() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="__all__" data-testid="fy-option-all">— Tous les exercices —</SelectItem>
-              {[...fiscalYears].sort((a, b) => (b.start_date || '').localeCompare(a.start_date || '')).map(y => (
+              {sortedFiscalYears.map(y => (
                 <SelectItem key={y.id} value={y.id} data-testid={`fy-option-${y.id}`}>
                   {y.name} {y.status === 'closed' ? '(cloture)' : ''}
                 </SelectItem>

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import api from '@/lib/api';
 import { useAuth } from '@/contexts/AuthContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -22,7 +22,7 @@ export default function TeamMembersPage() {
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState({ email: '', name: '', password: '', role_template_id: '', copropriete_ids: [], permissions: [], must_change_password: true });
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true);
     try {
       const [m, t, c, p] = await Promise.all([
@@ -36,9 +36,9 @@ export default function TeamMembersPage() {
       setCatalog(c.data);
       setCopros(p.data);
     } finally { setLoading(false); }
-  };
+  }, []);
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [load]);
 
   const openNew = () => {
     setEditing(null);
