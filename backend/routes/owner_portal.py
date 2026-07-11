@@ -350,6 +350,98 @@ def create_owner_portal_router(db):
             d.pop("stored_path", None)  # don't expose disk path
         return docs
 
+    @router.get("/communications")
+    async def my_communications(request: Request, copropriete_id: Optional[str] = None,
+                                limit: int = 100):
+        """Iter90db : liste des emails envoyes par le syndic au proprietaire.
+
+        Filtre :
+        - `to` contient l'email du proprietaire (email principal OU email2 si defini)
+          OU `owner_ids` contient l'id du proprietaire
+        - Chinese wall : `copropriete_id` doit etre l'une des ACPs du proprietaire
+        - `dry_run` : masque les emails en dry_run (pas reellement envoyes)
+        """
+        owner = await _resolve_owner(db, request)
+        owner_id = owner["id"]
+        emails_owner = [owner.get("email", "").lower().strip()]
+        if owner.get("email2"):
+            emails_owner.append(owner["email2"].lower().strip())
+        emails_owner = [e for e in emails_owner if e]
+
+        # ACPs autorisees pour ce proprietaire (chinese wall)
+        lots = await db.lots.find(
+            {"$or": [{"owner_id": owner_id}, {"owner_ids": owner_id}]},
+            {"_id": 0, "copropriete_id": 1},
+        ).to_list(1000)
+        allowed_copros = list({l["copropriete_id"] for l in lots if l.get("copropriete_id")})
+        if copropriete_id:
+            if copropriete_id not in allowed_copros:
+                return []
+            allowed_copros = [copropriete_id]
+        if not allowed_copros:
+            return []
+
+        # Query : owner_id OR (email in to)
+        q = {
+            "copropriete_id": {"$in": allowed_copros},
+            "dry_run": {"$ne": True},
+            "status": {"$ne": "failed"},
+            "$or": [
+                {"owner_ids": owner_id},
+                {"to": {"$in": emails_owner}} if emails_owner else {"owner_ids": owner_id},
+            ],
+        }
+        comms = await db.sent_communications.find(q, {"_id": 0, "body_html": 0}).sort("sent_at", -1).to_list(max(1, min(limit, 500)))
+
+        # Enrichir avec ACP name
+        copros_map = {}
+        if comms:
+            copros = await db.coproprietes.find(
+                {"id": {"$in": list({c["copropriete_id"] for c in comms if c.get("copropriete_id")})}},
+                {"_id": 0, "id": 1, "name": 1},
+            ).to_list(100)
+            copros_map = {c["id"]: c["name"] for c in copros}
+        for c in comms:
+            c["copropriete_name"] = copros_map.get(c.get("copropriete_id", ""), "")
+        return comms
+
+    @router.get("/communications/{comm_id}")
+    async def my_communication_detail(comm_id: str, request: Request):
+        """Iter90db : contenu HTML complet d'un email pour visualisation portail."""
+        owner = await _resolve_owner(db, request)
+        owner_id = owner["id"]
+        emails_owner = [owner.get("email", "").lower().strip()]
+        if owner.get("email2"):
+            emails_owner.append(owner["email2"].lower().strip())
+        emails_owner = [e for e in emails_owner if e]
+
+        comm = await db.sent_communications.find_one({"id": comm_id}, {"_id": 0})
+        if not comm:
+            raise HTTPException(404, "Communication introuvable")
+
+        # Chinese wall : verifier appartenance
+        if comm.get("dry_run") or comm.get("status") == "failed":
+            raise HTTPException(404, "Communication indisponible")
+        if owner_id not in (comm.get("owner_ids") or []):
+            # Fallback : email dans to
+            to_lower = [str(e).lower().strip() for e in (comm.get("to") or [])]
+            if not any(e in to_lower for e in emails_owner):
+                raise HTTPException(403, "Acces refuse a cette communication")
+
+        # Verifier ACP
+        copro_id = comm.get("copropriete_id", "")
+        if copro_id:
+            has_lot = await db.lots.find_one(
+                {"copropriete_id": copro_id,
+                 "$or": [{"owner_id": owner_id}, {"owner_ids": owner_id}]},
+                {"_id": 0, "id": 1},
+            )
+            if not has_lot:
+                raise HTTPException(403, "Acces refuse a cette communication")
+
+        return comm
+
+
     @router.get("/situation/{copropriete_id}")
     async def my_situation(copropriete_id: str, request: Request):
         """Detailed account situation (mouvements) for owner within a specific ACP."""

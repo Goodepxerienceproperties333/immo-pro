@@ -9,34 +9,59 @@ Fonctionnalites :
    (chaque gestionnaire choisit sa boite d'envoi dans la liste du syndic).
 6. Signature HTML par gestionnaire (enregistree sur le profil user).
 
+Iter90db : Historisation des envois dans `db.sent_communications` pour
+exposition dans le portail proprietaire (tab Communications).
+
 Modele de donnees :
 - `user.authorized_mailboxes` (uniquement sur les users role=syndic) :
   array de {address, display_name, active}. Le syndic gere sa liste ;
   les gestionnaires du meme cabinet (parent_syndic_id) heritent.
 - `user.signature_html` (tous roles) : signature HTML libre du gestionnaire.
-
-Endpoints :
-- GET  /api/communication/mailboxes         : liste boites autorisees (heritage syndic)
-- POST /api/communication/mailboxes         : ajouter (syndic uniquement)
-- DELETE /api/communication/mailboxes/{addr}: retirer (syndic uniquement)
-- GET  /api/communication/signature         : signature du user courant
-- PUT  /api/communication/signature         : maj signature du user courant
-- GET  /api/communication/owners-balances   : proprietaires + balance (pour UI selection)
-- POST /api/communication/send/situation    : envoi situation de compte
-- POST /api/communication/send/decompte     : envoi decompte annuel
-- POST /api/communication/send/mutation     : envoi decompte mutation
-- POST /api/communication/send/generic      : envoi libre + pj PDF
+- `db.sent_communications` (iter90db) :
+  {id, from_mailbox, to[], cc[], subject, body_html, body_preview,
+   has_attachment, attachment_filename, kind, copropriete_id, owner_ids[],
+   sent_at, sent_by_user_id, dry_run, status}
 """
 from __future__ import annotations
 
 import base64
 import logging
+import re
+import uuid
+from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Form
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_preview(html: str, max_len: int = 240) -> str:
+    """Iter90db : extrait un apercu texte sans HTML pour la vue portail."""
+    if not html:
+        return ""
+    text = re.sub(r"<[^>]+>", " ", html)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:max_len] + ("..." if len(text) > max_len else "")
+
+
+def _err_reason(exc: Exception, max_len: int = 200) -> str:
+    """Iter90dc : extrait un message d'erreur lisible pour l'utilisateur.
+
+    - HTTPException : renvoie `detail` (message metier)
+    - Autre : str(exc) tronque a max_len.
+    """
+    try:
+        from fastapi import HTTPException as _HE
+        if isinstance(exc, _HE):
+            det = exc.detail
+            if isinstance(det, (dict, list)):
+                det = str(det)
+            return (det or "").strip()[:max_len]
+    except Exception:
+        pass
+    return str(exc)[:max_len]
 
 
 # ---------- helpers scope cabinet ----------
@@ -251,9 +276,20 @@ def create_communication_router(db):
 
     async def _send_email(from_mailbox: str, to: List[str], subject: str,
                          html_body: str, attachment_pdf: Optional[bytes] = None,
-                         attachment_filename: str = "") -> dict:
+                         attachment_filename: str = "",
+                         *,
+                         kind: str = "generic",
+                         copropriete_id: str = "",
+                         owner_ids: Optional[List[str]] = None,
+                         request: Optional[Request] = None) -> dict:
         """Wrapper Graph : envoie a plusieurs destinataires. Si attachment_pdf est
-        fourni, l'ajoute en PJ (base64 dans le message Graph)."""
+        fourni, l'ajoute en PJ (base64 dans le message Graph).
+
+        Iter90db : persiste chaque envoi dans `db.sent_communications` (dry_run inclus)
+        pour affichage dans le portail proprietaire (tab Communications).
+        """
+        dry_run = False
+        status = "sent"
         try:
             from graph_email import _MAIL_ENABLED, _TENANT_ID, _CLIENT_ID, _CLIENT_SECRET
             import httpx
@@ -264,49 +300,122 @@ def create_communication_router(db):
         if not _MAIL_ENABLED:
             logger.info("[DRY-RUN] Email suppressed. From=%s To=%s Subject=%s Attach=%s",
                         from_mailbox, to, subject, bool(attachment_pdf))
-            return {"sent": len(to), "dry_run": True}
-        if not (_TENANT_ID and _CLIENT_ID and _CLIENT_SECRET):
+            dry_run = True
+        elif not (_TENANT_ID and _CLIENT_ID and _CLIENT_SECRET):
             raise HTTPException(500, "Microsoft Graph non configure (AZURE_TENANT_ID/CLIENT_ID/CLIENT_SECRET manquants)")
+        else:
+            # Token OAuth2 client credentials
+            async with httpx.AsyncClient(timeout=30) as client:
+                tok = await client.post(
+                    f"https://login.microsoftonline.com/{_TENANT_ID}/oauth2/v2.0/token",
+                    data={
+                        "client_id": _CLIENT_ID,
+                        "client_secret": _CLIENT_SECRET,
+                        "scope": "https://graph.microsoft.com/.default",
+                        "grant_type": "client_credentials",
+                    },
+                )
+                if tok.status_code >= 400:
+                    logger.error("Graph OAuth failed : %s %s", tok.status_code, tok.text)
+                    err_body = tok.text[:200] if tok.text else ""
+                    raise HTTPException(500, f"Auth Graph echouee : HTTP {tok.status_code} - {err_body}")
+                token = tok.json()["access_token"]
 
-        # Token OAuth2 client credentials
-        async with httpx.AsyncClient(timeout=30) as client:
-            tok = await client.post(
-                f"https://login.microsoftonline.com/{_TENANT_ID}/oauth2/v2.0/token",
-                data={
-                    "client_id": _CLIENT_ID,
-                    "client_secret": _CLIENT_SECRET,
-                    "scope": "https://graph.microsoft.com/.default",
-                    "grant_type": "client_credentials",
-                },
+                message = {
+                    "message": {
+                        "subject": subject,
+                        "body": {"contentType": "HTML", "content": html_body},
+                        "toRecipients": [{"emailAddress": {"address": a}} for a in to],
+                    },
+                    "saveToSentItems": True,
+                }
+                if attachment_pdf:
+                    message["message"]["attachments"] = [{
+                        "@odata.type": "#microsoft.graph.fileAttachment",
+                        "name": attachment_filename or "document.pdf",
+                        "contentType": "application/pdf",
+                        "contentBytes": base64.b64encode(attachment_pdf).decode("ascii"),
+                    }]
+
+                r = await client.post(
+                    f"https://graph.microsoft.com/v1.0/users/{from_mailbox}/sendMail",
+                    headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                    json=message,
+                )
+                if r.status_code >= 400:
+                    logger.error("Graph sendMail failed : %s %s", r.status_code, r.text)
+                    status = "failed"
+                    # Extraire un message d'erreur Graph lisible (iter90dc)
+                    err_detail = f"HTTP {r.status_code}"
+                    try:
+                        j = r.json()
+                        gerr = (j or {}).get("error", {})
+                        gcode = gerr.get("code", "")
+                        gmsg = gerr.get("message", "")[:200]
+                        if gcode or gmsg:
+                            err_detail = f"Graph {r.status_code} {gcode} : {gmsg}"
+                    except Exception:
+                        pass
+                    # Log l'echec en DB puis lever l'exception
+                    try:
+                        await _persist_sent_communication(
+                            from_mailbox=from_mailbox, to=to, subject=subject,
+                            html_body=html_body, attachment_filename=attachment_filename,
+                            has_attachment=bool(attachment_pdf), kind=kind,
+                            copropriete_id=copropriete_id, owner_ids=owner_ids or [],
+                            dry_run=False, status="failed",
+                            error_msg=err_detail, request=request,
+                        )
+                    except Exception as pe:
+                        logger.warning("Persist failed comm log failed : %s", pe)
+                    raise HTTPException(502, f"Envoi email echoue : {err_detail}")
+
+        # Iter90db : persiste succes / dry-run
+        try:
+            await _persist_sent_communication(
+                from_mailbox=from_mailbox, to=to, subject=subject,
+                html_body=html_body, attachment_filename=attachment_filename,
+                has_attachment=bool(attachment_pdf), kind=kind,
+                copropriete_id=copropriete_id, owner_ids=owner_ids or [],
+                dry_run=dry_run, status=status,
+                error_msg="", request=request,
             )
-            tok.raise_for_status()
-            token = tok.json()["access_token"]
+        except Exception as pe:
+            logger.warning("Persist sent_communications failed : %s", pe)
+        return {"sent": len(to), "dry_run": dry_run}
 
-            message = {
-                "message": {
-                    "subject": subject,
-                    "body": {"contentType": "HTML", "content": html_body},
-                    "toRecipients": [{"emailAddress": {"address": a}} for a in to],
-                },
-                "saveToSentItems": True,
-            }
-            if attachment_pdf:
-                message["message"]["attachments"] = [{
-                    "@odata.type": "#microsoft.graph.fileAttachment",
-                    "name": attachment_filename or "document.pdf",
-                    "contentType": "application/pdf",
-                    "contentBytes": base64.b64encode(attachment_pdf).decode("ascii"),
-                }]
-
-            r = await client.post(
-                f"https://graph.microsoft.com/v1.0/users/{from_mailbox}/sendMail",
-                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-                json=message,
-            )
-            if r.status_code >= 400:
-                logger.error("Graph sendMail failed : %s %s", r.status_code, r.text)
-                raise HTTPException(502, f"Envoi email echoue : {r.status_code}")
-        return {"sent": len(to), "dry_run": False}
+    async def _persist_sent_communication(
+        *,
+        from_mailbox: str, to: List[str], subject: str,
+        html_body: str, attachment_filename: str, has_attachment: bool,
+        kind: str, copropriete_id: str, owner_ids: List[str],
+        dry_run: bool, status: str, error_msg: str,
+        request: Optional[Request],
+    ) -> None:
+        """Iter90db : insertion dans db.sent_communications (sync a chaque envoi
+        via _send_email). Tolerance : ne remonte jamais d'erreur au caller."""
+        sent_by = ""
+        if request is not None:
+            sent_by = getattr(request.state, "user_id", "") or ""
+        doc = {
+            "id": str(uuid.uuid4()),
+            "from_mailbox": from_mailbox,
+            "to": to,
+            "subject": subject or "(sans sujet)",
+            "body_html": (html_body or "")[:100000],  # cap 100k chars
+            "body_preview": _extract_preview(html_body),
+            "has_attachment": bool(has_attachment),
+            "attachment_filename": attachment_filename or "",
+            "kind": kind or "generic",
+            "copropriete_id": copropriete_id or "",
+            "owner_ids": owner_ids or [],
+            "sent_at": datetime.now(timezone.utc).isoformat(),
+            "sent_by_user_id": sent_by,
+            "dry_run": bool(dry_run),
+            "status": status or "sent",
+            "error_msg": error_msg or "",
+        }
+        await db.sent_communications.insert_one(doc)
 
     async def _ensure_mailbox_allowed(request: Request, mailbox: str):
         _, scope_id = await _resolve_syndic_scope(db, request)
@@ -360,7 +469,8 @@ def create_communication_router(db):
             if len(pdf_bytes) > 15 * 1024 * 1024:
                 raise HTTPException(413, "Piece jointe > 15 MB")
             pdf_name = fname
-        result = await _send_email(from_mailbox, to, subject, html, pdf_bytes, pdf_name)
+        result = await _send_email(from_mailbox, to, subject, html, pdf_bytes, pdf_name,
+                                   kind="generic", request=request)
         return {"success": True, **result}
 
     @router.post("/send/situation")
@@ -420,11 +530,13 @@ def create_communication_router(db):
                 )
                 filename = f"situation_compte_{owner['name'].replace(' ', '_')}.pdf"
                 await _send_email(payload.from_mailbox, [owner["email"]], subj, html,
-                                  attachment_pdf=pdf_bytes, attachment_filename=filename)
+                                  attachment_pdf=pdf_bytes, attachment_filename=filename,
+                                  kind="situation", copropriete_id=payload.copropriete_id,
+                                  owner_ids=[oid], request=request)
                 sent += 1
             except Exception as e:
                 logger.warning("Send situation failed for %s : %s", oid, e)
-                failed.append({"owner_id": oid, "reason": str(e)[:100]})
+                failed.append({"owner_id": oid, "reason": _err_reason(e)})
         return {"success": True, "sent": sent, "failed": failed}
 
     @router.post("/send/decompte")
@@ -474,11 +586,13 @@ def create_communication_router(db):
                 )
                 filename = f"decompte_annuel_{owner['name'].replace(' ', '_')}.pdf"
                 await _send_email(payload.from_mailbox, [owner["email"]], subj, html,
-                                  attachment_pdf=pdf_bytes, attachment_filename=filename)
+                                  attachment_pdf=pdf_bytes, attachment_filename=filename,
+                                  kind="decompte", copropriete_id=payload.copropriete_id,
+                                  owner_ids=[oid], request=request)
                 sent += 1
             except Exception as e:
                 logger.warning("Send decompte failed for %s : %s", oid, e)
-                failed.append({"owner_id": oid, "reason": str(e)[:100]})
+                failed.append({"owner_id": oid, "reason": _err_reason(e)})
         return {"success": True, "sent": sent, "failed": failed}
 
     @router.post("/send/mutation")
@@ -525,7 +639,11 @@ def create_communication_router(db):
         html = await _build_html_with_signature(request, body, payload.include_signature)
 
         result = await _send_email(payload.from_mailbox, payload.to_emails, subj, html,
-                                   attachment_pdf=pdf_bytes, attachment_filename=filename)
+                                   attachment_pdf=pdf_bytes, attachment_filename=filename,
+                                   kind="mutation",
+                                   copropriete_id=lot.get("copropriete_id", ""),
+                                   owner_ids=[mutation.get("from_owner_id"), mutation.get("to_owner_id")],
+                                   request=request)
         return {"success": True, **result}
 
     return router

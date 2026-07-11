@@ -43,6 +43,7 @@ import OwnerPortalPage from "@/pages/OwnerPortalPage";
 import RemindersPage from "@/pages/RemindersPage";
 import ExpensesPage from "@/pages/ExpensesPage";
 import ExpenseCategoriesPage from "@/pages/ExpenseCategoriesPage";
+import DistributionKeysPage from "@/pages/DistributionKeysPage";
 import LegalDocPage from "@/pages/LegalDocPage";
 import AdminLegalDocsPage from "@/pages/AdminLegalDocsPage";
 import AdminRgpdRegisterPage from "@/pages/AdminRgpdRegisterPage";
@@ -95,6 +96,7 @@ function AppRoutes() {
         <Route path="reminders" element={<RemindersPage />} />
         <Route path="expenses" element={<ExpensesPage />} />
         <Route path="expense-categories" element={<ExpenseCategoriesPage />} />
+        <Route path="distribution-keys" element={<DistributionKeysPage />} />
         <Route path="documents" element={<DocumentsPage />} />
         <Route path="admin/users" element={<AdminUsersPage />} />
         <Route path="admin" element={<AdminDashboardPage />} />

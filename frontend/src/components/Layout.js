@@ -6,7 +6,7 @@ import {
   LayoutDashboard, Users, Building2, UserCheck, BookOpen, FileText,
   Receipt, Gauge, Landmark, FolderOpen, LogOut, ChevronLeft, ChevronRight,
   Menu, Shield, Home, Truck, Calendar, BookMarked, Megaphone, BarChart3, Bell, Wallet, Tag, UserCog, Pencil,
-  ShieldAlert, Unlock, ScrollText, IdCard, Activity, FileCheck, FileArchive, Mail, HardDrive
+  ShieldAlert, Unlock, ScrollText, IdCard, Activity, FileCheck, FileArchive, Mail, HardDrive, Key
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -29,6 +29,7 @@ const sections = [
     { to: '/fiscal', icon: Calendar, label: 'Exercices' },
     { to: '/journals', icon: FileText, label: 'Journaux' },
     { to: '/grand-livre', icon: BookMarked, label: 'Grand Livre' },
+    { to: '/distribution-keys', icon: Key, label: 'Cles de repartition' },
     { to: '/expense-categories', icon: Tag, label: 'Natures de depense' },
   ]},
   { title: 'Finance', accent: 'emerald', items: [

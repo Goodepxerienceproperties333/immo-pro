@@ -264,12 +264,17 @@ function SendActionDialog({
         ...(action === 'decompte' ? { fiscal_year_id } : {}),
       };
       const r = await api.post(`/communication/send/${action}`, payload);
-      const dryRun = r.data.dry_run || r.data.dry_run === undefined ? '' : '';
       const info = r.data.sent > 0
         ? `${r.data.sent} email(s) envoye(s)${r.data.dry_run ? ' (mode dry-run)' : ''}`
         : 'Aucun email envoye';
       if (r.data.failed?.length) {
-        toast.warning(`${info}. ${r.data.failed.length} echec(s).`);
+        // iter90dc : affiche la raison detaillee du premier echec pour aider au debug
+        const firstFail = r.data.failed[0] || {};
+        const reason = firstFail.reason || 'raison inconnue';
+        const suffix = r.data.failed.length > 1 ? ` (+${r.data.failed.length - 1} autre(s))` : '';
+        toast.warning(`${info}. ${r.data.failed.length} echec(s) : ${reason}${suffix}`, {
+          duration: 12000,
+        });
       } else {
         toast.success(info);
       }

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import api from '@/lib/api';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -9,7 +9,44 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { toast } from 'sonner';
-import { LogOut, Home, Wallet, FileText, Receipt, Megaphone, Building2, User, AlertCircle, CheckCircle2, ArrowDownToLine, Copy, UserCog, Users, Plus, Pencil, Trash2, Save, Eye } from 'lucide-react';
+import { LogOut, Home, Wallet, FileText, Receipt, Megaphone, Building2, User, AlertCircle, CheckCircle2, ArrowDownToLine, Copy, UserCog, Users, Plus, Pencil, Trash2, Save, Eye, Gauge, CalendarClock, PieChart as PieChartIcon, TrendingUp, Clock, Sparkles, Mail, MailOpen, Send, Paperclip } from 'lucide-react';
+import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RechartsTooltip } from 'recharts';
+import { sanitizeHtml } from '@/lib/sanitizeHtml';
+
+// Iter90db : palette couleur deterministe par nom de categorie de document
+// (index -> style bordure/fond/texte). Le hash simple s'assure que la meme
+// categorie recoit toujours la meme couleur, meme entre sessions/machines.
+const CATEGORY_COLOR_PALETTE = [
+  { bg: 'bg-blue-50', text: 'text-blue-700', border: 'border-blue-200', dot: 'bg-blue-500' },
+  { bg: 'bg-emerald-50', text: 'text-emerald-700', border: 'border-emerald-200', dot: 'bg-emerald-500' },
+  { bg: 'bg-amber-50', text: 'text-amber-700', border: 'border-amber-200', dot: 'bg-amber-500' },
+  { bg: 'bg-violet-50', text: 'text-violet-700', border: 'border-violet-200', dot: 'bg-violet-500' },
+  { bg: 'bg-rose-50', text: 'text-rose-700', border: 'border-rose-200', dot: 'bg-rose-500' },
+  { bg: 'bg-cyan-50', text: 'text-cyan-700', border: 'border-cyan-200', dot: 'bg-cyan-500' },
+  { bg: 'bg-lime-50', text: 'text-lime-700', border: 'border-lime-200', dot: 'bg-lime-500' },
+  { bg: 'bg-fuchsia-50', text: 'text-fuchsia-700', border: 'border-fuchsia-200', dot: 'bg-fuchsia-500' },
+  { bg: 'bg-orange-50', text: 'text-orange-700', border: 'border-orange-200', dot: 'bg-orange-500' },
+  { bg: 'bg-indigo-50', text: 'text-indigo-700', border: 'border-indigo-200', dot: 'bg-indigo-500' },
+  { bg: 'bg-teal-50', text: 'text-teal-700', border: 'border-teal-200', dot: 'bg-teal-500' },
+  { bg: 'bg-pink-50', text: 'text-pink-700', border: 'border-pink-200', dot: 'bg-pink-500' },
+];
+
+function categoryColor(name) {
+  const key = (name || 'Sans categorie').toLowerCase().trim();
+  let hash = 0;
+  for (let i = 0; i < key.length; i += 1) {
+    hash = ((hash << 5) - hash + key.charCodeAt(i)) | 0;
+  }
+  return CATEGORY_COLOR_PALETTE[Math.abs(hash) % CATEGORY_COLOR_PALETTE.length];
+}
+
+// Iter90db : palette + libelle par kind de communication
+const COMM_KIND_META = {
+  situation: { label: 'Situation de compte', color: 'bg-blue-100 text-blue-700 border-blue-200', icon: Wallet },
+  decompte: { label: 'Decompte annuel', color: 'bg-purple-100 text-purple-700 border-purple-200', icon: FileText },
+  mutation: { label: 'Decompte de mutation', color: 'bg-amber-100 text-amber-700 border-amber-200', icon: Home },
+  generic: { label: 'Communication', color: 'bg-slate-100 text-slate-700 border-slate-200', icon: Mail },
+};
 
 const fmt = (n) => new Intl.NumberFormat('fr-BE', { style: 'currency', currency: 'EUR' }).format(n || 0);
 const fmtDate = (s) => s ? new Date(s).toLocaleDateString('fr-BE') : '-';
@@ -21,6 +58,8 @@ export default function OwnerPortalPage() {
   const [fundCalls, setFundCalls] = useState([]);
   const [charges, setCharges] = useState([]);
   const [documents, setDocuments] = useState([]);
+  const [communications, setCommunications] = useState([]);
+  const [selectedComm, setSelectedComm] = useState(null); // detail email ouvert
   const [selectedAcp, setSelectedAcp] = useState('all');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -44,18 +83,20 @@ export default function OwnerPortalPage() {
   useEffect(() => {
     (async () => {
       try {
-        const [dash, copros, fc, inv, docs] = await Promise.all([
+        const [dash, copros, fc, inv, docs, comms] = await Promise.all([
           api.get('/owner/dashboard'),
           api.get('/owner/coproprietes'),
           api.get('/owner/fund-calls'),
           api.get('/owner/invoices'),
           api.get('/owner/documents'),
+          api.get('/owner/communications').catch(() => ({ data: [] })),
         ]);
         setDashboard(dash.data);
         setCoproprietes(copros.data);
         setFundCalls(fc.data);
         setCharges(inv.data);
         setDocuments(docs.data);
+        setCommunications(comms.data);
         // iter89 : init profile form from owner data
         const o = dash.data?.owner || {};
         setProfileForm({
@@ -73,6 +114,58 @@ export default function OwnerPortalPage() {
       }
     })();
   }, []);
+
+  // iter90da : calculs memoized pour l'onglet "Ma situation".
+  // Doivent etre AVANT les early returns (loading / error) pour respecter
+  // les rules-of-hooks.
+  const chargesMemo = useMemo(
+    () => (selectedAcp === 'all' ? charges : charges.filter(c => c.copropriete_id === selectedAcp)),
+    [charges, selectedAcp],
+  );
+  const pendingCallsMemo = useMemo(
+    () => {
+      const src = dashboard?.pending_calls || [];
+      return selectedAcp === 'all' ? src : src.filter(p => p.copropriete_id === selectedAcp);
+    },
+    [dashboard, selectedAcp],
+  );
+  const chargesByCategory = useMemo(() => {
+    const twelveMonthsAgo = new Date();
+    twelveMonthsAgo.setMonth(twelveMonthsAgo.getMonth() - 12);
+    const totals = {};
+    for (const c of chargesMemo) {
+      if (!c.date) continue;
+      const d = new Date(c.date);
+      if (d < twelveMonthsAgo) continue;
+      const cat = c.category || 'Autres';
+      totals[cat] = (totals[cat] || 0) + (c.my_amount || 0);
+    }
+    return Object.entries(totals)
+      .map(([name, value]) => ({ name, value: Math.round(value * 100) / 100 }))
+      .sort((a, b) => b.value - a.value);
+  }, [chargesMemo]);
+  const upcomingWithCountdown = useMemo(() => {
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+    return [...pendingCallsMemo]
+      .map(p => {
+        const due = p.due_date ? new Date(p.due_date) : null;
+        if (due) due.setHours(0, 0, 0, 0);
+        const daysDelta = due ? Math.round((due - now) / (1000 * 60 * 60 * 24)) : null;
+        let urgency = 'ok';
+        if (daysDelta !== null) {
+          if (daysDelta < 0) urgency = 'overdue';
+          else if (daysDelta <= 7) urgency = 'urgent';
+          else if (daysDelta <= 30) urgency = 'soon';
+        }
+        return { ...p, daysDelta, urgency };
+      })
+      .sort((a, b) => {
+        if (a.daysDelta === null) return 1;
+        if (b.daysDelta === null) return -1;
+        return a.daysDelta - b.daysDelta;
+      });
+  }, [pendingCallsMemo]);
 
   const handleLogout = async () => { await logout(); window.location.href = '/login'; };
 
@@ -164,8 +257,16 @@ export default function OwnerPortalPage() {
   const owner = dashboard?.owner || {};
   const stats = dashboard?.stats || {};
   const filteredFundCalls = selectedAcp === 'all' ? fundCalls : fundCalls.filter(fc => fc.copropriete_id === selectedAcp);
-  const filteredCharges = selectedAcp === 'all' ? charges : charges.filter(c => c.copropriete_id === selectedAcp);
+  const filteredCharges = chargesMemo;
   const filteredDocs = selectedAcp === 'all' ? documents : documents.filter(d => d.copropriete_id === selectedAcp);
+  const filteredCommunications = selectedAcp === 'all'
+    ? communications
+    : communications.filter(c => c.copropriete_id === selectedAcp);
+  const filteredPendingCalls = pendingCallsMemo;
+
+  const nextCall = upcomingWithCountdown[0] || null;
+  const totalPending = upcomingWithCountdown.reduce((s, p) => s + (p.amount || 0), 0);
+  const totalCharges12m = chargesByCategory.reduce((s, x) => s + x.value, 0);
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -254,13 +355,15 @@ export default function OwnerPortalPage() {
         )}
 
         {/* ACP selector + Tabs */}
-        <Tabs defaultValue="coproprietes" className="space-y-4">
+        <Tabs defaultValue="situation" className="space-y-4">
           <div className="flex items-center justify-between flex-wrap gap-3">
             <TabsList>
+              <TabsTrigger value="situation" data-testid="tab-situation"><Sparkles size={14} className="mr-1.5" /> Ma situation</TabsTrigger>
               <TabsTrigger value="coproprietes" data-testid="tab-coproprietes"><Building2 size={14} className="mr-1.5" /> Mes coproprietes</TabsTrigger>
               <TabsTrigger value="fund-calls" data-testid="tab-fund-calls"><Megaphone size={14} className="mr-1.5" /> Appels de fonds</TabsTrigger>
               <TabsTrigger value="charges" data-testid="tab-charges"><Receipt size={14} className="mr-1.5" /> Charges</TabsTrigger>
               <TabsTrigger value="documents" data-testid="tab-documents"><FileText size={14} className="mr-1.5" /> Documents</TabsTrigger>
+              <TabsTrigger value="communications" data-testid="tab-communications"><Mail size={14} className="mr-1.5" /> Communications</TabsTrigger>
               <TabsTrigger value="profile" data-testid="tab-profile"><UserCog size={14} className="mr-1.5" /> Mon profil</TabsTrigger>
               <TabsTrigger value="tenants" data-testid="tab-tenants"><Users size={14} className="mr-1.5" /> Mes locataires</TabsTrigger>
             </TabsList>
@@ -271,6 +374,24 @@ export default function OwnerPortalPage() {
               </select>
             )}
           </div>
+
+          <TabsContent value="situation" className="mt-0 space-y-5" data-testid="situation-tab-content">
+            <SituationHero
+              status={stats.status}
+              balance={stats.balance || 0}
+              totalCalled={stats.total_called || 0}
+              totalPaid={stats.total_paid || 0}
+              nextCall={nextCall}
+              totalPending={totalPending}
+              totalCharges12m={totalCharges12m}
+              pendingCount={upcomingWithCountdown.length}
+              copyVcs={copyVcs}
+            />
+            <div className="grid grid-cols-1 lg:grid-cols-5 gap-5">
+              <ChargesDonut data={chargesByCategory} total={totalCharges12m} />
+              <UpcomingTimeline items={upcomingWithCountdown} copyVcs={copyVcs} />
+            </div>
+          </TabsContent>
 
           <TabsContent value="coproprietes" className="mt-0">
             {coproprietes.length === 0 ? (
@@ -425,30 +546,67 @@ export default function OwnerPortalPage() {
             {filteredDocs.length === 0 ? (
               <Card><CardContent className="p-8 text-center text-slate-400">Aucun document partage</CardContent></Card>
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                {filteredDocs.map(d => (
-                  <Card key={d.id} className="border-slate-200 hover:shadow-sm transition-shadow" data-testid={`doc-card-${d.id}`}>
-                    <CardContent className="p-3">
-                      <div className="flex items-start gap-2 mb-1">
-                        <FileText size={14} className="text-[#2563EB] mt-0.5 flex-shrink-0" />
-                        <div className="min-w-0 flex-1">
-                          <div className="text-sm font-medium text-slate-900 truncate">{d.title}</div>
-                          {d.description && <div className="text-[11px] text-slate-500 line-clamp-2">{d.description}</div>}
-                        </div>
-                      </div>
-                      <div className="flex items-center justify-between mt-2">
-                        <Badge variant="outline" className="text-[10px]">{d.category_name || 'Sans categorie'}</Badge>
-                        {d.filename && (
-                          <a href={`${process.env.REACT_APP_BACKEND_URL}/api/documents/${d.id}/download`} target="_blank" rel="noreferrer" className="text-[#2563EB] hover:bg-blue-50 p-1 rounded" title="Telecharger">
-                            <ArrowDownToLine size={13} />
-                          </a>
-                        )}
-                      </div>
-                    </CardContent>
-                  </Card>
-                ))}
-              </div>
+              <>
+                {/* Iter90db : legende des categories */}
+                <DocumentCategoryLegend documents={filteredDocs} />
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {filteredDocs.map(d => {
+                    const catName = d.category_name || 'Sans categorie';
+                    const color = categoryColor(catName);
+                    return (
+                      <Card
+                        key={d.id}
+                        className={`border-l-4 hover:shadow-md transition-shadow ${color.border} border-slate-200`}
+                        data-testid={`doc-card-${d.id}`}
+                      >
+                        <CardContent className="p-3">
+                          <div className="flex items-start gap-2 mb-1">
+                            <div className={`w-8 h-8 rounded-md ${color.bg} flex items-center justify-center flex-shrink-0`}>
+                              <FileText size={15} className={color.text} />
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <div className="text-sm font-medium text-slate-900 truncate">{d.title}</div>
+                              {d.description && <div className="text-[11px] text-slate-500 line-clamp-2">{d.description}</div>}
+                            </div>
+                          </div>
+                          <div className="flex items-center justify-between mt-2 gap-2">
+                            <Badge
+                              variant="outline"
+                              className={`text-[10px] ${color.bg} ${color.text} ${color.border}`}
+                              data-testid={`doc-category-${d.id}`}
+                            >
+                              <span className={`inline-block w-1.5 h-1.5 rounded-full ${color.dot} mr-1`} />
+                              {catName}
+                            </Badge>
+                            {d.filename && (
+                              <a
+                                href={`${process.env.REACT_APP_BACKEND_URL}/api/documents/${d.id}/download`}
+                                target="_blank" rel="noreferrer"
+                                className="text-[#2563EB] hover:bg-blue-50 p-1 rounded"
+                                title="Telecharger"
+                              >
+                                <ArrowDownToLine size={13} />
+                              </a>
+                            )}
+                          </div>
+                          {d.created_at && (
+                            <div className="text-[10px] text-slate-400 mt-1.5">{fmtDate(d.created_at)}</div>
+                          )}
+                        </CardContent>
+                      </Card>
+                    );
+                  })}
+                </div>
+              </>
             )}
+          </TabsContent>
+
+          {/* Iter90db : Communications - historique des emails envoyes par le syndic */}
+          <TabsContent value="communications" className="mt-0" data-testid="communications-tab-content">
+            <CommunicationsTab
+              communications={filteredCommunications}
+              onOpenComm={(id) => setSelectedComm(id)}
+            />
           </TabsContent>
 
           {/* iter89 : Mon profil - modification self-service */}
@@ -634,6 +792,12 @@ export default function OwnerPortalPage() {
         </DialogContent>
       </Dialog>
 
+      {/* iter90db : Dialog detail communication */}
+      <CommunicationDetailDialog
+        commId={selectedComm}
+        onClose={() => setSelectedComm(null)}
+      />
+
       <footer className="max-w-6xl mx-auto pt-6 pb-4 border-t border-slate-200 mt-8">
         <div className="flex flex-wrap justify-center gap-x-3 gap-y-1 text-[10px] text-slate-400" data-testid="owner-portal-legal-footer">
           <a href="/legal/cgu" target="_blank" rel="noopener noreferrer" className="hover:text-[#2563EB] hover:underline">CGU</a>
@@ -663,3 +827,460 @@ function StatCard({ icon, label, value, highlight, badge }) {
     </Card>
   );
 }
+
+// ==============================================================
+// iter90da (Feb 2026) : onglet "Ma situation" - visuels executifs
+// ==============================================================
+
+// Palette pour donut charges (categoriel, contrastee)
+const CHARGE_COLORS = ['#2563EB', '#8B5CF6', '#10B981', '#F59E0B', '#EF4444', '#EC4899', '#06B6D4', '#84CC16', '#F97316', '#6366F1', '#14B8A6', '#A855F7'];
+
+function SituationHero({ status, balance, totalCalled, totalPaid, nextCall, totalPending, totalCharges12m, pendingCount, copyVcs }) {
+  // Bloc solde : couleur selon statut
+  const isDebtor = status === 'debiteur';
+  const isCreditor = status === 'crediteur';
+  const soldeBg = isDebtor
+    ? 'bg-gradient-to-br from-red-50 to-red-100 border-red-200'
+    : isCreditor
+      ? 'bg-gradient-to-br from-emerald-50 to-emerald-100 border-emerald-200'
+      : 'bg-gradient-to-br from-slate-50 to-slate-100 border-slate-200';
+  const soldeText = isDebtor ? 'text-red-700' : isCreditor ? 'text-emerald-700' : 'text-slate-700';
+  const soldeLabel = isDebtor ? 'Vous devez' : isCreditor ? 'Solde en votre faveur' : 'Compte solde';
+  const soldeIcon = isDebtor
+    ? <AlertCircle size={20} className="text-red-600" />
+    : isCreditor
+      ? <CheckCircle2 size={20} className="text-emerald-600" />
+      : <Gauge size={20} className="text-slate-500" />;
+
+  // Ratio paye/appele pour barre de progression
+  const paidRatio = totalCalled > 0 ? Math.max(0, Math.min(100, (totalPaid / totalCalled) * 100)) : 100;
+
+  // Bloc prochain paiement : couleur selon urgence
+  let nextBg = 'bg-gradient-to-br from-slate-50 to-slate-100 border-slate-200';
+  let nextTextColor = 'text-slate-700';
+  let nextIconColor = 'text-slate-500';
+  if (nextCall) {
+    if (nextCall.urgency === 'overdue' || nextCall.urgency === 'urgent') {
+      nextBg = 'bg-gradient-to-br from-red-50 to-red-100 border-red-200';
+      nextTextColor = 'text-red-700';
+      nextIconColor = 'text-red-600';
+    } else if (nextCall.urgency === 'soon') {
+      nextBg = 'bg-gradient-to-br from-amber-50 to-amber-100 border-amber-200';
+      nextTextColor = 'text-amber-700';
+      nextIconColor = 'text-amber-600';
+    } else {
+      nextBg = 'bg-gradient-to-br from-emerald-50 to-emerald-100 border-emerald-200';
+      nextTextColor = 'text-emerald-700';
+      nextIconColor = 'text-emerald-600';
+    }
+  }
+
+  const nextLabel = (() => {
+    if (!nextCall) return 'Aucun paiement en attente';
+    if (nextCall.daysDelta === null) return 'Echeance non renseignee';
+    if (nextCall.daysDelta < 0) return `En retard de ${Math.abs(nextCall.daysDelta)} jour(s)`;
+    if (nextCall.daysDelta === 0) return "A payer aujourd'hui";
+    if (nextCall.daysDelta === 1) return 'A payer demain';
+    return `Dans ${nextCall.daysDelta} jour(s)`;
+  })();
+
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-3 gap-4" data-testid="situation-hero">
+      {/* Carte 1 : Solde global */}
+      <Card className={`${soldeBg} border-2`} data-testid="situation-solde-card">
+        <CardContent className="p-5">
+          <div className="flex items-start justify-between mb-3">
+            <div className="flex items-center gap-2">
+              {soldeIcon}
+              <span className={`text-[11px] uppercase tracking-wider font-semibold ${soldeText}`}>{soldeLabel}</span>
+            </div>
+            <Badge variant="outline" className={`text-[10px] ${soldeText} border-current`}>{status || '—'}</Badge>
+          </div>
+          <div className={`text-3xl font-bold ${soldeText}`} style={{fontFamily:'Chivo,sans-serif'}}>{fmt(Math.abs(balance))}</div>
+          <div className="mt-3 text-[11px] text-slate-600 space-y-0.5">
+            <div className="flex justify-between"><span>Total appele :</span><span className="font-mono">{fmt(totalCalled)}</span></div>
+            <div className="flex justify-between"><span>Total paye :</span><span className="font-mono">{fmt(totalPaid)}</span></div>
+          </div>
+          {/* Barre de progression */}
+          <div className="mt-3">
+            <div className="text-[10px] text-slate-500 mb-1 flex justify-between">
+              <span>Paye</span><span>{paidRatio.toFixed(0)}%</span>
+            </div>
+            <div className="h-2 rounded-full bg-white/60 overflow-hidden">
+              <div
+                className={`h-full rounded-full transition-all ${isDebtor ? 'bg-red-500' : 'bg-emerald-500'}`}
+                style={{ width: `${paidRatio}%` }}
+              />
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Carte 2 : Prochain paiement */}
+      <Card className={`${nextBg} border-2`} data-testid="situation-next-card">
+        <CardContent className="p-5">
+          <div className="flex items-start justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <CalendarClock size={20} className={nextIconColor} />
+              <span className={`text-[11px] uppercase tracking-wider font-semibold ${nextTextColor}`}>Prochain paiement</span>
+            </div>
+            {pendingCount > 0 && <Badge variant="outline" className={`text-[10px] ${nextTextColor} border-current`}>{pendingCount} en attente</Badge>}
+          </div>
+          {nextCall ? (
+            <>
+              <div className={`text-3xl font-bold ${nextTextColor}`} style={{fontFamily:'Chivo,sans-serif'}}>{fmt(nextCall.amount)}</div>
+              <div className="mt-1 text-[13px] font-medium text-slate-700 truncate" title={nextCall.fund_call_name}>{nextCall.fund_call_name}</div>
+              <div className={`mt-2 text-xs font-semibold flex items-center gap-1.5 ${nextTextColor}`}>
+                <Clock size={12} />
+                {nextLabel} {nextCall.due_date && <span className="text-slate-500 font-normal">({fmtDate(nextCall.due_date)})</span>}
+              </div>
+              {nextCall.vcs_code && (
+                <button
+                  onClick={() => copyVcs(nextCall.vcs_code)}
+                  className="mt-3 font-mono text-[10px] text-[#2563EB] bg-white/60 hover:bg-white px-2 py-1 rounded inline-flex items-center gap-1"
+                  data-testid="situation-next-vcs-btn"
+                >
+                  {nextCall.vcs_code}<Copy size={9} />
+                </button>
+              )}
+              {pendingCount > 1 && (
+                <div className="mt-3 text-[11px] text-slate-600 pt-2 border-t border-white/60">
+                  Total en attente : <span className="font-mono font-semibold">{fmt(totalPending)}</span>
+                </div>
+              )}
+            </>
+          ) : (
+            <>
+              <div className={`text-3xl font-bold ${nextTextColor}`} style={{fontFamily:'Chivo,sans-serif'}}>—</div>
+              <div className="mt-2 text-xs text-slate-600">Tout est a jour. Merci !</div>
+            </>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Carte 3 : Total charges 12 mois */}
+      <Card className="bg-gradient-to-br from-blue-50 to-indigo-100 border-2 border-blue-200" data-testid="situation-charges-card">
+        <CardContent className="p-5">
+          <div className="flex items-start justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <TrendingUp size={20} className="text-blue-600" />
+              <span className="text-[11px] uppercase tracking-wider font-semibold text-blue-700">Charges 12 mois</span>
+            </div>
+          </div>
+          <div className="text-3xl font-bold text-blue-800" style={{fontFamily:'Chivo,sans-serif'}}>{fmt(totalCharges12m)}</div>
+          <div className="mt-2 text-xs text-slate-600">Cumul de votre quote-part sur les 12 derniers mois</div>
+          <div className="mt-3 text-[11px] text-slate-500 pt-2 border-t border-white/60">
+            {totalCharges12m > 0 ? "Voir la repartition par categorie ci-dessous" : "Aucune charge sur la periode"}
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function ChargesDonut({ data, total }) {
+  return (
+    <Card className="lg:col-span-3 border-slate-200" data-testid="situation-donut-card">
+      <CardHeader className="pb-2">
+        <div className="flex items-center gap-2">
+          <PieChartIcon size={16} className="text-[#2563EB]" />
+          <CardTitle className="text-base" style={{fontFamily:'Chivo,sans-serif'}}>Charges par categorie (12 mois)</CardTitle>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {data.length === 0 ? (
+          <div className="p-8 text-center text-slate-400 text-sm">
+            Aucune charge sur les 12 derniers mois
+          </div>
+        ) : (
+          <div className="flex flex-col md:flex-row items-center gap-4">
+            <div className="w-full md:w-1/2 h-64 relative">
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie
+                    data={data}
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={55}
+                    outerRadius={90}
+                    paddingAngle={2}
+                    dataKey="value"
+                  >
+                    {data.map((entry, index) => (
+                      <Cell key={entry.name} fill={CHARGE_COLORS[index % CHARGE_COLORS.length]} />
+                    ))}
+                  </Pie>
+                  <RechartsTooltip
+                    formatter={(value) => fmt(value)}
+                    contentStyle={{ fontSize: '12px', borderRadius: '6px' }}
+                  />
+                </PieChart>
+              </ResponsiveContainer>
+              <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                <div className="text-[10px] uppercase tracking-wider text-slate-400">Total</div>
+                <div className="text-lg font-bold text-slate-900" style={{fontFamily:'Chivo,sans-serif'}}>{fmt(total)}</div>
+              </div>
+            </div>
+            <div className="w-full md:w-1/2 space-y-2">
+              {data.map((entry, index) => {
+                const pct = total > 0 ? (entry.value / total) * 100 : 0;
+                return (
+                  <div key={entry.name} className="flex items-center gap-2" data-testid={`donut-legend-${index}`}>
+                    <span
+                      className="w-3 h-3 rounded-sm flex-shrink-0"
+                      style={{ background: CHARGE_COLORS[index % CHARGE_COLORS.length] }}
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-xs font-medium text-slate-800 truncate">{entry.name}</div>
+                      <div className="text-[10px] text-slate-500">{pct.toFixed(1)}%</div>
+                    </div>
+                    <div className="text-xs font-mono font-semibold text-slate-900">{fmt(entry.value)}</div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function UpcomingTimeline({ items, copyVcs }) {
+  return (
+    <Card className="lg:col-span-2 border-slate-200" data-testid="situation-timeline-card">
+      <CardHeader className="pb-2">
+        <div className="flex items-center gap-2">
+          <CalendarClock size={16} className="text-[#2563EB]" />
+          <CardTitle className="text-base" style={{fontFamily:'Chivo,sans-serif'}}>Prochaines echeances</CardTitle>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {items.length === 0 ? (
+          <div className="p-8 text-center text-slate-400 text-sm">
+            <CheckCircle2 size={32} className="mx-auto mb-2 text-emerald-500" />
+            Vous etes a jour. Aucun appel en attente.
+          </div>
+        ) : (
+          <div className="relative pl-6 max-h-80 overflow-y-auto pr-1">
+            {/* Ligne verticale de timeline */}
+            <div className="absolute left-2 top-2 bottom-2 w-0.5 bg-slate-200" />
+            <div className="space-y-3">
+              {items.slice(0, 8).map((it, i) => {
+                let dotColor = 'bg-emerald-500';
+                let badgeCls = 'bg-emerald-50 text-emerald-700 border-emerald-200';
+                let label = '';
+                if (it.urgency === 'overdue') {
+                  dotColor = 'bg-red-500 animate-pulse';
+                  badgeCls = 'bg-red-50 text-red-700 border-red-200';
+                  label = `${Math.abs(it.daysDelta)}j de retard`;
+                } else if (it.urgency === 'urgent') {
+                  dotColor = 'bg-red-500';
+                  badgeCls = 'bg-red-50 text-red-700 border-red-200';
+                  label = it.daysDelta === 0 ? "Aujourd'hui" : `Dans ${it.daysDelta}j`;
+                } else if (it.urgency === 'soon') {
+                  dotColor = 'bg-amber-500';
+                  badgeCls = 'bg-amber-50 text-amber-700 border-amber-200';
+                  label = `Dans ${it.daysDelta}j`;
+                } else {
+                  label = it.daysDelta !== null ? `Dans ${it.daysDelta}j` : 'A venir';
+                }
+                return (
+                  <div key={`${it.fund_call_name}-${i}`} className="relative" data-testid={`timeline-item-${i}`}>
+                    <span className={`absolute -left-4 top-1.5 w-3 h-3 rounded-full ring-2 ring-white ${dotColor}`} />
+                    <div className="bg-white border border-slate-200 rounded-md p-2.5 hover:shadow-sm transition-shadow">
+                      <div className="flex items-start justify-between gap-2 mb-1">
+                        <div className="text-xs font-medium text-slate-900 truncate flex-1" title={it.fund_call_name}>{it.fund_call_name}</div>
+                        <Badge variant="outline" className={`text-[9px] whitespace-nowrap ${badgeCls}`}>{label}</Badge>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] text-slate-500">{fmtDate(it.due_date)}</span>
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-semibold font-mono text-slate-900">{fmt(it.amount)}</span>
+                          {it.vcs_code && (
+                            <button
+                              onClick={() => copyVcs(it.vcs_code)}
+                              className="font-mono text-[9px] text-[#2563EB] bg-blue-50 hover:bg-blue-100 px-1.5 py-0.5 rounded inline-flex items-center gap-0.5"
+                              title="Copier VCS"
+                            >
+                              <Copy size={9} />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            {items.length > 8 && (
+              <div className="text-[10px] text-slate-400 text-center pt-2 italic">
+                +{items.length - 8} autre(s) echeance(s)
+              </div>
+            )}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ==============================================================
+// iter90db (Feb 2026) : Legende categories docs + Tab Communications
+// ==============================================================
+
+function DocumentCategoryLegend({ documents }) {
+  const counts = documents.reduce((acc, d) => {
+    const name = d.category_name || 'Sans categorie';
+    acc[name] = (acc[name] || 0) + 1;
+    return acc;
+  }, {});
+  const cats = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  if (cats.length <= 1) return null;
+  return (
+    <div className="mb-3 flex flex-wrap items-center gap-2 p-2 rounded-md bg-slate-50 border border-slate-200" data-testid="doc-legend">
+      <span className="text-[10px] uppercase tracking-wider text-slate-500 mr-1">Categories :</span>
+      {cats.map(([name, count]) => {
+        const color = categoryColor(name);
+        return (
+          <span
+            key={name}
+            className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium ${color.bg} ${color.text} border ${color.border}`}
+          >
+            <span className={`w-1.5 h-1.5 rounded-full ${color.dot}`} />
+            {name}
+            <span className="text-[10px] opacity-70">({count})</span>
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+function CommunicationsTab({ communications, onOpenComm }) {
+  if (!communications || communications.length === 0) {
+    return (
+      <Card>
+        <CardContent className="p-8 text-center text-slate-400">
+          <MailOpen size={32} className="mx-auto mb-2 text-slate-300" />
+          Aucun email envoye par votre syndic pour le moment
+        </CardContent>
+      </Card>
+    );
+  }
+  return (
+    <div className="space-y-2" data-testid="communications-list">
+      {communications.map((c) => {
+        const meta = COMM_KIND_META[c.kind] || COMM_KIND_META.generic;
+        const KindIcon = meta.icon;
+        // Extract classes from meta.color (e.g. "bg-blue-100 text-blue-700 border-blue-200")
+        const [bgCls, textCls] = meta.color.split(' ');
+        return (
+          <Card
+            key={c.id}
+            className="border-slate-200 hover:shadow-md hover:border-[#2563EB]/30 transition-all cursor-pointer"
+            data-testid={`comm-card-${c.id}`}
+            onClick={() => onOpenComm(c.id)}
+          >
+            <CardContent className="p-3">
+              <div className="flex items-start gap-3">
+                <div className={`w-9 h-9 rounded-md ${bgCls} flex items-center justify-center flex-shrink-0`}>
+                  <KindIcon size={16} className={textCls} />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center justify-between gap-2 mb-1">
+                    <div className="flex items-center gap-2 min-w-0 flex-1">
+                      <span className="font-semibold text-sm text-slate-900 truncate">{c.subject}</span>
+                      {c.has_attachment && <Paperclip size={12} className="text-slate-400 flex-shrink-0" />}
+                    </div>
+                    <span className="text-[11px] text-slate-500 whitespace-nowrap">{fmtDate(c.sent_at)}</span>
+                  </div>
+                  <div className="flex items-center gap-2 flex-wrap mb-1">
+                    <Badge variant="outline" className={`text-[10px] ${meta.color}`}>{meta.label}</Badge>
+                    <span className="text-[11px] text-slate-500 flex items-center gap-1">
+                      <Send size={10} /> {c.from_mailbox}
+                    </span>
+                    {c.copropriete_name && (
+                      <span className="text-[11px] text-slate-500">- {c.copropriete_name}</span>
+                    )}
+                  </div>
+                  {c.body_preview && (
+                    <div className="text-[12px] text-slate-600 line-clamp-2 leading-relaxed">{c.body_preview}</div>
+                  )}
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        );
+      })}
+    </div>
+  );
+}
+
+function CommunicationDetailDialog({ commId, onClose }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    if (!commId) { setData(null); return; }
+    setLoading(true); setError(null);
+    api.get(`/owner/communications/${commId}`)
+      .then((r) => setData(r.data))
+      .catch((err) => setError(err.response?.data?.detail || 'Erreur de chargement'))
+      .finally(() => setLoading(false));
+  }, [commId]);
+
+  const meta = data ? (COMM_KIND_META[data.kind] || COMM_KIND_META.generic) : null;
+
+  return (
+    <Dialog open={!!commId} onOpenChange={(open) => { if (!open) onClose(); }}>
+      <DialogContent className="max-w-3xl w-[95vw] max-h-[90vh] overflow-y-auto" data-testid="comm-detail-dialog">
+        <DialogHeader>
+          <DialogTitle style={{fontFamily:'Chivo,sans-serif'}} className="pr-8">
+            {data?.subject || 'Communication'}
+          </DialogTitle>
+        </DialogHeader>
+        {loading && <div className="p-6 text-center text-slate-400 text-sm">Chargement...</div>}
+        {error && (
+          <div className="p-4 bg-red-50 border border-red-200 rounded text-red-700 text-sm">
+            {error}
+          </div>
+        )}
+        {data && (
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-center gap-2 pb-3 border-b border-slate-100">
+              {meta && <Badge variant="outline" className={`text-[11px] ${meta.color}`}>{meta.label}</Badge>}
+              <div className="text-[11px] text-slate-500 flex items-center gap-1">
+                <Send size={11} /> De {data.from_mailbox}
+              </div>
+              <div className="text-[11px] text-slate-500">A : {(data.to || []).join(', ')}</div>
+              <div className="text-[11px] text-slate-500 ml-auto">{fmtDate(data.sent_at)}</div>
+            </div>
+            {data.copropriete_name && (
+              <div className="text-[11px] text-slate-500">
+                <Building2 size={11} className="inline mr-1" />
+                Copropriete : {data.copropriete_name}
+              </div>
+            )}
+            {data.has_attachment && (
+              <div className="flex items-center gap-2 p-2 bg-blue-50 border border-blue-200 rounded text-xs">
+                <Paperclip size={13} className="text-blue-600" />
+                <span className="text-blue-800">Piece jointe : {data.attachment_filename || 'document.pdf'}</span>
+                <span className="text-[10px] text-blue-600 italic ml-auto">
+                  (envoyee par email, non stockee dans le portail)
+                </span>
+              </div>
+            )}
+            <div
+              className="prose prose-sm max-w-none p-4 border border-slate-200 rounded bg-white text-slate-800"
+              style={{fontSize:'14px', lineHeight:'1.6'}}
+              dangerouslySetInnerHTML={{ __html: sanitizeHtml(data.body_html || '<p class="text-slate-400">Contenu vide</p>') }}
+            />
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+

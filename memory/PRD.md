@@ -12,6 +12,210 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 
+### Iter90db + iter90dc (Feb 2026) - Historique des communications syndic + fix affichage erreur envoi
+
+**Tickets utilisateur** :
+> 1. "P1 - Documents/communications elargis dans le portail proprietaire
+>    (codes couleur par categorie, tous les emails syndic visibles)"
+> 2. "je tente d'envoyer un mail a Teuwen en production et j'ai un message
+>    d'erreur : Aucun email envoye. 1 echec(s)" (aucune raison affichee)
+
+**Partie A - Iter90dc : Diagnostic email en cas d'echec** :
+
+1. **Backend `_err_reason(exc)`** (`communication.py`) : nouvelle fonction
+   utilitaire qui extrait `HTTPException.detail` si applicable (message metier
+   comprehensible) ; fallback `str(e)[:200]` sinon.
+
+2. **Backend Graph API** :
+   - OAuth token : `tok.raise_for_status()` remplace par un check explicite
+     avec `raise HTTPException(500, f"Auth Graph echouee : HTTP {code} - {body}")`
+   - sendMail : le message d'erreur inclut maintenant le `error.code` et
+     `error.message` Graph parses du JSON (au lieu du code HTTP nu).
+     Ex : "Graph 400 InvalidRecipients : The specified email is not valid".
+
+3. **Backend endpoints `/send/situation` + `/send/decompte`** : utilisent
+   `_err_reason(e)` au lieu de `str(e)[:100]` -> raison lisible pour l'user.
+
+4. **Frontend `CommunicationPage.js`** : le toast d'erreur affiche desormais
+   la raison detaillee du PREMIER echec, pendant 12s. Ex :
+   "Aucun email envoye. 1 echec(s) : Copropriete non trouvee" au lieu
+   du generique "Aucun email envoye. 1 echec(s)."
+
+**Partie B - Iter90db : Historique des communications syndic dans le portail** :
+
+1. **Nouvelle collection `db.sent_communications`** :
+   Chaque envoi via `_send_email` est persiste (dry_run inclus + failed).
+   Schema : `{id, from_mailbox, to[], subject, body_html, body_preview,
+   has_attachment, attachment_filename, kind, copropriete_id, owner_ids[],
+   sent_at, sent_by_user_id, dry_run, status, error_msg}`.
+   Kinds : `situation`, `decompte`, `mutation`, `generic`.
+
+2. **Backend `_send_email`** : accepte desormais kwargs
+   `kind`, `copropriete_id`, `owner_ids`, `request` pour tracer chaque envoi.
+   Refactor : dry_run et succes traites uniformement, `_persist_sent_communication`
+   isole en helper. Failures Graph loggees en DB avec `status=failed`.
+
+3. **Backend endpoints `/send/situation`, `/send/decompte`, `/send/mutation`,
+   `/send/generic`** : passent les metadonnees appropriees a `_send_email`.
+
+4. **Nouveaux endpoints `owner_portal.py`** :
+   - `GET /api/owner/communications` : liste les emails du proprietaire.
+     Filtres :
+     * `owner_ids` contient l'id du proprietaire OU `to` contient son email
+     * `copropriete_id` doit etre l'une des ACPs du proprietaire (chinese wall)
+     * `dry_run: false` et `status != failed`
+   - `GET /api/owner/communications/{id}` : contenu HTML complet avec double
+     verification chinese wall (owner_ids OR email in to, ACP membership).
+
+5. **Frontend `OwnerPortalPage.js`** :
+   - Nouveau tab "Communications" (icone `Mail`) apres "Documents"
+   - Component `CommunicationsTab` : liste chronologique de cartes cliquables :
+     * Icone couleur selon kind (situation=Wallet bleu, decompte=FileText violet,
+       mutation=Home orange, generic=Mail gris)
+     * Titre + Paperclip si PJ
+     * Badge kind + De + ACP name
+     * Preview 2 lignes du body (extrait sans HTML)
+     * Date sent_at a droite
+   - Component `CommunicationDetailDialog` : recharge le HTML complet via
+     `GET /owner/communications/{id}` (body_html exclu de la liste pour
+     alleger). Rendu via `sanitizeHtml` (DOMPurify strict).
+   - Filtre par ACP selectionnee (selectedAcp)
+
+6. **Tab Documents refactore** (`OwnerPortalPage.js`) :
+   - Nouvelle fonction `categoryColor(name)` : hash deterministe du nom de
+     categorie -> palette 12 couleurs (bg + text + border + dot).
+   - Component `DocumentCategoryLegend` : bandeau en tete avec toutes les
+     categories presentes + compteur, affichee uniquement si >1 categorie.
+   - Cards documents : bordure gauche coloree, icone dans un carre colore,
+     badge categorie avec dot colore, date de creation.
+
+**Testing iter90db + iter90dc** :
+- Lint clean (Python et JS)
+- Curl backend : `POST /communication/send/situation` avec owner_id valide mais
+  copropriete_id invalide -> `reason: "Copropriete non trouvee"` (au lieu de
+  "404: Copropriete non trouvee")
+- Smoke UI :
+  * Tab Communications avec 4 emails de test (kinds varies) : cards colorees
+    avec preview + badges kind
+  * Dialog detail : HTML sanitized rendu proprement (formatting, listes)
+  * Tab Documents : legende + cards avec bordures colorees par categorie
+
+**Impact utilisateur** :
+- PROD : la prochaine tentative d'envoi echouee affichera clairement la raison
+  (email manquant, Graph 400 X, boite non autorisee, ACP introuvable...)
+- Portail proprietaire : transparence totale sur les emails recus, meme en cas
+  de PJ perdue (le contenu HTML est conserve, la PJ elle est envoyee par email)
+- Documents : lecture visuelle immediate des categories, plus attractif
+
+**Note deploiement PROD** :
+- Aucun script retroactif requis. Les emails anciens (avant deploy) ne sont pas
+  historises car pas persistes a l'epoque. Going forward, tous les envois sont
+  loggues automatiquement.
+- Aucun changement de schema de DB : la collection sent_communications se cree
+  au premier insert.
+
+
+
+### Iter90da (Feb 2026) - Onglet "Ma situation" (portail proprietaire) + page dediee Cles de repartition
+
+**Tickets utilisateur** :
+> 1. "oui" (a la proposition d'un onglet visuel "Ma situation" avec jauge de solde,
+>    chronologie des prochains appels et donut chart des charges par categorie)
+> 2. "la creation des cles de repartition actuellement dans un onglet sous facturation
+>    doit etre deplace dans l'onglet comptabilite avec un lien direct vers la gestion
+>    des cles de repartition"
+
+**Partie A - Onglet "Ma situation" (`OwnerPortalPage.js`)** :
+
+Refonte du portail proprietaire avec un onglet ACTIF PAR DEFAUT "Ma situation" :
+
+1. **Hero row (3 cartes colorees, cascadees vert/orange/rouge selon urgence)** :
+   - Carte 1 SOLDE : rouge (debiteur) / vert (crediteur) / gris (solde=0) avec :
+     * Montant absolu du solde
+     * Total appele + Total paye + Barre de progression % paye
+     * Badge status (debiteur/crediteur/solde)
+   - Carte 2 PROCHAIN PAIEMENT : rouge (overdue OR <7j) / orange (<30j) / vert (>30j) :
+     * Montant du prochain paiement + nom appel + date echeance
+     * Label dynamique : "En retard de Nj", "A payer aujourd'hui/demain", "Dans Nj"
+     * VCS copiable inline
+     * "N en attente" + Total en attente
+   - Carte 3 CHARGES 12 MOIS : bleue toujours :
+     * Cumul quote-part sur 12 derniers mois
+     * Lien vers donut ci-dessous
+
+2. **Donut chart (Recharts PieChart)** :
+   - `chargesByCategory` : agrege les invoices sur 12 mois glissants par `category`
+   - Palette 12 couleurs contrastees (CHARGE_COLORS)
+   - Centre transparent avec total absolu
+   - Legende laterale avec pourcentages et montants formates
+   - Data-testid "situation-donut-card" + "donut-legend-{i}"
+
+3. **Timeline verticale (Prochaines echeances)** :
+   - Dots colores : rouge (overdue = animate-pulse), rouge (urgent), orange (soon), vert (ok)
+   - Badge urgence : "253j de retard", "Aujourd'hui", "Dans Nj"
+   - Jusqu'a 8 items visibles + "+N autre(s)" si plus
+   - Data-testid "situation-timeline-card" + "timeline-item-{i}"
+
+Techniques :
+- `useMemo` correctement place AVANT les early returns (`if (loading)`, `if (error)`)
+  pour respecter les rules-of-hooks (chargesMemo, pendingCallsMemo, chargesByCategory,
+  upcomingWithCountdown)
+- Recharts v3.6.0 deja installe
+- Aucun endpoint backend ajoute : reutilise `/api/owner/dashboard`, `/api/owner/invoices`
+- `filteredCharges` / `filteredPendingCalls` respectent `selectedAcp` selector
+
+**Partie B - Page dediee `DistributionKeysPage.js`** :
+
+1. Nouvelle page `/distribution-keys` extraite integralement du Tab "keys" de
+   `InvoicesPage.js` (table + Dialog + handlers : openCreateKey, openEditKey,
+   saveKey avec force detach, deleteKey, toggleDefaultKey, updateKeyLot,
+   fillFromQuotities, fillEqual, normalize1000).
+
+2. Route `/distribution-keys` ajoutee dans `App.js`.
+
+3. Menu **Comptabilite** enrichi dans `Layout.js` (icone `Key`) :
+   ```
+   Comptabilite
+     - Plan Comptable
+     - Exercices
+     - Journaux
+     - Grand Livre
+     - Cles de repartition   <-- NOUVEAU
+     - Natures de depense
+   ```
+
+4. **Nettoyage `InvoicesPage.js`** :
+   - Suppression des `<Tabs>`, `<TabsList>`, `<TabsTrigger value="keys">`,
+     `<TabsContent value="keys">`, `<Dialog>` Distribution Key
+   - Suppression des states : `tab, setTab, keyDialog, setKeyDialog, keyForm,
+     setKeyForm, editingKey, setEditingKey, keyUsage, setKeyUsage`
+   - Suppression des handlers : `updateKeyLot, openCreateKey, openEditKey,
+     saveKey, toggleDefaultKey, deleteKey`
+   - Imports nettoyes : retire `Tabs, TabsContent, TabsList, TabsTrigger`, `Key`,
+     `AlertTriangle`, `Star`
+   - Subtitle : "Factures et cles de repartition" -> "Factures et pieces jointes"
+   - `distKeys` conserve pour l'affichage/attribution des cles aux factures.
+
+5. **Bonus corrections lint InvoicesPage.js** :
+   - Ligne 169 : `// eslint-disable-next-line react-hooks/exhaustive-deps` inutile retire
+   - Ligne 896 : apostrophe francaise `d'un` -> `d&apos;un` (react/no-unescaped-entities)
+
+**Testing iter90da** :
+- Lint clean (0 issue sur les 3 fichiers modifies + le nouveau)
+- Smoke UI validee via screenshots :
+  * `/distribution-keys` en admin ET syndic : 4 cles affichees, bouton "Nouvelle cle" OK
+  * `/portal` en owner MATEXI : hero (3 cartes), donut + centre 6132.54 EUR,
+    timeline avec 8 dots rouges "253j de retard"
+  * `/invoices` : plus de tabs, subtitle mis a jour, filter bar + table intactes
+
+**Impact utilisateur** :
+- Portail proprietaire beaucoup plus attrayant, insights immediats
+- Menu principal plus coherent (cles de repartition retiree du contexte Facture)
+- Accessible directement en 1 clic depuis le menu Comptabilite
+- Non-regression complete sur la creation/edition/suppression des cles
+
+
+
 ### Iter90cz (Feb 2026) - Portail proprietaire : charges avec lien facture + fallback quotity
 
 **Ticket utilisateur** :
