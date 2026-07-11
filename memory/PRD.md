@@ -12,6 +12,60 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 
+### Iter90cz (Feb 2026) - Portail proprietaire : charges avec lien facture + fallback quotity
+
+**Ticket utilisateur** :
+> "la vue proprietaire est largement incomplete, pas de quotites, pas d'appels
+> alors qu'une mutation a eu lieu, il faut rendre l'interface sexy et agreable
+> a utiliser. Les charges sont visibles comme la liste de depenses avec un
+> lien vers la facture. Cela doit etre lisible et comprehensible pour des
+> non comptables"
+
+**Fixes iter90cz** :
+
+1. **`GET /api/owner/invoices`** (owner_portal.py) : expose maintenant les
+   champs `attachments: [{id, filename, mime_type}]` et `category` en plus
+   des donnees existantes (number, supplier, description, my_amount...).
+
+2. **Nouveau endpoint** `GET /api/owner/invoices/{id}/attachments/{att_id}/download`
+   avec verification Chinese wall proprietaire : le proprietaire doit avoir
+   une part dans `distribution_lines` de cette facture pour telecharger la PJ.
+
+3. **`GET /api/owner/coproprietes`** : ajoute un fallback quotity depuis la
+   cle generale (`is_default: true`) pour chaque lot sans quotity :
+   - `quotity_effective` = lot.quotity si defini, sinon share de la cle generale
+   - `quotity_source` = "lot" ou "cle_generale"
+   - `my_total_quotity` utilise `quotity_effective`
+   Impact : proprietaires d'ACPs recentes (ou avec quotity=0 sur les lots)
+   voient enfin leurs quotites via la cle de repartition.
+
+4. **UI OwnerPortalPage.js `Charges`** : refonte du tableau :
+   - Nouvelles colonnes : "N&deg; facture", "Statut" (badge vert Payee / jaune
+     En attente), "Facture" (bouton "Voir" qui ouvre la PJ en tab inline)
+   - Ouverture PDF via `URL.createObjectURL` (pas de navigation, expiration
+     60s pour eviter les leaks)
+   - Fallback "Aucune PJ" affiche en italique gris si absence
+
+**Testing** : lint clean (Python + JS), smoke UI OK.
+
+**Impact utilisateur** :
+- Proprietaire voit maintenant ses quotites meme si lots.quotity=0 (fallback cle)
+- Chaque charge affichee liste : date, fournisseur, numero facture, statut,
+  totaux, votre part, bouton "Voir" pour ouvrir la facture en 1 clic
+- Interface plus lisible pour non-comptables
+
+**Note deploiement PROD** : Aucun script retroactif requis. Le fallback
+quotity et l'exposition des attachments s'appliquent automatiquement au
+prochain fetch.
+
+**Non traite dans cette iteration (a planifier)** :
+- Refonte UI "sexy" complete du portail proprietaire (P2)
+- Documents cote syndic : consultation + edition metadata (a faire)
+- Documents cote proprietaire : partage + codes couleurs par categorie
+- Communications : voir toutes les emails envoyes cote proprietaire et syndic
+
+
+
 ### Iter90cy (Feb 2026) - Clarification UI wizard : distinction lots vs proprietaires uniques
 
 **Ticket utilisateur PROD** :

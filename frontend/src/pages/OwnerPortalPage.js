@@ -9,7 +9,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { toast } from 'sonner';
-import { LogOut, Home, Wallet, FileText, Receipt, Megaphone, Building2, User, AlertCircle, CheckCircle2, ArrowDownToLine, Copy, UserCog, Users, Plus, Pencil, Trash2, Save } from 'lucide-react';
+import { LogOut, Home, Wallet, FileText, Receipt, Megaphone, Building2, User, AlertCircle, CheckCircle2, ArrowDownToLine, Copy, UserCog, Users, Plus, Pencil, Trash2, Save, Eye } from 'lucide-react';
 
 const fmt = (n) => new Intl.NumberFormat('fr-BE', { style: 'currency', currency: 'EUR' }).format(n || 0);
 const fmtDate = (s) => s ? new Date(s).toLocaleDateString('fr-BE') : '-';
@@ -352,22 +352,68 @@ export default function OwnerPortalPage() {
               ) : (
                 <Table>
                   <TableHeader><TableRow>
-                    <TableHead>Date</TableHead><TableHead>Fournisseur</TableHead><TableHead>Description</TableHead>
-                    <TableHead className="text-right">Total facture</TableHead><TableHead className="text-right">Votre part</TableHead>
+                    <TableHead>Date</TableHead>
+                    <TableHead>Fournisseur</TableHead>
+                    <TableHead>N&deg; facture</TableHead>
+                    <TableHead>Description</TableHead>
+                    <TableHead>Statut</TableHead>
+                    <TableHead className="text-right">Total facture</TableHead>
+                    <TableHead className="text-right">Votre part</TableHead>
+                    <TableHead className="text-center">Facture</TableHead>
                   </TableRow></TableHeader>
                   <TableBody>
                     {filteredCharges.map(c => (
                       <TableRow key={c.id} data-testid={`charge-row-${c.id}`}>
                         <TableCell className="text-xs">{fmtDate(c.date)}</TableCell>
                         <TableCell className="text-sm font-medium">{c.supplier}</TableCell>
-                        <TableCell className="text-xs text-slate-600 max-w-xs truncate">{c.description}</TableCell>
+                        <TableCell className="text-xs font-mono text-slate-600">{c.number || <span className="text-slate-300 italic">-</span>}</TableCell>
+                        <TableCell className="text-xs text-slate-600 max-w-xs truncate" title={c.description}>{c.description}</TableCell>
+                        <TableCell>
+                          <Badge
+                            variant="outline"
+                            className={`text-[10px] ${c.status === 'paid' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-700 border-amber-200'}`}
+                          >
+                            {c.status === 'paid' ? 'Payee' : 'En attente'}
+                          </Badge>
+                        </TableCell>
                         <TableCell className="text-right font-mono text-xs text-slate-400">{fmt(c.total_amount)}</TableCell>
                         <TableCell className="text-right font-mono text-sm text-slate-900 font-semibold">{fmt(c.my_amount)}</TableCell>
+                        <TableCell className="text-center">
+                          {c.attachments && c.attachments.length > 0 ? (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-7 px-2 text-xs text-[#2563EB] hover:bg-blue-50"
+                              data-testid={`view-invoice-btn-${c.id}`}
+                              onClick={async () => {
+                                try {
+                                  const att = c.attachments[0];
+                                  const resp = await api.get(
+                                    `/owner/invoices/${c.id}/attachments/${att.id}/download`,
+                                    { params: { disposition: 'inline' }, responseType: 'blob' },
+                                  );
+                                  const blob = new Blob([resp.data], { type: att.mime_type || 'application/pdf' });
+                                  const url = window.URL.createObjectURL(blob);
+                                  window.open(url, '_blank');
+                                  // Cleanup after 60s
+                                  setTimeout(() => window.URL.revokeObjectURL(url), 60000);
+                                } catch (err) {
+                                  console.error('Erreur telechargement facture', err);
+                                }
+                              }}
+                            >
+                              <Eye size={13} className="mr-1" /> Voir
+                            </Button>
+                          ) : (
+                            <span className="text-[10px] text-slate-300 italic">Aucune PJ</span>
+                          )}
+                        </TableCell>
                       </TableRow>
                     ))}
                     <TableRow className="bg-slate-50 font-semibold">
-                      <TableCell colSpan={4} className="text-right">Total votre quote-part:</TableCell>
+                      <TableCell colSpan={6} className="text-right">Total votre quote-part:</TableCell>
                       <TableCell className="text-right font-mono">{fmt(filteredCharges.reduce((s,c) => s + c.my_amount, 0))}</TableCell>
+                      <TableCell></TableCell>
                     </TableRow>
                   </TableBody>
                 </Table>

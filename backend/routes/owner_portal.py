@@ -60,10 +60,37 @@ def create_owner_portal_router(db):
         coproprietes = await db.coproprietes.find(
             {"id": {"$in": copro_ids}}, {"_id": 0}
         ).sort("name", 1).to_list(100)
-        # Attach lots to each
+        # iter90cz : fallback quotity depuis la cle generale (defaut)
+        # si `lot.quotity` est vide/zero.
+        # Utile pour les ACPs recentes ou les lots crees sans quotity.
+        keys_by_copro = {}
+        if copro_ids:
+            default_keys = await db.distribution_keys.find(
+                {"copropriete_id": {"$in": copro_ids}, "is_default": True},
+                {"_id": 0, "copropriete_id": 1, "lots": 1},
+            ).to_list(len(copro_ids) * 2)
+            for k in default_keys:
+                keys_by_copro[k["copropriete_id"]] = {
+                    kl.get("lot_id"): float(kl.get("share", 0) or 0)
+                    for kl in (k.get("lots") or [])
+                }
+        # Attach lots to each ACP with quotity fallback
         for c in coproprietes:
             c["my_lots"] = [l for l in lots if l.get("copropriete_id") == c["id"]]
-            c["my_total_quotity"] = sum(l.get("quotity", 0) for l in c["my_lots"])
+            fallback_shares = keys_by_copro.get(c["id"], {})
+            for lt in c["my_lots"]:
+                if not float(lt.get("quotity", 0) or 0):
+                    fs = fallback_shares.get(lt["id"], 0)
+                    if fs > 0:
+                        lt["quotity_effective"] = fs
+                        lt["quotity_source"] = "cle_generale"
+                else:
+                    lt["quotity_effective"] = lt.get("quotity", 0)
+                    lt["quotity_source"] = "lot"
+            c["my_total_quotity"] = sum(
+                lt.get("quotity_effective", 0) or lt.get("quotity", 0)
+                for lt in c["my_lots"]
+            )
         return coproprietes
 
     @router.get("/dashboard")
@@ -202,6 +229,15 @@ def create_owner_portal_router(db):
                     my_amount += dl.get("amount", 0)
             if my_amount <= 0:
                 continue
+            # iter90cz : expose attachments (id + filename + mime) pour lien
+            # "Voir la facture" cote portail proprietaire.
+            atts = []
+            for att in inv.get("attachments", []) or []:
+                atts.append({
+                    "id": att.get("id", ""),
+                    "filename": att.get("filename", ""),
+                    "mime_type": att.get("mime_type", "application/pdf"),
+                })
             result.append({
                 "id": inv["id"],
                 "number": inv.get("number", ""),
@@ -212,8 +248,74 @@ def create_owner_portal_router(db):
                 "my_amount": round(my_amount, 2),
                 "copropriete_id": inv.get("copropriete_id", ""),
                 "status": inv.get("status", "unpaid"),
+                "category": inv.get("category", ""),
+                "attachments": atts,
             })
         return result
+
+    @router.get("/invoices/{invoice_id}/attachments/{attachment_id}/download")
+    async def download_owner_invoice_attachment(
+        invoice_id: str, attachment_id: str, request: Request,
+        disposition: str = "attachment",
+    ):
+        """iter90cz : Download d'une piece jointe de facture pour un
+        proprietaire. Verifie que le proprietaire a une part dans cette facture
+        (via distribution_lines lot_id) avant de streamer le fichier.
+        """
+        from fastapi import Response
+        from fastapi.responses import FileResponse
+        from pathlib import Path as _Path
+        from invoice_attachments_storage import get_invoice_attachments_storage
+        owner = await _resolve_owner(db, request)
+        owner_id = owner["id"]
+
+        inv = await db.invoices.find_one({"id": invoice_id}, {"_id": 0})
+        if not inv:
+            raise HTTPException(404, "Facture non trouvee")
+        # Chinese wall proprietaire : verifie qu'un des lot_id du proprietaire
+        # apparait dans distribution_lines.
+        my_lots = await db.lots.find(
+            {"$or": [{"owner_id": owner_id}, {"owner_ids": owner_id}],
+             "copropriete_id": inv.get("copropriete_id", "")},
+            {"_id": 0, "id": 1},
+        ).to_list(1000)
+        my_lot_ids = {lt["id"] for lt in my_lots}
+        has_share = any(
+            (dl.get("lot_id") in my_lot_ids and (dl.get("amount", 0) or 0) > 0)
+            for dl in (inv.get("distribution_lines") or [])
+        )
+        if not has_share:
+            raise HTTPException(403, "Vous n'avez pas de part dans cette facture")
+
+        att_storage = get_invoice_attachments_storage(db)
+        for att in inv.get("attachments", []) or []:
+            if att.get("id") != attachment_id:
+                continue
+            filename = att.get("filename", "facture.pdf")
+            media_type = att.get("mime_type", "application/pdf")
+            safe_name = filename.replace('"', "")
+            disp_header = (
+                f'inline; filename="{safe_name}"' if disposition == "inline"
+                else f'attachment; filename="{safe_name}"'
+            )
+            gid = att.get("gridfs_id")
+            if gid:
+                try:
+                    data = await att_storage.download(gid)
+                except Exception:
+                    raise HTTPException(404, "Fichier introuvable dans GridFS")
+                return Response(
+                    content=data, media_type=media_type,
+                    headers={"Content-Disposition": disp_header},
+                )
+            path = att.get("stored_path", "")
+            if path and _Path(path).exists():
+                return FileResponse(
+                    path, media_type=media_type,
+                    headers={"Content-Disposition": disp_header},
+                )
+            raise HTTPException(404, "Fichier introuvable")
+        raise HTTPException(404, "Piece jointe non trouvee")
 
     @router.get("/documents")
     async def my_documents(request: Request, copropriete_id: Optional[str] = None):
