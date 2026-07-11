@@ -14,7 +14,11 @@ const api = axios.create({
 // Si un appelant a besoin de TOUS les owners (ex. CoproprietesPage pour
 // l'autocomplete a la creation d'ACP), il doit passer explicitement
 // `params.copropriete_id = 'all'` ou retirer l'header X-Copropriete-Id.
-const GLOBAL_PATH_PREFIXES = ['/suppliers', '/users', '/auth', '/coproprietes', '/banking/lookup', '/legal', '/admin/duplicates'];
+// iter90de : `/owner` ajoute a la liste globale car ces endpoints font leur
+// propre chinese wall via _resolve_owner + lots. Auto-scoping polluerait les
+// requetes si un ancien `selectedCopro` traine en localStorage (ex : syndic
+// deconnecte qui se reconnecte comme owner).
+const GLOBAL_PATH_PREFIXES = ['/suppliers', '/users', '/auth', '/coproprietes', '/banking/lookup', '/legal', '/admin/duplicates', '/owner'];
 const isGlobalPath = (url = '') => GLOBAL_PATH_PREFIXES.some(p => url === p || url.startsWith(p + '/') || url.startsWith(p + '?'));
 
 api.interceptors.request.use((config) => {

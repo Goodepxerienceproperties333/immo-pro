@@ -12,6 +12,43 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 
+### Iter90de (Feb 2026) - Fix "Les charges ont disparues" du portail proprietaire
+
+**Ticket utilisateur** : "Les charges ont disparues de la partie proprietaire" (PROD)
+
+**Bug racine** :
+L'interceptor axios (`/app/frontend/src/lib/api.js`) auto-scope toutes les
+requetes non-globales avec `?copropriete_id={localStorage.selectedCopro}` +
+header `X-Copropriete-Id`. Objectif initial : chinese wall pour syndic.
+
+Probleme : un ancien `localStorage.selectedCopro` pollue les endpoints
+`/api/owner/*` du proprietaire. Ex : un syndic teste l'app, laisse
+`selectedCopro=ACP-X` en localStorage. Puis se logue comme owner. Toutes ses
+requetes `/api/owner/invoices`, `/api/owner/documents`, etc. embarquent
+`?copropriete_id=ACP-X`. Si l'owner n'a pas de lots dans ACP-X, le backend
+renvoie 0 resultats -> tab Charges vide.
+
+**Fix** :
+Ajout de `/owner` a `GLOBAL_PATH_PREFIXES`. Les endpoints `/api/owner/*` sont
+exclus de l'auto-scoping car ils font deja leur propre chinese wall via
+`_resolve_owner` + verifications sur les lots du proprietaire (iter90dd).
+
+**Testing iter90de** :
+- Repro : login owner avec `localStorage.selectedCopro` d'une autre ACP,
+  tab Charges vide (0 lignes)
+- Apres fix : tab Charges affiche 15 factures normalement, malgre
+  `localStorage.selectedCopro` pollue.
+
+**Impact utilisateur** :
+- Regression PROD sur toutes les vues du portail proprietaire disparait
+- Aucun changement de comportement pour les syndics/gestionnaires
+
+**Note** : Le path `/owners` (avec 's', endpoint syndic pour lister les
+proprietaires) N'est PAS impacte car `isGlobalPath` matche exactement
+`/owner`, `/owner/*`, `/owner?*` — pas `/owners*`.
+
+
+
 ### Iter90dd (Feb 2026) - Portail proprietaire : refonte solde/appels sur base grand livre + fixes UX
 
 **Bug racine (PROD)** :
