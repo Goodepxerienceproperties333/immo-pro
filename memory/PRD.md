@@ -12,6 +12,51 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 
+### Iter90cy (Feb 2026) - Clarification UI wizard : distinction lots vs proprietaires uniques
+
+**Ticket utilisateur PROD** :
+> "Il faut faire en sorte que les appels tiennents comptes des cles de
+> repartitions, donc ce n'est pas une repartition egale entre les lots.
+> Par exemple - Lot 001 = 898 quotites, fonds de reserve = 134.7"
+
+**Analyse** :
+Le code utilise DEJA les shares des cles de repartition (via
+`_distribute_amount` : `share_ratio = kl.share / total_shares`).
+- Lot 001 (898/10000) x 1500 = 134.70 EUR ✓
+- Lot 002 (1095/10000) x 1500 = 164.25 EUR ✓
+- Cave C01 (11/10000) x 1500 = 1.65 EUR ✓
+
+Le probleme etait la CONFUSION UI :
+- Colonne wizard "Proprietaires: 30" laissait croire a 30 proprietaires
+- En realite : 30 LIGNES de distribution (une par lot) pour 1 seul proprietaire (Matexi)
+
+**Fix iter90cy** (`BudgetWizard.js`) :
+
+1. Colonne renommee "Proprietaires" -> "Lignes (lots)" avec tooltip.
+2. Badge affiche `{lignes} / {N}p` (ex: `30 / 1p`) pour montrer nombre de
+   lignes ET nombre de proprietaires uniques.
+3. Detail par lot enrichi : 5 colonnes au lieu de 3 :
+   - Lot (numero)
+   - Quotites (share dans la cle)
+   - Proprietaire
+   - VCS
+   - Montant
+   Permet a l'utilisateur de verifier visuellement que 30 lots differents
+   recoivent des montants correspondant a leurs quotites (898->134.70,
+   1095->164.25, 11->1.65, etc).
+4. Summary text mis a jour : "Voir le detail par lot du 1er appel (N lignes)"
+   au lieu de "par proprietaire".
+
+**Note technique** : Aucun changement backend. Le calcul etait deja correct.
+Seul le rendu UI a ete clarifie.
+
+**Impact** : L'utilisateur voit maintenant explicitement que :
+- Toutes les charges sont distribuees selon les quotites de la cle
+- Les 30 lignes correspondent aux 30 lots (pas a des proprietaires distincts)
+- Le montant par lot est calcule fidelement (quotite/total x montant)
+
+
+
 ### Iter90cx (Feb 2026) - Fix dedup situation compte : perte 3.6% sur lignes identiques
 
 **Ticket utilisateur PROD** :

@@ -525,32 +525,51 @@ export default function BudgetWizard({ budget, distKeys = [], onClose, onDone, m
                       <th className="p-2 text-right">Montant</th>
                       <th className="p-2 text-right">Dont reserve</th>
                       <th className="p-2 text-right">Dont roulement</th>
-                      <th className="p-2 text-center">Proprietaires</th>
+                      <th className="p-2 text-center" title="Nombre de lignes de distribution (une par lot). Peut differer du nombre de proprietaires uniques.">Lignes (lots)</th>
                     </tr></thead>
                     <tbody>
-                      {preview.calls.map((c, i) => (
-                        <tr key={i} className="border-t border-slate-100">
-                          <td className="p-2 font-medium">{c.name}</td>
-                          <td className="p-2 font-mono text-xs">{fmtDate(c.date)}</td>
-                          <td className="p-2 font-mono text-xs">{fmtDate(c.due_date)}</td>
-                          <td className="p-2 text-right font-mono font-semibold">{c.total_amount.toFixed(2)}</td>
-                          <td className="p-2 text-right font-mono text-xs text-purple-700">{c.reserve_amount > 0 ? c.reserve_amount.toFixed(2) : '-'}</td>
-                          <td className="p-2 text-right font-mono text-xs text-amber-700">{(c.roulement_amount || 0) > 0 ? c.roulement_amount.toFixed(2) : '-'}</td>
-                          <td className="p-2 text-center"><Badge variant="outline">{c.distribution.length}</Badge></td>
-                        </tr>
-                      ))}
+                      {preview.calls.map((c, i) => {
+                        const uniqueOwners = new Set(
+                          (c.distribution || []).map(d => d.owner_id).filter(Boolean),
+                        );
+                        return (
+                          <tr key={i} className="border-t border-slate-100">
+                            <td className="p-2 font-medium">{c.name}</td>
+                            <td className="p-2 font-mono text-xs">{fmtDate(c.date)}</td>
+                            <td className="p-2 font-mono text-xs">{fmtDate(c.due_date)}</td>
+                            <td className="p-2 text-right font-mono font-semibold">{c.total_amount.toFixed(2)}</td>
+                            <td className="p-2 text-right font-mono text-xs text-purple-700">{c.reserve_amount > 0 ? c.reserve_amount.toFixed(2) : '-'}</td>
+                            <td className="p-2 text-right font-mono text-xs text-amber-700">{(c.roulement_amount || 0) > 0 ? c.roulement_amount.toFixed(2) : '-'}</td>
+                            <td className="p-2 text-center">
+                              <Badge variant="outline" title={`${c.distribution.length} lignes / ${uniqueOwners.size} proprietaire(s) unique(s)`}>
+                                {c.distribution.length} <span className="opacity-60">/ {uniqueOwners.size}p</span>
+                              </Badge>
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
 
                 <details className="text-xs">
-                  <summary className="cursor-pointer text-slate-600 select-none">Voir le detail par proprietaire du 1er appel ({preview.calls[0]?.distribution.length || 0})</summary>
+                  <summary className="cursor-pointer text-slate-600 select-none">Voir le detail par lot du 1er appel ({preview.calls[0]?.distribution.length || 0} lignes)</summary>
                   <div className="border rounded mt-2 max-h-48 overflow-y-auto">
                     <table className="w-full text-xs">
-                      <thead><tr className="bg-slate-50"><th className="p-1 text-left">Proprietaire</th><th className="p-1 text-left">VCS</th><th className="p-1 text-right">Montant</th></tr></thead>
+                      <thead>
+                        <tr className="bg-slate-50">
+                          <th className="p-1 text-left">Lot</th>
+                          <th className="p-1 text-right">Quotites</th>
+                          <th className="p-1 text-left">Proprietaire</th>
+                          <th className="p-1 text-left">VCS</th>
+                          <th className="p-1 text-right">Montant</th>
+                        </tr>
+                      </thead>
                       <tbody>
                         {preview.calls[0]?.distribution.map((d, j) => (
                           <tr key={j} className="border-t border-slate-100">
+                            <td className="p-1 font-mono">{d.lot_number || '-'}</td>
+                            <td className="p-1 text-right font-mono text-slate-500">{d.share ? Number(d.share).toFixed(0) : '-'}</td>
                             <td className="p-1">{d.owner_name}</td>
                             <td className="p-1 font-mono text-[#2563EB]">{d.vcs_code}</td>
                             <td className="p-1 text-right font-mono">{d.amount.toFixed(2)}</td>
