@@ -12,6 +12,104 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 
+### Iter90dd (Feb 2026) - Portail proprietaire : refonte solde/appels sur base grand livre + fixes UX
+
+**Bug racine (PROD)** :
+Le propriétaire voit "Solde = 0 EUR" et "Aucun appel de fonds" dans son portail
+alors que la balance de tiers admin lui montre un solde debiteur de 2036.78 EUR.
+
+Cause : le portail utilisait `fund_calls.distribution.owner_id` (attribution
+initiale au moment de la creation du fund_call). Or, apres une mutation,
+la distribution reste chez le vendeur mais les journal_entries OD MUT-P
+transferent la quote-part vers l'acquereur. Le portail ne voyait pas ces
+transferts -> ecart complet avec la comptabilite.
+
+**5 Fixes + 2 bonus** :
+
+1. **Solde via journal_entries** (`/api/owner/dashboard`) :
+   - Calcul base sur `journal_entries[i].lines[j].third_party_id == owner_id`
+     (ou compte tier valide dans `owner.tier_accounts[copropriete_id]`)
+   - `total_called = SUM(debit)`, `total_paid = SUM(credit)` sur le tier
+   - Bank txns non-lettres reconnus par VCS ajoutes au credit
+   - Retourne `stats_by_acp[copro_id]` pour affichage filtre cote frontend
+   - Aligne exactement avec `_compute_balance_tiers_for_ui` (balance de tiers admin)
+
+2. **Endpoint `/api/owner/movements`** (nouveau) :
+   - Liste chronologique des lignes du grand livre sur le compte tier
+   - Filtres : `copropriete_id`, `start_date`, `end_date`
+   - Enrichissement : `fund_call_name`, `description`, `running_balance`
+   - Chinese wall via lots du proprietaire (`_resolve_owner`)
+   - Opening balance calcule (avant start_date) + closing balance
+   - Filter sortie : `journal_type`, `is_mutation`, `reference`
+
+3. **Sélecteur ACP toujours visible + auto-select** (`OwnerPortalPage.js`) :
+   - Le dropdown ACP s'affiche meme avec 1 seule ACP
+   - useEffect qui set `selectedAcp = coproprietes[0].id` si `.length === 1`
+   - Toutes les stats hero utilisent `stats_by_acp[selectedAcp]` au lieu du total
+   - Cards COPROPRIETES / LOTS / TOTAL APPELE / SOLDE reflet l'ACP selectionnee
+
+4. **Refonte tab "Appels de fonds"** :
+   - Remplace la table `filteredFundCalls` (fund_calls.distribution) par
+     `MovementsTab` (mouvements grand livre)
+   - Colonnes : Date, Type (badge colore selon journal_type), Description,
+     Debit, Credit, Solde (running balance)
+   - Ligne "Solde initial" affichee si start_date fournie
+   - Ligne "Solde final" en pied de tableau
+   - Meta par journal_type : VE=orange (Appel), FI=vert (Paiement), OD=gris,
+     AN=bleu (Report), ACH=violet
+   - Badge "MUT" pour lignes de mutation
+
+5. **Filtre periode** (`MovementsTab`) :
+   - Card "Periode" avec inputs date Du/Au
+   - Bouton "Reinitialiser" quand actif
+   - Recharge automatique via useEffect sur `[selectedAcp, periodStart, periodEnd]`
+
+6. **Fix bouton oeil facture** :
+   - Bug backend : `from invoice_attachments_storage import ...` (module
+     inexistant, erreur `ModuleNotFoundError`) corrige en
+     `from gridfs_storage import get_invoice_attachments_storage`
+   - Frontend : ajout `toast.loading()` + `toast.error()` avec status HTTP et
+     message d'erreur backend en cas d'echec
+   - `window.open()` remplace par `<a>` element clique programmatiquement
+     (bypass popup blocker fiable)
+
+**Bonus** :
+
+- **Fallback "Prochain paiement"** : si `balance > 0.01` mais pas de pending
+  detaille via distribution, la carte reste rouge et affiche "Solde a payer :
+  {balance} EUR - Voir onglet Appels de fonds pour le detail". Rassure le
+  proprietaire que la carte n'est pas juste vide.
+
+- **Middleware chinese wall assoupli pour owners** (`server.py`) : les
+  endpoints `/api/owner/*` sont exclus du check global `user.copropriete_ids`
+  car ils font leur propre chinese wall via les LOTS du proprietaire (source
+  de verite plus fiable, car `user.copropriete_ids` peut etre obsolete apres
+  mutation).
+
+**Testing iter90dd** :
+- Lint clean (Python et JS)
+- Backend `/api/owner/movements?copropriete_id=X` : 200 avec 180 lignes,
+  running_balance de 0 -> 25 700.00 (correct)
+- Backend `/api/owner/invoices/{id}/attachments/{aid}/download` : 200 (avant
+  500 avec ModuleNotFoundError)
+- Frontend screenshots :
+  * Card SOLDE = 25 700,00 € debiteur (aligne avec balance de tiers admin)
+  * Card PROCHAIN PAIEMENT = 25 700,00 € "Solde a payer" (rouge)
+  * Tab Appels de fonds = 180 lignes avec running balance
+  * Selecteur ACP "Acacia" auto-selectionne, toujours visible
+  * Filtre Du/Au fonctionnel
+
+**Impact utilisateur (PROD)** :
+- La coherence entre balance de tiers admin et portail proprietaire est
+  garantie. Un debiteur ne peut plus "cacher" son solde en voyant 0 EUR.
+- Aligne avec la source de verite comptable (journal_entries) au lieu d'un
+  proxy fragile (fund_calls.distribution).
+- Bouton "Voir facture" fonctionne enfin.
+- Proprietaire peut filtrer ses mouvements par periode.
+- Redeployer PROD pour propager (aucune migration DB, changement lecture pure).
+
+
+
 ### Iter90db + iter90dc (Feb 2026) - Historique des communications syndic + fix affichage erreur envoi
 
 **Tickets utilisateur** :

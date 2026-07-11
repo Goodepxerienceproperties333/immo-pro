@@ -216,7 +216,12 @@ async def auth_middleware(request: Request, call_next):
     # Si la requete porte un copropriete_id (param OU header X-Copropriete-Id),
     # verifier que l'utilisateur (non-superadmin) a bien acces a cette ACP.
     # Le superadmin/admin voient tout (gestion plateforme).
-    if role not in ("superadmin", "admin") and path not in RBAC_EXEMPT_PATHS:
+    # Iter90dd : les endpoints /api/owner/* font leur propre chinese wall base
+    # sur les LOTS du proprietaire (via _resolve_owner). Le champ
+    # user.copropriete_ids sur les owners peut etre incomplet/obsolete, donc
+    # on skip ce check ici pour ne pas doublement contrarier.
+    if role not in ("superadmin", "admin") and path not in RBAC_EXEMPT_PATHS \
+       and not (role == "owner" and path.startswith("/api/owner/")):
         try:
             copro_q = request.query_params.get("copropriete_id")
         except Exception:

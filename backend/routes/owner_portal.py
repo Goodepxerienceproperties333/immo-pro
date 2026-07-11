@@ -95,7 +95,18 @@ def create_owner_portal_router(db):
 
     @router.get("/dashboard")
     async def my_dashboard(request: Request):
-        """Aggregated owner overview across all ACPs."""
+        """Aggregated owner overview across all ACPs.
+
+        Iter90dd : le solde est desormais calcule via le GRAND LIVRE
+        (journal_entries + tp_owner_id) au lieu de fund_calls.distribution.
+        C'est aligne avec la balance de tiers admin (source de verite comptable).
+
+        Justification : apres une mutation, les fund_calls restent attribues
+        au vendeur dans leur `distribution[]`, tandis que les OD MUT-P
+        transferent la quote-part vers l'acquereur au niveau des journal_entries.
+        Un calcul base sur `distribution` donne 0 EUR pour l'acquereur alors que
+        son compte tier est bien debiteur.
+        """
         owner = await _resolve_owner(db, request)
         owner_id = owner["id"]
 
@@ -105,45 +116,120 @@ def create_owner_portal_router(db):
         ).to_list(1000)
         copro_ids = list({l["copropriete_id"] for l in lots if l.get("copropriete_id")})
 
-        # Compute aggregate balance across all ACPs (batch fetch: fix N+1)
         total_called = 0.0
         total_paid = 0.0
         pending_calls = []
+        stats_by_acp: dict = {}  # {copro_id: {called, paid, balance, status}}
 
+        # ===============================================================
+        # 1) Solde comptable via journal_entries (aligne balance de tiers)
+        # ===============================================================
         if copro_ids:
-            all_fund_calls = await db.fund_calls.find(
-                {"copropriete_id": {"$in": copro_ids}}, {"_id": 0}
-            ).to_list(10000)
-            paid_txns = await db.bank_transactions.find(
-                {"copropriete_id": {"$in": copro_ids}, "matched": True,
-                 "match_type": "owner_payment", "matched_to": owner_id},
-                {"_id": 0, "amount": 1},
-            ).to_list(50000)
-            total_paid += sum(abs(t.get("amount", 0)) for t in paid_txns)
+            je_q = {"copropriete_id": {"$in": copro_ids},
+                    "reversed": {"$ne": True}, "is_reversal": {"$ne": True}}
+            entries = await db.journal_entries.find(je_q, {"_id": 0}).to_list(200000)
 
+            # Comptes tiers de l'owner par ACP
+            tier_accounts_by_copro = {}
+            for cp in copro_ids:
+                tacc = (owner.get("tier_accounts") or {}).get(cp, {}) or {}
+                accs = {a for a in (tacc.get("provisions", ""), tacc.get("reserve", "")) if a}
+                tier_accounts_by_copro[cp] = accs
+
+            # Init stats
+            for cp in copro_ids:
+                stats_by_acp[cp] = {"total_called": 0.0, "total_paid": 0.0, "balance": 0.0, "status": "solde"}
+
+            for e in entries:
+                cp = e.get("copropriete_id", "")
+                if cp not in stats_by_acp:
+                    continue
+                valid_accs = tier_accounts_by_copro.get(cp, set())
+                for ln in e.get("lines", []) or []:
+                    tpid = ln.get("third_party_id")
+                    acc = ln.get("account_number", "")
+                    # Ligne concernee : tp_owner_id == owner_id OU (tpid vide ET compte in valid_accs)
+                    if tpid == owner_id or (not tpid and acc in valid_accs):
+                        d_val = float(ln.get("debit", 0) or 0)
+                        c_val = float(ln.get("credit", 0) or 0)
+                        # DEBIT sur tier = charge appelee ; CREDIT = paiement/reduction
+                        stats_by_acp[cp]["total_called"] += d_val
+                        stats_by_acp[cp]["total_paid"] += c_val
+
+            # Bank txns non lettres reconnus par VCS -> credit additionnel
             if owner.get("vcs_digits"):
                 unmatched_all = await db.bank_transactions.find(
                     {"copropriete_id": {"$in": copro_ids}, "matched": False},
-                    {"_id": 0, "amount": 1, "communication": 1},
+                    {"_id": 0, "amount": 1, "communication": 1, "copropriete_id": 1},
                 ).to_list(50000)
                 for t in unmatched_all:
                     comm = (t.get("communication") or "").replace("+", "").replace("/", "").replace(" ", "")
                     if comm == owner["vcs_digits"]:
-                        total_paid += abs(t.get("amount", 0))
+                        cp = t.get("copropriete_id", "")
+                        if cp in stats_by_acp:
+                            stats_by_acp[cp]["total_paid"] += abs(t.get("amount", 0))
 
+            # Consolide par ACP + total global
+            for cp, st in stats_by_acp.items():
+                st["total_called"] = round(st["total_called"], 2)
+                st["total_paid"] = round(st["total_paid"], 2)
+                st["balance"] = round(st["total_called"] - st["total_paid"], 2)
+                st["status"] = "debiteur" if st["balance"] > 0.01 else ("crediteur" if st["balance"] < -0.01 else "solde")
+                total_called += st["total_called"]
+                total_paid += st["total_paid"]
+
+            # ===============================================================
+            # 2) Pending calls : parcourir les fund_calls mais utiliser
+            #    tp_owner_id des VE pour retrouver ceux qui concernent
+            #    reellement le proprietaire actuel (post-mutation aussi).
+            # ===============================================================
+            all_fund_calls = await db.fund_calls.find(
+                {"copropriete_id": {"$in": copro_ids}}, {"_id": 0}
+            ).sort("due_date", 1).to_list(10000)
+
+            # Map fund_call_id -> journal_entry lines (VE) sur tier owner
+            fc_ids = [fc.get("id") for fc in all_fund_calls if fc.get("id")]
+            ve_by_fc = {}
+            if fc_ids:
+                ve_entries = await db.journal_entries.find({
+                    "copropriete_id": {"$in": copro_ids},
+                    "journal_type": "VE",
+                    "fund_call_id": {"$in": fc_ids},
+                    "reversed": {"$ne": True},
+                    "is_reversal": {"$ne": True},
+                }, {"_id": 0}).to_list(50000)
+                for ve in ve_entries:
+                    fcid = ve.get("fund_call_id")
+                    cp = ve.get("copropriete_id", "")
+                    valid_accs = tier_accounts_by_copro.get(cp, set())
+                    for ln in ve.get("lines", []) or []:
+                        tpid = ln.get("third_party_id")
+                        acc = ln.get("account_number", "")
+                        if tpid == owner_id or (not tpid and acc in valid_accs):
+                            amt = float(ln.get("debit", 0) or 0)
+                            if amt > 0.01:
+                                ve_by_fc[fcid] = ve_by_fc.get(fcid, 0.0) + amt
+
+            # Determiner quels fund_calls sont "impayes" pour ce proprietaire
+            # (via balance globale + heuristique proportion)
             for fc in all_fund_calls:
-                copro_id = fc.get("copropriete_id", "")
-                for d in fc.get("distribution", []):
-                    if d.get("owner_id") == owner_id:
-                        total_called += d.get("amount", 0)
-                        if not d.get("paid"):
-                            pending_calls.append({
-                                "fund_call_name": fc.get("name", ""),
-                                "due_date": fc.get("due_date", ""),
-                                "amount": d.get("amount", 0),
-                                "vcs_code": d.get("vcs_code", owner.get("vcs_code", "")),
-                                "copropriete_id": copro_id,
-                            })
+                fcid = fc.get("id")
+                amt_owed_originally = ve_by_fc.get(fcid, 0.0)
+                if amt_owed_originally < 0.01:
+                    continue  # Ce fund_call ne concerne pas ce proprietaire
+                # Heuristique : si distribution[owner_id].paid=true, on considere paye
+                # Sinon, on marque en attente (le detail est fait via /movements)
+                dist = next((d for d in fc.get("distribution", [])
+                            if d.get("owner_id") == owner_id), None)
+                is_paid = dist.get("paid", False) if dist else False
+                if not is_paid:
+                    pending_calls.append({
+                        "fund_call_name": fc.get("name", ""),
+                        "due_date": fc.get("due_date", ""),
+                        "amount": round(amt_owed_originally, 2),
+                        "vcs_code": (dist or {}).get("vcs_code", owner.get("vcs_code", "")),
+                        "copropriete_id": fc.get("copropriete_id", ""),
+                    })
 
         balance = round(total_called - total_paid, 2)
         return {
@@ -157,12 +243,133 @@ def create_owner_portal_router(db):
                 "status": "debiteur" if balance > 0.01 else ("crediteur" if balance < -0.01 else "solde"),
                 "pending_calls_count": len(pending_calls),
             },
-            "pending_calls": pending_calls[:10],
+            "stats_by_acp": stats_by_acp,  # iter90dd : filtre cote frontend
+            "pending_calls": pending_calls[:15],
+        }
+
+    @router.get("/movements")
+    async def my_movements(
+        request: Request,
+        copropriete_id: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+    ):
+        """Iter90dd : mouvements du compte tiers du proprietaire (grand livre).
+
+        Filtre cote source de verite (journal_entries + tp_owner_id) et retourne
+        pour chaque ligne : date, type, description, debit, credit, running_balance,
+        reference (fund_call name, invoice number, etc.).
+
+        Le detail est celui vu par la balance de tiers admin et le PDF "Situation
+        de compte". Passe par le filtre period optionnel (start_date/end_date).
+
+        Chinese wall : `copropriete_id` doit etre l'une des ACPs du proprietaire.
+        """
+        owner = await _resolve_owner(db, request)
+        owner_id = owner["id"]
+
+        lots = await db.lots.find(
+            {"$or": [{"owner_id": owner_id}, {"owner_ids": owner_id}]},
+            {"_id": 0, "copropriete_id": 1},
+        ).to_list(1000)
+        allowed_copros = list({l["copropriete_id"] for l in lots if l.get("copropriete_id")})
+        if copropriete_id:
+            if copropriete_id not in allowed_copros:
+                return {"movements": [], "opening_balance": 0.0, "closing_balance": 0.0}
+            copros_target = [copropriete_id]
+        else:
+            copros_target = allowed_copros
+        if not copros_target:
+            return {"movements": [], "opening_balance": 0.0, "closing_balance": 0.0}
+
+        # Comptes tiers de l'owner par ACP
+        tier_accounts_by_copro = {}
+        for cp in copros_target:
+            tacc = (owner.get("tier_accounts") or {}).get(cp, {}) or {}
+            accs = {a for a in (tacc.get("provisions", ""), tacc.get("reserve", "")) if a}
+            tier_accounts_by_copro[cp] = accs
+
+        # Query : entries dans la periode + hors extournes
+        entry_q = {"copropriete_id": {"$in": copros_target},
+                   "reversed": {"$ne": True}, "is_reversal": {"$ne": True}}
+        if start_date or end_date:
+            entry_q["date"] = {}
+            if start_date:
+                entry_q["date"]["$gte"] = start_date
+            if end_date:
+                entry_q["date"]["$lte"] = end_date
+
+        entries = await db.journal_entries.find(entry_q, {"_id": 0}).sort("date", 1).to_list(100000)
+
+        # Fetch fund_call names + invoice numbers pour enrichir descriptions
+        fc_ids = list({e.get("fund_call_id", "") for e in entries if e.get("fund_call_id")})
+        fc_map = {}
+        if fc_ids:
+            fcs = await db.fund_calls.find({"id": {"$in": fc_ids}}, {"_id": 0, "id": 1, "name": 1, "due_date": 1}).to_list(len(fc_ids))
+            fc_map = {f["id"]: f for f in fcs}
+
+        # Opening balance (avant start_date) - calcule sur l'ACP filtree
+        opening = 0.0
+        if start_date:
+            pre_q = {"copropriete_id": {"$in": copros_target}, "date": {"$lt": start_date},
+                     "reversed": {"$ne": True}, "is_reversal": {"$ne": True}}
+            pre_entries = await db.journal_entries.find(pre_q, {"_id": 0, "lines": 1, "copropriete_id": 1}).to_list(100000)
+            for pe in pre_entries:
+                cp = pe.get("copropriete_id", "")
+                valid_accs = tier_accounts_by_copro.get(cp, set())
+                for ln in pe.get("lines", []) or []:
+                    tpid = ln.get("third_party_id")
+                    acc = ln.get("account_number", "")
+                    if tpid == owner_id or (not tpid and acc in valid_accs):
+                        opening += float(ln.get("debit", 0) or 0)
+                        opening -= float(ln.get("credit", 0) or 0)
+
+        # Movements dans la periode
+        movements = []
+        running = opening
+        for e in entries:
+            cp = e.get("copropriete_id", "")
+            valid_accs = tier_accounts_by_copro.get(cp, set())
+            fcid = e.get("fund_call_id")
+            fc_info = fc_map.get(fcid, {}) if fcid else {}
+            for ln in e.get("lines", []) or []:
+                tpid = ln.get("third_party_id")
+                acc = ln.get("account_number", "")
+                if not (tpid == owner_id or (not tpid and acc in valid_accs)):
+                    continue
+                d_val = float(ln.get("debit", 0) or 0)
+                c_val = float(ln.get("credit", 0) or 0)
+                if d_val == 0 and c_val == 0:
+                    continue
+                # Compose description lisible
+                desc = (ln.get("line_description") or e.get("description") or "").strip()
+                if fc_info.get("name") and fc_info["name"] not in desc:
+                    desc = f"{fc_info['name']} - {desc}" if desc else fc_info["name"]
+                running += (d_val - c_val)
+                movements.append({
+                    "date": e.get("date", ""),
+                    "journal_type": e.get("journal_type", "OD"),
+                    "reference": e.get("reference", "") or (e.get("id", "")[:8] if e.get("id") else ""),
+                    "description": desc,
+                    "debit": round(d_val, 2),
+                    "credit": round(c_val, 2),
+                    "running_balance": round(running, 2),
+                    "account_number": acc,
+                    "fund_call_id": fcid or "",
+                    "fund_call_name": fc_info.get("name", ""),
+                    "copropriete_id": cp,
+                    "is_mutation": (e.get("source_type") == "lot_mutation") or (e.get("reference", "") or "").startswith("MUT-"),
+                })
+
+        return {
+            "movements": movements,
+            "opening_balance": round(opening, 2),
+            "closing_balance": round(running, 2),
         }
 
     @router.get("/fund-calls")
     async def my_fund_calls(request: Request, copropriete_id: Optional[str] = None):
-        """All fund calls where the owner has a distribution."""
+        """All fund calls where the owner has a distribution (source: fund_calls doc)."""
         owner = await _resolve_owner(db, request)
         owner_id = owner["id"]
         q = {}
@@ -265,7 +472,7 @@ def create_owner_portal_router(db):
         from fastapi import Response
         from fastapi.responses import FileResponse
         from pathlib import Path as _Path
-        from invoice_attachments_storage import get_invoice_attachments_storage
+        from gridfs_storage import get_invoice_attachments_storage
         owner = await _resolve_owner(db, request)
         owner_id = owner["id"]
 

@@ -61,6 +61,13 @@ export default function OwnerPortalPage() {
   const [communications, setCommunications] = useState([]);
   const [selectedComm, setSelectedComm] = useState(null); // detail email ouvert
   const [selectedAcp, setSelectedAcp] = useState('all');
+  // Iter90dd : mouvements du grand livre + filtre periode
+  const [movements, setMovements] = useState([]);
+  const [movementsLoading, setMovementsLoading] = useState(false);
+  const [openingBalance, setOpeningBalance] = useState(0);
+  const [closingBalance, setClosingBalance] = useState(0);
+  const [periodStart, setPeriodStart] = useState('');
+  const [periodEnd, setPeriodEnd] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   // iter89 : profil editable + tenants self-service
@@ -114,6 +121,31 @@ export default function OwnerPortalPage() {
       }
     })();
   }, []);
+
+  // Iter90dd : auto-selection de l'ACP si le proprietaire n'en a qu'une seule
+  useEffect(() => {
+    if (coproprietes.length === 1 && selectedAcp === 'all') {
+      setSelectedAcp(coproprietes[0].id);
+    }
+  }, [coproprietes, selectedAcp]);
+
+  // Iter90dd : recharge les mouvements du grand livre quand ACP ou periode change
+  useEffect(() => {
+    if (!dashboard) return;
+    setMovementsLoading(true);
+    const params = {};
+    if (selectedAcp !== 'all') params.copropriete_id = selectedAcp;
+    if (periodStart) params.start_date = periodStart;
+    if (periodEnd) params.end_date = periodEnd;
+    api.get('/owner/movements', { params })
+      .then((r) => {
+        setMovements(r.data?.movements || []);
+        setOpeningBalance(r.data?.opening_balance || 0);
+        setClosingBalance(r.data?.closing_balance || 0);
+      })
+      .catch(() => { setMovements([]); setOpeningBalance(0); setClosingBalance(0); })
+      .finally(() => setMovementsLoading(false));
+  }, [selectedAcp, periodStart, periodEnd, dashboard]);
 
   // iter90da : calculs memoized pour l'onglet "Ma situation".
   // Doivent etre AVANT les early returns (loading / error) pour respecter
@@ -255,7 +287,24 @@ export default function OwnerPortalPage() {
   }
 
   const owner = dashboard?.owner || {};
-  const stats = dashboard?.stats || {};
+  // Iter90dd : stats effectives selon l'ACP selectionnee (fallback vers global)
+  const acpStats = (selectedAcp !== 'all' && dashboard?.stats_by_acp?.[selectedAcp])
+    ? dashboard.stats_by_acp[selectedAcp]
+    : null;
+  const globalStats = dashboard?.stats || {};
+  const acpLotsCount = selectedAcp !== 'all'
+    ? (coproprietes.find(c => c.id === selectedAcp)?.my_lots?.length || 0)
+    : globalStats.lots_count || 0;
+  const acpCoproCount = selectedAcp !== 'all' ? 1 : (globalStats.coproprietes_count || 0);
+  const stats = {
+    coproprietes_count: acpCoproCount,
+    lots_count: acpLotsCount,
+    total_called: acpStats ? acpStats.total_called : (globalStats.total_called || 0),
+    total_paid: acpStats ? acpStats.total_paid : (globalStats.total_paid || 0),
+    balance: acpStats ? acpStats.balance : (globalStats.balance || 0),
+    status: acpStats ? acpStats.status : (globalStats.status || 'solde'),
+    pending_calls_count: globalStats.pending_calls_count || 0,
+  };
   const filteredFundCalls = selectedAcp === 'all' ? fundCalls : fundCalls.filter(fc => fc.copropriete_id === selectedAcp);
   const filteredCharges = chargesMemo;
   const filteredDocs = selectedAcp === 'all' ? documents : documents.filter(d => d.copropriete_id === selectedAcp);
@@ -367,9 +416,14 @@ export default function OwnerPortalPage() {
               <TabsTrigger value="profile" data-testid="tab-profile"><UserCog size={14} className="mr-1.5" /> Mon profil</TabsTrigger>
               <TabsTrigger value="tenants" data-testid="tab-tenants"><Users size={14} className="mr-1.5" /> Mes locataires</TabsTrigger>
             </TabsList>
-            {coproprietes.length > 1 && (
-              <select value={selectedAcp} onChange={e => setSelectedAcp(e.target.value)} className="text-sm border border-slate-200 rounded-md px-3 py-1.5 bg-white">
-                <option value="all">Toutes les coproprietes</option>
+            {coproprietes.length >= 1 && (
+              <select
+                value={selectedAcp}
+                onChange={e => setSelectedAcp(e.target.value)}
+                className="text-sm border border-slate-200 rounded-md px-3 py-1.5 bg-white"
+                data-testid="acp-selector"
+              >
+                {coproprietes.length > 1 && <option value="all">Toutes les coproprietes</option>}
                 {coproprietes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
             )}
@@ -436,34 +490,22 @@ export default function OwnerPortalPage() {
             )}
           </TabsContent>
 
-          <TabsContent value="fund-calls" className="mt-0">
-            <Card><CardContent className="p-0">
-              {filteredFundCalls.length === 0 ? (
-                <div className="p-8 text-center text-slate-400">Aucun appel de fonds</div>
-              ) : (
-                <Table>
-                  <TableHeader><TableRow>
-                    <TableHead>Date</TableHead><TableHead>Nom</TableHead><TableHead>Echeance</TableHead>
-                    <TableHead className="text-right">Montant</TableHead><TableHead>VCS</TableHead><TableHead>Statut</TableHead>
-                  </TableRow></TableHeader>
-                  <TableBody>
-                    {filteredFundCalls.map(fc => (
-                      <TableRow key={fc.id} data-testid={`fc-row-${fc.id}`}>
-                        <TableCell className="text-xs">{fmtDate(fc.date)}</TableCell>
-                        <TableCell className="text-sm font-medium">{fc.name}</TableCell>
-                        <TableCell className="text-xs">{fmtDate(fc.due_date)}</TableCell>
-                        <TableCell className="text-right font-mono text-sm">{fmt(fc.my_amount)}</TableCell>
-                        <TableCell><button onClick={() => copyVcs(fc.vcs_code)} className="font-mono text-[10px] text-[#2563EB] hover:underline inline-flex items-center gap-1">{fc.vcs_code}<Copy size={9}/></button></TableCell>
-                        <TableCell>
-                          {fc.paid ? <Badge className="bg-green-100 text-green-700 border-0 text-[10px]">Paye</Badge>
-                            : <Badge className="bg-orange-100 text-orange-700 border-0 text-[10px]">A payer</Badge>}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              )}
-            </CardContent></Card>
+          <TabsContent value="fund-calls" className="mt-0" data-testid="fund-calls-tab-content">
+            {/* Iter90dd : refonte - mouvements du grand livre (aligne balance de tiers) */}
+            <MovementsTab
+              movements={movements}
+              loading={movementsLoading}
+              openingBalance={openingBalance}
+              closingBalance={closingBalance}
+              periodStart={periodStart}
+              periodEnd={periodEnd}
+              onPeriodStart={setPeriodStart}
+              onPeriodEnd={setPeriodEnd}
+              onResetPeriod={() => { setPeriodStart(''); setPeriodEnd(''); }}
+              acpFiltered={selectedAcp !== 'all'}
+              copyVcs={copyVcs}
+              vcsCode={owner.vcs_code}
+            />
           </TabsContent>
 
           <TabsContent value="charges" className="mt-0">
@@ -507,19 +549,31 @@ export default function OwnerPortalPage() {
                               className="h-7 px-2 text-xs text-[#2563EB] hover:bg-blue-50"
                               data-testid={`view-invoice-btn-${c.id}`}
                               onClick={async () => {
+                                const att = c.attachments[0];
+                                const loadingToast = toast.loading('Ouverture de la facture...');
                                 try {
-                                  const att = c.attachments[0];
                                   const resp = await api.get(
                                     `/owner/invoices/${c.id}/attachments/${att.id}/download`,
                                     { params: { disposition: 'inline' }, responseType: 'blob' },
                                   );
                                   const blob = new Blob([resp.data], { type: att.mime_type || 'application/pdf' });
                                   const url = window.URL.createObjectURL(blob);
-                                  window.open(url, '_blank');
-                                  // Cleanup after 60s
+                                  // Iter90dd : utilise <a> plutot que window.open (bypass popup blocker)
+                                  const link = document.createElement('a');
+                                  link.href = url;
+                                  link.target = '_blank';
+                                  link.rel = 'noopener noreferrer';
+                                  document.body.appendChild(link);
+                                  link.click();
+                                  document.body.removeChild(link);
+                                  toast.dismiss(loadingToast);
                                   setTimeout(() => window.URL.revokeObjectURL(url), 60000);
                                 } catch (err) {
+                                  toast.dismiss(loadingToast);
                                   console.error('Erreur telechargement facture', err);
+                                  const status = err.response?.status;
+                                  const msg = err.response?.data?.detail || err.message || 'Erreur inconnue';
+                                  toast.error(`Impossible d'ouvrir la facture${status ? ` (${status})` : ''} : ${msg}`);
                                 }
                               }}
                             >
@@ -873,6 +927,11 @@ function SituationHero({ status, balance, totalCalled, totalPaid, nextCall, tota
       nextTextColor = 'text-emerald-700';
       nextIconColor = 'text-emerald-600';
     }
+  } else if (balance > 0.01) {
+    // Iter90dd : solde debiteur sans pending detaille -> carte rouge
+    nextBg = 'bg-gradient-to-br from-red-50 to-red-100 border-red-200';
+    nextTextColor = 'text-red-700';
+    nextIconColor = 'text-red-600';
   }
 
   const nextLabel = (() => {
@@ -948,6 +1007,19 @@ function SituationHero({ status, balance, totalCalled, totalPaid, nextCall, tota
                   Total en attente : <span className="font-mono font-semibold">{fmt(totalPending)}</span>
                 </div>
               )}
+            </>
+          ) : balance > 0.01 ? (
+            // Iter90dd : fallback quand balance debiteur sans pending detaille
+            <>
+              <div className="text-3xl font-bold text-red-700" style={{fontFamily:'Chivo,sans-serif'}}>{fmt(balance)}</div>
+              <div className="mt-1 text-[13px] font-medium text-slate-700">Solde a payer</div>
+              <div className="mt-2 text-xs font-semibold flex items-center gap-1.5 text-red-700">
+                <Clock size={12} />
+                Voir onglet &quot;Appels de fonds&quot; pour le detail
+              </div>
+              <div className="mt-3 text-[11px] text-slate-600 italic">
+                Utilisez votre communication structuree pour tout virement
+              </div>
             </>
           ) : (
             <>
@@ -1283,4 +1355,203 @@ function CommunicationDetailDialog({ commId, onClose }) {
     </Dialog>
   );
 }
+
+// ==============================================================
+// iter90dd (Feb 2026) : Tab Appels de fonds refonte en Mouvements
+// ==============================================================
+
+// Meta par journal_type pour couleurs / libelles
+const JOURNAL_TYPE_META = {
+  VE: { label: 'Appel de fonds', color: 'bg-orange-50 text-orange-700 border-orange-200', dotColor: 'bg-orange-500' },
+  FI: { label: 'Paiement', color: 'bg-emerald-50 text-emerald-700 border-emerald-200', dotColor: 'bg-emerald-500' },
+  OD: { label: 'Ecriture diverse', color: 'bg-slate-100 text-slate-700 border-slate-200', dotColor: 'bg-slate-500' },
+  AN: { label: 'Report a nouveau', color: 'bg-blue-50 text-blue-700 border-blue-200', dotColor: 'bg-blue-500' },
+  ACH: { label: 'Achat', color: 'bg-purple-50 text-purple-700 border-purple-200', dotColor: 'bg-purple-500' },
+};
+
+function MovementsTab({
+  movements, loading, openingBalance, closingBalance,
+  periodStart, periodEnd, onPeriodStart, onPeriodEnd, onResetPeriod,
+  acpFiltered, copyVcs, vcsCode,
+}) {
+  return (
+    <div className="space-y-4" data-testid="movements-tab-body">
+      {/* Filtre periode */}
+      <Card className="border-slate-200 bg-slate-50/60">
+        <CardContent className="p-3">
+          <div className="flex items-center gap-3 flex-wrap">
+            <div className="text-xs font-semibold text-slate-600 flex items-center gap-1.5">
+              <CalendarClock size={13} className="text-[#2563EB]" />
+              Periode :
+            </div>
+            <div className="flex items-center gap-2 text-xs">
+              <label className="text-slate-500">Du</label>
+              <Input
+                type="date"
+                value={periodStart}
+                onChange={(e) => onPeriodStart(e.target.value)}
+                className="h-8 text-xs w-36"
+                data-testid="period-start-input"
+              />
+              <label className="text-slate-500">Au</label>
+              <Input
+                type="date"
+                value={periodEnd}
+                onChange={(e) => onPeriodEnd(e.target.value)}
+                className="h-8 text-xs w-36"
+                data-testid="period-end-input"
+              />
+              {(periodStart || periodEnd) && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={onResetPeriod}
+                  className="h-8 px-2 text-[11px] text-slate-500"
+                  data-testid="period-reset-btn"
+                >
+                  Reinitialiser
+                </Button>
+              )}
+            </div>
+            {!acpFiltered && (
+              <span className="ml-auto text-[10px] text-amber-600 bg-amber-50 border border-amber-200 rounded-full px-2 py-0.5">
+                Selectionnez une copropriete pour voir un solde detaille
+              </span>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+
+      {loading ? (
+        <Card><CardContent className="p-8 text-center text-slate-400 text-sm">Chargement des mouvements...</CardContent></Card>
+      ) : movements.length === 0 && !periodStart && !periodEnd ? (
+        <Card>
+          <CardContent className="p-8 text-center text-slate-400">
+            <CheckCircle2 size={32} className="mx-auto mb-2 text-emerald-500" />
+            Aucun mouvement enregistre sur ce compte
+          </CardContent>
+        </Card>
+      ) : (
+        <Card className="overflow-hidden">
+          <CardContent className="p-0">
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow className="bg-slate-50">
+                    <TableHead className="w-24">Date</TableHead>
+                    <TableHead className="w-32">Type</TableHead>
+                    <TableHead>Description</TableHead>
+                    <TableHead className="text-right w-28">Debit</TableHead>
+                    <TableHead className="text-right w-28">Credit</TableHead>
+                    <TableHead className="text-right w-28">Solde</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {/* Ligne opening balance */}
+                  {periodStart && (
+                    <TableRow className="bg-blue-50/40 border-t-2 border-blue-200">
+                      <TableCell className="text-xs font-mono">{fmtDate(periodStart)}</TableCell>
+                      <TableCell>
+                        <Badge variant="outline" className="text-[10px] bg-blue-50 text-blue-700 border-blue-200">
+                          Solde initial
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-xs italic text-slate-600">
+                        Report a la date du {fmtDate(periodStart)}
+                      </TableCell>
+                      <TableCell className="text-right font-mono text-xs text-slate-400">-</TableCell>
+                      <TableCell className="text-right font-mono text-xs text-slate-400">-</TableCell>
+                      <TableCell className={`text-right font-mono text-xs font-semibold ${openingBalance > 0.01 ? 'text-red-600' : openingBalance < -0.01 ? 'text-emerald-600' : 'text-slate-500'}`}>
+                        {fmt(openingBalance)}
+                      </TableCell>
+                    </TableRow>
+                  )}
+                  {movements.length === 0 && (
+                    <TableRow>
+                      <TableCell colSpan={6} className="text-center text-slate-400 text-sm py-6">
+                        Aucun mouvement dans la periode selectionnee
+                      </TableCell>
+                    </TableRow>
+                  )}
+                  {movements.map((m, i) => {
+                    const meta = JOURNAL_TYPE_META[m.journal_type] || JOURNAL_TYPE_META.OD;
+                    return (
+                      <TableRow key={`${m.reference}-${i}`} data-testid={`movement-row-${i}`} className="hover:bg-slate-50/50">
+                        <TableCell className="text-xs font-mono text-slate-600">{fmtDate(m.date)}</TableCell>
+                        <TableCell>
+                          <Badge variant="outline" className={`text-[10px] ${meta.color}`}>
+                            <span className={`w-1.5 h-1.5 rounded-full ${meta.dotColor} mr-1`} />
+                            {meta.label}
+                          </Badge>
+                          {m.is_mutation && (
+                            <Badge variant="outline" className="text-[9px] bg-amber-50 text-amber-700 border-amber-200 ml-1">
+                              MUT
+                            </Badge>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-xs text-slate-800">
+                          <div className="font-medium">{m.description || m.fund_call_name || '-'}</div>
+                          {m.reference && (
+                            <div className="text-[10px] text-slate-400 font-mono">{m.reference}</div>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-right font-mono text-xs">
+                          {m.debit > 0 ? <span className="text-slate-900">{fmt(m.debit)}</span> : <span className="text-slate-300">-</span>}
+                        </TableCell>
+                        <TableCell className="text-right font-mono text-xs">
+                          {m.credit > 0 ? <span className="text-emerald-600">{fmt(m.credit)}</span> : <span className="text-slate-300">-</span>}
+                        </TableCell>
+                        <TableCell className={`text-right font-mono text-xs font-semibold ${m.running_balance > 0.01 ? 'text-red-600' : m.running_balance < -0.01 ? 'text-emerald-600' : 'text-slate-500'}`}>
+                          {fmt(m.running_balance)}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                  {/* Ligne closing balance */}
+                  {movements.length > 0 && (
+                    <TableRow className="bg-slate-50 border-t-2 border-slate-300 font-semibold">
+                      <TableCell className="text-xs" colSpan={3}>
+                        <span className="uppercase tracking-wider text-[10px] text-slate-500">Solde final</span>
+                      </TableCell>
+                      <TableCell className="text-right font-mono text-xs text-slate-500">
+                        {fmt(movements.reduce((s, m) => s + (m.debit || 0), 0))}
+                      </TableCell>
+                      <TableCell className="text-right font-mono text-xs text-emerald-600">
+                        {fmt(movements.reduce((s, m) => s + (m.credit || 0), 0))}
+                      </TableCell>
+                      <TableCell className={`text-right font-mono text-sm ${closingBalance > 0.01 ? 'text-red-600' : closingBalance < -0.01 ? 'text-emerald-600' : 'text-slate-500'}`}>
+                        {fmt(closingBalance)}
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Info VCS pour paiement */}
+      {closingBalance > 0.01 && vcsCode && (
+        <Card className="border-blue-200 bg-blue-50/40">
+          <CardContent className="p-3 flex items-center gap-3 flex-wrap">
+            <Wallet size={16} className="text-blue-600" />
+            <div className="text-xs">
+              <div className="font-semibold text-blue-900">Pour regler votre solde de {fmt(closingBalance)}</div>
+              <div className="text-blue-700">Utilisez la communication structuree :</div>
+            </div>
+            <button
+              onClick={() => copyVcs(vcsCode)}
+              className="font-mono text-xs text-[#2563EB] bg-white hover:bg-blue-100 px-3 py-1.5 rounded border border-blue-200 inline-flex items-center gap-1.5"
+              data-testid="movements-vcs-btn"
+            >
+              {vcsCode}<Copy size={11} />
+            </button>
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  );
+}
+
 
