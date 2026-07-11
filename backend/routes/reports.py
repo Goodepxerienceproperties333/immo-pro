@@ -193,12 +193,16 @@ async def _build_situation_compte_pdf(db, owner_id, copropriete_id, start_date=N
         return "in"
 
     for e in entries:
-        for ln in e.get("lines", []) or []:
+        for idx, ln in enumerate(e.get("lines", []) or []):
             acc = ln.get("account_number", "")
             tpid = ln.get("third_party_id")
             if acc not in valid_accs and tpid != owner_id:
                 continue
-            key = (e.get("id"), acc, ln.get("debit", 0), ln.get("credit", 0), tpid)
+            # iter90cx : cle basee sur (entry_id, line_index) au lieu de
+            # (id, acc, debit, credit, tpid). Le tuple precedent dedupliquait
+            # par erreur des lignes legitimes ayant meme debit/credit/tpid
+            # (ex : 30 lots Matexi de meme quotite -> 3.6% perdu dans le PDF).
+            key = (e.get("id"), idx)
             if key in seen:
                 continue
             seen.add(key)
@@ -1983,7 +1987,7 @@ def create_reports_router(db):
         for e in entries:
             if (e.get("journal_type") or "") != "AN":
                 continue
-            for ln in e.get("lines", []) or []:
+            for idx, ln in enumerate(e.get("lines", []) or []):
                 acc = ln.get("account_number", "")
                 tpid = ln.get("third_party_id")
                 if acc not in valid_accs and tpid != owner_id:
@@ -1992,9 +1996,11 @@ def create_reports_router(db):
                 an_credit += float(ln.get("credit", 0) or 0)
                 if not an_account:
                     an_account = acc
-                # Tag this AN line as already processed so it's NOT shown
-                # again in the regular movements list below.
-                seen_lines.add((e.get("id"), acc, ln.get("debit", 0), ln.get("credit", 0), tpid))
+                # iter90cx : cle basee sur (entry_id, line_index) pour eviter
+                # les faux doublons quand 2 lots ont la meme quotite (donc
+                # meme debit). Le tuple (id, acc, debit, credit, tpid) precedent
+                # dedupliquait par erreur des lignes legitimes.
+                seen_lines.add((e.get("id"), idx))
 
         if abs(an_debit - an_credit) > 0.001:
             reprise_date = start_date or ""
@@ -2014,14 +2020,18 @@ def create_reports_router(db):
         for m in pre_mutation_movements:
             movements.append(m)
         for e in entries:
-            for ln in e.get("lines", []) or []:
+            for idx, ln in enumerate(e.get("lines", []) or []):
                 acc = ln.get("account_number", "")
                 tpid = ln.get("third_party_id")
                 # Match si compte tiers de l'owner OU explicitement tagge owner
                 if acc not in valid_accs and tpid != owner_id:
                     continue
-                # Eviter doublons (meme line)
-                key = (e.get("id"), acc, ln.get("debit", 0), ln.get("credit", 0), tpid)
+                # iter90cx : cle basee sur (entry_id, line_index) pour eviter
+                # de dedupliquer 2 lignes legitimes ayant meme (debit, credit,
+                # tpid). Ex : reserve fund distribue sur 30 lots dont plusieurs
+                # ont la meme quotite -> anciennement 3.6% des lignes etaient
+                # skippees par erreur.
+                key = (e.get("id"), idx)
                 if key in seen_lines:
                     continue
                 seen_lines.add(key)
@@ -2446,14 +2456,15 @@ def create_reports_router(db):
         for e in entries:
             if (e.get("journal_type") or "") != "AN":
                 continue
-            for ln in e.get("lines", []) or []:
+            for idx, ln in enumerate(e.get("lines", []) or []):
                 if not _line_matches(ln):
                     continue
                 an_debit += float(ln.get("debit", 0) or 0)
                 an_credit += float(ln.get("credit", 0) or 0)
                 if not an_account:
                     an_account = ln.get("account_number", "")
-                seen.add((e.get("id"), ln.get("account_number", ""), ln.get("debit", 0), ln.get("credit", 0), ln.get("third_party_id")))
+                # iter90cx : dedup par (entry_id, line_index)
+                seen.add((e.get("id"), idx))
         if abs(an_debit - an_credit) > 0.001:
             reprise_date = start_date or ""
             movements.append({
@@ -2471,10 +2482,11 @@ def create_reports_router(db):
             movements.append(m)
 
         for e in entries:
-            for ln in e.get("lines", []) or []:
+            for idx, ln in enumerate(e.get("lines", []) or []):
                 if not _line_matches(ln):
                     continue
-                key = (e.get("id"), ln.get("account_number", ""), ln.get("debit", 0), ln.get("credit", 0), ln.get("third_party_id"))
+                # iter90cx : dedup par (entry_id, line_index)
+                key = (e.get("id"), idx)
                 if key in seen:
                     continue
                 seen.add(key)

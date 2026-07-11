@@ -12,6 +12,57 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 
+### Iter90cx (Feb 2026) - Fix dedup situation compte : perte 3.6% sur lignes identiques
+
+**Ticket utilisateur PROD** :
+> "Total de la balance de tiers de Matexi en production est correcte cependant
+> dans le tableau, il y a une erreur : le total des appels de fonds de reserve
+> = 1500 EUR mais affiche 1446, et le fonds de roulement = 5200 EUR mais
+> affiche 5012.80. Pourrais-tu corriger afin que le montant dans la balance
+> de tiers soit correcte?"
+
+**Analyse** :
+- Total afficher = 25700 (correct)
+- Ligne reserve = 1446 au lieu de 1500 (perte 54 EUR = 3.6%)
+- Ligne roulement = 5012.80 au lieu de 5200 (perte 187.20 EUR = 3.6%)
+- Meme ratio 3.6% -> pattern systematique
+
+**Cause** : Dans `situation_compte_owner` (reports.py) et
+`_build_situation_compte_pdf` et `situation_compte_supplier`, la cle de
+deduplication `seen_lines.add((entry_id, account, debit, credit, tpid))`
+considerait 2 lignes DIFFERENTES comme doublons si elles avaient meme
+(debit, credit, tier). Or, quand Matexi possede N lots dont plusieurs
+partagent la meme quotite (ex : 10 caves de meme surface), l'appel reserve
+distribue le meme montant a plusieurs lignes -> plusieurs lignes ont
+debit identique -> `seen_lines` skippe erronement 3.6% (typiquement 1 ligne
+sur ~27 quand certaines quotites se repetent).
+
+**Fix iter90cx** : Cle dedup = `(entry_id, line_index)` uniquement. Chaque
+ligne d'un JE est identifiee de facon unique par sa position dans le
+tableau `lines`, independamment du contenu (debit/credit/tpid).
+
+Applique a 3 endroits :
+1. `situation_compte_owner` (endpoint JSON balance-tiers)
+2. `_build_situation_compte_pdf` (PDF telechargement)
+3. `situation_compte_supplier` (idem pour fournisseurs)
+
+**Tests iter90cx** (3/3 PASS) :
+1. `test_identical_lines_summed` : 3 lignes debit=500 identiques -> total=1500 (etait 500 avant fix)
+2. `test_distinct_lines_summed` : 3 lignes distinctes 400+500+600 -> total=1500 (regression)
+3. `test_acacia_30_lots_reserve` : 30 lignes (10x100 + 10x30 + 10x20) -> total=1500 (au lieu de 1440 - perte 4% avec ancien code)
+
+**Non-regression** : iter90bv (grouping owner), bz (Matexi mutations), bx
+(traceable reversals), ci (situation PDF exclude reversals) : 21/21 PASS.
+
+**Impact PROD Acacia apres redeploiement** :
+- Ligne reserve affichera 1500 EUR (au lieu de 1446)
+- Ligne roulement affichera 5200 EUR (au lieu de 5012.80)
+- Total debit = 25700 EUR (identique a solde)
+- Aucune modification en base : le grand livre etait correct, seul le
+  rendu de la situation etait faux.
+
+
+
 ### Iter90cw (Feb 2026) - Cleanup fund_calls orphelins (distribution vide)
 
 **Ticket utilisateur PROD** :
