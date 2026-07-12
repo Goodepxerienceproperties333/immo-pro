@@ -29,11 +29,21 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 - Meme logique appliquee sur le download endpoint des attachments
   (chinese wall protege l'acces).
 
-**Tests iter90dz** (4/4) :
-1. Owner voit les charges via fallback lot_number
+**Tests iter90dz** (5/5) :
+1. Owner voit les charges via fallback lot_number (/api/owner/invoices)
 2. Download attachment autorise via fallback lot_number
 3. Non-regression : owner voit toujours via lot_id direct
 4. Non-regression : autre owner reste refuse
+5. /api/owner/situation/{cid} : situation online utilise fallback lot_number
+
+**Extension iter90dz** (Feb 2026) : le meme fallback est applique dans :
+- `owner_portal.py::my_situation_online` (endpoint /situation/{cid})
+- `pdf_decompte.py::build_decompte_pdf` (decompte annuel PDF)
+
+Les endpoints /owner/dashboard, /owner/movements, /owner/pending-calls et le
+PDF `pdf_situation_compte.py` NE sont PAS impactes car ils filtrent via
+`third_party_id` (owner_id) et `account_number` (tier account) - deux champs
+STABLES qui ne dependent pas de lot_id.
 
 
 

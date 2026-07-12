@@ -786,7 +786,11 @@ def create_owner_portal_router(db):
         ).to_list(100)
         if not my_lots:
             raise HTTPException(403, "Vous n'avez aucun lot dans cette copropriete")
-        my_lot_ids = {l["id"] for l in my_lots}
+        my_lot_ids = {lt["id"] for lt in my_lots}
+        # iter90dz : fallback match par lot_number pour lot_ids phantoms
+        def _norm_num(s: str) -> str:
+            return (str(s or "")).strip().lstrip("0") or "0"
+        my_lot_nums = {_norm_num(lt.get("number", "")) for lt in my_lots}
         # Iter90df : compat single owner_id pour code aval
         owner_id = my_lots[0].get("owner_id") or (my_lots[0].get("owner_ids") or [owner["id"]])[0]
 
@@ -810,11 +814,17 @@ def create_owner_portal_router(db):
 
         # Invoice distributions - iter90bv : cumuler tous les lots du proprietaire
         # sur une meme facture en une seule ligne (sinon N lignes par lot).
+        # iter90dz : fallback lot_number pour distributions phantoms.
         invoices = await db.invoices.find({"copropriete_id": copropriete_id}, {"_id": 0}).to_list(10000)
         for inv in invoices:
             inv_amount = 0.0
             for dl in inv.get("distribution_lines", []):
-                if dl.get("lot_id") in my_lot_ids:
+                dl_lot_id = dl.get("lot_id")
+                if dl_lot_id and dl_lot_id in my_lot_ids:
+                    inv_amount += float(dl.get("amount", 0) or 0)
+                    continue
+                dl_num = _norm_num(dl.get("lot_number", ""))
+                if dl_num and dl_num != "0" and dl_num in my_lot_nums:
                     inv_amount += float(dl.get("amount", 0) or 0)
             if inv_amount > 0.001:
                 movements.append({

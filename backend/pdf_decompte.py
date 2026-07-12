@@ -163,6 +163,12 @@ def build_decompte_pdf(
         ],
     )
     owner_lot_ids = {l["id"] for l in owner_lots}
+    # iter90dz : fallback match par lot_number pour lot_ids phantoms
+    def _norm_num(s: str) -> str:
+        return (str(s or "")).strip().lstrip("0") or "0"
+    owner_lot_nums = {_norm_num(l.get("number", "")) for l in owner_lots}
+    # Mapping lot_number -> current lot_id (pour resoudre le phantom vers le vrai)
+    owner_lot_id_by_num = {_norm_num(l.get("number", "")): l["id"] for l in owner_lots}
     owner_quotity = sum(l.get("quotity", 0) for l in owner_lots)
     total_quotity = sum(l.get("quotity", 0) for l in all_lots) or 1
     share_pct = owner_quotity / total_quotity * 100
@@ -263,11 +269,19 @@ def build_decompte_pdf(
 
         if has_explicit:
             # Use explicit distribution_lines
+            # iter90dz : match direct par lot_id, fallback par lot_number
             key_id = raw_key or "_none"
             for dl in explicit_lines:
                 lid = dl.get("lot_id")
+                amt = float(dl.get("amount", 0) or 0)
                 if lid in owner_lot_ids:
-                    lot_share[lid] = lot_share.get(lid, 0.0) + float(dl.get("amount", 0) or 0)
+                    lot_share[lid] = lot_share.get(lid, 0.0) + amt
+                    continue
+                # Fallback iter90dz : match par lot_number
+                dl_num = _norm_num(dl.get("lot_number", ""))
+                if dl_num and dl_num != "0" and dl_num in owner_lot_nums:
+                    real_lid = owner_lot_id_by_num[dl_num]
+                    lot_share[real_lid] = lot_share.get(real_lid, 0.0) + amt
         else:
             # Fallback : split inv_total by tantiemes
             # Use the configured distribution key if present, else default tantiemes
