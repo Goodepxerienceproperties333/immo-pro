@@ -2106,6 +2106,26 @@ def create_reports_router(db):
                 )
                 if is_provisions_cancel and not show_all:
                     continue
+                # iter90eg : applique la meme regle que le PDF situation
+                # (iter90dv) au libelle des mouvements FI pour clarifier la
+                # balance des tiers.
+                # - Compte tier proprietaire au CREDIT (paiement du proprio)
+                #   -> "Paiement recu"
+                # - Compte tier proprietaire au DEBIT (remboursement de l'ACP
+                #   au proprio) -> "Votre remboursement"
+                journal_type = e.get("journal_type", "") or ""
+                is_owner_tier_line = (acc in valid_accs) or (tpid == owner_id)
+                if journal_type == "FI" and is_owner_tier_line:
+                    debit_amt = float(ln.get("debit", 0) or 0)
+                    credit_amt = float(ln.get("credit", 0) or 0)
+                    counterpart = (ln.get("counterparty_name") or ln.get("third_party_name") or "").strip()
+                    ref = (e.get("reference") or "").strip()
+                    detail_parts = [p for p in (counterpart, ref) if p]
+                    detail_suffix = f" - {' / '.join(detail_parts)}" if detail_parts else ""
+                    if credit_amt > 0.001:
+                        final_desc = f"Paiement recu{detail_suffix}"
+                    elif debit_amt > 0.001:
+                        final_desc = f"Votre remboursement{detail_suffix}"
                 movements.append({
                     "date": e.get("date", ""),
                     "description": f"[{e.get('journal_type','?')}] {final_desc}".strip(),

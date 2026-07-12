@@ -126,6 +126,28 @@ export default function BankingPage() {
     setInlineLines([]); setEditingTxn(null);
   };
 
+  // iter90eh : refresh instantane apres lettrage/delettrage.
+  // - Recharge transactions (matched flag) ET invoices (status paid/unpaid) en parallele.
+  // - Si le dialog de lettrage est encore ouvert, refetch aussi letteredLinks
+  //   pour synchroniser l'en-tete "Deja lettree a" sans clignotement.
+  const refreshAfterLettrage = useCallback(async (opts = {}) => {
+    const invPromise = api.get('/invoices', { params: fyParams }).then(r => setInvoices(r.data));
+    let txnPromise;
+    if (selectedStmt?.id) {
+      txnPromise = api.get(`/banking/statements/${selectedStmt.id}`)
+        .then(r => setTransactions(r.data.transactions || []));
+    } else {
+      txnPromise = api.get('/banking/transactions', { params: fyParams })
+        .then(r => setTransactions(r.data));
+    }
+    const linksPromise = (opts.refetchLinks && lettrageTarget?.id)
+      ? api.get(`/banking/transactions/${lettrageTarget.id}/lettered-links`)
+          .then(r => setLetteredLinks(r.data))
+          .catch(() => {})
+      : Promise.resolve();
+    await Promise.all([invPromise, txnPromise, linksPromise]);
+  }, [selectedStmt, lettrageTarget, fyParams]);
+
   const handleCodaImport = async (e) => {
     const file = e.target.files[0]; if (!file) return; setCodaUploading(true);
     try {
@@ -325,7 +347,7 @@ export default function BankingPage() {
       setLetteredLinksLoading(false);
     }
   };
-  const doLettrage = async (id, type) => { try { await api.post('/banking/lettrage', { transaction_id: lettrageTarget.id, match_to_id: id, match_type: type }); toast.success('Lettre'); setLettrageDialog(false); if (selectedStmt) loadStmtTxns(selectedStmt); else load(); } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); } };
+  const doLettrage = async (id, type) => { try { await api.post('/banking/lettrage', { transaction_id: lettrageTarget.id, match_to_id: id, match_type: type }); toast.success('Lettre'); setLettrageDialog(false); refreshAfterLettrage(); } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); } };
   const unlettrage = async (id) => {
     // iter90cl : optimistic patch au lieu de load() full reload pour perf batch.
     try {
@@ -368,6 +390,14 @@ export default function BankingPage() {
           inv.id === data.invoice.id ? { ...inv, ...data.invoice } : inv
         ));
       }
+      // iter90eh : rafraichit letteredLinks du dialog si il est encore ouvert
+      // sur la txn dont on delettre une des factures (multi_invoice)
+      if (lettrageTarget?.id && ids.has(lettrageTarget.id)) {
+        try {
+          const { data: links } = await api.get(`/banking/transactions/${lettrageTarget.id}/lettered-links`);
+          setLetteredLinks(links);
+        } catch { /* silent */ }
+      }
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Erreur');
     }
@@ -395,7 +425,7 @@ export default function BankingPage() {
       await api.post(`/banking/transactions/${categorizeTarget.id}/categorize`, payload);
       toast.success(`Categorisation OK (${payload.splits.length} nature${payload.splits.length > 1 ? 's' : ''})`);
       setCategorizeDialog(false);
-      if (selectedStmt) loadStmtTxns(selectedStmt); else load();
+      refreshAfterLettrage();
     } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); }
   };
   const uncategorize = async (id) => {
@@ -403,7 +433,7 @@ export default function BankingPage() {
     try {
       await api.delete(`/banking/transactions/${id}/categorize`);
       toast.success('Categorisation retiree');
-      if (selectedStmt) loadStmtTxns(selectedStmt); else load();
+      refreshAfterLettrage();
     } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); }
   };
 
@@ -431,7 +461,7 @@ export default function BankingPage() {
       toast.success(msg);
       setLettrageDialog(false);
       setSelectedInvoiceIds(new Set());
-      if (selectedStmt) loadStmtTxns(selectedStmt); else load();
+      refreshAfterLettrage();
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Erreur lettrage multi-factures');
     }
@@ -464,7 +494,7 @@ export default function BankingPage() {
       toast.success(msg);
       setBatchLettrageDialog(false);
       clearSelection();
-      if (selectedStmt) loadStmtTxns(selectedStmt); else load();
+      refreshAfterLettrage();
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Erreur lettrage en lot');
     }
@@ -1049,7 +1079,7 @@ export default function BankingPage() {
                         await api.post(`/banking/unlettrage/${lettrageTarget.id}`);
                         toast.success('Transaction delettree');
                         setLetteredLinks({ ...letteredLinks, matched: false, invoices: [], owner: null, supplier: null, sibling_transactions: [] });
-                        if (selectedStmt) loadStmtTxns(selectedStmt); else load();
+                        refreshAfterLettrage();
                       } catch (err) {
                         toast.error(err.response?.data?.detail || 'Erreur delettrage');
                       }

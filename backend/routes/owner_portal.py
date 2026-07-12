@@ -421,6 +421,19 @@ def create_owner_portal_router(db):
                 desc = (ln.get("line_description") or e.get("description") or "").strip()
                 if fc_info.get("name") and fc_info["name"] not in desc:
                     desc = f"{fc_info['name']} - {desc}" if desc else fc_info["name"]
+                # iter90eg : sur mouvement bancaire (FI) touchant le compte tier
+                # proprietaire, remplace le libelle par une formulation claire :
+                # - Ligne au CREDIT (paiement du proprio) -> "Paiement recu"
+                # - Ligne au DEBIT (remboursement de l'ACP) -> "Votre remboursement"
+                if e.get("journal_type", "") == "FI":
+                    counterpart = (ln.get("counterparty_name") or ln.get("third_party_name") or "").strip()
+                    ref = (e.get("reference") or "").strip()
+                    detail_parts = [p for p in (counterpart, ref) if p]
+                    detail_suffix = f" - {' / '.join(detail_parts)}" if detail_parts else ""
+                    if c_val > 0.001:
+                        desc = f"Paiement recu{detail_suffix}"
+                    elif d_val > 0.001:
+                        desc = f"Votre remboursement{detail_suffix}"
                 running += (d_val - c_val)
                 movements.append({
                     "date": e.get("date", ""),

@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { AlertTriangle, RefreshCw, Wrench, ShieldCheck, FileText } from 'lucide-react';
+import { AlertTriangle, RefreshCw, Wrench, ShieldCheck, FileText, Link2 } from 'lucide-react';
 
 /**
  * iter90dx - Admin : detection et reparation des mutations avec from/to inverses.
@@ -26,6 +26,9 @@ export default function AdminMutationsAuditPage() {
   // iter90dz : reparation invoices phantom distribution_lines
   const [invoiceRepairLoading, setInvoiceRepairLoading] = useState(false);
   const [invoiceRepairReport, setInvoiceRepairReport] = useState(null);
+  // iter90eh : reparation lettrages bancaires historiques
+  const [lettrageRepairLoading, setLettrageRepairLoading] = useState(false);
+  const [lettrageRepairReport, setLettrageRepairReport] = useState(null);
 
   const loadCopros = useCallback(async () => {
     try {
@@ -133,6 +136,26 @@ export default function AdminMutationsAuditPage() {
       toast.error(err.response?.data?.detail || 'Erreur reparation factures');
     } finally {
       setInvoiceRepairLoading(false);
+    }
+  };
+
+  // iter90eh : reparation retroactive des lettrages historiques
+  const runLettrageRepair = async () => {
+    setLettrageRepairLoading(true);
+    try {
+      const payload = selectedCopro ? { copropriete_id: selectedCopro } : {};
+      const { data } = await api.post('/banking/repair-legacy-lettrages', null, {
+        params: payload,
+      });
+      setLettrageRepairReport(data);
+      toast.success(
+        `${data.transactions_repaired} transaction(s) reconciliee(s) (${data.transactions_already_ok} deja OK)`,
+        { duration: 6000 }
+      );
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur reparation lettrages');
+    } finally {
+      setLettrageRepairLoading(false);
     }
   };
 
@@ -389,6 +412,59 @@ export default function AdminMutationsAuditPage() {
                 </div>
               </details>
             )}
+          </div>
+        )}
+      </Card>
+
+      {/* iter90eh : Reparation lettrages bancaires historiques */}
+      <Card className="p-5 space-y-4">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h2 className="text-lg font-semibold text-slate-900 flex items-center gap-2" style={{fontFamily:'Chivo,sans-serif'}}>
+              <Link2 size={18} className="text-emerald-600" />
+              Reparation lettrages bancaires historiques
+            </h2>
+            <p className="text-xs text-slate-500 mt-1 max-w-2xl">
+              Reconcilie les <code className="bg-slate-100 px-1 rounded">bank_transactions</code>
+              &nbsp;dont le champ <code className="bg-slate-100 px-1 rounded">matched</code> n&apos;est pas
+              correctement rempli alors que la facture est marquee payee via
+              <code className="bg-slate-100 px-1 rounded mx-1">paid_by_transaction_id</code>.
+              Necessaire pour les lettrages effectues avant iter90eb ou importes depuis Optipro/CODA.
+              {selectedCopro ? '' : ' (Portee : toutes les ACPs si aucune n\'est selectionnee ci-dessus.)'}
+            </p>
+          </div>
+          <Button
+            onClick={runLettrageRepair}
+            disabled={lettrageRepairLoading}
+            className="bg-emerald-600 hover:bg-emerald-700 text-white shrink-0"
+            data-testid="lettrage-repair-btn"
+          >
+            <Wrench size={14} className={`mr-2 ${lettrageRepairLoading ? 'animate-spin' : ''}`} />
+            {lettrageRepairLoading ? 'Reparation...' : 'Reparer les lettrages'}
+          </Button>
+        </div>
+        {lettrageRepairReport && (
+          <div className="border border-slate-200 rounded p-3 bg-slate-50" data-testid="lettrage-repair-report">
+            <div className="grid grid-cols-4 gap-2 text-xs">
+              <div>
+                <div className="text-slate-500">Factures scannees</div>
+                <div className="text-lg font-bold text-slate-900">{lettrageRepairReport.invoices_scanned}</div>
+              </div>
+              <div>
+                <div className="text-slate-500">Transactions reparees</div>
+                <div className="text-lg font-bold text-emerald-700">{lettrageRepairReport.transactions_repaired}</div>
+              </div>
+              <div>
+                <div className="text-slate-500">Deja OK</div>
+                <div className="text-lg font-bold text-slate-700">{lettrageRepairReport.transactions_already_ok}</div>
+              </div>
+              <div>
+                <div className="text-slate-500">Manquantes</div>
+                <div className={`text-lg font-bold ${lettrageRepairReport.transactions_missing > 0 ? 'text-amber-700' : 'text-slate-700'}`}>
+                  {lettrageRepairReport.transactions_missing}
+                </div>
+              </div>
+            </div>
           </div>
         )}
       </Card>

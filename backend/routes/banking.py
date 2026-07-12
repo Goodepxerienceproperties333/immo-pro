@@ -773,6 +773,46 @@ def create_banking_router(db):
         }
 
         if not txn.get("matched"):
+            # iter90eh : Fallback pour lettrages historiques mal marques
+            # (importes anciens Optipro/CODA ou creees avant le champ matched).
+            # Cherche les factures qui pointent vers cette txn via
+            # paid_by_transaction_id. Reconcilie a la volee et re-lit la txn.
+            legacy_invs = await db.invoices.find(
+                {"paid_by_transaction_id": txn_id},
+                {"_id": 0, "id": 1, "number": 1, "supplier": 1,
+                 "total_amount": 1, "amount_ttc": 1, "amount": 1,
+                 "amount_paid": 1, "status": 1, "date": 1, "description": 1},
+            ).to_list(1000)
+            if legacy_invs:
+                # Repare les champs manquants pour cette transaction
+                inv_ids = [i["id"] for i in legacy_invs]
+                set_fields = {"matched": True, "match_type": "invoice"}
+                if len(inv_ids) == 1:
+                    set_fields["matched_to"] = inv_ids[0]
+                else:
+                    set_fields["match_type"] = "multi_invoice"
+                    set_fields["matched_to"] = inv_ids[0]
+                    set_fields["matched_to_ids"] = inv_ids
+                await db.bank_transactions.update_one(
+                    {"id": txn_id}, {"$set": set_fields},
+                )
+                result["matched"] = True
+                result["match_type"] = set_fields["match_type"]
+                for inv in legacy_invs:
+                    inv_amt = float(
+                        inv.get("amount_ttc") or inv.get("total_amount")
+                        or inv.get("amount") or 0
+                    )
+                    result["invoices"].append({
+                        "id": inv["id"],
+                        "number": inv.get("number", ""),
+                        "supplier": inv.get("supplier", ""),
+                        "description": inv.get("description", ""),
+                        "date": inv.get("date", ""),
+                        "total_amount": round(inv_amt, 2),
+                        "amount_paid": round(float(inv.get("amount_paid") or 0), 2),
+                        "status": inv.get("status", ""),
+                    })
             return result
 
         mt = txn.get("match_type", "") or ""
@@ -858,6 +898,82 @@ def create_banking_router(db):
             ]
 
         return result
+
+    @router.post("/repair-legacy-lettrages")
+    async def repair_legacy_lettrages(copropriete_id: Optional[str] = None):
+        """iter90eh : Reconcilie les lettrages historiques.
+
+        Certaines factures marquees `paid` avec un `paid_by_transaction_id`
+        pointent vers des `bank_transactions` qui n'ont PAS `matched=True`
+        ou `matched_to`/`match_type` correctement peuples (import Optipro/CODA,
+        migration, ecritures pre-refactor iter90eb). Ce endpoint parcourt les
+        factures avec `paid_by_transaction_id` et re-marque les transactions
+        correspondantes.
+
+        Optionnel : `copropriete_id` pour limiter au scope ACP.
+        """
+        inv_q = {"paid_by_transaction_id": {"$exists": True, "$ne": ""}}
+        if copropriete_id:
+            inv_q["copropriete_id"] = copropriete_id
+        invs = await db.invoices.find(
+            inv_q,
+            {"_id": 0, "id": 1, "paid_by_transaction_id": 1, "copropriete_id": 1},
+        ).to_list(100000)
+
+        # Group par transaction_id (une txn peut payer 1 ou N factures)
+        by_txn: dict = {}
+        for inv in invs:
+            tid = inv.get("paid_by_transaction_id")
+            if not tid:
+                continue
+            by_txn.setdefault(tid, []).append(inv["id"])
+
+        repaired = 0
+        skipped = 0
+        already_ok = 0
+        for tid, inv_ids in by_txn.items():
+            txn = await db.bank_transactions.find_one(
+                {"id": tid}, {"_id": 0, "matched": 1, "matched_to": 1,
+                              "matched_to_ids": 1, "match_type": 1},
+            )
+            if not txn:
+                skipped += 1
+                continue
+            needs_repair = False
+            if not txn.get("matched"):
+                needs_repair = True
+            elif txn.get("match_type") not in ("invoice", "multi_invoice"):
+                needs_repair = True
+            elif len(inv_ids) == 1 and txn.get("matched_to") != inv_ids[0]:
+                needs_repair = True
+            elif len(inv_ids) > 1:
+                existing_ids = set(txn.get("matched_to_ids") or [])
+                if set(inv_ids) - existing_ids:
+                    needs_repair = True
+
+            if not needs_repair:
+                already_ok += 1
+                continue
+
+            set_fields = {"matched": True}
+            if len(inv_ids) == 1:
+                set_fields["match_type"] = "invoice"
+                set_fields["matched_to"] = inv_ids[0]
+            else:
+                set_fields["match_type"] = "multi_invoice"
+                set_fields["matched_to"] = inv_ids[0]
+                set_fields["matched_to_ids"] = inv_ids
+            await db.bank_transactions.update_one(
+                {"id": tid}, {"$set": set_fields},
+            )
+            repaired += 1
+
+        return {
+            "invoices_scanned": len(invs),
+            "transactions_repaired": repaired,
+            "transactions_already_ok": already_ok,
+            "transactions_missing": skipped,
+        }
 
     async def _refresh_fi_if_posted(txn_id):
         """Si l'extrait parent est `posted`, regenere l'ecriture FI de cette txn

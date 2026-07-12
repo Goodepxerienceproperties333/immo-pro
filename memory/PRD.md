@@ -12,6 +12,49 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 
+### Iter90eh (Feb 2026) - Lettrage bancaire : refresh instantane sans F5
+
+**Ticket utilisateur (PROD)** :
+> "en fait il faut toujours faire un refresh et la le statut se change,
+> il faut que ce soit dynamique et instananté sans refresh de la page
+> nécessaire"
+
+**Root cause** : Apres un lettrage, `doLettrage` (et `doLettrageMultiInvoices`,
+`doBatchLettrage`, `categorize`, `uncategorize`) appelaient
+`loadStmtTxns(selectedStmt)` qui recharge SEULEMENT `transactions` (statut
+`matched`) mais PAS `invoices` (statut `paid`). La liste des factures dans
+le dialog gardait son ancien statut jusqu'a un F5 manuel.
+
+**Fix iter90eh** (`BankingPage.js`) :
+
+1. Nouveau helper `refreshAfterLettrage(opts)` :
+   * Refetch `/invoices` + txns (par extrait ou global) EN PARALLELE via
+     `Promise.all`
+   * Option `refetchLinks=true` pour aussi recharger `letteredLinks` du
+     dialog (en-tete "Deja lettree a") si le dialog reste ouvert
+   * Wrap en `useCallback` avec deps `[selectedStmt, lettrageTarget, fyParams]`
+
+2. 6 callbacks post-lettrage migres vers `refreshAfterLettrage()` :
+   * `doLettrage` (single txn -> single target)
+   * `doLettrageMultiInvoices` (1 txn -> N factures)
+   * `doBatchLettrage` (N txns -> 1 facture)
+   * `categorize` + `uncategorize`
+   * `unlettrage` header button (Delettrer maintenant)
+
+3. `unlettrageByInvoice` : ajoute refetch conditionnel de `letteredLinks`
+   si le dialog est encore ouvert sur une txn concernee (multi_invoice).
+
+**Non-regression** : 16/16 tests iter90eb/ef/eg PASS. Lint clean.
+
+**Impact PROD** : Aucun F5 necessaire. Le statut PAYE/A PAYER des factures,
+l'icone matched des transactions, et le bandeau "Deja lettree a" de l'en-tete
+se mettent tous a jour instantanement apres chaque lettrage/delettrage.
+
+**Deploiement PROD** : Redeployer preview -> immo-pcmn.emergent.host.
+
+
+
+
 ### Iter90ef (Feb 2026) - ZERO DOUBLON FOURNISSEUR (fix root cause)
 
 **Ticket utilisateur (PROD)** :
