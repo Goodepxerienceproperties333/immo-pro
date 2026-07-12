@@ -218,7 +218,7 @@ export default function JournalsPage() {
     <div data-testid="journals-page">
       <div className="page-header flex items-center justify-between">
         <div><h1 className="page-title">Journaux Comptables</h1><p className="page-subtitle">Ecritures comptables par journal</p></div>
-        <Button onClick={openCreate} className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="create-entry-btn"><Plus size={16} className="mr-2" /> Nouvelle ecriture</Button>
+        <Button onClick={openCreate} className="bg-[#022D52] hover:bg-[#1D4ED8]" data-testid="create-entry-btn"><Plus size={16} className="mr-2" /> Nouvelle ecriture</Button>
       </div>
 
       <Tabs value={journalType} onValueChange={setJournalType}>
@@ -231,7 +231,7 @@ export default function JournalsPage() {
               type="checkbox"
               checked={includeReversals}
               onChange={e => setIncludeReversals(e.target.checked)}
-              className="h-4 w-4 accent-[#2563EB]"
+              className="h-4 w-4 accent-[#022D52]"
             />
             <span>Inclure les contre-passations</span>
           </label>
@@ -332,7 +332,7 @@ export default function JournalsPage() {
                     <TableCell className="font-mono text-sm">{fmtDate(e.date)}</TableCell>
                     <TableCell className="font-mono text-xs">
                       {e.reference}
-                      {e.auto_generated && !e.manually_edited && <Badge variant="outline" className="ml-2 text-[10px] bg-blue-50 border-blue-200 text-blue-700" data-testid={`auto-badge-${e.id}`}>Auto</Badge>}
+                      {e.auto_generated && !e.manually_edited && <Badge variant="outline" className="ml-2 text-[10px] bg-blue-50 border-blue-200 text-[#01213e]" data-testid={`auto-badge-${e.id}`}>Auto</Badge>}
                       {e.manually_edited && <Badge variant="outline" className="ml-2 text-[10px] bg-orange-50 border-orange-200 text-orange-700" data-testid={`manual-edit-badge-${e.id}`}>Modifie</Badge>}
                       {e.is_reversal && <Badge variant="outline" className="ml-2 text-[10px] bg-amber-100 border-amber-300 text-amber-800" data-testid={`reversal-badge-${e.id}`}>Contre-passation</Badge>}
                       {e.reversed && <Badge variant="outline" className="ml-2 text-[10px] bg-red-100 border-red-300 text-red-700" data-testid={`reversed-badge-${e.id}`}>Extournee</Badge>}
@@ -482,7 +482,7 @@ export default function JournalsPage() {
 
             <div className="flex gap-3 justify-end">
               <Button variant="outline" onClick={() => setDialogOpen(false)}>Annuler</Button>
-              <Button onClick={handleSave} disabled={!isBalanced} className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="entry-save-btn">Enregistrer</Button>
+              <Button onClick={handleSave} disabled={!isBalanced} className="bg-[#022D52] hover:bg-[#1D4ED8]" data-testid="entry-save-btn">Enregistrer</Button>
             </div>
           </div>
         </DialogContent>

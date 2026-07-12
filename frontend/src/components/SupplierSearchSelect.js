@@ -259,7 +259,7 @@ export default function SupplierSearchSelect({
                     data-testid={`${testId}-use-as-new`}
                   >
                     <div className="flex items-center gap-2">
-                      <Plus size={12} className="text-blue-600 shrink-0" />
+                      <Plus size={12} className="text-[#022D52] shrink-0" />
                       <span className="text-blue-800">
                         Utiliser <span className="font-semibold">{`"${query.trim()}"`}</span> sans creer de fiche
                       </span>

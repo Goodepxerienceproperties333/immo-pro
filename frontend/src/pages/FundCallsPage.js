@@ -21,7 +21,7 @@ const CALL_TYPES = {
     icon: Banknote,
     color: 'bg-blue-100 text-blue-800 border-blue-300',
     chipBg: 'bg-blue-50',
-    accent: 'text-blue-700',
+    accent: 'text-[#01213e]',
     desc: 'Avances trimestrielles/annuelles sur charges courantes',
   },
   reserve: {
@@ -271,7 +271,7 @@ export default function FundCallsPage() {
             <Button
               onClick={regenerateEntries}
               variant="outline"
-              className="border-blue-200 text-blue-700 hover:bg-blue-50"
+              className="border-blue-200 text-[#01213e] hover:bg-blue-50"
               data-testid="regenerate-entries-btn"
               title="Met a jour les libelles des ecritures comptables selon le type d'appel"
             >
@@ -288,7 +288,7 @@ export default function FundCallsPage() {
               <Trash2 size={16} className="mr-2" /> Supprimer tous les appels
             </Button>
           )}
-          <Button onClick={openCreate} className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="create-call-btn"><Plus size={16} className="mr-2" /> Nouvel appel</Button>
+          <Button onClick={openCreate} className="bg-[#022D52] hover:bg-[#1D4ED8]" data-testid="create-call-btn"><Plus size={16} className="mr-2" /> Nouvel appel</Button>
         </div>
       </div>
 
@@ -327,7 +327,7 @@ export default function FundCallsPage() {
             const meta = getCallTypeMeta(c.call_type);
             const TypeIcon = meta.icon;
             return (
-            <Card key={c.id} className={`cursor-pointer transition-all border-l-4 ${selectedCall?.id === c.id ? 'border-l-[#2563EB] shadow-md border border-[#2563EB]' : `border-l-current ${meta.accent} border-slate-200 hover:border-slate-300`}`} onClick={() => viewCall(c.id)} data-testid={`call-card-${c.id}`}>
+            <Card key={c.id} className={`cursor-pointer transition-all border-l-4 ${selectedCall?.id === c.id ? 'border-l-[#022D52] shadow-md border border-[#022D52]' : `border-l-current ${meta.accent} border-slate-200 hover:border-slate-300`}`} onClick={() => viewCall(c.id)} data-testid={`call-card-${c.id}`}>
               <CardContent className="p-4">
                 <div className="flex items-center justify-between mb-1">
                   <span className="font-semibold text-sm">{c.name}</span>
@@ -347,7 +347,7 @@ export default function FundCallsPage() {
                   </div>
                 )}
                 {c.budget_id && (
-                  <Badge variant="outline" className="mt-2 text-[10px] bg-blue-50 border-blue-200 text-blue-700" data-testid={`call-budget-badge-${c.id}`}>
+                  <Badge variant="outline" className="mt-2 text-[10px] bg-blue-50 border-blue-200 text-[#01213e]" data-testid={`call-budget-badge-${c.id}`}>
                     <Sparkles size={9} className="mr-1" /> Issu du budget {budgetName(c.budget_id) || '—'}
                   </Badge>
                 )}
@@ -385,7 +385,7 @@ export default function FundCallsPage() {
                     <CallIcon size={11} className="mr-1" /> {callMeta.label}
                   </Badge>
                   {selectedCall.budget_id && (
-                    <Badge variant="outline" className="text-xs bg-blue-50 border-blue-200 text-blue-700">
+                    <Badge variant="outline" className="text-xs bg-blue-50 border-blue-200 text-[#01213e]">
                       <Sparkles size={10} className="mr-1" /> Budget: {budgetName(selectedCall.budget_id) || '—'}
                     </Badge>
                   )}
@@ -504,7 +504,7 @@ export default function FundCallsPage() {
                                 <div className="flex items-center gap-3 min-w-0">
                                   <div className="text-sm font-semibold text-slate-900 truncate">{g.owner_name}</div>
                                   {g.vcs_code && (
-                                    <span className="text-[10px] font-mono text-[#2563EB] bg-blue-50 border border-blue-100 px-1.5 py-0.5 rounded">
+                                    <span className="text-[10px] font-mono text-[#022D52] bg-blue-50 border border-blue-100 px-1.5 py-0.5 rounded">
                                       {g.vcs_code}
                                     </span>
                                   )}
@@ -714,7 +714,7 @@ export default function FundCallsPage() {
             )}
             <div className="flex gap-3 justify-end">
               <Button variant="outline" onClick={() => setDialogOpen(false)}>Annuler</Button>
-              <Button onClick={saveCall} className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="call-save-btn">Creer</Button>
+              <Button onClick={saveCall} className="bg-[#022D52] hover:bg-[#1D4ED8]" data-testid="call-save-btn">Creer</Button>
             </div>
           </div>
         </DialogContent>

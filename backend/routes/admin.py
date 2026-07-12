@@ -270,7 +270,7 @@ def create_admin_router(db):
             raise HTTPException(400, "Email du superadmin introuvable")
         html = "<html><body style='font-family:sans-serif'><h2>Test MSGRAPH OK</h2><p>Si vous recevez cet email, l'integration Microsoft Graph fonctionne correctement.</p></body></html>"
         try:
-            await send_html_email([user["email"]], "[CoproManager] Test MSGRAPH", html)
+            await send_html_email([user["email"]], "[NextGe Copro] Test MSGRAPH", html)
         except Exception as e:
             raise HTTPException(500, f"Echec envoi : {e}")
         return {"status": "ok", "sent_to": user["email"]}

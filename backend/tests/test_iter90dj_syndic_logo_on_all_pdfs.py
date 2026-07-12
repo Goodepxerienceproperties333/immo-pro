@@ -239,7 +239,7 @@ def test_rgpd_register_pdf_with_syndic_ctx():
     ctx = _fake_ctx()
     register = {
         "controller": {
-            "societe": "CoproManager", "forme_juridique": "SPRL",
+            "societe": "NextGe Copro", "forme_juridique": "SPRL",
             "adresse": "Rue Test 1, 1000 Bruxelles",
             "bce": "0999.888.777", "tva": "BE0999888777",
             "representant": "Testeur", "email": "test@test.be",
@@ -262,7 +262,7 @@ def test_rgpd_register_pdf_without_ctx_regression():
     from pdf_rgpd_register import build_rgpd_register_pdf
     register = {
         "controller": {
-            "societe": "CoproManager", "forme_juridique": "SPRL",
+            "societe": "NextGe Copro", "forme_juridique": "SPRL",
             "adresse": "Rue Test 1, 1000 Bruxelles",
             "bce": "0999.888.777", "tva": "",
             "representant": "", "email": "",

@@ -109,12 +109,12 @@ export default function MonBureauPage() {
     <div className="p-4 md:p-6 max-w-4xl mx-auto space-y-4" data-testid="mon-bureau-page">
       <header>
         <h1 className="text-2xl font-semibold flex items-center gap-2">
-          <Building2 className="h-6 w-6 text-blue-600" />
+          <Building2 className="h-6 w-6 text-[#022D52]" />
           Mon bureau
         </h1>
         <p className="text-sm text-slate-500 mt-1">
           Personnalisez votre logo, vos coordonnees et les mentions legales qui apparaitront
-          en tete et en pied de page de tous les documents PDF generes par CoproManager
+          en tete et en pied de page de tous les documents PDF generes par NextGe Copro
           (situations de compte, decomptes, bilans, budgets, journaux, factures, RGPD...).
         </p>
       </header>
@@ -130,7 +130,7 @@ export default function MonBureauPage() {
           {/* Bandeau info */}
           <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 flex items-start gap-2"
                data-testid="mon-bureau-info-banner">
-            <Info className="h-4 w-4 text-blue-600 mt-0.5 shrink-0" />
+            <Info className="h-4 w-4 text-[#022D52] mt-0.5 shrink-0" />
             <div className="text-xs text-blue-900">
               Le logo s&apos;affichera <b>en tete de la premiere page</b> de chaque PDF, et
               les mentions legales apparaitront <b>en pied de page de toutes les pages</b>
@@ -143,7 +143,7 @@ export default function MonBureauPage() {
           <Card>
             <CardHeader className="pb-3">
               <CardTitle className="text-base flex items-center gap-2">
-                <ImageIcon className="h-4 w-4 text-blue-600" />
+                <ImageIcon className="h-4 w-4 text-[#022D52]" />
                 Logo du bureau
                 {cfg.has_logo && (
                   <Badge className="bg-emerald-100 text-emerald-700 ml-2" data-testid="badge-has-logo">
@@ -178,7 +178,7 @@ export default function MonBureauPage() {
                     <br />Dimensions PDF : 40mm x 22mm maximum, redimensionne en preservant le ratio.
                   </p>
                   {uploadingLogo && (
-                    <p className="text-sm text-blue-600 flex items-center gap-2">
+                    <p className="text-sm text-[#022D52] flex items-center gap-2">
                       <Upload className="h-4 w-4 animate-pulse" /> Envoi en cours...
                     </p>
                   )}
@@ -191,7 +191,7 @@ export default function MonBureauPage() {
           <Card>
             <CardHeader className="pb-3">
               <CardTitle className="text-base flex items-center gap-2">
-                <Building2 className="h-4 w-4 text-blue-600" /> Identite du bureau
+                <Building2 className="h-4 w-4 text-[#022D52]" /> Identite du bureau
               </CardTitle>
             </CardHeader>
             <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -293,7 +293,7 @@ export default function MonBureauPage() {
           <Card>
             <CardHeader className="pb-3">
               <CardTitle className="text-base flex items-center gap-2">
-                <FileText className="h-4 w-4 text-blue-600" /> Mentions legales (pied de page PDF)
+                <FileText className="h-4 w-4 text-[#022D52]" /> Mentions legales (pied de page PDF)
               </CardTitle>
             </CardHeader>
             <CardContent>
@@ -321,7 +321,7 @@ export default function MonBureauPage() {
             <Button
               onClick={saveIdent}
               disabled={saving}
-              className="bg-blue-600 hover:bg-blue-700"
+              className="bg-[#022D52] hover:bg-[#01213e]"
               data-testid="mon-bureau-btn-save"
             >
               <Save className="h-4 w-4 mr-1" />

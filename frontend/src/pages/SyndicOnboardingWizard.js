@@ -156,7 +156,7 @@ export default function SyndicOnboardingWizard() {
       <DialogContent className="max-w-3xl" data-testid="onboarding-wizard">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <Building2 className="h-5 w-5 text-blue-600" />
+            <Building2 className="h-5 w-5 text-[#022D52]" />
             Bienvenue ! Configurez votre cabinet syndic
           </DialogTitle>
         </DialogHeader>
@@ -166,7 +166,7 @@ export default function SyndicOnboardingWizard() {
           {[1, 2, 3, 4, 5].map((s) => (
             <div
               key={s}
-              className={`h-1.5 flex-1 rounded ${step >= s ? 'bg-blue-600' : 'bg-slate-200'}`}
+              className={`h-1.5 flex-1 rounded ${step >= s ? 'bg-[#022D52]' : 'bg-slate-200'}`}
               data-testid={`onboarding-step-indicator-${s}`}
             />
           ))}
@@ -206,7 +206,7 @@ export default function SyndicOnboardingWizard() {
         {step === 2 && (
           <div className="space-y-3">
             <div className="flex items-center gap-2 text-lg font-semibold">
-              <Building2 className="h-5 w-5 text-blue-600" /> Identite du cabinet
+              <Building2 className="h-5 w-5 text-[#022D52]" /> Identite du cabinet
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -298,7 +298,7 @@ export default function SyndicOnboardingWizard() {
               Retour
             </Button>
           )}
-          <Button onClick={next} disabled={saving} className="bg-blue-600 hover:bg-blue-700"
+          <Button onClick={next} disabled={saving} className="bg-[#022D52] hover:bg-[#01213e]"
                   data-testid="onboarding-btn-next">
             {step === 5 ? 'Terminer' : 'Suivant'} <ArrowRight className="h-4 w-4 ml-1" />
           </Button>
@@ -331,7 +331,7 @@ export function EmailConfigStep({ emailCfg, setEmailCfg }) {
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-2 text-lg font-semibold">
-        <Mail className="h-5 w-5 text-blue-600" /> Configuration serveur mail
+        <Mail className="h-5 w-5 text-[#022D52]" /> Configuration serveur mail
       </div>
       <p className="text-sm text-slate-600">
         Optionnel. Sans configuration, la plateforme utilisera son serveur mail global.
@@ -445,11 +445,11 @@ export function OnboardingBanner() {
   return (
     <div className="bg-gradient-to-r from-blue-50 to-violet-50 border-l-4 border-blue-500 p-3 text-sm flex items-center gap-2"
          data-testid="onboarding-banner">
-      <TriangleAlert className="h-5 w-5 text-blue-600 shrink-0" />
+      <TriangleAlert className="h-5 w-5 text-[#022D52] shrink-0" />
       <div className="flex-1">
         <b>Configurez votre cabinet</b> pour personnaliser vos PDF et emails (logo, adresse, mentions legales).
       </div>
-      <Badge className="bg-blue-600">A completer</Badge>
+      <Badge className="bg-[#022D52]">A completer</Badge>
     </div>
   );
 }

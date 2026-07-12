@@ -12,11 +12,11 @@ import { fmtDate } from '@/lib/dateFmt';
 
 const MATCH_LABELS = {
   vcs: { label: 'VCS detecte', color: 'text-emerald-700 bg-emerald-50 border-emerald-200' },
-  name_exact: { label: 'Nom exact', color: 'text-blue-700 bg-blue-50 border-blue-200' },
+  name_exact: { label: 'Nom exact', color: 'text-[#01213e] bg-blue-50 border-blue-200' },
   name_partial: { label: 'Nom partiel', color: 'text-amber-700 bg-amber-50 border-amber-200' },
   supplier_iban: { label: 'IBAN fournisseur', color: 'text-emerald-700 bg-emerald-50 border-emerald-200' },
-  supplier_name: { label: 'Nom fournisseur', color: 'text-blue-700 bg-blue-50 border-blue-200' },
-  invoice_number: { label: 'N facture', color: 'text-blue-700 bg-blue-50 border-blue-200' },
+  supplier_name: { label: 'Nom fournisseur', color: 'text-[#01213e] bg-blue-50 border-blue-200' },
+  invoice_number: { label: 'N facture', color: 'text-[#01213e] bg-blue-50 border-blue-200' },
 };
 
 const CONFIDENCE_LABELS = {
@@ -153,7 +153,7 @@ export default function CodaImportDialog({
       <DialogContent className="max-w-[1600px] max-h-[92vh] overflow-hidden flex flex-col p-0" data-testid="coda-import-dialog">
         <DialogHeader className="px-6 py-4 border-b border-slate-200 shrink-0">
           <DialogTitle className="flex items-center gap-2">
-            <Receipt size={18} className="text-blue-600" />
+            <Receipt size={18} className="text-[#022D52]" />
             Import CODA - Mapping et controle
             <Badge variant="outline" className="ml-2 text-[10px]">{preview.filename}</Badge>
           </DialogTitle>
@@ -250,7 +250,7 @@ export default function CodaImportDialog({
                 onClick={() => setFilter(f.v)}
                 className={`px-2.5 py-1 rounded border transition ${
                   filter === f.v
-                    ? 'bg-blue-600 text-white border-blue-600'
+                    ? 'bg-[#022D52] text-white border-[#022D52]'
                     : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
                 }`}
                 data-testid={`coda-filter-${f.v}`}
@@ -379,7 +379,7 @@ export default function CodaImportDialog({
             <Button
               onClick={confirmImport}
               disabled={importing || stats.included === 0 || !!preview.duplicate_warning}
-              className="bg-blue-600 hover:bg-blue-700 text-white"
+              className="bg-[#022D52] hover:bg-[#01213e] text-white"
               data-testid="coda-confirm-btn"
             >
               {importing ? (

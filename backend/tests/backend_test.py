@@ -1,4 +1,4 @@
-"""Backend tests for CoproManager - Belgian condominium management app.
+"""Backend tests for NextGe Copro - Belgian condominium management app.
 Covers: Auth, Owners/Lots/Tenants, PCMN/Journals, Invoices/DistKeys, Meters, Banking, Documents.
 """
 import os

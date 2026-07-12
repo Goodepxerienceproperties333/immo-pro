@@ -97,7 +97,7 @@ export default function AdminRoleTemplatesPage() {
   return (
     <div className="space-y-4" data-testid="admin-templates-page">
       <div className="flex items-center gap-3">
-        <Link to="/admin" className="text-[#2563EB] hover:underline text-sm flex items-center gap-1" data-testid="back-to-admin"><ArrowLeft size={14} /> Retour Admin</Link>
+        <Link to="/admin" className="text-[#022D52] hover:underline text-sm flex items-center gap-1" data-testid="back-to-admin"><ArrowLeft size={14} /> Retour Admin</Link>
       </div>
       <div className="page-header flex items-center justify-between">
         <div className="flex items-center gap-3">
@@ -125,7 +125,7 @@ export default function AdminRoleTemplatesPage() {
                     {tpl.name}
                   </CardTitle>
                   {tpl.is_system && (
-                    <Badge variant="outline" className="text-[10px] bg-blue-50 text-blue-700 border-blue-300">
+                    <Badge variant="outline" className="text-[10px] bg-blue-50 text-[#01213e] border-blue-300">
                       <Lock size={9} className="mr-1" /> Systeme
                     </Badge>
                   )}
@@ -168,7 +168,7 @@ export default function AdminRoleTemplatesPage() {
               <IdCard size={16} className="text-emerald-600" />
               {editing ? `Modifier le profil "${editing.name}"` : 'Nouveau profil utilisateur'}
               {editing?.is_system && (
-                <Badge variant="outline" className="text-xs bg-blue-50 text-blue-700 border-blue-300 ml-2">
+                <Badge variant="outline" className="text-xs bg-blue-50 text-[#01213e] border-blue-300 ml-2">
                   <Lock size={10} className="mr-1" /> Systeme
                 </Badge>
               )}

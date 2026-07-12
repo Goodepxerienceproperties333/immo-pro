@@ -29,7 +29,7 @@ mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 
-app = FastAPI(title="CoproManager")
+app = FastAPI(title="NextGe Copro")
 
 # iter90at : Rate limiting global (anti-DDoS + anti-brute-force).
 # - Global : 100 req/min/IP par defaut (protege contre le scraping / DDoS applicatif).

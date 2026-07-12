@@ -1,4 +1,4 @@
-"""Import Wizard module for Optipro/Sogis -> CoproManager migration.
+"""Import Wizard module for Optipro/Sogis -> NextGe Copro migration.
 
 Provides:
 - CSV sniffing (encoding + separator)

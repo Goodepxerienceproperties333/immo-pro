@@ -22,7 +22,7 @@ export function ownerTourStorageKey(email) {
 const STEPS = [
   {
     icon: Sparkles,
-    iconColor: 'text-[#2563EB]',
+    iconColor: 'text-[#022D52]',
     iconBg: 'bg-blue-50',
     title: 'Bienvenue dans votre espace proprietaire',
     subtitle: 'Un aperçu en 5 etapes',
@@ -234,7 +234,7 @@ export default function OwnerOnboardingTour({ open, onClose, onFinish }) {
           {/* Progress bar */}
           <div className="mt-4 h-1.5 bg-white/60 rounded-full overflow-hidden">
             <div
-              className="h-full bg-[#2563EB] transition-all duration-300"
+              className="h-full bg-[#022D52] transition-all duration-300"
               style={{ width: `${((step + 1) / total) * 100}%` }}
             />
           </div>
@@ -264,7 +264,7 @@ export default function OwnerOnboardingTour({ open, onClose, onFinish }) {
               <button
                 key={i}
                 onClick={() => setStep(i)}
-                className={`w-2 h-2 rounded-full transition-all ${i === step ? 'bg-[#2563EB] w-6' : 'bg-slate-300 hover:bg-slate-400'}`}
+                className={`w-2 h-2 rounded-full transition-all ${i === step ? 'bg-[#022D52] w-6' : 'bg-slate-300 hover:bg-slate-400'}`}
                 data-testid={`owner-tour-dot-${i}`}
                 aria-label={`Aller a l'etape ${i + 1}`}
               />
@@ -275,7 +275,7 @@ export default function OwnerOnboardingTour({ open, onClose, onFinish }) {
             <Button
               size="sm"
               onClick={handleFinish}
-              className="bg-[#2563EB] hover:bg-[#1D4ED8]"
+              className="bg-[#022D52] hover:bg-[#1D4ED8]"
               data-testid="owner-tour-finish-btn"
             >
               <Home size={14} className="mr-1.5" /> Commencer !
@@ -284,7 +284,7 @@ export default function OwnerOnboardingTour({ open, onClose, onFinish }) {
             <Button
               size="sm"
               onClick={() => setStep(Math.min(total - 1, step + 1))}
-              className="bg-[#2563EB] hover:bg-[#1D4ED8]"
+              className="bg-[#022D52] hover:bg-[#1D4ED8]"
               data-testid="owner-tour-next-btn"
             >
               Suivant <ArrowRight size={14} className="ml-1.5" />

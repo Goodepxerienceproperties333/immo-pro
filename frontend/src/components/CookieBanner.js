@@ -35,7 +35,7 @@ export default function CookieBanner() {
       <div className="flex-1 text-[13px] leading-snug">
         <div className="font-semibold mb-1">Cookies techniques uniquement</div>
         <div className="text-slate-300">
-          CoproManager utilise uniquement des cookies indispensables (authentification, session).
+          NextGe Copro utilise uniquement des cookies indispensables (authentification, session).
           Aucun cookie de tracking ni publicitaire.{' '}
           <Link
             to="/legal/cookies"
@@ -50,7 +50,7 @@ export default function CookieBanner() {
         <button
           onClick={dismiss}
           data-testid="cookie-banner-accept"
-          className="bg-[#2563EB] hover:bg-[#1D4ED8] text-white text-xs font-semibold px-3 py-1.5 rounded transition-colors whitespace-nowrap"
+          className="bg-[#022D52] hover:bg-[#1D4ED8] text-white text-xs font-semibold px-3 py-1.5 rounded transition-colors whitespace-nowrap"
         >
           J&apos;ai compris
         </button>

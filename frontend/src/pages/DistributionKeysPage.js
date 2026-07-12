@@ -123,7 +123,7 @@ export default function DistributionKeysPage() {
           </h1>
           <p className="page-subtitle">Gestion des cles utilisees pour repartir les charges, budgets et appels de fonds</p>
         </div>
-        <Button onClick={openCreateKey} className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="create-key-btn">
+        <Button onClick={openCreateKey} className="bg-[#022D52] hover:bg-[#1D4ED8]" data-testid="create-key-btn">
           <Plus size={16} className="mr-2" /> Nouvelle cle
         </Button>
       </div>
@@ -156,7 +156,7 @@ export default function DistributionKeysPage() {
               let coherenceLabel = `${total.toFixed(2)}`;
               if (hasZero) { coherenceColor = 'bg-amber-50 text-amber-700 border-amber-200'; coherenceLabel = 'Lots a 0'; }
               else if (isRound) { coherenceColor = 'bg-green-50 text-green-700 border-green-200'; coherenceLabel = 'OK'; }
-              else if (total > 0) { coherenceColor = 'bg-blue-50 text-blue-700 border-blue-200'; coherenceLabel = 'Custom'; }
+              else if (total > 0) { coherenceColor = 'bg-blue-50 text-[#01213e] border-blue-200'; coherenceLabel = 'Custom'; }
               return (
                 <TableRow key={k.id} className={`hover:bg-slate-50/50 ${k.is_default ? 'bg-amber-50/40' : ''}`}>
                   <TableCell className="font-mono text-xs text-slate-600" data-testid={`key-code-${k.id}`}>{k.code || <span className="text-slate-300">—</span>}</TableCell>
@@ -302,7 +302,7 @@ export default function DistributionKeysPage() {
               let badgeLabel = `Total : ${totalShare.toFixed(2)}`;
               if (lotsAtZero > 0) { badgeColor = 'bg-amber-50 text-amber-700 border-amber-300'; badgeLabel = `${lotsAtZero} lot(s) a 0 - Total ${totalShare.toFixed(2)}`; }
               else if (isRound) { badgeColor = 'bg-green-50 text-green-700 border-green-300'; badgeLabel = `Total : ${totalShare.toFixed(2)} - coherent`; }
-              else if (totalShare > 0) { badgeColor = 'bg-blue-50 text-blue-700 border-blue-300'; badgeLabel = `Total : ${totalShare.toFixed(2)}`; }
+              else if (totalShare > 0) { badgeColor = 'bg-blue-50 text-[#01213e] border-blue-300'; badgeLabel = `Total : ${totalShare.toFixed(2)}`; }
 
               const fillEqual = () => {
                 const n = activeLots.length || 1;
@@ -394,7 +394,7 @@ export default function DistributionKeysPage() {
             })()}
             <div className="flex gap-3 justify-end">
               <Button variant="outline" onClick={() => setKeyDialog(false)}>Annuler</Button>
-              <Button onClick={() => saveKey(false)} className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="key-save-btn">
+              <Button onClick={() => saveKey(false)} className="bg-[#022D52] hover:bg-[#1D4ED8]" data-testid="key-save-btn">
                 {editingKey ? 'Modifier' : 'Creer'}
               </Button>
             </div>

@@ -25,7 +25,7 @@ import {
 
 const STATUS_BADGES = {
   draft: { label: 'Brouillon', className: 'bg-slate-100 text-slate-700' },
-  convocation_sent: { label: 'Convocation envoyee', className: 'bg-blue-100 text-blue-700' },
+  convocation_sent: { label: 'Convocation envoyee', className: 'bg-blue-100 text-[#01213e]' },
   held: { label: 'Tenue', className: 'bg-emerald-100 text-emerald-700' },
   archived: { label: 'Archivee', className: 'bg-slate-200 text-slate-500' },
   cancelled: { label: 'Annulee', className: 'bg-red-100 text-red-700' },
@@ -139,7 +139,7 @@ function CreateAGDialog({ open, onOpenChange, copropriete_id, onCreated }) {
         </div>
         <DialogFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>Annuler</Button>
-          <Button onClick={create} disabled={saving} className="bg-blue-600 hover:bg-blue-700"
+          <Button onClick={create} disabled={saving} className="bg-[#022D52] hover:bg-[#01213e]"
                   data-testid="ag-btn-create-confirm">
             <Plus className="h-4 w-4 mr-1" /> Creer
           </Button>
@@ -183,7 +183,7 @@ export default function AGMeetingsPage() {
       <header className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold flex items-center gap-2">
-            <Vote className="h-6 w-6 text-blue-600" /> Assemblees Generales
+            <Vote className="h-6 w-6 text-[#022D52]" /> Assemblees Generales
           </h1>
           <p className="text-sm text-slate-500 mt-1">
             Convocations conformes au Code civil belge (Livre 3, art. 3.87 et 3.88).
@@ -193,7 +193,7 @@ export default function AGMeetingsPage() {
           <Button variant="ghost" size="sm" onClick={load} data-testid="ag-btn-refresh">
             <RefreshCw className="h-4 w-4" />
           </Button>
-          <Button onClick={() => setCreating(true)} className="bg-blue-600 hover:bg-blue-700"
+          <Button onClick={() => setCreating(true)} className="bg-[#022D52] hover:bg-[#01213e]"
                   data-testid="ag-btn-new-meeting">
             <Plus className="h-4 w-4 mr-1" /> Nouvelle AG
           </Button>

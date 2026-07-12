@@ -122,7 +122,7 @@ export default function AdminBackupsPage() {
       <header className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <h1 className="text-2xl font-semibold flex items-center gap-2">
-            <HardDrive className="h-6 w-6 text-blue-600" />
+            <HardDrive className="h-6 w-6 text-[#022D52]" />
             Sauvegardes ACP
           </h1>
           <p className="text-sm text-slate-500 mt-1">
@@ -131,7 +131,7 @@ export default function AdminBackupsPage() {
         </div>
         <div className="flex gap-2">
           <Button variant="ghost" onClick={load} data-testid="btn-refresh-backups"><RefreshCw className="h-4 w-4" /></Button>
-          <Button onClick={triggerAll} disabled={triggering} className="bg-blue-600 hover:bg-blue-700"
+          <Button onClick={triggerAll} disabled={triggering} className="bg-[#022D52] hover:bg-[#01213e]"
                   data-testid="btn-trigger-backup">
             <PlayCircle className="h-4 w-4 mr-1" /> Backup maintenant
           </Button>
@@ -206,7 +206,7 @@ export default function AdminBackupsPage() {
           <Card key={cid} data-testid={`acp-backups-${cid}`}>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm flex items-center gap-2">
-                <Building2 className="h-4 w-4 text-blue-600" />
+                <Building2 className="h-4 w-4 text-[#022D52]" />
                 {group.name} <span className="text-xs text-slate-400 font-normal">({group.items.length} backups)</span>
               </CardTitle>
             </CardHeader>
@@ -224,7 +224,7 @@ export default function AdminBackupsPage() {
                     <TableRow key={b.backup_id} data-testid={`row-backup-${b.backup_id}`}>
                       <TableCell>{humanDate(b.created_at)}</TableCell>
                       <TableCell>
-                        <Badge className={b.type === 'manual' ? 'bg-violet-100 text-violet-700' : 'bg-blue-100 text-blue-700'}>
+                        <Badge className={b.type === 'manual' ? 'bg-violet-100 text-violet-700' : 'bg-blue-100 text-[#01213e]'}>
                           {b.type || 'daily'}
                         </Badge>
                       </TableCell>

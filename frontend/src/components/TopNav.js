@@ -28,7 +28,7 @@ export default function TopNav({ sections, extraSections = [] }) {
     // iter90bq : gradients doux + rounded-full sur les triggers pour un rendu
     // plus "sexy". Couleurs sectorielles alignees sur design_guidelines.json.
     const baseMap = {
-      blue: 'text-blue-700',
+      blue: 'text-[#01213e]',
       violet: 'text-violet-700',
       emerald: 'text-emerald-700',
       amber: 'text-amber-700',
@@ -47,7 +47,7 @@ export default function TopNav({ sections, extraSections = [] }) {
   const dotClass = (accent) => {
     // Dot color-coded avant le titre (visible en permanence)
     const map = {
-      blue: 'bg-[#2563EB]',
+      blue: 'bg-[#022D52]',
       violet: 'bg-violet-500',
       emerald: 'bg-emerald-500',
       amber: 'bg-amber-500',
@@ -57,7 +57,7 @@ export default function TopNav({ sections, extraSections = [] }) {
   };
   const itemAccentClass = (accent) => {
     const map = {
-      blue: 'data-[highlighted]:bg-blue-50 data-[highlighted]:text-[#2563EB]',
+      blue: 'data-[highlighted]:bg-blue-50 data-[highlighted]:text-[#022D52]',
       violet: 'data-[highlighted]:bg-violet-50 data-[highlighted]:text-violet-700',
       emerald: 'data-[highlighted]:bg-emerald-50 data-[highlighted]:text-emerald-700',
       amber: 'data-[highlighted]:bg-amber-50 data-[highlighted]:text-amber-700',
@@ -68,7 +68,7 @@ export default function TopNav({ sections, extraSections = [] }) {
   const contentAccentClass = (accent) => {
     // Bordure gauche coloree du dropdown menu (rappel visuel de la section)
     const map = {
-      blue: 'border-l-4 border-l-[#2563EB]',
+      blue: 'border-l-4 border-l-[#022D52]',
       violet: 'border-l-4 border-l-violet-500',
       emerald: 'border-l-4 border-l-emerald-500',
       amber: 'border-l-4 border-l-amber-500',
@@ -78,7 +78,7 @@ export default function TopNav({ sections, extraSections = [] }) {
   };
   const labelAccentClass = (accent) => {
     const map = {
-      blue: 'text-[#2563EB]',
+      blue: 'text-[#022D52]',
       violet: 'text-violet-700',
       emerald: 'text-emerald-700',
       amber: 'text-amber-700',

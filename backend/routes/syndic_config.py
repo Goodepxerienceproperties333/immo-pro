@@ -152,13 +152,13 @@ async def _send_test_email_impl(effective_cfg: dict, from_mailbox: str, to: str)
     import base64
     import httpx
 
-    subject = "[Test] Configuration email CoproManager"
+    subject = "[Test] Configuration email NextGe Copro"
     body_html = (
         f"<p>Bonjour,</p>"
         f"<p>Cet email confirme que la configuration email de votre cabinet est operationnelle "
         f"(provider : <b>{effective_cfg.get('provider')}</b>, source : <b>{effective_cfg.get('source')}</b>).</p>"
         f"<p>Envoye a {datetime.now(timezone.utc).isoformat()} depuis <b>{from_mailbox}</b>.</p>"
-        f"<p>-- CoproManager</p>"
+        f"<p>-- NextGe Copro</p>"
     )
 
     prov = effective_cfg.get("provider")

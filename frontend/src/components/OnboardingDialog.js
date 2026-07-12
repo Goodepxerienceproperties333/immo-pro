@@ -12,13 +12,13 @@ import {
 const SYNDIC_STEPS = [
   {
     icon: Sparkles,
-    color: 'from-[#2563EB] to-[#1D4ED8]',
-    title: 'Bienvenue sur CoproManager',
+    color: 'from-[#022D52] to-[#1D4ED8]',
+    title: 'Bienvenue sur NextGe Copro',
     subtitle: 'Votre plateforme de gestion de copropriete selon le droit belge',
     body: (user) => (
       <div className="space-y-3 text-sm text-slate-700">
         <p>Bonjour <span className="font-semibold">{user?.name}</span>, ravis de vous accueillir !</p>
-        <p>CoproManager respecte strictement le <b>droit belge sur la copropriete</b> (Code civil livre 3, titre 8) et la <b>comptabilite PCMN</b> obligatoire pour les syndics depuis 2018.</p>
+        <p>NextGe Copro respecte strictement le <b>droit belge sur la copropriete</b> (Code civil livre 3, titre 8) et la <b>comptabilite PCMN</b> obligatoire pour les syndics depuis 2018.</p>
         <p className="text-xs text-slate-500 italic">Ce guide rapide (2 minutes) vous montre les 5 etapes pour bien demarrer.</p>
       </div>
     ),
@@ -116,7 +116,7 @@ const SYNDIC_STEPS = [
             <Building2 size={14} className="inline text-emerald-600 mr-1" /> <b>Coproprietes</b> : creer / gerer vos ACPs
           </div>
           <div className="bg-slate-50 p-2 rounded border border-slate-200">
-            <Megaphone size={14} className="inline text-blue-600 mr-1" /> <b>Appels de fonds</b> : trimestriels / annuels
+            <Megaphone size={14} className="inline text-[#022D52] mr-1" /> <b>Appels de fonds</b> : trimestriels / annuels
           </div>
           <div className="bg-slate-50 p-2 rounded border border-slate-200">
             <Receipt size={14} className="inline text-amber-600 mr-1" /> <b>Facturation</b> : factures + IA d&apos;extraction
@@ -138,7 +138,7 @@ const SUPERADMIN_STEPS = [
     icon: Sparkles,
     color: 'from-amber-500 to-red-600',
     title: 'Bienvenue Super Administrateur',
-    subtitle: 'Vous gerez la plateforme CoproManager',
+    subtitle: 'Vous gerez la plateforme NextGe Copro',
     body: (user) => (
       <div className="space-y-3 text-sm text-slate-700">
         <p>Bonjour <span className="font-semibold">{user?.name}</span>. Vous etes <b>Super Administrateur</b> de la plateforme.</p>
@@ -290,7 +290,7 @@ export default function OnboardingDialog() {
         <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between">
           <div className="flex items-center gap-2 text-xs text-slate-500">
             <span>Etape {step + 1} / {steps.length}</span>
-            <button onClick={close} className="text-[#2563EB] hover:underline" data-testid="onboarding-skip">
+            <button onClick={close} className="text-[#022D52] hover:underline" data-testid="onboarding-skip">
               Passer le guide
             </button>
           </div>
@@ -311,11 +311,11 @@ export default function OnboardingDialog() {
               </Button>
             )}
             {step === 1 && isSuper && (
-              <Button variant="outline" size="sm" onClick={() => goToAction('/admin/users')} className="border-blue-500 text-blue-700" data-testid="onboarding-go-users">
+              <Button variant="outline" size="sm" onClick={() => goToAction('/admin/users')} className="border-blue-500 text-[#01213e]" data-testid="onboarding-go-users">
                 Creer un syndic
               </Button>
             )}
-            <Button onClick={next} size="sm" className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="onboarding-next">
+            <Button onClick={next} size="sm" className="bg-[#022D52] hover:bg-[#1D4ED8]" data-testid="onboarding-next">
               {step === steps.length - 1 ? (
                 <>Commencer <CheckCircle2 size={14} className="ml-1" /></>
               ) : (

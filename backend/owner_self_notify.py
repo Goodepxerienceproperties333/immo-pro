@@ -39,7 +39,7 @@ def _build_html(owner_name: str, change_type: str, summary_lines: List[str],
             {lines_html}
         </ul>
         <p style="font-size:12px;color:#888;margin-top:24px;">
-            Notification automatique - CoproManager (iter89)
+            Notification automatique - NextGe Copro (iter89)
         </p>
     </body></html>
     """
@@ -101,7 +101,7 @@ async def notify_syndic_of_owner_change(
             recipients = await _find_syndic_recipients(db, copropriete_ids)
             if recipients:
                 html = _build_html(owner_name, change_type, summary_lines, copropriete_name)
-                subject = f"[CoproManager] {owner_name} - {change_type}"
+                subject = f"[NextGe Copro] {owner_name} - {change_type}"
                 await send_html_email(recipients, subject, html)
                 emailed = True
                 await db.owner_notifications.update_one(

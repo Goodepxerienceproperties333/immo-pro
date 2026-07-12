@@ -12,7 +12,7 @@ import { fmtDate } from '@/lib/dateFmt';
 
 const ACTION_LABELS = {
   grant: { label: 'Acces active', cls: 'text-emerald-700 bg-emerald-50', Icon: KeyRound },
-  resend: { label: 'Invitation renvoyee', cls: 'text-blue-700 bg-blue-50', Icon: MailCheck },
+  resend: { label: 'Invitation renvoyee', cls: 'text-[#01213e] bg-blue-50', Icon: MailCheck },
   revoke: { label: 'Acces suspendu', cls: 'text-red-700 bg-red-50', Icon: Ban },
   reactivate: { label: 'Acces reactive', cls: 'text-emerald-700 bg-emerald-50', Icon: RotateCcw },
   delete: { label: 'Acces supprime', cls: 'text-red-800 bg-red-100 font-bold', Icon: Trash2 },
@@ -206,7 +206,7 @@ export default function OwnerAccessSection({ ownerId, ownerEmail }) {
             size="sm"
             onClick={() => callAction('grant-access', 'Acces active', 'grant')}
             disabled={busy === 'grant' || !ownerEmail}
-            className="bg-[#2563EB] hover:bg-[#1D4ED8] text-white"
+            className="bg-[#022D52] hover:bg-[#1D4ED8] text-white"
             data-testid="owner-grant-access-btn"
           >
             {busy === 'grant' ? <Loader2 size={14} className="mr-1 animate-spin" /> : <KeyRound size={14} className="mr-1" />}
@@ -343,7 +343,7 @@ export default function OwnerAccessSection({ ownerId, ownerEmail }) {
                             <span className="ml-2 text-amber-600">(email non envoye)</span>
                           )}
                           {e.details?.linked_existing_user === true && (
-                            <span className="ml-2 text-blue-600">(compte existant lie)</span>
+                            <span className="ml-2 text-[#022D52]">(compte existant lie)</span>
                           )}
                         </div>
                       </div>

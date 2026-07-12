@@ -24,7 +24,7 @@ const BACKEND = process.env.REACT_APP_BACKEND_URL;
 
 const DECISION_LABELS = {
   info: { label: 'Information', color: 'bg-slate-100 text-slate-700', legal: '-' },
-  simple: { label: 'Majorite simple', color: 'bg-blue-100 text-blue-700', legal: 'Art. 3.88 §1' },
+  simple: { label: 'Majorite simple', color: 'bg-blue-100 text-[#01213e]', legal: 'Art. 3.88 §1' },
   '2_3': { label: 'Majorite 2/3', color: 'bg-amber-100 text-amber-700', legal: 'Art. 3.88 §2' },
   '4_5': { label: 'Majorite 4/5', color: 'bg-orange-100 text-orange-700', legal: 'Art. 3.88 §3' },
   unanimite: { label: 'Unanimite', color: 'bg-red-100 text-red-700', legal: 'Art. 3.88 §4' },
@@ -115,7 +115,7 @@ function AgendaItemDialog({ open, onOpenChange, meetingId, item, onSaved }) {
         </div>
         <DialogFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>Annuler</Button>
-          <Button onClick={save} disabled={saving} className="bg-blue-600 hover:bg-blue-700"
+          <Button onClick={save} disabled={saving} className="bg-[#022D52] hover:bg-[#01213e]"
                   data-testid="agenda-btn-save">
             <Save className="h-4 w-4 mr-1" /> Enregistrer
           </Button>
@@ -181,7 +181,7 @@ function SendConvocationDialog({ open, onOpenChange, meetingId, onSent }) {
         </div>
         <DialogFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>Annuler</Button>
-          <Button onClick={send} disabled={sending} className="bg-blue-600 hover:bg-blue-700"
+          <Button onClick={send} disabled={sending} className="bg-[#022D52] hover:bg-[#01213e]"
                   data-testid="convocation-btn-send-confirm">
             <Send className="h-4 w-4 mr-1" /> Envoyer
           </Button>
@@ -261,7 +261,7 @@ export default function AGMeetingDetailPage() {
           <div className="flex items-start justify-between">
             <div>
               <h1 className="text-2xl font-semibold flex items-center gap-2">
-                <Vote className="h-6 w-6 text-blue-600" />
+                <Vote className="h-6 w-6 text-[#022D52]" />
                 AG {meeting.type} - {meeting.scheduled_date}
               </h1>
               <div className="mt-2 space-y-1 text-sm text-slate-600">
@@ -302,7 +302,7 @@ export default function AGMeetingDetailPage() {
         </Button>
         <Button onClick={() => setShowSendDialog(true)}
                 disabled={!canSend}
-                className="bg-blue-600 hover:bg-blue-700"
+                className="bg-[#022D52] hover:bg-[#01213e]"
                 data-testid="ag-btn-open-send">
           <Send className="h-4 w-4 mr-1" /> Envoyer aux proprietaires
         </Button>

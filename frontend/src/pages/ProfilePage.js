@@ -14,7 +14,7 @@ const ROLE_META = {
   superadmin: { label: 'Super Administrateur', color: 'bg-purple-100 text-purple-800 border-purple-300', desc: "Gere les acces a la plateforme (creation/modification des utilisateurs)." },
   admin: { label: 'Super Administrateur', color: 'bg-purple-100 text-purple-800 border-purple-300', desc: "Gere les acces a la plateforme." },
   syndic: { label: 'Syndic', color: 'bg-red-50 text-red-700 border-red-200', desc: "Acces total aux donnees comptables et a la gestion des coproprietes." },
-  gestionnaire: { label: 'Gestionnaire', color: 'bg-blue-50 text-blue-700 border-blue-200', desc: "Gestion operationnelle des coproprietes." },
+  gestionnaire: { label: 'Gestionnaire', color: 'bg-blue-50 text-[#01213e] border-blue-200', desc: "Gestion operationnelle des coproprietes." },
   owner: { label: 'Proprietaire', color: 'bg-green-50 text-green-700 border-green-200', desc: "Acces a son portail proprietaire personnel." },
 };
 
@@ -112,7 +112,7 @@ export default function ProfilePage() {
             <Input value={name} onChange={e => setName(e.target.value)} data-testid="profile-name-input" />
           </div>
           <div className="flex justify-end">
-            <Button onClick={saveName} disabled={savingName} className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="profile-save-name-btn">
+            <Button onClick={saveName} disabled={savingName} className="bg-[#022D52] hover:bg-[#1D4ED8]" data-testid="profile-save-name-btn">
               <Save size={14} className="mr-2" /> {savingName ? 'Sauvegarde...' : 'Enregistrer'}
             </Button>
           </div>
@@ -144,7 +144,7 @@ export default function ProfilePage() {
             Apres modification, vous serez automatiquement deconnecte et devrez vous reconnecter.
           </div>
           <div className="flex justify-end">
-            <Button onClick={changePassword} disabled={savingPwd} className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="profile-change-pwd-btn">
+            <Button onClick={changePassword} disabled={savingPwd} className="bg-[#022D52] hover:bg-[#1D4ED8]" data-testid="profile-change-pwd-btn">
               <KeyRound size={14} className="mr-2" /> {savingPwd ? 'Modification...' : 'Modifier le mot de passe'}
             </Button>
           </div>
@@ -166,19 +166,19 @@ export default function ProfilePage() {
         </CardHeader>
         <CardContent className="space-y-2">
           <div className="flex flex-wrap gap-2">
-            <Link to="/legal/cgu" target="_blank" data-testid="profile-link-cgu" className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded border border-slate-200 hover:border-[#2563EB] hover:text-[#2563EB] transition-colors">
+            <Link to="/legal/cgu" target="_blank" data-testid="profile-link-cgu" className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded border border-slate-200 hover:border-[#022D52] hover:text-[#022D52] transition-colors">
               <ScrollText size={12} /> CGU
             </Link>
-            <Link to="/legal/privacy" target="_blank" data-testid="profile-link-privacy" className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded border border-slate-200 hover:border-[#2563EB] hover:text-[#2563EB] transition-colors">
+            <Link to="/legal/privacy" target="_blank" data-testid="profile-link-privacy" className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded border border-slate-200 hover:border-[#022D52] hover:text-[#022D52] transition-colors">
               <Shield size={12} /> Politique de Confidentialite
             </Link>
-            <Link to="/legal/mentions" target="_blank" data-testid="profile-link-mentions" className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded border border-slate-200 hover:border-[#2563EB] hover:text-[#2563EB] transition-colors">
+            <Link to="/legal/mentions" target="_blank" data-testid="profile-link-mentions" className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded border border-slate-200 hover:border-[#022D52] hover:text-[#022D52] transition-colors">
               <FileText size={12} /> Mentions Legales
             </Link>
-            <Link to="/legal/cookies" target="_blank" data-testid="profile-link-cookies" className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded border border-slate-200 hover:border-[#2563EB] hover:text-[#2563EB] transition-colors">
+            <Link to="/legal/cookies" target="_blank" data-testid="profile-link-cookies" className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded border border-slate-200 hover:border-[#022D52] hover:text-[#022D52] transition-colors">
               <Cookie size={12} /> Cookies
             </Link>
-            <Link to="/legal/disclaimer" target="_blank" data-testid="profile-link-disclaimer" className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded border border-slate-200 hover:border-[#2563EB] hover:text-[#2563EB] transition-colors">
+            <Link to="/legal/disclaimer" target="_blank" data-testid="profile-link-disclaimer" className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded border border-slate-200 hover:border-[#022D52] hover:text-[#022D52] transition-colors">
               <FileText size={12} /> Disclaimer
             </Link>
           </div>

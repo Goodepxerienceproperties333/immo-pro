@@ -66,7 +66,7 @@ export default function SupplierMergeDialog({
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="font-medium text-sm">{s.supplier_name}</span>
-                        {s.vat_number && <Badge variant="outline" className="text-[10px] font-mono bg-blue-50 text-blue-700 border-blue-200">TVA {s.vat_number}</Badge>}
+                        {s.vat_number && <Badge variant="outline" className="text-[10px] font-mono bg-blue-50 text-[#01213e] border-blue-200">TVA {s.vat_number}</Badge>}
                         <Badge variant="outline" className="text-[10px] font-mono">{s.tier_account || '—'}</Badge>
                       </div>
                       <div className="text-[11px] text-slate-500 mt-0.5">

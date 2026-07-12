@@ -22,7 +22,7 @@ import { Sparkles, Bug, Shield, AlertTriangle, TrendingUp,
          FileText, Plus, Pencil, Trash2, Download } from 'lucide-react';
 
 const CATEGORIES = [
-  { key: 'feature', label: 'Nouveaute', icon: Sparkles, color: 'text-blue-600' },
+  { key: 'feature', label: 'Nouveaute', icon: Sparkles, color: 'text-[#022D52]' },
   { key: 'improvement', label: 'Amelioration', icon: TrendingUp, color: 'text-violet-600' },
   { key: 'fix', label: 'Correction', icon: Bug, color: 'text-emerald-600' },
   { key: 'security', label: 'Securite', icon: Shield, color: 'text-amber-600' },
@@ -111,7 +111,7 @@ export default function AdminReleaseNotesPage() {
       const url = URL.createObjectURL(r.data);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `CoproManager-Fonctionnalites-${new Date().toISOString().slice(0, 10)}.pdf`;
+      a.download = `NextGe Copro-Fonctionnalites-${new Date().toISOString().slice(0, 10)}.pdf`;
       document.body.appendChild(a);
       a.click();
       a.remove();

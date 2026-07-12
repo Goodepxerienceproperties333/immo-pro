@@ -120,7 +120,7 @@ export default function CounterpartySearchSelect({
         <div className="overflow-auto flex-1">
           {filteredOwners.length > 0 && (
             <>
-              <div className="px-3 py-1 text-[10px] uppercase tracking-wider text-blue-700 font-semibold bg-blue-50 border-b border-blue-100">
+              <div className="px-3 py-1 text-[10px] uppercase tracking-wider text-[#01213e] font-semibold bg-blue-50 border-b border-blue-100">
                 Proprietaires ({filteredOwners.length})
               </div>
               {filteredOwners.map(o => (
@@ -133,7 +133,7 @@ export default function CounterpartySearchSelect({
                 >
                   <span className="truncate">{o.name}</span>
                   {o.vcs_code && (
-                    <span className="font-mono text-[10px] text-[#2563EB] shrink-0">{o.vcs_code}</span>
+                    <span className="font-mono text-[10px] text-[#022D52] shrink-0">{o.vcs_code}</span>
                   )}
                 </button>
               ))}

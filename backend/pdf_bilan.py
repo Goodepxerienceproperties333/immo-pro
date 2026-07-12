@@ -318,7 +318,7 @@ def build_bilan_pdf(
     elems.append(Spacer(1, 6 * mm))
     elems.append(Paragraph(
         f"<font size='7' color='#94A3B8'><i>Bilan etabli au {end_str or 'date du jour'} - "
-        f"Document interne genere par CoproManager le {datetime.now().strftime('%d/%m/%Y a %H:%M')}.</i></font>",
+        f"Document interne genere par NextGe Copro le {datetime.now().strftime('%d/%m/%Y a %H:%M')}.</i></font>",
         small,
     ))
 

@@ -90,7 +90,7 @@ function MailboxesSection({ onChange }) {
     <Card data-testid="mailboxes-section">
       <CardHeader className="pb-3">
         <CardTitle className="text-base flex items-center gap-2">
-          <Inbox className="h-4 w-4 text-blue-600" />
+          <Inbox className="h-4 w-4 text-[#022D52]" />
           Boites mail autorisees {canManage ? '(cabinet)' : '(heritees du syndic)'}
         </CardTitle>
       </CardHeader>
@@ -289,7 +289,7 @@ function SendActionDialog({
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
         <Button
-          className="bg-blue-600 hover:bg-blue-700"
+          className="bg-[#022D52] hover:bg-[#01213e]"
           disabled={selectedOwners.length === 0}
           data-testid={`btn-open-send-${action}`}
         >
@@ -385,7 +385,7 @@ function SendActionDialog({
         </div>
         <DialogFooter>
           <Button variant="ghost" onClick={() => setOpen(false)}>Annuler</Button>
-          <Button onClick={send} disabled={sending} className="bg-blue-600 hover:bg-blue-700"
+          <Button onClick={send} disabled={sending} className="bg-[#022D52] hover:bg-[#01213e]"
                   data-testid={`btn-confirm-send-${action}`}>
             <Send className="h-4 w-4 mr-1" /> Envoyer
           </Button>
@@ -439,7 +439,7 @@ function GenericComposer({ mailboxes }) {
     <Card data-testid="generic-composer">
       <CardHeader className="pb-3">
         <CardTitle className="text-base flex items-center gap-2">
-          <Mail className="h-4 w-4 text-blue-600" />
+          <Mail className="h-4 w-4 text-[#022D52]" />
           Email libre avec piece jointe
         </CardTitle>
       </CardHeader>
@@ -483,7 +483,7 @@ function GenericComposer({ mailboxes }) {
                  className="text-xs"
                  data-testid="input-generic-attachment" />
         </div>
-        <Button onClick={send} disabled={sending} className="bg-blue-600 hover:bg-blue-700"
+        <Button onClick={send} disabled={sending} className="bg-[#022D52] hover:bg-[#01213e]"
                 data-testid="btn-send-generic">
           <Send className="h-4 w-4 mr-1" /> Envoyer
         </Button>
@@ -561,7 +561,7 @@ export default function CommunicationPage() {
     <div className="p-4 md:p-6 max-w-7xl mx-auto space-y-6" data-testid="communication-page">
       <header>
         <h1 className="text-2xl font-semibold flex items-center gap-2">
-          <Mail className="h-6 w-6 text-blue-600" />
+          <Mail className="h-6 w-6 text-[#022D52]" />
           Communication proprietaires
         </h1>
         <p className="text-sm text-slate-500 mt-1">
@@ -602,7 +602,7 @@ export default function CommunicationPage() {
             </CardContent></Card>
             <Card><CardContent className="p-4">
               <div className="text-xs text-slate-500">Selectionnes</div>
-              <div className="text-lg font-semibold text-blue-600" data-testid="stat-selected">
+              <div className="text-lg font-semibold text-[#022D52]" data-testid="stat-selected">
                 {selected.size}
               </div>
             </CardContent></Card>

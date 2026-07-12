@@ -48,7 +48,7 @@ _DEFAULT_DOCS = {
 **Version 1 — En vigueur au [DATE_MISE_EN_LIGNE]**
 
 ## 1. Objet
-Les présentes Conditions Générales d'Utilisation (« CGU ») régissent l'accès et l'utilisation de la plateforme SaaS **CoproManager** (ci-après « la Plateforme »), éditée par [SOCIETE] (ci-après « l'Éditeur »).
+Les présentes Conditions Générales d'Utilisation (« CGU ») régissent l'accès et l'utilisation de la plateforme SaaS **NextGe Copro** (ci-après « la Plateforme »), éditée par [SOCIETE] (ci-après « l'Éditeur »).
 
 ## 2. Identification de l'Éditeur
 - Raison sociale : **[SOCIETE]**
@@ -66,7 +66,7 @@ L'utilisation de la Plateforme implique l'acceptation pleine et entière des pr�
 La Plateforme est un logiciel de gestion comptable et administrative destiné aux syndics de copropriétés belges, incluant notamment : gestion des lots et copropriétaires, comptabilité (PCMN), appels de fonds, extraits bancaires, rapports fiscaux, portail propriétaire.
 
 ## 5. Nature de l'outil — Limitation de responsabilité
-**CoproManager est un outil d'aide à la gestion.** La Plateforme :
+**NextGe Copro est un outil d'aide à la gestion.** La Plateforme :
 - ne se substitue pas à un expert-comptable, un réviseur d'entreprises ou un conseil juridique ;
 - ne garantit pas la conformité fiscale ou comptable des écritures générées, laquelle relève de la seule responsabilité du syndic ;
 - n'est pas responsable des décisions prises par l'Utilisateur sur base des données affichées.
@@ -230,7 +230,7 @@ Réclamation autorité : APD Belgique — Rue de la Presse 35 — 1000 Bruxelles
 Application hébergée par **Emergent Labs** (infrastructure Cloud).
 
 ## Propriété intellectuelle
-Le contenu, la structure, la charte graphique et le code source de CoproManager sont protégés par les lois belges et internationales relatives à la propriété intellectuelle. Toute reproduction totale ou partielle sans autorisation écrite préalable est interdite.
+Le contenu, la structure, la charte graphique et le code source de NextGe Copro sont protégés par les lois belges et internationales relatives à la propriété intellectuelle. Toute reproduction totale ou partielle sans autorisation écrite préalable est interdite.
 
 ## Responsabilité
 Les informations diffusées sont fournies « en l'état ». L'Éditeur s'efforce d'assurer leur exactitude mais ne garantit pas leur exhaustivité ni leur mise à jour permanente. L'utilisation de la Plateforme se fait sous la seule responsabilité de l'Utilisateur.
@@ -248,9 +248,9 @@ Pour toute réclamation ou question : welcome@goodexperienceproperties.be
 ## 1. Qu'est-ce qu'un cookie ?
 Un cookie est un petit fichier texte déposé sur votre appareil lors de la visite d'un site web, permettant de stocker des informations relatives à votre navigation.
 
-## 2. Cookies utilisés par CoproManager
+## 2. Cookies utilisés par NextGe Copro
 
-CoproManager n'utilise **QUE des cookies strictement nécessaires** au fonctionnement du service. Aucun cookie de tracking, de publicité ou d'analyse tiers n'est utilisé.
+NextGe Copro n'utilise **QUE des cookies strictement nécessaires** au fonctionnement du service. Aucun cookie de tracking, de publicité ou d'analyse tiers n'est utilisé.
 
 | Cookie | Finalité | Durée | Type |
 |--------|----------|-------|------|
@@ -272,7 +272,7 @@ Pour toute question : welcome@goodexperienceproperties.be
         "content": """
 # Disclaimer — Nature de l'outil comptable
 
-**CoproManager est un outil d'aide à la gestion administrative et comptable des copropriétés.**
+**NextGe Copro est un outil d'aide à la gestion administrative et comptable des copropriétés.**
 
 ## 1. Non-substitution
 La Plateforme ne se substitue en aucun cas à :

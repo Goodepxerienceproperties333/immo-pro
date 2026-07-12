@@ -73,10 +73,10 @@ export default function LegalAcceptanceModal() {
       style={{ fontFamily: 'Inter, system-ui, sans-serif', pointerEvents: 'auto' }}
     >
       <div className="bg-white rounded-lg shadow-2xl max-w-2xl w-full max-h-[90vh] flex flex-col overflow-hidden">
-        <div className="px-6 py-4 border-b border-slate-200 bg-gradient-to-r from-[#2563EB]/5 to-slate-50">
+        <div className="px-6 py-4 border-b border-slate-200 bg-gradient-to-r from-[#022D52]/5 to-slate-50">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-full bg-[#2563EB]/10 flex items-center justify-center">
-              <ScrollText size={20} className="text-[#2563EB]" />
+            <div className="w-10 h-10 rounded-full bg-[#022D52]/10 flex items-center justify-center">
+              <ScrollText size={20} className="text-[#022D52]" />
             </div>
             <div>
               <h2 className="text-lg font-semibold text-slate-900" style={{ fontFamily: 'Chivo, sans-serif' }}>
@@ -91,12 +91,12 @@ export default function LegalAcceptanceModal() {
 
         <div className="px-6 py-5 space-y-4 overflow-auto flex-1">
           <p className="text-sm text-slate-700 leading-relaxed">
-            Pour continuer a utiliser CoproManager, veuillez prendre connaissance et accepter les
+            Pour continuer a utiliser NextGe Copro, veuillez prendre connaissance et accepter les
             documents suivants (version en vigueur). Vous pouvez les consulter en integralite en
             cliquant sur les liens ci-dessous.
           </p>
 
-          <div className="border border-slate-200 rounded-lg p-4 flex items-start gap-3 hover:border-[#2563EB]/40 transition-colors">
+          <div className="border border-slate-200 rounded-lg p-4 flex items-start gap-3 hover:border-[#022D52]/40 transition-colors">
             <Checkbox
               id="acc-cgu"
               checked={acceptedCgu}
@@ -108,7 +108,7 @@ export default function LegalAcceptanceModal() {
               <div className="flex items-center gap-2">
                 <ScrollText size={14} className="text-slate-500" />
                 <span className="text-sm font-medium text-slate-800">
-                  J&apos;accepte les <Link to="/legal/cgu" target="_blank" className="text-[#2563EB] hover:underline inline-flex items-center gap-0.5">Conditions Generales d&apos;Utilisation <ExternalLink size={11} /></Link>
+                  J&apos;accepte les <Link to="/legal/cgu" target="_blank" className="text-[#022D52] hover:underline inline-flex items-center gap-0.5">Conditions Generales d&apos;Utilisation <ExternalLink size={11} /></Link>
                 </span>
               </div>
               <div className="text-[11px] text-slate-500 mt-0.5 ml-6">
@@ -117,7 +117,7 @@ export default function LegalAcceptanceModal() {
             </label>
           </div>
 
-          <div className="border border-slate-200 rounded-lg p-4 flex items-start gap-3 hover:border-[#2563EB]/40 transition-colors">
+          <div className="border border-slate-200 rounded-lg p-4 flex items-start gap-3 hover:border-[#022D52]/40 transition-colors">
             <Checkbox
               id="acc-privacy"
               checked={acceptedPrivacy}
@@ -129,7 +129,7 @@ export default function LegalAcceptanceModal() {
               <div className="flex items-center gap-2">
                 <Shield size={14} className="text-slate-500" />
                 <span className="text-sm font-medium text-slate-800">
-                  J&apos;ai lu la <Link to="/legal/privacy" target="_blank" className="text-[#2563EB] hover:underline inline-flex items-center gap-0.5">Politique de Confidentialite (RGPD) <ExternalLink size={11} /></Link>
+                  J&apos;ai lu la <Link to="/legal/privacy" target="_blank" className="text-[#022D52] hover:underline inline-flex items-center gap-0.5">Politique de Confidentialite (RGPD) <ExternalLink size={11} /></Link>
                 </span>
               </div>
               <div className="text-[11px] text-slate-500 mt-0.5 ml-6">
@@ -149,7 +149,7 @@ export default function LegalAcceptanceModal() {
           <Button
             onClick={submit}
             disabled={saving || !acceptedCgu || !acceptedPrivacy}
-            className="bg-[#2563EB] hover:bg-[#1D4ED8] text-white"
+            className="bg-[#022D52] hover:bg-[#1D4ED8] text-white"
             data-testid="legal-accept-submit-btn"
           >
             {saving ? <><Loader2 size={14} className="animate-spin mr-2" /> Enregistrement...</> : 'J\'accepte et je continue'}

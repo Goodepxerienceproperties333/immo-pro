@@ -115,7 +115,7 @@ def build_invitation_email(
     inviter_email: Optional[str] = None,
 ) -> tuple[str, str]:
     """Build the (subject, html_body) tuple for the standard invitation email."""
-    subject = "Invitation a rejoindre CoproManager"
+    subject = "Invitation a rejoindre NextGe Copro"
     inviter_line = ""
     if inviter_name:
         inviter_line = (
@@ -130,13 +130,13 @@ def build_invitation_email(
     <tr><td align="center">
       <table cellpadding="0" cellspacing="0" border="0" width="600" style="background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.06)">
         <tr><td style="background:linear-gradient(135deg,#0055FF 0%,#0040CC 100%);padding:32px 32px 28px">
-          <h1 style="color:#fff;margin:0;font-size:24px;font-weight:700;letter-spacing:-0.02em">CoproManager</h1>
+          <h1 style="color:#fff;margin:0;font-size:24px;font-weight:700;letter-spacing:-0.02em">NextGe Copro</h1>
           <p style="color:rgba(255,255,255,0.85);margin:4px 0 0;font-size:14px">Gestion de copropriete &mdash; Droit belge</p>
         </td></tr>
         <tr><td style="padding:32px">
           <h2 style="color:#0F172A;margin:0 0 16px;font-size:20px">Bonjour {recipient_name},</h2>
           <p style="color:#334155;font-size:15px;line-height:1.6;margin:0 0 16px">
-            Vous avez ete invite a rejoindre la plateforme <strong>CoproManager</strong> en tant que <strong>{role_label}</strong>.
+            Vous avez ete invite a rejoindre la plateforme <strong>NextGe Copro</strong> en tant que <strong>{role_label}</strong>.
           </p>
           {inviter_line}
           <p style="color:#334155;font-size:15px;line-height:1.6;margin:20px 0 24px">
@@ -157,7 +157,7 @@ def build_invitation_email(
         </td></tr>
         <tr><td style="background:#F8FAFC;padding:20px 32px;border-top:1px solid #E2E8F0">
           <p style="color:#94A3B8;font-size:11px;margin:0;text-align:center">
-            CoproManager &middot; Conforme PCMN belge &middot; Chinese wall RGPD strict
+            NextGe Copro &middot; Conforme PCMN belge &middot; Chinese wall RGPD strict
           </p>
         </td></tr>
       </table>
@@ -174,14 +174,14 @@ def build_password_reset_email(
     expires_minutes: int = 60,
 ) -> tuple[str, str]:
     """Build (subject, html_body) for the password reset email."""
-    subject = "Reinitialisation de votre mot de passe CoproManager"
+    subject = "Reinitialisation de votre mot de passe NextGe Copro"
     html = f"""<!DOCTYPE html>
 <html><body style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;background:#F5F7FA;margin:0;padding:0">
   <table cellpadding="0" cellspacing="0" border="0" width="100%" style="padding:32px 0">
     <tr><td align="center">
       <table cellpadding="0" cellspacing="0" border="0" width="600" style="background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.06)">
         <tr><td style="background:linear-gradient(135deg,#0055FF 0%,#0040CC 100%);padding:32px 32px 28px">
-          <h1 style="color:#fff;margin:0;font-size:24px;font-weight:700;letter-spacing:-0.02em">CoproManager</h1>
+          <h1 style="color:#fff;margin:0;font-size:24px;font-weight:700;letter-spacing:-0.02em">NextGe Copro</h1>
           <p style="color:rgba(255,255,255,0.85);margin:4px 0 0;font-size:14px">Reinitialisation de mot de passe</p>
         </td></tr>
         <tr><td style="padding:32px">
@@ -207,7 +207,7 @@ def build_password_reset_email(
         </td></tr>
         <tr><td style="background:#F8FAFC;padding:20px 32px;border-top:1px solid #E2E8F0">
           <p style="color:#94A3B8;font-size:11px;margin:0;text-align:center">
-            CoproManager &middot; Conforme PCMN belge &middot; Chinese wall RGPD strict
+            NextGe Copro &middot; Conforme PCMN belge &middot; Chinese wall RGPD strict
           </p>
         </td></tr>
       </table>

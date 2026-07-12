@@ -16,7 +16,7 @@ import { toast } from 'sonner';
 import { fmtDate } from '@/lib/dateFmt';
 
 const TAB_LABELS = {
-  suppliers: { label: 'Fournisseurs', icon: Building2, color: 'text-blue-600' },
+  suppliers: { label: 'Fournisseurs', icon: Building2, color: 'text-[#022D52]' },
   owners: { label: 'Proprietaires', icon: Users, color: 'text-emerald-600' },
   users: { label: 'Utilisateurs', icon: Shield, color: 'text-amber-600' },
 };
@@ -174,7 +174,7 @@ export default function AdminDuplicatesPage() {
           Cree {m.created_at ? fmtDate(m.created_at) : '-'} - id <span className="font-mono">{(m.id || '').slice(0, 8)}</span>
         </div>
         {(m.tier_accounts || []).length > 0 && (
-          <div className="text-[10px] text-blue-600 mt-1">
+          <div className="text-[10px] text-[#022D52] mt-1">
             <Hash size={8} className="inline" /> {m.tier_accounts.length} ACP rattachee(s)
           </div>
         )}
@@ -207,7 +207,7 @@ export default function AdminDuplicatesPage() {
         {m.vcs_code && <div>VCS: <span className="font-mono">{m.vcs_code}</span></div>}
         <div className="text-[10px] text-slate-400 mt-1 flex items-center gap-2">
           <span>Cree {m.created_at ? fmtDate(m.created_at) : '-'}</span>
-          <span className={m.lots_count > 0 ? 'text-blue-600 font-semibold' : 'text-amber-600'}>
+          <span className={m.lots_count > 0 ? 'text-[#022D52] font-semibold' : 'text-amber-600'}>
             {m.lots_count} lot{m.lots_count > 1 ? 's' : ''}
           </span>
         </div>
@@ -371,7 +371,7 @@ export default function AdminDuplicatesPage() {
                                 size="sm"
                                 disabled={!canMerge || isMerging || previewLoading}
                                 onClick={() => doMerge(idx, g)}
-                                className="bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50"
+                                className="bg-[#022D52] hover:bg-[#01213e] text-white disabled:opacity-50"
                                 data-testid={`dup-merge-btn-${idx}`}
                               >
                                 {isMerging ? (
@@ -383,7 +383,7 @@ export default function AdminDuplicatesPage() {
                                 )}
                               </Button>
                             ) : (
-                              <Link to="/admin/users" className="text-xs text-blue-600 hover:underline">
+                              <Link to="/admin/users" className="text-xs text-[#022D52] hover:underline">
                                 Gerer manuellement dans Utilisateurs
                               </Link>
                             )}
@@ -435,7 +435,7 @@ export default function AdminDuplicatesPage() {
               </div>
 
               <div className="bg-blue-50 border border-blue-200 rounded-md p-3">
-                <div className="text-xs text-blue-700 font-semibold mb-2">
+                <div className="text-xs text-[#01213e] font-semibold mb-2">
                   {preview.total_refs > 0 ? (
                     <>{preview.total_refs} REFERENCE(S) MIGREE(S) VERS LA FICHE CONSERVEE</>
                   ) : (
@@ -459,7 +459,7 @@ export default function AdminDuplicatesPage() {
                       return (
                         <div key={k} className="flex justify-between">
                           <span className="text-slate-600">{labels[k] || k}</span>
-                          <span className="font-mono font-semibold text-blue-700">{v}</span>
+                          <span className="font-mono font-semibold text-[#01213e]">{v}</span>
                         </div>
                       );
                     })}

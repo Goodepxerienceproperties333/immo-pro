@@ -310,7 +310,7 @@ def build_budget_pdf(
     story.append(Spacer(1, 16))
     story.append(Paragraph(
         f"<font size='7.5' color='#94A3B8'>Document genere le "
-        f"{datetime.now().strftime('%d/%m/%Y a %H:%M')} par CoproManager. "
+        f"{datetime.now().strftime('%d/%m/%Y a %H:%M')} par NextGe Copro. "
         f"Reference : Budget {budget.get('id', '')[:8]} &mdash; "
         f"ACP {ref or 'N/A'}.</font>",
         body_small,

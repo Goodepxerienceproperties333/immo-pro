@@ -52,7 +52,7 @@ export default function RegularizationDialog({ fiscalYearId, open, onClose, onDo
               <Card><CardContent className="p-3"><div className="text-[10px] uppercase text-slate-500">Frais reels</div><div className="font-mono font-bold text-sm mt-1">{preview.summary.total_real_expenses?.toFixed(2)} EUR</div></CardContent></Card>
               <Card><CardContent className="p-3"><div className="text-[10px] uppercase text-slate-500">Provisions appelees</div><div className="font-mono font-bold text-sm mt-1">{preview.summary.total_provisions_called?.toFixed(2)} EUR</div></CardContent></Card>
               <Card><CardContent className="p-3"><div className="text-[10px] uppercase text-slate-500">Difference budget-reel</div><div className={`font-mono font-bold text-sm mt-1 ${preview.summary.difference_budget_vs_real >= 0 ? 'text-green-700' : 'text-red-700'}`}>{preview.summary.difference_budget_vs_real?.toFixed(2)} EUR</div></CardContent></Card>
-              <Card className="border-[#2563EB]"><CardContent className="p-3"><div className="text-[10px] uppercase text-blue-700">Repartition</div><div className="text-sm mt-1 font-semibold">{preview.summary.owners_debiteurs} D / {preview.summary.owners_crediteurs} C</div></CardContent></Card>
+              <Card className="border-[#022D52]"><CardContent className="p-3"><div className="text-[10px] uppercase text-[#01213e]">Repartition</div><div className="text-sm mt-1 font-semibold">{preview.summary.owners_debiteurs} D / {preview.summary.owners_crediteurs} C</div></CardContent></Card>
             </div>
 
             <div className="mt-4">
@@ -84,7 +84,7 @@ export default function RegularizationDialog({ fiscalYearId, open, onClose, onDo
                     {preview.per_owner?.map((p, i) => (
                       <TableRow key={i} data-testid={`regul-row-${i}`}>
                         <TableCell className="font-medium">{p.owner_name}</TableCell>
-                        <TableCell className="font-mono text-[#2563EB] text-xs">{p.vcs_code}</TableCell>
+                        <TableCell className="font-mono text-[#022D52] text-xs">{p.vcs_code}</TableCell>
                         <TableCell className="font-mono text-xs text-slate-500">{p.account_provisions}</TableCell>
                         <TableCell className="text-right font-mono">{p.provisions_called.toFixed(2)}</TableCell>
                         <TableCell className="text-right font-mono">{p.real_expenses.toFixed(2)}</TableCell>
@@ -111,7 +111,7 @@ export default function RegularizationDialog({ fiscalYearId, open, onClose, onDo
               ) : (
                 <>
                   <div className="text-xs text-green-700 flex items-center gap-2"><CheckCircle2 size={14} /> Ecritures comptables creees (extourne + affectation).</div>
-                  <Button onClick={() => { onDone?.(); onClose(); }} className="bg-[#2563EB] hover:bg-[#1D4ED8]">Terminer</Button>
+                  <Button onClick={() => { onDone?.(); onClose(); }} className="bg-[#022D52] hover:bg-[#1D4ED8]">Terminer</Button>
                 </>
               )}
             </div>

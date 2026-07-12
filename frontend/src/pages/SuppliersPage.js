@@ -80,7 +80,7 @@ export default function SuppliersPage() {
     <div data-testid="suppliers-page">
       <div className="page-header flex items-center justify-between">
         <div><h1 className="page-title"><Truck size={24} className="inline mr-2" />Fournisseurs</h1><p className="page-subtitle">Gestion des fournisseurs et prestataires</p></div>
-        <Button onClick={openCreate} className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="create-supplier-btn"><Plus size={16} className="mr-2" /> Nouveau</Button>
+        <Button onClick={openCreate} className="bg-[#022D52] hover:bg-[#1D4ED8]" data-testid="create-supplier-btn"><Plus size={16} className="mr-2" /> Nouveau</Button>
       </div>
       <div className="mb-4 flex items-center gap-3 flex-wrap">
         <div className="relative max-w-sm flex-1">
@@ -149,7 +149,7 @@ export default function SuppliersPage() {
             </div>
             <div className="flex gap-3 justify-end">
               <Button variant="outline" onClick={() => setDialogOpen(false)}>Annuler</Button>
-              <Button onClick={handleSave} className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="supplier-save-btn">{editing ? 'Modifier' : 'Creer'}</Button>
+              <Button onClick={handleSave} className="bg-[#022D52] hover:bg-[#1D4ED8]" data-testid="supplier-save-btn">{editing ? 'Modifier' : 'Creer'}</Button>
             </div>
           </div>
         </DialogContent>
@@ -185,7 +185,7 @@ export default function SuppliersPage() {
                       <Button
                         size="sm"
                         variant="outline"
-                        className="text-blue-700 border-blue-200 h-7 text-[11px]"
+                        className="text-[#01213e] border-blue-200 h-7 text-[11px]"
                         onClick={() => {
                           // Pre-rempli le formulaire avec le supplier existant (mode edit) puis annule la creation
                           openEdit(m.supplier);

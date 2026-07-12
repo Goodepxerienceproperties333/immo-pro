@@ -15,7 +15,7 @@ import { Badge } from '@/components/ui/badge';
 import { Sparkles, Bug, Shield, AlertTriangle, TrendingUp, X } from 'lucide-react';
 
 const CATEGORY_META = {
-  feature: { label: 'Nouveaute', icon: Sparkles, color: 'bg-blue-100 text-blue-700 border-blue-200' },
+  feature: { label: 'Nouveaute', icon: Sparkles, color: 'bg-blue-100 text-[#01213e] border-blue-200' },
   fix: { label: 'Correction', icon: Bug, color: 'bg-emerald-100 text-emerald-700 border-emerald-200' },
   improvement: { label: 'Amelioration', icon: TrendingUp, color: 'bg-violet-100 text-violet-700 border-violet-200' },
   security: { label: 'Securite', icon: Shield, color: 'bg-amber-100 text-amber-700 border-amber-200' },
@@ -78,7 +78,7 @@ export default function ReleaseNotesModal() {
         <div className="bg-gradient-to-r from-blue-500 to-blue-700 px-6 py-5 text-white flex items-center justify-between">
           <div>
             <div className="flex items-center gap-2 text-xs uppercase tracking-wider opacity-80 mb-1">
-              <Sparkles size={14} /> Nouveautes CoproManager
+              <Sparkles size={14} /> Nouveautes NextGe Copro
             </div>
             <h2 className="text-xl font-display font-bold">
               {notes.length === 1
@@ -136,7 +136,7 @@ export default function ReleaseNotesModal() {
           <Button
             onClick={handleAcknowledge}
             disabled={acknowledging}
-            className="bg-blue-600 hover:bg-blue-700 text-white px-8"
+            className="bg-[#022D52] hover:bg-[#01213e] text-white px-8"
             data-testid="release-notes-ok"
           >
             {acknowledging ? "..." : "OK, j'ai compris"}

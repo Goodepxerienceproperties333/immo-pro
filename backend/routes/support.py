@@ -1,7 +1,7 @@
 """Iter90r - Support chatbot pour syndics.
 
 - Chat IA via Claude Sonnet 4.5 (Emergent LLM Key)
-- Base de connaissances des fonctionnalites CoproManager dans le system prompt
+- Base de connaissances des fonctionnalites NextGe Copro dans le system prompt
 - Historique des conversations en base
 - Escalade automatique par email si l'IA marque sa reponse [[NEEDS_ESCALATION]]
 - Bouton manuel "Envoyer au support" toujours disponible
@@ -26,11 +26,11 @@ from pydantic import BaseModel
 logger = logging.getLogger(__name__)
 
 
-_SUPPORT_SYSTEM_PROMPT = """Tu es "Assistant CoproManager", un assistant support pour les syndics utilisant l'application CoproManager (gestion de copropriete belge conforme au PCMN).
+_SUPPORT_SYSTEM_PROMPT = """Tu es "Assistant NextGe Copro", un assistant support pour les syndics utilisant l'application NextGe Copro (gestion de copropriete belge conforme au PCMN).
 
-Ton role : repondre aux questions fonctionnelles des syndics sur l'application, en francais, de facon claire et concise (max 4 paragraphes courts). Tu ne parles JAMAIS d'autres sujets que CoproManager.
+Ton role : repondre aux questions fonctionnelles des syndics sur l'application, en francais, de facon claire et concise (max 4 paragraphes courts). Tu ne parles JAMAIS d'autres sujets que NextGe Copro.
 
-FONCTIONNALITES CoproManager que tu connais :
+FONCTIONNALITES NextGe Copro que tu connais :
 
 1. **Coproprietes (ACP)** — Chaque syndic gere une ou plusieurs Associations de Coproprietaires. Onglet "Coproprietes" pour creer/editer. Chaque copro a son propre PCMN, journal, extraits bancaires.
 
@@ -55,8 +55,8 @@ FONCTIONNALITES CoproManager que tu connais :
 REGLES DE REPONSE :
 - Si la question porte sur une fonctionnalite existante ci-dessus, reponds precisement en indiquant les etapes (ex: "Allez dans Onglet X > bouton Y").
 - Si la question demande un diagnostic technique (bug, erreur, comportement anormal), une facturation, un contrat, un remboursement, ou tout ce qui necessite intervention humaine, termine ta reponse par la balise EXACTE `[[NEEDS_ESCALATION]]` sur sa propre ligne, precede d'une phrase du type "Je transmets votre demande au service support qui vous repondra rapidement."
-- Si la question est hors-sujet (autre app, question personnelle), reponds poliment "Je ne peux repondre qu'aux questions sur CoproManager. Pour toute autre demande, contactez le support directement." SANS ajouter la balise.
-- Ne mens JAMAIS. Si tu ne connais pas la reponse precise a une question sur CoproManager, escalade avec `[[NEEDS_ESCALATION]]`.
+- Si la question est hors-sujet (autre app, question personnelle), reponds poliment "Je ne peux repondre qu'aux questions sur NextGe Copro. Pour toute autre demande, contactez le support directement." SANS ajouter la balise.
+- Ne mens JAMAIS. Si tu ne connais pas la reponse precise a une question sur NextGe Copro, escalade avec `[[NEEDS_ESCALATION]]`.
 """
 
 
@@ -113,7 +113,7 @@ async def _send_support_escalation_email(
 
     body = f"""
 <div style="font-family:system-ui,Segoe UI,Arial,sans-serif;max-width:640px;">
-  <h2 style="color:#0055FF;margin-bottom:4px;">Nouvelle demande support CoproManager</h2>
+  <h2 style="color:#0055FF;margin-bottom:4px;">Nouvelle demande support NextGe Copro</h2>
   <p style="color:#555;margin-top:0;font-size:13px;">
     Un syndic a besoin d'assistance humaine. L'IA n'a pas pu resoudre la question.
   </p>
@@ -134,7 +134,7 @@ async def _send_support_escalation_email(
 
     await send_html_email(
         recipients=[support_email],
-        subject=f"[CoproManager Support] {conv_title or 'Nouvelle demande'} — {requester_name}",
+        subject=f"[NextGe Copro Support] {conv_title or 'Nouvelle demande'} — {requester_name}",
         html_body=body,
         reply_to=requester_email,
     )

@@ -56,8 +56,8 @@ export default function LegalDocPage() {
             <ArrowLeft size={16} /> Retour
           </button>
           <div className="flex-1" />
-          <Link to="/" className="text-[#2563EB] font-semibold text-sm hover:underline">
-            CoproManager
+          <Link to="/" className="text-[#022D52] font-semibold text-sm hover:underline">
+            NextGe Copro
           </Link>
         </div>
       </header>
@@ -75,8 +75,8 @@ export default function LegalDocPage() {
               data-testid={`legal-nav-${s}`}
               className={`inline-flex items-center gap-1.5 text-[12px] px-2.5 py-1 rounded border transition-colors ${
                 active
-                  ? 'bg-[#2563EB] text-white border-[#2563EB]'
-                  : 'bg-white text-slate-600 border-slate-200 hover:border-[#2563EB] hover:text-[#2563EB]'
+                  ? 'bg-[#022D52] text-white border-[#022D52]'
+                  : 'bg-white text-slate-600 border-slate-200 hover:border-[#022D52] hover:text-[#022D52]'
               }`}
             >
               <I size={12} /> {M.label}
@@ -88,8 +88,8 @@ export default function LegalDocPage() {
       <main className="max-w-4xl mx-auto px-6 py-6">
         <div className="bg-white rounded-lg border border-slate-200 shadow-sm p-8">
           <div className="flex items-start gap-4 mb-6 pb-4 border-b border-slate-100">
-            <div className="w-12 h-12 rounded-full bg-[#2563EB]/10 flex items-center justify-center shrink-0">
-              <Icon size={22} className="text-[#2563EB]" />
+            <div className="w-12 h-12 rounded-full bg-[#022D52]/10 flex items-center justify-center shrink-0">
+              <Icon size={22} className="text-[#022D52]" />
             </div>
             <div className="flex-1">
               <h1 className="text-2xl font-semibold text-slate-900" style={{ fontFamily: 'Chivo, sans-serif' }}>
@@ -112,14 +112,14 @@ export default function LegalDocPage() {
             <div className="text-red-600 text-sm py-8 text-center">{error}</div>
           )}
           {doc && !loading && !error && (
-            <article className="prose prose-slate prose-sm max-w-none prose-headings:font-semibold prose-headings:text-slate-800 prose-a:text-[#2563EB] prose-table:text-xs prose-code:text-[13px] prose-strong:text-slate-900" data-testid="legal-doc-content">
+            <article className="prose prose-slate prose-sm max-w-none prose-headings:font-semibold prose-headings:text-slate-800 prose-a:text-[#022D52] prose-table:text-xs prose-code:text-[13px] prose-strong:text-slate-900" data-testid="legal-doc-content">
               <ReactMarkdown remarkPlugins={[remarkGfm]}>{doc.content || ''}</ReactMarkdown>
             </article>
           )}
         </div>
 
         <p className="text-center text-[11px] text-slate-400 mt-4">
-          CoproManager - Ces documents sont fournis a titre indicatif et peuvent evoluer.
+          NextGe Copro - Ces documents sont fournis a titre indicatif et peuvent evoluer.
           Consultez regulierement leur derniere version.
         </p>
       </main>

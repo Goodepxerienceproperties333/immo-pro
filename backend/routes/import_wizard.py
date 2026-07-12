@@ -1,4 +1,4 @@
-"""Import Wizard routes - migration Optipro/Sogis -> CoproManager.
+"""Import Wizard routes - migration Optipro/Sogis -> NextGe Copro.
 
 Session-based, with rollback support (every imported doc carries `import_session_id`).
 """
@@ -936,7 +936,7 @@ def create_import_wizard_router(db):
                 # ---- Create bank_transaction inside its monthly statement ----
                 stmt_id = statement_by_key.get((bank_pcmn, date_v[:7])) if bank_pcmn else ""
                 if stmt_id:
-                    # Signed amount : IN = positive, OUT = negative (CoproManager convention)
+                    # Signed amount : IN = positive, OUT = negative (NextGe Copro convention)
                     signed_amount = amount if direction == "in" else (-amount if direction == "out" else amount)
                     # Use the REAL supplier/owner name from the CSV if available
                     # (Optipro 'Identite' column), else fallback to the generic

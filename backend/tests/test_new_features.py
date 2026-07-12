@@ -1,4 +1,4 @@
-"""Backend tests for new CoproManager features (iteration 2).
+"""Backend tests for new NextGe Copro features (iteration 2).
 Covers: Suppliers, Fiscal Years/Budgets, Fund Calls, Reports (grand-livre, balance,
 bilan, resultat, decompte, decompte PDF), Coproprietes, Admin Users, VCS generation.
 """

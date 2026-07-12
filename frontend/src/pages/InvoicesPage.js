@@ -578,7 +578,7 @@ export default function InvoicesPage() {
                 e.target.value = '';
               }} />
             </label>
-            <Button onClick={openCreateInvoice} className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="create-invoice-btn"><Plus size={16} className="mr-2" /> Nouvelle facture</Button>
+            <Button onClick={openCreateInvoice} className="bg-[#022D52] hover:bg-[#1D4ED8]" data-testid="create-invoice-btn"><Plus size={16} className="mr-2" /> Nouvelle facture</Button>
           </div>
 
           {/* ---- Filter bar invoices ---- */}
@@ -638,15 +638,15 @@ export default function InvoicesPage() {
                   const sortIcon = (k) => {
                     if (invSort.key !== k) return <ArrowUpDown size={12} className="ml-1 opacity-40" />;
                     return invSort.dir === 'asc'
-                      ? <ArrowUp size={12} className="ml-1 text-[#2563EB]" />
-                      : <ArrowDown size={12} className="ml-1 text-[#2563EB]" />;
+                      ? <ArrowUp size={12} className="ml-1 text-[#022D52]" />
+                      : <ArrowDown size={12} className="ml-1 text-[#022D52]" />;
                   };
                   const renderTh = (k, label, className = '', align = 'left') => (
                     <TableHead key={k} className={className}>
                       <button
                         type="button"
                         onClick={() => toggleSort(k)}
-                        className={`inline-flex items-center font-semibold hover:text-[#2563EB] transition-colors ${align === 'right' ? 'justify-end w-full' : ''}`}
+                        className={`inline-flex items-center font-semibold hover:text-[#022D52] transition-colors ${align === 'right' ? 'justify-end w-full' : ''}`}
                         data-testid={`inv-sort-${k}`}
                         title="Cliquez pour trier"
                       >
@@ -702,7 +702,7 @@ export default function InvoicesPage() {
                   if (sorted.length === 0) return <TableRow><TableCell colSpan={9} className="text-center py-8 text-slate-400">Aucune facture</TableCell></TableRow>;
                   return sorted.map(inv => (
                   <TableRow key={inv.id} className="hover:bg-slate-50/50">
-                    <TableCell className="font-mono text-xs text-[#2563EB] font-semibold">{inv.internal_reference || '-'}</TableCell>
+                    <TableCell className="font-mono text-xs text-[#022D52] font-semibold">{inv.internal_reference || '-'}</TableCell>
                     <TableCell className="font-mono text-sm">{inv.number}</TableCell>
                     <TableCell>{fmtDate(inv.date)}</TableCell>
                     <TableCell className="font-medium">{inv.supplier}</TableCell>
@@ -824,12 +824,12 @@ export default function InvoicesPage() {
                       const url = URL.createObjectURL(pendingPdf.file);
                       setViewerAttachment({ url, filename: pendingPdf.filename, isBlob: true });
                     }}
-                    className="p-1.5 rounded hover:bg-blue-100 text-blue-700"
+                    className="p-1.5 rounded hover:bg-blue-100 text-[#01213e]"
                     data-testid="preview-pending-pdf-btn"
                   >
                     <Eye size={14} />
                   </button>
-                  <button type="button" onClick={() => setPendingPdf(null)} className="p-1.5 rounded hover:bg-blue-100 text-blue-600" title="Retirer la piece jointe">
+                  <button type="button" onClick={() => setPendingPdf(null)} className="p-1.5 rounded hover:bg-blue-100 text-[#022D52]" title="Retirer la piece jointe">
                     <X size={14} />
                   </button>
                 </div>
@@ -839,7 +839,7 @@ export default function InvoicesPage() {
               <div className="text-xs">
                 <input id="manual-pdf-input" type="file" accept="application/pdf,image/*" className="hidden"
                   onChange={(e) => { const f = e.target.files?.[0]; if (f) setPendingPdf({ file: f, filename: f.name }); e.target.value = ''; }} />
-                <button type="button" className="text-slate-500 hover:text-[#2563EB] underline" onClick={() => document.getElementById('manual-pdf-input').click()} data-testid="manual-attach-btn">
+                <button type="button" className="text-slate-500 hover:text-[#022D52] underline" onClick={() => document.getElementById('manual-pdf-input').click()} data-testid="manual-attach-btn">
                   <Paperclip size={11} className="inline mr-1" /> Joindre la facture PDF / image (optionnel)
                 </button>
               </div>
@@ -862,7 +862,7 @@ export default function InvoicesPage() {
                         type="button"
                         title="Apercu de la facture"
                         onClick={() => setViewerAttachment({ url: inlineUrl, filename: a.filename })}
-                        className="p-1 rounded hover:bg-blue-50 text-blue-700"
+                        className="p-1 rounded hover:bg-blue-50 text-[#01213e]"
                         data-testid={`preview-attachment-${a.id}`}
                       >
                         <Eye size={14} />
@@ -877,7 +877,7 @@ export default function InvoicesPage() {
                 <label className="form-label">N facture fournisseur *</label>
                 <Input value={invForm.number} onChange={e => setInvForm({...invForm, number: e.target.value})} placeholder="Ex: V-260114" data-testid="inv-number" />
                 {editingInvoice?.internal_reference && (
-                  <p className="text-[10px] text-slate-500 mt-1">Ref. interne : <span className="font-mono text-[#2563EB] font-semibold">{editingInvoice.internal_reference}</span></p>
+                  <p className="text-[10px] text-slate-500 mt-1">Ref. interne : <span className="font-mono text-[#022D52] font-semibold">{editingInvoice.internal_reference}</span></p>
                 )}
                 {!editingInvoice && (
                   <p className="text-[10px] text-slate-400 mt-1">Une reference interne <span className="font-mono">FA-AAAA-NNNN</span> sera auto-generee a la creation.</p>
@@ -1098,7 +1098,7 @@ export default function InvoicesPage() {
                   <SelectContent>
                     <SelectItem value="none">— Aucune —</SelectItem>
                     {categories.map(c => <SelectItem key={c.id} value={c.id}>{c.name} <span className="text-slate-400 ml-2 font-mono text-xs">({c.account_number})</span></SelectItem>)}
-                    <SelectItem value="__create__" className="text-[#2563EB] font-semibold">+ Creer une nature de depense...</SelectItem>
+                    <SelectItem value="__create__" className="text-[#022D52] font-semibold">+ Creer une nature de depense...</SelectItem>
                   </SelectContent>
                 </Select>
                 <p className="text-[10px] text-slate-400 mt-1">Pre-rempli le compte PCMN + repartition occupant/proprio</p>
@@ -1144,7 +1144,7 @@ export default function InvoicesPage() {
                     }] : [];
                     setInvForm(f => ({ ...f, lines: [...firstLine, { _key: (crypto?.randomUUID?.() || `k-${Date.now()}-${Math.random()}`), account_number: '', expense_category_id: '', distribution_key_id: defaultKeyId, amount: 0, description: '' }] }));
                   }}
-                  className="text-xs text-[#2563EB] hover:text-[#1D4ED8] underline"
+                  className="text-xs text-[#022D52] hover:text-[#1D4ED8] underline"
                   data-testid="enable-multi-lines-btn"
                 >
                   <Plus size={11} className="inline mr-1" /> Splitter en plusieurs natures de depense
@@ -1159,9 +1159,9 @@ export default function InvoicesPage() {
               const diff = +(linesSum - totalAmt).toFixed(2);
               const ok = Math.abs(diff) < 0.01;
               return (
-                <div className="rounded-md border-2 border-[#2563EB]/30 bg-[#2563EB]/5 p-3 space-y-2" data-testid="multi-lines-block">
+                <div className="rounded-md border-2 border-[#022D52]/30 bg-[#022D52]/5 p-3 space-y-2" data-testid="multi-lines-block">
                   <div className="flex items-center justify-between">
-                    <div className="text-xs font-bold text-[#2563EB] uppercase tracking-wider">
+                    <div className="text-xs font-bold text-[#022D52] uppercase tracking-wider">
                       Lignes multiples ({invForm.lines.length})
                     </div>
                     <button
@@ -1302,11 +1302,11 @@ export default function InvoicesPage() {
                       </div>
                     ))}
                   </div>
-                  <div className="flex items-center justify-between pt-2 border-t border-[#2563EB]/20">
+                  <div className="flex items-center justify-between pt-2 border-t border-[#022D52]/20">
                     <button
                       type="button"
                       onClick={() => setInvForm(f => ({ ...f, lines: [...f.lines, { _key: (crypto?.randomUUID?.() || `k-${Date.now()}-${Math.random()}`), account_number: '', expense_category_id: '', distribution_key_id: defaultKeyId, amount: 0, description: '' }] }))}
-                      className="text-xs text-[#2563EB] hover:text-[#1D4ED8] font-semibold"
+                      className="text-xs text-[#022D52] hover:text-[#1D4ED8] font-semibold"
                       data-testid="invoice-line-add"
                     >
                       <Plus size={12} className="inline mr-1" /> Ajouter une ligne
@@ -1364,7 +1364,7 @@ export default function InvoicesPage() {
                 </div>
                 <div className="text-xs">
                   <div className="text-slate-500 uppercase tracking-wide text-[10px]">Part proprietaire</div>
-                  <div className="font-mono font-semibold text-blue-700">{((Number(invForm.total_amount) || 0) * (Number(invForm.proprietaire_pct) || 0) / 100).toFixed(2)} EUR</div>
+                  <div className="font-mono font-semibold text-[#01213e]">{((Number(invForm.total_amount) || 0) * (Number(invForm.proprietaire_pct) || 0) / 100).toFixed(2)} EUR</div>
                 </div>
               </div>
               <p className="text-[11px] text-slate-500">Total doit etre 100%. Pre-rempli depuis la nature de depense si selectionnee.</p>
@@ -1388,7 +1388,7 @@ export default function InvoicesPage() {
               <Button
                 onClick={saveInvoice}
                 disabled={aiExtracting}
-                className="bg-[#2563EB] hover:bg-[#1D4ED8] disabled:opacity-50 disabled:cursor-not-allowed"
+                className="bg-[#022D52] hover:bg-[#1D4ED8] disabled:opacity-50 disabled:cursor-not-allowed"
                 title={aiExtracting ? "Extraction IA en cours - patientez..." : ""}
                 data-testid="inv-save-btn"
               >
@@ -1429,7 +1429,7 @@ export default function InvoicesPage() {
                   <div key={a.id} className="flex items-center gap-2 border rounded px-2 py-1.5 text-sm min-w-0">
                     <button
                       type="button"
-                      className="flex-1 min-w-0 truncate flex items-center gap-2 text-left text-blue-600 hover:text-blue-800 hover:underline cursor-pointer"
+                      className="flex-1 min-w-0 truncate flex items-center gap-2 text-left text-[#022D52] hover:text-blue-800 hover:underline cursor-pointer"
                       onClick={() => setViewerAttachment({ url: inlineUrl, filename: a.filename })}
                       data-testid={`view-attachment-${a.id}`}
                       title={a.filename}
@@ -1539,7 +1539,7 @@ export default function InvoicesPage() {
             <div className="flex justify-end gap-2 pt-2">
               <Button variant="outline" onClick={() => setNewCatDialog(false)}>Annuler</Button>
               <Button
-                className="bg-[#2563EB] hover:bg-[#1D4ED8]"
+                className="bg-[#022D52] hover:bg-[#1D4ED8]"
                 disabled={!newCatForm.name.trim() || !newCatForm.account_number.trim()}
                 onClick={async () => {
                   try {
@@ -1596,7 +1596,7 @@ export default function InvoicesPage() {
                       <Button
                         size="sm"
                         variant="outline"
-                        className="text-blue-700 border-blue-200 h-7 text-[11px]"
+                        className="text-[#01213e] border-blue-200 h-7 text-[11px]"
                         onClick={() => supplierHomonymsDialog.onUseExisting(m.supplier)}
                         data-testid={`inv-use-existing-supplier-${i}`}
                       >

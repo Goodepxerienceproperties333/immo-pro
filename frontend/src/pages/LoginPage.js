@@ -98,15 +98,7 @@ export default function LoginPage() {
       <div className="w-full lg:w-1/2 flex items-center justify-center p-8">
         <div className="w-full max-w-md">
           <div className="flex items-center gap-3 mb-8">
-            <div className="w-10 h-10 rounded bg-[#2563EB] flex items-center justify-center text-white font-bold">
-              <Building2 size={22} />
-            </div>
-            <div>
-              <h1 className="text-2xl font-black tracking-tighter text-slate-950" style={{fontFamily:'Chivo,sans-serif'}}>
-                CoproManager
-              </h1>
-              <p className="text-xs text-slate-500">Gestion de copropriete</p>
-            </div>
+            <img src="/logo-nextge.png" alt="NextGe Copro" className="h-14 w-auto" data-testid="login-logo" />
           </div>
 
           <h2 className="text-xl font-bold text-slate-900 mb-1" style={{fontFamily:'Chivo,sans-serif'}}>{titleText}</h2>
@@ -183,7 +175,7 @@ export default function LoginPage() {
               type="submit"
               data-testid="login-submit-btn"
               disabled={loading}
-              className="w-full bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-semibold"
+              className="w-full bg-[#022D52] hover:bg-[#1D4ED8] text-white font-semibold"
             >
               {loading ? (
                 <span className="flex items-center gap-2">
@@ -204,7 +196,7 @@ export default function LoginPage() {
             {!isFirstSet && (
               <button
                 onClick={() => switchTo(isRegister ? 'login' : 'register')}
-                className="text-sm text-[#2563EB] hover:underline block w-full"
+                className="text-sm text-[#022D52] hover:underline block w-full"
                 data-testid="toggle-auth-mode"
               >
                 {isRegister ? 'Deja un compte ? Se connecter' : 'Pas de compte ? Creer un compte'}
@@ -213,7 +205,7 @@ export default function LoginPage() {
             {mode === 'login' && (
               <a
                 href="/forgot-password"
-                className="text-sm text-slate-600 hover:text-[#2563EB] hover:underline block w-full"
+                className="text-sm text-slate-600 hover:text-[#022D52] hover:underline block w-full"
                 data-testid="forgot-password-link"
               >
                 Mot de passe oublie ?
@@ -222,7 +214,7 @@ export default function LoginPage() {
             {mode === 'login' && (
               <button
                 onClick={() => switchTo('first-set')}
-                className="text-sm text-slate-600 hover:text-[#2563EB] hover:underline block w-full"
+                className="text-sm text-slate-600 hover:text-[#022D52] hover:underline block w-full"
                 data-testid="toggle-first-set"
               >
                 1ere connexion ? Definir mon mot de passe
@@ -231,7 +223,7 @@ export default function LoginPage() {
             {isFirstSet && (
               <button
                 onClick={() => switchTo('login')}
-                className="text-sm text-slate-600 hover:text-[#2563EB] hover:underline block w-full"
+                className="text-sm text-slate-600 hover:text-[#022D52] hover:underline block w-full"
                 data-testid="back-to-login"
               >
                 Retour a la connexion
@@ -242,26 +234,29 @@ export default function LoginPage() {
           {/* Legal footer links */}
           <div className="mt-6 pt-4 border-t border-slate-100">
             <div className="flex flex-wrap justify-center gap-x-3 gap-y-1 text-[11px] text-slate-400">
-              <a href="/legal/cgu" target="_blank" rel="noopener noreferrer" className="hover:text-[#2563EB] hover:underline" data-testid="login-link-cgu">CGU</a>
+              <a href="/legal/cgu" target="_blank" rel="noopener noreferrer" className="hover:text-[#022D52] hover:underline" data-testid="login-link-cgu">CGU</a>
               <span>·</span>
-              <a href="/legal/privacy" target="_blank" rel="noopener noreferrer" className="hover:text-[#2563EB] hover:underline" data-testid="login-link-privacy">Confidentialite</a>
+              <a href="/legal/privacy" target="_blank" rel="noopener noreferrer" className="hover:text-[#022D52] hover:underline" data-testid="login-link-privacy">Confidentialite</a>
               <span>·</span>
-              <a href="/legal/mentions" target="_blank" rel="noopener noreferrer" className="hover:text-[#2563EB] hover:underline" data-testid="login-link-mentions">Mentions Legales</a>
+              <a href="/legal/mentions" target="_blank" rel="noopener noreferrer" className="hover:text-[#022D52] hover:underline" data-testid="login-link-mentions">Mentions Legales</a>
               <span>·</span>
-              <a href="/legal/cookies" target="_blank" rel="noopener noreferrer" className="hover:text-[#2563EB] hover:underline" data-testid="login-link-cookies">Cookies</a>
+              <a href="/legal/cookies" target="_blank" rel="noopener noreferrer" className="hover:text-[#022D52] hover:underline" data-testid="login-link-cookies">Cookies</a>
             </div>
           </div>
         </div>
       </div>
 
       <div
-        className="hidden lg:block lg:w-1/2 bg-cover bg-center relative"
-        style={{backgroundImage: 'url(https://static.prod-images.emergentagent.com/jobs/ac7212f5-7097-4143-9040-c86e8f3b4207/images/44f29d66e326ce8d9c843c10ae9d5d76da988703cdae641f58ec60defdc6aad7.png)'}}
+        className="hidden lg:flex lg:w-1/2 relative items-center justify-center bg-gradient-to-br from-[#022D52] via-[#01213e] to-[#02A9AA]"
       >
-        <div className="absolute inset-0 bg-slate-950/20" />
-        <div className="absolute bottom-8 left-8 right-8">
-          <p className="text-white/80 text-sm">
-            Gestion professionnelle de copropriete selon le droit belge
+        <div className="text-center px-12">
+          <img src="/logo-nextge.png" alt="NextGe Copro" className="h-32 w-auto mx-auto mb-8 bg-white rounded-2xl p-4 shadow-2xl" />
+          <h3 className="text-white text-3xl font-bold tracking-tight mb-3" style={{fontFamily:'Chivo,sans-serif'}}>
+            NextGe Copro
+          </h3>
+          <p className="text-white/80 text-sm max-w-md mx-auto leading-relaxed">
+            La nouvelle generation de logiciel de gestion pour syndics belges.
+            Comptabilite PCMN, mutations, decomptes, portails proprietaires - tout ce qu&apos;il faut, avec la simplicite en plus.
           </p>
         </div>
       </div>

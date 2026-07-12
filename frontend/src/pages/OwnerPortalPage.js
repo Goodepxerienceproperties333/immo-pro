@@ -18,7 +18,7 @@ import OwnerOnboardingTour, { ownerTourStorageKey } from '@/components/OwnerOnbo
 // (index -> style bordure/fond/texte). Le hash simple s'assure que la meme
 // categorie recoit toujours la meme couleur, meme entre sessions/machines.
 const CATEGORY_COLOR_PALETTE = [
-  { bg: 'bg-blue-50', text: 'text-blue-700', border: 'border-blue-200', dot: 'bg-blue-500' },
+  { bg: 'bg-blue-50', text: 'text-[#01213e]', border: 'border-blue-200', dot: 'bg-blue-500' },
   { bg: 'bg-emerald-50', text: 'text-emerald-700', border: 'border-emerald-200', dot: 'bg-emerald-500' },
   { bg: 'bg-amber-50', text: 'text-amber-700', border: 'border-amber-200', dot: 'bg-amber-500' },
   { bg: 'bg-violet-50', text: 'text-violet-700', border: 'border-violet-200', dot: 'bg-violet-500' },
@@ -43,7 +43,7 @@ function categoryColor(name) {
 
 // Iter90db : palette + libelle par kind de communication
 const COMM_KIND_META = {
-  situation: { label: 'Situation de compte', color: 'bg-blue-100 text-blue-700 border-blue-200', icon: Wallet },
+  situation: { label: 'Situation de compte', color: 'bg-blue-100 text-[#01213e] border-blue-200', icon: Wallet },
   decompte: { label: 'Decompte annuel', color: 'bg-purple-100 text-purple-700 border-purple-200', icon: FileText },
   mutation: { label: 'Decompte de mutation', color: 'bg-amber-100 text-amber-700 border-amber-200', icon: Home },
   generic: { label: 'Communication', color: 'bg-slate-100 text-slate-700 border-slate-200', icon: Mail },
@@ -354,7 +354,7 @@ export default function OwnerPortalPage() {
       <header className="bg-white border-b border-slate-200 sticky top-0 z-10">
         <div className="max-w-6xl mx-auto px-6 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-md bg-[#2563EB] text-white flex items-center justify-center text-xs font-bold" style={{fontFamily:'Chivo,sans-serif'}}>CP</div>
+            <div className="w-8 h-8 rounded-md bg-[#022D52] text-white flex items-center justify-center text-xs font-bold" style={{fontFamily:'Chivo,sans-serif'}}>CP</div>
             <div>
               <h1 className="text-base font-semibold text-slate-900" style={{fontFamily:'Chivo,sans-serif'}}>Espace proprietaire</h1>
               <p className="text-[11px] text-slate-500">{owner.name}</p>
@@ -371,7 +371,7 @@ export default function OwnerPortalPage() {
           <CardContent className="p-5">
             <div className="flex items-start justify-between flex-wrap gap-4">
               <div className="flex items-center gap-3">
-                <div className="w-12 h-12 rounded-full bg-[#2563EB]/10 flex items-center justify-center text-[#2563EB]">
+                <div className="w-12 h-12 rounded-full bg-[#022D52]/10 flex items-center justify-center text-[#022D52]">
                   <User size={22} />
                 </div>
                 <div>
@@ -382,7 +382,7 @@ export default function OwnerPortalPage() {
               {owner.vcs_code && (
                 <div className="text-right">
                   <div className="text-[10px] uppercase tracking-wider text-slate-400 mb-0.5">Communication structuree (VCS)</div>
-                  <button onClick={() => copyVcs(owner.vcs_code)} className="font-mono text-sm text-[#2563EB] hover:bg-blue-50 px-2 py-1 rounded inline-flex items-center gap-1.5" data-testid="copy-vcs-btn">
+                  <button onClick={() => copyVcs(owner.vcs_code)} className="font-mono text-sm text-[#022D52] hover:bg-blue-50 px-2 py-1 rounded inline-flex items-center gap-1.5" data-testid="copy-vcs-btn">
                     {owner.vcs_code}
                     <Copy size={11} />
                   </button>
@@ -423,7 +423,7 @@ export default function OwnerPortalPage() {
                     </div>
                     <div className="flex items-center gap-3">
                       <span className="font-semibold text-orange-700">{fmt(p.amount)}</span>
-                      <button onClick={() => copyVcs(p.vcs_code)} className="font-mono text-[10px] text-[#2563EB] bg-blue-50 hover:bg-blue-100 px-2 py-0.5 rounded inline-flex items-center gap-1" title="Copier VCS pour le virement">
+                      <button onClick={() => copyVcs(p.vcs_code)} className="font-mono text-[10px] text-[#022D52] bg-blue-50 hover:bg-blue-100 px-2 py-0.5 rounded inline-flex items-center gap-1" title="Copier VCS pour le virement">
                         {p.vcs_code}<Copy size={9} />
                       </button>
                     </div>
@@ -499,7 +499,7 @@ export default function OwnerPortalPage() {
                       <div className="space-y-1 mb-3">
                         <div className="text-[11px] uppercase tracking-wider text-slate-400">Vos lots ({c.my_lots.length})</div>
                         {c.my_lots.map(l => (
-                          <div key={l.id} className="text-xs flex items-center justify-between border-l-2 border-[#2563EB]/30 pl-2 py-0.5">
+                          <div key={l.id} className="text-xs flex items-center justify-between border-l-2 border-[#022D52]/30 pl-2 py-0.5">
                             <span className="text-slate-700">Lot {l.number} {l.description ? `- ${l.description}` : ''}</span>
                             <span className="font-mono text-slate-500">{l.quotity}</span>
                           </div>
@@ -508,7 +508,7 @@ export default function OwnerPortalPage() {
                       <a
                         href={`${process.env.REACT_APP_BACKEND_URL}/api/owner/decompte/pdf?copropriete_id=${c.id}`}
                         target="_blank" rel="noreferrer"
-                        className="inline-flex items-center gap-1.5 text-xs text-[#2563EB] hover:bg-blue-50 px-3 py-1.5 rounded-md border border-[#2563EB]/20"
+                        className="inline-flex items-center gap-1.5 text-xs text-[#022D52] hover:bg-blue-50 px-3 py-1.5 rounded-md border border-[#022D52]/20"
                         data-testid={`download-decompte-${c.id}`}
                       >
                         <ArrowDownToLine size={12} />
@@ -577,7 +577,7 @@ export default function OwnerPortalPage() {
                             <Button
                               size="sm"
                               variant="ghost"
-                              className="h-7 px-2 text-xs text-[#2563EB] hover:bg-blue-50"
+                              className="h-7 px-2 text-xs text-[#022D52] hover:bg-blue-50"
                               data-testid={`view-invoice-btn-${c.id}`}
                               onClick={async () => {
                                 const att = c.attachments[0];
@@ -667,7 +667,7 @@ export default function OwnerPortalPage() {
                               <a
                                 href={`${process.env.REACT_APP_BACKEND_URL}/api/documents/${d.id}/download`}
                                 target="_blank" rel="noreferrer"
-                                className="text-[#2563EB] hover:bg-blue-50 p-1 rounded"
+                                className="text-[#022D52] hover:bg-blue-50 p-1 rounded"
                                 title="Telecharger"
                               >
                                 <ArrowDownToLine size={13} />
@@ -767,7 +767,7 @@ export default function OwnerPortalPage() {
                       </div>
                     </div>
                     <div className="pt-3 border-t border-slate-100">
-                      <Button onClick={saveProfile} disabled={savingProfile} className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="profile-save-btn">
+                      <Button onClick={saveProfile} disabled={savingProfile} className="bg-[#022D52] hover:bg-[#1D4ED8]" data-testid="profile-save-btn">
                         <Save size={14} className="mr-1.5" />
                         {savingProfile ? 'Enregistrement...' : 'Enregistrer mes modifications'}
                       </Button>
@@ -789,7 +789,7 @@ export default function OwnerPortalPage() {
                   <CardTitle className="text-base" style={{fontFamily:'Chivo,sans-serif'}}>Mes locataires</CardTitle>
                   <p className="text-xs text-slate-500">Toute modification est notifiee a votre syndic par email.</p>
                 </div>
-                <Button onClick={openCreateTenant} size="sm" className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="add-tenant-btn" disabled={myLots.length === 0}>
+                <Button onClick={openCreateTenant} size="sm" className="bg-[#022D52] hover:bg-[#1D4ED8]" data-testid="add-tenant-btn" disabled={myLots.length === 0}>
                   <Plus size={14} className="mr-1.5" /> Ajouter
                 </Button>
               </CardHeader>
@@ -886,7 +886,7 @@ export default function OwnerPortalPage() {
                           type="checkbox"
                           checked={checked}
                           onChange={() => toggleTenantLot(l.id)}
-                          className="w-4 h-4 accent-[#2563EB]"
+                          className="w-4 h-4 accent-[#022D52]"
                         />
                         <span className="font-mono text-xs text-slate-500 min-w-[40px]">Lot {l.number}</span>
                         {l.description && <span className="text-slate-700 truncate">{l.description}</span>}
@@ -937,7 +937,7 @@ export default function OwnerPortalPage() {
             </div>
             <div className="flex gap-2 justify-end pt-2 border-t border-slate-100">
               <Button variant="outline" onClick={() => setTenantDialog(false)}>Annuler</Button>
-              <Button onClick={saveTenant} className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="tenant-save-btn">
+              <Button onClick={saveTenant} className="bg-[#022D52] hover:bg-[#1D4ED8]" data-testid="tenant-save-btn">
                 {editingTenant ? 'Enregistrer' : 'Ajouter'}
               </Button>
             </div>
@@ -965,13 +965,13 @@ export default function OwnerPortalPage() {
 
       <footer className="max-w-6xl mx-auto pt-6 pb-4 border-t border-slate-200 mt-8">
         <div className="flex flex-wrap justify-center gap-x-3 gap-y-1 text-[10px] text-slate-400" data-testid="owner-portal-legal-footer">
-          <a href="/legal/cgu" target="_blank" rel="noopener noreferrer" className="hover:text-[#2563EB] hover:underline">CGU</a>
+          <a href="/legal/cgu" target="_blank" rel="noopener noreferrer" className="hover:text-[#022D52] hover:underline">CGU</a>
           <span>·</span>
-          <a href="/legal/privacy" target="_blank" rel="noopener noreferrer" className="hover:text-[#2563EB] hover:underline">Confidentialite</a>
+          <a href="/legal/privacy" target="_blank" rel="noopener noreferrer" className="hover:text-[#022D52] hover:underline">Confidentialite</a>
           <span>·</span>
-          <a href="/legal/mentions" target="_blank" rel="noopener noreferrer" className="hover:text-[#2563EB] hover:underline">Mentions Legales</a>
+          <a href="/legal/mentions" target="_blank" rel="noopener noreferrer" className="hover:text-[#022D52] hover:underline">Mentions Legales</a>
           <span>·</span>
-          <a href="/legal/cookies" target="_blank" rel="noopener noreferrer" className="hover:text-[#2563EB] hover:underline">Cookies</a>
+          <a href="/legal/cookies" target="_blank" rel="noopener noreferrer" className="hover:text-[#022D52] hover:underline">Cookies</a>
         </div>
       </footer>
     </div>
@@ -998,7 +998,7 @@ function StatCard({ icon, label, value, highlight, badge }) {
 // ==============================================================
 
 // Palette pour donut charges (categoriel, contrastee)
-const CHARGE_COLORS = ['#2563EB', '#8B5CF6', '#10B981', '#F59E0B', '#EF4444', '#EC4899', '#06B6D4', '#84CC16', '#F97316', '#6366F1', '#14B8A6', '#A855F7'];
+const CHARGE_COLORS = ['#022D52', '#8B5CF6', '#10B981', '#F59E0B', '#EF4444', '#EC4899', '#06B6D4', '#84CC16', '#F97316', '#6366F1', '#14B8A6', '#A855F7'];
 
 function SituationHero({ status, balance, totalCalled, totalPaid, nextCall, totalPending, totalCharges12m, pendingCount, copyVcs }) {
   // Bloc solde : couleur selon statut
@@ -1107,7 +1107,7 @@ function SituationHero({ status, balance, totalCalled, totalPaid, nextCall, tota
               {nextCall.vcs_code && (
                 <button
                   onClick={() => copyVcs(nextCall.vcs_code)}
-                  className="mt-3 font-mono text-[10px] text-[#2563EB] bg-white/60 hover:bg-white px-2 py-1 rounded inline-flex items-center gap-1"
+                  className="mt-3 font-mono text-[10px] text-[#022D52] bg-white/60 hover:bg-white px-2 py-1 rounded inline-flex items-center gap-1"
                   data-testid="situation-next-vcs-btn"
                 >
                   {nextCall.vcs_code}<Copy size={9} />
@@ -1146,8 +1146,8 @@ function SituationHero({ status, balance, totalCalled, totalPaid, nextCall, tota
         <CardContent className="p-5">
           <div className="flex items-start justify-between mb-3">
             <div className="flex items-center gap-2">
-              <TrendingUp size={20} className="text-blue-600" />
-              <span className="text-[11px] uppercase tracking-wider font-semibold text-blue-700">Charges 12 mois</span>
+              <TrendingUp size={20} className="text-[#022D52]" />
+              <span className="text-[11px] uppercase tracking-wider font-semibold text-[#01213e]">Charges 12 mois</span>
             </div>
           </div>
           <div className="text-3xl font-bold text-blue-800" style={{fontFamily:'Chivo,sans-serif'}}>{fmt(totalCharges12m)}</div>
@@ -1166,7 +1166,7 @@ function ChargesDonut({ data, total }) {
     <Card className="lg:col-span-3 border-slate-200" data-testid="situation-donut-card">
       <CardHeader className="pb-2">
         <div className="flex items-center gap-2">
-          <PieChartIcon size={16} className="text-[#2563EB]" />
+          <PieChartIcon size={16} className="text-[#022D52]" />
           <CardTitle className="text-base" style={{fontFamily:'Chivo,sans-serif'}}>Charges par categorie (12 mois)</CardTitle>
         </div>
       </CardHeader>
@@ -1234,7 +1234,7 @@ function UpcomingTimeline({ items, copyVcs }) {
     <Card className="lg:col-span-2 border-slate-200" data-testid="situation-timeline-card">
       <CardHeader className="pb-2">
         <div className="flex items-center gap-2">
-          <CalendarClock size={16} className="text-[#2563EB]" />
+          <CalendarClock size={16} className="text-[#022D52]" />
           <CardTitle className="text-base" style={{fontFamily:'Chivo,sans-serif'}}>Prochaines echeances</CardTitle>
         </div>
       </CardHeader>
@@ -1283,7 +1283,7 @@ function UpcomingTimeline({ items, copyVcs }) {
                           {it.vcs_code && (
                             <button
                               onClick={() => copyVcs(it.vcs_code)}
-                              className="font-mono text-[9px] text-[#2563EB] bg-blue-50 hover:bg-blue-100 px-1.5 py-0.5 rounded inline-flex items-center gap-0.5"
+                              className="font-mono text-[9px] text-[#022D52] bg-blue-50 hover:bg-blue-100 px-1.5 py-0.5 rounded inline-flex items-center gap-0.5"
                               title="Copier VCS"
                             >
                               <Copy size={9} />
@@ -1356,12 +1356,12 @@ function CommunicationsTab({ communications, onOpenComm }) {
       {communications.map((c) => {
         const meta = COMM_KIND_META[c.kind] || COMM_KIND_META.generic;
         const KindIcon = meta.icon;
-        // Extract classes from meta.color (e.g. "bg-blue-100 text-blue-700 border-blue-200")
+        // Extract classes from meta.color (e.g. "bg-blue-100 text-[#01213e] border-blue-200")
         const [bgCls, textCls] = meta.color.split(' ');
         return (
           <Card
             key={c.id}
-            className="border-slate-200 hover:shadow-md hover:border-[#2563EB]/30 transition-all cursor-pointer"
+            className="border-slate-200 hover:shadow-md hover:border-[#022D52]/30 transition-all cursor-pointer"
             data-testid={`comm-card-${c.id}`}
             onClick={() => onOpenComm(c.id)}
           >
@@ -1448,9 +1448,9 @@ function CommunicationDetailDialog({ commId, onClose }) {
             )}
             {data.has_attachment && (
               <div className="flex items-center gap-2 p-2 bg-blue-50 border border-blue-200 rounded text-xs">
-                <Paperclip size={13} className="text-blue-600" />
+                <Paperclip size={13} className="text-[#022D52]" />
                 <span className="text-blue-800">Piece jointe : {data.attachment_filename || 'document.pdf'}</span>
-                <span className="text-[10px] text-blue-600 italic ml-auto">
+                <span className="text-[10px] text-[#022D52] italic ml-auto">
                   (envoyee par email, non stockee dans le portail)
                 </span>
               </div>
@@ -1476,7 +1476,7 @@ const JOURNAL_TYPE_META = {
   VE: { label: 'Appel de fonds', color: 'bg-orange-50 text-orange-700 border-orange-200', dotColor: 'bg-orange-500' },
   FI: { label: 'Paiement', color: 'bg-emerald-50 text-emerald-700 border-emerald-200', dotColor: 'bg-emerald-500' },
   OD: { label: 'Ecriture diverse', color: 'bg-slate-100 text-slate-700 border-slate-200', dotColor: 'bg-slate-500' },
-  AN: { label: 'Report a nouveau', color: 'bg-blue-50 text-blue-700 border-blue-200', dotColor: 'bg-blue-500' },
+  AN: { label: 'Report a nouveau', color: 'bg-blue-50 text-[#01213e] border-blue-200', dotColor: 'bg-blue-500' },
   ACH: { label: 'Achat', color: 'bg-purple-50 text-purple-700 border-purple-200', dotColor: 'bg-purple-500' },
 };
 
@@ -1492,7 +1492,7 @@ function MovementsTab({
         <CardContent className="p-3">
           <div className="flex items-center gap-3 flex-wrap">
             <div className="text-xs font-semibold text-slate-600 flex items-center gap-1.5">
-              <CalendarClock size={13} className="text-[#2563EB]" />
+              <CalendarClock size={13} className="text-[#022D52]" />
               Periode :
             </div>
             <div className="flex items-center gap-2 text-xs">
@@ -1563,7 +1563,7 @@ function MovementsTab({
                     <TableRow className="bg-blue-50/40 border-t-2 border-blue-200">
                       <TableCell className="text-xs font-mono">{fmtDate(periodStart)}</TableCell>
                       <TableCell>
-                        <Badge variant="outline" className="text-[10px] bg-blue-50 text-blue-700 border-blue-200">
+                        <Badge variant="outline" className="text-[10px] bg-blue-50 text-[#01213e] border-blue-200">
                           Solde initial
                         </Badge>
                       </TableCell>
@@ -1646,14 +1646,14 @@ function MovementsTab({
       {closingBalance > 0.01 && vcsCode && (
         <Card className="border-blue-200 bg-blue-50/40">
           <CardContent className="p-3 flex items-center gap-3 flex-wrap">
-            <Wallet size={16} className="text-blue-600" />
+            <Wallet size={16} className="text-[#022D52]" />
             <div className="text-xs">
               <div className="font-semibold text-blue-900">Pour regler votre solde de {fmt(closingBalance)}</div>
-              <div className="text-blue-700">Utilisez la communication structuree :</div>
+              <div className="text-[#01213e]">Utilisez la communication structuree :</div>
             </div>
             <button
               onClick={() => copyVcs(vcsCode)}
-              className="font-mono text-xs text-[#2563EB] bg-white hover:bg-blue-100 px-3 py-1.5 rounded border border-blue-200 inline-flex items-center gap-1.5"
+              className="font-mono text-xs text-[#022D52] bg-white hover:bg-blue-100 px-3 py-1.5 rounded border border-blue-200 inline-flex items-center gap-1.5"
               data-testid="movements-vcs-btn"
             >
               {vcsCode}<Copy size={11} />

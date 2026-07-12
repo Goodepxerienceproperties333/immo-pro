@@ -22,7 +22,7 @@ export default function TiersDetailDialog({
             Situation de compte: {nameDisplay}
           </DialogTitle>
           {isOwner && detail?.owner?.vcs_code && (
-            <p className="font-mono text-sm text-[#2563EB]">{detail.owner.vcs_code}</p>
+            <p className="font-mono text-sm text-[#022D52]">{detail.owner.vcs_code}</p>
           )}
         </DialogHeader>
         <div className="mt-2">
@@ -41,7 +41,7 @@ export default function TiersDetailDialog({
                 <button
                   type="button"
                   onClick={() => viewOwnerDetail(detailOwnerId, true)}
-                  className={`px-3 py-1 rounded-full text-xs font-medium transition ${detailGrouped ? 'bg-white text-[#2563EB] shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                  className={`px-3 py-1 rounded-full text-xs font-medium transition ${detailGrouped ? 'bg-white text-[#022D52] shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
                   data-testid="detail-view-grouped-btn"
                   title="Fusionne les lignes portant sur plusieurs lots du meme proprietaire"
                 >
@@ -50,7 +50,7 @@ export default function TiersDetailDialog({
                 <button
                   type="button"
                   onClick={() => viewOwnerDetail(detailOwnerId, false)}
-                  className={`px-3 py-1 rounded-full text-xs font-medium transition ${!detailGrouped ? 'bg-white text-[#2563EB] shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                  className={`px-3 py-1 rounded-full text-xs font-medium transition ${!detailGrouped ? 'bg-white text-[#022D52] shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
                   data-testid="detail-view-detailed-btn"
                   title="Affiche une ligne par lot (utile pour audit)"
                 >

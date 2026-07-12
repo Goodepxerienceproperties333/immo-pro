@@ -152,7 +152,7 @@ export default function UnlettrageDialog({ entry, open, onClose, onSuccess }) {
           <div className="bg-slate-50 border-b border-slate-200 p-3 flex items-center gap-2 flex-wrap">
             <div className="flex-1 min-w-0">
               <div className="font-semibold text-slate-800 text-sm flex items-center gap-1.5">
-                <Link2 size={13} className="text-[#2563EB]" /> Relettrer directement a une autre facture
+                <Link2 size={13} className="text-[#022D52]" /> Relettrer directement a une autre facture
               </div>
               <div className="text-[11px] text-slate-500 mt-0.5">
                 {data?.current_supplier
@@ -197,7 +197,7 @@ export default function UnlettrageDialog({ entry, open, onClose, onSuccess }) {
                 {!showAll && data?.current_supplier && (
                   <button
                     onClick={() => setShowAll(true)}
-                    className="ml-2 text-[#2563EB] hover:underline"
+                    className="ml-2 text-[#022D52] hover:underline"
                   >
                     Voir tous fournisseurs
                   </button>
@@ -231,7 +231,7 @@ export default function UnlettrageDialog({ entry, open, onClose, onSuccess }) {
                             </Badge>
                           )}
                           {c.same_supplier && !c.exact_match && (
-                            <Badge variant="outline" className="ml-1.5 text-[9px] bg-blue-50 border-blue-300 text-blue-700">
+                            <Badge variant="outline" className="ml-1.5 text-[9px] bg-blue-50 border-blue-300 text-[#01213e]">
                               {c.supplier ? 'Meme fournisseur' : ''}
                             </Badge>
                           )}
@@ -249,7 +249,7 @@ export default function UnlettrageDialog({ entry, open, onClose, onSuccess }) {
                         <td className="p-2 text-right">
                           <Button
                             size="sm"
-                            className={`h-7 text-xs ${c.exact_match ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-[#2563EB] hover:bg-[#1D4ED8]'} text-white`}
+                            className={`h-7 text-xs ${c.exact_match ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-[#022D52] hover:bg-[#1D4ED8]'} text-white`}
                             onClick={() => doRelettrage(c.id, label)}
                             disabled={busy}
                             data-testid={`relettrage-btn-${i}`}

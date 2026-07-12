@@ -76,7 +76,7 @@ export default function DashboardPage() {
               disabled={seeding}
               variant="outline"
               size="sm"
-              className="border-[#2563EB]/30 text-[#2563EB] hover:bg-[#2563EB]/5"
+              className="border-[#022D52]/30 text-[#022D52] hover:bg-[#022D52]/5"
               data-testid="seed-demo-btn"
             >
               {seeding ? <Loader2 size={14} className="mr-2 animate-spin" /> : <Sparkles size={14} className="mr-2" />}
@@ -89,7 +89,7 @@ export default function DashboardPage() {
         {stats && (
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
             {[
-              { label: 'Coproprietes', value: stats.coproprietes_count || coproprietes.length, icon: Home, color: '#2563EB' },
+              { label: 'Coproprietes', value: stats.coproprietes_count || coproprietes.length, icon: Home, color: '#022D52' },
               { label: 'Proprietaires', value: stats.owners_count || 0, icon: Users, color: '#0284C7' },
               { label: 'Lots', value: stats.lots_count || 0, icon: Building2, color: '#00A650' },
               { label: 'Factures impayees', value: stats.unpaid_invoices || 0, icon: AlertCircle, color: '#DC2626' },
@@ -116,14 +116,14 @@ export default function DashboardPage() {
             {coproprietes.filter(c => c.status !== 'archived').map(c => (
               <Card
                 key={c.id}
-                className="border-slate-200 hover:border-[#2563EB] hover:shadow-lg cursor-pointer transition-all group"
+                className="border-slate-200 hover:border-[#022D52] hover:shadow-lg cursor-pointer transition-all group"
                 onClick={() => setSelectedCopro(c.id)}
                 data-testid={`copro-tile-${c.id}`}
               >
                 <CardContent className="p-5">
                   <div className="flex items-start justify-between mb-3">
-                    <div className="w-10 h-10 rounded-md bg-[#2563EB]/10 flex items-center justify-center group-hover:bg-[#2563EB] transition-colors">
-                      <Home size={20} className="text-[#2563EB] group-hover:text-white transition-colors" />
+                    <div className="w-10 h-10 rounded-md bg-[#022D52]/10 flex items-center justify-center group-hover:bg-[#022D52] transition-colors">
+                      <Home size={20} className="text-[#022D52] group-hover:text-white transition-colors" />
                     </div>
                     {c.reference && <Badge variant="outline" className="font-mono text-[10px]">{c.reference}</Badge>}
                   </div>
@@ -132,7 +132,7 @@ export default function DashboardPage() {
                   {c.bce && <p className="text-[10px] text-slate-400 font-mono mt-1">BCE: {c.bce}</p>}
                   <div className="mt-3 pt-3 border-t border-slate-100 flex items-center justify-between">
                     <span className="text-[10px] text-slate-400 font-mono">{getDefaultIban(c)}</span>
-                    <span className="text-xs text-[#2563EB] font-medium opacity-0 group-hover:opacity-100 transition-opacity">Ouvrir</span>
+                    <span className="text-xs text-[#022D52] font-medium opacity-0 group-hover:opacity-100 transition-opacity">Ouvrir</span>
                   </div>
                 </CardContent>
               </Card>
@@ -144,15 +144,15 @@ export default function DashboardPage() {
   }
 
   // ---- PER-ACP DASHBOARD ----
-  if (loading) return <div className="h-1 w-48 bg-slate-200 rounded overflow-hidden mx-auto mt-20"><div className="h-full bg-[#2563EB] animate-pulse w-1/2" /></div>;
+  if (loading) return <div className="h-1 w-48 bg-slate-200 rounded overflow-hidden mx-auto mt-20"><div className="h-full bg-[#022D52] animate-pulse w-1/2" /></div>;
 
   const kpis = [
-    { label: 'Proprietaires', value: stats?.owners_count || 0, icon: Users, color: '#2563EB' },
+    { label: 'Proprietaires', value: stats?.owners_count || 0, icon: Users, color: '#022D52' },
     { label: 'Lots', value: stats?.lots_count || 0, icon: Building2, color: '#0284C7' },
     { label: 'Locataires', value: stats?.tenants_count || 0, icon: UserCheck, color: '#00A650' },
     { label: 'Factures', value: stats?.invoices_count || 0, icon: Receipt, color: '#FF6B00' },
     { label: 'Impayees', value: stats?.unpaid_invoices || 0, icon: AlertCircle, color: '#DC2626' },
-    { label: 'Total charges', value: `${(stats?.total_charges || 0).toLocaleString('fr-BE')} EUR`, icon: TrendingUp, color: '#2563EB' },
+    { label: 'Total charges', value: `${(stats?.total_charges || 0).toLocaleString('fr-BE')} EUR`, icon: TrendingUp, color: '#022D52' },
   ];
 
   return (
@@ -205,7 +205,7 @@ export default function DashboardPage() {
                   <h3 className="text-base font-semibold text-slate-900" style={{fontFamily:'Chivo,sans-serif'}}>Sante comptable</h3>
                   <span className={`text-[10px] uppercase tracking-wider font-bold px-2 py-0.5 rounded-full ${
                     health.score >= 90 ? 'bg-green-100 text-green-700' :
-                    health.score >= 75 ? 'bg-blue-100 text-blue-700' :
+                    health.score >= 75 ? 'bg-blue-100 text-[#01213e]' :
                     health.score >= 50 ? 'bg-orange-100 text-orange-700' :
                     'bg-red-100 text-red-700'
                   }`} data-testid="health-label">{health.health_label}</span>
@@ -215,7 +215,7 @@ export default function DashboardPage() {
               <div className="text-right">
                 <div className={`text-3xl font-bold tracking-tight ${
                   health.score >= 90 ? 'text-green-600' :
-                  health.score >= 75 ? 'text-blue-600' :
+                  health.score >= 75 ? 'text-[#022D52]' :
                   health.score >= 50 ? 'text-orange-600' :
                   'text-red-600'
                 }`} style={{fontFamily:'Chivo,sans-serif'}} data-testid="health-score">{health.score}<span className="text-base text-slate-400">/100</span></div>
@@ -412,7 +412,7 @@ export default function DashboardPage() {
               actions={[
                 { id: 'invoice',   label: 'Facture',        href: '/invoices',      color: 'bg-orange-50 text-orange-700 border-orange-200',  icon: Receipt },
                 { id: 'entry',     label: 'Ecriture',       href: '/journals',      color: 'bg-green-50 text-green-700 border-green-200',     icon: FileText },
-                { id: 'banking',   label: 'Extrait',        href: '/banking',       color: 'bg-blue-50 text-blue-700 border-blue-200',        icon: Landmark },
+                { id: 'banking',   label: 'Extrait',        href: '/banking',       color: 'bg-blue-50 text-[#01213e] border-blue-200',        icon: Landmark },
                 { id: 'funds',     label: 'Appel fonds',    href: '/fund-calls',    color: 'bg-purple-50 text-purple-700 border-purple-200',  icon: Megaphone },
                 { id: 'tiers',     label: 'Balance tiers',  href: '/balance-tiers', color: 'bg-teal-50 text-teal-700 border-teal-200',        icon: Scale },
                 { id: 'mutation',  label: 'Mutation lot',   href: '/coproprietes',  color: 'bg-rose-50 text-rose-700 border-rose-200',        icon: ArrowLeftRight },

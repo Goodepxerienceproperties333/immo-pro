@@ -225,7 +225,7 @@ export default function AccountingPage() {
                       <TableCell className={`text-slate-700 ${acc.number.length >= 4 ? 'text-sm' : 'font-medium'}`}>{acc.name}</TableCell>
                       <TableCell><Badge variant="outline" className="text-xs font-mono">{acc.class_num}</Badge></TableCell>
                       <TableCell>
-                        <Badge className={acc.type === 'balance' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-green-50 text-green-700 border-green-200'} variant="outline">
+                        <Badge className={acc.type === 'balance' ? 'bg-blue-50 text-[#01213e] border-blue-200' : 'bg-green-50 text-green-700 border-green-200'} variant="outline">
                           {acc.type === 'balance' ? 'Bilan' : 'Resultat'}
                         </Badge>
                       </TableCell>

@@ -183,7 +183,7 @@ export default function BundleImportDialog({
       >
         <DialogHeader>
           <DialogTitle style={{fontFamily:'Chivo,sans-serif'}} className="flex items-center gap-2">
-            <FolderInput size={20} className="text-[#2563EB]" />
+            <FolderInput size={20} className="text-[#022D52]" />
             Regroupement de factures PDF
           </DialogTitle>
         </DialogHeader>
@@ -209,7 +209,7 @@ export default function BundleImportDialog({
               />
               <Button
                 onClick={() => document.getElementById('bundle-pdf-input').click()}
-                className="bg-[#2563EB] hover:bg-[#1D4ED8]"
+                className="bg-[#022D52] hover:bg-[#1D4ED8]"
                 data-testid="bundle-select-file-btn"
               >
                 <FileText size={16} className="mr-2" /> Selectionner un PDF
@@ -220,7 +220,7 @@ export default function BundleImportDialog({
 
         {step === 'analyzing' && (
           <div className="py-12 text-center" data-testid="bundle-analyzing">
-            <div className="inline-block animate-spin rounded-full h-10 w-10 border-b-2 border-[#2563EB] mb-4"></div>
+            <div className="inline-block animate-spin rounded-full h-10 w-10 border-b-2 border-[#022D52] mb-4"></div>
             <p className="text-sm text-slate-600">Analyse du PDF en cours...</p>
             <p className="text-xs text-slate-400 mt-1">Cette operation peut prendre quelques secondes pour les fichiers volumineux.</p>
           </div>
@@ -360,7 +360,7 @@ export default function BundleImportDialog({
 
             <div className="flex items-center justify-between pt-3 border-t shrink-0 sticky bottom-0 bg-white -mx-6 px-6 pb-1">
               <div className="text-xs text-slate-500">
-                <span className="font-semibold text-blue-700">{Object.values(assignments).filter(a => a.mode === 'attach').length}</span> attachement(s),{' '}
+                <span className="font-semibold text-[#01213e]">{Object.values(assignments).filter(a => a.mode === 'attach').length}</span> attachement(s),{' '}
                 <span className="font-semibold text-emerald-700">{Object.values(assignments).filter(a => a.mode === 'create').length}</span> creation(s),{' '}
                 <span className="font-semibold text-slate-500">{Object.values(assignments).filter(a => a.mode === 'skip').length}</span> ignoree(s)
               </div>
@@ -368,7 +368,7 @@ export default function BundleImportDialog({
                 <Button variant="outline" onClick={() => handleClose(false)} data-testid="bundle-cancel-btn">Annuler</Button>
                 <Button
                   onClick={commit}
-                  className="bg-[#2563EB] hover:bg-[#1D4ED8] font-semibold shadow-md"
+                  className="bg-[#022D52] hover:bg-[#1D4ED8] font-semibold shadow-md"
                   data-testid="bundle-commit-btn"
                 >
                   <Check size={16} className="mr-2" /> Confirmer l import
@@ -380,7 +380,7 @@ export default function BundleImportDialog({
 
         {step === 'committing' && (
           <div className="py-12 text-center" data-testid="bundle-committing">
-            <div className="inline-block animate-spin rounded-full h-10 w-10 border-b-2 border-[#2563EB] mb-4"></div>
+            <div className="inline-block animate-spin rounded-full h-10 w-10 border-b-2 border-[#022D52] mb-4"></div>
             <p className="text-sm text-slate-600">Decoupage et attachement en cours...</p>
           </div>
         )}
@@ -410,7 +410,7 @@ export default function BundleImportDialog({
               </div>
             )}
             <div className="flex justify-end">
-              <Button onClick={() => handleClose(false)} className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="bundle-close-btn">
+              <Button onClick={() => handleClose(false)} className="bg-[#022D52] hover:bg-[#1D4ED8]" data-testid="bundle-close-btn">
                 Fermer
               </Button>
             </div>
@@ -470,7 +470,7 @@ function CreateInvoiceMini({ data, accounts, distKeys, categories, expanded, onT
       <button
         type="button"
         onClick={onToggle}
-        className="text-[10px] text-blue-700 hover:underline flex items-center gap-0.5"
+        className="text-[10px] text-[#01213e] hover:underline flex items-center gap-0.5"
       >
         {expanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
         {expanded ? 'Moins d\'options' : 'Plus d\'options...'}

@@ -89,7 +89,7 @@ export default function AdminSyndicConfigPage() {
       <header className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold flex items-center gap-2">
-            <Settings className="h-6 w-6 text-blue-600" />
+            <Settings className="h-6 w-6 text-[#022D52]" />
             Configuration des cabinets syndics
           </h1>
           <p className="text-sm text-slate-500 mt-1">
@@ -124,7 +124,7 @@ export default function AdminSyndicConfigPage() {
                 <TableRow key={s.syndic_user_id} data-testid={`row-syndic-${s.syndic_user_id}`}>
                   <TableCell className="font-medium">
                     <div className="flex items-center gap-2">
-                      <Building2 className="h-4 w-4 text-blue-600" />
+                      <Building2 className="h-4 w-4 text-[#022D52]" />
                       <div>
                         <div>{s.legal_name || s.user_name || <em className="text-slate-400">-</em>}</div>
                         {s.display_name && <div className="text-xs text-slate-500">{s.display_name}</div>}
@@ -175,7 +175,7 @@ export default function AdminSyndicConfigPage() {
           <Card>
             <CardHeader className="pb-3">
               <CardTitle className="text-sm flex items-center gap-2">
-                <Building2 className="h-4 w-4 text-blue-600" /> Identite cabinet
+                <Building2 className="h-4 w-4 text-[#022D52]" /> Identite cabinet
               </CardTitle>
             </CardHeader>
             <CardContent className="grid grid-cols-2 gap-3">
@@ -211,7 +211,7 @@ export default function AdminSyndicConfigPage() {
           <Card>
             <CardHeader className="pb-3">
               <CardTitle className="text-sm flex items-center gap-2">
-                <Mail className="h-4 w-4 text-blue-600" /> Configuration email
+                <Mail className="h-4 w-4 text-[#022D52]" /> Configuration email
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
@@ -272,7 +272,7 @@ export default function AdminSyndicConfigPage() {
 
           <DialogFooter>
             <Button variant="ghost" onClick={() => setSelected(null)}>Fermer</Button>
-            <Button onClick={saveIdent} disabled={saving} className="bg-blue-600 hover:bg-blue-700"
+            <Button onClick={saveIdent} disabled={saving} className="bg-[#022D52] hover:bg-[#01213e]"
                     data-testid="admin-btn-save-ident">
               <Save className="h-4 w-4 mr-1" /> Enregistrer identite
             </Button>

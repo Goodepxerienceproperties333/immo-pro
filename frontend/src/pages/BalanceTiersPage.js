@@ -132,7 +132,7 @@ export default function BalanceTiersPage() {
     }
   };
 
-  if (loading && !ownersData) return <div className="h-1 w-48 bg-slate-200 rounded overflow-hidden mx-auto mt-20"><div className="h-full bg-[#2563EB] animate-pulse w-1/2" /></div>;
+  if (loading && !ownersData) return <div className="h-1 w-48 bg-slate-200 rounded overflow-hidden mx-auto mt-20"><div className="h-full bg-[#022D52] animate-pulse w-1/2" /></div>;
 
   // Apply free-text filter on owner_name / vcs_code client-side
   const applyTextFilter = (list) => {
@@ -248,7 +248,7 @@ export default function BalanceTiersPage() {
                             </Badge>
                           )}
                         </TableCell>
-                        <TableCell className="font-mono text-xs text-[#2563EB]">{o.vcs_code}</TableCell>
+                        <TableCell className="font-mono text-xs text-[#022D52]">{o.vcs_code}</TableCell>
                         <TableCell className="font-mono text-[11px] text-slate-500">
                           {o.account_provisions || '—'} <span className="text-slate-300">/</span> {o.account_reserve || '—'}
                         </TableCell>
@@ -280,7 +280,7 @@ export default function BalanceTiersPage() {
                                   }}
                                   data-testid={`pdf-situation-${o.owner_id}`}
                                   title={(filters.startDate || filters.endDate) ? `Situation de compte PDF (periode ${filters.startDate || '…'} - ${filters.endDate || '…'})` : "Situation de compte PDF (envoi email/postal)"}
-                                  className="text-[#2563EB] hover:text-[#1D4ED8]"
+                                  className="text-[#022D52] hover:text-[#1D4ED8]"
                                 >
                                   <FileText size={14} />
                                 </Button>

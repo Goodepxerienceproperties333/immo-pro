@@ -145,7 +145,7 @@ export default function AdminRgpdRegisterPage() {
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-2xl font-semibold text-slate-900 flex items-center gap-2" style={{ fontFamily: 'Chivo, sans-serif' }}>
-            <FileArchive size={22} className="text-[#2563EB]" />
+            <FileArchive size={22} className="text-[#022D52]" />
             Registre des traitements RGPD (art. 30)
           </h1>
           <p className="text-xs text-slate-500 mt-0.5">
@@ -170,7 +170,7 @@ export default function AdminRgpdRegisterPage() {
         <Button onClick={save} disabled={saving} className="bg-slate-800 hover:bg-slate-900 text-white" data-testid="rgpd-reg-save-btn">
           {saving ? <><Loader2 size={13} className="animate-spin mr-1.5" /> Sauvegarde...</> : <><Save size={13} className="mr-1.5" /> Sauvegarder</>}
         </Button>
-        <Button onClick={downloadPdf} disabled={downloading} className="bg-[#2563EB] hover:bg-[#1D4ED8] text-white" data-testid="rgpd-reg-download-pdf-btn">
+        <Button onClick={downloadPdf} disabled={downloading} className="bg-[#022D52] hover:bg-[#1D4ED8] text-white" data-testid="rgpd-reg-download-pdf-btn">
           {downloading ? <><Loader2 size={13} className="animate-spin mr-1.5" /> Generation...</> : <><Download size={13} className="mr-1.5" /> Telecharger le PDF</>}
         </Button>
       </div>
@@ -373,7 +373,7 @@ export default function AdminRgpdRegisterPage() {
           {saving ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />}
           <span className="ml-1.5">Sauvegarder</span>
         </Button>
-        <Button onClick={downloadPdf} disabled={downloading} className="bg-[#2563EB] hover:bg-[#1D4ED8] text-white" data-testid="rgpd-reg-download-pdf-btn-bottom">
+        <Button onClick={downloadPdf} disabled={downloading} className="bg-[#022D52] hover:bg-[#1D4ED8] text-white" data-testid="rgpd-reg-download-pdf-btn-bottom">
           {downloading ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}
           <span className="ml-1.5">Telecharger PDF</span>
         </Button>

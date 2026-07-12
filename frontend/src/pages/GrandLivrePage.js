@@ -41,7 +41,7 @@ export default function GrandLivrePage() {
           <div><label className="form-label">Au</label><Input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} className="w-40" /></div>
           <div><label className="form-label">Compte de</label><Input value={accountFrom} onChange={e => setAccountFrom(e.target.value)} placeholder="100000" className="w-32" /></div>
           <div><label className="form-label">Compte a</label><Input value={accountTo} onChange={e => setAccountTo(e.target.value)} placeholder="799999" className="w-32" /></div>
-          <Button onClick={loadLedger} className="bg-[#2563EB] hover:bg-[#1D4ED8]" disabled={loading} data-testid="load-ledger-btn">
+          <Button onClick={loadLedger} className="bg-[#022D52] hover:bg-[#1D4ED8]" disabled={loading} data-testid="load-ledger-btn">
             <Search size={16} className="mr-2" /> {loading ? 'Chargement...' : 'Charger'}
           </Button>
         </div>
@@ -55,8 +55,8 @@ export default function GrandLivrePage() {
             <Card key={account.account_number} className="border-slate-200">
               <CardHeader className="pb-2 bg-slate-50 rounded-t-md">
                 <CardTitle className="text-base flex items-center justify-between" style={{fontFamily:'Chivo,sans-serif'}}>
-                  <span><span className="font-mono text-[#2563EB] mr-2">{account.account_number}</span>{account.account_name}</span>
-                  <Badge variant="outline" className={`font-mono ${account.balance >= 0 ? 'text-blue-700' : 'text-red-700'}`}>Solde: {account.balance.toFixed(2)} EUR</Badge>
+                  <span><span className="font-mono text-[#022D52] mr-2">{account.account_number}</span>{account.account_name}</span>
+                  <Badge variant="outline" className={`font-mono ${account.balance >= 0 ? 'text-[#01213e]' : 'text-red-700'}`}>Solde: {account.balance.toFixed(2)} EUR</Badge>
                 </CardTitle>
               </CardHeader>
               <CardContent className="p-0">

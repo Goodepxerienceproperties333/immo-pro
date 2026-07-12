@@ -285,10 +285,10 @@ export default function ExpensesPage() {
         <div className="flex items-center gap-2">
           {/* View mode toggle : Flat list vs Grouped hierarchy */}
           <div className="inline-flex rounded-md border border-slate-200 bg-white">
-            <button onClick={() => setViewMode('grouped')} className={`px-3 py-1.5 text-xs flex items-center gap-1 ${viewMode === 'grouped' ? 'bg-[#2563EB] text-white' : 'text-slate-600 hover:bg-slate-50'}`} data-testid="view-grouped">
+            <button onClick={() => setViewMode('grouped')} className={`px-3 py-1.5 text-xs flex items-center gap-1 ${viewMode === 'grouped' ? 'bg-[#022D52] text-white' : 'text-slate-600 hover:bg-slate-50'}`} data-testid="view-grouped">
               <LayoutGrid size={12} /> Hierarchique
             </button>
-            <button onClick={() => setViewMode('flat')} className={`px-3 py-1.5 text-xs flex items-center gap-1 ${viewMode === 'flat' ? 'bg-[#2563EB] text-white' : 'text-slate-600 hover:bg-slate-50'}`} data-testid="view-flat">
+            <button onClick={() => setViewMode('flat')} className={`px-3 py-1.5 text-xs flex items-center gap-1 ${viewMode === 'flat' ? 'bg-[#022D52] text-white' : 'text-slate-600 hover:bg-slate-50'}`} data-testid="view-flat">
               <List size={12} /> Liste plate
             </button>
           </div>
@@ -325,7 +325,7 @@ export default function ExpensesPage() {
             </div>
             <div>
               <label className="form-label text-xs">
-                <span className="text-[10px] font-bold text-[#2563EB] mr-1">N1</span>
+                <span className="text-[10px] font-bold text-[#022D52] mr-1">N1</span>
                 Cle de repartition
               </label>
               <Select value={filters.distribution_key_id || ALL} onValueChange={v => setField('distribution_key_id', v)}>
@@ -338,7 +338,7 @@ export default function ExpensesPage() {
             </div>
             <div>
               <label className="form-label text-xs">
-                <span className="text-[10px] font-bold text-[#2563EB] mr-1">N2</span>
+                <span className="text-[10px] font-bold text-[#022D52] mr-1">N2</span>
                 Nature de depense
               </label>
               <Select value={filters.expense_category_id || ALL} onValueChange={v => setField('expense_category_id', v)}>
@@ -351,7 +351,7 @@ export default function ExpensesPage() {
             </div>
             <div>
               <label className="form-label text-xs">
-                <span className="text-[10px] font-bold text-[#2563EB] mr-1">N3</span>
+                <span className="text-[10px] font-bold text-[#022D52] mr-1">N3</span>
                 Compte comptable
               </label>
               <Select value={filters.account_number || ALL} onValueChange={v => setField('account_number', v)}>
@@ -388,10 +388,10 @@ export default function ExpensesPage() {
         const byKey = buildBreakdown(data.totals.by_key || {});
         return (
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
-            <Card className="border-[#2563EB] bg-blue-50/40">
+            <Card className="border-[#022D52] bg-blue-50/40">
               <CardContent className="p-4">
-                <div className="text-xs uppercase tracking-wider text-blue-700">Total filtre</div>
-                <div className="text-2xl font-black text-[#2563EB] font-mono mt-1" style={{ fontFamily: 'Chivo,sans-serif' }} data-testid="expenses-total">{data.totals.total.toFixed(2)} EUR</div>
+                <div className="text-xs uppercase tracking-wider text-[#01213e]">Total filtre</div>
+                <div className="text-2xl font-black text-[#022D52] font-mono mt-1" style={{ fontFamily: 'Chivo,sans-serif' }} data-testid="expenses-total">{data.totals.total.toFixed(2)} EUR</div>
                 <div className="text-[11px] text-slate-500 mt-1">{data.totals.count} depenses</div>
               </CardContent>
             </Card>
@@ -488,7 +488,7 @@ export default function ExpensesPage() {
                       <span className="text-amber-700 font-semibold">{(r.occupant_pct ?? 0).toFixed(0)}%</span>
                     )}
                     {(r.occupant_pct ?? 0) > 0 && <span className="text-slate-300"> / </span>}
-                    <span className="text-blue-700 font-semibold">{(r.proprietaire_pct ?? 100).toFixed(0)}%</span>
+                    <span className="text-[#01213e] font-semibold">{(r.proprietaire_pct ?? 100).toFixed(0)}%</span>
                   </TableCell>
                   <TableCell className="text-right font-mono font-semibold">{r.total_amount.toFixed(2)}</TableCell>
                   <TableCell>
@@ -498,7 +498,7 @@ export default function ExpensesPage() {
                     {r.attachments_count > 0 && <Paperclip size={12} className="inline" />}{r.attachments_count > 0 && <span className="text-[10px] ml-0.5">{r.attachments_count}</span>}
                   </TableCell>
                   <TableCell className="text-right whitespace-nowrap">
-                    <Button variant="ghost" size="sm" onClick={() => openQuickEdit(r)} title="Modifier nature / cle / repartition" data-testid={`quick-edit-expense-${r.id}`} className="text-[#2563EB]"><Pencil size={12} /></Button>
+                    <Button variant="ghost" size="sm" onClick={() => openQuickEdit(r)} title="Modifier nature / cle / repartition" data-testid={`quick-edit-expense-${r.id}`} className="text-[#022D52]"><Pencil size={12} /></Button>
                     <Button variant="ghost" size="sm" onClick={() => navigate(r.source === 'journal' ? `/accounting?entry=${r.id}` : `/invoices?edit=${r.id}`)} title="Edition complete" data-testid={`edit-expense-${r.id}`}><Receipt size={12} /></Button>
                   </TableCell>
                 </TableRow>
@@ -524,13 +524,13 @@ export default function ExpensesPage() {
             return (
               <div key={k1} className="border-b border-slate-200 last:border-b-0" data-testid={`group-key-${g1.key_id}`}>
                 {/* Niveau 1 : Cle de repartition */}
-                <button onClick={() => toggleCollapse(k1)} className="w-full flex items-center gap-2 px-4 py-3 bg-[#2563EB]/10 hover:bg-[#2563EB]/15 text-left">
-                  {c1 ? <ChevronRight size={14} className="text-[#2563EB]" /> : <ChevronDown size={14} className="text-[#2563EB]" />}
-                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-[#2563EB] text-white">N1 CLE</span>
+                <button onClick={() => toggleCollapse(k1)} className="w-full flex items-center gap-2 px-4 py-3 bg-[#022D52]/10 hover:bg-[#022D52]/15 text-left">
+                  {c1 ? <ChevronRight size={14} className="text-[#022D52]" /> : <ChevronDown size={14} className="text-[#022D52]" />}
+                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-[#022D52] text-white">N1 CLE</span>
                   <span className="font-semibold text-sm text-slate-800">{g1.key_name}</span>
                   <span className="ml-auto flex items-center gap-3">
                     <span className="text-[11px] text-slate-500">{g1.count} depense(s)</span>
-                    <span className="font-mono font-bold text-base text-[#2563EB]" data-testid={`group-key-${g1.key_id}-subtotal`}>{g1.subtotal.toFixed(2)} EUR</span>
+                    <span className="font-mono font-bold text-base text-[#022D52]" data-testid={`group-key-${g1.key_id}-subtotal`}>{g1.subtotal.toFixed(2)} EUR</span>
                   </span>
                 </button>
                 {!c1 && g1.natures.map((g2) => {
@@ -607,7 +607,7 @@ export default function ExpensesPage() {
                                             <span className="text-amber-700 font-semibold">{(r.occupant_pct ?? 0).toFixed(0)}%</span>
                                           )}
                                           {(r.occupant_pct ?? 0) > 0 && <span className="text-slate-300"> / </span>}
-                                          <span className="text-blue-700 font-semibold">{(r.proprietaire_pct ?? 100).toFixed(0)}%</span>
+                                          <span className="text-[#01213e] font-semibold">{(r.proprietaire_pct ?? 100).toFixed(0)}%</span>
                                         </TableCell>
                                         <TableCell className="text-right font-mono font-semibold">{r.total_amount.toFixed(2)}</TableCell>
                                         <TableCell>
@@ -617,7 +617,7 @@ export default function ExpensesPage() {
                                           {r.attachments_count > 0 && <><Paperclip size={10} className="inline" /><span className="text-[9px] ml-0.5">{r.attachments_count}</span></>}
                                         </TableCell>
                                         <TableCell className="text-right whitespace-nowrap">
-                                          <Button variant="ghost" size="sm" onClick={() => openQuickEdit(r)} title="Modifier" data-testid={`hier-quick-edit-${r.id}`} className="text-[#2563EB] h-6 w-6 p-0"><Pencil size={11} /></Button>
+                                          <Button variant="ghost" size="sm" onClick={() => openQuickEdit(r)} title="Modifier" data-testid={`hier-quick-edit-${r.id}`} className="text-[#022D52] h-6 w-6 p-0"><Pencil size={11} /></Button>
                                           <Button variant="ghost" size="sm" onClick={() => navigate(r.source === 'journal' ? `/accounting?entry=${r.id}` : `/invoices?edit=${r.id}`)} title="Edition complete" data-testid={`hier-edit-${r.id}`} className="h-6 w-6 p-0"><Receipt size={11} /></Button>
                                         </TableCell>
                                       </TableRow>
@@ -638,7 +638,7 @@ export default function ExpensesPage() {
           {data && data.expenses.length > 0 && (
             <div className="flex items-center justify-end gap-6 px-4 py-3 bg-slate-100 border-t border-slate-300">
               <span className="text-xs uppercase tracking-wider font-bold text-slate-600">Total general</span>
-              <span className="font-mono font-black text-lg text-[#2563EB]">{data.totals.total.toFixed(2)} EUR</span>
+              <span className="font-mono font-black text-lg text-[#022D52]">{data.totals.total.toFixed(2)} EUR</span>
               <span className="text-[11px] text-slate-500">({data.totals.count} depenses)</span>
             </div>
           )}
@@ -700,7 +700,7 @@ export default function ExpensesPage() {
               </div>
               <div>
                 <label className="form-label">
-                  <span className="text-[10px] font-bold text-[#2563EB] mr-1">N1</span>
+                  <span className="text-[10px] font-bold text-[#022D52] mr-1">N1</span>
                   Cle de repartition
                 </label>
                 <Select
@@ -750,7 +750,7 @@ export default function ExpensesPage() {
                       </div>
                       <div>
                         <div className="text-[10px] uppercase text-slate-500">Part proprietaire</div>
-                        <div className="font-mono font-semibold text-blue-700">
+                        <div className="font-mono font-semibold text-[#01213e]">
                           {(baseAmount * (Number(quickEdit.proprietaire_pct) || 0) / 100).toFixed(2)} EUR
                         </div>
                       </div>
@@ -772,7 +772,7 @@ export default function ExpensesPage() {
           )}
           <DialogFooter className="mt-2">
             <Button variant="outline" onClick={() => setQuickEdit(null)}>Annuler</Button>
-            <Button onClick={saveQuickEdit} disabled={savingEdit} className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="qe-save-btn">
+            <Button onClick={saveQuickEdit} disabled={savingEdit} className="bg-[#022D52] hover:bg-[#1D4ED8]" data-testid="qe-save-btn">
               <Save size={14} className="mr-2" />{savingEdit ? 'Enregistrement...' : 'Enregistrer'}
             </Button>
           </DialogFooter>

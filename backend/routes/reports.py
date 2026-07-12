@@ -2525,7 +2525,7 @@ def create_reports_router(db):
                 })
 
         movements.sort(key=lambda x: (x["date"], x.get("reference", "")))
-        # Cote fournisseur : credit a payer = positif (convention CoproManager)
+        # Cote fournisseur : credit a payer = positif (convention NextGe Copro)
         running = 0.0
         for m in movements:
             running += m["credit"] - m["debit"]

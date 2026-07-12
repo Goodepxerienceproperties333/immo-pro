@@ -30,7 +30,7 @@ const CATEGORIES = [
 function CategoryBadge({ cat }) {
   const map = {
     recouvrement: 'bg-red-100 text-red-700',
-    information: 'bg-blue-100 text-blue-700',
+    information: 'bg-blue-100 text-[#01213e]',
     confirmation: 'bg-emerald-100 text-emerald-700',
     convocation: 'bg-violet-100 text-violet-700',
     general: 'bg-slate-100 text-slate-700',
@@ -196,7 +196,7 @@ function TemplateEditor({ template, onSaved, onClose, variables }) {
         </div>
         <DialogFooter>
           <Button variant="ghost" onClick={onClose}><X className="h-4 w-4 mr-1" /> Annuler</Button>
-          <Button onClick={save} disabled={saving} className="bg-blue-600 hover:bg-blue-700"
+          <Button onClick={save} disabled={saving} className="bg-[#022D52] hover:bg-[#01213e]"
                   data-testid="tpl-btn-save">
             <Save className="h-4 w-4 mr-1" /> Enregistrer
           </Button>
@@ -251,7 +251,7 @@ export default function EmailTemplatesPage() {
       <header className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold flex items-center gap-2">
-            <FileText className="h-6 w-6 text-blue-600" />
+            <FileText className="h-6 w-6 text-[#022D52]" />
             Modeles d&apos;emails
           </h1>
           <p className="text-sm text-slate-500 mt-1">
@@ -262,7 +262,7 @@ export default function EmailTemplatesPage() {
           <Button variant="ghost" size="sm" onClick={load} data-testid="tpl-btn-refresh">
             <RefreshCw className="h-4 w-4" />
           </Button>
-          <Button onClick={() => setEditing({})} className="bg-blue-600 hover:bg-blue-700"
+          <Button onClick={() => setEditing({})} className="bg-[#022D52] hover:bg-[#01213e]"
                   data-testid="tpl-btn-new">
             <Plus className="h-4 w-4 mr-1" /> Nouveau modele
           </Button>

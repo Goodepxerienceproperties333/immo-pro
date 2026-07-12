@@ -17,7 +17,7 @@ import { ScrollText, Shield, FileText, Cookie, AlertTriangle, Save, Zap, Eye, Hi
 
 const SLUG_ORDER = ['cgu', 'privacy', 'mentions', 'cookies', 'disclaimer'];
 const SLUG_META = {
-  cgu: { label: 'CGU', icon: ScrollText, colorClass: 'text-blue-600', bgClass: 'bg-blue-50 border-blue-200' },
+  cgu: { label: 'CGU', icon: ScrollText, colorClass: 'text-[#022D52]', bgClass: 'bg-blue-50 border-blue-200' },
   privacy: { label: 'Confidentialite (RGPD)', icon: Shield, colorClass: 'text-emerald-600', bgClass: 'bg-emerald-50 border-emerald-200' },
   mentions: { label: 'Mentions Legales', icon: FileText, colorClass: 'text-slate-600', bgClass: 'bg-slate-50 border-slate-200' },
   cookies: { label: 'Cookies', icon: Cookie, colorClass: 'text-amber-600', bgClass: 'bg-amber-50 border-amber-200' },
@@ -122,7 +122,7 @@ export default function AdminLegalDocsPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold text-slate-900 flex items-center gap-2" style={{ fontFamily: 'Chivo, sans-serif' }}>
-            <ScrollText size={22} className="text-[#2563EB]" />
+            <ScrollText size={22} className="text-[#022D52]" />
             Documents legaux
           </h1>
           <p className="text-xs text-slate-500 mt-0.5">
@@ -149,8 +149,8 @@ export default function AdminLegalDocsPage() {
               data-testid={`admin-legal-tab-${slug}`}
               className={`inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded border transition-colors ${
                 isActive
-                  ? 'bg-[#2563EB] text-white border-[#2563EB]'
-                  : `bg-white text-slate-700 border-slate-200 hover:border-[#2563EB] hover:text-[#2563EB]`
+                  ? 'bg-[#022D52] text-white border-[#022D52]'
+                  : `bg-white text-slate-700 border-slate-200 hover:border-[#022D52] hover:text-[#022D52]`
               }`}
             >
               <Icon size={12} />
@@ -229,7 +229,7 @@ export default function AdminLegalDocsPage() {
                   <AlertDialogTrigger asChild>
                     <Button
                       variant="default"
-                      className="bg-[#2563EB] hover:bg-[#1D4ED8] text-white flex-1"
+                      className="bg-[#022D52] hover:bg-[#1D4ED8] text-white flex-1"
                       disabled={saving}
                       data-testid="admin-legal-bump-btn"
                     >
@@ -264,7 +264,7 @@ export default function AdminLegalDocsPage() {
                       <AlertDialogCancel data-testid="admin-legal-bump-cancel">Annuler</AlertDialogCancel>
                       <AlertDialogAction
                         onClick={(e) => { e.preventDefault(); save(true); }}
-                        className="bg-[#2563EB] hover:bg-[#1D4ED8] text-white"
+                        className="bg-[#022D52] hover:bg-[#1D4ED8] text-white"
                         data-testid="admin-legal-bump-confirm"
                       >
                         <Zap size={13} className="mr-1.5" /> Publier v{activeDoc.version + 1}
@@ -288,10 +288,10 @@ export default function AdminLegalDocsPage() {
                     <ul className="mt-2 space-y-1 max-h-40 overflow-auto">
                       {history.map((h) => (
                         <li key={h.id} className="text-[11px] px-2 py-1 rounded bg-slate-50 border border-slate-100 flex items-center gap-2">
-                          <span className={h.bumped ? 'font-semibold text-blue-700' : 'text-slate-700'}>
+                          <span className={h.bumped ? 'font-semibold text-[#01213e]' : 'text-slate-700'}>
                             v{h.version_before} → v{h.version_after}
                           </span>
-                          {h.bumped && <Badge className="bg-blue-100 text-blue-700 border-0 text-[9px]">bump</Badge>}
+                          {h.bumped && <Badge className="bg-blue-100 text-[#01213e] border-0 text-[9px]">bump</Badge>}
                           <span className="text-slate-500 ml-auto">
                             {h.edited_by_email} — {new Date(h.edited_at).toLocaleString('fr-BE')}
                           </span>
@@ -321,7 +321,7 @@ export default function AdminLegalDocsPage() {
                   {editTitle || activeDoc.title}
                 </h2>
                 <article
-                  className="prose prose-slate prose-sm max-w-none prose-headings:font-semibold prose-headings:text-slate-800 prose-a:text-[#2563EB] prose-table:text-xs prose-code:text-[13px] prose-strong:text-slate-900"
+                  className="prose prose-slate prose-sm max-w-none prose-headings:font-semibold prose-headings:text-slate-800 prose-a:text-[#022D52] prose-table:text-xs prose-code:text-[13px] prose-strong:text-slate-900"
                   data-testid="admin-legal-preview"
                 >
                   <ReactMarkdown remarkPlugins={[remarkGfm]}>{editContent || '*(vide)*'}</ReactMarkdown>

@@ -1,7 +1,7 @@
 """PDF Registre des traitements RGPD (art. 30).
 
 Genere un document PDF listant les activites de traitement des donnees
-personnelles de la plateforme CoproManager, prêt à envoyer à l'APD en cas
+personnelles de la plateforme NextGe Copro, prêt à envoyer à l'APD en cas
 de contrôle.
 
 Contenu :
@@ -320,7 +320,7 @@ def build_rgpd_register_pdf(register_data: dict, syndic_pdf_ctx: dict = None) ->
         topMargin=15 * mm,
         bottomMargin=28 * mm if use_new_layout else 15 * mm,
         title="Registre des traitements RGPD (art. 30)",
-        author="CoproManager",
+        author="NextGe Copro",
     )
     story = []
 
@@ -362,7 +362,7 @@ def build_rgpd_register_pdf(register_data: dict, syndic_pdf_ctx: dict = None) ->
 
     info_row = Table([[
         Paragraph(f"<b>Derniere mise a jour :</b> {updated_str}", styles["small"]),
-        Paragraph("<b>Version :</b> Registre unique — SaaS CoproManager", styles["small"]),
+        Paragraph("<b>Version :</b> Registre unique — SaaS NextGe Copro", styles["small"]),
     ]], colWidths=[95*mm, 90*mm])
     info_row.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, -1), ACCENT_BG),
@@ -395,7 +395,7 @@ def build_rgpd_register_pdf(register_data: dict, syndic_pdf_ctx: dict = None) ->
     story.append(Paragraph("2. Activites de traitement", styles["h2"]))
     story.append(Paragraph(
         "Liste exhaustive des traitements de donnees a caractere personnel realises par la Plateforme "
-        "CoproManager. Chaque traitement est detaille : finalite, base legale RGPD, categories de donnees, "
+        "NextGe Copro. Chaque traitement est detaille : finalite, base legale RGPD, categories de donnees, "
         "personnes concernees, destinataires et duree de conservation.",
         styles["body"]))
     story.append(Spacer(1, 4))
@@ -494,7 +494,7 @@ def build_rgpd_register_pdf(register_data: dict, syndic_pdf_ctx: dict = None) ->
         doc.build(story, onFirstPage=footer_cb, onLaterPages=footer_cb)
     else:
         doc.build(story,
-                  onFirstPage=_footer_maker("Registre RGPD - CoproManager"),
-                  onLaterPages=_footer_maker("Registre RGPD - CoproManager"))
+                  onFirstPage=_footer_maker("Registre RGPD - NextGe Copro"),
+                  onLaterPages=_footer_maker("Registre RGPD - NextGe Copro"))
     buf.seek(0)
     return buf.getvalue()

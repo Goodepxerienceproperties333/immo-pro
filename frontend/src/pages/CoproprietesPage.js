@@ -246,7 +246,7 @@ export default function CoproprietesPage() {
         <div><h1 className="page-title"><Home size={24} className="inline mr-2" />Coproprietes (ACP)</h1><p className="page-subtitle">Gestion des associations de coproprietaires</p></div>
         <div className="flex gap-2">
           <Button variant={showArchived ? "default" : "outline"} size="sm" onClick={() => setShowArchived(!showArchived)} data-testid="toggle-archived"><Archive size={14} className="mr-1" /> {showArchived ? 'Masquer archives' : 'Voir archives'}</Button>
-          {isManager && <Button onClick={openCreate} className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="create-copro-btn"><Plus size={16} className="mr-2" /> Nouvelle ACP</Button>}
+          {isManager && <Button onClick={openCreate} className="bg-[#022D52] hover:bg-[#1D4ED8]" data-testid="create-copro-btn"><Plus size={16} className="mr-2" /> Nouvelle ACP</Button>}
         </div>
       </div>
       <div className="mb-4 relative max-w-sm"><Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" /><Input placeholder="Rechercher ref, nom, BCE..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9" /></div>
@@ -258,19 +258,19 @@ export default function CoproprietesPage() {
           <TableBody>
             {filtered.length === 0 ? <TableRow><TableCell colSpan={7} className="text-center py-8 text-slate-400">Aucune copropriete</TableCell></TableRow> : filtered.map(c => (
               <TableRow key={c.id} className="hover:bg-slate-50/50" data-testid={`copro-row-${c.id}`}>
-                <TableCell className="font-mono text-xs text-[#2563EB]">{c.reference || '-'}</TableCell>
+                <TableCell className="font-mono text-xs text-[#022D52]">{c.reference || '-'}</TableCell>
                 <TableCell className="font-medium">{c.name}</TableCell>
                 <TableCell className="font-mono text-sm">{c.bce || '-'}</TableCell>
                 <TableCell className="text-sm">{c.city}{c.postal_code ? ` (${c.postal_code})` : ''}</TableCell>
                 <TableCell className="font-mono text-xs">{getDefaultIban(c)}</TableCell>
                 <TableCell><Badge variant="outline" className={c.status === 'archived' ? 'bg-slate-100 text-slate-500' : 'bg-green-50 text-green-700 border-green-200'}>{c.status === 'archived' ? 'Archive' : 'Active'}</Badge></TableCell>
                 <TableCell><div className="flex gap-0">
-                  {isManager && <Button variant="outline" size="sm" onClick={() => openEdit(c)} title="Modifier l'ACP (nom, adresse, banques, parametres)" data-testid={`edit-copro-${c.id}`} className="text-[#2563EB] border-[#2563EB]/30 hover:bg-[#2563EB]/10 mr-1"><Pencil size={13} className="mr-1" /> Modifier</Button>}
-                  {isSuperadmin && <Button variant="ghost" size="sm" onClick={() => handleCleanupOrphans(c)} className="text-blue-600 hover:text-blue-700" title="Nettoyer les ecritures orphelines (re-synchroniser bilan/grand livre)" data-testid={`cleanup-orphans-${c.id}`}><Wand2 size={13} /></Button>}
+                  {isManager && <Button variant="outline" size="sm" onClick={() => openEdit(c)} title="Modifier l'ACP (nom, adresse, banques, parametres)" data-testid={`edit-copro-${c.id}`} className="text-[#022D52] border-[#022D52]/30 hover:bg-[#022D52]/10 mr-1"><Pencil size={13} className="mr-1" /> Modifier</Button>}
+                  {isSuperadmin && <Button variant="ghost" size="sm" onClick={() => handleCleanupOrphans(c)} className="text-[#022D52] hover:text-[#01213e]" title="Nettoyer les ecritures orphelines (re-synchroniser bilan/grand livre)" data-testid={`cleanup-orphans-${c.id}`}><Wand2 size={13} /></Button>}
                   {isSuperadmin && <Button variant="outline" size="sm" onClick={() => handleResetData(c)} className="text-amber-700 border-amber-300 hover:bg-amber-50 mr-1" title="Vider TOUTES les donnees comptables (factures, ecritures, exercices, budgets...)" data-testid={`reset-data-${c.id}`}><Eraser size={13} className="mr-1" /> Vider</Button>}
                   {isManager && c.status !== 'archived' && <Button variant="ghost" size="sm" onClick={() => handleArchive(c.id)} className="text-orange-500" title="Archiver"><Archive size={13} /></Button>}
                   {isManager && c.status === 'archived' && <Button variant="ghost" size="sm" onClick={() => handleUnarchive(c.id)} className="text-green-600" title="Reactiver"><RotateCcw size={13} /></Button>}
-                  {isManager && <Button variant="ghost" size="sm" onClick={() => handleDownloadArchive(c)} className="text-blue-600" title="Telecharger archive ZIP complete par annee" data-testid={`archive-dl-${c.id}`}><Download size={13} /></Button>}
+                  {isManager && <Button variant="ghost" size="sm" onClick={() => handleDownloadArchive(c)} className="text-[#022D52]" title="Telecharger archive ZIP complete par annee" data-testid={`archive-dl-${c.id}`}><Download size={13} /></Button>}
                   {isAdmin && <Button variant="ghost" size="sm" onClick={() => handleDelete(c.id)} className="text-red-500" title="Supprimer (cascade)"><Trash2 size={13} /></Button>}
                 </div></TableCell>
               </TableRow>
@@ -290,7 +290,7 @@ export default function CoproprietesPage() {
         >
           <DialogHeader>
             <DialogTitle style={{fontFamily:'Chivo,sans-serif'}}>{editing ? 'Modifier ACP' : 'Assistant de creation ACP'}</DialogTitle>
-            {editing?.reference && <p className="font-mono text-sm text-[#2563EB]">Ref: {editing.reference}</p>}
+            {editing?.reference && <p className="font-mono text-sm text-[#022D52]">Ref: {editing.reference}</p>}
           </DialogHeader>
 
           {/* Wizard step indicator (only for creation, not edit) */}
@@ -302,8 +302,8 @@ export default function CoproprietesPage() {
                 { n: 3, label: 'Options & validation' },
               ].map((s, idx, arr) => (
                 <div key={s.n} className="flex items-center flex-1">
-                  <div className={`flex items-center gap-2 ${step === s.n ? 'text-[#2563EB]' : step > s.n ? 'text-green-600' : 'text-slate-400'}`}>
-                    <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold border-2 ${step === s.n ? 'bg-[#2563EB] text-white border-[#2563EB]' : step > s.n ? 'bg-green-500 text-white border-green-500' : 'bg-white border-slate-300'}`} data-testid={`step-indicator-${s.n}`}>
+                  <div className={`flex items-center gap-2 ${step === s.n ? 'text-[#022D52]' : step > s.n ? 'text-green-600' : 'text-slate-400'}`}>
+                    <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold border-2 ${step === s.n ? 'bg-[#022D52] text-white border-[#022D52]' : step > s.n ? 'bg-green-500 text-white border-green-500' : 'bg-white border-slate-300'}`} data-testid={`step-indicator-${s.n}`}>
                       {step > s.n ? '✓' : s.n}
                     </div>
                     <span className="text-xs font-medium hidden sm:inline">{s.label}</span>
@@ -387,16 +387,16 @@ export default function CoproprietesPage() {
                     <Button variant="outline" size="sm" onClick={() => setPdfOwnersOpen(true)} className="border-emerald-300 text-emerald-700 hover:bg-emerald-50" data-testid="import-owners-pdf-btn">
                       <FileText size={14} className="mr-1" /> Proprietaires (PDF)
                     </Button>
-                    <Button variant="outline" size="sm" onClick={() => setBulkLotsOpen(true)} className="border-blue-300 text-blue-700 hover:bg-blue-50" data-testid="import-lots-csv-btn">
+                    <Button variant="outline" size="sm" onClick={() => setBulkLotsOpen(true)} className="border-blue-300 text-[#01213e] hover:bg-blue-50" data-testid="import-lots-csv-btn">
                       <Upload size={14} className="mr-1" /> Lots (CSV)
                     </Button>
-                    <Button variant="outline" size="sm" onClick={() => setPdfLotsOpen(true)} className="border-blue-300 text-blue-700 hover:bg-blue-50" data-testid="import-lots-pdf-btn">
+                    <Button variant="outline" size="sm" onClick={() => setPdfLotsOpen(true)} className="border-blue-300 text-[#01213e] hover:bg-blue-50" data-testid="import-lots-pdf-btn">
                       <FileText size={14} className="mr-1" /> Lots (PDF)
                     </Button>
                     <Button variant="outline" size="sm" onClick={addLot} data-testid="add-lot-btn"><PlusCircle size={14} className="mr-1" /> Ajouter manuellement</Button>
                   </div>
                 </div>
-                <div className="bg-blue-50/40 border border-blue-100 text-xs text-blue-700 p-2 rounded mb-3">
+                <div className="bg-blue-50/40 border border-blue-100 text-xs text-[#01213e] p-2 rounded mb-3">
                   <strong>Reprise Optipro/Sogis ?</strong> Importez les <em>Listes des coproprietaires</em> et <em>Liste des lots</em> directement en PDF (export Optipro), ou en CSV. Les proprietaires importes seront automatiquement suggeres lors du matching avec les lots.
                 </div>
                 {(form.lots || []).length === 0 ? (
@@ -526,11 +526,11 @@ export default function CoproprietesPage() {
                                   </div>
                                 )}
                                 {getOwnerSuggestions(i).map(o => (
-                                  <button key={o.id} type="button" onMouseDown={e => e.preventDefault()} onClick={() => { addOwnerToLot(i, o.id); setOwnerSearchByLot({...ownerSearchByLot, [i]: ''}); }} className="w-full text-left px-2 py-1.5 hover:bg-[#2563EB]/5 border-b last:border-b-0 border-slate-100 text-xs flex items-center justify-between" data-testid={`lot-${i}-suggestion-${o.id}`}>
+                                  <button key={o.id} type="button" onMouseDown={e => e.preventDefault()} onClick={() => { addOwnerToLot(i, o.id); setOwnerSearchByLot({...ownerSearchByLot, [i]: ''}); }} className="w-full text-left px-2 py-1.5 hover:bg-[#022D52]/5 border-b last:border-b-0 border-slate-100 text-xs flex items-center justify-between" data-testid={`lot-${i}-suggestion-${o.id}`}>
                                     <span className="font-medium">{o.name}</span>
                                     <span className="flex items-center gap-2">
                                       {o.auxiliary_code && <span className="font-mono text-[9px] bg-slate-100 px-1 rounded text-slate-600">{o.auxiliary_code}</span>}
-                                      {o.vcs_code && <span className="font-mono text-[9px] text-[#2563EB]">{o.vcs_code}</span>}
+                                      {o.vcs_code && <span className="font-mono text-[9px] text-[#022D52]">{o.vcs_code}</span>}
                                     </span>
                                   </button>
                                 ))}
@@ -579,7 +579,7 @@ export default function CoproprietesPage() {
                   <li><strong>Lots:</strong> {(form.lots || []).filter(l => l.number?.trim()).length} (total quotites: {form.lots.reduce((s, l) => s + (parseFloat(l.quotity) || 0), 0).toFixed(2)})</li>
                   <li><strong>Total proprietaires affectes:</strong> {new Set(form.lots.flatMap(l => l.owner_ids || [])).size}</li>
                 </ul>
-                <div className="mt-2 text-blue-700">A la creation: 95 comptes PCMN belges + 10 categories documents seront automatiquement seedes.</div>
+                <div className="mt-2 text-[#01213e]">A la creation: 95 comptes PCMN belges + 10 categories documents seront automatiquement seedes.</div>
               </div>
             )}
             </>}
@@ -591,9 +591,9 @@ export default function CoproprietesPage() {
               ) : <Button variant="outline" onClick={() => setDialogOpen(false)}>Annuler</Button>}
               <div className="flex gap-2">
                 {!editing && step < 3 ? (
-                  <Button onClick={() => setStep(step + 1)} className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="wizard-next-btn" disabled={step === 1 && !form.name.trim()}>Suivant</Button>
+                  <Button onClick={() => setStep(step + 1)} className="bg-[#022D52] hover:bg-[#1D4ED8]" data-testid="wizard-next-btn" disabled={step === 1 && !form.name.trim()}>Suivant</Button>
                 ) : (
-                  <Button onClick={handleSave} className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="copro-save-btn">{editing ? 'Modifier' : 'Creer l\'ACP'}</Button>
+                  <Button onClick={handleSave} className="bg-[#022D52] hover:bg-[#1D4ED8]" data-testid="copro-save-btn">{editing ? 'Modifier' : 'Creer l\'ACP'}</Button>
                 )}
               </div>
             </div>

@@ -137,7 +137,7 @@ export default function RgpdSection() {
             variant="outline"
             size="sm"
             data-testid="rgpd-export-btn"
-            className="border-[#2563EB]/30 text-[#2563EB] hover:bg-[#2563EB]/5"
+            className="border-[#022D52]/30 text-[#022D52] hover:bg-[#022D52]/5"
           >
             {exporting ? <><Loader2 size={13} className="animate-spin mr-1.5" /> Export...</> : <><Download size={13} className="mr-1.5" /> Exporter</>}
           </Button>

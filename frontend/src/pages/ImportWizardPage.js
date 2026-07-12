@@ -426,7 +426,7 @@ export default function ImportWizardPage() {
           const isActive = i === stepIdx;
           return (
             <div key={s.key} className="flex items-center" data-testid={`step-${s.key}`}>
-              <div className={`flex items-center gap-2 px-3 py-2 rounded-md ${isActive ? 'bg-[#2563EB] text-white' : isDone ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'}`}>
+              <div className={`flex items-center gap-2 px-3 py-2 rounded-md ${isActive ? 'bg-[#022D52] text-white' : isDone ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'}`}>
                 {isDone ? <CheckCircle2 size={16} /> : <Icon size={16} />}
                 <div>
                   <div className="text-xs font-semibold">{s.label}</div>
@@ -443,7 +443,7 @@ export default function ImportWizardPage() {
       <Card>
         <CardHeader className="pb-3">
           <CardTitle className="text-base flex items-center gap-2">
-            {(() => { const I = step.icon; return <I size={18} className="text-[#2563EB]" />; })()}
+            {(() => { const I = step.icon; return <I size={18} className="text-[#022D52]" />; })()}
             Etape {stepIdx + 1} / {STEPS.length} : {step.label}
             {step.kind === 'csv' && <Badge variant="outline" className="text-[10px]">CSV</Badge>}
             {step.kind === 'pdf' && <Badge variant="outline" className="text-[10px]">PDF</Badge>}
@@ -511,7 +511,7 @@ export default function ImportWizardPage() {
                     onClick={() => { setUploadMode('csv'); setTimeout(() => document.getElementById('file-input').click(), 0); }}
                     disabled={sniffing}
                     variant="outline"
-                    className="border-blue-300 text-blue-700 hover:bg-blue-50"
+                    className="border-blue-300 text-[#01213e] hover:bg-blue-50"
                     data-testid="upload-csv-btn"
                   >
                     <Upload size={14} className="mr-1" /> Choisir CSV
@@ -526,7 +526,7 @@ export default function ImportWizardPage() {
                   </Button>
                 </div>
               ) : (
-                <Button onClick={() => document.getElementById('file-input').click()} disabled={sniffing} className="bg-[#2563EB] hover:bg-[#1D4ED8]">
+                <Button onClick={() => document.getElementById('file-input').click()} disabled={sniffing} className="bg-[#022D52] hover:bg-[#1D4ED8]">
                   {sniffing ? <><Loader2 size={14} className="animate-spin mr-1" /> Analyse en cours...</> : <><Upload size={14} className="mr-1" /> Choisir le fichier</>}
                 </Button>
               )}
@@ -634,7 +634,7 @@ export default function ImportWizardPage() {
               <Button
                 disabled={(step.kind === 'form' ? !fyForm.name : !sniffResult) || committing}
                 onClick={handleCommit}
-                className="bg-[#2563EB] hover:bg-[#1D4ED8]"
+                className="bg-[#022D52] hover:bg-[#1D4ED8]"
                 data-testid="commit-step"
               >
                 {committing ? <><Loader2 size={14} className="animate-spin mr-1" /> Import...</> : (
@@ -1488,7 +1488,7 @@ function BudgetPreview({ sections, setSections }) {
                 ))}
               </tbody>
             </table>
-            <button onClick={() => addLine(si)} className="text-xs text-[#2563EB] hover:underline px-3 py-1 flex items-center gap-1">
+            <button onClick={() => addLine(si)} className="text-xs text-[#022D52] hover:underline px-3 py-1 flex items-center gap-1">
               <Plus size={11} /> Ajouter une ligne
             </button>
           </div>
@@ -1520,7 +1520,7 @@ function KeysPreview({ keys, setKeys, onAddPdf }) {
   const headerActions = (
     <div className="flex flex-wrap gap-2 mb-2">
       {onAddPdf && (
-        <Button size="sm" variant="outline" onClick={onAddPdf} className="border-blue-300 text-blue-700 hover:bg-blue-50" data-testid="keys-add-pdf-btn">
+        <Button size="sm" variant="outline" onClick={onAddPdf} className="border-blue-300 text-[#01213e] hover:bg-blue-50" data-testid="keys-add-pdf-btn">
           <Upload size={13} className="mr-1.5" /> Ajouter un autre PDF
         </Button>
       )}

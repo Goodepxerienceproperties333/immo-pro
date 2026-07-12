@@ -1,7 +1,7 @@
 """Documentation & Commercial PDF (iter90br).
 
 Genere un PDF commercial complet listant l'integralite des
-fonctionnalites de CoproManager, utilisable comme argument commercial
+fonctionnalites de NextGe Copro, utilisable comme argument commercial
 (brochure client, appel d'offres, kit de presentation).
 
 Endpoint : GET /api/documentation/features-pdf
@@ -210,8 +210,8 @@ def _build_pdf() -> bytes:
         buf, pagesize=A4,
         rightMargin=2 * cm, leftMargin=2 * cm,
         topMargin=1.5 * cm, bottomMargin=2 * cm,
-        title="CoproManager - Fonctionnalites",
-        author="CoproManager",
+        title="NextGe Copro - Fonctionnalites",
+        author="NextGe Copro",
     )
     styles = getSampleStyleSheet()
     story: list = []
@@ -251,7 +251,7 @@ def _build_pdf() -> bytes:
 
     # ==================== PAGE DE COUVERTURE ====================
     story.append(Spacer(1, 4 * cm))
-    story.append(Paragraph("CoproManager", h1_center))
+    story.append(Paragraph("NextGe Copro", h1_center))
     story.append(Paragraph(
         "La plateforme complete de gestion de copropriete<br/>"
         "conforme au droit belge",
@@ -262,7 +262,7 @@ def _build_pdf() -> bytes:
     intro_table = Table([[
         Paragraph(
             "<b>Une solution moderne, securisee et intelligente</b><br/><br/>"
-            "CoproManager est la premiere plateforme de gestion de "
+            "NextGe Copro est la premiere plateforme de gestion de "
             "copropriete belge nativement pensee pour les syndics "
             "professionnels : comptabilite PCMN stricte, imports "
             "bancaires IA, portail proprietaire self-service, "
@@ -317,7 +317,7 @@ def _build_pdf() -> bytes:
     story.append(PageBreak())
 
     # ==================== EXECUTIVE SUMMARY ====================
-    story.append(Paragraph("Pourquoi CoproManager ?", h1))
+    story.append(Paragraph("Pourquoi NextGe Copro ?", h1))
     story.append(Spacer(1, 8))
     story.append(Paragraph(
         "Le marche belge de la gestion de copropriete est domine par des "
@@ -423,7 +423,7 @@ def _build_pdf() -> bytes:
     story.append(Paragraph("Prochaines etapes", h1))
     story.append(Spacer(1, 12))
     story.append(Paragraph(
-        "<b>Envie de tester CoproManager sur vos coproprietes ?</b>",
+        "<b>Envie de tester NextGe Copro sur vos coproprietes ?</b>",
         body,
     ))
     story.append(Spacer(1, 8))
@@ -476,7 +476,7 @@ def create_documentation_router(db):
     async def features_pdf():
         """Genere et retourne le PDF commercial complet."""
         pdf_bytes = _build_pdf()
-        filename = f"CoproManager-Fonctionnalites-{datetime.now(timezone.utc).strftime('%Y%m%d')}.pdf"
+        filename = f"NextGe Copro-Fonctionnalites-{datetime.now(timezone.utc).strftime('%Y%m%d')}.pdf"
         return Response(
             content=pdf_bytes,
             media_type="application/pdf",

@@ -110,7 +110,7 @@ export default function DocumentsPage() {
             <div className="flex gap-2">
             <Button onClick={openCreateDoc} variant="outline" data-testid="create-doc-btn"><Plus size={16} className="mr-2" /> Note manuelle</Button>
             <input type="file" ref={fileInputRef} onChange={handleFileChange} accept=".pdf,.png,.jpg,.jpeg,.webp,.heic,.heif" className="hidden" data-testid="doc-file-input" />
-            <Button onClick={() => fileInputRef.current?.click()} disabled={uploading} className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="upload-doc-btn">
+            <Button onClick={() => fileInputRef.current?.click()} disabled={uploading} className="bg-[#022D52] hover:bg-[#1D4ED8]" data-testid="upload-doc-btn">
               {uploading ? <><Loader2 size={16} className="mr-2 animate-spin" /> Analyse IA en cours...</> : <><Upload size={16} className="mr-2" /> Importer fichier (auto-classement IA)</>}
             </Button>
             </div>
@@ -124,7 +124,7 @@ export default function DocumentsPage() {
                   <CardContent className="p-4">
                     <div className="flex items-start justify-between mb-2">
                       <div className="flex items-center gap-2 min-w-0">
-                        <FileText size={16} className="text-[#2563EB] flex-shrink-0" />
+                        <FileText size={16} className="text-[#022D52] flex-shrink-0" />
                         <span className="font-medium text-sm text-slate-900 truncate">{doc.title}</span>
                       </div>
                       <div className="flex gap-0 flex-shrink-0">
@@ -157,7 +157,7 @@ export default function DocumentsPage() {
 
         <TabsContent value="categories" className="mt-0">
           <div className="flex justify-end mb-4">
-            <Button onClick={openCreateCat} className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="create-cat-btn"><Plus size={16} className="mr-2" /> Nouvelle categorie</Button>
+            <Button onClick={openCreateCat} className="bg-[#022D52] hover:bg-[#1D4ED8]" data-testid="create-cat-btn"><Plus size={16} className="mr-2" /> Nouvelle categorie</Button>
           </div>
           <div className="bg-white rounded-md border border-slate-200 overflow-hidden">
             <Table>
@@ -204,7 +204,7 @@ export default function DocumentsPage() {
             <div><label className="form-label">Contenu</label><Textarea value={docForm.content} onChange={e => setDocForm({...docForm, content: e.target.value})} rows={4} /></div>
             <div className="flex gap-3 justify-end">
               <Button variant="outline" onClick={() => setDocDialog(false)}>Annuler</Button>
-              <Button onClick={saveDoc} className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="doc-save-btn">Creer</Button>
+              <Button onClick={saveDoc} className="bg-[#022D52] hover:bg-[#1D4ED8]" data-testid="doc-save-btn">Creer</Button>
             </div>
           </div>
         </DialogContent>
@@ -219,7 +219,7 @@ export default function DocumentsPage() {
             <div><label className="form-label">Description</label><Input value={catForm.description} onChange={e => setCatForm({...catForm, description: e.target.value})} /></div>
             <div className="flex gap-3 justify-end">
               <Button variant="outline" onClick={() => setCatDialog(false)}>Annuler</Button>
-              <Button onClick={saveCat} className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="cat-save-btn">{editingCat ? 'Modifier' : 'Creer'}</Button>
+              <Button onClick={saveCat} className="bg-[#022D52] hover:bg-[#1D4ED8]" data-testid="cat-save-btn">{editingCat ? 'Modifier' : 'Creer'}</Button>
             </div>
           </div>
         </DialogContent>

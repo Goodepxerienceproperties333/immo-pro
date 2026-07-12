@@ -44,7 +44,7 @@ export default function AdminUsersPage() {
             Seul le super administrateur de la plateforme peut creer les comptes syndic principaux.
           </p>
           <p className="text-sm text-slate-600">
-            Pour modifier vos propres informations (nom, mot de passe), rendez-vous sur la page <a href="/profile" className="text-[#2563EB] hover:underline font-medium">Mon profil</a>.
+            Pour modifier vos propres informations (nom, mot de passe), rendez-vous sur la page <a href="/profile" className="text-[#022D52] hover:underline font-medium">Mon profil</a>.
           </p>
         </div>
       </div>
@@ -143,13 +143,13 @@ export default function AdminUsersPage() {
           <h1 className="page-title"><Shield size={24} className="inline mr-2" />Comptes syndic</h1>
           <p className="page-subtitle">Creez les comptes principaux des syndics. Chaque syndic gerera ensuite ses ACPs et son equipe.</p>
         </div>
-        <Button onClick={openCreate} className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="create-user-btn">
+        <Button onClick={openCreate} className="bg-[#022D52] hover:bg-[#1D4ED8]" data-testid="create-user-btn">
           <Plus size={16} className="mr-2" /> Nouveau syndic
         </Button>
       </div>
 
       <div className="bg-blue-50 border border-blue-200 rounded-md p-3 mb-4 flex items-start gap-2">
-        <Info size={16} className="text-blue-600 mt-0.5 flex-shrink-0" />
+        <Info size={16} className="text-[#022D52] mt-0.5 flex-shrink-0" />
         <div className="text-xs text-blue-900">
           <strong>Perimetre de cette page :</strong> creation du compte syndic uniquement (email + nom + mot de passe).
           C'est ensuite le syndic lui-meme qui cree ses coproprietes (ACPs) et son equipe de gestionnaires depuis son interface.
@@ -185,7 +185,7 @@ export default function AdminUsersPage() {
                 <TableCell>
                   <div className="flex gap-1">
                     {u.must_change_password && u.role !== 'superadmin' && (
-                      <Button variant="ghost" size="sm" onClick={() => handleResendInvitation(u)} className="text-blue-600 hover:text-blue-700" title="Renvoyer l'email d'invitation" data-testid={`resend-invite-${u.id}`}><Mail size={14} /></Button>
+                      <Button variant="ghost" size="sm" onClick={() => handleResendInvitation(u)} className="text-[#022D52] hover:text-[#01213e]" title="Renvoyer l'email d'invitation" data-testid={`resend-invite-${u.id}`}><Mail size={14} /></Button>
                     )}
                     {u.role !== 'superadmin' && (
                       <Button variant="ghost" size="sm" onClick={() => openEdit(u)} data-testid={`edit-user-${u.id}`}><Pencil size={14} /></Button>
@@ -243,7 +243,7 @@ export default function AdminUsersPage() {
             </label>
             <div className="flex gap-3 justify-end pt-2">
               <Button variant="outline" onClick={() => setDialogOpen(false)} data-testid="user-cancel">Annuler</Button>
-              <Button onClick={handleSave} className="bg-[#2563EB] hover:bg-[#1D4ED8]" data-testid="user-save-btn">
+              <Button onClick={handleSave} className="bg-[#022D52] hover:bg-[#1D4ED8]" data-testid="user-save-btn">
                 {editing ? 'Mettre a jour' : 'Creer le compte syndic'}
               </Button>
             </div>
