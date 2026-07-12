@@ -65,12 +65,22 @@ def build_journals_pdf(
     date_from: str,
     date_to: str,
     entries: list,            # list of journal_entries (already filtered & in period)
+    syndic_pdf_ctx: dict = None,
 ) -> bytes:
-    """Render le PDF 'Liste des journaux'."""
+    """Render le PDF 'Liste des journaux'.
+
+    iter90dj : `syndic_pdf_ctx` (optionnel) ajoute logo cabinet + pied de
+    page legal avec numeros de page sur toutes les pages.
+    """
+    from pdf_layout import build_header_with_logo, make_footer_callback
+    use_new_layout = bool(syndic_pdf_ctx and syndic_pdf_ctx.get("syndic_config"))
+    footer_cb = make_footer_callback(syndic_pdf_ctx.get("legal_mentions", "")) if use_new_layout else None
+
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
         buf, pagesize=landscape(A4),
-        topMargin=14 * mm, bottomMargin=14 * mm,
+        topMargin=14 * mm,
+        bottomMargin=28 * mm if use_new_layout else 14 * mm,
         leftMargin=12 * mm, rightMargin=12 * mm,
         title=f"Journaux {date_from} au {date_to}",
     )
@@ -86,6 +96,15 @@ def build_journals_pdf(
                               textColor=BRAND_BLUE, fontName="Helvetica-Bold", spaceBefore=8, spaceAfter=4)
 
     elements = []
+
+    # ---- iter90dj : LOGO CABINET + INFOS (1re page uniquement) ----
+    if use_new_layout:
+        elements.append(build_header_with_logo(
+            syndic_pdf_ctx.get("logo_bytes"),
+            syndic_pdf_ctx.get("syndic_config") or {},
+            small,
+        ))
+        elements.append(Spacer(1, 3 * mm))
 
     # ---- HEADER ----
     df = _fmt_date(date_from)
@@ -232,7 +251,7 @@ def build_journals_pdf(
             "<i>Aucune ecriture comptable sur la periode.</i>", body,
         ))
 
-    doc.build(elements, onFirstPage=_add_page_number, onLaterPages=_add_page_number)
+    doc.build(elements, onFirstPage=footer_cb or _add_page_number, onLaterPages=footer_cb or _add_page_number)
     buf.seek(0)
     return buf.read()
 
@@ -242,16 +261,25 @@ def build_invoices_list_pdf(
     date_from: str,
     date_to: str,
     invoices: list,
+    syndic_pdf_ctx: dict = None,
 ) -> bytes:
     """Render le PDF 'Liste exhaustive des factures' (toutes natures, tous statuts).
 
     Colonnes : Date | N piece | Fournisseur | Libelle | Compte | HTVA | TVA | TVAC | Statut
     Trie par date ASC. Totaux HTVA / TVA / TVAC en bas.
+
+    iter90dj : `syndic_pdf_ctx` (optionnel) ajoute logo cabinet + pied de
+    page legal avec numeros de page sur toutes les pages.
     """
+    from pdf_layout import build_header_with_logo, make_footer_callback
+    use_new_layout = bool(syndic_pdf_ctx and syndic_pdf_ctx.get("syndic_config"))
+    footer_cb = make_footer_callback(syndic_pdf_ctx.get("legal_mentions", "")) if use_new_layout else None
+
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
         buf, pagesize=landscape(A4),
-        topMargin=14 * mm, bottomMargin=14 * mm,
+        topMargin=14 * mm,
+        bottomMargin=28 * mm if use_new_layout else 14 * mm,
         leftMargin=10 * mm, rightMargin=10 * mm,
         title=f"Liste des factures {date_from} au {date_to}",
     )
@@ -265,6 +293,15 @@ def build_invoices_list_pdf(
     small = ParagraphStyle("small", parent=styles["Normal"], fontSize=7, leading=9, textColor=DARK_GREY)
 
     elements = []
+
+    # ---- iter90dj : LOGO CABINET + INFOS (1re page uniquement) ----
+    if use_new_layout:
+        elements.append(build_header_with_logo(
+            syndic_pdf_ctx.get("logo_bytes"),
+            syndic_pdf_ctx.get("syndic_config") or {},
+            small,
+        ))
+        elements.append(Spacer(1, 3 * mm))
 
     # ---- HEADER ----
     df = _fmt_date(date_from)
@@ -358,6 +395,6 @@ def build_invoices_list_pdf(
         elements.append(Spacer(1, 8 * mm))
         elements.append(Paragraph("<i>Aucune facture sur la periode.</i>", body))
 
-    doc.build(elements, onFirstPage=_add_page_number, onLaterPages=_add_page_number)
+    doc.build(elements, onFirstPage=footer_cb or _add_page_number, onLaterPages=footer_cb or _add_page_number)
     buf.seek(0)
     return buf.read()

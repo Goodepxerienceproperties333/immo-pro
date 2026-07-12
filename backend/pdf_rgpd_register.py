@@ -294,7 +294,7 @@ def _footer_maker(doc_title):
     return _draw
 
 
-def build_rgpd_register_pdf(register_data: dict) -> bytes:
+def build_rgpd_register_pdf(register_data: dict, syndic_pdf_ctx: dict = None) -> bytes:
     """Construit le PDF du registre des traitements.
 
     register_data doit contenir :
@@ -304,18 +304,34 @@ def build_rgpd_register_pdf(register_data: dict) -> bytes:
       - subprocessors: list[dict] sous-traitants
       - security_measures: list[str] mesures techniques et organisationnelles
       - updated_at: iso string
+
+    iter90dj : `syndic_pdf_ctx` (optionnel) ajoute logo cabinet + pied de
+    page legal avec numeros de page sur toutes les pages.
     """
+    from pdf_layout import build_header_with_logo, make_footer_callback
+    use_new_layout = bool(syndic_pdf_ctx and syndic_pdf_ctx.get("syndic_config"))
+
     styles = _styles()
 
     buf = BytesIO()
     doc = SimpleDocTemplate(
         buf, pagesize=A4,
         leftMargin=15 * mm, rightMargin=15 * mm,
-        topMargin=15 * mm, bottomMargin=15 * mm,
+        topMargin=15 * mm,
+        bottomMargin=28 * mm if use_new_layout else 15 * mm,
         title="Registre des traitements RGPD (art. 30)",
         author="CoproManager",
     )
     story = []
+
+    # ---- iter90dj : LOGO CABINET + INFOS (1re page uniquement) ----
+    if use_new_layout:
+        story.append(build_header_with_logo(
+            syndic_pdf_ctx.get("logo_bytes"),
+            syndic_pdf_ctx.get("syndic_config") or {},
+            styles["small"],
+        ))
+        story.append(Spacer(1, 4 * mm))
 
     # === Titre ===
     story.append(Paragraph("Registre des traitements de donnees a caractere personnel",
@@ -464,8 +480,13 @@ def build_rgpd_register_pdf(register_data: dict) -> bytes:
     ]))
     story.append(sig_table)
 
-    doc.build(story,
-              onFirstPage=_footer_maker("Registre RGPD - CoproManager"),
-              onLaterPages=_footer_maker("Registre RGPD - CoproManager"))
+    if use_new_layout:
+        # Utilise le pied de page unifie avec mentions legales + numeros de page
+        footer_cb = make_footer_callback(syndic_pdf_ctx.get("legal_mentions", ""))
+        doc.build(story, onFirstPage=footer_cb, onLaterPages=footer_cb)
+    else:
+        doc.build(story,
+                  onFirstPage=_footer_maker("Registre RGPD - CoproManager"),
+                  onLaterPages=_footer_maker("Registre RGPD - CoproManager"))
     buf.seek(0)
     return buf.getvalue()

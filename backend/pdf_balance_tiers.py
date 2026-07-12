@@ -55,13 +55,25 @@ def build_balance_tiers_pdf(
     suppliers_data: dict,  # {suppliers, total_debiteurs, total_crediteurs}
     period_start: str = "",
     period_end: str = "",
+    syndic_pdf_ctx: dict = None,
 ) -> bytes:
-    """Genere le PDF synthese balance des tiers."""
+    """Genere le PDF synthese balance des tiers.
+
+    iter90dj : si `syndic_pdf_ctx` est fourni (via
+    `pdf_layout.resolve_syndic_pdf_context(db, copropriete)`), ajoute :
+    - le logo cabinet + coordonnees en tete de la 1re page ;
+    - un pied de page avec mentions legales + numero de page sur toutes les pages.
+    """
+    from pdf_layout import build_header_with_logo, make_footer_callback
+    use_new_layout = bool(syndic_pdf_ctx and syndic_pdf_ctx.get("syndic_config"))
+    footer_cb = make_footer_callback(syndic_pdf_ctx.get("legal_mentions", "")) if use_new_layout else None
+
     buf = BytesIO()
     doc = SimpleDocTemplate(
         buf, pagesize=landscape(A4),
         leftMargin=12 * mm, rightMargin=12 * mm,
-        topMargin=12 * mm, bottomMargin=14 * mm,
+        topMargin=12 * mm,
+        bottomMargin=28 * mm if use_new_layout else 14 * mm,
         title=f"Balance des Tiers - {copropriete.get('name','')}",
     )
     styles = getSampleStyleSheet()
@@ -83,6 +95,15 @@ def build_balance_tiers_pdf(
                            fontSize=8, leading=10, textColor=SLATE_500)
 
     elems = []
+
+    # ---- iter90dj : LOGO CABINET + INFOS (1re page uniquement) ----
+    if use_new_layout:
+        elems.append(build_header_with_logo(
+            syndic_pdf_ctx.get("logo_bytes"),
+            syndic_pdf_ctx.get("syndic_config") or {},
+            small,
+        ))
+        elems.append(Spacer(1, 4 * mm))
 
     # ---- HEADER ----
     period_str = ""
@@ -318,5 +339,8 @@ def build_balance_tiers_pdf(
         small,
     ))
 
-    doc.build(elems)
+    if footer_cb:
+        doc.build(elems, onFirstPage=footer_cb, onLaterPages=footer_cb)
+    else:
+        doc.build(elems)
     return buf.getvalue()

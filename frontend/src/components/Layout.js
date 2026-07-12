@@ -244,6 +244,12 @@ export default function Layout() {
               </div>
             )}
             {(user?.role === 'syndic' || user?.role === 'admin' || user?.role === 'superadmin') && (
+              <NavLink to="/mon-bureau" onClick={() => setMobileOpen(false)}
+                className={({ isActive }) => `sidebar-link sidebar-link-slate ${isActive ? 'active' : ''} ${collapsed ? 'justify-center px-2' : ''}`}
+                data-testid="nav-mon-bureau"
+              ><span className="sidebar-icon-wrap"><Building2 size={18} strokeWidth={2} /></span>{!collapsed && <span className="text-[13.5px] font-medium">Mon bureau</span>}</NavLink>
+            )}
+            {(user?.role === 'syndic' || user?.role === 'admin' || user?.role === 'superadmin') && (
               <NavLink to="/team" onClick={() => setMobileOpen(false)}
                 className={({ isActive }) => `sidebar-link sidebar-link-slate ${isActive ? 'active' : ''} ${collapsed ? 'justify-center px-2' : ''}`}
                 data-testid="nav-team"
@@ -401,6 +407,7 @@ export default function Layout() {
   }
   const accountItems = [];
   if (user?.role === 'syndic' || user?.role === 'admin' || user?.role === 'superadmin') {
+    accountItems.push({ to: '/mon-bureau', icon: Building2, label: 'Mon bureau' });
     accountItems.push({ to: '/team', icon: Users, label: 'Mon equipe' });
   }
   accountItems.push({ to: '/profile', icon: UserCog, label: 'Mon profil' });

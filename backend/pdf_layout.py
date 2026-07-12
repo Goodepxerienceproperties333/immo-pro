@@ -86,6 +86,7 @@ async def resolve_syndic_pdf_context(db, copropriete: dict) -> dict:
     Priorite pour retrouver le syndic proprietaire de l'ACP :
     1. copropriete.syndic_user_id (nouveau champ explicite)
     2. copropriete.created_by -> user.role=syndic ou parent_syndic_id du createur
+       (iter90dj : superadmin accepte aussi si config presente)
     3. Recherche un syndic dont copropriete_ids contient l'id de l'ACP
     """
     from bson import ObjectId
@@ -96,10 +97,18 @@ async def resolve_syndic_pdf_context(db, copropriete: dict) -> dict:
             try:
                 creator = await db.users.find_one({"_id": ObjectId(str(created_by))})
                 if creator:
-                    if creator.get("role") == "syndic":
+                    role = creator.get("role")
+                    if role == "syndic":
                         syndic_user_id = str(creator["_id"])
                     elif creator.get("parent_syndic_id"):
                         syndic_user_id = str(creator["parent_syndic_id"])
+                    elif role in ("superadmin", "admin"):
+                        # iter90dj : superadmin qui gere une ACP peut avoir sa
+                        # propre config syndic (legal_name, logo, mentions).
+                        # On la retourne pour que ses PDFs soient personnalises.
+                        cfg = await db.syndic_configs.find_one({"syndic_user_id": str(creator["_id"])})
+                        if cfg:
+                            syndic_user_id = str(creator["_id"])
             except Exception:
                 pass
     if not syndic_user_id and copropriete and copropriete.get("id"):
@@ -208,24 +217,38 @@ def build_header_with_logo(logo_bytes: Optional[bytes], cabinet_info: dict, smal
 
 def draw_legal_footer(canvas_obj, doc, legal_mentions: str):
     """Callback onPage pour dessiner le pied de page avec mentions legales.
-    Utilise via `SimpleDocTemplate(onFirstPage=..., onLaterPages=...)`."""
+    Utilise via `SimpleDocTemplate(onFirstPage=..., onLaterPages=...)`.
+
+    Orientation-aware : detecte la largeur reelle de la page via doc.pagesize
+    (compatible portrait ET landscape A4).
+    """
     canvas_obj.saveState()
     canvas_obj.setFont("Helvetica", 7)
     canvas_obj.setFillColor(colors.HexColor("#94A3B8"))
+    # Largeur de la page (portrait A4 = 595pt, landscape A4 = 842pt)
+    try:
+        page_w = float(doc.pagesize[0])
+    except Exception:
+        page_w = 210 * mm
+    # Marges standards (15mm de chaque cote pour le trait)
+    center_x = page_w / 2.0
+    right_x = page_w - 10 * mm
+    line_left = 15 * mm
+    line_right = page_w - 15 * mm
     # Mentions legales sur plusieurs lignes
     if legal_mentions:
         # Wrap manuel : split par ligne si necessaire
         lines = legal_mentions.split("\n")
         y = 10 * mm
         for line in reversed(lines[:3]):  # max 3 lignes
-            canvas_obj.drawCentredString(105 * mm, y, line.strip()[:140])
+            canvas_obj.drawCentredString(center_x, y, line.strip()[:180])
             y += 3 * mm
-    # Numero de page a droite
-    canvas_obj.drawRightString(200 * mm, 8 * mm, f"Page {doc.page}")
+    # Numero de page a droite (toujours affiche, meme sans mentions legales)
+    canvas_obj.drawRightString(right_x, 8 * mm, f"Page {doc.page}")
     # Trait separateur
     canvas_obj.setStrokeColor(colors.HexColor("#E2E8F0"))
     canvas_obj.setLineWidth(0.4)
-    canvas_obj.line(15 * mm, 22 * mm, 195 * mm, 22 * mm)
+    canvas_obj.line(line_left, 22 * mm, line_right, 22 * mm)
     canvas_obj.restoreState()
 
 

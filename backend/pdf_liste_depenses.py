@@ -62,13 +62,23 @@ def build_liste_depenses_pdf(
     distribution_keys: list,
     pcmn_map: dict,            # {account_number: account_name}
     expense_categories: list,  # natures de depense
+    syndic_pdf_ctx: dict = None,
 ) -> bytes:
     """Render le PDF 'Liste des depenses' en bytes. iter90e : aligned with
-    /api/fiscal/expenses (HTVA + TVA + TVAC + parts proprio/occupant)."""
+    /api/fiscal/expenses (HTVA + TVA + TVAC + parts proprio/occupant).
+
+    iter90dj : `syndic_pdf_ctx` (optionnel) ajoute logo cabinet + pied de
+    page legal avec numeros de page sur toutes les pages.
+    """
+    from pdf_layout import build_header_with_logo, make_footer_callback
+    use_new_layout = bool(syndic_pdf_ctx and syndic_pdf_ctx.get("syndic_config"))
+    footer_cb = make_footer_callback(syndic_pdf_ctx.get("legal_mentions", "")) if use_new_layout else None
+
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
         buf, pagesize=landscape(A4),
-        topMargin=14 * mm, bottomMargin=14 * mm,
+        topMargin=14 * mm,
+        bottomMargin=28 * mm if use_new_layout else 14 * mm,
         leftMargin=12 * mm, rightMargin=12 * mm,
         title=f"Liste des depenses {date_from} au {date_to}",
     )
@@ -89,6 +99,15 @@ def build_liste_depenses_pdf(
                               textColor=DARK_GREY, fontName="Helvetica-Oblique", leftIndent=10)
 
     elements = []
+
+    # ---- iter90dj : LOGO CABINET + INFOS (1re page uniquement) ----
+    if use_new_layout:
+        elements.append(build_header_with_logo(
+            syndic_pdf_ctx.get("logo_bytes"),
+            syndic_pdf_ctx.get("syndic_config") or {},
+            small,
+        ))
+        elements.append(Spacer(1, 3 * mm))
 
     # ---- HEADER ----
     df = _fmt_date(date_from)
@@ -299,7 +318,7 @@ def build_liste_depenses_pdf(
             "<i>Aucune depense enregistree sur la periode.</i>", body
         ))
 
-    doc.build(elements, onFirstPage=_add_page_number, onLaterPages=_add_page_number)
+    doc.build(elements, onFirstPage=footer_cb or _add_page_number, onLaterPages=footer_cb or _add_page_number)
     buf.seek(0)
     return buf.read()
 

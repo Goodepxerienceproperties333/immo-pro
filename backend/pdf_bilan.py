@@ -169,13 +169,24 @@ def build_bilan_pdf(
     fiscal_year: dict = None,
     bilan_data: dict,
     date_to: str = "",
+    syndic_pdf_ctx: dict = None,
 ) -> bytes:
-    """Genere le PDF Bilan apres repartition."""
+    """Genere le PDF Bilan apres repartition.
+
+    iter90dj : si `syndic_pdf_ctx` est fourni, ajoute logo cabinet en tete
+    (1re page uniquement) + pied de page avec mentions legales + numero de
+    page sur toutes les pages.
+    """
+    from pdf_layout import build_header_with_logo, make_footer_callback
+    use_new_layout = bool(syndic_pdf_ctx and syndic_pdf_ctx.get("syndic_config"))
+    footer_cb = make_footer_callback(syndic_pdf_ctx.get("legal_mentions", "")) if use_new_layout else None
+
     buf = BytesIO()
     doc = SimpleDocTemplate(
         buf, pagesize=A4,
         leftMargin=12 * mm, rightMargin=12 * mm,
-        topMargin=12 * mm, bottomMargin=14 * mm,
+        topMargin=12 * mm,
+        bottomMargin=28 * mm if use_new_layout else 14 * mm,
         title=f"Bilan - {copropriete.get('name','')}",
     )
     styles = getSampleStyleSheet()
@@ -187,6 +198,15 @@ def build_bilan_pdf(
     small = ParagraphStyle("small", parent=styles["BodyText"],
                            fontSize=8.5, leading=11, textColor=SLATE_500)
     elems = []
+
+    # ---- iter90dj : LOGO CABINET + INFOS (1re page uniquement) ----
+    if use_new_layout:
+        elems.append(build_header_with_logo(
+            syndic_pdf_ctx.get("logo_bytes"),
+            syndic_pdf_ctx.get("syndic_config") or {},
+            small,
+        ))
+        elems.append(Spacer(1, 4 * mm))
 
     # ---- BANDEAU TITRE COLORE ----
     end_str = _fmt_date(date_to or (fiscal_year or {}).get("end_date", ""))
@@ -302,5 +322,8 @@ def build_bilan_pdf(
         small,
     ))
 
-    doc.build(elems)
+    if footer_cb:
+        doc.build(elems, onFirstPage=footer_cb, onLaterPages=footer_cb)
+    else:
+        doc.build(elems)
     return buf.getvalue()

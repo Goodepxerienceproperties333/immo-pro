@@ -838,6 +838,7 @@ def create_fiscal_router(db):
         import io
         from fastapi.responses import StreamingResponse
         from pdf_budget import build_budget_pdf
+        from pdf_layout import resolve_syndic_pdf_context
 
         budget = await db.budgets.find_one({"id": budget_id}, {"_id": 0})
         if not budget:
@@ -856,9 +857,12 @@ def create_fiscal_router(db):
         ).to_list(1000)
         keys_map = {k.get("id", ""): k.get("name", "") for k in keys}
 
+        # iter90dj : logo cabinet + mentions legales
+        syndic_pdf_ctx = await resolve_syndic_pdf_context(db, copropriete)
         pdf_bytes = build_budget_pdf(
             copropriete=copropriete, budget=budget, fiscal_year=fiscal_year,
             pcmn_map=pcmn_map, keys_map=keys_map,
+            syndic_pdf_ctx=syndic_pdf_ctx,
         )
         safe_name = (budget.get("name", "budget") or "budget").replace(" ", "_")[:40]
         fy_name = (fiscal_year.get("name", "") or "").replace(" ", "_")[:20]

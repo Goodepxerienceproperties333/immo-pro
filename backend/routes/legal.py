@@ -712,13 +712,31 @@ def create_legal_router(db):
         admin_user = await _require_superadmin(request)
         from fastapi.responses import Response
         from pdf_rgpd_register import build_rgpd_register_pdf
+        from pdf_layout import fetch_logo_bytes
 
         register = await db.legal_rgpd_register.find_one({"_id": "default"}, {"_id": 0})
         if not register:
             # Use defaults
             register = await get_rgpd_register(request)
 
-        pdf_bytes = build_rgpd_register_pdf(register)
+        # iter90dj : si l'admin a configure un logo/mentions legales, les
+        # utiliser dans le PDF (pied de page + entete).
+        syndic_pdf_ctx = None
+        try:
+            uid = str(admin_user.get("_id") or admin_user.get("id", ""))
+            cfg = await db.syndic_configs.find_one({"syndic_user_id": uid})
+            if cfg:
+                logo_bytes = await fetch_logo_bytes(db, uid)
+                syndic_pdf_ctx = {
+                    "syndic_user_id": uid,
+                    "syndic_config": cfg,
+                    "logo_bytes": logo_bytes,
+                    "legal_mentions": cfg.get("legal_mentions", ""),
+                }
+        except Exception:  # noqa: BLE001
+            syndic_pdf_ctx = None
+
+        pdf_bytes = build_rgpd_register_pdf(register, syndic_pdf_ctx=syndic_pdf_ctx)
 
         await db.audit_log.insert_one({
             "id": str(uuid.uuid4()),

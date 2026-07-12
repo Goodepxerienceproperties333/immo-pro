@@ -64,12 +64,20 @@ def build_budget_pdf(
     fiscal_year: dict,
     pcmn_map: dict,
     keys_map: dict,
+    syndic_pdf_ctx: dict = None,
 ) -> bytes:
+    """iter90dj : `syndic_pdf_ctx` (optionnel) ajoute logo cabinet + pied de
+    page legal avec numeros de page sur toutes les pages."""
+    from pdf_layout import build_header_with_logo, make_footer_callback
+    use_new_layout = bool(syndic_pdf_ctx and syndic_pdf_ctx.get("syndic_config"))
+    footer_cb = make_footer_callback(syndic_pdf_ctx.get("legal_mentions", "")) if use_new_layout else None
+
     buf = BytesIO()
     doc = SimpleDocTemplate(
         buf, pagesize=A4,
         leftMargin=15 * mm, rightMargin=15 * mm,
-        topMargin=14 * mm, bottomMargin=14 * mm,
+        topMargin=14 * mm,
+        bottomMargin=28 * mm if use_new_layout else 14 * mm,
         title=f"Budget - {budget.get('name', '')}",
     )
     styles = getSampleStyleSheet()
@@ -97,6 +105,15 @@ def build_budget_pdf(
     )
 
     story = []
+
+    # ---- iter90dj : LOGO CABINET + INFOS (1re page uniquement) ----
+    if use_new_layout:
+        story.append(build_header_with_logo(
+            syndic_pdf_ctx.get("logo_bytes"),
+            syndic_pdf_ctx.get("syndic_config") or {},
+            body_small,
+        ))
+        story.append(Spacer(1, 4 * mm))
 
     # ---- En-tete ----
     story.append(Paragraph(
@@ -299,6 +316,9 @@ def build_budget_pdf(
         body_small,
     ))
 
-    doc.build(story)
+    if footer_cb:
+        doc.build(story, onFirstPage=footer_cb, onLaterPages=footer_cb)
+    else:
+        doc.build(story)
     buf.seek(0)
     return buf.read()

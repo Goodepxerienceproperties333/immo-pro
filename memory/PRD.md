@@ -12,6 +12,108 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 
+### Iter90dj (Feb 2026) - Logo cabinet + mentions legales sur TOUS les PDFs + page "Mon bureau" self-service
+
+**Ticket utilisateur** :
+> "Permettre au syndic de rajouter son logo et ses informations legales
+>  en ancetre de tous les documents et en pied de page."
+
+**Contexte** :
+- Backend `syndic-config/*` + admin config UI + wizard onboarding existent depuis iter90av.
+- Helpers `pdf_layout.build_header_with_logo()` + `draw_legal_footer()` deja implementes.
+- MAIS : seulement 3 PDFs sur 9 utilisaient ces helpers (`decompte`, `mutation_decompte`,
+  `situation_compte`). Les 6 autres n'avaient ni logo ni mentions legales.
+- Pas de page self-service pour un syndic apres l'onboarding (seulement admin).
+
+**Fix iter90dj (2 volets)** :
+
+**A. PDFs modifies (7 nouveaux uses)** :
+Chaque builder accepte un parametre optionnel `syndic_pdf_ctx: dict = None`.
+Quand `resolve_syndic_pdf_context(db, copro)` retourne un contexte non-vide :
+- Prepend `build_header_with_logo(logo_bytes, cabinet_info, small_style)` au debut
+  du story/elems (donc uniquement 1re page).
+- Utilise `make_footer_callback(legal_mentions)` sur `onFirstPage` ET `onLaterPages`
+  (mentions legales + numero de page sur TOUTES les pages).
+- Augmente `bottomMargin` de 14-15mm a 28mm pour laisser la place au pied de page.
+
+Fichiers modifies :
+- `pdf_layout.py` : `draw_legal_footer` orientation-aware (portrait 210mm OU
+  landscape 297mm) + auto-detect largeur via `doc.pagesize`. Extension
+  `resolve_syndic_pdf_context` pour accepter superadmin/admin comme "syndic-like"
+  quand ils ont une config perso (iter90dj).
+- `pdf_balance_tiers.py` (paysage A4 - portrait ACP + tableaux propr./fourniss.)
+- `pdf_bilan.py` (portrait A4 - bilan comptable actif/passif)
+- `pdf_budget.py` (portrait A4 - budget previsionnel)
+- `pdf_journals_and_invoices.py` (paysage A4 - 2 builders : journaux + factures)
+- `pdf_liste_depenses.py` (paysage A4 - depenses par cle/nature/compte)
+- `pdf_rgpd_register.py` (portrait A4 - registre RGPD art. 30)
+
+Routes modifiees (chaque endpoint appelle
+`resolve_syndic_pdf_context(db, copro)` avant `build_*_pdf(...)`) :
+- `GET /api/reports/bilan/pdf`
+- `GET /api/reports/depenses/pdf`
+- `GET /api/reports/journals/pdf`
+- `GET /api/reports/invoices-list/pdf`
+- `GET /api/reports/balance-tiers/pdf`
+- `GET /api/fiscal/budgets/{id}/pdf`
+- `GET /api/legal/admin/rgpd-register/pdf` (utilise config du superadmin courant)
+
+**B. Nouvelle page self-service "Mon bureau"** (`MonBureauPage.js`) :
+- Route : `/mon-bureau` (role syndic/admin/superadmin)
+- 3 sections :
+  1. Upload logo (PNG/JPEG max 3 Mo, preview live avec cache-buster)
+  2. Identite bureau (denomination, adresse, CP, ville, email, tel, BCE, TVA, IPI)
+  3. Textarea "Mentions legales" (max 3 lignes affichees dans le pied de page PDF)
+- Bandeau info bleu : explique que logo = 1re page uniquement, mentions
+  legales + numeros de page = toutes pages.
+- Bouton "Enregistrer" sticky en bas de page.
+- Endpoints reutilises (existants iter90av) :
+  * `GET /api/syndic-config/me`
+  * `PUT /api/syndic-config/me`
+  * `POST /api/syndic-config/me/logo`
+  * `GET /api/syndic-config/{uid}/logo` (preview du logo)
+
+Navigation :
+- Nouvelle entree "Mon bureau" (icone `Building2`) dans le menu "Compte"
+  (sidebar mobile + TopNav desktop), visible pour syndic/admin/superadmin.
+
+**Testing iter90dj** (17/17 PASS via pytest) :
+1. 7 x `test_*_pdf_with_syndic_ctx` : chaque builder recoit un ctx avec
+   logo (32x32 PNG bleu) + mentions legales + config -> le PDF contient
+   `Cabinet Test SPRL`, `0999.888.777`, `Page 1`.
+2. 7 x `test_*_pdf_without_ctx_regression` : chaque builder est appele sans
+   `syndic_pdf_ctx` -> genere un PDF valide sans logo (retrocompatible).
+3. `test_legal_footer_shows_page_number_without_mentions` : mentions vides
+   mais numero de page toujours present.
+4. `test_pdf_with_empty_logo_bytes` : `logo_bytes=None` -> pas de crash.
+
+**Smoke test E2E (via curl + pypdf)** :
+- Cree config admin (legal_name=`Cabinet CoproTest SPRL`, mentions=`BCE 0999.888.777 - IPI 509.999`,
+  logo PNG 64x32 bleu).
+- Lie temporairement ACP `Acacia` a l'admin via `syndic_user_id`.
+- DL chaque PDF -> vérifie presence de `Cabinet CoproTest`, `0999.888.777`, `Page 1`.
+  * balance-tiers/pdf : PASS
+  * journals/pdf : PASS
+  * invoices-list/pdf : PASS
+  * depenses/pdf : PASS
+  * bilan/pdf : PASS
+  * budgets/{id}/pdf : PASS
+  * rgpd-register/pdf : PASS
+
+**Impact utilisateur (PROD apres redeploiement)** :
+- N'importe quel syndic peut maintenant, a tout moment (en dehors de
+  l'onboarding), personnaliser son bureau via /mon-bureau.
+- Tous les documents PDF exportes (balance de tiers, bilan, budget, grand
+  livre, factures, decomptes, RGPD...) affichent :
+  * le logo du bureau + coordonnees en tete de la 1re page ;
+  * les mentions legales (BCE, IPI, TVA, RGPD...) en pied de chaque page ;
+  * le numero de page sur chaque page.
+- Les PDFs sans config syndic (ACP orpheline) restent generees sans
+  branding (retrocompatibilite complete).
+- Aucune migration DB requise : `syndic_configs` collection deja existante.
+
+
+
 ### Iter90df -> 90di (Feb 2026) - Portail proprietaire : multi-ACP, multi-lots locataires, tour guide, import multi-factures
 
 **Tickets utilisateur (session enchainee sur PROD)** :

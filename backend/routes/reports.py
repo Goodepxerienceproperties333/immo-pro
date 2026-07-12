@@ -1038,6 +1038,7 @@ def create_reports_router(db):
         """Genere le PDF Bilan filtree par exercice (ou date_to libre).
         Chinese walls strict : copropriete_id requis."""
         from pdf_bilan import build_bilan_pdf
+        from pdf_layout import resolve_syndic_pdf_context
         copropriete_id = _require_copro(copropriete_id, request)
         copro = await db.coproprietes.find_one({"id": copropriete_id}, {"_id": 0})
         if not copro:
@@ -1061,12 +1062,15 @@ def create_reports_router(db):
         syndic_id = copro.get("syndic_id")
         if syndic_id:
             syndic = await db.syndics.find_one({"id": syndic_id}, {"_id": 0})
+        # iter90dj : logo cabinet + mentions legales dans le PDF
+        syndic_pdf_ctx = await resolve_syndic_pdf_context(db, copro)
         pdf_bytes = build_bilan_pdf(
             copropriete=copro,
             syndic=syndic,
             fiscal_year=fy,
             bilan_data=data,
             date_to=date_to or (fy.get("end_date") if fy else ""),
+            syndic_pdf_ctx=syndic_pdf_ctx,
         )
         safe_name = (copro.get("name", "acp") or "acp").replace(" ", "_").replace("/", "_")
         suffix = (date_to or (fy.get("end_date") if fy else datetime.now(timezone.utc).date().isoformat()))
@@ -1434,6 +1438,7 @@ def create_reports_router(db):
         Colonnes: Date valeur, Libelle, Fournisseur, Ref. interne, HTVA, TVA, TVAC, Part proprietaire, Part occupant.
         """
         from pdf_liste_depenses import build_liste_depenses_pdf
+        from pdf_layout import resolve_syndic_pdf_context
         from expense_rows import compute_expense_rows
 
         copro = await db.coproprietes.find_one({"id": copropriete_id}, {"_id": 0})
@@ -1460,6 +1465,8 @@ def create_reports_router(db):
             {"copropriete_id": copropriete_id}, {"_id": 0}
         ).to_list(1000)
 
+        # iter90dj : logo cabinet + mentions legales
+        syndic_pdf_ctx = await resolve_syndic_pdf_context(db, copro)
         pdf_bytes = build_liste_depenses_pdf(
             copropriete=copro,
             date_from=date_from, date_to=date_to,
@@ -1467,6 +1474,7 @@ def create_reports_router(db):
             distribution_keys=distribution_keys,
             pcmn_map=pcmn_map,
             expense_categories=cats,
+            syndic_pdf_ctx=syndic_pdf_ctx,
         )
         filename = f"liste_depenses_{date_from}_au_{date_to}.pdf"
         return StreamingResponse(
@@ -1487,6 +1495,7 @@ def create_reports_router(db):
         periode demandee, en un PDF unique. Format paysage A4, controle PCMN
         (somme debits = somme credits = total general)."""
         from pdf_journals_and_invoices import build_journals_pdf
+        from pdf_layout import resolve_syndic_pdf_context
 
         copro = await db.coproprietes.find_one({"id": copropriete_id}, {"_id": 0})
         if not copro:
@@ -1498,10 +1507,13 @@ def create_reports_router(db):
             q["journal_type"] = journal_type.upper()
         entries = await db.journal_entries.find(q, {"_id": 0}).sort("date", 1).to_list(100000)
 
+        # iter90dj : logo cabinet + mentions legales
+        syndic_pdf_ctx = await resolve_syndic_pdf_context(db, copro)
         pdf_bytes = build_journals_pdf(
             copropriete=copro,
             date_from=date_from, date_to=date_to,
             entries=entries,
+            syndic_pdf_ctx=syndic_pdf_ctx,
         )
         filename = f"journaux_{date_from}_au_{date_to}.pdf"
         return StreamingResponse(
@@ -1522,6 +1534,7 @@ def create_reports_router(db):
         statuts) sur la periode demandee. Colonnes: Date, N piece,
         Fournisseur, Libelle, Compte, HTVA, TVA, TVAC, Statut."""
         from pdf_journals_and_invoices import build_invoices_list_pdf
+        from pdf_layout import resolve_syndic_pdf_context
 
         copro = await db.coproprietes.find_one({"id": copropriete_id}, {"_id": 0})
         if not copro:
@@ -1533,10 +1546,13 @@ def create_reports_router(db):
             q["status"] = status
         invoices = await db.invoices.find(q, {"_id": 0}).sort("date", 1).to_list(100000)
 
+        # iter90dj : logo cabinet + mentions legales
+        syndic_pdf_ctx = await resolve_syndic_pdf_context(db, copro)
         pdf_bytes = build_invoices_list_pdf(
             copropriete=copro,
             date_from=date_from, date_to=date_to,
             invoices=invoices,
+            syndic_pdf_ctx=syndic_pdf_ctx,
         )
         filename = f"liste_factures_{date_from}_au_{date_to}.pdf"
         return StreamingResponse(
@@ -1837,6 +1853,7 @@ def create_reports_router(db):
         """Genere un PDF synthese de la balance des tiers (proprietaires + fournisseurs).
         Chinese walls strict : `copropriete_id` requis (param ou header)."""
         from pdf_balance_tiers import build_balance_tiers_pdf
+        from pdf_layout import resolve_syndic_pdf_context
 
         if not copropriete_id:
             copropriete_id = request.headers.get("X-Copropriete-Id") if request else None
@@ -1862,12 +1879,15 @@ def create_reports_router(db):
         suppliers_data["total_crediteurs"] = sup_a_payer
         suppliers_data["total_debiteurs"] = sup_acompte
 
+        # iter90dj : logo cabinet + mentions legales
+        syndic_pdf_ctx = await resolve_syndic_pdf_context(db, copro)
         pdf_bytes = build_balance_tiers_pdf(
             copropriete=copro,
             owners_data=owners_data,
             suppliers_data=suppliers_data,
             period_start=start_date or "",
             period_end=end_date or "",
+            syndic_pdf_ctx=syndic_pdf_ctx,
         )
         safe_name = (copro.get("name", "acp") or "acp").replace(" ", "_").replace("/", "_")
         suffix = (end_date or datetime.now(timezone.utc).date().isoformat())
