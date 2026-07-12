@@ -12,6 +12,64 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 
+### Iter90ek + iter90el (Feb 2026) - PDF Decompte : filigrane conditionnel + prorata mutation
+
+**Tickets utilisateur (PROD)** :
+1. "exercice cloture mais le filigrane reste dans le PDF ce n'est pas normal"
+2. "la repartition des charges ne prend pas en compte la mutation entre lot,
+   doit etre prise en compte dans le calcul du nombre de jour sur 365 jours"
+
+**Iter90ek - Filigrane APERCU conditionnel** :
+
+Root cause : `reports.py::decompte_pdf` passait le parametre `preview` du
+frontend directement a `build_decompte_pdf`. Un exercice cloture affichait
+donc le filigrane si l'utilisateur cliquait "Apercu" au lieu de "PDF".
+
+Fix : le call site passe desormais
+`preview=(preview and fy_status != "closed")`. Un exercice cloture n'aura
+JAMAIS de filigrane, meme via le bouton Apercu (qui reste un mode
+d'affichage inline, pas une decision juridique).
+
+**Iter90el - Prorata mutation** :
+
+Root cause : le PDF affichait "Prorata: 365 / 365 jours" en dur pour tous
+les lots, et attribuait TOUTES les factures d'un lot au proprietaire
+actuel, meme celles emises AVANT sa mutation.
+
+Fix :
+1. `build_decompte_pdf` accepte desormais un parametre `mutations: list`
+2. Calcule `lot_owned_period[lot_id] = (start_iso, end_iso, days_owned, fy_days_total)`
+   pour chaque lot du proprietaire, en fonction des mutations dans l'exercice :
+   - Si owner ACHETE le lot pendant l'exercice -> `start = sale_date`
+   - Si owner VEND le lot pendant l'exercice -> `end = sale_date`
+3. Filtre les invoices : `invoice.date NOT IN [start_iso, end_iso]` -> skip
+   (attribue au vendeur ou a l'acheteur, selon le sens de la mutation)
+4. Affichage dynamique : "Prorata: X / Y jours" avec X = jours de possession
+   et Y = jours dans l'exercice
+
+Le call site dans `reports.py::decompte_pdf` charge desormais les mutations
+scopees a l'ACP + lots du proprietaire + periode de l'exercice.
+
+**Tests iter90ek/el** (7/7 PASS) :
+1. `test_watermark_never_appears_on_closed_fiscal_year` : PDF cloture sans APERCU
+2. `test_watermark_appears_on_open_fiscal_year_preview` : PDF ouvert + apercu -> APERCU present
+3. `test_prorata_full_year_without_mutation` : sans mutation -> 365/365
+4. `test_prorata_partial_year_after_purchase` : achat au 15/06 -> 200/365
+5. `test_prorata_partial_year_after_sale` : vente au 20/03 -> 79/365
+6. `test_invoice_before_purchase_is_excluded` : facture pre-mutation attribuee au vendeur
+7. `test_invoice_after_purchase_is_included` : facture post-mutation attribuee a l'acheteur
+
+**Non-regression** : 15/15 tests (iter90ci, dz, ei, ek/el) PASS.
+
+**Impact PROD apres redeploiement** :
+- Le PDF decompte annuel affiche desormais la periode reelle de possession
+  et repartit correctement les charges entre vendeur et acheteur en cas
+  de mutation en cours d'exercice.
+- Le filigrane APERCU disparait automatiquement une fois l'exercice cloture.
+
+
+
+
 ### Iter90ei (Feb 2026) - Edition d'un exercice comptable
 
 **Ticket utilisateur** :

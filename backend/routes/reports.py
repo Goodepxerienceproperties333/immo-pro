@@ -1250,16 +1250,46 @@ def create_reports_router(db):
         inv_q = _apply_copro({"date": {"$gte": date_from or "2000-01-01", "$lte": date_to or "2099-12-31"}}, copropriete_id)
         invoices = await db.invoices.find(inv_q, {"_id": 0}).to_list(10000)
 
-        total_quotity = sum(lt.get("quotity", 0) for lt in lots)
+        # iter90ej : fallback quotites via la default distribution_key quand
+        # lot.quotity=0 (le champ direct sur le lot n'est pas peuple pour
+        # certaines ACPs, les shares vivent dans distribution_keys[is_default]).
+        default_key = await db.distribution_keys.find_one(
+            {"copropriete_id": copropriete_id, "is_default": True},
+            {"_id": 0},
+        )
+        lot_share_map = {}
+        if default_key:
+            for kl in default_key.get("lots", []) or []:
+                if kl.get("excluded"):
+                    continue
+                lot_share_map[kl.get("lot_id")] = float(kl.get("share", 0) or 0)
+
+        def _lot_share(lt) -> float:
+            q = float(lt.get("quotity", 0) or 0)
+            if q > 0:
+                return q
+            return lot_share_map.get(lt.get("id"), 0)
+
+        # iter90ej : phantom fallback - matche les lot_id des distribution_lines
+        # legacy avec les lot_id actuels via lot_number normalise (voir iter90du).
+        def _norm_lot_num(v: str) -> str:
+            return (str(v or "").strip().lstrip("0") or "0")
+        lots_by_norm_number = {
+            _norm_lot_num(lt.get("number", "")): lt["id"] for lt in lots
+        }
+        current_lot_ids = {lt["id"] for lt in lots}
+
+        total_quotity = sum(_lot_share(lt) for lt in lots)
 
         decomptes = []
         for owner in owners:
             owner_lots = [lt for lt in lots if lt.get("owner_id") == owner["id"]]
-            owner_quotity = sum(lt.get("quotity", 0) for lt in owner_lots)
+            owner_lot_ids = {lt["id"] for lt in owner_lots}
+            owner_quotity = sum(_lot_share(lt) for lt in owner_lots)
             share = owner_quotity / total_quotity if total_quotity > 0 else 0
 
             charges = []
-            total_owner_charges = 0
+            total_owner_charges = 0.0
             for inv in invoices:
                 # iter85f : pour multi-lignes, on agrege les descriptions de
                 # lignes par facture (separees par " - ") pour les afficher
@@ -1273,16 +1303,25 @@ def create_reports_router(db):
                 desc_combined = " - ".join(line_descs) if line_descs else (inv.get("description", "") or "")
                 desc_label = f"{inv.get('supplier', '')} - {desc_combined}".strip(" -")
 
-                dist_lines = inv.get("distribution_lines", [])
+                dist_lines = inv.get("distribution_lines") or []
                 for dl in dist_lines:
-                    if dl.get("lot_id") in [lt["id"] for lt in owner_lots]:
+                    # iter90ej : match direct par lot_id OU fallback par
+                    # lot_number normalise pour les factures legacy dont les
+                    # lot_id ne pointent plus vers des lots reels (phantom).
+                    dl_lot_id = dl.get("lot_id", "")
+                    if dl_lot_id and dl_lot_id in current_lot_ids:
+                        matched_lot_id = dl_lot_id
+                    else:
+                        matched_lot_id = lots_by_norm_number.get(_norm_lot_num(dl.get("lot_number", "")))
+                    if matched_lot_id and matched_lot_id in owner_lot_ids:
+                        amt = float(dl.get("amount", 0) or 0)
                         charges.append({
                             "date": inv["date"],
                             "description": desc_label,
                             "invoice_number": inv.get("number", ""),
-                            "amount": dl.get("amount", 0),
+                            "amount": amt,
                         })
-                        total_owner_charges += dl.get("amount", 0)
+                        total_owner_charges += amt
 
                 if not dist_lines and share > 0:
                     owner_amount = round(inv.get("total_amount", 0) * share, 2)
@@ -1298,7 +1337,7 @@ def create_reports_router(db):
                 "owner_id": owner["id"],
                 "owner_name": owner["name"],
                 "vcs_code": owner.get("vcs_code", ""),
-                "lots": [{"number": lt["number"], "quotity": lt.get("quotity", 0)} for lt in owner_lots],
+                "lots": [{"number": lt["number"], "quotity": _lot_share(lt)} for lt in owner_lots],
                 "share_pct": round(share * 100, 2),
                 "charges": charges,
                 "total_charges": round(total_owner_charges, 2),
@@ -1402,6 +1441,15 @@ def create_reports_router(db):
             {"copropriete_id": copro_id_use}, {"_id": 0}
         ).to_list(1000)
 
+        # iter90el : mutations pour ce owner sur ses lots dans l'exercice
+        owner_lot_ids_list = [l["id"] for l in owner_lots]
+        mutations_docs = await db.mutations.find(
+            {"copropriete_id": copro_id_use,
+             "lot_id": {"$in": owner_lot_ids_list},
+             "sale_date": {"$gte": fy["start_date"], "$lte": fy["end_date"]}},
+            {"_id": 0},
+        ).to_list(1000) if owner_lot_ids_list else []
+
         # Fund calls in period
         fund_calls = await db.fund_calls.find(
             {"copropriete_id": copro_id_use,
@@ -1445,7 +1493,14 @@ def create_reports_router(db):
             invoices=invoices, distribution_keys=distribution_keys,
             fund_calls=fund_calls, payments=payments,
             expense_accounts_map=nature_map,
-            preview=preview,
+            # iter90ek : le filigrane APERCU depend UNIQUEMENT du statut reel
+            # de l'exercice. Un exercice cloture ne doit JAMAIS avoir de
+            # filigrane, meme si le parametre preview=true (bouton Apercu)
+            # est envoye. Le mode "preview" du frontend est juste un mode
+            # d'affichage inline, pas une decision juridique.
+            preview=(preview and fy_status != "closed"),
+            # iter90el : prise en compte des mutations pour le prorata jours
+            mutations=mutations_docs,
         )
 
         filename = f"decompte_{owner['name'].replace(' ', '_')}_{fy.get('name','').replace(' ', '_')}.pdf"

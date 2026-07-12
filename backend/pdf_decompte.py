@@ -68,6 +68,7 @@ def build_decompte_pdf(
     expense_accounts_map: dict = None,
     preview: bool = False,
     syndic_pdf_ctx: dict = None,
+    mutations: list = None,
 ) -> bytes:
     """Genere le PDF Decompte annuel pour un proprietaire.
 
@@ -241,6 +242,57 @@ def build_decompte_pdf(
     # Aggregate by account globally for the "Recap locataire" summary
     occupant_summary_by_acc = {}  # acc -> {occ_amt, label}
 
+    # iter90el : calcul du prorata mutation par lot.
+    # Pour chaque lot du proprietaire, determine la periode de possession
+    # dans l'exercice (start_iso, end_iso). Les invoices dont la date est
+    # HORS de cette periode ne sont pas attribuees a ce proprietaire.
+    from datetime import date as _date
+    def _iso_to_date(s):
+        try:
+            return _date.fromisoformat((s or "")[:10])
+        except Exception:
+            return None
+    fy_start_iso = fiscal_year.get("start_date", "") or ""
+    fy_end_iso = fiscal_year.get("end_date", "") or ""
+    fy_start_dt = _iso_to_date(fy_start_iso)
+    fy_end_dt = _iso_to_date(fy_end_iso)
+    fy_days_total = 0
+    if fy_start_dt and fy_end_dt:
+        fy_days_total = max(1, (fy_end_dt - fy_start_dt).days + 1)
+
+    lot_owned_period = {}   # lot_id -> (start_iso, end_iso, days_owned, fy_days_total)
+    owner_id_local = owner.get("id", "")
+    muts = mutations or []
+    for lt in owner_lots:
+        lid = lt.get("id")
+        # Debut : par defaut le debut d'exercice ou l'owner l'avait deja
+        start_iso = fy_start_iso
+        end_iso = fy_end_iso
+        lot_muts = sorted(
+            [m for m in muts if m.get("lot_id") == lid],
+            key=lambda m: (m.get("sale_date") or ""),
+        )
+        for m in lot_muts:
+            sd = (m.get("sale_date") or "")[:10]
+            if not sd or not (fy_start_iso <= sd <= fy_end_iso):
+                continue
+            # Owner ACHETE le lot pendant l'exercice -> possession debute a sd
+            if m.get("to_owner_id") == owner_id_local:
+                if sd > start_iso:
+                    start_iso = sd
+            # Owner VEND le lot pendant l'exercice -> possession finit a sd
+            if m.get("from_owner_id") == owner_id_local:
+                if sd < end_iso:
+                    end_iso = sd
+        # Prorata jours
+        s_dt = _iso_to_date(start_iso)
+        e_dt = _iso_to_date(end_iso)
+        if s_dt and e_dt and e_dt >= s_dt:
+            days_owned = (e_dt - s_dt).days + 1
+        else:
+            days_owned = 0
+        lot_owned_period[lid] = (start_iso, end_iso, days_owned, fy_days_total)
+
     # Pre-compute "tantiemes par defaut" fallback (sum of all lot quotities in ACP)
     default_total_quotity = sum(float(l.get("quotity", 0) or 0) for l in all_lots) or 1.0
 
@@ -300,6 +352,17 @@ def build_decompte_pdf(
         for lot_id, amt_owner in lot_share.items():
             if abs(amt_owner) < 0.001 and abs(inv_total) < 0.001:
                 continue
+            # iter90el : filtrage par periode de possession du proprietaire
+            # sur ce lot dans l'exercice. Les invoices HORS periode ne sont
+            # pas attribuees au proprietaire (mutations en cours d'annee).
+            period = lot_owned_period.get(lot_id)
+            if period:
+                start_iso, end_iso, days_owned, _ = period
+                inv_date_iso = (inv.get("date") or "")[:10]
+                if inv_date_iso and (inv_date_iso < start_iso or inv_date_iso > end_iso):
+                    continue
+                if days_owned <= 0:
+                    continue
             amt_occ = round(amt_owner * occ_pct / 100, 2)
             amt_prop = round(amt_owner - amt_occ, 2)
 
@@ -500,11 +563,17 @@ def build_decompte_pdf(
             by_key = per_lot_data[lot_id]
             lot = lot_by_id.get(lot_id, {"number": "?", "description": ""})
 
-            # Lot header line
+            # Lot header line with dynamic prorata (iter90el)
+            _period = lot_owned_period.get(lot_id)
+            if _period:
+                _, _, _days_owned, _days_total = _period
+                _prorata_str = f"{_days_owned} / {_days_total} jours"
+            else:
+                _prorata_str = f"{fy_days_total or 365} / {fy_days_total or 365} jours"
             lot_label = (
                 f"<b>Lot: {lot.get('number','')}"
                 + (f" {lot.get('description','')}" if lot.get('description') else "")
-                + "</b> (Prorata: 365 / 365 jours)"
+                + f"</b> (Prorata: {_prorata_str})"
             )
             rows.append([Paragraph(lot_label, designation_style), "", "", "", ""])
             lot_header_idx = len(rows) - 1
