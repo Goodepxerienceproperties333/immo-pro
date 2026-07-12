@@ -12,6 +12,87 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 
+### Iter90ee (Feb 2026) - Import IA batch : ignorer les doublons
+
+**Ticket utilisateur** :
+> "lors de l'import de facture, permettre d'ignorer des factures qui
+> seraient en doublons et de passer a la suivante"
+
+**Bug** : Le workflow d'import IA batch (drop de plusieurs PDFs) etait
+bloque quand une facture rencontrait un doublon strict (409). L'utilisateur
+devait annuler tout le batch pour reprendre. La queue `pendingAiFiles`
+ne progressait pas.
+
+**Fix iter90ee** (`InvoicesPage.js`) :
+
+1. **Detection 409 en mode batch** dans `saveInvoice` :
+   - Si erreur 409 (doublon strict, sans [SOFT_DUPLICATE]) et mode batch
+     actif (`pendingAiFiles.length > 0 || aiBatchTotal > 1`) :
+     * `window.confirm(...)` propose "Passer a la facture suivante ?"
+     * Si OK : toast warning + `setPendingAiFiles(rest)` + reouverture
+       du dialog avec la facture suivante
+   - Si non batch : conserve le comportement existant (toast error)
+
+2. **Bouton "Ignorer et suivant"** dans le footer du dialog invoice :
+   - Visible uniquement si mode batch actif + nouvelle facture
+     (`!editingInvoice`)
+   - Icone `SkipForward` + couleur ambre
+   - Passe immediatement a la facture suivante SANS tenter l'enregistrement
+   - `data-testid="inv-skip-btn"`
+
+**Tests iter90ee** (2/2 PASS) :
+- `test_duplicate_invoice_returns_409_strict` : backend renvoie bien 409
+- `test_different_number_same_supplier_not_duplicate` : numeros distincts OK
+
+**Impact utilisateur (PROD apres redeploiement)** :
+- Import de 10 PDFs -> facture 3 est un doublon -> l'utilisateur clique
+  "Ignorer et suivant" (ou OK sur confirm) -> facture 4 se charge
+  automatiquement. Aucune perte de progression sur le batch.
+
+
+
+### Iter90ed (Feb 2026) - Apprentissage automatique de la repartition par nature
+
+**Ticket utilisateur** :
+> "apprends aussi quelle repartition on utilise en fonction de la nature
+> de depense (repartition proprietaire et locataire)"
+
+**Existant** : Chaque `expense_category` a `default_occupant_pct` et
+`default_proprietaire_pct` (100% total). Quand l'utilisateur selectionne
+une nature dans le dialog facture, ces defaults se pre-remplissent.
+
+**Manque** : Ces defaults etaient STATIQUES. Si l'utilisateur modifiait
+la repartition (ex: 30/70 au lieu du default 0/100), le default ne
+"apprenait" pas. La prochaine facture repartait de 0/100.
+
+**Fix iter90ed** (`invoices.py`) :
+
+- Nouveau helper `_learn_category_split(...)` place juste avant
+  `create_invoice`. Il est appele apres `insert_one` (create) et apres
+  `update_one` (update) :
+  * Skip mode multi-lignes (pcts globaux -> impossible par nature)
+  * Skip si `data.occupant_pct is None` (heritage pur du default)
+  * Sinon : `expense_categories.update_one(...)` -> MAJ
+    `default_occupant_pct` et `default_proprietaire_pct` avec la valeur
+    utilisee.
+- La prochaine facture sur la meme nature recevra ce nouveau split via
+  `default_occupant_pct` deja lu par `InvoicesPage.js::onValueChange`.
+
+**Tests iter90ed** (5/5 PASS) :
+1. `test_new_invoice_with_explicit_split_updates_category_default`
+2. `test_new_invoice_without_explicit_split_does_not_update_default`
+3. `test_update_invoice_learns_new_split`
+4. `test_multi_line_invoice_does_not_update_defaults`
+5. `test_learning_is_scoped_per_category`
+
+**Impact utilisateur (PROD apres redeploiement)** :
+- Systeme "apprend" progressivement les usages : la 1re facture Peppol a
+  70/30 -> la 2e facture Peppol arrive deja avec 70/30 pre-rempli.
+- Pas de scripts retroactifs necessaires.
+
+
+
+
 ### Iter90ec (Feb 2026) - Nouvelle nature de depense : refetch PCMN au open
 
 **Ticket utilisateur** (screenshot fourni) :

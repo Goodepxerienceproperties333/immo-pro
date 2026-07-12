@@ -911,6 +911,47 @@ def create_invoices_router(db):
                     f"Si c'est une facture distincte, modifiez le numero pour le rendre unique."
                 )
 
+    async def _learn_category_split(
+        expense_category_id: Optional[str],
+        provided_occupant_pct: Optional[float],
+        applied_occupant_pct: float,
+        lines: Optional[list] = None,
+    ) -> None:
+        """iter90ed : Apprentissage automatique de la repartition
+        occupant/proprietaire par nature de depense.
+
+        Quand l'utilisateur enregistre une facture avec une repartition
+        explicite (occupant_pct fourni != None), on met a jour
+        `default_occupant_pct` et `default_proprietaire_pct` sur la nature
+        cible. La prochaine facture sur cette nature aura ce split
+        pre-rempli automatiquement dans le frontend.
+
+        Logique :
+          - Mode single-line (lines vide/None) : update category unique
+            (`expense_category_id`) avec `applied_occupant_pct`.
+          - Mode multi-lignes : ignore (les pcts sont globaux, pas par ligne).
+          - Skip si aucune valeur explicite (heritage pur du default).
+        """
+        # Mode multi-lignes : impossible d'attribuer un split a une nature
+        # specifique (occupant_pct est global). Skip.
+        if lines and len(lines) > 0:
+            return
+        # Skip si l'utilisateur n'a rien fourni (heritage pur du default)
+        if provided_occupant_pct is None:
+            return
+        if not expense_category_id:
+            return
+        # Update default sur la nature
+        occ = max(0.0, min(100.0, float(applied_occupant_pct)))
+        prop = round(100.0 - occ, 2)
+        await db.expense_categories.update_one(
+            {"id": expense_category_id},
+            {"$set": {
+                "default_occupant_pct": occ,
+                "default_proprietaire_pct": prop,
+            }},
+        )
+
     @router.post("/invoices")
     async def create_invoice(data: InvoiceInput, force: bool = Query(default=False)):
         from fiscal_lock import ensure_period_open
@@ -1070,6 +1111,17 @@ def create_invoices_router(db):
         }
         await db.invoices.insert_one(doc)
         clean = {k: v for k, v in doc.items() if k != "_id"}
+        # iter90ed : apprentissage automatique de la repartition
+        # occupant/proprietaire par nature. Si l'utilisateur a fourni un
+        # occupant_pct explicite, on met a jour default_occupant_pct de la
+        # nature -> la prochaine facture sur cette nature aura ce split.
+        try:
+            await _learn_category_split(
+                data.expense_category_id, data.occupant_pct,
+                occupant_pct, data.lines,
+            )
+        except Exception as e:
+            print(f"[learn-split] failed: {e}")
         try:
             await generate_purchase_entry(db, clean)
         except Exception as e:
@@ -1265,6 +1317,14 @@ def create_invoices_router(db):
         if result.matched_count == 0:
             raise HTTPException(404, "Facture non trouvee")
         inv = await db.invoices.find_one({"id": invoice_id}, {"_id": 0})
+        # iter90ed : apprentissage automatique de la repartition
+        try:
+            await _learn_category_split(
+                data.expense_category_id, data.occupant_pct,
+                occupant_pct, data.lines,
+            )
+        except Exception as e:
+            print(f"[learn-split] failed: {e}")
         try:
             await generate_purchase_entry(db, inv)
         except Exception as e:

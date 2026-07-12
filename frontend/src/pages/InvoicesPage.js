@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { Plus, Trash2, Receipt, Sparkles, Paperclip, Download, X, Pencil, Filter, FolderInput, Eye, Loader2, ArrowUp, ArrowDown, ArrowUpDown } from 'lucide-react';
+import { Plus, Trash2, Receipt, Sparkles, Paperclip, Download, X, Pencil, Filter, FolderInput, Eye, Loader2, ArrowUp, ArrowDown, ArrowUpDown, SkipForward } from 'lucide-react';
 import AccountSearchSelect from '@/components/AccountSearchSelect';
 import SupplierSearchSelect from '@/components/SupplierSearchSelect';
 import BundleImportDialog from '@/components/BundleImportDialog';
@@ -444,6 +444,43 @@ export default function InvoicesPage() {
           const ok = window.confirm(`${cleanMsg}\n\nEnregistrer quand meme ?`);
           if (!ok) return;
           invoiceId = await saveOnce(true);
+        } else if (err.response?.status === 409 && (pendingAiFiles.length > 0 || aiBatchTotal > 1)) {
+          // iter90ee : Doublon strict en mode batch import IA -> proposer de
+          // passer a la facture suivante au lieu de bloquer toute la queue.
+          const remaining = pendingAiFiles.length;
+          const msg = typeof detail === 'string'
+            ? detail
+            : 'Facture deja existante (doublon strict)';
+          const skip = window.confirm(
+            `${msg}\n\n` +
+            `Facture ${aiBatchIndex}/${aiBatchTotal} en doublon.\n` +
+            (remaining > 0
+              ? `Passer a la facture suivante ? (${remaining} restante${remaining > 1 ? 's' : ''} en attente)`
+              : `Il s'agit de la derniere facture du batch. Cliquez OK pour ignorer.`)
+          );
+          if (!skip) return;
+          // Skip = passer a la suivante SANS enregistrer cette facture
+          toast.warning(`Facture ${aiBatchIndex}/${aiBatchTotal} ignoree (doublon)`);
+          if (remaining > 0) {
+            const [next, ...rest] = pendingAiFiles;
+            setPendingAiFiles(rest);
+            setAiBatchIndex(prev => prev + 1);
+            setInvoiceDialog(false); setPendingPdf(null); setEditingInvoice(null);
+            setLastAiRawText(''); setLastAiSupplierIdGuess(''); setLastAiValues(null); setLastAiExtractionSource('');
+            setTimeout(() => {
+              openCreateInvoice();
+              aiExtractFromPdf(next);
+            }, 300);
+          } else {
+            // Fin de queue
+            if (aiBatchTotal > 1) {
+              toast.success(`Batch termine (${aiBatchTotal} traitees, dont doublons ignores)`, { duration: 5000 });
+            }
+            setAiBatchTotal(0); setAiBatchIndex(0);
+            setInvoiceDialog(false); setPendingPdf(null); setEditingInvoice(null);
+            setLastAiRawText(''); setLastAiSupplierIdGuess(''); setLastAiValues(null); setLastAiExtractionSource('');
+          }
+          return;
         } else {
           throw err;
         }
@@ -1450,6 +1487,39 @@ export default function InvoicesPage() {
                 }
                 setInvoiceDialog(false);
               }}>Annuler</Button>
+              {/* iter90ee : bouton "Ignorer" en mode batch pour passer la facture courante */}
+              {(pendingAiFiles.length > 0 || aiBatchTotal > 1) && !editingInvoice && (
+                <Button
+                  variant="outline"
+                  className="border-amber-300 text-amber-700 hover:bg-amber-50"
+                  onClick={() => {
+                    const remaining = pendingAiFiles.length;
+                    toast.warning(`Facture ${aiBatchIndex}/${aiBatchTotal} ignoree`);
+                    if (remaining > 0) {
+                      const [next, ...rest] = pendingAiFiles;
+                      setPendingAiFiles(rest);
+                      setAiBatchIndex(prev => prev + 1);
+                      setInvoiceDialog(false); setPendingPdf(null); setEditingInvoice(null);
+                      setLastAiRawText(''); setLastAiSupplierIdGuess(''); setLastAiValues(null); setLastAiExtractionSource('');
+                      setTimeout(() => {
+                        openCreateInvoice();
+                        aiExtractFromPdf(next);
+                      }, 300);
+                    } else {
+                      if (aiBatchTotal > 1) {
+                        toast.success(`Batch termine (${aiBatchTotal} traitees)`, { duration: 5000 });
+                      }
+                      setAiBatchTotal(0); setAiBatchIndex(0);
+                      setInvoiceDialog(false); setPendingPdf(null); setEditingInvoice(null);
+                      setLastAiRawText(''); setLastAiSupplierIdGuess(''); setLastAiValues(null); setLastAiExtractionSource('');
+                    }
+                  }}
+                  data-testid="inv-skip-btn"
+                  title="Ignorer cette facture et passer a la suivante"
+                >
+                  <SkipForward size={14} className="mr-1.5" /> Ignorer et suivant
+                </Button>
+              )}
               <Button
                 onClick={saveInvoice}
                 disabled={aiExtracting}
