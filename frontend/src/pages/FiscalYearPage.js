@@ -9,7 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { toast } from 'sonner';
-import { Plus, Trash2, Lock, Unlock, Calendar, CheckCircle2, RotateCcw, Sparkles, Send, Calculator, FileDown } from 'lucide-react';
+import { Plus, Trash2, Lock, Unlock, Calendar, CheckCircle2, RotateCcw, Sparkles, Send, Calculator, FileDown, Pencil } from 'lucide-react';
 import BudgetWizard from '@/components/BudgetWizard';
 import RegularizationDialog from '@/components/RegularizationDialog';
 import AccountSearchSelect from '@/components/AccountSearchSelect';
@@ -22,7 +22,8 @@ export default function FiscalYearPage() {
   const [accounts, setAccounts] = useState([]);
   const [distKeys, setDistKeys] = useState([]);
   const [yearDialog, setYearDialog] = useState(false);
-  const [budgetDialog, setBudgetDialog] = useState(false);
+  // iter90ei : edition d'un exercice existant (null = mode creation)
+  const [editingYear, setEditingYear] = useState(null);  const [budgetDialog, setBudgetDialog] = useState(false);
   const [editingBudget, setEditingBudget] = useState(null);
   const [comparison, setComparison] = useState(null);
   const [yearForm, setYearForm] = useState({ name: '', start_date: '', end_date: '', invoice_number_prefix: '' });
@@ -51,12 +52,34 @@ export default function FiscalYearPage() {
 
   const openCreateYear = () => {
     const now = new Date().getFullYear();
+    setEditingYear(null);
     setYearForm({ name: `Exercice ${now}`, start_date: `${now}-01-01`, end_date: `${now}-12-31`, invoice_number_prefix: `FA-${now}-` });
     setYearDialog(true);
   };
+  // iter90ei : ouverture du dialog en mode edition
+  const openEditYear = (y) => {
+    setEditingYear(y);
+    setYearForm({
+      name: y.name || '',
+      start_date: (y.start_date || '').slice(0, 10),
+      end_date: (y.end_date || '').slice(0, 10),
+      invoice_number_prefix: y.invoice_number_prefix || '',
+    });
+    setYearDialog(true);
+  };
   const saveYear = async () => {
-    try { await api.post('/fiscal/years', yearForm); toast.success('Exercice cree'); setYearDialog(false); load(); }
-    catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); }
+    try {
+      if (editingYear) {
+        await api.put(`/fiscal/years/${editingYear.id}`, yearForm);
+        toast.success('Exercice modifie');
+      } else {
+        await api.post('/fiscal/years', yearForm);
+        toast.success('Exercice cree');
+      }
+      setYearDialog(false);
+      setEditingYear(null);
+      load();
+    } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); }
   };
   const closeYear = async (id) => {
     if (!window.confirm(
@@ -292,6 +315,7 @@ export default function FiscalYearPage() {
                     <TableCell><div className="flex gap-1">
                       {y.status === 'open'
                         ? <>
+                            <Button variant="ghost" size="sm" onClick={() => openEditYear(y)} title="Modifier l'exercice" data-testid={`edit-year-${y.id}`}><Pencil size={14} /></Button>
                             <Button variant="ghost" size="sm" onClick={() => setRegulFy(y)} className="text-orange-600" title="Regulariser cloture" data-testid={`regularize-${y.id}`}><Calculator size={14} /></Button>
                             <Button variant="ghost" size="sm" onClick={() => closeYear(y.id)} className="text-orange-600" title="Cloturer"><Lock size={14} /></Button>
                           </>
@@ -377,9 +401,9 @@ export default function FiscalYearPage() {
       </Tabs>
 
       {/* Year dialog */}
-      <Dialog open={yearDialog} onOpenChange={setYearDialog}>
+      <Dialog open={yearDialog} onOpenChange={(open) => { setYearDialog(open); if (!open) setEditingYear(null); }}>
         <DialogContent>
-          <DialogHeader><DialogTitle style={{fontFamily:'Chivo,sans-serif'}}>Nouvel exercice</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle style={{fontFamily:'Chivo,sans-serif'}}>{editingYear ? "Modifier l'exercice" : 'Nouvel exercice'}</DialogTitle></DialogHeader>
           <div className="space-y-4 mt-2">
             <div><label className="form-label">Nom *</label><Input value={yearForm.name} onChange={e => setYearForm({...yearForm, name: e.target.value})} data-testid="year-name" /></div>
             <div className="grid grid-cols-2 gap-4">
@@ -388,7 +412,7 @@ export default function FiscalYearPage() {
             </div>
             {/* iter90dq : prefixe libre pour l'auto-numerotation des factures */}
             <div>
-              <label className="form-label">Prefixe des factures</label>
+              <label className="form-label">Reference interne (prefixe des factures)</label>
               <Input
                 value={yearForm.invoice_number_prefix || ''}
                 onChange={e => setYearForm({...yearForm, invoice_number_prefix: e.target.value})}
@@ -402,10 +426,16 @@ export default function FiscalYearPage() {
                 Cette reference interne permet au commissaire aux comptes de lier
                 chaque facture a la depense comptabilisee.
               </p>
+              {editingYear && (
+                <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5 mt-2">
+                  <b>Attention :</b> les factures deja creees NE seront PAS renumerotees.
+                  Seules les prochaines factures utiliseront le nouveau prefixe.
+                </p>
+              )}
             </div>
             <div className="flex gap-3 justify-end">
-              <Button variant="outline" onClick={() => setYearDialog(false)}>Annuler</Button>
-              <Button onClick={saveYear} className="bg-[#022D52] hover:bg-[#1D4ED8]" data-testid="year-save-btn">Creer</Button>
+              <Button variant="outline" onClick={() => { setYearDialog(false); setEditingYear(null); }}>Annuler</Button>
+              <Button onClick={saveYear} className="bg-[#022D52] hover:bg-[#1D4ED8]" data-testid="year-save-btn">{editingYear ? 'Enregistrer' : 'Creer'}</Button>
             </div>
           </div>
         </DialogContent>

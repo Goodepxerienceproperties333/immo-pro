@@ -12,6 +12,48 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 
+### Iter90ei (Feb 2026) - Edition d'un exercice comptable
+
+**Ticket utilisateur** :
+> "permettre d'editer un exercice comptable"
+> "ceci permettra de laisser au syndic la possibilte de decider de son nr
+> de reference interne pour la numerotation des factures"
+
+**Existant** : Endpoint `PUT /api/fiscal/years/{year_id}` deja implemente
+(iter90dq) mais NON EXPOSE dans le frontend. Le syndic devait recreer un
+exercice pour changer le prefixe.
+
+**Fix iter90ei** (`FiscalYearPage.js`) :
+
+1. Nouveau state `editingYear` (null en mode creation, objet en mode edit)
+2. Fonction `openEditYear(y)` pre-remplit `yearForm` avec les valeurs de
+   l'exercice + ouvre le dialog
+3. `saveYear` dispatch entre POST (create) et PUT (edit) selon `editingYear`
+4. Dialog :
+   * Titre dynamique "Nouvel exercice" ou "Modifier l'exercice"
+   * Label modifie : "Reference interne (prefixe des factures)"
+   * Bouton "Creer" -> "Enregistrer" en mode edition
+   * Warning ambre affiche en mode edit : "les factures deja creees NE
+     seront PAS renumerotees"
+   * `onOpenChange` reset `editingYear=null` a la fermeture
+5. Table exercices ouverts : nouveau bouton icone Pencil `data-testid="edit-year-{id}"`
+   affiche uniquement pour `status=open` (car cloture verrouille tout)
+
+**Tests iter90ei** (3/3 PASS) :
+1. `test_update_fiscal_year_persists_prefix` : PUT MAJ nom + prefixe
+2. `test_update_fiscal_year_404_when_not_found` : PUT sur id inexistant -> 404
+3. `test_update_fiscal_year_can_change_dates` : dates modifiables
+
+**Impact utilisateur (PROD apres redeploiement)** :
+- Bouton crayon apparait sur chaque ligne d'exercice ouvert dans
+  `/fiscal` tab "Exercices"
+- Clic -> dialog pre-rempli, syndic modifie le prefixe (ex "FA-2025-" ->
+  "ACACIA-25-") et sauvegarde. Les prochaines factures utilisent le nouveau
+  prefixe automatiquement.
+
+
+
+
 ### Iter90eh (Feb 2026) - Lettrage bancaire : refresh instantane sans F5
 
 **Ticket utilisateur (PROD)** :
