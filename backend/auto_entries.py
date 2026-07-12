@@ -410,6 +410,12 @@ async def generate_sale_entry(db, fund_call: dict) -> dict | None:
             continue
         accs = get_owner_accounts(owner, copro_id)
         owner_total = float(d.get("amount", 0) or 0)
+        # iter90ea : persiste lot_id + lot_number sur chaque ligne du journal
+        # pour eliminer definitivement le risque phantom au niveau schema.
+        # Ces champs restent stables meme apres suppression/re-import du lot,
+        # permettant une resolution robuste par lot_number.
+        lot_id_for_line = d.get("lot_id", "") or ""
+        lot_number_for_line = d.get("lot_number", "") or ""
         # Prorate reserve + roulement vs provisions per owner
         owner_reserve = round(owner_total * (reserve_total / full_total), 2) if reserve_total > 0 else 0
         owner_roul = round(owner_total * (roulement_total / full_total), 2) if roulement_total > 0 else 0
@@ -422,6 +428,8 @@ async def generate_sale_entry(db, fund_call: dict) -> dict | None:
                 "third_party_id": oid,
                 "third_party_name": owner.get("name", ""),
                 "line_description": label_prov if call_type_for_default in ("", "provisions") else label_default,
+                "lot_id": lot_id_for_line,
+                "lot_number": lot_number_for_line,
             })
             sum_dr_prov += owner_prov
         if owner_reserve > 0.001 and accs.get("reserve"):
@@ -432,6 +440,8 @@ async def generate_sale_entry(db, fund_call: dict) -> dict | None:
                 "third_party_id": oid,
                 "third_party_name": owner.get("name", ""),
                 "line_description": label_res,
+                "lot_id": lot_id_for_line,
+                "lot_number": lot_number_for_line,
             })
             sum_dr_res += owner_reserve
         if owner_roul > 0.001 and accs.get("provisions"):
@@ -443,6 +453,8 @@ async def generate_sale_entry(db, fund_call: dict) -> dict | None:
                 "third_party_id": oid,
                 "third_party_name": owner.get("name", ""),
                 "line_description": label_roul,
+                "lot_id": lot_id_for_line,
+                "lot_number": lot_number_for_line,
             })
             sum_dr_roul += owner_roul
 

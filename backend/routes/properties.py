@@ -2099,12 +2099,18 @@ def create_properties_router(db):
                      "account_name": f"Mutation - {new_owner.get('last_name') or new_owner.get('name')}",
                      "debit": amount, "credit": 0.0,
                      "third_party_id": data.new_owner_id,
-                     "third_party_name": new_owner.get("name", "")},
+                     "third_party_name": new_owner.get("name", ""),
+                     # iter90ea : persistance lot_number
+                     "lot_id": lt.get("id", "") or "",
+                     "lot_number": lt.get("number", "") or ""},
                     {"account_number": old_acc,
                      "account_name": f"Mutation - {old_owner.get('last_name') or old_owner.get('name')}",
                      "debit": 0.0, "credit": amount,
                      "third_party_id": old_owner_id,
-                     "third_party_name": old_owner.get("name", "")},
+                     "third_party_name": old_owner.get("name", ""),
+                     # iter90ea : persistance lot_number
+                     "lot_id": lt.get("id", "") or "",
+                     "lot_number": lt.get("number", "") or ""},
                 ]
                 return {
                     "id": str(uuid.uuid4()),

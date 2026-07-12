@@ -12,6 +12,113 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 
+### Iter90eb (Feb 2026) - Lettrage bancaire : en-tete enrichi avec liens existants
+
+**Ticket utilisateur** :
+> "lors de la comptabilisation des extraits de compte 'lettrages' le lettrage
+> des proprietaires est automatique sur base de leurs noms ou nr VCS. Il faut
+> par contre pour le lettrage des factures et lier au paiement il faut marquer
+> en vert les factures deja lettrees cela eviter de lettrer les differents
+> paiement sur une factures. Dans le detail qui apparait dans l'entete du
+> lettrage marque quel paiement a ete deja lie a cette transaction."
+
+**Existant** : Les factures deja lettrees sont deja marquees visuellement dans
+la liste (badge PAYE vert + bordure gauche verte). MAIS l'utilisateur ne
+voyait pas d'un coup d'oeil a quelle cible la transaction en cours d'ouverture
+etait deja lettree.
+
+**Fix iter90eb** :
+
+Backend (`banking.py`) :
+- Nouveau endpoint `GET /api/banking/transactions/{txn_id}/lettered-links`
+- Structure de retour :
+  * `matched`, `match_type`, `lettrage_code`
+  * `invoices[]` : {id, number, supplier, total_amount, amount_paid, status, date, description}
+  * `owner` : {id, name, vcs_code, email} (si match_type=owner_payment)
+  * `supplier` : {id, name, vat_number} (si match_type=supplier_payment)
+  * `sibling_transactions[]` : autres txns du meme `lettrage_code` (batch N->1)
+
+Frontend (`BankingPage.js`) :
+- `openLettrage(txn)` charge desormais les liens lettres via l'endpoint
+- Bandeau visuel dans l'en-tete du dialog `#lettrage-dialog` :
+  * Icone CheckCircle vert + titre "Cette transaction est deja lettree..."
+  * Detail par facture : numero + fournisseur + statut + montant
+  * Detail owner/supplier avec VCS/TVA
+  * Code lettrage `#XXXX` en badge mono
+  * Sibling transactions (autres txns du meme batch)
+  * Warning ambre + bouton "Delettrer maintenant" pour action rapide
+
+**Tests iter90eb** (6/6 PASS) :
+1. `test_unmatched_transaction_returns_empty_links`
+2. `test_invoice_lettrage_returns_invoice_details`
+3. `test_multi_invoice_returns_all_invoices`
+4. `test_owner_payment_returns_owner_info`
+5. `test_batch_lettrage_returns_sibling_transactions`
+6. `test_transaction_not_found_returns_404`
+
+**Impact utilisateur (PROD apres deploiement)** :
+- L'utilisateur voit immediatement dans l'en-tete du dialog de lettrage
+  les liens deja existants (factures, owner, supplier) et peut delettrer
+  d'un clic.
+- Impossible d'oublier qu'une transaction paie deja une facture -> pas
+  de re-lettrage accidentel a une autre cible.
+
+
+
+### Iter90ea (Feb 2026) - Renforcement structurel : lot_number persiste sur toutes les ecritures
+
+**User confirmation** :
+> "a) OUI - Renforcement structurel : lot_number persistée à chaque écriture
+> (protection définitive)"
+
+**Cause traitee** : Elimination definitive du risque phantom au niveau
+schema en persistant `lot_id` + `lot_number` sur chaque ligne des
+`journal_entries` generees, permettant une resolution robuste par
+`lot_number` normalise meme apres suppression/re-import du lot.
+
+**Etat existant (avant iter90ea)** :
+- `invoices.distribution_lines[]` : DEJA persiste `lot_id + lot_number`
+- `fund_calls.distribution[]` : DEJA persiste `lot_id + lot_number`
+- `journal_entries.lines[]` (VE fund_calls) : lot_number ABSENT
+- `journal_entries.lines[]` (OD MUT mutation) : lot_number ABSENT
+
+**Fix iter90ea (3 fichiers)** :
+
+1. `auto_entries.py::generate_sale_entry` :
+   - Chaque ligne owner_prov / owner_reserve / owner_roul recoit
+     desormais `lot_id` + `lot_number` extraits de la distribution.
+   - Ligne credit 700000 / 160 / 100 : PAS de lot_id (compte global).
+
+2. `fund_calls.py` (OD MUT-P retroactif + MUT-R backfill iter90cf/ck) :
+   - Chaque ligne debit/credit de l'OD contient `lot_id` + `lot_number`
+     de l'entree phantom.
+
+3. `properties.py::_build_entry` (OD MUT-R/MUT-P lors des mutations) :
+   - Chaque ligne debit/credit contient `lot_id` + `lot_number` du lot
+     concerne par la mutation.
+
+**Tests iter90ea** (3/3 PASS) :
+1. `test_generate_sale_entry_persists_lot_number_on_each_line` : fund_call
+   avec 3 lots -> 3 lignes debit avec lot_id + lot_number distincts
+2. `test_generate_sale_entry_reserve_and_roulement_persist_lot_number` :
+   fund_call avec reserve + roulement -> 3 lignes debit
+   (owner_prov + owner_reserve + owner_roul) toutes avec lot_number
+3. `test_lot_number_survives_phantom_lookup` : validation du contract
+   de resolution par lot_number normalise
+
+**Non-regression** : Tests iter90cr, iter90cg, iter90ch, iter90ci, iter90du,
+iter90dy, iter90dz PASS.
+
+**Impact deploiement** :
+- Toute nouvelle ecriture (VE, OD mutations) generees APRES deploy aura
+  `lot_number` persiste sur ses lignes.
+- Les anciennes ecritures continuent de fonctionner via le fallback
+  `lot_number` normalise iter90dz (deja en place).
+- Aucun script retroactif requis.
+
+
+
+
 ### Iter90dz (Feb 2026) - Portail proprietaire : fallback lot_number pour distribution_lines phantoms
 
 **Ticket utilisateur PROD** :

@@ -739,6 +739,126 @@ def create_banking_router(db):
         txns = await db.bank_transactions.find(query, {"_id": 0}).sort("date", -1).to_list(1000)
         return txns
 
+    @router.get("/transactions/{txn_id}/lettered-links")
+    async def get_lettered_links(txn_id: str):
+        """iter90eb : Retourne les cibles (factures/owner/supplier) deja
+        lettrees a cette transaction, pour affichage dans l'en-tete du dialog
+        de lettrage. Permet a l'utilisateur d'eviter de re-lettrer par erreur.
+
+        Structure de retour :
+          {
+            "transaction_id": "...",
+            "matched": true|false,
+            "match_type": "invoice" | "multi_invoice" | "owner_payment" | "supplier_payment" | "",
+            "lettrage_code": "...",  # si batch/multi
+            "invoices": [{id, number, supplier, total_amount, amount_paid, status, date}],
+            "owner": {id, name, vcs_code} | null,
+            "supplier": {id, name, vat_number} | null,
+            "sibling_transactions": [...]  # autres txns du meme lettrage_code (batch N->1)
+          }
+        """
+        txn = await db.bank_transactions.find_one({"id": txn_id}, {"_id": 0})
+        if not txn:
+            raise HTTPException(404, "Transaction non trouvee")
+
+        result: dict = {
+            "transaction_id": txn_id,
+            "matched": bool(txn.get("matched")),
+            "match_type": txn.get("match_type", "") or "",
+            "lettrage_code": txn.get("lettrage_code", "") or "",
+            "invoices": [],
+            "owner": None,
+            "supplier": None,
+            "sibling_transactions": [],
+        }
+
+        if not txn.get("matched"):
+            return result
+
+        mt = txn.get("match_type", "") or ""
+
+        # --- Cas 1 : invoice simple (1 txn -> 1 facture)
+        # OU multi_invoice (1 txn -> N factures : matched_to_ids)
+        invoice_ids: list = []
+        if mt == "invoice" and txn.get("matched_to"):
+            invoice_ids = [txn["matched_to"]]
+        elif mt == "multi_invoice":
+            invoice_ids = list(txn.get("matched_to_ids") or [])
+            if not invoice_ids and txn.get("matched_to"):
+                invoice_ids = [txn["matched_to"]]
+
+        if invoice_ids:
+            invs = await db.invoices.find(
+                {"id": {"$in": invoice_ids}},
+                {"_id": 0, "id": 1, "number": 1, "supplier": 1,
+                 "total_amount": 1, "amount_ttc": 1, "amount": 1,
+                 "amount_paid": 1, "status": 1, "date": 1, "description": 1},
+            ).to_list(1000)
+            for inv in invs:
+                inv_amt = float(
+                    inv.get("amount_ttc") or inv.get("total_amount")
+                    or inv.get("amount") or 0
+                )
+                result["invoices"].append({
+                    "id": inv["id"],
+                    "number": inv.get("number", ""),
+                    "supplier": inv.get("supplier", ""),
+                    "description": inv.get("description", ""),
+                    "date": inv.get("date", ""),
+                    "total_amount": round(inv_amt, 2),
+                    "amount_paid": round(float(inv.get("amount_paid") or 0), 2),
+                    "status": inv.get("status", ""),
+                })
+
+        # --- Cas 2 : owner_payment
+        if mt == "owner_payment" and txn.get("matched_to"):
+            owner = await db.owners.find_one(
+                {"id": txn["matched_to"]},
+                {"_id": 0, "id": 1, "name": 1, "vcs_code": 1, "email": 1},
+            )
+            if owner:
+                result["owner"] = {
+                    "id": owner["id"],
+                    "name": owner.get("name", ""),
+                    "vcs_code": owner.get("vcs_code", ""),
+                    "email": owner.get("email", ""),
+                }
+
+        # --- Cas 3 : supplier_payment
+        if mt == "supplier_payment" and txn.get("matched_to"):
+            supplier = await db.suppliers.find_one(
+                {"id": txn["matched_to"]},
+                {"_id": 0, "id": 1, "name": 1, "vat_number": 1},
+            )
+            if supplier:
+                result["supplier"] = {
+                    "id": supplier["id"],
+                    "name": supplier.get("name", ""),
+                    "vat_number": supplier.get("vat_number", ""),
+                }
+
+        # --- Cas 4 : autres transactions du meme lettrage_code (batch N->1)
+        code = result["lettrage_code"]
+        if code:
+            siblings = await db.bank_transactions.find(
+                {"lettrage_code": code, "id": {"$ne": txn_id}},
+                {"_id": 0, "id": 1, "date": 1, "amount": 1,
+                 "counterparty_name": 1, "communication": 1, "statement_id": 1},
+            ).to_list(100)
+            result["sibling_transactions"] = [
+                {
+                    "id": s["id"],
+                    "date": s.get("date", ""),
+                    "amount": round(float(s.get("amount") or 0), 2),
+                    "counterparty_name": s.get("counterparty_name", ""),
+                    "communication": s.get("communication", ""),
+                    "statement_id": s.get("statement_id", ""),
+                }
+                for s in siblings
+            ]
+
+        return result
+
     async def _refresh_fi_if_posted(txn_id):
         """Si l'extrait parent est `posted`, regenere l'ecriture FI de cette txn
         (Dr Banque / Cr counterpart si lettree, sinon Cr 499000). Permet aux balances

@@ -52,6 +52,10 @@ export default function BankingPage() {
   const [batchInvoiceSearch, setBatchInvoiceSearch] = useState('');
   // 1 txn -> N invoices (multi-selection des factures dans le dialog lettrage de transaction)
   const [selectedInvoiceIds, setSelectedInvoiceIds] = useState(new Set());
+  // iter90eb : Liens deja lettres sur la transaction en cours d'ouverture
+  //   { matched, match_type, lettrage_code, invoices[], owner, supplier, sibling_transactions[] }
+  const [letteredLinks, setLetteredLinks] = useState(null);
+  const [letteredLinksLoading, setLetteredLinksLoading] = useState(false);
   // ----- iter90k : Categorisation par nature de depense/revenu -----
   const [expenseCategories, setExpenseCategories] = useState([]);
   const [distributionKeys, setDistributionKeys] = useState([]);
@@ -303,7 +307,24 @@ export default function BankingPage() {
   };
 
   // LETTRAGE
-  const openLettrage = (txn) => { setLettrageTarget(txn); setLettrageDialog(true); setLookupQuery(''); setSelectedInvoiceIds(new Set()); };
+  const openLettrage = async (txn) => {
+    setLettrageTarget(txn);
+    setLettrageDialog(true);
+    setLookupQuery('');
+    setSelectedInvoiceIds(new Set());
+    // iter90eb : charge les liens deja lettres sur cette txn
+    setLetteredLinks(null);
+    setLetteredLinksLoading(true);
+    try {
+      const { data } = await api.get(`/banking/transactions/${txn.id}/lettered-links`);
+      setLetteredLinks(data);
+    } catch (err) {
+      // Silent : l'utilisateur peut lettrer sans le detail (fallback UI)
+      setLetteredLinks(null);
+    } finally {
+      setLetteredLinksLoading(false);
+    }
+  };
   const doLettrage = async (id, type) => { try { await api.post('/banking/lettrage', { transaction_id: lettrageTarget.id, match_to_id: id, match_type: type }); toast.success('Lettre'); setLettrageDialog(false); if (selectedStmt) loadStmtTxns(selectedStmt); else load(); } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); } };
   const unlettrage = async (id) => {
     // iter90cl : optimistic patch au lieu de load() full reload pour perf batch.
@@ -938,6 +959,111 @@ export default function BankingPage() {
                   <span className="font-mono text-[11px] bg-white/15 px-2 py-0.5 rounded">{lettrageTarget.communication}</span>
                 )}
               </div>
+            )}
+            {/* iter90eb : Bandeau "Deja lettree" avec detail des cibles */}
+            {letteredLinks?.matched && (
+              <div
+                className="mt-3 bg-white/15 border border-white/30 rounded-md px-3 py-2.5 text-[12px]"
+                data-testid="lettrage-existing-links"
+              >
+                <div className="flex items-center gap-2 mb-1.5">
+                  <CheckCircle2 size={13} className="text-emerald-200" />
+                  <span className="font-semibold text-white">
+                    {(() => {
+                      const mt = letteredLinks.match_type;
+                      if (mt === 'invoice' && letteredLinks.invoices.length > 0) {
+                        return `Cette transaction est deja lettree a ${letteredLinks.invoices.length} facture${letteredLinks.invoices.length > 1 ? 's' : ''}`;
+                      }
+                      if (mt === 'multi_invoice') {
+                        return `Cette transaction paie ${letteredLinks.invoices.length} facture${letteredLinks.invoices.length > 1 ? 's' : ''}`;
+                      }
+                      if (mt === 'owner_payment' && letteredLinks.owner) return 'Deja lettree a un proprietaire';
+                      if (mt === 'supplier_payment' && letteredLinks.supplier) return 'Deja lettree a un fournisseur';
+                      return 'Deja lettree';
+                    })()}
+                  </span>
+                  {letteredLinks.lettrage_code && (
+                    <span className="ml-auto font-mono text-[10px] bg-white/20 px-1.5 py-0.5 rounded" title="Code lettrage groupe">
+                      #{letteredLinks.lettrage_code}
+                    </span>
+                  )}
+                </div>
+                {/* Details factures */}
+                {letteredLinks.invoices?.length > 0 && (
+                  <div className="space-y-1 pl-4" data-testid="lettered-invoices-list">
+                    {letteredLinks.invoices.map(inv => (
+                      <div
+                        key={inv.id}
+                        className="flex items-center justify-between gap-3 text-white/95"
+                        data-testid={`lettered-invoice-${inv.id}`}
+                      >
+                        <div className="flex items-center gap-2 min-w-0 flex-1">
+                          <span className="font-mono text-[11px] font-semibold">{inv.number || '—'}</span>
+                          <span className="truncate">{inv.supplier}</span>
+                          <span className="text-[10px] bg-white/25 px-1.5 py-0.5 rounded shrink-0">{inv.status?.toUpperCase()}</span>
+                        </div>
+                        <span className="font-mono text-[11px] shrink-0">{Number(inv.total_amount).toFixed(2)} EUR</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {/* Owner details */}
+                {letteredLinks.owner && (
+                  <div className="pl-4 text-white/95">
+                    <span className="font-medium">{letteredLinks.owner.name}</span>
+                    {letteredLinks.owner.vcs_code && (
+                      <span className="ml-2 font-mono text-[10px] bg-white/20 px-1.5 py-0.5 rounded">{letteredLinks.owner.vcs_code}</span>
+                    )}
+                  </div>
+                )}
+                {/* Supplier details */}
+                {letteredLinks.supplier && (
+                  <div className="pl-4 text-white/95">
+                    <span className="font-medium">{letteredLinks.supplier.name}</span>
+                    {letteredLinks.supplier.vat_number && (
+                      <span className="ml-2 font-mono text-[10px] bg-white/20 px-1.5 py-0.5 rounded">{letteredLinks.supplier.vat_number}</span>
+                    )}
+                  </div>
+                )}
+                {/* Sibling transactions (batch N->1) */}
+                {letteredLinks.sibling_transactions?.length > 0 && (
+                  <div className="mt-1.5 pl-4 text-white/80 text-[11px]" data-testid="lettered-siblings">
+                    <span className="italic">+ {letteredLinks.sibling_transactions.length} autre{letteredLinks.sibling_transactions.length > 1 ? 's' : ''} transaction{letteredLinks.sibling_transactions.length > 1 ? 's' : ''} du meme lettrage</span>
+                    <span className="ml-2 font-mono">
+                      (total {letteredLinks.sibling_transactions.reduce((s, t) => s + Math.abs(Number(t.amount || 0)), 0).toFixed(2)} EUR)
+                    </span>
+                  </div>
+                )}
+                {/* Warning re-lettrage + bouton action rapide */}
+                <div className="mt-2 pt-2 border-t border-white/20 text-[11px] text-amber-200 flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5">
+                    <AlertTriangle size={11} />
+                    <span>Delettrez d&apos;abord avant de lettrer a une nouvelle cible.</span>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={async () => {
+                      if (!lettrageTarget) return;
+                      try {
+                        await api.post(`/banking/unlettrage/${lettrageTarget.id}`);
+                        toast.success('Transaction delettree');
+                        setLetteredLinks({ ...letteredLinks, matched: false, invoices: [], owner: null, supplier: null, sibling_transactions: [] });
+                        if (selectedStmt) loadStmtTxns(selectedStmt); else load();
+                      } catch (err) {
+                        toast.error(err.response?.data?.detail || 'Erreur delettrage');
+                      }
+                    }}
+                    className="bg-white/10 hover:bg-white/25 border-white/40 text-white h-6 text-[11px] shrink-0"
+                    data-testid="lettrage-header-unlettrage-btn"
+                  >
+                    <Unlink size={11} className="mr-1" /> Delettrer maintenant
+                  </Button>
+                </div>
+              </div>
+            )}
+            {letteredLinksLoading && !letteredLinks && (
+              <div className="mt-3 text-[11px] text-white/70 italic" data-testid="lettered-links-loading">Verification des lettrages existants...</div>
             )}
           </div>
 
