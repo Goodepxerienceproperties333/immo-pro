@@ -94,25 +94,17 @@ export default function LoginPage() {
   if (isFirstSet) { titleText = 'Definir mon mot de passe'; subtitleText = '1ere connexion : choisissez votre mot de passe'; }
 
   return (
-    <div
-      className="min-h-screen flex items-center justify-center p-4 sm:p-8 relative"
-      style={{
-        backgroundColor: '#f8fafc',
-        backgroundImage: "url('/logo-nextge.png')",
-        backgroundSize: 'min(720px, 65vw) auto',
-        backgroundPosition: 'center',
-        backgroundRepeat: 'no-repeat',
-      }}
-    >
-      {/* Overlay blanc semi-opaque pour attenuer le logo de fond */}
-      <div className="absolute inset-0 bg-white/78 backdrop-blur-[1px]" aria-hidden="true" />
+    <div className="min-h-screen flex flex-col items-center justify-center p-4 sm:p-8 bg-slate-50">
+      {/* Logo grand en HAUT, au-dessus du formulaire */}
+      <img
+        src="/logo-nextge.png"
+        alt="NextGe Copro"
+        className="h-56 md:h-64 w-auto mb-6"
+        data-testid="login-logo"
+      />
 
-      <div className="w-full max-w-md relative z-10">
-        <div className="bg-white/95 backdrop-blur-sm shadow-2xl shadow-slate-900/10 rounded-2xl p-8 border border-slate-200/60">
-          <div className="flex items-center justify-center mb-6">
-            <img src="/logo-nextge.png" alt="NextGe Copro" className="h-24 w-auto" data-testid="login-logo" />
-          </div>
-
+      <div className="w-full max-w-md">
+        <div className="bg-white shadow-2xl shadow-slate-900/10 rounded-2xl p-8 border border-slate-200/60">
           <h2 className="text-center text-xl font-bold text-slate-900 mb-1" style={{fontFamily:'Chivo,sans-serif'}}>{titleText}</h2>
           <p className="text-center text-sm text-slate-500 mb-6">{subtitleText}</p>
 
