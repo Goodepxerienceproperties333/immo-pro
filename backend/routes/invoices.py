@@ -604,6 +604,130 @@ def create_invoices_router(db):
             raise HTTPException(404, "Cle non trouvee")
         return {"message": "Cle supprimee"}
 
+    @router.post("/invoices/repair-phantom-distribution-lines")
+    async def repair_phantom_distribution_lines(data: dict):
+        """iter90dz : Repare retroactivement les invoice.distribution_lines
+        qui pointent vers des lot_ids phantoms.
+
+        Pour chaque facture d'une ACP, matche les entrees phantom aux lots
+        actuels par `lot_number` normalise et met a jour le `lot_id`.
+
+        Input :
+          {
+            "copropriete_id": str (optional - sinon toutes les ACPs),
+            "dry_run": bool (defaut True),
+          }
+
+        Return summary : nombre de factures scannees, factures avec phantoms,
+        distributions_lines reparees, details par facture.
+        """
+        copro_id = (data.get("copropriete_id") or "").strip()
+        dry_run = bool(data.get("dry_run", True))
+
+        def _norm_num(s: str) -> str:
+            return (str(s or "")).strip().lstrip("0") or "0"
+
+        # Load invoices
+        q = {}
+        if copro_id:
+            q["copropriete_id"] = copro_id
+        invoices = await db.invoices.find(q, {"_id": 0}).to_list(50000)
+
+        # Cache lots by copro
+        lots_cache: dict = {}  # cid -> {ids: set, by_number: {norm_num: id}}
+
+        async def _get_lots(cid: str):
+            if cid in lots_cache:
+                return lots_cache[cid]
+            lots = await db.lots.find(
+                {"copropriete_id": cid}, {"_id": 0, "id": 1, "number": 1},
+            ).to_list(5000)
+            lots_cache[cid] = {
+                "ids": {lt["id"] for lt in lots},
+                "by_number": {_norm_num(lt.get("number", "")): lt["id"] for lt in lots},
+            }
+            return lots_cache[cid]
+
+        from datetime import datetime, timezone
+        now_iso = datetime.now(timezone.utc).isoformat()
+
+        details = []
+        invoices_with_phantoms = 0
+        invoices_repaired = 0
+        lines_repaired_total = 0
+
+        for inv in invoices:
+            inv_cid = inv.get("copropriete_id", "")
+            if not inv_cid:
+                continue
+            cache = await _get_lots(inv_cid)
+            valid_ids = cache["ids"]
+            by_num = cache["by_number"]
+
+            distribution_lines = inv.get("distribution_lines") or []
+            if not distribution_lines:
+                continue
+
+            new_lines = []
+            phantom_count = 0
+            resolved_count = 0
+            unresolvable_count = 0
+
+            for dl in distribution_lines:
+                lot_id = dl.get("lot_id", "")
+                if lot_id and lot_id in valid_ids:
+                    new_lines.append(dl)
+                    continue
+                # Phantom detecte
+                phantom_count += 1
+                lot_num_key = _norm_num(dl.get("lot_number", ""))
+                if lot_num_key and lot_num_key != "0" and lot_num_key in by_num:
+                    new_dl = dict(dl)
+                    new_dl["lot_id"] = by_num[lot_num_key]
+                    new_dl["iter90dz_rebound_at"] = now_iso
+                    new_dl["iter90dz_previous_lot_id"] = lot_id
+                    new_lines.append(new_dl)
+                    resolved_count += 1
+                else:
+                    # Aucun match - garde l'original (fallback runtime le gerera)
+                    new_lines.append(dl)
+                    unresolvable_count += 1
+
+            if phantom_count == 0:
+                continue
+
+            invoices_with_phantoms += 1
+            details.append({
+                "invoice_id": inv.get("id", ""),
+                "invoice_number": inv.get("number", ""),
+                "copropriete_id": inv_cid,
+                "phantom_count": phantom_count,
+                "resolved_count": resolved_count,
+                "unresolvable_count": unresolvable_count,
+                "applied": False,
+            })
+
+            if not dry_run and resolved_count > 0:
+                await db.invoices.update_one(
+                    {"id": inv["id"]},
+                    {"$set": {
+                        "distribution_lines": new_lines,
+                        "iter90dz_repaired_at": now_iso,
+                    }},
+                )
+                invoices_repaired += 1
+                lines_repaired_total += resolved_count
+                details[-1]["applied"] = True
+
+        return {
+            "dry_run": dry_run,
+            "invoices_scanned": len(invoices),
+            "invoices_with_phantoms": invoices_with_phantoms,
+            "invoices_repaired": invoices_repaired,
+            "lines_repaired_total": lines_repaired_total,
+            "details": details,
+        }
+
     # ---- INVOICES ----
     @router.get("/invoices")
     async def list_invoices(

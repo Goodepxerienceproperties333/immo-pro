@@ -36,6 +36,18 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 4. Non-regression : autre owner reste refuse
 5. /api/owner/situation/{cid} : situation online utilise fallback lot_number
 
+**Endpoint de reparation retroactive** (iter90dz Feb 2026) :
+- `POST /api/invoices/repair-phantom-distribution-lines`
+  - Params : `copropriete_id` (opt), `dry_run` (defaut True)
+  - Scan toutes les factures, matche les lot_ids phantoms via `lot_number` normalise
+  - Retourne : `invoices_scanned`, `invoices_with_phantoms`, `invoices_repaired`, `lines_repaired_total`, `details[]`
+  - Idempotent : les factures deja reparees ne re-declenchent pas de mutation
+  - Champs audit sur chaque distribution_line : `iter90dz_rebound_at`, `iter90dz_previous_lot_id`
+- UI : nouveau bloc "Reparation retroactive des factures" dans `/admin/mutations-audit`
+  avec boutons Simuler + Reparer + rapport detaille par facture.
+
+**Tests reparation** (3/3) : dry-run, commit + idempotence, phantoms irresolvables preserves.
+
 **Extension iter90dz** (Feb 2026) : le meme fallback est applique dans :
 - `owner_portal.py::my_situation_online` (endpoint /situation/{cid})
 - `pdf_decompte.py::build_decompte_pdf` (decompte annuel PDF)
