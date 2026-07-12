@@ -350,6 +350,11 @@ export default function Layout() {
           <NavLink to="/profile" className="text-slate-400 hover:text-white text-xs flex items-center gap-1.5 transition-colors" data-testid="nav-profile-top">
             <UserCog size={14} /> Mon profil
           </NavLink>
+          {(user?.role === 'syndic' || user?.role === 'admin' || user?.role === 'superadmin') && (
+            <NavLink to="/mon-bureau" className="text-slate-400 hover:text-white text-xs flex items-center gap-1.5 transition-colors" data-testid="nav-mon-bureau-top">
+              <Building2 size={14} /> Mon bureau
+            </NavLink>
+          )}
           <NavLink to="/coproprietes" className="text-slate-400 hover:text-white text-xs flex items-center gap-1.5 transition-colors" data-testid="nav-coproprietes-top">
             <Home size={14} /> Gerer les ACP
           </NavLink>
