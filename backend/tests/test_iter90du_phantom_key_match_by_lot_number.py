@@ -301,5 +301,144 @@ def test_phantom_key_no_match_falls_back_to_quotity():
     asyncio.run(_scenario_phantom_key_no_match_fallback_to_quotity())
 
 
+# =========================================================================
+# SCENARIO 3: Cle complete de 30 lots (Acacia reel) - 898 + 34 + 11 out of 10000
+# Total shares = 10000 -> les 3 lots recoivent 447.93 (943/10000 x 4750)
+# =========================================================================
+async def _scenario_acacia_full_30_lots_phantom_key():
+    """Simule exactement le cas PROD Acacia:
+    - 30 lots reels (quotity=0)
+    - Cle avec 30 entrees phantom totalisant 10000 shares
+    - 3 lots ciblent avec shares (898, 34, 11)
+    - Attendu: pour ces 3 lots combines = 4750 x 943/10000 = 447.925
+    """
+    db = await _mongo()
+    cid = f"iter90du-acacia-{uuid.uuid4()}"
+    fy_id = str(uuid.uuid4())
+    matexi_id = f"matexi-{uuid.uuid4()}"
+
+    await db.coproprietes.insert_one({"id": cid, "name": "Acacia", "status": "active"})
+    await db.fiscal_years.insert_one({
+        "id": fy_id, "name": "2026", "start_date": "2026-01-01",
+        "end_date": "2026-12-31", "copropriete_id": cid, "status": "open",
+    })
+    await db.pcmn_accounts.insert_many([
+        {"number": "100", "class_num": 1, "copropriete_id": cid, "name": "R"},
+        {"number": "400000", "class_num": 4, "copropriete_id": cid, "name": "P"},
+        {"number": "4100021", "class_num": 4, "copropriete_id": cid, "name": "T-M"},
+        {"number": "700000", "class_num": 7, "copropriete_id": cid, "name": "VE"},
+        {"number": "61", "class_num": 6, "copropriete_id": cid, "name": "C"},
+    ])
+    await db.owners.insert_one({
+        "id": matexi_id, "name": "Matexi", "auxiliary_code": "M",
+        "copropriete_ids": [cid], "tier_accounts": {cid: {"provisions": "4100021"}},
+    })
+
+    # 30 lots reels avec numbers varies (imitation reelle) + quotity=0
+    # 3 lots cibles: 001 (898), 002 (34), 101 (11)
+    # 27 autres lots avec shares se repartissant les 9057 restants
+    target_shares = {"001": 898, "002": 34, "101": 11}
+    lot_numbers = list(target_shares.keys())  # 3 cibles
+    # 27 autres numbers uniques
+    extra_numbers = [f"OTH{i:03d}" for i in range(27)]
+    lot_numbers.extend(extra_numbers)
+    # 9057 shares repartis egalement sur 27 lots = 335.44 chacun
+    # Pour rester en integers propres: 27 lots x 335 = 9045, on ajuste
+    per_extra = 9057 // 27  # = 335
+    remainder = 9057 - per_extra * 27  # = 12
+    shares_by_num = dict(target_shares)
+    for i, num in enumerate(extra_numbers):
+        # Repartit le remainder sur les 1ers lots
+        shares_by_num[num] = per_extra + (1 if i < remainder else 0)
+    assert sum(shares_by_num.values()) == 10000, sum(shares_by_num.values())
+
+    lot_ids_by_num = {}
+    lots_docs = []
+    for num in lot_numbers:
+        lid = f"lot-{num}-{uuid.uuid4().hex[:6]}"
+        lot_ids_by_num[num] = lid
+        lots_docs.append({
+            "id": lid, "number": num, "owner_id": matexi_id,
+            "owner_ids": [matexi_id], "copropriete_id": cid, "quotity": 0,
+        })
+    await db.lots.insert_many(lots_docs)
+
+    # Cle avec 30 entrees PHANTOM (lot_ids inexistants) mais lot_numbers matchant
+    key_id = str(uuid.uuid4())
+    key_lots = []
+    for num, share in shares_by_num.items():
+        key_lots.append({
+            "lot_id": f"phantom-{uuid.uuid4()}",
+            "lot_number": num,
+            "share": float(share),
+        })
+    await db.distribution_keys.insert_one({
+        "id": key_id, "copropriete_id": cid,
+        "name": "Charges Acacia", "code": "GEN",
+        "is_default": True, "key_type": "quotity",
+        "lots": key_lots,
+    })
+
+    ctx = {"db": db, "cid": cid, "fy_id": fy_id, "key_id": key_id,
+           "matexi": matexi_id}
+
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            cookies = await _login(client)
+            b = await _create_budget(client, cookies, ctx, key_id, 19000.0)
+            resp = await _preview_call(client, cookies, ctx, b["id"])
+            calls = resp.get("calls") or []
+            first_call = calls[0]
+            total = first_call.get("total_amount", 0.0)
+            assert abs(total - 4750.0) < 0.01
+
+            distribution = first_call.get("distribution") or []
+            assert len(distribution) == 30, (
+                f"30 entrees phantom avec lot_numbers matchant "
+                f"-> 30 lignes attendues. Obtenu {len(distribution)}."
+            )
+
+            by_num = {d["lot_number"]: d for d in distribution}
+
+            # Verifie les shares originales preservees
+            assert by_num["001"]["share"] == 898.0
+            assert by_num["002"]["share"] == 34.0
+            assert by_num["101"]["share"] == 11.0
+
+            # Montants attendus (total_shares=10000):
+            # Lot 001: 4750 x 898/10000 = 426.55
+            # Lot 002: 4750 x 34/10000 = 16.15
+            # Lot 101: 4750 x 11/10000 = 5.225 -> 5.23
+            # Sum 3 lots = 447.925 -> 447.93 (avec _snap arrondi)
+            assert abs(by_num["001"]["amount"] - 426.55) < 0.5, (
+                f"Lot 001 (898/10000): attendu ~426.55, obtenu {by_num['001']['amount']}"
+            )
+            assert abs(by_num["002"]["amount"] - 16.15) < 0.5, (
+                f"Lot 002 (34/10000): attendu ~16.15, obtenu {by_num['002']['amount']}"
+            )
+            assert abs(by_num["101"]["amount"] - 5.23) < 0.5, (
+                f"Lot 101 (11/10000): attendu ~5.23, obtenu {by_num['101']['amount']}"
+            )
+
+            # Sum des 3 lots = 447.93 (bug user: obtenait 475)
+            sum_3_lots = (by_num["001"]["amount"] + by_num["002"]["amount"]
+                          + by_num["101"]["amount"])
+            assert abs(sum_3_lots - 447.925) < 1.0, (
+                f"iter90du : les 3 lots (943/10000) doivent recevoir "
+                f"~447.93 EUR combined, PAS 475 (bug equal-split). "
+                f"Obtenu {sum_3_lots}."
+            )
+
+            # Somme totale = call_total
+            total_dist = sum(d["amount"] for d in distribution)
+            assert abs(total_dist - 4750.0) < 0.01
+    finally:
+        await _cleanup(ctx)
+
+
+def test_acacia_30_lots_phantom_key_uses_correct_shares():
+    asyncio.run(_scenario_acacia_full_30_lots_phantom_key())
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])

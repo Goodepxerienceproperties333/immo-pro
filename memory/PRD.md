@@ -12,6 +12,68 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 
+### Iter90du (Feb 2026) - Fund call: fallback iter90cr utilise les shares originales de la cle (match par lot_number)
+
+**Ticket utilisateur PROD (ACP Acacia)** :
+> "Budget 19 000E, cle avec 3 lots (898/34/11 = 943 sur 10000), quarterly
+> attendu 447.93E pour les 3 lots combines, mais le systeme retourne
+> 475E (soit 158.34E x 3 = distribution egale entre 30 lots)."
+
+**Bug racine** :
+Chaine de causalite quand la cle est 100% phantom (references perimees apres
+re-import Optipro) :
+1. `_fallback_by_quotity()` (iter90cr) se declenche
+2. Les 30 lots actuels ont `quotity = 0` en base (imports sans quotites)
+3. `total_quotity = 0` -> `share_ratio = 0` -> amounts = 0 pour tous
+4. `_snap_distribution_to_total(distribution, call_total)` distribue le
+   residu (= 4750 EUR complet) de facon **egale** entre les 30 lots
+5. Chaque lot recoit 4750/30 = 158.33 EUR -> 3 lots = 475 EUR (WRONG)
+
+**Fix iter90du** (`fund_calls.py::_distribute_amount`) :
+- Nouveau helper `_norm_lot_num(s)` : normalise `lstrip("0")` pour comparaison
+  robuste des numeros de lots (ex: "001" == "1")
+- Nouveau index `lots_by_number` : map les lots actuels par numero normalise
+- Boucle `resolved_kls` : pour chaque entree de cle, essaie de resoudre :
+  1. Match direct par `kle.lot_id` (cas nominal)
+  2. **NOUVEAU** : Fallback par `kle.lot_number` normalise (cas phantom)
+- La share reste celle definie dans la cle (source de verite absolue),
+  meme si le lot_id a change apres re-import.
+- Fallback complet par quotity uniquement si AUCUNE resolution possible.
+
+**Impact** :
+- Cas Acacia : cle de 30 entrees phantom avec lot_numbers matchant les
+  30 lots actuels -> tous resolus, shares 898/34/11/.../ preservees.
+- Distribution correcte : Lot 001 = 4750 x 898/10000 = 426.55 EUR ;
+  Lot 002 = 16.15 EUR ; Lot 101 = 5.23 EUR ; sum 3 lots = 447.93 EUR.
+
+**Tests iter90du** (3/3 PASS) :
+1. `test_phantom_key_matches_by_lot_number_uses_key_shares` : cle 3 entrees
+   phantom (898/34/11), lot_numbers "001"/"002"/"101" matchent lots reels
+   quotity=0 -> les 3 lots recoivent respectivement leurs parts.
+2. `test_phantom_key_no_match_falls_back_to_quotity` : cle phantom avec
+   lot_numbers "999"/"888" ne matchant AUCUN lot -> fallback quotity iter90cr.
+3. `test_acacia_30_lots_phantom_key_uses_correct_shares` : cle complete
+   30 entrees phantom totalisant 10000 shares -> distribution proportionnelle
+   parfaite, 3 lots combines = 447.93 EUR (bug user resolu).
+
+**Regression** : iter90cr (3/3), iter90cu (deja verifie), iter90cb/cf/cg
+tests separes (13/13). Aucun changement de comportement pour les cles
+normales (non-phantom).
+
+**Frontend UX** :
+- Banner bleu info dans BudgetWizard.js (iter90cu) : texte mis a jour pour
+  refleter le nouveau comportement iter90du ("shares originales de la cle,
+  matchees par numero de lot" au lieu de "quotites des lots actuels").
+
+**Instructions PROD user** :
+1. Redeployer preview -> prod (Emergent UI).
+2. Aucun script retroactif necessaire : le fix s'applique automatiquement
+   a la prochaine generation d'appels de fonds.
+3. Verifier via le BudgetWizard : la colonne "MONTANT" par lot doit
+   afficher des montants proportionnels aux quotites (pas equal-split).
+
+
+
 ### Iter90dj (Feb 2026) - Logo cabinet + mentions legales sur TOUS les PDFs + page "Mon bureau" self-service
 
 **Ticket utilisateur** :

@@ -477,7 +477,7 @@ export default function BudgetWizard({ budget, distKeys = [], onClose, onDone, m
                   </div>
                 )}
 
-                {/* iter90cu : info soft - cles 100% phantom, fallback iter90cr applique */}
+                {/* iter90cu + iter90du : info soft - cles 100% phantom, fallback applique */}
                 {preview.orphan_lots_warning && preview.orphan_lots_warning.phantom_keys_fallback && preview.orphan_lots_warning.phantom_keys_fallback.length > 0 && (
                   <div className="bg-blue-50 border-2 border-blue-300 rounded-lg p-4 flex items-start gap-3" data-testid="phantom-keys-fallback-info">
                     <AlertTriangle size={22} className="text-[#022D52] flex-shrink-0 mt-0.5" />
@@ -486,8 +486,9 @@ export default function BudgetWizard({ budget, distKeys = [], onClose, onDone, m
                         {preview.orphan_lots_warning.phantom_keys_fallback.length} cle(s) de repartition avec references perimees (auto-corrigees)
                       </div>
                       <div className="text-xs text-blue-800 mt-1">
-                        Les entrees de ces cles pointent vers des lot_ids qui n&apos;existent plus en DB (probablement suite a une reimport).
-                        La distribution utilisera automatiquement <strong>les quotites des lots actuels</strong> (fix iter90cr).
+                        Les entrees de ces cles pointent vers des lot_ids qui n&apos;existent plus en DB (probablement suite a un reimport).
+                        La distribution utilisera automatiquement <strong>les shares originales de la cle, matchees aux lots actuels par numero de lot</strong> (fix iter90du).
+                        Si le numero de lot n&apos;est pas retrouve, fallback sur les quotites des lots (iter90cr).
                         <strong> Aucune perte de shares.</strong> Pour nettoyer definitivement les cles, utilisez l&apos;endpoint
                         <code className="mx-1 px-1 bg-blue-100 rounded">POST /api/distribution-keys/&lt;key_id&gt;/rebuild</code>.
                       </div>
