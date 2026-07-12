@@ -31,6 +31,7 @@ import AdminLoginHistoryPage from "@/pages/AdminLoginHistoryPage";
 import ImportWizardPage from "@/pages/ImportWizardPage";
 import AdminRoleTemplatesPage from "@/pages/AdminRoleTemplatesPage";
 import AdminDuplicatesPage from "@/pages/AdminDuplicatesPage";
+import AdminMutationsAuditPage from "@/pages/AdminMutationsAuditPage";
 import TeamMembersPage from "@/pages/TeamMembersPage";
 import ProfilePage from "@/pages/ProfilePage";
 import CommunicationPage from "@/pages/CommunicationPage";
@@ -110,6 +111,7 @@ function AppRoutes() {
         <Route path="import-wizard" element={<ImportWizardPage />} />
         <Route path="admin/role-templates" element={<AdminRoleTemplatesPage />} />
         <Route path="admin/duplicates" element={<AdminDuplicatesPage />} />
+        <Route path="admin/mutations-audit" element={<AdminMutationsAuditPage />} />
         <Route path="team" element={<TeamMembersPage />} />
         <Route path="communication" element={<CommunicationPage />} />
         <Route path="email-templates" element={<EmailTemplatesPage />} />

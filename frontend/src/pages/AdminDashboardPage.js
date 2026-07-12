@@ -5,7 +5,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Users, Unlock, ScrollText, ArrowRight, ShieldAlert, IdCard, Building2, ChevronDown, ChevronRight as ChevRight, Briefcase, Merge } from 'lucide-react';
+import { Users, Unlock, ScrollText, ArrowRight, ShieldAlert, IdCard, Building2, ChevronDown, ChevronRight as ChevRight, Briefcase, Merge, ShieldCheck } from 'lucide-react';
 import { fmtDate } from '@/lib/dateFmt';
 
 export default function AdminDashboardPage() {
@@ -128,6 +128,13 @@ export default function AdminDashboardPage() {
           <CardContent className="text-sm text-slate-600 pt-1">
             <p>Trace complete des actions superadmin. Export CSV pour compliance.</p>
             <Button variant="link" className="px-0 mt-2 text-slate-600" data-testid="btn-go-audit">Ouvrir <ArrowRight size={14} className="ml-1" /></Button>
+          </CardContent>
+        </Card>
+        <Card className="hover:shadow-md transition cursor-pointer border-amber-200" onClick={() => navigate('/admin/mutations-audit')} data-testid="card-mutations-audit">
+          <CardHeader className="pb-2"><CardTitle className="text-base flex items-center gap-2 text-slate-900"><ShieldCheck size={18} className="text-amber-600" />Audit des mutations</CardTitle></CardHeader>
+          <CardContent className="text-sm text-slate-600 pt-1">
+            <p>Detecter les mutations avec sens (vendeur/acheteur) inverse et les reparer (contre-passation des ODs).</p>
+            <Button variant="link" className="px-0 mt-2 text-amber-600" data-testid="btn-go-mutations-audit">Ouvrir <ArrowRight size={14} className="ml-1" /></Button>
           </CardContent>
         </Card>
       </div>

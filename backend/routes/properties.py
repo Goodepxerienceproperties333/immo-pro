@@ -2576,4 +2576,244 @@ def create_properties_router(db):
             raise HTTPException(404, "Locataire non trouve")
         return {"message": "Locataire supprime"}
 
+    # ------------------------------------------------------------------
+    # iter90dx : Detection et reparation des mutations avec from/to inverses
+    # ------------------------------------------------------------------
+    @router.get("/mutations/detect-inversions")
+    async def detect_mutation_inversions(
+        request: Request,
+        copropriete_id: Optional[str] = None,
+        founder_owner_id: Optional[str] = None,
+    ):
+        """iter90dx : detecte les mutations avec from_owner_id/to_owner_id
+        potentiellement inverses.
+
+        Algo :
+        1. Pour chaque lot avec >=2 mutations, calcule la chaine d'ownership
+           attendue. Si mismatch avec inversion possible (to == expected),
+           marque comme suspect_inversion.
+        2. Si `founder_owner_id` fourni : marque aussi comme suspect toute
+           mutation ou le founder est TO (acheteur) au lieu de FROM (vendeur).
+           Utile pour les promoteurs comme Matexi qui n'achetent jamais.
+        """
+        q = {}
+        if copropriete_id:
+            q["copropriete_id"] = copropriete_id
+        all_muts = await db.mutations.find(q, {"_id": 0}).to_list(50000)
+        # Group by lot
+        muts_by_lot: dict = {}
+        for m in all_muts:
+            lid = m.get("lot_id", "")
+            if lid:
+                muts_by_lot.setdefault(lid, []).append(m)
+        # Load owner names for readability
+        owner_ids = set()
+        for m in all_muts:
+            if m.get("from_owner_id"):
+                owner_ids.add(m["from_owner_id"])
+            if m.get("to_owner_id"):
+                owner_ids.add(m["to_owner_id"])
+        if founder_owner_id:
+            owner_ids.add(founder_owner_id)
+        owners = await db.owners.find(
+            {"id": {"$in": list(owner_ids)}},
+            {"_id": 0, "id": 1, "name": 1, "last_name": 1},
+        ).to_list(5000)
+        owner_names = {o["id"]: o.get("name") or o.get("last_name") or o["id"][:8]
+                       for o in owners}
+
+        suspects = []
+        # Pour dedup : une mutation ne doit pas etre listee 2 fois
+        seen_muts = set()
+
+        def _add_suspect(m, lot, kind, expected_owner, auto_fixable, reason=""):
+            mid = m.get("id")
+            if mid in seen_muts:
+                return
+            seen_muts.add(mid)
+            suspects.append({
+                "mutation_id": mid,
+                "lot_id": m.get("lot_id", ""),
+                "lot_number": lot.get("number", ""),
+                "sale_date": m.get("sale_date", ""),
+                "declared_from_id": m.get("from_owner_id", ""),
+                "declared_from_name": owner_names.get(m.get("from_owner_id", ""), "?"),
+                "declared_to_id": m.get("to_owner_id", ""),
+                "declared_to_name": owner_names.get(m.get("to_owner_id", ""), "?"),
+                "expected_from_id": expected_owner,
+                "expected_from_name": owner_names.get(expected_owner, "?"),
+                "kind": kind,
+                "auto_fixable": auto_fixable,
+                "reason": reason,
+            })
+
+        for lid, muts in muts_by_lot.items():
+            muts.sort(key=lambda x: (x.get("sale_date") or "", x.get("id", "")))
+            if len(muts) < 1:
+                continue
+            lot = await db.lots.find_one({"id": lid}, {"_id": 0, "number": 1, "owner_id": 1})
+            if not lot:
+                continue
+
+            # ---- Heuristique 1 : chaine multi-mutations ----
+            initial_owner = muts[0].get("from_owner_id", "")
+            expected_owner = initial_owner
+            for m in muts:
+                actual_from = m.get("from_owner_id", "")
+                actual_to = m.get("to_owner_id", "")
+                if not actual_from or not actual_to:
+                    continue
+                if actual_from != expected_owner:
+                    if actual_to == expected_owner:
+                        _add_suspect(m, lot, "from_to_swapped", expected_owner,
+                                     True, "chaine_ownership_incoherente")
+                    else:
+                        _add_suspect(m, lot, "chain_break", expected_owner,
+                                     False, "chaine_ownership_incoherente")
+                expected_owner = actual_to
+
+            # ---- Heuristique 2 : founder ne doit jamais etre acheteur ----
+            if founder_owner_id:
+                for m in muts:
+                    actual_from = m.get("from_owner_id", "")
+                    actual_to = m.get("to_owner_id", "")
+                    if actual_to == founder_owner_id and actual_from != founder_owner_id:
+                        _add_suspect(
+                            m, lot, "from_to_swapped", founder_owner_id, True,
+                            f"founder {owner_names.get(founder_owner_id, '?')} "
+                            f"apparait comme acheteur (ne devrait jamais)"
+                        )
+
+        return {
+            "copropriete_id": copropriete_id or "all",
+            "founder_owner_id": founder_owner_id or "",
+            "total_mutations_scanned": len(all_muts),
+            "suspects_count": len(suspects),
+            "auto_fixable_count": sum(1 for s in suspects if s.get("auto_fixable")),
+            "suspects": suspects,
+        }
+
+    @router.post("/mutations/{mutation_id}/fix-inversion")
+    async def fix_mutation_inversion(
+        mutation_id: str,
+        request: Request,
+        dry_run: bool = True,
+    ):
+        """iter90dx : Inverse from_owner_id/to_owner_id d'une mutation et
+        contre-passe les OD MUT-R/MUT-P associees.
+
+        Etapes :
+        1. Swap from/to dans db.mutations
+        2. Swap old_owner_id/new_owner_id dans lot.mutations[]
+        3. Marque les OD journal_entries lies comme `reversed=True`
+           (les prochains fund calls regenererent des ODs correctes)
+        4. Recalcule lot.owner_id d'apres la derniere mutation post-swap
+
+        Idempotent : trace `iter90dx_fix_applied_at` pour audit.
+        """
+        mut = await db.mutations.find_one({"id": mutation_id}, {"_id": 0})
+        if not mut:
+            raise HTTPException(404, "Mutation introuvable")
+
+        old_from = mut.get("from_owner_id", "")
+        old_to = mut.get("to_owner_id", "")
+        if not old_from or not old_to:
+            raise HTTPException(400, "Mutation avec from/to manquants")
+        if old_from == old_to:
+            raise HTTPException(400, "from_owner_id == to_owner_id (rien a inverser)")
+
+        lot_id = mut.get("lot_id", "")
+        sale_date = mut.get("sale_date", "")
+
+        # Recupere les ODs actives lies a cette mutation
+        related_ods = await db.journal_entries.find({
+            "source_type": "lot_mutation",
+            "source_id": lot_id,
+            "date": sale_date,
+            "reversed": {"$ne": True},
+            "is_reversal": {"$ne": True},
+        }, {"_id": 0, "id": 1, "reference": 1, "description": 1,
+             "source_subtype": 1, "total_debit": 1}).to_list(200)
+
+        # Recupere les OD MUT-P (prorata post-mutation) lies via reference
+        # (leur source_id peut etre different)
+        mutp_ods = await db.journal_entries.find({
+            "copropriete_id": mut.get("copropriete_id", ""),
+            "reference": {"$regex": f"MUTP-POST-.*{old_to[:6]}"},
+            "date": {"$gte": sale_date},
+            "reversed": {"$ne": True},
+            "is_reversal": {"$ne": True},
+        }, {"_id": 0, "id": 1, "reference": 1, "description": 1,
+             "total_debit": 1}).to_list(200)
+
+        plan = {
+            "mutation_id": mutation_id,
+            "lot_id": lot_id,
+            "sale_date": sale_date,
+            "swap": {
+                "from": {"before_id": old_from, "after_id": old_to},
+                "to": {"before_id": old_to, "after_id": old_from},
+            },
+            "od_entries_to_reverse": [
+                {"id": od["id"], "reference": od.get("reference"),
+                 "kind": od.get("source_subtype", "mutation"),
+                 "description": (od.get("description", "") or "")[:80],
+                 "total": od.get("total_debit", 0)}
+                for od in related_ods
+            ],
+            "mutp_entries_related": [
+                {"id": od["id"], "reference": od.get("reference"),
+                 "description": (od.get("description", "") or "")[:80]}
+                for od in mutp_ods
+            ],
+            "dry_run": dry_run,
+            "applied": False,
+        }
+        if dry_run:
+            return plan
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+
+        # 1) Reverse les ODs MUT-R et MUT-P
+        all_ods_ids = [od["id"] for od in related_ods] + [od["id"] for od in mutp_ods]
+        if all_ods_ids:
+            await db.journal_entries.update_many(
+                {"id": {"$in": all_ods_ids}},
+                {"$set": {"reversed": True, "reversed_at": now_iso,
+                          "reversal_reason": "iter90dx_mutation_inversion_fix"}},
+            )
+
+        # 2) Swap dans db.mutations
+        await db.mutations.update_one(
+            {"id": mutation_id},
+            {"$set": {"from_owner_id": old_to, "to_owner_id": old_from,
+                      "iter90dx_fix_applied_at": now_iso}},
+        )
+
+        # 3) Swap dans lot.mutations[]
+        await db.lots.update_one(
+            {"id": lot_id, "mutations.id": mutation_id},
+            {"$set": {"mutations.$.old_owner_id": old_to,
+                      "mutations.$.new_owner_id": old_from,
+                      "mutations.$.iter90dx_fix_applied_at": now_iso}},
+        )
+
+        # 4) Recalcule lot.owner_id d'apres la derniere mutation post-swap
+        all_muts = await db.mutations.find(
+            {"lot_id": lot_id}, {"_id": 0, "sale_date": 1, "to_owner_id": 1},
+        ).to_list(1000)
+        all_muts.sort(key=lambda x: x.get("sale_date") or "")
+        if all_muts:
+            latest_to = all_muts[-1].get("to_owner_id", "")
+            if latest_to:
+                await db.lots.update_one(
+                    {"id": lot_id},
+                    {"$set": {"owner_id": latest_to,
+                              "owner_ids": [latest_to]}},
+                )
+
+        plan["applied"] = True
+        plan["reversed_ods_count"] = len(all_ods_ids)
+        return plan
+
     return router

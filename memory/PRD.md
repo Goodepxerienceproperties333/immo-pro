@@ -12,6 +12,56 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 
+### Iter90dw + iter90dx (Feb 2026) - Situation vendeur : grouping par counterpart + audit inversions
+
+**Ticket utilisateur PROD (ACP Acacia)** :
+> "j'aimerais que dans la vue de la situation de compte d'un vendeur, on
+> differencie les proprietaires - pas d'additions entre les sommes
+> proprietaires pour les ajustements comptables pour les provisions pour
+> charge cela doit etre lisible pour le vendeur. Les mutations 17/11, 18/11,
+> 19/11 en DEBIT sont bug (il s'agit de vente)."
+
+**Fix iter90dw** (`reports.py::_group_movements_by_owner`) :
+- `_normalize_mutation_desc` retourne desormais un tuple
+  `(label, from_name, to_name)` (extraction via regex enrichi).
+- `_group_movements_by_owner` accepte `self_owner_name` et regroupe les
+  mutations PAR COUNTERPART OWNER (pas par lot). Ex :
+  "Mutations (3 lots) - Fonds de roulement -> Dewinter" est distinct de
+  "Mutations (3 lots) - Fonds de roulement -> Lahaye" meme meme date.
+- `_build_situation_compte_pdf` passe `owner.name` comme self.
+
+**Fix iter90dx** (`properties.py`) :
+- Nouveau endpoint `GET /api/mutations/detect-inversions?copropriete_id=X&founder_owner_id=Y`
+- Detecte 2 types d'anomalies :
+  1. **from_to_swapped** (auto_fixable) : chaine ownership incoherente
+     (le from declare != owner attendu, mais to == owner attendu)
+  2. **chain_break** (manual review) : autre incoherence
+  - Heuristique founder : si `founder_owner_id` fourni, toute mutation ou
+    ce owner est TO (acheteur) est marquee suspect (utile pour Matexi qui
+    ne devrait JAMAIS etre acheteur).
+- Nouveau endpoint `POST /api/mutations/{mutation_id}/fix-inversion?dry_run=true|false` :
+  1. Swap from_owner_id/to_owner_id dans db.mutations
+  2. Swap old_owner_id/new_owner_id dans lot.mutations[]
+  3. Marque les OD lies (source_type=lot_mutation) comme reversed=True
+  4. Recalcule lot.owner_id d'apres la derniere mutation post-swap
+- Nouvelle page `/admin/mutations-audit` (AdminMutationsAuditPage.js) :
+  UI complete pour selectionner ACP + founder, scanner, simuler et
+  appliquer les fixes lot par lot.
+- Lien depuis AdminDashboard (carte "Audit des mutations").
+
+**Tests iter90dw** (7/7) : grouping par counterpart, buyer view, edge cases.
+**Tests iter90dx** (4/4) : detect via founder, dry-run, commit, idempotence.
+**Non-regression iter90bz** (13/13) : tuple return signature preservee.
+
+**Deploiement PROD** :
+1. Redeployer preview -> prod via UI Emergent.
+2. Aller sur `/admin/mutations-audit`, selectionner ACP Acacia + Matexi
+   comme founder, cliquer "Analyser".
+3. Simuler chaque mutation suspecte (17/11, 18/11, 19/11) avant de
+   confirmer la reparation.
+
+
+
 ### Iter90dv (Feb 2026) - PDF Situation de compte : distinction "Paiement recu" vs "Remboursement effectue"
 
 **Ticket utilisateur PROD** :
