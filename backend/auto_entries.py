@@ -39,7 +39,10 @@ async def _resolve_or_create_supplier_account(db, supplier_name: str, copro_id: 
     """iter90by : extrait de generate_purchase_entry pour reduire la complexite.
 
     Retourne (supplier_acc, supplier_doc). Regle Chinese walls STRICT :
-    - Match par nom (regex insensible)
+    - Match par nom NORMALISE (iter90ef : particules juridiques filtrees +
+      mots tries + coquilles Levenshtein >= 0.90) via find_duplicate_supplier
+      + find_similar_suppliers. Elimine les doublons "Finlead" vs "Finlead SRL"
+      vs "SRL Finlead" vs "finleed" (coquille).
     - Si aucun fournisseur en base, cree un fiche fournisseur auto (auto_created)
       pour eviter tout fallback vers le compte maitre 440000 qui fuiterait les
       donnees entre ACPs.
@@ -49,16 +52,35 @@ async def _resolve_or_create_supplier_account(db, supplier_name: str, copro_id: 
     supplier_acc = ""
     supplier_doc = None
     if supplier_name:
-        import re
         import uuid as _uuid
         from datetime import datetime, timezone
-        supplier_doc = await db.suppliers.find_one(
-            {"name": {"$regex": f"^{re.escape(supplier_name)}$", "$options": "i"}}, {"_id": 0}
+        from routes.suppliers import (
+            find_duplicate_supplier,
+            find_similar_suppliers,
         )
+        # iter90ef : recherche via normalisation partagee (particules
+        # juridiques filtrees, mots tries, insensible casse/ponctuation).
+        # find_duplicate_supplier scope ACP par defaut.
+        dup = await find_duplicate_supplier(
+            db, name=supplier_name, copro_id=copro_id,
+        )
+        if dup and dup.get("supplier"):
+            supplier_doc = dup["supplier"]
+        else:
+            # Fallback : recherche par coquille (Levenshtein) sur le meme
+            # scope ACP. Reutilise le meilleur match >= 0.90 pour eviter
+            # les doublons du type "Finleed" vs "Finlead".
+            similars = await find_similar_suppliers(
+                db, name=supplier_name, copro_id=copro_id,
+                threshold=0.90, limit=1,
+            )
+            if similars:
+                supplier_doc = similars[0]["supplier"]
         if not supplier_doc:
             supplier_doc = {
                 "id": str(_uuid.uuid4()),
                 "name": supplier_name,
+                "copropriete_id": copro_id,
                 "tier_accounts": {},
                 "auto_created": True,
                 "created_at": datetime.now(timezone.utc).isoformat(),

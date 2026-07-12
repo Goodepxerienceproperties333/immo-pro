@@ -110,6 +110,10 @@ def create_duplicates_router(db):
         suppliers = await db.suppliers.find(query, {"_id": 0}).to_list(10000)
 
         uf = UF()
+        # iter90ef : utilise la normalisation supplier-aware qui filtre les
+        # particules juridiques (SRL/SA/SPRL/etc), pour capturer les doublons
+        # du type "Finlead" vs "Finlead SRL" vs "SRL Finlead" en admin/duplicates.
+        from routes.suppliers import _norm_name as _norm_supplier_name
         # Indexes par cle
         by_name = {}
         by_bce = {}
@@ -118,7 +122,7 @@ def create_duplicates_router(db):
         for s in suppliers:
             sid = s["id"]
             uf.parent[sid] = sid
-            nm = _norm_name(s.get("name", ""))
+            nm = _norm_supplier_name(s.get("name", ""))
             if nm:
                 by_name.setdefault(nm, []).append(sid)
             for fld, idx in (("bce_number", by_bce), ("vat_number", by_vat), ("iban", by_iban)):

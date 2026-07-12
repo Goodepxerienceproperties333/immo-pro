@@ -12,6 +12,70 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 
+### Iter90ef (Feb 2026) - ZERO DOUBLON FOURNISSEUR (fix root cause)
+
+**Ticket utilisateur (PROD)** :
+> "tu crees encore des doublons de founisseurs il ne faut jamais que ca arrive"
+
+**Root cause identifiee** : `auto_entries.py::_resolve_or_create_supplier_account`
+etait appelee AUTOMATIQUEMENT a chaque `generate_purchase_entry`
+(POST/PUT `/invoices`) et utilisait un simple regex :
+```python
+find_one({"name": {"$regex": f"^{re.escape(name)}$", "$options": "i"}})
+```
+Cette regex :
+- Ne filtre PAS les particules juridiques (SRL/SA/SPRL/BV/etc)
+- Ne trie PAS les mots (ordre different = pas de match)
+- Ne tolere PAS les coquilles (Finleed vs Finlead)
+- N'est PAS scope par ACP (chinese wall casse)
+
+Consequence PROD : chaque petit ecart (nom court, particule differente,
+majuscule, coquille) creait un nouveau supplier `auto_created=True`
+silencieusement, meme si `POST /suppliers` bloquait bien les doublons cote UI.
+
+**Fix iter90ef** :
+
+1. `auto_entries.py::_resolve_or_create_supplier_account` :
+   - Remplace le regex par `find_duplicate_supplier(db, name=..., copro_id=cid)`
+     (particules filtrees + mots tries + scope ACP)
+   - Fallback `find_similar_suppliers(threshold=0.90)` pour coquilles
+     (ex "Finleadd" reutilise "Finlead")
+   - Ajoute `copropriete_id: cid` sur le doc auto_created pour respect chinese wall
+   - Reutilise le supplier trouve au lieu de creer un doublon
+
+2. `duplicates.py::_norm_name` (admin/duplicates/suppliers) :
+   - Remplace `_norm_name` local par `routes.suppliers._norm_name` (celui qui
+     filtre les particules juridiques). Consequence : la page admin
+     `/admin/duplicates` liste desormais bien "Finlead" + "Finlead SRL" comme
+     doublons a fusionner (au lieu de les considerer separes).
+
+**Tests iter90ef** (7/7 PASS) :
+1. `test_resolve_reuses_supplier_with_legal_particle_variation` :
+   "Finlead SRL" existe -> facture "Finlead" reutilise (pas de doublon)
+2. `test_resolve_reuses_supplier_with_word_order_variation` :
+   "SRL Finlead" existe -> facture "Finlead SRL" reutilise
+3. `test_resolve_reuses_supplier_case_insensitive` :
+   "Finlead SRL" existe -> facture "finlead srl" (lowercase) reutilise
+4. `test_resolve_reuses_supplier_with_typo` :
+   "Finlead" existe -> facture "Finleadd" (coquille) reutilise via Levenshtein
+5. `test_resolve_creates_new_when_truly_different_name` : cree bien un nouveau
+   supplier si le nom est vraiment different
+6. `test_resolve_respects_acp_scope` : chinese wall preserve entre ACPs
+7. `test_resolve_idempotent_no_dupes_on_repeat` : 5 variantes du meme nom
+   -> 1 seul supplier cree (idempotent)
+
+**Non-regression** : 15/15 tests iter90ea/ed/ef PASS.
+
+**Deploiement PROD** :
+- Redeployer preview -> immo-pcmn.emergent.host
+- Utiliser l'outil `AdminDuplicatesPage` (`/admin/duplicates` tab
+  "Fournisseurs") pour fusionner les doublons DEJA existants en base
+  (accumules avant le fix). Grace au nouveau `_norm_name`, la page listera
+  desormais correctement "Finlead" + "Finlead SRL" comme candidats de fusion.
+
+
+
+
 ### Iter90ee (Feb 2026) - Import IA batch : ignorer les doublons
 
 **Ticket utilisateur** :
