@@ -52,6 +52,7 @@ export default function InvoicesPage() {
   const [newCatDialog, setNewCatDialog] = useState(false);
   const [newCatForm, setNewCatForm] = useState({ name: '', account_number: '', description: '' });
   const [bundleDialog, setBundleDialog] = useState(false);
+  const [dragActive, setDragActive] = useState(false);
   const [viewerAttachment, setViewerAttachment] = useState(null); // {url, filename}
   // iter85g : dialog de confirmation homonymes lors de la creation supplier
   // depuis InvoicesPage. State : { payload, similar, onConfirm } ou null.
@@ -537,20 +538,61 @@ export default function InvoicesPage() {
     <div data-testid="invoices-page">
       <div className="page-header"><h1 className="page-title">Facturation</h1><p className="page-subtitle">Factures et pieces jointes</p></div>
 
-      <div className="flex justify-end gap-2 mb-4">
+      {/* iter90dt : zone drag-and-drop dediee multi-upload PDF. Rend evident
+          qu'on peut deposer plusieurs fichiers a la fois. */}
+      <div
+        className={`mb-4 border-2 border-dashed rounded-lg p-4 transition-colors ${
+          dragActive ? 'border-purple-500 bg-purple-50' : 'border-slate-300 bg-slate-50'
+        }`}
+        onDragOver={(e) => { e.preventDefault(); setDragActive(true); }}
+        onDragLeave={() => setDragActive(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragActive(false);
+          const files = Array.from(e.dataTransfer?.files || []).filter(f =>
+            f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf')
+          );
+          if (files.length === 0) { toast.warning('Deposez des fichiers PDF uniquement'); return; }
+          if (files.length === 1) {
+            setPendingAiFiles([]); setAiBatchTotal(1); setAiBatchIndex(1);
+            openCreateInvoice(); aiExtractFromPdf(files[0]);
+          } else {
+            const [first, ...rest] = files;
+            setPendingAiFiles(rest); setAiBatchTotal(files.length); setAiBatchIndex(1);
+            toast.info(`${files.length} factures a traiter - facture 1/${files.length} en cours...`, { duration: 4000 });
+            openCreateInvoice(); aiExtractFromPdf(first);
+          }
+        }}
+        data-testid="pdf-drop-zone"
+      >
+        <div className="flex items-center justify-between gap-4 flex-wrap">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-lg bg-purple-100 flex items-center justify-center text-purple-700 flex-shrink-0">
+              <Sparkles size={20} />
+            </div>
+            <div>
+              <p className="text-sm font-semibold text-slate-900" style={{fontFamily:'Chivo,sans-serif'}}>
+                Deposez vos factures PDF ici pour extraction IA
+              </p>
+              <p className="text-xs text-slate-500 mt-0.5">
+                1 ou plusieurs fichiers a la fois - chaque facture sera analysee puis validee etape par etape.
+              </p>
+            </div>
+          </div>
+          <div className="flex gap-2 flex-wrap justify-end">
             <Button type="button" variant="outline" className="border-emerald-300 text-emerald-700 hover:bg-emerald-50" data-testid="bundle-import-btn"
               onClick={() => setBundleDialog(true)}>
-              <FolderInput size={16} className="mr-2" /> Importer un regroupement de PDFs
+              <FolderInput size={14} className="mr-1.5" /> Regroupement Optipro (1 PDF concat.)
             </Button>
             <label className="inline-flex">
               <Button type="button" variant="outline" className="border-purple-300 text-purple-700 hover:bg-purple-50" data-testid="ai-extract-btn"
                 onClick={() => document.getElementById('ai-pdf-input').click()} disabled={aiExtracting}>
                 {aiExtracting ? (
-                  <><Loader2 size={16} className="mr-2 animate-spin" /> Extraction IA...</>
+                  <><Loader2 size={14} className="mr-1.5 animate-spin" /> Extraction IA...</>
                 ) : aiBatchTotal > 1 ? (
-                  <><Sparkles size={16} className="mr-2" /> Facture {aiBatchIndex}/{aiBatchTotal}</>
+                  <><Sparkles size={14} className="mr-1.5" /> Facture {aiBatchIndex}/{aiBatchTotal}</>
                 ) : (
-                  <><Sparkles size={16} className="mr-2" /> Importer factures PDF (IA)</>
+                  <><Sparkles size={14} className="mr-1.5" /> Choisir des factures (1+)</>
                 )}
               </Button>
               {/* Iter90di : multiple - permet d'uploader plusieurs factures en une fois.
@@ -559,14 +601,12 @@ export default function InvoicesPage() {
                 const files = Array.from(e.target.files || []);
                 if (files.length === 0) return;
                 if (files.length === 1) {
-                  // Comportement historique : 1 fichier
                   setPendingAiFiles([]);
                   setAiBatchTotal(1);
                   setAiBatchIndex(1);
                   openCreateInvoice();
                   aiExtractFromPdf(files[0]);
                 } else {
-                  // Iter90di : queue sequentielle
                   const [first, ...rest] = files;
                   setPendingAiFiles(rest);
                   setAiBatchTotal(files.length);
@@ -578,8 +618,33 @@ export default function InvoicesPage() {
                 e.target.value = '';
               }} />
             </label>
-            <Button onClick={openCreateInvoice} className="bg-[#022D52] hover:bg-[#1D4ED8]" data-testid="create-invoice-btn"><Plus size={16} className="mr-2" /> Nouvelle facture</Button>
+            <Button onClick={openCreateInvoice} className="bg-[#022D52] hover:bg-[#01213e]" data-testid="create-invoice-btn"><Plus size={14} className="mr-1.5" /> Manuel</Button>
           </div>
+        </div>
+
+        {/* Batch progress banner - visible durant tout le traitement multi-fichier */}
+        {aiBatchTotal > 1 && (
+          <div className="mt-3 pt-3 border-t border-slate-200 flex items-center justify-between gap-3" data-testid="batch-progress-banner">
+            <div className="flex items-center gap-2 text-sm">
+              <Loader2 size={14} className="text-purple-600 animate-spin" />
+              <span className="font-semibold text-slate-900">
+                Traitement en cours : <span className="text-purple-700">{aiBatchIndex}/{aiBatchTotal}</span>
+              </span>
+              <span className="text-xs text-slate-500">
+                {pendingAiFiles.length > 0 ? `(${pendingAiFiles.length} en file d'attente)` : '(dernier fichier)'}
+              </span>
+            </div>
+            <div className="flex-1 max-w-md">
+              <div className="h-2 bg-slate-200 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-purple-600 transition-all"
+                  style={{width: `${(aiBatchIndex - 1) / aiBatchTotal * 100}%`}}
+                />
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
 
           {/* ---- Filter bar invoices ---- */}
           <div className="mb-3 p-3 bg-slate-50 border border-slate-200 rounded-md flex flex-wrap items-end gap-2" data-testid="invoices-filter-bar">

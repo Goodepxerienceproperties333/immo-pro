@@ -690,15 +690,32 @@ def create_invoices_router(db):
         else:
             year = inv_date[:4]
             prefix = f"FA-{year}-"
-        cnt = await db.invoices.count_documents({
-            "copropriete_id": data.copropriete_id or "",
-            "internal_reference": {"$regex": f"^{prefix}"}
-        })
-        internal_reference = f"{prefix}{(cnt + 1):04d}"
-        # Eviter doublon en cas de concurrence
+
+        # iter90ds : sequence basee sur MAX des refs existantes, PAS sur
+        # count(). Cela evite les doublons quand des factures sont
+        # supprimees et preserve la continuite du facturier ACH pour l'audit.
+        import re as _re
+        existing_refs = await db.invoices.find(
+            {
+                "copropriete_id": data.copropriete_id or "",
+                "internal_reference": {"$regex": f"^{_re.escape(prefix)}[0-9]+$"},
+            },
+            {"_id": 0, "internal_reference": 1},
+        ).to_list(200000)
+        seq_pat = _re.compile(f"^{_re.escape(prefix)}([0-9]+)$")
+        max_seq = 0
+        for e in existing_refs:
+            m = seq_pat.match(e.get("internal_reference", "") or "")
+            if m:
+                try:
+                    max_seq = max(max_seq, int(m.group(1)))
+                except ValueError:  # noqa: PERF203
+                    pass
+        internal_reference = f"{prefix}{(max_seq + 1):04d}"
+        # Ceinture-bretelles : verifie l'unicite au cas ou (concurrence).
         while await db.invoices.find_one({"copropriete_id": data.copropriete_id or "", "internal_reference": internal_reference}, {"_id": 0, "id": 1}):
-            cnt += 1
-            internal_reference = f"{prefix}{(cnt + 1):04d}"
+            max_seq += 1
+            internal_reference = f"{prefix}{(max_seq + 1):04d}"
 
         doc = {
             "id": str(uuid.uuid4()),
