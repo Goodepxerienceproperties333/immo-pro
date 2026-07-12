@@ -231,38 +231,41 @@ def build_bilan_pdf(
     elems.append(Spacer(1, 4 * mm))
 
     # ---- HEADER INFO ACP + SYNDIC ----
-    acp_block = (
-        f"<b>IMMEUBLE : {copropriete.get('name','')}</b><br/>"
-        f"{copropriete.get('address','')}<br/>"
-        f"{copropriete.get('postal_code','')} {copropriete.get('city','')}<br/>"
-        + (f"BCE : {copropriete.get('bce','')}<br/>" if copropriete.get('bce') else "")
-    )
-    syndic_block = ""
-    if syndic:
-        syndic_block = (
-            f"<b>{syndic.get('name','')}</b><br/>"
-            f"{syndic.get('address','')}<br/>"
-            f"{syndic.get('postal_code','')} {syndic.get('city','')}<br/>"
-            + (f"Tel. {syndic.get('phone','')}<br/>" if syndic.get('phone') else "")
-            + (f"{syndic.get('email','')}<br/>" if syndic.get('email') else "")
-            + (f"<font size='7' color='#64748B'>Num. IPI : {syndic.get('ipi','')}</font>"
-               if syndic.get('ipi') else "")
+    # iter90dp : quand le header logo affiche deja l'ACP, on omet le bloc
+    # ACP ci-dessous pour eviter la duplication.
+    if not use_new_layout:
+        acp_block = (
+            f"<b>IMMEUBLE : {copropriete.get('name','')}</b><br/>"
+            f"{copropriete.get('address','')}<br/>"
+            f"{copropriete.get('postal_code','')} {copropriete.get('city','')}<br/>"
+            + (f"BCE : {copropriete.get('bce','')}<br/>" if copropriete.get('bce') else "")
         )
-    header_tbl = Table(
-        [[Paragraph(acp_block, small), Paragraph(syndic_block, small)]],
-        colWidths=[93 * mm, 93 * mm],
-    )
-    header_tbl.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, -1), SLATE_50),
-        ("BOX", (0, 0), (-1, -1), 0.5, SLATE_300),
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 10),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 10),
-        ("TOPPADDING", (0, 0), (-1, -1), 8),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
-    ]))
-    elems.append(header_tbl)
-    elems.append(Spacer(1, 6 * mm))
+        syndic_block = ""
+        if syndic:
+            syndic_block = (
+                f"<b>{syndic.get('name','')}</b><br/>"
+                f"{syndic.get('address','')}<br/>"
+                f"{syndic.get('postal_code','')} {syndic.get('city','')}<br/>"
+                + (f"Tel. {syndic.get('phone','')}<br/>" if syndic.get('phone') else "")
+                + (f"{syndic.get('email','')}<br/>" if syndic.get('email') else "")
+                + (f"<font size='7' color='#64748B'>Num. IPI : {syndic.get('ipi','')}</font>"
+                   if syndic.get('ipi') else "")
+            )
+        header_tbl = Table(
+            [[Paragraph(acp_block, small), Paragraph(syndic_block, small)]],
+            colWidths=[93 * mm, 93 * mm],
+        )
+        header_tbl.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), SLATE_50),
+            ("BOX", (0, 0), (-1, -1), 0.5, SLATE_300),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 10),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+            ("TOPPADDING", (0, 0), (-1, -1), 8),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+        ]))
+        elems.append(header_tbl)
+        elems.append(Spacer(1, 6 * mm))
 
     # ---- TABLES ACTIF + PASSIF (cote a cote) ----
     actif_tbl = _column_table(

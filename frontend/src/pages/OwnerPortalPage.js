@@ -9,7 +9,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { toast } from 'sonner';
-import { LogOut, Home, Wallet, FileText, Receipt, Megaphone, Building2, User, AlertCircle, CheckCircle2, ArrowDownToLine, Copy, UserCog, Users, Plus, Pencil, Trash2, Save, Eye, Gauge, CalendarClock, PieChart as PieChartIcon, TrendingUp, Clock, Sparkles, Mail, MailOpen, Send, Paperclip } from 'lucide-react';
+import { LogOut, Home, Wallet, FileText, Receipt, Megaphone, Building2, User, AlertCircle, CheckCircle2, ArrowDownToLine, Copy, UserCog, Users, Plus, Pencil, Trash2, Save, Eye, Gauge, CalendarClock, PieChart as PieChartIcon, TrendingUp, Clock, Sparkles, Mail, MailOpen, Send, Paperclip, ChevronRight } from 'lucide-react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RechartsTooltip } from 'recharts';
 import { sanitizeHtml } from '@/lib/sanitizeHtml';
 import OwnerOnboardingTour, { ownerTourStorageKey } from '@/components/OwnerOnboardingTour';
@@ -61,7 +61,10 @@ export default function OwnerPortalPage() {
   const [documents, setDocuments] = useState([]);
   const [communications, setCommunications] = useState([]);
   const [selectedComm, setSelectedComm] = useState(null); // detail email ouvert
-  const [selectedAcp, setSelectedAcp] = useState('all');
+  // iter90do : selectedAcp commence a null -> ecran de selection ACP obligatoire.
+  // Aucune donnee financiere n'est affichee tant qu'une ACP n'est pas choisie.
+  const [selectedAcp, setSelectedAcp] = useState(null);
+  const [financialLoading, setFinancialLoading] = useState(false);
   // Iter90dd : mouvements du grand livre + filtre periode
   const [movements, setMovements] = useState([]);
   const [movementsLoading, setMovementsLoading] = useState(false);
@@ -94,20 +97,16 @@ export default function OwnerPortalPage() {
   useEffect(() => {
     (async () => {
       try {
-        const [dash, copros, fc, inv, docs, comms] = await Promise.all([
+        // iter90do : chargement initial minimal (aucune donnee financiere).
+        // On charge uniquement la liste des ACPs + le profil de l'owner. Les
+        // fund-calls/invoices/docs/comms sont charges UNIQUEMENT quand une
+        // ACP est selectionnee (chinese wall strict).
+        const [dash, copros] = await Promise.all([
           api.get('/owner/dashboard'),
           api.get('/owner/coproprietes'),
-          api.get('/owner/fund-calls'),
-          api.get('/owner/invoices'),
-          api.get('/owner/documents'),
-          api.get('/owner/communications').catch(() => ({ data: [] })),
         ]);
         setDashboard(dash.data);
         setCoproprietes(copros.data);
-        setFundCalls(fc.data);
-        setCharges(inv.data);
-        setDocuments(docs.data);
-        setCommunications(comms.data);
         // iter89 : init profile form from owner data
         const o = dash.data?.owner || {};
         setProfileForm({
@@ -133,19 +132,56 @@ export default function OwnerPortalPage() {
     })();
   }, []);
 
-  // Iter90dd : auto-selection de l'ACP si le proprietaire n'en a qu'une seule
+  // iter90do : auto-selection si une seule ACP (skip picker)
   useEffect(() => {
-    if (coproprietes.length === 1 && selectedAcp === 'all') {
+    if (coproprietes.length === 1 && !selectedAcp) {
       setSelectedAcp(coproprietes[0].id);
     }
   }, [coproprietes, selectedAcp]);
 
-  // Iter90dd : recharge les mouvements du grand livre quand ACP ou periode change
+  // iter90do : charge les donnees financieres UNIQUEMENT apres selection ACP
   useEffect(() => {
-    if (!dashboard) return;
+    if (!selectedAcp) {
+      // Vide les donnees precedentes pour eviter de leaker entre ACPs
+      setFundCalls([]);
+      setCharges([]);
+      setDocuments([]);
+      setCommunications([]);
+      return;
+    }
+    setFinancialLoading(true);
+    (async () => {
+      try {
+        const params = { copropriete_id: selectedAcp };
+        const [fc, inv, docs, comms] = await Promise.all([
+          api.get('/owner/fund-calls', { params }),
+          api.get('/owner/invoices', { params }),
+          api.get('/owner/documents', { params }),
+          api.get('/owner/communications', { params }).catch(() => ({ data: [] })),
+        ]);
+        setFundCalls(fc.data);
+        setCharges(inv.data);
+        setDocuments(docs.data);
+        setCommunications(comms.data);
+      } catch (err) {
+        setError(err.response?.data?.detail || 'Erreur chargement des donnees ACP');
+      } finally {
+        setFinancialLoading(false);
+      }
+    })();
+  }, [selectedAcp]);
+
+  // Iter90dd : recharge les mouvements du grand livre quand ACP ou periode change
+  // iter90do : skip si aucune ACP selectionnee (chinese wall strict).
+  useEffect(() => {
+    if (!dashboard || !selectedAcp) {
+      setMovements([]);
+      setOpeningBalance(0);
+      setClosingBalance(0);
+      return;
+    }
     setMovementsLoading(true);
-    const params = {};
-    if (selectedAcp !== 'all') params.copropriete_id = selectedAcp;
+    const params = { copropriete_id: selectedAcp };
     if (periodStart) params.start_date = periodStart;
     if (periodEnd) params.end_date = periodEnd;
     api.get('/owner/movements', { params })
@@ -161,15 +197,11 @@ export default function OwnerPortalPage() {
   // iter90da : calculs memoized pour l'onglet "Ma situation".
   // Doivent etre AVANT les early returns (loading / error) pour respecter
   // les rules-of-hooks.
-  const chargesMemo = useMemo(
-    () => (selectedAcp === 'all' ? charges : charges.filter(c => c.copropriete_id === selectedAcp)),
-    [charges, selectedAcp],
-  );
+  // iter90do : les donnees sont deja scopees par API (copropriete_id envoye).
+  // Le filtre client "selectedAcp === all" est retire.
+  const chargesMemo = useMemo(() => charges, [charges]);
   const pendingCallsMemo = useMemo(
-    () => {
-      const src = dashboard?.pending_calls || [];
-      return selectedAcp === 'all' ? src : src.filter(p => p.copropriete_id === selectedAcp);
-    },
+    () => (dashboard?.pending_calls || []).filter(p => p.copropriete_id === selectedAcp),
     [dashboard, selectedAcp],
   );
   const chargesByCategory = useMemo(() => {
@@ -317,31 +349,105 @@ export default function OwnerPortalPage() {
     );
   }
 
+  // iter90do : ecran de selection ACP obligatoire quand plusieurs ACPs.
+  // AUCUNE donnee financiere ne doit apparaitre ici (chinese wall strict) :
+  // solde, appels, factures, docs, communications sont HORS ecran.
+  if (!selectedAcp && coproprietes.length > 1) {
+    const ownerName = dashboard?.owner?.name || user?.name || 'Proprietaire';
+    return (
+      <div className="min-h-screen bg-slate-50">
+        <header className="bg-white border-b border-slate-200 sticky top-0 z-10">
+          <div className="max-w-6xl mx-auto px-6 py-3 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <img src="/logo-nextge.png" alt="NextGe Copro" className="h-9 w-auto" />
+              <div>
+                <h1 className="text-base font-semibold text-slate-900" style={{fontFamily:'Chivo,sans-serif'}}>Espace proprietaire</h1>
+                <p className="text-[11px] text-slate-500">{ownerName}</p>
+              </div>
+            </div>
+            <Button variant="ghost" size="sm" onClick={handleLogout} data-testid="logout-btn" className="text-slate-500">
+              <LogOut size={14} className="mr-1.5" /> Deconnexion
+            </Button>
+          </div>
+        </header>
+
+        <main className="max-w-4xl mx-auto p-6" data-testid="acp-picker-screen">
+          <div className="mb-6 text-center">
+            <h2 className="text-2xl font-bold text-slate-900 mb-2" style={{fontFamily:'Chivo,sans-serif'}}>
+              Bienvenue {ownerName.split(' ')[0]}
+            </h2>
+            <p className="text-slate-600">
+              Vous etes proprietaire dans <b>{coproprietes.length}</b> coproprietes.
+              Selectionnez celle que vous souhaitez consulter :
+            </p>
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-2">
+            {coproprietes.map((c) => (
+              <button
+                key={c.id}
+                onClick={() => setSelectedAcp(c.id)}
+                data-testid={`acp-picker-${c.id}`}
+                className="text-left bg-white border-2 border-slate-200 rounded-xl p-5 hover:border-[#02A9AA] hover:shadow-lg transition-all group"
+              >
+                <div className="flex items-start gap-3">
+                  <div className="w-11 h-11 rounded-lg bg-[#022D52] group-hover:bg-[#02A9AA] transition-colors flex items-center justify-center text-white flex-shrink-0">
+                    <Building2 size={20} />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="font-semibold text-slate-900 truncate" style={{fontFamily:'Chivo,sans-serif'}}>
+                      {c.name}
+                    </div>
+                    {c.address && (
+                      <div className="text-xs text-slate-500 mt-0.5 line-clamp-2">
+                        {c.address}{c.postal_code || c.city ? `, ${c.postal_code || ''} ${c.city || ''}`.trim() : ''}
+                      </div>
+                    )}
+                    {c.reference && (
+                      <div className="text-[11px] text-slate-400 mt-1 font-mono">Ref: {c.reference}</div>
+                    )}
+                    <div className="mt-2 text-[11px] text-slate-500">
+                      <b className="text-slate-700">{c.my_lots?.length || 0}</b> lot(s) a votre nom
+                    </div>
+                  </div>
+                  <ChevronRight size={18} className="text-slate-300 group-hover:text-[#02A9AA] transition-colors" />
+                </div>
+              </button>
+            ))}
+          </div>
+
+          <p className="text-center text-xs text-slate-400 mt-6">
+            Vos donnees comptables sont strictement cloisonnees par copropriete
+            (Chinese wall). Vous ne verrez que les informations relatives a la
+            copropriete selectionnee.
+          </p>
+        </main>
+      </div>
+    );
+  }
+
   const owner = dashboard?.owner || {};
-  // Iter90dd : stats effectives selon l'ACP selectionnee (fallback vers global)
-  const acpStats = (selectedAcp !== 'all' && dashboard?.stats_by_acp?.[selectedAcp])
+  // Iter90dd/do : stats effectives pour l'ACP selectionnee.
+  const acpStats = (selectedAcp && dashboard?.stats_by_acp?.[selectedAcp])
     ? dashboard.stats_by_acp[selectedAcp]
     : null;
-  const globalStats = dashboard?.stats || {};
-  const acpLotsCount = selectedAcp !== 'all'
-    ? (coproprietes.find(c => c.id === selectedAcp)?.my_lots?.length || 0)
-    : globalStats.lots_count || 0;
-  const acpCoproCount = selectedAcp !== 'all' ? 1 : (globalStats.coproprietes_count || 0);
+  // iter90do : donnees toujours scopees a l'ACP selectionnee (chinese wall strict).
+  // Plus de mode "all" : selectedAcp est toujours defini quand on affiche
+  // le dashboard financier.
+  const acpLotsCount = coproprietes.find(c => c.id === selectedAcp)?.my_lots?.length || 0;
   const stats = {
-    coproprietes_count: acpCoproCount,
+    coproprietes_count: 1,
     lots_count: acpLotsCount,
-    total_called: acpStats ? acpStats.total_called : (globalStats.total_called || 0),
-    total_paid: acpStats ? acpStats.total_paid : (globalStats.total_paid || 0),
-    balance: acpStats ? acpStats.balance : (globalStats.balance || 0),
-    status: acpStats ? acpStats.status : (globalStats.status || 'solde'),
-    pending_calls_count: globalStats.pending_calls_count || 0,
+    total_called: acpStats ? acpStats.total_called : 0,
+    total_paid: acpStats ? acpStats.total_paid : 0,
+    balance: acpStats ? acpStats.balance : 0,
+    status: acpStats ? acpStats.status : 'solde',
+    pending_calls_count: (dashboard?.pending_calls || []).filter(p => p.copropriete_id === selectedAcp).length,
   };
-  const filteredFundCalls = selectedAcp === 'all' ? fundCalls : fundCalls.filter(fc => fc.copropriete_id === selectedAcp);
+  const filteredFundCalls = fundCalls;
   const filteredCharges = chargesMemo;
-  const filteredDocs = selectedAcp === 'all' ? documents : documents.filter(d => d.copropriete_id === selectedAcp);
-  const filteredCommunications = selectedAcp === 'all'
-    ? communications
-    : communications.filter(c => c.copropriete_id === selectedAcp);
+  const filteredDocs = documents;
+  const filteredCommunications = communications;
   const filteredPendingCalls = pendingCallsMemo;
 
   const nextCall = upcomingWithCountdown[0] || null;
@@ -448,15 +554,27 @@ export default function OwnerPortalPage() {
               <TabsTrigger value="tenants" data-testid="tab-tenants"><Users size={14} className="mr-1.5" /> Mes locataires</TabsTrigger>
             </TabsList>
             {coproprietes.length >= 1 && (
-              <select
-                value={selectedAcp}
-                onChange={e => setSelectedAcp(e.target.value)}
-                className="text-sm border border-slate-200 rounded-md px-3 py-1.5 bg-white"
-                data-testid="acp-selector"
-              >
-                {coproprietes.length > 1 && <option value="all">Toutes les coproprietes</option>}
-                {coproprietes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-              </select>
+              <div className="flex items-center gap-2">
+                <select
+                  value={selectedAcp || ''}
+                  onChange={e => setSelectedAcp(e.target.value)}
+                  className="text-sm border border-slate-200 rounded-md px-3 py-1.5 bg-white"
+                  data-testid="acp-selector"
+                >
+                  {coproprietes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+                {coproprietes.length > 1 && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setSelectedAcp(null)}
+                    data-testid="btn-change-acp"
+                    className="text-xs"
+                  >
+                    <Building2 size={12} className="mr-1" /> Changer
+                  </Button>
+                )}
+              </div>
             )}
           </div>
 

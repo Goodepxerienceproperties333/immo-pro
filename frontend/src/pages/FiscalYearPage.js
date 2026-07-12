@@ -25,7 +25,7 @@ export default function FiscalYearPage() {
   const [budgetDialog, setBudgetDialog] = useState(false);
   const [editingBudget, setEditingBudget] = useState(null);
   const [comparison, setComparison] = useState(null);
-  const [yearForm, setYearForm] = useState({ name: '', start_date: '', end_date: '' });
+  const [yearForm, setYearForm] = useState({ name: '', start_date: '', end_date: '', invoice_number_prefix: '' });
   const [budgetForm, setBudgetForm] = useState({ fiscal_year_id: '', name: '', lines: [] });
   const [prevExp, setPrevExp] = useState(null);
   const [wizardBudget, setWizardBudget] = useState(null);
@@ -51,7 +51,7 @@ export default function FiscalYearPage() {
 
   const openCreateYear = () => {
     const now = new Date().getFullYear();
-    setYearForm({ name: `Exercice ${now}`, start_date: `${now}-01-01`, end_date: `${now}-12-31` });
+    setYearForm({ name: `Exercice ${now}`, start_date: `${now}-01-01`, end_date: `${now}-12-31`, invoice_number_prefix: `FA-${now}-` });
     setYearDialog(true);
   };
   const saveYear = async () => {
@@ -385,6 +385,23 @@ export default function FiscalYearPage() {
             <div className="grid grid-cols-2 gap-4">
               <div><label className="form-label">Debut *</label><Input type="date" value={yearForm.start_date} onChange={e => setYearForm({...yearForm, start_date: e.target.value})} /></div>
               <div><label className="form-label">Fin *</label><Input type="date" value={yearForm.end_date} onChange={e => setYearForm({...yearForm, end_date: e.target.value})} /></div>
+            </div>
+            {/* iter90dq : prefixe libre pour l'auto-numerotation des factures */}
+            <div>
+              <label className="form-label">Prefixe des factures</label>
+              <Input
+                value={yearForm.invoice_number_prefix || ''}
+                onChange={e => setYearForm({...yearForm, invoice_number_prefix: e.target.value})}
+                placeholder="Ex : FA-2025- ou ACACIA-25-"
+                data-testid="year-invoice-prefix"
+              />
+              <p className="text-xs text-slate-500 mt-1">
+                Chaque nouvelle facture creee pendant cet exercice sera numerotee
+                automatiquement : <b>{yearForm.invoice_number_prefix || 'FA-{annee}-'}0001</b>,
+                {' '}<b>{yearForm.invoice_number_prefix || 'FA-{annee}-'}0002</b>, etc.
+                Cette reference interne permet au commissaire aux comptes de lier
+                chaque facture a la depense comptabilisee.
+              </p>
             </div>
             <div className="flex gap-3 justify-end">
               <Button variant="outline" onClick={() => setYearDialog(false)}>Annuler</Button>

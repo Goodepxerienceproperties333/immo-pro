@@ -113,20 +113,32 @@ def build_balance_tiers_pdf(
         period_str = f"Arretee au {_fmt_date(period_end)}"
     else:
         period_str = "Situation a date"
-    header_text = (
-        f"<b>{copropriete.get('name','')}</b><br/>"
-        f"{copropriete.get('address','')} - "
-        f"{copropriete.get('postal_code','')} {copropriete.get('city','')}<br/>"
-        f"BCE : {copropriete.get('bce','-')}"
-    )
-    info_text = (
-        f"{period_str}<br/>"
-        f"Edite le {datetime.now().strftime('%d/%m/%Y a %H:%M')}"
-    )
-    header_tbl = Table(
-        [[Paragraph(header_text, small), Paragraph(info_text, small)]],
-        colWidths=[150 * mm, 120 * mm],
-    )
+    # iter90dp : si le header logo affiche deja les infos ACP (name/adresse/BCE),
+    # on omet le bloc de gauche pour eviter la duplication.
+    if use_new_layout:
+        info_text = (
+            f"{period_str}<br/>"
+            f"Edite le {datetime.now().strftime('%d/%m/%Y a %H:%M')}"
+        )
+        header_tbl = Table(
+            [[Paragraph("", small), Paragraph(info_text, small)]],
+            colWidths=[150 * mm, 120 * mm],
+        )
+    else:
+        header_text = (
+            f"<b>{copropriete.get('name','')}</b><br/>"
+            f"{copropriete.get('address','')} - "
+            f"{copropriete.get('postal_code','')} {copropriete.get('city','')}<br/>"
+            f"BCE : {copropriete.get('bce','-')}"
+        )
+        info_text = (
+            f"{period_str}<br/>"
+            f"Edite le {datetime.now().strftime('%d/%m/%Y a %H:%M')}"
+        )
+        header_tbl = Table(
+            [[Paragraph(header_text, small), Paragraph(info_text, small)]],
+            colWidths=[150 * mm, 120 * mm],
+        )
     header_tbl.setStyle(TableStyle([
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ("ALIGN", (1, 0), (1, 0), "RIGHT"),

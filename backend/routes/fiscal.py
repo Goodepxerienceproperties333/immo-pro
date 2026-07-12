@@ -10,6 +10,12 @@ class FiscalYearInput(BaseModel):
     start_date: str
     end_date: str
     copropriete_id: Optional[str] = ""
+    # iter90dq : prefixe libre pour l'auto-numerotation des factures de cet
+    # exercice (ex : "ACACIA-2025-", "FA-2025-", "ACP01-", ...).
+    # Chaque nouvelle facture creee pendant l'exercice recevra
+    # `internal_reference = f"{invoice_number_prefix}{next_seq:04d}"`.
+    # Si vide, on retombe sur le prefixe par defaut `FA-YYYY-`.
+    invoice_number_prefix: Optional[str] = ""
 
 
 class BudgetLineInput(BaseModel):
@@ -57,6 +63,8 @@ def create_fiscal_router(db):
             "end_date": data.end_date,
             "status": "open",
             "copropriete_id": data.copropriete_id or "",
+            # iter90dq : prefixe libre pour l'auto-numerotation des factures
+            "invoice_number_prefix": (data.invoice_number_prefix or "").strip(),
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
         await db.fiscal_years.insert_one(doc)
@@ -66,7 +74,14 @@ def create_fiscal_router(db):
     async def update_fiscal_year(year_id: str, data: FiscalYearInput):
         result = await db.fiscal_years.update_one(
             {"id": year_id},
-            {"$set": {"name": data.name, "start_date": data.start_date, "end_date": data.end_date}},
+            {"$set": {
+                "name": data.name,
+                "start_date": data.start_date,
+                "end_date": data.end_date,
+                # iter90dq : modifiable en cours d'exercice (prochaines factures
+                # utilisent le nouveau prefixe, les anciennes ne sont PAS renumerotees).
+                "invoice_number_prefix": (data.invoice_number_prefix or "").strip(),
+            }},
         )
         if result.matched_count == 0:
             raise HTTPException(404, "Exercice non trouve")

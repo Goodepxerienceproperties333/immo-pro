@@ -671,9 +671,25 @@ def create_invoices_router(db):
                         "amount": round(data.total_amount * share_ratio, 2)
                     })
 
-        # Generer une reference interne auto-incrementee par ACP (FA-YYYY-NNNN)
-        year = (data.date or datetime.now(timezone.utc).date().isoformat())[:4]
-        prefix = f"FA-{year}-"
+        # iter90dq : prefixe interne configurable par exercice fiscal.
+        # 1. Cherche l'exercice actif sur la date de la facture
+        # 2. Utilise `fiscal_year.invoice_number_prefix` s'il est defini
+        # 3. Sinon fallback `FA-YYYY-` (comportement historique)
+        inv_date = data.date or datetime.now(timezone.utc).date().isoformat()
+        fy = await db.fiscal_years.find_one(
+            {
+                "copropriete_id": data.copropriete_id or "",
+                "start_date": {"$lte": inv_date},
+                "end_date": {"$gte": inv_date},
+            },
+            {"_id": 0, "invoice_number_prefix": 1},
+        )
+        prefix_conf = (fy or {}).get("invoice_number_prefix") or ""
+        if prefix_conf:
+            prefix = prefix_conf
+        else:
+            year = inv_date[:4]
+            prefix = f"FA-{year}-"
         cnt = await db.invoices.count_documents({
             "copropriete_id": data.copropriete_id or "",
             "internal_reference": {"$regex": f"^{prefix}"}

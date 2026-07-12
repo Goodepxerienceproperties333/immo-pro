@@ -112,14 +112,20 @@ def build_liste_depenses_pdf(
     # ---- HEADER ----
     df = _fmt_date(date_from)
     dt = _fmt_date(date_to)
-    header = [[
-        Paragraph(
+    # iter90dp : evite duplication ACP quand header logo actif
+    left_col_para = (
+        Paragraph("", small)
+        if use_new_layout
+        else Paragraph(
             f"<b>{copropriete.get('name','')}</b><br/>"
             f"{copropriete.get('address','')}<br/>"
             f"{copropriete.get('postal_code','')} {copropriete.get('city','')}<br/>"
             f"BCE: {copropriete.get('bce','-')} - Ref: {copropriete.get('reference','')}",
             small,
-        ),
+        )
+    )
+    header = [[
+        left_col_para,
         Paragraph("<b>LISTE DES DEPENSES</b>", h_title),
         Paragraph(
             f"<b>FAIT LE :</b><br/>{datetime.now().strftime('%d/%m/%Y')}<br/><br/>"

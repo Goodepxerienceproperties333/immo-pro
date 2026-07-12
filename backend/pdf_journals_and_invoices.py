@@ -109,14 +109,21 @@ def build_journals_pdf(
     # ---- HEADER ----
     df = _fmt_date(date_from)
     dt = _fmt_date(date_to)
-    header = [[
-        Paragraph(
+    # iter90dp : quand le header logo a deja affiche name/adresse/BCE/Ref,
+    # on omet la colonne de gauche pour eviter la duplication.
+    left_col_para = (
+        Paragraph("", small)
+        if use_new_layout
+        else Paragraph(
             f"<b>{copropriete.get('name','')}</b><br/>"
             f"{copropriete.get('address','')}<br/>"
             f"{copropriete.get('postal_code','')} {copropriete.get('city','')}<br/>"
             f"BCE: {copropriete.get('bce','-')} - Ref: {copropriete.get('reference','')}",
             small,
-        ),
+        )
+    )
+    header = [[
+        left_col_para,
         Paragraph("<b>JOURNAUX COMPTABLES</b>", h_title),
         Paragraph(
             f"<b>FAIT LE :</b><br/>{datetime.now().strftime('%d/%m/%Y')}<br/><br/>"
@@ -165,6 +172,10 @@ def build_journals_pdf(
             j_title,
         ))
 
+        # iter90dp : wrap Libelle et Nom compte dans des Paragraph pour eviter
+        # que les textes longs debordent sur les colonnes voisines (superposition).
+        from reportlab.lib.styles import ParagraphStyle as _PS
+        cell_style = _PS("cell", fontName="Helvetica", fontSize=7, leading=8)
         # Build rows : 1 row per LINE, with the entry header repeated only on the first line of each entry.
         rows = [[Paragraph(f"<b>{h}</b>", small) for h in headers]]
         for e in j_entries:
@@ -174,7 +185,7 @@ def build_journals_pdf(
                 if first:
                     date_cell = _fmt_date(e.get("date", ""))
                     ref_cell = e.get("reference", "") or ""
-                    desc_cell = (e.get("description", "") or "")[:60]
+                    desc_cell = (e.get("description", "") or "")
                 else:
                     date_cell = ""
                     ref_cell = ""
@@ -184,9 +195,9 @@ def build_journals_pdf(
                 rows.append([
                     date_cell,
                     ref_cell,
-                    desc_cell,
+                    Paragraph(desc_cell, cell_style),
                     ln.get("account_number", "") or "",
-                    (ln.get("account_name", "") or "")[:35],
+                    Paragraph((ln.get("account_name", "") or ""), cell_style),
                     _eur_be(debit) if debit else "",
                     _eur_be(credit) if credit else "",
                 ])
@@ -306,14 +317,20 @@ def build_invoices_list_pdf(
     # ---- HEADER ----
     df = _fmt_date(date_from)
     dt = _fmt_date(date_to)
-    header = [[
-        Paragraph(
+    # iter90dp : evite duplication ACP quand header logo actif
+    left_col_para = (
+        Paragraph("", small)
+        if use_new_layout
+        else Paragraph(
             f"<b>{copropriete.get('name','')}</b><br/>"
             f"{copropriete.get('address','')}<br/>"
             f"{copropriete.get('postal_code','')} {copropriete.get('city','')}<br/>"
             f"BCE: {copropriete.get('bce','-')} - Ref: {copropriete.get('reference','')}",
             small,
-        ),
+        )
+    )
+    header = [[
+        left_col_para,
         Paragraph("<b>LISTE EXHAUSTIVE DES FACTURES</b>", h_title),
         Paragraph(
             f"<b>FAIT LE :</b><br/>{datetime.now().strftime('%d/%m/%Y')}<br/><br/>"
@@ -341,6 +358,10 @@ def build_invoices_list_pdf(
     total_htva = 0.0
     total_tva = 0.0
     total_tvac = 0.0
+    # iter90dp : wrap Fournisseur + Libelle dans Paragraph pour eviter debordement
+    from reportlab.lib.styles import ParagraphStyle as _PS
+    inv_cell = _PS("inv_cell", fontName="Helvetica", fontSize=7, leading=8)
+
     for inv in sorted(invoices, key=lambda x: (x.get("date", ""), x.get("number", ""))):
         tvac = float(inv.get("total_amount") or 0)
         tva = float(inv.get("vat_amount") or 0)
@@ -355,8 +376,8 @@ def build_invoices_list_pdf(
         rows.append([
             _fmt_date(inv.get("date", "")),
             (inv.get("number", "") or "")[:14],
-            (inv.get("supplier", "") or "")[:28],
-            (inv.get("description", "") or "")[:38],
+            Paragraph(inv.get("supplier", "") or "", inv_cell),
+            Paragraph(inv.get("description", "") or "", inv_cell),
             inv.get("account_number", "") or "",
             _eur_be(htva),
             _eur_be(tva),
