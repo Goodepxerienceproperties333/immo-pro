@@ -10,7 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { Plus, Trash2, Pencil, AlertTriangle, Star, Key } from 'lucide-react';
+import { Plus, Trash2, Pencil, AlertTriangle, Star, Key, Wrench } from 'lucide-react';
 import { fmtDate } from '@/lib/dateFmt';
 
 export default function DistributionKeysPage() {
@@ -20,6 +20,10 @@ export default function DistributionKeysPage() {
   const [keyForm, setKeyForm] = useState({ name: '', code: '', description: '', key_type: 'quotity', lots: [], is_default: false });
   const [editingKey, setEditingKey] = useState(null);
   const [keyUsage, setKeyUsage] = useState(null);
+  // iter90du : nettoyage des cles phantoms
+  const [cleanupDialog, setCleanupDialog] = useState(false);
+  const [cleanupReport, setCleanupReport] = useState(null);
+  const [cleanupLoading, setCleanupLoading] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -35,6 +39,48 @@ export default function DistributionKeysPage() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  // iter90du : detection locale des cles avec entrees phantom
+  const lotIdSet = new Set((lots || []).map(l => l.id));
+  const phantomKeys = (distKeys || []).map(k => {
+    const activeEntries = (k.lots || []).filter(l => !l.excluded);
+    const phantomEntries = activeEntries.filter(l => !l.lot_id || !lotIdSet.has(l.lot_id));
+    return { key: k, phantomCount: phantomEntries.length, totalEntries: activeEntries.length };
+  }).filter(x => x.phantomCount > 0);
+
+  const runCleanupDryRun = async () => {
+    setCleanupLoading(true);
+    try {
+      const { data } = await api.post('/distribution-keys/bulk-rebuild', {
+        mode: 'match_by_number',
+        dry_run: true,
+      });
+      setCleanupReport(data);
+      setCleanupDialog(true);
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur analyse');
+    } finally {
+      setCleanupLoading(false);
+    }
+  };
+
+  const applyCleanup = async () => {
+    setCleanupLoading(true);
+    try {
+      const { data } = await api.post('/distribution-keys/bulk-rebuild', {
+        mode: 'match_by_number',
+        dry_run: false,
+      });
+      toast.success(`${data.keys_rebuilt} cle(s) reparee(s) avec succes`);
+      setCleanupDialog(false);
+      setCleanupReport(null);
+      await load();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur reparation');
+    } finally {
+      setCleanupLoading(false);
+    }
+  };
 
   // --- Handlers ---
   const updateKeyLot = (i, field, value) => {
@@ -123,9 +169,24 @@ export default function DistributionKeysPage() {
           </h1>
           <p className="page-subtitle">Gestion des cles utilisees pour repartir les charges, budgets et appels de fonds</p>
         </div>
-        <Button onClick={openCreateKey} className="bg-[#022D52] hover:bg-[#1D4ED8]" data-testid="create-key-btn">
-          <Plus size={16} className="mr-2" /> Nouvelle cle
-        </Button>
+        <div className="flex items-center gap-2">
+          {phantomKeys.length > 0 && (
+            <Button
+              onClick={runCleanupDryRun}
+              variant="outline"
+              className="border-amber-400 text-amber-800 hover:bg-amber-50"
+              disabled={cleanupLoading}
+              data-testid="cleanup-phantoms-btn"
+              title={`${phantomKeys.length} cle(s) avec entrees phantom detectee(s)`}
+            >
+              <Wrench size={16} className="mr-2" />
+              Nettoyer les cles phantoms ({phantomKeys.length})
+            </Button>
+          )}
+          <Button onClick={openCreateKey} className="bg-[#022D52] hover:bg-[#1D4ED8]" data-testid="create-key-btn">
+            <Plus size={16} className="mr-2" /> Nouvelle cle
+          </Button>
+        </div>
       </div>
 
       <div className="bg-white rounded-md border border-slate-200 overflow-hidden">
@@ -397,6 +458,102 @@ export default function DistributionKeysPage() {
               <Button onClick={() => saveKey(false)} className="bg-[#022D52] hover:bg-[#1D4ED8]" data-testid="key-save-btn">
                 {editingKey ? 'Modifier' : 'Creer'}
               </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* iter90du : Dialog de nettoyage des cles phantoms */}
+      <Dialog open={cleanupDialog} onOpenChange={setCleanupDialog}>
+        <DialogContent className="max-w-3xl w-[92vw] max-h-[85vh] overflow-y-auto" data-testid="cleanup-dialog">
+          <DialogHeader>
+            <DialogTitle style={{fontFamily:'Chivo,sans-serif'}} className="flex items-center gap-2">
+              <Wrench size={20} className="text-amber-600" />
+              Reparation des cles avec entrees phantom
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 mt-2 text-sm">
+            <div className="bg-blue-50 border border-blue-200 rounded p-3 text-xs text-blue-900">
+              <div className="font-semibold mb-1">Que fait cette operation ?</div>
+              <ul className="list-disc ml-4 space-y-0.5">
+                <li>Pour chaque cle contenant des lot_id perimes (references cassees), le systeme
+                  matche chaque entree phantom par <strong>numero de lot</strong> avec un lot actuel.</li>
+                <li>Les shares (quotites) originales de la cle sont <strong>preservees</strong> comme source de verite.</li>
+                <li>Les lots actuels non presents dans la cle sont ajoutes avec <code>share=0</code>
+                  (n&apos;affecte pas la distribution, editable manuellement ensuite).</li>
+                <li>Les factures, budgets et appels de fonds lies restent intacts.</li>
+              </ul>
+            </div>
+
+            {cleanupReport ? (
+              <>
+                <div className="grid grid-cols-3 gap-2 text-xs">
+                  <div className="bg-slate-50 rounded p-2 border border-slate-200">
+                    <div className="text-slate-500">Cles scannees</div>
+                    <div className="text-xl font-bold text-slate-900">{cleanupReport.keys_scanned}</div>
+                  </div>
+                  <div className="bg-amber-50 rounded p-2 border border-amber-200">
+                    <div className="text-amber-700">A reparer</div>
+                    <div className="text-xl font-bold text-amber-900">{cleanupReport.keys_with_phantoms}</div>
+                  </div>
+                  <div className="bg-green-50 rounded p-2 border border-green-200">
+                    <div className="text-green-700">Mode</div>
+                    <div className="text-sm font-semibold text-green-900">match_by_number</div>
+                  </div>
+                </div>
+
+                {cleanupReport.keys_with_phantoms === 0 ? (
+                  <div className="bg-green-50 border border-green-200 rounded p-3 text-sm text-green-800">
+                    Aucune cle a reparer. Toutes les cles ont des references valides.
+                  </div>
+                ) : (
+                  <div className="bg-white border border-slate-200 rounded overflow-hidden">
+                    <table className="w-full text-xs">
+                      <thead className="bg-slate-100">
+                        <tr>
+                          <th className="p-2 text-left">Cle</th>
+                          <th className="p-2 text-center">Phantoms</th>
+                          <th className="p-2 text-center">Matches</th>
+                          <th className="p-2 text-center">Supprimes</th>
+                          <th className="p-2 text-right">Total avant</th>
+                          <th className="p-2 text-right">Total apres</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(cleanupReport.details || []).map(d => (
+                          <tr key={d.key_id} className="border-t border-slate-100" data-testid={`cleanup-row-${d.key_id}`}>
+                            <td className="p-2 font-medium">{d.key_name}</td>
+                            <td className="p-2 text-center">{d.phantom_count}</td>
+                            <td className="p-2 text-center text-green-700 font-mono">{d.stats.phantom_matched_by_number}</td>
+                            <td className="p-2 text-center text-red-600 font-mono">{d.stats.phantom_removed}</td>
+                            <td className="p-2 text-right font-mono text-slate-500">{d.before_total_share.toFixed(2)}</td>
+                            <td className="p-2 text-right font-mono font-semibold">{d.after_total_share.toFixed(2)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="text-slate-500 text-sm italic">Chargement du rapport...</div>
+            )}
+
+            <div className="flex gap-3 justify-end pt-2">
+              <Button variant="outline" onClick={() => { setCleanupDialog(false); setCleanupReport(null); }} data-testid="cleanup-cancel-btn">
+                Fermer
+              </Button>
+              {cleanupReport && cleanupReport.keys_with_phantoms > 0 && (
+                <Button
+                  onClick={applyCleanup}
+                  disabled={cleanupLoading}
+                  className="bg-amber-600 hover:bg-amber-700 text-white"
+                  data-testid="cleanup-apply-btn"
+                >
+                  <Wrench size={14} className="mr-2" />
+                  {cleanupLoading ? 'Application...' : `Reparer ${cleanupReport.keys_with_phantoms} cle(s)`}
+                </Button>
+              )}
             </div>
           </div>
         </DialogContent>
