@@ -18,31 +18,38 @@ class TestNormalizeMutationDesc:
         r = _normalize_mutation_desc(
             "Mutation lot 001 - Prorata appel (Trimestriel 1/4 - Exercice 2026): Matexi -> Dewinter (206.44 EUR)"
         )
-        assert r == "Mutation lots - Prorata appel (Trimestriel 1/4 - Exercice 2026)"
+        # iter90dw : returns (label, from_name, to_name) tuple
+        assert r[0] == "Mutation lots - Prorata appel (Trimestriel 1/4 - Exercice 2026)"
+        assert r[1] == "Matexi"
+        assert r[2] == "Dewinter"
 
     def test_alphanumeric_lot(self):
         r = _normalize_mutation_desc(
             "Mutation lot C9 - Fonds de roulement: Matexi -> Dewinter"
         )
-        assert r == "Mutation lots - Fonds de roulement"
+        assert r[0] == "Mutation lots - Fonds de roulement"
+        assert r[1] == "Matexi"
+        assert r[2] == "Dewinter"
 
     def test_alphanumeric_lot_with_prefix(self):
         r = _normalize_mutation_desc(
-            "Mutation lot Pe01 - Appel futur (Trimestriel 2/4 - Exercice 2026): Ma"
+            "Mutation lot Pe01 - Appel futur (Trimestriel 2/4 - Exercice 2026): Matexi -> Buyer"
         )
-        assert r == "Mutation lots - Appel futur (Trimestriel 2/4 - Exercice 2026)"
+        assert r[0] == "Mutation lots - Appel futur (Trimestriel 2/4 - Exercice 2026)"
 
     def test_with_journal_prefix(self):
         r = _normalize_mutation_desc(
             "[OD] Mutation lot 302 - Appel futur (Trimestriel 4/4)"
         )
-        assert r == "Mutation lots - Appel futur (Trimestriel 4/4)"
+        assert r[0] == "Mutation lots - Appel futur (Trimestriel 4/4)"
 
     def test_with_operation_prefix(self):
         r = _normalize_mutation_desc(
             "Operation : Mutation lot 001 - Prorata appel (Q1): Matexi -> Buyer"
         )
-        assert r == "Mutation lots - Prorata appel (Q1)"
+        assert r[0] == "Mutation lots - Prorata appel (Q1)"
+        assert r[1] == "Matexi"
+        assert r[2] == "Buyer"
 
     def test_non_matching_returns_none(self):
         assert _normalize_mutation_desc("Appel de provisions - Q1 2026") is None

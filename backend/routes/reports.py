@@ -43,35 +43,42 @@ _MUTATION_LOT_RE = __import__("re").compile(
     r"^\s*(?:\[[A-Z]{2,3}\]\s*)?"        # optionnel "[OD] "
     r"(?:Operation\s*:\s*)?"              # optionnel "Operation : "
     r"Mutation\s+lot\s+\S+\s*-\s*"        # "Mutation lot XXX -"
-    r"([^:]+?)"                            # groupe 1 : label stable (ex "Prorata appel (Q1/4)")
-    r"(?:\s*:.*)?$"                        # optionnel ":  <details>"
+    r"(.+?)"                               # groupe 1 : label (autorise parentheses/hyphens)
+    r"(?:\s*:\s*(.+?)\s+->\s+([^(]+?))?"  # groupes 2/3 (opt) : from -> to
+    r"(?:\s*\([^)]*EUR[^)]*\))?"           # optionnel "(206.44 EUR)"
+    r"\s*$"
 )
 
 
-def _normalize_mutation_desc(desc: str) -> str | None:
+def _normalize_mutation_desc(desc: str):
     """iter90bz : extrait le suffixe STABLE d'une description "Mutation lot XXX - <label>".
 
-    Retourne le label normalise ("Mutation lots - <label>") ou None si le
-    pattern ne matche pas.
+    iter90dw : retourne aussi from_owner_name et to_owner_name pour permettre
+    l'aggregation PAR PROPRIETAIRE COUNTERPART dans la vue du vendeur.
+
+    Retourne un tuple (label, from_name, to_name) ou None si le pattern ne matche pas.
+    Backward-compat : callers qui n'utilisent que la premiere valeur restent OK.
 
     Exemples :
       "Mutation lot 001 - Prorata appel (Q1/4): Matexi -> Dewinter (206.44 EUR)"
-        -> "Mutation lots - Prorata appel (Q1/4)"
-      "Mutation lot C9 - Fonds de roulement: Matexi -> Dewinter"
-        -> "Mutation lots - Fonds de roulement"
-      "[OD] Mutation lot 302 - Appel futur (Q4/4)"
-        -> "Mutation lots - Appel futur (Q4/4)"
+        -> ("Mutation lots - Prorata appel (Q1/4)", "Matexi", "Dewinter")
+      "Mutation lot C9 - Fonds de roulement: Matexi -> Buyer"
+        -> ("Mutation lots - Fonds de roulement", "Matexi", "Buyer")
     """
     if not desc:
         return None
     m = _MUTATION_LOT_RE.match(desc)
-    if m:
-        label = (m.group(1) or "").strip().rstrip(" -")
-        return f"Mutation lots - {label}" if label else None
-    return None
+    if not m:
+        return None
+    label = (m.group(1) or "").strip().rstrip(" -")
+    if not label:
+        return None
+    from_name = (m.group(2) or "").strip() if m.group(2) else ""
+    to_name = (m.group(3) or "").strip() if m.group(3) else ""
+    return (f"Mutation lots - {label}", from_name, to_name)
 
 
-def _group_movements_by_owner(movements: list) -> list:
+def _group_movements_by_owner(movements: list, self_owner_name: str = "") -> list:
     """iter90bv + iter90bz : regroupe les mouvements d'un meme proprietaire pour
     tous ses lots.
 
@@ -86,9 +93,19 @@ def _group_movements_by_owner(movements: list) -> list:
     fusionne via un pattern regex sur "Mutation lot XXX - <label>" en une
     seule ligne "Mutations (N lots) - <label>".
 
+    iter90dw (Feb 2026) : les mutations sont maintenant regroupees PAR
+    COUNTERPART OWNER pour la vue du vendeur. Ex : "Mutations (3 lots) -
+    Fonds de roulement -> Dewinter" (plutot que d'additionner Dewinter +
+    Lahaye dans un seul bucket, non-lisible pour le vendeur).
+
     Preserve l'ordre chronologique et la structure des mouvements (dates,
     references, types de journal). Les journal_entries en base sont
     INCHANGEES (audit trail preserve).
+
+    Args:
+      movements: liste des mouvements
+      self_owner_name: nom du proprietaire dont c'est la situation
+        (pour identifier le counterpart parmi from/to). Optionnel.
     """
     if not movements:
         return []
@@ -97,15 +114,28 @@ def _group_movements_by_owner(movements: list) -> list:
     order = []
     for m in movements:
         raw_desc = (m.get("description") or "").strip()
-        norm_mutation = _normalize_mutation_desc(raw_desc)
-        if norm_mutation:
-            # iter90bz : cle SANS reference (chaque mutation lot a une ref unique)
-            # => fusionne toutes les mutations partageant le meme label stable
+        norm = _normalize_mutation_desc(raw_desc)
+        if norm:
+            norm_label, from_name, to_name = norm
+            # iter90dw : identifie le counterpart (l'autre owner de la mutation)
+            counterpart = ""
+            if self_owner_name:
+                sn = self_owner_name.strip().lower()
+                if from_name.strip().lower() == sn:
+                    counterpart = to_name
+                elif to_name.strip().lower() == sn:
+                    counterpart = from_name
+            # Fallback : si on n'a pas identifie self, prend to_name par defaut
+            if not counterpart:
+                counterpart = to_name or from_name
+            # iter90bz + iter90dw : cle SANS reference mais AVEC counterpart
+            # => fusionne mutations partageant date+label+counterpart
             key = (
-                "MUT-AGG",  # marqueur du bucket "mutations agregees"
+                "MUT-AGG",
                 m.get("date", ""),
                 m.get("account_number", "") or "",
-                norm_mutation,
+                norm_label,
+                counterpart.strip().lower(),
                 m.get("journal_type", "") or "",
                 m.get("third_party_id", "") or "",
             )
@@ -122,7 +152,9 @@ def _group_movements_by_owner(movements: list) -> list:
             b = dict(m)
             b["debit"] = float(m.get("debit", 0) or 0)
             b["credit"] = float(m.get("credit", 0) or 0)
-            b["_norm_mutation_label"] = norm_mutation  # temp interne
+            b["_norm_mutation"] = norm  # tuple ou None
+            if norm:
+                b["_counterpart"] = counterpart
             buckets[key] = b
             counts[key] = 1
             order.append(key)
@@ -135,14 +167,18 @@ def _group_movements_by_owner(movements: list) -> list:
         b = buckets[key]
         b["debit"] = round(b["debit"], 2)
         b["credit"] = round(b["credit"], 2)
-        # iter90bz : reformater la description si mutations agregees
-        norm = b.pop("_norm_mutation_label", None)
+        # iter90bz + iter90dw : reformater la description si N > 1
+        # (les mutations uniques gardent leur description originale = plus precis)
+        norm = b.pop("_norm_mutation", None)
+        counterpart = b.pop("_counterpart", "")
         if norm and counts[key] > 1:
-            # "Mutation lots - Prorata appel Q1" => "Mutations (30 lots) - Prorata appel Q1"
-            label_suffix = norm.removeprefix("Mutation lots - ")
-            b["description"] = f"Mutations ({counts[key]} lots) - {label_suffix}"
-            # Reference groupee : "MUT-AGG-{count}"
-            b["reference"] = f"MUT-AGG ({counts[key]})"
+            norm_label, _from, _to = norm
+            label_suffix = norm_label.removeprefix("Mutation lots - ")
+            n = counts[key]
+            cp = counterpart or _to or _from
+            arrow = f" -> {cp}" if cp else ""
+            b["description"] = f"Mutations ({n} lots) - {label_suffix}{arrow}"
+            b["reference"] = f"MUT-AGG ({n})"
         result.append(b)
     return result
 
@@ -255,8 +291,9 @@ async def _build_situation_compte_pdf(db, owner_id, copropriete_id, start_date=N
     movements.sort(key=lambda x: (x["date"], x.get("reference", "")))
 
     # iter90bv : fusion des lignes d'un meme proprietaire pour tous ses lots
+    # iter90dw : passe self_owner_name pour differencier les mutations par counterpart
     if group_by_owner:
-        movements = _group_movements_by_owner(movements)
+        movements = _group_movements_by_owner(movements, self_owner_name=owner.get("name", ""))
 
     syndic_info = {
         "name": copro.get("syndic_name") or copro.get("name", "Syndic"),
@@ -2109,8 +2146,11 @@ def create_reports_router(db):
         # iter90bv : fusion des lignes d'un meme proprietaire pour tous ses lots.
         # Un appel de fonds VE cree N lignes debit par lot ; on les cumule en 1.
         # `group_by_owner=false` pour audit / vue detaillee par lot.
+        # iter90dw : passe self_owner_name pour differencier les mutations par counterpart
         if group_by_owner:
-            movements = _group_movements_by_owner(movements)
+            movements = _group_movements_by_owner(
+                movements, self_owner_name=(owner or {}).get("name", ""),
+            )
 
         running = 0
         for m in movements:
