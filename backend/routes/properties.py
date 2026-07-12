@@ -1214,6 +1214,12 @@ def create_properties_router(db):
         sale_date: str  # ISO YYYY-MM-DD
         sale_price: Optional[float] = 0.0
         note: Optional[str] = ""
+        # iter90dk : lots supplementaires appartenant au meme vendeur qui sont
+        # aussi cedes lors de cette mutation (checklist frontend). Le lot cible
+        # (lot_id du path) ET ses enfants parent-lot sont TOUJOURS inclus. Ce
+        # champ permet en plus d'inclure des lots INDEPENDANTS du meme vendeur
+        # (ex : parking non lie parent-enfant a l'appart).
+        additional_lot_ids: List[str] = []
 
     # ---- LIENS ENTRE LOTS (regroupements appartement + cave/parking) ----
     class LotLinkInput(BaseModel):
@@ -1651,6 +1657,77 @@ def create_properties_router(db):
             "total_transfer": total_transfer,
         }
 
+    @router.get("/lots/{lot_id}/mutation-candidates")
+    async def get_mutation_candidates(lot_id: str):
+        """iter90dk : Liste des lots pouvant etre mutes en meme temps que
+        le lot cible (checklist frontend). Le decoupage :
+
+        - `primary_lot`  : le lot cible (obligatoirement mute, non decochable).
+        - `children`     : lots enfants (parent_lot_id = lot_id).
+                           Pre-selectionnes et non decochables (lien technique).
+        - `other_owner_lots` : autres lots INDEPENDANTS du meme proprietaire.
+                           Pre-selectionnes = false. L'utilisateur coche ceux
+                           qu'il souhaite muter simultanement.
+
+        Refuse si `lot_id` est un enfant (parent_lot_id non vide) : il faut
+        muter le lot parent.
+        """
+        lot = await db.lots.find_one({"id": lot_id}, {"_id": 0})
+        if not lot:
+            raise HTTPException(404, "Lot non trouve")
+        if lot.get("parent_lot_id"):
+            other = await db.lots.find_one(
+                {"id": lot["parent_lot_id"]}, {"_id": 0, "number": 1},
+            )
+            raise HTTPException(400, (
+                f"Ce lot est lie au lot parent {other.get('number','?') if other else '?'} - "
+                "mutez le parent."
+            ))
+        old_owner_id = lot.get("owner_id", "")
+        copro_id = lot.get("copropriete_id", "")
+        if not old_owner_id:
+            return {"primary_lot": lot, "children": [], "other_owner_lots": []}
+
+        # Enfants (parent_lot_id = lot_id) - toujours pre-selectionnes.
+        children = await db.lots.find(
+            {"parent_lot_id": lot_id},
+            {"_id": 0, "id": 1, "number": 1, "type": 1, "unit": 1,
+             "quotity": 1, "owner_id": 1},
+        ).to_list(100)
+
+        # Autres lots INDEPENDANTS du meme proprietaire.
+        child_ids = [c["id"] for c in children]
+        others_cursor = db.lots.find(
+            {
+                "copropriete_id": copro_id,
+                "owner_id": old_owner_id,
+                "id": {"$nin": [lot_id] + child_ids},
+                # exclure lots dont parent est deja dans notre groupe (evite doublons)
+                "$or": [
+                    {"parent_lot_id": {"$exists": False}},
+                    {"parent_lot_id": ""},
+                    {"parent_lot_id": None},
+                ],
+            },
+            {"_id": 0, "id": 1, "number": 1, "type": 1, "unit": 1,
+             "quotity": 1, "parent_lot_id": 1},
+        ).sort("number", 1)
+        other_owner_lots = await others_cursor.to_list(500)
+
+        # Compact primary lot response
+        primary_lot = {
+            "id": lot.get("id"),
+            "number": lot.get("number"),
+            "type": lot.get("type"),
+            "unit": lot.get("unit"),
+            "quotity": lot.get("quotity"),
+        }
+        return {
+            "primary_lot": primary_lot,
+            "children": children,
+            "other_owner_lots": other_owner_lots,
+        }
+
     @router.post("/lots/{lot_id}/mutate")
     async def mutate_lot(lot_id: str, data: LotMutationInput):
         """Mutation d'un lot (vente entre proprietaires). Calcule et passe l'OD
@@ -1659,6 +1736,10 @@ def create_properties_router(db):
         Si le lot a des enfants lies (autres lots dont parent_lot_id = lot_id),
         la mutation est appliquee a TOUS les lots du groupe (mutation groupee).
         Chaque lot recoit sa propre ecriture OD et son propre mutation_record.
+
+        iter90dk : `data.additional_lot_ids` permet en plus d'inclure des lots
+        INDEPENDANTS du meme vendeur (checklist frontend). Les lots doivent
+        appartenir au meme old_owner_id ET a la meme ACP, sinon 400.
 
         Refuse si le lot vise est un enfant (parent_lot_id non vide) :
         l'utilisateur doit muter le lot parent pour declencher la mutation groupee.
@@ -1706,7 +1787,31 @@ def create_properties_router(db):
             if ch.get("owner_id") != old_owner_id:
                 raise HTTPException(400, f"Lot enfant {ch.get('number','?')} a un proprietaire different - lien incoherent. Deliez-le ou alignez les proprietaires.")
 
-        all_lots = [lot] + children
+        # iter90dk : lots additionnels selectionnes par l'utilisateur (checklist).
+        # Doivent appartenir au meme vendeur ET a la meme ACP. Deduplique.
+        additional_lots = []
+        add_ids = [x for x in (data.additional_lot_ids or []) if x]
+        already_ids = {lot_id} | {c["id"] for c in children}
+        add_ids = [x for x in add_ids if x not in already_ids]
+        if add_ids:
+            add_lots_docs = await db.lots.find(
+                {"id": {"$in": add_ids}}, {"_id": 0},
+            ).to_list(500)
+            found_ids = {l["id"] for l in add_lots_docs}
+            missing = [x for x in add_ids if x not in found_ids]
+            if missing:
+                raise HTTPException(400, f"Lot(s) additionnel(s) introuvable(s) : {missing}")
+            for al in add_lots_docs:
+                if al.get("copropriete_id") != copro_id:
+                    raise HTTPException(400, f"Lot {al.get('number','?')} n'appartient pas a la meme ACP")
+                if al.get("owner_id") != old_owner_id:
+                    raise HTTPException(400, f"Lot {al.get('number','?')} n'a pas le meme vendeur ({old_owner.get('name','?')})")
+                if al.get("parent_lot_id"):
+                    # Ne devrait pas arriver (l'endpoint mutation-candidates les filtre)
+                    raise HTTPException(400, f"Lot {al.get('number','?')} est enfant d'un autre lot - deliez-le d'abord")
+                additional_lots.append(al)
+
+        all_lots = [lot] + children + additional_lots
 
         # ----- Helper iter84++ : regeneration des appels FUTURS apres mutation -----
         async def _regenerate_future_calls_after_mutation(
@@ -2244,6 +2349,44 @@ def create_properties_router(db):
             "total_transfer": mut.get("total_transfer", 0),
         }
 
+        # iter90dk : cherche les mutations "soeurs" (meme grouped_parent_lot_id =
+        # lot_id courant, meme date, meme old_owner). Chaque lot a sa propre
+        # mutation mais elles font partie du meme "groupe" (parent-enfant OU
+        # lots additionnels selectionnes en checklist par le vendeur).
+        lots_group = [{"lot": lot, "breakdown": breakdown}]
+        sale_dt_str = mut.get("date", "")
+        old_owner_id = mut.get("old_owner_id", "")
+        if lot.get("copropriete_id") and sale_dt_str and old_owner_id:
+            sibling_lots = await db.lots.find(
+                {"copropriete_id": lot.get("copropriete_id"),
+                 "id": {"$ne": lot_id},
+                 "mutations": {"$exists": True, "$ne": []}},
+                {"_id": 0},
+            ).to_list(1000)
+            for sl in sibling_lots:
+                sl_muts = sl.get("mutations") or []
+                for sm in sl_muts:
+                    if (sm.get("grouped_parent_lot_id") == lot_id
+                            and sm.get("date") == sale_dt_str
+                            and sm.get("old_owner_id") == old_owner_id
+                            and sm.get("new_owner_id") == mut.get("new_owner_id")):
+                        lots_group.append({
+                            "lot": sl,
+                            "breakdown": {
+                                "roulement_quota": sm.get("roulement_quota", 0),
+                                "current_period_prorata": sm.get("current_period_prorata",
+                                                                  sm.get("prorata_provisions", 0)),
+                                "current_period_details": sm.get("current_period_details")
+                                                          or sm.get("prorata_details") or [],
+                                "future_calls": sm.get("future_calls") or [],
+                                "future_calls_total": sm.get("future_calls_total", 0),
+                                "budget_frequency": sm.get("budget_frequency"),
+                                "budget_frequency_label": sm.get("budget_frequency_label", ""),
+                                "total_transfer": sm.get("total_transfer", 0),
+                            },
+                        })
+                        break
+
         from pdf_layout import resolve_syndic_pdf_context
         syndic_pdf_ctx = await resolve_syndic_pdf_context(db, copro)
         pdf_bytes = build_mutation_decompte_pdf(
@@ -2251,6 +2394,7 @@ def create_properties_router(db):
             seller=seller, buyer=buyer,
             mutation=mut, breakdown=breakdown,
             syndic_pdf_ctx=syndic_pdf_ctx,
+            lots_group=lots_group,
         )
 
         sale_date = (mut.get("date", "") or "").replace("-", "")
@@ -2291,7 +2435,27 @@ def create_properties_router(db):
 
         # Recupere les lots enfants lies (mutation groupee)
         children = await db.lots.find({"parent_lot_id": lot_id}, {"_id": 0}).to_list(100)
-        all_lots = [lot] + children
+
+        # iter90dk : lots additionnels choisis par le vendeur (checklist frontend)
+        additional_lots = []
+        add_ids = [x for x in (data.additional_lot_ids or []) if x]
+        already_ids = {lot_id} | {c["id"] for c in children}
+        add_ids = [x for x in add_ids if x not in already_ids]
+        if add_ids:
+            add_lots_docs = await db.lots.find(
+                {"id": {"$in": add_ids}}, {"_id": 0},
+            ).to_list(500)
+            for al in add_lots_docs:
+                # Validation stricte : meme ACP + meme vendeur, pas d'enfant.
+                if al.get("copropriete_id") != copro_id:
+                    raise HTTPException(400, f"Lot {al.get('number','?')} n'appartient pas a la meme ACP")
+                if al.get("owner_id") != old_owner_id:
+                    raise HTTPException(400, f"Lot {al.get('number','?')} n'a pas le meme vendeur")
+                if al.get("parent_lot_id"):
+                    raise HTTPException(400, f"Lot {al.get('number','?')} est enfant d'un autre lot")
+                additional_lots.append(al)
+
+        all_lots = [lot] + children + additional_lots
 
         per_lot = []
         agg = {
@@ -2320,6 +2484,8 @@ def create_properties_router(db):
             **root_payload,
             "per_lot_breakdowns": per_lot,
             "linked_lots_count": len(children),
+            # iter90dk : nombre de lots additionnels manuellement selectionnes
+            "additional_lots_count": len(additional_lots),
             # Totaux agreges
             "grouped_total_roulement": agg["roulement_quota"],
             "grouped_total_current_prorata": agg["current_period_prorata"],

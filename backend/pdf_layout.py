@@ -175,14 +175,20 @@ def build_recipient_address_flowable(recipient: dict, small_style) -> Table:
 
 
 def build_header_with_logo(logo_bytes: Optional[bytes], cabinet_info: dict, small_style) -> Table:
-    """Construit le header PDF avec logo a gauche + infos cabinet.
+    """Construit le header PDF avec logo a gauche + coordonnees cabinet a droite.
 
-    `cabinet_info` = syndic_config dict (legal_name, address, city, phone, email, bce, ipi_number).
+    iter90dl : le nom du cabinet n'est PLUS affiche en texte (deja present dans
+    le logo graphique). Seules les coordonnees sont listees a droite du logo :
+      - Adresse ligne 1
+      - Code postal + ville
+      - Email · Telephone
+      - Agrement IPI
+
+    `cabinet_info` = syndic_config dict (address, city, phone, email, ipi_number, ...).
     """
     logo_flow = load_logo_image(logo_bytes)
-    # Bloc texte cabinet a droite du logo
-    name = cabinet_info.get("legal_name") or cabinet_info.get("display_name") or "Syndic"
-    lines = [f"<b>{name}</b>"]
+    # Bloc texte cabinet a droite du logo : SANS le nom (dans le logo).
+    lines = []
     addr = cabinet_info.get("address", "")
     if addr:
         lines.append(addr)
@@ -195,6 +201,12 @@ def build_header_with_logo(logo_bytes: Optional[bytes], cabinet_info: dict, smal
     ipi = cabinet_info.get("ipi_number", "")
     if ipi:
         lines.append(f"Agrement IPI : {ipi}")
+    # Fallback : si aucune coord (config vide), affiche au moins le nom pour
+    # que le header ne soit pas totalement vide.
+    if not lines:
+        fallback_name = cabinet_info.get("legal_name") or cabinet_info.get("display_name") or ""
+        if fallback_name:
+            lines.append(fallback_name)
 
     cabinet_para = Paragraph("<br/>".join(lines), small_style)
     left_cell = logo_flow if logo_flow else Paragraph("", small_style)

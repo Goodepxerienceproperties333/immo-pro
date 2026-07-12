@@ -374,8 +374,19 @@ function MutationDialog({ lot, owners, ownersRefresh, onClose, onDone }) {
   const [preview, setPreview] = useState(null);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
+  // iter90dk : checklist multi-lots
+  const [candidates, setCandidates] = useState(null);
+  const [additionalLotIds, setAdditionalLotIds] = useState([]);
 
   const newOwnerId = newOwnerIds[0] || '';
+
+  // Fetch candidates once when dialog opens
+  useEffect(() => {
+    if (!lot?.id) { setCandidates(null); setAdditionalLotIds([]); return; }
+    api.get(`/lots/${lot.id}/mutation-candidates`)
+      .then(r => setCandidates(r.data))
+      .catch(() => setCandidates(null));
+  }, [lot?.id]);
 
   // Auto preview when newOwnerId and saleDate set
   useEffect(() => {
@@ -385,10 +396,11 @@ function MutationDialog({ lot, owners, ownersRefresh, onClose, onDone }) {
       new_owner_id: newOwnerId,
       sale_date: saleDate,
       sale_price: 0,
+      additional_lot_ids: additionalLotIds,
     }).then(r => setPreview(r.data))
       .catch(err => toast.error(err.response?.data?.detail || 'Erreur preview'))
       .finally(() => setLoading(false));
-  }, [lot, newOwnerId, saleDate]);
+  }, [lot, newOwnerId, saleDate, additionalLotIds]);
 
   const handleConfirm = async () => {
     if (!newOwnerId) { toast.error('Selectionnez un acquereur'); return; }
@@ -398,6 +410,7 @@ function MutationDialog({ lot, owners, ownersRefresh, onClose, onDone }) {
         new_owner_id: newOwnerId,
         sale_date: saleDate,
         note,
+        additional_lot_ids: additionalLotIds,
       });
       toast.success('Mutation enregistree');
       onDone();
@@ -406,6 +419,12 @@ function MutationDialog({ lot, owners, ownersRefresh, onClose, onDone }) {
     } finally {
       setBusy(false);
     }
+  };
+
+  const toggleAdditionalLot = (lotId) => {
+    setAdditionalLotIds((prev) =>
+      prev.includes(lotId) ? prev.filter(x => x !== lotId) : [...prev, lotId]
+    );
   };
 
   const handleCancelMutation = async (mutationId) => {
@@ -446,16 +465,18 @@ function MutationDialog({ lot, owners, ownersRefresh, onClose, onDone }) {
           </div>
 
           {/* Bandeau mutation groupee */}
-          {preview && preview.linked_lots_count > 0 && (
+          {preview && (preview.linked_lots_count > 0 || preview.additional_lots_count > 0) && (
             <div className="rounded-md border-2 border-indigo-300 bg-indigo-50 p-3" data-testid="grouped-mutation-banner">
               <div className="flex items-center gap-2 text-sm">
                 <Link2 size={16} className="text-indigo-700" />
                 <span className="font-semibold text-indigo-900">
-                  Mutation groupee : {preview.linked_lots_count + 1} lots seront mutes ensemble
+                  Mutation groupee : {(preview.linked_lots_count || 0) + (preview.additional_lots_count || 0) + 1} lots seront mutes ensemble
                 </span>
               </div>
               <div className="text-xs text-indigo-700 mt-1.5">
-                Lot principal : <b>{lot?.number}</b> + {preview.linked_lots_count} lot(s) lie(s).
+                Lot principal : <b>{lot?.number}</b>
+                {preview.linked_lots_count > 0 && ` + ${preview.linked_lots_count} lot(s) lie(s) (parent-enfant)`}
+                {preview.additional_lots_count > 0 && ` + ${preview.additional_lots_count} lot(s) selectionne(s) manuellement`}.
                 Chaque lot recevra sa propre ecriture OD.
               </div>
               {preview.per_lot_breakdowns && preview.per_lot_breakdowns.length > 0 && (
@@ -502,6 +523,68 @@ function MutationDialog({ lot, owners, ownersRefresh, onClose, onDone }) {
             <label className="form-label">Date de la vente *</label>
             <Input type="date" value={saleDate} onChange={e => setSaleDate(e.target.value)} data-testid="mutation-sale-date" />
           </div>
+
+          {/* iter90dk : Checklist des lots du meme vendeur */}
+          {candidates && (candidates.children?.length > 0 || candidates.other_owner_lots?.length > 0) && (
+            <div className="rounded-md border border-blue-300 bg-blue-50 p-3" data-testid="mutation-multi-lots-checklist">
+              <div className="text-xs font-bold text-blue-900 uppercase tracking-wider mb-2">
+                Lots du vendeur - Selection des lots a muter ensemble
+              </div>
+
+              {/* Children (parent-lot) : cases toujours cochees, non decochables */}
+              {candidates.children?.length > 0 && (
+                <div className="mb-2">
+                  <div className="text-xs text-slate-600 font-medium mb-1">Lots lies (parent-enfant) - obligatoires :</div>
+                  <div className="grid grid-cols-2 gap-1">
+                    {candidates.children.map((c) => (
+                      <label key={c.id} className="flex items-center gap-2 text-xs bg-white border border-slate-200 rounded px-2 py-1.5 opacity-70 cursor-not-allowed">
+                        <input type="checkbox" checked disabled readOnly className="accent-indigo-600" />
+                        <span className="font-mono font-semibold">{c.number}</span>
+                        <span className="text-slate-500">- {c.type || c.unit || 'annexe'}</span>
+                        <span className="ml-auto text-[10px] text-slate-400 font-mono">Q{c.quotity}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Other owner lots : checkable */}
+              {candidates.other_owner_lots?.length > 0 && (
+                <div>
+                  <div className="text-xs text-slate-600 font-medium mb-1">
+                    Autres lots du meme vendeur - cochez ceux egalement cedes a cet acquereur :
+                  </div>
+                  <div className="grid grid-cols-2 gap-1 max-h-56 overflow-auto">
+                    {candidates.other_owner_lots.map((o) => {
+                      const checked = additionalLotIds.includes(o.id);
+                      return (
+                        <label
+                          key={o.id}
+                          className={`flex items-center gap-2 text-xs border rounded px-2 py-1.5 cursor-pointer transition-colors ${checked ? 'bg-indigo-100 border-indigo-400' : 'bg-white border-slate-200 hover:border-indigo-300'}`}
+                          data-testid={`mutation-additional-lot-${o.id}`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => toggleAdditionalLot(o.id)}
+                            className="accent-indigo-600"
+                          />
+                          <span className="font-mono font-semibold">{o.number}</span>
+                          <span className="text-slate-500">- {o.type || o.unit || ''}</span>
+                          <span className="ml-auto text-[10px] text-slate-400 font-mono">Q{o.quotity}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                  {additionalLotIds.length > 0 && (
+                    <div className="mt-2 text-[11px] text-indigo-800 font-medium" data-testid="mutation-additional-count">
+                      {additionalLotIds.length} lot(s) supplementaire(s) selectionne(s)
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
 
           <div>
             <label className="form-label">Note</label>

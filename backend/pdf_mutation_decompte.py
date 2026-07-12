@@ -55,19 +55,28 @@ def build_mutation_decompte_pdf(
     seller: dict, buyer: dict,
     mutation: dict, breakdown: dict,
     syndic_pdf_ctx: dict = None,
+    lots_group: list = None,
 ) -> bytes:
     """Genere le PDF Decompte de mutation.
 
     Args:
         copropriete: dict copropriete (name, reference, address...)
-        lot: dict lot (number, quotity, description...)
+        lot: dict lot PRINCIPAL (number, quotity, description...). Utilise si
+             `lots_group` non fourni (retrocompat single-lot).
         seller: dict owner vendeur (name, address, vcs...)
         buyer: dict owner acheteur (idem)
         mutation: dict mutation_record (date, sale_price, total_transfer, etc.)
-        breakdown: dict resultat de `_compute_mutation_breakdown` (roulement_quota,
-                   current_period_details, future_calls, ...)
+        breakdown: dict resultat de `_compute_mutation_breakdown` (agrege si multi).
         syndic_pdf_ctx: iter90av - contexte cabinet (logo + mentions legales)
+        lots_group: iter90dk - liste [{lot, breakdown}] pour mutation multi-lots.
+                    Si fourni et len > 1, le PDF liste chaque lot separement
+                    (Bloc 1 / 2 / 3). Sinon, fallback single-lot (comportement
+                    original).
     """
+    # iter90dk : uniformise le traitement (single = liste de 1).
+    if not lots_group:
+        lots_group = [{"lot": lot, "breakdown": breakdown}]
+    is_multi_lot = len(lots_group) > 1
     use_new_layout = bool(syndic_pdf_ctx and syndic_pdf_ctx.get("syndic_config"))
     from pdf_layout import (
         build_header_with_logo, build_recipient_address_flowable,
@@ -161,18 +170,19 @@ def build_mutation_decompte_pdf(
     elements.append(tbl)
 
     elements.append(Spacer(1, 6))
-    lot_box = [
-        [
-            Paragraph(f"<b>LOT VENDU</b>", small),
-            Paragraph(f"<b>QUOTITES</b>", small),
-            Paragraph(f"<b>DESCRIPTION</b>", small),
-        ],
-        [
-            Paragraph(f"Lot {lot.get('number','')}", body),
-            Paragraph(f"{lot.get('quotity', 0)}", body),
-            Paragraph(f"{lot.get('description','') or '-'}", body),
-        ],
-    ]
+    # iter90dk : affichage multi-lots (une ligne par lot) ou single (une ligne)
+    lot_box = [[
+        Paragraph("<b>LOT VENDU</b>", small),
+        Paragraph("<b>QUOTITES</b>", small),
+        Paragraph("<b>DESCRIPTION</b>", small),
+    ]]
+    for lg in lots_group:
+        lt = lg.get("lot") or {}
+        lot_box.append([
+            Paragraph(f"Lot {lt.get('number','')}", body),
+            Paragraph(f"{lt.get('quotity', 0)}", body),
+            Paragraph(f"{lt.get('description','') or lt.get('type','') or '-'}", body),
+        ])
     tbl_lot = Table(lot_box, colWidths=[40 * mm, 30 * mm, 106 * mm])
     tbl_lot.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), SLATE_100),
@@ -186,10 +196,11 @@ def build_mutation_decompte_pdf(
     elements.append(tbl_lot)
 
     # ----- RECAP NUMERIQUE -----
-    total_transfer = float(breakdown.get("total_transfer", 0) or 0)
-    fr_quota = float(breakdown.get("roulement_quota", 0) or 0)
-    current_prorata = float(breakdown.get("current_period_prorata", 0) or 0)
-    futures_total = float(breakdown.get("future_calls_total", 0) or 0)
+    # iter90dk : totaux agreges sur tous les lots (single = les breakdowns du seul lot)
+    total_transfer = sum(float(lg["breakdown"].get("total_transfer", 0) or 0) for lg in lots_group)
+    fr_quota = sum(float(lg["breakdown"].get("roulement_quota", 0) or 0) for lg in lots_group)
+    current_prorata = sum(float(lg["breakdown"].get("current_period_prorata", 0) or 0) for lg in lots_group)
+    futures_total = sum(float(lg["breakdown"].get("future_calls_total", 0) or 0) for lg in lots_group)
 
     elements.append(Spacer(1, 8))
     elements.append(Paragraph("Recapitulatif du decompte", h_section))
@@ -229,18 +240,22 @@ def build_mutation_decompte_pdf(
         rule,
     ))
     elements.append(Spacer(1, 4))
-    fr_data = [
-        ["Date ecriture", "Compte", "Libelle", "Quote-part lot", "Montant"],
-        [
+    # iter90dk : une ligne par lot dans "Transfert du fonds de roulement".
+    fr_data = [["Date ecriture", "Compte", "Libelle", "Quote-part lot", "Montant"]]
+    for lg in lots_group:
+        lt = lg.get("lot") or {}
+        bd = lg.get("breakdown") or {}
+        fr_data.append([
             _fmt_date(sale_date),
             "100",
-            f"Fonds de roulement - lot {lot.get('number','')}",
-            f"{lot.get('quotity', 0)}",
-            _fmt_eur(fr_quota),
-        ],
-    ]
+            f"Fonds de roulement - lot {lt.get('number','')}",
+            f"{lt.get('quotity', 0)}",
+            _fmt_eur(float(bd.get("roulement_quota", 0) or 0)),
+        ])
+    if is_multi_lot:
+        fr_data.append(["", "", "", "Total", _fmt_eur(fr_quota)])
     fr_tbl = Table(fr_data, colWidths=[28 * mm, 18 * mm, 70 * mm, 32 * mm, 30 * mm])
-    fr_tbl.setStyle(TableStyle([
+    fr_style_cmds = [
         ("BACKGROUND", (0, 0), (-1, 0), SLATE_100),
         ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
         ("FONTSIZE", (0, 0), (-1, -1), 8),
@@ -250,7 +265,11 @@ def build_mutation_decompte_pdf(
         ("RIGHTPADDING", (0, 0), (-1, -1), 5),
         ("TOPPADDING", (0, 0), (-1, -1), 4),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-    ]))
+    ]
+    if is_multi_lot:
+        fr_style_cmds.append(("BACKGROUND", (0, -1), (-1, -1), BLUE_BG))
+        fr_style_cmds.append(("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"))
+    fr_tbl.setStyle(TableStyle(fr_style_cmds))
     elements.append(fr_tbl)
 
     # ----- BLOC 2 : PRORATA APPELS EN COURS -----
@@ -262,7 +281,15 @@ def build_mutation_decompte_pdf(
         rule,
     ))
     elements.append(Spacer(1, 4))
-    details = breakdown.get("current_period_details") or []
+    # iter90dk : agrege les details de tous les lots. Chaque row porte le
+    # numero de lot en prefixe si multi-lot.
+    details = []
+    for lg in lots_group:
+        lt_num = (lg.get("lot") or {}).get("number", "")
+        for d in ((lg.get("breakdown") or {}).get("current_period_details") or []):
+            d_copy = dict(d)
+            d_copy["_lot_number"] = lt_num
+            details.append(d_copy)
     if not details:
         elements.append(Paragraph(
             "<i>Aucun appel de provisions n'est en cours a la date de vente "
@@ -270,29 +297,40 @@ def build_mutation_decompte_pdf(
             small,
         ))
     else:
-        bloc2_data = [["Appel", "Date appel", "Periode", "Mt vendeur", "J apres / total", "Prorata"]]
+        header_row = (
+            ["Lot", "Appel", "Date appel", "Periode", "Mt vendeur", "J apres / total", "Prorata"]
+            if is_multi_lot else
+            ["Appel", "Date appel", "Periode", "Mt vendeur", "J apres / total", "Prorata"]
+        )
+        bloc2_data = [header_row]
         for d in details:
-            bloc2_data.append([
+            row = [
                 d.get("fund_call_name", ""),
                 _fmt_date(d.get("call_date", "")),
                 f"{_fmt_date(d.get('period_start',''))} -> {_fmt_date(d.get('period_end',''))}",
                 _fmt_eur(d.get("owner_amount", 0)),
                 f"{d.get('days_after','')} / {d.get('total_days','')}",
                 _fmt_eur(d.get("prorata", 0)),
-            ])
-        bloc2_data.append([
-            "", "", "",
-            "", "Sous-total",
-            _fmt_eur(current_prorata),
-        ])
-        bloc2_tbl = Table(bloc2_data, colWidths=[34 * mm, 20 * mm, 44 * mm, 22 * mm, 26 * mm, 32 * mm])
+            ]
+            if is_multi_lot:
+                row = [d.get("_lot_number", "")] + row
+            bloc2_data.append(row)
+        # Sous-total
+        if is_multi_lot:
+            bloc2_data.append(["", "", "", "", "", "Sous-total", _fmt_eur(current_prorata)])
+            col_widths = [14 * mm, 34 * mm, 20 * mm, 40 * mm, 20 * mm, 22 * mm, 28 * mm]
+            right_align_col = 4
+        else:
+            bloc2_data.append(["", "", "", "", "Sous-total", _fmt_eur(current_prorata)])
+            col_widths = [34 * mm, 20 * mm, 44 * mm, 22 * mm, 26 * mm, 32 * mm]
+            right_align_col = 3
+        bloc2_tbl = Table(bloc2_data, colWidths=col_widths)
         bloc2_tbl.setStyle(TableStyle([
             ("BACKGROUND", (0, 0), (-1, 0), SLATE_100),
             ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
             ("FONTSIZE", (0, 0), (-1, -1), 7.5),
             ("GRID", (0, 0), (-1, -1), 0.4, SLATE_300),
-            ("ALIGN", (3, 1), (-1, -1), "RIGHT"),
-            ("ALIGN", (4, 1), (4, -1), "CENTER"),
+            ("ALIGN", (right_align_col, 1), (-1, -1), "RIGHT"),
             ("BACKGROUND", (0, -1), (-1, -1), BLUE_BG),
             ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
             ("LEFTPADDING", (0, 0), (-1, -1), 4),
@@ -303,8 +341,11 @@ def build_mutation_decompte_pdf(
         elements.append(bloc2_tbl)
 
     # ----- BLOC 3 : APPELS FUTURS -----
+    # iter90dk : ancien breakdown a `budget_frequency_label` ; en multi-lot on
+    # prend celui du premier lot (meme valeur pour tous, cle ACP-wide).
+    bf_label = (lots_group[0].get("breakdown") or {}).get("budget_frequency_label", "")
     elements.append(Paragraph(
-        f"3. Appels futurs ({breakdown.get('budget_frequency_label','')})",
+        f"3. Appels futurs ({bf_label})",
         h_section,
     ))
     elements.append(Paragraph(
@@ -316,7 +357,14 @@ def build_mutation_decompte_pdf(
         rule,
     ))
     elements.append(Spacer(1, 4))
-    futures = breakdown.get("future_calls") or []
+    # iter90dk : agrege les futures de tous les lots en annotant chaque row du lot
+    futures = []
+    for lg in lots_group:
+        lt_num = (lg.get("lot") or {}).get("number", "")
+        for f in ((lg.get("breakdown") or {}).get("future_calls") or []):
+            f_copy = dict(f)
+            f_copy["_lot_number"] = lt_num
+            futures.append(f_copy)
     if not futures:
         elements.append(Paragraph(
             "<i>Aucun appel futur de provisions n'est enregistre pour la "
@@ -339,7 +387,11 @@ def build_mutation_decompte_pdf(
             except Exception:
                 return "Autres"
 
-        bloc3_data = [["Appel", "Date appel", "Periode", "Quote-part lot"]]
+        bloc3_data = [
+            ["Lot", "Appel", "Date appel", "Periode", "Quote-part lot"]
+            if is_multi_lot else
+            ["Appel", "Date appel", "Periode", "Quote-part lot"]
+        ]
         # Style cellule pour wrap automatique
         cell_left = ParagraphStyle("cell_left", parent=small, alignment=0, leading=10)
         cell_right = ParagraphStyle("cell_right", parent=small, alignment=2, leading=10)
@@ -367,7 +419,7 @@ def build_mutation_decompte_pdf(
                     f.get("amount", f.get("lot_amount", f.get("owner_amount", 0))) or 0
                 )
                 sub_total += amt
-                bloc3_data.append([
+                row = [
                     Paragraph(f.get("fund_call_name", ""), cell_left),
                     Paragraph(_fmt_date(f.get("date", "")), cell_left),
                     Paragraph(
@@ -375,25 +427,39 @@ def build_mutation_decompte_pdf(
                         cell_left,
                     ),
                     Paragraph(_fmt_eur(amt), cell_right),
-                ])
+                ]
+                if is_multi_lot:
+                    row = [Paragraph(f.get("_lot_number", ""), cell_left)] + row
+                bloc3_data.append(row)
             # Sous-total trimestre (fond SLATE_100)
-            bloc3_data.append([
+            subtotal_row = [
                 Paragraph(f"Sous-total {tri}", cell_bold),
                 Paragraph("", cell_left),
                 Paragraph("", cell_left),
                 Paragraph(_fmt_eur(sub_total), cell_bold_right),
-            ])
+            ]
+            if is_multi_lot:
+                subtotal_row = [Paragraph("", cell_left)] + subtotal_row
+            bloc3_data.append(subtotal_row)
             subtotal_row_indexes.append(len(bloc3_data) - 1)
 
         # Ligne finale : sous-total general
-        bloc3_data.append([
+        final_row = [
             Paragraph("", cell_left),
             Paragraph("", cell_left),
             Paragraph("Sous-total appels futurs", cell_bold),
             Paragraph(_fmt_eur(futures_total), cell_bold_right),
-        ])
+        ]
+        if is_multi_lot:
+            final_row = [Paragraph("", cell_left)] + final_row
+        bloc3_data.append(final_row)
 
-        bloc3_tbl = Table(bloc3_data, colWidths=[56 * mm, 24 * mm, 58 * mm, 40 * mm])
+        bloc3_col_widths = (
+            [14 * mm, 50 * mm, 22 * mm, 54 * mm, 38 * mm]
+            if is_multi_lot else
+            [56 * mm, 24 * mm, 58 * mm, 40 * mm]
+        )
+        bloc3_tbl = Table(bloc3_data, colWidths=bloc3_col_widths)
         style_cmds = [
             ("BACKGROUND", (0, 0), (-1, 0), SLATE_100),
             ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
