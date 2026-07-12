@@ -94,15 +94,27 @@ export default function LoginPage() {
   if (isFirstSet) { titleText = 'Definir mon mot de passe'; subtitleText = '1ere connexion : choisissez votre mot de passe'; }
 
   return (
-    <div className="min-h-screen flex">
-      <div className="w-full lg:w-1/2 flex items-center justify-center p-8">
-        <div className="w-full max-w-md">
-          <div className="flex items-center gap-3 mb-8">
-            <img src="/logo-nextge.png" alt="NextGe Copro" className="h-14 w-auto" data-testid="login-logo" />
+    <div
+      className="min-h-screen flex items-center justify-center p-4 sm:p-8 relative"
+      style={{
+        backgroundColor: '#f8fafc',
+        backgroundImage: "url('/logo-nextge.png')",
+        backgroundSize: 'min(720px, 65vw) auto',
+        backgroundPosition: 'center',
+        backgroundRepeat: 'no-repeat',
+      }}
+    >
+      {/* Overlay blanc semi-opaque pour attenuer le logo de fond */}
+      <div className="absolute inset-0 bg-white/78 backdrop-blur-[1px]" aria-hidden="true" />
+
+      <div className="w-full max-w-md relative z-10">
+        <div className="bg-white/95 backdrop-blur-sm shadow-2xl shadow-slate-900/10 rounded-2xl p-8 border border-slate-200/60">
+          <div className="flex items-center justify-center mb-6">
+            <img src="/logo-nextge.png" alt="NextGe Copro" className="h-24 w-auto" data-testid="login-logo" />
           </div>
 
-          <h2 className="text-xl font-bold text-slate-900 mb-1" style={{fontFamily:'Chivo,sans-serif'}}>{titleText}</h2>
-          <p className="text-sm text-slate-500 mb-6">{subtitleText}</p>
+          <h2 className="text-center text-xl font-bold text-slate-900 mb-1" style={{fontFamily:'Chivo,sans-serif'}}>{titleText}</h2>
+          <p className="text-center text-sm text-slate-500 mb-6">{subtitleText}</p>
 
           {info && (
             <div className="bg-blue-50 text-blue-800 text-sm px-4 py-3 rounded-md mb-4 border border-blue-200" data-testid="auth-info">
@@ -243,21 +255,6 @@ export default function LoginPage() {
               <a href="/legal/cookies" target="_blank" rel="noopener noreferrer" className="hover:text-[#022D52] hover:underline" data-testid="login-link-cookies">Cookies</a>
             </div>
           </div>
-        </div>
-      </div>
-
-      <div
-        className="hidden lg:flex lg:w-1/2 relative items-center justify-center bg-gradient-to-br from-[#022D52] via-[#01213e] to-[#02A9AA]"
-      >
-        <div className="text-center px-12">
-          <img src="/logo-nextge.png" alt="NextGe Copro" className="h-32 w-auto mx-auto mb-8 bg-white rounded-2xl p-4 shadow-2xl" />
-          <h3 className="text-white text-3xl font-bold tracking-tight mb-3" style={{fontFamily:'Chivo,sans-serif'}}>
-            NextGe Copro
-          </h3>
-          <p className="text-white/80 text-sm max-w-md mx-auto leading-relaxed">
-            La nouvelle generation de logiciel de gestion pour syndics belges.
-            Comptabilite PCMN, mutations, decomptes, portails proprietaires - tout ce qu&apos;il faut, avec la simplicite en plus.
-          </p>
         </div>
       </div>
     </div>
