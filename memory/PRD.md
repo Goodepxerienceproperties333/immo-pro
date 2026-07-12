@@ -12,6 +12,43 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 
+### Iter90ec (Feb 2026) - Nouvelle nature de depense : refetch PCMN au open
+
+**Ticket utilisateur** (screenshot fourni) :
+> "une fois un compte comptable cree il faut pouvoir recuperer le compte
+> comptable nouvellement cree pour creer la nature de depenses"
+
+**Bug reproduit** : Utilisateur cree le compte 61605 "Frais Peppol" (Custom)
+dans Plan Comptable PCMN. Revient sur la modale de facture, ouvre
+"Nouvelle nature de depense" -> le dropdown "COMPTE PCMN (CLASSE 6)"
+recherche "61605" et retourne "Aucun compte trouve".
+
+**Cause** : `accounts` dans `InvoicesPage.js` est charge une seule fois via
+`Promise.all` au montage initial (ligne ~147). Aucun refetch n'a lieu
+lorsque l'utilisateur ouvre le dialog `newCatDialog` -> la liste locale
+ne contient pas le nouveau compte fraichement cree.
+
+**Fix iter90ec** (InvoicesPage.js) :
+```js
+<Dialog open={newCatDialog} onOpenChange={async (open) => {
+  setNewCatDialog(open);
+  if (open) {
+    const { data } = await api.get('/accounting/pcmn', { params: { class_num: 6 } });
+    setAccounts(data);
+  }
+}}>
+```
+
+Chaque ouverture du dialog "Nouvelle nature de depense" declenche un
+refetch de `/accounting/pcmn?class_num=6`, garantissant que les comptes
+custom crees entre-temps sont bien presents dans le dropdown
+`AccountSearchSelect`.
+
+**Impact** : Bug UX resolu. Aucun impact backend.
+
+
+
+
 ### Iter90eb (Feb 2026) - Lettrage bancaire : en-tete enrichi avec liens existants
 
 **Ticket utilisateur** :

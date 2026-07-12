@@ -1566,7 +1566,17 @@ export default function InvoicesPage() {
       />
 
       {/* Create Expense Category inline dialog */}
-      <Dialog open={newCatDialog} onOpenChange={setNewCatDialog}>
+      <Dialog open={newCatDialog} onOpenChange={async (open) => {
+        setNewCatDialog(open);
+        // iter90ec : refetch les comptes PCMN a l'ouverture pour inclure les
+        // comptes tout juste crees (custom) dans une autre page.
+        if (open) {
+          try {
+            const { data } = await api.get('/accounting/pcmn', { params: { class_num: 6 } });
+            setAccounts(data);
+          } catch (err) { /* silent : fallback sur la liste existante */ }
+        }
+      }}>
         <DialogContent className="max-w-md" data-testid="new-category-dialog">
           <DialogHeader>
             <DialogTitle style={{fontFamily:'Chivo,sans-serif'}}>Nouvelle nature de depense</DialogTitle>
