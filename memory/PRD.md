@@ -12,6 +12,138 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 
+### Iter90df -> 90di (Feb 2026) - Portail proprietaire : multi-ACP, multi-lots locataires, tour guide, import multi-factures
+
+**Tickets utilisateur (session enchainee sur PROD)** :
+
+1. "coté propriétaire, il faut bien que les copropriétés soient affichées pour
+   le multi propriétaire, base toi sur l'adresse email afin d'affecter
+   correctement les ACP aux propriétaires"
+2. "supprimer de la fiche locataire le montant du loyer et ajouter des champs
+   'noms à mentionner sur la boite aux lettres/sonnette'"
+3. "lors de l'assignation d'un locataire le propriétaire peut sélectionner
+   plusieurs lots (checkbox)"
+4. "Lors de la première connexion du propriétaire un mode d'emploi lui explique
+   toutes les possibilités et fonctionnalités... via un pop-up avec différentes
+   étapes... insister sur la responsabilité du propriétaire"
+5. "Dans la partie facturation avoir la possibilité de charger plusieurs
+   fichiers à la fois, chaque fichier lu individuellement, étape par étape"
+
+**Iter90df - Multi-fiches proprietaire (backend `owner_portal.py`)** :
+
+Nouveau helper `_resolve_owner_ids(db, request) -> (owner_ids, primary_owner)`.
+Match par `email` OU `email2` (case-insensitive). Un meme user peut avoir des
+fiches distinctes dans plusieurs ACPs (cas frequent en droit belge). Le
+primary_owner est choisi via score : tier_accounts renseignes > nom present >
+email principal match.
+
+Endpoints impactes (tous supportent multi-fiches maintenant) :
+- `/coproprietes`, `/dashboard`, `/movements`, `/fund-calls`, `/invoices`,
+  `/documents`, `/communications` (+/{id}), `/situation/{copropriete_id}`,
+  `/tenants` (+CRUD), `/attachments/{aid}/download`
+- Query `db.lots` : `{"$or": [{"owner_id": {"$in": owner_ids}}, {"owner_ids": {"$in": owner_ids}}]}`
+- Comptes tiers agreges de toutes les fiches (union des sets)
+- VCS agreges (chaque fiche a son propre `vcs_digits`)
+
+**Fix bloquant mutation (iter90df)** :
+Bug PROD : "Le lot 001 n'est pas dans la cle par defaut" alors que le lot y est
+bien. Cause : match par `lot_id` uniquement, alors que les cles importees
+peuvent avoir des UUID differents des lots actuels (re-import Optipro).
+
+Fix : dans `properties.py:1485` et `fund_calls.py:578`, si le match par `lot_id`
+echoue, fallback sur `lot_number` normalise (sans zeros en tete).
+
+**Iter90dg - Fiche locataire refonte** :
+
+Backend (`owner_portal.py`) :
+- Model `TenantInput` : retire `rent_amount`, ajoute `mailbox_names: str`,
+  remplace `lot_id: str` par `lot_ids: List[str]` (avec `lot_id` optionnel
+  pour backward compat en input)
+- Storage : chaque tenant stocke `lot_ids[]` (source de verite) + `lot_id`
+  = premier element pour compat lecture avec ancien code
+- `create_my_tenant` : verifie que TOUS les lots appartiennent bien au
+  proprietaire, refuse le mix owner/non-owner (403)
+- `update_my_tenant` : verifie ownership sur au moins 1 des lots existants
+  puis sur TOUS les nouveaux. `$unset: {rent_amount: ""}` pour purger le champ
+- `my_tenants` GET : lit `lot_ids[]` ou `lot_id` (fallback legacy), toujours
+  expose `lot_ids[]` en sortie
+- Notifications syndic : listent les lots concernes + les noms boite/sonnette
+
+Frontend (`OwnerPortalPage.js`) :
+- State `tenantForm` : `lot_ids: []`, `mailbox_names: ''`, retire `rent_amount`
+- Table locataires : colonne "Lot(s)" avec badges multiples, colonne
+  "Boite/Sonnette" au lieu de "Loyer"
+- Dialog : liste de checkbox scrollable pour selection lots (data-testids
+  `tenant-lot-checkbox-{id}` + `tenant-lots-checkbox-list`), input
+  `mailbox_names` avec placeholder "Ex : Famille Dupont, Cabinet SPRL Dupont"
+- Compat lecture : `t.lot_ids || [t.lot_id]` pour anciens tenants
+
+**Iter90dh - Tour guide de premiere connexion** :
+
+Nouveau composant `OwnerOnboardingTour.js` (5 etapes) :
+1. **Bienvenue** - "Un principe cle : Vous etes responsable de la mise a jour
+   de vos coordonnees et des informations sur vos locataires. Chaque
+   modification declenche automatiquement une notification au syndic."
+2. **Votre compte & vos appels de fonds** - jauge, prochain paiement,
+   mouvements, filtre periode, alignement avec balance de tiers officielle
+3. **Documents & communications** - documents par categorie (codes couleur),
+   archive emails syndic avec contenu integral
+4. **Vos donnees personnelles** (fond ambre, badge AlertCircle) -
+   VOTRE RESPONSABILITE : maintenir a jour vos coordonnees, syndic
+   automatiquement informe
+5. **Vos locataires** (fond rose, badge AlertCircle) -
+   VOTRE RESPONSABILITE : tenir a jour les baux + noms boite/sonnette,
+   syndic notifie a chaque changement
+
+UX :
+- Dialog shadcn 5 etapes avec header colore par section
+- Progress bar bleue + dots cliquables pour navigation directe
+- Boutons "Precedent" / "Suivant" / "Commencer !"
+- Stockage completion dans `localStorage.owner_tour_completed_v1_{email}` (versionne)
+- Auto-affiche 800ms apres chargement du dashboard si jamais vu
+- Bouton "Revoir le guide" dans le tab **Mon profil** pour re-declencher
+- Data-testids : `owner-tour-dialog`, `owner-tour-next-btn`, `owner-tour-prev-btn`,
+  `owner-tour-finish-btn`, `owner-tour-dot-{i}`, `show-tour-btn`
+
+**Iter90di - Import multi-factures sequentiel (Facturation)** :
+
+`InvoicesPage.js` :
+- Input file `<input multiple>` : accepte plusieurs PDFs a la fois
+- State queue : `pendingAiFiles[]`, `aiBatchTotal`, `aiBatchIndex`
+- Comportement :
+  * 1 fichier -> flow historique (pas de changement)
+  * 2+ fichiers -> queue sequentielle : traite le premier, ouvre le dialog
+    pre-rempli (extraction IA), l'user valide/modifie, save, dialog se ferme
+    et le fichier suivant se charge automatiquement
+- Bouton dynamique : "Facture 2/5" affiche pendant le batch
+- Toast progression : "Facture 2/5 enregistree - passage a la suivante (reste 3)..."
+- Bouton "Annuler" ouvre confirm() : "Il reste N facture(s) a traiter dans le
+  batch. Abandonner tout le batch ?"
+- Fin de batch : toast success "Batch termine : N factures traitees"
+
+**Testing iter90df->di** :
+- Backend : lint clean (Python), curl `/api/owner/movements` renvoie
+  180 lignes closing_balance 25 700 EUR (correct)
+- Frontend : lint clean (JS), smoke test :
+  * Tour affiche a la premiere connexion (localStorage clear)
+  * Etape 1/5 rendue avec encadre "Vous etes responsable"
+  * Navigation Suivant/Precedent/dots fonctionnelle
+  * Fermeture -> `localStorage.owner_tour_completed_v1_{email}` positionne
+- Manque : test e2e complet du tab locataires multi-lots (a faire par user
+  via UI)
+
+**Impact utilisateur (PROD apres redeploy)** :
+- Un proprietaire avec plusieurs fiches (Acacia + un autre immeuble) voit
+  TOUTES ses coproprietes et tous ses lots dans son portail
+- Fiche locataire simplifiee et alignee avec les besoins terrain (boite/sonnette)
+- Multi-lots pour un meme locataire (cas garage + appartement)
+- Onboarding pedagogique clair a la 1ere connexion, avec insistance forte sur
+  la responsabilite proprietaire
+- Encodage rapide de plusieurs factures : batch de 10 PDFs traites en boucle
+  au lieu d'un a la fois
+
+
+
 ### Iter90de (Feb 2026) - Fix "Les charges ont disparues" du portail proprietaire
 
 **Ticket utilisateur** : "Les charges ont disparues de la partie proprietaire" (PROD)

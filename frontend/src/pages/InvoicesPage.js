@@ -44,6 +44,10 @@ export default function InvoicesPage() {
   const [lastAiValues, setLastAiValues] = useState(null);
   const [lastAiExtractionSource, setLastAiExtractionSource] = useState('');
   const [pendingPdf, setPendingPdf] = useState(null); // {file, filename} captured for later attach
+  // Iter90di : queue multi-fichiers pour import IA sequentiel (facture par facture)
+  const [pendingAiFiles, setPendingAiFiles] = useState([]);
+  const [aiBatchTotal, setAiBatchTotal] = useState(0);
+  const [aiBatchIndex, setAiBatchIndex] = useState(0);
   const [attachDialogInv, setAttachDialogInv] = useState(null); // invoice being managed
   const [newCatDialog, setNewCatDialog] = useState(false);
   const [newCatForm, setNewCatForm] = useState({ name: '', account_number: '', description: '' });
@@ -472,6 +476,28 @@ export default function InvoicesPage() {
           });
         } catch (e) { console.warn('Template learn failed', e); }
       }
+      // Iter90di : si des fichiers PDF restent dans la queue -> traiter suivant
+      const queue = pendingAiFiles;
+      if (queue.length > 0) {
+        const [next, ...rest] = queue;
+        setPendingAiFiles(rest);
+        setAiBatchIndex(prev => prev + 1);
+        setInvoiceDialog(false); setPendingPdf(null); setEditingInvoice(null);
+        setLastAiRawText(''); setLastAiSupplierIdGuess(''); setLastAiValues(null); setLastAiExtractionSource('');
+        toast.info(`Facture ${aiBatchIndex}/${aiBatchTotal} enregistree - passage a la suivante (reste ${queue.length})...`, { duration: 3000 });
+        // Petit delay pour laisser le dialog se fermer avant reouverture
+        setTimeout(() => {
+          openCreateInvoice();
+          aiExtractFromPdf(next);
+        }, 300);
+        load();
+        return;
+      }
+      // Fin de queue : reset batch state
+      if (aiBatchTotal > 1) {
+        toast.success(`Batch termine : ${aiBatchTotal} factures traitees`, { duration: 5000 });
+      }
+      setAiBatchTotal(0); setAiBatchIndex(0);
       setInvoiceDialog(false); setPendingPdf(null); setEditingInvoice(null);
       // Reset des state IA
       setLastAiRawText(''); setLastAiSupplierIdGuess(''); setLastAiValues(null); setLastAiExtractionSource('');
@@ -521,14 +547,34 @@ export default function InvoicesPage() {
                 onClick={() => document.getElementById('ai-pdf-input').click()} disabled={aiExtracting}>
                 {aiExtracting ? (
                   <><Loader2 size={16} className="mr-2 animate-spin" /> Extraction IA...</>
+                ) : aiBatchTotal > 1 ? (
+                  <><Sparkles size={16} className="mr-2" /> Facture {aiBatchIndex}/{aiBatchTotal}</>
                 ) : (
-                  <><Sparkles size={16} className="mr-2" /> Importer facture PDF (IA)</>
+                  <><Sparkles size={16} className="mr-2" /> Importer factures PDF (IA)</>
                 )}
               </Button>
-              <input id="ai-pdf-input" type="file" accept="application/pdf" className="hidden" onChange={(e) => {
-                const f = e.target.files?.[0]; if (!f) return;
-                openCreateInvoice();
-                aiExtractFromPdf(f);
+              {/* Iter90di : multiple - permet d'uploader plusieurs factures en une fois.
+                  Chaque fichier est traite individuellement, sequentiellement. */}
+              <input id="ai-pdf-input" type="file" accept="application/pdf" multiple className="hidden" onChange={(e) => {
+                const files = Array.from(e.target.files || []);
+                if (files.length === 0) return;
+                if (files.length === 1) {
+                  // Comportement historique : 1 fichier
+                  setPendingAiFiles([]);
+                  setAiBatchTotal(1);
+                  setAiBatchIndex(1);
+                  openCreateInvoice();
+                  aiExtractFromPdf(files[0]);
+                } else {
+                  // Iter90di : queue sequentielle
+                  const [first, ...rest] = files;
+                  setPendingAiFiles(rest);
+                  setAiBatchTotal(files.length);
+                  setAiBatchIndex(1);
+                  toast.info(`${files.length} factures a traiter - facture 1/${files.length} en cours...`, { duration: 4000 });
+                  openCreateInvoice();
+                  aiExtractFromPdf(first);
+                }
                 e.target.value = '';
               }} />
             </label>
@@ -1325,7 +1371,20 @@ export default function InvoicesPage() {
             </div>
 
             <div className="flex gap-3 justify-end">
-              <Button variant="outline" onClick={() => setInvoiceDialog(false)}>Annuler</Button>
+              <Button variant="outline" onClick={() => {
+                // Iter90di : si queue de fichiers active, demander confirmation
+                if (pendingAiFiles.length > 0 || aiBatchTotal > 1) {
+                  const remaining = pendingAiFiles.length + 1;
+                  if (!window.confirm(`Il reste ${remaining} facture(s) a traiter dans le batch. Abandonner tout le batch ?`)) {
+                    return;
+                  }
+                  setPendingAiFiles([]);
+                  setAiBatchTotal(0);
+                  setAiBatchIndex(0);
+                  toast.info(`Batch abandonne (${remaining} fichier(s) non traites)`);
+                }
+                setInvoiceDialog(false);
+              }}>Annuler</Button>
               <Button
                 onClick={saveInvoice}
                 disabled={aiExtracting}

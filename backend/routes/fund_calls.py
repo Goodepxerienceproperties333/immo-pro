@@ -578,6 +578,19 @@ async def generate_prorata_mut_ods_for_call(db, call_doc: dict) -> dict:
                     (kl for kl in default_key["lots"] if kl.get("lot_id") == lot_id),
                     None,
                 )
+                if not lot_entry_in_key:
+                    # Iter90df : fallback match par lot_number normalise
+                    # (robuste apres re-creation/re-import de lots).
+                    lot_doc = await db.lots.find_one(
+                        {"id": lot_id}, {"_id": 0, "number": 1},
+                    )
+                    if lot_doc:
+                        lot_num_str = str(lot_doc.get("number", "")).lstrip("0") or "0"
+                        lot_entry_in_key = next(
+                            (kl for kl in default_key["lots"]
+                             if (str(kl.get("lot_number", "")).lstrip("0") or "0") == lot_num_str),
+                            None,
+                        )
                 if not lot_entry_in_key or lot_entry_in_key.get("excluded"):
                     continue
                 key_total = sum(

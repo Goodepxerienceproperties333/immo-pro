@@ -23,7 +23,13 @@ OWNER_SELF_EDITABLE = {
 
 
 async def _resolve_owner(db, request: Request) -> dict:
-    """Find the owner record matching the current authenticated user (by email)."""
+    """Find the owner record matching the current authenticated user (by email).
+
+    Retourne LE PREMIER owner match (identite principale). Pour les endpoints
+    qui doivent inclure les fiches multi-ACP (un meme email peut avoir des
+    fiches distinctes dans plusieurs ACPs), utiliser `_resolve_owner_ids` a la
+    place.
+    """
     email = getattr(request.state, "user_email", "") or ""
     if not email:
         raise HTTPException(401, "Not authenticated")
@@ -36,6 +42,46 @@ async def _resolve_owner(db, request: Request) -> dict:
     return owner
 
 
+async def _resolve_owner_ids(db, request: Request) -> tuple:
+    """Iter90df : retourne (owner_ids, primary_owner) pour un proprietaire qui
+    peut avoir plusieurs fiches (une par ACP).
+
+    Match strict par email principal + email2 (aucun matching flou).
+    Toujours normalise en lowercase.
+
+    Le `primary_owner` (premier match, prefere celui qui a un tier_accounts non
+    vide) est retourne pour les infos d'identite : nom, vcs_code, contact...
+    """
+    email = getattr(request.state, "user_email", "") or ""
+    if not email:
+        raise HTTPException(401, "Not authenticated")
+    email_lower = email.lower().strip()
+    # Chercher tous les owners par email ou email2
+    cur = db.owners.find(
+        {"$or": [{"email": email_lower}, {"email2": email_lower}]},
+        {"_id": 0},
+    )
+    owners = await cur.to_list(50)
+    if not owners:
+        raise HTTPException(
+            404,
+            "Aucune fiche proprietaire ne correspond a votre compte. Contactez le syndic.",
+        )
+    # Choisir un primary : preferer celui avec tier_accounts, puis nom non vide
+    def _score(o):
+        s = 0
+        if o.get("tier_accounts"):
+            s += 10
+        if o.get("name"):
+            s += 1
+        if o.get("email") == email_lower:  # preference si email principal
+            s += 5
+        return -s  # sort ascending -> plus haut score en premier
+    owners.sort(key=_score)
+    owner_ids = [o["id"] for o in owners]
+    return owner_ids, owners[0]
+
+
 def create_owner_portal_router(db):
     router = APIRouter(prefix="/api/owner")
 
@@ -46,12 +92,11 @@ def create_owner_portal_router(db):
 
     @router.get("/coproprietes")
     async def my_coproprietes(request: Request):
-        """ACPs where the owner has at least one lot."""
-        owner = await _resolve_owner(db, request)
-        owner_id = owner["id"]
-        # Lots owned (single or multi-owner)
+        """ACPs where the owner has at least one lot (across all owner fiches matching email)."""
+        owner_ids, _ = await _resolve_owner_ids(db, request)
+        # Lots owned (single or multi-owner) - iter90df : accepte multi-fiches
         lots = await db.lots.find(
-            {"$or": [{"owner_id": owner_id}, {"owner_ids": owner_id}]},
+            {"$or": [{"owner_id": {"$in": owner_ids}}, {"owner_ids": {"$in": owner_ids}}]},
             {"_id": 0}
         ).to_list(1000)
         copro_ids = list({l["copropriete_id"] for l in lots if l.get("copropriete_id")})
@@ -107,11 +152,14 @@ def create_owner_portal_router(db):
         Un calcul base sur `distribution` donne 0 EUR pour l'acquereur alors que
         son compte tier est bien debiteur.
         """
-        owner = await _resolve_owner(db, request)
-        owner_id = owner["id"]
+        # Iter90df : support multi-fiches owner (une par ACP) via email match
+        owner_ids, primary_owner = await _resolve_owner_ids(db, request)
+        # Compat avec le reste du code (single-owner variables)
+        owner = primary_owner
+        owner_id_set = set(owner_ids)
 
         lots = await db.lots.find(
-            {"$or": [{"owner_id": owner_id}, {"owner_ids": owner_id}]},
+            {"$or": [{"owner_id": {"$in": owner_ids}}, {"owner_ids": {"$in": owner_ids}}]},
             {"_id": 0}
         ).to_list(1000)
         copro_ids = list({l["copropriete_id"] for l in lots if l.get("copropriete_id")})
@@ -129,12 +177,24 @@ def create_owner_portal_router(db):
                     "reversed": {"$ne": True}, "is_reversal": {"$ne": True}}
             entries = await db.journal_entries.find(je_q, {"_id": 0}).to_list(200000)
 
-            # Comptes tiers de l'owner par ACP
+            # Iter90df : comptes tiers agreges (tous les owners du meme email)
             tier_accounts_by_copro = {}
+            owners_by_id = {}
+            all_owners_docs = await db.owners.find(
+                {"id": {"$in": owner_ids}}, {"_id": 0}
+            ).to_list(len(owner_ids))
+            for o in all_owners_docs:
+                owners_by_id[o["id"]] = o
+                for cp, tacc in (o.get("tier_accounts") or {}).items():
+                    if cp not in tier_accounts_by_copro:
+                        tier_accounts_by_copro[cp] = set()
+                    for a in (tacc.get("provisions", ""), tacc.get("reserve", "")):
+                        if a:
+                            tier_accounts_by_copro[cp].add(a)
+            # Init pour toutes les ACPs ou l'owner a un lot
             for cp in copro_ids:
-                tacc = (owner.get("tier_accounts") or {}).get(cp, {}) or {}
-                accs = {a for a in (tacc.get("provisions", ""), tacc.get("reserve", "")) if a}
-                tier_accounts_by_copro[cp] = accs
+                if cp not in tier_accounts_by_copro:
+                    tier_accounts_by_copro[cp] = set()
 
             # Init stats
             for cp in copro_ids:
@@ -148,8 +208,8 @@ def create_owner_portal_router(db):
                 for ln in e.get("lines", []) or []:
                     tpid = ln.get("third_party_id")
                     acc = ln.get("account_number", "")
-                    # Ligne concernee : tp_owner_id == owner_id OU (tpid vide ET compte in valid_accs)
-                    if tpid == owner_id or (not tpid and acc in valid_accs):
+                    # Ligne concernee : tp_owner_id in owner_ids OU (tpid vide ET compte in valid_accs)
+                    if tpid in owner_id_set or (not tpid and acc in valid_accs):
                         d_val = float(ln.get("debit", 0) or 0)
                         c_val = float(ln.get("credit", 0) or 0)
                         # DEBIT sur tier = charge appelee ; CREDIT = paiement/reduction
@@ -157,14 +217,19 @@ def create_owner_portal_router(db):
                         stats_by_acp[cp]["total_paid"] += c_val
 
             # Bank txns non lettres reconnus par VCS -> credit additionnel
-            if owner.get("vcs_digits"):
+            # Iter90df : accepte les VCS de toutes les fiches owner (multi-ACP)
+            vcs_digits_set = {
+                o.get("vcs_digits", "")
+                for o in all_owners_docs if o.get("vcs_digits")
+            }
+            if vcs_digits_set:
                 unmatched_all = await db.bank_transactions.find(
                     {"copropriete_id": {"$in": copro_ids}, "matched": False},
                     {"_id": 0, "amount": 1, "communication": 1, "copropriete_id": 1},
                 ).to_list(50000)
                 for t in unmatched_all:
                     comm = (t.get("communication") or "").replace("+", "").replace("/", "").replace(" ", "")
-                    if comm == owner["vcs_digits"]:
+                    if comm in vcs_digits_set:
                         cp = t.get("copropriete_id", "")
                         if cp in stats_by_acp:
                             stats_by_acp[cp]["total_paid"] += abs(t.get("amount", 0))
@@ -205,7 +270,7 @@ def create_owner_portal_router(db):
                     for ln in ve.get("lines", []) or []:
                         tpid = ln.get("third_party_id")
                         acc = ln.get("account_number", "")
-                        if tpid == owner_id or (not tpid and acc in valid_accs):
+                        if tpid in owner_id_set or (not tpid and acc in valid_accs):
                             amt = float(ln.get("debit", 0) or 0)
                             if amt > 0.01:
                                 ve_by_fc[fcid] = ve_by_fc.get(fcid, 0.0) + amt
@@ -220,7 +285,7 @@ def create_owner_portal_router(db):
                 # Heuristique : si distribution[owner_id].paid=true, on considere paye
                 # Sinon, on marque en attente (le detail est fait via /movements)
                 dist = next((d for d in fc.get("distribution", [])
-                            if d.get("owner_id") == owner_id), None)
+                            if d.get("owner_id") in owner_id_set), None)
                 is_paid = dist.get("paid", False) if dist else False
                 if not is_paid:
                     pending_calls.append({
@@ -265,11 +330,13 @@ def create_owner_portal_router(db):
 
         Chinese wall : `copropriete_id` doit etre l'une des ACPs du proprietaire.
         """
-        owner = await _resolve_owner(db, request)
-        owner_id = owner["id"]
+        # Iter90df : support multi-fiches owner (une par ACP) via email match
+        owner_ids, primary_owner = await _resolve_owner_ids(db, request)
+        owner = primary_owner
+        owner_id_set = set(owner_ids)
 
         lots = await db.lots.find(
-            {"$or": [{"owner_id": owner_id}, {"owner_ids": owner_id}]},
+            {"$or": [{"owner_id": {"$in": owner_ids}}, {"owner_ids": {"$in": owner_ids}}]},
             {"_id": 0, "copropriete_id": 1},
         ).to_list(1000)
         allowed_copros = list({l["copropriete_id"] for l in lots if l.get("copropriete_id")})
@@ -282,12 +349,21 @@ def create_owner_portal_router(db):
         if not copros_target:
             return {"movements": [], "opening_balance": 0.0, "closing_balance": 0.0}
 
-        # Comptes tiers de l'owner par ACP
+        # Iter90df : comptes tiers agreges de TOUTES les fiches owner du meme email
         tier_accounts_by_copro = {}
+        all_owners_docs = await db.owners.find(
+            {"id": {"$in": owner_ids}}, {"_id": 0, "tier_accounts": 1},
+        ).to_list(len(owner_ids))
+        for o in all_owners_docs:
+            for cp, tacc in (o.get("tier_accounts") or {}).items():
+                if cp not in tier_accounts_by_copro:
+                    tier_accounts_by_copro[cp] = set()
+                for a in (tacc.get("provisions", ""), tacc.get("reserve", "")):
+                    if a:
+                        tier_accounts_by_copro[cp].add(a)
         for cp in copros_target:
-            tacc = (owner.get("tier_accounts") or {}).get(cp, {}) or {}
-            accs = {a for a in (tacc.get("provisions", ""), tacc.get("reserve", "")) if a}
-            tier_accounts_by_copro[cp] = accs
+            if cp not in tier_accounts_by_copro:
+                tier_accounts_by_copro[cp] = set()
 
         # Query : entries dans la periode + hors extournes
         entry_q = {"copropriete_id": {"$in": copros_target},
@@ -320,7 +396,7 @@ def create_owner_portal_router(db):
                 for ln in pe.get("lines", []) or []:
                     tpid = ln.get("third_party_id")
                     acc = ln.get("account_number", "")
-                    if tpid == owner_id or (not tpid and acc in valid_accs):
+                    if tpid in owner_id_set or (not tpid and acc in valid_accs):
                         opening += float(ln.get("debit", 0) or 0)
                         opening -= float(ln.get("credit", 0) or 0)
 
@@ -335,7 +411,7 @@ def create_owner_portal_router(db):
             for ln in e.get("lines", []) or []:
                 tpid = ln.get("third_party_id")
                 acc = ln.get("account_number", "")
-                if not (tpid == owner_id or (not tpid and acc in valid_accs)):
+                if not (tpid in owner_id_set or (not tpid and acc in valid_accs)):
                     continue
                 d_val = float(ln.get("debit", 0) or 0)
                 c_val = float(ln.get("credit", 0) or 0)
@@ -370,8 +446,10 @@ def create_owner_portal_router(db):
     @router.get("/fund-calls")
     async def my_fund_calls(request: Request, copropriete_id: Optional[str] = None):
         """All fund calls where the owner has a distribution (source: fund_calls doc)."""
-        owner = await _resolve_owner(db, request)
-        owner_id = owner["id"]
+        # Iter90df : accepte multi-fiches owner via email match
+        owner_ids, primary_owner = await _resolve_owner_ids(db, request)
+        owner = primary_owner
+        owner_id_set = set(owner_ids)
         q = {}
         if copropriete_id:
             q["copropriete_id"] = copropriete_id
@@ -387,7 +465,7 @@ def create_owner_portal_router(db):
             copro_map = {c["id"]: c for c in copros}
         result = []
         for fc in all_calls:
-            my_share = next((d for d in fc.get("distribution", []) if d.get("owner_id") == owner_id), None)
+            my_share = next((d for d in fc.get("distribution", []) if d.get("owner_id") in owner_id_set), None)
             if not my_share:
                 continue
             copro = copro_map.get(fc.get("copropriete_id", "")) or {}
@@ -411,10 +489,10 @@ def create_owner_portal_router(db):
     @router.get("/invoices")
     async def my_invoices_charges(request: Request, copropriete_id: Optional[str] = None):
         """Invoices that affect this owner via distribution_lines (his share)."""
-        owner = await _resolve_owner(db, request)
-        owner_id = owner["id"]
+        # Iter90df : accepte multi-fiches owner via email match
+        owner_ids, _primary = await _resolve_owner_ids(db, request)
         # Get owner's lots
-        lots_q = {"$or": [{"owner_id": owner_id}, {"owner_ids": owner_id}]}
+        lots_q = {"$or": [{"owner_id": {"$in": owner_ids}}, {"owner_ids": {"$in": owner_ids}}]}
         if copropriete_id:
             lots_q["copropriete_id"] = copropriete_id
         my_lots = await db.lots.find(lots_q, {"_id": 0}).to_list(1000)
@@ -473,8 +551,8 @@ def create_owner_portal_router(db):
         from fastapi.responses import FileResponse
         from pathlib import Path as _Path
         from gridfs_storage import get_invoice_attachments_storage
-        owner = await _resolve_owner(db, request)
-        owner_id = owner["id"]
+        # Iter90df : accepte multi-fiches owner via email match
+        owner_ids, _primary = await _resolve_owner_ids(db, request)
 
         inv = await db.invoices.find_one({"id": invoice_id}, {"_id": 0})
         if not inv:
@@ -482,7 +560,7 @@ def create_owner_portal_router(db):
         # Chinese wall proprietaire : verifie qu'un des lot_id du proprietaire
         # apparait dans distribution_lines.
         my_lots = await db.lots.find(
-            {"$or": [{"owner_id": owner_id}, {"owner_ids": owner_id}],
+            {"$or": [{"owner_id": {"$in": owner_ids}}, {"owner_ids": {"$in": owner_ids}}],
              "copropriete_id": inv.get("copropriete_id", "")},
             {"_id": 0, "id": 1},
         ).to_list(1000)
@@ -527,10 +605,11 @@ def create_owner_portal_router(db):
     @router.get("/documents")
     async def my_documents(request: Request, copropriete_id: Optional[str] = None):
         """Documents from ACPs where the owner has lots."""
-        owner = await _resolve_owner(db, request)
-        owner_id = owner["id"]
+        # Iter90df : accepte multi-fiches owner via email match
+        owner_ids, _primary = await _resolve_owner_ids(db, request)
         lots = await db.lots.find(
-            {"$or": [{"owner_id": owner_id}, {"owner_ids": owner_id}]}, {"_id": 0, "copropriete_id": 1}
+            {"$or": [{"owner_id": {"$in": owner_ids}}, {"owner_ids": {"$in": owner_ids}}]},
+            {"_id": 0, "copropriete_id": 1}
         ).to_list(1000)
         copro_ids = list({l["copropriete_id"] for l in lots if l.get("copropriete_id")})
         if copropriete_id:
@@ -568,16 +647,23 @@ def create_owner_portal_router(db):
         - Chinese wall : `copropriete_id` doit etre l'une des ACPs du proprietaire
         - `dry_run` : masque les emails en dry_run (pas reellement envoyes)
         """
-        owner = await _resolve_owner(db, request)
-        owner_id = owner["id"]
-        emails_owner = [owner.get("email", "").lower().strip()]
-        if owner.get("email2"):
-            emails_owner.append(owner["email2"].lower().strip())
-        emails_owner = [e for e in emails_owner if e]
+        # Iter90df : accepte multi-fiches owner via email match
+        owner_ids, primary_owner = await _resolve_owner_ids(db, request)
+        owner_id_set = set(owner_ids)
+        # Collect all emails (main + email2 of all fiches)
+        emails_owner = []
+        all_owners_docs = await db.owners.find(
+            {"id": {"$in": owner_ids}}, {"_id": 0, "email": 1, "email2": 1},
+        ).to_list(len(owner_ids))
+        for o in all_owners_docs:
+            for e in (o.get("email", ""), o.get("email2", "")):
+                if e:
+                    emails_owner.append(e.lower().strip())
+        emails_owner = list(set(emails_owner))
 
         # ACPs autorisees pour ce proprietaire (chinese wall)
         lots = await db.lots.find(
-            {"$or": [{"owner_id": owner_id}, {"owner_ids": owner_id}]},
+            {"$or": [{"owner_id": {"$in": owner_ids}}, {"owner_ids": {"$in": owner_ids}}]},
             {"_id": 0, "copropriete_id": 1},
         ).to_list(1000)
         allowed_copros = list({l["copropriete_id"] for l in lots if l.get("copropriete_id")})
@@ -594,8 +680,8 @@ def create_owner_portal_router(db):
             "dry_run": {"$ne": True},
             "status": {"$ne": "failed"},
             "$or": [
-                {"owner_ids": owner_id},
-                {"to": {"$in": emails_owner}} if emails_owner else {"owner_ids": owner_id},
+                {"owner_ids": {"$in": owner_ids}},
+                {"to": {"$in": emails_owner}} if emails_owner else {"owner_ids": {"$in": owner_ids}},
             ],
         }
         comms = await db.sent_communications.find(q, {"_id": 0, "body_html": 0}).sort("sent_at", -1).to_list(max(1, min(limit, 500)))
@@ -615,12 +701,18 @@ def create_owner_portal_router(db):
     @router.get("/communications/{comm_id}")
     async def my_communication_detail(comm_id: str, request: Request):
         """Iter90db : contenu HTML complet d'un email pour visualisation portail."""
-        owner = await _resolve_owner(db, request)
-        owner_id = owner["id"]
-        emails_owner = [owner.get("email", "").lower().strip()]
-        if owner.get("email2"):
-            emails_owner.append(owner["email2"].lower().strip())
-        emails_owner = [e for e in emails_owner if e]
+        # Iter90df : accepte multi-fiches owner via email match
+        owner_ids, _primary = await _resolve_owner_ids(db, request)
+        owner_id_set = set(owner_ids)
+        emails_owner = []
+        all_owners_docs = await db.owners.find(
+            {"id": {"$in": owner_ids}}, {"_id": 0, "email": 1, "email2": 1},
+        ).to_list(len(owner_ids))
+        for o in all_owners_docs:
+            for e in (o.get("email", ""), o.get("email2", "")):
+                if e:
+                    emails_owner.append(e.lower().strip())
+        emails_owner = list(set(emails_owner))
 
         comm = await db.sent_communications.find_one({"id": comm_id}, {"_id": 0})
         if not comm:
@@ -629,7 +721,7 @@ def create_owner_portal_router(db):
         # Chinese wall : verifier appartenance
         if comm.get("dry_run") or comm.get("status") == "failed":
             raise HTTPException(404, "Communication indisponible")
-        if owner_id not in (comm.get("owner_ids") or []):
+        if not any(oid in owner_id_set for oid in (comm.get("owner_ids") or [])):
             # Fallback : email dans to
             to_lower = [str(e).lower().strip() for e in (comm.get("to") or [])]
             if not any(e in to_lower for e in emails_owner):
@@ -640,7 +732,7 @@ def create_owner_portal_router(db):
         if copro_id:
             has_lot = await db.lots.find_one(
                 {"copropriete_id": copro_id,
-                 "$or": [{"owner_id": owner_id}, {"owner_ids": owner_id}]},
+                 "$or": [{"owner_id": {"$in": owner_ids}}, {"owner_ids": {"$in": owner_ids}}]},
                 {"_id": 0, "id": 1},
             )
             if not has_lot:
@@ -652,16 +744,20 @@ def create_owner_portal_router(db):
     @router.get("/situation/{copropriete_id}")
     async def my_situation(copropriete_id: str, request: Request):
         """Detailed account situation (mouvements) for owner within a specific ACP."""
-        owner = await _resolve_owner(db, request)
-        owner_id = owner["id"]
+        # Iter90df : accepte multi-fiches owner via email match
+        owner_ids, primary_owner = await _resolve_owner_ids(db, request)
+        owner = primary_owner
         # Verify owner has lots in this ACP
         my_lots = await db.lots.find(
-            {"copropriete_id": copropriete_id, "$or": [{"owner_id": owner_id}, {"owner_ids": owner_id}]},
+            {"copropriete_id": copropriete_id,
+             "$or": [{"owner_id": {"$in": owner_ids}}, {"owner_ids": {"$in": owner_ids}}]},
             {"_id": 0}
         ).to_list(100)
         if not my_lots:
             raise HTTPException(403, "Vous n'avez aucun lot dans cette copropriete")
         my_lot_ids = {l["id"] for l in my_lots}
+        # Iter90df : compat single owner_id pour code aval
+        owner_id = my_lots[0].get("owner_id") or (my_lots[0].get("owner_ids") or [owner["id"]])[0]
 
         movements = []
         # Fund calls - iter90bv : aggreger par (fc_id, name) pour un proprietaire
@@ -916,124 +1012,174 @@ def create_owner_portal_router(db):
     @router.get("/tenants")
     async def my_tenants(request: Request):
         """Tenants associated to the owner's lots only (scope strict)."""
-        owner = await _resolve_owner(db, request)
-        owner_id = owner["id"]
+        # Iter90df : multi-fiches owner via email match
+        owner_ids, _ = await _resolve_owner_ids(db, request)
         lots = await db.lots.find(
-            {"$or": [{"owner_id": owner_id}, {"owner_ids": owner_id}]},
+            {"$or": [{"owner_id": {"$in": owner_ids}}, {"owner_ids": {"$in": owner_ids}}]},
             {"_id": 0, "id": 1, "number": 1, "copropriete_id": 1, "description": 1}
         ).to_list(1000)
         lot_ids = [l["id"] for l in lots]
         if not lot_ids:
             return {"tenants": [], "lots": []}
+        # Iter90dg : tenants supportent lot_ids[] OU lot_id single (legacy)
         tenants = await db.tenants.find(
-            {"lot_id": {"$in": lot_ids}}, {"_id": 0}
+            {"$or": [
+                {"lot_ids": {"$in": lot_ids}},
+                {"lot_id": {"$in": lot_ids}},
+            ]},
+            {"_id": 0},
         ).sort("created_at", -1).to_list(1000)
+        # Normalise en sortie : chaque tenant expose lot_ids[] (source de verite)
+        # meme si stocke en legacy avec lot_id single.
+        for t in tenants:
+            if not t.get("lot_ids"):
+                if t.get("lot_id"):
+                    t["lot_ids"] = [t["lot_id"]]
+                else:
+                    t["lot_ids"] = []
         return {"tenants": tenants, "lots": lots}
 
     class TenantInput(BaseModel):
         name: str
         email: Optional[str] = ""
         phone: Optional[str] = ""
-        lot_id: str
+        # Iter90dg : `lot_ids[]` remplace `lot_id` (compat avec ancien front).
+        lot_ids: Optional[List[str]] = None
+        lot_id: Optional[str] = None  # legacy fallback si le front n'envoie qu'un seul
         lease_start: Optional[str] = ""
         lease_end: Optional[str] = ""
-        rent_amount: Optional[float] = 0.0
+        mailbox_names: Optional[str] = ""  # iter90dg : noms boite/sonnette
+
+    def _resolve_tenant_lot_ids(data: "TenantInput") -> List[str]:
+        """Iter90dg : renvoie la liste de lot_ids depuis TenantInput (compat)."""
+        if data.lot_ids:
+            return [x for x in data.lot_ids if x]
+        if data.lot_id:
+            return [data.lot_id]
+        return []
 
     @router.post("/tenants")
     async def create_my_tenant(data: TenantInput, request: Request):
-        """Owner creates a tenant - the tenant MUST be linked to one of his lots."""
-        owner = await _resolve_owner(db, request)
-        owner_id = owner["id"]
-        lot = await db.lots.find_one(
-            {"id": data.lot_id,
-             "$or": [{"owner_id": owner_id}, {"owner_ids": owner_id}]},
-            {"_id": 0}
-        )
-        if not lot:
-            raise HTTPException(403, "Le lot ne vous appartient pas")
+        """Owner creates a tenant - the tenant MUST be linked to one of his lots.
+
+        Iter90dg : accepte plusieurs lots (checkbox cote UI).
+        """
+        # Iter90df : multi-fiches owner
+        owner_ids, primary_owner = await _resolve_owner_ids(db, request)
+        owner = primary_owner
+        lot_ids_req = _resolve_tenant_lot_ids(data)
+        if not lot_ids_req:
+            raise HTTPException(400, "Au moins un lot est requis")
+        # Verifier que TOUS les lots appartiennent au proprietaire
+        owned_lots = await db.lots.find(
+            {"id": {"$in": lot_ids_req},
+             "$or": [{"owner_id": {"$in": owner_ids}}, {"owner_ids": {"$in": owner_ids}}]},
+            {"_id": 0},
+        ).to_list(len(lot_ids_req))
+        if len(owned_lots) != len(set(lot_ids_req)):
+            raise HTTPException(403, "Au moins un des lots ne vous appartient pas")
+        # Copropriete_id = celle du premier lot (les lots multiples sont dans la meme ACP en general)
+        copro_id = owned_lots[0].get("copropriete_id", "")
         doc = {
             "id": str(uuid.uuid4()),
             "name": data.name.strip(),
             "email": (data.email or "").strip(),
             "phone": (data.phone or "").strip(),
-            "lot_id": data.lot_id,
+            "lot_ids": lot_ids_req,
+            "lot_id": lot_ids_req[0],  # backward compat
             "lease_start": data.lease_start or "",
             "lease_end": data.lease_end or "",
-            "rent_amount": float(data.rent_amount or 0),
-            "copropriete_id": lot.get("copropriete_id", ""),
-            "created_by_owner_id": owner_id,
+            "mailbox_names": (data.mailbox_names or "").strip(),
+            "copropriete_id": copro_id,
+            "created_by_owner_id": owner["id"],
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
         await db.tenants.insert_one(doc)
         # Notify syndic
         copro = await db.coproprietes.find_one(
-            {"id": lot.get("copropriete_id", "")}, {"_id": 0, "name": 1}
+            {"id": copro_id}, {"_id": 0, "name": 1}
+        ) if copro_id else None
+        lots_desc = ", ".join(
+            f"{l.get('number','')} {(l.get('description') or '').strip()}".strip()
+            for l in owned_lots
         )
         await notify_syndic_of_owner_change(
             db, owner,
             change_type="ajouter un locataire",
             summary_lines=[
                 f"Locataire : {doc['name']}",
-                f"Lot : {lot.get('number','')} {(lot.get('description') or '').strip()}".strip(),
+                f"Lots : {lots_desc}",
                 f"Email : {doc['email'] or '-'}",
                 f"GSM : {doc['phone'] or '-'}",
                 f"Bail : {doc['lease_start'] or '-'} -> {doc['lease_end'] or '-'}",
-                f"Loyer : {doc['rent_amount']:.2f} EUR" if doc['rent_amount'] else "Loyer : non renseigne",
+                f"Noms boite/sonnette : {doc['mailbox_names'] or '-'}",
             ],
-            copropriete_ids=[lot.get("copropriete_id", "")] if lot.get("copropriete_id") else [],
+            copropriete_ids=[copro_id] if copro_id else [],
             copropriete_name=(copro or {}).get("name", ""),
         )
         return {k: v for k, v in doc.items() if k != "_id"}
 
     @router.put("/tenants/{tenant_id}")
     async def update_my_tenant(tenant_id: str, data: TenantInput, request: Request):
-        owner = await _resolve_owner(db, request)
-        owner_id = owner["id"]
+        # Iter90df : multi-fiches owner
+        owner_ids, primary_owner = await _resolve_owner_ids(db, request)
+        owner = primary_owner
         existing = await db.tenants.find_one({"id": tenant_id}, {"_id": 0})
         if not existing:
             raise HTTPException(404, "Locataire non trouve")
-        # Ownership check via lot
-        lot = await db.lots.find_one(
-            {"id": existing.get("lot_id", ""),
-             "$or": [{"owner_id": owner_id}, {"owner_ids": owner_id}]},
-            {"_id": 0}
+        # Verifier ownership sur AU MOINS UN des lots actuels
+        existing_lot_ids = existing.get("lot_ids") or (
+            [existing["lot_id"]] if existing.get("lot_id") else []
         )
-        if not lot:
-            raise HTTPException(403, "Ce locataire n'est pas dans l'un de vos lots")
-        # New lot must also belong to owner (if changed)
-        new_lot = lot
-        if data.lot_id and data.lot_id != existing.get("lot_id"):
-            new_lot = await db.lots.find_one(
-                {"id": data.lot_id,
-                 "$or": [{"owner_id": owner_id}, {"owner_ids": owner_id}]},
-                {"_id": 0}
+        if existing_lot_ids:
+            check = await db.lots.find_one(
+                {"id": {"$in": existing_lot_ids},
+                 "$or": [{"owner_id": {"$in": owner_ids}}, {"owner_ids": {"$in": owner_ids}}]},
+                {"_id": 0, "id": 1},
             )
-            if not new_lot:
-                raise HTTPException(403, "Le nouveau lot ne vous appartient pas")
+            if not check:
+                raise HTTPException(403, "Ce locataire n'est pas dans l'un de vos lots")
+        # Nouveaux lots doivent tous appartenir au proprietaire
+        lot_ids_req = _resolve_tenant_lot_ids(data)
+        if not lot_ids_req:
+            raise HTTPException(400, "Au moins un lot est requis")
+        owned_lots = await db.lots.find(
+            {"id": {"$in": lot_ids_req},
+             "$or": [{"owner_id": {"$in": owner_ids}}, {"owner_ids": {"$in": owner_ids}}]},
+            {"_id": 0},
+        ).to_list(len(lot_ids_req))
+        if len(owned_lots) != len(set(lot_ids_req)):
+            raise HTTPException(403, "Au moins un des nouveaux lots ne vous appartient pas")
+        copro_id = owned_lots[0].get("copropriete_id", existing.get("copropriete_id", ""))
         diffs = []
         new_email = (data.email or "").strip()
         new_phone = (data.phone or "").strip()
-        new_rent = float(data.rent_amount or 0)
+        new_mailbox = (data.mailbox_names or "").strip()
         for k, old, new in [
             ("name", existing.get("name", ""), data.name.strip()),
             ("email", existing.get("email", ""), new_email),
             ("phone", existing.get("phone", ""), new_phone),
             ("lease_start", existing.get("lease_start", ""), data.lease_start or ""),
             ("lease_end", existing.get("lease_end", ""), data.lease_end or ""),
-            ("rent_amount", existing.get("rent_amount", 0), new_rent),
-            ("lot_id", existing.get("lot_id", ""), data.lot_id or existing.get("lot_id", "")),
+            ("mailbox_names", existing.get("mailbox_names", ""), new_mailbox),
+            ("lot_ids", existing_lot_ids, lot_ids_req),
         ]:
             if old != new:
                 diffs.append(f"{k} : '{old}' -> '{new}'")
         update = {
             "name": data.name.strip(), "email": new_email, "phone": new_phone,
-            "lot_id": data.lot_id or existing.get("lot_id", ""),
+            "lot_ids": lot_ids_req,
+            "lot_id": lot_ids_req[0],  # backward compat
             "lease_start": data.lease_start or "",
             "lease_end": data.lease_end or "",
-            "rent_amount": new_rent,
-            "copropriete_id": new_lot.get("copropriete_id", existing.get("copropriete_id", "")),
+            "mailbox_names": new_mailbox,
+            "copropriete_id": copro_id,
         }
-        await db.tenants.update_one({"id": tenant_id}, {"$set": update})
+        # Iter90dg : purger l'ancien champ rent_amount pour reflet UI
+        await db.tenants.update_one(
+            {"id": tenant_id},
+            {"$set": update, "$unset": {"rent_amount": ""}},
+        )
         updated = await db.tenants.find_one({"id": tenant_id}, {"_id": 0})
         if diffs:
             copro = await db.coproprietes.find_one(

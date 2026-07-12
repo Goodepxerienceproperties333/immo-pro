@@ -1484,6 +1484,19 @@ def create_properties_router(db):
             None,
         )
         if not lot_entry_in_key:
+            # Iter90df : fallback match par lot_number normalise (sans zeros
+            # en tete). Robuste apres re-creation/re-import de lots (Optipro)
+            # ou apres migration : le lot.id (UUID) peut changer mais le
+            # lot_number reste stable.
+            def _norm(v):
+                return str(v or "").lstrip("0") or "0"
+            lot_num_norm = _norm(lot.get("number"))
+            lot_entry_in_key = next(
+                (kl for kl in default_key["lots"]
+                 if _norm(kl.get("lot_number")) == lot_num_norm),
+                None,
+            )
+        if not lot_entry_in_key:
             raise HTTPException(
                 400,
                 f"Le lot {lot.get('number', '?')} n'est pas dans la cle par defaut "

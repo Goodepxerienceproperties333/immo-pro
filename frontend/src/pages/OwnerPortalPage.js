@@ -12,6 +12,7 @@ import { toast } from 'sonner';
 import { LogOut, Home, Wallet, FileText, Receipt, Megaphone, Building2, User, AlertCircle, CheckCircle2, ArrowDownToLine, Copy, UserCog, Users, Plus, Pencil, Trash2, Save, Eye, Gauge, CalendarClock, PieChart as PieChartIcon, TrendingUp, Clock, Sparkles, Mail, MailOpen, Send, Paperclip } from 'lucide-react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RechartsTooltip } from 'recharts';
 import { sanitizeHtml } from '@/lib/sanitizeHtml';
+import OwnerOnboardingTour, { ownerTourStorageKey } from '@/components/OwnerOnboardingTour';
 
 // Iter90db : palette couleur deterministe par nom de categorie de document
 // (index -> style bordure/fond/texte). Le hash simple s'assure que la meme
@@ -68,6 +69,8 @@ export default function OwnerPortalPage() {
   const [closingBalance, setClosingBalance] = useState(0);
   const [periodStart, setPeriodStart] = useState('');
   const [periodEnd, setPeriodEnd] = useState('');
+  // Iter90dh : tour guide de premiere connexion
+  const [showTour, setShowTour] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   // iter89 : profil editable + tenants self-service
@@ -77,7 +80,8 @@ export default function OwnerPortalPage() {
   const [myLots, setMyLots] = useState([]);
   const [tenantDialog, setTenantDialog] = useState(false);
   const [editingTenant, setEditingTenant] = useState(null);
-  const [tenantForm, setTenantForm] = useState({ name: '', email: '', phone: '', lot_id: '', lease_start: '', lease_end: '', rent_amount: 0 });
+  // iter90dg : rent_amount retire, mailbox_names ajoute, multi-lots (lot_ids[])
+  const [tenantForm, setTenantForm] = useState({ name: '', email: '', phone: '', lot_ids: [], lease_start: '', lease_end: '', mailbox_names: '' });
 
   const loadTenants = async () => {
     try {
@@ -114,6 +118,13 @@ export default function OwnerPortalPage() {
           phone: o.phone || '', phone2: o.phone2 || '',
         });
         await loadTenants();
+        // Iter90dh : affiche le tour guide si pas encore vu
+        try {
+          const key = ownerTourStorageKey(o.email || user?.email || '');
+          if (!localStorage.getItem(key)) {
+            setTimeout(() => setShowTour(true), 800);  // laisse l'UI se poser
+          }
+        } catch { /* localStorage indisponible : skip */ }
       } catch (err) {
         setError(err.response?.data?.detail || 'Erreur de chargement');
       } finally {
@@ -226,24 +237,44 @@ export default function OwnerPortalPage() {
     }
   };
 
-  // iter89 : CRUD locataires self-service
+  // iter89 : CRUD locataires self-service (iter90dg : multi-lots + mailbox_names)
   const openCreateTenant = () => {
     setEditingTenant(null);
-    setTenantForm({ name: '', email: '', phone: '', lot_id: myLots[0]?.id || '', lease_start: '', lease_end: '', rent_amount: 0 });
+    setTenantForm({
+      name: '', email: '', phone: '',
+      lot_ids: myLots.length === 1 ? [myLots[0].id] : [],
+      lease_start: '', lease_end: '', mailbox_names: '',
+    });
     setTenantDialog(true);
   };
   const openEditTenant = (t) => {
     setEditingTenant(t);
     setTenantForm({
       name: t.name || '', email: t.email || '', phone: t.phone || '',
-      lot_id: t.lot_id || '', lease_start: t.lease_start || '',
-      lease_end: t.lease_end || '', rent_amount: t.rent_amount || 0,
+      // Compat : lit lot_ids[] ou lot_id single (legacy)
+      lot_ids: t.lot_ids && t.lot_ids.length > 0
+        ? t.lot_ids
+        : (t.lot_id ? [t.lot_id] : []),
+      lease_start: t.lease_start || '',
+      lease_end: t.lease_end || '',
+      mailbox_names: t.mailbox_names || '',
     });
     setTenantDialog(true);
   };
+  const toggleTenantLot = (lotId) => {
+    setTenantForm(prev => {
+      const has = (prev.lot_ids || []).includes(lotId);
+      return {
+        ...prev,
+        lot_ids: has ? prev.lot_ids.filter(x => x !== lotId) : [...(prev.lot_ids || []), lotId],
+      };
+    });
+  };
   const saveTenant = async () => {
     if (!tenantForm.name?.trim()) { toast.error('Nom obligatoire'); return; }
-    if (!tenantForm.lot_id) { toast.error('Lot obligatoire'); return; }
+    if (!tenantForm.lot_ids || tenantForm.lot_ids.length === 0) {
+      toast.error('Au moins un lot doit etre selectionne'); return;
+    }
     try {
       if (editingTenant) {
         await api.put(`/owner/tenants/${editingTenant.id}`, tenantForm);
@@ -667,8 +698,22 @@ export default function OwnerPortalPage() {
           <TabsContent value="profile" className="mt-0">
             <Card data-testid="profile-card">
               <CardHeader>
-                <CardTitle className="text-base" style={{fontFamily:'Chivo,sans-serif'}}>Mes coordonnees</CardTitle>
-                <p className="text-xs text-slate-500">Modifiez vos informations. Toute modification est automatiquement transmise par email a votre syndic.</p>
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <CardTitle className="text-base" style={{fontFamily:'Chivo,sans-serif'}}>Mes coordonnees</CardTitle>
+                    <p className="text-xs text-slate-500">Modifiez vos informations. Toute modification est automatiquement transmise par email a votre syndic.</p>
+                  </div>
+                  {/* iter90dh : bouton "Revoir le guide" */}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setShowTour(true)}
+                    className="text-xs shrink-0"
+                    data-testid="show-tour-btn"
+                  >
+                    <Sparkles size={13} className="mr-1.5" /> Revoir le guide
+                  </Button>
+                </div>
               </CardHeader>
               <CardContent>
                 {profileForm && (
@@ -756,26 +801,42 @@ export default function OwnerPortalPage() {
                 ) : (
                   <Table>
                     <TableHeader><TableRow>
-                      <TableHead>Locataire</TableHead><TableHead>Lot</TableHead>
+                      <TableHead>Locataire</TableHead><TableHead>Lot(s)</TableHead>
                       <TableHead>Email</TableHead><TableHead>GSM</TableHead>
-                      <TableHead>Bail</TableHead><TableHead className="text-right">Loyer</TableHead>
+                      <TableHead>Bail</TableHead><TableHead>Boite/Sonnette</TableHead>
                       <TableHead className="w-24">Actions</TableHead>
                     </TableRow></TableHeader>
                     <TableBody>
                       {tenants.map(t => {
-                        const lot = myLots.find(l => l.id === t.lot_id);
+                        // Iter90dg : plusieurs lots possibles
+                        const tenantLotIds = t.lot_ids && t.lot_ids.length > 0
+                          ? t.lot_ids
+                          : (t.lot_id ? [t.lot_id] : []);
+                        const tenantLots = tenantLotIds
+                          .map(id => myLots.find(l => l.id === id))
+                          .filter(Boolean);
                         return (
                           <TableRow key={t.id} data-testid={`tenant-row-${t.id}`}>
                             <TableCell className="font-medium text-sm">{t.name}</TableCell>
                             <TableCell className="text-xs">
-                              {lot ? `${lot.number}${lot.description ? ' - ' + lot.description : ''}` : '-'}
+                              {tenantLots.length === 0 ? '-' : (
+                                <div className="flex flex-wrap gap-1">
+                                  {tenantLots.map(l => (
+                                    <Badge key={l.id} variant="outline" className="text-[10px] bg-slate-50">
+                                      {l.number}{l.description ? ' - ' + l.description : ''}
+                                    </Badge>
+                                  ))}
+                                </div>
+                              )}
                             </TableCell>
                             <TableCell className="text-xs font-mono text-slate-600">{t.email || '-'}</TableCell>
                             <TableCell className="text-xs font-mono text-slate-600">{t.phone || '-'}</TableCell>
                             <TableCell className="text-xs text-slate-600">
                               {t.lease_start ? fmtDate(t.lease_start) : '-'} - {t.lease_end ? fmtDate(t.lease_end) : '-'}
                             </TableCell>
-                            <TableCell className="text-right font-mono text-sm">{t.rent_amount ? fmt(t.rent_amount) : '-'}</TableCell>
+                            <TableCell className="text-xs text-slate-700 max-w-[180px] truncate" title={t.mailbox_names || ''}>
+                              {t.mailbox_names || <span className="text-slate-300">-</span>}
+                            </TableCell>
                             <TableCell>
                               <div className="flex gap-1">
                                 <Button variant="ghost" size="sm" onClick={() => openEditTenant(t)} data-testid={`edit-tenant-${t.id}`}><Pencil size={13} /></Button>
@@ -806,11 +867,39 @@ export default function OwnerPortalPage() {
               <Input value={tenantForm.name} onChange={e => setTenantForm({...tenantForm, name: e.target.value})} data-testid="tenant-name" />
             </div>
             <div>
-              <label className="text-[10px] uppercase tracking-wider text-slate-500 mb-1 block">Lot *</label>
-              <select value={tenantForm.lot_id} onChange={e => setTenantForm({...tenantForm, lot_id: e.target.value})} data-testid="tenant-lot" className="w-full border border-slate-200 rounded-md px-3 py-2 text-sm bg-white">
-                <option value="">Selectionner un lot</option>
-                {myLots.map(l => <option key={l.id} value={l.id}>Lot {l.number}{l.description ? ' - ' + l.description : ''}</option>)}
-              </select>
+              <label className="text-[10px] uppercase tracking-wider text-slate-500 mb-1 block">
+                Lot(s) * <span className="text-slate-400 italic normal-case">(cochez un ou plusieurs lots)</span>
+              </label>
+              {myLots.length === 0 ? (
+                <div className="text-xs text-slate-400 italic p-2">Aucun lot enregistre</div>
+              ) : (
+                <div className="border border-slate-200 rounded-md p-2 max-h-40 overflow-y-auto space-y-1 bg-slate-50/50" data-testid="tenant-lots-checkbox-list">
+                  {myLots.map(l => {
+                    const checked = (tenantForm.lot_ids || []).includes(l.id);
+                    return (
+                      <label
+                        key={l.id}
+                        className="flex items-center gap-2 px-2 py-1 rounded cursor-pointer hover:bg-white text-sm"
+                        data-testid={`tenant-lot-checkbox-${l.id}`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => toggleTenantLot(l.id)}
+                          className="w-4 h-4 accent-[#2563EB]"
+                        />
+                        <span className="font-mono text-xs text-slate-500 min-w-[40px]">Lot {l.number}</span>
+                        {l.description && <span className="text-slate-700 truncate">{l.description}</span>}
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
+              {(tenantForm.lot_ids || []).length > 0 && (
+                <div className="text-[10px] text-slate-500 mt-1">
+                  {tenantForm.lot_ids.length} lot(s) selectionne(s)
+                </div>
+              )}
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -822,7 +911,7 @@ export default function OwnerPortalPage() {
                 <Input value={tenantForm.phone} onChange={e => setTenantForm({...tenantForm, phone: e.target.value})} data-testid="tenant-phone" />
               </div>
             </div>
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="text-[10px] uppercase tracking-wider text-slate-500 mb-1 block">Debut bail</label>
                 <Input type="date" value={tenantForm.lease_start} onChange={e => setTenantForm({...tenantForm, lease_start: e.target.value})} data-testid="tenant-lease-start" />
@@ -831,10 +920,20 @@ export default function OwnerPortalPage() {
                 <label className="text-[10px] uppercase tracking-wider text-slate-500 mb-1 block">Fin bail</label>
                 <Input type="date" value={tenantForm.lease_end} onChange={e => setTenantForm({...tenantForm, lease_end: e.target.value})} data-testid="tenant-lease-end" />
               </div>
-              <div>
-                <label className="text-[10px] uppercase tracking-wider text-slate-500 mb-1 block">Loyer (EUR)</label>
-                <Input type="number" step="0.01" value={tenantForm.rent_amount} onChange={e => setTenantForm({...tenantForm, rent_amount: parseFloat(e.target.value) || 0})} data-testid="tenant-rent" />
-              </div>
+            </div>
+            <div>
+              <label className="text-[10px] uppercase tracking-wider text-slate-500 mb-1 block">
+                Noms a mentionner sur la boite aux lettres / sonnette
+              </label>
+              <Input
+                value={tenantForm.mailbox_names}
+                onChange={e => setTenantForm({...tenantForm, mailbox_names: e.target.value})}
+                placeholder="Ex : Famille Dupont, Cabinet SPRL Dupont"
+                data-testid="tenant-mailbox-names"
+              />
+              <p className="text-[10px] text-slate-400 mt-1 italic">
+                Informe le syndic des noms visibles sur la boite/sonnette (utile pour les concierges, coursiers, secours).
+              </p>
             </div>
             <div className="flex gap-2 justify-end pt-2 border-t border-slate-100">
               <Button variant="outline" onClick={() => setTenantDialog(false)}>Annuler</Button>
@@ -850,6 +949,18 @@ export default function OwnerPortalPage() {
       <CommunicationDetailDialog
         commId={selectedComm}
         onClose={() => setSelectedComm(null)}
+      />
+
+      {/* iter90dh : Tour guide de premiere connexion */}
+      <OwnerOnboardingTour
+        open={showTour}
+        onClose={() => setShowTour(false)}
+        onFinish={() => {
+          try {
+            const key = ownerTourStorageKey(owner?.email || user?.email || '');
+            localStorage.setItem(key, new Date().toISOString());
+          } catch { /* skip */ }
+        }}
       />
 
       <footer className="max-w-6xl mx-auto pt-6 pb-4 border-t border-slate-200 mt-8">
