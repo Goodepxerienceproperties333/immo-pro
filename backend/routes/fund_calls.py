@@ -1706,21 +1706,44 @@ def create_fund_calls_router(db):
                 # iter90cb : exclut aussi les lots orphelins (sans owner_id)
                 # pour eviter la perte de valeur sur les shares non attribuables.
                 lots_by_id = {lt["id"]: lt for lt in lots}
-                owned_kls = [
-                    kle for kle in key.get("lots", [])
-                    if not kle.get("excluded")
-                    and lots_by_id.get(kle.get("lot_id"), {}).get("owner_id")
-                ]
-                total_shares = sum(kle["share"] for kle in owned_kls)
-                # iter90cr : fallback si la cle est totalement invalide
-                if not owned_kls or total_shares <= 0:
-                    return _fallback_by_quotity()
-                for kl in owned_kls:
-                    lot = lots_by_id.get(kl.get("lot_id"))
-                    if not lot:
+                # iter90du : index by normalized lot_number for fallback matching
+                # (robuste apres re-import : les lot_ids peuvent avoir change mais
+                # les numeros de lot restent stables).
+                def _norm_lot_num(s: str) -> str:
+                    return (str(s or "")).strip().lstrip("0") or "0"
+                lots_by_number = {}
+                for lt in lots:
+                    lots_by_number[_norm_lot_num(lt.get("number", ""))] = lt
+
+                # Pour chaque entree de la cle, resoud le lot actuel (par lot_id
+                # ou par lot_number normalise). Conserve la SHARE definie dans
+                # la cle (les quotites/shares de la cle sont la source de verite,
+                # meme apres re-import).
+                resolved_kls: list = []  # [(kl, lot)]
+                for kle in key.get("lots", []):
+                    if kle.get("excluded"):
                         continue
+                    kle_lot_id = kle.get("lot_id") or ""
+                    lot = lots_by_id.get(kle_lot_id)
+                    if not lot or not lot.get("owner_id"):
+                        # iter90du fallback : match par lot_number normalise
+                        num_key = _norm_lot_num(kle.get("lot_number", ""))
+                        if num_key and num_key != "0":
+                            candidate = lots_by_number.get(num_key)
+                            if candidate and candidate.get("owner_id"):
+                                lot = candidate
+                    if not lot or not lot.get("owner_id"):
+                        continue
+                    resolved_kls.append((kle, lot))
+
+                total_shares = sum(float(kle.get("share", 0) or 0) for kle, _ in resolved_kls)
+                # iter90cr : fallback si la cle est totalement invalide
+                # (aucune entree resolvable, meme par lot_number)
+                if not resolved_kls or total_shares <= 0:
+                    return _fallback_by_quotity()
+                for kle, lot in resolved_kls:
                     owner = owners_map.get(lot["owner_id"]) or {}
-                    share_ratio = kl["share"] / total_shares if total_shares > 0 else 0
+                    share_ratio = float(kle.get("share", 0) or 0) / total_shares if total_shares > 0 else 0
                     entries.append({
                         "lot_id": lot["id"],
                         "lot_number": lot.get("number", ""),
@@ -1729,7 +1752,7 @@ def create_fund_calls_router(db):
                         "owner_name": owner.get("name", ""),
                         "vcs_code": owner.get("vcs_code", ""),
                         "amount": amount * share_ratio,
-                        "share": float(kl["share"]),
+                        "share": float(kle.get("share", 0) or 0),
                     })
             else:
                 entries = _fallback_by_quotity()
