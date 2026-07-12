@@ -37,8 +37,13 @@ def _fmt_date(s):
         return s
 
 
-def _humanize_label(description, reference, journal_type):
-    """Transform technical labels into something readable for non-accountants."""
+def _humanize_label(description, reference, journal_type, debit=0, credit=0):
+    """Transform technical labels into something readable for non-accountants.
+
+    iter90dv : pour les journaux financiers (FI/BANK), distingue :
+    - CREDIT sur le tier proprietaire = argent recu du proprio -> "Paiement recu"
+    - DEBIT sur le tier proprietaire  = argent verse au proprio -> "Remboursement effectue"
+    """
     desc = (description or "").strip()
     ref = (reference or "").strip()
     # Strip technical [VE], [AC]... prefix
@@ -54,7 +59,18 @@ def _humanize_label(description, reference, journal_type):
     elif journal_type == "AC":
         label_prefix = "Facture : "
     elif journal_type == "FI" or journal_type == "BANK":
-        label_prefix = "Paiement recu : "
+        # iter90dv : detection sens du flux via debit/credit sur le tier proprio
+        try:
+            d = float(debit or 0)
+            c = float(credit or 0)
+        except Exception:
+            d = c = 0
+        if d > c:
+            # Debit sur tier -> argent verse au proprio = remboursement
+            label_prefix = "Remboursement effectue : "
+        else:
+            # Credit sur tier -> argent recu du proprio = paiement
+            label_prefix = "Paiement recu : "
     elif journal_type == "OD":
         label_prefix = "Operation : "
     elif journal_type == "AN":
@@ -291,7 +307,10 @@ def build_situation_compte_pdf(
         d = float(m.get("debit", 0) or 0)
         c = float(m.get("credit", 0) or 0)
         running2 += d - c
-        label = _humanize_label(m.get("description", ""), m.get("reference", ""), m.get("journal_type", ""))
+        label = _humanize_label(
+            m.get("description", ""), m.get("reference", ""),
+            m.get("journal_type", ""), debit=d, credit=c,
+        )
         rows.append([
             _fmt_date(m.get("date", "")),
             Paragraph(label, op_style),

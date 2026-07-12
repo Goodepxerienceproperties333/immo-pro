@@ -12,6 +12,43 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 
+### Iter90dv (Feb 2026) - PDF Situation de compte : distinction "Paiement recu" vs "Remboursement effectue"
+
+**Ticket utilisateur PROD** :
+> "lors d'un paiement a un proprietaire il faut mentionner
+> 'remboursement effectue' au lieu de paiement recu"
+
+**Contexte** : Le PDF Situation de compte utilisait le libelle "Paiement recu :"
+pour TOUS les mouvements de journal FI/BANK sur le compte tier proprietaire,
+independamment du sens (debit ou credit). Screenshot user :
+- 14/04/2026 - "Paiement recu : Matexi" 1 000,00 EUR (correct)
+- 16/04/2026 - "Paiement recu : Matexi" 9 000,00 EUR (INCORRECT : c'est
+  un DEBIT sur le tier -> remboursement de la copro au proprio)
+
+**Fix iter90dv** (`pdf_situation_compte.py::_humanize_label`) :
+- Signature enrichie : `_humanize_label(description, reference, journal_type,
+  debit=0, credit=0)`
+- Pour les journaux FI/BANK :
+  - **CREDIT > DEBIT** sur tier proprio -> "Paiement recu :" (argent recu du proprio)
+  - **DEBIT > CREDIT** sur tier proprio -> "Remboursement effectue :" (argent verse au proprio)
+- Backward-compat : debit=credit=0 (params non passes) -> defaut "Paiement recu"
+- L'appel dans la boucle movements passe deja `d` et `c` calcules.
+
+**Tests iter90dv** (5/5 PASS) :
+1. CREDIT sur tier -> "Paiement recu"
+2. DEBIT sur tier -> "Remboursement effectue"
+3. Journal BANK meme comportement que FI
+4. Backward-compat sans debit/credit -> defaut "Paiement recu"
+5. Autres journaux (VE/AC/OD/AN) non impactes
+
+**Impact PROD** :
+- Aucun script retroactif necessaire : le fix s'applique automatiquement
+  au prochain PDF genere.
+- Pour un proprietaire crediteur (solde negatif du point de vue copro),
+  les paiements sortants (remboursements) affichent maintenant le bon libelle.
+
+
+
 ### Iter90du (Feb 2026) - Fund call: fallback iter90cr utilise les shares originales de la cle (match par lot_number)
 
 **Ticket utilisateur PROD (ACP Acacia)** :
