@@ -1034,6 +1034,13 @@ def create_invoices_router(db):
                     data = await att_storage.download(gid)
                 except Exception:
                     raise HTTPException(404, "Fichier introuvable dans GridFS")
+                # iter90dr : appose la reference interne en haut a droite du PDF.
+                # Non-destructif : seul le flux telecharge est modifie, le
+                # fichier GridFS original reste intact. Utile pour les audits.
+                from pdf_stamp import stamp_pdf_with_reference, is_pdf_bytes
+                internal_ref = inv.get("internal_reference", "")
+                if internal_ref and is_pdf_bytes(data):
+                    data = stamp_pdf_with_reference(data, internal_ref)
                 return Response(
                     content=data,
                     media_type=media_type,
@@ -1042,6 +1049,19 @@ def create_invoices_router(db):
             # Legacy disk fallback
             path = att.get("stored_path", "")
             if path and Path(path).exists():
+                # iter90dr : idem pour le fallback disque
+                from pdf_stamp import stamp_pdf_with_reference, is_pdf_bytes
+                internal_ref = inv.get("internal_reference", "")
+                if internal_ref and str(path).lower().endswith(".pdf"):
+                    with open(path, "rb") as fh:
+                        raw = fh.read()
+                    if is_pdf_bytes(raw):
+                        raw = stamp_pdf_with_reference(raw, internal_ref)
+                        return Response(
+                            content=raw,
+                            media_type=media_type,
+                            headers={"Content-Disposition": disp_header},
+                        )
                 return FileResponse(
                     path, media_type=media_type,
                     headers={"Content-Disposition": disp_header},
