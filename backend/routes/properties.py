@@ -56,6 +56,78 @@ async def _build_mutation_decompte_context(db, lot_id: str, mutation_id: str) ->
     }
 
 
+async def _auto_rebind_phantom_keys_for_new_lot(
+    db, copro_id: str, new_lot_id: str, new_lot_number: str,
+) -> list:
+    """iter90dy : quand un lot est cree (creation manuelle ou re-import),
+    rebind automatiquement les entrees phantom des cles de repartition
+    dont le lot_number correspond.
+
+    Cas d'usage :
+    - Vous supprimez un lot puis le re-creez (typiquement apres import Optipro
+      qui produit de nouveaux UUID).
+    - L'ancienne cle contient toujours l'ancien lot_id (phantom).
+    - Le nouveau lot a le meme numero -> on rebind automatiquement.
+
+    Retourne la liste des cles rebindees pour audit / feedback UI.
+    """
+    if not copro_id or not new_lot_number:
+        return []
+
+    def _norm_num(s: str) -> str:
+        return (str(s or "")).strip().lstrip("0") or "0"
+
+    target_num = _norm_num(new_lot_number)
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    # Cherche toutes les cles de l'ACP avec une entree phantom matchant
+    keys = await db.distribution_keys.find(
+        {"copropriete_id": copro_id}, {"_id": 0},
+    ).to_list(2000)
+    # Ensemble des lot_ids existants (pour identifier les phantoms)
+    existing_lot_ids = set()
+    async for lt in db.lots.find(
+        {"copropriete_id": copro_id}, {"_id": 0, "id": 1},
+    ):
+        existing_lot_ids.add(lt["id"])
+
+    rebound = []
+    for k in keys:
+        modified = False
+        new_lots_arr = []
+        for kle in (k.get("lots") or []):
+            if kle.get("excluded"):
+                new_lots_arr.append(kle)
+                continue
+            kle_lot_id = kle.get("lot_id", "")
+            kle_lot_num = _norm_num(kle.get("lot_number", ""))
+            # Detecte l'entree phantom qui match ce nouveau lot par numero
+            if (kle_lot_id and kle_lot_id not in existing_lot_ids
+                    and kle_lot_num == target_num
+                    and new_lot_id not in [x.get("lot_id") for x in (k.get("lots") or [])]):
+                new_kle = dict(kle)
+                new_kle["lot_id"] = new_lot_id
+                new_kle["lot_number"] = new_lot_number
+                new_kle["iter90dy_auto_rebound_at"] = now_iso
+                new_kle["iter90dy_previous_lot_id"] = kle_lot_id
+                new_lots_arr.append(new_kle)
+                modified = True
+            else:
+                new_lots_arr.append(kle)
+        if modified:
+            await db.distribution_keys.update_one(
+                {"id": k["id"]},
+                {"$set": {"lots": new_lots_arr}},
+            )
+            rebound.append({
+                "key_id": k["id"], "key_name": k.get("name", ""),
+                "lot_number": new_lot_number,
+            })
+    return rebound
+
+
+
+
 def create_properties_router(db):
     router = APIRouter(prefix="/api")
 
@@ -1151,7 +1223,18 @@ def create_properties_router(db):
             "created_at": datetime.now(timezone.utc).isoformat()
         }
         await db.lots.insert_one(doc)
-        return {k: v for k, v in doc.items() if k != "_id"}
+
+        # iter90dy : SMART IMPORT - Auto-rebind des entrees phantom des cles
+        # existantes qui correspondent a ce nouveau lot (matching par lot_number).
+        # Cas d'usage : ACP re-importee apres suppression -> les cles gardent les
+        # anciens lot_ids. Quand on re-cree les lots, on rebind automatiquement.
+        rebound = await _auto_rebind_phantom_keys_for_new_lot(
+            db, copro_id=copro_id, new_lot_id=doc["id"], new_lot_number=doc["number"],
+        )
+        response = {k: v for k, v in doc.items() if k != "_id"}
+        if rebound:
+            response["_rebound_keys"] = rebound  # info dev/audit
+        return response
 
     @router.put("/lots/{lot_id}")
     async def update_lot(lot_id: str, data: LotInput, request: Request):
@@ -1203,10 +1286,47 @@ def create_properties_router(db):
 
     @router.delete("/lots/{lot_id}")
     async def delete_lot(lot_id: str):
+        """iter90dy : cascade sur les cles de repartition.
+
+        Quand un lot est supprime, TOUTES les cles qui le referencent sont
+        mises a jour :
+        - Les entrees pointant vers ce lot_id sont marquees `excluded=True`
+          (soft delete, preserve la trace de share pour audit)
+        - Un champ `iter90dy_orphan_since` est ajoute pour audit
+        - Les journaux fund_calls/OD deja postes ne sont PAS touches
+          (chinese wall comptable)
+        """
+        lot = await db.lots.find_one({"id": lot_id}, {"_id": 0, "number": 1, "copropriete_id": 1})
+        if not lot:
+            raise HTTPException(404, "Lot non trouve")
+
+        # 1) Cascade sur les distribution_keys : mark entries as excluded
+        now_iso = datetime.now(timezone.utc).isoformat()
+        affected_keys = await db.distribution_keys.find(
+            {"copropriete_id": lot.get("copropriete_id", ""), "lots.lot_id": lot_id},
+            {"_id": 0, "id": 1, "name": 1},
+        ).to_list(1000)
+        for k in affected_keys:
+            await db.distribution_keys.update_one(
+                {"id": k["id"]},
+                {"$set": {
+                    "lots.$[entry].excluded": True,
+                    "lots.$[entry].iter90dy_orphan_since": now_iso,
+                }},
+                array_filters=[{"entry.lot_id": lot_id}],
+            )
+
+        # 2) Delete le lot
         result = await db.lots.delete_one({"id": lot_id})
         if result.deleted_count == 0:
             raise HTTPException(404, "Lot non trouve")
-        return {"message": "Lot supprime"}
+        return {
+            "message": "Lot supprime",
+            "cascade": {
+                "distribution_keys_updated": len(affected_keys),
+                "keys": [{"id": k["id"], "name": k.get("name", "")} for k in affected_keys],
+            },
+        }
 
     # ---- MUTATION (vente / changement de proprietaire) ----
     class LotMutationInput(BaseModel):

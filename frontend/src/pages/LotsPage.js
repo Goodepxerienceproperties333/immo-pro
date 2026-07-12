@@ -919,8 +919,17 @@ export default function LotsPage() {
         await api.put(`/lots/${editing.id}`, payload);
         toast.success('Lot modifie');
       } else {
-        await api.post('/lots', payload);
-        toast.success('Lot cree');
+        const { data } = await api.post('/lots', payload);
+        // iter90dy : feedback si des cles phantoms ont ete auto-rebindees
+        const rebound = data?._rebound_keys || [];
+        if (rebound.length > 0) {
+          toast.success(
+            `Lot cree - ${rebound.length} cle(s) auto-reparee(s) par matching lot_number (iter90dy)`,
+            { duration: 6000 }
+          );
+        } else {
+          toast.success('Lot cree');
+        }
       }
       setDialogOpen(false);
       load();
@@ -930,10 +939,22 @@ export default function LotsPage() {
   };
 
   const handleDelete = async (id) => {
-    if (!window.confirm('Supprimer ce lot ?')) return;
-    await api.delete(`/lots/${id}`);
-    toast.success('Lot supprime');
-    load();
+    if (!window.confirm('Supprimer ce lot ?\n\nToutes les entrees des cles de repartition referen\u00e7ant ce lot seront automatiquement marquees excluded=true (iter90dy).')) return;
+    try {
+      const { data } = await api.delete(`/lots/${id}`);
+      const nKeys = data?.cascade?.distribution_keys_updated || 0;
+      if (nKeys > 0) {
+        toast.success(
+          `Lot supprime + ${nKeys} cle(s) mise(s) a jour en cascade (iter90dy)`,
+          { duration: 5000 }
+        );
+      } else {
+        toast.success('Lot supprime');
+      }
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur suppression');
+    }
   };
 
   // iter90cm : Audit ownership diagnostic (identifie les lots dont l'ownership

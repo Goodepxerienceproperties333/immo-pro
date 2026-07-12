@@ -488,7 +488,13 @@ def create_owner_portal_router(db):
 
     @router.get("/invoices")
     async def my_invoices_charges(request: Request, copropriete_id: Optional[str] = None):
-        """Invoices that affect this owner via distribution_lines (his share)."""
+        """Invoices that affect this owner via distribution_lines (his share).
+
+        iter90dz : fallback match par lot_number normalise si le lot_id
+        des distribution_lines ne correspond a aucun lot actuel du proprietaire
+        (cas Acacia : re-import Optipro -> nouveaux lot_ids, distribution_lines
+        pointent vers anciens lot_ids phantoms).
+        """
         # Iter90df : accepte multi-fiches owner via email match
         owner_ids, _primary = await _resolve_owner_ids(db, request)
         # Get owner's lots
@@ -496,13 +502,18 @@ def create_owner_portal_router(db):
         if copropriete_id:
             lots_q["copropriete_id"] = copropriete_id
         my_lots = await db.lots.find(lots_q, {"_id": 0}).to_list(1000)
-        my_lot_ids = {l["id"] for l in my_lots}
+        my_lot_ids = {lt["id"] for lt in my_lots}
+
+        # iter90dz : index par lot_number normalise pour fallback matching
+        def _norm_num(s: str) -> str:
+            return (str(s or "")).strip().lstrip("0") or "0"
+        my_lots_by_number = {_norm_num(lt.get("number", "")): lt for lt in my_lots}
 
         inv_q = {}
         if copropriete_id:
             inv_q["copropriete_id"] = copropriete_id
         else:
-            copro_ids = list({l["copropriete_id"] for l in my_lots})
+            copro_ids = list({lt["copropriete_id"] for lt in my_lots})
             inv_q["copropriete_id"] = {"$in": copro_ids} if copro_ids else "__none__"
 
         invoices = await db.invoices.find(inv_q, {"_id": 0}).sort("date", -1).to_list(10000)
@@ -510,8 +521,16 @@ def create_owner_portal_router(db):
         for inv in invoices:
             my_amount = 0.0
             for dl in inv.get("distribution_lines", []):
-                if dl.get("lot_id") in my_lot_ids:
-                    my_amount += dl.get("amount", 0)
+                dl_lot_id = dl.get("lot_id")
+                dl_amount = float(dl.get("amount", 0) or 0)
+                # iter90dz : essaie d'abord match direct par lot_id
+                if dl_lot_id and dl_lot_id in my_lot_ids:
+                    my_amount += dl_amount
+                    continue
+                # iter90dz : fallback match par lot_number (phantom)
+                dl_lot_num = _norm_num(dl.get("lot_number", ""))
+                if dl_lot_num and dl_lot_num != "0" and dl_lot_num in my_lots_by_number:
+                    my_amount += dl_amount
             if my_amount <= 0:
                 continue
             # iter90cz : expose attachments (id + filename + mime) pour lien
@@ -559,16 +578,28 @@ def create_owner_portal_router(db):
             raise HTTPException(404, "Facture non trouvee")
         # Chinese wall proprietaire : verifie qu'un des lot_id du proprietaire
         # apparait dans distribution_lines.
+        # iter90dz : fallback match par lot_number si lot_id phantom.
         my_lots = await db.lots.find(
             {"$or": [{"owner_id": {"$in": owner_ids}}, {"owner_ids": {"$in": owner_ids}}],
              "copropriete_id": inv.get("copropriete_id", "")},
-            {"_id": 0, "id": 1},
+            {"_id": 0, "id": 1, "number": 1},
         ).to_list(1000)
         my_lot_ids = {lt["id"] for lt in my_lots}
-        has_share = any(
-            (dl.get("lot_id") in my_lot_ids and (dl.get("amount", 0) or 0) > 0)
-            for dl in (inv.get("distribution_lines") or [])
-        )
+        def _norm_num(s: str) -> str:
+            return (str(s or "")).strip().lstrip("0") or "0"
+        my_lot_nums = {_norm_num(lt.get("number", "")) for lt in my_lots}
+        has_share = False
+        for dl in (inv.get("distribution_lines") or []):
+            amt = float(dl.get("amount", 0) or 0)
+            if amt <= 0:
+                continue
+            if dl.get("lot_id") in my_lot_ids:
+                has_share = True
+                break
+            dl_num = _norm_num(dl.get("lot_number", ""))
+            if dl_num and dl_num != "0" and dl_num in my_lot_nums:
+                has_share = True
+                break
         if not has_share:
             raise HTTPException(403, "Vous n'avez pas de part dans cette facture")
 

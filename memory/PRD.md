@@ -12,6 +12,63 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 
+### Iter90dz (Feb 2026) - Portail proprietaire : fallback lot_number pour distribution_lines phantoms
+
+**Ticket utilisateur PROD** :
+> "cote proprietaire on ne voit toujours pas les charges pour l'ACP acacia"
+
+**Cause** : Les `invoices.distribution_lines` referencent des `lot_id` phantoms
+(anciens UUID perdus apres re-import Optipro). Le check exact
+`dl.lot_id in my_lot_ids` echoue -> owner voit 0 charge alors qu'il y en a
+11 850 EUR.
+
+**Fix iter90dz** (`owner_portal.py`) :
+- `my_invoices_charges` (GET /api/owner/invoices) : ajoute fallback match
+  par `lot_number` normalise (`lstrip("0")`) quand le `lot_id` n'existe
+  pas dans les lots actuels de l'owner.
+- Meme logique appliquee sur le download endpoint des attachments
+  (chinese wall protege l'acces).
+
+**Tests iter90dz** (4/4) :
+1. Owner voit les charges via fallback lot_number
+2. Download attachment autorise via fallback lot_number
+3. Non-regression : owner voit toujours via lot_id direct
+4. Non-regression : autre owner reste refuse
+
+
+
+### Iter90dy (Feb 2026) - Prevention structurelle des cles phantoms
+
+**Question utilisateur** :
+> "Pourquoi des cles phantoms peuvent arriver et comment les eviter ?"
+
+**Cause principale identifiee** : re-import Optipro/CSV genere de nouveaux
+lot_ids UUID, les cles referencent les anciens -> phantoms.
+
+**2 preventions implementees** :
+
+**(a) Cascade automatique a la suppression de lot** :
+- `DELETE /api/lots/{id}` met a jour toutes les cles referencant ce lot
+- Les entrees correspondantes sont marquees `excluded=True` avec un
+  `iter90dy_orphan_since` pour audit (soft delete, preserve la trace)
+- Feedback UI : toast "Lot supprime + N cle(s) mise(s) a jour"
+
+**(d) Smart import : auto-rebind au moment de la creation** :
+- `POST /api/lots` avec un `lot_number` matchant une entree phantom
+  d'une cle existante -> rebind automatiquement (nouveau lot_id, share
+  preservee)
+- Champ audit `iter90dy_auto_rebound_at` + `iter90dy_previous_lot_id`
+- Feedback UI : toast "Lot cree - N cle(s) auto-reparee(s)"
+- Helper reutilisable : `_auto_rebind_phantom_keys_for_new_lot(...)`
+
+**Tests iter90dy** (4/4) :
+1. Cascade suppression : entrees marquees excluded ✓
+2. Smart import : rebind par lot_number ✓
+3. No-match : aucun rebind ✓
+4. Duplicate prevention : lot deja bind reste intact ✓
+
+
+
 ### Iter90dw + iter90dx (Feb 2026) - Situation vendeur : grouping par counterpart + audit inversions
 
 **Ticket utilisateur PROD (ACP Acacia)** :
