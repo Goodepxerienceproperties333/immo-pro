@@ -109,11 +109,10 @@ def build_decompte_pdf(
 
     elems = []
 
-    # ---- HEADER : logo + cabinet (nouveau layout iter90av) ----
+    # ---- HEADER : logo + ACP info (iter90dm) ----
     if use_new_layout:
-        cabinet_info = syndic_pdf_ctx.get("syndic_config") or {}
         elems.append(build_header_with_logo(
-            syndic_pdf_ctx.get("logo_bytes"), cabinet_info, small,
+            syndic_pdf_ctx.get("logo_bytes"), copropriete, small,
         ))
         elems.append(Spacer(1, 4 * mm))
         elems.append(build_recipient_address_flowable(owner, small))

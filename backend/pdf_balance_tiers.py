@@ -100,7 +100,7 @@ def build_balance_tiers_pdf(
     if use_new_layout:
         elems.append(build_header_with_logo(
             syndic_pdf_ctx.get("logo_bytes"),
-            syndic_pdf_ctx.get("syndic_config") or {},
+            copropriete,
             small,
         ))
         elems.append(Spacer(1, 4 * mm))

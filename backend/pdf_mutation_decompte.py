@@ -108,12 +108,11 @@ def build_mutation_decompte_pdf(
 
     elements = []
 
-    # ----- HEADER : logo + adresse destinataire (nouveau layout iter90av) -----
+    # ----- HEADER : logo + ACP info (iter90dm) -----
     # Destinataire mutation = acquereur (buyer) pour envoi postal
     if use_new_layout:
-        cabinet_info = syndic_pdf_ctx.get("syndic_config") or {}
         elements.append(build_header_with_logo(
-            syndic_pdf_ctx.get("logo_bytes"), cabinet_info, small,
+            syndic_pdf_ctx.get("logo_bytes"), copropriete, small,
         ))
         elements.append(Spacer(1, 4 * mm))
         elements.append(build_recipient_address_flowable(buyer, small))

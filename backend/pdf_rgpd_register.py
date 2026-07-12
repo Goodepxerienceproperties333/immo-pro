@@ -326,9 +326,17 @@ def build_rgpd_register_pdf(register_data: dict, syndic_pdf_ctx: dict = None) ->
 
     # ---- iter90dj : LOGO CABINET + INFOS (1re page uniquement) ----
     if use_new_layout:
+        # iter90dm : le registre RGPD n'est PAS lie a une ACP. On utilise
+        # les infos du responsable de traitement (controller) comme header.
+        controller = register_data.get("controller") or {}
+        acp_like = {
+            "name": controller.get("societe", ""),
+            "address": controller.get("adresse", ""),
+            "bce": controller.get("bce", ""),
+        }
         story.append(build_header_with_logo(
             syndic_pdf_ctx.get("logo_bytes"),
-            syndic_pdf_ctx.get("syndic_config") or {},
+            acp_like,
             styles["small"],
         ))
         story.append(Spacer(1, 4 * mm))

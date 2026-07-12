@@ -104,7 +104,7 @@ def build_liste_depenses_pdf(
     if use_new_layout:
         elements.append(build_header_with_logo(
             syndic_pdf_ctx.get("logo_bytes"),
-            syndic_pdf_ctx.get("syndic_config") or {},
+            copropriete,
             small,
         ))
         elements.append(Spacer(1, 3 * mm))

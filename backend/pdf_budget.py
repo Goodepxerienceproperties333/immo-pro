@@ -110,7 +110,7 @@ def build_budget_pdf(
     if use_new_layout:
         story.append(build_header_with_logo(
             syndic_pdf_ctx.get("logo_bytes"),
-            syndic_pdf_ctx.get("syndic_config") or {},
+            copropriete,
             body_small,
         ))
         story.append(Spacer(1, 4 * mm))

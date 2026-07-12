@@ -127,11 +127,10 @@ def build_situation_compte_pdf(
 
     elems = []
 
-    # ---- HEADER : logo + infos cabinet (nouveau layout iter90av) ----
+    # ---- HEADER : logo + infos ACP (iter90dm) ----
     if use_new_layout:
-        cabinet_info = syndic_pdf_ctx.get("syndic_config") or {}
         elems.append(build_header_with_logo(
-            syndic_pdf_ctx.get("logo_bytes"), cabinet_info, small,
+            syndic_pdf_ctx.get("logo_bytes"), copropriete, small,
         ))
         elems.append(Spacer(1, 4 * mm))
         # Bloc adresse destinataire alignee fenetre C6 droite

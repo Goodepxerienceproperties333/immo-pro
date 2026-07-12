@@ -174,45 +174,47 @@ def build_recipient_address_flowable(recipient: dict, small_style) -> Table:
     return tbl
 
 
-def build_header_with_logo(logo_bytes: Optional[bytes], cabinet_info: dict, small_style) -> Table:
-    """Construit le header PDF avec logo a gauche + coordonnees cabinet a droite.
+def build_header_with_logo(logo_bytes: Optional[bytes], acp_info: dict, small_style) -> Table:
+    """Construit le header PDF avec logo a gauche + coordonnees de l'ACP a droite.
 
-    iter90dl : le nom du cabinet n'est PLUS affiche en texte (deja present dans
-    le logo graphique). Seules les coordonnees sont listees a droite du logo :
-      - Adresse ligne 1
+    iter90dm : le header n'affiche PLUS les coordonnees du syndic. Le bloc a
+    droite du logo contient uniquement les informations de la copropriete :
+      - Nom (bold)
+      - Adresse
       - Code postal + ville
-      - Email · Telephone
-      - Agrement IPI
+      - BCE (si present)
+      - Reference (si presente)
 
-    `cabinet_info` = syndic_config dict (address, city, phone, email, ipi_number, ...).
+    Les coordonnees du syndic (nom, adresse, IPI, contact) apparaissent
+    uniquement en pied de page via `legal_mentions` (draw_legal_footer).
+
+    `acp_info` = copropriete dict (name, address, postal_code, city, bce,
+    reference, ...).
     """
     logo_flow = load_logo_image(logo_bytes)
-    # Bloc texte cabinet a droite du logo : SANS le nom (dans le logo).
+    # Bloc texte ACP a droite du logo.
     lines = []
-    addr = cabinet_info.get("address", "")
+    name = acp_info.get("name", "")
+    if name:
+        lines.append(f"<b>{name}</b>")
+    addr = acp_info.get("address", "")
     if addr:
         lines.append(addr)
-    ville_line = f"{cabinet_info.get('postal_code','')} {cabinet_info.get('city','')}".strip()
+    ville_line = f"{acp_info.get('postal_code','')} {acp_info.get('city','')}".strip()
     if ville_line:
         lines.append(ville_line)
-    contact = " · ".join(x for x in [cabinet_info.get("email", ""), cabinet_info.get("phone", "")] if x)
-    if contact:
-        lines.append(contact)
-    ipi = cabinet_info.get("ipi_number", "")
-    if ipi:
-        lines.append(f"Agrement IPI : {ipi}")
-    # Fallback : si aucune coord (config vide), affiche au moins le nom pour
-    # que le header ne soit pas totalement vide.
-    if not lines:
-        fallback_name = cabinet_info.get("legal_name") or cabinet_info.get("display_name") or ""
-        if fallback_name:
-            lines.append(fallback_name)
+    bce = acp_info.get("bce", "")
+    if bce:
+        lines.append(f"BCE : {bce}")
+    ref = acp_info.get("reference", "")
+    if ref:
+        lines.append(f"Reference : {ref}")
 
-    cabinet_para = Paragraph("<br/>".join(lines), small_style)
+    acp_para = Paragraph("<br/>".join(lines), small_style)
     left_cell = logo_flow if logo_flow else Paragraph("", small_style)
 
     tbl = Table(
-        [[left_cell, cabinet_para]],
+        [[left_cell, acp_para]],
         colWidths=[50 * mm, 130 * mm],
         rowHeights=[24 * mm],
     )
