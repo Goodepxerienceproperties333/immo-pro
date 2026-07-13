@@ -12,6 +12,43 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 
+### Iter90fk (Feb 2026) - Nettoyage automatique des fiches fournisseurs auto-creees orphelines
+
+**Ticket utilisateur** : "P3 (optionnel, non-bloquant) : nettoyer automatiquement les fiches
+fournisseurs `auto_created` orphelines lors de la suppression d'une facture"
+(suite direct de iter90fj, backlog optionnel valide par l'utilisateur).
+
+**Fix** (`routes/invoices.py`) :
+- Nouvelle fonction `_cleanup_orphan_auto_supplier(supplier_name, copro_id)`
+  appelee APRES la suppression physique de la facture dans
+  `DELETE /api/invoices/{id}`.
+- Regles strictes :
+  1. Ne touche QUE les fiches `auto_created=True` (creees implicitement par
+     `_resolve_or_create_supplier_account` lors de la generation d'une
+     ecriture comptable). Une fiche creee explicitement par le syndic
+     (`POST /api/suppliers`) n'est JAMAIS supprimee automatiquement, meme
+     si elle devient inutilisee.
+  2. Ne supprime que si AUCUNE autre facture de la MEME ACP ne reference
+     encore ce nom (normalise via `_norm_name`, memes regles que le reste
+     du systeme anti-doublon).
+  3. Scope ACP strict (chinese wall) : les fiches auto-creees sont
+     toujours mono-ACP a leur creation, verifier les factures de cette
+     seule ACP est donc suffisant et surtout plus performant qu'un scan
+     global.
+
+**Tests** (`test_iter90fk_cleanup_orphan_auto_supplier.py`, 3/3 verts) :
+- Fiche auto-creee + facture unique -> suppression facture = suppression
+  fiche.
+- Fiche auto-creee + 2 factures -> suppression de la 1ere garde la fiche
+  (encore reference par la 2e), suppression de la 2e supprime la fiche.
+- Fiche creee EXPLICITEMENT (`auto_created` absent) + facture -> apres
+  suppression de la facture, la fiche reste intacte (jamais auto-supprimee).
+
+**Verifie manuellement via curl** (meme scenarios) avant la creation des
+tests pytest -> comportement 100% conforme.
+
+
+
 ### Iter90fj (Feb 2026) - Gate homonyme fournisseur : plus JAMAIS de creation implicite sans accord du syndic
 
 **Ticket utilisateur** :

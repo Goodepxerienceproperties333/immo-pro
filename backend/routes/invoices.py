@@ -1724,6 +1724,40 @@ def create_invoices_router(db):
                     print(f"[unlink-bank] failed for txn {txn.get('id','?')}: {e}")
         return touched
 
+    async def _cleanup_orphan_auto_supplier(supplier_name: str, copro_id: str):
+        """iter90fk : apres suppression d'une facture, si le fournisseur
+        associe est une fiche AUTO-CREEE (`auto_created=True`, generee
+        automatiquement par `_resolve_or_create_supplier_account` lors de la
+        comptabilisation, jamais choisie explicitement par le syndic via
+        `POST /api/suppliers`) ET qu'AUCUNE autre facture de cette ACP ne la
+        reference plus, on la supprime. Evite d'accumuler des fiches
+        orphelines/polluantes au fil des suppressions (tests, corrections
+        d'imports errones, etc.).
+
+        Une fiche creee EXPLICITEMENT par le syndic (`auto_created` absent
+        ou False) n'est JAMAIS supprimee automatiquement, meme si elle
+        devient inutilisee - seul le syndic decide de la retirer.
+
+        Scope ACP strict (chinese wall) : les fiches auto-creees sont
+        toujours rattachees a un unique `copropriete_id` a leur creation
+        (jamais de partage cross-ACP implicite), donc il suffit de verifier
+        les factures de CETTE ACP.
+        """
+        if not supplier_name or not copro_id:
+            return
+        from routes.suppliers import find_duplicate_supplier, _norm_name
+        dup = await find_duplicate_supplier(db, name=supplier_name, copro_id=copro_id)
+        supplier_doc = dup.get("supplier") if dup else None
+        if not supplier_doc or not supplier_doc.get("auto_created"):
+            return
+        norm_target = _norm_name(supplier_doc.get("name", ""))
+        async for inv in db.invoices.find(
+            {"copropriete_id": copro_id}, {"_id": 0, "supplier": 1},
+        ):
+            if _norm_name(inv.get("supplier", "")) == norm_target:
+                return  # encore reference par une autre facture -> on ne touche pas
+        await db.suppliers.delete_one({"id": supplier_doc["id"]})
+
     @router.delete("/invoices/{invoice_id}")
     async def delete_invoice(invoice_id: str):
         from fiscal_lock import ensure_period_open
@@ -1761,6 +1795,12 @@ def create_invoices_router(db):
         result = await db.invoices.delete_one({"id": invoice_id})
         if result.deleted_count == 0:
             raise HTTPException(404, "Facture non trouvee")
+        try:
+            # iter90fk : nettoyage des fiches fournisseurs auto-creees devenues
+            # orphelines (plus aucune facture ne les reference).
+            await _cleanup_orphan_auto_supplier(inv.get("supplier", ""), inv.get("copropriete_id", ""))
+        except Exception as e:
+            print(f"[delete_invoice] cleanup orphan auto supplier failed: {e}")
         return {"message": "Facture supprimee"}
 
     # ---- INVOICE ATTACHMENTS ----
