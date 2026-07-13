@@ -548,6 +548,22 @@ def create_admin_router(db):
         ).to_list(len(entry_ids) + 10)
         if not entries:
             raise HTTPException(404, "Aucune ecriture trouvee dans la liste")
+        # iter90ep : interdiction de supprimer contre-passations & extournes
+        # (integrite audit trail PCMN)
+        blocked = [
+            e for e in entries
+            if e.get("is_reversal") or e.get("reversed")
+        ]
+        if blocked:
+            refs = ", ".join(
+                (b.get("reference") or b.get("id", ""))[:20] for b in blocked[:5]
+            )
+            raise HTTPException(
+                400,
+                f"Impossible de supprimer une contre-passation ou une ecriture "
+                f"extournee (audit trail legal). Ecritures bloquees : {refs}"
+                + (f" (+{len(blocked) - 5} autres)" if len(blocked) > 5 else ""),
+            )
         # Archive dans deleted_entries (audit trail)
         deleted_at = datetime.now(timezone.utc).isoformat()
         archive_docs = [

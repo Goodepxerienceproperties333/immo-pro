@@ -222,8 +222,17 @@ export default function JournalsPage() {
   };
   const [unlettrageEntry, setUnlettrageEntry] = useState(null);
 
-  // iter90en : selection multi + suppression bulk (admin only)
+  // iter90en/iter90ep : selection multi + suppression bulk (superadmin only).
+  // Une contre-passation ou une ecriture extournee ne peut jamais etre
+  // supprimee (integrite audit trail PCMN).
+  const isDeletableEntry = (e) => !e?.is_reversal && !e?.reversed;
+  const deletableEntries = entries.filter(isDeletableEntry);
   const toggleSelect = (id) => {
+    const entry = entries.find(e => e.id === id);
+    if (!isDeletableEntry(entry)) {
+      toast.error("Impossible : les contre-passations et extournes ne sont pas supprimables (audit trail legal)");
+      return;
+    }
     setSelectedIds(prev => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id); else next.add(id);
@@ -231,16 +240,16 @@ export default function JournalsPage() {
     });
   };
   const toggleSelectAll = () => {
-    if (selectedIds.size === entries.length) {
+    if (selectedIds.size === deletableEntries.length) {
       setSelectedIds(new Set());
     } else {
-      setSelectedIds(new Set(entries.map(e => e.id)));
+      setSelectedIds(new Set(deletableEntries.map(e => e.id)));
     }
   };
   const clearSelection = () => setSelectedIds(new Set());
   const openBulkDelete = (selectAll = false) => {
     if (selectAll) {
-      setSelectedIds(new Set(entries.map(e => e.id)));
+      setSelectedIds(new Set(deletableEntries.map(e => e.id)));
     }
     setBulkDeleteReason('');
     setBulkDeleteDialogOpen(true);
@@ -412,9 +421,9 @@ export default function JournalsPage() {
                     onClick={() => openBulkDelete(true)}
                     className="border-red-300 text-red-700 hover:bg-red-50 h-7 text-xs"
                     data-testid="bulk-delete-all-btn"
-                    disabled={entries.length === 0}
+                    disabled={deletableEntries.length === 0}
                   >
-                    <Trash2 size={13} className="mr-1" /> Supprimer TOUT ({entries.length})
+                    <Trash2 size={13} className="mr-1" /> Supprimer TOUT ({deletableEntries.length})
                   </Button>
                 </div>
               </div>
@@ -425,11 +434,12 @@ export default function JournalsPage() {
                   <TableHead className="w-10">
                     <input
                       type="checkbox"
-                      checked={entries.length > 0 && selectedIds.size === entries.length}
+                      checked={deletableEntries.length > 0 && selectedIds.size === deletableEntries.length}
                       onChange={toggleSelectAll}
                       className="cursor-pointer"
                       data-testid="bulk-select-all-checkbox"
-                      title="Tout selectionner"
+                      title="Tout selectionner (hors contre-passations)"
+                      disabled={deletableEntries.length === 0}
                     />
                   </TableHead>
                 )}
@@ -443,13 +453,21 @@ export default function JournalsPage() {
                   <TableRow key={e.id} className={`hover:bg-slate-50/50 ${e.reversed ? 'bg-red-50/30 line-through opacity-70' : ''} ${e.is_reversal ? 'bg-amber-50/40' : ''} ${selectedIds.has(e.id) ? 'bg-red-50/50' : ''}`}>
                     {isSuperadmin && (
                       <TableCell>
-                        <input
-                          type="checkbox"
-                          checked={selectedIds.has(e.id)}
-                          onChange={() => toggleSelect(e.id)}
-                          className="cursor-pointer"
-                          data-testid={`bulk-select-${e.id}`}
-                        />
+                        {isDeletableEntry(e) ? (
+                          <input
+                            type="checkbox"
+                            checked={selectedIds.has(e.id)}
+                            onChange={() => toggleSelect(e.id)}
+                            className="cursor-pointer"
+                            data-testid={`bulk-select-${e.id}`}
+                          />
+                        ) : (
+                          <span
+                            className="inline-block w-3 h-3 rounded-sm bg-slate-200"
+                            title="Contre-passation / extournee : suppression interdite (audit legal)"
+                            data-testid={`bulk-select-blocked-${e.id}`}
+                          />
+                        )}
                       </TableCell>
                     )}
                     <TableCell className="font-mono text-sm">{fmtDate(e.date)}</TableCell>

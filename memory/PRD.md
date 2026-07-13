@@ -12,6 +12,50 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 
+### Iter90ep (Feb 2026) - Bulk delete : blocage des contre-passations & extournes
+
+**Ticket utilisateur** :
+> "cette fonction ne doit être visible QUE du coté super utilisateur il
+> est interdit de supprimmer des contrepassation"
+
+**Contexte** : depuis iter90en, le superadmin peut bulk-supprimer des
+ecritures dans `JournalsPage.js`. L'utilisateur exige que les ecritures
+de type contre-passation (`is_reversal=True`) ainsi que les ecritures
+source deja extournees (`reversed=True`) soient totalement exclues du
+mecanisme de bulk delete (integrite audit trail PCMN).
+
+**Fix iter90ep** :
+
+Backend (`routes/admin.py`) :
+- `bulk_force_delete_entries` verifie chaque `entry_id` : si l'une des
+  ecritures a `is_reversal=True` OU `reversed=True`, la requete est
+  rejetee avec HTTP 400 et un message listant les references bloquees
+  (max 5, puis "+N autres"). Aucune ecriture n'est supprimee (atomique).
+
+Frontend (`pages/JournalsPage.js`) :
+- Helper `isDeletableEntry(e)` = `!e.is_reversal && !e.reversed`.
+- `deletableEntries` = liste filtree, utilisee pour :
+  * Compteur "Supprimer TOUT (N)" (N = deletables seulement)
+  * State de la case "Tout selectionner" (checked/disabled)
+  * Selection lors du clic "Supprimer TOUT"
+- Sur chaque ligne : si non-deletable, la case a cocher est remplacee par
+  un petit carre gris inerte + tooltip "Contre-passation / extournee :
+  suppression interdite (audit legal)".
+- `toggleSelect(id)` refuse la selection si l'ecriture est non-deletable
+  (toast d'erreur, defense en profondeur en cas de bypass DOM).
+
+**Tests** (`test_iter90ep_bulk_delete_rejects_reversals.py`) :
+- Refus 400 si une contre-passation est incluse dans la liste (rien
+  supprime, remaining = 2).
+- Refus 400 si une source extournee est incluse.
+- Regression : suppression normale d'ecritures classiques toujours OK.
+
+**Verifie** : screenshot ACP "Les Alisiers Test" / journal Achats -
+6 ecritures contre-passation/extournee visibles avec case grisee inerte,
+compteur "Supprimer TOUT (16)" (au lieu de 22 = total).
+
+
+
 ### Iter90eo (Feb 2026) - Arrondi EUR entier pour reserve et roulement
 
 **Ticket utilisateur** :
