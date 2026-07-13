@@ -1,121 +1,112 @@
 <analysis>**original_problem_statement**: 
 Créer une application de gestion de copropriété basée sur le droit belge (PCMN), incluant la gestion stricte des rôles, le cloisonnement des données (Chinese Wall), la gestion des imports CODA/Optipro, et les verrous fiscaux. 
-PRODUCT REQUIREMENTS: Génération d'un PDF Décompte de mutation clair, application stricte des règles comptables belges, persistance fiable, portail propriétaire, imports IA, Système légalement blindé. 
-Recent updates: Added toggle for zero-balance tier accounts. Fixed proportional prorata for calls generated *after* a property mutation has occurred (Matexi bug). Fixed budget deletion to correctly reverse MUT-P journal entries. Fixed PDF Situation de compte to exclude reversed entries.
+PRODUCT REQUIREMENTS: Génération d'un PDF Décompte de mutation clair, application stricte des règles comptables belges, persistance fiable, portail propriétaire, imports IA, Système légalement blindé.
 
-**User's preferred language**: French (You MUST respond in French ONLY)
+**User's preferred language**: French (INSTRUCT NEXT AGENT: You MUST automatically detect the user's primary language from their messages inside the <trajectory> tag and INSTRUCT next agent to respond in the user's preferred language ONLY. All UI elements, comments, and communications must be in French.)
 
 **what currently exists?** 
-A highly mature, production-ready Belgian property management application (FastAPI, React, MongoDB). It has strict PCMN accounting logic, legally bulletproof compliance, automated PDF generation, and a modern UI. Recently, the app's mutation logic, fund call attribution, budget deletion cascading, and PDF accounting exports were fortified with robust fixes and idempotency. The testing suite is comprehensive and passes successfully.
+A mature, production-ready Belgian property management application (FastAPI, React, MongoDB) named NextGe Copro. It features strict PCMN accounting logic, an owner portal, automated PDF generation, and a robust backend test suite. The app recently added PCMN-compliant logic to automatically unmatch bank transactions and reverse (counter-pass) journal entries when an invoice is deleted or reverted to draft status.
 
 **Last working item**:
-    - Last item agent was working: The user requested a way to migrate/import data for the production ACP Acacia into the PREVIEW environment for testing. The agent paused this to fix a critical PDF bug the user reported immediately after. The PDF bug is now fixed, so the migration task remains the next actionable item.
-    - Status: NOT STARTED / PENDING USER CLARIFICATION
-    - Agent Testing Done: N
-    - Which testing method agent to use? Python scripts/backend testing
+    - Last item agent was working: Implemented the P0 issue handling invoice deletion and draft reversion. When a validated or paid invoice is deleted or reverted to draft, the backend now automatically unmatches any associated bank transactions and properly reverses the accounting entries () instead of hard-deleting them, preserving the audit trail.
+    - Status: USER VERIFICATION PENDING
+    - Agent Testing Done: Y
+    - Which testing method agent to use? NA (Backend tests written and passed).
     - User Testing Done: N
 
-**All Pending/In progress Issue list**:
-  Issue 1: PROD to PREVIEW Data Migration Scripts for ACP Acacia (P0)
-     - Attempted fixes: The agent asked the user clarifying questions about the scope of the migration (e.g., just owners/lots, or also budgets/fund_calls/journals) and whether PII data like emails and IBANs should be sanitized. 
-     - Next debug checklist: Ask the user to confirm the migration scope and sanitization preferences. Then, provide the user with an export script to run on PROD and an import script to run on PREVIEW. 
-     - Why fix this issue and what will be achieved with the fix? Allows the user to safely debug the Acacia property data in the preview environment without messing up production.
-     - Status: NOT STARTED
-     - Is recurring issue? N
-     - Should Test frontend/backend/both after fix? Backend
+**All Pending/In progress Issue list**:  
+  None active. (Note: The user explicitly cancelled the previous P1 issue PROD to PREVIEW Data Migration Scripts for ACP Acacia. Do not work on it.)
 
 **In progress Task List**:
-  - None active beyond the migration script request.
+  None active.
 
 **Upcoming and Future Tasks**
   - P1: Gestion des compteurs (eau, chauffage, électricité) - Formulaires de relevés, historisation, et calcul de répartition basé sur les consommations.
   - P2: Certificat fiscal annuel.
-  - P3: Admin tool to bulk reset legacy paid invoices (invoices marked paid manually or migrated from Optipro without a bank transaction link) back to unpaid status.
-  - P4: Automated debt collection emails (Job APScheduler quotidien qui identifie les débiteurs et envoie automatiquement une relance selon un template sélectionné).
-  - P5: Further React Component Refactoring ( is still quite large).
+  - P3: Admin tool to bulk reset legacy paid invoices back to unpaid status.
+  - P4: Automated debt collection emails (Job APScheduler quotidien).
+  - P5: Refactor massive components:  (>600 lines), , , .
 
 **Completed work in this session**
-- Added UI toggle to hide zero-balance accounts in  (DONE).
-- Iter90cg: Fixed bug where late fund calls straddling a mutation were attributing to the buyer instead of the seller. Rebind now uses  (DONE).
-- Created data repair script:  for the user to run on PROD (DONE).
-- Iter90ch: Ensured budget deletion/revocation properly reverses  journal entries (DONE).
-- Iter90ci: Fixed PDF Situation de compte bug where reversed entries ( and ) were showing up and corrupting the balance. Reversals are now excluded from the PDF generation (DONE).
+- : Added  in  (DONE).
+- : Modified  to automatically unmatch bank transactions, reverse accounting entries, and delete the invoice (DONE).
+- : Modified  to automatically unmatch and reverse entries when an invoice's status is changed to  (DONE).
+- : Created and passed full backend test suite  (DONE).
 
 **Earlier issues found/mentioned but not fixed**
-   - None clearly pending, the agent resolved all reported bugs.
+   Issue 1: Monolithic architecture
+   - Debug checklist: Break down ,  (approaching 2000 lines),  (~1500 lines), and .
+   - Why to solve this issue and what will be achieved with this? Long-term maintainability.
+   - Should Test frontend/backend/both after fix: Both
+   - Is recurring issue? Y
 
 **Known issue recurrence from previous fork**
   - Issue recurrence in previous fork: Confusion between PREVIEW vs PRODUCTION environments.
-  - Recurrence count: High
+  - Recurrence count: Extremely High
   - Status: ONGOING
-  - Note: Users repeatedly encounter issues in PROD or ask the agent to apply changes/scripts to PROD. The agent DOES NOT have prod access. ALWAYS clarify if the issue is in PROD, and remind them that they must redeploy the preview code to PROD or run scripts via the Emergent Production Console themselves.
+  - Note: The user actively deploys to a PRODUCTION environment and frequently uploads screenshots of bugs happening there. You MUST fix the code in the PREVIEW environment. Do not get confused by production data mismatches. **Never attempt to execute scripts directly on the user's provided PROD MongoDB URI.** Remind the user they must deploy your preview fixes to production and run scripts via the Emergent Production Console.
 
 **Code Architecture**
 
 
 **Key Technical Concepts**
-- Backend: FastAPI, Async MongoDB (Motor), , Pytest, PCMN Accounting logic.
+- Backend: FastAPI, Async MongoDB (Motor), , Pytest, PCMN Accounting logic, .
 - Frontend: React, Tailwind CSS, Shadcn UI.
-- Integrations: Emergent LLM Key (Claude Sonnet 4.6), MS Graph (Email).
+- Business Logic: Strict Idempotency, no hard deletes for accounting entries (only  and swapping debits/credits).
 
 **key DB schema**
-  - : Kept in sync with the  array.
-  - : Strict Belgian accounting. Edits are reversals (, ).
-  - : Stores periodic billing.
+  - : Strictly linked to invoices and bank transactions. Never hard-deleted.
+  - : Statuses (validated, draft, paid).
 
 **changes in tech stack**
-  - None this session.
+  - None.
 
 **All files of reference** 
-  -  (Added toggle for zero balance)
-  -  (Updated rebind logic to )
-  -  (Updated to reverse MUT-P on budget delete)
-  -  (Excluded reversals in PDF generation)
-  -  (New repair script)
-  - New test files: , , 
+  -  (Updated to handle journal reversal and unmatching on DELETE and PUT)
+  -  (New test file for the feature)
+  -  (Updated with iter90fi)
 
 **Areas that need refactoring**: 
-  -  (Still 500+ lines, could be broken down).
+  -  (Approaching 2000 lines)
+  -  (~1500 lines)
+  - 
 
 **key api endpoints**
-  - 
   - 
   - 
 
 **Critical Info for New Agent** 
 - **LANGUAGE**: Communicate entirely in **French**.
-- **PREVIEW VS PROD**: The user will ask you to run things on production. You cannot. Provide them the exact commands/scripts to run via their Production Console.
-- The immediate next step is to address the user's request (Message 202) to migrate PROD data for ACP Acacia to PREVIEW. Follow up on the scope/sanitization of this request.
+- **ACCOUNTING RULE**: In PCMN accounting, never use . Always generate a counter-pass entry ( and  inverted) and flag original and new entries with  and . This is now strictly implemented for Invoices.
+- **ACACIA MIGRATION CANCELED**: The user explicitly stated oublier ce projet (forget this project) regarding the PROD->PREVIEW Acacia data migration. Do not attempt to resume it.
+- **PREVIEW VS PROD**: Fix all bugs in PREVIEW. Do not attempt to use PROD credentials.
 
 **documents and test reports created in this job** 
-  -  (Updated with iter90cg, iter90ch, iter90ci)
+  - 
+  - 
 
 **Last 10 User Messages and any pending HUMAN messages** 
- 1. User: Asked for a toggle to hide zero-balance accounts in the tier balance. (Completed)
- 2. User: Reported a bug where fund calls generated after a mutation for an overlapping period are assigned incorrectly.
- 3. User: Clarified details (Matexi was the seller, date confirmed, PROD env).
- 4. User: Requested deployment and script execution on PROD. (Agent provided instructions on how the user can run this).
- 5. User: Reported another issue: deleting/revoking a budget should delete associated ODs. (Completed via reversals).
- 6. User: **(PENDING)** Requested to integrate production data from ACP Acacia to preview. (Agent proposed a plan but got interrupted).
- 7. User: Uploaded a PDF Situation de compte and complained it is completely incoherent with the journals (duplicate/reversed entries were visible). (Completed: fixed PDF generation to exclude reversals).
+ 1. User: lors de la suppression ou de la remise en broullion le journal financier doit être mis à jour en contrepassant les écritures enregistrées
+ 2. User: Please use ask_human tool and confirm your plan now.
+ 3. User (ask_human response): Confirmed that on DELETE of a validated invoice, the system must reverse entries and delete the invoice. For paid invoices, it must unmatch the bank transaction automatically and reverse. Also told the agent to forget the Acacia migration project. (Completed)
 
 **Project Health Check:**
 - Broken: None.
 - Mocked: None.
-- Health: Excellent (Thorough pytest suite ensuring no regressions, all 17 tests passed).
+- Health: Excellent. Pytest suite covers edge cases heavily and passes entirely.
 
 **3rd Party Integrations** 
-  - Emergent LLM Key (Claude Sonnet 4.6 text-only)
+  - Emergent LLM Key (Claude Sonnet 4.5 text-only) — uses Emergent LLM Key
   - Microsoft Graph (Email) — requires User Azure AD Credentials.
 
 **Testing status**
-  - Testing agent used after significant changes: NO (Self-tested via pytest strictly).
+  - Testing agent used after significant changes: NO (Self-tested extensively via pytest).
   - Troubleshoot agent used after agent stuck in loop: NO
-  - Test files created: , , 
+  - Test files created: 
   - Known regressions: None.
 
 **Credentials to test flow:**
 Check 
 
 **What agent forgot to execute**
-The agent fixed the PDF bug, but has not yet returned to the user's prior request (Message 202) to build the export/import scripts for migrating ACP Acacia data from PROD to PREVIEW. The next agent must address this.</analysis>
+The agent finished the core logic successfully. During the  tool call, the agent suggested a UI enhancement: adding a visual warning badge ⚠️ Sera contre-passée next to the status selector in the UI when transitioning an invoice to . The next agent can propose implementing this UI enhancement to the user if they wish.</analysis>
