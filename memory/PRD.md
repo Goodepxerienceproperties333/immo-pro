@@ -12,6 +12,51 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 
+### Iter90fi (Feb 2026) - Suppression / remise en brouillon : contre-passation
+
+**Demande utilisateur** :
+> "Lors de la suppression ou de la remise en brouillon le journal financier
+> doit etre mis a jour en contrepassant les ecritures enregistrees"
+
+**Contexte PCMN** : en droit belge, les ecritures comptables ne peuvent
+JAMAIS etre supprimees physiquement. Toute annulation doit generer une
+ecriture INVERSE (Dr <-> Cr) qui neutralise mathematiquement l'originale
+tout en preservant la trace d'audit.
+
+**Fix iter90fi** (`routes/invoices.py`) :
+1. Ajout d'un helper `_unlink_bank_txns_for_invoice(invoice_id)` qui :
+   - trouve toutes les `bank_transactions` avec `matched_to == invoice_id`
+     ou `matched_to_ids` contenant `invoice_id` ;
+   - reset le lettrage (`matched=False`, `matched_to=""`, etc.) ;
+   - regenere l'ecriture FI via `generate_bank_entry` (qui bascule en
+     compte de suspens 499000) OU contrepasse la FI si l'extrait n'est
+     pas encore pose.
+2. `DELETE /api/invoices/{id}` :
+   - deraprochage des txns bancaires (avec contrepasse FI + regeneration
+     en suspens) AVANT la contrepasse AC ;
+   - puis `_delete_auto_entries(db, "invoice", invoice_id)` -> AC
+     contre-passee ;
+   - puis suppression physique de la facture (choix utilisateur : sortir
+     du listing).
+3. `PUT /api/invoices/{id}` :
+   - detection de la transition `status != "draft" -> status == "draft"` ;
+   - si transition detectee : deraprochage des txns + contrepasse AC,
+     PAS de regeneration `generate_purchase_entry`, la facture reste
+     dans le listing en statut "draft" ;
+   - si `new_status == "draft"` deja avant : idempotent (rien a faire) ;
+   - dans tous les autres cas : regeneration AC comme avant.
+
+**Tests** (`tests/test_iter90fi_invoice_draft_reverses_journal.py`) :
+- `test_delete_invoice_reverses_purchase_entry_and_removes_invoice` : DELETE cree une contre-passation + supprime la facture du listing.
+- `test_put_invoice_to_draft_reverses_purchase_entry` : PUT->draft contrepasse l'AC et garde la facture.
+- `test_put_invoice_from_draft_back_to_unpaid_regenerates_entry` : draft->unpaid recree bien une AC active.
+- `test_delete_invoice_unlinks_matched_bank_transaction` : DELETE d'une facture lettree derapproche la txn, contrepasse la FI et regenere en suspens 499000.
+- `test_put_invoice_draft_to_draft_is_idempotent` : PUT draft->draft ne cree pas de doublon de contre-passation.
+
+Tous les 5 tests passent (`pytest tests/test_iter90fi_*`).
+
+---
+
 ### Iter90fh (Feb 2026) - BUG CRITIQUE : bilan desequilibre (Actif != Passif)
 
 **Ticket utilisateur** :

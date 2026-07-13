@@ -5,7 +5,7 @@ from typing import Optional, List
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 import uuid
-from auto_entries import generate_purchase_entry, _delete_auto_entries
+from auto_entries import generate_purchase_entry, generate_bank_entry, _delete_auto_entries
 from gridfs_storage import (
     get_invoice_attachments_storage,
     get_invoice_bundles_storage,
@@ -1546,11 +1546,109 @@ def create_invoices_router(db):
             )
         except Exception as e:
             print(f"[learn-split] failed: {e}")
-        try:
-            await generate_purchase_entry(db, inv)
-        except Exception as e:
-            print(f"[auto-entry] purchase update failed: {e}")
+        # iter90fi : si la facture est/passe en "brouillon", on ne genere PAS
+        # d'ecriture d'achat. Si transition validee -> brouillon, on contrepasse
+        # les ecritures deja generees (AC + FI si paiement lettre).
+        prev_status = (existing or {}).get("status", "") if existing else ""
+        new_status = (data.status or "").strip()
+        going_to_draft = new_status == "draft" and prev_status != "draft"
+        if going_to_draft:
+            try:
+                await _unlink_bank_txns_for_invoice(
+                    invoice_id, reason="Facture remise en brouillon",
+                )
+            except Exception as e:
+                print(f"[put_invoice draft] unlink bank txns failed: {e}")
+            try:
+                await _delete_auto_entries(
+                    db, "invoice", invoice_id,
+                    reason="Facture remise en brouillon",
+                )
+            except Exception as e:
+                print(f"[put_invoice draft] reverse AC failed: {e}")
+        elif new_status != "draft":
+            try:
+                await generate_purchase_entry(db, inv)
+            except Exception as e:
+                print(f"[auto-entry] purchase update failed: {e}")
         return inv
+
+    async def _unlink_bank_txns_for_invoice(invoice_id: str, reason: str = "invoice removed"):
+        """iter90fi : Delie toutes les transactions bancaires rapprochees a
+        cette facture, contrepasse leur ecriture FI, puis regenere une FI en
+        suspens (compte 499000) pour que le compte bancaire reste equilibre.
+
+        Cas geres :
+        - match_type == "invoice", matched_to == invoice_id : reset complet.
+        - match_type == "multi_invoice" : retire invoice_id de matched_to_ids.
+          Si liste devient vide -> reset complet ("").
+          Sinon garde le lettrage sur les factures restantes (matched_to =
+          premier id restant).
+
+        Idempotent : si aucune txn liee, ne fait rien.
+        Retourne le nombre de txns delie(e)s.
+        """
+        cursor = db.bank_transactions.find(
+            {"$or": [
+                {"matched_to": invoice_id},
+                {"matched_to_ids": invoice_id},
+            ]},
+            {"_id": 0},
+        )
+        touched = 0
+        async for txn in cursor:
+            update: dict = {}
+            match_type = txn.get("match_type", "")
+            if match_type == "multi_invoice":
+                remaining = [i for i in (txn.get("matched_to_ids") or []) if i != invoice_id]
+                if not remaining:
+                    # Plus rien -> reset complet
+                    update = {
+                        "matched": False,
+                        "matched_to": "",
+                        "matched_to_ids": [],
+                        "match_type": "",
+                    }
+                else:
+                    # Garde le lettrage sur les autres factures
+                    update = {
+                        "matched_to_ids": remaining,
+                    }
+                    if txn.get("matched_to") == invoice_id:
+                        update["matched_to"] = remaining[0]
+                    # Si une seule facture reste, simplifie en "invoice"
+                    if len(remaining) == 1:
+                        update["match_type"] = "invoice"
+                        update["matched_to_ids"] = []
+                        update["matched_to"] = remaining[0]
+            else:
+                # match_type == "invoice" (ou vide) -> reset complet
+                update = {
+                    "matched": False,
+                    "matched_to": "",
+                    "matched_to_ids": [],
+                    "match_type": "",
+                }
+            await db.bank_transactions.update_one({"id": txn["id"]}, {"$set": update})
+            touched += 1
+            # Regenere l'ecriture FI en fonction du nouveau lettrage (ou 499000 si dessaisi)
+            fresh = await db.bank_transactions.find_one({"id": txn["id"]}, {"_id": 0})
+            if fresh:
+                try:
+                    # Ne regenere que si l'extrait est comptabilise
+                    stmt = None
+                    if fresh.get("statement_id"):
+                        stmt = await db.bank_statements.find_one(
+                            {"id": fresh["statement_id"]}, {"_id": 0, "status": 1},
+                        )
+                    if stmt and stmt.get("status") == "posted":
+                        await generate_bank_entry(db, fresh)
+                    else:
+                        # Extrait non pose : contrepasse au moins l'ecriture liee
+                        await _delete_auto_entries(db, "bank_txn", txn["id"], reason=reason)
+                except Exception as e:
+                    print(f"[unlink-bank] failed for txn {txn.get('id','?')}: {e}")
+        return touched
 
     @router.delete("/invoices/{invoice_id}")
     async def delete_invoice(invoice_id: str):
@@ -1576,7 +1674,14 @@ def create_invoices_router(db):
             except Exception:
                 pass
         try:
-            await _delete_auto_entries(db, "invoice", invoice_id)
+            # iter90fi : dérapproche automatiquement les transactions bancaires
+            # rapprochees a cette facture (contrepasse leur FI et recree en
+            # suspens 499000 si l'extrait est deja pose).
+            await _unlink_bank_txns_for_invoice(invoice_id, reason="Facture supprimee")
+        except Exception as e:
+            print(f"[delete_invoice] unlink bank txns failed: {e}")
+        try:
+            await _delete_auto_entries(db, "invoice", invoice_id, reason="Facture supprimee")
         except Exception:
             pass
         result = await db.invoices.delete_one({"id": invoice_id})
