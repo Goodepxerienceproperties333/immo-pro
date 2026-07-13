@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import api from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -389,18 +389,47 @@ function MutationDialog({ lot, owners, ownersRefresh, onClose, onDone }) {
   }, [lot?.id]);
 
   // Auto preview when newOwnerId and saleDate set
+  // iter90ew : la preview a subi des race conditions sur saisie rapide
+  // de la date (l'input date genere plusieurs onChange par seconde en
+  // navigation clavier/spinbox). On debounce 350ms + on invalide toute
+  // reponse plus ancienne via un token de sequence.
+  const previewSeqRef = useRef(0);
+  const additionalKey = JSON.stringify(additionalLotIds || []);
   useEffect(() => {
     if (!lot || !newOwnerId || !saleDate) { setPreview(null); return; }
+    // Date incomplete (input type=date renvoie chaine vide ou incomplet
+    // pendant la frappe). Ne rien faire tant que ce n'est pas un
+    // YYYY-MM-DD valide.
+    const dateOk = /^\d{4}-\d{2}-\d{2}$/.test(saleDate);
+    if (!dateOk) { setPreview(null); setLoading(false); return; }
     setLoading(true);
-    api.post(`/lots/${lot.id}/mutate-preview`, {
-      new_owner_id: newOwnerId,
-      sale_date: saleDate,
-      sale_price: 0,
-      additional_lot_ids: additionalLotIds,
-    }).then(r => setPreview(r.data))
-      .catch(err => toast.error(err.response?.data?.detail || 'Erreur preview'))
-      .finally(() => setLoading(false));
-  }, [lot, newOwnerId, saleDate, additionalLotIds]);
+    const mySeq = ++previewSeqRef.current;
+    const timer = setTimeout(() => {
+      api.post(`/lots/${lot.id}/mutate-preview`, {
+        new_owner_id: newOwnerId,
+        sale_date: saleDate,
+        sale_price: 0,
+        additional_lot_ids: additionalLotIds,
+      }).then(r => {
+        // Ignore reponses obsoletes (une frappe plus recente a suivi)
+        if (mySeq !== previewSeqRef.current) return;
+        setPreview(r.data);
+      })
+        .catch(err => {
+          if (mySeq !== previewSeqRef.current) return;
+          toast.error(err.response?.data?.detail || 'Erreur preview');
+        })
+        .finally(() => {
+          if (mySeq !== previewSeqRef.current) return;
+          setLoading(false);
+        });
+    }, 350);
+    return () => {
+      clearTimeout(timer);
+      // Sequence bump implicite : incremente en creant le prochain
+      // effet ; les then/catch precedents seront rejetes.
+    };
+  }, [lot?.id, newOwnerId, saleDate, additionalKey]);
 
   const handleConfirm = async () => {
     if (!newOwnerId) { toast.error('Selectionnez un acquereur'); return; }

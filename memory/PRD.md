@@ -12,6 +12,57 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 
+### Iter90ew (Feb 2026) - Race condition sur preview mutation lors de la frappe de la date
+
+**Ticket utilisateur** :
+> "Lors des mutations les calculs sont parfois pas corrects et il faut
+> s'y reprendre a 2 fois et la les calculs de repartition des charges
+> sont corrects, investigue pourquoi et solutionne - a mon avis c'est
+> lie a la date de redaction des dates de mutations, si ca va trop
+> vite, le calcul a du mal a se faire correctement en cas de
+> correction de date"
+
+**Root cause identifie** dans `LotsPage.js` (MutationDialog) :
+
+```jsx
+// AVANT (bugue) :
+useEffect(() => {
+  api.post(`/lots/${lot.id}/mutate-preview`, { sale_date: saleDate, ... })
+    .then(r => setPreview(r.data))
+  ...
+}, [lot, newOwnerId, saleDate, additionalLotIds]);
+```
+
+Trois problemes :
+1. **Aucun debounce** : chaque onChange sur `<input type="date">`
+   declenche immediatement une requete. En navigation clavier
+   (up/down sur spinner), 5-10 requetes peuvent partir en 1 seconde.
+2. **Aucune annulation des reponses obsoletes** : si la requete A
+   (date incomplete) repond APRES la requete B (date correcte), le
+   preview affiche les mauvais chiffres.
+3. **`additionalLotIds` reference-comparee** : chaque render qui
+   recreait le tableau relancait un refetch inutile.
+
+**Fix iter90ew** :
+- **Debounce 350ms** via `setTimeout` + cleanup.
+- **Sequence token** (`useRef(0)`) incremente a chaque effet. Toute
+  reponse dont le token != current est ignoree (setPreview,
+  toast.error et setLoading tous conditionnes).
+- **Validation stricte** de la date via regex `/^\d{4}-\d{2}-\d{2}$/`
+  avant tout appel API. Si l'input est incomplet, on ne fait meme
+  pas la requete.
+- **`additionalKey = JSON.stringify(additionalLotIds)`** : compare
+  la valeur, pas la reference.
+
+**Effet visible** : la preview attend 350ms apres la derniere saisie
+avant de recalculer. Une saisie rapide de 2026-06-12 caractere par
+caractere ne provoque plus qu'UNE requete au lieu de 10, et cette
+requete est garantie de contenir la valeur finale.
+
+**Aucun changement backend** : le bug etait purement cote client.
+
+
+
 ### Iter90ev (Feb 2026) - BUG CRITIQUE : appels futurs sur mutation groupee affichaient la quote-part du lot principal seulement
 
 **Ticket utilisateur** :
