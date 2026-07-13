@@ -92,7 +92,10 @@ export default function ExpensesPage() {
         return;
       }
       // Invoice : load full doc for PUT
-      const { data: inv } = await api.get(`/invoices/${row.id}`);
+      // iter90fg : facture multi-lignes -> row.id = "{inv_id}::line-{idx}",
+      // il faut utiliser row.invoice_id pour recuperer la facture reelle.
+      const invId = row.invoice_id || row.id;
+      const { data: inv } = await api.get(`/invoices/${invId}`);
       setQuickEdit({
         source: 'invoice',
         invoice: inv,
@@ -499,7 +502,7 @@ export default function ExpensesPage() {
                   </TableCell>
                   <TableCell className="text-right whitespace-nowrap">
                     <Button variant="ghost" size="sm" onClick={() => openQuickEdit(r)} title="Modifier nature / cle / repartition" data-testid={`quick-edit-expense-${r.id}`} className="text-[#022D52]"><Pencil size={12} /></Button>
-                    <Button variant="ghost" size="sm" onClick={() => navigate(r.source === 'journal' ? `/accounting?entry=${r.id}` : `/invoices?edit=${r.id}`)} title="Edition complete" data-testid={`edit-expense-${r.id}`}><Receipt size={12} /></Button>
+                    <Button variant="ghost" size="sm" onClick={() => navigate(r.source === 'journal' ? `/accounting?entry=${r.id}` : `/invoices?edit=${r.invoice_id || r.id}`)} title="Edition complete" data-testid={`edit-expense-${r.id}`}><Receipt size={12} /></Button>
                   </TableCell>
                 </TableRow>
               ))}
@@ -618,7 +621,7 @@ export default function ExpensesPage() {
                                         </TableCell>
                                         <TableCell className="text-right whitespace-nowrap">
                                           <Button variant="ghost" size="sm" onClick={() => openQuickEdit(r)} title="Modifier" data-testid={`hier-quick-edit-${r.id}`} className="text-[#022D52] h-6 w-6 p-0"><Pencil size={11} /></Button>
-                                          <Button variant="ghost" size="sm" onClick={() => navigate(r.source === 'journal' ? `/accounting?entry=${r.id}` : `/invoices?edit=${r.id}`)} title="Edition complete" data-testid={`hier-edit-${r.id}`} className="h-6 w-6 p-0"><Receipt size={11} /></Button>
+                                          <Button variant="ghost" size="sm" onClick={() => navigate(r.source === 'journal' ? `/accounting?entry=${r.id}` : `/invoices?edit=${r.invoice_id || r.id}`)} title="Edition complete" data-testid={`hier-edit-${r.id}`} className="h-6 w-6 p-0"><Receipt size={11} /></Button>
                                         </TableCell>
                                       </TableRow>
                                     ))}

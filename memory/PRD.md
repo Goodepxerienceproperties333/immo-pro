@@ -12,6 +12,48 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 
+### Iter90fg (Feb 2026) - Bug critique liste des depenses : "Facture non trouvee"
+
+**Ticket utilisateur** :
+> "facture bien presente dans le facturier mais dans la liste des
+> depenses message d'erreur sans doute lie a la fusion des
+> fournisseurs, cela ne doit vraiment plus arriver"
+
+**Root cause** : dans `expense_rows.py`, une facture MULTI-LIGNES
+genere plusieurs `rows` avec `row.id = f"{inv['id']}::line-{idx}"`
+(id composite pour identifier la ligne) tandis que `row.invoice_id`
+contient l'id reel de la facture. Or `ExpensesPage.js` utilisait
+`row.id` dans les 2 boutons :
+- `openQuickEdit(row)` -> `GET /api/invoices/${row.id}` -> 404
+- `navigate('/invoices?edit=${row.id}')` -> deep-link ne trouve pas
+  la facture dans la liste locale.
+
+**Fix iter90fg** :
+
+Frontend (`ExpensesPage.js`) :
+- `openQuickEdit` : `const invId = row.invoice_id || row.id` avant le
+  GET.
+- Les 2 boutons "Edition complete" (table plate + vue hierarchique) :
+  `/invoices?edit=${r.invoice_id || r.id}`.
+
+Backend (`routes/invoices.py::update_invoice`) - fix associe :
+Le PUT allege declenche par `quickEdit` n'envoie PAS de champ `lines`.
+Avant iter90fg, le backend ecrasait `invoice.lines = []` ->
+**perte silencieuse de la ventilation multi-lignes**.
+Fix : `update["lines"] = resolved_lines` UNIQUEMENT si `data.lines is
+not None` (le payload envoie explicitement une valeur, meme []).
+Un PUT sans le champ preserve les lines existantes.
+
+**Tests** (`test_iter90fg_preserve_multi_lines_on_put.py`) :
+- `test_put_without_lines_preserves_existing_lines` : PUT allege sur
+  une facture 2-lignes -> lines intactes, per-line occupant_pct
+  intact.
+- `test_put_with_empty_lines_still_wipes` : PUT avec `lines: []`
+  explicite -> pas de crash (retro-compat).
+- Regression : 5 tests iter90ey/fe/fg -> verts.
+
+
+
 ### Iter90fe (Feb 2026) - Situation de compte fournisseur inclut les AC historiques
 
 **Ticket utilisateur** :

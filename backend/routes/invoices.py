@@ -1512,7 +1512,6 @@ def create_invoices_router(db):
             "account_number": account_number,
             "expense_category_id": data.expense_category_id or "",
             "distribution_key_id": "" if data.is_private_fee else data.distribution_key_id,
-            "lines": resolved_lines,
             "status": data.status,
             "is_private_fee": bool(data.is_private_fee),
             "private_fee_owner_id": data.private_fee_owner_id or "",
@@ -1522,6 +1521,12 @@ def create_invoices_router(db):
             "occupant_amount": round(data.total_amount * occupant_pct / 100, 2),
             "proprietaire_amount": round(data.total_amount * proprietaire_pct / 100, 2),
         }
+        # iter90fg : `lines` et `distribution_lines` sont UNIQUEMENT ecrasees
+        # si le payload en fournit explicitement (data.lines != None). Un
+        # PUT allege (ex: quickEdit depuis /reports/depenses) ne doit PAS
+        # wiper la ventilation multi-lignes preexistante.
+        if data.lines is not None:
+            update["lines"] = resolved_lines
         # If switching to private fee, clear distribution_lines (and lines)
         if data.is_private_fee:
             update["distribution_lines"] = []
