@@ -12,6 +12,97 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 
+### Iter90fj (Feb 2026) - Gate homonyme fournisseur : plus JAMAIS de creation implicite sans accord du syndic
+
+**Ticket utilisateur** :
+> "lors de l'import de factures tu continues a creer librement des
+> fournisseurs, il faut en cas d'homonyme une invite apparaisse et que le
+> syndic puisse choisir le fournisseur ou en creer un nouveau, ne jamais
+> enregistrer une facture sans accord du syndic en cas d'homonyme ou proche
+> du nom reconnu"
+
+Puis confirmation de 2 comportements existants a preserver :
+> "sur base du nom du fournisseur la nature de depenses est automatiquement
+> proposee, le syndic peut evidemment modifier si besoin"
+> "la repartition proprietaire/locataire est aussi apprise automatiquement"
+
+**Contexte** : malgre iter90fa/fb/fd/ef (snap-to-card sur nom EXACT
+normalise, blocage strict des VRAIS doublons), aucun garde-fou n'existait
+quand le nom tape/extrait par l'IA etait SIMILAIRE (homonyme) sans etre
+identique. La facture s'enregistrait directement avec le texte libre, et
+`auto_entries.py::_resolve_or_create_supplier_account` pouvait creer
+silencieusement une nouvelle fiche fournisseur lors de la generation de
+l'ecriture comptable, sans jamais consulter le syndic.
+
+**Fix iter90fj** :
+
+Backend (`routes/invoices.py`) :
+- Nouveau champ `InvoiceInput.supplier_confirmed: bool = False`.
+- Nouvelle fonction `_check_supplier_homonym(name, copro_id)` : appelle
+  `find_similar_suppliers` (seuil 0.80, deja existant) ; si des candidats
+  sont trouves, leve `HTTPException(409, detail={code:"SUPPLIER_HOMONYM",
+  typed_name, similar:[{id,name,score,bce_number,vat_number,city}]})`.
+- `create_invoice` : apres la tentative de snap EXACT (inchangee), si
+  AUCUN snap exact n'a eu lieu ET `supplier_confirmed` est faux -> appel
+  du gate. Un nom EXACT (apres normalisation/particules juridiques)
+  continue de snapper silencieusement (pas de friction, deja sans
+  ambiguite).
+- `update_invoice` : meme gate, mais UNIQUEMENT si le fournisseur soumis
+  differe reellement de celui deja enregistre sur la facture (compare
+  via `_norm_name` AVANT toute mutation) -> une simple modification de
+  montant/description ne declenche jamais le gate.
+- `GET /api/invoices/supplier-suggestion` : la reponse `suggestion`
+  inclut desormais `occupant_pct` (`cat.default_occupant_pct`), pour que
+  la repartition apprise (iter90ed) suive la nature suggeree par le nom
+  du fournisseur, pas seulement lors d'une selection manuelle.
+
+Frontend (`pages/InvoicesPage.js`) :
+- Nouveau state `invSupplierGate` + dialog bloquant
+  `data-testid="invoice-supplier-gate-dialog"` avec, par candidat :
+  bouton "Utiliser celui-ci" (`inv-gate-use-existing-{i}`), et global
+  "Confirmer nouveau fournisseur" (`inv-gate-create-new-btn`) /
+  "Annuler" (`inv-gate-cancel-btn`).
+- `saveInvoice` intercepte le 409 `SUPPLIER_HOMONYM` EN PRIORITE (avant
+  SOFT_DUPLICATE et avant le skip-doublon batch IA) : ouvre le dialog,
+  attend le choix du syndic (Promise), n'enregistre JAMAIS la facture si
+  "Annuler". Si "Utiliser celui-ci" : remplace le nom + relance
+  `/invoices/supplier-suggestion` sur le nom canonique choisi pour
+  propager nature + repartition avant le retry de sauvegarde. Fonctionne
+  identiquement en creation, edition ET import IA batch (meme fonction).
+- `applySupplierSuggestion` : propage desormais aussi `occupant_pct` /
+  `proprietaire_pct` (avant : seulement nature + compte + cle).
+
+**BUG CRITIQUE trouve et corrige par l'agent de test** : l'intercepteur
+axios global (`frontend/src/lib/api.js`) aplatissait TOUJOURS un `detail`
+objet en string, detruisant le champ `.code` avant qu'il n'atteigne le
+catch de `saveInvoice`. Resultat : le dialog n'apparaissait JAMAIS via
+l'UI reelle (seul un toast d'erreur generique, sans moyen de resoudre).
+Fix : `else if (typeof d === 'object' && !d.code)` (ne stringifie que les
+objets SANS champ `code` discriminant ; convention deja utilisee par
+`PASSWORD_SETUP_REQUIRED`).
+
+**Tests** (`test_iter90fj_invoice_supplier_gate.py`, 6/7 verts, 1 skip
+legitime si aucune nature de depense n'existe) :
+- Homonyme (typo proche) -> 409 avec `similar[0].score >= 0.80`.
+- Nom exact/normalise -> snap silencieux, pas de 409.
+- Nom completement nouveau -> save direct.
+- `supplier_confirmed=true` -> bypass, garde le nom tape.
+- PUT changeant vers un homonyme -> 409 ; PUT ne touchant pas le
+  fournisseur -> jamais de 409.
+- `/invoices/supplier-suggestion` propage `occupant_pct`.
+
+**Validation** : testee end-to-end via UI (dialog + 3 actions), via
+curl (exact/homonyme/confirmed/PUT), et via pytest. Regression complete
+sur les tests invoices/suppliers existants (iter78 a iter90fi) : verts.
+
+**Limite connue (non bloquante)** : `DELETE /api/invoices/{id}` ne
+supprime pas la fiche fournisseur `auto_created=true` associee meme si
+elle n'est plus utilisee -> peut laisser des fiches orphelines apres de
+nombreux tests/annulations. Deja gerable via la page Doublons/Nettoyage.
+Backlog P3 si le user souhaite un nettoyage automatique.
+
+
+
 ### Iter90fi (Feb 2026) - Suppression / remise en brouillon : contre-passation
 
 **Demande utilisateur** :
