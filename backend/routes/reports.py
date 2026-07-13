@@ -33,10 +33,16 @@ def _exclude_reversals(q: dict) -> dict:
     (`reversed=True`) ainsi que sa contre-passation (`is_reversal=True`) ne doivent
     pas apparaitre dans les soldes "operationnels" : elles s'annulent comptablement.
     Les listings de journaux peuvent les afficher en mode "audit" via un flag UI.
+
+    iter90fl : delegue a `journal_reversals.exclude_reversals` (SOURCE UNIQUE DE
+    VERITE) pour eviter toute divergence de noms de champs entre modules -
+    c'est exactement ce genre de duplication qui a cause le bug de lignes
+    fantomes dans "Liste des depenses" (`expense_rows.py` utilisait des noms
+    de champs inexistants). Garde le nom de fonction pour compat avec les
+    ~12 appels existants dans ce fichier.
     """
-    q["is_reversal"] = {"$ne": True}
-    q["reversed"] = {"$ne": True}
-    return q
+    from journal_reversals import exclude_reversals
+    return exclude_reversals(q)
 
 
 _MUTATION_LOT_RE = __import__("re").compile(

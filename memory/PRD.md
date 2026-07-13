@@ -65,6 +65,27 @@ gonflement artificiel du total "Depenses de l'exercice" (UI + PDF). A
 redeployer en PRODUCTION pour corriger les ecarts constates par
 l'utilisateur sur l'ACP "Les Alisiers"/ACACIA.
 
+**Durcissement demande par l'utilisateur** ("les lignes fantomes ne
+doivent jamais exister, securise") : audit complet de TOUS les
+consommateurs de `journal_entries` dans le backend (60+ points d'appel
+recenses). Verdict : **`expense_rows.py` etait le SEUL endroit avec des
+noms de champs errones** - Balance/Bilan/Grand Livre/Decompte
+(`routes/reports.py`), regularisations et decompte proprietaire
+(`routes/fiscal.py`, `routes/owner_portal.py`), listing des journaux
+(`routes/accounting.py`) utilisaient deja les bons noms (`reversed`/
+`is_reversal`). Pour empecher structurellement toute recidive :
+- Nouvelle fonction canonique `journal_reversals.exclude_reversals(q)` =
+  SOURCE UNIQUE DE VERITE pour ce filtre (colocalisee avec
+  `reverse_journal_entry` qui pose les champs).
+- `routes/reports.py::_exclude_reversals` (12 points d'appel : balance,
+  bilan, grand livre, decompte, regularisations...) delegue desormais a
+  cette fonction canonique au lieu de dupliquer la logique.
+- `expense_rows.py` utilise la meme fonction canonique.
+- Verification post-refactor : `/api/reports/grand-livre`,
+  `/api/reports/balance`, `/api/reports/bilan` repondent 200 (aucune
+  regression), suite de tests iter90fi/fj/fk/fl toujours verte.
+
+
 **Note pour le prochain agent** : plusieurs anciens fichiers de tests
 (`test_iter16_auto_entries.py`, `test_iter86_private_fees_in_expenses_list.py`,
 `test_iter90i_private_fees_excluded_from_expenses.py`,

@@ -132,3 +132,25 @@ async def reverse_auto_entries(
         if rev:
             count += 1
     return count
+
+
+def exclude_reversals(q: dict) -> dict:
+    """iter90fl : SOURCE UNIQUE DE VERITE pour exclure les paires de
+    contre-passation (ecriture originale extournee + sa contre-passation)
+    d'une requete MongoDB sur `journal_entries`.
+
+    Ce sont les 2 SEULS champs reellement poses par `reverse_journal_entry`
+    ci-dessus (`reversed` sur l'originale, `is_reversal` sur la
+    contre-passation). Toute autre variante de nom de champ (`reverses_id`,
+    `reversed_by_id`, etc.) est un BUG : un tel bug a fausse "Liste des
+    depenses" (UI + PDF) en laissant les paires apparaitre EN DOUBLE au
+    lieu d'etre exclues (cf. `expense_rows.py`, corrige en iter90fl).
+
+    A utiliser PARTOUT ou un total "operationnel" (balance, bilan, grand
+    livre, liste des depenses, decompte de mutation) est calcule a partir
+    de `journal_entries` - JAMAIS dans les vues d'audit/journal brut ou
+    l'affichage de la paire complete est intentionnel (transparence legale).
+    """
+    q["reversed"] = {"$ne": True}
+    q["is_reversal"] = {"$ne": True}
+    return q

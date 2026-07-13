@@ -290,17 +290,11 @@ async def compute_expense_rows(
             je_q["date"]["$gte"] = date_from
         if date_to:
             je_q["date"]["$lte"] = date_to
-    # iter90fl : les champs corrects (voir journal_reversals.py) sont
-    # `reversed` (True sur l'ecriture originale extournee) et `is_reversal`
-    # (True sur la contre-passation elle-meme). Les anciens noms
-    # `reverses_id`/`reversed_by_id` n'ont JAMAIS existe en base -> ce
-    # filtre etait totalement inoperant et laissait apparaitre en DOUBLE
-    # (originale + contre-passation) toute ecriture FI/OD extournee sur un
-    # compte de charge, faussant "Liste des depenses" (UI + PDF).
-    je_q["$and"] = [
-        {"reversed": {"$ne": True}},
-        {"is_reversal": {"$ne": True}},
-    ]
+    # iter90fl : exclusion des paires de contre-passation - SOURCE UNIQUE DE
+    # VERITE dans journal_reversals.exclude_reversals (voir docstring pour le
+    # bug historique cause par une divergence de noms de champs ici).
+    from journal_reversals import exclude_reversals
+    exclude_reversals(je_q)
     je_entries = await db.journal_entries.find(je_q, {"_id": 0}).sort("date", 1).to_list(50000)
     for je in je_entries:
         if je.get("source_type") == "invoice" and je.get("source_id") in invoice_ids_done:
