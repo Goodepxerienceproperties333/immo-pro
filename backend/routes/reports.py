@@ -856,26 +856,19 @@ def create_reports_router(db):
             solde = round(b["debit"] - b["credit"], 2)
             _classify_account(acc, solde, balances)
 
-        # Compute current period result (classes 6 & 7) and inject in 499 (avant repartition)
-        # ou re-imputer sur les comptes 4000XX des owners (apres repartition).
-        # IMPORTANT : pour que le bilan soit equilibre, on prend toutes les ecritures
-        # 6/7 jusqu'a date_to (sans start_date). Par double-entree, le solde net des
-        # comptes 1-5 (= bilan) = -(solde net 6-7) = resultat de l'exercice cumule.
-        q_res = _apply_copro({}, copropriete_id)
-        if date_to:
-            q_res["date"] = {"$lte": date_to}
-        q_res["journal_type"] = {"$ne": "AN"}
-        if view_mode != "after_distribution":
-            q_res["$and"] = [
-                {"is_regularization": {"$ne": True}},
-                {"reference": {"$not": {"$regex": "^(OD-REG-|EXT-)"}}},
-            ]
-        entries_res = await db.journal_entries.find(q_res, {"_id": 0}).to_list(100000)
+        # iter90fh : le resultat de l'exercice se calcule DIRECTEMENT depuis
+        # les MEMES ecritures que celles utilisees pour le bilan (`entries`).
+        # Cela garantit mathematiquement l'equation "Actif - Passif = Resultat"
+        # par la loi de la double-entree (pour chaque ecriture, sum(debit) =
+        # sum(credit) implique sum_15(D) - sum_15(C) = sum_67(C) - sum_67(D)).
+        # Un `entries_res` separe pouvait diverger et casser l'equilibre.
         total_charges = 0.0
         total_produits = 0.0
-        for entry in entries_res:
+        for entry in entries:
             for line in entry.get("lines", []):
-                acc = line["account_number"]
+                acc = line.get("account_number", "")
+                if not acc:
+                    continue
                 if acc.startswith("6"):
                     total_charges += line.get("debit", 0) - line.get("credit", 0)
                 elif acc.startswith("7"):

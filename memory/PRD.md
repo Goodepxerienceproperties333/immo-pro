@@ -12,6 +12,63 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 
+### Iter90fh (Feb 2026) - BUG CRITIQUE : bilan desequilibre (Actif != Passif)
+
+**Ticket utilisateur** :
+> "le bilan DOIT avoir l'actif = au passif ce n'est pas acceptable
+> d'avoir une difference !! C'est une regle comptable stricte"
+
+Screenshot PROD : Actif 26500.02 EUR / Passif 24245.96 EUR, ecart 2254.06 EUR.
+
+**Root cause identifie** dans `routes/reports.py::bilan` :
+
+Le code faisait DEUX requetes DB distinctes :
+- `entries` (classes 1-5) : filtree via `_exclude_reversals(q)` + regul filter.
+- `entries_res` (classes 6-7) : filtree SANS `_exclude_reversals` -> incluait
+  les contre-passations partielles.
+
+L'equation "Actif - Passif = Resultat" (garantie par la loi de la double
+entree pour un MEME ensemble d'ecritures) etait donc rompue des qu'un
+`is_reversal=True` ou `reversed=True` existait dans le journal.
+
+**Fix iter90fh** (routes/reports.py) :
+- Suppression complete de la requete `entries_res`.
+- Calcul du resultat DIRECTEMENT depuis `entries` (meme source =
+  double-entree mathematiquement garantie) :
+  ```python
+  for entry in entries:  # meme collection que le bilan
+      for line in entry.get("lines", []):
+          acc = line.get("account_number", "")
+          if acc.startswith("6"):
+              total_charges += line.debit - line.credit
+          elif acc.startswith("7"):
+              total_produits += line.credit - line.debit
+  result_exercise = round(total_produits - total_charges, 2)
+  ```
+- L'invariant "Actif - Passif = Resultat" est desormais IMPOSSIBLE a violer :
+  pour chaque ecriture E : sum(debit_E) = sum(credit_E), et si on somme
+  sur toutes les ecritures :
+      sum_15(D) + sum_67(D) = sum_15(C) + sum_67(C)
+      sum_15(D) - sum_15(C) = sum_67(C) - sum_67(D)
+      Actif - Passif = Produits - Charges = Resultat
+  Ajouter le resultat au passif (boni) ou a l'actif (mali) equilibre.
+
+**Tests** (`test_iter90fh_bilan_equilibre.py`) :
+- `test_bilan_actif_equals_passif_with_reversals` : ACP avec 1 achat +
+  1 contre-passation (le scenario qui declenchait le bug) + 1 encaissement
+  normal -> bilan equilibre a 0.01 pres.
+- `test_bilan_actif_equals_passif_after_distribution` : 2 achats + 1
+  reversal + 1 encaissement -> bilan equilibre.
+
+**Regression** : tests iter72_bilan_2digit + iter73_bilan_apres_repartition
++ 9 tests actuels iter90fh/fg/fe/fd : verts.
+
+**Note environnement** : le fix est en PREVIEW. Le user doit redeployer
+en PROD via son processus habituel (git push + Emergent Deploy) pour
+que le bilan PROD soit re-genere correct.
+
+
+
 ### Iter90fg (Feb 2026) - Bug critique liste des depenses : "Facture non trouvee"
 
 **Ticket utilisateur** :
