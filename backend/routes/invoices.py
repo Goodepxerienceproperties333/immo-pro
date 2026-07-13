@@ -968,10 +968,12 @@ def create_invoices_router(db):
         # une fiche existante (par nom normalise), on remplace par le nom
         # canonique de la fiche pour eviter la creation implicite d'un
         # doublon "sans fiche".
+        # iter90fb : matche aussi le contenu entre parentheses (ex:
+        # "Finlead Properties (Finlead srl)" -> snap sur "Finlead SRL").
         if data.supplier:
-            from routes.suppliers import _norm_name as _norm_supplier_name
-            target_norm = _norm_supplier_name(data.supplier)
-            if target_norm:
+            from routes.suppliers import _norm_name_candidates
+            target_norms = _norm_name_candidates(data.supplier)
+            if target_norms:
                 q_sup = {}
                 if data.copropriete_id:
                     q_sup["$or"] = [
@@ -979,8 +981,9 @@ def create_invoices_router(db):
                         {"is_global": True},
                         {"copropriete_id": {"$in": [None, ""]}},
                     ]
+                from routes.suppliers import _norm_name as _norm_supplier_name
                 async for card in db.suppliers.find(q_sup, {"_id": 0, "name": 1}):
-                    if _norm_supplier_name(card.get("name", "")) == target_norm:
+                    if _norm_supplier_name(card.get("name", "")) in target_norms:
                         data.supplier = card["name"]
                         break
         # Verrou fiscal : la date de la facture doit etre dans une periode ouverte
@@ -1258,11 +1261,11 @@ def create_invoices_router(db):
     @router.put("/invoices/{invoice_id}")
     async def update_invoice(invoice_id: str, data: InvoiceInput, force: bool = Query(default=False)):
         from fiscal_lock import ensure_period_open
-        # iter90fa : snap-to-card (idem create_invoice)
+        # iter90fa/fb : snap-to-card (idem create_invoice, match parentheses)
         if data.supplier:
-            from routes.suppliers import _norm_name as _norm_supplier_name
-            target_norm = _norm_supplier_name(data.supplier)
-            if target_norm:
+            from routes.suppliers import _norm_name_candidates, _norm_name as _norm_supplier_name
+            target_norms = _norm_name_candidates(data.supplier)
+            if target_norms:
                 q_sup = {}
                 if data.copropriete_id:
                     q_sup["$or"] = [
@@ -1271,7 +1274,7 @@ def create_invoices_router(db):
                         {"copropriete_id": {"$in": [None, ""]}},
                     ]
                 async for card in db.suppliers.find(q_sup, {"_id": 0, "name": 1}):
-                    if _norm_supplier_name(card.get("name", "")) == target_norm:
+                    if _norm_supplier_name(card.get("name", "")) in target_norms:
                         data.supplier = card["name"]
                         break
         existing_for_lock = await db.invoices.find_one({"id": invoice_id}, {"_id": 0})

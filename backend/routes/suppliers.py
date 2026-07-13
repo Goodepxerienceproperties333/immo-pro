@@ -28,8 +28,15 @@ def _norm_name(value: str) -> str:
     particules est aussi ignoree ("S.A.", "s.a" -> "sa" -> filtre).
     Si apres filtrage la chaine devient vide (ex: "SRL"), on retombe sur le
     nom d'origine trie (garde-fou).
+
+    iter90fb : les parties entre parentheses ne sont plus considerees comme
+    des mots du nom principal (on les ignore ici). Pour matcher aussi le
+    contenu entre parentheses, utiliser `_norm_name_candidates`.
     """
-    words = (value or "").strip().lower().split()
+    # iter90fb : retire le contenu entre parentheses pour la normalisation
+    # principale ("Finlead Properties (Finlead srl)" -> "Finlead Properties").
+    stripped = re.sub(r"\([^)]*\)", " ", value or "")
+    words = stripped.strip().lower().split()
     # Pour chaque mot, on determine si c'est une particule juridique en
     # retirant TOUS les caracteres non-alphanumeriques avant comparaison.
     def _is_particle(w: str) -> bool:
@@ -39,6 +46,25 @@ def _norm_name(value: str) -> str:
     if not filtered:
         filtered = words
     return " ".join(sorted(filtered))
+
+
+def _norm_name_candidates(value: str) -> set[str]:
+    """iter90fb : retourne toutes les normalisations candidates pour un nom :
+    - le nom complet normalise (sans parentheses)
+    - chaque fragment entre parentheses normalise individuellement
+    Permet de matcher "Finlead Properties (Finlead srl)" avec la fiche
+    "Finlead SRL" (le contenu de la parenthese est traite comme un
+    candidat autonome).
+    """
+    candidates: set[str] = set()
+    primary = _norm_name(value)
+    if primary:
+        candidates.add(primary)
+    for m in re.findall(r"\(([^)]+)\)", value or ""):
+        c = _norm_name(m)
+        if c:
+            candidates.add(c)
+    return candidates
 
 
 def _norm_id(value: str) -> str:

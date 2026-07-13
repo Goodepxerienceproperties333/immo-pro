@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import { Search, ChevronDown, X, Plus, Building2, Loader2 } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { normSupplierName } from '@/lib/supplierName';
+import { normSupplierName, normSupplierNameCandidates } from '@/lib/supplierName';
 
 /**
  * SupplierSearchSelect - selecteur avec autocomplete des fournisseurs

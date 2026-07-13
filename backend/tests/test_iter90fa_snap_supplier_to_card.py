@@ -158,8 +158,42 @@ def test_unknown_supplier_stays_as_is():
     asyncio.run(_run())
 
 
+def test_free_text_supplier_with_parenthesized_legal_name_snaps():
+    """iter90fb : "Finlead Properties (Finlead srl)" doit snap vers la
+    fiche "Finlead SRL" (le contenu entre parentheses est traite comme
+    candidat de matching autonome)."""
+    async def _run():
+        db, cid, canonical, suffix = await _setup()
+        cookies = await _login()
+        try:
+            # Nom compose : trade name + legal name en parentheses
+            trade = f"Finlead {suffix} Properties (Finlead {suffix} srl)"
+            async with httpx.AsyncClient(cookies=cookies) as c:
+                r = await c.post(f"{BACKEND}/api/invoices", json={
+                    "supplier": trade,
+                    "number": f"FA-P-{suffix}",
+                    "date": "2026-01-15",
+                    "total_amount": 100.0,
+                    "account_number": f"6140{suffix[:2]}",
+                    "copropriete_id": cid,
+                    "description": "Test iter90fb parenthese",
+                })
+                assert r.status_code == 200, r.text
+                inv_id = r.json()["id"]
+            inv = await db.invoices.find_one({"id": inv_id})
+            assert inv["supplier"] == canonical["name"], (
+                f"iter90fb : '{trade}' doit snap vers '{canonical['name']}', "
+                f"got '{inv['supplier']}'"
+            )
+        finally:
+            await _cleanup(db, cid)
+
+    asyncio.run(_run())
+
+
 if __name__ == "__main__":
     test_free_text_supplier_snaps_to_existing_card()
     test_free_text_supplier_wrong_case_and_particles()
     test_unknown_supplier_stays_as_is()
+    test_free_text_supplier_with_parenthesized_legal_name_snaps()
     print("OK")

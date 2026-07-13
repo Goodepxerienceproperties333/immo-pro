@@ -13,22 +13,42 @@ const isParticle = (w) => {
   return LEGAL_PARTICLES.has(core);
 };
 
-/**
- * Normalise un nom de fournisseur :
- * - minuscules
- * - split en mots
- * - filtre les particules juridiques (sa, sprl, srl, bvba, ...)
- * - retire les caracteres non-alphanumeriques restants dans chaque mot
- * - trie alphabetiquement pour matcher "Finlead SRL" et "SRL Finlead"
- * Si apres filtrage il ne reste rien, on retombe sur les mots d'origine
- * (garde-fou pour un input tel que "SRL" tout seul).
- */
-export function normSupplierName(value) {
-  const words = (value || '').toString().trim().toLowerCase().split(/\s+/).filter(Boolean);
+function _norm(words) {
   const filtered = words.filter(w => !isParticle(w));
   const src = filtered.length ? filtered : words;
-  // On retire aussi la ponctuation interne des mots restants pour matcher
-  // "Finlead." et "Finlead" identiquement.
   const cleaned = src.map(w => w.replace(/[^a-z0-9]/g, '')).filter(Boolean);
   return cleaned.sort().join(' ');
+}
+
+/**
+ * Normalise un nom de fournisseur :
+ * - retire d'abord tout contenu entre parentheses
+ * - minuscules, split en mots, filtre particules juridiques, tri
+ * Ex: "Finlead Properties (Finlead srl)" -> "finlead properties"
+ */
+export function normSupplierName(value) {
+  const stripped = (value || '').toString().replace(/\([^)]*\)/g, ' ');
+  const words = stripped.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  return _norm(words);
+}
+
+/**
+ * iter90fb : retourne toutes les cles candidates pour un matching. Chaque
+ * fragment entre parentheses genere une cle autonome. Permet de matcher
+ * "Finlead Properties (Finlead srl)" avec la fiche "Finlead SRL".
+ */
+export function normSupplierNameCandidates(value) {
+  const set = new Set();
+  const primary = normSupplierName(value);
+  if (primary) set.add(primary);
+  const re = /\(([^)]+)\)/g;
+  let m;
+  const s = (value || '').toString();
+  while ((m = re.exec(s)) !== null) {
+    const inner = m[1];
+    const words = inner.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    const norm = _norm(words);
+    if (norm) set.add(norm);
+  }
+  return set;
 }

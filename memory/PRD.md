@@ -12,6 +12,56 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 
+### Iter90fb (Feb 2026) - Elargissement colonne Montant + snap-to-card avec parentheses
+
+**Ticket 1 (doublons)** :
+> "doublons une nouvelle fois cree en production"
+> Screenshot : "Finlead Properties (Finlead srl)" + "Finlead SRL"
+
+**Root cause** : "Finlead Properties (Finlead srl)" ne normalisait pas
+vers "Finlead SRL" car les mots "properties" + "finlead" restaient
+apres filtrage des particules.
+
+**Fix iter90fb (doublons)** :
+
+Backend (`routes/suppliers.py`) :
+- `_norm_name` retire desormais TOUT contenu entre parentheses AVANT
+  normalisation. "Finlead Properties (Finlead srl)" -> "finlead
+  properties".
+- Nouveau `_norm_name_candidates(value)` -> `set[str]` : retourne
+  toutes les cles candidates de matching = le nom complet normalise
+  PLUS chaque fragment entre parentheses normalise separement.
+  Pour "Finlead Properties (Finlead srl)" -> {
+    "finlead properties", "finlead"
+  }.
+
+Backend (`routes/invoices.py`) :
+- POST + PUT snap-to-card utilisent `_norm_name_candidates`. Une
+  fiche existante dont le nom normalise est DANS l'ensemble des
+  candidats declenche la substitution.
+
+Frontend (`lib/supplierName.js`) :
+- `normSupplierName` : retire les parentheses avant normalisation
+  (equivalent backend).
+- Nouveau `normSupplierNameCandidates(value)` : Set JS de candidats
+  (nom complet + fragments parentheses).
+
+**Ticket 2 (UX Montant)** :
+> "les champs sont un peu trop petit pour une lecture du montant
+> integral"
+
+Le champ Montant en mode multi-lignes n'affichait que les 2-3 premiers
+chiffres ("93" au lieu de "934.29").
+
+**Fix iter90fb (Montant)** (`InvoicesPage.js`) :
+- Grille passe de `grid-cols-[repeat(14,...)]` a
+  `grid-cols-[repeat(15,...)]`.
+- Colonne Montant passe de `col-span-1` a `col-span-2` -> largeur
+  doublee. Un montant a 4 chiffres decimaux (ex: "1069.29") tient
+  entierement.
+
+
+
 ### Iter90fa (Feb 2026) - Suppression des doublons de fournisseurs (dropdown + snap-to-card)
 
 **Ticket utilisateur** (avec screenshot montrant 3 entrees pour Finlead) :

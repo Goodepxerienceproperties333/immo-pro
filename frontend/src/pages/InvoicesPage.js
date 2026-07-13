@@ -1301,7 +1301,7 @@ export default function InvoicesPage() {
                   </div>
                   <div className="space-y-1.5">
                     {invForm.lines.map((ln, idx) => (
-                      <div key={ln._key || idx} className="grid grid-cols-[repeat(14,minmax(0,1fr))] gap-2 items-end bg-white rounded border border-slate-200 px-2 py-1.5" data-testid={`invoice-line-${idx}`}>
+                      <div key={ln._key || idx} className="grid grid-cols-[repeat(15,minmax(0,1fr))] gap-2 items-end bg-white rounded border border-slate-200 px-2 py-1.5" data-testid={`invoice-line-${idx}`}>
                         <div className="col-span-3">
                           {idx === 0 && <label className="form-label text-[10px]">Nature</label>}
                           <Select
@@ -1459,7 +1459,7 @@ export default function InvoicesPage() {
                             data-testid={`invoice-line-prop-${idx}`}
                           />
                         </div>
-                        <div className="col-span-1">
+                        <div className="col-span-2">
                           {idx === 0 && <label className="form-label text-[10px]">Montant *</label>}
                           <Input
                             type="number" step="0.01"
