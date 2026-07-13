@@ -12,6 +12,44 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 
+### Iter90es (Feb 2026) - Verrouillage fermeture dialog par clic exterieur
+
+**Ticket utilisateur** :
+> "lors de l'introduction de valeurs dans une fenêtre ne jamais pouvoir
+> en sortir avec un clic en dehors. Il faut cliquer sur annuler ou sur
+> la croix pour ferme la fenêtre, applique ce principe partout"
+
+**Contexte** : le comportement par defaut de Radix Dialog ferme le
+dialog quand l'utilisateur clique en dehors, ce qui perd toutes les
+donnees saisies. Sur un wizard de creation ACP (3 etapes, imports PDF),
+c'est une catastrophe UX.
+
+**Fix iter90es** :
+
+1. `components/ui/dialog.jsx` (utilise partout dans l'app) :
+   - `DialogContent` intercepte `onPointerDownOutside` et
+     `onInteractOutside` avec `e.preventDefault()` par defaut.
+   - Le parent peut toujours ecouter (callback chaine) mais NE PEUT
+     PLUS reactiver la fermeture (l'appel a preventDefault est force).
+
+2. `components/ui/sheet.jsx` (drawers laterales) :
+   - Meme traitement sur `SheetContent`.
+
+**Ce qui ferme le dialog desormais** :
+- Bouton "Annuler" explicite (via `onOpenChange(false)` du parent)
+- La croix "X" du DialogClose (via `DialogPrimitive.Close`)
+
+**Ce qui ne ferme plus** : clic sur l'overlay, clic sur le fond,
+tap outside (mobile).
+
+**AlertDialog** : deja modal par nature dans Radix, aucun changement
+necessaire.
+
+**Verifie** : ouvrir wizard ACP, remplir "Nom de l'ACP" -> cliquer a
+50/500 (hors dialog) -> dialog toujours ouvert + valeur preservee.
+
+
+
 ### Iter90er (Feb 2026) - Blocage modification a la roulette souris sur inputs number
 
 **Ticket utilisateur** :
