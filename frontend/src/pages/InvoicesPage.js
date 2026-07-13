@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { Plus, Trash2, Receipt, Sparkles, Paperclip, Download, X, Pencil, Filter, FolderInput, Eye, Loader2, ArrowUp, ArrowDown, ArrowUpDown, SkipForward } from 'lucide-react';
+import { Plus, Trash2, Receipt, Sparkles, Paperclip, Download, X, Pencil, Filter, FolderInput, Eye, Loader2, ArrowUp, ArrowDown, ArrowUpDown, SkipForward, PanelRightClose, PanelRightOpen, FileText } from 'lucide-react';
 import AccountSearchSelect from '@/components/AccountSearchSelect';
 import SupplierSearchSelect from '@/components/SupplierSearchSelect';
 import BundleImportDialog from '@/components/BundleImportDialog';
@@ -58,6 +58,21 @@ export default function InvoicesPage() {
   const newCatDirty = useDirtyGuard(newCatForm, newCatDialog);
   const [dragActive, setDragActive] = useState(false);
   const [viewerAttachment, setViewerAttachment] = useState(null); // {url, filename}
+  // iter90ez : side panel PDF viewer inside invoice dialog
+  // (minimizable pour ne pas encombrer). Auto-open des qu'un pendingPdf
+  // existe.
+  const [pdfPanelOpen, setPdfPanelOpen] = useState(true);
+  const [pdfPanelUrl, setPdfPanelUrl] = useState(null);
+  useEffect(() => {
+    if (pendingPdf && pendingPdf.file) {
+      const url = URL.createObjectURL(pendingPdf.file);
+      setPdfPanelUrl(url);
+      setPdfPanelOpen(true);
+      return () => URL.revokeObjectURL(url);
+    } else {
+      setPdfPanelUrl(null);
+    }
+  }, [pendingPdf]);
   // iter85g : dialog de confirmation homonymes lors de la creation supplier
   // depuis InvoicesPage. State : { payload, similar, onConfirm } ou null.
   const [supplierHomonymsDialog, setSupplierHomonymsDialog] = useState(null);
@@ -866,9 +881,11 @@ export default function InvoicesPage() {
 
       {/* Invoice Dialog */}
       <Dialog open={invoiceDialog} onOpenChange={(open) => { if (!open) { setEditingInvoice(null); setPendingPdf(null); } setInvoiceDialog(open); }} hasUnsavedChanges={invDirty}>
-        <DialogContent className="max-w-[1600px] w-[97vw] max-h-[92vh] overflow-y-auto" data-testid="invoice-dialog">
+        <DialogContent className="max-w-[1600px] w-[97vw] max-h-[92vh] overflow-hidden flex flex-col" data-testid="invoice-dialog">
           <DialogHeader><DialogTitle style={{fontFamily:'Chivo,sans-serif'}}>{editingInvoice ? 'Modifier la facture' : 'Nouvelle facture'}</DialogTitle></DialogHeader>
-          <div className="space-y-4 mt-2">
+          <div className="flex gap-3 mt-2 flex-1 min-h-0">
+            {/* LEFT COLUMN : form (scrollable) */}
+            <div className={`space-y-4 min-w-0 overflow-y-auto pr-2 ${pdfPanelUrl && pdfPanelOpen ? 'flex-1 max-w-[62%]' : 'flex-1'}`}>
             {/* Loading banner during AI extraction */}
             {aiExtracting && (
               <div
@@ -1601,6 +1618,57 @@ export default function InvoicesPage() {
                 ) : 'Enregistrer'}
               </Button>
             </div>
+            </div>
+            {/* RIGHT COLUMN : PDF/image side panel - iter90ez */}
+            {pdfPanelUrl && (
+              pdfPanelOpen ? (
+                <div className="w-[38%] shrink-0 flex flex-col border-l border-slate-200 pl-3" data-testid="invoice-pdf-panel">
+                  <div className="flex items-center justify-between mb-2 shrink-0">
+                    <div className="text-xs font-semibold text-slate-700 flex items-center gap-1 min-w-0">
+                      <FileText size={13} className="shrink-0 text-purple-600" />
+                      <span className="truncate" title={pendingPdf?.filename || 'Facture'}>{pendingPdf?.filename || 'Facture'}</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setPdfPanelOpen(false)}
+                      title="Reduire le volet"
+                      className="p-1 rounded hover:bg-slate-100 text-slate-600 shrink-0"
+                      data-testid="pdf-panel-collapse-btn"
+                    >
+                      <PanelRightClose size={16} />
+                    </button>
+                  </div>
+                  {(() => {
+                    const isImg = /\.(jpe?g|png|webp|gif|bmp)$/i.test(pendingPdf?.filename || '');
+                    return isImg ? (
+                      <img
+                        src={pdfPanelUrl}
+                        alt="Facture"
+                        className="flex-1 w-full min-h-0 object-contain rounded border border-slate-200 bg-slate-50"
+                      />
+                    ) : (
+                      <iframe
+                        src={pdfPanelUrl}
+                        title="Facture"
+                        className="flex-1 w-full min-h-0 rounded border border-slate-200 bg-white"
+                        data-testid="pdf-panel-iframe"
+                      />
+                    );
+                  })()}
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setPdfPanelOpen(true)}
+                  title="Ouvrir l'apercu de la facture"
+                  className="w-9 shrink-0 border-l border-slate-200 pl-2 flex flex-col items-center gap-2 pt-2 text-slate-600 hover:bg-slate-50"
+                  data-testid="pdf-panel-expand-btn"
+                >
+                  <PanelRightOpen size={16} />
+                  <span className="[writing-mode:vertical-rl] rotate-180 text-[10px] font-medium tracking-wide text-slate-500">Apercu facture</span>
+                </button>
+              )
+            )}
           </div>
         </DialogContent>
       </Dialog>

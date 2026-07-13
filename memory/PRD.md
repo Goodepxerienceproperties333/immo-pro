@@ -12,6 +12,54 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 
+### Iter90ez (Feb 2026) - Volet lateral PDF/image pour controle facture
+
+**Ticket utilisateur** :
+> "lors de la reconnaissance IA des factures il serait bien d'avoir une
+> fenetre qui s'ouvre a droite que l'on puisse minimiser afin de
+> consulter la facture en mode controle"
+
+**Contexte** : lors de la creation d'une facture via IA (extraction du
+PDF), l'utilisateur doit verifier chaque champ extrait
+(numero/date/fournisseur/montants). Auparavant, il fallait cliquer sur
+l'oeil pour ouvrir un modal separe qui masquait le formulaire.
+
+**Fix iter90ez** (`InvoicesPage.js`) :
+
+1. `DialogContent` passe en `flex flex-col overflow-hidden` (au lieu de
+   `overflow-y-auto`) pour permettre 2 colonnes independantes en
+   hauteur.
+2. Colonne GAUCHE (formulaire) :
+   - `flex-1 min-w-0 overflow-y-auto pr-2 max-w-[62%]` quand le PDF
+     panel est ouvert.
+   - `flex-1` (pleine largeur) sinon.
+3. Colonne DROITE (`pdfPanelOpen && pdfPanelUrl`) :
+   - Largeur `38%`, header avec `<FileText>` + nom du fichier +
+     bouton `PanelRightClose` (reduire).
+   - Detection auto image (extensions `.jpe?g/png/webp/gif/bmp`) :
+     rendu via `<img>` (contain, fond slate-50). Sinon `<iframe>`.
+   - `URL.createObjectURL(pendingPdf.file)` en `useEffect` (revoque au
+     changement de PDF).
+4. Etat "reduit" :
+   - Bande verticale de 9px avec icone `PanelRightOpen` + libellé
+     "Apercu facture" en `writing-mode: vertical-rl rotate-180`.
+   - Clic dessus -> `setPdfPanelOpen(true)`.
+5. `pdfPanelOpen` reset a `true` a chaque changement de `pendingPdf`
+   (nouvelle IA -> panel remis en avant).
+
+**Data-testid ajoutes** :
+- `invoice-pdf-panel`, `pdf-panel-collapse-btn`, `pdf-panel-expand-btn`,
+  `pdf-panel-iframe`.
+
+**Verifie visuellement** (screenshots) :
+- Ouverture d'une nouvelle facture + upload d'un PNG -> panneau droit
+  s'affiche automatiquement avec l'image.
+- Clic sur le bouton PanelRightClose -> panneau reduit en bande
+  verticale, formulaire prend la pleine largeur.
+- Clic sur la bande -> panneau ouvert a nouveau.
+
+
+
 ### Iter90ex (Feb 2026) - Autorisation de plusieurs natures de depense sur le meme compte PCMN
 
 **Ticket utilisateur** :
