@@ -12,6 +12,56 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 
+### Iter90fd (Feb 2026) - BLOCAGE STRICT : plus JAMAIS de doublons de fournisseurs
+
+**Ticket utilisateur** :
+> "il est STRICTEMENT interdit de dupliquer un fournisseur !!"
+
+**Root cause residuelle malgre iter90ef/fa/fb** : `find_duplicate_supplier`
+comparait le nom normalise PRINCIPAL entre les fiches (nom vs nom).
+Or "Finlead Properties (Finlead srl)" normalise en "finlead properties",
+qui ne matche pas "finlead" (norm de "Finlead SRL"). La detection
+n'attrapait que les strict egalites, pas le contenu parenthese.
+
+**Fix iter90fd** dans `backend/routes/suppliers.py::find_duplicate_supplier` :
+- Pour le nom de la requete, calcule TOUS les candidats
+  `_norm_name_candidates(name)` (nom complet + chaque fragment
+  parenthese).
+- Pour chaque fiche existante, calcule egalement ses candidats.
+- Match si l'intersection des deux ensembles n'est PAS vide.
+- -> "Finlead Properties (Finlead srl)" (candidats = {finlead
+  properties, finlead}) matche "Finlead SRL" (candidats = {finlead}).
+
+**Points d'entree tous proteges** grace au nouveau matching :
+- `POST /api/suppliers` -> 409 (via find_duplicate_supplier)
+- `PUT /api/suppliers/{id}` -> 409 (via find_duplicate_supplier)
+- `POST /api/import-wizard/sessions/{id}/commit-suppliers` (CSV)
+  -> skipped_duplicates++ (silencieux, non-fatal)
+- `POST /api/import-wizard/sessions/{id}/commit-suppliers-pdf`
+  -> skipped_duplicates++ (idem)
+- `auto_entries._resolve_or_create_supplier_account` (creation
+  auto lors de la generation d'ecriture depuis une facture) -> reuse
+  automatique de la fiche existante, jamais de creation implicite.
+- `POST /api/invoices` + `PUT /api/invoices/{id}` -> snap-to-card
+  iter90fa/fb sur `data.supplier` (via `_norm_name_candidates`).
+
+**Tests iter90fd** (`test_iter90fd_strict_supplier_dedup.py`) :
+- `test_create_supplier_with_parenthesized_duplicate_returns_409`
+- `test_create_supplier_same_as_existing_returns_409`
+- `test_update_supplier_to_matching_name_returns_409`
+- `test_bundle_import_skips_parenthesized_duplicates`
+
+**Total** : 33 tests regression fournisseurs (iter78 + 79 + 85g + 90az
++ 90be + 90ef + 90fa + 90fd) tous verts.
+
+**Correction du historique** : les 5 factures Finlead deja en PROD
+(dont "Finlead Properties (Finlead srl)") ne sont pas retro-nettoyees
+automatiquement. Utiliser le script iter90fc :
+`python -m scripts.cleanup_supplier_duplicates --execute` en console
+production.
+
+
+
 ### Iter90fc (Feb 2026) - Script one-shot cleanup doublons fournisseurs
 
 **Contexte** : suite a iter90fa/fb, les nouvelles factures sont

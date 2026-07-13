@@ -123,7 +123,7 @@ async def find_duplicate_supplier(
 ) -> Optional[dict]:
     """Recherche un fournisseur en doublon sur 3 criteres (l'un suffit) :
         1. BCE ou TVA identique (normalises)
-        2. Nom identique (normalise)
+        2. Nom identique (normalise, incluant les candidats parentheses - iter90fd)
         3. IBAN identique (normalise)
 
     Scope : limite aux fournisseurs rattaches a `copro_id` (direct ou via
@@ -132,11 +132,15 @@ async def find_duplicate_supplier(
     Retourne {"supplier": <doc>, "field": "bce|vat|name|iban", "value": <str>}
     ou None.
     """
-    norm_name = _norm_name(name)
+    # iter90fd : blocage strict des doublons. On genere TOUS les candidats
+    # de normalisation (nom complet + chaque fragment entre parentheses)
+    # -> matcher meme les cas "Finlead Properties (Finlead srl)".
+    name_candidates = _norm_name_candidates(name)
+    norm_name = _norm_name(name)  # cle principale (pour retro-compat champ "value")
     norm_bce = _norm_id(bce_number)
     norm_vat = _norm_id(vat_number)
     norm_iban = _norm_id(iban)
-    if not (norm_name or norm_bce or norm_vat or norm_iban):
+    if not (name_candidates or norm_bce or norm_vat or norm_iban):
         return None
 
     # Construit la projection scope ACP
@@ -165,8 +169,12 @@ async def find_duplicate_supplier(
                 return {"supplier": s, "field": "bce_number", "value": s.get("bce_number", "")}
         if norm_iban and _norm_id(s.get("iban", "")) == norm_iban:
             return {"supplier": s, "field": "iban", "value": s.get("iban", "")}
-        if norm_name and _norm_name(s.get("name", "")) == norm_name:
-            return {"supplier": s, "field": "name", "value": s.get("name", "")}
+        # iter90fd : cross-check TOUS les candidats de nom (nom complet +
+        # parentheses) vs le nom normalise de la fiche existante ET vice-versa.
+        if name_candidates:
+            other_candidates = _norm_name_candidates(s.get("name", ""))
+            if name_candidates & other_candidates:
+                return {"supplier": s, "field": "name", "value": s.get("name", "")}
     return None
 
 
