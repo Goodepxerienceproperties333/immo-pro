@@ -12,6 +12,56 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 
+### Iter90ev (Feb 2026) - BUG CRITIQUE : appels futurs sur mutation groupee affichaient la quote-part du lot principal seulement
+
+**Ticket utilisateur** :
+> "l'appel de fonds trimestriel pour le lot 001 est normalement de 443 EUR
+> la base du calcul est la suivante :
+>  - budget cle generale 18800/10000 (quotities) * 943 = 443.21 EUR
+> Les 422.06 ne sont donc pas correctes verifie"
+
+**Scenario** :
+- Budget cle generale : 18800 EUR/an = 4700 EUR/trimestre
+- Quotites cumulees des 3 lots meme owner : 898 + 11 + 34 = 943
+- Denominateur total ACP : 10000
+- Quote-part groupee cumulee = 943/10000 * 4700 = **443.21 EUR** (correct)
+- **Bug : affichait 422.06 EUR** = 898/10000 * 4700 (main lot only)
+
+**Root cause** : dans `LotsPage.js`, le Bloc 2.b "Appels futurs" iterait
+uniquement `preview.future_calls` (le lot principal), pas les
+`per_lot_breakdowns[].future_calls` des lots additionnels et enfants
+lies. Meme probleme sur le Bloc 2.a (prorata sur appel en cours).
+
+**Fix iter90ev** (`LotsPage.js`) :
+- Nouvelle logique dans l'IIFE de preview :
+  * `displayFutureCalls` : agregation par `fund_call_id` (ou cle
+    composite `name::start::end` si pas d'id) sur tous les
+    `per_lot_breakdowns[]` en mode groupe.
+  * `futureCallsTotal` : consomme `preview.grouped_total_future`
+    (deja calcule par le backend).
+  * `displayCurrentDetails` : meme approche pour Bloc 2.a.
+  * Sous-total Bloc 2.a affiche desormais `currentProrataSum`
+    (calcule iter90eu) au lieu de la valeur main-only.
+- Ajout badge "(cumul N lots)" a cote du titre Bloc 2.b en mode groupe.
+- Sous-total Bloc 2.a suffixe "(N lots)" en mode groupe.
+
+**Backend inchange** : les agregats `grouped_total_current_prorata` et
+`grouped_total_future` etaient deja exposes. Le `per_lot_breakdowns[]`
+contient deja les detail per-lot. Bug purement UI.
+
+**Test** (`test_iter90ev_grouped_future_calls_total.py`) :
+- Reproduit exactement le scenario Matexi : 3 lots (898/11/34) + 1 lot
+  "OtherOwner" (9057) pour atteindre 10000 total.
+- 4 appels trimestriels de 4700 EUR.
+- Sale date 2025-11-17 (T1 en cours -> prorata + 3 T futurs).
+- Verifie que main.future_calls[i] = 422.06 (main only, backend).
+- Verifie que somme(per_lot.future_calls[fund_call_id]) = 443.21 par
+  appel (943/10000 x 4700).
+- Verifie que `grouped_total_future = 443.21 * 3 = 1329.63`.
+- 17 tests regression iter83/85/90ab/90ag/90eu/90ev : verts.
+
+
+
 ### Iter90eu (Feb 2026) - BUG CRITIQUE : mutation groupee affichait un fonds de roulement partiel
 
 **Ticket utilisateur** :

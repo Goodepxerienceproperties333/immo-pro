@@ -611,6 +611,61 @@ function MutationDialog({ lot, owners, ownersRefresh, onClose, onDone }) {
             const totalTransferSum = isGrouped
               ? (preview.grouped_total_transfer || 0)
               : (preview.total_transfer || 0);
+            // iter90ev : agregation des appels futurs par fund_call_id
+            // sur tous les lots du groupe (bug repro Matexi/Teluwen :
+            // 898/10000 x 18800/4 = 422.06 seulement pour le lot 001,
+            // alors qu'il faut 943/10000 x 18800/4 = 443.21 pour le
+            // groupe complet).
+            let displayFutureCalls, futureCallsTotal;
+            if (isGrouped) {
+              const byId = new Map();
+              for (const b of bd) {
+                for (const fc of (b.future_calls || [])) {
+                  const key = fc.fund_call_id || `${fc.fund_call_name}::${fc.period_start}::${fc.period_end}`;
+                  if (byId.has(key)) {
+                    byId.get(key).amount += (parseFloat(fc.amount) || 0);
+                  } else {
+                    byId.set(key, { ...fc, amount: parseFloat(fc.amount) || 0 });
+                  }
+                }
+              }
+              displayFutureCalls = Array.from(byId.values())
+                .map(fc => ({ ...fc, amount: Math.round(fc.amount * 100) / 100 }));
+              futureCallsTotal = preview.grouped_total_future ?? displayFutureCalls.reduce((s, f) => s + f.amount, 0);
+            } else {
+              displayFutureCalls = preview.future_calls || [];
+              futureCallsTotal = preview.future_calls_total || 0;
+            }
+            // iter90ev : idem pour le prorata sur appel en cours
+            // (Bloc 2.a). Chaque per_lot_breakdown expose
+            // current_period_details.
+            let displayCurrentDetails;
+            if (isGrouped) {
+              const byId = new Map();
+              for (const b of bd) {
+                for (const d of (b.current_period_details || [])) {
+                  const key = d.fund_call_id || `${d.fund_call_name}::${d.period_start}::${d.period_end}`;
+                  if (byId.has(key)) {
+                    const agg = byId.get(key);
+                    agg.owner_amount += (parseFloat(d.owner_amount) || 0);
+                    agg.prorata += (parseFloat(d.prorata) || 0);
+                  } else {
+                    byId.set(key, {
+                      ...d,
+                      owner_amount: parseFloat(d.owner_amount) || 0,
+                      prorata: parseFloat(d.prorata) || 0,
+                    });
+                  }
+                }
+              }
+              displayCurrentDetails = Array.from(byId.values()).map(d => ({
+                ...d,
+                owner_amount: Math.round(d.owner_amount * 100) / 100,
+                prorata: Math.round(d.prorata * 100) / 100,
+              }));
+            } else {
+              displayCurrentDetails = preview.current_period_details || [];
+            }
             return (
             <div className="space-y-3" data-testid="mutation-preview">
               {/* BLOC 1 : Fonds de roulement (jamais au prorata, sur quotites) */}
@@ -670,20 +725,22 @@ function MutationDialog({ lot, owners, ownersRefresh, onClose, onDone }) {
                         <tr><th className="text-left">Appel</th><th className="text-right">Date appel</th><th className="text-right">Periode</th><th className="text-right">Mt vendeur</th><th className="text-right">Jours apres</th><th className="text-right">Prorata</th></tr>
                       </thead>
                       <tbody>
-                        {(preview.current_period_details || []).map((d, i) => (
+                        {displayCurrentDetails.map((d, i) => (
                           <tr key={i} className="border-t border-slate-200">
                             <td className="py-1">{d.fund_call_name}</td>
                             <td className="text-right font-mono text-slate-500">{d.call_date || '-'}</td>
                             <td className="text-right">{d.period_start} -&gt; {d.period_end}</td>
-                            <td className="text-right font-mono">{d.owner_amount.toFixed(2)}</td>
+                            <td className="text-right font-mono">{Number(d.owner_amount).toFixed(2)}</td>
                             <td className="text-right font-mono">{d.days_after}/{d.total_days}</td>
-                            <td className="text-right font-mono font-semibold">{d.prorata.toFixed(2)}</td>
+                            <td className="text-right font-mono font-semibold">{Number(d.prorata).toFixed(2)}</td>
                           </tr>
                         ))}
                         <tr className="border-t-2 border-slate-300 bg-white">
-                          <td colSpan="5" className="py-1 text-right font-semibold">Sous-total prorata appel courant</td>
+                          <td colSpan="5" className="py-1 text-right font-semibold">
+                            Sous-total prorata appel courant{isGrouped ? ` (${bd.length} lots)` : ''}
+                          </td>
                           <td className="text-right font-mono font-bold text-[#022D52]" data-testid="mutation-current-prorata">
-                            {preview.current_period_prorata?.toFixed(2)} EUR
+                            {currentProrataSum.toFixed(2)} EUR
                           </td>
                         </tr>
                       </tbody>
@@ -699,8 +756,11 @@ function MutationDialog({ lot, owners, ownersRefresh, onClose, onDone }) {
                 <div>
                   <div className="text-xs font-semibold text-slate-700 mb-1">
                     b) Appels de provisions futurs (information - factures normalement a l&apos;acquereur)
+                    {isGrouped && (
+                      <span className="ml-2 text-[10px] font-normal text-slate-500">(cumul {bd.length} lots)</span>
+                    )}
                   </div>
-                  {(preview.future_calls || []).length === 0 ? (
+                  {(displayFutureCalls || []).length === 0 ? (
                     <div className="text-xs text-slate-500 italic">Aucun appel futur planifie apres la date de mutation.</div>
                   ) : (
                     <table className="w-full text-[11px]">
@@ -708,18 +768,18 @@ function MutationDialog({ lot, owners, ownersRefresh, onClose, onDone }) {
                         <tr><th className="text-left">Appel</th><th className="text-right">Periode</th><th className="text-right">Echeance</th><th className="text-right">Montant (acquereur)</th></tr>
                       </thead>
                       <tbody>
-                        {(preview.future_calls || []).map((fc, i) => (
+                        {displayFutureCalls.map((fc, i) => (
                           <tr key={i} className="border-t border-slate-200">
                             <td className="py-1">{fc.fund_call_name}</td>
                             <td className="text-right">{fc.period_start} -&gt; {fc.period_end}</td>
                             <td className="text-right">{fc.due_date || '-'}</td>
-                            <td className="text-right font-mono">{fc.amount.toFixed(2)}</td>
+                            <td className="text-right font-mono">{Number(fc.amount).toFixed(2)}</td>
                           </tr>
                         ))}
                         <tr className="border-t-2 border-slate-300 bg-white">
-                          <td colSpan="3" className="py-1 text-right font-semibold">Total appels futurs ({preview.future_calls.length})</td>
+                          <td colSpan="3" className="py-1 text-right font-semibold">Total appels futurs ({displayFutureCalls.length})</td>
                           <td className="text-right font-mono font-bold text-[#022D52]" data-testid="mutation-future-calls-total">
-                            {preview.future_calls_total?.toFixed(2)} EUR
+                            {Number(futureCallsTotal || 0).toFixed(2)} EUR
                           </td>
                         </tr>
                       </tbody>
