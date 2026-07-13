@@ -12,6 +12,66 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 
+### Iter90fa (Feb 2026) - Suppression des doublons de fournisseurs (dropdown + snap-to-card)
+
+**Ticket utilisateur** (avec screenshot montrant 3 entrees pour Finlead) :
+> "tu crees encore des doublons de fournisseurs cela est interdit !"
+
+**Contexte** : la barre de recherche affichait toujours 3 entrees
+distinctes :
+- "Finlead" (SANS FICHE)
+- "Finlead Properties (Finlead srl)" (SANS FICHE)
+- "Finlead SRL" (avec BCE, fiche canonique)
+
+Deux racines :
+1. Le composant `SupplierSearchSelect` deduplique par
+   `name.trim().toLowerCase()` -> ne collapse pas les variantes.
+2. Lors de la sauvegarde d'une facture, le champ `supplier` etait
+   stocke TEL QUEL (nom libre) meme si une fiche canonique existait.
+
+**Fix iter90fa** :
+
+1. **Frontend - lib partagee** `frontend/src/lib/supplierName.js` :
+   - `normSupplierName(value)` : reprend la logique du backend
+     `_norm_name` (particules juridiques filtrees : sa/sprl/srl/bvba/
+     sarl/nv/gmbh/ltd/... + mots tries alphabetiquement + ponctuation
+     retiree).
+   - Ex: "Finlead" == "Finlead SRL" == "SRL Finlead" == "finlead."
+
+2. **Frontend - `SupplierSearchSelect.js`** :
+   - `dedupedList` : cle Map = `normSupplierName(name)` (au lieu de
+     lowercase).
+   - Les fournisseurs jamais utilises (fiches sans invoice) sont
+     desormais inclus dans la liste (avant : filtres out).
+   - Quand une fiche existe pour cette cle, on affiche SON nom
+     canonique (l'utilisateur voit une seule entree "Finlead SRL").
+   - `matchedCard` et `queryIsExisting` utilisent aussi la
+     normalisation.
+
+3. **Backend - snap-to-card** dans `POST/PUT /api/invoices` :
+   - Avant persistance, si `data.supplier` normalise matche une fiche
+     existante (globale ou copro), on remplace par le nom canonique de
+     la fiche.
+   - Consequence : plus jamais de creation implicite de "Finlead"
+     libre quand la fiche "Finlead SRL" existe.
+
+**Tests** (`test_iter90fa_snap_supplier_to_card.py`) :
+- `test_free_text_supplier_snaps_to_existing_card` : "Finlead {suffix}"
+  -> "Finlead {suffix} SRL" (la fiche canonique).
+- `test_free_text_supplier_wrong_case_and_particles` : "srl FINLEAD
+  {suffix}" -> snappe correctement.
+- `test_unknown_supplier_stays_as_is` : nom totalement different reste
+  intact.
+- 28 tests regression (iter78/79/85g/90az/90be/90ef/90fa) : verts.
+
+**Note importante** : les doublons DEJA existants dans la base
+(anciennes factures avec "Finlead" en libre) ne sont pas modifies par
+ce patch. Un admin peut les nettoyer via l'outil
+`/admin/duplicates/suppliers` existant qui utilise deja la
+normalisation `_norm_name`.
+
+
+
 ### Iter90ez (Feb 2026) - Volet lateral PDF/image pour controle facture
 
 **Ticket utilisateur** :

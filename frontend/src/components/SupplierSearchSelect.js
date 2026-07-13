@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import { Search, ChevronDown, X, Plus, Building2, Loader2 } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import { normSupplierName } from '@/lib/supplierName';
 
 /**
  * SupplierSearchSelect - selecteur avec autocomplete des fournisseurs
@@ -55,30 +56,51 @@ export default function SupplierSearchSelect({
   }, []);
 
   // Construit la liste DEDOUBLONNEE des fournisseurs utilises :
-  // - Cle = nom normalise (lowercase + trim)
+  // iter90fa : cle = nom normalise (particules juridiques filtrees + mots
+  // tries + ponctuation retiree). Ceci fait matcher "Finlead", "Finlead
+  // SRL" et "SRL Finlead" comme UNE seule entree.
   // - On enrichit avec la fiche correspondante (si elle existe) pour montrer BCE/IBAN/Ville
   // - On inclut les noms libres (utilises mais sans fiche)
   const dedupedList = useMemo(() => {
     const map = new Map();
     const byNormName = new Map();
     suppliers.forEach((s) => {
-      const k = (s.name || '').trim().toLowerCase();
+      const k = normSupplierName(s.name);
       if (k && !byNormName.has(k)) byNormName.set(k, s);
     });
     usedNames.forEach((rawName) => {
       const name = (rawName || '').trim();
       if (!name) return;
-      const k = name.toLowerCase();
+      const k = normSupplierName(name);
+      if (!k) return;
       if (map.has(k)) return; // dedup
       const card = byNormName.get(k) || null;
       map.set(k, {
         id: card?.id || `freetext::${k}`,
+        // Si une fiche existe, on affiche SON nom canonique (pas la
+        // variante libre). Sinon on garde le nom libre.
         name: card?.name || name,
         bce_number: card?.bce_number || '',
         vat_number: card?.vat_number || '',
         iban: card?.iban || '',
         city: card?.city || '',
         hasCard: !!card,
+      });
+    });
+    // Aussi : inclure les fiches JAMAIS utilisees dans une facture
+    // (au cas ou une fiche existe mais aucun usedNames match). Utile
+    // pour la premiere selection d'un nouveau fournisseur.
+    suppliers.forEach((s) => {
+      const k = normSupplierName(s.name);
+      if (!k || map.has(k)) return;
+      map.set(k, {
+        id: s.id,
+        name: s.name,
+        bce_number: s.bce_number || '',
+        vat_number: s.vat_number || '',
+        iban: s.iban || '',
+        city: s.city || '',
+        hasCard: true,
       });
     });
     return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
@@ -98,13 +120,14 @@ export default function SupplierSearchSelect({
     })
     .slice(0, 50);
 
-  // Trouve une fiche dans `suppliers` qui matche le nom courant
+  // Trouve une fiche dans `suppliers` qui matche le nom courant.
+  // iter90fa : match par nom normalise (particules juridiques filtrees).
   const matchedCard = suppliers.find(
-    (s) => (s.name || '').trim().toLowerCase() === (value || '').trim().toLowerCase()
+    (s) => normSupplierName(s.name) === normSupplierName(value)
   );
 
   const queryIsExisting = q && filtered.some(
-    (s) => s.name.trim().toLowerCase() === q
+    (s) => normSupplierName(s.name) === normSupplierName(q)
   );
 
   const handleSelect = (s) => {

@@ -964,6 +964,25 @@ def create_invoices_router(db):
     @router.post("/invoices")
     async def create_invoice(data: InvoiceInput, force: bool = Query(default=False)):
         from fiscal_lock import ensure_period_open
+        # iter90fa : snap-to-card - si un nom de fournisseur libre matche
+        # une fiche existante (par nom normalise), on remplace par le nom
+        # canonique de la fiche pour eviter la creation implicite d'un
+        # doublon "sans fiche".
+        if data.supplier:
+            from routes.suppliers import _norm_name as _norm_supplier_name
+            target_norm = _norm_supplier_name(data.supplier)
+            if target_norm:
+                q_sup = {}
+                if data.copropriete_id:
+                    q_sup["$or"] = [
+                        {"copropriete_id": data.copropriete_id},
+                        {"is_global": True},
+                        {"copropriete_id": {"$in": [None, ""]}},
+                    ]
+                async for card in db.suppliers.find(q_sup, {"_id": 0, "name": 1}):
+                    if _norm_supplier_name(card.get("name", "")) == target_norm:
+                        data.supplier = card["name"]
+                        break
         # Verrou fiscal : la date de la facture doit etre dans une periode ouverte
         await ensure_period_open(db, data.copropriete_id or "", data.date, context="facture")
         # Anti-doublon strict avant toute persistance (soft duplicate ignore si force=true)
@@ -1239,6 +1258,22 @@ def create_invoices_router(db):
     @router.put("/invoices/{invoice_id}")
     async def update_invoice(invoice_id: str, data: InvoiceInput, force: bool = Query(default=False)):
         from fiscal_lock import ensure_period_open
+        # iter90fa : snap-to-card (idem create_invoice)
+        if data.supplier:
+            from routes.suppliers import _norm_name as _norm_supplier_name
+            target_norm = _norm_supplier_name(data.supplier)
+            if target_norm:
+                q_sup = {}
+                if data.copropriete_id:
+                    q_sup["$or"] = [
+                        {"copropriete_id": data.copropriete_id},
+                        {"is_global": True},
+                        {"copropriete_id": {"$in": [None, ""]}},
+                    ]
+                async for card in db.suppliers.find(q_sup, {"_id": 0, "name": 1}):
+                    if _norm_supplier_name(card.get("name", "")) == target_norm:
+                        data.supplier = card["name"]
+                        break
         existing_for_lock = await db.invoices.find_one({"id": invoice_id}, {"_id": 0})
         if existing_for_lock:
             # Verrou : la date d'origine ET la nouvelle doivent etre dans un exercice ouvert
