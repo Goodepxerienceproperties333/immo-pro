@@ -88,14 +88,13 @@ def create_expense_categories_router(db):
         prop = float(data.default_proprietaire_pct or 0)
         if abs((occ + prop) - 100) > 0.01:
             raise HTTPException(400, f"La somme % occupant ({occ}) + % proprietaire ({prop}) doit etre 100 (recu {occ + prop})")
-        # Enforce 1:1 - reject if account_number already used in this ACP
-        existing = await db.expense_categories.find_one({
-            "account_number": data.account_number,
-            "copropriete_id": data.copropriete_id or "",
-        }, {"_id": 0})
-        if existing:
-            raise HTTPException(409, f"Une nature existe deja pour ce compte ({existing.get('name','?')})")
-        # Validate account exists and is class 6 (Charges) or class 7 (Produits)
+        # iter90ex : suppression du blocage 1:1 (compte PCMN <-> nature).
+        # Plusieurs natures de depense peuvent partager le meme compte
+        # PCMN (ex: "RC copro" et "Assurance RC CoC & Comm.aux comptes"
+        # tous deux sur 6141). Les ecritures comptables restent
+        # correctes puisque tout le systeme downstream identifie la
+        # nature par `expense_category_id`, jamais en remontant de
+        # `account_number`. Validate account exists and is class 5/6/7.
         pcmn = await db.pcmn_accounts.find_one({
             "number": data.account_number,
             "copropriete_id": data.copropriete_id or "",
@@ -141,15 +140,9 @@ def create_expense_categories_router(db):
         prop = float(data.default_proprietaire_pct or 0)
         if abs((occ + prop) - 100) > 0.01:
             raise HTTPException(400, f"La somme % occupant ({occ}) + % proprietaire ({prop}) doit etre 100 (recu {occ + prop})")
-        # If account changed: enforce 1:1
+        # If account changed: valider que le compte existe et est de la
+        # bonne classe. iter90ex : plus de blocage 1:1.
         if data.account_number != existing.get("account_number"):
-            dup = await db.expense_categories.find_one({
-                "account_number": data.account_number,
-                "copropriete_id": data.copropriete_id or existing.get("copropriete_id", ""),
-                "id": {"$ne": cat_id},
-            }, {"_id": 0})
-            if dup:
-                raise HTTPException(409, f"Compte deja attribue a la nature '{dup.get('name','?')}'")
             pcmn = await db.pcmn_accounts.find_one({
                 "number": data.account_number,
                 "copropriete_id": data.copropriete_id or existing.get("copropriete_id", ""),

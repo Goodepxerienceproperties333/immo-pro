@@ -306,6 +306,21 @@ async def generate_purchase_entry(db, invoice: dict) -> dict | None:
     # ---- ECRITURE STANDARD ----
     # Mode multi-lignes : 1 ecriture avec N debits (1 par ligne) + 1 credit fournisseur.
     # Mode 1-ligne : 1 debit + 1 credit (legacy).
+    # iter90ey : chaque debit porte son propre occupant_pct/proprietaire_pct.
+    # Ligne : fallback ligne -> facture -> defaut (0% occ / 100% prop).
+    invoice_occ_pct = invoice.get("occupant_pct")
+    invoice_prop_pct = invoice.get("proprietaire_pct")
+    def _resolve_line_pct(line_occ, line_prop):
+        occ = line_occ if line_occ is not None else invoice_occ_pct
+        prop = line_prop if line_prop is not None else invoice_prop_pct
+        if occ is None and prop is None:
+            occ, prop = 0.0, 100.0
+        elif occ is None:
+            occ = max(0.0, 100.0 - float(prop))
+        elif prop is None:
+            prop = max(0.0, 100.0 - float(occ))
+        return float(occ), float(prop)
+
     invoice_lines = invoice.get("lines") or []
     if invoice_lines:
         # Pre-fetch des noms PCMN pour toutes les natures
@@ -320,11 +335,17 @@ async def generate_purchase_entry(db, invoice: dict) -> dict | None:
             if amt <= 0 or not acc:
                 continue
             desc = (ln.get("description") or "").strip()
+            occ_pct, prop_pct = _resolve_line_pct(
+                ln.get("occupant_pct"), ln.get("proprietaire_pct")
+            )
             lines.append({
                 "account_number": acc,
                 "account_name": pcmn_names_multi.get(acc, "") + (f" - {desc}" if desc else ""),
                 "debit": amt, "credit": 0.0,
                 "third_party_id": None, "third_party_name": "",
+                "occupant_pct": occ_pct,
+                "proprietaire_pct": prop_pct,
+                "description": desc,
             })
         lines.append({
             "account_number": supplier_acc,
@@ -334,11 +355,13 @@ async def generate_purchase_entry(db, invoice: dict) -> dict | None:
             "third_party_name": supplier_name,
         })
     else:
+        occ_pct, prop_pct = _resolve_line_pct(None, None)
         lines = [
             {"account_number": expense_acc,
              "account_name": pcmn_names.get(expense_acc, ""),
              "debit": amount, "credit": 0.0,
-             "third_party_id": None, "third_party_name": ""},
+             "third_party_id": None, "third_party_name": "",
+             "occupant_pct": occ_pct, "proprietaire_pct": prop_pct},
             {"account_number": supplier_acc,
              "account_name": pcmn_names.get(supplier_acc, supplier_name),
              "debit": 0.0, "credit": amount,

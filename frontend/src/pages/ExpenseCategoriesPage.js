@@ -200,7 +200,7 @@ export default function ExpenseCategoriesPage() {
                   </Command>
                 </PopoverContent>
               </Popover>
-              <p className="text-[11px] text-slate-500 mt-1">Un compte ne peut etre lie qu&apos;a UNE seule nature (relation 1:1)</p>
+              <p className="text-[11px] text-slate-500 mt-1">Plusieurs natures peuvent partager le meme compte PCMN.</p>
             </div>
             <div>
               <label className="form-label">Description (optionnel)</label>

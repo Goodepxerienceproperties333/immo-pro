@@ -52,12 +52,17 @@ class DistKeyInput(BaseModel):
 class InvoiceLineInput(BaseModel):
     """Une ligne de detail de facture (split entre plusieurs natures/comptes).
     Si lines=[] (ou None) sur la facture, on reste en mode 1-ligne legacy.
+    iter90ey : occupant_pct/proprietaire_pct optionnels au niveau ligne.
+    Si None -> herite de la facture (occupant_pct global), qui elle-meme
+    herite eventuellement de la nature.
     """
     account_number: str
     expense_category_id: Optional[str] = ""
     distribution_key_id: Optional[str] = ""
     amount: float
     description: Optional[str] = ""
+    occupant_pct: Optional[float] = None
+    proprietaire_pct: Optional[float] = None
 
 
 class PrivateFeeAllocation(BaseModel):
@@ -813,6 +818,10 @@ def create_invoices_router(db):
                 "distribution_key_id": ln.distribution_key_id or "",
                 "amount": round(amt, 2),
                 "description": ln.description or "",
+                # iter90ey : occupant/proprietaire percentage per-line
+                # (fallback vers facture globale si None).
+                "occupant_pct": ln.occupant_pct,
+                "proprietaire_pct": ln.proprietaire_pct,
             })
             total += amt
 

@@ -122,14 +122,18 @@ class TestExpenseCategoriesCRUD:
         assert mine.get("invoice_count") == 0
         assert mine.get("invoice_total") == 0
 
-    def test_one_to_one_strict_same_acp(self, admin_client, copro_id, pcmn_class6, created_ids):
-        """2nd POST with same account_number in same ACP -> 409."""
+    def test_multiple_categories_allowed_same_account(self, admin_client, copro_id, pcmn_class6, created_ids):
+        """iter90ex : plusieurs natures peuvent partager le meme compte
+        PCMN (ex: 'RC copro' et 'Assurance RC CoC & Comm.aux comptes'
+        tous deux sur 6141)."""
         acc = pcmn_class6[0]
         # cat1 already created on this account in previous test
         r = admin_client.post(f"{API}/expense-categories", json={
-            "name": f"{TAG}_dup", "account_number": acc["number"], "copropriete_id": copro_id,
+            "name": f"{TAG}_second_on_same_account", "account_number": acc["number"],
+            "copropriete_id": copro_id,
         }, timeout=15)
-        assert r.status_code == 409, f"expected 409, got {r.status_code}: {r.text}"
+        assert r.status_code == 200, f"iter90ex : creation multi-natures/compte doit passer, got {r.status_code}: {r.text}"
+        created_ids["categories"].append(r.json()["id"])
 
     def test_must_be_class6(self, admin_client, copro_id, pcmn_class7):
         r = admin_client.post(f"{API}/expense-categories", json={
@@ -137,7 +141,7 @@ class TestExpenseCategoriesCRUD:
         }, timeout=15)
         assert r.status_code == 400, f"expected 400 for non-class-6, got {r.status_code}: {r.text}"
 
-    def test_update_conflict_and_invalid_class(self, admin_client, copro_id, pcmn_class6, pcmn_class7, created_ids):
+    def test_update_reassign_and_invalid_class(self, admin_client, copro_id, pcmn_class6, pcmn_class7, created_ids):
         # Create a second cat on pcmn[1]
         acc2 = pcmn_class6[1]
         r = admin_client.post(f"{API}/expense-categories", json={
@@ -146,13 +150,13 @@ class TestExpenseCategoriesCRUD:
         assert r.status_code == 200
         cat2 = r.json()
         created_ids["categories"].append(cat2["id"])
-        # Try to PUT cat2 onto cat1's account -> 409
+        # iter90ex : PUT cat2 onto cat1's account -> 200 (plus de 1:1)
         cat1_acc = pcmn_class6[0]["number"]
         pu = admin_client.put(f"{API}/expense-categories/{cat2['id']}", json={
             "name": cat2["name"], "account_number": cat1_acc, "copropriete_id": copro_id,
         }, timeout=15)
-        assert pu.status_code == 409, f"expected 409 conflict, got {pu.status_code}: {pu.text}"
-        # PUT to class 7 -> 400
+        assert pu.status_code == 200, f"iter90ex : reaffectation autorisee, got {pu.status_code}: {pu.text}"
+        # PUT to class 7 -> 400 (regle metier inchangee)
         pu2 = admin_client.put(f"{API}/expense-categories/{cat2['id']}", json={
             "name": cat2["name"], "account_number": pcmn_class7["number"], "copropriete_id": copro_id,
         }, timeout=15)

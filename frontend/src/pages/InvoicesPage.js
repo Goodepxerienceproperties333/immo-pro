@@ -426,6 +426,9 @@ export default function InvoicesPage() {
           distribution_key_id: (l.distribution_key_id && l.distribution_key_id !== 'none') ? l.distribution_key_id : '',
           amount: Number(l.amount),
           description: l.description || '',
+          // iter90ey : repartition Occ/Prop specifique a la ligne (null = herite)
+          occupant_pct: (l.occupant_pct === '' || l.occupant_pct === null || l.occupant_pct === undefined) ? null : Number(l.occupant_pct),
+          proprietaire_pct: (l.proprietaire_pct === '' || l.proprietaire_pct === null || l.proprietaire_pct === undefined) ? null : Number(l.proprietaire_pct),
         })) : null,
       };
       let invoiceId;
@@ -1281,7 +1284,7 @@ export default function InvoicesPage() {
                   </div>
                   <div className="space-y-1.5">
                     {invForm.lines.map((ln, idx) => (
-                      <div key={ln._key || idx} className="grid grid-cols-12 gap-2 items-end bg-white rounded border border-slate-200 px-2 py-1.5" data-testid={`invoice-line-${idx}`}>
+                      <div key={ln._key || idx} className="grid grid-cols-[repeat(14,minmax(0,1fr))] gap-2 items-end bg-white rounded border border-slate-200 px-2 py-1.5" data-testid={`invoice-line-${idx}`}>
                         <div className="col-span-3">
                           {idx === 0 && <label className="form-label text-[10px]">Nature</label>}
                           <Select
@@ -1299,6 +1302,14 @@ export default function InvoicesPage() {
                                     account_number: cat?.account_number || newLines[idx].account_number,
                                     // Auto-pre-rempli la cle de repartition par defaut de la nature
                                     distribution_key_id: cat?.default_distribution_key_id || newLines[idx].distribution_key_id || '',
+                                    // iter90ey : pre-remplir %Occ/%Prop depuis la nature
+                                    // si l'utilisateur ne les a pas encore explicitement fixes.
+                                    occupant_pct: (newLines[idx].occupant_pct == null && cat?.default_occupant_pct != null)
+                                      ? cat.default_occupant_pct
+                                      : newLines[idx].occupant_pct,
+                                    proprietaire_pct: (newLines[idx].proprietaire_pct == null && cat?.default_proprietaire_pct != null)
+                                      ? cat.default_proprietaire_pct
+                                      : newLines[idx].proprietaire_pct,
                                   };
                                 }
                                 return { ...f, lines: newLines };
@@ -1375,6 +1386,60 @@ export default function InvoicesPage() {
                             placeholder={invForm.description ? `« ${invForm.description.slice(0, 24)}${invForm.description.length > 24 ? '…' : ''} »` : 'Optionnel'}
                             title="Vide = herite de la description generale. Rempli = remplace pour cette ligne."
                             data-testid={`invoice-line-desc-${idx}`}
+                          />
+                        </div>
+                        {/* iter90ey : repartition Occupant / Proprietaire par ligne */}
+                        <div className="col-span-1">
+                          {idx === 0 && (
+                            <label
+                              className="form-label text-[10px]"
+                              title="Pourcentage occupant sur cette ligne. Si laisse vide, la repartition globale de la facture (bas du formulaire) s'applique."
+                            >
+                              % Occ
+                            </label>
+                          )}
+                          <Input
+                            type="number" step="0.01" min="0" max="100"
+                            value={ln.occupant_pct ?? ''}
+                            onChange={e => {
+                              const raw = e.target.value;
+                              const v = raw === '' ? null : Math.max(0, Math.min(100, parseFloat(raw) || 0));
+                              setInvForm(f => {
+                                const newLines = [...f.lines];
+                                newLines[idx] = {
+                                  ...newLines[idx],
+                                  occupant_pct: v,
+                                  proprietaire_pct: v == null ? null : Math.max(0, 100 - v),
+                                };
+                                return { ...f, lines: newLines };
+                              });
+                            }}
+                            className="h-8 text-xs text-right font-mono"
+                            placeholder={ln.expense_category_id ? '(nature)' : '(global)'}
+                            data-testid={`invoice-line-occ-${idx}`}
+                          />
+                        </div>
+                        <div className="col-span-1">
+                          {idx === 0 && <label className="form-label text-[10px]">% Prop</label>}
+                          <Input
+                            type="number" step="0.01" min="0" max="100"
+                            value={ln.proprietaire_pct ?? ''}
+                            onChange={e => {
+                              const raw = e.target.value;
+                              const v = raw === '' ? null : Math.max(0, Math.min(100, parseFloat(raw) || 0));
+                              setInvForm(f => {
+                                const newLines = [...f.lines];
+                                newLines[idx] = {
+                                  ...newLines[idx],
+                                  proprietaire_pct: v,
+                                  occupant_pct: v == null ? null : Math.max(0, 100 - v),
+                                };
+                                return { ...f, lines: newLines };
+                              });
+                            }}
+                            className="h-8 text-xs text-right font-mono"
+                            placeholder={ln.expense_category_id ? '(nature)' : '(global)'}
+                            data-testid={`invoice-line-prop-${idx}`}
                           />
                         </div>
                         <div className="col-span-1">
@@ -1674,7 +1739,7 @@ export default function InvoicesPage() {
                 placeholder="6XXX..."
                 testId="new-cat-account"
               />
-              <p className="text-[10px] text-slate-400 mt-1">Un compte PCMN ne peut etre lie qu&apos;a une seule nature.</p>
+              <p className="text-[10px] text-slate-400 mt-1">Plusieurs natures peuvent partager le meme compte PCMN.</p>
             </div>
             <div>
               <label className="form-label">Description</label>

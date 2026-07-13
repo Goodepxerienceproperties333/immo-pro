@@ -12,6 +12,90 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 
+### Iter90ex (Feb 2026) - Autorisation de plusieurs natures de depense sur le meme compte PCMN
+
+**Ticket utilisateur** :
+> "ce blocage ne doit pas avoir lieu"
+
+Le systeme refusait la creation d'une nature "RC copro" sur le compte
+6141 parce qu'une nature "Assurance RC Conseil de Copropriete et
+Commissaires aux comptes" existait deja sur le meme compte.
+
+**Fix iter90ex** :
+
+Backend (`routes/expense_categories.py`) :
+- Suppression du check 409 dans `POST /api/expense-categories` :
+  la contrainte "1 compte PCMN <-> 1 nature" est levee.
+- Suppression du check 409 dans `PUT /api/expense-categories/{id}`
+  quand `account_number` change.
+- Justification : toute la chaine downstream (banking split, journal
+  entry generation, expense_rows) identifie une nature par son
+  `expense_category_id`, jamais par remontee `account_number`.
+
+Frontend :
+- `ExpenseCategoriesPage.js` : message d'aide passe de "Un compte ne
+  peut etre lie qu'a UNE seule nature (relation 1:1)" a "Plusieurs
+  natures peuvent partager le meme compte PCMN."
+- `InvoicesPage.js` : meme message d'aide mis a jour dans la dialog
+  "Nouvelle nature de depense" inline.
+
+**Tests** (`test_iter90ex_multiple_categories_per_account.py`) :
+- Creation 2 natures sur meme compte -> 200 x 2.
+- Reaffectation nature B vers compte deja utilise par nature A -> 200.
+- Tests iter17 (test_iter17_expense_categories.py) mis a jour pour
+  refleter la nouvelle regle (200 au lieu de 409).
+
+---
+
+### Iter90ey (Feb 2026) - Repartition Occupant/Proprietaire configurable PAR LIGNE en mode multi-lignes
+
+**Ticket utilisateur** :
+> "lors de l'edition de facture multiligne il doit aussi etre possible
+> de decider de la repartition entre proprietaires et occupant par
+> ligne, actuellement c'est pas possible"
+
+Avant : la repartition Occupant / Proprietaire etait GLOBALE a la
+facture. Impossible d'avoir par exemple ligne A a 100% proprio (RC
+copro) et ligne B a 70/30 (Incendie parties communes vs parties
+privees).
+
+**Fix iter90ey** :
+
+Backend :
+- `InvoiceLineInput` : ajout de `occupant_pct` et `proprietaire_pct`
+  optionnels (None = herite du niveau facture).
+- `routes/invoices.py::_resolve_invoice_lines` : conserve les valeurs
+  par ligne dans le doc invoice.
+- `auto_entries.py::generate_purchase_entry` : chaque debit multi-ligne
+  porte desormais son propre `occupant_pct/proprietaire_pct`.
+  Fallback en cascade : ligne -> facture globale -> defaut (0/100).
+- Consequence : `expense_rows.py` (ligne 320-346) qui lit
+  `ln.get("occupant_pct")` depuis les journal lines applique
+  automatiquement la bonne repartition par ligne dans le decompte
+  locataire et la liste des depenses.
+
+Frontend (`InvoicesPage.js`) :
+- La ligne de multi-line passe de `grid-cols-12` a
+  `grid-cols-[repeat(14,minmax(0,1fr))]` pour accommoder 2 nouvelles
+  colonnes "% Occ" et "% Prop" (1 col chacune).
+- Chaque input :
+  - Vide -> `null` -> herite du niveau facture (placeholder "(global)"
+    ou "(nature)" si une nature est selectionnee).
+  - Saisir % Occ -> % Prop = 100 - % Occ auto, et vice-versa.
+- Selection d'une nature avec `default_occupant_pct` : pre-remplit
+  les 2 champs de la ligne uniquement si ils sont encore null.
+- Payload save (POST/PUT) inclut `occupant_pct` / `proprietaire_pct`
+  par ligne, `null` explicite si non defini.
+
+**Tests** (`test_iter90ey_line_level_occupant_pct.py`) :
+- Ligne A 100/0 + Ligne B 70/30 -> journal debit A avec 0/100,
+  debit B avec 70/30.
+- Ligne sans pct + facture globale 50/50 -> ligne herite 50/50, ligne
+  avec override 100/0 -> journal a 100/0 pour cette ligne uniquement.
+- 8 tests regression iter85f/90ea/90ex : verts.
+
+
+
 ### Iter90ew (Feb 2026) - Race condition sur preview mutation lors de la frappe de la date
 
 **Ticket utilisateur** :
