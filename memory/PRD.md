@@ -12,6 +12,78 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 
+### Iter90fe (Feb 2026) - Situation de compte fournisseur inclut les AC historiques
+
+**Ticket utilisateur** :
+> "dans la balance des tiers fournisseurs il faut que les factures
+> comptabilisees soient visible au credit"
+
+**Root cause** : dans `GET /api/reports/balance-tiers/suppliers/{id}`,
+la fonction `_line_matches` acceptait une ligne si
+`line.third_party_id == supplier_id` OU `line.account_number == tier`.
+Or les factures historiques (creees avant la fiche canonique) ont un
+compte auto-genere different du tier canonique ET/OU aucun
+`third_party_id`. Resultat : leurs AC ne remontaient pas dans la
+situation, seuls les paiements bancaires (FI) apparaissaient au
+debit.
+
+**Fix iter90fe** (`routes/reports.py::situation_compte_supplier`) :
+- Nouveau fallback : pre-calcule `matching_invoice_ids` = ensemble des
+  ids de factures dont `supplier_id == supplier_id` OU dont
+  `supplier` normalise (`_norm_name_candidates`) matche celui de la
+  fiche.
+- `_line_matches(ln, entry)` accepte desormais aussi les lignes
+  d'une ecriture dont le `source_invoice_id` est dans cet ensemble
+  ET dont le credit > 0 (ligne tier fournisseur uniquement).
+- Toutes les 3 invocations existantes (`pre_q`, `AN in-period`,
+  `entries`) mises a jour pour passer l'entry.
+
+**Effet** : "Finlead SRL" affiche desormais TOUS les credits
+d'invoices lui correspondant, meme si l'AC porte un compte auto-genere
+ou aucun `third_party_id`.
+
+**Test** (`test_iter90fe_situation_supplier_historical.py`) :
+Setup : 1 invoice avec third_party_id correct (100 EUR) + 1 invoice
+legacy avec supplier libre "Finlead X Properties (Finlead X srl)"
+sans third_party_id (200 EUR sur compte 4400099 different du tier
+canonique 4400001).
+Assert : total_credit = 300 EUR (les deux inclus) + les 2 refs
+(F-A-001, F-B-001) dans les movements.
+
+---
+
+### Iter90ff (Feb 2026) - Export CSV / PDF du facturier
+
+**Ticket utilisateur** :
+> "Ajouter aussi un bouton permettant dans le facturier d'exporter
+> une liste de factures en format PDF ou CSV"
+
+**Livrable** :
+
+Backend (`routes/invoices.py`) :
+- `GET /api/invoices/export.csv` : renvoie un CSV UTF-8 BOM (Excel-
+  friendly), separateur `;`, avec les colonnes : Ref interne, N°
+  fournisseur, Date, Fournisseur, Description, Montant EUR, Cle
+  repartition, Statut. Prend les memes filtres que la UI :
+  `copropriete_id, start_date, end_date, supplier, status, reference`.
+- `GET /api/invoices/export.pdf` : PDF paysage A4 via ReportLab avec
+  titre "Facturier - {ACP}", ligne de sous-titre listant les filtres
+  actifs, table paginee (repeat header), ligne TOTAL en bas + resume
+  "N facture(s) - Total EUR".
+- Helper interne `_build_invoice_query` partage entre les 2 endpoints.
+
+Frontend (`pages/InvoicesPage.js`) :
+- Nouveau helper `exportInvoices(format)` qui construit l'URL avec
+  les filtres actifs et l'ouvre dans un nouvel onglet (le navigateur
+  declenche le download via `Content-Disposition: attachment`).
+- Deux boutons `CSV` / `PDF` (data-testid `inv-export-csv-btn` /
+  `inv-export-pdf-btn`) alignes a droite de la barre de filtres.
+
+**Verifie** : curl CSV -> 3 factures reelles renvoyees. curl PDF ->
+3688 bytes, header %PDF-1.4 valide.
+
+
+
 ### Iter90fd (Feb 2026) - BLOCAGE STRICT : plus JAMAIS de doublons de fournisseurs
 
 **Ticket utilisateur** :

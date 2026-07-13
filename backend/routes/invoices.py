@@ -961,6 +961,175 @@ def create_invoices_router(db):
             }},
         )
 
+    @router.get("/invoices/export.csv")
+    async def export_invoices_csv(
+        copropriete_id: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        supplier: Optional[str] = None,
+        status: Optional[str] = None,
+        reference: Optional[str] = None,
+    ):
+        """iter90ff : export CSV du facturier (avec filtres identiques a la
+        liste UI). Le CSV est UTF-8 avec BOM (Excel-friendly) et separateur ';'.
+        Colonnes : Ref interne;N* fournisseur;Date;Fournisseur;Description;
+        Montant;Cle;Statut."""
+        import csv
+        import io
+        q = _build_invoice_query(copropriete_id, start_date, end_date, supplier, status, reference)
+        docs = await db.invoices.find(q, {"_id": 0}).sort("date", -1).to_list(20000)
+        # Enrichit avec le nom de la cle de repartition
+        keys_by_id: dict[str, str] = {}
+        if copropriete_id:
+            async for k in db.distribution_keys.find(
+                {"copropriete_id": copropriete_id}, {"_id": 0, "id": 1, "name": 1}
+            ):
+                keys_by_id[k["id"]] = k.get("name", "")
+        buf = io.StringIO()
+        buf.write("\ufeff")  # BOM UTF-8 pour Excel
+        w = csv.writer(buf, delimiter=";", quoting=csv.QUOTE_MINIMAL)
+        w.writerow(["Ref interne", "N* fournisseur", "Date", "Fournisseur",
+                    "Description", "Montant EUR", "Cle repartition", "Statut"])
+        for inv in docs:
+            key_name = keys_by_id.get(inv.get("distribution_key_id") or "", "-")
+            w.writerow([
+                inv.get("internal_reference") or "",
+                inv.get("number") or "",
+                inv.get("date") or "",
+                inv.get("supplier") or "",
+                (inv.get("description") or "").replace("\n", " "),
+                f"{float(inv.get('total_amount') or 0):.2f}",
+                key_name,
+                inv.get("status") or "",
+            ])
+        return Response(
+            content=buf.getvalue(),
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": 'attachment; filename="factures.csv"'},
+        )
+
+    @router.get("/invoices/export.pdf")
+    async def export_invoices_pdf(
+        copropriete_id: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        supplier: Optional[str] = None,
+        status: Optional[str] = None,
+        reference: Optional[str] = None,
+    ):
+        """iter90ff : export PDF paysage du facturier avec les memes filtres
+        que la liste UI. Titre + periode + totaux, table paginee."""
+        from reportlab.lib.pagesizes import A4, landscape
+        from reportlab.lib import colors
+        from reportlab.lib.styles import getSampleStyleSheet
+        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+        import io
+        q = _build_invoice_query(copropriete_id, start_date, end_date, supplier, status, reference)
+        docs = await db.invoices.find(q, {"_id": 0}).sort("date", -1).to_list(20000)
+        keys_by_id: dict[str, str] = {}
+        if copropriete_id:
+            async for k in db.distribution_keys.find(
+                {"copropriete_id": copropriete_id}, {"_id": 0, "id": 1, "name": 1}
+            ):
+                keys_by_id[k["id"]] = k.get("name", "")
+
+        copro_name = ""
+        if copropriete_id:
+            c = await db.coproprietes.find_one({"id": copropriete_id}, {"_id": 0, "name": 1})
+            if c:
+                copro_name = c.get("name", "")
+
+        buf = io.BytesIO()
+        doc = SimpleDocTemplate(buf, pagesize=landscape(A4),
+                                topMargin=25, bottomMargin=25,
+                                leftMargin=20, rightMargin=20)
+        styles = getSampleStyleSheet()
+        story = []
+        title = f"Facturier - {copro_name}" if copro_name else "Facturier"
+        story.append(Paragraph(title, styles["Heading1"]))
+        # Sous-titre : filtres actifs
+        filters_bits = []
+        if start_date:
+            filters_bits.append(f"du {start_date}")
+        if end_date:
+            filters_bits.append(f"au {end_date}")
+        if supplier:
+            filters_bits.append(f"fournisseur : {supplier}")
+        if status:
+            filters_bits.append(f"statut : {status}")
+        if reference:
+            filters_bits.append(f"ref/desc : {reference}")
+        if filters_bits:
+            story.append(Paragraph(" · ".join(filters_bits), styles["Normal"]))
+        story.append(Spacer(1, 8))
+
+        # Table
+        data = [["Ref interne", "N* fourn.", "Date", "Fournisseur",
+                 "Description", "Montant EUR", "Cle", "Statut"]]
+        total_amount = 0.0
+        for inv in docs:
+            amt = float(inv.get("total_amount") or 0)
+            total_amount += amt
+            data.append([
+                inv.get("internal_reference") or "",
+                inv.get("number") or "",
+                inv.get("date") or "",
+                (inv.get("supplier") or "")[:32],
+                (inv.get("description") or "")[:40],
+                f"{amt:.2f}",
+                (keys_by_id.get(inv.get("distribution_key_id") or "", "-"))[:22],
+                inv.get("status") or "",
+            ])
+        data.append(["", "", "", "", "TOTAL", f"{total_amount:.2f}", "", ""])
+        col_widths = [55, 65, 55, 130, 200, 60, 100, 55]
+        t = Table(data, repeatRows=1, colWidths=col_widths)
+        t.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#022D52")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE", (0, 0), (-1, -1), 7.5),
+            ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#cbd5e1")),
+            ("ALIGN", (5, 1), (5, -1), "RIGHT"),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -2), [colors.white, colors.HexColor("#f8fafc")]),
+            ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
+            ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#e2e8f0")),
+        ]))
+        story.append(t)
+        story.append(Spacer(1, 10))
+        story.append(Paragraph(
+            f"{len(docs)} facture(s) - Total : {total_amount:.2f} EUR",
+            styles["Normal"],
+        ))
+        doc.build(story)
+        return Response(
+            content=buf.getvalue(),
+            media_type="application/pdf",
+            headers={"Content-Disposition": 'attachment; filename="factures.pdf"'},
+        )
+
+    def _build_invoice_query(copropriete_id, start_date, end_date, supplier, status, reference):
+        q: dict = {}
+        if copropriete_id:
+            q["copropriete_id"] = copropriete_id
+        if start_date or end_date:
+            q["date"] = {}
+            if start_date:
+                q["date"]["$gte"] = start_date
+            if end_date:
+                q["date"]["$lte"] = end_date
+        if supplier:
+            q["supplier"] = supplier
+        if status:
+            q["status"] = status
+        if reference:
+            import re as _re
+            regex = _re.escape(reference)
+            q["$or"] = [
+                {"number": {"$regex": regex, "$options": "i"}},
+                {"description": {"$regex": regex, "$options": "i"}},
+            ]
+        return q
+
     @router.post("/invoices")
     async def create_invoice(data: InvoiceInput, force: bool = Query(default=False)):
         from fiscal_lock import ensure_period_open

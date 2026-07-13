@@ -2517,10 +2517,45 @@ def create_reports_router(db):
         if copropriete_id:
             tier_acc = ((supplier.get("tier_accounts") or {}).get(copropriete_id, {}) or {}).get("main", "")
 
-        def _line_matches(ln):
+        # iter90fe : elargit le matching pour capturer les ecritures AC
+        # historiques dont le third_party_id / account ne matche pas la
+        # fiche canonique actuelle (invoices creees avec un nom libre
+        # avant l'existence de la fiche).
+        # 1. Set des noms normalises pointant vers ce fournisseur (nom
+        #    complet + fragments parentheses).
+        # 2. Set des ids d'invoices dont supplier_id == supplier_id OU
+        #    dont supplier normalise matche.
+        from routes.suppliers import _norm_name, _norm_name_candidates
+        supplier_candidates = _norm_name_candidates(supplier.get("name", ""))
+        matching_invoice_ids: set[str] = set()
+        if copropriete_id and supplier_candidates:
+            inv_q: dict = {"copropriete_id": copropriete_id}
+            inv_cur = db.invoices.find(inv_q, {"_id": 0, "id": 1, "supplier": 1, "supplier_id": 1})
+            async for inv in inv_cur:
+                if inv.get("supplier_id") == supplier_id:
+                    matching_invoice_ids.add(inv["id"])
+                    continue
+                inv_candidates = _norm_name_candidates(inv.get("supplier", ""))
+                if inv_candidates & supplier_candidates:
+                    matching_invoice_ids.add(inv["id"])
+
+        def _line_matches(ln, entry=None):
             acc = ln.get("account_number", "")
             tpid = ln.get("third_party_id")
-            return (tpid == supplier_id) or (tier_acc and acc == tier_acc)
+            if tpid == supplier_id:
+                return True
+            if tier_acc and acc == tier_acc:
+                return True
+            # iter90fe : fallback historique - ligne appartenant a une
+            # ecriture AC dont le source_invoice_id pointe vers une
+            # facture de ce fournisseur (matching par nom normalise).
+            if entry is not None and matching_invoice_ids:
+                if (entry.get("source_invoice_id") or "") in matching_invoice_ids:
+                    # Filtre : ne prendre que la ligne credit (compte tier)
+                    # pour eviter d'inclure la ligne debit charges.
+                    if float(ln.get("credit", 0) or 0) > 0:
+                        return True
+            return False
 
         movements = []
         entry_q = {}
@@ -2566,7 +2601,7 @@ def create_reports_router(db):
             for pe in pre_entries:
                 is_mut = _is_mutation_entry_sup(pe)
                 for pln in pe.get("lines", []) or []:
-                    if not _line_matches(pln):
+                    if not _line_matches(pln, pe):
                         continue
                     if is_mut:
                         pre_mutation_movements_sup.append({
@@ -2592,7 +2627,7 @@ def create_reports_router(db):
             if (e.get("journal_type") or "") != "AN":
                 continue
             for idx, ln in enumerate(e.get("lines", []) or []):
-                if not _line_matches(ln):
+                if not _line_matches(ln, e):
                     continue
                 an_debit += float(ln.get("debit", 0) or 0)
                 an_credit += float(ln.get("credit", 0) or 0)
@@ -2618,7 +2653,7 @@ def create_reports_router(db):
 
         for e in entries:
             for idx, ln in enumerate(e.get("lines", []) or []):
-                if not _line_matches(ln):
+                if not _line_matches(ln, e):
                     continue
                 # iter90cx : dedup par (entry_id, line_index)
                 key = (e.get("id"), idx)

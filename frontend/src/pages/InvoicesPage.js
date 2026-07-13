@@ -195,6 +195,22 @@ export default function InvoicesPage() {
   const [editingInvoice, setEditingInvoice] = useState(null);
 
   // Invoice handlers
+  // iter90ff : export PDF/CSV de la liste filtree
+  const exportInvoices = (format) => {
+    const copro = localStorage.getItem('selectedCopro') || localStorage.getItem('copropriete_id') || '';
+    const params = new URLSearchParams();
+    if (copro) params.set('copropriete_id', copro);
+    if (invFilters.startDate) params.set('start_date', invFilters.startDate);
+    if (invFilters.endDate) params.set('end_date', invFilters.endDate);
+    if (invFilters.supplier) params.set('supplier', invFilters.supplier);
+    if (invFilters.status) params.set('status', invFilters.status);
+    if (invFilters.reference) params.set('reference', invFilters.reference);
+    const url = `${process.env.REACT_APP_BACKEND_URL}/api/invoices/export.${format}?${params.toString()}`;
+    // Ouvre dans un nouvel onglet -> le navigateur declenche le download
+    // avec la Content-Disposition envoyee par le backend.
+    window.open(url, '_blank');
+  };
+
   const openCreateInvoice = () => {
     setEditingInvoice(null);
     setInvForm({ number: `F-${Date.now().toString().slice(-6)}`, date: new Date().toISOString().split('T')[0], due_date: '', supplier: '', description: '', total_amount: 0, vat_amount: 0, account_number: '', expense_category_id: '', distribution_key_id: defaultKeyId, status: 'unpaid', is_private_fee: false, private_fee_owner_id: '', private_fee_allocations: [], occupant_pct: 0, proprietaire_pct: 100, lines: [] });
@@ -752,6 +768,29 @@ export default function InvoicesPage() {
                 Reset
               </Button>
             )}
+            {/* iter90ff : exports CSV / PDF de la liste filtree */}
+            <div className="ml-auto flex items-center gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8 text-xs"
+                onClick={() => exportInvoices('csv')}
+                data-testid="inv-export-csv-btn"
+                title="Exporter la liste filtree en CSV (Excel)"
+              >
+                <Download size={13} className="mr-1" /> CSV
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8 text-xs"
+                onClick={() => exportInvoices('pdf')}
+                data-testid="inv-export-pdf-btn"
+                title="Exporter la liste filtree en PDF"
+              >
+                <Download size={13} className="mr-1" /> PDF
+              </Button>
+            </div>
           </div>
 
           <div className="bg-white rounded-md border border-slate-200 overflow-hidden">
