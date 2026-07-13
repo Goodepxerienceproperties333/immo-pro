@@ -12,6 +12,50 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 
+### Iter90fc (Feb 2026) - Script one-shot cleanup doublons fournisseurs
+
+**Contexte** : suite a iter90fa/fb, les nouvelles factures sont
+correctement snappees vers les fiches canoniques. Mais les factures
+DEJA existantes en PROD gardent leurs anciens noms libres. Il faut
+un script one-shot pour les corriger.
+
+**Livrable** : `/app/backend/scripts/cleanup_supplier_duplicates.py`
+
+**Fonctionnalites** :
+- Indexe toutes les fiches `suppliers` (globales + copro). Si plusieurs
+  fiches ont la meme cle normalisee, choisit la plus complete via un
+  score : `+5 si BCE, +3 si VAT, +2 si IBAN, +1 si ville, + len(name)`.
+- Parcourt toutes les factures et calcule
+  `_norm_name_candidates(invoice.supplier)`.
+- Detecte les factures snappables et affiche un rapport tabulaire top
+  50 + top 20 canonicals utilises + stats globales (will_snap /
+  already_canonical / no_match_freetext / empty_supplier).
+- Mode `--execute` : applique reellement les changements sur
+  `invoices.supplier` ET `journal_entries.lines.$.third_party_name`
+  (via `array_filters`) pour garder les ecritures comptables coherentes.
+- Ecrit un rapport JSON complet dans
+  `/tmp/cleanup_supplier_duplicates_report.json`.
+- Idempotent : relance sans risque.
+
+**Usage documente en tete du script** :
+```bash
+python -m scripts.cleanup_supplier_duplicates                       # dry-run
+python -m scripts.cleanup_supplier_duplicates --execute             # apply
+python -m scripts.cleanup_supplier_duplicates --copropriete-id CID  # 1 ACP
+```
+
+**Test PREVIEW** :
+- 29 fiches canoniques indexees.
+- 16 factures scannees, 0 a corriger (base propre).
+- Injection d'une facture doublon volontaire ("Finlead Cleanup
+  Properties (Finlead Cleanup srl)" + fiche "Finlead Cleanup SRL")
+  -> detection immediate.
+- Bonus : le dry-run revele 5 factures REELLES preview avec le
+  pattern "Finlead Properties (Finlead srl)" prete a snapper sur
+  la fiche "Finlead".
+
+
+
 ### Iter90fb (Feb 2026) - Elargissement colonne Montant + snap-to-card avec parentheses
 
 **Ticket 1 (doublons)** :
