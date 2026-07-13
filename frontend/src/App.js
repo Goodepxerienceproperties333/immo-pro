@@ -1,4 +1,5 @@
 import "@/App.css";
+import { useEffect } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "@/contexts/AuthContext";
 import { Toaster } from "@/components/ui/sonner";
@@ -125,6 +126,25 @@ function AppRoutes() {
 }
 
 function App() {
+  // iter90er : bloque la modification des inputs number a la roulette
+  // (couvre les <input type="number"> bruts non wrappes par le composant
+  // Input partage - ex: ImportWizardPage).
+  useEffect(() => {
+    const handler = (e) => {
+      const t = e.target;
+      if (
+        t &&
+        t.tagName === "INPUT" &&
+        t.type === "number" &&
+        document.activeElement === t
+      ) {
+        t.blur();
+      }
+    };
+    document.addEventListener("wheel", handler, { passive: true });
+    return () => document.removeEventListener("wheel", handler);
+  }, []);
+
   return (
     <BrowserRouter>
       <AuthProvider>

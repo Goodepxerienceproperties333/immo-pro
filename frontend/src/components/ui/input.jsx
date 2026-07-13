@@ -2,7 +2,20 @@ import * as React from "react"
 
 import { cn } from "@/lib/utils"
 
-const Input = React.forwardRef(({ className, type, ...props }, ref) => {
+// iter90er : bloque la modification des montants a la roulette souris
+// (comportement natif tres intrusif sur les inputs number). On blur
+// l'input focus sur wheel : la valeur reste intacte et la page scroll
+// normalement.
+const handleWheelNumber = (e) => {
+  if (document.activeElement === e.currentTarget) {
+    e.currentTarget.blur();
+  }
+};
+
+const Input = React.forwardRef(({ className, type, onWheel, ...props }, ref) => {
+  const wheelHandler = type === "number"
+    ? (e) => { handleWheelNumber(e); if (onWheel) onWheel(e); }
+    : onWheel;
   return (
     <input
       type={type}
@@ -12,6 +25,7 @@ const Input = React.forwardRef(({ className, type, ...props }, ref) => {
         className
       )}
       ref={ref}
+      onWheel={wheelHandler}
       {...props} />
   );
 })

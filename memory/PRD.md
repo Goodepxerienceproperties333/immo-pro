@@ -12,6 +12,37 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 
+### Iter90er (Feb 2026) - Blocage modification a la roulette souris sur inputs number
+
+**Ticket utilisateur** :
+> "pas de modification des montants dans les champs avec la roulette de
+> la souris, cela fait défiler les chiffres cette fonction doit être
+> bloquée"
+
+**Contexte** : le comportement natif des navigateurs modifie la valeur
+d'un `<input type="number">` focus quand l'utilisateur scrolle avec la
+molette. Sur des saisies comptables (montants, budgets, quotites), ce
+comportement est un piege classique -> corruption silencieuse.
+
+**Fix iter90er** :
+
+1. Composant partage `components/ui/input.jsx` :
+   - Sur `type="number"`, `onWheel` blur l'input focus. La molette
+     scrolle alors la page normalement, la valeur reste intacte.
+   - `onWheel` externe eventuel est chaine si fourni par le parent.
+
+2. Filet de securite global (`App.js`) :
+   - `useEffect` monte un listener `wheel` document-level (passive) qui
+     blur tout `INPUT[type=number]` actif. Couvre les `<input>` bruts
+     non wrappes par le composant partage (11 occurrences dans
+     `ImportWizardPage.js` en particulier).
+
+**Verifie** : test playwright sur wizard ACP / champ Etage :
+- fill "42" -> molette haut + molette bas -> valeur toujours "42"
+- input effectivement blurred apres wheel
+
+
+
 ### Iter90eq (Feb 2026) - Suppression du champ Quotite dans la creation manuelle ACP
 
 **Ticket utilisateur** :
