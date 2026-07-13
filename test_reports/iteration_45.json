@@ -1,0 +1,45 @@
+{
+  "summary": "iter90fj (gate homonyme fournisseur sur facture) teste end-to-end UI + API. Backend logique correcte (409 SUPPLIER_HOMONYM, snap exact, supplier_confirmed bypass, occupant_pct propage dans /invoices/supplier-suggestion) - confirme par curl ET par nouveau fichier pytest test_iter90fj_invoice_supplier_gate.py (6 passed, 1 skipped). MAIS decouvert un BUG CRITIQUE frontend qui rendait la fonctionnalite INUTILISABLE via l'UI : l'intercepteur de reponse global axios (frontend/src/lib/api.js) transformait TOUJOURS un `detail` objet (ex {code:'SUPPLIER_HOMONYM', similar:[...]}) en simple string avant qu'il n'atteigne le catch specifique de InvoicesPage.saveInvoice, qui teste `typeof detail === 'object' && detail.code === 'SUPPLIER_HOMONYM'`. Resultat observe avant fix : au lieu du dialog bloquant avec les 2 boutons de choix, seul un toast d'erreur generique apparaissait et la facture n'etait PAS enregistree, mais le syndic n'avait AUCUN moyen de resoudre l'homonyme (pas de bouton 'Utiliser celui-ci' / 'Confirmer nouveau'). J'ai applique un correctif minimal et cible (preserver les objets `detail` qui portent un champ `code` discriminant, ne stringifier que les objets generiques sans code) et re-teste l'intégralité du parcours UI apres coup : TOUT fonctionne desormais correctement (voir details ci-dessous).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {
+        "flow": "Gate homonyme fournisseur (creation/edition facture)",
+        "issue": "CRITIQUE (corrige) : le dialog invoice-supplier-gate-dialog n'apparaissait JAMAIS via l'UI reelle malgre un backend fonctionnel a 100%, car l'intercepteur axios global (api.js) aplati systematiquement tout `error.response.data.detail` objet en string, detruisant le champ `.code` utilise par InvoicesPage.saveInvoke pour detecter le cas SUPPLIER_HOMONYM. Le syndic se retrouvait avec un simple toast d'erreur sans aucun moyen de choisir/resoudre - violation directe de la demande utilisateur ('ne jamais enregistrer sans accord ET pouvoir choisir'). CORRIGE dans cette session (voir updated_files) - retest complet effectue avec succes apres le fix.",
+        "affected_selectors": ["invoice-supplier-gate-dialog", "inv-gate-use-existing-*", "inv-gate-create-new-btn", "inv-gate-cancel-btn"]
+      }
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter90fj_invoice_supplier_gate.py",
+    "/app/test_reports/pytest/iter90fj_gate.xml",
+    "/app/test_reports/pytest/iter90fj_regression.xml"
+  ],
+  "action_items": [
+    "AUCUN : le bug critique du gate homonyme a ete corrige et re-teste avec succes dans cette session (voir updated_files). A surveiller uniquement si de futures features backend renvoient un HTTPException(detail={...dict sans champ 'code'...}) et attendent cote frontend un objet structure - dans ce cas ajouter un champ `code` discriminant (convention deja suivie par SUPPLIER_HOMONYM et PASSWORD_SETUP_REQUIRED).",
+    "Optionnel : la suppression d'une facture (DELETE /api/invoices/{id}) ne supprime pas la fiche fournisseur auto-creee associee (auto_created=true) meme si elle n'est plus utilisee par aucune facture - laisse des fiches orphelines apres annulation de tests. Pas bloquant mais pourrait polluer la liste fournisseurs a long terme (deja gere partiellement par la page Doublons/Nettoyage existante)."
+  ],
+  "critical_code_review_comments": [
+    "RCA du bug principal : frontend/src/lib/api.js (intercepteur reponse, ~ligne 62-76) normalisait TOUT detail objet en string pour supporter le rendu des erreurs Pydantic 422 (array) - mais cette normalisation etait appliquee sans discrimination a TOUS les objets, y compris les erreurs structurees intentionnelles (SUPPLIER_HOMONYM iter90fj, PASSWORD_SETUP_REQUIRED). Seul 2 endpoints backend utilisent `detail={...dict...}` actuellement (verifie par grep), donc le risque de regression du fix est tres faible.",
+    "Fix applique : `else if (typeof d === 'object' && !d.code)` au lieu de `else if (typeof d === 'object')` - preserve les objets avec un champ `code` discriminant, continue de stringifier les objets generiques/legacy sans code.",
+    "Bon : backend _check_supplier_homonym / find_similar_suppliers (threshold 0.80, difflib SequenceMatcher sur noms normalises + particules juridiques filtrees) est solide et bien teste (pytest existant test_iter85g/90fa/90fj tous verts).",
+    "Bon : update_invoice ne re-verifie le gate QUE si le fournisseur soumis differe reellement de la valeur en base (compare via _norm_name) - evite les faux blocages sur une simple edition de montant/description, confirme par test UI et pytest.",
+    "Bon : le fix iter90fj propageant occupant_pct dans /invoices/supplier-suggestion fonctionne et est bien visible cote UI (toast 'Nature apprise' + prefill % Occupant/Proprietaire)."
+  ],
+  "updated_files": [
+    "/app/frontend/src/lib/api.js",
+    "/app/backend/tests/test_iter90fj_invoice_supplier_gate.py"
+  ],
+  "success_rate": {"backend": "100% apres retest cible (17/17 tests pertinents + 6/7 nouveaux, 1 skip legitime)", "frontend": "100% apres fix (tous les scenarios UI P0/P1 valides manuellement)"},
+  "test_credentials": "admin@copro.be / admin123 (superadmin) - ACP de test utilisee : 'ACP Les Alisiers Test' (id 47e79d1c-d96a-4e8b-b80c-148295f9160f), exercice fiscal ouvert 2025-10-01/2026-09-30.",
+  "seed_data_creation": "Tous les fournisseurs/factures TEST_* et 'Test Homonyme*'/'Zorglub*'/'EditTestSupplierABC'/'NatureLearnTest001' crees pendant les tests UI et API ont ete supprimes en fin de session (invoices + suppliers). Le default_occupant_pct de la nature 'Ascenseurs - contrat d'entretien' (temporairement modifie a 35% par le test d'apprentissage) a ete restaure a 100%/0%.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Parcours UI complet valide APRES fix : (1) homonyme typo -> dialog bloquant avec % similarite + 3 boutons (Utiliser celui-ci / Confirmer nouveau / Annuler) tous fonctionnels ; (2) Annuler ne sauvegarde JAMAIS la facture (verifie apres reload) ; (3) nom exact/normalise (particule juridique differente) -> snap silencieux sans dialog ; (4) nom completement nouveau -> save direct sans dialog ; (5) meme comportement en EDITION, ET confirmation qu'editer un champ autre que fournisseur (montant) ne declenche JAMAIS le gate ; (6) suggestion nature de depense + % occupant/proprietaire fonctionne (toast 'Nature apprise' + prefill). Le bug etait 100% frontend (interception axios), le backend fonctionnait parfaitement depuis le depart (confirme par le main agent via curl avant meme cette session de test). Note infra : lancer beaucoup de fichiers pytest backend en meme temps (ex `pytest -k invoice`) declenche des 429 sur /api/auth/login (rate-limit 5/min, deja documente) - toujours tester en fichiers cibles/petits lots.",
+  "rca_of_the_issue": "frontend/src/lib/api.js ligne ~72 : `else if (typeof d === 'object') { error.response.data.detail = d.message || ... }` s'executait AVANT que le catch de InvoicesPage.saveInvoice puisse inspecter `detail.code`. Comme le check `typeof detail === 'object'` devenait faux (detail etait deja une string), la branche de gestion du dialog n'etait jamais atteinte, et l'erreur retombait dans le `else { throw err }` general -> toast generique sans possibilite de resolution. Corrige en excluant du flattening les objets porteurs d'un champ `code` (convention deja utilisee ailleurs dans le code, ex PASSWORD_SETUP_REQUIRED)."
+}

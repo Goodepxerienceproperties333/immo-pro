@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { Plus, Trash2, Receipt, Sparkles, Paperclip, Download, X, Pencil, Filter, FolderInput, Eye, Loader2, ArrowUp, ArrowDown, ArrowUpDown, SkipForward, PanelRightClose, PanelRightOpen, FileText } from 'lucide-react';
+import { Plus, Trash2, Receipt, Sparkles, Paperclip, Download, X, Pencil, Filter, FolderInput, Eye, Loader2, ArrowUp, ArrowDown, ArrowUpDown, SkipForward, PanelRightClose, PanelRightOpen, FileText, ShieldAlert } from 'lucide-react';
 import AccountSearchSelect from '@/components/AccountSearchSelect';
 import SupplierSearchSelect from '@/components/SupplierSearchSelect';
 import BundleImportDialog from '@/components/BundleImportDialog';
@@ -76,6 +76,12 @@ export default function InvoicesPage() {
   // iter85g : dialog de confirmation homonymes lors de la creation supplier
   // depuis InvoicesPage. State : { payload, similar, onConfirm } ou null.
   const [supplierHomonymsDialog, setSupplierHomonymsDialog] = useState(null);
+  // iter90fj : dialog BLOQUANT lors de l'enregistrement d'une facture si le
+  // fournisseur saisi/extrait par l'IA n'a pas de fiche exacte mais ressemble
+  // a une fiche existante (homonyme). Le syndic DOIT choisir avant que la
+  // facture ne soit persistee. State : { typedName, similar, onUseExisting,
+  // onCreateNew, onCancel } ou null.
+  const [invSupplierGate, setInvSupplierGate] = useState(null);
   const fyParams = useFiscalYearParams();
 
   // iter85g : helper de creation supplier avec pre-check homonymes.
@@ -282,6 +288,11 @@ export default function InvoicesPage() {
               expense_category_id: sug.expense_category_id,
               account_number: sug.account_number || first.account_number,
               distribution_key_id: sug.distribution_key_id || first.distribution_key_id,
+              // iter90fj : la repartition Occ/Prop apprise pour la nature suit
+              // la meme regle que la selection manuelle (non-destructif : ligne
+              // sans pct explicite uniquement).
+              occupant_pct: (first.occupant_pct == null && sug.occupant_pct != null) ? Number(sug.occupant_pct) : first.occupant_pct,
+              proprietaire_pct: (first.proprietaire_pct == null && sug.occupant_pct != null) ? +(100 - Number(sug.occupant_pct)).toFixed(2) : first.proprietaire_pct,
             };
             toast.success(`Nature apprise : ${sug.expense_category_name} (${sug.usage_count} facture${sug.usage_count > 1 ? 's' : ''} de ${name})`);
             return { ...f, lines: newLines };
@@ -296,6 +307,10 @@ export default function InvoicesPage() {
             expense_category_id: sug.expense_category_id,
             account_number: sug.account_number || f.account_number,
             distribution_key_id: sug.distribution_key_id || f.distribution_key_id,
+            // iter90fj : repartition Occ/Prop apprise, au meme titre que la
+            // selection manuelle de la nature (cf. onValueChange plus bas).
+            occupant_pct: sug.occupant_pct != null ? Number(sug.occupant_pct) : f.occupant_pct,
+            proprietaire_pct: sug.occupant_pct != null ? +(100 - Number(sug.occupant_pct)).toFixed(2) : f.proprietaire_pct,
           };
         }
         return f;
@@ -463,21 +478,98 @@ export default function InvoicesPage() {
         })) : null,
       };
       let invoiceId;
+      // iter90fj : une fois le syndic a tranche sur un homonyme (utiliser
+      // l'existant ou creer un nouveau), on envoie supplier_confirmed=true
+      // pour que le backend n'exige plus de confirmation sur ce meme nom.
+      let supplierConfirmed = false;
       // iter90ay : retry avec ?force=true si SOFT_DUPLICATE (montant+date proche mais numero different)
       const saveOnce = async (force = false) => {
         const suffix = force ? '?force=true' : '';
+        const body = { ...payload, supplier_confirmed: supplierConfirmed };
         if (editingInvoice) {
-          await api.put(`/invoices/${editingInvoice.id}${suffix}`, payload);
+          await api.put(`/invoices/${editingInvoice.id}${suffix}`, body);
           return editingInvoice.id;
         }
-        const { data: created } = await api.post(`/invoices${suffix}`, payload);
+        const { data: created } = await api.post(`/invoices${suffix}`, body);
         return created?.id;
       };
       try {
         invoiceId = await saveOnce(false);
       } catch (err) {
         const detail = err.response?.data?.detail || '';
-        if (err.response?.status === 409 && typeof detail === 'string' && detail.includes('[SOFT_DUPLICATE]')) {
+        if (err.response?.status === 409 && detail && typeof detail === 'object' && detail.code === 'SUPPLIER_HOMONYM') {
+          // iter90fj : ne JAMAIS enregistrer sans accord explicite du syndic
+          // en cas d'homonyme/nom proche detecte.
+          const decision = await new Promise((resolve) => {
+            setInvSupplierGate({
+              typedName: detail.typed_name,
+              similar: detail.similar || [],
+              onUseExisting: (name) => { setInvSupplierGate(null); resolve({ action: 'use', name }); },
+              onCreateNew: () => { setInvSupplierGate(null); resolve({ action: 'new' }); },
+              onCancel: () => { setInvSupplierGate(null); resolve(null); },
+            });
+          });
+          if (!decision) return; // annule : facture NON enregistree
+          supplierConfirmed = true;
+          if (decision.action === 'use') {
+            payload.supplier = decision.name;
+            setInvForm(f => ({ ...f, supplier: decision.name }));
+            // iter90fj : le fournisseur canonique choisi peut avoir un
+            // historique de nature/repartition. Si la nature n'a pas encore
+            // ete renseignee sur cette facture, on tente la suggestion avant
+            // le retry de sauvegarde (meme comportement que la saisie manuelle).
+            const noCategoryYet = (payload.lines && payload.lines.length > 0)
+              ? !payload.lines[0].expense_category_id
+              : !payload.expense_category_id;
+            if (noCategoryYet) {
+              try {
+                const copro = localStorage.getItem('selectedCopro') || localStorage.getItem('copropriete_id') || '';
+                if (copro && copro !== 'all') {
+                  const { data: sugData } = await api.get('/invoices/supplier-suggestion', { params: { supplier: decision.name, copropriete_id: copro } });
+                  const sug = sugData?.suggestion;
+                  if (sug) {
+                    const occ = sug.occupant_pct != null ? Number(sug.occupant_pct) : null;
+                    if (payload.lines && payload.lines.length > 0) {
+                      payload.lines[0] = {
+                        ...payload.lines[0],
+                        expense_category_id: sug.expense_category_id,
+                        account_number: sug.account_number || payload.lines[0].account_number,
+                        distribution_key_id: sug.distribution_key_id || payload.lines[0].distribution_key_id,
+                        occupant_pct: occ,
+                        proprietaire_pct: occ != null ? +(100 - occ).toFixed(2) : payload.lines[0].proprietaire_pct,
+                      };
+                      setInvForm(f => {
+                        if (!f.lines || f.lines.length === 0) return f;
+                        const newLines = [...f.lines];
+                        newLines[0] = { ...newLines[0], ...payload.lines[0] };
+                        return { ...f, lines: newLines };
+                      });
+                    } else {
+                      payload.expense_category_id = sug.expense_category_id;
+                      payload.account_number = sug.account_number || payload.account_number;
+                      payload.distribution_key_id = sug.distribution_key_id || payload.distribution_key_id;
+                      if (occ != null) { payload.occupant_pct = occ; payload.proprietaire_pct = +(100 - occ).toFixed(2); }
+                      setInvForm(f => ({
+                        ...f,
+                        expense_category_id: sug.expense_category_id,
+                        account_number: sug.account_number || f.account_number,
+                        distribution_key_id: sug.distribution_key_id || f.distribution_key_id,
+                        occupant_pct: occ != null ? occ : f.occupant_pct,
+                        proprietaire_pct: occ != null ? +(100 - occ).toFixed(2) : f.proprietaire_pct,
+                      }));
+                    }
+                    toast.success(`Nature apprise : ${sug.expense_category_name} (${sug.usage_count} facture${sug.usage_count > 1 ? 's' : ''} de ${decision.name})`);
+                  }
+                }
+              } catch { /* suggestion best-effort, non bloquante */ }
+            }
+          }
+          try {
+            invoiceId = await saveOnce(false);
+          } catch (err2) {
+            throw err2;
+          }
+        } else if (err.response?.status === 409 && typeof detail === 'string' && detail.includes('[SOFT_DUPLICATE]')) {
           const cleanMsg = detail.replace('[SOFT_DUPLICATE] ', '');
           const ok = window.confirm(`${cleanMsg}\n\nEnregistrer quand meme ?`);
           if (!ok) return;
@@ -1940,6 +2032,66 @@ export default function InvoicesPage() {
                   data-testid="inv-similar-force-create-btn"
                 >
                   Creer quand meme
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+      {/* iter90fj : dialog BLOQUANT lors de l'enregistrement d'une facture -
+          homonyme detecte sur le champ Fournisseur (pas de fiche exacte,
+          mais nom proche d'une fiche existante). La facture n'est PAS
+          enregistree tant que le syndic n'a pas explicitement choisi. */}
+      <Dialog open={!!invSupplierGate} onOpenChange={(o) => { if (!o && invSupplierGate) invSupplierGate.onCancel(); }}>
+        <DialogContent className="max-w-2xl" data-testid="invoice-supplier-gate-dialog">
+          <DialogHeader>
+            <DialogTitle style={{fontFamily:'Chivo,sans-serif'}} className="flex items-center gap-2 text-amber-700">
+              <ShieldAlert size={18} /> Fournisseur a confirmer avant enregistrement
+            </DialogTitle>
+          </DialogHeader>
+          {invSupplierGate && (
+            <div className="space-y-4 mt-2">
+              <p className="text-sm text-slate-700">
+                Le nom saisi <b>&quot;{invSupplierGate.typedName}&quot;</b> ne correspond a aucune fiche
+                fournisseur exacte, mais ressemble a {invSupplierGate.similar.length > 1 ? 'des fournisseurs' : 'un fournisseur'} deja enregistre(s).
+                La facture ne sera PAS enregistree tant que vous n'avez pas choisi une option ci-dessous.
+              </p>
+              <div className="bg-amber-50 border border-amber-200 rounded p-3 space-y-2 max-h-72 overflow-auto">
+                {invSupplierGate.similar.map((m, i) => (
+                  <div key={i} className="flex items-center justify-between bg-white border border-amber-100 rounded p-2" data-testid={`inv-gate-similar-supplier-${i}`}>
+                    <div className="flex-1">
+                      <div className="font-medium text-sm">{m.name}</div>
+                      <div className="text-[11px] text-slate-500 space-x-3">
+                        {m.vat_number && <span>TVA: {m.vat_number}</span>}
+                        {m.bce_number && <span>BCE: {m.bce_number}</span>}
+                        {m.city && <span>{m.city}</span>}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[11px] font-mono text-amber-700">{Math.round(m.score * 100)}% similarite</span>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="text-[#01213e] border-blue-200 h-7 text-[11px]"
+                        onClick={() => invSupplierGate.onUseExisting(m.name)}
+                        data-testid={`inv-gate-use-existing-${i}`}
+                      >
+                        Utiliser celui-ci
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="flex gap-3 justify-between items-center">
+                <Button variant="outline" onClick={() => invSupplierGate.onCancel()} data-testid="inv-gate-cancel-btn">
+                  Annuler
+                </Button>
+                <Button
+                  onClick={() => invSupplierGate.onCreateNew()}
+                  className="bg-amber-600 hover:bg-amber-700 text-white"
+                  data-testid="inv-gate-create-new-btn"
+                >
+                  Confirmer nouveau fournisseur &quot;{invSupplierGate.typedName}&quot;
                 </Button>
               </div>
             </div>

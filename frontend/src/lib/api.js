@@ -69,7 +69,14 @@ api.interceptors.response.use(
             const msg = e?.msg || JSON.stringify(e);
             return loc ? `${loc}: ${msg}` : msg;
           }).join(' | ');
-        } else if (typeof d === 'object') {
+        } else if (typeof d === 'object' && !d.code) {
+          // iter90fj fix : preserve structured error objects that carry a
+          // discriminated `code` field (ex: SUPPLIER_HOMONYM,
+          // PASSWORD_SETUP_REQUIRED). Ces objets sont consommes tels quels
+          // par des handlers dedies (ex: InvoicesPage.saveInvoice) qui
+          // testent `detail.code === '...'`. Ne stringifier QUE les objets
+          // "generiques" sans code (ancien comportement, pour les erreurs
+          // Pydantic/legacy qui n'ont pas de discriminant).
           error.response.data.detail = d.message || d.msg || JSON.stringify(d);
         }
       }

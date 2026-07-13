@@ -105,6 +105,11 @@ class InvoiceInput(BaseModel):
     # le total des lignes doit egal total_amount. Une ecriture comptable
     # unique sera generee avec N debits (un par ligne) + 1 credit fournisseur.
     lines: Optional[List[InvoiceLineInput]] = None
+    # iter90fj : le syndic a explicitement confirme le fournisseur (choix
+    # dans le dialog d'homonymes cote frontend, ou nom deja verifie). Tant
+    # que ce flag n'est pas True ET qu'aucun snap exact n'a eu lieu, la
+    # sauvegarde est bloquee si un homonyme proche existe deja en base.
+    supplier_confirmed: Optional[bool] = False
 
 
 def create_invoices_router(db):
@@ -920,6 +925,46 @@ def create_invoices_router(db):
                     f"Si c'est une facture distincte, modifiez le numero pour le rendre unique."
                 )
 
+    async def _check_supplier_homonym(name: str, copro_id: str):
+        """iter90fj : bloque la sauvegarde d'une facture si le nom de
+        fournisseur soumis n'est PAS une fiche existante (snap exact deja
+        gere avant l'appel), mais est PROCHE (homonyme, Levenshtein) d'une
+        fiche deja presente en base. Le syndic DOIT choisir explicitement
+        entre reutiliser la fiche existante ou confirmer la creation d'un
+        nouveau fournisseur (`supplier_confirmed=true`) avant que la facture
+        ne puisse etre persistee. Aucune creation implicite de fournisseur
+        n'est plus autorisee en cas de nom proche/ambigu.
+        """
+        from routes.suppliers import find_similar_suppliers
+        if not name:
+            return
+        similar = await find_similar_suppliers(db, name=name, copro_id=copro_id or "")
+        if similar:
+            raise HTTPException(
+                409,
+                detail={
+                    "code": "SUPPLIER_HOMONYM",
+                    "message": (
+                        f"Le fournisseur '{name}' n'a pas de fiche exacte mais ressemble a "
+                        f"{len(similar)} fournisseur(s) deja enregistre(s). Choisissez le "
+                        f"fournisseur existant ou confirmez la creation d'une nouvelle fiche "
+                        f"avant d'enregistrer la facture."
+                    ),
+                    "typed_name": name,
+                    "similar": [
+                        {
+                            "id": s["supplier"].get("id", ""),
+                            "name": s["supplier"].get("name", ""),
+                            "score": s["score"],
+                            "bce_number": s["supplier"].get("bce_number", ""),
+                            "vat_number": s["supplier"].get("vat_number", ""),
+                            "city": s["supplier"].get("city", ""),
+                        }
+                        for s in similar
+                    ],
+                },
+            )
+
     async def _learn_category_split(
         expense_category_id: Optional[str],
         provided_occupant_pct: Optional[float],
@@ -1139,6 +1184,7 @@ def create_invoices_router(db):
         # doublon "sans fiche".
         # iter90fb : matche aussi le contenu entre parentheses (ex:
         # "Finlead Properties (Finlead srl)" -> snap sur "Finlead SRL").
+        exact_snap_matched = False
         if data.supplier:
             from routes.suppliers import _norm_name_candidates
             target_norms = _norm_name_candidates(data.supplier)
@@ -1154,7 +1200,12 @@ def create_invoices_router(db):
                 async for card in db.suppliers.find(q_sup, {"_id": 0, "name": 1}):
                     if _norm_supplier_name(card.get("name", "")) in target_norms:
                         data.supplier = card["name"]
+                        exact_snap_matched = True
                         break
+            # iter90fj : pas de snap exact -> verifie les homonymes proches.
+            # Bloque tant que le syndic n'a pas explicitement confirme.
+            if not exact_snap_matched and not data.supplier_confirmed:
+                await _check_supplier_homonym(data.supplier, data.copropriete_id or "")
         # Verrou fiscal : la date de la facture doit etre dans une periode ouverte
         await ensure_period_open(db, data.copropriete_id or "", data.date, context="facture")
         # Anti-doublon strict avant toute persistance (soft duplicate ignore si force=true)
@@ -1409,12 +1460,19 @@ def create_invoices_router(db):
             (cat.get("default_distribution_key_id") or "").strip()
             or meta.get("distribution_key_id", "")
         )
+        # iter90fj : la repartition occupant/proprietaire de la nature
+        # (deja apprise via iter90ed a chaque saisie manuelle) est propagee
+        # dans la suggestion, au meme titre que compte/cle. Sans cela, une
+        # facture pre-remplie automatiquement par reconnaissance du
+        # fournisseur perdait la repartition Occ/Prop apprise.
+        default_occupant_pct = cat.get("default_occupant_pct")
         return {
             "suggestion": {
                 "expense_category_id": top_cid,
                 "expense_category_name": cat.get("name", ""),
                 "account_number": account_number,
                 "distribution_key_id": distribution_key_id,
+                "occupant_pct": default_occupant_pct,
                 "usage_count": counts[top_cid],
                 "invoices_matched": len(invoices),
             }
@@ -1430,7 +1488,13 @@ def create_invoices_router(db):
     @router.put("/invoices/{invoice_id}")
     async def update_invoice(invoice_id: str, data: InvoiceInput, force: bool = Query(default=False)):
         from fiscal_lock import ensure_period_open
+        # iter90fj : fetch AVANT toute mutation pour comparer le fournisseur
+        # soumis par le client avec la valeur deja enregistree (ne bloquer
+        # que si le fournisseur change reellement).
+        existing_for_lock = await db.invoices.find_one({"id": invoice_id}, {"_id": 0})
+        submitted_supplier = data.supplier
         # iter90fa/fb : snap-to-card (idem create_invoice, match parentheses)
+        exact_snap_matched = False
         if data.supplier:
             from routes.suppliers import _norm_name_candidates, _norm_name as _norm_supplier_name
             target_norms = _norm_name_candidates(data.supplier)
@@ -1445,8 +1509,18 @@ def create_invoices_router(db):
                 async for card in db.suppliers.find(q_sup, {"_id": 0, "name": 1}):
                     if _norm_supplier_name(card.get("name", "")) in target_norms:
                         data.supplier = card["name"]
+                        exact_snap_matched = True
                         break
-        existing_for_lock = await db.invoices.find_one({"id": invoice_id}, {"_id": 0})
+            # iter90fj : ne verifie les homonymes QUE si le fournisseur
+            # soumis differe reellement de celui deja enregistre (evite de
+            # bloquer un simple PUT qui ne touche pas au fournisseur).
+            if not exact_snap_matched and not data.supplier_confirmed:
+                prior_supplier = (existing_for_lock or {}).get("supplier", "")
+                if _norm_supplier_name(submitted_supplier) != _norm_supplier_name(prior_supplier):
+                    await _check_supplier_homonym(
+                        submitted_supplier,
+                        data.copropriete_id or (existing_for_lock or {}).get("copropriete_id", ""),
+                    )
         if existing_for_lock:
             # Verrou : la date d'origine ET la nouvelle doivent etre dans un exercice ouvert
             await ensure_period_open(db, existing_for_lock.get("copropriete_id", ""), existing_for_lock.get("date"), context="facture")
