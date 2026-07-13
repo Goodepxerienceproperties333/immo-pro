@@ -462,7 +462,7 @@ export default function CoproprietesPage() {
                     {form.lots.map((lot, i) => (
                       <div key={i} className="border rounded-md p-3 bg-slate-50/50 relative" data-testid={`lot-row-${i}`}>
                         <button onClick={() => removeLot(i)} className="absolute top-2 right-2 text-red-400 hover:text-red-600"><X size={14} /></button>
-                        <div className="grid grid-cols-6 gap-3">
+                        <div className="grid grid-cols-5 gap-3">
                           <div><label className="form-label">N* *</label><Input value={lot.number} onChange={e => updateLot(i, 'number', e.target.value)} placeholder="A1" data-testid={`lot-number-${i}`} /></div>
                           <div className="col-span-2"><label className="form-label">Description</label><Input value={lot.description} onChange={e => updateLot(i, 'description', e.target.value)} placeholder="Appartement 2 ch" /></div>
                           <div><label className="form-label">Type</label>
@@ -479,7 +479,6 @@ export default function CoproprietesPage() {
                             </Select>
                           </div>
                           <div><label className="form-label">Etage</label><Input type="number" value={lot.floor} onChange={e => updateLot(i, 'floor', parseInt(e.target.value || '0'))} /></div>
-                          <div><label className="form-label">Quotite</label><Input type="number" step="0.01" value={lot.quotity} onChange={e => updateLot(i, 'quotity', parseFloat(e.target.value || '0'))} placeholder="125.50" /></div>
                         </div>
 
                         {/* Owner autocomplete per lot */}
@@ -540,9 +539,6 @@ export default function CoproprietesPage() {
                         </div>
                       </div>
                     ))}
-                    <div className="text-[11px] text-slate-500 px-1">
-                      Total quotites: <span className="font-mono font-semibold text-slate-700">{form.lots.reduce((s, l) => s + (parseFloat(l.quotity) || 0), 0).toFixed(2)}</span> / 10000
-                    </div>
                   </div>
                   </>
                 )}
@@ -576,7 +572,7 @@ export default function CoproprietesPage() {
                   <li><strong>Nom:</strong> {form.name || '(non defini)'}</li>
                   <li><strong>Adresse:</strong> {form.address}, {form.postal_code} {form.city}</li>
                   <li><strong>Comptes bancaires:</strong> {form.bank_accounts.length}</li>
-                  <li><strong>Lots:</strong> {(form.lots || []).filter(l => l.number?.trim()).length} (total quotites: {form.lots.reduce((s, l) => s + (parseFloat(l.quotity) || 0), 0).toFixed(2)})</li>
+                  <li><strong>Lots:</strong> {(form.lots || []).filter(l => l.number?.trim()).length}</li>
                   <li><strong>Total proprietaires affectes:</strong> {new Set(form.lots.flatMap(l => l.owner_ids || [])).size}</li>
                 </ul>
                 <div className="mt-2 text-[#01213e]">A la creation: 95 comptes PCMN belges + 10 categories documents seront automatiquement seedes.</div>

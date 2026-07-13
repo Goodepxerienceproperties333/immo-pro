@@ -12,6 +12,39 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 
+### Iter90eq (Feb 2026) - Suppression du champ Quotite dans la creation manuelle ACP
+
+**Ticket utilisateur** :
+> "lors de la création d'une ACP le champs quotité doit être supprimé
+> de la partie création manuelle cette quotité se retouvant dans la clé
+> de répartition"
+
+**Contexte** : dans l'assistant de creation ACP, etape "Lots &
+proprietaires", chaque lot ajoute manuellement affichait un champ
+"Quotite" (input numeric) + un bandeau "Total quotites : N / 10000".
+Or les quotites sont deja definies au niveau des cles de repartition
+(page dediee), et cette double saisie creait de la confusion.
+
+**Fix iter90eq** (`CoproprietesPage.js`) :
+- Retire l'input "Quotite" de la ligne lot (etape 2 wizard).
+- Grille passe de `grid-cols-6` a `grid-cols-5` (N* / Description x2 /
+  Type / Etage).
+- Retire le bandeau "Total quotites: X / 10000" sous la liste des lots.
+- Retire la mention "(total quotites: X)" dans le recap etape 3.
+- `emptyLot.quotity = 0` conserve dans le state (retrocompat backend +
+  imports CSV/PDF continuent d'ecrire cette valeur), l'utilisateur ne la
+  saisit plus manuellement.
+
+**Note** : les imports CSV/PDF (Optipro/Sogis) conservent le champ
+quotity car il vient des sources documentaires. Seule la creation
+manuelle est simplifiee.
+
+**Verifie** : screenshot wizard etape 2 avec 2 lots ajoutes
+manuellement -> aucun champ "Quotite" visible, tests DOM
+`hasQuotiteLabel: false`, `totalQuotitesText: null`.
+
+
+
 ### Iter90ep (Feb 2026) - Bulk delete : blocage des contre-passations & extournes
 
 **Ticket utilisateur** :
