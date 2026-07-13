@@ -527,6 +527,53 @@ def create_admin_router(db):
         )
         return {"status": "ok"}
 
+    @router.post("/journal-entries/bulk-force-delete")
+    async def bulk_force_delete_entries(request: Request):
+        """iter90en : suppression bulk d'ecritures (admin only).
+
+        Body : { entry_ids: [str], reason: str }
+        Chaque ecriture est archivee dans `deleted_entries` (audit trail)
+        avant suppression definitive. Action critique reservee superadmin.
+        """
+        admin = await _get_superadmin_only(request)
+        body = await request.json() if request.headers.get("content-length") else {}
+        entry_ids = body.get("entry_ids") or []
+        reason = body.get("reason") or ""
+        if not entry_ids or not isinstance(entry_ids, list):
+            raise HTTPException(400, "Liste entry_ids requise")
+        if not reason or len(reason) < 10:
+            raise HTTPException(400, "Justification detaillee requise (minimum 10 caracteres)")
+        entries = await db.journal_entries.find(
+            {"id": {"$in": entry_ids}}, {"_id": 0}
+        ).to_list(len(entry_ids) + 10)
+        if not entries:
+            raise HTTPException(404, "Aucune ecriture trouvee dans la liste")
+        # Archive dans deleted_entries (audit trail)
+        deleted_at = datetime.now(timezone.utc).isoformat()
+        archive_docs = [
+            {**{k: v for k, v in e.items() if k != "_id"},
+             "deleted_at": deleted_at,
+             "deleted_by_admin_id": admin.get("id"),
+             "delete_reason": reason,
+             "bulk_delete": True}
+            for e in entries
+        ]
+        if archive_docs:
+            await db.deleted_entries.insert_many(archive_docs)
+        result = await db.journal_entries.delete_many({"id": {"$in": entry_ids}})
+        # Audit consolide (une entree par bulk operation, pas par entry, pour
+        # ne pas polluer le log)
+        copro_ids = {e.get("copropriete_id") for e in entries if e.get("copropriete_id")}
+        await _audit(
+            admin, "bulk_force_delete_entries", "journal_entry", "bulk",
+            details={"reason": reason,
+                     "count": result.deleted_count,
+                     "entry_ids_sample": entry_ids[:10],
+                     "copropriete_ids": list(copro_ids)},
+            copropriete_id=next(iter(copro_ids)) if len(copro_ids) == 1 else None,
+        )
+        return {"status": "ok", "deleted_count": result.deleted_count}
+
     @router.get("/audit-log")
     async def get_audit_log(
         request: Request,

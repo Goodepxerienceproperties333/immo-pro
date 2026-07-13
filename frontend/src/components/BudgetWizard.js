@@ -42,6 +42,8 @@ export default function BudgetWizard({ budget, distKeys = [], onClose, onDone, m
   const [reserveFreq, setReserveFreq] = useState(0);
   const [reserveStartDate, setReserveStartDate] = useState('');
   const [reserveDueOffset, setReserveDueOffset] = useState(30);
+  // iter90eo : arrondi au superieur (EUR entier) de la quote-part par lot
+  const [reserveRoundUp, setReserveRoundUp] = useState(false);
 
   const [roulEnabled, setRoulEnabled] = useState(false);
   const [roulMode, setRoulMode] = useState('create'); // create | increase
@@ -51,6 +53,8 @@ export default function BudgetWizard({ budget, distKeys = [], onClose, onDone, m
   const [roulFreq, setRoulFreq] = useState(0);
   const [roulStartDate, setRoulStartDate] = useState('');
   const [roulDueOffset, setRoulDueOffset] = useState(30);
+  // iter90eo : arrondi au superieur (EUR entier) de la quote-part par lot
+  const [roulRoundUp, setRoulRoundUp] = useState(false);
 
   // iter90aa : quand distKeys arrive, pre-remplir la cle par defaut si aucune choisie
   useEffect(() => {
@@ -76,6 +80,7 @@ export default function BudgetWizard({ budget, distKeys = [], onClose, onDone, m
       frequency: Number(reserveFreq) || 0,
       start_date: reserveStartDate || '',
       due_offset_days: Number(reserveDueOffset) || 30,
+      round_up: !!reserveRoundUp,
     },
     roulement_fund: {
       enabled: roulEnabled, amount: Number(roulAmount) || 0,
@@ -83,6 +88,7 @@ export default function BudgetWizard({ budget, distKeys = [], onClose, onDone, m
       frequency: Number(roulFreq) || 0,
       start_date: roulStartDate || '',
       due_offset_days: Number(roulDueOffset) || 30,
+      round_up: !!roulRoundUp,
     },
     copropriete_id: budget.copropriete_id || '',
   });
@@ -285,6 +291,24 @@ export default function BudgetWizard({ budget, distKeys = [], onClose, onDone, m
                         </>
                       )}
                     </div>
+                    {/* iter90eo : arrondi au superieur EUR entier par lot */}
+                    <div className="mt-3 pt-3 border-t border-slate-100 flex items-start gap-3">
+                      <Switch
+                        checked={reserveRoundUp}
+                        onCheckedChange={setReserveRoundUp}
+                        data-testid="wizard-reserve-round-up"
+                      />
+                      <div className="flex-1">
+                        <label className="text-sm font-medium text-slate-800 cursor-pointer" onClick={() => setReserveRoundUp(v => !v)}>
+                          Arrondir a l&apos;euro superieur par lot
+                        </label>
+                        <p className="text-xs text-slate-500 mt-0.5">
+                          Chaque quote-part est arrondie a l&apos;EUR entier superieur
+                          (ex : 42,17 EUR &rarr; 43 EUR). Le total appele depasse legerement
+                          le montant vote ; l&apos;exces alimente le fonds (surprovision).
+                        </p>
+                      </div>
+                    </div>
                   </div>
                 )}
               </CardContent>
@@ -390,6 +414,24 @@ export default function BudgetWizard({ budget, distKeys = [], onClose, onDone, m
                           </div>
                         </>
                       )}
+                    </div>
+                    {/* iter90eo : arrondi au superieur EUR entier par lot */}
+                    <div className="mt-3 pt-3 border-t border-slate-100 flex items-start gap-3">
+                      <Switch
+                        checked={roulRoundUp}
+                        onCheckedChange={setRoulRoundUp}
+                        data-testid="wizard-roul-round-up"
+                      />
+                      <div className="flex-1">
+                        <label className="text-sm font-medium text-slate-800 cursor-pointer" onClick={() => setRoulRoundUp(v => !v)}>
+                          Arrondir a l&apos;euro superieur par lot
+                        </label>
+                        <p className="text-xs text-slate-500 mt-0.5">
+                          Chaque quote-part est arrondie a l&apos;EUR entier superieur.
+                          Le total appele depasse legerement le montant vote ;
+                          l&apos;exces alimente le fonds de roulement.
+                        </p>
+                      </div>
                     </div>
                   </div>
                 )}

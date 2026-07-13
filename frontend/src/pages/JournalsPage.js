@@ -9,11 +9,12 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { Plus, Trash2, Eye, Paperclip, Download, Pencil, Unlink } from 'lucide-react';
+import { Plus, Trash2, Eye, Paperclip, Download, Pencil, Unlink, ShieldAlert, X } from 'lucide-react';
 import AccountSearchSelect from '@/components/AccountSearchSelect';
 import UnlettrageDialog from '@/components/UnlettrageDialog';
 import { fmtDate } from '@/lib/dateFmt';
 import { useFiscalYearParams } from '@/hooks/useFiscalYearParams';
+import { useAuth } from '@/contexts/AuthContext';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
@@ -26,6 +27,13 @@ const JOURNAL_TYPES = [
 ];
 
 export default function JournalsPage() {
+  const { user } = useAuth();
+  // iter90en : suppression bulk d'ecritures (admin/superadmin only)
+  const isSuperadmin = user && (user.role === 'superadmin' || user.role === 'admin');
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const [bulkDeleteDialogOpen, setBulkDeleteDialogOpen] = useState(false);
+  const [bulkDeleteReason, setBulkDeleteReason] = useState('');
+  const [bulkDeleting, setBulkDeleting] = useState(false);
   const [entries, setEntries] = useState([]);
   const [accounts, setAccounts] = useState([]);
   const [categories, setCategories] = useState([]);
@@ -214,6 +222,53 @@ export default function JournalsPage() {
   };
   const [unlettrageEntry, setUnlettrageEntry] = useState(null);
 
+  // iter90en : selection multi + suppression bulk (admin only)
+  const toggleSelect = (id) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+  const toggleSelectAll = () => {
+    if (selectedIds.size === entries.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(entries.map(e => e.id)));
+    }
+  };
+  const clearSelection = () => setSelectedIds(new Set());
+  const openBulkDelete = (selectAll = false) => {
+    if (selectAll) {
+      setSelectedIds(new Set(entries.map(e => e.id)));
+    }
+    setBulkDeleteReason('');
+    setBulkDeleteDialogOpen(true);
+  };
+  const confirmBulkDelete = async () => {
+    if (bulkDeleteReason.trim().length < 10) {
+      toast.error('Justification detaillee requise (10 caracteres minimum)');
+      return;
+    }
+    setBulkDeleting(true);
+    try {
+      const ids = Array.from(selectedIds);
+      const { data } = await api.post('/admin/journal-entries/bulk-force-delete', {
+        entry_ids: ids,
+        reason: bulkDeleteReason.trim(),
+      });
+      toast.success(`${data.deleted_count} ecriture(s) supprimee(s) definitivement`);
+      setBulkDeleteDialogOpen(false);
+      setBulkDeleteReason('');
+      clearSelection();
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur suppression');
+    } finally {
+      setBulkDeleting(false);
+    }
+  };
+
   return (
     <div data-testid="journals-page">
       <div className="page-header flex items-center justify-between">
@@ -319,16 +374,84 @@ export default function JournalsPage() {
           </div>
 
           <div className="bg-white rounded-md border border-slate-200 overflow-hidden">
+            {/* iter90en : barre d'actions bulk (admin only) */}
+            {isSuperadmin && entries.length > 0 && (
+              <div className="flex items-center gap-3 px-4 py-2 bg-slate-50 border-b border-slate-200 text-sm">
+                {selectedIds.size > 0 ? (
+                  <>
+                    <span className="text-slate-700 font-medium">
+                      {selectedIds.size} ecriture(s) selectionnee(s)
+                    </span>
+                    <Button
+                      size="sm"
+                      onClick={() => openBulkDelete(false)}
+                      className="bg-red-600 hover:bg-red-700 text-white h-7 text-xs"
+                      data-testid="bulk-delete-selected-btn"
+                    >
+                      <Trash2 size={13} className="mr-1" /> Supprimer selection ({selectedIds.size})
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={clearSelection}
+                      className="h-7 text-xs"
+                    >
+                      <X size={13} className="mr-1" /> Deselectionner
+                    </Button>
+                  </>
+                ) : (
+                  <span className="text-slate-500 italic">
+                    <ShieldAlert size={13} className="inline mr-1" />
+                    Mode admin : cochez les ecritures a supprimer definitivement
+                  </span>
+                )}
+                <div className="ml-auto">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => openBulkDelete(true)}
+                    className="border-red-300 text-red-700 hover:bg-red-50 h-7 text-xs"
+                    data-testid="bulk-delete-all-btn"
+                    disabled={entries.length === 0}
+                  >
+                    <Trash2 size={13} className="mr-1" /> Supprimer TOUT ({entries.length})
+                  </Button>
+                </div>
+              </div>
+            )}
             <Table>
               <TableHeader><TableRow>
+                {isSuperadmin && (
+                  <TableHead className="w-10">
+                    <input
+                      type="checkbox"
+                      checked={entries.length > 0 && selectedIds.size === entries.length}
+                      onChange={toggleSelectAll}
+                      className="cursor-pointer"
+                      data-testid="bulk-select-all-checkbox"
+                      title="Tout selectionner"
+                    />
+                  </TableHead>
+                )}
                 <TableHead>Date</TableHead><TableHead>Reference</TableHead><TableHead>Description</TableHead>
                 <TableHead className="text-right">Debit</TableHead><TableHead className="text-right">Credit</TableHead><TableHead className="w-24">Actions</TableHead>
               </TableRow></TableHeader>
               <TableBody>
                 {entries.length === 0 ? (
-                  <TableRow><TableCell colSpan={6} className="text-center py-8 text-slate-400">Aucune ecriture</TableCell></TableRow>
+                  <TableRow><TableCell colSpan={isSuperadmin ? 7 : 6} className="text-center py-8 text-slate-400">Aucune ecriture</TableCell></TableRow>
                 ) : entries.map(e => (
-                  <TableRow key={e.id} className={`hover:bg-slate-50/50 ${e.reversed ? 'bg-red-50/30 line-through opacity-70' : ''} ${e.is_reversal ? 'bg-amber-50/40' : ''}`}>
+                  <TableRow key={e.id} className={`hover:bg-slate-50/50 ${e.reversed ? 'bg-red-50/30 line-through opacity-70' : ''} ${e.is_reversal ? 'bg-amber-50/40' : ''} ${selectedIds.has(e.id) ? 'bg-red-50/50' : ''}`}>
+                    {isSuperadmin && (
+                      <TableCell>
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.has(e.id)}
+                          onChange={() => toggleSelect(e.id)}
+                          className="cursor-pointer"
+                          data-testid={`bulk-select-${e.id}`}
+                        />
+                      </TableCell>
+                    )}
                     <TableCell className="font-mono text-sm">{fmtDate(e.date)}</TableCell>
                     <TableCell className="font-mono text-xs">
                       {e.reference}
@@ -567,6 +690,66 @@ export default function JournalsPage() {
         onClose={() => setUnlettrageEntry(null)}
         onSuccess={load}
       />
+
+      {/* iter90en : Dialog de confirmation bulk delete (admin only) */}
+      <Dialog open={bulkDeleteDialogOpen} onOpenChange={setBulkDeleteDialogOpen}>
+        <DialogContent className="max-w-lg" data-testid="bulk-delete-dialog">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-red-700" style={{fontFamily:'Chivo,sans-serif'}}>
+              <ShieldAlert size={20} /> Suppression definitive
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 mt-2">
+            <div className="bg-red-50 border border-red-200 rounded p-3 text-sm text-red-900">
+              <p className="font-semibold mb-1">
+                Vous etes sur le point de supprimer <b>{selectedIds.size}</b> ecriture(s) DEFINITIVEMENT.
+              </p>
+              <p className="text-xs text-red-800">
+                Cette action est irreversible. Contrairement au bouton &laquo;extourne&raquo; habituel
+                qui cree une contre-passation traceable, ce bouton ADMIN supprime
+                completement les ecritures. Une copie est conservee dans <code>deleted_entries</code>
+                pour l&apos;audit trail.
+              </p>
+              <p className="text-xs text-red-800 mt-1">
+                <b>Impact bilan :</b> Les provisions/charges concernees disparaissent des
+                balances et bilan. Assurez-vous que ces ecritures sont bien des doublons
+                ou erreurs de saisie.
+              </p>
+            </div>
+            <div>
+              <label className="form-label">Justification (10 caracteres minimum) *</label>
+              <Textarea
+                value={bulkDeleteReason}
+                onChange={e => setBulkDeleteReason(e.target.value)}
+                placeholder="Ex : suppression doublons VE crees par regularisation 2026 relancee 3 fois"
+                rows={3}
+                data-testid="bulk-delete-reason"
+              />
+              <p className="text-[11px] text-slate-500 mt-1">
+                La justification est loguee dans l&apos;audit trail avec votre identifiant admin.
+              </p>
+            </div>
+            <div className="flex gap-3 justify-end">
+              <Button
+                variant="outline"
+                onClick={() => setBulkDeleteDialogOpen(false)}
+                disabled={bulkDeleting}
+              >
+                Annuler
+              </Button>
+              <Button
+                onClick={confirmBulkDelete}
+                className="bg-red-600 hover:bg-red-700 text-white"
+                disabled={bulkDeleting || bulkDeleteReason.trim().length < 10}
+                data-testid="bulk-delete-confirm-btn"
+              >
+                <Trash2 size={14} className="mr-1.5" />
+                {bulkDeleting ? 'Suppression...' : `Supprimer ${selectedIds.size} ecriture(s)`}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

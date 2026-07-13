@@ -12,6 +12,177 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 
+### Iter90eo (Feb 2026) - Arrondi EUR entier pour reserve et roulement
+
+**Ticket utilisateur** :
+> "Dans la partie budget wizard permettre syndic de choisir si il veut
+> arrondir à la supérieure les appels de provision pour charge concernant
+> les fonds de réserve et l'effondrement il n'y a pas d'arrondi possible"
+
+**Bug** : les quotes-parts des appels de fonds reserve/roulement pouvaient
+avoir des decimales (ex 42.17 EUR) rendant les avis d'appel peu lisibles
+pour les proprietaires.
+
+**Fix iter90eo** :
+
+Backend (`fund_calls.py`) :
+- `ReserveFund` et `RoulementFund` acceptent desormais `round_up: bool`
+- Deux endroits appliquent `math.ceil()` sur chaque quote-part si active :
+  * Injection legacy sur appel #1 des provisions (fonds sans schedule propre)
+  * Serie propre du fonds (frequency > 0)
+- Le champ `line_details[*].round_up` est propage sur les appels generes
+- IMPORTANT : quand `round_up=true`, `_snap_distribution_to_total` n'est
+  PAS applique -> les valeurs arrondies sont conservees telles quelles
+  (la somme reelle depasse legerement le montant vote, l'exces alimente
+  le fonds = surprovision voulue)
+
+Frontend (`BudgetWizard.js`) :
+- Nouveau state `reserveRoundUp` + `roulRoundUp`
+- Toggle `Switch` sous le formulaire de chaque fonds :
+  * Label "Arrondir a l'euro superieur par lot"
+  * `data-testid="wizard-reserve-round-up"` et `wizard-roul-round-up`
+  * Aide contextuelle : "ex 42.17 -> 43 EUR. L'exces alimente le fonds"
+- Le payload envoye au backend inclut desormais `round_up`
+
+**Tests iter90eo** (3/3 PASS) :
+1. `test_reserve_round_up_ceils_each_share` : 1000 EUR reparti sur 3 lots
+   avec quotites 333/333/334 -> AVEC round_up chaque quote-part est un
+   entier (334/334/335), total 1003 EUR (surprovision +3)
+2. `test_reserve_without_round_up_keeps_decimals` : sans round_up, la
+   somme reste egale au vote (~1000)
+3. `test_roulement_round_up_ceils_each_share` : meme regle pour roulement
+
+**Non-regression** : 14/14 tests iter90eo + em + ek/el PASS.
+
+**Impact PROD apres redeploiement** :
+- Les avis d'appel affichent des montants entiers ronds (plus lisibles)
+- Le syndic controle l'option par fonds (reserve OU roulement, ou les 2)
+- La surprovision est traceable via le champ `line_details[*].round_up`
+
+
+
+
+### Iter90em (Feb 2026) - Regularisation d'exercice : idempotence et bilan equilibre
+
+**Ticket utilisateur (PROD critique)** :
+> "problème dans la régularisation des décomptes. si budget appellé > charges alors
+> difference créditrice répartie sur proprios selon quotités... certaines extournes
+> n'ont pas été supprimée du principe comptable (vue coté admin) ce qui fausse le
+> bilan il est interdit d'avoir un bilan faux. Actif = Passif c'est primordial."
+>
+> "selon mes calculs la régularisation créditrice devrait être de 6453.8€
+> (Acacia: 19000 provisions - 12546.2 charges réelles)"
+
+**Symptomes PROD** :
+- Bilan ACTIF (21911.31 EUR) != PASSIF (578947.48 EUR)
+- Compte 499 "Boni a repartir" gonfle a 564185.99 EUR au lieu de ~6454 EUR
+- Frais reels alloues aux proprios = 0.00 (repartition cassee)
+- Grand livre montre des VE en double
+
+**Root causes identifiees** :
+
+1. `regularize_fiscal_year` creait une OD d'extourne (EXT-XXX) SANS marquer
+   les VE originales comme `reversed=True`. Chaque relance de la
+   regularisation additionnait donc les provisions -> boni artificiel enorme.
+
+2. `_distribute()` matchait les lots uniquement par `lot_id` exact, echouant
+   sur les phantom keys (lots supprimes/re-importes) -> frais alloues = 0.
+
+3. `revert_regularization` ne demarquait pas les VE originales -> rollback
+   incomplet.
+
+**Fix iter90em (fiscal.py)** :
+
+1. `regularize_fiscal_year` :
+   * Exclut les VE deja `reversed=True` ou `is_reversal=True` du calcul de
+     `provisions_called_by_owner` (evite double comptage)
+   * Track `ve_entry_ids_to_reverse` pendant le scan
+   * Apres insertion de l'OD d'extourne, marque toutes ces VE :
+     `reversed=True`, `reversed_by_entry_id=<ext_id>`, `reversed_reason="regularization"`
+   * L'OD d'extourne est marquee `is_reversal=True` (pour que `_exclude_reversals`
+     la retire du bilan)
+
+2. `_distribute()` :
+   * Nouveau fallback phantom key via `lot_number` normalise (aligne avec iter90du)
+   * Fallback distribution_key `is_default` si `lot.quotity=0` partout
+     (les vraies quotites vivent souvent dans distribution_keys)
+
+3. `revert_regularization` :
+   * Trouve l'OD d'extourne (EXT-XXX) via source_id
+   * Demarque toutes les VE liees par `reversed_by_entry_id`
+   * Supprime les OD de regularisation
+   * Nettoie les champs `regularized_at` / `regularization_summary` sur le FY
+
+**Tests iter90em** (4/4 PASS) :
+1. `test_regularization_computes_correct_boni_acacia` : scenario user reel
+   Acacia -> 19000 provisions - 12546.20 charges = 6453.80 boni CORRECT
+2. `test_regularization_marks_ve_originals_as_reversed` : VE apres regul ont
+   `reversed=True` + `reversed_by_entry_id` + `is_reversal` sur l'extourne
+3. `test_regularization_is_idempotent_no_double_counting` : lancement 3 fois
+   -> 1re regul = 19000, 2e et 3e = 0 (pas de doublons)
+4. `test_revert_regularization_unmarks_ve_originals` : rollback complet
+
+**Impact PROD apres redeploiement** :
+- Boni compte 499 = valeur reelle (~6454 EUR pour Acacia au lieu de 564185.99)
+- Bilan equilibre : ACTIF = PASSIF
+- Repartition correcte des frais reels par proprio
+- Relance sans risque de la regularisation (idempotent)
+
+**Recommandation pour Acacia (donnees legacy corrompues)** :
+1. Redeployer preview -> immo-pcmn.emergent.host
+2. Lancer `DELETE /api/fiscal/years/{id}/regularize` pour ROLLBACK la
+   regularisation actuelle (elle demarque les VE et supprime les OD EXT/AFF)
+3. Relancer `POST /api/fiscal/years/{id}/regularize` -> le nouveau calcul
+   sera bon
+
+
+
+### Iter90en (Feb 2026) - Grand Livre : suppression bulk d'ecritures (admin)
+
+**Ticket utilisateur** :
+> "coté admin permettre de supprimer toutes les écritures en les selectionnants
+> donc checkbox (multiselect) et boutton supprimmer + boutton supprimmer tous"
+
+**Fix iter90en** :
+
+**Backend** (`admin.py`) :
+- Nouveau endpoint `POST /api/admin/journal-entries/bulk-force-delete`
+- Body : `{ entry_ids: [str], reason: str (>= 10 char) }`
+- Reserve superadmin uniquement
+- Archive dans `deleted_entries` (audit trail) AVANT suppression
+- Log dans `audit_log` (une entree par bulk, pas par entry)
+- Retourne `{ status: "ok", deleted_count: N }`
+
+**Frontend** (`JournalsPage.js`) :
+- Colonne checkbox visible uniquement pour `user.role` superadmin/admin
+- Checkbox "Tout selectionner" dans le header
+- Barre d'actions bulk avec :
+  * Compteur `X ecriture(s) selectionnee(s)`
+  * Bouton `Supprimer selection (X)` rouge
+  * Bouton `Deselectionner`
+  * Bouton `Supprimer TOUT (N)` (a droite, avec badge)
+- Dialog de confirmation `#bulk-delete-dialog` avec :
+  * Avertissement rouge sur l'irreversibilite
+  * Explication difference vs "extourne" (contre-passation)
+  * Champ justification requis (>= 10 caracteres)
+  * Bouton "Supprimer X ecriture(s)" desactive tant que justification insuffisante
+- Ligne selectionnee highlight (bg-red-50/50)
+
+**Tests iter90en** (4/4 PASS) :
+1. `test_bulk_force_delete_removes_entries_and_archives` : supprime 3
+   entries + archive dans deleted_entries + bulk_delete flag
+2. `test_bulk_force_delete_requires_justification` : refus si < 10 char
+3. `test_bulk_force_delete_requires_ids` : refus si liste vide
+4. `test_bulk_force_delete_returns_404_if_none_found` : 404 si ids inexistants
+
+**Cas d'usage typiques** :
+- Nettoyage des VE en double crees par la regularisation Acacia PROD
+- Retrait des ecritures test/demo apres migration
+- Correction rapide d'imports Optipro/CODA errones
+
+
+
+
 ### Iter90ek + iter90el (Feb 2026) - PDF Decompte : filigrane conditionnel + prorata mutation
 
 **Tickets utilisateur (PROD)** :

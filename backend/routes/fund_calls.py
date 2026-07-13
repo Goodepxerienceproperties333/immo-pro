@@ -28,6 +28,10 @@ class ReserveFund(BaseModel):
     frequency: Optional[int] = 0  # 0 = legacy injection, 1/2/3/4/6/12 = serie propre
     start_date: Optional[str] = ""
     due_offset_days: Optional[int] = 30
+    # iter90eo : arrondi au superieur (EUR entier) de la quote-part par lot.
+    # Utile pour l'affichage sur les avis d'appel (evite les centimes).
+    # L'exces recolte alimente le fonds (surprovision utilisable).
+    round_up: Optional[bool] = False
 
 
 class RoulementFund(BaseModel):
@@ -40,6 +44,8 @@ class RoulementFund(BaseModel):
     frequency: Optional[int] = 0
     start_date: Optional[str] = ""
     due_offset_days: Optional[int] = 30
+    # iter90eo : arrondi au superieur (EUR entier) de la quote-part par lot.
+    round_up: Optional[bool] = False
 
 
 class GenerateFromBudgetInput(BaseModel):
@@ -1864,6 +1870,14 @@ def create_fund_calls_router(db):
                 # iter90aj + iter90cg : rebind sur date effective = min(call_date, period_end).
                 # Cas cible : appel Q3 emis en retard apres mutation posterieure a la periode -> vendeur.
                 reserve_dist = _rebind_owner_at_call_date(reserve_dist, call_date, period_end)
+                # iter90eo : arrondi au superieur (EUR entier) si option activee.
+                # Chaque quote-part passe a `ceil(amount)`. La somme totale
+                # augmente legerement (surprovision utilisable par le fonds).
+                if data.reserve_fund.round_up:
+                    import math as _m
+                    for e in reserve_dist:
+                        e["amount"] = float(_m.ceil(float(e.get("amount", 0) or 0)))
+                    reserve_amount = round(sum(e.get("amount", 0) for e in reserve_dist), 2)
                 line_details.append({
                     "account_number": "RESERVE",
                     "account_name": data.reserve_fund.label or "Fonds de reserve",
@@ -1871,6 +1885,7 @@ def create_fund_calls_router(db):
                     "distribution_key_name": keys_map.get(data.reserve_fund.distribution_key_id or "", {}).get("name", "Tantiemes"),
                     "amount": reserve_amount,
                     "is_reserve": True,
+                    "round_up": bool(data.reserve_fund.round_up),
                 })
                 call_total += reserve_amount
                 reserve_added = reserve_amount
@@ -1886,6 +1901,12 @@ def create_fund_calls_router(db):
                 roul_dist = _distribute_amount(roul_amount, data.roulement_fund.distribution_key_id or "")
                 # iter90aj + iter90cg : rebind sur date effective = min(call_date, period_end).
                 roul_dist = _rebind_owner_at_call_date(roul_dist, call_date, period_end)
+                # iter90eo : arrondi au superieur (EUR entier) si option activee.
+                if data.roulement_fund.round_up:
+                    import math as _m
+                    for e in roul_dist:
+                        e["amount"] = float(_m.ceil(float(e.get("amount", 0) or 0)))
+                    roul_amount = round(sum(e.get("amount", 0) for e in roul_dist), 2)
                 lbl = data.roulement_fund.label or "Fonds de roulement"
                 mode_lbl = "(creation)" if (data.roulement_fund.mode or "create") == "create" else "(augmentation)"
                 line_details.append({
@@ -1896,6 +1917,7 @@ def create_fund_calls_router(db):
                     "amount": roul_amount,
                     "is_roulement": True,
                     "roulement_mode": data.roulement_fund.mode or "create",
+                    "round_up": bool(data.roulement_fund.round_up),
                 })
                 call_total += roul_amount
                 roulement_added = roul_amount
@@ -1983,6 +2005,13 @@ def create_fund_calls_router(db):
                 # mutation posterieure a la periode -> vendeur (proprietaire
                 # durant la periode Q3), pas nouvel acheteur (owner-at-call-date).
                 dist = _rebind_owner_at_call_date(dist, cd, pend)
+                # iter90eo : arrondi au superieur (EUR entier) par lot si active.
+                _per_call_actual = per_call
+                if getattr(fund, "round_up", False):
+                    import math as _m
+                    for e in dist:
+                        e["amount"] = float(_m.ceil(float(e.get("amount", 0) or 0)))
+                    _per_call_actual = round(sum(e.get("amount", 0) for e in dist), 2)
                 # iter85b : distribution par lot (cascade parent/enfant)
                 distribution = []
                 for e in dist:
@@ -1999,13 +2028,18 @@ def create_fund_calls_router(db):
                         "paid_date": "",
                     })
                 # iter90w : garantit sum(distribution.amount) == per_call
-                _snap_distribution_to_total(distribution, per_call)
+                # iter90eo : si round_up actif, on ne resnap PAS (on veut garder
+                # les valeurs arrondies au superieur, la somme reelle peut
+                # depasser per_call - c'est la surprovision voulue).
+                if not getattr(fund, "round_up", False):
+                    _snap_distribution_to_total(distribution, per_call)
                 distribution.sort(key=lambda x: (x["owner_name"] or "", x["lot_number"] or ""))
                 line_tag = {"account_number": account_tag,
                             "account_name": base_label,
                             "distribution_key_id": fund.distribution_key_id or "",
                             "distribution_key_name": keys_map.get(fund.distribution_key_id or "", {}).get("name", "Tantiemes"),
-                            "amount": per_call}
+                            "amount": _per_call_actual,
+                            "round_up": bool(getattr(fund, "round_up", False))}
                 if fund_kind == "reserve":
                     line_tag["is_reserve"] = True
                 else:
@@ -2017,9 +2051,9 @@ def create_fund_calls_router(db):
                     "due_date": dd,
                     "period_start": cd,
                     "period_end": pend,
-                    "total_amount": per_call,
-                    "reserve_amount": per_call if fund_kind == "reserve" else 0.0,
-                    "roulement_amount": per_call if fund_kind == "roulement" else 0.0,
+                    "total_amount": _per_call_actual,
+                    "reserve_amount": _per_call_actual if fund_kind == "reserve" else 0.0,
+                    "roulement_amount": _per_call_actual if fund_kind == "roulement" else 0.0,
                     "roulement_mode": (fund.mode or "create") if (fund_kind == "roulement" and hasattr(fund, 'mode')) else "",
                     "lines": [line_tag],
                     "distribution": distribution,

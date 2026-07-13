@@ -473,13 +473,21 @@ def create_fiscal_router(db):
         total_real = round(sum(by_nature_key.values()), 2)
 
         # 3) Total provisions called (700000) - exclude reserve
+        # iter90em : EXCLURE les VE deja extournees (reversed=True) et les
+        # contre-passations (is_reversal=True) pour eviter de compter les
+        # provisions en double si la regularisation est relancee.
         ve_q = {"date": {"$gte": start, "$lte": end}, "copropriete_id": copro_id,
-                "journal_type": "VE"}
+                "journal_type": "VE",
+                "reversed": {"$ne": True},
+                "is_reversal": {"$ne": True}}
         ve_entries = await db.journal_entries.find(ve_q, {"_id": 0}).to_list(50000)
         provisions_called_by_owner = defaultdict(float)  # owner_id -> amount
         provisions_called_total = 0.0
+        # Track VE entry IDs to mark as reversed later (iter90em)
+        ve_entry_ids_to_reverse = set()
         from tier_accounts import is_provisions_account
         for e in ve_entries:
+            has_provision_line = False
             for line in e.get("lines", []):
                 acc = line.get("account_number", "")
                 # provisions only (legacy 40000XXX OR new 4101XXXX), not reserve
@@ -488,6 +496,9 @@ def create_fiscal_router(db):
                     if amt > 0 and line.get("third_party_id"):
                         provisions_called_by_owner[line["third_party_id"]] += amt
                         provisions_called_total += amt
+                        has_provision_line = True
+            if has_provision_line:
+                ve_entry_ids_to_reverse.add(e["id"])
         provisions_called_total = round(provisions_called_total, 2)
 
         # 4) Resolve owner accounts and distribution keys
@@ -504,17 +515,43 @@ def create_fiscal_router(db):
 
         def _distribute(amount: float, key_id: str) -> dict:
             dist = defaultdict(float)
+            # iter90em : fallback phantom key via lot_number normalise
+            # (aligne avec iter90du : les distribution_keys peuvent contenir
+            # des lot_id qui ne pointent plus vers les lots actuels apres
+            # suppression/re-import Optipro).
+            def _norm_num(v):
+                return (str(v or "").strip().lstrip("0") or "0")
+            lots_by_norm_number = {
+                _norm_num(l.get("number", "")): l for l in lots
+            }
             if key_id and key_id in keys_map:
                 key = keys_map[key_id]
                 total_shares = sum(l["share"] for l in key.get("lots", []))
                 for kl in key.get("lots", []):
                     lot = next((l for l in lots if l["id"] == kl["lot_id"]), None)
+                    # iter90em : phantom fallback par lot_number normalise
+                    if not lot:
+                        lot = lots_by_norm_number.get(_norm_num(kl.get("lot_number", "")))
                     if not lot or not lot.get("owner_id"):
                         continue
                     ratio = kl["share"] / total_shares if total_shares > 0 else 0
                     dist[lot["owner_id"]] += amount * ratio
             else:
                 total_quotity = sum(l.get("quotity", 0) for l in lots if l.get("owner_id"))
+                # iter90em : fallback si quotity=0 partout -> utilise default distribution key
+                if total_quotity <= 0:
+                    default_key = next((k for k in keys if k.get("is_default")), None)
+                    if default_key:
+                        total_shares = sum(l["share"] for l in default_key.get("lots", []))
+                        for kl in default_key.get("lots", []):
+                            lot = next((l for l in lots if l["id"] == kl["lot_id"]), None)
+                            if not lot:
+                                lot = lots_by_norm_number.get(_norm_num(kl.get("lot_number", "")))
+                            if not lot or not lot.get("owner_id"):
+                                continue
+                            ratio = kl["share"] / total_shares if total_shares > 0 else 0
+                            dist[lot["owner_id"]] += amount * ratio
+                        return dist
                 for lot in lots:
                     if not lot.get("owner_id"):
                         continue
@@ -608,9 +645,26 @@ def create_fiscal_router(db):
                 "auto_generated": True,
                 "source_type": "regularization",
                 "source_id": year_id,
+                # iter90em : marque cette OD comme contre-passation pour que
+                # _exclude_reversals la retire des balances/bilan.
+                "is_reversal": True,
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
             await db.journal_entries.insert_one(extourne_entry)
+            # iter90em : marque TOUTES les VE originales comme reversed=True
+            # avec reference a l'extourne. Sans cela, `_exclude_reversals`
+            # les laisserait dans le bilan -> doublons de provisions et
+            # boni artificiel enorme si la regularisation est relancee.
+            if ve_entry_ids_to_reverse:
+                await db.journal_entries.update_many(
+                    {"id": {"$in": list(ve_entry_ids_to_reverse)}},
+                    {"$set": {
+                        "reversed": True,
+                        "reversed_by_entry_id": extourne_entry["id"],
+                        "reversed_at": datetime.now(timezone.utc).isoformat(),
+                        "reversed_reason": "regularization",
+                    }},
+                )
 
         # ----- 7b) Affectation frais reels par proprietaire -----
         affect_lines = []
@@ -665,7 +719,30 @@ def create_fiscal_router(db):
 
     @router.delete("/years/{year_id}/regularize")
     async def revert_regularization(year_id: str):
-        """Annule la regularisation (utile en cas d'erreur)."""
+        """Annule la regularisation (utile en cas d'erreur).
+
+        iter90em : demarque aussi les VE originales (reversed=False) qui
+        avaient ete marquees par la regularisation. Sans cela, les provisions
+        appelees restent invisibles au bilan/balance apres rollback.
+        """
+        # 1) Trouve l'ID de l'extourne (EXT-XXX) genere par cette regul
+        ext_entries = await db.journal_entries.find(
+            {"source_type": "regularization", "source_id": year_id},
+            {"_id": 0, "id": 1},
+        ).to_list(100)
+        ext_ids = [e["id"] for e in ext_entries]
+        # 2) Demarque les VE originales pointees par ces extournes
+        if ext_ids:
+            await db.journal_entries.update_many(
+                {"reversed_by_entry_id": {"$in": ext_ids}},
+                {"$unset": {
+                    "reversed": "",
+                    "reversed_by_entry_id": "",
+                    "reversed_at": "",
+                    "reversed_reason": "",
+                }},
+            )
+        # 3) Supprime les OD de regularisation (EXT + AFF)
         await db.journal_entries.delete_many({"source_type": "regularization", "source_id": year_id})
         await db.fiscal_years.update_one(
             {"id": year_id}, {"$unset": {"regularized_at": "", "regularization_summary": ""}}
