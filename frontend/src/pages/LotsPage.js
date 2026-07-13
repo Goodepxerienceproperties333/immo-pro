@@ -593,7 +593,25 @@ function MutationDialog({ lot, owners, ownersRefresh, onClose, onDone }) {
 
           {/* Preview */}
           {loading && <div className="text-sm text-slate-500">Calcul en cours...</div>}
-          {preview && !loading && (
+          {preview && !loading && (() => {
+            // iter90eu : bug critique - la mutation groupee doit sommer le
+            // roulement de TOUS les lots dans le Bloc 1, pas seulement le
+            // lot principal. Utilise les agregats backend (grouped_total_*).
+            const bd = preview.per_lot_breakdowns || [];
+            const isGrouped = bd.length > 1;
+            const roulementSum = isGrouped
+              ? (preview.grouped_total_roulement ?? bd.reduce((s, b) => s + (parseFloat(b.roulement_quota) || 0), 0))
+              : (preview.roulement_quota || 0);
+            const shareSum = isGrouped
+              ? bd.reduce((s, b) => s + (parseFloat(b.lot_share_in_key) || 0), 0)
+              : preview.lot_share_in_key;
+            const currentProrataSum = isGrouped
+              ? (preview.grouped_total_current_prorata ?? bd.reduce((s, b) => s + (parseFloat(b.current_period_prorata) || 0), 0))
+              : (preview.current_period_prorata || 0);
+            const totalTransferSum = isGrouped
+              ? (preview.grouped_total_transfer || 0)
+              : (preview.total_transfer || 0);
+            return (
             <div className="space-y-3" data-testid="mutation-preview">
               {/* BLOC 1 : Fonds de roulement (jamais au prorata, sur quotites) */}
               <div className="rounded-md border border-emerald-300 bg-emerald-50 p-4 space-y-2" data-testid="mutation-block-roulement">
@@ -608,11 +626,17 @@ function MutationDialog({ lot, owners, ownersRefresh, onClose, onDone }) {
                 <div className="grid grid-cols-2 gap-2 text-sm">
                   <div className="text-slate-600">Solde fonds de roulement (cpt 100, ACP)</div>
                   <div className="text-right font-mono">{preview.fonds_roulement_total?.toFixed(2)} EUR</div>
-                  <div className="text-slate-600">Part du lot dans la cle par defaut ({preview.default_key_name || 'Generale'})</div>
-                  <div className="text-right font-mono">{preview.lot_share_in_key} / {preview.key_total_quotity}</div>
-                  <div className="text-slate-900 font-semibold border-t pt-2">Quote-part transferee</div>
+                  <div className="text-slate-600">
+                    {isGrouped
+                      ? `Part cumulee des ${bd.length} lots dans la cle par defaut (${preview.default_key_name || 'Generale'})`
+                      : `Part du lot dans la cle par defaut (${preview.default_key_name || 'Generale'})`}
+                  </div>
+                  <div className="text-right font-mono">{shareSum} / {preview.key_total_quotity}</div>
+                  <div className="text-slate-900 font-semibold border-t pt-2">
+                    {isGrouped ? 'Quote-part transferee (total groupe)' : 'Quote-part transferee'}
+                  </div>
                   <div className="text-right font-mono font-bold border-t pt-2 text-emerald-700" data-testid="mutation-roulement-quota">
-                    {preview.roulement_quota?.toFixed(2)} EUR
+                    {roulementSum.toFixed(2)} EUR
                   </div>
                 </div>
                 <div className="text-[11px] text-slate-500 italic">
@@ -710,25 +734,27 @@ function MutationDialog({ lot, owners, ownersRefresh, onClose, onDone }) {
               {/* SYNTHESE - Ecriture OD */}
               <div className="rounded-md border-2 border-slate-700 bg-slate-50 p-4 space-y-1" data-testid="mutation-block-summary">
                 <div className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
-                  Synthese - Ecriture comptable OD
+                  {isGrouped ? `Synthese - Ecritures comptables OD (${bd.length} lots)` : 'Synthese - Ecriture comptable OD'}
                 </div>
                 <div className="grid grid-cols-2 gap-2 text-sm">
                   <div className="text-slate-700">Fonds de roulement (Bloc 1)</div>
-                  <div className="text-right font-mono">{preview.roulement_quota?.toFixed(2)} EUR</div>
+                  <div className="text-right font-mono">{roulementSum.toFixed(2)} EUR</div>
                   <div className="text-slate-700">+ Prorata appel en cours (Bloc 2.a)</div>
-                  <div className="text-right font-mono">{preview.current_period_prorata?.toFixed(2)} EUR</div>
+                  <div className="text-right font-mono">{currentProrataSum.toFixed(2)} EUR</div>
                   <div className="text-slate-900 font-bold border-t border-slate-700 pt-2">= Total transfert OD</div>
                   <div className="text-right font-mono font-bold border-t border-slate-700 pt-2 text-slate-900 text-base" data-testid="mutation-total-transfer">
-                    {preview.total_transfer?.toFixed(2)} EUR
+                    {totalTransferSum.toFixed(2)} EUR
                   </div>
                 </div>
                 <div className="text-[11px] text-slate-500 italic mt-2">
-                  Ecriture : Dr compte acquereur / Cr compte vendeur pour {preview.total_transfer?.toFixed(2)} EUR.
-                  Le fonds de reserve n&apos;est PAS impacte. Le lot sera reaffecte a l&apos;acquereur.
+                  {isGrouped
+                    ? `${bd.length} ecritures OD seront generees (une par lot). Le fonds de reserve n'est PAS impacte.`
+                    : `Ecriture : Dr compte acquereur / Cr compte vendeur pour ${totalTransferSum.toFixed(2)} EUR. Le fonds de reserve n'est PAS impacte. Le lot sera reaffecte a l'acquereur.`}
                 </div>
               </div>
             </div>
-          )}
+          );
+          })()}
 
           <div className="sticky bottom-0 -mx-6 px-6 pt-3 pb-1 bg-white border-t border-slate-200 flex gap-3 justify-end z-10">
             <Button variant="outline" onClick={onClose}>Annuler</Button>

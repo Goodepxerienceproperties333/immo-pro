@@ -5,7 +5,21 @@ import { X } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 
-const Sheet = SheetPrimitive.Root
+// iter90et : meme mecanisme que Dialog pour proteger les Sheets
+// contenant des saisies.
+const UNSAVED_CONFIRM_MSG =
+  "Voulez-vous vraiment fermer ? Vos modifications non sauvegardees seront perdues.";
+
+const Sheet = ({ hasUnsavedChanges, onOpenChange, ...props }) => {
+  const handleOpenChange = React.useCallback((open) => {
+    if (!open && hasUnsavedChanges) {
+      // eslint-disable-next-line no-alert
+      if (!window.confirm(UNSAVED_CONFIRM_MSG)) return;
+    }
+    onOpenChange?.(open);
+  }, [hasUnsavedChanges, onOpenChange]);
+  return <SheetPrimitive.Root onOpenChange={handleOpenChange} {...props} />;
+};
 
 const SheetTrigger = SheetPrimitive.Trigger
 

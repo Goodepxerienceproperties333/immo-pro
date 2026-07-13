@@ -17,6 +17,7 @@ import SupplierSearchSelect from '@/components/SupplierSearchSelect';
 import BundleImportDialog from '@/components/BundleImportDialog';
 import { fmtDate } from '@/lib/dateFmt';
 import { useFiscalYearParams } from '@/hooks/useFiscalYearParams';
+import { useDirtyGuard } from '@/hooks/useDirtyGuard';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
@@ -52,6 +53,9 @@ export default function InvoicesPage() {
   const [newCatDialog, setNewCatDialog] = useState(false);
   const [newCatForm, setNewCatForm] = useState({ name: '', account_number: '', description: '' });
   const [bundleDialog, setBundleDialog] = useState(false);
+  // iter90et : dirty guard sur le dialog facture
+  const invDirty = useDirtyGuard(invForm, invoiceDialog);
+  const newCatDirty = useDirtyGuard(newCatForm, newCatDialog);
   const [dragActive, setDragActive] = useState(false);
   const [viewerAttachment, setViewerAttachment] = useState(null); // {url, filename}
   // iter85g : dialog de confirmation homonymes lors de la creation supplier
@@ -858,7 +862,7 @@ export default function InvoicesPage() {
           </div>
 
       {/* Invoice Dialog */}
-      <Dialog open={invoiceDialog} onOpenChange={(open) => { if (!open) { setEditingInvoice(null); setPendingPdf(null); } setInvoiceDialog(open); }}>
+      <Dialog open={invoiceDialog} onOpenChange={(open) => { if (!open) { setEditingInvoice(null); setPendingPdf(null); } setInvoiceDialog(open); }} hasUnsavedChanges={invDirty}>
         <DialogContent className="max-w-[1600px] w-[97vw] max-h-[92vh] overflow-y-auto" data-testid="invoice-dialog">
           <DialogHeader><DialogTitle style={{fontFamily:'Chivo,sans-serif'}}>{editingInvoice ? 'Modifier la facture' : 'Nouvelle facture'}</DialogTitle></DialogHeader>
           <div className="space-y-4 mt-2">
@@ -1636,7 +1640,7 @@ export default function InvoicesPage() {
       />
 
       {/* Create Expense Category inline dialog */}
-      <Dialog open={newCatDialog} onOpenChange={async (open) => {
+      <Dialog open={newCatDialog} hasUnsavedChanges={newCatDirty} onOpenChange={async (open) => {
         setNewCatDialog(open);
         // iter90ec : refetch les comptes PCMN a l'ouverture pour inclure les
         // comptes tout juste crees (custom) dans une autre page.

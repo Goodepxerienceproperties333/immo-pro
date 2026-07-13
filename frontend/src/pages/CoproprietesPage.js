@@ -14,6 +14,7 @@ import { toast } from 'sonner';
 import { Plus, Pencil, Trash2, Home, Search, Archive, RotateCcw, Landmark, PlusCircle, X, Eraser, Wand2, Upload, UserPlus, FileText, Download } from 'lucide-react';
 import BulkCsvImportDialog from '@/components/BulkCsvImportDialog';
 import PdfImportDialog from '@/components/PdfImportDialog';
+import { useDirtyGuard } from '@/hooks/useDirtyGuard';
 
 const emptyBank = { iban: '', bic: '', account_type: 'vue', is_default: false, label: '' };
 const emptyLot = { number: '', description: '', lot_type: 'apartment', floor: 0, area: 0, quotity: 0 };
@@ -38,6 +39,7 @@ export default function CoproprietesPage() {
   const [step, setStep] = useState(1);
   const [ownerSearchByLot, setOwnerSearchByLot] = useState({});  // {lotIdx: 'query'}
   const [ownerFocusLot, setOwnerFocusLot] = useState(null);  // lotIdx currently focused or null
+  const dirty = useDirtyGuard(form, dialogOpen);
 
   const load = useCallback(async () => {
     const { data } = await api.get('/coproprietes', { params: { show_archived: showArchived } });
@@ -280,13 +282,10 @@ export default function CoproprietesPage() {
       </div>
 
       {/* Dialog */}
-      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+      <Dialog open={dialogOpen} onOpenChange={setDialogOpen} hasUnsavedChanges={dirty}>
         <DialogContent
           className="max-w-3xl max-h-[85vh] overflow-y-auto"
           data-testid="copro-dialog"
-          onPointerDownOutside={(e) => e.preventDefault()}
-          onInteractOutside={(e) => e.preventDefault()}
-          onEscapeKeyDown={(e) => e.preventDefault()}
         >
           <DialogHeader>
             <DialogTitle style={{fontFamily:'Chivo,sans-serif'}}>{editing ? 'Modifier ACP' : 'Assistant de creation ACP'}</DialogTitle>

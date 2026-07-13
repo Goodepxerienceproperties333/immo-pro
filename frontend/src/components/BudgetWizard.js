@@ -10,6 +10,7 @@ import { Switch } from '@/components/ui/switch';
 import { toast } from 'sonner';
 import { ChevronLeft, ChevronRight, Send, CheckCircle2, Calendar, Wallet, ShieldCheck, Banknote, ClipboardList, AlertTriangle } from 'lucide-react';
 import { fmtDate } from '@/lib/dateFmt';
+import { useDirtyGuard } from '@/hooks/useDirtyGuard';
 
 const FREQ_OPTIONS = [
   { v: 1, l: 'Unique (annuel)', interval: 12 },
@@ -136,8 +137,24 @@ export default function BudgetWizard({ budget, distKeys = [], onClose, onDone, m
     return true;
   };
 
+  // iter90et : dirty guard - alerte si l'utilisateur ferme avant "Lancer"
+  const wizardDirty = useDirtyGuard(
+    {
+      frequency, startDate, dueOffset,
+      reserveEnabled, reserveAmount, reserveKeyId, reserveLabel, reserveFreq,
+      reserveStartDate, reserveDueOffset, reserveRoundUp,
+      roulEnabled, roulMode, roulAmount, roulKeyId, roulLabel, roulFreq,
+      roulStartDate, roulDueOffset, roulRoundUp,
+    },
+    true,
+  );
+
   return (
-    <Dialog open onOpenChange={() => onClose?.()}>
+    <Dialog
+      open
+      onOpenChange={() => onClose?.()}
+      hasUnsavedChanges={wizardDirty}
+    >
       <DialogContent className="max-w-4xl" data-testid="budget-wizard">
         <DialogHeader>
           <DialogTitle style={{ fontFamily: 'Chivo,sans-serif' }}>

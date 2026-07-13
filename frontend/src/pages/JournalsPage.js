@@ -15,6 +15,7 @@ import UnlettrageDialog from '@/components/UnlettrageDialog';
 import { fmtDate } from '@/lib/dateFmt';
 import { useFiscalYearParams } from '@/hooks/useFiscalYearParams';
 import { useAuth } from '@/contexts/AuthContext';
+import { useDirtyGuard } from '@/hooks/useDirtyGuard';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
@@ -51,6 +52,8 @@ export default function JournalsPage() {
     amount_min: '', amount_max: '', third_party_name: '',
   });
   const fyParams = useFiscalYearParams();
+  // iter90et : dirty guard sur le dialog de creation/edition d'ecriture
+  const entryDirty = useDirtyGuard(form, dialogOpen);
 
   const load = useCallback(async () => {
     // Compose les params : filtres locaux + defaut fiscal + journal type
@@ -521,7 +524,7 @@ export default function JournalsPage() {
       </Tabs>
 
       {/* Create Dialog */}
-      <Dialog open={dialogOpen} onOpenChange={(open) => { if (!open) setEditingEntry(null); setDialogOpen(open); }}>
+      <Dialog open={dialogOpen} onOpenChange={(open) => { if (!open) setEditingEntry(null); setDialogOpen(open); }} hasUnsavedChanges={entryDirty}>
         <DialogContent className="max-w-3xl" data-testid="entry-dialog">
           <DialogHeader><DialogTitle style={{fontFamily:'Chivo,sans-serif'}}>
             {editingEntry ? `Modifier ecriture ${editingEntry.reference || ''}` : 'Nouvelle ecriture comptable'}

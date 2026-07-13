@@ -12,6 +12,61 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 
+### Iter90eu (Feb 2026) - BUG CRITIQUE : mutation groupee affichait un fonds de roulement partiel
+
+**Ticket utilisateur** :
+> "lors de la mutation dans l'apercu tu dois bien prendre le total des
+> sommes fonds de roulement dans le calcul donc TOUS les lots affectes
+> a ce proprietaires dans ton calcul tu mentionnes 466.96 EUR qui ne
+> correspond pas au 490.36 EUR qui doivent etre pris en compte tu dois
+> donc ajouter les sommes relatives aux lots secondaires bug critique"
+
+**Scenario Matexi (repro exact)** :
+- Lot principal 001 : quotity 898 -> roulement 466.96 EUR
+- Lot lie C01 : quotity 11 -> roulement 5.72 EUR
+- Lot lie pe01 : quotity 34 -> roulement 17.68 EUR
+- **Total attendu Bloc 1 : 490.36 EUR**
+- **Bug : affichait 466.96 EUR** (uniquement le lot principal)
+
+**Root cause** : dans `LotsPage.js`, le "Bloc 1 - Transfert du fonds
+de roulement" affichait `preview.roulement_quota`, qui est la quote-part
+du lot principal SEUL. Le backend renvoyait deja les agregats
+`grouped_total_roulement` / `grouped_total_current_prorata` /
+`grouped_total_transfer`, mais le frontend ne les consommait pas.
+
+**Fix iter90eu** (`LotsPage.js`) :
+- Ajout d'une IIFE en tete du bloc `{preview && !loading && ...}` qui
+  calcule :
+  - `isGrouped` = `per_lot_breakdowns.length > 1`
+  - `roulementSum` = `preview.grouped_total_roulement` si groupe, sinon
+    `preview.roulement_quota`
+  - `shareSum` = somme des `lot_share_in_key` (part cumulee)
+  - `currentProrataSum` = `preview.grouped_total_current_prorata` si
+    groupe, sinon single
+  - `totalTransferSum` = `preview.grouped_total_transfer` si groupe
+- Bloc 1 :
+  * Titre adaptatif "Part cumulee des N lots" quand groupe.
+  * `Quote-part transferee (total groupe)` en mode groupe.
+- Synthese OD :
+  * Titre "Synthese - Ecritures comptables OD (N lots)" en mode groupe.
+  * Toutes les valeurs remplacees par les sommes.
+  * Message final adapte : "N ecritures OD seront generees (une par
+    lot)."
+
+**Ce qui n'a PAS change** :
+- Le PDF `pdf_mutation_decompte.py` etait deja correct (iter90dk) :
+  `fr_quota = sum(bd.roulement_quota for lg in lots_group)` ligne 200.
+- Le backend `mutate-preview` etait deja correct : les agregats
+  `grouped_total_*` etaient deja calcules.
+
+**Test** (`test_iter90eu_grouped_mutation_preview_total.py`) :
+- Reproduit le scenario Matexi (quotities 898/11/34, solde 5200).
+- Verifie que `grouped_total_roulement == sum(per_lot.roulement_quota)`.
+- Verifie que le total groupe est strictement > au lot principal seul.
+- 13 tests des iter83/85/90ab regression check : tous verts.
+
+
+
 ### Iter90es (Feb 2026) - Verrouillage fermeture dialog par clic exterieur
 
 **Ticket utilisateur** :

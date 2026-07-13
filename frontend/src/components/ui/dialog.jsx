@@ -4,7 +4,22 @@ import { X } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 
-const Dialog = DialogPrimitive.Root
+// iter90et : garde-fou global "modifications non sauvegardees".
+// Si `hasUnsavedChanges` est true, tout tentative de fermer le dialog
+// (X, Annuler via setOpen(false), ESC) declenche une confirmation.
+const UNSAVED_CONFIRM_MSG =
+  "Voulez-vous vraiment fermer ? Vos modifications non sauvegardees seront perdues.";
+
+const Dialog = ({ hasUnsavedChanges, onOpenChange, ...props }) => {
+  const handleOpenChange = React.useCallback((open) => {
+    if (!open && hasUnsavedChanges) {
+      // eslint-disable-next-line no-alert
+      if (!window.confirm(UNSAVED_CONFIRM_MSG)) return;
+    }
+    onOpenChange?.(open);
+  }, [hasUnsavedChanges, onOpenChange]);
+  return <DialogPrimitive.Root onOpenChange={handleOpenChange} {...props} />;
+};
 
 const DialogTrigger = DialogPrimitive.Trigger
 
