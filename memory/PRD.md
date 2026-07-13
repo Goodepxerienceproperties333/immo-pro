@@ -12,6 +12,75 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 
+### Iter90fl (Feb 2026) - BUG CRITIQUE : lignes fantomes dans "Liste des depenses" (champs de filtre inexistants)
+
+**Contexte** : l'utilisateur a compare un export PDF "Liste des depenses"
+(NextGe Copro, ACP reelle en PRODUCTION) avec un rapport externe du
+fournisseur JAG SPRL, et a signale une ligne fantome ("00029", ref externe
+"F-004782", 03/2026, 235,95 EUR) absente du Facturier (confirmee "7"
+factures JAG reelles par l'utilisateur, pas 8).
+
+**Root cause trouvee par revue de code** (`expense_rows.py`, fonction
+`compute_expense_rows`, utilisee par `/api/fiscal/expenses` (UI) ET
+`/api/reports/depenses/pdf` (export PDF) - donc affecte les 2 en meme
+temps) :
+
+Le filtre destine a exclure les ecritures OD/FI deja extournees
+(contre-passees) de la Liste des depenses utilisait des noms de champs
+**qui n'ont JAMAIS existe en base** :
+```python
+je_q["$and"] = [
+    {"reverses_id": {"$exists": False}},      # FAUX : jamais ecrit nulle part
+    {"reversed_by_id": {"$exists": False}},   # FAUX : jamais ecrit nulle part
+]
+```
+alors que `journal_reversals.py` (systeme de contre-passation officiel,
+iter90bx) pose les champs `reversed` (bool, sur l'originale) et
+`is_reversal` (bool, sur la contre-passation), avec `reversed_by_entry_id`
+/ `reverses_entry_id` pour la liaison. Consequence : ce filtre etait
+**totalement inoperant** (les champs cherches n'existant jamais, la
+condition `$exists: False` est toujours vraie) -> **toute ecriture OD/FI
+extournee sur un compte de charge restait visible EN DOUBLE** (l'originale
++ sa contre-passation) dans la Liste des depenses (UI et PDF), au lieu
+d'etre exclue des deux.
+
+**Fix** : correction des noms de champs vers `reversed`/`is_reversal`
+(memes noms que `journal_reversals.py` et que la requete equivalente dans
+`reverse_auto_entries`).
+
+**Reproduction et validation** (`test_iter90fl_expense_rows_reversal_exclusion.py`) :
+1. Creation d'une ecriture OD manuelle sur un compte de charge (classe 6)
+   via `POST /api/accounting/entries`.
+2. Verification qu'elle apparait 1 fois dans `/api/fiscal/expenses`.
+3. Suppression (`DELETE /api/accounting/entries/{id}` -> contre-passation
+   automatique, jamais de hard-delete en PCMN belge).
+4. **AVANT le fix** : le test echoue - l'originale ET la contre-passation
+   restent visibles (2 lignes fantomes au lieu de 0), confirmant le bug
+   exact signale par l'utilisateur. **APRES le fix** : 0 ligne visible,
+   test vert.
+
+**Impact** : ce bug affecte potentiellement TOUTE ACP ayant deja eu une
+ecriture OD/FI (hors facture) contre-passee sur un compte de charge -
+gonflement artificiel du total "Depenses de l'exercice" (UI + PDF). A
+redeployer en PRODUCTION pour corriger les ecarts constates par
+l'utilisateur sur l'ACP "Les Alisiers"/ACACIA.
+
+**Note pour le prochain agent** : plusieurs anciens fichiers de tests
+(`test_iter16_auto_entries.py`, `test_iter86_private_fees_in_expenses_list.py`,
+`test_iter90i_private_fees_excluded_from_expenses.py`,
+`test_iter90k_categorize_bank_transaction.py`,
+`test_iter90m_internal_transfers_58.py`) echouent avec une erreur infra
+PRE-EXISTANTE et SANS RAPPORT avec ce fix (`RuntimeError: ... attached to
+a different loop` - connexion Motor directe incompatible avec la boucle
+asyncio de pytest dans ces vieux fichiers). `test_iter86` est en plus
+BUSINESS-OBSOLETE (il attend l'ancien comportement pre-iter90i ou les
+factures privatives etaient INCLUSES dans la liste des depenses ; iter90i
+a deliberement change cette regle pour les EXCLURE). Backlog P3 :
+moderniser ces fixtures de test (asyncio) et supprimer/reecrire
+`test_iter86`.
+
+
+
 ### Iter90fk (Feb 2026) - Nettoyage automatique des fiches fournisseurs auto-creees orphelines
 
 **Ticket utilisateur** : "P3 (optionnel, non-bloquant) : nettoyer automatiquement les fiches
