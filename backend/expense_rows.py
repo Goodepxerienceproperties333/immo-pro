@@ -162,8 +162,13 @@ async def compute_expense_rows(
                     continue
                 if expense_category_id and li.get("expense_category_id", "") != expense_category_id and li_cat.get("id", "") != expense_category_id:
                     continue
-                occ_pct = float(inv.get("occupant_pct", 0) or 0)
-                prop_pct = float(inv.get("proprietaire_pct", 100) or 100) if inv.get("proprietaire_pct") is not None else 100
+                occ_pct = float(li.get("occupant_pct")) if li.get("occupant_pct") is not None else float(inv.get("occupant_pct", 0) or 0)
+                # iter90fn : la repartition Occ/Prop DOIT toujours sommer a 100.
+                # On ne fait JAMAIS confiance au `proprietaire_pct` stocke tel
+                # quel (donnees historiques parfois corrompues avec les 2
+                # valeurs a 100 independamment) - il est TOUJOURS derive du
+                # seul champ `occupant_pct` qui fait foi.
+                prop_pct = round(100.0 - occ_pct, 2)
                 # Distribute VAT pro-rata so sum of all line VATs = invoice VAT
                 li_vat = round(inv_vat * li_amt / sum_li, 2) if inv_vat else 0.0
                 rows.append({
@@ -218,6 +223,13 @@ async def compute_expense_rows(
                     "amount": round(float(a.get("amount", 0) or 0), 2),
                 })
             priv_owners_display = ", ".join(p["owner_name"] for p in priv_allocs if p["owner_name"])
+        # iter90fn : meme regle que pour les lignes multi-nature ci-dessus -
+        # `proprietaire_pct` est TOUJOURS derive de `occupant_pct` (seul champ
+        # de reference), jamais lu tel quel depuis le document (auto-guerit
+        # les factures historiques ou les 2 champs avaient ete enregistres
+        # independamment, ex: 100%/100%).
+        occ_pct = float(inv.get("occupant_pct", 0) or 0)
+        prop_pct = round(100.0 - occ_pct, 2)
         rows.append({
             "id": inv["id"],
             "date": inv.get("date", ""),
@@ -237,10 +249,10 @@ async def compute_expense_rows(
             "paid": inv["id"] in paid_map,
             "paid_info": paid_map.get(inv["id"]),
             "attachments_count": len(inv.get("attachments", []) or []),
-            "occupant_pct": inv.get("occupant_pct", 0) or 0,
-            "proprietaire_pct": inv.get("proprietaire_pct", 100) if inv.get("proprietaire_pct") is not None else 100,
-            "occupant_amount": inv.get("occupant_amount", 0) or 0,
-            "proprietaire_amount": inv.get("proprietaire_amount", 0) or inv_total,
+            "occupant_pct": occ_pct,
+            "proprietaire_pct": prop_pct,
+            "occupant_amount": round(inv_total * occ_pct / 100, 2),
+            "proprietaire_amount": round(inv_total * prop_pct / 100, 2),
             "source": "invoice",
             "journal_type": "AC",
             "is_private_fee": is_priv,
@@ -318,12 +330,10 @@ async def compute_expense_rows(
             if abs(amount) < 0.005:
                 continue
             desc = (ln.get("description") or je.get("description", "") or "").strip()
-            occ_pct = ln.get("occupant_pct")
-            prop_pct = ln.get("proprietaire_pct")
-            if occ_pct is None:
-                occ_pct = 0
-            if prop_pct is None:
-                prop_pct = 100
+            # iter90fn : meme regle de coherence que pour les factures -
+            # `proprietaire_pct` est TOUJOURS derive de `occupant_pct`.
+            occ_pct = float(ln.get("occupant_pct") or 0)
+            prop_pct = round(100.0 - occ_pct, 2)
             rows.append({
                 "id": je.get("id", ""),
                 "date": je.get("date", ""),

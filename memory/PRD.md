@@ -5,6 +5,55 @@ Multi-ACP avec **chinese walls stricts** sur donnees comptables/financieres.
 Auth: JWT cookie + middleware global FastAPI.
 Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
+### Iter90fn (Feb 2026) - BUG : repartition Occupant/Proprietaire affichant "100% / 100%" au lieu de sommer a 100
+
+**Signale par l'utilisateur** (capture d'ecran, facture JAG SPRL en
+production) : la Liste des Depenses affichait "100% / 100%" pour la
+colonne Occupant%/Proprietaire%, alors que ces 2 valeurs doivent TOUJOURS
+sommer a 100 (ex: 100%/0%).
+
+**Root cause** : plusieurs endroits du backend faisaient confiance au
+champ `proprietaire_pct` stocke tel quel (donnees historiques/import,
+avant que la validation de complementarite existe) au lieu de le DERIVER
+systematiquement de `occupant_pct` (seul champ de reference) :
+- `expense_rows.py` (single-line ET multi-line invoices, ET lignes
+  d'ecriture OD/FI hors facture)
+- `routes/accounting.py::update_entry_line_quick` (edition rapide depuis
+  la Liste des Depenses)
+
+Bonne nouvelle verifiee par audit : le PDF legal "Decompte de charges"
+(`pdf_decompte.py`) et la generation de l'ecriture comptable elle-meme
+(`auto_entries.py`) n'utilisent QUE `occupant_pct` (jamais
+`proprietaire_pct`) - donc ni le montant reellement comptabilise, ni le
+decompte envoye aux proprietaires n'ont jamais ete faussigne par ce bug.
+Impact reellement limite a l'AFFICHAGE de la Liste des Depenses.
+
+**Fix** : tous ces points derivent desormais `proprietaire_pct = round(100
+- occupant_pct, 2)` de maniere systematique (jamais lu tel quel depuis un
+document), y compris pour les DONNEES HISTORIQUES DEJA CORROMPUES en base
+(auto-guerison a la lecture, aucune migration necessaire). Bonus :
+`expense_rows.py` (multi-ligne) utilise desormais le `occupant_pct`
+PROPRE A CHAQUE LIGNE plutot que celui de la facture globale applique
+uniformement (bug additionnel corrige au passage).
+
+**Tests** (`test_iter90fn_repartition_always_complementary.py`, 3/3
+verts) :
+- Facture normale creee via l'API -> coherence verifiee.
+- **Injection directe en base** (pymongo) d'une facture avec 100%/100%
+  stockes independamment (reproduction fidele du bug de production) ->
+  `/api/fiscal/expenses` affiche bien 100%/0%, sans modifier le document
+  source.
+- Edition rapide de ligne OD/FI (`/accounting/entries/{id}/line-quick`)
+  avec 100%/100% envoyes -> serveur force 100%/0%.
+
+**Question en attente pour le prochain agent / utilisateur** : l'utilisateur
+a aussi signale "impossible de modifier une facture apres sauvegarde" (a
+tester/reproduire - non confirme en preview, PUT teste manuellement avec
+succes ; demande de precisions envoyee - message d'erreur exact ou
+capture d'ecran + confirmation preview vs production).
+
+
+
 ## Security model
 1. Auth middleware global sur /api/* (sauf /auth/login, /auth/register, /auth/refresh, /auth/logout).
 2. RBAC path-based: admin only sur /api/admin/* + /api/users; owner restreint a /api/owner/*, /api/auth/*, GET /api/coproprietes(+sous-paths), GET /api/documents/.../download.

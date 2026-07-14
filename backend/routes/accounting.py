@@ -621,10 +621,16 @@ def create_accounting_router(db):
             line["expense_category_id"] = data.get("expense_category_id") or ""
         if "distribution_key_id" in data:
             line["distribution_key_id"] = data.get("distribution_key_id") or ""
+        # iter90fn : la repartition Occ/Prop DOIT toujours sommer a 100 -
+        # jamais 2 valeurs independantes (meme bug que sur les factures,
+        # corrige dans expense_rows.py). Le champ fourni fait foi, l'autre
+        # est TOUJOURS derive automatiquement.
         if "occupant_pct" in data:
             line["occupant_pct"] = float(data["occupant_pct"] or 0)
-        if "proprietaire_pct" in data:
+            line["proprietaire_pct"] = round(100.0 - line["occupant_pct"], 2)
+        elif "proprietaire_pct" in data:
             line["proprietaire_pct"] = float(data["proprietaire_pct"] or 0)
+            line["occupant_pct"] = round(100.0 - line["proprietaire_pct"], 2)
         if "description" in data:
             line["description"] = (data.get("description") or "").strip()
         lines[target_idx] = line
