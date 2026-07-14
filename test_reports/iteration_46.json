@@ -1,5 +1,5 @@
 {
-  "summary": "Validated 2 bug fixes for NextGe Copro: P0 (dashboard health-audit 502/timeout crash) and P1 (invoice edit - Nature de depense field disabled + not persisting). Both confirmed FIXED via backend pytest, direct curl, and e2e Playwright flows on ACP 'Les Alisiers Test' (copropriete_id=47e79d1c-d96a-4e8b-b80c-148295f9160f).",
+  "summary": "Validated 2 bug fixes for NextGe Copro: P0 (dashboard health-audit 502/timeout crash) and P1 (invoice edit - Nature de depense field disabled + not persisting). Both confirmed FIXED via backend pytest, direct curl, and e2e Playwright flows on ACP 'Les Alisiers Test' (copropriete_id=bilan-secure).",
   "backend_issues": {
     "critical": [],
     "minor": [
