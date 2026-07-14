@@ -576,12 +576,27 @@ async def build_acp_archive_zip(db, copropriete_id: str, include_pdfs: bool = Tr
             if include_pdfs:
                 try:
                     from pdf_bilan import build_bilan_pdf
-                    from routes.reports import _compute_bilan
-                    bilan_data = await _compute_bilan(db, copropriete_id, fy.get("id"))
-                    z.writestr(f"{year_prefix}/bilan.pdf", build_bilan_pdf(bilan_data))
+                    from routes.reports import compute_bilan_data
+                    # iter90fq : fix de l'appel casse (signature incorrecte +
+                    # import d'une fonction inexistante `_compute_bilan`).
+                    # `compute_bilan_data` est reutilisee depuis routes/reports.py
+                    # (meme fonction que l'endpoint /reports/bilan) - evite toute
+                    # divergence de logique entre le backup et l'app.
+                    bilan_data = await compute_bilan_data(
+                        db, copropriete_id, date_to=end, fiscal_year_id=fy.get("id"),
+                    )
+                    z.writestr(f"{year_prefix}/bilan.pdf", build_bilan_pdf(
+                        copropriete=copro, fiscal_year=fy, bilan_data=bilan_data,
+                        date_to=end,
+                    ))
                 except Exception as e:  # noqa: BLE001
                     logger.warning("Bilan PDF absent pour %s : %s", year_folder, e)
                 # iter90bs : ajout compte de resultat
+                # NOTE (iter90fq) : `pdf_resultat.py`/`build_resultat_pdf` n'existe
+                # pas dans le codebase - cette fonctionnalite n'a jamais ete
+                # implementee (import ci-dessous echouera toujours, avale par le
+                # try/except). A construire dans un futur chantier dedie si le
+                # compte de resultat PDF est requis dans les backups.
                 try:
                     from pdf_resultat import build_resultat_pdf
                     from routes.reports import _compute_resultat

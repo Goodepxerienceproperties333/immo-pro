@@ -63,7 +63,47 @@ iter90dj).
 `_compute_bilan` depuis `routes.reports` qui n'existe pas sous ce nom -
 deja silencieusement avale par un `try/except` (backup continue sans le
 bilan PDF). Bug PRE-EXISTANT non lie a ce fix, a corriger dans un futur
-chantier "backups complets".
+chantier "backups complets". **-> CORRIGE en iter90fq (partie 2), voir
+ci-dessous.**
+
+### Iter90fq partie 2 (Feb 2026) - FIX : bilan.pdf absent de tous les backups legaux (appel casse)
+
+**Root cause** : `backup_service.py` (generation ZIP de backup legal par
+ACP/exercice) appelait `build_bilan_pdf(bilan_data)` avec un SEUL argument
+positionnel sur une fonction 100% keyword-only (`*,` requiert `copropriete`
++ `bilan_data`), et importait `from routes.reports import _compute_bilan`
+- une fonction qui n'a JAMAIS existe sous ce nom (`bilan()` est une closure
+NON exportable, definie dans `create_reports_router(db)`). Resultat : le
+`bilan.pdf` etait ABSENT de TOUS les backups legaux depuis la creation de
+cette fonctionnalite, avale silencieusement par un `try/except` large sans
+aucune erreur visible.
+
+**Fix** :
+- Extraction de la logique de calcul du bilan (`bilan()`) dans une
+  fonction module-level importable `compute_bilan_data(db, copropriete_id,
+  date_to=None, fiscal_year_id=None, view_mode="before_distribution")`
+  dans `routes/reports.py` - reutilisee a la fois par l'endpoint FastAPI
+  ET par `backup_service.py` (source unique de verite, evite toute
+  divergence de calcul entre les 2 - meme principe que le fix iter90fl).
+  L'endpoint `/reports/bilan` devient un thin wrapper qui resout
+  `copropriete_id` puis delegue a `compute_bilan_data`.
+- `backup_service.py` appelle desormais `compute_bilan_data(...)` puis
+  `build_bilan_pdf(copropriete=copro, fiscal_year=fy, bilan_data=...,
+  date_to=...)` avec tous les kwargs requis.
+
+**Tests** (`test_iter90fq_backup_bilan_pdf_fixed.py`, 1/1 vert) : verifie
+que le ZIP de backup contient desormais un `bilan.pdf` valide (header PDF
++ donnees reelles) pour chaque exercice - confirme via test direct (4118
+bytes, contenu correct : ACP, BCE, actif/passif). Regression : 38/38
+tests bilan/backup/PDF existants verts (iter90ax, iter90bw, iter90dj,
+iter73, iter90fh, iter72, iter90fq partie 1).
+
+**Note residuelle (toujours hors scope)** : le bloc `compte_resultat.pdf`
+juste apres importe `pdf_resultat.build_resultat_pdf` qui **n'existe pas
+du tout** dans le codebase (aucun fichier `pdf_resultat.py`) - fonctionnalite
+jamais implementee, deja gracieusement avalee par try/except. A construire
+dans un futur chantier dedie si le compte de resultat PDF est requis dans
+les backups legaux.
 
 ### Iter90fp (Feb 2026) - P0-class : extraction IA de facture intermittente (Cloudflare timeout, PRODUCTION)
 
