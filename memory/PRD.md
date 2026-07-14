@@ -1,9 +1,111 @@
 # CoproManager PRD
 
+**NOTE** : ce fichier depasse largement les 700 lignes recommandees. A
+scinder au prochain grand chantier en `PRD.md` (statique) / `CHANGELOG.md`
+(historique iter90*) / `ROADMAP.md` (backlog P0/P1/P2). Non fait dans cette
+session par prudence (risque de perte d'info sur un fichier de 9400+
+lignes sans relecture complete).
+
 ## Architecture
 Multi-ACP avec **chinese walls stricts** sur donnees comptables/financieres.
 Auth: JWT cookie + middleware global FastAPI.
 Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
+
+### Iter90fo (Feb 2026) - P0 CRITIQUE : crash Cloudflare 502 dashboard + P1 : edition facture cassee
+
+**P0 - Ticket utilisateur (PROD)** :
+> "erreur critique plus d'acces a production - The origin web server sent
+> a response that Cloudflare could not parse... Sante comptable
+> indisponible... cette situation disparait apres quelques minutes mais a
+> un enorme impact sur mes clients - ce type d'erreur ne peut plus jamais
+> arriver securise"
+
+**Root cause P0** (`health_audit.py::compute_health_audit`, endpoint
+`GET /api/dashboard/health-audit`) :
+1. `db.owners.find({})` et `db.suppliers.find({})` SANS filtre
+   `copropriete_id` -> full scan de TOUTE la base multi-tenant (tous les
+   clients de la plateforme) a CHAQUE appel du dashboard d'UN SEUL client.
+2. Boucle imbriquee **O(lignes_ecritures x nb_owners)** pour calculer le
+   solde de chaque proprietaire (pas de map de lookup) -> avec des annees
+   d'historique + beaucoup de lots, peut prendre plusieurs MINUTES.
+3. Aucun index Mongo sur `copropriete_id` (journal_entries, invoices,
+   suppliers, fund_calls) ni `copropriete_ids` (owners) -> chaque requete
+   filtree fait un scan complet de collection.
+4. Backend deploye en `uvicorn --workers 1` (single event loop) : un calcul
+   CPU-bound synchrone de plusieurs minutes GELE TOUTE L'APPLICATION pour
+   TOUS les clients pendant ce temps -> Cloudflare finit par timeout et
+   renvoyer une reponse tronquee/502 ("could not parse").
+
+**Fix P0** :
+- `health_audit.py` reecrit : 1 seule requete `invoices` (au lieu de 2),
+  1 seule requete `journal_entries` (au lieu de 2), `owners`/`suppliers`
+  filtres par copropriete (plus de full-scan multi-tenant), boucle
+  O(lignes*owners) remplacee par une map `account_number -> owner_id`
+  (lookup O(1)).
+- `server.py` (startup) : nouveaux index Mongo `copropriete_id` sur
+  `journal_entries`/`invoices`/`suppliers`/`fund_calls`, `copropriete_ids`
+  sur `owners`.
+- `server.py` (endpoint) : garde-fou `asyncio.wait_for(..., timeout=20.0)`
+  -> si jamais un cas extreme depasse 20s, retourne un 503 propre au lieu
+  de laisser Cloudflare timeout et geler l'app.
+
+**Tests** (`test_iter90fo_health_audit_perf_and_correctness.py`, 3/3
+verts) : correction du solde owner (extournes exclues), isolation
+multi-tenant (owners/comptes d'une AUTRE ACP jamais rattaches), perf
+bornee (150 owners x 300 ecritures < 5s, avant potentiellement des
+minutes). Verifie via curl sur donnees reelles (ACP "Les Alisiers Test") :
+reponse en 0.16s, score=66/Moyen identique a avant le refactor (aucune
+regression fonctionnelle).
+
+---
+
+**P1 - Tickets utilisateur** :
+> "impossible de modifier une facture apres sauvegarde ca doit toujours
+> etre possible"
+> "nature de depense grisee en production donc impossible de changer"
+> "en partant de la liste des depenses, il est possible d'editer une
+> facture, cependant, la modification n'est pas enregistree"
+
+**Root cause P1** :
+1. Frontend (`InvoicesPage.js::openEditInvoice`) : toute facture stockee
+   avec un tableau `lines` non-vide (meme UNE seule entree - cas frequent
+   des imports CODA/Optipro et extractions IA, confirme en base) activait
+   le mode "lignes multiples", qui applique `opacity-50 pointer-events-none`
+   sur le bloc Nature de depense / Compte PCMN / Cle de repartition ->
+   champ grise et non-cliquable.
+2. Backend (`routes/invoices.py::update_invoice`) : meme en editant via
+   les champs top-level (quick-edit Liste des Depenses, qui n'envoie JAMAIS
+   `lines` dans le body), l'ancienne `lines[0]` figee en base n'etait
+   JAMAIS resynchronisee. Or `expense_rows.py` (Liste des Depenses) donne
+   TOUJOURS priorite a `lines` sur les champs top-level quand `lines` est
+   non-vide -> l'edition semblait "ne pas s'enregistrer" (200 OK mais
+   l'ancienne valeur restait affichee).
+
+**Fix P1** :
+- Frontend : `openEditInvoice` aplatit une facture a 1 SEULE ligne dans
+  les champs top-level (mode normal, editable). Les VRAIES factures
+  multi-lignes (>= 2 lignes, ex: police d'assurance avec plusieurs primes)
+  restent en mode "lignes multiples" (comportement inchange, voulu).
+- Backend : quand `data.lines` n'est pas fourni (None) ET que la facture
+  existante n'a qu'UNE seule ligne, `update_invoice` resynchronise
+  automatiquement cette ligne unique avec les nouvelles valeurs top-level
+  a chaque sauvegarde.
+
+**Tests** (`test_iter90fo_invoice_edit_category_sync.py`, 2/2 verts) :
+reproduction fidele (injection directe d'une facture legacy 1-ligne),
+PUT sans `lines` dans le body change la nature -> `lines[0]` resynchronisee
++ `/api/fiscal/expenses` reflete bien la nouvelle valeur. Garde-fou : une
+vraie facture multi-lignes (2 entrees) n'est jamais ecrasee par un PUT
+partiel (statut seul).
+
+**Validation e2e** (`testing_agent_v4`, iteration_46.json) : 100%
+backend + frontend. Edition d'une facture reelle (FA-2025-0014) : select
+"Nature de depense" desormais actif, changement persiste apres
+sauvegarde + reouverture. Facture multi-lignes reelle (B00041885, 3
+lignes) : comportement grise inchange (correct), lignes intactes apres
+sauvegarde. Creation facture standard : non affectee (regression OK).
+Seul finding mineur hors-scope : creation de facture accepte un
+fournisseur vide malgre le marquage "requis" en UI (P3, non bloquant).
 
 ### Iter90fn (Feb 2026) - BUG : repartition Occupant/Proprietaire affichant "100% / 100%" au lieu de sommer a 100
 
