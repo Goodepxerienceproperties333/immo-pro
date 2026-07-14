@@ -11,6 +11,60 @@ Multi-ACP avec **chinese walls stricts** sur donnees comptables/financieres.
 Auth: JWT cookie + middleware global FastAPI.
 Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
+### Iter90fq (Feb 2026) - BUG PROD : PDF "Bilan apres repartition" affichait le bilan AVANT repartition
+
+**Ticket utilisateur (PROD, ACP Acacia TER)** :
+> "le bilan après répartition en PDF n'est pas le bon, le compte de
+> régularisation est toujours présent et donc pas réparti sur les
+> propriétaires"
+> "le PDF du bilan après répartition n'est pas correct il affiche le bilan
+> avant réparation - Corrige"
+
+Comportement attendu (confirme par l'utilisateur) : le bilan "apres
+repartition" simule l'exercice comme s'il avait ete cloture a cette date -
+les comptes de regularisation debiteurs/crediteurs (dont 499, boni/mali)
+doivent etre repartis sur les proprietaires selon leurs quotites.
+
+**Root cause** : `GET /api/reports/bilan/pdf` (`routes/reports.py::bilan_pdf`)
+n'acceptait PAS le parametre `view_mode` dans sa signature (seulement
+`copropriete_id`/`fiscal_year_id`/`date_to`). Le frontend
+(`ReportsPage.js::downloadBilanPdf`, ligne ~75) envoyait pourtant bien
+`view_mode` (selon le choix "Avant"/"Apres repartition" dans l'UI), mais
+FastAPI ignore silencieusement les query params non declares -> l'appel
+interne `await bilan(...)` ne recevait JAMAIS ce parametre et retombait
+TOUJOURS sur le defaut `before_distribution` (compte 499 non reparti,
+visible dans TOUS les PDF, quel que soit le choix utilisateur). Le titre
+du PDF (`pdf_bilan.py`) etait en plus hardcode "BILAN COMPTABLE APRES
+REPARTITION" quel que soit le mode reel calcule, ce qui masquait
+completement le bug a l'oeil (le titre mentait). La logique de calcul
+elle-meme (`bilan()` JSON, `view_mode=after_distribution`) etait deja
+CORRECTE (redistribution du boni/mali + comptes 49X par quotite,
+verifiee via curl) - seul le pont PDF etait casse.
+
+**Fix** :
+- `bilan_pdf()` declare desormais `view_mode: Optional[str] =
+  "before_distribution"` et le transmet a `bilan(...)`.
+- `build_bilan_pdf()` (`pdf_bilan.py`) accepte `view_mode` et affiche le
+  titre correct ("AVANT" vs "APRES REPARTITION") selon le mode REELLEMENT
+  utilise pour le calcul.
+
+**Tests** (`test_iter90fq_bilan_pdf_view_mode.py`, 3/3 verts) : PDF
+`after_distribution` ne contient plus le 499 + titre correct ; PDF
+`before_distribution` contient toujours le 499 + titre correct ; defaut
+implicite preserve (retro-compatible). Verifie via curl sur donnees
+reelles (ACP "Les Alisiers Test", boni 12495,69€) : avant=25700€
+(499 present), apres=13204,31€ (499 absent, reparti), les 2 equilibres.
+Regression : 24/24 tests existants verts (iter73, iter90fh, iter72,
+iter90dj).
+
+**Backlog note (hors scope, non corrige)** : `backup_service.py` ligne
+~581 appelle `build_bilan_pdf(bilan_data)` avec une signature incorrecte
+(args positionnels sur une fonction keyword-only) et importe
+`_compute_bilan` depuis `routes.reports` qui n'existe pas sous ce nom -
+deja silencieusement avale par un `try/except` (backup continue sans le
+bilan PDF). Bug PRE-EXISTANT non lie a ce fix, a corriger dans un futur
+chantier "backups complets".
+
 ### Iter90fp (Feb 2026) - P0-class : extraction IA de facture intermittente (Cloudflare timeout, PRODUCTION)
 
 **Ticket utilisateur (PROD)** : capture d'ecran d'un formulaire "Nouvelle

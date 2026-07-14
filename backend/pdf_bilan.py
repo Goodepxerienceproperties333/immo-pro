@@ -170,8 +170,9 @@ def build_bilan_pdf(
     bilan_data: dict,
     date_to: str = "",
     syndic_pdf_ctx: dict = None,
+    view_mode: str = "before_distribution",
 ) -> bytes:
-    """Genere le PDF Bilan apres repartition.
+    """Genere le PDF Bilan (avant ou apres repartition selon `view_mode`).
 
     iter90dj : si `syndic_pdf_ctx` est fourni, ajoute logo cabinet en tete
     (1re page uniquement) + pied de page avec mentions legales + numero de
@@ -211,7 +212,14 @@ def build_bilan_pdf(
     # ---- BANDEAU TITRE COLORE ----
     end_str = _fmt_date(date_to or (fiscal_year or {}).get("end_date", ""))
     fy_name = (fiscal_year or {}).get("name", "")
-    title_text = "BILAN COMPTABLE APRES REPARTITION"
+    # BUG FIX (iter90fq) : le titre etait hardcode "APRES REPARTITION" meme
+    # quand les donnees etaient calculees en mode "avant repartition" (compte
+    # 499 non reparti visible). Le titre doit refleter le VRAI mode utilise
+    # pour le calcul, sinon l'utilisateur ne peut pas detecter l'incoherence.
+    title_text = (
+        "BILAN COMPTABLE APRES REPARTITION" if view_mode == "after_distribution"
+        else "BILAN COMPTABLE AVANT REPARTITION"
+    )
     if end_str:
         title_text += f" AU {end_str}"
     title_tbl = Table(

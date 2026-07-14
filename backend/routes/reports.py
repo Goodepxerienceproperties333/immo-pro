@@ -1070,6 +1070,7 @@ def create_reports_router(db):
         copropriete_id: Optional[str] = None,
         fiscal_year_id: Optional[str] = None,
         date_to: Optional[str] = None,
+        view_mode: Optional[str] = "before_distribution",
     ):
         """Genere le PDF Bilan filtree par exercice (ou date_to libre).
         Chinese walls strict : copropriete_id requis."""
@@ -1089,9 +1090,14 @@ def create_reports_router(db):
             if not fy:
                 raise HTTPException(404, "Exercice non trouve pour cette ACP")
         # Re-utilise le calcul du bilan via l'endpoint interne
+        # BUG FIX (iter90fq) : `view_mode` n'etait jamais transmis a l'endpoint
+        # interne `bilan()` (parametre absent de la signature) -> le PDF etait
+        # TOUJOURS genere en mode "before_distribution" (compte 499 non reparti)
+        # meme quand l'utilisateur choisissait "Apres repartition" (le titre du
+        # PDF etait aussi hardcode "APRES REPARTITION", ce qui masquait le bug).
         data = await bilan(
             request=request, date_to=date_to, copropriete_id=copropriete_id,
-            fiscal_year_id=fiscal_year_id,
+            fiscal_year_id=fiscal_year_id, view_mode=view_mode,
         )
         # Syndic info (si lie a la copro)
         syndic = None
@@ -1107,6 +1113,7 @@ def create_reports_router(db):
             bilan_data=data,
             date_to=date_to or (fy.get("end_date") if fy else ""),
             syndic_pdf_ctx=syndic_pdf_ctx,
+            view_mode=view_mode,
         )
         safe_name = (copro.get("name", "acp") or "acp").replace(" ", "_").replace("/", "_")
         suffix = (date_to or (fy.get("end_date") if fy else datetime.now(timezone.utc).date().isoformat()))
