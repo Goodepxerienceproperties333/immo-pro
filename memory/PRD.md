@@ -12,6 +12,48 @@ Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
 
 
+### Iter90fm (Feb 2026) - Balance de Tiers : export PDF "vue simplifiee" et "vue detaillee"
+
+**Demande utilisateur** : "dans les balance de tiers permettre d'exporter
+un listing uniquement des totaux par proprietaire (vue generale, 1 ligne
+par proprietaire + solde) ou bien une vue detaillee avec les mouvements
+par tiers, en PDF."
+
+**Constat** : le PDF "synthese" (`/api/reports/balance-tiers/pdf`)
+existait deja cote backend (1 ligne de totaux par tiers) mais n'etait
+appele NULLE PART dans le frontend (aucun bouton). Aucune "vue detaillee"
+combinant TOUS les tiers dans un seul PDF n'existait (seul le PDF
+"Situation de compte" - lettre postale pour UN SEUL proprietaire -
+proposait le detail des mouvements).
+
+**Implemente** :
+- `GET /api/reports/balance-tiers/pdf` etendu avec 2 nouveaux parametres :
+  - `scope` = `owners` | `suppliers` | `both` (defaut, comportement
+    inchange pour compat retro)
+  - `view` = `simplified` (defaut, comportement inchange - 1 ligne de
+    totaux par tiers) | `detailed` (NOUVEAU)
+- `view=detailed` : boucle sur chaque proprietaire/fournisseur ayant un
+  compte tier, reutilise `situation_compte_owner`/`situation_compte_supplier`
+  (memes fonctions que le detail a l'ecran / la lettre individuelle - pas
+  de logique metier dupliquee) pour recuperer ses mouvements, puis genere
+  UN SEUL PDF compact (A4 paysage) avec, par tiers : un bandeau
+  nom+solde colore (rouge debiteur / vert crediteur) suivi du tableau des
+  mouvements (Date, Operation, Debit, Credit, Solde cumule). Nouvelle
+  fonction `pdf_balance_tiers.py::build_balance_tiers_detailed_pdf`.
+- Frontend (`BalanceTiersPage.js`) : bouton "Export PDF" (menu deroulant)
+  avec "Vue simplifiee (totaux par proprietaire/fournisseur)" et "Vue
+  detaillee (mouvements par tiers)", scope automatique selon l'onglet actif
+  (Proprietaires -> `scope=owners`, Fournisseurs -> `scope=suppliers`).
+
+**Teste** : 5 combinaisons (owners/suppliers/both x simplified/detailed)
+verifiees par curl (200 OK, tailles PDF coherentes). Contenu du PDF
+detaille verifie par analyse automatique (titre, section "1.
+Proprietaires", bandeau solde, tableau mouvements avec solde cumule
+correct). Retro-compatibilite verifiee (appel sans parametres = comportement
+identique a avant).
+
+
+
 ### Iter90fl (Feb 2026) - BUG CRITIQUE : lignes fantomes dans "Liste des depenses" (champs de filtre inexistants)
 
 **Contexte** : l'utilisateur a compare un export PDF "Liste des depenses"

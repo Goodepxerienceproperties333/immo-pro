@@ -1940,49 +1940,107 @@ def create_reports_router(db):
         copropriete_id: Optional[str] = None,
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
+        scope: str = "both",
+        view: str = "simplified",
     ):
-        """Genere un PDF synthese de la balance des tiers (proprietaires + fournisseurs).
-        Chinese walls strict : `copropriete_id` requis (param ou header)."""
-        from pdf_balance_tiers import build_balance_tiers_pdf
+        """Genere un PDF de la balance des tiers (proprietaires et/ou fournisseurs).
+        Chinese walls strict : `copropriete_id` requis (param ou header).
+
+        iter90fm :
+        - `scope` = "owners" | "suppliers" | "both" (defaut) - permet un export
+          UNIQUEMENT proprietaires ou UNIQUEMENT fournisseurs.
+        - `view` = "simplified" (defaut, 1 ligne de totaux par tiers) |
+          "detailed" (le detail des mouvements du grand livre par tiers, en
+          plus du solde - document interne syndic, distinct de la
+          "Situation de compte" postale individuelle)."""
         from pdf_layout import resolve_syndic_pdf_context
 
         if not copropriete_id:
             copropriete_id = request.headers.get("X-Copropriete-Id") if request else None
         if not copropriete_id or copropriete_id == "all":
             raise HTTPException(400, "copropriete_id requis - chinese walls strict")
+        if scope not in ("owners", "suppliers", "both"):
+            raise HTTPException(400, "scope invalide (owners|suppliers|both)")
+        if view not in ("simplified", "detailed"):
+            raise HTTPException(400, "view invalide (simplified|detailed)")
 
         copro = await db.coproprietes.find_one({"id": copropriete_id}, {"_id": 0})
         if not copro:
             raise HTTPException(404, "Copropriete non trouvee")
 
-        # Re-utilise les endpoints internes
-        owners_data = await balance_tiers_owners(
-            copropriete_id=copropriete_id, start_date=start_date, end_date=end_date,
-        )
-        suppliers_data = await balance_tiers_suppliers(
-            request=request, copropriete_id=copropriete_id,
-            start_date=start_date, end_date=end_date,
-        )
-        # Calcule total_debiteurs/crediteurs pour fournisseurs (positif = a payer)
-        sups = suppliers_data.get("suppliers", []) or []
-        sup_a_payer = round(sum(s["balance"] for s in sups if s["balance"] > 0), 2)
-        sup_acompte = round(sum(abs(s["balance"]) for s in sups if s["balance"] < 0), 2)
-        suppliers_data["total_crediteurs"] = sup_a_payer
-        suppliers_data["total_debiteurs"] = sup_acompte
-
-        # iter90dj : logo cabinet + mentions legales
+        want_owners = scope in ("owners", "both")
+        want_suppliers = scope in ("suppliers", "both")
         syndic_pdf_ctx = await resolve_syndic_pdf_context(db, copro)
-        pdf_bytes = build_balance_tiers_pdf(
-            copropriete=copro,
-            owners_data=owners_data,
-            suppliers_data=suppliers_data,
-            period_start=start_date or "",
-            period_end=end_date or "",
-            syndic_pdf_ctx=syndic_pdf_ctx,
-        )
         safe_name = (copro.get("name", "acp") or "acp").replace(" ", "_").replace("/", "_")
         suffix = (end_date or datetime.now(timezone.utc).date().isoformat())
-        filename = f"balance-tiers-{safe_name}-{suffix}.pdf"
+
+        if view == "detailed":
+            from pdf_balance_tiers import build_balance_tiers_detailed_pdf
+            owners_detail = None
+            suppliers_detail = None
+            if want_owners:
+                owners_data = await balance_tiers_owners(
+                    copropriete_id=copropriete_id, start_date=start_date, end_date=end_date,
+                )
+                owners_detail = []
+                for o in owners_data.get("owners", []) or []:
+                    if not o.get("owner_id"):
+                        continue
+                    detail = await situation_compte_owner(
+                        owner_id=o["owner_id"], request=request, copropriete_id=copropriete_id,
+                        start_date=start_date, end_date=end_date,
+                    )
+                    owners_detail.append(detail)
+            if want_suppliers:
+                suppliers_data = await balance_tiers_suppliers(
+                    request=request, copropriete_id=copropriete_id,
+                    start_date=start_date, end_date=end_date,
+                )
+                suppliers_detail = []
+                for s in suppliers_data.get("suppliers", []) or []:
+                    if not s.get("supplier_id"):
+                        continue
+                    detail = await situation_compte_supplier(
+                        supplier_id=s["supplier_id"], copropriete_id=copropriete_id,
+                        start_date=start_date, end_date=end_date,
+                    )
+                    suppliers_detail.append(detail)
+            pdf_bytes = build_balance_tiers_detailed_pdf(
+                copropriete=copro,
+                owners_detail=owners_detail,
+                suppliers_detail=suppliers_detail,
+                period_start=start_date or "",
+                period_end=end_date or "",
+                syndic_pdf_ctx=syndic_pdf_ctx,
+            )
+            filename = f"balance-tiers-detaillee-{scope}-{safe_name}-{suffix}.pdf"
+        else:
+            from pdf_balance_tiers import build_balance_tiers_pdf
+            owners_data = {"owners": [], "total_debiteurs": 0.0, "total_crediteurs": 0.0}
+            suppliers_data = {"suppliers": [], "total_debiteurs": 0.0, "total_crediteurs": 0.0}
+            if want_owners:
+                owners_data = await balance_tiers_owners(
+                    copropriete_id=copropriete_id, start_date=start_date, end_date=end_date,
+                )
+            if want_suppliers:
+                suppliers_data = await balance_tiers_suppliers(
+                    request=request, copropriete_id=copropriete_id,
+                    start_date=start_date, end_date=end_date,
+                )
+                # Calcule total_debiteurs/crediteurs pour fournisseurs (positif = a payer)
+                sups = suppliers_data.get("suppliers", []) or []
+                suppliers_data["total_crediteurs"] = round(sum(s["balance"] for s in sups if s["balance"] > 0), 2)
+                suppliers_data["total_debiteurs"] = round(sum(abs(s["balance"]) for s in sups if s["balance"] < 0), 2)
+            pdf_bytes = build_balance_tiers_pdf(
+                copropriete=copro,
+                owners_data=owners_data,
+                suppliers_data=suppliers_data,
+                period_start=start_date or "",
+                period_end=end_date or "",
+                syndic_pdf_ctx=syndic_pdf_ctx,
+            )
+            filename = f"balance-tiers-{scope}-{safe_name}-{suffix}.pdf"
+
         return StreamingResponse(
             io.BytesIO(pdf_bytes),
             media_type="application/pdf",

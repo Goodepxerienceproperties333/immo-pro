@@ -3,10 +3,11 @@ import api from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { Users, Truck, Eye, ArrowUpRight, ArrowDownRight, Download, FileText, Link2, EyeOff } from 'lucide-react';
+import { Users, Truck, Eye, ArrowUpRight, ArrowDownRight, Download, FileText, Link2, EyeOff, ChevronDown } from 'lucide-react';
 import FilterBar from '@/components/balance-tiers/FilterBar';
 import TiersDetailDialog from '@/components/balance-tiers/TiersDetailDialog';
 import LettrerDialog from '@/components/balance-tiers/LettrerDialog';
@@ -134,6 +135,17 @@ export default function BalanceTiersPage() {
 
   if (loading && !ownersData) return <div className="h-1 w-48 bg-slate-200 rounded overflow-hidden mx-auto mt-20"><div className="h-full bg-[#022D52] animate-pulse w-1/2" /></div>;
 
+  // iter90fm : export PDF "Balance des tiers" - vue simplifiee (totaux uniquement)
+  // ou vue detaillee (mouvements par tiers), scope selon l'onglet actif.
+  const exportBalanceTiersPdf = (scope, view) => {
+    const c = localStorage.getItem('selectedCopro') || localStorage.getItem('copropriete_id') || '';
+    if (!c || c === 'all') { toast.error('Selectionnez une ACP specifique en haut de page'); return; }
+    const params = new URLSearchParams({ copropriete_id: c, scope, view });
+    if (filters.startDate) params.set('start_date', filters.startDate);
+    if (filters.endDate) params.set('end_date', filters.endDate);
+    window.open(`${API}/api/reports/balance-tiers/pdf?${params.toString()}`, '_blank');
+  };
+
   // Apply free-text filter on owner_name / vcs_code client-side
   const applyTextFilter = (list) => {
     if (!filters.search) return list;
@@ -156,10 +168,27 @@ export default function BalanceTiersPage() {
     <div data-testid="balance-tiers-page">
       <div className="page-header flex items-start justify-between">
         <div><h1 className="page-title">Balance de Tiers</h1><p className="page-subtitle">Situation de compte des proprietaires et fournisseurs</p></div>
-        <Button variant="outline" size="sm" data-testid="export-balance-tiers-xlsx"
-          onClick={() => { const c = localStorage.getItem('selectedCopro') || localStorage.getItem('copropriete_id') || ''; window.open(`${API}/api/exports/balance-tiers/owners.xlsx${c && c !== 'all' ? '?copropriete_id=' + c : ''}`, '_blank'); }}>
-          <Download size={14} className="mr-1" /> Export Excel
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" data-testid="export-balance-tiers-xlsx"
+            onClick={() => { const c = localStorage.getItem('selectedCopro') || localStorage.getItem('copropriete_id') || ''; window.open(`${API}/api/exports/balance-tiers/owners.xlsx${c && c !== 'all' ? '?copropriete_id=' + c : ''}`, '_blank'); }}>
+            <Download size={14} className="mr-1" /> Export Excel
+          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="sm" data-testid="export-balance-tiers-pdf-menu-btn">
+                <FileText size={14} className="mr-1" /> Export PDF <ChevronDown size={12} className="ml-1" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem data-testid="export-pdf-simplified-btn" onClick={() => exportBalanceTiersPdf(tab, 'simplified')}>
+                Vue simplifiee <span className="text-slate-400 ml-1 text-xs">(totaux par {tab === 'owners' ? 'proprietaire' : 'fournisseur'})</span>
+              </DropdownMenuItem>
+              <DropdownMenuItem data-testid="export-pdf-detailed-btn" onClick={() => exportBalanceTiersPdf(tab, 'detailed')}>
+                Vue detaillee <span className="text-slate-400 ml-1 text-xs">(mouvements par tiers)</span>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
       </div>
 
       <Tabs value={tab} onValueChange={setTab}>

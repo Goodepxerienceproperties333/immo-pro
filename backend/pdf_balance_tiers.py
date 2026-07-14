@@ -48,6 +48,188 @@ def _fmt_date(s):
         return s
 
 
+def build_balance_tiers_detailed_pdf(
+    *,
+    copropriete: dict,
+    owners_detail: list = None,   # [{owner, movements, balance, status}, ...] ou None pour omettre la section
+    suppliers_detail: list = None,  # [{supplier, movements, balance, status}, ...] ou None pour omettre la section
+    period_start: str = "",
+    period_end: str = "",
+    syndic_pdf_ctx: dict = None,
+) -> bytes:
+    """iter90fm : PDF "Balance des Tiers - vue detaillee" : pour chaque
+    proprietaire/fournisseur, affiche le solde ET le detail des mouvements
+    (grand livre) sur la periode, contrairement a `build_balance_tiers_pdf`
+    (vue simplifiee : uniquement les totaux, 1 ligne par tiers).
+
+    Document interne syndic (audit-friendly), a distinguer de la
+    "Situation de compte" (lettre postale individuelle par proprietaire,
+    `pdf_situation_compte.py`) : ici, TOUS les tiers d'une categorie sont
+    regroupes dans UN SEUL document compact.
+    """
+    from pdf_layout import build_header_with_logo, make_footer_callback
+    use_new_layout = bool(syndic_pdf_ctx and syndic_pdf_ctx.get("syndic_config"))
+    footer_cb = make_footer_callback(syndic_pdf_ctx.get("legal_mentions", "")) if use_new_layout else None
+
+    buf = BytesIO()
+    doc = SimpleDocTemplate(
+        buf, pagesize=landscape(A4),
+        leftMargin=12 * mm, rightMargin=12 * mm,
+        topMargin=12 * mm,
+        bottomMargin=28 * mm if use_new_layout else 14 * mm,
+        title=f"Balance des Tiers (detaillee) - {copropriete.get('name','')}",
+    )
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        "title", parent=styles["Heading1"],
+        fontSize=18, leading=22, textColor=BRAND,
+        spaceAfter=2, fontName="Helvetica-Bold",
+    )
+    sub_style = ParagraphStyle(
+        "sub", parent=styles["BodyText"],
+        fontSize=9.5, leading=12, textColor=SLATE_500, spaceAfter=4,
+    )
+    h2 = ParagraphStyle("h2", parent=styles["Heading2"],
+                        fontSize=12, leading=15, textColor=SLATE_900,
+                        spaceAfter=4, fontName="Helvetica-Bold")
+    h3 = ParagraphStyle("h3", parent=styles["Heading3"],
+                        fontSize=10, leading=13, textColor=colors.white,
+                        fontName="Helvetica-Bold")
+    body = ParagraphStyle("body", parent=styles["BodyText"],
+                          fontSize=9, leading=11.5)
+    small = ParagraphStyle("small", parent=styles["BodyText"],
+                           fontSize=8, leading=10, textColor=SLATE_500)
+    op_style = ParagraphStyle("op", parent=body, fontSize=8, leading=10, wordWrap="CJK")
+
+    elems = []
+
+    if use_new_layout:
+        elems.append(build_header_with_logo(syndic_pdf_ctx.get("logo_bytes"), copropriete, small))
+        elems.append(Spacer(1, 4 * mm))
+
+    period_str = ""
+    if period_start and period_end:
+        period_str = f"Periode du {_fmt_date(period_start)} au {_fmt_date(period_end)}"
+    elif period_end:
+        period_str = f"Arretee au {_fmt_date(period_end)}"
+    else:
+        period_str = "Situation a date"
+    header_left = "" if use_new_layout else (
+        f"<b>{copropriete.get('name','')}</b><br/>"
+        f"{copropriete.get('address','')} - {copropriete.get('postal_code','')} {copropriete.get('city','')}"
+    )
+    header_tbl = Table(
+        [[Paragraph(header_left, small),
+          Paragraph(f"{period_str}<br/>Edite le {datetime.now().strftime('%d/%m/%Y a %H:%M')}", small)]],
+        colWidths=[150 * mm, 120 * mm],
+    )
+    header_tbl.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("ALIGN", (1, 0), (1, 0), "RIGHT"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+    ]))
+    elems.append(header_tbl)
+    elems.append(Spacer(1, 6 * mm))
+    elems.append(Paragraph("Balance des Tiers - Vue detaillee", title_style))
+    elems.append(Paragraph(
+        "Solde et detail des mouvements (grand livre) par tiers.", sub_style,
+    ))
+    elems.append(Spacer(1, 5 * mm))
+
+    def _tier_block(name: str, subtitle: str, movements: list, balance: float, status: str):
+        color = RED if status == "debiteur" else (GREEN if status == "crediteur" else SLATE_500)
+        head_tbl = Table(
+            [[Paragraph(f"<b>{name}</b>" + (f"  <font size='7' color='#CBD5E1'>{subtitle}</font>" if subtitle else ""), h3),
+              Paragraph(f"<b>{_fmt_eur(balance)}</b>", ParagraphStyle("r3", parent=h3, alignment=2))]],
+            colWidths=[220 * mm, 47 * mm],
+        )
+        head_tbl.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), color),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 8),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+            ("TOPPADDING", (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ]))
+        block = [head_tbl]
+        if not movements:
+            block.append(Paragraph("<i>Aucun mouvement sur la periode.</i>", small))
+        else:
+            rows = [["Date", "Operation", "Debit", "Credit", "Solde"]]
+            running = 0.0
+            for m in movements:
+                d = float(m.get("debit", 0) or 0)
+                c = float(m.get("credit", 0) or 0)
+                running += d - c
+                rows.append([
+                    _fmt_date(m.get("date", "")),
+                    Paragraph((m.get("description", "") or "")[:100], op_style),
+                    _fmt_eur(d) if d > 0 else "",
+                    _fmt_eur(c) if c > 0 else "",
+                    _fmt_eur(running),
+                ])
+            tbl = Table(rows, colWidths=[22 * mm, 165 * mm, 26 * mm, 26 * mm, 28 * mm])
+            tbl.setStyle(TableStyle([
+                ("BACKGROUND", (0, 0), (-1, 0), SLATE_100),
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("FONTSIZE", (0, 0), (-1, -1), 8),
+                ("ALIGN", (2, 0), (4, -1), "RIGHT"),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LINEBELOW", (0, 0), (-1, -1), 0.25, SLATE_300),
+                ("TOPPADDING", (0, 0), (-1, -1), 3),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+                ("LEFTPADDING", (0, 0), (-1, -1), 5),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+            ]))
+            block.append(tbl)
+        block.append(Spacer(1, 5 * mm))
+        return block
+
+    if owners_detail is not None:
+        elems.append(Paragraph("1. Proprietaires", h2))
+        if not owners_detail:
+            elems.append(Paragraph("<i>Aucun proprietaire.</i>", body))
+        for od in owners_detail:
+            owner = od.get("owner", {}) or {}
+            elems.extend(_tier_block(
+                owner.get("name", "") or "—",
+                owner.get("vcs_code", ""),
+                od.get("movements", []),
+                float(od.get("balance", 0) or 0),
+                od.get("status", "solde"),
+            ))
+        elems.append(Spacer(1, 4 * mm))
+
+    if suppliers_detail is not None:
+        elems.append(Paragraph("2. Fournisseurs", h2))
+        if not suppliers_detail:
+            elems.append(Paragraph("<i>Aucun fournisseur.</i>", body))
+        for sd in suppliers_detail:
+            supplier = sd.get("supplier", {}) or {}
+            elems.extend(_tier_block(
+                supplier.get("name", "") or "—",
+                supplier.get("vat_number", "") or supplier.get("bce_number", ""),
+                sd.get("movements", []),
+                float(sd.get("balance", 0) or 0),
+                sd.get("status", "solde"),
+            ))
+
+    elems.append(Spacer(1, 4 * mm))
+    elems.append(Paragraph(
+        f"<font size='7' color='#94A3B8'><i>Document interne genere automatiquement - "
+        f"Balance des tiers detaillee de la copropriete {copropriete.get('name','')}. "
+        f"Edite le {datetime.now().strftime('%d/%m/%Y a %H:%M')}.</i></font>",
+        small,
+    ))
+
+    if footer_cb:
+        doc.build(elems, onFirstPage=footer_cb, onLaterPages=footer_cb)
+    else:
+        doc.build(elems)
+    return buf.getvalue()
+
+
 def build_balance_tiers_pdf(
     *,
     copropriete: dict,
