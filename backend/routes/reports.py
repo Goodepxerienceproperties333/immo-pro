@@ -788,10 +788,30 @@ async def compute_bilan_data(db, copropriete_id: str, date_to: Optional[str] = N
         total_quotities = 0.0
         for lot in lots_for_acp:
             quo = float(lot.get("quotity", 0) or 0)
-            oid = lot.get("owner_id")
-            if oid and quo > 0:
-                owner_quotities[oid] = owner_quotities.get(oid, 0.0) + quo
-                total_quotities += quo
+            if quo <= 0:
+                continue
+            # BUG FIX (iter90fr) : certains lots (notamment en co-propriete/
+            # co-indivision) n'ont pas `owner_id` (singulier) rempli et
+            # utilisent uniquement `owner_ids` (liste) - meme convention que
+            # `duplicates.py`/`banking.py` ($or owner_id/owner_ids). Ignorer
+            # `owner_ids` faisait chuter `total_quotities` a une valeur trop
+            # faible (voire 0), empechant la repartition du boni/mali sur
+            # CES proprietaires -> bilan "apres repartition" desequilibre
+            # (le compte 499 est retire de l'affichage mais son montant
+            # n'est jamais recredite a personne).
+            oids = [o for o in (lot.get("owner_ids") or []) if o]
+            if not oids and lot.get("owner_id"):
+                oids = [lot["owner_id"]]
+            if not oids:
+                continue
+            # Pas de cle de repartition fractionnelle par co-proprietaire
+            # stockee -> partage egal de la quotite du lot entre les
+            # co-proprietaires (meme heuristique que la notification
+            # groupee des lots en co-indivision ailleurs dans l'app).
+            quo_per_owner = quo / len(oids)
+            for oid in oids:
+                owner_quotities[oid] = owner_quotities.get(oid, 0.0) + quo_per_owner
+                total_quotities += quo_per_owner
         if total_quotities > 0:
             for oid, quo in owner_quotities.items():
                 share = round(result_exercise * (quo / total_quotities), 2)
@@ -892,6 +912,28 @@ async def compute_bilan_data(db, copropriete_id: str, date_to: Optional[str] = N
             solde = round(b["debit"] - b["credit"], 2)
             _classify_account(acc, solde, balances)
         # En mode "apres repartition", le 499 est neutralise (solde = 0), donc PAS d'ajout
+
+        # GARDE-FOU (iter90fr) : si aucune quotite n'a pu etre trouvee pour
+        # cette ACP (lots manquants/sans owner_id ni owner_ids/sans quotity),
+        # `total_quotities` reste a 0 -> AUCUN proprietaire n'a ete credite/
+        # debite du boni/mali. Ne JAMAIS supprimer silencieusement ce montant
+        # sans le re-affecter : cela romprait l'egalite stricte Actif=Passif
+        # (regle metier imperative du bilan "apres repartition"). On retombe
+        # alors sur le meme affichage que le mode "avant repartition" pour ce
+        # montant precis, avec une mention explicite pour alerter le syndic.
+        if total_quotities <= 0:
+            if result_exercise > 0:
+                passif_buckets["VII_regul_passif"].append({
+                    "account_number": "499",
+                    "account_name": "Compte de regularisation - Boni a repartir (quotites manquantes - completer les lots)",
+                    "amount": abs(result_exercise),
+                })
+            else:
+                actif_buckets["VIII_regul_actif"].append({
+                    "account_number": "499",
+                    "account_name": "Compte de regularisation - Mali a repartir (quotites manquantes - completer les lots)",
+                    "amount": abs(result_exercise),
+                })
 
     elif abs(result_exercise) > 0.01:
         # Mode AVANT REPARTITION : place le boni/mali sur compte 499

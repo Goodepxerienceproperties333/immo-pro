@@ -11,6 +11,52 @@ Multi-ACP avec **chinese walls stricts** sur donnees comptables/financieres.
 Auth: JWT cookie + middleware global FastAPI.
 Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
+### Iter90fr (Feb 2026) - BUG PROD : bilan "apres repartition" DESEQUILIBRE (boni 499 supprime sans etre reparti)
+
+**Ticket utilisateur (PROD, ACP Acacia TER)**, suite immediate d'iter90fq :
+> "dans le bilan après réparition il faut que le compte de régularisation
+> 499 ... soit réparti sur les propriétaires sur base de leurs quotités la
+> tu as supprimé le poste sans le répartir donc ton bilan est faux actif
+> n'est pas égal à passif! c'est une règle stricte..."
+
+Reproduction confirmee sur le PDF fourni : Total Actif 16210,17€ / Total
+Passif 9156,60€, ecart = 7053,57€ = EXACTEMENT le boni. Le fix iter90fq
+avait bien active la branche `after_distribution` (499 correctement
+retire de l'affichage), mais la redistribution effective aux
+proprietaires echouait silencieusement.
+
+**Root cause (2 aspects)** :
+1. La repartition par quotite (`compute_bilan_data`) n'utilisait QUE
+   `lot.owner_id` (singulier). Beaucoup de lots (co-propriete/co-indivision,
+   import legacy) n'ont PAS `owner_id` rempli et utilisent uniquement
+   `owner_ids` (liste) - meme convention deja etablie ailleurs dans l'app
+   (`duplicates.py`, `banking.py` : `$or owner_id/owner_ids`). Ces lots
+   etaient silencieusement EXCLUS du calcul de `total_quotities`.
+2. Aucun garde-fou : si `total_quotities` finissait a 0 (donnees de lots
+   incompletes pour une ACP), le 499 restait quand meme supprime de
+   l'affichage (puisqu'on est dans la branche "after_distribution") SANS
+   jamais recrediter personne -> le montant disparaissait purement et
+   simplement, cassant l'equation Actif = Passif.
+
+**Fix** :
+- `owner_ids` (liste) pris en compte en plus de `owner_id` (singulier),
+  avec partage EGAL de la quotite du lot entre co-proprietaires (pas de
+  cle de fraction par co-proprietaire stockee dans le modele actuel).
+- GARDE-FOU STRICT : si `total_quotities` reste a 0 malgre tout (aucun
+  lot/quotite exploitable), le compte 499 est REAFFICHE (comportement
+  "avant repartition" pour ce montant precis, libelle explicite "quotites
+  manquantes - completer les lots") plutot que d'etre silencieusement
+  supprime - garantit l'invariant Actif == Passif dans TOUS les cas, sans
+  exception.
+
+**Tests** (`test_iter90fr_bilan_distribution_quotity_fallback.py`, 2/2
+verts) : lot co-detenu (owner_ids=[o1,o2], owner_id vide) redistribue
+correctement 50/50, bilan equilibre. ACP sans aucun lot exploitable :
+garde-fou reaffiche le 499, bilan reste equilibre (memes totaux qu'avant-
+repartition). Verifie manuellement en reproduisant les 2 scenarios via
+script direct (memes resultats). Regression : 42/42 tests bilan/backup/PDF
+existants verts.
+
 ### Iter90fq (Feb 2026) - BUG PROD : PDF "Bilan apres repartition" affichait le bilan AVANT repartition
 
 **Ticket utilisateur (PROD, ACP Acacia TER)** :
