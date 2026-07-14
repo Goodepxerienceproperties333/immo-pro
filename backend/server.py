@@ -858,7 +858,20 @@ async def dashboard_health_audit(request: Request, copropriete_id: Optional[str]
     role = user.get("role", "")
     if role not in ("superadmin", "admin", "syndic") and copropriete_id not in (user.get("copropriete_ids") or []):
         raise HTTPException(403, "Acces refuse a cette copropriete")
-    return await compute_health_audit(db, copropriete_id, days_threshold=days_threshold)
+    # P0 fix (iter90fo) : garde-fou anti-timeout. Meme optimise, on ne veut
+    # JAMAIS qu'un audit lourd puisse geler l'app (mode single-worker) ni
+    # provoquer un timeout Cloudflare 502 (qui coupe la connexion brutalement
+    # et affecte TOUS les clients pendant qu'il tourne). Si le calcul depasse
+    # 20s, on retourne une erreur degradee propre plutot que de laisser
+    # la requete pendre jusqu'au timeout du reverse-proxy.
+    import asyncio
+    try:
+        return await asyncio.wait_for(
+            compute_health_audit(db, copropriete_id, days_threshold=days_threshold),
+            timeout=20.0,
+        )
+    except asyncio.TimeoutError:
+        raise HTTPException(503, "Audit sante comptable temporairement indisponible (volume de donnees trop important) - reessayez dans quelques instants")
 
 # Admin seed
 async def seed_admin():
@@ -903,6 +916,19 @@ async def startup():
         await db.owners.create_index("vcs_code", sparse=True)
     except Exception as _e:
         print(f"[startup] owners.vcs_code index skipped: {_e}")
+    # P0 fix (iter90fo) : index critiques manquants sur copropriete_id.
+    # Sans ces index, chaque requete filtree par copropriete_id (invoices,
+    # journal_entries, suppliers) fait un FULL COLLECTION SCAN sur TOUTE
+    # la base multi-tenant (tous les clients), ce qui degrade et finit par
+    # crasher/timeout le dashboard (health-audit) quand la base grossit.
+    try:
+        await db.journal_entries.create_index([("copropriete_id", 1), ("journal_type", 1)])
+        await db.invoices.create_index([("copropriete_id", 1), ("status", 1)])
+        await db.suppliers.create_index("copropriete_id")
+        await db.owners.create_index("copropriete_ids")
+        await db.fund_calls.create_index("copropriete_id")
+    except Exception as _e:
+        print(f"[startup] copropriete_id indexes skipped: {_e}")
     # iter87 : TTL index on invoice_bundle_sessions for auto-cleanup of bundle
     # PDF sessions after 24h (uses `expires_at` ISODate field set on creation).
     try:

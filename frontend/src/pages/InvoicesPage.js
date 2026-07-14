@@ -226,13 +226,29 @@ export default function InvoicesPage() {
 
   const openEditInvoice = (inv) => {
     setEditingInvoice(inv);
+    // P1 fix (iter90fo) : bug "nature de depense grisee, impossible de
+    // changer / modification non enregistree". Root cause : de nombreuses
+    // factures (import CODA/Optipro, extraction IA) sont stockees avec un
+    // tableau `lines` contenant UNE SEULE ligne (meme si conceptuellement
+    // c'est une facture a "1 seule nature"). En edition, le simple fait que
+    // `lines.length > 0` activait le mode "lignes multiples" : le bloc
+    // Nature/Compte/Cle du haut devenait `pointer-events-none` (grise et
+    // non-cliquable), forcant l'utilisateur a utiliser un second selecteur
+    // (bloc "Lignes multiples") qu'il ne voyait/comprenait pas -> impression
+    // que le champ est bloque et que la modification ne "prend" jamais.
+    // Fix : si la facture n'a qu'UNE seule ligne, on "aplatit" cette ligne
+    // dans les champs de premier niveau (mode normal, editable) et on vide
+    // `lines`. Les VRAIES factures multi-lignes (>= 2 lignes, ex: relance
+    // assurance avec plusieurs primes) restent en mode "lignes multiples".
+    const rawLines = inv.lines || [];
+    const singleLine = rawLines.length === 1 ? rawLines[0] : null;
     setInvForm({
       number: inv.number || '', date: inv.date || '', due_date: inv.due_date || '',
       supplier: inv.supplier || '', description: inv.description || '',
       total_amount: inv.total_amount || 0, vat_amount: inv.vat_amount || 0,
-      account_number: inv.account_number || '',
-      expense_category_id: inv.expense_category_id || '',
-      distribution_key_id: inv.distribution_key_id || '',
+      account_number: singleLine ? (singleLine.account_number || inv.account_number || '') : (inv.account_number || ''),
+      expense_category_id: singleLine ? (singleLine.expense_category_id || inv.expense_category_id || '') : (inv.expense_category_id || ''),
+      distribution_key_id: singleLine ? (singleLine.distribution_key_id || inv.distribution_key_id || '') : (inv.distribution_key_id || ''),
       status: inv.status || 'unpaid',
       is_private_fee: !!inv.is_private_fee,
       private_fee_owner_id: inv.private_fee_owner_id || '',
@@ -244,9 +260,9 @@ export default function InvoicesPage() {
             owner_id: a.owner_id, amount: a.amount,
           }))
         : [],
-      occupant_pct: inv.occupant_pct ?? 0,
-      proprietaire_pct: inv.proprietaire_pct ?? 100,
-      lines: (inv.lines || []).map(l => ({
+      occupant_pct: singleLine ? (singleLine.occupant_pct ?? inv.occupant_pct ?? 0) : (inv.occupant_pct ?? 0),
+      proprietaire_pct: singleLine ? (singleLine.proprietaire_pct ?? inv.proprietaire_pct ?? 100) : (inv.proprietaire_pct ?? 100),
+      lines: singleLine ? [] : rawLines.map(l => ({
         _key: (crypto?.randomUUID?.() || `k-${Date.now()}-${Math.random()}`),
         account_number: l.account_number || '',
         expense_category_id: l.expense_category_id || '',

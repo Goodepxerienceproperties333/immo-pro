@@ -29,12 +29,18 @@ async def compute_health_audit(db, copropriete_id: str, days_threshold: int = 60
         "owners_late": 0,
     }
 
+    # P0 fix (iter90fo) : UNE seule requete invoices (au lieu de 2) reutilisee
+    # pour le calcul des impayees ET des doublons. Reduit la charge DB et le
+    # temps de reponse, cause probable des timeouts Cloudflare 502 constates
+    # en production sur les ACP avec beaucoup de factures.
+    inv_all = await db.invoices.find(
+        {"copropriete_id": copropriete_id},
+        {"_id": 0, "id": 1, "supplier_id": 1, "supplier": 1, "number": 1,
+         "date": 1, "due_date": 1, "total_amount": 1, "status": 1},
+    ).to_list(20000)
+
     # 1) FACTURES IMPAYEES > X jours
-    invoices = await db.invoices.find(
-        {"copropriete_id": copropriete_id, "status": "unpaid"},
-        {"_id": 0, "id": 1, "supplier": 1, "number": 1, "date": 1,
-         "due_date": 1, "total_amount": 1},
-    ).to_list(10000)
+    invoices = [inv for inv in inv_all if inv.get("status") == "unpaid"]
     stats["invoices_unpaid"] = len(invoices)
     overdue_list = []
     for inv in invoices:
@@ -72,11 +78,6 @@ async def compute_health_audit(db, copropriete_id: str, days_threshold: int = 60
     # unique chez le fournisseur, donc numeros differents = factures reelles
     # distinctes (jamais des doublons). On garde le flag uniquement si les
     # numeros sont identiques OU si au moins un est vide (import legacy).
-    inv_all = await db.invoices.find(
-        {"copropriete_id": copropriete_id},
-        {"_id": 0, "id": 1, "supplier_id": 1, "supplier": 1, "number": 1,
-         "date": 1, "total_amount": 1},
-    ).to_list(10000)
     by_sig = {}
     for inv in inv_all:
         amt = round(float(inv.get("total_amount", 0) or 0), 2)
@@ -124,31 +125,86 @@ async def compute_health_audit(db, copropriete_id: str, days_threshold: int = 60
         })
 
     # 3) COMPTES TIER ORPHELINS (soldes 400/440 sans owner/supplier link)
-    je_q = {"copropriete_id": copropriete_id, "journal_type": {"$ne": "AN"}}
-    entries = await db.journal_entries.find(je_q, {"_id": 0}).to_list(100000)
+    # P0 fix (iter90fo) : UNE seule requete journal_entries (au lieu de 2)
+    # reutilisee pour orphelins + ecritures non equilibrees + solde owners.
+    # Avant : 2 fetchs de la collection ENTIERE (jusqu'a 100k docs chacun)
+    # + une boucle O(lignes * nb_owners) pour calculer le solde de chaque
+    # proprietaire -> avec des annees d'historique et des centaines de lots,
+    # cette boucle imbriquee pouvait prendre plusieurs MINUTES et, en mode
+    # single-worker, geler TOUTE l'application (tous les clients) pendant ce
+    # temps -> timeout Cloudflare 502. Remplace par une map de lookup O(1).
+    entries = await db.journal_entries.find(
+        {"copropriete_id": copropriete_id, "journal_type": {"$ne": "AN"}},
+        {"_id": 0, "id": 1, "reference": 1, "date": 1, "total_debit": 1,
+         "total_credit": 1, "is_reversal": 1, "reversed": 1, "lines": 1},
+    ).to_list(50000)
+
+    # Comptes attendus pour les owners (filtres sur CETTE copropriete uniquement,
+    # pas toute la base multi-tenant comme avant)
+    owners = await db.owners.find(
+        {f"tier_accounts.{copropriete_id}": {"$exists": True}},
+        {"_id": 0, "id": 1, "name": 1, "tier_accounts": 1},
+    ).to_list(5000)
+    valid_owner_accs = set()
+    owner_acc_to_id = {}  # account_number -> owner_id (lookup O(1) au lieu de boucle)
+    owner_tier_accs = {}  # owner_id -> set des comptes tier
+    owner_balance = {}  # owner_id -> solde net du compte tier (positif = debiteur)
+    for o in owners:
+        accs = ((o.get("tier_accounts") or {}).get(copropriete_id, {}) or {})
+        all_accs = set()
+        for k in ("provisions", "reserve"):
+            if accs.get(k):
+                valid_owner_accs.add(accs[k])
+        for k in ("provisions", "reserve", "main"):
+            if accs.get(k):
+                all_accs.add(accs[k])
+                owner_acc_to_id[accs[k]] = o["id"]
+        if all_accs:
+            owner_tier_accs[o["id"]] = all_accs
+            owner_balance[o["id"]] = 0.0
+
+    # Comptes attendus pour les suppliers (filtres sur cette copropriete)
+    suppliers = await db.suppliers.find(
+        {"copropriete_id": copropriete_id},
+        {"_id": 0, "id": 1, "name": 1, "tier_accounts": 1},
+    ).to_list(5000)
+    valid_sup_accs = set()
+    for s in suppliers:
+        accs = ((s.get("tier_accounts") or {}).get(copropriete_id, {}) or {})
+        if accs.get("main"):
+            valid_sup_accs.add(accs["main"])
+
     accs_used = {}
+    unbalanced = []
     for e in entries:
+        td = float(e.get("total_debit", 0) or 0)
+        tc = float(e.get("total_credit", 0) or 0)
+        if abs(td - tc) > 0.01:
+            unbalanced.append({
+                "id": e["id"],
+                "reference": e.get("reference", ""),
+                "date": e.get("date", ""),
+                "debit": td,
+                "credit": tc,
+                "ecart": round(td - tc, 2),
+            })
+        # Solde owner : exclut extournes/contre-passations (sous-ensemble
+        # des criteres deja appliques par le filtre journal_type != AN)
+        skip_balance = bool(e.get("is_reversal")) or bool(e.get("reversed"))
         for ln in e.get("lines", []) or []:
             acc = ln.get("account_number", "")
             if acc.startswith("400") or acc.startswith("440"):
                 accs_used.setdefault(acc, {"debit": 0.0, "credit": 0.0, "name": ln.get("account_name", "")})
                 accs_used[acc]["debit"] += float(ln.get("debit", 0) or 0)
                 accs_used[acc]["credit"] += float(ln.get("credit", 0) or 0)
-    # Comptes attendus pour les owners
-    owners = await db.owners.find({}, {"_id": 0, "id": 1, "name": 1, "tier_accounts": 1}).to_list(10000)
-    valid_owner_accs = set()
-    for o in owners:
-        accs = ((o.get("tier_accounts") or {}).get(copropriete_id, {}) or {})
-        for k in ("provisions", "reserve"):
-            if accs.get(k):
-                valid_owner_accs.add(accs[k])
-    # Comptes attendus pour les suppliers
-    suppliers = await db.suppliers.find({}, {"_id": 0, "id": 1, "name": 1, "tier_accounts": 1}).to_list(10000)
-    valid_sup_accs = set()
-    for s in suppliers:
-        accs = ((s.get("tier_accounts") or {}).get(copropriete_id, {}) or {})
-        if accs.get("main"):
-            valid_sup_accs.add(accs["main"])
+            if skip_balance:
+                continue
+            tpid = ln.get("third_party_id")
+            oid = owner_acc_to_id.get(acc) or (tpid if tpid in owner_balance else None)
+            if oid:
+                d = float(ln.get("debit", 0) or 0)
+                c = float(ln.get("credit", 0) or 0)
+                owner_balance[oid] = owner_balance.get(oid, 0.0) + (d - c)
 
     orphan_list = []
     for acc, b in accs_used.items():
@@ -173,19 +229,6 @@ async def compute_health_audit(db, copropriete_id: str, days_threshold: int = 60
         })
 
     # 4) ECRITURES NON EQUILIBREES
-    unbalanced = []
-    for e in entries:
-        td = float(e.get("total_debit", 0) or 0)
-        tc = float(e.get("total_credit", 0) or 0)
-        if abs(td - tc) > 0.01:
-            unbalanced.append({
-                "id": e["id"],
-                "reference": e.get("reference", ""),
-                "date": e.get("date", ""),
-                "debit": td,
-                "credit": tc,
-                "ecart": round(td - tc, 2),
-            })
     stats["unbalanced"] = len(unbalanced)
     if unbalanced:
         score -= min(20, len(unbalanced) * 10)
@@ -206,39 +249,6 @@ async def compute_health_audit(db, copropriete_id: str, days_threshold: int = 60
     fund_calls = await db.fund_calls.find(
         {"copropriete_id": copropriete_id}, {"_id": 0},
     ).to_list(10000)
-
-    # Pre-calcul du solde COMPTABLE de chaque proprietaire (somme par tier_account)
-    # Exclusion stricte : contre-passations + ecritures extournees + AN futurs
-    owners_acp = await db.owners.find({}, {"_id": 0}).to_list(10000)
-    owner_balance = {}  # owner_id -> solde net du compte tier (positif = debiteur)
-    owner_tier_accs = {}  # owner_id -> set des comptes tier
-    for o in owners_acp:
-        accs = (o.get("tier_accounts") or {}).get(copropriete_id, {}) or {}
-        all_accs = set()
-        for k in ("provisions", "reserve", "main"):
-            if accs.get(k):
-                all_accs.add(accs[k])
-        if all_accs:
-            owner_tier_accs[o["id"]] = all_accs
-            owner_balance[o["id"]] = 0.0
-
-    # Charge les ecritures hors AN et hors reversals
-    je_balance = await db.journal_entries.find({
-        "copropriete_id": copropriete_id,
-        "journal_type": {"$ne": "AN"},
-        "is_reversal": {"$ne": True},
-        "reversed": {"$ne": True},
-    }, {"_id": 0, "lines": 1}).to_list(100000)
-    for e in je_balance:
-        for ln in e.get("lines", []) or []:
-            acc = ln.get("account_number", "")
-            tpid = ln.get("third_party_id")
-            d = float(ln.get("debit", 0) or 0)
-            c = float(ln.get("credit", 0) or 0)
-            for oid, accs in owner_tier_accs.items():
-                if acc in accs or tpid == oid:
-                    owner_balance[oid] = owner_balance.get(oid, 0.0) + (d - c)
-                    break
 
     late_owners = {}
     # iter90ar : deuxieme piste - proprietaires avec appels non payes mais

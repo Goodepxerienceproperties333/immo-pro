@@ -1599,8 +1599,32 @@ def create_invoices_router(db):
         # si le payload en fournit explicitement (data.lines != None). Un
         # PUT allege (ex: quickEdit depuis /reports/depenses) ne doit PAS
         # wiper la ventilation multi-lignes preexistante.
+        existing_lines = (existing or {}).get("lines") or []
         if data.lines is not None:
             update["lines"] = resolved_lines
+        elif len(existing_lines) == 1 and not data.is_private_fee:
+            # P1 fix (iter90fo) : bug "nature de depense grisee / modification
+            # non enregistree". De nombreuses factures legacy (import
+            # CODA/Optipro, extraction IA) sont stockees avec `lines` = UNE
+            # seule entree, meme si conceptuellement c'est une facture a
+            # 1 seule nature. `expense_rows.py` (Liste des Depenses) donne
+            # TOUJOURS la priorite a `lines` sur les champs top-level quand
+            # `lines` est non-vide. Donc si l'utilisateur edite la nature/
+            # compte/repartition via les champs top-level (dialog principal
+            # aplati OU quick-edit de la Liste des Depenses, qui n'envoient
+            # PAS `lines` dans le body), l'ancienne ligne figee continuait
+            # d'etre affichee -> l'edition semblait "ne pas s'enregistrer".
+            # Fix : on resynchronise cette ligne unique legacy avec les
+            # nouvelles valeurs top-level a chaque update.
+            update["lines"] = [{
+                "account_number": account_number,
+                "expense_category_id": data.expense_category_id or "",
+                "distribution_key_id": data.distribution_key_id or "",
+                "amount": round(float(data.total_amount), 2),
+                "description": existing_lines[0].get("description", ""),
+                "occupant_pct": occupant_pct,
+                "proprietaire_pct": proprietaire_pct,
+            }]
         # If switching to private fee, clear distribution_lines (and lines)
         if data.is_private_fee:
             update["distribution_lines"] = []
