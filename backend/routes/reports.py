@@ -779,11 +779,18 @@ async def compute_bilan_data(db, copropriete_id: str, date_to: Optional[str] = N
     # ce qui n'est pas le cas dans le modele actuel. A migrer dans une iteration ulterieure
     # avec materialisation OD permanente a la cloture d'exercice.
     distributed_per_owner = {}
+    # iter90fs : totaux reellement distribues (peut differer de
+    # `result_exercise` si un lot n'a pas de proprietaire connu, ou si le
+    # proprietaire refere par owner_id/owner_ids n'existe plus dans la
+    # collection `owners`). Toute part "perdue" est renvoyee sur le
+    # compte 499 en fin de traitement (safety net strict Actif = Passif).
+    actual_boni_distributed = 0.0
     if view_mode == "after_distribution" and abs(result_exercise) > 0.01:
         lots_for_acp = await db.lots.find(
             {"copropriete_id": copropriete_id}, {"_id": 0}
         ).to_list(10000)
         owners_for_acp = await db.owners.find({}, {"_id": 0}).to_list(10000)
+        owners_by_id = {o["id"]: o for o in owners_for_acp if o.get("id")}
         owner_quotities = {}
         total_quotities = 0.0
         for lot in lots_for_acp:
@@ -813,8 +820,19 @@ async def compute_bilan_data(db, copropriete_id: str, date_to: Optional[str] = N
                 owner_quotities[oid] = owner_quotities.get(oid, 0.0) + quo_per_owner
                 total_quotities += quo_per_owner
         if total_quotities > 0:
-            for oid, quo in owner_quotities.items():
-                share = round(result_exercise * (quo / total_quotities), 2)
+            # Repartition proportionnelle a la quotite, avec correction
+            # d'arrondi sur le dernier owner pour que la somme distribuee
+            # egale EXACTEMENT `result_exercise` (evite les ecarts de
+            # centimes qui casseraient l'equilibre Actif=Passif).
+            owner_items = list(owner_quotities.items())
+            running_sum = 0.0
+            for idx, (oid, quo) in enumerate(owner_items):
+                is_last = (idx == len(owner_items) - 1)
+                if is_last:
+                    share = round(result_exercise - running_sum, 2)
+                else:
+                    share = round(result_exercise * (quo / total_quotities), 2)
+                    running_sum += share
                 distributed_per_owner[oid] = share
 
         for oid, delta in distributed_per_owner.items():
@@ -824,9 +842,15 @@ async def compute_bilan_data(db, copropriete_id: str, date_to: Optional[str] = N
                     balances[virt_acc]["credit"] += delta
                 else:
                     balances[virt_acc]["debit"] += abs(delta)
+                actual_boni_distributed += delta
             else:
-                owner_doc = next((o for o in owners_for_acp if o["id"] == oid), None)
+                owner_doc = owners_by_id.get(oid)
                 if not owner_doc:
+                    # Proprietaire refere par un lot mais absent de la
+                    # collection `owners` (donnees corrompues / owner
+                    # supprime). Ne PAS silencieusement perdre sa quote-
+                    # part : la difference sera recreditee sur 499 par la
+                    # safety net finale (voir plus bas).
                     continue
                 balances[virt_acc] = {
                     "account_number": virt_acc,
@@ -834,7 +858,12 @@ async def compute_bilan_data(db, copropriete_id: str, date_to: Optional[str] = N
                     "debit": abs(delta) if delta < 0 else 0.0,
                     "credit": delta if delta > 0 else 0.0,
                     "is_owner_aggregated": True,
+                    # iter90fs : sans cette ligne, la nouvelle entree
+                    # owner (proprietaire sans activite prealable) etait
+                    # affichee sans numero de compte dans le bilan.
+                    "display_account": owner_primary_acc.get(oid, ""),
                 }
+                actual_boni_distributed += delta
 
         # ---- Repartition des comptes de regularisation 49X sur les proprietaires ----
         # Regle metier (PCMN copro) : en consultation "Apres repartition", les comptes
@@ -863,6 +892,14 @@ async def compute_bilan_data(db, copropriete_id: str, date_to: Optional[str] = N
             else:
                 regul_passif_by_account[acc] = abs(solde)
 
+        # iter90fs : totaux reellement distribues pour les comptes 49X (regul
+        # actif/passif hors 499). Analogue a `actual_boni_distributed` : si
+        # un owner n'a pas pu recevoir sa part (owner_id oriente vers une
+        # fiche disparue), on ne peut PAS neutraliser aveuglement le 49X
+        # d'origine sans casser l'equilibre. On track les montants
+        # effectivement distribues et on n'invalidera que ceux-la.
+        actual_regul_actif_distributed = 0.0
+        actual_regul_passif_distributed = 0.0
         if (regul_actif_by_account or regul_passif_by_account) and total_quotities > 0:
             total_actif_regul = sum(regul_actif_by_account.values())
             total_passif_regul = sum(regul_passif_by_account.values())
@@ -887,7 +924,7 @@ async def compute_bilan_data(db, copropriete_id: str, date_to: Optional[str] = N
                     continue
                 virt_acc = f"OWNER_{oid}"
                 if virt_acc not in balances:
-                    owner_doc = next((o for o in owners_for_acp if o["id"] == oid), None)
+                    owner_doc = owners_by_id.get(oid)
                     if not owner_doc:
                         continue
                     balances[virt_acc] = {
@@ -895,15 +932,30 @@ async def compute_bilan_data(db, copropriete_id: str, date_to: Optional[str] = N
                         "account_name": owner_doc.get("name", ""),
                         "debit": 0.0, "credit": 0.0,
                         "is_owner_aggregated": True,
+                        # iter90fs : eviter d'afficher une ligne sans
+                        # numero de compte pour ce nouveau proprietaire.
+                        "display_account": owner_primary_acc.get(oid, ""),
                     }
                 # Regul actif -> owner DEBIT (reste cote ACTIF, rubrique V.A)
                 balances[virt_acc]["debit"] += actif_share
+                actual_regul_actif_distributed += actif_share
                 # Regul passif -> owner CREDIT (reste cote PASSIF, rubrique VI.A)
                 balances[virt_acc]["credit"] += passif_share
-            # Neutralise les comptes 49X reels (sauf 499)
-            for acc in list(regul_actif_by_account.keys()) + list(regul_passif_by_account.keys()):
-                balances[acc]["debit"] = 0.0
-                balances[acc]["credit"] = 0.0
+                actual_regul_passif_distributed += passif_share
+            # iter90fs : on ne neutralise chaque compte 49X d'origine QUE si
+            # sa part a effectivement ete redistribuee (au centime pres).
+            # Si un ou plusieurs owners ont echoue (owner_doc None), la
+            # portion perdue reste visible sur le compte 49X initial afin
+            # que le bilan reste equilibre. Cas rare mais indispensable
+            # pour garantir Actif = Passif dans TOUTES les configurations.
+            if abs(actual_regul_actif_distributed - total_actif_regul) < 0.01:
+                for acc in regul_actif_by_account:
+                    balances[acc]["debit"] = 0.0
+                    balances[acc]["credit"] = 0.0
+            if abs(actual_regul_passif_distributed - total_passif_regul) < 0.01:
+                for acc in regul_passif_by_account:
+                    balances[acc]["debit"] = 0.0
+                    balances[acc]["credit"] = 0.0
 
         # Reset buckets et re-classer suite a modification balances
         actif_buckets = {k: [] for k in actif_buckets}
@@ -913,26 +965,32 @@ async def compute_bilan_data(db, copropriete_id: str, date_to: Optional[str] = N
             _classify_account(acc, solde, balances)
         # En mode "apres repartition", le 499 est neutralise (solde = 0), donc PAS d'ajout
 
-        # GARDE-FOU (iter90fr) : si aucune quotite n'a pu etre trouvee pour
-        # cette ACP (lots manquants/sans owner_id ni owner_ids/sans quotity),
-        # `total_quotities` reste a 0 -> AUCUN proprietaire n'a ete credite/
-        # debite du boni/mali. Ne JAMAIS supprimer silencieusement ce montant
-        # sans le re-affecter : cela romprait l'egalite stricte Actif=Passif
-        # (regle metier imperative du bilan "apres repartition"). On retombe
-        # alors sur le meme affichage que le mode "avant repartition" pour ce
-        # montant precis, avec une mention explicite pour alerter le syndic.
-        if total_quotities <= 0:
-            if result_exercise > 0:
+        # iter90fs : SAFETY NET STRICT Actif = Passif.
+        # Somme de tout ce qui n'a PAS ete distribue :
+        #   - part du boni/mali dont l'owner est introuvable
+        #   - cas total_quotities == 0 (aucun lot exploitable dans l'ACP)
+        # Peu importe la cause : on ne PEUT PAS supprimer silencieusement
+        # ce montant du bilan (ce serait exactement le bug rapporte par
+        # l'utilisateur en production, ecart = boni). On le REAFFICHE sur
+        # 499 avec un libelle explicite pour alerter le syndic.
+        missing_boni = round(result_exercise - actual_boni_distributed, 2)
+        if abs(missing_boni) > 0.01:
+            reason = (
+                "quotites manquantes - completer les lots"
+                if total_quotities <= 0
+                else "proprietaire(s) introuvable(s) - verifier les fiches proprietaires"
+            )
+            if missing_boni > 0:
                 passif_buckets["VII_regul_passif"].append({
                     "account_number": "499",
-                    "account_name": "Compte de regularisation - Boni a repartir (quotites manquantes - completer les lots)",
-                    "amount": abs(result_exercise),
+                    "account_name": f"Compte de regularisation - Boni non reparti ({reason})",
+                    "amount": abs(missing_boni),
                 })
             else:
                 actif_buckets["VIII_regul_actif"].append({
                     "account_number": "499",
-                    "account_name": "Compte de regularisation - Mali a repartir (quotites manquantes - completer les lots)",
-                    "amount": abs(result_exercise),
+                    "account_name": f"Compte de regularisation - Mali non reparti ({reason})",
+                    "amount": abs(missing_boni),
                 })
 
     elif abs(result_exercise) > 0.01:

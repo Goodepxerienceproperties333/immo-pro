@@ -11,6 +11,81 @@ Multi-ACP avec **chinese walls stricts** sur donnees comptables/financieres.
 Auth: JWT cookie + middleware global FastAPI.
 Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
+### Iter90fs (Feb 2026) - BUG PROD (RECURRENCE) : bilan "apres repartition" DESEQUILIBRE malgre iter90fr
+
+**Ticket utilisateur (Feb 2026, PROD, redite d'iter90fr)** :
+> "Au niveau du bilan il y a 2 vues il y a une vue avant répartition ...
+> avant répartition il est bon par contre après répartition il est mauvais
+> je te demande de vérifier pourquoi et de corriger"
+
+Le user a signale que le bug d'iter90fr est TOUJOURS visible sur ACP Acacia
+TER en PROD : actif != passif, ecart = boni exactement, aussi bien dans le
+PDF que dans l'interface. Investigation : iter90fr fonctionne bien sur les
+scenarios de test principaux (verifie sur ACP Les Alisiers), mais avait 2
+failles residuelles :
+
+**Faille 1 (safety net incomplete)** : dans la boucle de distribution du
+499 aux proprietaires (`compute_bilan_data`, lignes ~820-830), si un lot
+pointe vers un `owner_id`/`owner_ids` qui n'existe PLUS dans la collection
+`owners` (fiche supprimee/renommee, ou donnees corrompues import legacy),
+le code faisait un `continue` silencieux. Sa quote-part etait PERDUE, et
+comme le compte 499 etait DEJA supprime de l'affichage (branche
+after_distribution), l'ecart Actif - Passif = somme des parts perdues.
+
+**Faille 2 (display)** : les proprietaires SANS activite prealable
+(aucune ligne 41010XXX en base) qui recoivent une part du boni via
+redistribution voyaient une NOUVELLE entree balance creee sans le champ
+`display_account` -> ligne du bilan affichee sans numero de compte (juste
+"Owner Name = X.XX EUR", trompeur, invalide pour un PDF legal).
+
+**Fix iter90fs** :
+1. Nouveau compteur `actual_boni_distributed` : suit ce qui est
+   effectivement recredite dans la boucle owner_doc trouve. Idem
+   `actual_regul_actif_distributed`/`actual_regul_passif_distributed`
+   pour les comptes 49X (hors 499).
+2. SAFETY NET FINAL : `missing_boni = result_exercise -
+   actual_boni_distributed`. Si `abs(missing_boni) > 0.01`, REAFFICHER
+   le residu sur le compte 499 avec un libelle explicite ("Boni non
+   reparti - proprietaire(s) introuvable(s) - verifier les fiches
+   proprietaires" OU "quotites manquantes - completer les lots" selon
+   la cause). Garantit STRICTEMENT Actif = Passif dans TOUS les cas de
+   donnees corrompues.
+3. Les comptes 49X (regul) ne sont neutralises QUE si leur distribution
+   totale a reussi (au centime pres). Sinon, la portion perdue reste
+   visible sur le compte d'origine -> aucun trou dans le bilan.
+4. `owner_primary_acc.get(oid, "")` desormais transmis sur les nouvelles
+   entrees `balances[OWNER_{oid}]` creees a l'occasion de la
+   redistribution -> pas de ligne blanche.
+5. Corollaire : suppression du garde-fou specifique `total_quotities <=
+   0` (iter90fr) qui est desormais un cas particulier de la safety net
+   generale (`missing_boni == result_exercise` si personne n'est distribue).
+6. Refactor `owners_by_id = {o['id']: o for o in owners_for_acp}` en O(1)
+   au lieu du `next(... for o in list)` en O(n) a chaque owner.
+7. Correction d'arrondi propagee au boni : le dernier owner recoit
+   `result_exercise - sum_precedents` (comme deja fait pour les 49X).
+   Evite les ecarts de centimes cumules.
+
+**Tests** (`test_iter90fs_bilan_after_distribution_safety_net.py`, 3/3
+verts + regression 42/42 verte sur bilan/backup/PDF) :
+- `test_ghost_owner_id_safety_net_keeps_bilan_balanced` : owner_id
+  pointe vers une fiche disparue -> Alice recoit 420 EUR (60%), les 280
+  EUR restants (40% du ghost) reaffiches sur 499 avec libelle explicite,
+  bilan reste equilibre au centime pres.
+- `test_co_indivision_partial_ghost_owner_ids` : idem en co-indivision
+  (2 owner_ids dont un ghost) -> real recoit 250 EUR (50%), residu 250
+  EUR sur 499.
+- `test_new_owner_display_account_is_populated` : Carol (sans activite
+  prealable) recoit sa part et apparait avec son vrai compte
+  41010002, pas une ligne blanche. Garde-fou strict : aucune ligne du
+  bilan avec `account_number` vide.
+
+**Note importante pour le user** : le fix est en PREVIEW. Pour que le
+bilan d'Acacia TER soit corrige en PROD, il faut REDEPLOYER (git push +
+Emergent Deploy). L'utilisateur signale a plusieurs iterations d'affilee
+qu'il voit encore les anciens bugs en prod - c'est systematiquement lie
+au deploiement non effectue (confirme par le handoff summary "Confusion
+entre PREVIEW vs PRODUCTION - recurrence extremement elevee").
+
 ### Iter90fr (Feb 2026) - BUG PROD : bilan "apres repartition" DESEQUILIBRE (boni 499 supprime sans etre reparti)
 
 **Ticket utilisateur (PROD, ACP Acacia TER)**, suite immediate d'iter90fq :
