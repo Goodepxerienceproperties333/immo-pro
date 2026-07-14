@@ -791,10 +791,49 @@ async def compute_bilan_data(db, copropriete_id: str, date_to: Optional[str] = N
         ).to_list(10000)
         owners_for_acp = await db.owners.find({}, {"_id": 0}).to_list(10000)
         owners_by_id = {o["id"]: o for o in owners_for_acp if o.get("id")}
+        # iter90ft : fallback quotites via la default distribution_key.
+        # Sur certaines ACPs (import legacy, ACP Acacia TER, etc.), le
+        # champ `quotity` n'est PAS peuple directement sur le document lot.
+        # Les quotites vivent alors dans la "cle de repartition generale"
+        # (`distribution_keys` avec `is_default=True`), sous la forme
+        # `[{lot_id, share, excluded}, ...]`. Meme approche que
+        # `_lot_share` deja utilise par le decompte annuel (iter90ej) et
+        # `owner_portal` (iter90cz). Sans ce fallback, `total_quotities`
+        # reste a 0 -> repartition du boni impossible -> le safety net
+        # iter90fs reaffichait le 499 avec "quotites manquantes" et le
+        # boni n'etait pas reparti sur les proprietaires (bug rapporte
+        # par l'utilisateur sur ACP Acacia TER apres iter90fs).
+        default_key = await db.distribution_keys.find_one(
+            {"copropriete_id": copropriete_id, "is_default": True},
+            {"_id": 0},
+        )
+        lot_share_map = {}
+        if default_key:
+            for kl in default_key.get("lots", []) or []:
+                if kl.get("excluded"):
+                    continue
+                lot_id = kl.get("lot_id")
+                if lot_id:
+                    lot_share_map[lot_id] = float(kl.get("share", 0) or 0)
+
+        def _lot_quotity(lot):
+            """Retourne la quotite du lot avec fallback sur la cle generale.
+
+            Ordre de priorite (memes regles que iter90ej/iter90cz) :
+            1. `lot.quotity` (champ direct sur le document lot) - source
+               historique, prioritaire.
+            2. `default_key.lots[lot_id].share` - fallback pour les ACPs
+               dont les quotites vivent uniquement dans la cle generale.
+            """
+            q = float(lot.get("quotity", 0) or 0)
+            if q > 0:
+                return q
+            return lot_share_map.get(lot.get("id"), 0.0)
+
         owner_quotities = {}
         total_quotities = 0.0
         for lot in lots_for_acp:
-            quo = float(lot.get("quotity", 0) or 0)
+            quo = _lot_quotity(lot)
             if quo <= 0:
                 continue
             # BUG FIX (iter90fr) : certains lots (notamment en co-propriete/

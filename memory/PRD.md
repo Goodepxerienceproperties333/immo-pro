@@ -11,6 +11,59 @@ Multi-ACP avec **chinese walls stricts** sur donnees comptables/financieres.
 Auth: JWT cookie + middleware global FastAPI.
 Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
+### Iter90ft (Feb 2026) - BUG PROD (3eme redite iter90fr/fs) : quotites du bilan pas prises dans la cle generale
+
+**Ticket utilisateur (Feb 2026, PROD Acacia TER, 3eme rapport du meme bug)** :
+> "Il n'y a eu aucune répartition du compte de régularisation sur les
+> propriétaires je veux que tu corriges cela à savoir que le compte de
+> régularisation Boni ou Mali serait se répartit sur les soldes
+> propriétaires selon leur quotité DANS LES CLÉS DE RÉPARTITION"
+
+PDF fourni : Total Actif = Total Passif = 16210.17€ (bilan equilibre grace
+au safety net iter90fs) MAIS le compte 499 apparait toujours avec le
+libelle "quotites manquantes - completer les lots" - 7053.57€, alors que
+10 proprietaires sont bien listes sur l'ACTIF avec leurs comptes 4101XXXX.
+
+**Root cause** : sur cette ACP (import legacy), le champ `quotity` n'est
+PAS peuple directement sur les documents `lots`. Les quotites vivent dans
+`distribution_keys[is_default=True].lots[].share`. `compute_bilan_data` ne
+consultait QUE `lot.quotity` (0 partout) -> total_quotities=0 -> safety
+net iter90fs kickait (bilan equilibre, mais boni non reparti et libelle
+explicite pour alerter le syndic).
+
+L'utilisateur attend que le boni soit reparti sur les 10 proprietaires
+selon leur quotite dans la cle generale, pas qu'il reste sur 499. Le
+meme fallback existe deja dans le codebase pour le decompte annuel
+(`_lot_share` iter90ej) et le portail proprietaire (iter90cz) mais
+n'avait jamais ete propage a `compute_bilan_data`.
+
+**Fix iter90ft** (`routes/reports.py::compute_bilan_data`) :
+- Chargement de `distribution_keys[is_default=True]` en amont de la
+  boucle de repartition.
+- Nouveau helper interne `_lot_quotity(lot)` : priorite 1 = `lot.quotity`
+  direct (retrocompat ACPs deja migrees), priorite 2 = fallback sur
+  `default_key.lots[lot_id].share` (sauf lots `excluded=True`).
+- Remplacement de `quo = float(lot.get("quotity", 0) or 0)` par
+  `quo = _lot_quotity(lot)`. Le reste de la logique iter90fr/fs
+  (owner_ids, safety net) reste intact.
+
+Sans changement backend d'aucune autre couche : le decompte annuel et
+le portail proprietaire utilisent deja ce fallback (donc coherence
+totale entre bilan/decompte).
+
+**Tests** (`test_iter90ft_bilan_default_key_fallback.py`, 3/3 verts) :
+- Lot quotity=0 + cle generale avec shares -> repartition correcte selon
+  les shares, 499 supprime completement du bilan.
+- Lot quotity>0 + cle generale differente -> quotity direct prime
+  (retro-compat garantie).
+- Lots marques `excluded=True` dans la cle generale -> ignores du
+  total_quotities (regle metier existante).
+
+Regression : 15/15 tests bilan/backup/PDF verts (iter72, iter73,
+iter90fh, iter90fq x2, iter90fr, iter90fs, iter90ft).
+
+**Redeploiement requis en PROD** pour Acacia TER.
+
 ### Iter90fs (Feb 2026) - BUG PROD (RECURRENCE) : bilan "apres repartition" DESEQUILIBRE malgre iter90fr
 
 **Ticket utilisateur (Feb 2026, PROD, redite d'iter90fr)** :
