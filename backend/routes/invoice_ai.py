@@ -65,6 +65,44 @@ async def _extract_pdf_text(file_path: str, max_chars: int = 4000) -> str:
         return ""
 
 
+def _norm_bce(v: str) -> str:
+    """Normalise un numero BCE/TVA en 9-10 chiffres pour comparaison exacte."""
+    if not v:
+        return ""
+    digits = "".join(c for c in v if c.isdigit())
+    return digits[-10:] if len(digits) >= 9 else digits
+
+
+async def _get_supplier_bce_index(db, copropriete_id: str) -> dict:
+    """Index {bce/vat normalise -> fiche supplier}, SCOPE a cette copropriete
+    (+ fiches globales). Remplace 2 scans complets et non-filtres de la
+    collection `suppliers` (TOUTE la base multi-tenant, tous les clients de
+    la plateforme) par UNE seule requete bornee, evaluee une fois par
+    extraction au lieu de 2 fois. Meme classe de bug que le crash P0 du
+    dashboard (health_audit.py) : un scan multi-tenant non filtre execute a
+    chaque requete utilisateur degrade/timeout au fur et a mesure que la
+    plateforme grossit (l'IA d'extraction de facture est appelee bien plus
+    souvent qu'un chargement de dashboard).
+    """
+    q = {"$or": [
+        {"bce_number": {"$exists": True, "$ne": ""}},
+        {"vat_number": {"$exists": True, "$ne": ""}},
+    ]}
+    if copropriete_id:
+        q = {"$and": [q, {"$or": [
+            {"copropriete_id": copropriete_id},
+            {"is_global": True},
+            {"copropriete_id": {"$in": [None, ""]}},
+        ]}]}
+    suppliers = await db.suppliers.find(q, {"_id": 0}).to_list(2000)
+    index = {}
+    for s in suppliers:
+        sb = _norm_bce(s.get("bce_number", "") or s.get("vat_number", ""))
+        if sb:
+            index[sb] = s
+    return index
+
+
 async def _extract_invoice_with_ai(file_path: str, mime_type: str, known_pcmn: list) -> dict:
     """Use Claude Sonnet 4.5 to extract invoice metadata from PDF.
     - Tries text extraction first (fast).
@@ -170,7 +208,15 @@ async def _extract_invoice_with_ai(file_path: str, mime_type: str, known_pcmn: l
         else:
             msg = UserMessage(text=f"Extract metadata from this Belgian supplier invoice:\n\n{text}")
 
-        response = await chat.send_message(msg)
+        # P0-class fix (iter90fp) : garde-fou anti-timeout sur l'appel LLM.
+        # Un PDF scanne volumineux (path vision) ou une latence provider
+        # peut faire trainer cet appel bien au-dela du timeout du reverse
+        # proxy (Cloudflare) -> connexion coupee brutalement, l'utilisateur
+        # voit une erreur opaque au lieu d'un message clair. On borne
+        # l'appel a 55s et on degrade proprement (formulaire vide + message
+        # explicite, saisie manuelle toujours possible) au lieu de laisser
+        # la requete pendre.
+        response = await asyncio.wait_for(chat.send_message(msg), timeout=55.0)
         txt = response.strip()
         if txt.startswith("```"):
             txt = txt.split("```")[1] if "```" in txt[3:] else txt[3:]
@@ -178,6 +224,9 @@ async def _extract_invoice_with_ai(file_path: str, mime_type: str, known_pcmn: l
                 txt = txt[4:]
             txt = txt.strip("` \n")
         return json.loads(txt)
+    except asyncio.TimeoutError:
+        print("[AI invoice extract skipped]: LLM timeout > 55s")
+        return {"_warning": "Extraction IA trop lente (>55s), veuillez remplir manuellement ou reessayer"}
     except Exception as e:
         print(f"[AI invoice extract skipped]: {e}")
         return {"_warning": f"Echec extraction IA : {str(e)[:200]}"}
@@ -213,6 +262,10 @@ def create_invoice_ai_router(db):
 
             # iter90an : PCMN via cache TTL (evite refetch a chaque extraction)
             pcmn, valid_accs = await _get_pcmn_cached(db, copropriete_id or "")
+            # iter90fp : index BCE/TVA scope a CETTE copropriete, calcule UNE
+            # SEULE fois par extraction (reutilise plus bas dans _find_supplier
+            # au lieu de re-scanner toute la collection une 2e fois).
+            supplier_bce_index = await _get_supplier_bce_index(db, copropriete_id or "")
 
             # iter90aq : template appris - extraction rapide sans IA si supplier connu.
             # 1) Extraire le texte brut du PDF
@@ -231,17 +284,10 @@ def create_invoice_ai_router(db):
                     if len(bce_digits) < 9:
                         continue
                     bce_norm = bce_digits[-10:] if len(bce_digits) >= 10 else bce_digits
-                    async for _s in db.suppliers.find(
-                        {"$or": [{"bce_number": {"$exists": True}}, {"vat_number": {"$exists": True}}]},
-                        {"_id": 0, "id": 1, "name": 1, "bce_number": 1, "vat_number": 1},
-                    ):
-                        sb = "".join(c for c in (_s.get("bce_number", "") or _s.get("vat_number", "")) if c.isdigit())
-                        sb_norm = sb[-10:] if len(sb) >= 10 else sb
-                        if sb_norm and sb_norm == bce_norm:
-                            supplier_id_guess = _s.get("id")
-                            supplier_name_guess = _s.get("name", "")
-                            break
-                    if supplier_id_guess:
+                    _s = supplier_bce_index.get(bce_norm)
+                    if _s:
+                        supplier_id_guess = _s.get("id")
+                        supplier_name_guess = _s.get("name", "")
                         break
 
                 if supplier_id_guess:
@@ -342,13 +388,6 @@ def create_invoice_ai_router(db):
 
         _validate_dates()
 
-        # Normalize BCE/VAT numbers (strip dots, spaces; uppercase prefix)
-        def _norm_bce(v: str) -> str:
-            if not v:
-                return ""
-            digits = "".join(c for c in v if c.isdigit())
-            return digits[-10:] if len(digits) >= 9 else digits
-
         bce_norm = _norm_bce(result.get("bce_number", "") or result.get("vat_number", ""))
         result["bce_normalized"] = bce_norm
 
@@ -356,20 +395,22 @@ def create_invoice_ai_router(db):
             supplier_match = None
             match_method = None
             if bce_norm:
-                cursor = db.suppliers.find({"$or": [
-                    {"bce_number": {"$exists": True, "$ne": ""}},
-                    {"vat_number": {"$exists": True, "$ne": ""}},
-                ]}, {"_id": 0})
-                async for s in cursor:
-                    sb = _norm_bce(s.get("bce_number", "") or s.get("vat_number", ""))
-                    if sb and sb == bce_norm:
-                        supplier_match = s
-                        match_method = "bce"
-                        break
+                # iter90fp : reutilise l'index deja calcule (1 seul scan par
+                # extraction, scope a cette copropriete) au lieu d'un 2e scan
+                # complet non filtre de toute la base multi-tenant.
+                _s = supplier_bce_index.get(bce_norm)
+                if _s:
+                    supplier_match = _s
+                    match_method = "bce"
             if not supplier_match and result.get("supplier_name"):
-                supplier_match = await db.suppliers.find_one(
-                    {"name": {"$regex": result["supplier_name"], "$options": "i"}}, {"_id": 0}
-                )
+                name_q = {"name": {"$regex": result["supplier_name"], "$options": "i"}}
+                if copropriete_id:
+                    name_q = {"$and": [name_q, {"$or": [
+                        {"copropriete_id": copropriete_id},
+                        {"is_global": True},
+                        {"copropriete_id": {"$in": [None, ""]}},
+                    ]}]}
+                supplier_match = await db.suppliers.find_one(name_q, {"_id": 0})
                 if supplier_match:
                     match_method = "name"
             return supplier_match, match_method

@@ -11,6 +11,53 @@ Multi-ACP avec **chinese walls stricts** sur donnees comptables/financieres.
 Auth: JWT cookie + middleware global FastAPI.
 Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
+### Iter90fp (Feb 2026) - P0-class : extraction IA de facture intermittente (Cloudflare timeout, PRODUCTION)
+
+**Ticket utilisateur (PROD)** : capture d'ecran d'un formulaire "Nouvelle
+facture" vide (valeurs par defaut, aucune donnee extraite) + erreur
+"The origin web server did not respond to Cloudflare within the allowed
+time". Confirme par l'utilisateur juste apres : "ca a fonctionne, bug
+temporaire ?" -> latence variable, pas un echec deterministe/reproductible
+en preview.
+
+**Root cause** (meme classe que le crash P0 iter90fo du dashboard) :
+`POST /api/invoices-ai/extract` (`routes/invoice_ai.py`) faisait **2 scans
+complets et non filtres** de la collection `suppliers` (TOUTE la base
+multi-tenant, tous les clients de la plateforme) a CHAQUE extraction de
+facture - endpoint bien plus frequent qu'un chargement de dashboard - plus
+AUCUN timeout de garde-fou sur l'appel LLM (le mode vision pour PDF scanne
+peut etre lent). Latence cumulee variable pouvant approcher/depasser le
+timeout du reverse proxy sous charge.
+
+**Fix** :
+- Nouvelle fonction `_get_supplier_bce_index(db, copropriete_id)` : UN
+  SEUL scan, SCOPE a la copropriete (+ fiches globales `is_global=True`),
+  reutilise pour le matching "template appris" ET le matching final
+  (`_find_supplier`) au lieu de 2 scans non filtres distincts.
+- `asyncio.wait_for(chat.send_message(msg), timeout=55.0)` sur l'appel
+  LLM -> degrade proprement (`_warning` explicite : "Extraction IA trop
+  lente (>55s)...") au lieu de laisser la requete pendre jusqu'au timeout
+  Cloudflare.
+- Matching par nom (fallback) egalement scope a la copropriete.
+
+**Tests** (`test_iter90fp_invoice_ai_supplier_index_and_timeout.py`, 3/3
+verts) : isolation multi-tenant (BCE identique par coincidence dans 2 ACP
+differentes -> jamais de faux-match croise), suppliers `is_global=True`
+toujours visibles partout. Verifie via curl avec une vraie facture
+synthetique (extraction complete en 3.77s, toutes donnees correctement
+extraites) + tests existants iter90an/iter90aq (13/13 verts, aucune
+regression).
+
+**Note** : difference constatee par l'utilisateur entre "Liste des
+Depenses" Optipro (periode 01/10/2025-14/07/2026, total 11946,43€) et
+export app (periode calendaire 2026, total 5698,10€) - periodes non
+comparables directement. 2 pistes identifiees en attendant le retour
+utilisateur (export app regenere sur la MEME periode que Optipro pour
+diff precis) : (1) ligne "Expertise sous-sols" 96,25€ presente dans
+Optipro mais absente de l'export app pour la periode 2026 ; (2) facture
+SWDE "ouverture" datee 07/12/2025 dans Optipro vs 07/01/2026 dans l'app
+(decalage d'1 mois). **STATUT : EN ATTENTE retour utilisateur.**
+
 ### Iter90fo (Feb 2026) - P0 CRITIQUE : crash Cloudflare 502 dashboard + P1 : edition facture cassee
 
 **P0 - Ticket utilisateur (PROD)** :
