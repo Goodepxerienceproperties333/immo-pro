@@ -11,6 +11,64 @@ Multi-ACP avec **chinese walls stricts** sur donnees comptables/financieres.
 Auth: JWT cookie + middleware global FastAPI.
 Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
+### Iter90fy (Feb 2026) - PORTAIL PROPRIETAIRE : decompte apres cloture uniquement + selecteur d'exercice
+
+**Ticket utilisateur (Feb 2026, PROD Acacia TER, TEUWEN Gael)** :
+> "cote proprietaire, l'interface devrait permettre au proprietaire de
+> telecharger son decompte seulement une fois que l'exercice est cloture.
+> Actuellement malgre l'exercice cloture, il y a un bug - le document
+> semble ne pas etre dispo"
+> "dans la partie client 'Appel de fonds' il faut mentionner l'exercice
+> comptable et pas de dates selectors"
+
+Trois problemes fixes :
+
+**1. `/api/owner/decompte/pdf` retournait "Aucune fiche proprietaire"**
+Utilisait `_resolve_owner` (mono-fiche) au lieu de `_resolve_owner_ids`
+(multi-fiche). Sur ACP Acacia TER, TEUWEN a plusieurs fiches (une par
+ACP, dont certaines sans email defini). La mono-lookup echouait meme
+avec un exercice cloture.
+Fix : `_resolve_owner_ids(db, request)` + filtre par lot.owner_id ou
+owner_ids -> resout la fiche correcte pour CETTE ACP.
+
+**2. Le decompte etait genere meme sans exercice cloture**
+Si `fiscal_year_id` etait absent, le backend generait un decompte fake
+avec `status=""` -> generation quand meme (avec filigrane). Le user
+voulait un verrou strict.
+Fix : auto-selection du DERNIER FY avec `status='closed'` quand absent.
+Si aucun FY cloture -> HTTP 400 explicite "Aucun exercice comptable
+cloture pour cette copropriete. Votre decompte sera disponible apres
+cloture par le syndic.".
+
+**3. Onglet "Appels de fonds" avait des selecteurs de dates libres**
+Remplaces par un dropdown Select des exercices comptables. Backend
+`/owner/fiscal-years/{cid}` refactorise pour utiliser `_resolve_owner_ids`.
+Frontend : `periodStart`/`periodEnd` derives automatiquement de la FY
+selectionnee via un useEffect (retro-compat avec l'endpoint /movements
+qui reste sur `start_date`/`end_date`).
+
+**4. Onglet "Mes coproprietes" : bouton conditionnel**
+Backend `/owner/coproprietes` ajoute 2 champs par ACP :
+- `has_closed_fiscal_year: bool`
+- `latest_closed_fiscal_year: {id,name,end_date,...} | null`
+Frontend : si `has_closed_fiscal_year=true` -> bouton "Telecharger mon
+decompte annuel (2024)". Sinon -> encadre grise "Decompte annuel
+disponible apres cloture de l'exercice par le syndic" (pas de bouton
+mort ni d'erreur bruyante).
+
+**Tests** (`test_iter90fy_owner_portal_decompte_closed_fy.py`, 2/2 verts) :
+- `test_coproprietes_exposes_closed_fy_flag` : ACP A (FY 2024 cloture + FY
+  2025 open) -> `has_closed_fiscal_year=True`, `latest_closed.name=2024`.
+  ACP B (FY 2025 open uniquement) -> `has_closed_fiscal_year=False`.
+- `test_decompte_pdf_auto_selects_latest_closed_fy` : avec 1 FY cloture,
+  auto-selection reussie. Sans FY cloture, retourne None (backend leve
+  400 avec message clair).
+
+Regression : 10/10 tests iter90fv/fw/fx/fy/fz verts.
+
+**Redeploiement requis en PROD** pour Acacia TER (TEUWEN pourra alors
+telecharger son decompte 2024 depuis son portail).
+
 ### Iter90fz (Feb 2026) - BUG PROD CRITIQUE : Décompte annuel - double-comptage "Montant à répartir"
 
 **Ticket utilisateur (Feb 2026, PROD Acacia TER)** :

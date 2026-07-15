@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { toast } from 'sonner';
 import { LogOut, Home, Wallet, FileText, Receipt, Megaphone, Building2, User, AlertCircle, CheckCircle2, ArrowDownToLine, Copy, UserCog, Users, Plus, Pencil, Trash2, Save, Eye, Gauge, CalendarClock, PieChart as PieChartIcon, TrendingUp, Clock, Sparkles, Mail, MailOpen, Send, Paperclip, ChevronRight } from 'lucide-react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RechartsTooltip } from 'recharts';
@@ -175,6 +176,46 @@ export default function OwnerPortalPage() {
       }
     })();
   }, [selectedAcp]);
+
+  // iter90fy : charge les exercices comptables (fiscal_years) de l'ACP
+  // selectionnee, et selectionne automatiquement le dernier CLOTURE. Le
+  // periodStart/End sera derive de la FY selectionnee via un autre effet.
+  useEffect(() => {
+    if (!selectedAcp) {
+      setFiscalYears([]);
+      setSelectedFyId('');
+      return;
+    }
+    (async () => {
+      try {
+        const r = await api.get(`/owner/fiscal-years/${selectedAcp}`);
+        const years = r.data || [];
+        setFiscalYears(years);
+        // Preselection : dernier CLOTURE, sinon dernier tout court
+        const closed = years.filter(y => y.status === 'closed');
+        const preferred = closed[0] || years[0];
+        setSelectedFyId(preferred?.id || '');
+      } catch {
+        setFiscalYears([]);
+        setSelectedFyId('');
+      }
+    })();
+  }, [selectedAcp]);
+
+  // iter90fy : quand la FY selectionnee change, applique sa periode
+  // start_date/end_date aux mouvements.
+  useEffect(() => {
+    if (!selectedFyId) {
+      setPeriodStart('');
+      setPeriodEnd('');
+      return;
+    }
+    const fy = fiscalYears.find(y => y.id === selectedFyId);
+    if (fy) {
+      setPeriodStart(fy.start_date || '');
+      setPeriodEnd(fy.end_date || '');
+    }
+  }, [selectedFyId, fiscalYears]);
 
   // Iter90dd : recharge les mouvements du grand livre quand ACP ou periode change
   // iter90do : skip si aucune ACP selectionnee (chinese wall strict).
@@ -628,15 +669,29 @@ export default function OwnerPortalPage() {
                           </div>
                         ))}
                       </div>
-                      <a
-                        href={`${process.env.REACT_APP_BACKEND_URL}/api/owner/decompte/pdf?copropriete_id=${c.id}`}
-                        target="_blank" rel="noreferrer"
-                        className="inline-flex items-center gap-1.5 text-xs text-[#022D52] hover:bg-blue-50 px-3 py-1.5 rounded-md border border-[#022D52]/20"
-                        data-testid={`download-decompte-${c.id}`}
-                      >
-                        <ArrowDownToLine size={12} />
-                        Telecharger mon decompte annuel (PDF)
-                      </a>
+                      {/* iter90fy : le decompte annuel n'est dispo qu'apres
+                          cloture de l'exercice par le syndic. Sinon on
+                          affiche une info claire au lieu du bouton. */}
+                      {c.has_closed_fiscal_year ? (
+                        <a
+                          href={`${process.env.REACT_APP_BACKEND_URL}/api/owner/decompte/pdf?copropriete_id=${c.id}${c.latest_closed_fiscal_year?.id ? `&fiscal_year_id=${c.latest_closed_fiscal_year.id}` : ''}`}
+                          target="_blank" rel="noreferrer"
+                          className="inline-flex items-center gap-1.5 text-xs text-[#022D52] hover:bg-blue-50 px-3 py-1.5 rounded-md border border-[#022D52]/20"
+                          data-testid={`download-decompte-${c.id}`}
+                          title={`Decompte de l'exercice cloture : ${c.latest_closed_fiscal_year?.name || ''}`}
+                        >
+                          <ArrowDownToLine size={12} />
+                          Telecharger mon decompte annuel {c.latest_closed_fiscal_year?.name ? `(${c.latest_closed_fiscal_year.name})` : ''}
+                        </a>
+                      ) : (
+                        <div
+                          className="inline-flex items-center gap-1.5 text-xs text-slate-500 bg-slate-50 border border-slate-200 px-3 py-1.5 rounded-md"
+                          data-testid={`decompte-unavailable-${c.id}`}
+                        >
+                          <CalendarClock size={12} />
+                          Decompte annuel disponible apres cloture de l&apos;exercice par le syndic
+                        </div>
+                      )}
                     </CardContent>
                   </Card>
                 ))}
@@ -645,17 +700,16 @@ export default function OwnerPortalPage() {
           </TabsContent>
 
           <TabsContent value="fund-calls" className="mt-0" data-testid="fund-calls-tab-content">
-            {/* Iter90dd : refonte - mouvements du grand livre (aligne balance de tiers) */}
+            {/* Iter90dd : refonte - mouvements du grand livre (aligne balance de tiers)
+                iter90fy : selecteur exercice comptable au lieu de dates libres */}
             <MovementsTab
               movements={movements}
               loading={movementsLoading}
               openingBalance={openingBalance}
               closingBalance={closingBalance}
-              periodStart={periodStart}
-              periodEnd={periodEnd}
-              onPeriodStart={setPeriodStart}
-              onPeriodEnd={setPeriodEnd}
-              onResetPeriod={() => { setPeriodStart(''); setPeriodEnd(''); }}
+              fiscalYears={fiscalYears}
+              selectedFyId={selectedFyId}
+              onSelectedFyId={setSelectedFyId}
               acpFiltered={selectedAcp !== 'all'}
               copyVcs={copyVcs}
               vcsCode={owner.vcs_code}
@@ -1605,48 +1659,55 @@ const JOURNAL_TYPE_META = {
 
 function MovementsTab({
   movements, loading, openingBalance, closingBalance,
-  periodStart, periodEnd, onPeriodStart, onPeriodEnd, onResetPeriod,
+  fiscalYears, selectedFyId, onSelectedFyId,
   acpFiltered, copyVcs, vcsCode,
 }) {
+  const selectedFy = fiscalYears.find(y => y.id === selectedFyId);
   return (
     <div className="space-y-4" data-testid="movements-tab-body">
-      {/* Filtre periode */}
+      {/* iter90fy : selecteur d'exercice comptable au lieu de dates libres.
+          L'utilisateur voit uniquement les exercices de SES ACPs (backend
+          /owner/fiscal-years/{cid} enforce chinese wall). */}
       <Card className="border-slate-200 bg-slate-50/60">
         <CardContent className="p-3">
           <div className="flex items-center gap-3 flex-wrap">
             <div className="text-xs font-semibold text-slate-600 flex items-center gap-1.5">
               <CalendarClock size={13} className="text-[#022D52]" />
-              Periode :
+              Exercice comptable :
             </div>
-            <div className="flex items-center gap-2 text-xs">
-              <label className="text-slate-500">Du</label>
-              <Input
-                type="date"
-                value={periodStart}
-                onChange={(e) => onPeriodStart(e.target.value)}
-                className="h-8 text-xs w-36"
-                data-testid="period-start-input"
-              />
-              <label className="text-slate-500">Au</label>
-              <Input
-                type="date"
-                value={periodEnd}
-                onChange={(e) => onPeriodEnd(e.target.value)}
-                className="h-8 text-xs w-36"
-                data-testid="period-end-input"
-              />
-              {(periodStart || periodEnd) && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={onResetPeriod}
-                  className="h-8 px-2 text-[11px] text-slate-500"
-                  data-testid="period-reset-btn"
-                >
-                  Reinitialiser
-                </Button>
-              )}
-            </div>
+            {fiscalYears.length === 0 ? (
+              <span className="text-xs text-slate-400 italic">
+                Aucun exercice defini pour cette copropriete
+              </span>
+            ) : (
+              <>
+                <Select value={selectedFyId} onValueChange={onSelectedFyId}>
+                  <SelectTrigger className="h-8 text-xs w-[260px]" data-testid="fiscal-year-select">
+                    <SelectValue placeholder="Choisir un exercice" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {fiscalYears.map((fy) => (
+                      <SelectItem key={fy.id} value={fy.id} data-testid={`fiscal-year-opt-${fy.id}`}>
+                        <div className="flex items-center gap-2">
+                          <span>{fy.name}</span>
+                          <span className="text-[10px] text-slate-400">({fy.start_date} - {fy.end_date})</span>
+                          {fy.status === 'closed' && (
+                            <span className="text-[9px] uppercase tracking-wider font-semibold px-1 rounded bg-emerald-100 text-emerald-700 border border-emerald-200">
+                              Cloture
+                            </span>
+                          )}
+                        </div>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {selectedFy && (
+                  <span className="text-[11px] text-slate-500 font-mono">
+                    Du {selectedFy.start_date} au {selectedFy.end_date}
+                  </span>
+                )}
+              </>
+            )}
             {!acpFiltered && (
               <span className="ml-auto text-[10px] text-amber-600 bg-amber-50 border border-amber-200 rounded-full px-2 py-0.5">
                 Selectionnez une copropriete pour voir un solde detaille
@@ -1658,7 +1719,7 @@ function MovementsTab({
 
       {loading ? (
         <Card><CardContent className="p-8 text-center text-slate-400 text-sm">Chargement des mouvements...</CardContent></Card>
-      ) : movements.length === 0 && !periodStart && !periodEnd ? (
+      ) : movements.length === 0 && !selectedFyId ? (
         <Card>
           <CardContent className="p-8 text-center text-slate-400">
             <CheckCircle2 size={32} className="mx-auto mb-2 text-emerald-500" />
@@ -1681,17 +1742,18 @@ function MovementsTab({
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {/* Ligne opening balance */}
-                  {periodStart && (
+                  {/* Ligne opening balance : n'affiche que si une FY est
+                      selectionnee (i.e. periode contextuelle definie). */}
+                  {selectedFy?.start_date && (
                     <TableRow className="bg-blue-50/40 border-t-2 border-blue-200">
-                      <TableCell className="text-xs font-mono">{fmtDate(periodStart)}</TableCell>
+                      <TableCell className="text-xs font-mono">{fmtDate(selectedFy.start_date)}</TableCell>
                       <TableCell>
                         <Badge variant="outline" className="text-[10px] bg-blue-50 text-[#01213e] border-blue-200">
                           Solde initial
                         </Badge>
                       </TableCell>
                       <TableCell className="text-xs italic text-slate-600">
-                        Report a la date du {fmtDate(periodStart)}
+                        Report a la date du {fmtDate(selectedFy.start_date)}
                       </TableCell>
                       <TableCell className="text-right font-mono text-xs text-slate-400">-</TableCell>
                       <TableCell className="text-right font-mono text-xs text-slate-400">-</TableCell>

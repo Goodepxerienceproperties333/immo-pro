@@ -136,6 +136,25 @@ def create_owner_portal_router(db):
                 lt.get("quotity_effective", 0) or lt.get("quotity", 0)
                 for lt in c["my_lots"]
             )
+        # iter90fy : signale aux frontends si un exercice cloture existe
+        # pour cette ACP -> permet au portail proprietaire d'afficher ou
+        # masquer le bouton "Telecharger mon decompte annuel" (l'utilisateur
+        # veut que le decompte soit uniquement dispo apres cloture).
+        if copro_ids:
+            closed_fy = await db.fiscal_years.find(
+                {"copropriete_id": {"$in": copro_ids}, "status": "closed"},
+                {"_id": 0, "copropriete_id": 1, "id": 1, "name": 1, "end_date": 1},
+                sort=[("end_date", -1)],
+            ).to_list(len(copro_ids) * 20)
+            latest_closed_by_cid = {}
+            for fy in closed_fy:
+                cid = fy.get("copropriete_id")
+                if cid and cid not in latest_closed_by_cid:
+                    latest_closed_by_cid[cid] = fy
+            for c in coproprietes:
+                fy = latest_closed_by_cid.get(c["id"])
+                c["has_closed_fiscal_year"] = bool(fy)
+                c["latest_closed_fiscal_year"] = fy or None
         return coproprietes
 
     @router.get("/dashboard")
