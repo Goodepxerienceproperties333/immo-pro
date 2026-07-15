@@ -1870,14 +1870,18 @@ def create_fund_calls_router(db):
                 # iter90aj + iter90cg : rebind sur date effective = min(call_date, period_end).
                 # Cas cible : appel Q3 emis en retard apres mutation posterieure a la periode -> vendeur.
                 reserve_dist = _rebind_owner_at_call_date(reserve_dist, call_date, period_end)
-                # iter90eo : arrondi au superieur (EUR entier) si option activee.
-                # Chaque quote-part passe a `ceil(amount)`. La somme totale
-                # augmente legerement (surprovision utilisable par le fonds).
-                if data.reserve_fund.round_up:
-                    import math as _m
-                    for e in reserve_dist:
-                        e["amount"] = float(_m.ceil(float(e.get("amount", 0) or 0)))
-                    reserve_amount = round(sum(e.get("amount", 0) for e in reserve_dist), 2)
+                # iter90ge : REGLE METIER PCMN BELGE - l'arrondi euro
+                # superieur (surprovision) ne s'applique QU'AUX PROVISIONS
+                # POUR CHARGES ORDINAIRES. Les fonds de reserve et roulement
+                # sont des CAPITAUX (comptes 160/100) votes par l'AG, dont
+                # le montant est fige et ne doit JAMAIS etre depasse par
+                # arrondi. On ignore donc round_up=True cote serveur pour
+                # la reserve, meme si un client envoie ce flag.
+                # if data.reserve_fund.round_up:  # <-- desactive iter90ge
+                #     import math as _m
+                #     for e in reserve_dist:
+                #         e["amount"] = float(_m.ceil(float(e.get("amount", 0) or 0)))
+                #     reserve_amount = round(sum(e.get("amount", 0) for e in reserve_dist), 2)
                 line_details.append({
                     "account_number": "RESERVE",
                     "account_name": data.reserve_fund.label or "Fonds de reserve",
@@ -1885,7 +1889,7 @@ def create_fund_calls_router(db):
                     "distribution_key_name": keys_map.get(data.reserve_fund.distribution_key_id or "", {}).get("name", "Tantiemes"),
                     "amount": reserve_amount,
                     "is_reserve": True,
-                    "round_up": bool(data.reserve_fund.round_up),
+                    "round_up": False,  # iter90ge : jamais d'arrondi sur reserve
                 })
                 call_total += reserve_amount
                 reserve_added = reserve_amount
@@ -1901,12 +1905,13 @@ def create_fund_calls_router(db):
                 roul_dist = _distribute_amount(roul_amount, data.roulement_fund.distribution_key_id or "")
                 # iter90aj + iter90cg : rebind sur date effective = min(call_date, period_end).
                 roul_dist = _rebind_owner_at_call_date(roul_dist, call_date, period_end)
-                # iter90eo : arrondi au superieur (EUR entier) si option activee.
-                if data.roulement_fund.round_up:
-                    import math as _m
-                    for e in roul_dist:
-                        e["amount"] = float(_m.ceil(float(e.get("amount", 0) or 0)))
-                    roul_amount = round(sum(e.get("amount", 0) for e in roul_dist), 2)
+                # iter90ge : arrondi euro superieur INTERDIT sur roulement
+                # (meme regle que la reserve : capital vote, montant fige).
+                # if data.roulement_fund.round_up:  # <-- desactive iter90ge
+                #     import math as _m
+                #     for e in roul_dist:
+                #         e["amount"] = float(_m.ceil(float(e.get("amount", 0) or 0)))
+                #     roul_amount = round(sum(e.get("amount", 0) for e in roul_dist), 2)
                 lbl = data.roulement_fund.label or "Fonds de roulement"
                 mode_lbl = "(creation)" if (data.roulement_fund.mode or "create") == "create" else "(augmentation)"
                 line_details.append({
@@ -1917,7 +1922,7 @@ def create_fund_calls_router(db):
                     "amount": roul_amount,
                     "is_roulement": True,
                     "roulement_mode": data.roulement_fund.mode or "create",
-                    "round_up": bool(data.roulement_fund.round_up),
+                    "round_up": False,  # iter90ge : jamais d'arrondi sur roulement
                 })
                 call_total += roul_amount
                 roulement_added = roul_amount

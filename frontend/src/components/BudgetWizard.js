@@ -81,7 +81,8 @@ export default function BudgetWizard({ budget, distKeys = [], onClose, onDone, m
       frequency: Number(reserveFreq) || 0,
       start_date: reserveStartDate || '',
       due_offset_days: Number(reserveDueOffset) || 30,
-      round_up: !!reserveRoundUp,
+      // iter90ge : arrondi force a false (reserve = capital, pas provision)
+      round_up: false,
     },
     roulement_fund: {
       enabled: roulEnabled, amount: Number(roulAmount) || 0,
@@ -89,7 +90,8 @@ export default function BudgetWizard({ budget, distKeys = [], onClose, onDone, m
       frequency: Number(roulFreq) || 0,
       start_date: roulStartDate || '',
       due_offset_days: Number(roulDueOffset) || 30,
-      round_up: !!roulRoundUp,
+      // iter90ge : arrondi force a false (roulement = capital, pas provision)
+      round_up: false,
     },
     copropriete_id: budget.copropriete_id || '',
   });
@@ -308,24 +310,11 @@ export default function BudgetWizard({ budget, distKeys = [], onClose, onDone, m
                         </>
                       )}
                     </div>
-                    {/* iter90eo : arrondi au superieur EUR entier par lot */}
-                    <div className="mt-3 pt-3 border-t border-slate-100 flex items-start gap-3">
-                      <Switch
-                        checked={reserveRoundUp}
-                        onCheckedChange={setReserveRoundUp}
-                        data-testid="wizard-reserve-round-up"
-                      />
-                      <div className="flex-1">
-                        <label className="text-sm font-medium text-slate-800 cursor-pointer" onClick={() => setReserveRoundUp(v => !v)}>
-                          Arrondir a l&apos;euro superieur par lot
-                        </label>
-                        <p className="text-xs text-slate-500 mt-0.5">
-                          Chaque quote-part est arrondie a l&apos;EUR entier superieur
-                          (ex : 42,17 EUR &rarr; 43 EUR). Le total appele depasse legerement
-                          le montant vote ; l&apos;exces alimente le fonds (surprovision).
-                        </p>
-                      </div>
-                    </div>
+                    {/* iter90ge : suppression de l'arrondi euro superieur
+                        pour le fonds de RESERVE. Regle metier belge : les
+                        appels de reserve/roulement sont des CAPITAUX (comptes
+                        16X/100), pas des provisions. L'arrondi surprovision
+                        ne s'applique qu'aux CHARGES ordinaires. */}
                   </div>
                 )}
               </CardContent>
@@ -432,24 +421,11 @@ export default function BudgetWizard({ budget, distKeys = [], onClose, onDone, m
                         </>
                       )}
                     </div>
-                    {/* iter90eo : arrondi au superieur EUR entier par lot */}
-                    <div className="mt-3 pt-3 border-t border-slate-100 flex items-start gap-3">
-                      <Switch
-                        checked={roulRoundUp}
-                        onCheckedChange={setRoulRoundUp}
-                        data-testid="wizard-roul-round-up"
-                      />
-                      <div className="flex-1">
-                        <label className="text-sm font-medium text-slate-800 cursor-pointer" onClick={() => setRoulRoundUp(v => !v)}>
-                          Arrondir a l&apos;euro superieur par lot
-                        </label>
-                        <p className="text-xs text-slate-500 mt-0.5">
-                          Chaque quote-part est arrondie a l&apos;EUR entier superieur.
-                          Le total appele depasse legerement le montant vote ;
-                          l&apos;exces alimente le fonds de roulement.
-                        </p>
-                      </div>
-                    </div>
+                    {/* iter90ge : suppression de l'arrondi euro superieur
+                        pour le fonds de ROULEMENT. Meme regle que la reserve :
+                        capital de tresorerie permanente, pas une provision
+                        pour charges. L'arrondi surprovision est reserve
+                        exclusivement aux appels de provisions. */}
                   </div>
                 )}
               </CardContent>
