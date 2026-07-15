@@ -812,17 +812,11 @@ def build_decompte_pdf(
                             parts.append(
                                 f"<font color='#D97706' size='7'><i>repartition auto (tantiemes)</i></font>"
                             )
-                        # iter90g1 : affiche le prorata mutation applique
-                        # a cette facture si != 1.0 (mutation en cours d'exercice)
-                        _pr = iv.get("prorata", 1.0)
-                        if _pr < 0.999:
-                            _full = iv.get("total_amount_full", iv.get("total_amount", 0))
-                            parts.append(
-                                f"<font color='#7C3AED' size='7'><i>"
-                                f"prorata mutation {_pr*100:.1f}% "
-                                f"(total facture: {_fmt_eur(_full)})"
-                                f"</i></font>"
-                            )
+                        # iter90g5 : le prorata mutation est deja affiche UNE
+                        # FOIS dans l'entete du lot ("Prorata: 318/365 jours").
+                        # Retire du detail par ligne pour alleger la lecture
+                        # (demande utilisateur - meme convention qu'Optipro).
+                        # Le calcul reste applique sur les montants.
                         inv_label = " ".join(parts)
                         inv_indent_style = ParagraphStyle(
                             "inv_in", parent=designation_style,

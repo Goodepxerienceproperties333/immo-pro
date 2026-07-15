@@ -236,9 +236,15 @@ def test_prorata_includes_invoices_outside_owned_period():
     assert "AXA-JAN" in text or "V-JAN-001" in text, (
         f"La facture pre-mutation doit apparaitre avec prorata pour l'acheteur"
     )
-    # Verifie le prorata affiche dans la ligne facture
-    assert "prorata mutation" in text.lower(), (
-        f"Marqueur 'prorata mutation' attendu dans le PDF"
+    # iter90g5 : le prorata est desormais affiche UNE FOIS dans l'entete
+    # du lot ("Prorata: 200 / 365 jours") et non plus a chaque ligne
+    # facture (demande utilisateur : allegement de lecture).
+    assert "prorata: 200 / 365 jours" in text.lower(), (
+        f"Marqueur 'Prorata: 200 / 365 jours' attendu dans l'entete du lot"
+    )
+    # Le calcul de prorata reste bien applique : 1000 * 200/365 = 547.95
+    assert "547,95" in text, (
+        f"Montant prorate (547.95) attendu dans le PDF, mais absent"
     )
 
 

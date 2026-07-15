@@ -389,6 +389,19 @@ async def _build_decompte_annuel_pdf(db, owner_id, copropriete_id, fiscal_year_i
         {"copropriete_id": copropriete_id}, {"_id": 0}
     ).to_list(1000)
 
+    # iter90g5 : bug fix - mutations DOIVENT etre passees a build_decompte_pdf
+    # pour que le prorata (days_owned/days_total) soit applique. Sans cela,
+    # un proprietaire qui achete en cours d'exercice paie 100% des charges
+    # au lieu de sa quote-part au prorata. Ce chemin (envoi email groupe
+    # via communication, decompte_annuel_pdf helper) etait casse.
+    owner_lot_ids_helper = [l["id"] for l in owner_lots]
+    mutations_docs = await db.mutations.find(
+        {"copropriete_id": copropriete_id,
+         "lot_id": {"$in": owner_lot_ids_helper},
+         "sale_date": {"$gte": fy["start_date"], "$lte": fy["end_date"]}},
+        {"_id": 0},
+    ).to_list(1000) if owner_lot_ids_helper else []
+
     fund_calls = await db.fund_calls.find(
         {"copropriete_id": copropriete_id,
          "date": {"$gte": fy["start_date"], "$lte": fy["end_date"]}},
@@ -431,6 +444,7 @@ async def _build_decompte_annuel_pdf(db, owner_id, copropriete_id, fiscal_year_i
         expense_accounts_map=nature_map,
         preview=preview,
         syndic_pdf_ctx=await resolve_syndic_pdf_context(db, copro),
+        mutations=mutations_docs,  # iter90g5 : prorata mutation
     )
     safe_name = (owner.get("name", "owner") or "owner").replace(" ", "_").replace("/", "_")
     fy_name = (fy.get("name", "") or "").replace(" ", "_")

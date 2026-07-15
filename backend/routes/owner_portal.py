@@ -1004,6 +1004,19 @@ def create_owner_portal_router(db):
             {"_id": 0}
         ).sort("date", 1).to_list(10000)
         dks = await db.distribution_keys.find({"copropriete_id": copropriete_id}, {"_id": 0}).to_list(1000)
+
+        # iter90g5 : bug fix - mutations doivent etre passees a build_decompte_pdf
+        # pour que le prorata (days_owned/days_total) soit applique. Sans cela,
+        # un proprietaire qui achete en cours d'exercice paie 100% des charges
+        # via son portail au lieu de sa quote-part reelle.
+        owner_lot_ids_op = [l["id"] for l in owner_lots]
+        mutations_op = await db.mutations.find(
+            {"copropriete_id": copropriete_id,
+             "lot_id": {"$in": owner_lot_ids_op},
+             "sale_date": {"$gte": fy["start_date"], "$lte": fy["end_date"]}},
+            {"_id": 0},
+        ).to_list(1000) if owner_lot_ids_op else []
+
         fcs = await db.fund_calls.find(
             {"copropriete_id": copropriete_id, "date": {"$gte": fy["start_date"], "$lte": fy["end_date"]}},
             {"_id": 0}
@@ -1043,6 +1056,7 @@ def create_owner_portal_router(db):
             invoices=invoices, distribution_keys=dks,
             fund_calls=fcs, payments=payments,
             expense_accounts_map=nature_map,
+            mutations=mutations_op,  # iter90g5 : prorata mutation
         )
 
         filename = f"decompte_{owner['name'].replace(' ', '_')}_{fy.get('name','').replace(' ', '_')}.pdf"

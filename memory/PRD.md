@@ -6,6 +6,72 @@ scinder au prochain grand chantier en `PRD.md` (statique) / `CHANGELOG.md`
 session par prudence (risque de perte d'info sur un fichier de 9400+
 lignes sans relecture complete).
 
+### Iter90g5 (Feb 2026) - PDF DECOMPTE : retrait texte "prorata mutation" par ligne + fix mutations manquantes sur 2 endpoints
+
+**Ticket utilisateur** :
+> "dans le décompte propriétaire le texte 'prorata mutation 87.1%' ne doit
+> pas apparaitre, la lecture étant plus lourde. Conserver comme actuellement
+> c'est correct pour les situations de comptes."
+> "les factures sont bien présentes aussi bien dans le facturier que dans
+> la liste des dépenses - donc il y a un problème plus profond"
+
+**Fix 1** (`pdf_decompte.py::build_decompte_pdf`) :
+- Retrait du bloc violet "prorata mutation X% (total facture: XXX EUR)"
+  affiche a chaque ligne facture. Le prorata reste applique mathematiquement
+  sur `amt_owner` et `inv_total_for_lot`.
+- Info "Prorata: X / Y jours" conservee UNE FOIS dans l'entete du lot
+  (meme convention qu'Optipro : le lecteur voit tout de suite le prorata,
+  sans redite sur chaque facture).
+- Test iter90g1 `test_prorata_includes_invoices_outside_owned_period` mis
+  a jour : verifie la presence de "Prorata: 200 / 365 jours" + montant
+  prorate (547,95 = 1000 * 200/365) au lieu de "prorata mutation".
+
+**Fix 2 (BUG CACHE trouve pendant l'analyse)** :
+- `mutations=` N'ETAIT PAS PASSE a `build_decompte_pdf` dans 2 endpoints :
+  * `owner_portal.py:1040` (telechargement decompte depuis Portail Proprio)
+  * `_build_decompte_annuel_pdf` `reports.py:426` (envoi email groupe via
+    Communication > Decomptes)
+- **Consequence** : un proprietaire qui achete son lot en cours d'exercice
+  (mutation intra-FY) et telecharge son decompte via le portail OU recoit
+  son decompte par email groupe -> payait 100% des charges annuelles au
+  lieu de sa quote-part au prorata (ex: TEUWEN 100% au lieu de 87.1%).
+  Seul l'ecran syndic /api/reports/decompte/pdf (chemin manuel) faisait
+  le calcul correct.
+- Fix : `mutations = await db.mutations.find({copropriete_id, lot_id in
+  owner_lot_ids, sale_date in FY range}).to_list()` puis passe a
+  `build_decompte_pdf(mutations=mutations_docs)`.
+
+**Test pytest iter90g4 (verrouillage fix clôture)**
+(`test_iter90g4_regularize_excludes_reserve_roulement.py`, 4/4 verts) :
+- `pure_provisions_call_is_counted` : appel provisions pur (2000) ->
+  compte 2000. Regression check.
+- `pure_reserve_call_excluded` : appel reserve pur (3000) + appel
+  provisions (1000) -> `provisions_called_total = 1000`, pas 4000.
+- `pure_roulement_call_excluded` : appel roulement pur (5000) + appel
+  provisions (1500) -> `provisions_called_total = 1500`, pas 6500.
+- `mixed_call_only_provisions_lines_counted` : appel mixte (2000
+  provisions + 800 roulement sur MEME compte 4101XXXX, discrimines par
+  account_name) -> seul 2000 compte, ligne "Fonds roulement" filtree.
+
+**Note analyse ecart 1401 EUR Optipro vs App (TEUWEN)** :
+Comparaison decompte TEUWEN Gael, exercice 01/10/2025-30/09/2026 :
+- Optipro : Total repartir 11 791,83 EUR / Part prop 968,81 EUR
+- App     : Total repartir ~11 689 EUR   / Part prop 573,59 EUR (573+345=919
+                                                                 charges TEUWEN)
+Diagnostic partiel :
+1. Ecart raw total ~103 EUR (arrondis + qq factures classees dans
+   "Autres charges" chez nous au lieu de 6140/6141/6146 chez Optipro).
+2. Ecart 1000 EUR sur 61300 Honoraires syndics compense par surplus 6160
+   Peppol (~1123 chez nous, absent chez Optipro qui regroupe tout sur 61300).
+3. **Cause PRINCIPALE ecart 555 EUR sur SOLDE** : Optipro genere une
+   ecriture "Transfert fonds de roulement 490,36 EUR" (Debit acheteur /
+   Credit vendeur) au moment de la mutation TEUWEN/MATEXI. Notre app ne
+   materialise PAS cette reprise du fonds de roulement historique du
+   vendeur. -> **NOUVELLE TACHE P0** : iter90g6 (a planifier).
+
+**Redeploiement requis en PROD** pour Acacia TER.
+
+
 ### Iter90g1 (Feb 2026) - PRORATA MUTATION DANS LE DECOMPTE (fix ecart Optipro)
 
 **Ticket utilisateur** :
