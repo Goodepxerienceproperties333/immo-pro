@@ -170,8 +170,47 @@ def build_decompte_pdf(
     owner_lot_nums = {_norm_num(l.get("number", "")) for l in owner_lots}
     # Mapping lot_number -> current lot_id (pour resoudre le phantom vers le vrai)
     owner_lot_id_by_num = {_norm_num(l.get("number", "")): l["id"] for l in owner_lots}
-    owner_quotity = sum(l.get("quotity", 0) for l in owner_lots)
-    total_quotity = sum(l.get("quotity", 0) for l in all_lots) or 1
+
+    # iter90g0 : fallback quotity via la cle de repartition GENERALE
+    # (is_default=True). Sur les ACPs issues d'un import legacy (Acacia
+    # TER, Optipro), le champ `lot.quotity` est vide - les tantiemes
+    # vivent dans `distribution_keys[is_default].lots[].share`. Sans ce
+    # fallback l'en-tete du decompte affichait "0 tantiemes" et la
+    # quote-part globale "0.00% (0/1)". Meme regle qu'iter90ej
+    # (`_lot_share`) et iter90ft (compute_bilan_data).
+    default_dk = None
+    for _dk in (distribution_keys or []):
+        if _dk.get("is_default") is True:
+            default_dk = _dk
+            break
+    default_share_map = {}
+    default_total = 0.0
+    if default_dk:
+        for it in (default_dk.get("lots", []) or []):
+            if it.get("excluded"):
+                continue
+            lid = it.get("lot_id")
+            q = it.get("share")
+            if q is None:
+                q = it.get("quotity", 0)
+            try:
+                q = float(q or 0)
+            except Exception:
+                q = 0.0
+            if lid:
+                default_share_map[lid] = q
+                default_total += q
+
+    def _lot_quotity(l):
+        """Retourne la quotite effective d'un lot avec fallback sur la cle
+        generale. Priorite : lot.quotity direct > default_key.lot.share."""
+        q = float(l.get("quotity", 0) or 0)
+        if q > 0:
+            return q
+        return default_share_map.get(l.get("id"), 0.0)
+
+    owner_quotity = sum(_lot_quotity(l) for l in owner_lots)
+    total_quotity = sum(_lot_quotity(l) for l in all_lots) or 1
     share_pct = owner_quotity / total_quotity * 100
 
     # iter90fv : detection de la cle de repartition "eau" (nom OU code
@@ -206,7 +245,7 @@ def build_decompte_pdf(
     def _lot_line(l):
         base = (
             f"Lot <b>{l.get('number','')}</b> - {l.get('description','')} "
-            f"({l.get('quotity',0):.0f} tantiemes)"
+            f"({_lot_quotity(l):.0f} tantiemes)"
         )
         # iter90fv : ajoute les quotites eau si la cle existe pour ce lot
         if water_key and l.get("id") in water_shares:

@@ -11,6 +11,69 @@ Multi-ACP avec **chinese walls stricts** sur donnees comptables/financieres.
 Auth: JWT cookie + middleware global FastAPI.
 Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
+### Iter90g0 (Feb 2026) - BUG PROD PDF DECOMPTE : quotites vides + diagnostic divergences Optipro
+
+**Ticket utilisateur (Feb 2026, PROD Acacia TER, TEUWEN Gael)** :
+> "les quotites sont vides ! et nous avons encore des enormes differences
+> entre optipro et Ma plateforme"
+
+**Bug 1 - Quotites vides (FIX iter90g0)** : le PDF decompte affichait
+"Lot 001 - (0 tantiemes)", "Lot C01 - (0 tantiemes)", ... et quote-part
+globale "0.00% (0/1)". Cause : `pdf_decompte.py::build_decompte_pdf`
+utilisait `l.get('quotity', 0)` directement, sans fallback sur la cle
+generale. Sur ACPs import legacy (Acacia TER, Optipro), lot.quotity=0 et
+les tantiemes vivent dans `distribution_keys[is_default].lots[].share`.
+
+Fix : introduction d'un helper local `_lot_quotity(l)` dans
+`build_decompte_pdf` avec la meme priorite qu'iter90ej/iter90ft/iter90cz :
+1. `lot.quotity` direct > 0 -> retourne cette valeur ;
+2. Sinon fallback sur `default_key.lots[lot_id].share`.
+
+Utilise dans `_lot_line`, `owner_quotity`, `total_quotity`. Les
+distribution_lines des invoices restent intactes (pre-calculees a la
+creation via `key['lots'][i]['share']`, donc correctes independamment
+de lot.quotity).
+
+**Bug 2 - Divergences Optipro vs App (DIAGNOSTIC)** :
+Comparaison decompte TEUWEN Gael, exercice 01/10/2025 - 30/09/2026 :
+- Optipro Total a repartir : **11 791,83 EUR** (part_prop 968,81 + occ 470,86)
+- Notre App Total a repartir : **10 389,93 EUR** (part_prop 979,79)
+- Ecart : **1 401,90 EUR**
+
+Analyse categorie par categorie :
+- Optipro inclut : Assurance incendie 919,12 + RC 228,66 + Assistance
+  judiciaire 247,72 = **1 395,50 EUR** -> pile l'ecart de 1401,90 EUR
+- Conclusion : les factures d'ASSURANCES ne sont pas presentes dans
+  notre base (a re-importer via Optipro, verifier import wizard).
+
+**Bug 3 - Absence de prorata mutation (A IMPLEMENTER, iter90g1 futur)** :
+Optipro applique un prorata `318/365 jours` pour TEUWEN qui a acquis
+son lot en cours d'exercice (~17/11/2025). Notre app applique 100% =
+1 an complet -> facture toute l'annee au proprietaire alors qu'il
+n'etait pas encore proprietaire pendant Q4 2025.
+
+Detection : owner_quotity_actuelle × total_charges = 979,79. Optipro
+applique en plus × (318/365) = 968,81. Impact critique sur toutes les
+mutations en cours d'exercice.
+
+**Fix propose (iter90g1, ATTENTE user)** : ajouter dans le decompte le
+calcul du nombre de jours de detention effective du lot dans l'exercice
+via `db.mutations`. Charges = share × (days_owned / days_in_fy).
+Necessite : (a) enrichir `pdf_decompte` avec un `days_owned_ratio` par
+lot ; (b) faire de meme pour l'endpoint /api/reports/decompte JSON.
+
+**Tests iter90g0** (`test_iter90g0_pdf_decompte_quotity_fallback.py`, 2/2 verts) :
+- `test_quotity_fallback_via_default_distribution_key` : lots quotity=0
+  + default_key avec shares 898/11/34/9057 -> PDF affiche bien les
+  tantiemes issus de la cle et quote-part globale 9,43%. Aucun
+  "(0 tantiemes)" dans le PDF.
+- `test_direct_quotity_still_takes_priority` : lot.quotity=5000 prime
+  sur default_key.share=100 (retro-compat).
+
+Regression : 11/11 tests iter90fv/fw/fx/fy/fz/g0 verts.
+
+**Redeploiement requis en PROD** pour Acacia TER.
+
 ### Iter90fy (Feb 2026) - PORTAIL PROPRIETAIRE : decompte apres cloture uniquement + selecteur d'exercice
 
 **Ticket utilisateur (Feb 2026, PROD Acacia TER, TEUWEN Gael)** :
