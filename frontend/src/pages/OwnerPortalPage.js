@@ -72,6 +72,11 @@ export default function OwnerPortalPage() {
   const [closingBalance, setClosingBalance] = useState(0);
   const [periodStart, setPeriodStart] = useState('');
   const [periodEnd, setPeriodEnd] = useState('');
+  // iter90fy : exercices comptables de l'ACP selectionnee (remplace les
+  // selecteurs de date libres par une liste d'exercices comptables). L'user
+  // ne peut voir que les FY de ses ACPs (backend /owner/fiscal-years/{cid}).
+  const [fiscalYears, setFiscalYears] = useState([]);
+  const [selectedFyId, setSelectedFyId] = useState('');
   // Iter90dh : tour guide de premiere connexion
   const [showTour, setShowTour] = useState(false);
   const [loading, setLoading] = useState(true);

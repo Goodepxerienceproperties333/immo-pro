@@ -891,39 +891,74 @@ def create_owner_portal_router(db):
     @router.get("/decompte/pdf")
     async def my_decompte_pdf(request: Request, copropriete_id: str, fiscal_year_id: Optional[str] = None,
                               date_from: Optional[str] = None, date_to: Optional[str] = None):
-        """Generate the owner's annual statement PDF (for any of his ACPs)."""
+        """Generate the owner's annual statement PDF (for any of his ACPs).
+
+        iter90fy : refactor pour :
+        - Utiliser `_resolve_owner_ids` (multi-fiche support) au lieu de
+          `_resolve_owner` (mono) - le proprietaire peut avoir des fiches
+          distinctes par ACP dont certaines sans email defini. La fiche
+          matchant l'ACP demandee est resolue via ses lots.
+        - Si `fiscal_year_id` absent : selection auto du dernier exercice
+          CLOTURE (`status='closed'`) de l'ACP. Aucun decompte n'est
+          produit tant qu'aucun exercice n'est cloture -> le proprietaire
+          voit une erreur claire (400) plutot que le decompte provisoire.
+        """
         from datetime import datetime, timezone
         from fastapi.responses import StreamingResponse
         import io
         from pdf_decompte import build_decompte_pdf
 
-        owner = await _resolve_owner(db, request)
-        owner_id = owner["id"]
+        owner_ids, primary_owner = await _resolve_owner_ids(db, request)
 
-        # Ensure owner has lots in this ACP
+        # Trouver la fiche du proprietaire pour cette ACP (peut differer du
+        # primary si multi-ACP). On matche par lot.owner_id ou owner_ids.
         owner_lots = await db.lots.find(
             {"copropriete_id": copropriete_id,
-             "$or": [{"owner_id": owner_id}, {"owner_ids": owner_id}]},
+             "$or": [
+                 {"owner_id": {"$in": owner_ids}},
+                 {"owner_ids": {"$in": owner_ids}},
+             ]},
             {"_id": 0}
         ).to_list(100)
         if not owner_lots:
             raise HTTPException(403, "Vous n'avez aucun lot dans cette copropriete")
 
+        # Determiner le owner "actif" pour cette ACP (celui qui possede les lots)
+        active_owner_id = owner_lots[0].get("owner_id") or (
+            owner_lots[0].get("owner_ids", [None])[0]
+        )
+        owner = await db.owners.find_one({"id": active_owner_id}, {"_id": 0}) if active_owner_id else None
+        if not owner:
+            # Fallback : primary owner
+            owner = primary_owner
+        owner_id = owner["id"]
+
         copro = await db.coproprietes.find_one({"id": copropriete_id}, {"_id": 0})
         if not copro:
             raise HTTPException(404, "Copropriete non trouvee")
 
-        # Fiscal year
+        # Fiscal year : auto-select le dernier CLOSED si non specifie
         fy = None
         if fiscal_year_id:
-            fy = await db.fiscal_years.find_one({"id": fiscal_year_id, "copropriete_id": copropriete_id}, {"_id": 0})
-        if not fy:
-            today = datetime.now(timezone.utc)
-            fy = {
-                "name": f"Exercice {today.year}",
-                "start_date": date_from or f"{today.year}-01-01",
-                "end_date": date_to or f"{today.year}-12-31",
-            }
+            fy = await db.fiscal_years.find_one(
+                {"id": fiscal_year_id, "copropriete_id": copropriete_id},
+                {"_id": 0}
+            )
+            if not fy:
+                raise HTTPException(404, "Exercice comptable introuvable pour cette ACP.")
+        else:
+            # iter90fy : auto-selection du dernier exercice CLOTURE.
+            fy = await db.fiscal_years.find_one(
+                {"copropriete_id": copropriete_id, "status": "closed"},
+                {"_id": 0},
+                sort=[("end_date", -1)],
+            )
+            if not fy:
+                raise HTTPException(
+                    400,
+                    "Aucun exercice comptable cloture pour cette copropriete. "
+                    "Votre decompte annuel sera disponible apres cloture par le syndic.",
+                )
 
         # Verrou : decompte annuel uniquement apres cloture de l'exercice
         if fy.get("status", "") != "closed":
@@ -989,13 +1024,17 @@ def create_owner_portal_router(db):
 
     @router.get("/fiscal-years/{copropriete_id}")
     async def my_fiscal_years(copropriete_id: str, request: Request):
-        """List fiscal years of an ACP where the owner has lots."""
-        owner = await _resolve_owner(db, request)
-        owner_id = owner["id"]
+        """List fiscal years of an ACP where the owner has lots.
+
+        iter90fy : utilise `_resolve_owner_ids` (multi-fiche) au lieu de
+        `_resolve_owner` (mono) pour supporter les proprietaires ayant
+        des fiches distinctes par ACP.
+        """
+        owner_ids, _ = await _resolve_owner_ids(db, request)
         # Verify access
         n = await db.lots.count_documents({
             "copropriete_id": copropriete_id,
-            "$or": [{"owner_id": owner_id}, {"owner_ids": owner_id}]
+            "$or": [{"owner_id": {"$in": owner_ids}}, {"owner_ids": {"$in": owner_ids}}]
         })
         if n == 0:
             raise HTTPException(403, "Acces refuse")

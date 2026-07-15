@@ -557,7 +557,7 @@ function SendActionDialog({
 }
 
 // ============ Generic email composer ============
-function GenericComposer({ mailboxes }) {
+function GenericComposer({ mailboxes, copropriete_id }) {
   const [from_mailbox, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [subject, setSubject] = useState('');
@@ -565,6 +565,19 @@ function GenericComposer({ mailboxes }) {
   const [include_signature, setIncSig] = useState(true);
   const [file, setFile] = useState(null);
   const [sending, setSending] = useState(false);
+  // iter90fx : listes proprietaires/locataires + toggle CCI GDPR
+  const [addressBook, setAddressBook] = useState({ owners: [], tenants: [] });
+  const [abLoading, setAbLoading] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(null); // 'owners' | 'tenants' | null
+  const [pickerSel, setPickerSel] = useState(new Set()); // emails cochees dans le picker actif
+  const [pickerSearch, setPickerSearch] = useState('');
+  // Manual override du toggle. `null` = auto (BCC si >1 destinataire).
+  const [useBccOverride, setUseBccOverride] = useState(null);
+
+  // Emails valides deduits du champ "to"
+  const emails = to.split(/[,;\s]+/).map(s => s.trim()).filter(s => s.includes('@'));
+  const auto_bcc = emails.length > 1;
+  const use_bcc = useBccOverride !== null ? useBccOverride : auto_bcc;
 
   useEffect(() => {
     if (mailboxes.length && !from_mailbox) {
@@ -573,8 +586,44 @@ function GenericComposer({ mailboxes }) {
     }
   }, [mailboxes, from_mailbox]);
 
+  // iter90fx : charge l'address book quand la copropriete change
+  useEffect(() => {
+    if (!copropriete_id || copropriete_id === 'all') {
+      setAddressBook({ owners: [], tenants: [] });
+      return;
+    }
+    (async () => {
+      setAbLoading(true);
+      try {
+        const r = await api.get('/communication/address-book');
+        setAddressBook({ owners: r.data.owners || [], tenants: r.data.tenants || [] });
+      } catch (e) {
+        // Silencieux : le composant reste fonctionnel meme sans address book
+      } finally { setAbLoading(false); }
+    })();
+  }, [copropriete_id]);
+
+  const openPicker = (kind) => {
+    const current = new Set(emails);
+    setPickerSel(new Set([...current]));
+    setPickerSearch('');
+    setPickerOpen(kind);
+  };
+  const togglePickerEmail = (email) => {
+    const next = new Set(pickerSel);
+    if (next.has(email)) next.delete(email); else next.add(email);
+    setPickerSel(next);
+  };
+  const applyPicker = () => {
+    const merged = Array.from(new Set([...emails, ...pickerSel]));
+    setTo(merged.join(', '));
+    setPickerOpen(null);
+  };
+  const removeChip = (email) => {
+    setTo(emails.filter(e => e !== email).join(', '));
+  };
+
   const send = async () => {
-    const emails = to.split(/[,;\s]+/).map(s => s.trim()).filter(s => s.includes('@'));
     if (!from_mailbox) return toast.error('Choisissez une boite expeditrice');
     if (emails.length === 0) return toast.error('Aucun destinataire valide');
     if (!subject.trim()) return toast.error('Objet requis');
@@ -586,15 +635,24 @@ function GenericComposer({ mailboxes }) {
       fd.append('subject', subject);
       fd.append('body_html', body_html);
       fd.append('include_signature', String(include_signature));
+      fd.append('use_bcc', String(use_bcc));
       if (file) fd.append('attachment', file);
       const r = await api.post('/communication/send/generic', fd, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
-      toast.success(`Email envoye${r.data.dry_run ? ' (mode dry-run)' : ''}`);
-      setTo(''); setSubject(''); setBody(''); setFile(null);
+      const bccInfo = use_bcc ? ` (${emails.length} destinataires en CCI)` : '';
+      toast.success(`Email envoye${r.data.dry_run ? ' (mode dry-run)' : ''}${bccInfo}`);
+      setTo(''); setSubject(''); setBody(''); setFile(null); setUseBccOverride(null);
     } catch (e) { toast.error(extractApiError(e)); }
     finally { setSending(false); }
   };
+
+  const pickerList = pickerOpen === 'owners' ? addressBook.owners : (pickerOpen === 'tenants' ? addressBook.tenants : []);
+  const filteredPickerList = pickerSearch.trim()
+    ? pickerList.filter(p =>
+        (p.name || '').toLowerCase().includes(pickerSearch.toLowerCase()) ||
+        (p.email || '').toLowerCase().includes(pickerSearch.toLowerCase()))
+    : pickerList;
 
   return (
     <Card data-testid="generic-composer">
@@ -616,12 +674,71 @@ function GenericComposer({ mailboxes }) {
             </Select>
           </div>
           <div>
-            <Label className="text-xs">Destinataires (separes par virgule)</Label>
+            <div className="flex items-center justify-between">
+              <Label className="text-xs">Destinataires (separes par virgule)</Label>
+              {/* iter90fx : pickers proprietaires + locataires de l'ACP */}
+              <div className="flex items-center gap-1">
+                <Button
+                  type="button" variant="outline" size="sm"
+                  className="h-6 px-2 text-[10px] text-[#022D52] border-[#022D52]/30"
+                  onClick={() => openPicker('owners')}
+                  disabled={abLoading || addressBook.owners.length === 0}
+                  data-testid="btn-picker-owners"
+                >
+                  <Users className="h-3 w-3 mr-1" />
+                  Proprietaires ({addressBook.owners.length})
+                </Button>
+                <Button
+                  type="button" variant="outline" size="sm"
+                  className="h-6 px-2 text-[10px] text-emerald-700 border-emerald-300"
+                  onClick={() => openPicker('tenants')}
+                  disabled={abLoading || addressBook.tenants.length === 0}
+                  data-testid="btn-picker-tenants"
+                >
+                  <Users className="h-3 w-3 mr-1" />
+                  Locataires ({addressBook.tenants.length})
+                </Button>
+              </div>
+            </div>
             <Input value={to} onChange={(e) => setTo(e.target.value)}
                    placeholder="user1@ex.com, user2@ex.com"
                    data-testid="input-generic-to" />
+            {/* Chips visuels des emails detectes */}
+            {emails.length > 0 && (
+              <div className="flex flex-wrap gap-1 mt-1.5" data-testid="chips-recipients">
+                {emails.map(e => (
+                  <span key={e}
+                        className="inline-flex items-center gap-1 text-[10px] bg-slate-100 text-slate-700 border border-slate-200 rounded-full px-2 py-0.5"
+                        data-testid={`chip-recipient-${e}`}>
+                    {e}
+                    <button type="button" onClick={() => removeChip(e)}
+                            className="text-slate-400 hover:text-red-500"
+                            aria-label={`Retirer ${e}`}>x</button>
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
         </div>
+        {/* iter90fx : Toggle CCI GDPR - active auto si >1 destinataire */}
+        {emails.length > 1 && (
+          <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded p-2">
+            <Checkbox
+              id="gen-bcc"
+              checked={use_bcc}
+              onCheckedChange={(v) => setUseBccOverride(!!v)}
+              data-testid="checkbox-generic-bcc"
+              className="mt-0.5"
+            />
+            <Label htmlFor="gen-bcc" className="text-xs leading-snug flex-1 cursor-pointer">
+              <b>Envoyer en CCI (invisible entre destinataires)</b>
+              <span className="block text-slate-600 mt-0.5">
+                Recommande pour tout envoi groupe (RGPD). Les destinataires ne verront pas les adresses des autres.
+                Vous recevez une copie dans &laquo;&nbsp;{from_mailbox || 'votre boite'}&nbsp;&raquo;.
+              </span>
+            </Label>
+          </div>
+        )}
         <div>
           <Label className="text-xs">Objet</Label>
           <Input value={subject} onChange={(e) => setSubject(e.target.value)}
@@ -649,6 +766,91 @@ function GenericComposer({ mailboxes }) {
           <Send className="h-4 w-4 mr-1" /> Envoyer
         </Button>
       </CardContent>
+
+      {/* iter90fx : Picker Proprietaires / Locataires */}
+      <Dialog open={pickerOpen !== null} onOpenChange={(v) => !v && setPickerOpen(null)}>
+        <DialogContent className="max-w-2xl" data-testid="dialog-address-picker">
+          <DialogHeader>
+            <DialogTitle>
+              Selection {pickerOpen === 'owners' ? 'proprietaires' : 'locataires'}
+              <span className="ml-2 text-xs text-slate-500 font-normal">
+                ({pickerSel.size} coche(s))
+              </span>
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-2">
+            <div className="relative">
+              <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-slate-400" />
+              <Input
+                placeholder="Rechercher par nom ou email..."
+                value={pickerSearch}
+                onChange={(e) => setPickerSearch(e.target.value)}
+                className="pl-7"
+                data-testid="input-picker-search"
+              />
+            </div>
+            <div className="flex items-center justify-between text-xs text-slate-500 px-1">
+              <span>{filteredPickerList.length} disponibles</span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  className="text-[#022D52] hover:underline"
+                  onClick={() => setPickerSel(new Set(filteredPickerList.map(p => p.email)))}
+                >
+                  Tout cocher
+                </button>
+                <span className="text-slate-300">|</span>
+                <button
+                  type="button"
+                  className="text-slate-500 hover:underline"
+                  onClick={() => setPickerSel(new Set())}
+                >
+                  Tout decocher
+                </button>
+              </div>
+            </div>
+            <div className="border rounded max-h-[400px] overflow-y-auto divide-y divide-slate-100">
+              {filteredPickerList.map(p => {
+                const checked = pickerSel.has(p.email);
+                return (
+                  <label
+                    key={p.email + p.id}
+                    className={`flex items-center gap-3 px-3 py-2 cursor-pointer hover:bg-slate-50 ${checked ? 'bg-blue-50/50' : ''}`}
+                    data-testid={`picker-row-${p.email}`}
+                  >
+                    <Checkbox checked={checked} onCheckedChange={() => togglePickerEmail(p.email)} />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium text-slate-900 truncate">{p.name}</div>
+                      <div className="text-xs text-slate-500 truncate">{p.email}</div>
+                      {p.lot_number && (
+                        <div className="text-[10px] text-slate-400">Lot {p.lot_number}</div>
+                      )}
+                    </div>
+                    {p.vcs_code && (
+                      <span className="text-[10px] text-[#022D52] font-mono">{p.vcs_code}</span>
+                    )}
+                  </label>
+                );
+              })}
+              {filteredPickerList.length === 0 && (
+                <div className="p-6 text-center text-sm text-slate-400">
+                  Aucun {pickerOpen === 'owners' ? 'proprietaire' : 'locataire'} avec email
+                </div>
+              )}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setPickerOpen(null)}>Annuler</Button>
+            <Button
+              onClick={applyPicker}
+              className="bg-[#022D52] hover:bg-[#01213e]"
+              data-testid="btn-picker-apply"
+            >
+              Ajouter ({pickerSel.size})
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Card>
   );
 }
@@ -879,7 +1081,7 @@ export default function CommunicationPage() {
         </TabsContent>
 
         <TabsContent value="generic">
-          <GenericComposer mailboxes={mailboxes} />
+          <GenericComposer mailboxes={mailboxes} copropriete_id={selectedCopro} />
         </TabsContent>
 
         <TabsContent value="settings" className="space-y-4">

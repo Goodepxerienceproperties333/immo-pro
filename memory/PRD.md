@@ -11,6 +11,113 @@ Multi-ACP avec **chinese walls stricts** sur donnees comptables/financieres.
 Auth: JWT cookie + middleware global FastAPI.
 Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
+### Iter90fz (Feb 2026) - BUG PROD CRITIQUE : Décompte annuel - double-comptage "Montant à répartir"
+
+**Ticket utilisateur (Feb 2026, PROD Acacia TER)** :
+> "les decomptes divergents car il y a une erreur de calcul tu additions
+> les frais repartis par lots alors qu'il ne s'agit pas d'une addition
+> le total des depenses est de 11946.43 EUR donc tu ne calcule pas bien
+> les decomptes - Revoir ta methode"
+
+Bug identifie a partir du decompte fourni pour ABED - STEUVE (proprietaire
+de 3 lots : 202, C08, pe07) : la colonne "Montant a repartir" du "Totaux
+generaux" etait calculee comme `sum(lot_total_dist for each lot)`. Consequence :
+un meme invoice touchant les 3 lots du proprietaire etait compte **3 fois**
+dans le grand total (ex: JAG SPRL 1297,73 EUR affiche a 3891 EUR).
+
+Ce n'est PAS un bug sur les colonnes "Part proprietaire" ni "Part occupant"
+(qui sont des sommes de fractions par lot, mathematiquement correctes). Seule
+la colonne "Montant a repartir" (reference d'apercu = valeur brute des invoices)
+etait affectee.
+
+**Fix** (`pdf_decompte.py::build_decompte_pdf`) :
+- Nouveau tracking `owner_seen_inv_ids` (set global au proprietaire) +
+  `owner_grand_dist_unique` (somme des inv_total uniques).
+- Nouveau tracking `lot_seen_inv_ids[lot_id]` (set par lot) +
+  `lot_dist_unique[lot_id]` pour la coherence des sous-totaux lots.
+- Remplacement `grand_dist = sum(lot_total_dist)` -> `grand_dist =
+  owner_grand_dist_unique` (chaque invoice compte UNE FOIS peu importe
+  combien de lots du proprietaire elle touche).
+- Sous-total lot : idem `lot_total_dist = lot_dist_unique[lot_id]` au lieu
+  de `sum(key_total_dist)` (dedup les invoices multi-comptes/multi-cles).
+
+Les sous-totaux "Part proprietaire" et "Part occupant" restent des sommes
+de fractions (comportement inchange, mathematiquement correct).
+
+**Tests** (`test_iter90fz_decompte_grand_dist_no_double_count.py`, 2/2 verts) :
+- `test_multi_lot_owner_grand_dist_not_double_counted` : owner avec 3 lots +
+  invoice de 1000 EUR touchant les 3 -> le PDF affiche "1 000,00 EUR" UNE
+  FOIS dans le grand total, JAMAIS "3 000,00" (regression check).
+- `test_multi_lot_owner_prop_and_occ_shares_are_correct` : verifie que les
+  colonnes owner/occupant restent correctes (550 = 500+50, occ 30% = 165,
+  prop = 385) apres le fix.
+
+Regression : 6/6 tests iter90fv/fw/fz verts.
+
+**Redeploiement requis en PROD** - urgent pour Acacia TER.
+
+### Iter90fx (Feb 2026) - FEATURE : Email libre - pickers Proprietaires/Locataires + envoi CCI GDPR
+
+**Ticket utilisateur (Feb 2026)** :
+> "dans les mails libre il faut la liste de proprietaires relatifs a cette
+> copropriete de meme que la liste des locataires, il doit etre possible
+> d'envoyer une communication a toutes ces adresses email en CCI GDPR
+> oblige ceci s'applique pour toute communication groupee"
+
+Le composant `GenericComposer` (onglet "Email libre" de la Communication)
+etait limite a un champ texte de destinataires separes par virgule -
+impossible de piocher directement dans les fiches proprietaires/locataires
+de l'ACP, et les envois multi-destinataires se faisaient en TO clair
+(fuite d'adresses = non-conforme RGPD).
+
+**Backend** :
+1. Nouvel endpoint `GET /api/communication/address-book` : retourne
+   `{owners: [{id,name,email,vcs_code,kind:'owner'}], tenants: [...,'tenant']}`
+   filtre STRICT par ACP (chinese wall) et sans les fiches sans email.
+2. `POST /api/communication/send/generic` : nouveau champ FormData
+   `use_bcc: bool` (default false). Si `true`, `_send_email` place TOUS
+   les destinataires en `bccRecipients` (Graph API) et met l'expediteur
+   seul en `toRecipients` (Graph exige >= 1 TO). L'expediteur recoit
+   ainsi une copie visible (tracabilite) sans exposer les autres
+   destinataires.
+
+**Frontend** (`CommunicationPage.js GenericComposer`) :
+1. Charge auto l'address book quand la copropriete active change.
+2. 2 boutons "+ Proprietaires (N)" et "+ Locataires (N)" a cote du label
+   Destinataires -> ouvre un mini-dialog picker avec :
+   - Recherche par nom/email
+   - Cases a cocher par entree (Tout cocher / Tout decocher)
+   - Affichage du lot et du VCS
+   - Bouton "Ajouter (N)" -> merge dans le champ Destinataires
+3. Affichage des destinataires en CHIPS supprimables sous le champ
+   texte (`data-testid=chip-recipient-{email}`).
+4. Toggle "Envoyer en CCI (invisible entre destinataires)" visible
+   automatiquement des que le nombre de destinataires > 1. Coche par
+   defaut, message d'alerte RGPD. Peut etre decoche manuellement si
+   besoin de communication transparente (rare, ex: reunion travaux).
+5. Le toast de succes indique "(N destinataires en CCI)" pour confirmer
+   le mode utilise.
+
+**Comportement pour les envois DEJA groupes (situation/decompte/mutation)** :
+Ceux-ci envoient 1 email PERSONNALISE par proprietaire (avec son propre
+PDF), donc chaque email n'a qu'un destinataire -> aucun risque de fuite,
+aucun changement necessaire.
+
+**Tests** (`test_iter90fx_address_book_bcc_gdpr.py`, 2/2 verts) :
+- `test_address_book_returns_owners_and_tenants` : ACP A a Owner Un
+  (avec email) + Owner SansMail + Owner Other ACP + Locataire Un +
+  Locataire Other ACP. Verifie que l'address book de l'ACP A retourne
+  UNIQUEMENT Owner Un + Locataire Un (chinese wall + filtre email).
+- `test_graph_message_bcc_gdpr_layout` : verifie la construction du
+  payload Graph - `use_bcc=True` -> `toRecipients=[expediteur]` +
+  `bccRecipients=[destinataires]`. `use_bcc=False` -> `toRecipients=[destinataires]`
+  sans bccRecipients.
+
+Regression : 6/6 tests iter90fv/fw/fx verts.
+
+**Redeploiement requis en PROD** pour rendre les pickers + le toggle
+CCI visibles sur Acacia TER.
+
 ### Iter90fw (Feb 2026) - FEATURE : Filtre "Proprietaires actuels vs Tous" sur les Décomptes
 
 **Ticket utilisateur (Feb 2026)** :

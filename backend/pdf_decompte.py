@@ -281,6 +281,18 @@ def build_decompte_pdf(
     total_owner_charges = 0.0
     total_occupant_share = 0.0
     total_proprio_share = 0.0
+    # iter90fz : bug fix "Montant à répartir" double-comptage.
+    # Ancien code : `grand_dist = sum(lot_total_dist)` -> un meme invoice
+    # touchant N lots du proprietaire etait compte N fois dans la ligne
+    # "Totaux generaux". Signale par l'utilisateur : "tu additions les
+    # frais repartis par lots alors qu'il ne s'agit pas d'une addition".
+    # Correction : dedup les invoices AU NIVEAU OWNER (et par LOT) pour
+    # le total "Montant à répartir" (les colonnes "Part proprietaire" et
+    # "Part occupant" restent des sommes de fractions et sont correctes).
+    owner_seen_inv_ids = set()          # invoices deja comptees pour l'owner
+    owner_grand_dist_unique = 0.0       # somme des inv_total uniques
+    lot_seen_inv_ids = {}               # lot_id -> set(inv_id)
+    lot_dist_unique = {}                # lot_id -> somme des inv_total uniques
     # Aggregate by account globally for the "Recap locataire" summary
     occupant_summary_by_acc = {}  # acc -> {occ_amt, label}
 
@@ -352,7 +364,6 @@ def build_decompte_pdf(
         acc = inv.get("account_number", "") or "_other"
         occ_pct = float(inv.get("occupant_pct", 0) or 0)
         inv_total = float(inv.get("total_amount", 0) or 0)
-
         # Compute owner share per lot for this invoice
         lot_share = {}
         explicit_lines = inv.get("distribution_lines", []) or []
@@ -449,6 +460,16 @@ def build_decompte_pdf(
             if seen_key not in key_bucket["_invoices_seen"]:
                 key_bucket["_invoices_seen"].add(seen_key)
                 acc_bucket["total_dist"] += inv_total
+
+            # iter90fz : dedup au niveau LOT et OWNER pour eviter le
+            # double-comptage dans les totaux "Montant à répartir".
+            lot_seen = lot_seen_inv_ids.setdefault(lot_id, set())
+            if inv_id not in lot_seen:
+                lot_seen.add(inv_id)
+                lot_dist_unique[lot_id] = lot_dist_unique.get(lot_id, 0.0) + inv_total
+            if inv_id not in owner_seen_inv_ids:
+                owner_seen_inv_ids.add(inv_id)
+                owner_grand_dist_unique += inv_total
 
             total_owner_charges += amt_owner
             total_occupant_share += amt_occ
@@ -627,7 +648,6 @@ def build_decompte_pdf(
             lot_total_prop = 0.0
             lot_total_occ = 0.0
             lot_total_owner = 0.0
-
             # For each key, sorted by name
             for key_id in sorted(by_key.keys(),
                                  key=lambda k: (dk_by_id.get(k, {}).get("name", "") or "")):
@@ -738,10 +758,15 @@ def build_decompte_pdf(
                     if a["owner_occ"] > 0.001 and acc in occupant_summary_by_acc:
                         occupant_summary_by_acc[acc]["label"] = nature_label
 
-                lot_total_dist += key_total_dist
                 lot_total_owner += key_total_amt
                 lot_total_occ += key_total_occ
                 lot_total_prop += key_total_prop
+
+            # iter90fz : lot_total_dist doit refleter la somme des invoices
+            # UNIQUES ayant touche ce lot (dedup par inv_id), pas la somme
+            # des `key_total_dist` qui multi-comptent quand un meme invoice
+            # touche plusieurs comptes.
+            lot_total_dist = lot_dist_unique.get(lot_id, 0.0)
 
             # Lot subtotal row
             lot_subtotal_label = f"<b>Total Lot {lot.get('number','')}</b>"
@@ -760,7 +785,10 @@ def build_decompte_pdf(
             lot_grand_totals.append((lot, lot_total_dist, lot_total_prop, lot_total_occ))
 
         # Totaux generaux row
-        grand_dist = sum(t[1] for t in lot_grand_totals)
+        # iter90fz : grand_dist utilise la somme UNIQUE des invoices vues
+        # au niveau owner (dedup par inv_id), pas la somme des lot_totals
+        # qui compterait N fois un invoice touchant N lots.
+        grand_dist = owner_grand_dist_unique
         grand_prop = sum(t[2] for t in lot_grand_totals)
         grand_occ = sum(t[3] for t in lot_grand_totals)
 

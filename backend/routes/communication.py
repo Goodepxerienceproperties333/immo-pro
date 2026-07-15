@@ -304,12 +304,17 @@ def create_communication_router(db):
                          kind: str = "generic",
                          copropriete_id: str = "",
                          owner_ids: Optional[List[str]] = None,
-                         request: Optional[Request] = None) -> dict:
+                         request: Optional[Request] = None,
+                         use_bcc: bool = False) -> dict:
         """Wrapper Graph : envoie a plusieurs destinataires. Si attachment_pdf est
         fourni, l'ajoute en PJ (base64 dans le message Graph).
 
         Iter90db : persiste chaque envoi dans `db.sent_communications` (dry_run inclus)
         pour affichage dans le portail proprietaire (tab Communications).
+        iter90fx : `use_bcc=True` place les destinataires en CCI (bccRecipients)
+        au lieu de TO, pour conformite GDPR sur les communications groupees.
+        L'expediteur (`from_mailbox`) est alors mis en `toRecipient` unique -
+        Microsoft Graph exige au moins un `toRecipient` non-vide.
         """
         dry_run = False
         status = "sent"
@@ -348,10 +353,17 @@ def create_communication_router(db):
                     "message": {
                         "subject": subject,
                         "body": {"contentType": "HTML", "content": html_body},
-                        "toRecipients": [{"emailAddress": {"address": a}} for a in to],
                     },
                     "saveToSentItems": True,
                 }
+                if use_bcc:
+                    # iter90fx : GDPR - destinataires en CCI. Graph exige au
+                    # moins un `toRecipients` -> on met l'expediteur lui-meme
+                    # (il recoit une copie visible, utile pour tracabilite).
+                    message["message"]["toRecipients"] = [{"emailAddress": {"address": from_mailbox}}]
+                    message["message"]["bccRecipients"] = [{"emailAddress": {"address": a}} for a in to]
+                else:
+                    message["message"]["toRecipients"] = [{"emailAddress": {"address": a}} for a in to]
                 if attachment_pdf:
                     message["message"]["attachments"] = [{
                         "@odata.type": "#microsoft.graph.fileAttachment",
@@ -474,6 +486,7 @@ def create_communication_router(db):
         subject: str = Form(...),
         body_html: str = Form(...),
         include_signature: str = Form("true"),
+        use_bcc: str = Form("false"),  # iter90fx : envoi en CCI (GDPR)
         attachment: Optional[UploadFile] = File(None),
     ):
         import json
@@ -492,9 +505,67 @@ def create_communication_router(db):
             if len(pdf_bytes) > 15 * 1024 * 1024:
                 raise HTTPException(413, "Piece jointe > 15 MB")
             pdf_name = fname
+        bcc_flag = use_bcc.lower() == "true"
         result = await _send_email(from_mailbox, to, subject, html, pdf_bytes, pdf_name,
-                                   kind="generic", request=request)
+                                   kind="generic", request=request, use_bcc=bcc_flag)
         return {"success": True, **result}
+
+    # ============== ADDRESS BOOK (iter90fx) ==============
+    @router.get("/address-book")
+    async def address_book(request: Request, copropriete_id: Optional[str] = None):
+        """Retourne les listes proprietaires + locataires de l'ACP courante
+        pour alimenter les pickers de l'email libre. Chinese wall STRICT :
+        seuls les owners/tenants de l'ACP demandee sont retournes.
+
+        iter90fx : indispensable pour permettre l'envoi groupe en CCI aux
+        proprietaires ET locataires d'une meme ACP (GDPR : les adresses ne
+        doivent PAS etre visibles entre destinataires).
+        """
+        from routes.reports import _require_copro
+        cid = _require_copro(copropriete_id, request)
+        # Owners : ceux qui ont un lot dans cette ACP OU un tier_account
+        # configure (couvre aussi les anciens proprietaires ayant encore
+        # un solde). L'utilisateur peut filtrer visuellement cote frontend.
+        lots = await db.lots.find(
+            {"copropriete_id": cid}, {"_id": 0, "owner_id": 1, "owner_ids": 1},
+        ).to_list(2000)
+        owner_ids = set()
+        for lt in lots:
+            if lt.get("owner_id"):
+                owner_ids.add(lt["owner_id"])
+            for oid in (lt.get("owner_ids") or []):
+                if oid:
+                    owner_ids.add(oid)
+        owners = await db.owners.find(
+            {"$or": [
+                {"id": {"$in": list(owner_ids)}},
+                {f"tier_accounts.{cid}": {"$exists": True}},
+            ]},
+            {"_id": 0, "id": 1, "name": 1, "email": 1, "vcs_code": 1},
+        ).sort("name", 1).to_list(2000) if (owner_ids or True) else []
+        owners_out = [
+            {
+                "id": o["id"], "name": o.get("name", ""),
+                "email": (o.get("email") or "").strip(),
+                "vcs_code": o.get("vcs_code", ""),
+                "kind": "owner",
+            }
+            for o in owners if (o.get("email") or "").strip()
+        ]
+        tenants = await db.tenants.find(
+            {"copropriete_id": cid},
+            {"_id": 0, "id": 1, "name": 1, "email": 1, "lot_number": 1, "phone": 1},
+        ).sort("name", 1).to_list(2000)
+        tenants_out = [
+            {
+                "id": t["id"], "name": t.get("name", ""),
+                "email": (t.get("email") or "").strip(),
+                "lot_number": t.get("lot_number", ""),
+                "kind": "tenant",
+            }
+            for t in tenants if (t.get("email") or "").strip()
+        ]
+        return {"owners": owners_out, "tenants": tenants_out}
 
     @router.post("/send/situation")
     async def send_situation(payload: SendSituation, request: Request):
