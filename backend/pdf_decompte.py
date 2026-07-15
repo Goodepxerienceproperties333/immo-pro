@@ -173,10 +173,52 @@ def build_decompte_pdf(
     owner_quotity = sum(l.get("quotity", 0) for l in owner_lots)
     total_quotity = sum(l.get("quotity", 0) for l in all_lots) or 1
     share_pct = owner_quotity / total_quotity * 100
-    lots_str = "<br/>".join(
-        f"Lot <b>{l.get('number','')}</b> - {l.get('description','')} ({l.get('quotity',0):.0f} tantiemes)"
-        for l in owner_lots
-    ) or "(aucun lot)"
+
+    # iter90fv : detection de la cle de repartition "eau" (nom OU code
+    # contenant 'eau', insensible a la casse). L'utilisateur demande que
+    # les quotites eau par lot soient visibles dans l'en-tete du PDF
+    # decompte, en plus des quotites generales, pour faciliter le
+    # controle des repartitions liees a la consommation d'eau.
+    water_key = None
+    for _dk in (distribution_keys or []):
+        _lbl = f"{_dk.get('name','')} {_dk.get('code','')}".lower()
+        if "eau" in _lbl and _dk.get("is_default") is not True:
+            water_key = _dk
+            break
+    water_shares = {}
+    water_total = 0.0
+    if water_key:
+        for it in (water_key.get("lots", []) or []):
+            if it.get("excluded"):
+                continue
+            lid = it.get("lot_id")
+            q = it.get("share")
+            if q is None:
+                q = it.get("quotity", 0)
+            try:
+                q = float(q or 0)
+            except Exception:
+                q = 0.0
+            if lid:
+                water_shares[lid] = q
+                water_total += q
+
+    def _lot_line(l):
+        base = (
+            f"Lot <b>{l.get('number','')}</b> - {l.get('description','')} "
+            f"({l.get('quotity',0):.0f} tantiemes)"
+        )
+        # iter90fv : ajoute les quotites eau si la cle existe pour ce lot
+        if water_key and l.get("id") in water_shares:
+            base += (
+                f"<br/><font size='8' color='#64748B'>&nbsp;&nbsp;&nbsp;&nbsp;"
+                f"Quotites {water_key.get('name','eau')} : "
+                f"<b>{water_shares[l['id']]:.0f}</b>"
+                f"{('/' + f'{water_total:.0f}' + ' unites') if water_total > 0 else ''}"
+                f"</font>"
+            )
+        return base
+    lots_str = "<br/>".join(_lot_line(l) for l in owner_lots) or "(aucun lot)"
 
     info_lines = [
         f"<b>Vos lots :</b><br/>{lots_str}",

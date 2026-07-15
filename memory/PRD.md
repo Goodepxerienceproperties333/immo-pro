@@ -11,6 +11,81 @@ Multi-ACP avec **chinese walls stricts** sur donnees comptables/financieres.
 Auth: JWT cookie + middleware global FastAPI.
 Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
+### Iter90fv (Feb 2026) - FEATURES : Décomptes compact + Communication preview + PDF eau
+
+**Ticket utilisateur (Feb 2026)** :
+> "Dans la partie décompte il ne faut pas montrer un détail par
+> copropriétaire sur cette vue juste un aperçu par ligne par propriétaire
+> de leur solde au niveau des comptes il est possible à ce moment-là de
+> cliquer sur un petit œil pour avoir une vue détaillée ou de générer le
+> décompte en PDF. Le but aussi dans la partie communication et d'avoir
+> aussi une liste de tous les propriétaires concernés pour les situations
+> de compte et pour les décomptes et de faire un envoi groupé avec une
+> prévisualisation du mail avant envoi. Dans le document PDF il faut aussi
+> mentionner le nombre de quantités par l'eau actuellement dans l'en-tête
+> ce n'est pas visible"
+
+Trois changements livres :
+
+**1. Rapports > Décomptes : refonte affichage compact**
+- Avant : cartes etendues avec detail complet des charges (verbeux,
+  bruyant).
+- Apres : tableau 1 ligne par proprietaire (Nom / VCS / Lots / Quote-part /
+  Solde compte tiers / actions Oeil+PDF).
+- Le detail complet reste accessible via l'oeil (apercu PDF filigrane)
+  ou le bouton PDF (telechargement).
+- Nouveau champ backend `tier_balance` retourne par
+  `/api/reports/decompte` : sum(debit-credit) sur les comptes tiers du
+  proprietaire (meme metrique que Balance des Tiers + dashboard health
+  audit), positif = debiteur, negatif = crediteur, affichage colore
+  (rouge/vert) avec libelle "Debiteur"/"Crediteur"/"Solde".
+- Frontend : `frontend/src/pages/ReportsPage.js` decomptes tab
+  (`data-testid=decomptes-table`, `data-testid=decompte-row-{id}`,
+  `data-testid=tier-balance-{id}`).
+
+**2. Communication : prévisualisation email avant envoi groupé**
+- 2 nouveaux endpoints backend :
+  - `POST /api/communication/preview/situation`
+  - `POST /api/communication/preview/decompte`
+  Retournent : `subject` + `body_html` (rendus avec substitution template
+  {owner_name}, {balance}, ... + signature) + `attachment_pdf_base64` +
+  metadata destinataire. Reutilise EXACTEMENT la meme chaine de rendu que
+  `send/situation` et `send/decompte` (`_preview_common` helper interne)
+  -> apercu 100% fidele.
+- Dialog `SendActionDialog` (`CommunicationPage.js`) : nouveau bouton
+  "Previsualiser" a cote de "Annuler"/"Envoyer" -> ouvre un sub-dialog
+  95vw x 90vh en 2 colonnes :
+  - GAUCHE : entete (De/A/Objet/PJ) + body HTML render (sanitize)
+  - DROITE : iframe inline avec le PDF PJ (data:URL base64)
+  - Boutons "Precedent"/"Suivant" pour cycler entre les destinataires
+  - "Confirmer l envoi (N destinataires)" en bas -> envoi effectif
+- Test-IDs : `btn-preview-{action}`, `dialog-preview-{action}`,
+  `btn-preview-prev`, `btn-preview-next`, `preview-body-html`,
+  `preview-attachment-iframe`, `btn-preview-confirm-send-{action}`.
+
+**3. PDF Décompte : quotites Eau visibles dans l'entete**
+- Detection auto de la cle de repartition eau : distribution_key
+  non-default dont le `name` OU `code` contient "eau" (insensible casse).
+- Pour chaque lot du proprietaire, ligne secondaire ajoutee sous la
+  quotite generale : "Quotites {name_cle} : {share_lot}/{total_cle}
+  unites".
+- Aucune modification si aucune cle eau trouvee (retro-compat).
+- Fichier : `backend/pdf_decompte.py::build_decompte_pdf` header block.
+
+**Tests** (`test_iter90fv_decompte_communication_features.py`, 2/2 verts) :
+- `test_decompte_returns_tier_balance` : verifie le calcul solde net (AC
+  1000, FI 200 -> solde 500 debiteur ; AC 500, FI 900 -> solde -400
+  crediteur).
+- `test_pdf_decompte_shows_water_quotity_in_header` : parse le PDF genere
+  avec PyMuPDF et verifie que "Cle Eau" + "Quotites" + les shares eau
+  apparaissent bien dans le header.
+
+Regression complete : 13/13 tests verts sur iterations iter90fr/fs/ft/fu/fv.
+
+**Redeploiement requis en PROD** pour que le user retrouve : le tableau
+compact des decomptes, la previsualisation mail avant envoi groupe, et
+les quotites eau dans le PDF header.
+
 ### Iter90fu (Feb 2026) - BUG PROD : health audit flaggait un CREDITEUR comme "en attente de traitement"
 
 **Ticket utilisateur (Feb 2026, PROD ACP Acacia TER)** :

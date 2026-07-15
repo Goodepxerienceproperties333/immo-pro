@@ -169,6 +169,29 @@ class SendDecompteMutation(BaseModel):
     template_id: str = ""
 
 
+class PreviewSituation(BaseModel):
+    from_mailbox: str
+    copropriete_id: str
+    owner_id: str  # un seul owner a la fois pour la previsualisation
+    subject: str = ""
+    body_html: str = ""
+    include_signature: bool = True
+    start_date: str = ""
+    end_date: str = ""
+    template_id: str = ""
+
+
+class PreviewDecompte(BaseModel):
+    from_mailbox: str
+    copropriete_id: str
+    fiscal_year_id: str
+    owner_id: str
+    subject: str = ""
+    body_html: str = ""
+    include_signature: bool = True
+    template_id: str = ""
+
+
 # ---------- Router ----------
 
 def create_communication_router(db):
@@ -645,5 +668,127 @@ def create_communication_router(db):
                                    owner_ids=[mutation.get("from_owner_id"), mutation.get("to_owner_id")],
                                    request=request)
         return {"success": True, **result}
+
+    # ============== PREVIEW (iter90fv) ==============
+    # Rendu du mail (subject + body HTML + signature + PDF PJ en base64)
+    # SANS envoi effectif. Utilise par le dialog "Aperçu avant envoi" cote
+    # frontend pour permettre au syndic de valider chaque destinataire avant
+    # de cliquer sur "Envoyer" pour de bon. Retourne un JSON leger que le
+    # frontend peut afficher dans un iframe (data:URL pour le PDF, HTML
+    # inline pour le mail).
+
+    async def _preview_common(request, from_mailbox, template_id, subject_in,
+                              body_in, include_signature, subject_default,
+                              body_default, owner_id, copropriete_id,
+                              balances_map=None):
+        """Rend le subject + body HTML final (avec substitution template +
+        signature) pour UN proprietaire donne. Reutilise `render_template`
+        exactement comme les endpoints send/situation et send/decompte, pour
+        garantir que l'apercu est FIDELE a ce qui sera envoye."""
+        from routes.email_templates import (
+            get_template_by_id, render_template, build_owner_email_context,
+        )
+        from bson import ObjectId as _oid
+
+        tpl = None
+        if template_id:
+            _, syndic_uid = await _resolve_syndic_scope(db, request)
+            tpl = await get_template_by_id(db, syndic_uid, template_id)
+            if not tpl:
+                raise HTTPException(404, f"Template '{template_id}' non trouve")
+        current_user = await db.users.find_one({"_id": _oid(request.state.user_id)})
+        if tpl:
+            ctx = await build_owner_email_context(db, owner_id, copropriete_id, current_user)
+            if balances_map is not None:
+                bal = balances_map.get(owner_id, 0.0)
+                ctx["balance"] = f"{bal:.2f}"
+                ctx["abs_balance"] = f"{abs(bal):.2f}"
+                ctx["balance_status"] = (
+                    "debiteur" if bal > 0 else ("crediteur" if bal < 0 else "solde")
+                )
+            subj = render_template(tpl.get("subject", "") or subject_default, ctx)
+            body_rendered = render_template(tpl.get("body_html", "") or body_default, ctx)
+        else:
+            subj = (subject_in or "").strip() or subject_default
+            body_rendered = (body_in or "").strip() or body_default
+        html = await _build_html_with_signature(request, body_rendered, include_signature)
+        return subj, html
+
+    @router.post("/preview/situation")
+    async def preview_situation(payload: PreviewSituation, request: Request):
+        """Rend l'apercu du mail + PDF Situation de compte pour UN
+        proprietaire, sans envoi. iter90fv."""
+        await _ensure_mailbox_allowed(request, payload.from_mailbox)
+        from routes.reports import _build_situation_compte_pdf, _compute_balance_tiers_for_ui
+
+        owner = await db.owners.find_one(
+            {"id": payload.owner_id},
+            {"_id": 0, "id": 1, "email": 1, "name": 1},
+        )
+        if not owner:
+            raise HTTPException(404, "Proprietaire introuvable")
+
+        balances_map = {}
+        if payload.template_id:
+            bal_data = await _compute_balance_tiers_for_ui(db, payload.copropriete_id)
+            balances_map = {b["owner_id"]: b["balance"] for b in bal_data.get("owners", [])}
+
+        subj, html = await _preview_common(
+            request, payload.from_mailbox, payload.template_id,
+            payload.subject, payload.body_html, payload.include_signature,
+            "Situation de votre compte - Copropriete",
+            "Bonjour,<br><br>Veuillez trouver en piece jointe la situation actuelle de votre compte.<br><br>Cordialement,",
+            payload.owner_id, payload.copropriete_id, balances_map,
+        )
+        pdf_bytes = await _build_situation_compte_pdf(
+            db, payload.owner_id, payload.copropriete_id,
+            payload.start_date or None, payload.end_date or None,
+        )
+        return {
+            "owner_id": payload.owner_id,
+            "owner_name": owner.get("name", ""),
+            "owner_email": owner.get("email", ""),
+            "from_mailbox": payload.from_mailbox,
+            "subject": subj,
+            "body_html": html,
+            "attachment_filename": f"situation_compte_{owner.get('name','').replace(' ', '_')}.pdf",
+            "attachment_pdf_base64": base64.b64encode(pdf_bytes).decode("ascii"),
+        }
+
+    @router.post("/preview/decompte")
+    async def preview_decompte(payload: PreviewDecompte, request: Request):
+        """Rend l'apercu du mail + PDF Decompte annuel pour UN proprietaire,
+        sans envoi. iter90fv."""
+        await _ensure_mailbox_allowed(request, payload.from_mailbox)
+        from routes.reports import _build_decompte_annuel_pdf
+
+        owner = await db.owners.find_one(
+            {"id": payload.owner_id},
+            {"_id": 0, "id": 1, "email": 1, "name": 1},
+        )
+        if not owner:
+            raise HTTPException(404, "Proprietaire introuvable")
+
+        subj, html = await _preview_common(
+            request, payload.from_mailbox, payload.template_id,
+            payload.subject, payload.body_html, payload.include_signature,
+            "Decompte annuel de charges - Copropriete",
+            "Bonjour,<br><br>Veuillez trouver en piece jointe votre decompte annuel de charges.<br><br>"
+            "N'hesitez pas a nous contacter en cas de question.<br><br>Cordialement,",
+            payload.owner_id, payload.copropriete_id,
+        )
+        pdf_bytes = await _build_decompte_annuel_pdf(
+            db, payload.owner_id, payload.copropriete_id, payload.fiscal_year_id,
+        )
+        return {
+            "owner_id": payload.owner_id,
+            "owner_name": owner.get("name", ""),
+            "owner_email": owner.get("email", ""),
+            "from_mailbox": payload.from_mailbox,
+            "subject": subj,
+            "body_html": html,
+            "attachment_filename": f"decompte_annuel_{owner.get('name','').replace(' ', '_')}.pdf",
+            "attachment_pdf_base64": base64.b64encode(pdf_bytes).decode("ascii"),
+        }
 
     return router

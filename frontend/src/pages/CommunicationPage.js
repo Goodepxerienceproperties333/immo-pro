@@ -19,7 +19,7 @@ import {
 import { toast } from 'sonner';
 import {
   Mail, Send, Users, FileSignature, Inbox, TriangleAlert, Trash2, Plus,
-  ArrowDownRight, ArrowUpRight, RefreshCw, Search,
+  ArrowDownRight, ArrowUpRight, RefreshCw, Search, Eye,
 } from 'lucide-react';
 
 const currency = (v) => (v || 0).toLocaleString('fr-BE', { style: 'currency', currency: 'EUR' });
@@ -210,6 +210,11 @@ function SendActionDialog({
   // iter90aw : template
   const [templates, setTemplates] = useState([]);
   const [template_id, setTemplateId] = useState('');
+  // iter90fv : previsualisation email + PJ PDF
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewData, setPreviewData] = useState(null); // { owner_id, subject, body_html, attachment_pdf_base64, ... }
+  const [previewIdx, setPreviewIdx] = useState(0);
 
   useEffect(() => {
     if (mailboxes.length && !from_mailbox) {
@@ -283,6 +288,50 @@ function SendActionDialog({
     } catch (e) {
       toast.error(extractApiError(e, 'Envoi echoue'));
     } finally { setSending(false); }
+  };
+
+  // iter90fv : appelle l'endpoint preview pour rendre subject + body + PDF PJ
+  // pour UN destinataire (celui de l'index courant). Utilise pour l'apercu
+  // avant envoi.
+  const loadPreview = async (idx) => {
+    const owner = selectedOwners[idx];
+    if (!owner) return;
+    if (!from_mailbox) return toast.error('Choisissez une boite expeditrice');
+    if (action === 'decompte' && !fiscal_year_id) return toast.error('Choisissez un exercice');
+    setPreviewLoading(true);
+    try {
+      const payload = {
+        from_mailbox,
+        copropriete_id,
+        owner_id: owner.owner_id,
+        subject: subject || defaultsFor.subject,
+        body_html: body_html || defaultsFor.body,
+        include_signature,
+        template_id: template_id || '',
+        ...(action === 'situation' ? { start_date, end_date } : {}),
+        ...(action === 'decompte' ? { fiscal_year_id } : {}),
+      };
+      const r = await api.post(`/communication/preview/${action}`, payload);
+      setPreviewData(r.data);
+    } catch (e) {
+      toast.error(extractApiError(e, 'Erreur de generation de l apercu'));
+    } finally { setPreviewLoading(false); }
+  };
+
+  const openPreview = () => {
+    if (selectedOwners.length === 0) return toast.error('Selectionnez au moins un proprietaire');
+    if (action === 'decompte' && !fiscal_year_id) return toast.error('Choisissez un exercice');
+    setPreviewIdx(0);
+    setPreviewData(null);
+    setPreviewOpen(true);
+    loadPreview(0);
+  };
+  const cyclePreview = (delta) => {
+    const next = Math.min(Math.max(previewIdx + delta, 0), selectedOwners.length - 1);
+    if (next === previewIdx) return;
+    setPreviewIdx(next);
+    setPreviewData(null);
+    loadPreview(next);
   };
 
   return (
@@ -385,12 +434,124 @@ function SendActionDialog({
         </div>
         <DialogFooter>
           <Button variant="ghost" onClick={() => setOpen(false)}>Annuler</Button>
+          {/* iter90fv : bouton Previsualiser AVANT envoi */}
+          <Button
+            variant="outline"
+            onClick={openPreview}
+            disabled={selectedOwners.length === 0 || !from_mailbox}
+            className="text-[#022D52] border-[#022D52]/40 hover:bg-[#022D52]/10"
+            data-testid={`btn-preview-${action}`}
+          >
+            <Eye className="h-4 w-4 mr-1" /> Previsualiser
+          </Button>
           <Button onClick={send} disabled={sending} className="bg-[#022D52] hover:bg-[#01213e]"
                   data-testid={`btn-confirm-send-${action}`}>
             <Send className="h-4 w-4 mr-1" /> Envoyer
           </Button>
         </DialogFooter>
       </DialogContent>
+
+      {/* iter90fv : Sub-dialog d'apercu du mail rendu + PDF PJ inline */}
+      <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
+        <DialogContent className="max-w-6xl w-[95vw] h-[90vh] p-0 overflow-hidden flex flex-col" data-testid={`dialog-preview-${action}`}>
+          <DialogHeader className="px-6 py-3 border-b border-slate-200 bg-gradient-to-r from-[#022D52] to-[#1D4ED8] text-white shrink-0">
+            <DialogTitle className="flex items-center justify-between text-white">
+              <div className="flex items-center gap-2">
+                <Eye className="h-5 w-5" />
+                <span>Apercu du mail avant envoi</span>
+                <span className="text-xs opacity-80 ml-2">
+                  ({previewIdx + 1} / {selectedOwners.length})
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => cyclePreview(-1)}
+                  disabled={previewIdx === 0 || previewLoading}
+                  className="bg-white text-[#022D52] hover:bg-slate-100 h-8"
+                  data-testid="btn-preview-prev"
+                >
+                  Precedent
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => cyclePreview(1)}
+                  disabled={previewIdx >= selectedOwners.length - 1 || previewLoading}
+                  className="bg-white text-[#022D52] hover:bg-slate-100 h-8"
+                  data-testid="btn-preview-next"
+                >
+                  Suivant
+                </Button>
+              </div>
+            </DialogTitle>
+          </DialogHeader>
+          <div className="flex-1 overflow-hidden bg-slate-100 grid grid-cols-2 gap-0">
+            {/* Colonne gauche : mail rendu */}
+            <div className="border-r border-slate-200 bg-white flex flex-col overflow-hidden">
+              <div className="px-4 py-2 border-b border-slate-200 bg-slate-50 text-xs">
+                {previewLoading ? (
+                  <div className="text-slate-500">Chargement de l apercu...</div>
+                ) : previewData ? (
+                  <>
+                    <div><span className="text-slate-500">De :</span> <span className="font-mono">{previewData.from_mailbox}</span></div>
+                    <div><span className="text-slate-500">A :</span> <span className="font-mono">{previewData.owner_name} &lt;{previewData.owner_email || '(email manquant)'}&gt;</span></div>
+                    <div><span className="text-slate-500">Objet :</span> <b>{previewData.subject}</b></div>
+                    <div><span className="text-slate-500">Piece jointe :</span> <span className="font-mono text-[#022D52]">{previewData.attachment_filename}</span></div>
+                  </>
+                ) : (
+                  <div className="text-slate-400">Aucune donnee</div>
+                )}
+              </div>
+              <div className="flex-1 overflow-auto p-4">
+                {previewLoading ? (
+                  <div className="flex items-center justify-center h-full text-slate-400">
+                    <div className="animate-spin h-8 w-8 border-4 border-[#022D52] border-t-transparent rounded-full" />
+                  </div>
+                ) : previewData ? (
+                  <div
+                    className="prose prose-sm max-w-none"
+                    data-testid="preview-body-html"
+                    dangerouslySetInnerHTML={{ __html: sanitizeHtml(previewData.body_html || '') }}
+                  />
+                ) : null}
+              </div>
+            </div>
+            {/* Colonne droite : PDF PJ inline */}
+            <div className="bg-slate-800 flex flex-col overflow-hidden">
+              <div className="px-4 py-2 border-b border-slate-700 bg-slate-900 text-xs text-slate-300">
+                Apercu de la piece jointe PDF
+              </div>
+              <div className="flex-1 overflow-hidden">
+                {previewData?.attachment_pdf_base64 ? (
+                  <iframe
+                    src={`data:application/pdf;base64,${previewData.attachment_pdf_base64}`}
+                    title="Apercu PDF piece jointe"
+                    className="w-full h-full border-0"
+                    data-testid="preview-attachment-iframe"
+                  />
+                ) : (
+                  <div className="flex items-center justify-center h-full text-slate-400 text-sm">
+                    {previewLoading ? 'Generation du PDF...' : 'Aucun PDF a afficher'}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+          <DialogFooter className="px-6 py-3 border-t border-slate-200 bg-white shrink-0">
+            <Button variant="ghost" onClick={() => setPreviewOpen(false)}>Fermer</Button>
+            <Button
+              onClick={() => { setPreviewOpen(false); send(); }}
+              disabled={sending}
+              className="bg-[#022D52] hover:bg-[#01213e]"
+              data-testid={`btn-preview-confirm-send-${action}`}
+            >
+              <Send className="h-4 w-4 mr-1" /> Confirmer l envoi ({selectedOwners.length} destinataires)
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Dialog>
   );
 }

@@ -1438,6 +1438,39 @@ def create_reports_router(db):
                 return q
             return lot_share_map.get(lt.get("id"), 0)
 
+        # iter90fv : pre-fetch journal entries filtres sur cette ACP pour
+        # calculer le SOLDE NET COMPTE TIERS de chaque proprietaire (meme
+        # metrique que Balance des Tiers). Positif = debiteur, negatif =
+        # crediteur. Utilise par le nouveau tableau compact des decomptes
+        # cote frontend (iter90fv), l'utilisateur voulant voir en un
+        # coup d'oeil qui doit / a paye trop, sans deployer chaque decompte.
+        # On exclut les extournes (is_reversal + reversed) comme
+        # `_compute_balance_tiers_for_ui` et health_audit le font.
+        entries_for_balance = await db.journal_entries.find(
+            {"copropriete_id": copropriete_id, "journal_type": {"$ne": "AN"}},
+            {"_id": 0, "id": 1, "lines": 1, "is_reversal": 1, "reversed": 1},
+        ).to_list(100000)
+        owner_acc_to_id = {}
+        for o in owners:
+            accs = ((o.get("tier_accounts") or {}).get(copropriete_id, {}) or {})
+            for k in ("provisions", "reserve", "main"):
+                acc = accs.get(k)
+                if acc:
+                    owner_acc_to_id[acc] = o["id"]
+        owner_balances = {o["id"]: 0.0 for o in owners}
+        for e in entries_for_balance:
+            if e.get("is_reversal") or e.get("reversed"):
+                continue
+            for ln in e.get("lines", []) or []:
+                acc = ln.get("account_number", "")
+                oid = owner_acc_to_id.get(acc) or (
+                    ln.get("third_party_id") if ln.get("third_party_id") in owner_balances else None
+                )
+                if oid:
+                    d = float(ln.get("debit", 0) or 0)
+                    c = float(ln.get("credit", 0) or 0)
+                    owner_balances[oid] += d - c
+
         # iter90ej : phantom fallback - matche les lot_id des distribution_lines
         # legacy avec les lot_id actuels via lot_number normalise (voir iter90du).
         def _norm_lot_num(v: str) -> str:
@@ -1505,10 +1538,16 @@ def create_reports_router(db):
                 "owner_id": owner["id"],
                 "owner_name": owner["name"],
                 "vcs_code": owner.get("vcs_code", ""),
+                "email": owner.get("email", ""),
                 "lots": [{"number": lt["number"], "quotity": _lot_share(lt)} for lt in owner_lots],
                 "share_pct": round(share * 100, 2),
                 "charges": charges,
                 "total_charges": round(total_owner_charges, 2),
+                # iter90fv : solde net tier accounts (meme metrique que la
+                # Balance des Tiers et le dashboard health audit). Positif
+                # = proprietaire debiteur (doit de l'argent), negatif =
+                # crediteur (a paye trop / a du remboursement).
+                "tier_balance": round(owner_balances.get(owner["id"], 0.0), 2),
             })
 
         return {"decomptes": decomptes, "period": {"from": date_from, "to": date_to}}

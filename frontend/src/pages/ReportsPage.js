@@ -405,38 +405,74 @@ export default function ReportsPage() {
           </div>
           {decomptes && (<div className="space-y-4">
             <div className="text-sm text-slate-500 mb-2">Periode: {decomptes.period.from} au {decomptes.period.to} - {decomptes.decomptes.length} proprietaires</div>
-            {decomptes.decomptes.map(d => (
-              <Card key={d.owner_id} className="border-slate-200"><CardContent className="p-4">
-                <div className="flex items-center justify-between mb-3">
-                  <div>
-                    <span className="font-semibold text-slate-900">{d.owner_name}</span>
-                    {d.vcs_code && <span className="ml-2 font-mono text-xs text-[#022D52]">{d.vcs_code}</span>}
-                    <div className="text-xs text-slate-500">Lots: {d.lots.map(l => l.number).join(', ')} - Quote-part: {d.share_pct}%</div>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <span className="font-mono font-bold text-lg">{d.total_charges.toFixed(2)} EUR</span>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => openPreview(d.owner_id, d.owner_name)}
-                      className="text-[#022D52] border-[#022D52]/30 hover:bg-[#022D52]/10"
-                      data-testid={`preview-decompte-${d.owner_id}`}
-                      title="Apercu du decompte (avec filigrane) sans cloturer l'exercice"
-                    >
-                      <Eye size={14} className="mr-1" /> Apercu
-                    </Button>
-                    <Button variant="outline" size="sm" onClick={() => downloadPdf(d.owner_id)} data-testid={`download-pdf-${d.owner_id}`}><Download size={14} className="mr-1" /> PDF</Button>
-                  </div>
-                </div>
-                {d.charges.length > 0 && (
-                  <div className="border rounded overflow-hidden">
-                    <table className="w-full text-xs"><thead><tr className="bg-slate-50"><th className="p-2 text-left">Date</th><th className="p-2 text-left">Description</th><th className="p-2">Facture</th><th className="p-2 text-right">Montant</th></tr></thead>
-                      <tbody>{d.charges.map((c, i) => (<tr key={i} className="border-t border-slate-100"><td className="p-2 font-mono">{fmtDate(c.date)}</td><td className="p-2">{c.description}</td><td className="p-2 font-mono">{c.invoice_number}</td><td className="p-2 text-right font-mono">{c.amount.toFixed(2)}</td></tr>))}</tbody>
-                    </table>
-                  </div>
-                )}
-              </CardContent></Card>
-            ))}
+            {/* iter90fv : vue tableau compacte (1 ligne par proprietaire) au
+                lieu de l'ancien affichage carte + detail des charges. Le
+                detail complet est desormais accessible via l'oeil (apercu
+                PDF) ou le bouton PDF (telechargement direct). */}
+            <div className="border border-slate-200 rounded-md overflow-hidden bg-white" data-testid="decomptes-table">
+              <Table>
+                <TableHeader>
+                  <TableRow className="bg-slate-50 hover:bg-slate-50">
+                    <TableHead className="text-xs uppercase tracking-wider text-slate-500">Proprietaire</TableHead>
+                    <TableHead className="text-xs uppercase tracking-wider text-slate-500">Reference</TableHead>
+                    <TableHead className="text-xs uppercase tracking-wider text-slate-500">Lots</TableHead>
+                    <TableHead className="text-xs uppercase tracking-wider text-slate-500 text-right">Quote-part</TableHead>
+                    <TableHead className="text-xs uppercase tracking-wider text-slate-500 text-right">Solde compte tiers</TableHead>
+                    <TableHead className="text-xs uppercase tracking-wider text-slate-500 text-right w-[140px]">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {decomptes.decomptes.map(d => {
+                    const bal = typeof d.tier_balance === 'number' ? d.tier_balance : 0;
+                    const balColor = bal > 0.01 ? 'text-red-600' : (bal < -0.01 ? 'text-emerald-600' : 'text-slate-500');
+                    const balLabel = bal > 0.01 ? 'Debiteur' : (bal < -0.01 ? 'Crediteur' : 'Solde');
+                    return (
+                      <TableRow key={d.owner_id} data-testid={`decompte-row-${d.owner_id}`}>
+                        <TableCell className="font-medium text-slate-900">{d.owner_name}</TableCell>
+                        <TableCell className="font-mono text-xs text-[#022D52]">{d.vcs_code || '-'}</TableCell>
+                        <TableCell className="text-xs text-slate-600">{d.lots.map(l => l.number).join(', ') || '-'}</TableCell>
+                        <TableCell className="text-right font-mono text-sm">{d.share_pct}%</TableCell>
+                        <TableCell className={`text-right font-mono font-semibold ${balColor}`} data-testid={`tier-balance-${d.owner_id}`}>
+                          {Math.abs(bal).toFixed(2)} EUR
+                          <div className="text-[10px] uppercase tracking-wider font-normal opacity-70">{balLabel}</div>
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <div className="flex items-center justify-end gap-1">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => openPreview(d.owner_id, d.owner_name)}
+                              className="text-[#022D52] border-[#022D52]/30 hover:bg-[#022D52]/10 h-8 px-2"
+                              data-testid={`preview-decompte-${d.owner_id}`}
+                              title="Apercu du decompte detaille (filigrane)"
+                            >
+                              <Eye size={14} />
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => downloadPdf(d.owner_id)}
+                              className="h-8 px-2"
+                              data-testid={`download-pdf-${d.owner_id}`}
+                              title="Telecharger le PDF"
+                            >
+                              <Download size={14} />
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                  {decomptes.decomptes.length === 0 && (
+                    <TableRow>
+                      <TableCell colSpan={6} className="text-center text-slate-500 text-sm py-6">
+                        Aucun proprietaire sur cette periode
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </div>
           </div>)}
         </TabsContent>
       </Tabs>
