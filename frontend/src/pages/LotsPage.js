@@ -1265,7 +1265,7 @@ export default function LotsPage() {
               <label className="form-label">Description</label>
               <Input value={form.description} onChange={e => setForm({...form, description: e.target.value})} data-testid="lot-desc-input" />
             </div>
-            <div className="grid grid-cols-3 gap-4">
+            <div className={`grid ${editing ? 'grid-cols-3' : 'grid-cols-2'} gap-4`}>
               <div>
                 <label className="form-label">Etage</label>
                 <Input type="number" value={form.floor} onChange={e => setForm({...form, floor: e.target.value})} data-testid="lot-floor-input" />
@@ -1274,10 +1274,18 @@ export default function LotsPage() {
                 <label className="form-label">Surface (m2)</label>
                 <Input type="number" step="0.01" value={form.area} onChange={e => setForm({...form, area: e.target.value})} data-testid="lot-area-input" />
               </div>
-              <div>
-                <label className="form-label">Tantiemes</label>
-                <Input type="number" step="0.01" value={form.quotity} onChange={e => setForm({...form, quotity: e.target.value})} data-testid="lot-quotity-input" />
-              </div>
+              {/* iter90gd : le champ Tantiemes n'est visible qu'en mode
+                  EDITION. A la creation, les tantiemes sont saisis plus tard
+                  via l'edition du lot ou via les cles de repartition (leur
+                  valeur est definie par l'acte notarie / le reglement de
+                  copropriete, souvent inconnue au moment de la creation
+                  initiale du lot). */}
+              {editing && (
+                <div>
+                  <label className="form-label">Tantiemes</label>
+                  <Input type="number" step="0.01" value={form.quotity} onChange={e => setForm({...form, quotity: e.target.value})} data-testid="lot-quotity-input" />
+                </div>
+              )}
             </div>
             <div>
               <label className="form-label">Proprietaires <span className="text-slate-400 font-normal">(recherche par nom, email, VCS)</span></label>
