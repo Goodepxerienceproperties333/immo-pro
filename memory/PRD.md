@@ -11,6 +11,53 @@ Multi-ACP avec **chinese walls stricts** sur donnees comptables/financieres.
 Auth: JWT cookie + middleware global FastAPI.
 Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
+### Iter90fu (Feb 2026) - BUG PROD : health audit flaggait un CREDITEUR comme "en attente de traitement"
+
+**Ticket utilisateur (Feb 2026, PROD ACP Acacia TER)** :
+> "Les informations concernant matexi en tableau de bord sont fausses. La
+> balance étant créditrice"
+
+Screenshots : Balance des Tiers montre Matexi Solde=-1755.42 EUR
+(Crediteur, badge vert), 37010 appeles vs 38765 payes. Le dashboard "sante
+comptable" en dessous affichait pourtant l'anomalie "1 proprietaire avec
+appel non paye et solde tier non debiteur -> Matexi Total du 20950.00 EUR,
+150 appels, retard 257j".
+
+**Root cause** : `health_audit.py::compute_health_audit` (endpoint
+`/api/dashboard/health-audit`) classait les proprietaires via :
+```python
+target = late_owners if balance > 0.01 else pending_owners
+```
+Consequence : un proprietaire CREDITEUR (`balance < -0.01`) - qui a paye
+PLUS que ce qui lui a ete appele - etait classe dans `pending_owners`
+juste parce que certains flags `paid` des `fund_calls.distribution[]`
+historiques n'ont jamais ete togglees (donnees legacy, import Optipro,
+lettrage bancaire manuel non propage aux fund_calls). Le tableau de bord
+affichait alors des dettes FANTOMES de 20950 EUR alors que le solde
+comptable reel etait -1755 EUR (creditrice).
+
+**Fix iter90fu** (`health_audit.py::compute_health_audit`) :
+- Filtre explicite `if balance < -0.01: continue` AVANT le classement
+  late/pending. Un proprietaire crediteur ne peut logiquement pas etre
+  "en retard" NI "en attente" - il a paye TROP.
+- Les fund_calls avec flag `paid` non mis a jour sont un probleme de
+  "compliance de flag" separe, pas une anomalie comptable reelle. Le
+  syndic doit corriger via lettrage/rapprochement bancaire.
+
+**Tests** (`test_iter90fu_health_audit_creditor_not_flagged.py`, 3/3
+verts) :
+- Crediteur (AC=1000, FI=1500 -> solde=-500) avec fund_call non paid
+  -> exclu completement du rapport (ni late, ni pending).
+- Debiteur reel (solde=+800) -> reste dans `late_owners` (regle
+  inchangee).
+- Solde ~0 (VE non generee, appel pose) -> reste dans `pending_owners`
+  (comportement iter90ar preserve).
+
+Regression : 3/3 tests iter90fo (perf + correctness) restent verts.
+
+**Redeploiement requis en PROD** pour Acacia TER (Matexi ne doit plus
+apparaitre dans les alertes du dashboard).
+
 ### Iter90ft (Feb 2026) - BUG PROD (3eme redite iter90fr/fs) : quotites du bilan pas prises dans la cle generale
 
 **Ticket utilisateur (Feb 2026, PROD Acacia TER, 3eme rapport du meme bug)** :

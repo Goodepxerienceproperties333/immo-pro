@@ -270,8 +270,19 @@ async def compute_health_audit(db, copropriete_id: str, days_threshold: int = 60
                     if not oid:
                         continue
                     balance = owner_balance.get(oid, 0.0)
+                    # iter90fu : ne JAMAIS flagger un proprietaire CREDITEUR
+                    # (solde tier < -0.01). Le proprietaire a paye PLUS que
+                    # ce qui lui a ete appele - il ne peut pas etre "en
+                    # retard" ni "en attente" quel que soit le flag `paid`
+                    # des fund_calls (souvent legacy/non mis a jour apres
+                    # lettrage bancaire). Bug remonte par l'utilisateur
+                    # sur ACP Acacia TER PROD : Matexi affiche Solde -1755
+                    # EUR (creditrice) mais apparaissait en "attente de
+                    # traitement" avec 20950 EUR de dettes fantomes.
+                    if balance < -0.01:
+                        continue
                     # Rule : solde tier debiteur > 0.01 -> retard confirme
-                    # Sinon (=0 ou credit) -> retard en attente de comptabilisation
+                    # Sinon (=0 environ) -> retard en attente de comptabilisation
                     target = late_owners if balance > 0.01 else pending_owners
                     if oid not in target:
                         target[oid] = {
