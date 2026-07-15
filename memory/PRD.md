@@ -6,6 +6,48 @@ scinder au prochain grand chantier en `PRD.md` (statique) / `CHANGELOG.md`
 session par prudence (risque de perte d'info sur un fichier de 9400+
 lignes sans relecture complete).
 
+### Iter90g1 (Feb 2026) - PRORATA MUTATION DANS LE DECOMPTE (fix ecart Optipro)
+
+**Ticket utilisateur** :
+> "iter90g1 : Prorata mutation dans le decompte (~sur votre feu vert) GO"
+> Ecart d'environ 1400 EUR entre Optipro et l'App du a un traitement
+> incorrect des mutations en cours d'exercice ("318/365 jours").
+
+**Choix utilisateur (5 questions confirmees)** :
+- Source des dates : `db.mutations` collection (sale_date, from_owner_id, to_owner_id)
+- Base : jours calendaires
+- Comportement : ancien paie prorata sur sa periode, nouveau paie le reste (Interpretation B)
+- Frais concernes : uniquement charges courantes (Class 6)
+
+**Fix** :
+1. `pdf_decompte.py::build_decompte_pdf` : remplacement du filtrage par date
+   de facture (iter90el) par un vrai PRORATA multiplicatif :
+   `amt_owner *= days_owned / days_total`. Applique sur toutes les charges
+   courantes de l'exercice, independamment de la date exacte de la facture.
+2. Fix off-by-one dans le calcul des jours possedes : convention iter76,
+   le jour de la vente appartient a l'ACHETEUR. Le vendeur finit la
+   veille (`sale_date - 1`).
+3. Prorata affiche par facture dans la colonne detail : "prorata mutation
+   X.X% (total facture: YYY EUR)".
+4. Deduplication au niveau owner via `owner_seen_inv_prorata` (dict) qui
+   conserve le prorata MAX vu (edge case : owner multi-lots avec mutation
+   sur un seul).
+
+**Regressions couvertes (11 tests)** :
+- `test_iter90g1_pdf_decompte_prorata_mutation.py` : 6 tests
+  * no_mutation_full_year (grand_dist == charges totales)
+  * seller_gets_days_before_sale (181/365 sur 2000 EUR = 991)
+  * buyer_gets_days_from_sale_to_year_end (184/365)
+  * seller_plus_buyer_equals_full_charges (sanity : somme == 100%)
+  * includes_invoices_outside_owned_period (facture Jan pour acheteur
+    Jun apparait avec prorata, contrairement a iter90el)
+  * zero_days_owned_skips_lot (edge case)
+- `test_iter90el_pdf_decompte_watermark_and_prorata.py` : 5 tests
+  (renomme depuis iter90ek_el, l'ancien fichier a ete supprime).
+  Test `partial_year_after_sale` mis a jour : 78 jours (au lieu de 79)
+  pour refleter la convention "vendeur finit la veille".
+
+
 ## Architecture
 Multi-ACP avec **chinese walls stricts** sur donnees comptables/financieres.
 Auth: JWT cookie + middleware global FastAPI.

@@ -328,18 +328,30 @@ def build_decompte_pdf(
     # Correction : dedup les invoices AU NIVEAU OWNER (et par LOT) pour
     # le total "Montant à répartir" (les colonnes "Part proprietaire" et
     # "Part occupant" restent des sommes de fractions et sont correctes).
-    owner_seen_inv_ids = set()          # invoices deja comptees pour l'owner
-    owner_grand_dist_unique = 0.0       # somme des inv_total uniques
+    # iter90g1 : avec prorata mutation, on retient le prorata MAX vu pour
+    # chaque invoice (ex: proprietaire multi-lots ou un seul a subi une
+    # mutation) afin d'eviter de sous-evaluer le "Montant à répartir".
+    owner_seen_inv_prorata = {}         # inv_id -> max prorata seen for this owner
+    owner_grand_dist_unique = 0.0       # somme des inv_total uniques (prorates)
     lot_seen_inv_ids = {}               # lot_id -> set(inv_id)
-    lot_dist_unique = {}                # lot_id -> somme des inv_total uniques
+    lot_dist_unique = {}                # lot_id -> somme des inv_total_for_lot uniques
     # Aggregate by account globally for the "Recap locataire" summary
     occupant_summary_by_acc = {}  # acc -> {occ_amt, label}
 
-    # iter90el : calcul du prorata mutation par lot.
+    # iter90el / iter90g1 : calcul du prorata mutation par lot.
     # Pour chaque lot du proprietaire, determine la periode de possession
-    # dans l'exercice (start_iso, end_iso). Les invoices dont la date est
-    # HORS de cette periode ne sont pas attribuees a ce proprietaire.
-    from datetime import date as _date
+    # dans l'exercice (start_iso, end_iso). Convention Belge (art. 3.86
+    # CDE + iter76 fund calls) : la journee de vente est attribuee a
+    # l'ACHETEUR. Le vendeur possede jusqu'a la veille de la vente inclus.
+    #
+    # iter90g1 : remplace le simple FILTRAGE par date (iter90el) par un vrai
+    # PRORATA multiplicatif (days_owned / days_total) applique aux invoices
+    # de charges courantes (Class 6). Repond a la pratique Optipro et au
+    # scenario "318/365" mentionne par l'utilisateur : les charges annuelles
+    # (assurance, entretien) sont partagees entre ancien et nouveau
+    # proprietaire au prorata des jours de possession, sans regarder la
+    # date exacte de la facture.
+    from datetime import date as _date, timedelta as _td
     def _iso_to_date(s):
         try:
             return _date.fromisoformat((s or "")[:10])
@@ -369,14 +381,21 @@ def build_decompte_pdf(
             sd = (m.get("sale_date") or "")[:10]
             if not sd or not (fy_start_iso <= sd <= fy_end_iso):
                 continue
-            # Owner ACHETE le lot pendant l'exercice -> possession debute a sd
+            # Owner ACHETE le lot pendant l'exercice -> possession debute
+            # a sd (jour de vente inclus pour l'acheteur, cf iter76).
             if m.get("to_owner_id") == owner_id_local:
                 if sd > start_iso:
                     start_iso = sd
-            # Owner VEND le lot pendant l'exercice -> possession finit a sd
+            # Owner VEND le lot pendant l'exercice -> possession finit la
+            # VEILLE de sd (jour de vente exclu du vendeur, cf iter76). Fix
+            # off-by-one iter90g1 : evite le double comptage d'un jour
+            # entre vendeur et acheteur.
             if m.get("from_owner_id") == owner_id_local:
-                if sd < end_iso:
-                    end_iso = sd
+                sd_dt = _iso_to_date(sd)
+                if sd_dt:
+                    day_before = (sd_dt - _td(days=1)).isoformat()
+                    if day_before < end_iso:
+                        end_iso = day_before
         # Prorata jours
         s_dt = _iso_to_date(start_iso)
         e_dt = _iso_to_date(end_iso)
@@ -444,17 +463,26 @@ def build_decompte_pdf(
         for lot_id, amt_owner in lot_share.items():
             if abs(amt_owner) < 0.001 and abs(inv_total) < 0.001:
                 continue
-            # iter90el : filtrage par periode de possession du proprietaire
-            # sur ce lot dans l'exercice. Les invoices HORS periode ne sont
-            # pas attribuees au proprietaire (mutations en cours d'annee).
+            # iter90g1 : prorata mutation. Applique un facteur multiplicatif
+            # (days_owned / days_total) sur la quote-part du proprietaire
+            # et sur le montant total distribue au lot. Remplace le simple
+            # filtrage par date (iter90el) qui produisait un ecart avec
+            # Optipro sur les charges annuelles (assurance, entretien).
+            # Convention : "Ancien paie prorata sur la periode ou il
+            # possedait, nouveau paie le reste" (Interpretation B).
+            lot_prorata = 1.0
             period = lot_owned_period.get(lot_id)
             if period:
-                start_iso, end_iso, days_owned, _ = period
-                inv_date_iso = (inv.get("date") or "")[:10]
-                if inv_date_iso and (inv_date_iso < start_iso or inv_date_iso > end_iso):
-                    continue
+                _s, _e, days_owned, days_total = period
                 if days_owned <= 0:
-                    continue
+                    continue  # Owner n'a pas possede ce lot dans l'exercice
+                if days_total > 0 and days_owned < days_total:
+                    lot_prorata = days_owned / days_total
+            if lot_prorata < 1.0:
+                amt_owner = round(amt_owner * lot_prorata, 2)
+                inv_total_for_lot = round(inv_total * lot_prorata, 2)
+            else:
+                inv_total_for_lot = inv_total
             amt_occ = round(amt_owner * occ_pct / 100, 2)
             amt_prop = round(amt_owner - amt_occ, 2)
 
@@ -486,7 +514,9 @@ def build_decompte_pdf(
                 "supplier": inv.get("supplier", "") or "",
                 "description": final_desc,
                 "reference": inv.get("reference", "") or inv.get("invoice_number", "") or "",
-                "total_amount": inv_total,
+                "total_amount": inv_total_for_lot,
+                "total_amount_full": inv_total,
+                "prorata": lot_prorata,
                 "owner_amt": amt_owner,
                 "owner_occ": amt_occ,
                 "owner_prop": amt_prop,
@@ -498,17 +528,22 @@ def build_decompte_pdf(
             seen_key = (acc, inv_id)
             if seen_key not in key_bucket["_invoices_seen"]:
                 key_bucket["_invoices_seen"].add(seen_key)
-                acc_bucket["total_dist"] += inv_total
+                acc_bucket["total_dist"] += inv_total_for_lot
 
             # iter90fz : dedup au niveau LOT et OWNER pour eviter le
             # double-comptage dans les totaux "Montant à répartir".
+            # iter90g1 : le montant deduplique est deja prorate par lot.
+            # Pour l'owner, on retient le prorata MAX (cas rare : owner a
+            # deux lots, un seul a subi mutation).
             lot_seen = lot_seen_inv_ids.setdefault(lot_id, set())
             if inv_id not in lot_seen:
                 lot_seen.add(inv_id)
-                lot_dist_unique[lot_id] = lot_dist_unique.get(lot_id, 0.0) + inv_total
-            if inv_id not in owner_seen_inv_ids:
-                owner_seen_inv_ids.add(inv_id)
-                owner_grand_dist_unique += inv_total
+                lot_dist_unique[lot_id] = lot_dist_unique.get(lot_id, 0.0) + inv_total_for_lot
+            prev_prorata = owner_seen_inv_prorata.get(inv_id, 0.0)
+            if lot_prorata > prev_prorata:
+                # Ajoute le delta pour convergerf vers max(prorata) * inv_total
+                owner_grand_dist_unique += inv_total * (lot_prorata - prev_prorata)
+                owner_seen_inv_prorata[inv_id] = lot_prorata
 
             total_owner_charges += amt_owner
             total_occupant_share += amt_occ
@@ -776,6 +811,17 @@ def build_decompte_pdf(
                         if iv.get("auto_split"):
                             parts.append(
                                 f"<font color='#D97706' size='7'><i>repartition auto (tantiemes)</i></font>"
+                            )
+                        # iter90g1 : affiche le prorata mutation applique
+                        # a cette facture si != 1.0 (mutation en cours d'exercice)
+                        _pr = iv.get("prorata", 1.0)
+                        if _pr < 0.999:
+                            _full = iv.get("total_amount_full", iv.get("total_amount", 0))
+                            parts.append(
+                                f"<font color='#7C3AED' size='7'><i>"
+                                f"prorata mutation {_pr*100:.1f}% "
+                                f"(total facture: {_fmt_eur(_full)})"
+                                f"</i></font>"
                             )
                         inv_label = " ".join(parts)
                         inv_indent_style = ParagraphStyle(
