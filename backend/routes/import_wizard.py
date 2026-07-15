@@ -580,7 +580,11 @@ def create_import_wizard_router(db):
                     keys_by_code[v] = k["id"]
         cats_by_code: dict[str, str] = {}
         cats_by_account: dict[str, str] = {}
+        # iter90g9 : conserve la liste complete pour deriver account_number a partir
+        # de la nature de depense quand le fichier source ne fournit pas de compte.
+        expense_cats: list[dict] = []
         async for c in db.expense_categories.find({"copropriete_id": copro_id}, {"_id": 0, "id": 1, "code": 1, "account_number": 1}):
+            expense_cats.append(c)
             v = (c.get("code") or "").strip()
             if v:
                 cats_by_code[v.zfill(4)] = c["id"]
@@ -657,6 +661,35 @@ def create_import_wizard_router(db):
                     expense_cat_id = cats_by_account.get(account_num) or ""
                 if expense_cat_id:
                     matched_category += 1
+
+                # iter90g9 : si le fichier source Optipro/CODA n'a pas fourni
+                # de compte comptable ET qu'une nature de depense a ete
+                # matchee, derive account_num de la nature (elle-meme liee
+                # a un compte PCMN). Sans cela, la facture serait importee
+                # sans account_number -> tombe dans "Autres charges" du
+                # decompte -> violation PCMN.
+                if not account_num and expense_cat_id:
+                    cat_doc = next(
+                        (c for c in expense_cats if c.get("id") == expense_cat_id),
+                        None,
+                    )
+                    if cat_doc and cat_doc.get("account_number"):
+                        account_num = (cat_doc.get("account_number") or "").strip()
+
+                # iter90g9 : verrou PCMN - refuse l'import d'une facture sans
+                # compte comptable resoluble. On la met dans errors[] avec un
+                # message explicite pour que le syndic corrige la source ou
+                # cree la nature manquante avant de rejouer l'import.
+                if not account_num:
+                    errors.append({
+                        "row": idx,
+                        "error": (
+                            "Compte comptable manquant (ni nature_code, ni "
+                            "account_number resoluble). Corrigez le fichier "
+                            "source ou creez la nature de depense correspondante."
+                        ),
+                    })
+                    continue
 
                 total_amount = float(inv.get("montant_tvac") or 0)
                 vat_amount = float(inv.get("montant_tva") or 0)

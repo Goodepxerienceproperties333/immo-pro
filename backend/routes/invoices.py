@@ -1261,6 +1261,24 @@ def create_invoices_router(db):
             else:
                 raise HTTPException(400, "Au moins un proprietaire doit etre selectionne pour un frais privatif")
             account_number = "643"
+        # iter90g9 : verrou PCMN - une facture DOIT toujours avoir un compte
+        # comptable affecte. Impossible d'enregistrer une facture "orpheline"
+        # qui tombera dans "Autres charges" du decompte. Trois voies :
+        # 1) account_number explicite fourni dans le formulaire
+        # 2) expense_category_id qui derive un account_number
+        # 3) is_private_fee -> force account_number = 643 (deja gere ci-dessus)
+        # 4) resolved_lines multi-lignes -> chaque ligne a son propre compte
+        #    (deja valide par _resolve_invoice_lines ligne 819)
+        if not resolved_lines and not (account_number or "").strip():
+            raise HTTPException(
+                400,
+                "Compte comptable requis : selectionnez soit une nature de "
+                "depense (elle derivera automatiquement le compte PCMN), soit "
+                "saisissez directement un numero de compte (ex: 6140 Assurance "
+                "incendie, 61300 Honoraires syndic). Une facture ne peut jamais "
+                "etre enregistree sans compte : la comptabilite PCMN belge "
+                "l'interdit."
+            )
         # Compute distribution lines if key provided (skipped for private fees,
         # remplaced by merged_dist in multi-line mode)
         distribution_lines = []
@@ -1793,6 +1811,18 @@ def create_invoices_router(db):
             else:
                 raise HTTPException(400, "Au moins un proprietaire doit etre selectionne pour un frais privatif")
             account_number = "643"
+        # iter90g9 : meme verrou que create_invoice - impossible d'enregistrer
+        # une facture sans compte comptable (voir explication dans POST /invoices).
+        if not resolved_lines and not (account_number or "").strip():
+            raise HTTPException(
+                400,
+                "Compte comptable requis : selectionnez soit une nature de "
+                "depense (elle derivera automatiquement le compte PCMN), soit "
+                "saisissez directement un numero de compte (ex: 6140 Assurance "
+                "incendie, 61300 Honoraires syndic). Une facture ne peut jamais "
+                "etre enregistree sans compte : la comptabilite PCMN belge "
+                "l'interdit."
+            )
         update = {
             "number": data.number, "date": data.date, "due_date": data.due_date,
             "supplier": data.supplier, "description": data.description,

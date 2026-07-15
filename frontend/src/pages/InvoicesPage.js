@@ -452,6 +452,21 @@ export default function InvoicesPage() {
           if (!ln.account_number) { toast.error(`Ligne ${i + 1} : compte PCMN requis`); return; }
           if (!Number(ln.amount) || Number(ln.amount) <= 0) { toast.error(`Ligne ${i + 1} : montant > 0 requis`); return; }
         }
+      } else if (!invForm.is_private_fee) {
+        // iter90g9 : verrou UI - meme regle que backend
+        // Une facture 1-ligne doit avoir un compte PCMN (via nature OU direct)
+        // Frais privatif force 643 (backend) -> exempte du check UI
+        const hasAccount = (invForm.account_number || '').trim();
+        const hasCategory = (invForm.expense_category_id || '').trim();
+        if (!hasAccount && !hasCategory) {
+          toast.error(
+            'Compte comptable requis : selectionnez une nature de depense OU '
+            + 'saisissez directement un numero de compte PCMN. Une facture ne '
+            + 'peut jamais etre enregistree sans compte.',
+            { duration: 6000 }
+          );
+          return;
+        }
       }
       // iter85e : validation allocations frais privatif (centimes pour eviter
       // les erreurs d'arrondi flottants)
@@ -1347,7 +1362,12 @@ export default function InvoicesPage() {
               })()}
             </div>
             <div className={`grid grid-cols-3 gap-4 ${invForm.is_private_fee || (invForm.lines && invForm.lines.length > 0) ? 'opacity-50 pointer-events-none' : ''}`}>
-              <div><label className="form-label">Nature de depense</label>
+              <div><label className="form-label">
+                Nature de depense
+                {!invForm.is_private_fee && !(invForm.lines && invForm.lines.length > 0) && (
+                  <span className="text-rose-500 ml-1" title="Nature OU compte PCMN requis">*</span>
+                )}
+              </label>
                 <Select
                   value={invForm.expense_category_id || 'none'}
                   onValueChange={v => {
@@ -1376,7 +1396,12 @@ export default function InvoicesPage() {
                 </Select>
                 <p className="text-[10px] text-slate-400 mt-1">Pre-rempli le compte PCMN + repartition occupant/proprio</p>
               </div>
-              <div><label className="form-label">Compte PCMN</label>
+              <div><label className="form-label">
+                Compte PCMN
+                {!invForm.is_private_fee && !(invForm.lines && invForm.lines.length > 0) && (
+                  <span className="text-rose-500 ml-1" title="Nature OU compte PCMN requis">*</span>
+                )}
+              </label>
                 <AccountSearchSelect
                   accounts={accounts}
                   value={invForm.account_number}
@@ -2070,7 +2095,7 @@ export default function InvoicesPage() {
               <p className="text-sm text-slate-700">
                 Le nom saisi <b>&quot;{invSupplierGate.typedName}&quot;</b> ne correspond a aucune fiche
                 fournisseur exacte, mais ressemble a {invSupplierGate.similar.length > 1 ? 'des fournisseurs' : 'un fournisseur'} deja enregistre(s).
-                La facture ne sera PAS enregistree tant que vous n'avez pas choisi une option ci-dessous.
+                La facture ne sera PAS enregistree tant que vous n&apos;avez pas choisi une option ci-dessous.
               </p>
               <div className="bg-amber-50 border border-amber-200 rounded p-3 space-y-2 max-h-72 overflow-auto">
                 {invSupplierGate.similar.map((m, i) => (

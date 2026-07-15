@@ -6,7 +6,79 @@ scinder au prochain grand chantier en `PRD.md` (statique) / `CHANGELOG.md`
 session par prudence (risque de perte d'info sur un fichier de 9400+
 lignes sans relecture complete).
 
-### Iter90g7 (Feb 2026) - BUG DATA LEGACY : owner_lots via mutations (fix TEUWEN/MATEXI mapping)
+### Iter90g9 (Feb 2026) - VERROU PCMN STRICT : impossible de creer une facture sans compte comptable
+
+**Ticket utilisateur** :
+> "comment est-il possible qu'une facture n'ait pas de compte comptable
+> affecte ? cette situation ne doit jamais arriver !"
+
+Le user a raison : la comptabilite PCMN belge interdit une facture
+"orpheline" sans compte de charge 6xx (ou compte specifique 643 pour
+frais privatif). Les factures qui existaient sans account_number en base
+resultent de 3 defauts de conception, tous corriges par iter90g9.
+
+**Analyse des chemins d'entree (avant iter90g9)** :
+1. `POST /api/invoices` : `InvoiceInput.account_number: Optional[str] = ""`
+   permettait l'enregistrement sans compte si aucune nature n'etait
+   selectionnee.
+2. `PUT /api/invoices/{id}` : idem, permettait de VIDER retroactivement
+   le compte d'une facture existante.
+3. `import_wizard._commit_invoices` (import Optipro/CODA) : inserait un
+   doc avec `account_number = ""` si le fichier source ne fournissait
+   pas ce champ ET qu'aucune nature n'etait matchee via `nature_code`.
+
+**Fix iter90g9 - 3 verrous backend** :
+
+1. `create_invoice` (`routes/invoices.py:1263`) :
+   Apres derivation via category / is_private_fee / resolved_lines, si
+   `account_number` toujours vide en mode 1-ligne -> HTTP 400 avec message
+   explicite mentionnant "compte" et "PCMN".
+
+2. `update_invoice` (`routes/invoices.py:1795`) : meme verrou. Impossible
+   de vider retroactivement le compte d'une facture existante.
+
+3. `import_wizard._commit_invoices` (`routes/import_wizard.py:660`) :
+   - Enrichissement : si le fichier source n'a pas fourni
+     `account_number` mais `nature_code` matche une expense_category qui
+     a un `account_number` -> derive automatiquement.
+   - Verrou : si toujours vide -> ajoute a `errors[]` avec message
+     explicite et SKIP l'insertion (au lieu de creer une facture
+     orpheline qui polluera "Autres charges" du decompte).
+
+**Fix iter90g9 - UI double check** :
+
+`InvoicesPage.js` :
+- Client-side : validation avant submit du form. Si (pas de private_fee)
+  ET (pas de multi-lignes) ET (pas de nature) ET (pas de compte PCMN)
+  -> toast erreur explicite (6s duree pour donner le temps de lire).
+- Visuel : labels "Nature de depense" et "Compte PCMN" marques d'un
+  asterisque rouge en mode 1-ligne standard. Tooltip explique
+  "Nature OU compte PCMN requis".
+
+**Tests** (`test_iter90g9_invoice_requires_pcmn_account.py`, 6/6 verts) :
+- `create_invoice_without_account_number_rejected` : POST sans compte
+  -> 400 avec detail contenant "compte" + "PCMN".
+- `create_invoice_with_account_number_accepted` : POST avec compte
+  explicite -> 200.
+- `create_invoice_with_category_accepted` : POST avec nature qui derive
+  6140 -> 200, account_number = "6140" persiste.
+- `update_invoice_cannot_clear_account_number` : PUT tentative de vider
+  -> 400.
+- `private_fee_forces_643_no_error` : frais privatif sans compte ->
+  force 643 (retro-compatibilite).
+- `multiline_invoice_no_header_account_accepted` : facture multi-lignes
+  avec comptes DANS chaque ligne -> OK (header vide autorise en multi).
+
+**Score de session** : 33/33 tests pytest verts (iter90g4/g5/g6/g7/g8/g9
++ regressions historiques). Zero erreur de lint (Python + JavaScript).
+
+**Redeploiement PROD requis** pour Acacia TER. Apres redeploiement :
+- Impossible de creer/modifier une facture sans compte comptable
+- L'import Optipro/CODA refuse les factures orphelines avec message clair
+- Les factures existantes sans compte peuvent etre corrigees via iter90g8
+  ("Autres charges : diagnostic")
+
+
 
 **Ticket utilisateur** :
 > "30 lots sont assignes a MATEXI au lieu de TEUWEN, il faut un fix qui
