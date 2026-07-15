@@ -8,7 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { useNavigate } from 'react-router-dom';
-import { Receipt, X, Paperclip, Filter, Pencil, Download, Save, ChevronDown, ChevronRight, LayoutGrid, List } from 'lucide-react';
+import { Receipt, X, Paperclip, Filter, Pencil, Download, Save, ChevronDown, ChevronRight, LayoutGrid, List, AlertCircle, Wand2, CheckCircle2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAuth } from '@/contexts/AuthContext';
 import { fmtDate } from '@/lib/dateFmt';
@@ -40,6 +40,11 @@ export default function ExpensesPage() {
   // Inline edit dialog state : modifier cle de repartition + % occupant/proprio
   const [quickEdit, setQuickEdit] = useState(null);
   const [savingEdit, setSavingEdit] = useState(false);
+  // iter90g8 : dialog Diagnostic factures non categorisees
+  const [diagOpen, setDiagOpen] = useState(false);
+  const [diagLoading, setDiagLoading] = useState(false);
+  const [diagData, setDiagData] = useState(null);
+  const [applyingSupplier, setApplyingSupplier] = useState('');
 
   useEffect(() => {
     Promise.all([
@@ -70,6 +75,50 @@ export default function ExpensesPage() {
 
   const clearFilters = () => setFilters({ fiscal_year_id: '', distribution_key_id: '', expense_category_id: '', account_number: '', date_from: '', date_to: '' });
   const setField = (k, v) => setFilters(f => ({ ...f, [k]: v === ALL ? '' : v }));
+
+  // iter90g8 : Diagnostic factures non categorisees (rubrique "Autres charges")
+  const loadDiagnostic = useCallback(async () => {
+    if (!selectedCopro) { toast.error('Selectionnez une copropriete'); return; }
+    setDiagLoading(true);
+    try {
+      const params = { copropriete_id: selectedCopro };
+      if (filters.fiscal_year_id) params.fiscal_year_id = filters.fiscal_year_id;
+      const { data } = await api.get('/invoices/uncategorized-diagnostic', { params });
+      setDiagData(data);
+    } catch (e) {
+      toast.error('Erreur diagnostic : ' + (e.response?.data?.detail || e.message));
+    } finally { setDiagLoading(false); }
+  }, [selectedCopro, filters.fiscal_year_id]);
+
+  const openDiagnostic = () => {
+    setDiagOpen(true);
+    if (!diagData) loadDiagnostic();
+  };
+
+  const applySupplierSuggestion = async (supplierRow) => {
+    if (!supplierRow.suggestion) return;
+    if (!window.confirm(
+      `Appliquer le compte ${supplierRow.suggestion.account_number} `
+      + `(${supplierRow.suggestion.expense_category_name || 'nature auto'}) `
+      + `sur ${supplierRow.invoice_count} facture(s) de "${supplierRow.supplier}" ?`
+    )) return;
+    setApplyingSupplier(supplierRow.supplier);
+    try {
+      const ids = supplierRow.sample_invoices.map(i => i.id);
+      const { data } = await api.post('/invoices/bulk-assign-account', {
+        invoice_ids: ids,
+        account_number: supplierRow.suggestion.account_number,
+        expense_category_id: supplierRow.suggestion.expense_category_id || '',
+        copropriete_id: selectedCopro,
+      });
+      toast.success(`${data.updated} facture(s) mise(s) a jour pour ${supplierRow.supplier}`);
+      // Recharge diagnostic + tableau depenses
+      await loadDiagnostic();
+      await load();
+    } catch (e) {
+      toast.error('Echec bulk-assign : ' + (e.response?.data?.detail || e.message));
+    } finally { setApplyingSupplier(''); }
+  };
 
   const openQuickEdit = async (row) => {
     try {
@@ -303,6 +352,15 @@ export default function ExpensesPage() {
           </Button>
           <Button variant="outline" onClick={() => downloadOtherPdf('journals')} data-testid="journals-pdf-btn" title="Tous les journaux comptables (AC / OD / BQ / VE)">
             <Download size={16} className="mr-2" />Journaux (PDF)
+          </Button>
+          <Button
+            variant="outline"
+            onClick={openDiagnostic}
+            data-testid="uncategorized-diagnostic-btn"
+            title="Trouver et corriger en masse les factures sans compte comptable (rubrique 'Autres charges' du decompte)"
+            className="border-amber-300 text-amber-700 hover:bg-amber-50"
+          >
+            <AlertCircle size={16} className="mr-2" />Autres charges : diagnostic
           </Button>
         </div>
       </div>
@@ -778,6 +836,109 @@ export default function ExpensesPage() {
             <Button onClick={saveQuickEdit} disabled={savingEdit} className="bg-[#022D52] hover:bg-[#1D4ED8]" data-testid="qe-save-btn">
               <Save size={14} className="mr-2" />{savingEdit ? 'Enregistrement...' : 'Enregistrer'}
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* iter90g8 : Dialog Diagnostic factures non categorisees */}
+      <Dialog open={diagOpen} onOpenChange={setDiagOpen}>
+        <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto" data-testid="uncategorized-diagnostic-dialog">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertCircle className="text-amber-600" size={20} />
+              Diagnostic : factures sans compte comptable
+            </DialogTitle>
+          </DialogHeader>
+          <div className="text-xs text-slate-600 mb-3">
+            Les factures sans compte PCMN tombent dans la rubrique &quot;Autres charges&quot; du decompte annuel au lieu d&apos;etre agregees sur le bon compte (ex : 6140 Assurance incendie). Ce diagnostic propose le compte le plus frequent utilise pour chaque fournisseur, base sur l&apos;historique deja classifie.
+          </div>
+          {diagLoading ? (
+            <div className="text-center py-8 text-slate-500 text-sm">Analyse en cours...</div>
+          ) : !diagData ? (
+            <div className="text-center py-8 text-slate-500 text-sm">Cliquez sur Actualiser pour lancer le diagnostic.</div>
+          ) : diagData.total_uncategorized === 0 ? (
+            <div className="text-center py-8 text-emerald-700 flex flex-col items-center gap-2" data-testid="diag-empty">
+              <CheckCircle2 size={40} />
+              <div className="font-semibold">Aucune facture non categorisee</div>
+              <div className="text-xs text-slate-500">Toutes vos factures ont un compte comptable.</div>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <div className="rounded-md border border-amber-300 bg-amber-50/50 p-3 text-sm">
+                <div className="flex justify-between items-center">
+                  <div>
+                    <div className="font-semibold text-amber-900">
+                      {diagData.total_uncategorized} facture(s) sans compte
+                    </div>
+                    <div className="text-xs text-amber-800 mt-0.5">
+                      Total : <span className="font-mono font-bold">{diagData.total_amount_uncategorized.toFixed(2)} EUR</span>
+                    </div>
+                  </div>
+                  <Button size="sm" variant="outline" onClick={loadDiagnostic} data-testid="diag-refresh">
+                    Actualiser
+                  </Button>
+                </div>
+              </div>
+              {diagData.by_supplier.map((sup, i) => (
+                <div key={i} className="border border-slate-200 rounded-md p-3" data-testid={`diag-supplier-${i}`}>
+                  <div className="flex justify-between items-start gap-3">
+                    <div className="flex-1">
+                      <div className="font-semibold text-sm text-slate-900">{sup.supplier}</div>
+                      <div className="text-xs text-slate-500">
+                        {sup.invoice_count} facture(s) - Total{' '}
+                        <span className="font-mono font-bold">{sup.total_amount.toFixed(2)} EUR</span>
+                      </div>
+                      {sup.suggestion ? (
+                        <div className="mt-2 rounded bg-emerald-50 border border-emerald-200 p-2 text-xs">
+                          <div className="font-semibold text-emerald-900 flex items-center gap-1">
+                            <Wand2 size={12} />
+                            Suggestion : compte <span className="font-mono">{sup.suggestion.account_number}</span>
+                            {sup.suggestion.expense_category_name && (
+                              <span className="text-slate-600">
+                                ({sup.suggestion.expense_category_name})
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-[11px] text-emerald-700 mt-0.5">
+                            Confiance {(sup.suggestion.confidence * 100).toFixed(0)}% - base sur {sup.suggestion.based_on_invoices} facture(s) deja classifiees
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="mt-2 text-[11px] text-slate-400 italic">
+                          Aucune suggestion (pas d&apos;historique classifiie pour ce fournisseur)
+                        </div>
+                      )}
+                      <details className="mt-2 text-[11px] text-slate-500">
+                        <summary className="cursor-pointer hover:text-slate-700">
+                          Voir echantillon ({Math.min(sup.sample_invoices.length, 5)})
+                        </summary>
+                        <div className="mt-1 space-y-0.5">
+                          {sup.sample_invoices.map((inv, j) => (
+                            <div key={j} className="font-mono">
+                              {inv.date} - {inv.number || inv.reference || '(sans ref)'} - {inv.amount.toFixed(2)} EUR
+                            </div>
+                          ))}
+                        </div>
+                      </details>
+                    </div>
+                    {sup.suggestion && (
+                      <Button
+                        size="sm"
+                        onClick={() => applySupplierSuggestion(sup)}
+                        disabled={applyingSupplier === sup.supplier}
+                        className="bg-[#022D52] hover:bg-[#1D4ED8]"
+                        data-testid={`diag-apply-${i}`}
+                      >
+                        {applyingSupplier === sup.supplier ? 'Application...' : 'Appliquer'}
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDiagOpen(false)}>Fermer</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

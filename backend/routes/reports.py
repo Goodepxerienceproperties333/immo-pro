@@ -377,6 +377,27 @@ async def _build_decompte_annuel_pdf(db, owner_id, copropriete_id, fiscal_year_i
          "$or": [{"owner_id": owner_id}, {"owner_ids": owner_id}]},
         {"_id": 0}
     ).to_list(100)
+    # iter90g7 : inclut aussi les lots impliques dans une mutation intra-FY
+    # (via db.mutations), meme si lot.owner_id est bloque sur l'ancien
+    # proprietaire (cas bug TEUWEN/MATEXI legacy).
+    muts_for_owner_h = await db.mutations.find(
+        {"copropriete_id": copropriete_id,
+         "$or": [{"from_owner_id": owner_id}, {"to_owner_id": owner_id}],
+         "sale_date": {"$gte": fy["start_date"], "$lte": fy["end_date"]}},
+        {"_id": 0, "lot_id": 1},
+    ).to_list(1000)
+    existing_lot_ids_h = {l["id"] for l in owner_lots}
+    extra_lot_ids_h = {
+        m["lot_id"] for m in muts_for_owner_h
+        if m.get("lot_id") and m["lot_id"] not in existing_lot_ids_h
+    }
+    if extra_lot_ids_h:
+        extra_lots_h = await db.lots.find(
+            {"id": {"$in": list(extra_lot_ids_h)},
+             "copropriete_id": copropriete_id},
+            {"_id": 0}
+        ).to_list(100)
+        owner_lots.extend(extra_lots_h)
     all_lots = await db.lots.find({"copropriete_id": copropriete_id}, {"_id": 0}).to_list(1000)
 
     invoices = await db.invoices.find(
@@ -1488,12 +1509,21 @@ def create_reports_router(db):
             # Pour chaque lot, si mutation.sale_date > fy_start,
             # from_owner_id etait le proprietaire AVANT (donc au fy_start
             # si sale_date <= fy_end), on l'inclut.
+            # iter90g7 : on inclut AUSSI to_owner_id (acheteur intra-FY),
+            # sinon un acheteur dont lot.owner_id n'a pas ete mis a jour
+            # (bug legacy import TEUWEN/MATEXI) n'apparait pas dans les
+            # decomptes. Le prorata iter90g1 partagera correctement les
+            # charges vendeur/acheteur.
             for m in muts_all:
                 sd = (m.get("sale_date") or "")
-                if not sd or not m.get("from_owner_id"):
+                if not sd:
                     continue
-                if sd > fy_start and (not fy_end or sd <= fy_end):
+                if not (sd >= fy_start and (not fy_end or sd <= fy_end)):
+                    continue
+                if m.get("from_owner_id"):
                     current_owner_ids.add(m["from_owner_id"])
+                if m.get("to_owner_id"):
+                    current_owner_ids.add(m["to_owner_id"])
 
         # Pour "all" : owners globaux dont un compte tier n'est PAS
         # a zero dans cette ACP.
@@ -1581,11 +1611,47 @@ def create_reports_router(db):
         }
         current_lot_ids = {lt["id"] for lt in lots}
 
+        # iter90g7 : mapping owner -> lots impliques dans une mutation intra-FY.
+        # Corrige le bug TEUWEN/MATEXI : quand lot.owner_id reste bloque sur
+        # l'ancien proprietaire (import legacy, migration incomplete), l'acheteur
+        # n'apparait dans AUCUN decompte. En s'appuyant sur db.mutations (source
+        # de verite pour l'historique), on rattrape ces cas. Le prorata iter90g1
+        # partagera ensuite correctement les charges entre vendeur/acheteur.
+        from collections import defaultdict
+        lots_via_mutations = defaultdict(set)  # owner_id -> set(lot_id)
+        for m in muts_all:
+            sd = (m.get("sale_date") or "")
+            if not sd:
+                continue
+            if fy_start and sd < fy_start:
+                continue
+            if fy_end and sd > fy_end:
+                continue
+            lid = m.get("lot_id")
+            if not lid:
+                continue
+            if m.get("from_owner_id"):
+                lots_via_mutations[m["from_owner_id"]].add(lid)
+            if m.get("to_owner_id"):
+                lots_via_mutations[m["to_owner_id"]].add(lid)
+
         total_quotity = sum(_lot_share(lt) for lt in lots)
 
         decomptes = []
         for owner in owners:
-            owner_lots = [lt for lt in lots if lt.get("owner_id") == owner["id"]]
+            # iter90g7 : trois criteres pour rattacher un lot a un owner :
+            #   1. lot.owner_id == owner.id (owner ACTUEL, cas standard)
+            #   2. owner.id in lot.owner_ids (co-propriete legacy)
+            #   3. lot implique dans une mutation intra-FY (vendeur ou acheteur
+            #      via db.mutations, meme si lot.owner_id est bloque sur
+            #      l'ancien proprio suite a un import legacy)
+            mut_lot_ids = lots_via_mutations.get(owner["id"], set())
+            owner_lots = [
+                lt for lt in lots
+                if lt.get("owner_id") == owner["id"]
+                or owner["id"] in (lt.get("owner_ids") or [])
+                or lt["id"] in mut_lot_ids
+            ]
             owner_lot_ids = {lt["id"] for lt in owner_lots}
             owner_quotity = sum(_lot_share(lt) for lt in owner_lots)
             share = owner_quotity / total_quotity if total_quotity > 0 else 0
@@ -1739,12 +1805,33 @@ def create_reports_router(db):
         if not copro:
             raise HTTPException(404, "Copropriete non trouvee")
 
-        # Owner's lots in this ACP
+        # Owner's lots in this ACP - iter90g7 : inclut aussi les lots impliques
+        # dans une mutation intra-FY (via db.mutations), meme si lot.owner_id est
+        # bloque sur l'ancien proprietaire (cas bug TEUWEN/MATEXI legacy).
         owner_lots = await db.lots.find(
             {"copropriete_id": copro_id_use,
              "$or": [{"owner_id": owner_id}, {"owner_ids": owner_id}]},
             {"_id": 0}
         ).to_list(100)
+        # Ajoute les lots impliques dans une mutation ou l'owner est vendeur/acheteur
+        muts_for_owner = await db.mutations.find(
+            {"copropriete_id": copro_id_use,
+             "$or": [{"from_owner_id": owner_id}, {"to_owner_id": owner_id}],
+             "sale_date": {"$gte": fy["start_date"], "$lte": fy["end_date"]}},
+            {"_id": 0, "lot_id": 1},
+        ).to_list(1000)
+        existing_lot_ids = {l["id"] for l in owner_lots}
+        extra_lot_ids = {
+            m["lot_id"] for m in muts_for_owner
+            if m.get("lot_id") and m["lot_id"] not in existing_lot_ids
+        }
+        if extra_lot_ids:
+            extra_lots = await db.lots.find(
+                {"id": {"$in": list(extra_lot_ids)},
+                 "copropriete_id": copro_id_use},
+                {"_id": 0}
+            ).to_list(100)
+            owner_lots.extend(extra_lots)
         all_lots = await db.lots.find({"copropriete_id": copro_id_use}, {"_id": 0}).to_list(1000)
 
         # Invoices in period

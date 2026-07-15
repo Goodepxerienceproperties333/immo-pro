@@ -6,7 +6,77 @@ scinder au prochain grand chantier en `PRD.md` (statique) / `CHANGELOG.md`
 session par prudence (risque de perte d'info sur un fichier de 9400+
 lignes sans relecture complete).
 
-### Iter90g6 (Feb 2026) - BUG CRITIQUE : le decompte annuel IGNORAIT les OD lot_mutation (transfert fonds de roulement + prorata)
+### Iter90g7 (Feb 2026) - BUG DATA LEGACY : owner_lots via mutations (fix TEUWEN/MATEXI mapping)
+
+**Ticket utilisateur** :
+> "30 lots sont assignes a MATEXI au lieu de TEUWEN, il faut un fix qui
+> combine lot.owner_id + les cles de distribution pour retrouver le bon
+> proprietaire des lots"
+
+**Root cause** :
+Quand `lot.owner_id` reste bloque sur l'ancien proprietaire suite a un
+import legacy Optipro/CODA (la mutation etait dans `db.mutations` mais
+`lot.owner_id` n'a pas ete mis a jour), l'ACHETEUR n'apparaissait dans
+AUCUN decompte :
+- `reports.py::decompte_annuel` (JSON, ligne 1588) filtrait uniquement
+  `lot.owner_id == owner.id`
+- `current_owner_ids` (iter90fw) n'ajoutait que `from_owner_id` des
+  mutations, pas `to_owner_id` (acheteurs).
+
+**Fix iter90g7** :
+Pour chaque owner, un lot est rattache si :
+1. `lot.owner_id == owner.id` (owner ACTUEL, cas standard)
+2. `owner.id in lot.owner_ids` (co-propriete)
+3. Il existe une mutation intra-FY ou `owner.id in (from_owner_id,
+   to_owner_id)` ET `mutation.lot_id == lot.id`
+
+Applique dans 4 endpoints :
+- `routes/reports.py::decompte_annuel` (JSON) - build `lots_via_mutations`
+  defaultdict + owner_lots filter avec 3 criteres
+- `routes/reports.py::decompte_pdf` (PDF syndic) - db.mutations rescue
+- `routes/reports.py::_build_decompte_annuel_pdf` (helper communication)
+- `routes/owner_portal.py::download_decompte_pdf` (portail proprio)
+- `current_owner_ids` inclut maintenant AUSSI `to_owner_id` (buyers intra-FY)
+
+Le prorata iter90g1 partage ensuite correctement les charges vendeur/
+acheteur sur base de `days_owned/365`.
+
+**Tests** (`test_iter90g7_owner_lots_via_mutations.py`, 3/3 verts) :
+- `teuwen_appears_in_json_decompte_despite_stale_owner_id`
+- `teuwen_pdf_endpoint_returns_valid_pdf`
+- `standard_owner_no_regression`
+
+### Iter90g8 (Feb 2026) - Diagnostic + bulk-fix factures sans compte PCMN
+
+**Ticket utilisateur** :
+Factures B'Cover (Assurance immeuble 997,97 + Prime B'Property 149,81)
+classees dans "Autres charges" du decompte au lieu de 6140/6141 chez
+Optipro. Cause : import legacy Optipro/CODA sans mapping automatique.
+
+**Fix iter90g8** (2 endpoints + 1 UI Dialog) :
+1. `GET /api/invoices/uncategorized-diagnostic?copropriete_id=X&fiscal_year_id=Y` :
+   - Liste toutes les factures avec `account_number` vide
+   - Groupe par supplier avec `sample_invoices`, total, count
+   - Pour chaque supplier, propose l'account_number LE PLUS FREQUENT parmi
+     ses factures deja classifiees + expense_category_id + confidence
+2. `POST /api/invoices/bulk-assign-account` :
+   - Body : `{invoice_ids, account_number, expense_category_id, copropriete_id}`
+   - Chinese wall strict (403 si facture d'une autre ACP)
+   - Regenere l'ecriture AC associee via `_delete_auto_entries` +
+     `generate_purchase_entry`
+3. UI : bouton "Autres charges : diagnostic" dans ExpensesPage.js avec
+   Dialog listant les fournisseurs, suggestion + bouton "Appliquer" batch.
+
+**Tests** (`test_iter90g8_uncategorized_diagnostic_and_bulk_fix.py`, 3/3 verts) :
+- `diagnostic_finds_uncategorized_and_suggests`
+- `bulk_assign_updates_and_returns_count`
+- `bulk_assign_refuses_other_acp` (chinese wall)
+
+**Score de session** : 27/27 tests pytest verts (iter90g4/g5/g6/g7/g8 +
+regressions historiques). Zero erreur de lint. Redeploiement PROD requis
+pour Acacia TER.
+
+
 
 **Ticket utilisateur (PROD, decompte TEUWEN vs Optipro, ecart 555 EUR)** :
 > "les décomptes sont toujours très différents en terme de frais... le total

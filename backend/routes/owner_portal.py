@@ -942,6 +942,9 @@ def create_owner_portal_router(db):
 
         # Trouver la fiche du proprietaire pour cette ACP (peut differer du
         # primary si multi-ACP). On matche par lot.owner_id ou owner_ids.
+        # iter90g7 : inclut aussi les lots impliques dans une mutation intra-FY
+        # via db.mutations, meme si lot.owner_id est bloque sur l'ancien
+        # proprietaire (cas bug TEUWEN/MATEXI legacy).
         owner_lots = await db.lots.find(
             {"copropriete_id": copropriete_id,
              "$or": [
@@ -997,6 +1000,30 @@ def create_owner_portal_router(db):
                 f"L'exercice '{fy.get('name','')}' n'est pas cloture. "
                 "Le decompte annuel sera disponible apres la cloture par le syndic."
             )
+
+        # iter90g7 : rattrapage - lots impliques dans une mutation intra-FY
+        # via db.mutations, meme si lot.owner_id est bloque sur l'ancien
+        # proprietaire (cas bug TEUWEN/MATEXI legacy). Prorata iter90g1 gerera
+        # le partage vendeur/acheteur.
+        muts_owner_op = await db.mutations.find(
+            {"copropriete_id": copropriete_id,
+             "$or": [{"from_owner_id": {"$in": owner_ids}},
+                     {"to_owner_id": {"$in": owner_ids}}],
+             "sale_date": {"$gte": fy["start_date"], "$lte": fy["end_date"]}},
+            {"_id": 0, "lot_id": 1},
+        ).to_list(1000)
+        existing_lot_ids_op = {l["id"] for l in owner_lots}
+        extra_lot_ids_op = {
+            m["lot_id"] for m in muts_owner_op
+            if m.get("lot_id") and m["lot_id"] not in existing_lot_ids_op
+        }
+        if extra_lot_ids_op:
+            extra_lots_op = await db.lots.find(
+                {"id": {"$in": list(extra_lot_ids_op)},
+                 "copropriete_id": copropriete_id},
+                {"_id": 0}
+            ).to_list(100)
+            owner_lots.extend(extra_lots_op)
 
         all_lots = await db.lots.find({"copropriete_id": copropriete_id}, {"_id": 0}).to_list(1000)
         invoices = await db.invoices.find(

@@ -1478,6 +1478,220 @@ def create_invoices_router(db):
             }
         }
 
+    @router.get("/invoices/uncategorized-diagnostic")
+    async def uncategorized_invoices_diagnostic(
+        request: Request,
+        copropriete_id: Optional[str] = None,
+        fiscal_year_id: Optional[str] = None,
+    ):
+        """iter90g8 : diagnostic + suggestions de remap pour les factures
+        sans compte PCMN valide (`account_number` vide ou compte non
+        reconnu). Ces factures tombent dans "Autres charges" du decompte
+        au lieu d'etre agregees sur le bon compte (ex: 6140 Assurance
+        incendie), ce qui fausse les regroupements par nature.
+
+        Pour chaque supplier concerne, on propose l'account_number et
+        l'expense_category_id LES PLUS FREQUENTS parmi ses autres factures
+        (dans cette ACP ET globalement). Retourne un rapport actionnable.
+
+        Reponse :
+        - `total_uncategorized` : nb factures avec account_number vide
+        - `by_supplier` : liste triee par montant descendant, avec
+          suggestion de remap
+        """
+        if not copropriete_id:
+            copropriete_id = request.headers.get("X-Copropriete-Id") or None
+        if not copropriete_id or copropriete_id == "all":
+            raise HTTPException(400, "copropriete_id requis - chinese walls")
+
+        # Optionnel : filtre par exercice fiscal
+        date_q = {}
+        if fiscal_year_id:
+            fy = await db.fiscal_years.find_one(
+                {"id": fiscal_year_id, "copropriete_id": copropriete_id},
+                {"_id": 0, "start_date": 1, "end_date": 1},
+            )
+            if fy:
+                date_q = {"date": {"$gte": fy["start_date"], "$lte": fy["end_date"]}}
+
+        # Factures avec account_number vide ou absent
+        q = {"copropriete_id": copropriete_id,
+             "$or": [{"account_number": ""}, {"account_number": {"$exists": False}}],
+             **date_q}
+        uncategorized = await db.invoices.find(
+            q,
+            {"_id": 0, "id": 1, "date": 1, "supplier": 1, "supplier_id": 1,
+             "total_amount": 1, "description": 1, "reference": 1,
+             "number": 1, "lines": 1},
+        ).sort("date", 1).to_list(10000)
+
+        # Groupe par supplier
+        from collections import defaultdict
+        import re as _re
+        by_supplier = defaultdict(lambda: {"invoices": [], "total": 0.0})
+        for inv in uncategorized:
+            # Ignorer les factures multi-lignes qui ont bien leur account_number
+            # sur chaque ligne (dans ce cas, la facture-header est vide mais les
+            # lines sont classifiees) - on regarde si TOUTES les lines ont acc
+            lines = inv.get("lines") or []
+            if lines and all((l.get("account_number") or "").strip() for l in lines):
+                continue
+            sup = (inv.get("supplier") or "").strip() or "(Sans fournisseur)"
+            by_supplier[sup]["invoices"].append({
+                "id": inv["id"], "date": inv.get("date", ""),
+                "number": inv.get("number", ""),
+                "reference": inv.get("reference", ""),
+                "description": inv.get("description", ""),
+                "amount": float(inv.get("total_amount", 0) or 0),
+            })
+            by_supplier[sup]["total"] += float(inv.get("total_amount", 0) or 0)
+
+        # Pour chaque supplier, cherche l'account_number et expense_category_id
+        # LES PLUS FREQUENTS dans ses autres factures classifiees (meme ACP)
+        result = []
+        for sup, data in by_supplier.items():
+            suggestion = None
+            if sup and sup != "(Sans fournisseur)":
+                # Query les autres factures du meme supplier AVEC account_number
+                other_q = {
+                    "copropriete_id": copropriete_id,
+                    "supplier": {"$regex": f"^{_re.escape(sup)}$", "$options": "i"},
+                    "account_number": {"$exists": True, "$ne": ""},
+                }
+                classified = await db.invoices.find(
+                    other_q,
+                    {"_id": 0, "account_number": 1, "expense_category_id": 1},
+                ).to_list(5000)
+                if classified:
+                    acc_counts = defaultdict(int)
+                    cat_counts = defaultdict(int)
+                    for c in classified:
+                        acc = (c.get("account_number") or "").strip()
+                        if acc:
+                            acc_counts[acc] += 1
+                        cat = (c.get("expense_category_id") or "").strip()
+                        if cat:
+                            cat_counts[cat] += 1
+                    top_acc = (
+                        max(acc_counts, key=lambda k: acc_counts[k])
+                        if acc_counts else ""
+                    )
+                    top_cat = (
+                        max(cat_counts, key=lambda k: cat_counts[k])
+                        if cat_counts else ""
+                    )
+                    cat_name = ""
+                    if top_cat:
+                        cat = await db.expense_categories.find_one(
+                            {"id": top_cat}, {"_id": 0, "name": 1}
+                        )
+                        cat_name = (cat or {}).get("name", "")
+                    if top_acc:
+                        suggestion = {
+                            "account_number": top_acc,
+                            "expense_category_id": top_cat,
+                            "expense_category_name": cat_name,
+                            "confidence": acc_counts[top_acc] / len(classified),
+                            "based_on_invoices": len(classified),
+                        }
+            result.append({
+                "supplier": sup,
+                "invoice_count": len(data["invoices"]),
+                "total_amount": round(data["total"], 2),
+                "sample_invoices": data["invoices"][:5],
+                "suggestion": suggestion,
+            })
+        result.sort(key=lambda x: -x["total_amount"])
+        return {
+            "total_uncategorized": sum(r["invoice_count"] for r in result),
+            "total_amount_uncategorized": round(sum(r["total_amount"] for r in result), 2),
+            "by_supplier": result,
+            "period": (
+                {"from": date_q["date"]["$gte"], "to": date_q["date"]["$lte"]}
+                if date_q else None
+            ),
+        }
+
+    class BulkAssignAccountInput(BaseModel):
+        invoice_ids: List[str]
+        account_number: str
+        expense_category_id: Optional[str] = ""
+        copropriete_id: str
+
+    @router.post("/invoices/bulk-assign-account")
+    async def bulk_assign_account(data: BulkAssignAccountInput):
+        """iter90g8 : applique un `account_number` (et eventuellement
+        `expense_category_id`) sur une liste de factures existantes.
+
+        Cas d'usage typique : apres import legacy Optipro/CODA, plusieurs
+        factures d'un meme supplier sont sans account_number (tombent dans
+        "Autres charges"). Le syndic utilise le diagnostic pour identifier,
+        puis applique en batch le bon compte. Regenere aussi l'ecriture
+        comptable (AC) associee pour que le grand livre reflete le fix.
+        """
+        if not data.invoice_ids:
+            raise HTTPException(400, "Aucune facture selectionnee")
+        if not (data.account_number or "").strip():
+            raise HTTPException(400, "account_number requis")
+        if not data.copropriete_id:
+            raise HTTPException(400, "copropriete_id requis - chinese walls")
+
+        # Chinese wall : verifie que toutes les factures appartiennent bien
+        # a cette ACP (attaque)
+        invs = await db.invoices.find(
+            {"id": {"$in": data.invoice_ids},
+             "copropriete_id": data.copropriete_id},
+            {"_id": 0, "id": 1, "lines": 1},
+        ).to_list(len(data.invoice_ids))
+        if len(invs) != len(data.invoice_ids):
+            raise HTTPException(
+                403, "Certaines factures n'appartiennent pas a cette ACP"
+            )
+
+        # Applique le remap sur chaque facture
+        updated = 0
+        errors = []
+        for inv in invs:
+            update_set = {"account_number": data.account_number.strip()}
+            if data.expense_category_id:
+                update_set["expense_category_id"] = data.expense_category_id.strip()
+            # Multi-lignes : mettre a jour la premiere ligne SI elle n'a
+            # pas encore d'account_number (ne pas ecraser un choix explicite)
+            lines = inv.get("lines") or []
+            if lines and len(lines) == 1 and not (
+                (lines[0].get("account_number") or "").strip()
+            ):
+                lines[0]["account_number"] = data.account_number.strip()
+                if data.expense_category_id:
+                    lines[0]["expense_category_id"] = data.expense_category_id.strip()
+                update_set["lines"] = lines
+            try:
+                res = await db.invoices.update_one(
+                    {"id": inv["id"], "copropriete_id": data.copropriete_id},
+                    {"$set": update_set},
+                )
+                if res.modified_count:
+                    updated += 1
+                # Regenere l'ecriture AC (contre-passe + regenere)
+                try:
+                    from auto_entries import _delete_auto_entries, generate_purchase_entry
+                    await _delete_auto_entries(db, "invoice", inv["id"])
+                    # Recharge la facture COMPLETE apres update
+                    fresh = await db.invoices.find_one(
+                        {"id": inv["id"]}, {"_id": 0}
+                    )
+                    if fresh:
+                        await generate_purchase_entry(db, fresh)
+                except Exception as ae:
+                    errors.append({"invoice_id": inv["id"],
+                                    "error": f"regen AC : {ae}"})
+            except Exception as e:
+                errors.append({"invoice_id": inv["id"], "error": str(e)})
+
+        return {"updated": updated,
+                "requested": len(data.invoice_ids),
+                "errors": errors}
+
     @router.get("/invoices/{invoice_id}")
     async def get_invoice(invoice_id: str):
         inv = await db.invoices.find_one({"id": invoice_id}, {"_id": 0})
