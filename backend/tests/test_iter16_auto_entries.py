@@ -14,7 +14,7 @@ import uuid
 import requests
 import pytest
 
-BASE = (os.environ.get("REACT_APP_BACKEND_URL") or "https://bilan-secure.preview.emergentagent.com").rstrip("/")
+BASE = (os.environ.get("REACT_APP_BACKEND_URL") or "https://property-mgmt-be.preview.emergentagent.com").rstrip("/")
 API = f"{BASE}/api"
 ADMIN = {"email": "admin@copro.be", "password": "admin123"}
 

@@ -9,7 +9,7 @@ import uuid
 import requests
 import pytest
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://bilan-secure.preview.emergentagent.com").rstrip("/")
+BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://property-mgmt-be.preview.emergentagent.com").rstrip("/")
 ACP_ID = "6748ca1a-216d-4002-8417-799287238736"
 
 
