@@ -12,7 +12,7 @@ import {
 import { toast } from 'sonner';
 import {
   Archive, Download, Trash2, PlayCircle, RefreshCw, HardDrive, Clock,
-  CheckCircle2, XCircle, RotateCcw, Building2,
+  CheckCircle2, XCircle, RotateCcw, Building2, DatabaseZap,
 } from 'lucide-react';
 
 const BACKEND = process.env.REACT_APP_BACKEND_URL || '';
@@ -40,6 +40,30 @@ export default function AdminBackupsPage() {
   const [restoreDryRun, setRestoreDryRun] = useState(true);
   const [restoring, setRestoring] = useState(false);
   const [restoreResult, setRestoreResult] = useState(null);
+  // iter90ga : GridFS migration
+  const [gridfsRunning, setGridfsRunning] = useState(false);
+  const [gridfsResult, setGridfsResult] = useState(null);
+
+  const runGridfsMigration = async (dryRun) => {
+    if (!dryRun && !window.confirm(
+      'Lancer la migration REELLE des fichiers uploads vers MongoDB GridFS ?\n\n'
+      + 'Le script est idempotent (les fichiers deja migres sont skip). Peut '
+      + 'prendre plusieurs minutes selon le volume.'
+    )) return;
+    setGridfsRunning(true);
+    setGridfsResult(null);
+    try {
+      const { data } = await api.post('/admin/gridfs-migration', { dry_run: !!dryRun });
+      setGridfsResult(data);
+      if (dryRun) {
+        toast.success(`Simulation OK : ${data.total_migrated} fichier(s) migrables, ${humanSize(data.total_bytes)}`);
+      } else {
+        toast.success(`Migration terminee : ${data.total_migrated} fichier(s) transferes en ${(data.duration_ms/1000).toFixed(1)}s`);
+      }
+    } catch (e) {
+      toast.error('Echec migration : ' + extractApiError(e));
+    } finally { setGridfsRunning(false); }
+  };
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -166,6 +190,83 @@ export default function AdminBackupsPage() {
           )}
         </CardContent></Card>
       </div>
+
+      {/* iter90ga : GridFS migration - one-shot per install */}
+      <Card className="border-amber-200 bg-amber-50/30">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <DatabaseZap className="h-4 w-4 text-amber-600" />
+            Migration fichiers vers GridFS (persistance PROD)
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-xs text-slate-700">
+            Les fichiers uploades (factures, ecritures, documents) sur le disque
+            <span className="font-mono">/app/uploads/</span> sont EPHEMERES : ils sont
+            effaces a chaque redeploiement en PROD. Cette migration transfere tous les
+            fichiers existants vers MongoDB GridFS (persistant + sauvegarde). Le script
+            est <span className="font-semibold">idempotent</span> : les fichiers deja migres
+            sont skip, vous pouvez le rejouer sans risque.
+          </p>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => runGridfsMigration(true)}
+              disabled={gridfsRunning}
+              data-testid="btn-gridfs-dry-run"
+            >
+              {gridfsRunning ? 'En cours...' : 'Simuler (dry-run)'}
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => runGridfsMigration(false)}
+              disabled={gridfsRunning}
+              className="bg-amber-600 hover:bg-amber-700 text-white"
+              data-testid="btn-gridfs-apply"
+            >
+              {gridfsRunning ? 'Migration en cours...' : 'Lancer la migration'}
+            </Button>
+          </div>
+          {gridfsResult && (
+            <div className="rounded border border-slate-200 bg-white p-3 text-xs space-y-1" data-testid="gridfs-result">
+              <div className="flex justify-between font-semibold">
+                <span>{gridfsResult.dry_run ? 'Simulation' : 'Migration reelle'}</span>
+                <span className="text-slate-500">{gridfsResult.duration_ms} ms</span>
+              </div>
+              <div className="grid grid-cols-3 gap-2 pt-1">
+                <div>
+                  <div className="text-slate-500">Factures</div>
+                  <div>Migres : <span className="font-mono font-semibold">{gridfsResult.invoices.migrated}</span></div>
+                  <div>Skip : <span className="font-mono text-slate-400">{gridfsResult.invoices.skipped}</span></div>
+                  <div>Absents : <span className="font-mono text-red-600">{gridfsResult.invoices.missing}</span></div>
+                </div>
+                <div>
+                  <div className="text-slate-500">Ecritures</div>
+                  <div>Migres : <span className="font-mono font-semibold">{gridfsResult.journal_entries.migrated}</span></div>
+                  <div>Skip : <span className="font-mono text-slate-400">{gridfsResult.journal_entries.skipped}</span></div>
+                  <div>Absents : <span className="font-mono text-red-600">{gridfsResult.journal_entries.missing}</span></div>
+                </div>
+                <div>
+                  <div className="text-slate-500">Documents</div>
+                  <div>Migres : <span className="font-mono font-semibold">{gridfsResult.documents.migrated}</span></div>
+                  <div>Skip : <span className="font-mono text-slate-400">{gridfsResult.documents.skipped}</span></div>
+                  <div>Absents : <span className="font-mono text-red-600">{gridfsResult.documents.missing}</span></div>
+                </div>
+              </div>
+              <div className="pt-2 border-t border-slate-100 flex justify-between font-semibold">
+                <span>Total transfere</span>
+                <span>{gridfsResult.total_migrated} fichier(s) - {humanSize(gridfsResult.total_bytes)}</span>
+              </div>
+              {gridfsResult.total_missing > 0 && (
+                <div className="pt-1 text-red-600">
+                  {gridfsResult.total_missing} fichier(s) referenc(s) dans la base mais absents du disque (probablement supprimes par un redeploiement anterieur).
+                </div>
+              )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       {/* Runs history */}
       {runs.length > 0 && (

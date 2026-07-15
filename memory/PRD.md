@@ -6,7 +6,60 @@ scinder au prochain grand chantier en `PRD.md` (statique) / `CHANGELOG.md`
 session par prudence (risque de perte d'info sur un fichier de 9400+
 lignes sans relecture complete).
 
-### Iter90g9 (Feb 2026) - VERROU PCMN STRICT : impossible de creer une facture sans compte comptable
+### Iter90ga (Feb 2026) - Migration GridFS depuis l'UI PROD (endpoint superadmin)
+
+**Ticket utilisateur** :
+> "P1 - GridFS Persistent Document Storage : provide the user with exact
+> instructions on how to execute the migration on their Production
+> environment so documents survive container redeployments."
+
+**Contexte** :
+`scripts/migrate_uploads_to_gridfs.py` (iter87) existe depuis longtemps
+mais necessite un shell PROD pour etre lance. Or l'utilisateur deploie
+sur Emergent Hosting sans acces shell direct au container. Il faut donc
+un moyen de declencher la migration depuis l'UI admin.
+
+**Fix iter90ga** :
+
+1. **Endpoint** `POST /api/admin/gridfs-migration` (`routes/admin.py`) :
+   - Body : `{"dry_run": bool}` (defaut true)
+   - Superadmin ONLY (403 sinon)
+   - Retourne le detail par bucket (invoices/journal_entries/documents)
+     avec counts (migrated, skipped, missing) + bytes + duration_ms
+   - Idempotent : reappelable sans risque
+
+2. **UI** (`AdminBackupsPage.js`) : nouvelle Card ambre entre les stats
+   et l'historique des jobs, avec 2 boutons :
+   - "Simuler (dry-run)" : compte + volume sans ecrire
+   - "Lancer la migration" (confirm) : execute reellement
+   Affichage detaille du resultat (grid 3 colonnes : Factures / Ecritures
+   / Documents) + total transfere + alerte si fichiers absents du disque.
+
+3. **Tests** (`test_iter90ga_gridfs_migration_endpoint.py`, 3/3 verts) :
+   - `dry_run_returns_plan` : structure du retour valide
+   - `apply_writes_gridfs_id` : seed fichier disque + attachment legacy ->
+     dry-run detecte + apply ecrit `gridfs_id` sur l'attachment.
+     Reappel dry-run : idempotence verifiee.
+   - `non_superadmin_gets_403` : role syndic refuse (403).
+
+**Procedure PROD (a fournir a l'utilisateur)** :
+1. Se connecter en superadmin sur https://immo-pcmn.emergent.host
+2. Naviguer vers /admin/backups
+3. Card "Migration fichiers vers GridFS" :
+   a. Cliquer "Simuler (dry-run)" pour verifier le plan
+   b. Verifier les counts (migrated + skipped + missing)
+   c. Cliquer "Lancer la migration" (confirmation demandee)
+   d. Attendre la fin (peut prendre 1-5 min selon volume)
+4. Verifier que `total_missing = 0` (aucun fichier introuvable sur disque)
+5. Prochains redeploiements PROD : les fichiers persistent dans GridFS.
+
+**Note idempotence** : la migration peut etre relancee autant de fois
+que necessaire. Les attachments ayant deja un `gridfs_id` sont skip.
+
+**Score de session finale** : 36/36 tests pytest verts (iter90g4/g5/g6/
+g7/g8/g9/ga + regressions historiques). Zero erreur de lint.
+
+
 
 **Ticket utilisateur** :
 > "comment est-il possible qu'une facture n'ait pas de compte comptable

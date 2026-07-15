@@ -863,4 +863,79 @@ def create_admin_router(db):
                      details={"name": tpl.get("name")})
         return {"status": "ok"}
 
+    class GridfsMigrationInput(BaseModel):
+        dry_run: bool = True
+
+    @router.post("/gridfs-migration")
+    async def run_gridfs_migration(data: GridfsMigrationInput, request: Request):
+        """iter90ga : execute la migration `migrate_uploads_to_gridfs.py`
+        depuis l'UI admin (evite d'avoir besoin d'un shell PROD).
+
+        - dry_run=True (defaut) : simule et retourne le plan (compte + bytes)
+        - dry_run=False : execute reellement la migration
+
+        Restrict : superadmin only (operation lourde).
+
+        Le script est IDEMPOTENT : les attachments qui ont deja un `gridfs_id`
+        sont skip. Peut donc etre rejoue sans risque de double-upload.
+
+        Retour :
+        {
+          "invoices":       {"migrated": N, "skipped": N, "missing": N, "bytes": N},
+          "journal_entries":{"migrated": N, "skipped": N, "missing": N, "bytes": N},
+          "documents":      {"migrated": N, "skipped": N, "missing": N, "bytes": N},
+          "total_migrated": N,
+          "total_bytes": N,
+          "duration_ms": N,
+          "dry_run": bool,
+        }
+        """
+        from server import get_current_user, is_superadmin_only
+        user = await get_current_user(request)
+        if not is_superadmin_only(user.get("role", "")):
+            raise HTTPException(
+                403,
+                "Migration GridFS reservee au superadmin (operation lourde)",
+            )
+        # Import lazy pour eviter de charger le script au boot
+        import sys as _sys
+        import time as _time
+        from pathlib import Path
+        _sys.path.insert(0, "/app/backend/scripts")
+        from migrate_uploads_to_gridfs import (  # noqa: E402
+            _migrate_attachments_collection,
+            _migrate_documents,
+            _create_bundles_ttl_index,
+        )
+        from gridfs_storage import (
+            get_invoice_attachments_storage,
+            get_journal_attachments_storage,
+        )
+        t0 = _time.time()
+        inv_storage = get_invoice_attachments_storage(db)
+        je_storage = get_journal_attachments_storage(db)
+        m, s, mi, b = await _migrate_attachments_collection(
+            db, "invoices", inv_storage,
+            Path("/app/uploads/invoice_attachments"), data.dry_run,
+        )
+        m2, s2, mi2, b2 = await _migrate_attachments_collection(
+            db, "journal_entries", je_storage,
+            Path("/app/uploads/journal_attachments"), data.dry_run,
+        )
+        m3, s3, mi3, b3 = await _migrate_documents(db, data.dry_run)
+        if not data.dry_run:
+            await _create_bundles_ttl_index(db)
+        duration_ms = int((_time.time() - t0) * 1000)
+        return {
+            "dry_run": data.dry_run,
+            "invoices": {"migrated": m, "skipped": s, "missing": mi, "bytes": b},
+            "journal_entries": {"migrated": m2, "skipped": s2, "missing": mi2, "bytes": b2},
+            "documents": {"migrated": m3, "skipped": s3, "missing": mi3, "bytes": b3},
+            "total_migrated": m + m2 + m3,
+            "total_skipped": s + s2 + s3,
+            "total_missing": mi + mi2 + mi3,
+            "total_bytes": b + b2 + b3,
+            "duration_ms": duration_ms,
+        }
+
     return router
