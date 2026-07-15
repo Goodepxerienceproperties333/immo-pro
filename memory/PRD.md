@@ -6,7 +6,74 @@ scinder au prochain grand chantier en `PRD.md` (statique) / `CHANGELOG.md`
 session par prudence (risque de perte d'info sur un fichier de 9400+
 lignes sans relecture complete).
 
-### Iter90ga (Feb 2026) - Migration GridFS depuis l'UI PROD (endpoint superadmin)
+### Iter90gb (Feb 2026) - Endpoint diagnostic journal_entries + Iter90gc (Feb 2026) - Regeneration OD MUT-R legacy
+
+**Ticket utilisateur** :
+> "les OD sont VIDES !!" (onglet Journaux Comptables > Operations Diverses
+> completement vide sur PROD alors que AC/VE/FI ont des ecritures).
+
+**Root cause identifie** :
+`db.mutations` (source de verite historique des ventes) contient 30
+mutations MATEXI->TEUWEN sur Acacia TER. Mais **aucune OD MUT-R
+correspondante** n'existe dans `db.journal_entries`. Consequence : le
+transfert fonds de roulement 490,36 EUR n'apparait ni dans les journaux,
+ni dans le decompte annuel.
+
+Ce scenario arrive quand :
+- Un import legacy Optipro insere directement dans db.mutations
+- Un script SQL modifie lot.owner_id sans passer par mutate_lot
+- Une regeneration incomplete apres backup/restore
+
+**Fix iter90gb** — `GET /api/admin/journal-entries/diagnostic` :
+Retourne un breakdown par ACP :
+- total_entries + by_journal_type (AC/OD/VE/FI/BQ)
+- by_source_type (invoice/fund_call/lot_mutation/fiscal_regularization/...)
+- date_min/date_max + reversed_count + is_reversal_count
+- deleted_entries_archived (verifie si bulk-delete accidentel)
+- mutation_entries_count vs fiscal_year_count
+
+Diagnostic instantane : "mutation_entries_count=0 mais db.mutations contient
+30 documents" -> confirme le cas legacy et permet de decider du fix.
+
+**Fix iter90gc** — Regeneration OD MUT-R manquantes :
+
+1. **Helper module-level** `regenerate_orphan_mutation_od(db, mutation_doc)`
+   dans `routes/properties.py` :
+   - Utilise `roulement_quota` deja stocke dans db.mutations (fige au
+     moment de la vente)
+   - assign_owner_accounts + resolution des comptes tiers
+   - Genere l'OD MUT-R (DR acheteur / CR vendeur) datee `sale_date`
+   - Idempotent via (source_id=lot_id, sale_date, source_subtype)
+
+2. **Endpoint** `POST /api/mutations/regenerate-orphan-od` :
+   - Query params : `copropriete_id`, `dry_run` (defaut true)
+   - Superadmin ONLY + chinese wall strict
+   - Parcourt db.mutations d'une ACP, rejoue le helper
+   - dry_run=true : simule et compte
+   - dry_run=false : cree reellement les OD manquantes
+   - Retour : {total_mutations, regenerated, skipped, errors, details[]}
+
+**Procedure PROD pour Acacia TER** :
+1. Redeployer PROD pour pousser iter90gb + gc
+2. Login superadmin sur immo-pcmn.emergent.host
+3. Appeler GET /api/admin/journal-entries/diagnostic
+   -> Confirme "mutation_entries_count = 0" pour Acacia TER
+4. Appeler POST /api/mutations/regenerate-orphan-od?copropriete_id=<acacia_id>&dry_run=true
+   -> Voir "regenerated=30" ou similaire
+5. Appeler avec dry_run=false pour executer
+6. Verifier Journaux Comptables > OD : 30 nouvelles OD MUT-R visibles
+7. Verifier decompte TEUWEN : Transfert fonds de roulement 490.36 apparait
+
+**Tests iter90gb** (2/2 verts) : `diagnostic_returns_breakdown_by_acp`,
+`non_superadmin_gets_403`.
+**Tests iter90gc** (4/4 verts) : `dry_run_detects_orphan_mutation`,
+`apply_creates_od_mut_r`, `idempotent_second_call_skips`,
+`non_superadmin_gets_403`.
+
+**Score de session finale** : 42/42 tests pytest verts (iter90g4/g5/g6/g7
+/g8/g9/ga/gb/gc + regressions historiques). Zero erreur de lint.
+
+
 
 **Ticket utilisateur** :
 > "P1 - GridFS Persistent Document Storage : provide the user with exact

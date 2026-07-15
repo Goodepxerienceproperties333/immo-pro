@@ -863,6 +863,98 @@ def create_admin_router(db):
                      details={"name": tpl.get("name")})
         return {"status": "ok"}
 
+    @router.get("/journal-entries/diagnostic")
+    async def journal_entries_diagnostic(request: Request):
+        """iter90gb : inventaire diagnostic de journal_entries par ACP.
+
+        Objectif : quand le syndic constate "les OD sont vides" sur l'ecran
+        Journaux Comptables, permet en un appel de determiner :
+        - Y a-t-il vraiment des donnees ? Par ACP, par journal_type ?
+        - Les OD attendues (mutations, cloture, appels de fonds) existent-elles ?
+        - Y a-t-il eu des suppressions bulk (deleted_entries) ?
+        - Range de dates : les OD sont-elles peut-etre datees en dehors du
+          FY selectionne dans le UI ?
+
+        Retourne, par ACP, un breakdown :
+        {
+          "coproprietes": [{
+            "id": "...", "name": "Acacia TER",
+            "total_entries": 123,
+            "by_journal_type": {"AC": 45, "OD": 12, "FI": 30, "BQ": 36, "VE": 0},
+            "by_source_type": {"invoice": 45, "fund_call": 5,
+                               "lot_mutation": 3, "fiscal_regularization": 4, ...},
+            "date_min": "2025-10-01",
+            "date_max": "2026-09-30",
+            "reversed_count": 2,
+            "is_reversal_count": 2,
+            "deleted_entries_archived": 0,  # dans db.deleted_entries
+            "mutation_entries_count": 3,  # source_type=lot_mutation
+            "fiscal_year_count": 2,
+          }, ...],
+          "total_all_acp": {...},
+        }
+        """
+        await _get_superadmin_only(request)
+        copros = await db.coproprietes.find(
+            {}, {"_id": 0, "id": 1, "name": 1}
+        ).sort("name", 1).to_list(200)
+
+        result = []
+        grand_total = {"total_entries": 0, "by_journal_type": {},
+                       "by_source_type": {}}
+        for copro in copros:
+            cid = copro["id"]
+            entries = await db.journal_entries.find(
+                {"copropriete_id": cid},
+                {"_id": 0, "journal_type": 1, "source_type": 1,
+                 "source_subtype": 1, "date": 1,
+                 "reversed": 1, "is_reversal": 1},
+            ).to_list(100000)
+            by_jt: dict = {}
+            by_st: dict = {}
+            mut_count = 0
+            reversed_c = 0
+            is_reversal_c = 0
+            dates = []
+            for e in entries:
+                jt = e.get("journal_type", "?")
+                by_jt[jt] = by_jt.get(jt, 0) + 1
+                grand_total["by_journal_type"][jt] = grand_total["by_journal_type"].get(jt, 0) + 1
+                st = e.get("source_type", "manual") or "manual"
+                by_st[st] = by_st.get(st, 0) + 1
+                grand_total["by_source_type"][st] = grand_total["by_source_type"].get(st, 0) + 1
+                if st == "lot_mutation":
+                    mut_count += 1
+                if e.get("reversed"):
+                    reversed_c += 1
+                if e.get("is_reversal"):
+                    is_reversal_c += 1
+                d = e.get("date")
+                if d:
+                    dates.append(d)
+            deleted_count = await db.deleted_entries.count_documents({"copropriete_id": cid})
+            fy_count = await db.fiscal_years.count_documents({"copropriete_id": cid})
+            result.append({
+                "id": cid,
+                "name": copro.get("name", ""),
+                "total_entries": len(entries),
+                "by_journal_type": by_jt,
+                "by_source_type": by_st,
+                "date_min": min(dates) if dates else None,
+                "date_max": max(dates) if dates else None,
+                "reversed_count": reversed_c,
+                "is_reversal_count": is_reversal_c,
+                "deleted_entries_archived": deleted_count,
+                "mutation_entries_count": mut_count,
+                "fiscal_year_count": fy_count,
+            })
+            grand_total["total_entries"] += len(entries)
+        return {
+            "coproprietes": result,
+            "grand_total": grand_total,
+            "acp_count": len(result),
+        }
+
     class GridfsMigrationInput(BaseModel):
         dry_run: bool = True
 

@@ -7,6 +7,115 @@ import uuid
 from tier_accounts import assign_owner_accounts
 
 
+async def regenerate_orphan_mutation_od(db, mutation_doc: dict) -> dict:
+    """iter90gc : regenere l'OD MUT-R (Fonds de roulement) pour une mutation
+    qui n'en a pas (cas legacy : mutation inseree manuellement en base OU
+    via import Optipro sans passer par POST /api/lots/{id}/mutate).
+
+    Le champ `roulement_quota` est deja pre-calcule dans `db.mutations`
+    (par mutate_lot ou l'import). On l'utilise tel quel plutot que de
+    tenter de recalculer (qui necessiterait de reconstruire l'etat
+    historique des fund_calls a sale_date). C'est safe car ce montant
+    est fige juridiquement au moment de la vente.
+
+    Idempotent : si une OD source_type=lot_mutation existe deja pour
+    ce (lot_id, sale_date, source_subtype='fonds_roulement'), skip.
+
+    Retourne :
+        {"regenerated": bool, "reason": "...", "entry_id": Optional[str]}
+    """
+    lot_id = mutation_doc.get("lot_id")
+    from_owner_id = mutation_doc.get("from_owner_id")
+    to_owner_id = mutation_doc.get("to_owner_id")
+    sale_date = mutation_doc.get("sale_date")
+    r_quota = float(mutation_doc.get("roulement_quota", 0) or 0)
+    copro_id = mutation_doc.get("copropriete_id", "")
+    if not (lot_id and from_owner_id and to_owner_id and sale_date):
+        return {"regenerated": False,
+                "reason": "champ manquant (lot_id/owners/sale_date)"}
+    if r_quota <= 0.001:
+        return {"regenerated": False,
+                "reason": "roulement_quota=0 (rien a transferer)"}
+
+    # Idempotence : verifie s'il existe deja une OD MUT-R pour cette mutation
+    existing = await db.journal_entries.find_one({
+        "copropriete_id": copro_id,
+        "source_type": "lot_mutation",
+        "source_subtype": "fonds_roulement",
+        "source_id": lot_id,
+        "date": sale_date,
+    }, {"_id": 0, "id": 1})
+    if existing:
+        return {"regenerated": False,
+                "reason": "OD MUT-R deja presente",
+                "entry_id": existing["id"]}
+
+    # Charge lot + owners + assigne les comptes tiers
+    lot = await db.lots.find_one({"id": lot_id}, {"_id": 0})
+    old_owner = await db.owners.find_one({"id": from_owner_id}, {"_id": 0})
+    new_owner = await db.owners.find_one({"id": to_owner_id}, {"_id": 0})
+    if not lot or not old_owner or not new_owner:
+        return {"regenerated": False,
+                "reason": "lot ou proprietaire introuvable"}
+    old_owner = await assign_owner_accounts(db, old_owner, copro_id)
+    new_owner = await assign_owner_accounts(db, new_owner, copro_id)
+    old_acc = (old_owner.get("tier_accounts", {}) or {}).get(copro_id, {}).get("provisions")
+    new_acc = (new_owner.get("tier_accounts", {}) or {}).get(copro_id, {}).get("provisions")
+    if not old_acc or not new_acc:
+        return {"regenerated": False,
+                "reason": "comptes tiers non resolus"}
+
+    # Genere l'OD MUT-R
+    entry_id = str(uuid.uuid4())
+    entry_doc = {
+        "id": entry_id,
+        "journal_type": "OD",
+        "date": sale_date,
+        "reference": f"MUT-{(lot.get('number','') or '')[:18]}-R",
+        "description": (
+            f"Mutation lot {lot.get('number','')} - Fonds de roulement: "
+            f"{old_owner.get('name','')} -> {new_owner.get('name','')} "
+            f"({r_quota:.2f} EUR) [regenere iter90gc]"
+        ),
+        "lines": [
+            {"account_number": new_acc,
+             "account_name": f"Mutation - {new_owner.get('last_name') or new_owner.get('name')}",
+             "debit": r_quota, "credit": 0.0,
+             "third_party_id": to_owner_id,
+             "third_party_name": new_owner.get("name", ""),
+             "lot_id": lot_id,
+             "lot_number": lot.get("number", "") or ""},
+            {"account_number": old_acc,
+             "account_name": f"Mutation - {old_owner.get('last_name') or old_owner.get('name')}",
+             "debit": 0.0, "credit": r_quota,
+             "third_party_id": from_owner_id,
+             "third_party_name": old_owner.get("name", ""),
+             "lot_id": lot_id,
+             "lot_number": lot.get("number", "") or ""},
+        ],
+        "total_debit": r_quota,
+        "total_credit": r_quota,
+        "copropriete_id": copro_id,
+        "auto_generated": False,
+        "manually_edited": True,
+        "source_type": "lot_mutation",
+        "source_id": lot_id,
+        "source_subtype": "fonds_roulement",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.journal_entries.insert_one(entry_doc)
+
+    # Trace le journal_entry_id dans mutations (pour l'idempotence future)
+    try:
+        await db.mutations.update_one(
+            {"id": mutation_doc.get("id")},
+            {"$addToSet": {"journal_entry_ids": entry_id}},
+        )
+    except Exception:
+        pass
+    return {"regenerated": True, "entry_id": entry_id, "amount": r_quota}
+
+
 async def _build_mutation_decompte_context(db, lot_id: str, mutation_id: str) -> dict:
     """iter90au : helper reutilisable qui prepare le contexte pour
     build_mutation_decompte_pdf. Utilise par le download endpoint et par le
@@ -2319,6 +2428,98 @@ def create_properties_router(db):
             "linked_lots_count": len(children),
             "grouped_total_transfer": round(agg_total, 2),
         }
+
+    @router.post("/mutations/regenerate-orphan-od")
+    async def regenerate_orphan_mutation_od_endpoint(
+        request: Request,
+        copropriete_id: Optional[str] = None,
+        dry_run: bool = True,
+    ):
+        """iter90gc : regenere les OD MUT-R manquantes pour les mutations
+        legacy (importees sans passer par POST /api/lots/{id}/mutate).
+
+        Cas d'usage typique : Acacia TER, 30 lots MATEXI->TEUWEN dont les
+        mutations sont en base (db.mutations) mais aucun OD MUT-R n'a ete
+        genere. Consequence : le decompte annuel n'inclut pas les 490.36 EUR
+        de transfert fonds de roulement (bug iter90g6). Cet endpoint
+        rattrape ce cas retroactivement.
+
+        - dry_run=true (defaut) : liste les mutations orphelines sans creer
+          les OD
+        - dry_run=false : cree les OD MUT-R manquantes
+
+        100% idempotent : les mutations qui ont deja leur OD sont skip.
+        Chinese wall strict via copropriete_id obligatoire.
+        """
+        from server import get_current_user, is_superadmin_only
+        user = await get_current_user(request)
+        if not is_superadmin_only(user.get("role", "")):
+            raise HTTPException(
+                403, "Reserve au superadmin (operation comptable sensible)"
+            )
+        if not copropriete_id:
+            copropriete_id = request.headers.get("X-Copropriete-Id") or None
+        if not copropriete_id or copropriete_id == "all":
+            raise HTTPException(400, "copropriete_id requis (chinese wall)")
+
+        from routes.properties import regenerate_orphan_mutation_od
+        muts = await db.mutations.find(
+            {"copropriete_id": copropriete_id},
+            {"_id": 0},
+        ).to_list(10000)
+        report = {
+            "dry_run": dry_run,
+            "total_mutations": len(muts),
+            "regenerated": 0,
+            "skipped": 0,
+            "errors": 0,
+            "details": [],
+        }
+        for m in muts:
+            try:
+                if dry_run:
+                    # Simulate : verifie juste si l'OD MUT-R existe deja
+                    r_quota = float(m.get("roulement_quota", 0) or 0)
+                    if r_quota <= 0.001:
+                        report["skipped"] += 1
+                        continue
+                    existing = await db.journal_entries.find_one({
+                        "copropriete_id": copropriete_id,
+                        "source_type": "lot_mutation",
+                        "source_subtype": "fonds_roulement",
+                        "source_id": m.get("lot_id"),
+                        "date": m.get("sale_date"),
+                    }, {"_id": 0, "id": 1})
+                    if existing:
+                        report["skipped"] += 1
+                    else:
+                        report["regenerated"] += 1
+                        report["details"].append({
+                            "mutation_id": m.get("id"),
+                            "lot_id": m.get("lot_id"),
+                            "sale_date": m.get("sale_date"),
+                            "roulement_quota": r_quota,
+                            "would_create": True,
+                        })
+                else:
+                    res = await regenerate_orphan_mutation_od(db, m)
+                    if res["regenerated"]:
+                        report["regenerated"] += 1
+                        report["details"].append({
+                            "mutation_id": m.get("id"),
+                            "lot_id": m.get("lot_id"),
+                            "sale_date": m.get("sale_date"),
+                            "entry_id": res["entry_id"],
+                            "amount": res.get("amount"),
+                        })
+                    else:
+                        report["skipped"] += 1
+            except Exception as e:
+                report["errors"] += 1
+                report["details"].append({
+                    "mutation_id": m.get("id"), "error": str(e),
+                })
+        return report
 
     @router.delete("/lots/{lot_id}/mutate/{mutation_id}")
     async def cancel_mutation(lot_id: str, mutation_id: str):
