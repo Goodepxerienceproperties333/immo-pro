@@ -547,7 +547,12 @@ def create_communication_router(db):
                     subj = payload.subject.strip() or subject_default
                     body_rendered = payload.body_html.strip() or body_default
                 html = await _build_html_with_signature(request, body_rendered, payload.include_signature)
-                pdf_bytes = await _build_situation_compte_pdf(
+                # iter90fv fix : `_build_situation_compte_pdf` retourne un
+                # tuple (pdf_bytes, filename). L'ancien code passait la tuple
+                # directement a `_send_email(attachment_pdf=...)` -> echec
+                # base64.b64encode masque par le try/except (les envois
+                # remontaient "0 email envoye" cote UI, deroutant l'utilisateur).
+                pdf_bytes, _ = await _build_situation_compte_pdf(
                     db, oid, payload.copropriete_id,
                     payload.start_date or None, payload.end_date or None,
                 )
@@ -604,7 +609,9 @@ def create_communication_router(db):
                     subj = payload.subject.strip() or subj_default
                     body_rendered = payload.body_html.strip() or body_default
                 html = await _build_html_with_signature(request, body_rendered, payload.include_signature)
-                pdf_bytes = await _build_decompte_annuel_pdf(
+                # iter90fv fix : idem preview_situation - tuple unpacking
+                # (cf. commentaire dans send_situation).
+                pdf_bytes, _ = await _build_decompte_annuel_pdf(
                     db, oid, payload.copropriete_id, payload.fiscal_year_id,
                 )
                 filename = f"decompte_annuel_{owner['name'].replace(' ', '_')}.pdf"
@@ -740,7 +747,10 @@ def create_communication_router(db):
             "Bonjour,<br><br>Veuillez trouver en piece jointe la situation actuelle de votre compte.<br><br>Cordialement,",
             payload.owner_id, payload.copropriete_id, balances_map,
         )
-        pdf_bytes = await _build_situation_compte_pdf(
+        # iter90fv fix : `_build_situation_compte_pdf` retourne un TUPLE
+        # (pdf_bytes, filename). Le code initial de preview essayait de
+        # base64-encoder le tuple directement -> 500 "expected bytes-like".
+        pdf_bytes, filename = await _build_situation_compte_pdf(
             db, payload.owner_id, payload.copropriete_id,
             payload.start_date or None, payload.end_date or None,
         )
@@ -751,7 +761,7 @@ def create_communication_router(db):
             "from_mailbox": payload.from_mailbox,
             "subject": subj,
             "body_html": html,
-            "attachment_filename": f"situation_compte_{owner.get('name','').replace(' ', '_')}.pdf",
+            "attachment_filename": filename,
             "attachment_pdf_base64": base64.b64encode(pdf_bytes).decode("ascii"),
         }
 
@@ -777,7 +787,9 @@ def create_communication_router(db):
             "N'hesitez pas a nous contacter en cas de question.<br><br>Cordialement,",
             payload.owner_id, payload.copropriete_id,
         )
-        pdf_bytes = await _build_decompte_annuel_pdf(
+        # iter90fv fix : `_build_decompte_annuel_pdf` retourne aussi un tuple
+        # (pdf_bytes, filename). Cf note dans preview_situation.
+        pdf_bytes, filename = await _build_decompte_annuel_pdf(
             db, payload.owner_id, payload.copropriete_id, payload.fiscal_year_id,
         )
         return {
@@ -787,7 +799,7 @@ def create_communication_router(db):
             "from_mailbox": payload.from_mailbox,
             "subject": subj,
             "body_html": html,
-            "attachment_filename": f"decompte_annuel_{owner.get('name','').replace(' ', '_')}.pdf",
+            "attachment_filename": filename,
             "attachment_pdf_base64": base64.b64encode(pdf_bytes).decode("ascii"),
         }
 
