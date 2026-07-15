@@ -402,6 +402,20 @@ async def _build_decompte_annuel_pdf(db, owner_id, copropriete_id, fiscal_year_i
         {"_id": 0},
     ).to_list(1000) if owner_lot_ids_helper else []
 
+    # iter90g6 : ecritures OD lot_mutation touchant le compte tier de
+    # l'owner (MUT-R fonds de roulement, MUT-P prorata, MUT-F futurs).
+    # Impactent le solde comptable definitif du proprietaire (dettes
+    # reprises ou cedees lors du transfert de propriete).
+    mutation_entries_docs = await db.journal_entries.find(
+        {"copropriete_id": copropriete_id,
+         "source_type": "lot_mutation",
+         "date": {"$gte": fy["start_date"], "$lte": fy["end_date"]},
+         "reversed": {"$ne": True},
+         "is_reversal": {"$ne": True},
+         "lines.third_party_id": owner_id},
+        {"_id": 0},
+    ).to_list(10000)
+
     fund_calls = await db.fund_calls.find(
         {"copropriete_id": copropriete_id,
          "date": {"$gte": fy["start_date"], "$lte": fy["end_date"]}},
@@ -1754,6 +1768,18 @@ def create_reports_router(db):
             {"_id": 0},
         ).to_list(1000) if owner_lot_ids_list else []
 
+        # iter90g6 : ecritures OD lot_mutation touchant le compte tier de
+        # l'owner (MUT-R/MUT-P/MUT-F) - impactent le solde definitif.
+        mutation_entries_docs = await db.journal_entries.find(
+            {"copropriete_id": copro_id_use,
+             "source_type": "lot_mutation",
+             "date": {"$gte": fy["start_date"], "$lte": fy["end_date"]},
+             "reversed": {"$ne": True},
+             "is_reversal": {"$ne": True},
+             "lines.third_party_id": owner_id},
+            {"_id": 0},
+        ).to_list(10000)
+
         # Fund calls in period
         fund_calls = await db.fund_calls.find(
             {"copropriete_id": copro_id_use,
@@ -1805,6 +1831,8 @@ def create_reports_router(db):
             preview=(preview and fy_status != "closed"),
             # iter90el : prise en compte des mutations pour le prorata jours
             mutations=mutations_docs,
+            # iter90g6 : OD MUT-R/P/F pour solde exact
+            mutation_entries=mutation_entries_docs,
         )
 
         filename = f"decompte_{owner['name'].replace(' ', '_')}_{fy.get('name','').replace(' ', '_')}.pdf"

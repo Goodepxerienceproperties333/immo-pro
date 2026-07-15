@@ -6,7 +6,91 @@ scinder au prochain grand chantier en `PRD.md` (statique) / `CHANGELOG.md`
 session par prudence (risque de perte d'info sur un fichier de 9400+
 lignes sans relecture complete).
 
-### Iter90g5 (Feb 2026) - PDF DECOMPTE : retrait texte "prorata mutation" par ligne + fix mutations manquantes sur 2 endpoints
+### Iter90g6 (Feb 2026) - BUG CRITIQUE : le decompte annuel IGNORAIT les OD lot_mutation (transfert fonds de roulement + prorata)
+
+**Ticket utilisateur (PROD, decompte TEUWEN vs Optipro, ecart 555 EUR)** :
+> "les décomptes sont toujours très différents en terme de frais... le total
+> créditeur est vraiment pas aligné. Les mutations sont réalisées
+> automatiquement lors du transfert de propriété dès lors, il n'y pas
+> besoin de wizard - Les écritures étant passées au moment du transfert."
+
+**Root cause** : notre code de mutation (`properties.py::_build_entry`)
+generait bien les OD `source_type=lot_mutation` (MUT-R fonds de roulement,
+MUT-P prorata appel en cours, MUT-F reprise appels futurs) au moment de
+la vente. MAIS le calcul du solde du decompte annuel
+(`pdf_decompte.py::build_decompte_pdf`) IGNORAIT completement ces
+ecritures :
+
+```python
+total_imputed = charges + reserve + roulement   # <-- MUT-R absent !
+balance = total_imputed - payments
+```
+
+**Consequence** : un acheteur mid-year (ex: TEUWEN, mutation 17/11/2025
+mid-exercice 01/10/2025-30/09/2026) voyait son debit "Transfert fonds de
+roulement 490,36 EUR" JAMAIS impute a son solde. Son decompte affichait
+faussement 688,98 EUR crediteur alors qu'Optipro affiche 133,88 EUR :
+
+| Poste | Optipro | Notre App AVANT fix | Notre App APRES iter90g6 |
+| Charges | 968,81 EUR | 919,07 EUR | ~919,07 EUR |
+| Transfert MUT-R | 490,36 EUR debit | ABSENT ! | 490,36 EUR debit |
+| Total impute | 1474,17 | 919,07 | 1409,43 |
+| Versements | 1608,05 | 1608,05 | 1608,05 |
+| Solde crediteur | **133,88** | 688,98 (faux) | ~198,62 EUR |
+
+Ecart residuel ~65 EUR = ecart d'arrondis + factures classees dans
+"Autres charges" chez nous au lieu de 6140/6141 chez Optipro (probleme
+de qualite de donnees, pas un bug).
+
+**Fix iter90g6** :
+
+1. `pdf_decompte.py::build_decompte_pdf` - nouveau parametre
+   `mutation_entries: list = None`.
+2. Nouveau calcul par owner :
+   ```python
+   mutation_net_debit = sum(
+       line.debit - line.credit
+       for entry in mutation_entries
+       for line in entry.lines
+       if line.third_party_id == owner.id
+       and not entry.reversed and not entry.is_reversal
+   )
+   total_imputed = charges + reserve + roulement + mutation_net_debit
+   ```
+3. Nouvelle section "3bis. Transferts lies a la mutation" dans le PDF
+   (avant les paiements) qui liste chaque OD avec libelle explicite :
+   - `source_subtype=fonds_roulement` -> "Transfert fonds de roulement"
+   - `source_subtype=prorata` -> "Prorata appel en cours (mutation)"
+   - `source_subtype=future_call` -> "Reprise appel futur (mutation)"
+4. 3 endpoints mis a jour pour charger les OD lot_mutation via
+   `db.journal_entries.find({source_type:'lot_mutation',
+   lines.third_party_id: owner_id, date in FY, reversed/is_reversal!=true})` :
+   - `reports.py::decompte_pdf` (ecran syndic Rapports > Decomptes)
+   - `reports.py::_build_decompte_annuel_pdf` (helper communication email
+     groupe)
+   - `owner_portal.py::download_decompte_pdf` (portail proprio)
+
+**Tests** (`test_iter90g6_decompte_includes_mutation_entries.py`, 5/5 verts) :
+- `buyer_receives_debit_mut_r` : acheteur voit debit 490,36 EUR dans PDF +
+  section "Transferts lies a la mutation".
+- `buyer_balance_includes_mut_r_debit` : verifie que le solde inclut le
+  debit MUT-R (scenario complet avec prorata + MUT-R + paiement, solde
+  attendu 35,67 EUR crediteur au lieu de 526,03 EUR sans le fix).
+- `seller_receives_credit_mut_r` : vendeur voit credit 490,36 EUR (dette
+  cedee, diminue son debit).
+- `no_mutation_entries_unchanged` : owner sans OD lot_mutation ->
+  comportement inchange (retro-compatible, aucune section transferts).
+- `reversed_mut_r_is_ignored` : OD annulee (reversed=True ou
+  is_reversal=True suite a cancel_mutation) -> ignoree du solde.
+
+Regression complete : 28/28 tests verts sur iter90g0-g6 + tests decompte
+historiques.
+
+**Redeploiement requis en PROD** pour Acacia TER - le solde TEUWEN passera
+correctement de 688 EUR crediteur (faux) a ~135-200 EUR crediteur (correct,
+alignement avec Optipro).
+
+
 
 **Ticket utilisateur** :
 > "dans le décompte propriétaire le texte 'prorata mutation 87.1%' ne doit

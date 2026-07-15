@@ -1017,6 +1017,17 @@ def create_owner_portal_router(db):
             {"_id": 0},
         ).to_list(1000) if owner_lot_ids_op else []
 
+        # iter90g6 : OD lot_mutation impactant le compte tier de l'owner
+        mutation_entries_op = await db.journal_entries.find(
+            {"copropriete_id": copropriete_id,
+             "source_type": "lot_mutation",
+             "date": {"$gte": fy["start_date"], "$lte": fy["end_date"]},
+             "reversed": {"$ne": True},
+             "is_reversal": {"$ne": True},
+             "lines.third_party_id": owner_id},
+            {"_id": 0},
+        ).to_list(10000)
+
         fcs = await db.fund_calls.find(
             {"copropriete_id": copropriete_id, "date": {"$gte": fy["start_date"], "$lte": fy["end_date"]}},
             {"_id": 0}
@@ -1057,6 +1068,7 @@ def create_owner_portal_router(db):
             fund_calls=fcs, payments=payments,
             expense_accounts_map=nature_map,
             mutations=mutations_op,  # iter90g5 : prorata mutation
+            mutation_entries=mutation_entries_op,  # iter90g6 : OD MUT-R/P/F
         )
 
         filename = f"decompte_{owner['name'].replace(' ', '_')}_{fy.get('name','').replace(' ', '_')}.pdf"

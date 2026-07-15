@@ -69,6 +69,7 @@ def build_decompte_pdf(
     preview: bool = False,
     syndic_pdf_ctx: dict = None,
     mutations: list = None,
+    mutation_entries: list = None,
 ) -> bytes:
     """Genere le PDF Decompte annuel pour un proprietaire.
 
@@ -77,6 +78,13 @@ def build_decompte_pdf(
 
     iter90av : `syndic_pdf_ctx` (optionnel) active le nouveau layout avec logo
     cabinet + adresse destinataire fenetre C6 droite + mentions legales footer.
+
+    iter90g6 : `mutation_entries` (optionnel) contient les OD `source_type=
+    lot_mutation` touchant le compte tier du proprietaire pendant le FY
+    (MUT-R fonds de roulement, MUT-P prorata, MUT-F futurs). Sans ce
+    parametre, un acheteur mid-year voit un decompte incomplet : ses
+    transferts de dettes reprises au vendeur ne sont pas imputes, son solde
+    apparait faussement crediteur.
     """
     use_new_layout = bool(syndic_pdf_ctx and syndic_pdf_ctx.get("syndic_config"))
     from pdf_layout import build_header_with_logo, build_recipient_address_flowable, draw_legal_footer
@@ -598,17 +606,56 @@ def build_decompte_pdf(
 
     total_payments = sum(abs(float(p.get("amount", 0) or 0)) for p in payments)
 
+    # iter90g6 : agrege les ecritures de mutation (OD MUT-R / MUT-P / MUT-F)
+    # touchant le compte tier du proprietaire. Un ACHETEUR mid-year recoit
+    # un DEBIT (dette reprise du vendeur). Un VENDEUR recoit un CREDIT
+    # (dette cedee a l'acheteur, remboursable). Sans ce calcul, le solde
+    # du decompte ignore ces transferts et affiche un ecart avec Optipro.
+    mutation_entries_owner = []
+    mutation_net_debit = 0.0  # positif = dettes reprises (a payer)
+    for me in (mutation_entries or []):
+        if me.get("is_reversal") or me.get("reversed"):
+            continue
+        for ln in me.get("lines", []) or []:
+            if ln.get("third_party_id") != owner.get("id"):
+                continue
+            d = float(ln.get("debit", 0) or 0)
+            c = float(ln.get("credit", 0) or 0)
+            net = d - c
+            if abs(net) < 0.001:
+                continue
+            subtype = me.get("source_subtype", "") or ""
+            _labels = {
+                "fonds_roulement": "Transfert fonds de roulement",
+                "prorata": "Prorata appel en cours (mutation)",
+                "future_call": "Reprise appel futur (mutation)",
+            }
+            label = _labels.get(subtype, "Transfert de mutation")
+            mutation_entries_owner.append({
+                "date": me.get("date", ""),
+                "label": label,
+                "description": me.get("description", "") or "",
+                "reference": me.get("reference", "") or "",
+                "amount": net,  # positif = debit (a payer), negatif = credit
+                "subtype": subtype,
+            })
+            mutation_net_debit += net
+    mutation_net_debit = round(mutation_net_debit, 2)
+
     # ---- CALCUL DU SOLDE COMPTABLE CORRECT ----
     # Total IMPUTE DEFINITIVEMENT au proprietaire pour cet exercice :
     #   = Charges reelles reparties (compte 6xx)
     #     + Quote-part fonds de reserve appelee (compte 13X - non remboursable)
     #     + Quote-part fonds de roulement appelee (compte 13X - non remboursable)
+    #     + Solde net des ecritures de mutation (iter90g6, ex: dettes reprises)
     # Le BONI/MALI sur provisions = provisions appelees - charges reelles.
     # Solde net pour le proprietaire = Versements - Total impute definitivement
     #   > 0  : EN VOTRE FAVEUR (excedent versement, remboursable ou reportable)
     #   < 0  : RESTE A REGLER (somme due au syndic)
     total_imputed = round(
-        total_owner_charges + total_called_reserve + total_called_roulement, 2
+        total_owner_charges + total_called_reserve + total_called_roulement
+        + mutation_net_debit,
+        2,
     )
     boni_provisions = round(total_called_provisions - total_owner_charges, 2)
     balance = round(total_imputed - total_payments, 2)
@@ -1086,6 +1133,73 @@ def build_decompte_pdf(
         elems.append(fc_tbl)
 
     elems.append(Spacer(1, 8 * mm))
+
+    # ---- 4. TRANSFERTS DE MUTATION (iter90g6) ----
+    # Detail des OD source_type=lot_mutation touchant le compte tier de
+    # l'owner : MUT-R (fonds de roulement transfere), MUT-P (prorata appel
+    # en cours), MUT-F (reprise appels futurs). Un ACHETEUR voit ces
+    # montants comme des DEBITS (dettes reprises du vendeur, a payer). Un
+    # VENDEUR les voit comme des CREDITS (dettes cedees, remboursables).
+    if mutation_entries_owner:
+        elems.append(Paragraph(
+            "3bis. Transferts lies a la mutation",
+            h2,
+        ))
+        elems.append(Paragraph(
+            "Ecritures generees lors du transfert de propriete (fonds de "
+            "roulement, prorata des appels en cours). Un DEBIT augmente ce "
+            "que vous devez au syndic (dettes reprises du vendeur). Un "
+            "CREDIT diminue votre solde (dettes cedees a l'acheteur).",
+            sub_style,
+        ))
+        elems.append(Spacer(1, 2 * mm))
+        mut_rows = [["Date", "Libelle", "Debit", "Credit"]]
+        mut_cell = ParagraphStyle(
+            "mut", parent=body, fontSize=8.5, leading=10.5, wordWrap="CJK",
+        )
+        total_mut_debit_disp = 0.0
+        total_mut_credit_disp = 0.0
+        for me in sorted(mutation_entries_owner, key=lambda x: x.get("date", "")):
+            amt = float(me.get("amount", 0) or 0)
+            d_amt = amt if amt > 0 else 0.0
+            c_amt = -amt if amt < 0 else 0.0
+            total_mut_debit_disp += d_amt
+            total_mut_credit_disp += c_amt
+            mut_rows.append([
+                _fmt_date(me.get("date", "")),
+                Paragraph(me.get("label", "") + (
+                    f" <font color='#94A3B8' size='7'>({me.get('reference','')})</font>"
+                    if me.get("reference") else ""
+                ), mut_cell),
+                _fmt_eur(d_amt) if d_amt > 0.001 else "-",
+                _fmt_eur(c_amt) if c_amt > 0.001 else "-",
+            ])
+        mut_rows.append([
+            "",
+            Paragraph("<b>TOTAL</b>", mut_cell),
+            _fmt_eur(total_mut_debit_disp) if total_mut_debit_disp > 0.001 else "-",
+            _fmt_eur(total_mut_credit_disp) if total_mut_credit_disp > 0.001 else "-",
+        ])
+        mut_tbl = Table(mut_rows, colWidths=[22 * mm, 110 * mm, 20 * mm, 20 * mm])
+        mut_tbl.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), BRAND),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE", (0, 0), (-1, -1), 8.5),
+            ("ALIGN", (2, 0), (3, -1), "RIGHT"),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -2),
+             [colors.white, SLATE_50]),
+            ("BACKGROUND", (0, -1), (-1, -1), SLATE_100),
+            ("FONTNAME", (1, -1), (3, -1), "Helvetica-Bold"),
+            ("LINEABOVE", (0, -1), (-1, -1), 1, BRAND),
+            ("TOPPADDING", (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ("LEFTPADDING", (0, 0), (-1, -1), 5),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+        ]))
+        elems.append(mut_tbl)
+        elems.append(Spacer(1, 8 * mm))
 
     # ---- 4. PAIEMENTS ----
     if payments:
