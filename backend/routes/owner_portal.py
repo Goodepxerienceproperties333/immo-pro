@@ -219,16 +219,27 @@ def create_owner_portal_router(db):
             for cp in copro_ids:
                 stats_by_acp[cp] = {"total_called": 0.0, "total_paid": 0.0, "balance": 0.0, "status": "solde"}
 
-            for e in entries:
+            # iter90g3 : dedup defensive. Empeche de compter deux fois la meme
+            # ligne d'ecriture (par exemple si `journal_entries` contient un
+            # doublon accidentel, ou si un backfill a cree deux MUT-* pour un
+            # meme lot/mutation). Cle : (entry_id, line_index). En cas d'id
+            # vide, utilise un index de position pour eviter les collisions.
+            seen_lines = set()
+            for entry_pos, e in enumerate(entries):
                 cp = e.get("copropriete_id", "")
                 if cp not in stats_by_acp:
                     continue
+                entry_id = e.get("id") or f"__pos_{entry_pos}"
                 valid_accs = tier_accounts_by_copro.get(cp, set())
-                for ln in e.get("lines", []) or []:
+                for line_idx, ln in enumerate(e.get("lines", []) or []):
                     tpid = ln.get("third_party_id")
                     acc = ln.get("account_number", "")
                     # Ligne concernee : tp_owner_id in owner_ids OU (tpid vide ET compte in valid_accs)
                     if tpid in owner_id_set or (not tpid and acc in valid_accs):
+                        line_key = (entry_id, line_idx)
+                        if line_key in seen_lines:
+                            continue
+                        seen_lines.add(line_key)
                         d_val = float(ln.get("debit", 0) or 0)
                         c_val = float(ln.get("credit", 0) or 0)
                         # DEBIT sur tier = charge appelee ; CREDIT = paiement/reduction
@@ -1061,6 +1072,60 @@ def create_owner_portal_router(db):
             {"copropriete_id": copropriete_id}, {"_id": 0}
         ).sort("start_date", -1).to_list(50)
         return years
+
+    @router.get("/movements/pdf")
+    async def my_movements_pdf(
+        request: Request,
+        copropriete_id: str,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+    ):
+        """iter90g3 : telechargement PDF du grand livre (appels de fonds) pour
+        la periode donnee. Reutilise `_build_situation_compte_pdf` qui produit
+        le meme document que celui envoye par le syndic dans les communications
+        "Situation de compte". Chinese wall enforce via lots.
+
+        Query params :
+        - copropriete_id : obligatoire (chinese wall)
+        - start_date / end_date : bornes de la periode (typiquement l'exercice
+          selectionne dans l'UI). Optionnels.
+        """
+        from fastapi.responses import StreamingResponse
+        import io
+        from routes.reports import _build_situation_compte_pdf
+
+        owner_ids, primary_owner = await _resolve_owner_ids(db, request)
+
+        # Trouver la fiche possedant les lots dans CET ACP (multi-fiche support).
+        # Meme logique que /decompte/pdf : le primary_owner peut ne pas avoir
+        # les lots dans cette ACP si le proprietaire a plusieurs fiches.
+        owner_lots = await db.lots.find(
+            {"copropriete_id": copropriete_id,
+             "$or": [
+                 {"owner_id": {"$in": owner_ids}},
+                 {"owner_ids": {"$in": owner_ids}},
+             ]},
+            {"_id": 0, "owner_id": 1, "owner_ids": 1},
+        ).to_list(100)
+        if not owner_lots:
+            raise HTTPException(403, "Vous n'avez aucun lot dans cette copropriete")
+        active_owner_id = owner_lots[0].get("owner_id") or (
+            (owner_lots[0].get("owner_ids") or [None])[0]
+        )
+        if not active_owner_id or active_owner_id not in owner_ids:
+            active_owner_id = primary_owner["id"]
+
+        pdf_bytes, filename = await _build_situation_compte_pdf(
+            db, active_owner_id, copropriete_id,
+            start_date=start_date, end_date=end_date,
+            group_by_owner=True,
+        )
+        return StreamingResponse(
+            io.BytesIO(pdf_bytes),
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
 
     # ====================================================================
     # iter89 : SELF-SERVICE - le proprio peut modifier ses coords et gerer

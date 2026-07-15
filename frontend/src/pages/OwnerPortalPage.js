@@ -10,7 +10,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { toast } from 'sonner';
-import { LogOut, Home, Wallet, FileText, Receipt, Megaphone, Building2, User, AlertCircle, CheckCircle2, ArrowDownToLine, Copy, UserCog, Users, Plus, Pencil, Trash2, Save, Eye, Gauge, CalendarClock, PieChart as PieChartIcon, TrendingUp, Clock, Sparkles, Mail, MailOpen, Send, Paperclip, ChevronRight } from 'lucide-react';
+import { LogOut, Home, Wallet, FileText, Receipt, Megaphone, Building2, User, AlertCircle, CheckCircle2, ArrowDownToLine, Copy, UserCog, Users, Plus, Pencil, Trash2, Save, Eye, Gauge, CalendarClock, PieChart as PieChartIcon, TrendingUp, Clock, Sparkles, Mail, MailOpen, Send, Paperclip, ChevronRight, Download } from 'lucide-react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RechartsTooltip } from 'recharts';
 import { sanitizeHtml } from '@/lib/sanitizeHtml';
 import OwnerOnboardingTour, { ownerTourStorageKey } from '@/components/OwnerOnboardingTour';
@@ -701,7 +701,8 @@ export default function OwnerPortalPage() {
 
           <TabsContent value="fund-calls" className="mt-0" data-testid="fund-calls-tab-content">
             {/* Iter90dd : refonte - mouvements du grand livre (aligne balance de tiers)
-                iter90fy : selecteur exercice comptable au lieu de dates libres */}
+                iter90fy : selecteur exercice comptable au lieu de dates libres
+                iter90g3 : bouton telechargement PDF des appels de fonds/mouvements */}
             <MovementsTab
               movements={movements}
               loading={movementsLoading}
@@ -713,6 +714,9 @@ export default function OwnerPortalPage() {
               acpFiltered={selectedAcp !== 'all'}
               copyVcs={copyVcs}
               vcsCode={owner.vcs_code}
+              copropriete_id={selectedAcp}
+              periodStart={periodStart}
+              periodEnd={periodEnd}
             />
           </TabsContent>
 
@@ -1661,8 +1665,20 @@ function MovementsTab({
   movements, loading, openingBalance, closingBalance,
   fiscalYears, selectedFyId, onSelectedFyId,
   acpFiltered, copyVcs, vcsCode,
+  copropriete_id, periodStart, periodEnd,
 }) {
   const selectedFy = fiscalYears.find(y => y.id === selectedFyId);
+  // iter90g3 : URL de telechargement PDF des mouvements. Utilise
+  // process.env.REACT_APP_BACKEND_URL avec les cookies d'auth (target=_blank
+  // + credentials='include' via header <a>). Les query params passent
+  // copropriete_id et la periode selectionnee.
+  const pdfHref = useMemo(() => {
+    if (!copropriete_id) return null;
+    const params = new URLSearchParams({ copropriete_id });
+    if (periodStart) params.set('start_date', periodStart);
+    if (periodEnd) params.set('end_date', periodEnd);
+    return `${process.env.REACT_APP_BACKEND_URL}/api/owner/movements/pdf?${params.toString()}`;
+  }, [copropriete_id, periodStart, periodEnd]);
   return (
     <div className="space-y-4" data-testid="movements-tab-body">
       {/* iter90fy : selecteur d'exercice comptable au lieu de dates libres.
@@ -1712,6 +1728,21 @@ function MovementsTab({
               <span className="ml-auto text-[10px] text-amber-600 bg-amber-50 border border-amber-200 rounded-full px-2 py-0.5">
                 Selectionnez une copropriete pour voir un solde detaille
               </span>
+            )}
+            {/* iter90g3 : bouton de telechargement PDF du grand livre.
+                Ne s'affiche que si un exercice est selectionne (pour eviter
+                un PDF vide ou trop volumineux). */}
+            {acpFiltered && selectedFy && movements.length > 0 && pdfHref && (
+              <a
+                href={pdfHref}
+                target="_blank"
+                rel="noreferrer"
+                className={`${acpFiltered ? '' : 'ml-auto'} inline-flex items-center gap-1.5 text-xs text-white bg-[#022D52] hover:bg-[#01213e] px-3 py-1.5 rounded-md border border-[#022D52] transition-colors`}
+                data-testid="download-movements-pdf-btn"
+              >
+                <Download size={12} />
+                Telecharger le PDF
+              </a>
             )}
           </div>
         </CardContent>

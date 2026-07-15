@@ -991,6 +991,40 @@ async def startup():
             print(f"[startup][iter90cf] db.mutations synced from lot.mutations: {synced} entries")
     except Exception as _e:
         print(f"[startup][iter90cf] mutation sync skipped: {_e}")
+
+    # iter90g2 : seed la boite mail welcome@goodexperienceproperties.be pour
+    # le syndic gerald@gep.be. Idempotent : n'ajoute que si absent. Corrige
+    # le bug "Graph 404 ErrorInvalidUser" ou l'envoi echouait car le fallback
+    # utilisait l'email de compte (`gerald@gep.be`) qui n'est pas une mailbox
+    # Microsoft Graph valide dans le tenant.
+    try:
+        gep_user = await db.users.find_one(
+            {"email": "gerald@gep.be"}, {"_id": 1, "authorized_mailboxes": 1}
+        )
+        if gep_user:
+            boxes = list(gep_user.get("authorized_mailboxes") or [])
+            wanted_addr = "welcome@goodexperienceproperties.be"
+            has_wanted = any(
+                (b.get("address") or "").lower() == wanted_addr for b in boxes
+            )
+            if not has_wanted:
+                # Si aucune boite n'a `default=True` -> nouvelle boite = default
+                # Sinon respect de l'existant : la nouvelle est ajoutee non-default
+                has_default = any(b.get("default", False) for b in boxes)
+                boxes.append({
+                    "address": wanted_addr,
+                    "display_name": "GEP - Good Experience Properties",
+                    "active": True,
+                    "default": not has_default,
+                })
+                await db.users.update_one(
+                    {"_id": gep_user["_id"]},
+                    {"$set": {"authorized_mailboxes": boxes}},
+                )
+                print(f"[startup][iter90g2] mailbox seeded for gerald@gep.be: {wanted_addr}")
+    except Exception as _e:
+        print(f"[startup][iter90g2] mailbox seed skipped: {_e}")
+
     # iter90as : ecriture test_credentials.md en dev/preview UNIQUEMENT.
     # En production K8s, /app/memory peut ne pas etre writable (filesystem
     # hardened, volume ephemere) -> le crash faisait timeout le readiness probe.
