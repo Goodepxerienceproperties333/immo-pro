@@ -208,15 +208,14 @@ async def _extract_invoice_with_ai(file_path: str, mime_type: str, known_pcmn: l
         else:
             msg = UserMessage(text=f"Extract metadata from this Belgian supplier invoice:\n\n{text}")
 
-        # P0-class fix (iter90fp) : garde-fou anti-timeout sur l'appel LLM.
-        # Un PDF scanne volumineux (path vision) ou une latence provider
-        # peut faire trainer cet appel bien au-dela du timeout du reverse
-        # proxy (Cloudflare) -> connexion coupee brutalement, l'utilisateur
-        # voit une erreur opaque au lieu d'un message clair. On borne
-        # l'appel a 55s et on degrade proprement (formulaire vide + message
-        # explicite, saisie manuelle toujours possible) au lieu de laisser
-        # la requete pendre.
-        response = await asyncio.wait_for(chat.send_message(msg), timeout=55.0)
+        # iter90gf : garde-fou anti-timeout durci.
+        # PROD Cloudflare kill les connexions >60s. Le budget total de
+        # l'endpoint (upload + BCE index + PDF text + template + LLM) doit
+        # rester bien sous 60s. LLM plafonne a 30s (au lieu de 55s) pour
+        # laisser 30s de buffer aux autres etapes. En cas de timeout, on
+        # degrade proprement (formulaire vide + _warning) plutot que de
+        # laisser Cloudflare afficher son ecran "origin timeout" opaque.
+        response = await asyncio.wait_for(chat.send_message(msg), timeout=30.0)
         txt = response.strip()
         if txt.startswith("```"):
             txt = txt.split("```")[1] if "```" in txt[3:] else txt[3:]
@@ -225,8 +224,8 @@ async def _extract_invoice_with_ai(file_path: str, mime_type: str, known_pcmn: l
             txt = txt.strip("` \n")
         return json.loads(txt)
     except asyncio.TimeoutError:
-        print("[AI invoice extract skipped]: LLM timeout > 55s")
-        return {"_warning": "Extraction IA trop lente (>55s), veuillez remplir manuellement ou reessayer"}
+        print("[AI invoice extract skipped]: LLM timeout > 30s")
+        return {"_warning": "Extraction IA trop lente (>30s), veuillez remplir manuellement ou reessayer"}
     except Exception as e:
         print(f"[AI invoice extract skipped]: {e}")
         return {"_warning": f"Echec extraction IA : {str(e)[:200]}"}
@@ -246,6 +245,69 @@ def create_invoice_ai_router(db):
         and deleted right after. Nothing is persisted on disk or in GridFS
         (the extraction is stateless - the user will upload the PDF again
         if they want to attach it to a real invoice).
+
+        iter90gf : wrap try/except global + timeout HTTP 45s. Objectif :
+        cet endpoint ne DOIT JAMAIS retourner un 5xx qui remonterait vers
+        Cloudflare (qui afficherait alors un ecran "origin timeout" opaque
+        a l'utilisateur). Toute erreur inattendue (timeout LLM, provider
+        HS, PDF corrompu, mongo lent, ...) retourne un 200 avec
+        `extracted._warning` explicite, laissant l'UI proposer la saisie
+        manuelle en fallback.
+        """
+        # iter90gf : global timeout garde-fou (45s max sur le endpoint entier,
+        # bien sous les 60s Cloudflare). Si tout depasse, on retourne un
+        # dict degrade et l'UI bascule en saisie manuelle.
+        try:
+            return await asyncio.wait_for(
+                _extract_invoice_impl(db, file, copropriete_id or ""),
+                timeout=45.0,
+            )
+        except asyncio.TimeoutError:
+            filename = getattr(file, "filename", "") or ""
+            print(f"[iter90gf] /invoices-ai/extract global timeout >45s for {filename}")
+            return {
+                "extracted": {
+                    "_warning": (
+                        "Reconnaissance IA trop lente (>45s). Le fichier est "
+                        "probablement volumineux ou complexe. Veuillez remplir "
+                        "les champs manuellement ; le PDF pourra etre joint "
+                        "apres la creation de la facture."
+                    ),
+                },
+                "supplier_match": None,
+                "supplier_match_method": None,
+                "supplier_suggest_create": False,
+                "filename": filename,
+                "stored_temp_path": "",
+                "raw_text": "",
+                "supplier_id_guess": "",
+            }
+        except Exception as e:
+            filename = getattr(file, "filename", "") or ""
+            print(f"[iter90gf] /invoices-ai/extract crashed: {type(e).__name__}: {e}")
+            return {
+                "extracted": {
+                    "_warning": (
+                        f"Reconnaissance IA impossible ({type(e).__name__}). "
+                        "Veuillez remplir les champs manuellement ; le PDF "
+                        "pourra etre joint apres la creation de la facture."
+                    ),
+                },
+                "supplier_match": None,
+                "supplier_match_method": None,
+                "supplier_suggest_create": False,
+                "filename": filename,
+                "stored_temp_path": "",
+                "raw_text": "",
+                "supplier_id_guess": "",
+            }
+
+    async def _extract_invoice_impl(
+        db, file: UploadFile, copropriete_id: str,
+    ):
+        """iter90gf : implementation reelle - toujours enveloppee par
+        `extract_invoice` qui garantit un retour 200 en cas d'erreur ou
+        de timeout. Cette fonction PEUT lever, l'appelant catch tout.
         """
         ext = Path(file.filename or "file").suffix.lower()
         if ext != ".pdf":
