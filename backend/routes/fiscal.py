@@ -481,22 +481,53 @@ def create_fiscal_router(db):
                 "reversed": {"$ne": True},
                 "is_reversal": {"$ne": True}}
         ve_entries = await db.journal_entries.find(ve_q, {"_id": 0}).to_list(50000)
+        # iter90g4 : precharge les fund_calls references par les VE pour
+        # distinguer les lignes "provisions charges" (a regulariser) des lignes
+        # "fonds de roulement" (non regularisables) qui utilisent le MEME
+        # compte tier `accs["provisions"]` = 4101XXXX. Voir auto_entries.py
+        # ligne 492-503 : `account_number = accs["provisions"]` pour les
+        # DEUX types, seul `account_name`/`line_description` differe.
+        fc_ids = list({e.get("source_id") for e in ve_entries
+                       if e.get("source_type") == "fund_call" and e.get("source_id")})
+        fund_calls_map = {}
+        if fc_ids:
+            async for fc in db.fund_calls.find(
+                {"id": {"$in": fc_ids}}, {"_id": 0}
+            ):
+                fund_calls_map[fc["id"]] = fc
         provisions_called_by_owner = defaultdict(float)  # owner_id -> amount
         provisions_called_total = 0.0
         # Track VE entry IDs to mark as reversed later (iter90em)
         ve_entry_ids_to_reverse = set()
         from tier_accounts import is_provisions_account
         for e in ve_entries:
+            # iter90g4 : detecte le type de l'appel via fund_call. Un appel
+            # 100% reserve ou 100% roulement doit etre ignore. Un appel
+            # provisions mixte (avec roulement_amount > 0) verra ses lignes
+            # roulement filtrees en aval.
+            fc = fund_calls_map.get(e.get("source_id"))
+            call_type = (fc or {}).get("call_type", "")
+            if call_type in ("reserve", "roulement"):
+                # Appel dedie a reserve ou roulement -> exclu integralement
+                continue
             has_provision_line = False
             for line in e.get("lines", []):
                 acc = line.get("account_number", "")
                 # provisions only (legacy 40000XXX OR new 4101XXXX), not reserve
-                if is_provisions_account(acc):
-                    amt = line.get("debit", 0) - line.get("credit", 0)
-                    if amt > 0 and line.get("third_party_id"):
-                        provisions_called_by_owner[line["third_party_id"]] += amt
-                        provisions_called_total += amt
-                        has_provision_line = True
+                if not is_provisions_account(acc):
+                    continue
+                # iter90g4 : exclure les lignes "Fonds roulement" qui utilisent
+                # le meme compte tier (4101XXXX) que les provisions charges.
+                # Le seul discriminant est `account_name` ou `line_description`.
+                _an = (line.get("account_name") or "").lower()
+                _ld = (line.get("line_description") or "").lower()
+                if _an.startswith("fonds roulement") or _ld.startswith("appel fonds de roulement"):
+                    continue
+                amt = line.get("debit", 0) - line.get("credit", 0)
+                if amt > 0 and line.get("third_party_id"):
+                    provisions_called_by_owner[line["third_party_id"]] += amt
+                    provisions_called_total += amt
+                    has_provision_line = True
             if has_provision_line:
                 ve_entry_ids_to_reverse.add(e["id"])
         provisions_called_total = round(provisions_called_total, 2)
