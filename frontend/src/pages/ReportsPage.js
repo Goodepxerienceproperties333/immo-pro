@@ -30,6 +30,8 @@ export default function ReportsPage() {
   const [years, setYears] = useState([]);
   const [fiscalYearId, setFiscalYearId] = useState('');
   const [viewMode, setViewMode] = useState('before_distribution');
+  // iter90fw : filtre proprietaires actuels vs tous (current | all)
+  const [ownerFilter, setOwnerFilter] = useState('current');
   const [loading, setLoading] = useState(false);
   // Preview Decompte state
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -95,10 +97,19 @@ export default function ReportsPage() {
     }
   };
   const loadResultat = async () => { setLoading(true); try { const params = {}; if (dateFrom) params.date_from = dateFrom; if (dateTo) params.date_to = dateTo; const { data } = await api.get('/reports/resultat', { params }); setResultat(data); } catch { toast.error('Erreur'); } finally { setLoading(false); } };
+  // iter90fw : auto-reload decomptes quand le filtre owner change
+  // (si un chargement precedent existe deja - sinon on attend le clic
+  // sur "Generer decomptes").
+  useEffect(() => {
+    if (decomptes) {
+      loadDecomptes();
+    }
+  }, [ownerFilter]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const loadDecomptes = async () => {
     setLoading(true);
     try {
-      const params = {};
+      const params = { owner_filter: ownerFilter };
       if (fiscalYearId) params.fiscal_year_id = fiscalYearId;
       if (dateFrom) params.date_from = dateFrom;
       if (dateTo) params.date_to = dateTo;
@@ -395,6 +406,35 @@ export default function ReportsPage() {
                 </p>
               )}
             </div>
+            {/* iter90fw : toggle Proprietaires actuels / Tous */}
+            <div>
+              <label className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold block mb-1">Perimetre</label>
+              <div className="inline-flex rounded-md border border-slate-200 bg-white overflow-hidden" data-testid="owner-filter-toggle">
+                {[
+                  { k: 'current', label: 'Actuels' },
+                  { k: 'all', label: 'Tous' },
+                ].map(o => (
+                  <button
+                    key={o.k}
+                    type="button"
+                    onClick={() => setOwnerFilter(o.k)}
+                    data-testid={`owner-filter-${o.k}`}
+                    className={`px-3 py-2 text-sm transition-colors ${
+                      ownerFilter === o.k
+                        ? 'bg-[#022D52] text-white font-semibold'
+                        : 'text-slate-600 hover:bg-slate-100'
+                    }`}
+                  >
+                    {o.label}
+                  </button>
+                ))}
+              </div>
+              <p className="text-[10px] text-slate-400 mt-1">
+                {ownerFilter === 'current'
+                  ? 'Proprietaires ayant un lot au 1er jour de l exercice'
+                  : 'Inclut aussi les anciens proprietaires avec solde'}
+              </p>
+            </div>
           </div>
           <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-md text-sm text-amber-800 flex items-start gap-2" data-testid="decompte-warning">
             <FileText size={16} className="mt-0.5 shrink-0" />
@@ -427,8 +467,21 @@ export default function ReportsPage() {
                     const balColor = bal > 0.01 ? 'text-red-600' : (bal < -0.01 ? 'text-emerald-600' : 'text-slate-500');
                     const balLabel = bal > 0.01 ? 'Debiteur' : (bal < -0.01 ? 'Crediteur' : 'Solde');
                     return (
-                      <TableRow key={d.owner_id} data-testid={`decompte-row-${d.owner_id}`}>
-                        <TableCell className="font-medium text-slate-900">{d.owner_name}</TableCell>
+                      <TableRow key={d.owner_id} data-testid={`decompte-row-${d.owner_id}`} className={d.is_former ? 'bg-slate-50/70' : ''}>
+                        <TableCell className="font-medium text-slate-900">
+                          <div className="flex items-center gap-2">
+                            <span>{d.owner_name}</span>
+                            {d.is_former && (
+                              <span
+                                className="text-[9px] uppercase tracking-wider font-semibold px-1.5 py-0.5 rounded bg-slate-200 text-slate-600 border border-slate-300"
+                                data-testid={`badge-former-${d.owner_id}`}
+                                title="Ancien proprietaire (plus de lot dans cette ACP)"
+                              >
+                                Ancien
+                              </span>
+                            )}
+                          </div>
+                        </TableCell>
                         <TableCell className="font-mono text-xs text-[#022D52]">{d.vcs_code || '-'}</TableCell>
                         <TableCell className="text-xs text-slate-600">{d.lots.map(l => l.number).join(', ') || '-'}</TableCell>
                         <TableCell className="text-right font-mono text-sm">{d.share_pct}%</TableCell>

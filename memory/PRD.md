@@ -11,6 +11,55 @@ Multi-ACP avec **chinese walls stricts** sur donnees comptables/financieres.
 Auth: JWT cookie + middleware global FastAPI.
 Roles: `superadmin`, `syndic`, `gestionnaire`, `owner`.
 
+### Iter90fw (Feb 2026) - FEATURE : Filtre "Proprietaires actuels vs Tous" sur les Décomptes
+
+**Ticket utilisateur (Feb 2026)** :
+> "il faut un filtre qui permet de choisir - Proprietaires actuels ou
+> Tous les proprietaires"
+
+Contexte : dans le tableau compact des decomptes (iter90fv), tous les
+proprietaires ayant un solde etaient affiches - y compris d'anciens
+proprietaires ayant vendu leur lot. L'utilisateur veut pouvoir toggler
+entre 2 vues :
+
+**Actuels ('current', default)** : proprietaires possedant >= 1 lot AU
+1er JOUR de l'exercice selectionne OU ayant possede pendant l'exercice
+(vendeur mid-year -> inclus pour recevoir son decompte de mutation).
+Resolution via `db.mutations` + `lot.owner_id`/`owner_ids`.
+
+**Tous ('all')** : actuels + anciens proprietaires (n'ont plus de lot
+mais ont soit un `tier_accounts` configure pour cette ACP, soit
+apparaissent dans les mutations historiques). Chaque owner a un flag
+`is_former` -> badge visuel "Ancien" + ligne grisee dans le tableau.
+
+**Backend** (`routes/reports.py::decompte_annuel`) :
+- Nouveau parametre `owner_filter=current|all` (default 'current')
+- Construction de `current_owner_ids` via lots actuels + vendeurs
+  intra-exercice depuis mutations
+- `is_former=True` retourne dans chaque decompte quand `owner_id NOT IN
+  current_owner_ids`
+- Reponse enrichie avec `owner_filter` (echo du param) pour le frontend
+
+**Frontend** (`ReportsPage.js` decomptes tab) :
+- Toggle 2 boutons "Actuels" / "Tous" (data-testid=owner-filter-toggle,
+  owner-filter-current, owner-filter-all)
+- Badge "Ancien" en gris pale sur les lignes d'anciens proprietaires
+  (data-testid=badge-former-{owner_id})
+- Auto-reload quand le filtre change (si un chargement existe deja)
+
+**Tests** (`test_iter90fw_decompte_owner_filter.py`, 2/2 verts) :
+- `test_owner_filter_current_vs_all` : Alice (actuelle) / Bob (a vendu
+  en 2024 avant fy_start 2025) / Carol (jamais eu de lot mais tier
+  configure). Mode 'current' = Alice seule. Mode 'all' = les 3, avec
+  is_former correct sur Bob et Carol.
+- `test_seller_mid_exercise_stays_current` : Bob vend le 30/06/2025 a
+  Alice. Fy 2025 = 01/01 -> 31/12/2025. Les 2 doivent apparaitre en mode
+  'current' (Bob pour son decompte de mutation).
+
+Regression complete : 15/15 tests verts sur iter90fr/fs/ft/fu/fv/fw.
+
+**Redeploiement requis en PROD** pour Acacia TER.
+
 ### Iter90fv (Feb 2026) - FEATURES : Décomptes compact + Communication preview + PDF eau
 
 **Ticket utilisateur (Feb 2026)** :

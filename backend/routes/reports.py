@@ -1398,9 +1398,26 @@ def create_reports_router(db):
 
     # ---- DECOMPTE ANNUEL PAR PROPRIETAIRE ----
     @router.get("/decompte")
-    async def decompte_annuel(request: Request, fiscal_year_id: Optional[str] = None, date_from: Optional[str] = None, date_to: Optional[str] = None, copropriete_id: Optional[str] = None):
-        """Decomptes annuels - chinese walls STRICT."""
+    async def decompte_annuel(request: Request, fiscal_year_id: Optional[str] = None, date_from: Optional[str] = None, date_to: Optional[str] = None, copropriete_id: Optional[str] = None, owner_filter: str = "current"):
+        """Decomptes annuels - chinese walls STRICT.
+
+        iter90fw : `owner_filter` (defaut 'current') :
+        - 'current' : proprietaires qui possedent >= 1 lot AU 1er JOUR de
+          l'exercice selectionne (resolu via `db.mutations` si historique
+          disponible). Un vendeur ayant cede en cours d'exercice reste
+          "current" pour cet exercice ; un acheteur ayant achete apres le
+          start_date est aussi inclus (il apparait des le decompte de
+          l'exercice ou il possede pour la 1ere fois). NB : dans la
+          pratique on inclut tout owner qui a possede a UN moment de
+          l'exercice pour eviter des trous dans les decomptes de mutation.
+        - 'all' : proprietaires actuels + anciens qui n'ont plus de lot
+          mais gardent un solde tier != 0 dans cette ACP. Chaque owner a
+          un flag booleen `is_former` pour distinguer visuellement.
+        """
         copropriete_id = _require_copro(copropriete_id, request)
+        if owner_filter not in ("current", "all"):
+            owner_filter = "current"
+        fy = None
         if fiscal_year_id:
             fy = await db.fiscal_years.find_one({"id": fiscal_year_id}, {"_id": 0})
             if fy and fy.get("copropriete_id") and fy["copropriete_id"] != copropriete_id:
@@ -1412,8 +1429,64 @@ def create_reports_router(db):
         # Owners are global, but lots/invoices are ACP-scoped (chinese wall)
         lots_q = _apply_copro({}, copropriete_id)
         lots = await db.lots.find(lots_q, {"_id": 0}).to_list(1000)
-        owner_ids_in_acp = list({lt.get("owner_id") for lt in lots if lt.get("owner_id")})
-        owners = await db.owners.find({"id": {"$in": owner_ids_in_acp}}, {"_id": 0}).sort("name", 1).to_list(1000) if owner_ids_in_acp else []
+
+        # iter90fw : construction de l'ensemble de reference des owners
+        # selon `owner_filter`. Approche :
+        # 1. Owners "current" = owner_id direct sur les lots (soit owner
+        #    actuel, soit un ancien present dans l'historique de mutations
+        #    dont le sale_date recouvre l'exercice).
+        # 2. Owners "all" = current + owners ayant deja possede un lot
+        #    dans cette ACP (via mutations.from_owner_id/to_owner_id).
+        current_owner_ids = set()
+        for lt in lots:
+            if lt.get("owner_id"):
+                current_owner_ids.add(lt["owner_id"])
+            for oid in (lt.get("owner_ids") or []):
+                if oid:
+                    current_owner_ids.add(oid)
+
+        # iter90fw : ajouter les proprietaires qui possedaient un lot AU
+        # 1er JOUR de l'exercice ou qui ont possede pendant l'exercice
+        # (via `db.mutations`). Un vendeur cedant sa quote-part au cours
+        # de l'exercice doit apparaitre dans son decompte final.
+        fy_start = (fy or {}).get("start_date") if fy else (date_from or "")
+        fy_end = (fy or {}).get("end_date") if fy else (date_to or "")
+        muts_all = []
+        if fy_start:
+            muts_all = await db.mutations.find(
+                {"copropriete_id": copropriete_id},
+                {"_id": 0, "lot_id": 1, "from_owner_id": 1, "to_owner_id": 1, "sale_date": 1},
+            ).to_list(10000)
+            # Pour chaque lot, si mutation.sale_date > fy_start,
+            # from_owner_id etait le proprietaire AVANT (donc au fy_start
+            # si sale_date <= fy_end), on l'inclut.
+            for m in muts_all:
+                sd = (m.get("sale_date") or "")
+                if not sd or not m.get("from_owner_id"):
+                    continue
+                if sd > fy_start and (not fy_end or sd <= fy_end):
+                    current_owner_ids.add(m["from_owner_id"])
+
+        # Pour "all" : owners globaux dont un compte tier n'est PAS
+        # a zero dans cette ACP.
+        all_owner_ids = set(current_owner_ids)
+        if owner_filter == "all":
+            # Owners avec tier_accounts configures pour cette ACP.
+            candidates = await db.owners.find(
+                {f"tier_accounts.{copropriete_id}": {"$exists": True}},
+                {"_id": 0, "id": 1},
+            ).to_list(10000)
+            for c in candidates:
+                all_owner_ids.add(c["id"])
+            # Owners historiques via mutations
+            for m in muts_all:
+                if m.get("from_owner_id"):
+                    all_owner_ids.add(m["from_owner_id"])
+                if m.get("to_owner_id"):
+                    all_owner_ids.add(m["to_owner_id"])
+
+        target_ids = list(all_owner_ids if owner_filter == "all" else current_owner_ids)
+        owners = await db.owners.find({"id": {"$in": target_ids}}, {"_id": 0}).sort("name", 1).to_list(1000) if target_ids else []
 
         inv_q = _apply_copro({"date": {"$gte": date_from or "2000-01-01", "$lte": date_to or "2099-12-31"}}, copropriete_id)
         invoices = await db.invoices.find(inv_q, {"_id": 0}).to_list(10000)
@@ -1548,9 +1621,19 @@ def create_reports_router(db):
                 # = proprietaire debiteur (doit de l'argent), negatif =
                 # crediteur (a paye trop / a du remboursement).
                 "tier_balance": round(owner_balances.get(owner["id"], 0.0), 2),
+                # iter90fw : owner considere comme "actuel" s'il possede
+                # au moins un lot au 1er jour de l'exercice OU s'il a
+                # possede pendant l'exercice (vendeur mid-year). Sinon,
+                # c'est un ancien proprietaire (visible uniquement en
+                # mode owner_filter='all').
+                "is_former": owner["id"] not in current_owner_ids,
             })
 
-        return {"decomptes": decomptes, "period": {"from": date_from, "to": date_to}}
+        return {
+            "decomptes": decomptes,
+            "period": {"from": date_from, "to": date_to},
+            "owner_filter": owner_filter,
+        }
 
     # ---- PDF DECOMPTE ----
     @router.get("/decompte/pdf/{owner_id}")
