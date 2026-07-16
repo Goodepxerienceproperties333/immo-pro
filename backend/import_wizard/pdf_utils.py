@@ -1381,7 +1381,27 @@ def parse_distribution_keys_pdf(raw: bytes) -> dict:
                     continue
                 first_libelle = libelles[0]
                 code_match = re.match(r"^(\d{3,4})\s*[-–]\s*(.+)$", first_libelle)
-                if code_match:
+                # iter90gi : distingue SUMMARY vs DETAIL row.
+                # Le regex \d{3,4} matche BOTH "0001 - Charges communes" (summary)
+                # ET "001 - APPARTEMENT C2612 TEUWEN..." (detail lot).
+                # Heuristique : si la cellule "coproprietaire" contient un code
+                # Optipro C\d{3,5} (owner code) OU un des types de lot generiques
+                # (APPARTEMENT, CAVE, PARKING, COMMERCE, STUDIO, GARAGE, BUREAU,
+                # LOCAL, CHAMBRE, GRENIER), c'est une ligne de DETAIL, pas un
+                # resume de cle.
+                first_owner = (owners[0] if owners else "").strip()
+                # Lot type patterns (case-insensitive) present in the libelle
+                lot_type_patterns = (
+                    "appartement", "cave", "parking", "commerce", "studio",
+                    "garage", "bureau", "local", "chambre", "grenier", "atelier",
+                    "loft", "duplex", "triplex", "combles",
+                )
+                libelle_lower = first_libelle.lower()
+                looks_like_detail = (
+                    re.match(r"^C\d{3,5}\b", first_owner)  # owner code Optipro
+                    or any(pat in libelle_lower for pat in lot_type_patterns)
+                )
+                if code_match and not looks_like_detail:
                     # ---- Key SUMMARY row : open a new key ----
                     key_code = code_match.group(1)
                     key_name = code_match.group(2).strip()
@@ -1407,14 +1427,19 @@ def parse_distribution_keys_pdf(raw: bytes) -> dict:
                                 "quotity": qt,
                             })
                             inline_total += qt
-                    # The TOTAL QUOTITES on the SUMMARY row is at qts[0]
-                    explicit_total = _to_float(qts[0]) if qts else 0.0
+                    # iter90gi : NE PAS utiliser qts[0] comme total_quotities.
+                    # Sur les PDFs Optipro, la cellule qts[0] de la ligne de
+                    # resume represente souvent la quotite du lot associe au
+                    # code de la cle (ex : "001 APPARTEMENT" -> quotite du lot
+                    # 001), et non le total de la distribution. On calcule
+                    # systematiquement le total a partir des lignes de detail
+                    # (une post-passe finale garantit la coherence).
                     current_key = {
                         "code": key_code,
                         "name": key_name,
                         "type": "tantiemes",
                         "lines": inline_lines,
-                        "total_quotities": round(explicit_total or inline_total, 6),
+                        "total_quotities": round(inline_total, 6),
                     }
                     keys.append(current_key)
                 else:
@@ -1444,10 +1469,20 @@ def parse_distribution_keys_pdf(raw: bytes) -> dict:
                             current_key["lines"] = detail_lines
                         else:
                             current_key["lines"].extend(detail_lines)
-                        # Update total : prefer the explicit total from the summary
-                        # row if it's already set ; otherwise sum from details.
-                        if not current_key["total_quotities"]:
-                            current_key["total_quotities"] = round(detail_total, 6)
+                        # iter90gi : total_quotities = sum(lines) systematiquement
+                        # (voir commentaire sur la ligne resume ci-dessus).
+                        current_key["total_quotities"] = round(
+                            sum(float(l.get("quotity") or 0) for l in current_key["lines"]),
+                            6,
+                        )
+    # iter90gi : post-passe finale - garantit que total_quotities == sum(lines)
+    # pour toutes les cles (defense en profondeur contre les futures regressions
+    # du parser).
+    for k in keys:
+        k["total_quotities"] = round(
+            sum(float(l.get("quotity") or 0) for l in (k.get("lines") or [])),
+            6,
+        )
     # Fallback : if no key parsed from tables, attempt text-based extraction
     if not keys:
         text = info.get("full_text", "")

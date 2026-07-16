@@ -10710,3 +10710,83 @@ Interface complete pour l'envoi d'emails aux proprietaires avec PDF attaches.
 - Client secret chiffre AES/Fernet en base (EMAIL_CONFIG_KEY)
 - Token Azure valide, boite `welcome@...` marquee `default=true` pour les 2 users
 
+
+
+---
+
+## iter90gi (Jul 2026) — Wizard d'import Optipro : idempotence et bugs P0
+
+### Contexte
+Session productive sur un vrai import Optipro pour "ACP Acacia Test Complet". 4 bugs P0 releves par le syndic pendant le parcours du wizard.
+
+### 1. Import de proprietaires - "0 crees (11 echecs)"
+**Cause** : l'anti-doublon `find_duplicate_owner` (nom + prenom, email, phone, BCE, adresse) rejette les 11 owners deja en base (tentative precedente restee orpheline).
+
+**Fix** :
+- Backend : `POST /api/owners?reuse_on_duplicate=true` retourne l'existant avec `_reused: true` (200 OK) au lieu d'un 409, et attache l'ACP a `copropriete_ids[]` si fournie.
+- Frontend : les 2 handlers CSV/PDF (`bulkOwnersOpen`, `pdfOwnersOpen`) passent le flag et affichent `X crees + Y reutilises`.
+- Tests : `test_iter90gi_owner_reuse_on_duplicate.py` (3/3 pass).
+
+### 2. Workflow wizard : mutations en fin, autres etapes skipees
+**Cause** : `handleSave` de `CoproprietesPage.js` redirigait DIRECTEMENT vers `/lots?post_import_mutations=1` quand `hadIntraFySales=true`, en sautant les fournisseurs/natures/budget/factures/journaux/OD.
+
+**Fix** :
+- Frontend : proposer le wizard d'import AVANT les mutations. Le flag `pending_mutations=1` est propage via query param.
+- ImportWizardPage : a la fin du wizard, si `pending_mutations=1`, redirige vers `/lots?post_import_mutations=1` au lieu du dashboard.
+- Bandeau orange visible dans le wizard rappelant que les mutations seront saisies a la fin.
+
+### 3. Etape "Exercice fiscal" du wizard supprimee (redondante)
+**Cause** : depuis iter90gg, l'exercice est cree lors de la creation de l'ACP. L'etape wizard essayait de recreer -> "L'exercice existe deja" bloquant Budget/OD.
+
+**Fix** :
+- Backend : `create_session` + `get_active_session` auto-hydratent `session.steps.fiscal_year.fiscal_year_id` depuis l'exercice ouvert de l'ACP (idempotent, self-healing).
+- `commit-budget` + `commit-opening-balance` : fallback sur l'exercice ouvert de l'ACP si `fiscal_year_id` non fourni.
+- Frontend : `fiscal_year` retire du tableau `STEPS`. Le wizard passe de 9 a 8 etapes.
+- Tests : `test_iter90gi_wizard_fy_autohydrate.py` (2/2 pass).
+
+### 4. Bouton "Ajouter un autre PDF" (cles de repartition) inoperant
+**Cause** : `<input id="file-input">` etait rendu uniquement sous condition `!sniffResult`. Apres le 1er PDF, l'element est demonte du DOM et `document.getElementById('file-input')` retourne `null`.
+
+**Fix** : deplacement de l'input dans `<CardContent>` racine, toujours monte independamment de `sniffResult`.
+
+### 5. Total quotites incorrect dans le preview des cles
+**Cause** : le parseur `parse_distribution_keys_pdf` prenait `qts[0]` (cellule de la ligne resume) comme `explicit_total`. Sur les PDFs Optipro, cette cellule est la quotite du LOT associe au code (ex : 898 pour "001 APPARTEMENT") et non le total de la distribution.
+
+**Fix** :
+- Backend : suppression de `explicit_total`. Post-passe finale sur toutes les cles : `total_quotities = sum(lines[].quotity)`.
+- Frontend : recalcul defensif au rendu (independant du champ stocke) pour que la correction soit visible immediatement sans re-upload.
+- Tests : `test_iter90gi_distribution_keys_total_quotities.py` (3/3 pass).
+
+### Fichiers modifies
+- Backend : `routes/properties.py`, `routes/import_wizard.py`, `import_wizard/pdf_utils.py`.
+- Frontend : `pages/CoproprietesPage.js`, `pages/ImportWizardPage.js`.
+- Tests : 3 nouveaux fichiers `test_iter90gi_*.py` (8/8 pass au total).
+
+
+### 6. Lot 001 systematiquement ignore lors de l'import de cles
+**Cause** : le regex `^(\d{3,4})\s*[-–]\s*(.+)$` matchait a la fois :
+- SUMMARY row : "0001 - Charges communes 30 10 000,00"
+- DETAIL row  : "001 - APPARTEMENT C2612 TEUWEN Gaël - 898.000000"
+
+Consequence : le lot 001 etait traite comme une NOUVELLE cle fantome
+au lieu d'etre ajoute en detail de "0001 - Charges communes".
+Meme chose pour les cles n°XXX associees a un appartement (101, 102, etc.).
+
+**Fix** : distinction SUMMARY vs DETAIL via heuristique :
+- Cellule coproprietaire matchant `^C\d{3,5}\b` (code Optipro) -> DETAIL
+- Libelle contenant un type de lot (APPARTEMENT, CAVE, PARKING, COMMERCE,
+  GARAGE, STUDIO, BUREAU, LOCAL, CHAMBRE, GRENIER, ATELIER, LOFT,
+  DUPLEX, TRIPLEX, COMBLES) -> DETAIL
+
+Verifie avec le vrai PDF utilisateur (`Cle de repartition.pdf`) :
+- Avant : ~10 cles fantomes, lot 001 manquant, totaux 898 / 797 / etc.
+- Apres : 1 cle "0001 - Charges communes" avec 30 lignes et total 10 000,00
+
+**Tests** : `test_iter90gi_key_summary_vs_detail_row.py` (2/2 pass) incl.
+test end-to-end sur le vrai PDF utilisateur.
+
+### Bilan iter90gi
+- 6 bugs P0 P1 corriges sur le wizard d'import Optipro.
+- **10 tests unitaires** (3+3+2+2) tous verts.
+- Redeploiement necessaire sur production (`immo-pcmn.emergent.host`).
+

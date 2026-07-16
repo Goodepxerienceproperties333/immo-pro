@@ -469,6 +469,23 @@ export default function ImportWizardPage() {
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
+          {/* iter90gi : file input toujours monte (meme apres sniffResult) pour
+              permettre au bouton "Ajouter un autre PDF" (KeysPreview, etc.)
+              de retrouver l'element via document.getElementById. */}
+          <input
+            type="file"
+            id="file-input"
+            className="hidden"
+            accept={
+              step.kind === 'csv' || step.kind === 'csv_invoices' || step.kind === 'csv_journals'
+                ? '.csv,.txt'
+                : step.kind === 'csv_or_pdf'
+                  ? '.csv,.txt,.pdf'
+                  : '.pdf'
+            }
+            onChange={handleFileChange}
+            data-testid="file-input"
+          />
           {!sniffResult && step.key === 'od_entries' && (
             <div className="bg-blue-50 border border-blue-200 rounded p-3 text-[12px] text-blue-900 space-y-1.5">
               <div className="font-semibold flex items-center gap-1.5">
@@ -510,20 +527,6 @@ export default function ImportWizardPage() {
                             ? <span>Chargez le <strong>meme PDF &laquo;Liste des depenses&raquo;</strong> que pour les factures.<br/>Le wizard extrait <strong>uniquement les lignes avec N&deg; piece = &quot;-&quot;</strong> (= ecritures OD year-end : charges a reporter, FAR, AGS, sinistres, imputations privatives) qui ne sont pas des factures.</span>
                             : `Chargez le PDF (${step.label})`}
               </p>
-              <input
-                type="file"
-                id="file-input"
-                className="hidden"
-                accept={
-                  step.kind === 'csv' || step.kind === 'csv_invoices' || step.kind === 'csv_journals'
-                    ? '.csv,.txt'
-                    : step.kind === 'csv_or_pdf'
-                      ? '.csv,.txt,.pdf'
-                      : '.pdf'
-                }
-                onChange={handleFileChange}
-                data-testid="file-input"
-              />
               {step.kind === 'csv_or_pdf' ? (
                 <div className="flex justify-center gap-2">
                   <Button
@@ -1587,7 +1590,11 @@ function KeysPreview({ keys, setKeys, onAddPdf }) {
                 {k._manual && <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 text-[10px]">manuel</span>}
               </div>
               <div className="flex gap-2 items-center">
-                <span className="text-slate-500">Total quotites : <strong>{k.total_quotities?.toFixed(2) || '0.00'}</strong></span>
+                {/* iter90gi : recalcul defensif du total a partir des lignes */}
+                {(() => {
+                  const computed = (k.lines || []).reduce((acc, l) => acc + (parseFloat(l.quotity) || 0), 0);
+                  return <span className="text-slate-500">Total quotites : <strong>{computed.toFixed(2)}</strong></span>;
+                })()}
                 <button onClick={() => addLine(ki)} className="text-emerald-600 hover:text-emerald-800" title="Ajouter une ligne"><Plus size={12} /></button>
                 <button onClick={() => delKey(ki)} className="text-red-500"><Trash2 size={12} /></button>
               </div>
