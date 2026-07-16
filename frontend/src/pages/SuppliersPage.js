@@ -15,6 +15,8 @@ export default function SuppliersPage() {
   const [form, setForm] = useState({ name:'', vat_number:'', bce_number:'', address:'', postal_code:'', city:'', country:'Belgique', phone:'', email:'', iban:'', bic:'', default_account:'', notes:'' });
   // iter85g : dialog de confirmation homonymes
   const [similarDialog, setSimilarDialog] = useState(null); // {similar: [...], pendingForm}
+  // iter90gk : candidats BCE cousins pour rattachement (fiche sans BCE)
+  const [bceCandidates, setBceCandidates] = useState([]);
 
   const load = useCallback(async () => {
     const { data } = await api.get('/suppliers', { params: search ? { search } : {} });
@@ -23,8 +25,49 @@ export default function SuppliersPage() {
   useEffect(() => { load(); }, [load]);
 
   const filtered = suppliers;
-  const openCreate = () => { setEditing(null); setForm({ name:'', vat_number:'', bce_number:'', address:'', postal_code:'', city:'', country:'Belgique', phone:'', email:'', iban:'', bic:'', default_account:'', notes:'' }); setDialogOpen(true); };
-  const openEdit = (s) => { setEditing(s); setForm({ name:s.name, vat_number:s.vat_number||'', bce_number:s.bce_number||'', address:s.address||'', postal_code:s.postal_code||'', city:s.city||'', country:s.country||'Belgique', phone:s.phone||'', email:s.email||'', iban:s.iban||'', bic:s.bic||'', default_account:s.default_account||'', notes:s.notes||'' }); setDialogOpen(true); };
+  const openCreate = () => { setEditing(null); setForm({ name:'', vat_number:'', bce_number:'', address:'', postal_code:'', city:'', country:'Belgique', phone:'', email:'', iban:'', bic:'', default_account:'', notes:'' }); setBceCandidates([]); setDialogOpen(true); };
+  const openEdit = async (s) => {
+    setEditing(s);
+    setForm({ name:s.name, vat_number:s.vat_number||'', bce_number:s.bce_number||'', address:s.address||'', postal_code:s.postal_code||'', city:s.city||'', country:s.country||'Belgique', phone:s.phone||'', email:s.email||'', iban:s.iban||'', bic:s.bic||'', default_account:s.default_account||'', notes:s.notes||'' });
+    setBceCandidates([]);
+    setDialogOpen(true);
+    // iter90gk : si la fiche n'a pas de BCE, on cherche les cousins ayant un
+    // BCE renseigne pour proposer un rattachement (evite de garder un doublon).
+    if (!s.bce_number) {
+      try {
+        const { data } = await api.get(`/suppliers/${s.id}/bce-candidates`);
+        if (data.candidates?.length > 0) setBceCandidates(data.candidates);
+      } catch { /* silent */ }
+    }
+  };
+
+  // iter90gk : rattache la fiche courante a un fournisseur cousin ayant un BCE
+  // via une fusion. Merge = data preserves + delete slave.
+  const handleAttachToCandidate = async (candidate) => {
+    if (!editing) return;
+    const ok = window.confirm(
+      `Rattacher la fiche courante "${editing.name}" au fournisseur cousin "${candidate.name}" (BCE ${candidate.bce_number}) ?\n\n` +
+      `Cette action va :\n` +
+      `- Reassigner toutes les factures et ecritures de la fiche courante vers "${candidate.name}"\n` +
+      `- Fusionner les copropriete_ids et tier_accounts\n` +
+      `- Supprimer la fiche courante "${editing.name}"\n\n` +
+      `Cette action est irreversible.`
+    );
+    if (!ok) return;
+    try {
+      // Utilise le merge endpoint existant : garde le candidate (avec BCE), supprime la fiche courante
+      await api.post('/suppliers/merge', {
+        keep_id: candidate.id,
+        remove_ids: [editing.id],
+      });
+      toast.success(`Rattachement effectue vers ${candidate.name}`);
+      setDialogOpen(false);
+      setBceCandidates([]);
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur rattachement');
+    }
+  };
 
   const performCreate = async (formToUse, forceDespiteSimilar = false) => {
     try {
@@ -129,6 +172,44 @@ export default function SuppliersPage() {
         <DialogContent className="max-w-2xl" data-testid="supplier-dialog">
           <DialogHeader><DialogTitle style={{fontFamily:'Chivo,sans-serif'}}>{editing ? 'Modifier fournisseur' : 'Nouveau fournisseur'}</DialogTitle></DialogHeader>
           <div className="space-y-4 mt-2">
+            {/* iter90gk : Bloc "Rattacher a un fournisseur existant avec BCE" */}
+            {editing && bceCandidates.length > 0 && !form.bce_number && (
+              <div className="p-3 bg-amber-50 border border-amber-300 rounded" data-testid="bce-candidates-box">
+                <div className="flex items-start gap-2 mb-2">
+                  <AlertTriangle size={16} className="text-amber-600 mt-0.5" />
+                  <div>
+                    <div className="font-semibold text-amber-900 text-sm">Fiche sans BCE - rattachement possible</div>
+                    <div className="text-xs text-amber-800 mt-1">
+                      Cette fiche n&apos;a pas de BCE. {bceCandidates.length} fournisseur(s) similaire(s) avec BCE detecte(s).
+                      Rattachez-les pour eviter les doublons (fusion automatique des factures et ecritures).
+                    </div>
+                  </div>
+                </div>
+                <div className="space-y-1 mt-2">
+                  {bceCandidates.slice(0, 5).map((c) => (
+                    <div key={c.id} className="flex items-center justify-between bg-white rounded px-2 py-1 text-xs">
+                      <div>
+                        <span className="font-semibold">{c.name}</span>
+                        <span className="text-slate-500 ml-2">BCE {c.bce_number}</span>
+                        <span className="text-slate-400 ml-2">
+                          - {c.usage_count.invoices} facture(s), {c.usage_count.journal_entries} ecriture(s)
+                        </span>
+                        <span className="text-slate-400 ml-2 italic">(match par {c.matched_by})</span>
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="text-xs py-0 h-6"
+                        onClick={() => handleAttachToCandidate(c)}
+                        data-testid={`bce-attach-${c.id}`}
+                      >
+                        Rattacher
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
             <div className="grid grid-cols-2 gap-4">
               <div><label className="form-label">Nom *</label><Input value={form.name} onChange={e => setForm({...form, name: e.target.value})} data-testid="supplier-name" /></div>
               <div><label className="form-label">N BCE *</label><Input value={form.bce_number} onChange={e => setForm({...form, bce_number: e.target.value})} placeholder="BE0123456789" data-testid="supplier-bce" required /></div>

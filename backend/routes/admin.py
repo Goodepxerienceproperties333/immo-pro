@@ -1244,4 +1244,258 @@ def create_admin_router(db):
             "duration_ms": duration_ms,
         }
 
+    # ==================== iter90gk : DUPLICATES AUDIT GLOBAL ====================
+
+    @router.get("/duplicates-audit")
+    async def duplicates_audit(request: Request, format: str = "json", copro_id: Optional[str] = None):
+        """iter90gk : rapport global anti-doublons pour toutes les ACPs
+        (ou une seule si `copro_id` fourni).
+
+        Detecte :
+          - Suppliers avec BCE duplique (global)
+          - Suppliers avec meme nom + copro (potentiel doublon dans une ACP)
+          - Suppliers sans BCE (a completer pour activer la protection strict)
+          - Owners avec email/telephone duplique (bloquant)
+          - Owners homonymes (meme nom, coordonnees differentes)
+          - PCMN accounts orphelins (utilises en JE sans matching supplier fiche)
+          - PCMN accounts bancaires dupliques (6-char + 8-char pour la meme banque)
+          - Notes de Credit (facture negative) sans ecriture AC
+
+        `format=json` (defaut) ou `format=csv` (telechargement).
+        """
+        from fastapi.responses import Response
+        from collections import defaultdict
+        from routes.suppliers import _norm_id, _norm_name_candidates
+        await _get_admin_user(request)
+
+        report: dict = {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "scope": copro_id or "all_acps",
+            "suppliers": {
+                "bce_duplicates": [],  # groupes de fiches partageant le meme BCE
+                "name_duplicates_per_acp": [],  # groupes de fiches meme nom dans meme ACP
+                "missing_bce_count": 0,  # nombre de fiches sans BCE (renseigne=vide/absent)
+                "missing_bce_examples": [],  # top 10 fiches sans BCE (avec usage)
+            },
+            "owners": {
+                "email_duplicates": [],  # groupes owner meme email
+                "phone_duplicates": [],  # groupes owner meme telephone
+                "name_homonyms_per_acp": [],  # homonymes non-strict a valider
+            },
+            "pcmn_accounts": {
+                "orphan_tier_accounts": [],  # 440XXX sans matching supplier fiche
+                "duplicated_bank_accounts": [],  # 6-char + 8-char pour meme banque
+            },
+            "credit_notes_without_entry": [],
+        }
+
+        # ==== SUPPLIERS ====
+        sup_query = {}
+        if copro_id:
+            sup_query = {"$or": [
+                {"copropriete_id": copro_id},
+                {f"tier_accounts.{copro_id}": {"$exists": True}},
+            ]}
+        all_sups = await db.suppliers.find(sup_query, {"_id": 0}).to_list(20000)
+
+        # BCE duplicates global
+        by_bce = defaultdict(list)
+        for s in all_sups:
+            bce = _norm_id(s.get("bce_number", ""))
+            if bce:
+                by_bce[bce].append(s)
+        for bce, group in by_bce.items():
+            if len(group) > 1:
+                report["suppliers"]["bce_duplicates"].append({
+                    "bce": bce,
+                    "count": len(group),
+                    "suppliers": [{"id": s["id"], "name": s.get("name"), "copro_id": s.get("copropriete_id")} for s in group],
+                })
+
+        # Name duplicates per ACP
+        by_name_copro = defaultdict(list)
+        for s in all_sups:
+            copro = s.get("copropriete_id", "")
+            cands = _norm_name_candidates(s.get("name", ""))
+            for cand in cands:
+                by_name_copro[(cand, copro)].append(s)
+        seen_pairs = set()
+        for (cand, copro), group in by_name_copro.items():
+            if len(group) > 1:
+                ids = tuple(sorted(s["id"] for s in group))
+                if ids in seen_pairs:
+                    continue
+                seen_pairs.add(ids)
+                report["suppliers"]["name_duplicates_per_acp"].append({
+                    "name_candidate": cand,
+                    "copro_id": copro,
+                    "count": len(group),
+                    "suppliers": [{"id": s["id"], "name": s.get("name"), "bce": s.get("bce_number","")} for s in group],
+                })
+
+        # Suppliers sans BCE (used + BCE missing = a fixer en priorite)
+        missing = 0
+        examples = []
+        for s in all_sups:
+            bce = _norm_id(s.get("bce_number", ""))
+            if bce:
+                continue
+            missing += 1
+            if len(examples) < 10:
+                inv_cnt = await db.invoices.count_documents({"supplier_id": s["id"]})
+                if inv_cnt > 0:
+                    examples.append({
+                        "id": s["id"], "name": s.get("name"),
+                        "copro_id": s.get("copropriete_id"),
+                        "invoices_using": inv_cnt,
+                    })
+        report["suppliers"]["missing_bce_count"] = missing
+        report["suppliers"]["missing_bce_examples"] = examples
+
+        # ==== OWNERS ====
+        owner_query = {"copropriete_id": copro_id} if copro_id else {}
+        all_owners = await db.owners.find(owner_query, {"_id": 0}).to_list(20000)
+        # Email duplicates
+        by_email = defaultdict(list)
+        for o in all_owners:
+            for f in ("email", "email2"):
+                v = (o.get(f) or "").strip().lower()
+                if v:
+                    by_email[v].append(o)
+        for email, group in by_email.items():
+            if len(group) > 1:
+                ids = set(o["id"] for o in group)
+                if len(ids) > 1:
+                    report["owners"]["email_duplicates"].append({
+                        "email": email, "count": len(ids),
+                        "owners": [{"id": o["id"], "name": o.get("name",""), "copro_id": o.get("copropriete_id","")} for o in group],
+                    })
+        # Phone duplicates
+        by_phone = defaultdict(list)
+        for o in all_owners:
+            for f in ("phone", "phone2"):
+                v = "".join(c for c in (o.get(f) or "") if c.isalnum()).upper()
+                if v and len(v) >= 6:  # skip trop courts (bruit)
+                    by_phone[v].append(o)
+        for phone, group in by_phone.items():
+            if len(group) > 1:
+                ids = set(o["id"] for o in group)
+                if len(ids) > 1:
+                    report["owners"]["phone_duplicates"].append({
+                        "phone": phone, "count": len(ids),
+                        "owners": [{"id": o["id"], "name": o.get("name","")} for o in group],
+                    })
+
+        # ==== PCMN ACCOUNTS - orphan tier + duplicated bank ====
+        pcmn_query = {"copropriete_id": copro_id} if copro_id else {}
+        # Tier accounts orphelins : 44000XXX en journal_entries sans tpid + qui
+        # ne matche aucune fiche fournisseur
+        je_query = {"lines.account_number": {"$regex": "^440"}}
+        if copro_id:
+            je_query["copropriete_id"] = copro_id
+        pipeline = [
+            {"$match": je_query},
+            {"$unwind": "$lines"},
+            {"$match": {"lines.account_number": {"$regex": "^440"}}},
+            {"$group": {
+                "_id": {"copro": "$copropriete_id", "acc": "$lines.account_number"},
+                "count": {"$sum": 1},
+                "tpids": {"$addToSet": "$lines.third_party_id"},
+                "sample_name": {"$first": "$lines.account_name"},
+            }},
+        ]
+        supplier_tier_by_copro = defaultdict(set)
+        for s in all_sups:
+            for cid, ta in (s.get("tier_accounts") or {}).items():
+                main = (ta or {}).get("main", "")
+                if main:
+                    supplier_tier_by_copro[cid].add(main)
+        async for r in db.journal_entries.aggregate(pipeline):
+            cid = r["_id"]["copro"]
+            acc = r["_id"]["acc"]
+            tpids = [t for t in r["tpids"] if t]
+            has_tpid = bool(tpids)
+            # Orphan if : NO tpid AND NOT in supplier fiches for that ACP
+            if not has_tpid and acc not in supplier_tier_by_copro.get(cid, set()):
+                report["pcmn_accounts"]["orphan_tier_accounts"].append({
+                    "copro_id": cid, "account": acc,
+                    "name": r.get("sample_name") or "",
+                    "count": r["count"],
+                })
+        # Duplicated bank accounts : 6-char + 8-char pour meme copro
+        all_pcmn = await db.pcmn_accounts.find(pcmn_query, {"_id": 0, "number": 1, "copropriete_id": 1, "name": 1}).to_list(20000)
+        by_copro_prefix = defaultdict(list)
+        for p in all_pcmn:
+            n = p.get("number", "")
+            cid = p.get("copropriete_id", "")
+            if n.startswith("55") and len(n) in (6, 8):
+                by_copro_prefix[(cid, n[:6])].append(p)
+        for (cid, prefix), group in by_copro_prefix.items():
+            if len(group) > 1:
+                report["pcmn_accounts"]["duplicated_bank_accounts"].append({
+                    "copro_id": cid, "prefix": prefix,
+                    "accounts": [{"number": p["number"], "name": p.get("name","")} for p in group],
+                })
+
+        # ==== CREDIT NOTES sans entry ====
+        inv_query = {"total_amount": {"$lt": 0}}
+        if copro_id:
+            inv_query["copropriete_id"] = copro_id
+        async for inv in db.invoices.find(inv_query, {"_id": 0}):
+            je = await db.journal_entries.find_one(
+                {"source_invoice_id": inv["id"], "reversed": {"$ne": True}, "is_reversal": {"$ne": True}},
+                {"_id": 0, "id": 1},
+            )
+            if not je:
+                report["credit_notes_without_entry"].append({
+                    "invoice_id": inv["id"],
+                    "internal_reference": inv.get("internal_reference"),
+                    "supplier": inv.get("supplier"),
+                    "amount": inv.get("total_amount"),
+                    "copro_id": inv.get("copropriete_id"),
+                    "date": inv.get("date"),
+                })
+
+        # ==== SUMMARY ====
+        report["summary"] = {
+            "supplier_bce_duplicates": len(report["suppliers"]["bce_duplicates"]),
+            "supplier_name_dup_groups": len(report["suppliers"]["name_duplicates_per_acp"]),
+            "supplier_missing_bce": missing,
+            "owner_email_dup_groups": len(report["owners"]["email_duplicates"]),
+            "owner_phone_dup_groups": len(report["owners"]["phone_duplicates"]),
+            "pcmn_orphan_tier": len(report["pcmn_accounts"]["orphan_tier_accounts"]),
+            "pcmn_dup_bank": len(report["pcmn_accounts"]["duplicated_bank_accounts"]),
+            "credit_notes_missing_entry": len(report["credit_notes_without_entry"]),
+        }
+        report["healthy"] = all(v == 0 for v in report["summary"].values())
+
+        if format.lower() == "csv":
+            # CSV export : tableau plat pour analyse dans Excel
+            import csv, io
+            buf = io.StringIO()
+            w = csv.writer(buf)
+            w.writerow(["category", "type", "detail", "copro_id", "count"])
+            for g in report["suppliers"]["bce_duplicates"]:
+                w.writerow(["supplier", "bce_dup", g["bce"], ";".join(s["copro_id"] or "" for s in g["suppliers"]), g["count"]])
+            for g in report["suppliers"]["name_duplicates_per_acp"]:
+                w.writerow(["supplier", "name_dup", g["name_candidate"], g["copro_id"], g["count"]])
+            for ex in report["suppliers"]["missing_bce_examples"]:
+                w.writerow(["supplier", "missing_bce", f"{ex['name']} (id={ex['id'][:8]})", ex["copro_id"], ex["invoices_using"]])
+            for g in report["owners"]["email_duplicates"]:
+                w.writerow(["owner", "email_dup", g["email"], "", g["count"]])
+            for g in report["owners"]["phone_duplicates"]:
+                w.writerow(["owner", "phone_dup", g["phone"], "", g["count"]])
+            for r in report["pcmn_accounts"]["orphan_tier_accounts"]:
+                w.writerow(["pcmn", "orphan_tier", f"{r['account']} - {r['name']}", r["copro_id"], r["count"]])
+            for r in report["pcmn_accounts"]["duplicated_bank_accounts"]:
+                w.writerow(["pcmn", "dup_bank", "+".join(a["number"] for a in r["accounts"]), r["copro_id"], len(r["accounts"])])
+            for r in report["credit_notes_without_entry"]:
+                w.writerow(["credit_note", "missing_entry", f"{r['internal_reference']} - {r['supplier']} {r['amount']}", r["copro_id"], 1])
+            return Response(
+                content=buf.getvalue(),
+                media_type="text/csv",
+                headers={"Content-Disposition": f"attachment; filename=duplicates-audit-{report['generated_at'][:10]}.csv"},
+            )
+        return report
+
     return router

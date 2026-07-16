@@ -44,6 +44,9 @@ export default function CoproprietesPage() {
   const [pdfOwnersOpen, setPdfOwnersOpen] = useState(false);
   const [pdfLotsOpen, setPdfLotsOpen] = useState(false);
   const [importingOwners, setImportingOwners] = useState(false);
+  // iter90gk : dialog interactif pour les homonymes owner detectes en batch
+  // (PDF Optipro). Structure : {rows: [{row, message}], resolved: {rowIdx: 'force'|'skip'}}
+  const [ownerHomonymsDialog, setOwnerHomonymsDialog] = useState(null);
   const [step, setStep] = useState(1);
   const [ownerSearchByLot, setOwnerSearchByLot] = useState({});  // {lotIdx: 'query'}
   const [ownerFocusLot, setOwnerFocusLot] = useState(null);  // lotIdx currently focused or null
@@ -795,6 +798,8 @@ export default function CoproprietesPage() {
           if (importingOwners) return;
           setImportingOwners(true);
           let ok = 0, reused = 0, ko = 0;
+          // iter90gk : accumule les homonymes detectes pour un dialog de review
+          const homonyms = [];
           for (const r of rows) {
             try {
               const last = r.last_name || '';
@@ -808,7 +813,14 @@ export default function CoproprietesPage() {
               });
               if (resp?.data?._reused) reused++;
               else ok++;
-            } catch (_e) { ko++; }
+            } catch (err) {
+              const msg = err.response?.data?.detail || '';
+              if (err.response?.status === 409 && msg.toLowerCase().includes('homonyme detecte')) {
+                homonyms.push({ row: r, message: msg });
+              } else {
+                ko++;
+              }
+            }
           }
           // Reload owners so the lot autocomplete sees them
           let nextOwners = owners;
@@ -843,6 +855,10 @@ export default function CoproprietesPage() {
             `${ok} propr. crees${reused ? ` + ${reused} reutilises` : ''}${ko ? ` (${ko} echec(s))` : ''}` +
             (retroMatched ? ` - ${retroMatched} lot(s) auto-affectes` : '')
           );
+          // iter90gk : ouvre le dialog interactif pour les homonymes en attente
+          if (homonyms.length > 0) {
+            setOwnerHomonymsDialog({ rows: homonyms });
+          }
           setImportingOwners(false);
         }}
       />
@@ -869,6 +885,8 @@ export default function CoproprietesPage() {
           setImportingOwners(true);
           const created = [];
           let ok = 0, reused = 0, ko = 0;
+          // iter90gk : accumule les homonymes detectes pour un dialog de review
+          const homonyms = [];
           for (const r of rows) {
             try {
               const last = r.last_name || '';
@@ -895,7 +913,15 @@ export default function CoproprietesPage() {
               if (resp?.data) created.push(resp.data);
               if (resp?.data?._reused) reused++;
               else ok++;
-            } catch (_e) { ko++; }
+            } catch (err) {
+              // iter90gk : detecte les homonymes (409 non-strict) pour review batch
+              const msg = err.response?.data?.detail || '';
+              if (err.response?.status === 409 && msg.toLowerCase().includes('homonyme detecte')) {
+                homonyms.push({ row: r, message: msg });
+              } else {
+                ko++;
+              }
+            }
           }
           // Re-fetch the full list so the local state is consistent
           let nextOwners = owners;
@@ -936,6 +962,10 @@ export default function CoproprietesPage() {
             `${ok} propr. crees${reused ? ` + ${reused} reutilises` : ''}${ko ? ` (${ko} echec(s))` : ''}` +
             (retroMatched ? ` - ${retroMatched} lot(s) auto-affectes` : '')
           );
+          // iter90gk : ouvre le dialog interactif pour les homonymes PDF
+          if (homonyms.length > 0) {
+            setOwnerHomonymsDialog({ rows: homonyms });
+          }
           setImportingOwners(false);
         }}
       />
@@ -1011,6 +1041,92 @@ export default function CoproprietesPage() {
           );
         }}
       />
+
+      {/* iter90gk : Dialog interactif review homonymes owner (batch PDF import) */}
+      <Dialog open={!!ownerHomonymsDialog} onOpenChange={(o) => { if (!o) setOwnerHomonymsDialog(null); }}>
+        <DialogContent className="max-w-3xl" data-testid="owner-homonyms-batch-dialog">
+          <DialogHeader>
+            <DialogTitle style={{ fontFamily: 'Chivo,sans-serif' }}>
+              Homonymes detectes ({ownerHomonymsDialog?.rows?.length || 0})
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="p-3 bg-yellow-50 border border-yellow-300 rounded text-xs">
+              <strong>Regle stricte anti-doublon :</strong> les {ownerHomonymsDialog?.rows?.length || 0} proprietaires
+              suivants ont un HOMONYME dans une autre ACP mais leur email/telephone est DIFFERENT.
+              Verifiez qu&apos;il s&apos;agit bien d&apos;autres personnes avant de forcer la creation.
+            </div>
+            <div className="border rounded max-h-80 overflow-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Nom import</TableHead>
+                    <TableHead>Email / Tel</TableHead>
+                    <TableHead className="w-64">Homonyme existant</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {(ownerHomonymsDialog?.rows || []).map((h, i) => (
+                    <TableRow key={i}>
+                      <TableCell className="text-xs">
+                        {[h.row.civility, h.row.last_name, h.row.first_name].filter(Boolean).join(' ')}
+                      </TableCell>
+                      <TableCell className="text-xs text-slate-600">
+                        <div>{h.row.email || '(sans email)'}</div>
+                        <div className="text-slate-400">{h.row.phone || '(sans tel)'}</div>
+                      </TableCell>
+                      <TableCell className="text-xs text-slate-500 italic max-w-md break-words">
+                        {h.message.split('. ')[0]}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+            <div className="flex gap-2 justify-end">
+              <Button variant="outline" onClick={() => setOwnerHomonymsDialog(null)} data-testid="homonym-skip-all">
+                Ignorer (ne pas creer)
+              </Button>
+              <Button
+                className="bg-yellow-600 hover:bg-yellow-700 text-white"
+                data-testid="homonym-force-all"
+                onClick={async () => {
+                  const rows = ownerHomonymsDialog?.rows || [];
+                  let ok = 0, ko = 0;
+                  for (const h of rows) {
+                    try {
+                      const r = h.row;
+                      const last = r.last_name || '';
+                      const first = r.first_name || '';
+                      const civ = r.civility ? `${r.civility} ` : '';
+                      const name = (civ + last + ' ' + first).trim() || (r.name || '');
+                      await api.post('/owners?force_create_despite_homonym=true', {
+                        first_name: first, last_name: last || r.name, name,
+                        civility: r.civility || '',
+                        email: r.email || '', phone: r.phone || '',
+                        vcs_code: r.vcs_code || '', vcs_digits: r.vcs_digits || '',
+                        auxiliary_code: r.auxiliary_code || '', identifier: r.identifier || '',
+                        address: r.address || '', postal_code: r.postal_code || '', city: r.city || '',
+                        country: 'Belgique', iban: r.iban || '',
+                      });
+                      ok++;
+                    } catch (_e) { ko++; }
+                  }
+                  toast.success(`${ok} homonyme(s) confirme(s) et cree(s)${ko ? ` (${ko} echec(s))` : ''}`);
+                  setOwnerHomonymsDialog(null);
+                  // Refetch owners
+                  try {
+                    const rr = await api.get('/owners', { params: { include_unassigned: true, copropriete_id: 'all' } });
+                    setOwners(rr.data || []);
+                  } catch { /* silent */ }
+                }}
+              >
+                Creer TOUS (homonymes confirmes)
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

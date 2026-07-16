@@ -120,6 +120,46 @@ lignes sans relecture complete).
 
 **Verrous en production apres redeploiement + migrations** :
 - Impossible de creer 2 fiches fournisseur avec le meme BCE (globalement).
+
+### Iter90gk (part 3, Feb 2026) - Attach BCE + Audit + Owner homonym batch review
+
+**3 tasks P1 completees en suivant** :
+
+1. **AttachToBceCandidate** (`GET /api/suppliers/{id}/bce-candidates`) :
+   - Backend : retourne les fournisseurs cousins (matching nom/IBAN) ayant un BCE renseigne,
+     tries par usage (invoices + JE) decroissant.
+   - Frontend `SuppliersPage.js` : bloc amber "Fiche sans BCE - rattachement possible" avec
+     bouton "Rattacher" par candidat (utilise `/suppliers/merge` existant).
+
+2. **Duplicates Audit Global** (`GET /api/admin/duplicates-audit?format=json|csv&copro_id=?`) :
+   - Detecte : BCE dupliques (global), noms dupliques (per ACP), suppliers sans BCE
+     (avec top 10 exemples utilises), emails owners dupliques, telephones owners dupliques,
+     tier accounts orphelins (440XXX sans supplier fiche), comptes bancaires dupliques
+     (6+8 chars pour meme banque), notes de credit sans ecriture AC.
+   - Export CSV pour Excel. Reserve aux superadmins.
+   - **Test sur DB actuelle** : 26 orphan tier accounts + 2 bank dup + 99 suppliers missing BCE
+     + 8 owner email dup groups + 8 phone dup groups sur les autres ACPs (a nettoyer via
+     les migrations iter90gk/gl/gm sur chaque ACP).
+
+3. **Owner Homonym Batch Review** (frontend `CoproprietesPage.js`) :
+   - Modif des 2 blocs `onImport` (CSV bulk + PDF Optipro) pour catch les 409 homonymes.
+   - Nouveau dialog "Homonymes detectes (N)" : table avec Nom / Email+Tel / Homonyme existant.
+   - 2 boutons : "Ignorer" ou "Creer TOUS (homonymes confirmes)" qui envoie
+     `force_create_despite_homonym=true` pour chaque ligne.
+
+**Tests iter90gk (part 3)** : `tests/test_iter90gk_bce_candidates_and_audit.py`
+- 5 tests : matching name, usage sorting, audit categories, decisions structure,
+  partialFilterExpression semantics.
+- Total pytest iter90gk : **15/15 pass** ✓
+
+**Etat final anti-doublons app** :
+- 5 endpoints anti-doublons : `/suppliers/check-duplicate`, `/suppliers/{id}/bce-candidates`,
+  `/owners/check-duplicate`, `/admin/duplicates-audit`, `/import-wizard/sessions/{id}/preview-suppliers-pdf`.
+- 3 index MongoDB uniques : `pcmn_accounts (copro, number)`, `suppliers.bce_number (partial)`,
+  `suppliers.copropriete_id`.
+- 4 dialogs UI : Similar suppliers, BCE attach candidates, Owner homonym single, Owner homonyms batch.
+- 5 migrations one-time (dry-run + apply) : cleanup orphans, heal NC, merge banks, merge BCE dup, migrate empty BCE.
+
 - Impossible de creer 2 comptes PCMN avec le meme numero par ACP.
 - Impossible de creer 2 proprietaires avec le meme email/telephone.
 - Un homonyme (meme nom, coordonnees differentes) exige confirmation UI.

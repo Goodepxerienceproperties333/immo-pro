@@ -411,6 +411,65 @@ def create_suppliers_router(db):
             await assign_supplier_account(db, doc, copro_id)
         return {k: v for k, v in doc.items() if k != "_id"}
 
+    @router.get("/{supplier_id}/bce-candidates")
+    async def bce_candidates(supplier_id: str, request: Request):
+        """iter90gk : au refresh d'une fiche fournisseur SANS BCE, retourne
+        la liste des fournisseurs cousins (nom similaire) qui ONT un BCE, pour
+        que le syndic puisse rattacher (fusionner) plutot que garder un doublon.
+
+        Retourne :
+          {
+            "supplier": {fiche courante},
+            "candidates": [
+              {id, name, bce_number, copropriete_id, matched_by: "name|address|iban",
+               usage_count: {invoices, journal_entries}}
+            ]
+          }
+        """
+        is_super, allowed_copros = await _get_user_scope(request)
+        s = await db.suppliers.find_one({"id": supplier_id}, {"_id": 0})
+        if not s:
+            raise HTTPException(404, "Fournisseur introuvable")
+        if not is_super and not _supplier_in_scope(s, allowed_copros):
+            raise HTTPException(403, "Fournisseur hors scope")
+        # Cherche les cousins ayant un BCE renseigne
+        name_cands = _norm_name_candidates(s.get("name", ""))
+        norm_iban = _norm_id(s.get("iban", ""))
+        candidates = []
+        all_others = await db.suppliers.find(
+            {"id": {"$ne": supplier_id}, "bce_number": {"$type": "string", "$gt": ""}},
+            {"_id": 0},
+        ).to_list(5000)
+        for o in all_others:
+            # 1. Match par nom
+            other_cands = _norm_name_candidates(o.get("name", ""))
+            matched_by = None
+            if name_cands & other_cands:
+                matched_by = "name"
+            elif norm_iban and _norm_id(o.get("iban", "")) == norm_iban:
+                matched_by = "iban"
+            if not matched_by:
+                continue
+            # Filtre chinese wall : le syndic ne voit que les fournisseurs
+            # de ses ACPs (superadmin voit tout)
+            if not is_super and not _supplier_in_scope(o, allowed_copros):
+                continue
+            inv_cnt = await db.invoices.count_documents({"supplier_id": o["id"]})
+            je_cnt = await db.journal_entries.count_documents({"lines.third_party_id": o["id"]})
+            candidates.append({
+                "id": o["id"],
+                "name": o.get("name", ""),
+                "bce_number": o.get("bce_number", ""),
+                "vat_number": o.get("vat_number", ""),
+                "iban": o.get("iban", ""),
+                "copropriete_id": o.get("copropriete_id", ""),
+                "matched_by": matched_by,
+                "usage_count": {"invoices": inv_cnt, "journal_entries": je_cnt},
+            })
+        # Trie : plus utilise en premier (usage_count.invoices desc)
+        candidates.sort(key=lambda c: -(c["usage_count"]["invoices"] + c["usage_count"]["journal_entries"]))
+        return {"supplier": s, "candidates": candidates}
+
     @router.get("/{supplier_id}")
     async def get_supplier(supplier_id: str, request: Request):
         is_super, allowed_copros = await _get_user_scope(request)
