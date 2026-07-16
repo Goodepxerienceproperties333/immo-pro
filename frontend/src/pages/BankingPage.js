@@ -19,10 +19,14 @@ import CodaImportDialog from '@/components/CodaImportDialog';
 import { fmtDate } from '@/lib/dateFmt';
 
 export default function BankingPage() {
-  const { selectedCopro } = useAuth();
+  const { selectedCopro, selectedFiscalYear, selectedFiscalYearId, setSelectedFiscalYearId } = useAuth();
   const navigate = useNavigate();
   const fyParams = useFiscalYearParams();
   const [statements, setStatements] = useState([]);
+  // iter90gr : nombre TOTAL d'extraits toutes periodes confondues (sans filtre FY).
+  // Sert a detecter le cas "l'utilisateur a des extraits en base mais le filtre
+  // FY courant les masque tous" - on l'aide alors a comprendre la situation.
+  const [totalStatementsAllPeriods, setTotalStatementsAllPeriods] = useState(0);
   const [transactions, setTransactions] = useState([]);
   const [selectedStmt, setSelectedStmt] = useState(null);
   const [stmtDialog, setStmtDialog] = useState(false);
@@ -116,7 +120,22 @@ export default function BankingPage() {
     setDistributionKeys(dks.data || []);
     setPcmnAccounts(pcmn.data || []);
     setBankAccounts(c?.data?.bank_accounts || []);
-  }, [selectedCopro, fyParams.date_from, fyParams.date_to]);
+    // iter90gr : quand le filtre FY masque tous les extraits, il faut savoir
+    // s'il en existe HORS de ce filtre pour orienter l'utilisateur. Un appel
+    // supplementaire sans date_from/date_to donne le total reel. On ne le fait
+    // que si le filtre FY est actif ET que le resultat filtre est vide - sinon
+    // les 2 comptes sont deja identiques.
+    if ((s.data?.length || 0) === 0 && selectedFiscalYearId) {
+      try {
+        const rAll = await api.get('/banking/statements');  // pas de fyParams
+        setTotalStatementsAllPeriods((rAll.data || []).length);
+      } catch {
+        setTotalStatementsAllPeriods(0);
+      }
+    } else {
+      setTotalStatementsAllPeriods(s.data?.length || 0);
+    }
+  }, [selectedCopro, fyParams.date_from, fyParams.date_to, selectedFiscalYearId]);
   useEffect(() => { load(); }, [load]);
 
   const loadStmtTxns = async (stmt) => {
@@ -541,7 +560,27 @@ export default function BankingPage() {
         {/* Statements sidebar */}
         <div className="space-y-2 lg:col-span-1">
           <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold px-1">Extraits</div>
-          {statements.length === 0 ? <p className="text-sm text-slate-400 text-center py-4">Aucun extrait</p> : statements.map(s => {
+          {statements.length === 0 ? (
+            // iter90gr : message d'aide contextuel selon la situation.
+            // - S'il existe des extraits HORS du filtre FY courant : on l'indique
+            //   et on propose un bouton pour voir toutes les periodes.
+            // - Sinon : "Aucun extrait" simple (base reellement vide).
+            (selectedFiscalYearId && totalStatementsAllPeriods > 0) ? (
+              <div className="text-xs text-slate-600 text-center py-6 px-3 bg-amber-50 border border-amber-200 rounded" data-testid="stmt-fy-filter-empty">
+                <div className="font-semibold text-amber-800 mb-1">Aucun extrait pour cet exercice</div>
+                <div className="mb-2">{totalStatementsAllPeriods} extrait(s) existent hors de la periode {selectedFiscalYear?.start_date} - {selectedFiscalYear?.end_date}.</div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="text-[10px] h-6"
+                  onClick={() => setSelectedFiscalYearId('')}
+                  data-testid="stmt-clear-fy-filter"
+                >Voir tous les exercices</Button>
+              </div>
+            ) : (
+              <p className="text-sm text-slate-400 text-center py-4">Aucun extrait</p>
+            )
+          ) : statements.map(s => {
             const baBadge = getBankAccountBadge(s);
             return (
             <Card key={s.id} className={`cursor-pointer transition-all border-l-4 text-sm ${selectedStmt?.id === s.id ? 'border-[#022D52] shadow-md' : `${baBadge?.border || 'border-slate-200'} hover:border-slate-400`}`} onClick={() => loadStmtTxns(s)} data-testid={`stmt-card-${s.id}`}>
