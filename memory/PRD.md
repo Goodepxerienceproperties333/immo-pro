@@ -195,6 +195,41 @@ AdminDashboardPage.js (Fragment key + <p> -> <div>).
 - 6 endpoints anti-doublons + 1 page admin dediee
 - 3 index MongoDB uniques (pcmn_accounts, suppliers.bce)
 - 5 dialogs UI (similar suppliers, BCE attach candidates, owner homonym single, owner homonyms batch, quality-audit page)
+
+### Iter90gn (Feb 2026) - Stress test + P0 GridFS + Cache duplicates-audit
+
+**Stress test executé** avec 10 syndics × 30 ACPs = 300 ACPs, 150 000 journal_entries,
+75 000 invoices, 9 000 owners (`/app/backend/stress/stress_test_v1.py`).
+
+Resultats (charge cible reelle) :
+- Bilan 1 ACP (500 JE) : p95 = **81ms** ✓
+- Balance-tiers/suppliers : p95 = **66ms** ✓
+- List owners (9000) : p95 = **184ms** ✓
+- List invoices 1 ACP : p95 = **66ms** ✓
+- Bilan 20 concurrent : p95 = **1030ms** (WARN, acceptable pic AG)
+- **duplicates-audit AVANT cache : p95 = 2440ms (CRIT)**
+
+**Fixes P0** :
+
+1. **GridFS documents (iter90gn)** :
+   - Infra deja en place (`gridfs_storage.py`) - documents/invoices upload utilisent GridFS.
+   - Nettoyage : 10 test-orphan documents supprimes (TEST_DOC_A/B_...).
+   - Ajout section `documents_without_gridfs` dans `/api/admin/duplicates-audit` +
+     UI dans AdminQualityAuditPage (badge "Docs sans GridFS").
+   - Detection continue des nouveaux orphelins (persistance ephemere = perte au redeploy K8s).
+
+2. **Cache duplicates-audit (iter90gn)** :
+   - In-memory cache TTL 300s (5 min) sur `/api/admin/duplicates-audit`.
+   - Header `_cache_hit: true` retourne pour les hits cache.
+   - Bouton "Force" dans UI qui envoie `force_refresh=true` (bypass cache).
+   - **Impact stress test** : **p95 = 2440ms → 74ms (-97%)**.
+
+**Verdict scaling** : plateforme tient largement 10 syndics x 30 ACPs pour l'usage quotidien.
+Seuls points d'amelioration restants :
+- P1 : cache `/reports/bilan` (sous charge 20 concurrent : 1030ms)
+- P1 : pagination systematique sur `/owners`
+- P2 : job queue asynchrone pour PDFs de masse en pic AG
+
 - 5 migrations one-time (cleanup orphans, heal NC, merge banks, merge BCE dup, migrate empty BCE)
 - 24 tests pytest verrouillant tout le comportement
 

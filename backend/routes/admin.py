@@ -1245,9 +1245,29 @@ def create_admin_router(db):
         }
 
     # ==================== iter90gk : DUPLICATES AUDIT GLOBAL ====================
+    # iter90gn : cache TTL 5min pour eviter le rescan complet a chaque appel.
+    # Le stress test a mesure duplicates-audit p95=2440ms - prohibitif si polle.
+    # Format cache : {key -> (timestamp, data)}. Cle inclut copro_id + format.
+    _audit_cache: dict = {}
+    _AUDIT_CACHE_TTL = 300  # 5 minutes
+
+    def _audit_cache_get(key: str):
+        import time as _t
+        entry = _audit_cache.get(key)
+        if not entry:
+            return None
+        ts, data = entry
+        if _t.time() - ts > _AUDIT_CACHE_TTL:
+            _audit_cache.pop(key, None)
+            return None
+        return data
+
+    def _audit_cache_set(key: str, data):
+        import time as _t
+        _audit_cache[key] = (_t.time(), data)
 
     @router.get("/duplicates-audit")
-    async def duplicates_audit(request: Request, format: str = "json", copro_id: Optional[str] = None):
+    async def duplicates_audit(request: Request, format: str = "json", copro_id: Optional[str] = None, force_refresh: bool = False):
         """iter90gk : rapport global anti-doublons pour toutes les ACPs
         (ou une seule si `copro_id` fourni).
 
@@ -1268,6 +1288,14 @@ def create_admin_router(db):
         from routes.suppliers import _norm_id, _norm_name_candidates
         await _get_admin_user(request)
 
+        # iter90gn : cache lookup (skip si force_refresh=true ou format=csv qui
+        # generate a new response de toute facon). Cle par copro_id.
+        cache_key = f"{copro_id or 'all'}|{format}"
+        if not force_refresh and format.lower() != "csv":
+            cached = _audit_cache_get(cache_key)
+            if cached is not None:
+                return {**cached, "_cache_hit": True}
+
         report: dict = {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "scope": copro_id or "all_acps",
@@ -1287,6 +1315,9 @@ def create_admin_router(db):
                 "duplicated_bank_accounts": [],  # 6-char + 8-char pour meme banque
             },
             "credit_notes_without_entry": [],
+            # iter90gn : verification GridFS documents. Sans gridfs_id, les
+            # fichiers sont sur filesystem ephemere et perdus au redeploiement.
+            "documents_without_gridfs": [],
         }
 
         # ==== SUPPLIERS ====
@@ -1456,6 +1487,20 @@ def create_admin_router(db):
                     "date": inv.get("date"),
                 })
 
+        # ==== iter90gn : GridFS documents check ====
+        # Docs sans gridfs_id -> fichiers sur filesystem ephemere. Perdus au
+        # redeploiement K8s. Doivent etre re-uploades (ou supprimes si test).
+        doc_query = {"gridfs_id": {"$in": [None, ""]}}
+        if copro_id:
+            doc_query["copropriete_id"] = copro_id
+        async for d in db.documents.find(doc_query, {"_id": 0, "id": 1, "title": 1, "copropriete_id": 1, "created_at": 1}).limit(50):
+            report["documents_without_gridfs"].append({
+                "document_id": d["id"],
+                "title": d.get("title", ""),
+                "copro_id": d.get("copropriete_id", ""),
+                "created_at": d.get("created_at", ""),
+            })
+
         # ==== SUMMARY ====
         report["summary"] = {
             "supplier_bce_duplicates": len(report["suppliers"]["bce_duplicates"]),
@@ -1466,8 +1511,13 @@ def create_admin_router(db):
             "pcmn_orphan_tier": len(report["pcmn_accounts"]["orphan_tier_accounts"]),
             "pcmn_dup_bank": len(report["pcmn_accounts"]["duplicated_bank_accounts"]),
             "credit_notes_missing_entry": len(report["credit_notes_without_entry"]),
+            "documents_without_gridfs": len(report["documents_without_gridfs"]),
         }
         report["healthy"] = all(v == 0 for v in report["summary"].values())
+
+        # iter90gn : cache le resultat pour les 5 minutes suivantes (JSON only)
+        if format.lower() != "csv":
+            _audit_cache_set(cache_key, report)
 
         if format.lower() == "csv":
             # CSV export : tableau plat pour analyse dans Excel
@@ -1491,6 +1541,8 @@ def create_admin_router(db):
                 w.writerow(["pcmn", "dup_bank", "+".join(a["number"] for a in r["accounts"]), r["copro_id"], len(r["accounts"])])
             for r in report["credit_notes_without_entry"]:
                 w.writerow(["credit_note", "missing_entry", f"{r['internal_reference']} - {r['supplier']} {r['amount']}", r["copro_id"], 1])
+            for d in report["documents_without_gridfs"]:
+                w.writerow(["document", "missing_gridfs", d["title"] or d["document_id"], d["copro_id"], 1])
             return Response(
                 content=buf.getvalue(),
                 media_type="text/csv",

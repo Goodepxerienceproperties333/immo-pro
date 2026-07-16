@@ -55,12 +55,14 @@ export default function AdminQualityAuditPage() {
       setCopros(data || []);
     } catch { /* silent */ }
   };
-  const load = async () => {
+  const load = async (opts = {}) => {
     setLoading(true);
     try {
       const params = coproFilter !== 'all' ? { copro_id: coproFilter } : {};
+      if (opts.force) params.force_refresh = true;
       const { data } = await api.get('/admin/duplicates-audit', { params });
       setReport(data);
+      if (opts.force) toast.success('Rapport regenere depuis la DB');
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Erreur chargement rapport');
     } finally {
@@ -90,6 +92,7 @@ export default function AdminQualityAuditPage() {
           {report && (
             <p className="text-xs text-slate-400 mt-1">
               Genere le {new Date(report.generated_at).toLocaleString('fr-BE')} - Scope : {report.scope}
+              {report._cache_hit && <span className="ml-2 text-emerald-600" data-testid="cache-hit-badge">(cache 5min)</span>}
             </p>
           )}
         </div>
@@ -105,9 +108,12 @@ export default function AdminQualityAuditPage() {
               <option key={c.id} value={c.id}>{c.name}</option>
             ))}
           </select>
-          <Button size="sm" onClick={load} disabled={loading} data-testid="quality-refresh">
+          <Button size="sm" onClick={() => load()} disabled={loading} data-testid="quality-refresh">
             <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
             {loading ? 'Analyse...' : 'Actualiser'}
+          </Button>
+          <Button size="sm" variant="outline" onClick={() => load({ force: true })} disabled={loading} data-testid="quality-force-refresh" title="Force regeneration depuis la DB (bypass cache 5min)">
+            <RefreshCw size={14} className="mr-1" /> Force
           </Button>
           <Button size="sm" variant="outline" onClick={downloadCsv} data-testid="quality-download-csv">
             <Download size={14} className="mr-1" /> CSV
@@ -135,6 +141,7 @@ export default function AdminQualityAuditPage() {
                 <span>PCMN orphan tier : <strong>{s.pcmn_orphan_tier || 0}</strong></span>
                 <span>Bank dup : <strong>{s.pcmn_dup_bank || 0}</strong></span>
                 <span>NC sans ecriture : <strong>{s.credit_notes_missing_entry || 0}</strong></span>
+                <span>Docs sans GridFS : <strong>{s.documents_without_gridfs || 0}</strong></span>
               </div>
             </div>
           </div>
@@ -391,6 +398,41 @@ export default function AdminQualityAuditPage() {
                         <TableCell className="font-mono text-xs">{r.internal_reference}</TableCell>
                         <TableCell className="text-xs">{r.supplier}</TableCell>
                         <TableCell className="text-xs font-mono text-red-600">{r.amount}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </>
+            )}
+          </Section>
+
+          {/* iter90gn : Documents without GridFS - eviter la perte de fichiers au redeploy */}
+          <Section
+            icon={FileWarning}
+            title="Documents sans GridFS"
+            count={report.documents_without_gridfs?.length || 0}
+            severity={(report.documents_without_gridfs?.length || 0) > 0 ? 'err' : 'ok'}
+          >
+            {(report.documents_without_gridfs?.length || 0) === 0 ? (
+              <p className="text-xs text-slate-500">Tous les documents sont persistes en GridFS</p>
+            ) : (
+              <>
+                <p className="text-xs text-slate-600 mb-2">
+                  <strong>Attention</strong> : ces documents ont leur fichier sur filesystem ephemere (perte au redeploiement K8s).
+                  Re-uploadez-les ou supprimez-les via l&apos;UI documents.
+                </p>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="text-xs">Titre</TableHead>
+                      <TableHead className="text-xs w-32">Date</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {report.documents_without_gridfs.map((d, i) => (
+                      <TableRow key={i}>
+                        <TableCell className="text-xs">{d.title || d.document_id.slice(0,12)}</TableCell>
+                        <TableCell className="text-xs text-slate-400">{d.created_at?.slice(0,10)}</TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
