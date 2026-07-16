@@ -17,8 +17,16 @@ import PdfImportDialog from '@/components/PdfImportDialog';
 import { useDirtyGuard } from '@/hooks/useDirtyGuard';
 
 const emptyBank = { iban: '', bic: '', account_type: 'vue', is_default: false, label: '' };
-const emptyLot = { number: '', description: '', lot_type: 'apartment', floor: 0, area: 0, quotity: 0 };
-const emptyForm = { name: '', bce: '', address: '', postal_code: '', city: '', country: 'Belgique', description: '', bank_accounts: [], quarterly_closing: true, default_provisions: true, lots: [] };
+const emptyLot = { number: '', description: '', lot_type: 'apartment', floor: 0, area: 0, quotity: 0, parent_lot_number: '' };
+const emptyForm = {
+  name: '', bce: '', address: '', postal_code: '', city: '', country: 'Belgique',
+  description: '', bank_accounts: [], quarterly_closing: true, default_provisions: true,
+  lots: [],
+  // iter90gg : periode de l'exercice fiscal courant (obligatoire au Step 2)
+  fy_start: '', fy_end: '', fy_name: '',
+  // iter90gg : au Step 3, le syndic declare s'il y a eu des ventes intra-FY
+  _has_intra_fy_sales: false,
+};
 
 export default function CoproprietesPage() {
   const { isAdmin, isManager, isSuperadmin } = useAuth();
@@ -147,12 +155,32 @@ export default function CoproprietesPage() {
     try {
       if (editing) { await api.put(`/coproprietes/${editing.id}`, form); toast.success('Copropriete modifiee'); setDialogOpen(false); load(); }
       else {
-        const r = await api.post('/coproprietes', form);
+        // iter90gg BLOC A : validation - la periode d'exercice est obligatoire
+        if (!form.fy_start || !form.fy_end) {
+          toast.error('Periode de l\'exercice fiscal requise (Etape 2)');
+          setStep(2);
+          return;
+        }
+        // Nettoie les champs UI-only avant envoi
+        const payload = { ...form };
+        const hadIntraFySales = !!payload._has_intra_fy_sales;
+        delete payload._has_intra_fy_sales;
+        const r = await api.post('/coproprietes', payload);
         const newCopro = r.data;
         const nLots = (form.lots || []).filter(l => l.number && l.number.trim()).length;
         toast.success(nLots > 0 ? `ACP creee avec ${nLots} lot(s)` : 'Copropriete creee');
         setDialogOpen(false); load();
-        // Reprise Optipro/Sogis ?
+
+        // iter90gg BLOC C : si le syndic a declare des ventes intra-exercice,
+        // redirige direct vers la page Lots avec un banner d'invitation
+        if (hadIntraFySales && newCopro?.id) {
+          setTimeout(() => {
+            navigate(`/lots?post_import_mutations=1&copropriete_id=${newCopro.id}`);
+          }, 300);
+          return;
+        }
+
+        // Reprise Optipro/Sogis ? (fallback si pas de ventes intra-FY)
         setTimeout(() => {
           if (newCopro?.id && window.confirm(
             `L'ACP "${newCopro.name}" a ete creee.\n\n` +
@@ -320,7 +348,7 @@ export default function CoproprietesPage() {
             <div>
               <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Identification</div>
               <div className="grid grid-cols-2 gap-4">
-                <div><label className="form-label">Nom de l'ACP *</label><Input value={form.name} onChange={e => setForm({...form, name: e.target.value})} data-testid="copro-name-input" /></div>
+                <div><label className="form-label">Nom de l&apos;ACP *</label><Input value={form.name} onChange={e => setForm({...form, name: e.target.value})} data-testid="copro-name-input" /></div>
                 <div><label className="form-label">N BCE</label><Input value={form.bce} onChange={e => setForm({...form, bce: e.target.value})} placeholder="0123.456.789" data-testid="copro-bce-input" /></div>
               </div>
             </div>
@@ -377,6 +405,28 @@ export default function CoproprietesPage() {
             {/* STEP 2: Lots with owner autocomplete */}
             {!editing && step === 2 && (
               <div>
+                {/* iter90gg BLOC A : Confirmation periode de l'exercice fiscal */}
+                <div className="bg-amber-50 border-2 border-amber-300 rounded-lg p-3 mb-4" data-testid="fy-period-block">
+                  <div className="text-xs font-bold text-amber-900 uppercase tracking-wide mb-1">Etape prealable : periode de l&apos;exercice en cours</div>
+                  <p className="text-[11px] text-amber-800 mb-2">
+                    Les proprietaires que vous allez importer doivent correspondre a ceux qui possedaient les lots <strong>a la date du debut de l&apos;exercice</strong>. Les ventes survenues APRES seront saisies a l&apos;etape suivante (mutations).
+                  </p>
+                  <div className="grid grid-cols-3 gap-3">
+                    <div>
+                      <label className="form-label text-amber-900">Debut d&apos;exercice *</label>
+                      <Input type="date" value={form.fy_start} onChange={e => setForm({...form, fy_start: e.target.value})} data-testid="fy-start-input" className="h-9" />
+                    </div>
+                    <div>
+                      <label className="form-label text-amber-900">Fin d&apos;exercice *</label>
+                      <Input type="date" value={form.fy_end} onChange={e => setForm({...form, fy_end: e.target.value})} data-testid="fy-end-input" className="h-9" />
+                    </div>
+                    <div>
+                      <label className="form-label text-amber-900">Nom exercice</label>
+                      <Input value={form.fy_name} onChange={e => setForm({...form, fy_name: e.target.value})} placeholder="auto (2025-2026)" data-testid="fy-name-input" className="h-9" />
+                    </div>
+                  </div>
+                </div>
+
                 <div className="flex items-center justify-between mb-2">
                   <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Lots et proprietaires</div>
                   <div className="flex gap-2 flex-wrap">
@@ -480,6 +530,26 @@ export default function CoproprietesPage() {
                           <div><label className="form-label">Etage</label><Input type="number" value={lot.floor} onChange={e => updateLot(i, 'floor', parseInt(e.target.value || '0'))} /></div>
                         </div>
 
+                        {/* iter90gg BLOC B : Lot parent (facultatif) - pour cave/garage lie a un appartement */}
+                        {['parking', 'cave', 'autre'].includes(lot.lot_type) && (
+                          <div className="mt-2 pt-2 border-t border-slate-200/70">
+                            <label className="form-label">
+                              Lot parent <span className="text-slate-400 font-normal">(lie ce {lot.lot_type} a un appartement principal ; facultatif)</span>
+                            </label>
+                            <Select value={lot.parent_lot_number || '_none'} onValueChange={v => updateLot(i, 'parent_lot_number', v === '_none' ? '' : v)}>
+                              <SelectTrigger className="h-8 text-sm" data-testid={`lot-${i}-parent`}>
+                                <SelectValue placeholder="Aucun (lot independant)" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="_none">Aucun (lot independant)</SelectItem>
+                                {(form.lots || []).filter((l2, i2) => i2 !== i && l2.lot_type === 'apartment' && l2.number).map((l2, i2) => (
+                                  <SelectItem key={i2} value={l2.number}>Lot {l2.number} {l2.description ? `- ${l2.description}` : ''}</SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        )}
+
                         {/* Owner autocomplete per lot */}
                         <div className="mt-2 pt-2 border-t border-slate-200/70">
                           <label className="form-label">Proprietaires <span className="text-slate-400 font-normal">(cliquez pour voir la liste ou tapez pour filtrer)</span></label>
@@ -546,6 +616,42 @@ export default function CoproprietesPage() {
 
             {/* STEP 3: Options + description + summary */}
             {(editing || step === 3) && <>
+            {/* iter90gg BLOC C : Ventes intra-exercice */}
+            {!editing && form.fy_start && (
+              <div className="bg-orange-50 border-2 border-orange-300 rounded-lg p-3" data-testid="intra-fy-sales-block">
+                <div className="text-xs font-bold text-orange-900 uppercase tracking-wide mb-2">Ventes intra-exercice</div>
+                <p className="text-[11px] text-orange-800 mb-2">
+                  Depuis le debut de l&apos;exercice (<strong>{form.fy_start}</strong>), y a-t-il eu des mutations (ventes) sur des lots de cette ACP ?
+                </p>
+                <div className="flex gap-4">
+                  <label className="flex items-center gap-2 cursor-pointer text-sm">
+                    <input
+                      type="radio"
+                      name="intra_fy_sales"
+                      checked={!form._has_intra_fy_sales}
+                      onChange={() => setForm({...form, _has_intra_fy_sales: false})}
+                      data-testid="intra-fy-no"
+                    />
+                    <span>Non, aucune vente intra-exercice</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer text-sm">
+                    <input
+                      type="radio"
+                      name="intra_fy_sales"
+                      checked={form._has_intra_fy_sales}
+                      onChange={() => setForm({...form, _has_intra_fy_sales: true})}
+                      data-testid="intra-fy-yes"
+                    />
+                    <span>Oui, il y a eu des ventes</span>
+                  </label>
+                </div>
+                {form._has_intra_fy_sales && (
+                  <p className="text-[11px] text-orange-900 mt-2 italic">
+                    A la creation de l&apos;ACP, vous serez automatiquement redirige vers la page Lots pour saisir les mutations (Debit acheteur / Credit vendeur, transferts fonds de roulement, prorata).
+                  </p>
+                )}
+              </div>
+            )}
             <div>
               <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Options</div>
               <div className="flex gap-6">
@@ -586,7 +692,19 @@ export default function CoproprietesPage() {
               ) : <Button variant="outline" onClick={() => setDialogOpen(false)}>Annuler</Button>}
               <div className="flex gap-2">
                 {!editing && step < 3 ? (
-                  <Button onClick={() => setStep(step + 1)} className="bg-[#022D52] hover:bg-[#1D4ED8]" data-testid="wizard-next-btn" disabled={step === 1 && !form.name.trim()}>Suivant</Button>
+                  <Button
+                    onClick={() => setStep(step + 1)}
+                    className="bg-[#022D52] hover:bg-[#1D4ED8]"
+                    data-testid="wizard-next-btn"
+                    disabled={
+                      (step === 1 && !form.name.trim())
+                      // iter90gg : blocage passage Step 2 -> 3 si periode FY vide
+                      || (step === 2 && (!form.fy_start || !form.fy_end))
+                    }
+                    title={step === 2 && (!form.fy_start || !form.fy_end) ? 'Renseignez la periode de l\'exercice fiscal' : ''}
+                  >
+                    Suivant
+                  </Button>
                 ) : (
                   <Button onClick={handleSave} className="bg-[#022D52] hover:bg-[#1D4ED8]" data-testid="copro-save-btn">{editing ? 'Modifier' : 'Creer l\'ACP'}</Button>
                 )}

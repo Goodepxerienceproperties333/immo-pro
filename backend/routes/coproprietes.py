@@ -22,6 +22,10 @@ class LotInlineInput(BaseModel):
     area: Optional[float] = 0.0
     quotity: Optional[float] = 0.0
     owner_ids: Optional[List[str]] = []
+    # iter90gg : "lot parent" pour lier garage/cave a un appartement principal.
+    # Reference le NUMERO du lot parent (pas l'id, car les lots sont crees
+    # ensemble dans une transaction, ids pas encore stables cote client).
+    parent_lot_number: Optional[str] = ""
 
 
 class CoproprieteInput(BaseModel):
@@ -36,6 +40,14 @@ class CoproprieteInput(BaseModel):
     quarterly_closing: Optional[bool] = True
     default_provisions: Optional[bool] = True
     lots: Optional[List[LotInlineInput]] = []
+    # iter90gg : periode de l'exercice fiscal courant fournie par le
+    # syndic lors de la creation. Si fournie, on cree immediatement un
+    # `fiscal_year` en base avec status='open'. Permet de valider les
+    # proprietaires importes A LA DATE de debut d'exercice (source de
+    # verite legale pour l'attribution des lots).
+    fy_start: Optional[str] = ""  # format YYYY-MM-DD
+    fy_end: Optional[str] = ""
+    fy_name: Optional[str] = ""   # ex: "2025-2026", "2026", ou auto-derive
 
 
 def create_coproprietes_router(db):
@@ -221,14 +233,18 @@ def create_coproprietes_router(db):
         } for cn in DEFAULT_CATEGORIES]
         await db.document_categories.insert_many(cat_docs)
         # Create lots on the fly (if provided during ACP creation)
+        # iter90gg : 2-pass pour resoudre les parent_lot_number en parent_lot_id
         if data.lots:
             now_iso = datetime.now(timezone.utc).isoformat()
             lot_docs = []
+            number_to_id: dict = {}
             for lot in data.lots:
                 if not lot.number or not lot.number.strip():
                     continue
+                lid = str(uuid.uuid4())
+                number_to_id[lot.number.strip()] = lid
                 lot_docs.append({
-                    "id": str(uuid.uuid4()),
+                    "id": lid,
                     "number": lot.number.strip(),
                     "description": lot.description or "",
                     "lot_type": lot.lot_type or "apartment",
@@ -239,9 +255,33 @@ def create_coproprietes_router(db):
                     "owner_ids": lot.owner_ids or [],
                     "copropriete_id": doc["id"],
                     "created_at": now_iso,
+                    "_parent_ref": (lot.parent_lot_number or "").strip(),
                 })
+            # 2e passe : resout parent_lot_number -> parent_lot_id
+            for ld in lot_docs:
+                pref = ld.pop("_parent_ref", "")
+                if pref and pref in number_to_id and number_to_id[pref] != ld["id"]:
+                    ld["parent_lot_id"] = number_to_id[pref]
             if lot_docs:
                 await db.lots.insert_many(lot_docs)
+
+        # iter90gg : cree un fiscal_year si la periode est fournie
+        if data.fy_start and data.fy_end:
+            fy_name = data.fy_name.strip() if data.fy_name else ""
+            if not fy_name:
+                # Auto-derive : "2025-2026" si annees differentes, sinon "2026"
+                y1 = data.fy_start[:4]
+                y2 = data.fy_end[:4]
+                fy_name = f"{y1}-{y2}" if y1 != y2 else y1
+            await db.fiscal_years.insert_one({
+                "id": str(uuid.uuid4()),
+                "copropriete_id": doc["id"],
+                "name": fy_name,
+                "start_date": data.fy_start,
+                "end_date": data.fy_end,
+                "status": "open",
+                "created_at": now_iso,
+            })
         return {k: v for k, v in doc.items() if k != "_id"}
 
     @router.put("/{copro_id}")

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import api from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -7,7 +8,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { Plus, Pencil, Trash2, Search, X, ArrowRightLeft, UserPlus, Link2, Link2Off, FileDown, ClipboardCheck } from 'lucide-react';
+import { Plus, Pencil, Trash2, Search, X, ArrowRightLeft, UserPlus, Link2, Link2Off, FileDown, ClipboardCheck, AlertTriangle } from 'lucide-react';
 import { fmtDate } from '@/lib/dateFmt';
 
 const LOT_TYPES = [
@@ -979,6 +980,13 @@ function MutationDialog({ lot, owners, ownersRefresh, onClose, onDone }) {
 }
 
 export default function LotsPage() {
+  // iter90gg BLOC C : detecte le retour du wizard de creation ACP avec
+  // declaration de ventes intra-exercice. Affiche un banner d'invitation
+  // a saisir les mutations.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const postImportMutations = searchParams.get('post_import_mutations') === '1';
+  const [showMutationBanner, setShowMutationBanner] = useState(postImportMutations);
+
   const [lots, setLots] = useState([]);
   const [owners, setOwners] = useState([]);
   const [search, setSearch] = useState('');
@@ -1128,6 +1136,32 @@ export default function LotsPage() {
 
   return (
     <div data-testid="lots-page">
+      {/* iter90gg BLOC C : banner d'invitation apres creation ACP avec ventes intra-FY */}
+      {showMutationBanner && (
+        <div className="mb-4 rounded-lg border-2 border-orange-400 bg-gradient-to-r from-orange-50 to-amber-50 p-4 shadow-sm" data-testid="post-import-mutations-banner">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="text-orange-600 flex-shrink-0 mt-0.5" size={22} />
+            <div className="flex-1">
+              <div className="text-sm font-bold text-orange-900">Mutations intra-exercice a saisir</div>
+              <div className="text-xs text-orange-800 mt-1 leading-relaxed">
+                Vous avez declare des ventes depuis le debut de l&apos;exercice fiscal.
+                Pour chaque lot vendu, cliquez sur l&apos;icone <ArrowRightLeft size={12} className="inline mx-0.5" /> a droite du lot pour saisir la mutation
+                (date de vente, nouveau proprietaire, prorata jours, transfert fonds de roulement).
+                Les OD comptables seront generees automatiquement.
+              </div>
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => { setShowMutationBanner(false); setSearchParams({}); }}
+              className="text-orange-700 hover:bg-orange-100 flex-shrink-0"
+              data-testid="dismiss-mutation-banner"
+            >
+              <X size={16} />
+            </Button>
+          </div>
+        </div>
+      )}
       <div className="page-header flex items-center justify-between">
         <div>
           <h1 className="page-title">Lots</h1>
