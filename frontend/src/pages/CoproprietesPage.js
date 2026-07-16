@@ -117,13 +117,31 @@ export default function CoproprietesPage() {
     const q = (ownerSearchByLot[i] || '').trim().toLowerCase();
     const taken = form.lots[i].owner_ids || [];
     const available = owners.filter(o => !taken.includes(o.id));
+    // iter90gh : dedup UI par nom normalise. Si plusieurs fiches partagent
+    // le meme nom (cas legacy Optipro imports repetes), on ne garde QUE
+    // celle qui a le plus d'attributs "identifiants" (VCS + auxiliary +
+    // email). Le tri prefere : vcs > aux > email > id lexico (stable).
+    const _score = (o) => {
+      let s = 0;
+      if ((o.vcs_code || '').trim()) s += 4;
+      if ((o.auxiliary_code || '').trim()) s += 2;
+      if ((o.email || '').trim()) s += 1;
+      return s;
+    };
+    const _norm = (s) => (s || '').trim().toLowerCase().replace(/\s+/g, ' ');
+    const bestByName = new Map();
+    for (const o of available) {
+      const key = _norm(o.name);
+      if (!key) continue;
+      const cur = bestByName.get(key);
+      if (!cur || _score(o) > _score(cur)) bestByName.set(key, o);
+    }
+    const deduped = Array.from(bestByName.values());
     if (!q) {
-      // No query yet : if the input is focused, show top N available owners
-      // (so the user can BROWSE imported owners without typing). Otherwise hide.
-      if (ownerFocusLot === i) return available.slice(0, 50);
+      if (ownerFocusLot === i) return deduped.slice(0, 50);
       return [];
     }
-    return available.filter(o =>
+    return deduped.filter(o =>
       (o.name || '').toLowerCase().includes(q) ||
       (o.email || '').toLowerCase().includes(q) ||
       (o.vcs_code || '').includes(q)

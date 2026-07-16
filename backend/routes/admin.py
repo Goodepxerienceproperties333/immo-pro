@@ -955,6 +955,220 @@ def create_admin_router(db):
             "acp_count": len(result),
         }
 
+    @router.get("/owners/duplicates-diagnostic")
+    async def owners_duplicates_diagnostic(
+        request: Request,
+        copropriete_id: Optional[str] = None,
+    ):
+        """iter90gh : identifie les fiches owner en doublon dans une ACP.
+        Cause classique : imports Optipro/CODA repetes.
+        Retourne des groupes {master, slaves[]} par nom normalise.
+        """
+        await _get_superadmin_only(request)
+        if not copropriete_id:
+            copropriete_id = request.headers.get("X-Copropriete-Id") or ""
+        if not copropriete_id or copropriete_id == "all":
+            raise HTTPException(400, "copropriete_id requis (chinese wall)")
+        lots = await db.lots.find(
+            {"copropriete_id": copropriete_id},
+            {"_id": 0, "owner_id": 1, "owner_ids": 1},
+        ).to_list(10000)
+        owner_ids_from_lots: set = set()
+        for l in lots:
+            if l.get("owner_id"):
+                owner_ids_from_lots.add(l["owner_id"])
+            for oid in (l.get("owner_ids") or []):
+                owner_ids_from_lots.add(oid)
+        owners = await db.owners.find(
+            {"$or": [
+                {"id": {"$in": list(owner_ids_from_lots)}},
+                {"copropriete_ids": copropriete_id},
+            ]},
+            {"_id": 0},
+        ).to_list(50000)
+
+        def _norm(s: str) -> str:
+            import re
+            return re.sub(r"\s+", " ", (s or "").strip().lower())
+
+        def _score(o: dict) -> int:
+            s = 0
+            if (o.get("vcs_code") or "").strip(): s += 4
+            if (o.get("auxiliary_code") or "").strip(): s += 2
+            if (o.get("email") or "").strip(): s += 1
+            if (o.get("iban") or "").strip(): s += 1
+            if (o.get("last_name") or "").strip(): s += 1
+            return s
+
+        from collections import defaultdict
+        by_norm = defaultdict(list)
+        for o in owners:
+            key = _norm(o.get("name", ""))
+            if key:
+                by_norm[key].append(o)
+        duplicate_groups = []
+        for key, group in by_norm.items():
+            if len(group) < 2:
+                continue
+            group.sort(key=lambda o: -_score(o))
+            master, slaves = group[0], group[1:]
+            slaves_detail = []
+            for s in slaves:
+                sid = s["id"]
+                lots_count = sum(
+                    1 for l in lots
+                    if l.get("owner_id") == sid or sid in (l.get("owner_ids") or [])
+                )
+                inv_c = await db.invoices.count_documents({
+                    "copropriete_id": copropriete_id,
+                    "$or": [{"private_fee_owner_id": sid}, {"owner_id": sid}],
+                })
+                mut_c = await db.mutations.count_documents({
+                    "copropriete_id": copropriete_id,
+                    "$or": [{"from_owner_id": sid}, {"to_owner_id": sid}],
+                })
+                je_c = await db.journal_entries.count_documents({
+                    "copropriete_id": copropriete_id,
+                    "lines.third_party_id": sid,
+                })
+                slaves_detail.append({
+                    "id": sid,
+                    "name": s.get("name", ""),
+                    "email": s.get("email", ""),
+                    "vcs_code": s.get("vcs_code", ""),
+                    "auxiliary_code": s.get("auxiliary_code", ""),
+                    "lots_count": lots_count,
+                    "invoices_count": inv_c,
+                    "mutations_count": mut_c,
+                    "journal_lines_count": je_c,
+                    "score": _score(s),
+                })
+            duplicate_groups.append({
+                "normalized_name": key,
+                "master": {
+                    "id": master["id"],
+                    "name": master.get("name", ""),
+                    "vcs_code": master.get("vcs_code", ""),
+                    "email": master.get("email", ""),
+                    "score": _score(master),
+                },
+                "slaves": slaves_detail,
+                "total_duplicates": len(slaves),
+            })
+        duplicate_groups.sort(key=lambda g: -g["total_duplicates"])
+        return {
+            "copropriete_id": copropriete_id,
+            "total_owners_scanned": len(owners),
+            "total_groups": len(duplicate_groups),
+            "total_slaves_to_merge": sum(g["total_duplicates"] for g in duplicate_groups),
+            "groups": duplicate_groups,
+        }
+
+    class OwnersMergeInput(BaseModel):
+        copropriete_id: str
+        master_id: str
+        slave_ids: List[str]
+        dry_run: bool = True
+
+    @router.post("/owners/merge-duplicates")
+    async def owners_merge_duplicates(data: OwnersMergeInput, request: Request):
+        """iter90gh : fusionne N slaves dans 1 master. Propage sur lots,
+        invoices, mutations, journal_entries, fund_calls, bank_accounts.
+        Puis SUPPRIME les slaves. Chinese wall strict.
+        """
+        await _get_superadmin_only(request)
+        if not data.copropriete_id or data.copropriete_id == "all":
+            raise HTTPException(400, "copropriete_id requis")
+        if not data.master_id or not data.slave_ids:
+            raise HTTPException(400, "master_id et slave_ids requis")
+        if data.master_id in data.slave_ids:
+            raise HTTPException(400, "master ne peut pas etre dans slave_ids")
+        all_ids = [data.master_id] + data.slave_ids
+        owners = await db.owners.find(
+            {"id": {"$in": all_ids}}, {"_id": 0, "id": 1},
+        ).to_list(len(all_ids))
+        found = {o["id"] for o in owners}
+        if data.master_id not in found:
+            raise HTTPException(404, "Master introuvable")
+        missing = [s for s in data.slave_ids if s not in found]
+        if missing:
+            raise HTTPException(404, f"Slaves introuvables : {missing}")
+        report = {
+            "dry_run": data.dry_run, "master_id": data.master_id,
+            "slaves_merged": len(data.slave_ids),
+            "lots_updated": 0, "invoices_updated": 0, "mutations_updated": 0,
+            "journal_entries_updated": 0, "fund_calls_updated": 0,
+            "bank_accounts_updated": 0, "slaves_deleted": 0,
+        }
+        for sid in data.slave_ids:
+            lots_c = await db.lots.count_documents({
+                "copropriete_id": data.copropriete_id,
+                "$or": [{"owner_id": sid}, {"owner_ids": sid}],
+            })
+            report["lots_updated"] += lots_c
+            if not data.dry_run and lots_c:
+                await db.lots.update_many(
+                    {"copropriete_id": data.copropriete_id, "owner_id": sid},
+                    {"$set": {"owner_id": data.master_id}})
+                await db.lots.update_many(
+                    {"copropriete_id": data.copropriete_id, "owner_ids": sid},
+                    {"$addToSet": {"owner_ids": data.master_id}})
+                await db.lots.update_many(
+                    {"copropriete_id": data.copropriete_id, "owner_ids": sid},
+                    {"$pull": {"owner_ids": sid}})
+            inv_c = await db.invoices.count_documents({
+                "copropriete_id": data.copropriete_id,
+                "$or": [{"private_fee_owner_id": sid}, {"owner_id": sid}]})
+            report["invoices_updated"] += inv_c
+            if not data.dry_run and inv_c:
+                await db.invoices.update_many(
+                    {"copropriete_id": data.copropriete_id, "private_fee_owner_id": sid},
+                    {"$set": {"private_fee_owner_id": data.master_id}})
+                await db.invoices.update_many(
+                    {"copropriete_id": data.copropriete_id, "owner_id": sid},
+                    {"$set": {"owner_id": data.master_id}})
+            mut_c = await db.mutations.count_documents({
+                "copropriete_id": data.copropriete_id,
+                "$or": [{"from_owner_id": sid}, {"to_owner_id": sid}]})
+            report["mutations_updated"] += mut_c
+            if not data.dry_run and mut_c:
+                await db.mutations.update_many(
+                    {"copropriete_id": data.copropriete_id, "from_owner_id": sid},
+                    {"$set": {"from_owner_id": data.master_id}})
+                await db.mutations.update_many(
+                    {"copropriete_id": data.copropriete_id, "to_owner_id": sid},
+                    {"$set": {"to_owner_id": data.master_id}})
+            je_c = await db.journal_entries.count_documents({
+                "copropriete_id": data.copropriete_id,
+                "lines.third_party_id": sid})
+            report["journal_entries_updated"] += je_c
+            if not data.dry_run and je_c:
+                await db.journal_entries.update_many(
+                    {"copropriete_id": data.copropriete_id,
+                     "lines.third_party_id": sid},
+                    {"$set": {"lines.$[l].third_party_id": data.master_id}},
+                    array_filters=[{"l.third_party_id": sid}])
+            fc_c = await db.fund_calls.count_documents({
+                "copropriete_id": data.copropriete_id,
+                "distribution.owner_id": sid})
+            report["fund_calls_updated"] += fc_c
+            if not data.dry_run and fc_c:
+                await db.fund_calls.update_many(
+                    {"copropriete_id": data.copropriete_id,
+                     "distribution.owner_id": sid},
+                    {"$set": {"distribution.$[e].owner_id": data.master_id}},
+                    array_filters=[{"e.owner_id": sid}])
+            ba_c = await db.owner_bank_accounts.count_documents({"owner_id": sid})
+            report["bank_accounts_updated"] += ba_c
+            if not data.dry_run and ba_c:
+                await db.owner_bank_accounts.update_many(
+                    {"owner_id": sid},
+                    {"$set": {"owner_id": data.master_id}})
+            if not data.dry_run:
+                await db.owners.delete_one({"id": sid})
+                report["slaves_deleted"] += 1
+        return report
+
     class GridfsMigrationInput(BaseModel):
         dry_run: bool = True
 
