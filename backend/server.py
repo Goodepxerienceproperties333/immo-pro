@@ -86,7 +86,58 @@ class BodySizeLimitMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
+class SafeResponseMiddleware(BaseHTTPMiddleware):
+    """iter90gy : filet de securite anti-Cloudflare 502.
+
+    Sans ce middleware, quand un endpoint crash silencieusement (asyncio
+    cancel, task group exception, shutdown en cours de requete, exception
+    non-catchee dans un middleware amont), Starlette leve `RuntimeError:
+    No response returned.` et **aucune reponse HTTP n'est envoyee au
+    client**. Cloudflare interprete ca comme une origine down et retourne
+    un 502 "The origin web server returned an invalid or incomplete
+    response".
+
+    On englobe donc `call_next` dans un try/except large : toute exception
+    non-attrapee en aval produit un 503 JSON propre (au lieu de rien).
+    L'exception reste loguee pour debug, mais le client recoit toujours
+    une reponse valide.
+    """
+    async def dispatch(self, request, call_next):
+        try:
+            return await call_next(request)
+        except RuntimeError as e:
+            # "No response returned" -> l'endpoint a plante sans repondre
+            if "No response returned" in str(e):
+                logging.getLogger(__name__).error(
+                    "iter90gy safe-net: endpoint %s %s a plante sans reponse",
+                    request.method, request.url.path,
+                )
+                return StarletteResponse(
+                    content='{"detail":"Service temporairement indisponible, veuillez reessayer."}',
+                    status_code=503,
+                    media_type="application/json",
+                )
+            raise
+        except Exception:
+            # Toute autre exception non-attrapee (asyncio.CancelledError,
+            # ExceptionGroup, etc.) - loguer + retourner 500 propre plutot
+            # que laisser Cloudflare voir un stream tronque.
+            logging.getLogger(__name__).exception(
+                "iter90gy safe-net: exception non-geree sur %s %s",
+                request.method, request.url.path,
+            )
+            return StarletteResponse(
+                content='{"detail":"Erreur interne du serveur"}',
+                status_code=500,
+                media_type="application/json",
+            )
+
+
 app.add_middleware(BodySizeLimitMiddleware)
+# iter90gy : le SafeResponseMiddleware DOIT etre ajoute EN DERNIER (donc
+# execute EN PREMIER dans la chaine) pour attraper toutes les exceptions
+# des autres middlewares en aval (auth, security, cors, body_size...).
+app.add_middleware(SafeResponseMiddleware)
 
 # CORS - cookie-based auth needs explicit origins (allow_credentials=True is
 # incompatible with allow_origins=["*"]). We honor CORS_ORIGINS if it lists

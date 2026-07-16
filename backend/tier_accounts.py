@@ -112,37 +112,49 @@ async def assign_owner_accounts(db, owner: dict, copro_id: Optional[str] = None)
         current_ids.append(target_copro)
         owner["copropriete_ids"] = current_ids
     accounts_map = owner.get("tier_accounts", {}) or {}
-    if target_copro in accounts_map:
-        return owner
+    existing = accounts_map.get(target_copro) or {}
+    # iter90gx : verrouille la creation MANQUANTE d'un compte (provisions ou
+    # reserve) meme si un mapping partiel existe deja pour cette ACP.
+    # Ancien bug : sur les owners issus d'imports legacy (Optipro), seul
+    # `provisions` etait renseigne -> tous les appels de fonds de reserve
+    # generaient un VE vide (return None) car `accs.get("reserve") is None`
+    # bloquait la boucle. Consequence : le journal Ventes ne contenait
+    # aucune ligne de fonds de reserve alors que le fund_call etait cree.
+    if existing.get("provisions") and existing.get("reserve"):
+        return owner  # already fully assigned - fast path
+    # Sinon on va creer les cles manquantes (idempotent)
 
-    # Generation des 2 comptes tiers dans le format PCMN standard
-    seq_prov = await _next_seq(db, target_copro, PROVISIONS_PREFIX)
-    prov_num = _format_seq(PROVISIONS_PREFIX, seq_prov, width=SEQ_WIDTH_NEW)
-    seq_res = await _next_seq(db, target_copro, RESERVE_PREFIX)
-    res_num = _format_seq(RESERVE_PREFIX, seq_res, width=SEQ_WIDTH_NEW)
-    # Nom du proprietaire pour libelle
     display_name = (
         owner.get("name")
         or f"{owner.get('last_name', '')} {owner.get('first_name', '')}".strip()
         or owner.get("last_name", "")
     ).strip()[:50] or f"Proprietaire {owner.get('id', '')[:8]}"
 
-    # Comptes maitres PCMN
+    # Comptes maitres PCMN (idempotent)
     await _ensure_account(db, target_copro, PROVISIONS_PREFIX,
                           "Acompte de fonds de roulement appele", 4, parent="410")
     await _ensure_account(db, target_copro, RESERVE_PREFIX,
                           "Acompte de fonds de reserve appele", 4, parent="410")
 
-    # Comptes auxiliaires du proprietaire
-    await _ensure_account(db, target_copro, prov_num,
-                          f"Acompte de fonds de roulement appele - {display_name}", 4,
-                          parent=PROVISIONS_PREFIX)
-    await _ensure_account(db, target_copro, res_num,
-                          f"Acompte de fonds de reserve appele - {display_name}", 4,
-                          parent=RESERVE_PREFIX)
+    # Provisions : ne cree que si absent
+    if not existing.get("provisions"):
+        seq_prov = await _next_seq(db, target_copro, PROVISIONS_PREFIX)
+        prov_num = _format_seq(PROVISIONS_PREFIX, seq_prov, width=SEQ_WIDTH_NEW)
+        await _ensure_account(db, target_copro, prov_num,
+                              f"Acompte de fonds de roulement appele - {display_name}", 4,
+                              parent=PROVISIONS_PREFIX)
+        existing["provisions"] = prov_num
 
-    # Cles internes conservees pour compat : provisions/reserve
-    accounts_map[target_copro] = {"provisions": prov_num, "reserve": res_num}
+    # Reserve : ne cree que si absent (cas critique du legacy Optipro)
+    if not existing.get("reserve"):
+        seq_res = await _next_seq(db, target_copro, RESERVE_PREFIX)
+        res_num = _format_seq(RESERVE_PREFIX, seq_res, width=SEQ_WIDTH_NEW)
+        await _ensure_account(db, target_copro, res_num,
+                              f"Acompte de fonds de reserve appele - {display_name}", 4,
+                              parent=RESERVE_PREFIX)
+        existing["reserve"] = res_num
+
+    accounts_map[target_copro] = existing
     await db.owners.update_one({"id": owner["id"]}, {"$set": {"tier_accounts": accounts_map}})
     owner["tier_accounts"] = accounts_map
     return owner
