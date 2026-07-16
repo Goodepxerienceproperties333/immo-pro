@@ -525,7 +525,7 @@ export default function JournalsPage() {
 
       {/* Create Dialog */}
       <Dialog open={dialogOpen} onOpenChange={(open) => { if (!open) setEditingEntry(null); setDialogOpen(open); }} hasUnsavedChanges={entryDirty}>
-        <DialogContent className="max-w-3xl" data-testid="entry-dialog">
+        <DialogContent className="max-w-6xl w-[min(96vw,1400px)] max-h-[90vh] overflow-y-auto" data-testid="entry-dialog">
           <DialogHeader><DialogTitle style={{fontFamily:'Chivo,sans-serif'}}>
             {editingEntry ? `Modifier ecriture ${editingEntry.reference || ''}` : 'Nouvelle ecriture comptable'}
             {editingEntry?.auto_generated && <Badge variant="outline" className="ml-2 text-[10px] bg-orange-50 border-orange-200 text-orange-700">Auto -&gt; sera marquee comme modifiee</Badge>}
@@ -545,13 +545,15 @@ export default function JournalsPage() {
 
             <div>
               <label className="form-label mb-2">Lignes d'ecriture</label>
-              <div className="border rounded-md overflow-hidden">
-                <table className="w-full text-sm">
+              <div className="border rounded-md overflow-x-auto">
+                <table className="w-full text-sm min-w-[900px]">
                   <thead><tr className="bg-slate-50 text-xs text-slate-600 uppercase">
-                    <th className="p-2 text-left">Compte</th><th className="p-2 text-left">Libelle</th>
-                    <th className="p-2 text-right">Debit</th><th className="p-2 text-right">Credit</th>
-                    <th className="p-2 text-right" title="Pourcentage occupant (decompte locataire)">%Occ.</th>
-                    <th className="p-2 text-right" title="Pourcentage proprietaire">%Prop.</th>
+                    <th className="p-2 text-left" style={{ minWidth: 260 }}>Compte</th>
+                    <th className="p-2 text-left">Libelle</th>
+                    <th className="p-2 text-right" style={{ minWidth: 110 }}>Debit</th>
+                    <th className="p-2 text-right" style={{ minWidth: 110 }}>Credit</th>
+                    <th className="p-2 text-right" style={{ minWidth: 80 }} title="Pourcentage occupant (decompte locataire)">%Occ.</th>
+                    <th className="p-2 text-right" style={{ minWidth: 80 }} title="Pourcentage proprietaire">%Prop.</th>
                     <th className="p-2 w-10"></th>
                   </tr></thead>
                   <tbody>
@@ -559,7 +561,7 @@ export default function JournalsPage() {
                       const isCharge = line.account_number && (line.account_number.startsWith('6') || line.account_number.startsWith('7'));
                       return (
                       <tr key={i} className="border-t border-slate-100">
-                        <td className="p-1 min-w-[280px]">
+                        <td className="p-1" style={{ minWidth: 260 }}>
                           <AccountSearchSelect
                             accounts={accounts}
                             value={line.account_number}
@@ -569,20 +571,20 @@ export default function JournalsPage() {
                           />
                         </td>
                         <td className="p-1 text-xs text-slate-500">{line.account_name}</td>
-                        <td className="p-1"><Input type="number" step="0.01" className="text-right text-sm h-8" value={line.debit} onChange={e => updateLine(i, 'debit', e.target.value)} /></td>
-                        <td className="p-1"><Input type="number" step="0.01" className="text-right text-sm h-8" value={line.credit} onChange={e => updateLine(i, 'credit', e.target.value)} /></td>
-                        <td className="p-1 w-20">
+                        <td className="p-1"><Input type="number" step="0.01" className="text-right text-sm h-8 font-mono w-full" value={line.debit} onChange={e => updateLine(i, 'debit', e.target.value)} /></td>
+                        <td className="p-1"><Input type="number" step="0.01" className="text-right text-sm h-8 font-mono w-full" value={line.credit} onChange={e => updateLine(i, 'credit', e.target.value)} /></td>
+                        <td className="p-1">
                           {isCharge ? (
-                            <Input type="number" min={0} max={100} step={1} className="text-right text-sm h-8 bg-amber-50/40"
+                            <Input type="number" min={0} max={100} step={1} className="text-right text-sm h-8 bg-amber-50/40 font-mono w-full"
                               value={line.occupant_pct ?? 0}
                               onChange={e => updateLine(i, 'occupant_pct', e.target.value)}
                               data-testid={`journal-line-${i}-occupant`}
                             />
                           ) : <span className="text-slate-300 text-xs">—</span>}
                         </td>
-                        <td className="p-1 w-20">
+                        <td className="p-1">
                           {isCharge ? (
-                            <Input type="number" min={0} max={100} step={1} className="text-right text-sm h-8 bg-blue-50/40"
+                            <Input type="number" min={0} max={100} step={1} className="text-right text-sm h-8 bg-blue-50/40 font-mono w-full"
                               value={line.proprietaire_pct ?? 100}
                               onChange={e => updateLine(i, 'proprietaire_pct', e.target.value)}
                               data-testid={`journal-line-${i}-proprio`}
