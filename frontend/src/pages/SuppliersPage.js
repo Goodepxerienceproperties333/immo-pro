@@ -12,7 +12,7 @@ export default function SuppliersPage() {
   const [search, setSearch] = useState('');
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState(null);
-  const [form, setForm] = useState({ name:'', vat_number:'', address:'', postal_code:'', city:'', country:'Belgique', phone:'', email:'', iban:'', bic:'', default_account:'', notes:'' });
+  const [form, setForm] = useState({ name:'', vat_number:'', bce_number:'', address:'', postal_code:'', city:'', country:'Belgique', phone:'', email:'', iban:'', bic:'', default_account:'', notes:'' });
   // iter85g : dialog de confirmation homonymes
   const [similarDialog, setSimilarDialog] = useState(null); // {similar: [...], pendingForm}
 
@@ -23,8 +23,8 @@ export default function SuppliersPage() {
   useEffect(() => { load(); }, [load]);
 
   const filtered = suppliers;
-  const openCreate = () => { setEditing(null); setForm({ name:'', vat_number:'', address:'', postal_code:'', city:'', country:'Belgique', phone:'', email:'', iban:'', bic:'', default_account:'', notes:'' }); setDialogOpen(true); };
-  const openEdit = (s) => { setEditing(s); setForm({ name:s.name, vat_number:s.vat_number||'', address:s.address||'', postal_code:s.postal_code||'', city:s.city||'', country:s.country||'Belgique', phone:s.phone||'', email:s.email||'', iban:s.iban||'', bic:s.bic||'', default_account:s.default_account||'', notes:s.notes||'' }); setDialogOpen(true); };
+  const openCreate = () => { setEditing(null); setForm({ name:'', vat_number:'', bce_number:'', address:'', postal_code:'', city:'', country:'Belgique', phone:'', email:'', iban:'', bic:'', default_account:'', notes:'' }); setDialogOpen(true); };
+  const openEdit = (s) => { setEditing(s); setForm({ name:s.name, vat_number:s.vat_number||'', bce_number:s.bce_number||'', address:s.address||'', postal_code:s.postal_code||'', city:s.city||'', country:s.country||'Belgique', phone:s.phone||'', email:s.email||'', iban:s.iban||'', bic:s.bic||'', default_account:s.default_account||'', notes:s.notes||'' }); setDialogOpen(true); };
 
   const performCreate = async (formToUse, forceDespiteSimilar = false) => {
     try {
@@ -131,7 +131,13 @@ export default function SuppliersPage() {
           <div className="space-y-4 mt-2">
             <div className="grid grid-cols-2 gap-4">
               <div><label className="form-label">Nom *</label><Input value={form.name} onChange={e => setForm({...form, name: e.target.value})} data-testid="supplier-name" /></div>
-              <div><label className="form-label">N TVA</label><Input value={form.vat_number} onChange={e => setForm({...form, vat_number: e.target.value})} placeholder="BE0123.456.789" /></div>
+              <div><label className="form-label">N BCE *</label><Input value={form.bce_number} onChange={e => setForm({...form, bce_number: e.target.value})} placeholder="BE0123456789" data-testid="supplier-bce" required /></div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div><label className="form-label">N TVA (si different du BCE)</label><Input value={form.vat_number} onChange={e => setForm({...form, vat_number: e.target.value})} placeholder="BE0123.456.789" data-testid="supplier-vat" /></div>
+              <div className="text-xs text-slate-500 pt-6">
+                <a href="https://kbopub.economie.fgov.be/" target="_blank" rel="noreferrer" className="underline text-blue-600">Verifier le BCE en ligne</a>
+              </div>
             </div>
             <div><label className="form-label">Adresse</label><Input value={form.address} onChange={e => setForm({...form, address: e.target.value})} /></div>
             <div className="grid grid-cols-3 gap-4">

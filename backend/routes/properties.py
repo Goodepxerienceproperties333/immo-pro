@@ -346,15 +346,23 @@ def create_properties_router(db):
         address: str, postal_code: str, city: str,
         copro_id: str = "", exclude_id: Optional[str] = None,
     ) -> Optional[dict]:
-        """Detecte un doublon de proprietaire sur 5 criteres (l'un suffit) :
-        1. Nom + prenom normalises (mots tries alphabetiquement)
-        2. Email (champ email OU email2) normalise
-        3. Telephone normalise (alphanumerique)
-        4. BCE normalise
-        5. Adresse complete normalisee (adresse + cp + ville)
+        """Detecte un doublon de proprietaire. iter90gk : distingue les
+        doublons STRICTS (email/telephone/BCE = bloquants) des HOMONYMES
+        (nom seul = confirmation par le syndic).
+
+        Regle metier utilisateur : "si un homonyme apparait un check est fait
+        sur les coordonnees du proprietaire (email + telephone). Si l'email
+        existe ou le telephone existe -> reuse existant. Sinon -> syndic peut
+        creer un nouveau proprietaire".
+
+        Retourne :
+          {"owner": doc, "field": "email|phone|bce_number", "value": ...,
+           "is_strict": True}  -> reuse OBLIGATOIRE (identifiant unique matche)
+          {"owner": doc, "field": "name|address", "value": ...,
+           "is_strict": False} -> homonyme, syndic peut choisir
+          None -> pas de doublon
 
         Scope : limite a copro_id si fourni (chinese wall), sinon global.
-        Retourne {"owner": doc, "field": "name|email|phone|bce|address", "value": ...}.
         """
         norm_name = _norm_owner_name(first_name, last_name, name)
         norm_email = (email or "").strip().lower()
@@ -370,27 +378,30 @@ def create_properties_router(db):
         if exclude_id:
             base_query["id"] = {"$ne": exclude_id}
         candidates = await db.owners.find(base_query, {"_id": 0}).to_list(5000)
+        # 1er passage : cherche un doublon STRICT (email/telephone/BCE)
         for o in candidates:
             if norm_email:
                 e1 = (o.get("email") or "").strip().lower()
                 e2 = (o.get("email2") or "").strip().lower()
                 if e1 == norm_email or e2 == norm_email:
-                    return {"owner": o, "field": "email", "value": email}
+                    return {"owner": o, "field": "email", "value": email, "is_strict": True}
             if norm_phone:
                 p1 = _norm_alphanum(o.get("phone", ""))
                 p2 = _norm_alphanum(o.get("phone2", ""))
                 if p1 == norm_phone or p2 == norm_phone:
-                    return {"owner": o, "field": "phone", "value": phone}
+                    return {"owner": o, "field": "phone", "value": phone, "is_strict": True}
             if norm_bce and _norm_alphanum(o.get("bce_number", "")) == norm_bce:
-                return {"owner": o, "field": "bce_number", "value": bce_number}
+                return {"owner": o, "field": "bce_number", "value": bce_number, "is_strict": True}
+        # 2e passage : cherche un homonyme (nom / adresse) - non bloquant
+        for o in candidates:
             if norm_name:
                 o_name = _norm_owner_name(o.get("first_name", ""), o.get("last_name", ""), o.get("name", ""))
                 if o_name and o_name == norm_name:
-                    return {"owner": o, "field": "name", "value": f"{first_name} {last_name}".strip() or name}
+                    return {"owner": o, "field": "name", "value": f"{first_name} {last_name}".strip() or name, "is_strict": False}
             if norm_addr:
                 o_addr = _norm_address(o.get("address", ""), o.get("postal_code", ""), o.get("city", ""))
                 if o_addr and o_addr == norm_addr:
-                    return {"owner": o, "field": "address", "value": f"{address}, {postal_code} {city}".strip()}
+                    return {"owner": o, "field": "address", "value": f"{address}, {postal_code} {city}".strip(), "is_strict": False}
         return None
 
     @router.get("/owners")
@@ -469,7 +480,7 @@ def create_properties_router(db):
         return owners
 
     @router.post("/owners")
-    async def create_owner(data: OwnerInput, reuse_on_duplicate: bool = False):
+    async def create_owner(data: OwnerInput, reuse_on_duplicate: bool = False, force_create_despite_homonym: bool = False):
         """Cree un proprietaire.
 
         iter90gi : `reuse_on_duplicate=true` -> si l'anti-doublon detecte un
@@ -477,6 +488,12 @@ def create_properties_router(db):
         (statut 200) au lieu de lever une 409. Indispensable pour les wizards
         d'import CSV/PDF Optipro qui doivent etre idempotents (re-lancer le
         meme import ne doit PAS bloquer : les doublons sont reutilises).
+
+        iter90gk : `force_create_despite_homonym=true` -> autorise la creation
+        d'un homonyme (meme nom mais email/telephone DIFFERENTS). Sans ce
+        flag, un homonyme est bloque (409) et l'UI doit demander confirmation
+        au syndic. Un doublon STRICT (meme email/telephone/BCE) reste bloque
+        meme avec ce flag.
         """
         from server import generate_vcs
         # Check anti-doublon avant creation
@@ -491,6 +508,7 @@ def create_properties_router(db):
         )
         if dup:
             existing = dup["owner"]
+            is_strict = dup.get("is_strict", True)
             # iter90gi : mode reuse -> retourne l'owner existant + rattache
             # eventuellement a l'ACP demandee (pour que les imports repetes
             # soient idempotents).
@@ -503,20 +521,39 @@ def create_properties_router(db):
                     await assign_owner_accounts(db, existing, data.copropriete_id)
                     existing = await db.owners.find_one({"id": existing["id"]}, {"_id": 0}) or existing
                 return {**{k: v for k, v in existing.items() if k != "_id"}, "_reused": True, "_dup_field": dup.get("field", "")}
-            field_label = {
-                "name": "nom + prenom",
-                "email": "email",
-                "phone": "telephone",
-                "bce_number": "numero BCE",
-                "address": "adresse postale",
-            }.get(dup["field"], dup["field"])
-            existing_name = existing.get("name") or f"{existing.get('first_name','')} {existing.get('last_name','')}".strip()
-            raise HTTPException(
-                409,
-                f"Doublon detecte : un proprietaire avec le meme {field_label} existe deja "
-                f"({existing_name} - id {existing.get('id','')[:8]}). "
-                f"Utilisez le proprietaire existant plutot que d'en creer un nouveau.",
-            )
+            # iter90gk : les HOMONYMES (name/address, is_strict=False) peuvent
+            # etre outrepasses par le syndic apres confirmation UI. Les
+            # doublons STRICTS (email/phone/BCE) restent bloquants.
+            if not is_strict and force_create_despite_homonym:
+                pass  # continue vers creation
+            else:
+                field_label = {
+                    "name": "nom + prenom",
+                    "email": "email",
+                    "phone": "telephone",
+                    "bce_number": "numero BCE",
+                    "address": "adresse postale",
+                }.get(dup["field"], dup["field"])
+                existing_name = existing.get("name") or f"{existing.get('first_name','')} {existing.get('last_name','')}".strip()
+                if is_strict:
+                    # Doublon strict : bloquant, sans possibilite de bypass
+                    raise HTTPException(
+                        409,
+                        f"Doublon STRICT detecte : un proprietaire avec le meme {field_label} existe deja "
+                        f"({existing_name} - id {existing.get('id','')[:8]}). "
+                        f"Utilisez le proprietaire existant plutot que d'en creer un nouveau. "
+                        f"Regle metier : email/telephone/BCE identifient unique un proprietaire.",
+                    )
+                else:
+                    # Homonyme : peut etre outrepasse via force_create_despite_homonym=true
+                    raise HTTPException(
+                        409,
+                        f"Homonyme detecte : un proprietaire avec le meme {field_label} existe deja "
+                        f"({existing_name} - id {existing.get('id','')[:8]}). "
+                        f"Verifiez son email/telephone : si differents, il s'agit d'une autre "
+                        f"personne -> repassez avec force_create_despite_homonym=true. Sinon, "
+                        f"utilisez le proprietaire existant.",
+                    )
         # If a VCS code is provided (e.g. from an Optipro import), reuse it
         # to preserve the legacy reference. Otherwise auto-generate one.
         vcs_code = (data.vcs_code or "").strip()

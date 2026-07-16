@@ -606,7 +606,17 @@ async def compute_bilan_data(db, copropriete_id: str, date_to: Optional[str] = N
     q = _apply_copro({}, copropriete_id)
     if date_to:
         q["date"] = {"$lte": date_to}
-    q["journal_type"] = {"$ne": "AN"}
+    # iter90gk : exclure les AN de CLOTURE (duplicats cumulatifs de N-1)
+    # mais INCLURE les AN d'OUVERTURE (wizard) marquees `is_opening_balance=True`.
+    # Sans cette inclusion, un ACP frais importe via le wizard perd ses
+    # ouvertures : dettes fournisseurs 1132.92 (AG) + 639.69 (SRL Finlead)
+    # non visibles au Bilan alors que la Balance des Tiers les affichait
+    # (bug rapporte par l'utilisateur : "le bilan est different de la
+    # situation de compte, ce n'est pas normal").
+    q["$or"] = [
+        {"journal_type": {"$ne": "AN"}},
+        {"journal_type": "AN", "is_opening_balance": True},
+    ]
     # SECURISATION : toujours exclure les ecritures EXTOURNEES (reversed=True)
     # et leurs CONTRE-PASSATIONS (is_reversal=True). Ces paires s'annulent au bilan
     # mais leur presence introduit du bruit + des doublons quand la cloture a ete

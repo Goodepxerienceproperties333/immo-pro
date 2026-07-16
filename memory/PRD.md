@@ -6,6 +6,99 @@ scinder au prochain grand chantier en `PRD.md` (statique) / `CHANGELOG.md`
 session par prudence (risque de perte d'info sur un fichier de 9400+
 lignes sans relecture complete).
 
+### Iter90gk / iter90gl / iter90gm (Feb 2026) - Bilan vs Balance des Tiers - regle stricte anti-doublon
+
+**Ticket utilisateur** (multiple messages) :
+> "le bilan ne correspond pas a la balance des tiers ce n'est pas normal !"
+> "le bilan est different de la situation de compte, ce n'est pas normal !
+>  La situation de compte est correcte dans ce bug."
+> "verrouille toute creation de doublons sur base du BCE et oblige le BCE
+>  dans la fiche fournisseur et son nom"
+> "De maniere generale il est interdit de dupliquer les comptes, c'est
+>  quelque chose qui est vraiment bloquant au niveau comptable"
+> "au niveau des proprietaires il faut faire un check sur le nom et adresse
+>  email plus numero de telephone. Si un homonyme apparait un check est fait
+>  sur les coordonnees. Si l'email/telephone n'existe pas -> creer nouveau,
+>  sinon utiliser l'existant"
+
+**Root cause identifie** :
+1. Le wizard Optipro `commit_invoices` derivait le compte tier fournisseur
+   depuis l'aux_code Optipro (`"4400" + aux[1:].zfill(3)`) au lieu d'utiliser
+   le tier canonique de la fiche fournisseur.
+2. Aucun `third_party_id` n'etait pose sur la ligne credit du compte tier.
+3. Le wizard `commit_opening_balance` (AN) creait des lignes sur des comptes
+   6-char (551331) alors que le module banking utilisait des 8-char
+   canoniques (55133100). Meme cas pour les fournisseurs (44001115 vs 44000006).
+4. Le Bilan (agrege par acc.startswith("440")) voyait tous les comptes,
+   la Balance des Tiers (agrege par acc.startswith("44000") + tpid) ratait
+   les orphelins -> 2 lignes fournisseur (une actif, une passif) pour le
+   meme fournisseur.
+5. Les factures negatives (Notes de Credit) etaient skipees (garde
+   `total_amount > 0`) -> aucune ecriture AC creee -> le remboursement
+   bancaire ulterieur creait un solde fictif "a payer".
+
+**Fixes iter90gk** :
+- `import_wizard.py::commit_invoices` : utilise `supplier_doc.tier_accounts[copro_id].main`
+  comme sup_pcmn. Fallback matching par nom (`_norm_name_candidates`) si aux_code
+  ne matche pas. `assign_supplier_account` auto-invoque si fiche sans tier.
+  Pose `third_party_id`/`third_party_type` sur la ligne credit du compte tier.
+- `import_wizard.py::commit_opening_balance` : ajout du matching par NOM en
+  fallback quand aux_code echoue. Reecriture du numero de compte vers le
+  tier canonique de la fiche. Flag `is_opening_balance=True` sur l'AN.
+- `routes/reports.py::compute_bilan_data` : inclut les AN avec
+  `is_opening_balance=True` (au lieu de tout exclure). Sans ce fix, un
+  ACP frais sans historique perdait ses ouvertures.
+- `routes/suppliers.py::find_duplicate_supplier` : premier passage GLOBAL
+  cross-ACP sur BCE/TVA/IBAN. Un BCE identifie univoquement une entreprise.
+- `routes/suppliers.py::create/update_supplier` : BCE OBLIGATOIRE en creation
+  ET en update (message explicite avec lien kbopub.economie.fgov.be).
+- `frontend/SuppliersPage.js` : ajout champ BCE requis (data-testid="supplier-bce")
+  et lien de verification BCE en ligne.
+- `server.py startup` : index MongoDB UNIQUE sur `pcmn_accounts (copropriete_id, number)`
+  + index UNIQUE sparse sur `suppliers.bce_number` (regle metier "pas de doublons").
+
+**Fixes iter90gl - Notes de Credit** :
+- `import_wizard.py::commit_invoices` : detection `is_credit_note` via
+  `total_amount < 0`, inversion des signes debit/credit :
+  DEBIT compte tier / CREDIT compte de charge (au lieu de l'inverse
+  pour une facture normale).
+- Migration `iter90gl_heal_credit_notes.py` : heal des NC existantes sans
+  ecriture. Applied on ACP Maria : NC Engie FA-2026-0005 (-57.03) creee.
+
+**Fixes iter90gm - Comptes bancaires** :
+- `import_wizard.py::commit_opening_balance` : helper `_canonize_bank_account`
+  qui remonte les comptes 6-char (551331) vers le canonique 8-char (55133100)
+  si celui-ci existe deja en PCMN.
+- Migration `iter90gm_merge_bank_accounts.py` : fusion des paires de comptes
+  bancaires dupliquees. Applied on ACP Maria : 551331 -> 55133100,
+  550732 -> 55073200. Nom canonique preserve avec IBAN.
+
+**Fixes iter90gk - Owners strict vs homonyme** :
+- `routes/properties.py::find_duplicate_owner` : refactoré pour distinguer
+  doublons STRICTS (email/telephone/BCE = bloquants) des HOMONYMES (nom
+  seul = confirmation). Retourne `is_strict` dans le resultat.
+- `routes/properties.py::create_owner` : nouveau flag `force_create_despite_homonym`
+  qui permet au syndic de creer un homonyme apres avoir confirme UI. Un
+  doublon STRICT reste bloquant meme avec ce flag.
+
+**Migrations executees sur ACP Maria** :
+1. `iter90gk_cleanup_orphan_tiers.py --apply` : 36 lignes reassignees
+   (5 comptes tier orphelins fusionnes vers canoniques)
+2. `iter90gl_heal_credit_notes.py --apply` : 1 NC creee (Engie -57.03)
+3. `iter90gm_merge_bank_accounts.py --apply` : 78 lignes migrees
+   (2 paires de comptes bancaires fusionnees)
+
+**Verification finale ACP Maria** :
+- Bilan Actif=Passif=14351.48 EUR (equilibre) ✓
+- Situation compte Engie : Total debit=171.03, credit=171.03, solde=0 ✓
+- Balance Tiers = Bilan (parfait match pour AG/Baloise/Engie/Euromex/Finlead/Sneyers)
+
+**Tests iter90gk** : `tests/test_iter90gk_bilan_balance_tiers_reconciliation.py`
+- 10 tests, tous passent. Verrouille : canonical tier, tpid, is_opening_balance,
+  fallback name matching, BCE required, credit note signs, bank canonize,
+  owner strict/homonym split, supplier BCE global uniqueness.
+
+
 ### Iter90gb (Feb 2026) - Endpoint diagnostic journal_entries + Iter90gc (Feb 2026) - Regeneration OD MUT-R legacy
 
 **Ticket utilisateur** :

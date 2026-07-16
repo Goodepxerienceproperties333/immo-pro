@@ -929,6 +929,25 @@ async def startup():
         await db.fund_calls.create_index("copropriete_id")
     except Exception as _e:
         print(f"[startup] copropriete_id indexes skipped: {_e}")
+    # iter90gk : UNICITE STRICTE des comptes PCMN par ACP (couple copro+number).
+    # Sans cet index, le meme numero de compte pouvait etre insere plusieurs
+    # fois pour la meme ACP par des code paths differents (wizard AN, module
+    # banking, assign_supplier_account, etc.) -> doublons dans le Bilan +
+    # divergence avec la Balance des Tiers. Regle metier utilisateur : "il
+    # est interdit de dupliquer les comptes, c'est bloquant en comptabilite".
+    try:
+        await db.pcmn_accounts.create_index(
+            [("copropriete_id", 1), ("number", 1)], unique=True, name="uq_pcmn_copro_number"
+        )
+    except Exception as _e:
+        print(f"[startup] pcmn_accounts unique index skipped: {_e}")
+    # iter90gk : UNICITE GLOBALE du BCE fournisseur. Empeche 2 fiches
+    # fournisseur ayant le meme BCE (identifiant unique d'entreprise). Sparse
+    # pour tolerer les fiches historiques sans BCE (a migrer manuellement).
+    try:
+        await db.suppliers.create_index("bce_number", unique=True, sparse=True, name="uq_supplier_bce")
+    except Exception as _e:
+        print(f"[startup] suppliers.bce_number unique index skipped: {_e}")
     # iter87 : TTL index on invoice_bundle_sessions for auto-cleanup of bundle
     # PDF sessions after 24h (uses `expires_at` ISODate field set on creation).
     try:

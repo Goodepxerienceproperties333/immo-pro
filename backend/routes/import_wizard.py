@@ -823,6 +823,38 @@ def create_import_wizard_router(db):
 
                 supplier_aux = (inv.get("supplier_aux_code") or "").upper().strip()
                 supplier_doc = sup_by_aux.get(supplier_aux) if supplier_aux else None
+                # iter90gk : fallback matching par nom si aux_code absent/inconnu.
+                # Certaines factures Optipro n'ont pas d'aux_code ou l'aux_code
+                # ne matche pas la fiche existante -> matcher par nom pour eviter
+                # de creer des lignes AC orphelines (sans tpid) sur un compte
+                # tier calcule "4400" + aux[1:] different du tier de la fiche.
+                if not supplier_doc:
+                    from routes.suppliers import _norm_name_candidates
+                    inv_name = (inv.get("supplier_name") or "").strip()
+                    if inv_name:
+                        inv_cands = _norm_name_candidates(inv_name)
+                        for aux_key, s_doc in sup_by_aux.items():
+                            other_cands = _norm_name_candidates(s_doc.get("name", ""))
+                            if inv_cands & other_cands:
+                                supplier_doc = s_doc
+                                break
+                        # Elargir : chercher parmi TOUS les fournisseurs de l'ACP
+                        # (pas seulement ceux avec aux_code).
+                        if not supplier_doc:
+                            async for cand in db.suppliers.find(
+                                {"copropriete_id": copro_id}, {"_id": 0}
+                            ):
+                                other_cands = _norm_name_candidates(cand.get("name", ""))
+                                if inv_cands & other_cands:
+                                    supplier_doc = cand
+                                    break
+                # iter90gk : s'assurer que la fiche fournisseur a un tier_account
+                # dans cette ACP AVANT de creer l'ecriture AC (evite la creation
+                # d'un compte tier oriente Optipro qui ne correspond pas au
+                # compte tier canonique de la fiche).
+                if supplier_doc:
+                    from tier_accounts import assign_supplier_account
+                    supplier_doc = await assign_supplier_account(db, supplier_doc, copro_id)
                 supplier_id = supplier_doc["id"] if supplier_doc else None
                 if supplier_id:
                     matched_supplier += 1
@@ -875,6 +907,18 @@ def create_import_wizard_router(db):
 
                 total_amount = float(inv.get("montant_tvac") or 0)
                 vat_amount = float(inv.get("montant_tva") or 0)
+                # iter90gl : detection note de credit (facture negative).
+                # Optipro exporte les NC avec un montant TVAC negatif. Sans
+                # ce traitement, l'ecriture AC etait skipee (garde total_amount>0)
+                # -> la NC n'apparaissait pas au compte tier fournisseur et le
+                # remboursement bancaire creait un solde fictif a payer (cas
+                # Engie -57.03 EUR rapporte par l'utilisateur : "tu n'as
+                # comptabilise que le remboursement du fournisseur").
+                # Sens comptable NC : DEBIT compte tier (reduit dette) /
+                # CREDIT compte de charge (reduit la charge deja passee).
+                is_credit_note = total_amount < 0
+                total_amount_abs = abs(total_amount)
+                vat_amount = abs(vat_amount) if is_credit_note else vat_amount
                 occ_pct = float(inv.get("part_occupant") or 0)
                 prop_pct = float(inv.get("part_proprietaire") or 0)
                 if occ_pct == 0 and prop_pct == 0:
@@ -887,15 +931,47 @@ def create_import_wizard_router(db):
                 invoice_id = str(uuid.uuid4())
 
                 # Compute supplier PCMN sub-account for the journal entry
+                # iter90gk : PRIORITE STRICTE au compte tier declare dans la
+                # fiche fournisseur (via assign_supplier_account). Le calcul
+                # historique "4400" + aux[1:] etait la CAUSE des lignes AC
+                # orphelines (compte 44001115 pour Sneyers alors que la fiche
+                # a 44000006, compte 44000216 pour Baloise alors que fiche a
+                # 44000005) qui apparaissaient dans le Bilan mais pas dans la
+                # Balance des Tiers -> Bilan desequilibre.
                 sup_pcmn = ""
-                if supplier_aux.startswith("F") and len(supplier_aux) >= 5:
+                if supplier_doc:
+                    sup_pcmn = ((supplier_doc.get("tier_accounts") or {}).get(copro_id, {}) or {}).get("main", "")
+                if not sup_pcmn and supplier_aux.startswith("F") and len(supplier_aux) >= 5:
+                    # Fallback historique (aucune fiche fournisseur trouvee) : on
+                    # derive un compte tier depuis l'aux Optipro. Cette branche
+                    # ne devrait plus etre atteinte grace au matching par nom
+                    # ajoute plus haut, mais on la garde pour ne pas casser les
+                    # imports historiques ou les CSV sans mapping fiche.
                     sup_pcmn = "4400" + supplier_aux[1:].zfill(3)
                 supplier_label = (inv.get("supplier_name") or supplier_aux).strip()
 
                 # ---- Create journal entry (Achats - AC) ----
+                # iter90gl : gere aussi les Notes de Credit (NC / avoir) qui
+                # ont un montant negatif. Pour une NC : inverse les signes
+                # debit/credit (DEBIT compte tier fournisseur, CREDIT compte
+                # de charge) pour reduire correctement les soldes.
                 je_id = ""
-                if account_num and sup_pcmn and total_amount > 0:
+                if account_num and sup_pcmn and total_amount_abs > 0:
                     je_id = str(uuid.uuid4())
+                    if is_credit_note:
+                        # NC : DEBIT compte tier / CREDIT charge (inverse d'une facture)
+                        expense_debit = 0.0
+                        expense_credit = total_amount_abs
+                        supplier_debit = total_amount_abs
+                        supplier_credit = 0.0
+                        desc_prefix = "NC"
+                    else:
+                        # Facture normale : DEBIT charge / CREDIT compte tier
+                        expense_debit = total_amount_abs
+                        expense_credit = 0.0
+                        supplier_debit = 0.0
+                        supplier_credit = total_amount_abs
+                        desc_prefix = "DA"
                     je_doc = {
                         "id": je_id,
                         "journal_type": "AC",
@@ -906,8 +982,8 @@ def create_import_wizard_router(db):
                             {
                                 "account_number": account_num,
                                 "account_name": (inv.get("account_label") or "").strip(),
-                                "debit": total_amount,
-                                "credit": 0.0,
+                                "debit": expense_debit,
+                                "credit": expense_credit,
                                 "description": (inv.get("libelle") or "").strip(),
                                 "occupant_pct": occ_pct,
                                 "proprietaire_pct": prop_pct,
@@ -915,18 +991,27 @@ def create_import_wizard_router(db):
                             {
                                 "account_number": sup_pcmn,
                                 "account_name": supplier_label,
-                                "debit": 0.0,
-                                "credit": total_amount,
-                                "description": f"DA {internal_ref}",
+                                # iter90gk : lie explicitement la ligne compte tier
+                                # a la fiche fournisseur pour que la Balance des
+                                # Tiers et le Bilan agregent correctement (evite
+                                # les lignes orphelines qui apparaissaient sur
+                                # les 2 cotes du bilan pour le meme fournisseur).
+                                "third_party_id": supplier_id or None,
+                                "third_party_type": "supplier" if supplier_id else None,
+                                "debit": supplier_debit,
+                                "credit": supplier_credit,
+                                "description": f"{desc_prefix} {internal_ref}",
                                 "occupant_pct": None,
                                 "proprietaire_pct": None,
                             },
                         ],
-                        "total_debit": total_amount,
-                        "total_credit": total_amount,
+                        "total_debit": total_amount_abs,
+                        "total_credit": total_amount_abs,
                         "copropriete_id": copro_id,
                         "import_session_id": session_id,
                         "source_invoice_id": invoice_id,
+                        # iter90gl : trace explicite du type d'ecriture
+                        "is_credit_note": is_credit_note,
                         "created_at": _now_iso(),
                     }
                     await db.journal_entries.insert_one(je_doc)
@@ -943,6 +1028,9 @@ def create_import_wizard_router(db):
                     "description": (inv.get("libelle") or "").strip(),
                     "total_amount": total_amount,
                     "vat_amount": vat_amount,
+                    # iter90gl : marque explicite pour la UI (Balance des Tiers,
+                    # Journaux, Situation de compte fournisseur).
+                    "is_credit_note": is_credit_note,
                     "account_number": account_num,
                     "expense_category_id": expense_cat_id,
                     "distribution_key_id": dist_key_id,
@@ -1411,29 +1499,78 @@ def create_import_wizard_router(db):
             if aux:
                 suppliers_by_aux[aux] = sup
 
-        def _resolve_third_party(account_number: str) -> tuple:
-            """Returns (third_party_id, third_party_type, party_doc) or (None, None, None)."""
+        # iter90gm : indexe les comptes PCMN 55XXXX (bancaires) deja existants
+        # pour re-utiliser le canonique 8-char si l'AN veut creer un 6-char
+        # equivalent. Sans ce mapping, le Bilan affiche 2 lignes bancaires
+        # dupliquees (une du wizard, une du module bank_txn).
+        existing_bank_accs: set = set()
+        async for pa in db.pcmn_accounts.find(
+            {"copropriete_id": copro_id, "number": {"$regex": "^55[0-9]"}},
+            {"_id": 0, "number": 1},
+        ):
+            existing_bank_accs.add(pa["number"])
+
+        def _canonize_bank_account(acc: str) -> str:
+            """iter90gm : si acc est un 6-char bancaire (551331) et qu'un
+            canonique 8-char existe (55133100), retourne le canonique.
+            Sinon retourne acc inchange."""
+            if len(acc) == 6 and acc.startswith("55"):
+                cand = acc + "00"
+                if cand in existing_bank_accs:
+                    return cand
+            return acc
+
+        # iter90gk : indexe TOUS les suppliers de l'ACP (pas seulement ceux
+        # avec aux_code) pour permettre le matching par nom en fallback
+        # quand le compte tier orphelin ne matche aucun aux_code.
+        all_suppliers_acp: list[dict] = []
+        async for sup in db.suppliers.find({"copropriete_id": copro_id}, {"_id": 0, "id": 1, "name": 1, "auxiliary_code": 1, "tier_accounts": 1}):
+            all_suppliers_acp.append(sup)
+
+        def _resolve_third_party(account_number: str, label: str = "") -> tuple:
+            """Returns (third_party_id, third_party_type, party_doc, canonical_account) or (None, None, None, None).
+
+            iter90gk : ajout du matching par NOM (label) en fallback quand
+            l'aux_code ne matche aucune fiche. Retourne aussi le compte tier
+            canonique de la fiche fournisseur pour REECRIRE le numero de
+            compte de la ligne AN (evite les orphelins 44001115 / 44000216
+            qui doublonnent avec le tier canonique 44000005 dans le bilan).
+            """
             acc = (account_number or "").strip()
             if not acc:
-                return None, None, None
+                return None, None, None, None
             # 410xxxx or 4001xxxx -> owner (4 digits after prefix)
             if acc.startswith("410") and len(acc) >= 7:
                 aux = "C" + acc[-4:]
                 o = owners_by_aux.get(aux)
                 if o:
-                    return o["id"], "owner", o
+                    return o["id"], "owner", o, None
             if acc.startswith("4001") and len(acc) >= 8:
                 aux = "C" + acc[-4:]
                 o = owners_by_aux.get(aux)
                 if o:
-                    return o["id"], "owner", o
-            # 440xxxx -> supplier
-            if acc.startswith("440") and len(acc) >= 7:
+                    return o["id"], "owner", o, None
+            # 440xxxx -> supplier (aux match first, then name match)
+            if acc.startswith("440") and len(acc) >= 5:
                 aux = "F" + acc[-4:]
                 sup = suppliers_by_aux.get(aux)
                 if sup:
-                    return sup["id"], "supplier", sup
-            return None, None, None
+                    canonical = ((sup.get("tier_accounts") or {}).get(copro_id, {}) or {}).get("main", "")
+                    return sup["id"], "supplier", sup, canonical or None
+                # iter90gk : fallback name matching (Levenshtein-lite via
+                # _norm_name_candidates). Evite les orphelins pour les
+                # bilans d'ouverture ou l'Optipro utilise un numero de
+                # compte different de celui declare dans la fiche.
+                if label:
+                    from routes.suppliers import _norm_name_candidates
+                    lbl_cands = _norm_name_candidates(label)
+                    if lbl_cands:
+                        for cand in all_suppliers_acp:
+                            other_cands = _norm_name_candidates(cand.get("name", ""))
+                            if lbl_cands & other_cands:
+                                canonical = ((cand.get("tier_accounts") or {}).get(copro_id, {}) or {}).get("main", "")
+                                return cand["id"], "supplier", cand, canonical or None
+            return None, None, None, None
 
         # Build the journal entry lines + collect tier_accounts updates
         lines = []
@@ -1447,14 +1584,30 @@ def create_import_wizard_router(db):
                 continue
             is_actif = a in actif
             acc_num = (a.get("account") or "").strip()
-            tp_id, tp_type, party = _resolve_third_party(acc_num)
+            # iter90gm : canonize les comptes bancaires (55XXXX -> 55XXXX00) si
+            # un compte 8-char equivalent existe deja (evite les doublons dans
+            # le Bilan entre comptes AN et comptes operations bancaires).
+            acc_num = _canonize_bank_account(acc_num)
+            label = (a.get("label") or "").strip()
+            tp_id, tp_type, party, canonical_acc = _resolve_third_party(acc_num, label=label)
+            # iter90gk : si le matching par NOM a trouve une fiche fournisseur
+            # ET qu'elle a un compte tier canonique different, on reecrit le
+            # numero de compte pour eviter les orphelins (44001115 -> 44000006).
+            # La description conserve la trace du compte source Optipro pour
+            # audit.
+            source_acc = acc_num
+            if canonical_acc and canonical_acc != acc_num and tp_type == "supplier":
+                acc_num = canonical_acc
             line = {
                 "account_number": acc_num,
-                "account_name": (a.get("label") or "").strip(),
+                "account_name": label,
                 "debit": amt if is_actif else 0.0,
                 "credit": 0.0 if is_actif else amt,
-                "description": f"A-Nouveau : {(a.get('label') or '').strip()}",
-                "line_description": f"A-Nouveau {acc_num}" + (f" - {party.get('name','')}" if party else ""),
+                "description": f"A-Nouveau : {label}",
+                "line_description": (
+                    f"A-Nouveau {source_acc}" + (f" -> {acc_num}" if acc_num != source_acc else "")
+                    + (f" - {party.get('name','')}" if party else "")
+                ),
                 "occupant_pct": None,
                 "proprietaire_pct": None,
             }
@@ -1502,6 +1655,11 @@ def create_import_wizard_router(db):
             "total_credit": total_passif,
             "copropriete_id": copro_id,
             "import_session_id": session_id,
+            # iter90gk : marque cette AN comme "ouverture wizard" (pas une AN
+            # de cloture d'exercice). Le Bilan doit INCLURE ces AN-la
+            # (contrairement aux AN de cloture qui sont des duplicats
+            # cumulatifs de l'exercice N-1).
+            "is_opening_balance": True,
             "created_at": _now_iso(),
         })
 

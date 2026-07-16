@@ -143,6 +143,29 @@ async def find_duplicate_supplier(
     if not (name_candidates or norm_bce or norm_vat or norm_iban):
         return None
 
+    # iter90gk : verifie D'ABORD la duplication BCE/TVA/IBAN au niveau GLOBAL
+    # (sans scope ACP). Le BCE identifie univoquement une entreprise -> deux
+    # ACPs ne peuvent PAS creer 2 fiches distinctes pour la meme societe.
+    # Regle strictement demandee par l'utilisateur (message de production
+    # apres avoir detecte 5 doublons de comptes tier).
+    if norm_bce or norm_vat or norm_iban:
+        global_candidates = await db.suppliers.find({}, {"_id": 0}).to_list(20000)
+        for s in global_candidates:
+            if exclude_id and s.get("id") == exclude_id:
+                continue
+            if norm_bce:
+                if _norm_id(s.get("bce_number", "")) == norm_bce:
+                    return {"supplier": s, "field": "bce_number", "value": s.get("bce_number", "")}
+                if _norm_id(s.get("vat_number", "")) == norm_bce:
+                    return {"supplier": s, "field": "vat_number", "value": s.get("vat_number", "")}
+            if norm_vat:
+                if _norm_id(s.get("vat_number", "")) == norm_vat:
+                    return {"supplier": s, "field": "vat_number", "value": s.get("vat_number", "")}
+                if _norm_id(s.get("bce_number", "")) == norm_vat:
+                    return {"supplier": s, "field": "bce_number", "value": s.get("bce_number", "")}
+            if norm_iban and _norm_id(s.get("iban", "")) == norm_iban:
+                return {"supplier": s, "field": "iban", "value": s.get("iban", "")}
+
     # Construit la projection scope ACP
     base_query: dict = {}
     if copro_id:
@@ -327,6 +350,22 @@ def create_suppliers_router(db):
                 raise HTTPException(400, "Un fournisseur doit etre rattache a une copropriete (chinese wall + RGPD)")
             if copro_id not in (allowed_copros or []):
                 raise HTTPException(403, "Vous ne pouvez attribuer ce fournisseur qu'a une de vos ACPs")
+        # iter90gk : nom + BCE OBLIGATOIRES (regle utilisateur : verrouiller
+        # toute creation de fournisseur sans BCE pour eviter les doublons
+        # comme observes en production : Sneyers/Baloise/Euromex/Finlead
+        # sur 5 comptes tier orphelins differents pour les memes societes).
+        name = (data.name or "").strip()
+        bce = _norm_id(data.bce_number or "")
+        vat = _norm_id(data.vat_number or "")
+        if not name:
+            raise HTTPException(400, "Le nom du fournisseur est obligatoire.")
+        if not (bce or vat):
+            raise HTTPException(
+                400,
+                "Le numero BCE (ou TVA equivalent) est obligatoire pour creer un fournisseur. "
+                "Format attendu : BE0123456789 - identifiant unique de l'entreprise sur "
+                "https://kbopub.economie.fgov.be/",
+            )
         # Check anti-doublon : BCE/TVA, nom et IBAN normalises (scope ACP)
         dup = await find_duplicate_supplier(
             db,
@@ -395,6 +434,23 @@ def create_suppliers_router(db):
         # Empeche un syndic de "transferer" un fournisseur vers une ACP qui n'est pas la sienne
         if not is_super and copro_id and copro_id not in (allowed_copros or []):
             raise HTTPException(403, "Vous ne pouvez attribuer ce fournisseur qu'a une de vos ACPs")
+        # iter90gk : verrou BCE obligatoire aussi en mise a jour. Si le
+        # fournisseur existait deja sans BCE (fiches legacy issues du wizard
+        # PDF Optipro qui n'incluait pas le BCE), la mise a jour DOIT
+        # renseigner le BCE. Message d'erreur explicite pour guider le
+        # syndic.
+        name = (data.name or "").strip()
+        bce = _norm_id(data.bce_number or "")
+        vat = _norm_id(data.vat_number or "")
+        if not name:
+            raise HTTPException(400, "Le nom du fournisseur est obligatoire.")
+        if not (bce or vat):
+            raise HTTPException(
+                400,
+                "Le numero BCE (ou TVA equivalent) est obligatoire. "
+                "Renseignez-le pour finaliser la fiche fournisseur - "
+                "https://kbopub.economie.fgov.be/",
+            )
         # Check anti-doublon : exclure le fournisseur en cours d'edition
         dup = await find_duplicate_supplier(
             db,
