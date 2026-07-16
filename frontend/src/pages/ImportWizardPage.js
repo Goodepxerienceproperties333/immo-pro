@@ -15,7 +15,7 @@
  *
  * Rollback complet possible via le bouton "Annuler l'import" (DELETE session).
  */
-import { useState, useEffect, Fragment } from 'react';
+import { useState, useEffect, useMemo, Fragment } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import api from '@/lib/api';
 import { useAuth } from '@/contexts/AuthContext';
@@ -302,6 +302,16 @@ export default function ImportWizardPage() {
         r = await api.post(`/import-wizard/sessions/${session.id}/commit-distribution-keys`, { keys: keysParsed });
         toast.success(`${r.data.inserted} cle(s) de repartition creees`);
       } else if (step.key === 'invoices') {
+        // iter90gj : bloque le commit si des factures n'ont pas de compte
+        // comptable (verrou PCMN iter90g9). Le PDF tabulaire "Factures
+        // fournisseurs" ne fournit pas les comptes -> le syndic doit les
+        // saisir dans la preview.
+        const missing = (invoicesParsed || []).filter(i => !(i.account_number || '').trim()).length;
+        if (missing > 0) {
+          toast.error(`${missing} facture(s) sans compte comptable. Saisissez-les dans la colonne "Cpte" avant de valider.`);
+          setCommitting(false);
+          return;
+        }
         r = await api.post(`/import-wizard/sessions/${session.id}/commit-invoices`, { invoices: invoicesParsed });
         const m = r.data;
         toast.success(
@@ -1234,6 +1244,18 @@ function OdJournalPreview({ odData, setOdData }) {
 
 // ============== Format B : Liste des depenses (legacy) ==============
 function OdExpenseListPreview({ odData, setOdData }) {
+  // iter90gj : charge le PCMN complet de l'ACP courante pour permettre
+  // au syndic de choisir n'importe quel compte comptable en contrepartie
+  // (pas juste les 11 comptes hardcodes).
+  const [pcmnAccounts, setPcmnAccounts] = useState([]);
+  useEffect(() => {
+    let alive = true;
+    api.get('/accounting/pcmn').then(r => {
+      if (alive) setPcmnAccounts(r.data || []);
+    }).catch(() => { /* silent : fallback sur shortlist */ });
+    return () => { alive = false; };
+  }, []);
+
   const upd = (idx, field, value) => {
     const next = odData.entries.map((e, i) => i === idx ? { ...e, [field]: value } : e);
     setOdData({ ...odData, entries: next });
@@ -1241,21 +1263,34 @@ function OdExpenseListPreview({ odData, setOdData }) {
   const del = (idx) => {
     setOdData({ ...odData, entries: odData.entries.filter((_, i) => i !== idx) });
   };
-  // Common Belgian PCMN counterpart accounts for OD
-  const counterpartChoices = [
-    { value: '', label: '-- Choisir --' },
-    { value: '490|Charges a reporter', label: '490 - Charges a reporter' },
-    { value: '491|Produits a reporter', label: '491 - Produits a reporter' },
-    { value: '444|Factures a recevoir', label: '444 - Factures a recevoir (FAR)' },
-    { value: '417|Creances douteuses', label: '417 - Creances douteuses (AGS)' },
-    { value: '410|Coproprietaires', label: '410 - Coproprietaires (imputation)' },
-    { value: '494|Provisions sinistres', label: '494 - Provisions sinistres' },
-    { value: '494001|SIN 202200724 INONDATION', label: '494001 - SIN 202200724 INONDATION' },
-    { value: '499|Provisions diverses', label: '499 - Provisions diverses' },
-    { value: '499603|Sinistre garage - Pompe de relevage', label: '499603 - Sinistre garage - Pompe de relevage' },
-    { value: '4990|Provisions sinistres diverses', label: '4990 - Provisions sinistres diverses' },
-    { value: '4991|Arrondis crediteurs', label: '4991 - Arrondis crediteurs' },
+  // Shortlist des comptes de contrepartie OD frequents (mis en avant).
+  const SHORTLIST = [
+    { number: '490', name: 'Charges a reporter' },
+    { number: '491', name: 'Produits a reporter' },
+    { number: '444', name: 'Factures a recevoir (FAR)' },
+    { number: '417', name: 'Creances douteuses (AGS)' },
+    { number: '410', name: 'Coproprietaires (imputation)' },
+    { number: '494', name: 'Provisions sinistres' },
+    { number: '499', name: 'Provisions diverses' },
+    { number: '4991', name: 'Arrondis crediteurs' },
   ];
+  // Union : shortlist en tete + PCMN complet dedup par number
+  const counterpartChoices = useMemo(() => {
+    const seen = new Set();
+    const merged = [];
+    // shortlist first (only if the account exists in the loaded PCMN, else keep as suggestion)
+    SHORTLIST.forEach(s => {
+      const inPcmn = pcmnAccounts.find(a => (a.number || '').toString() === s.number);
+      const item = inPcmn ? { number: inPcmn.number, name: inPcmn.name || s.name } : s;
+      if (!seen.has(item.number)) { seen.add(item.number); merged.push(item); }
+    });
+    // Then all PCMN accounts sorted by number
+    pcmnAccounts.forEach(a => {
+      const num = (a.number || '').toString();
+      if (!seen.has(num)) { seen.add(num); merged.push({ number: num, name: a.name || '' }); }
+    });
+    return merged;
+  }, [pcmnAccounts]);
 
   const missing = odData.entries.filter(e => !(e.counterpart_account || '').trim()).length;
   const sumPositive = odData.entries.filter(e => e.amount > 0).reduce((s, e) => s + e.amount, 0);
@@ -1310,7 +1345,6 @@ function OdExpenseListPreview({ odData, setOdData }) {
           <tbody>
             {odData.entries.map((e, i) => {
               const hasCounter = !!(e.counterpart_account || '').trim();
-              const cpVal = e.counterpart_account ? `${e.counterpart_account}|${e.counterpart_account_name || ''}` : '';
               const libelle = e.libelle || '';
               return (
                 <tr key={i} className={`border-t border-slate-100 ${!hasCounter ? 'bg-red-50' : ''}`} data-testid={`od-row-${i}`}>
@@ -1322,24 +1356,29 @@ function OdExpenseListPreview({ odData, setOdData }) {
                   </td>
                   <td className={`px-2 py-0.5 text-right font-mono ${e.amount < 0 ? 'text-red-700' : 'text-slate-800'}`}>{(Number(e.amount) || 0).toFixed(2)}</td>
                   <td className="px-2 py-0.5">
-                    <select
-                      value={cpVal}
+                    <input
+                      type="text"
+                      list={`od-cp-list-${i}`}
+                      value={e.counterpart_account ? `${e.counterpart_account} - ${e.counterpart_account_name || ''}` : ''}
                       onChange={ev => {
-                        const [acc, name] = (ev.target.value || '|').split('|');
-                        upd(i, 'counterpart_account', acc);
-                        upd(i, 'counterpart_account_name', name || '');
+                        const raw = ev.target.value || '';
+                        // Formats acceptes : "490", "490 - Charges a reporter"
+                        const numMatch = raw.match(/^(\d{3,7})/);
+                        const num = numMatch ? numMatch[1] : raw.trim();
+                        const found = counterpartChoices.find(c => c.number === num);
+                        upd(i, 'counterpart_account', num);
+                        upd(i, 'counterpart_account_name', found?.name || raw.split(' - ').slice(1).join(' - ').trim() || '');
                       }}
+                      onFocus={ev => ev.target.select()}
+                      placeholder="Tapez un n° ou libelle..."
                       className={`w-full text-[10px] border ${hasCounter ? 'border-slate-200' : 'border-red-300 bg-red-50'} rounded px-1 py-0.5`}
                       data-testid={`od-counterpart-${i}`}
-                    >
-                      {counterpartChoices.map(opt => (
-                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                    />
+                    <datalist id={`od-cp-list-${i}`}>
+                      {counterpartChoices.slice(0, 500).map(c => (
+                        <option key={c.number} value={`${c.number} - ${c.name}`} />
                       ))}
-                      {/* If suggested isn't in standard list, keep it as custom */}
-                      {e.counterpart_account && !counterpartChoices.find(c => c.value.startsWith(e.counterpart_account + '|')) && (
-                        <option value={cpVal}>{e.counterpart_account} - {e.counterpart_account_name}</option>
-                      )}
-                    </select>
+                    </datalist>
                   </td>
                   <td className="px-1 py-0.5 text-center">
                     {confidenceBadge(e.suggested_counterpart?.confidence)}
@@ -1370,27 +1409,86 @@ function OdExpenseListPreview({ odData, setOdData }) {
 
 // ============== INVOICES PREVIEW (Step G - Factures Optipro) ==============
 function InvoicesPreview({ invoices, setInvoices }) {
+  // iter90gj : charge le PCMN de l'ACP pour autocomplete des comptes.
+  // Les PDF "Factures fournisseurs" tabulaires ne contiennent PAS de compte
+  // comptable : le syndic doit le saisir manuellement dans la preview.
+  const [pcmnAccounts, setPcmnAccounts] = useState([]);
+  useEffect(() => {
+    let alive = true;
+    api.get('/accounting/pcmn').then(r => {
+      if (alive) setPcmnAccounts(r.data || []);
+    }).catch(() => { /* silent */ });
+    return () => { alive = false; };
+  }, []);
+  const [bulkAccount, setBulkAccount] = useState('');
+
   if (!invoices?.length) {
     return (
       <div className="text-center py-6 text-amber-600 text-sm">
-        <AlertTriangle size={24} className="inline mr-1" /> Aucune facture extraite du CSV.
+        <AlertTriangle size={24} className="inline mr-1" /> Aucune facture extraite.
       </div>
     );
   }
   const totalHT = invoices.reduce((a, i) => a + (parseFloat(i.montant_ht) || 0), 0);
   const totalTVAC = invoices.reduce((a, i) => a + (parseFloat(i.montant_tvac) || 0), 0);
   const uniqueSuppliers = [...new Set(invoices.map(i => i.supplier_aux_code).filter(Boolean))];
+  const missingAccounts = invoices.filter(i => !(i.account_number || '').trim()).length;
   const upd = (idx, field, value) => {
     const next = invoices.map((i, j) => j === idx ? { ...i, [field]: value } : i);
     setInvoices(next);
   };
   const del = (idx) => setInvoices(invoices.filter((_, j) => j !== idx));
+  const applyBulkAccount = () => {
+    if (!bulkAccount.trim()) return;
+    const numMatch = bulkAccount.match(/^(\d{3,7})/);
+    const num = numMatch ? numMatch[1] : bulkAccount.trim();
+    const found = pcmnAccounts.find(a => (a.number || '').toString() === num);
+    const label = found?.name || '';
+    setInvoices(invoices.map(i => i.account_number ? i : { ...i, account_number: num, account_label: label }));
+    setBulkAccount('');
+  };
   return (
     <div className="space-y-3">
       <div className="bg-blue-50 border border-blue-200 rounded p-3 text-xs text-blue-900 flex justify-between flex-wrap gap-2">
         <span><strong>{invoices.length} facture(s)</strong> detectee(s) - {uniqueSuppliers.length} fournisseur(s) distinct(s)</span>
         <span className="font-mono">HT : {totalHT.toFixed(2)} EUR | TVAC : <strong>{totalTVAC.toFixed(2)} EUR</strong></span>
       </div>
+      {/* iter90gj : bandeau bloquant si des factures n'ont pas de compte */}
+      {missingAccounts > 0 && (
+        <div className="border-2 border-red-400 bg-red-50 rounded p-3" data-testid="invoices-missing-account-banner">
+          <div className="flex items-start gap-2">
+            <AlertTriangle size={18} className="text-red-600 flex-shrink-0 mt-0.5" />
+            <div className="flex-1 text-xs text-red-900">
+              <div className="font-bold">{missingAccounts} facture(s) sans compte comptable</div>
+              <div className="mt-1">
+                Le PDF <em>&laquo;Factures fournisseurs&raquo;</em> n&apos;inclut pas les comptes comptables.
+                Vous devez les saisir dans la colonne <strong>Cpte</strong> avant de valider (autocomplete via
+                le PCMN de l&apos;ACP).
+              </div>
+              <div className="mt-2 flex items-center gap-2">
+                <span className="font-semibold">Appliquer un compte a toutes les factures sans compte :</span>
+                <input
+                  type="text"
+                  list="bulk-account-list"
+                  value={bulkAccount}
+                  onChange={e => setBulkAccount(e.target.value)}
+                  placeholder="Ex : 61000"
+                  className="border border-red-300 rounded px-2 py-1 font-mono w-40"
+                  data-testid="bulk-account-input"
+                />
+                <datalist id="bulk-account-list">
+                  {pcmnAccounts.slice(0, 500).map(a => (
+                    <option key={a.number} value={`${a.number} - ${a.name || ''}`} />
+                  ))}
+                </datalist>
+                <Button size="sm" onClick={applyBulkAccount} disabled={!bulkAccount.trim()} className="bg-red-600 hover:bg-red-700 text-white" data-testid="bulk-account-apply">
+                  Appliquer
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="text-[11px] text-amber-700 bg-amber-50 border border-amber-100 rounded p-2">
         <AlertTriangle size={11} className="inline mr-1" /> Les factures seront auto-rattachees aux fournisseurs (via code <span className="font-mono">F0XXX</span>),
         aux cles de repartition et aux natures de depense importes precedemment.
@@ -1400,9 +1498,9 @@ function InvoicesPreview({ invoices, setInvoices }) {
           <thead className="bg-slate-50 sticky top-0">
             <tr>
               <th className="px-1 py-1 text-left w-20">Date</th>
-              <th className="px-1 py-1 text-left w-24">N° ext.</th>
+              <th className="px-1 py-1 text-left w-24">N&deg; ext.</th>
               <th className="px-1 py-1 text-left">Fournisseur</th>
-              <th className="px-1 py-1 text-left w-16">Cpte</th>
+              <th className="px-1 py-1 text-left w-32">Cpte</th>
               <th className="px-1 py-1 text-left w-12">Cle</th>
               <th className="px-1 py-1 text-left w-12">Nat.</th>
               <th className="px-1 py-1 text-left">Libelle</th>
@@ -1413,8 +1511,10 @@ function InvoicesPreview({ invoices, setInvoices }) {
             </tr>
           </thead>
           <tbody>
-            {invoices.map((i, idx) => (
-              <tr key={idx} className="border-t border-slate-100" data-testid={`inv-row-${idx}`}>
+            {invoices.map((i, idx) => {
+              const missing = !(i.account_number || '').trim();
+              return (
+              <tr key={idx} className={`border-t border-slate-100 ${missing ? 'bg-red-50/50' : ''}`} data-testid={`inv-row-${idx}`}>
                 <td className="px-1 py-0.5"><input value={i.date} onChange={e => upd(idx, 'date', e.target.value)} className="w-20 border-0 bg-transparent font-mono text-[10px]" /></td>
                 <td className="px-1 py-0.5"><input value={i.external_ref} onChange={e => upd(idx, 'external_ref', e.target.value)} className="w-24 border-0 bg-transparent font-mono text-[10px]" /></td>
                 <td className="px-1 py-0.5">
@@ -1423,7 +1523,28 @@ function InvoicesPreview({ invoices, setInvoices }) {
                     <input value={i.supplier_name} onChange={e => upd(idx, 'supplier_name', e.target.value)} className="flex-1 border-0 bg-transparent text-[11px]" />
                   </div>
                 </td>
-                <td className="px-1 py-0.5"><input value={i.account_number} onChange={e => upd(idx, 'account_number', e.target.value)} className="w-16 border-0 bg-transparent font-mono text-[10px]" /></td>
+                <td className="px-1 py-0.5">
+                  <input
+                    list={`pcmn-inv-${idx}`}
+                    value={i.account_number}
+                    onChange={e => {
+                      const raw = e.target.value || '';
+                      const m = raw.match(/^(\d{3,7})/);
+                      const num = m ? m[1] : raw.trim();
+                      const found = pcmnAccounts.find(a => (a.number || '').toString() === num);
+                      upd(idx, 'account_number', num);
+                      if (found) upd(idx, 'account_label', found.name || '');
+                    }}
+                    placeholder="Compte..."
+                    className={`w-32 border ${missing ? 'border-red-400 bg-red-50' : 'border-slate-200'} rounded px-1 py-0.5 font-mono text-[10px]`}
+                    data-testid={`inv-account-${idx}`}
+                  />
+                  <datalist id={`pcmn-inv-${idx}`}>
+                    {pcmnAccounts.slice(0, 500).map(a => (
+                      <option key={a.number} value={`${a.number} - ${a.name || ''}`} />
+                    ))}
+                  </datalist>
+                </td>
                 <td className="px-1 py-0.5"><input value={i.dist_key_code} onChange={e => upd(idx, 'dist_key_code', e.target.value)} className="w-12 border-0 bg-transparent font-mono text-[10px]" /></td>
                 <td className="px-1 py-0.5"><input value={i.nature_code} onChange={e => upd(idx, 'nature_code', e.target.value)} className="w-12 border-0 bg-transparent font-mono text-[10px]" /></td>
                 <td className="px-1 py-0.5"><input value={i.libelle} onChange={e => upd(idx, 'libelle', e.target.value)} className="w-full border-0 bg-transparent" /></td>
@@ -1432,7 +1553,8 @@ function InvoicesPreview({ invoices, setInvoices }) {
                 <td className="px-1 py-0.5 text-center"><input value={i.vat_code} onChange={e => upd(idx, 'vat_code', e.target.value)} className="w-8 border-0 bg-transparent text-center font-mono text-[10px]" /></td>
                 <td className="px-0 py-0.5"><button onClick={() => del(idx)} className="text-red-500 hover:text-red-700" data-testid={`inv-del-${idx}`}><X size={11} /></button></td>
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
       </div>
