@@ -942,10 +942,15 @@ async def startup():
     except Exception as _e:
         print(f"[startup] pcmn_accounts unique index skipped: {_e}")
     # iter90gk : UNICITE GLOBALE du BCE fournisseur. Empeche 2 fiches
-    # fournisseur ayant le meme BCE (identifiant unique d'entreprise). Sparse
-    # pour tolerer les fiches historiques sans BCE (a migrer manuellement).
+    # fournisseur ayant le meme BCE (identifiant unique d'entreprise).
+    # `partialFilterExpression` ignore les documents ayant bce_number="" (les
+    # fiches legacy sans BCE - a migrer manuellement). `sparse` ne suffit pas
+    # car il n'ignore que les champs absents, pas les strings vides.
     try:
-        await db.suppliers.create_index("bce_number", unique=True, sparse=True, name="uq_supplier_bce")
+        await db.suppliers.create_index(
+            "bce_number", unique=True, name="uq_supplier_bce",
+            partialFilterExpression={"bce_number": {"$type": "string", "$gt": ""}},
+        )
     except Exception as _e:
         print(f"[startup] suppliers.bce_number unique index skipped: {_e}")
     # iter87 : TTL index on invoice_bundle_sessions for auto-cleanup of bundle
