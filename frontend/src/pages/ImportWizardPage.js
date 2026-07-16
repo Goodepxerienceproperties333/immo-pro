@@ -313,12 +313,47 @@ export default function ImportWizardPage() {
         }
         r = await api.post(`/import-wizard/sessions/${session.id}/commit-invoices`, { invoices: invoicesParsed });
         const m = r.data;
-        toast.success(
+        const errs = m.errors || [];
+        const summaryStr =
           `${m.inserted} facture(s) validee(s)${m.grouped ? ` (${m.grouped} lignes de detail regroupees)` : ''} + ${m.journal_entries || 0} ecriture(s) AC creee(s)` +
           (m.pcmn_created ? ` - ${m.pcmn_created} compte(s) PCMN auto-ajoutes` : '') +
           ` - ${m.matched_supplier} avec fournisseur, ${m.matched_key} avec cle, ${m.matched_category} avec nature` +
-          (m.private_fees_detected ? ` - ${m.private_fees_detected} FRAIS PRIVATIF(S) 643 detecte(s) : assignez les proprietaires en fin de wizard` : '')
-        );
+          (m.private_fees_detected ? ` - ${m.private_fees_detected} FRAIS PRIVATIF(S) 643 detecte(s) : assignez les proprietaires en fin de wizard` : '');
+        // iter90gq : afficher les erreurs backend (Periode fermee, PCMN manquant, etc.)
+        // Sans ce feedback l'utilisateur voyait "0 validee(s)" en toast SUCCESS
+        // et croyait avoir importe alors que tout etait rejete.
+        if (errs.length > 0) {
+          // Regroupe par nature d'erreur pour ne pas noyer l'utilisateur.
+          const closedPeriodDates = new Set();
+          const otherErrs = [];
+          for (const e of errs) {
+            const msg = e.error || '';
+            const m2 = msg.match(/date du (\d{2}\/\d{2}\/\d{4})/);
+            if (msg.includes('Periode fermee') && m2) {
+              closedPeriodDates.add(m2[1]);
+            } else {
+              otherErrs.push(e);
+            }
+          }
+          if (m.inserted === 0) {
+            toast.error(`${errs.length} facture(s) REJETEE(S) - aucune facture importee. ${summaryStr}`, { duration: 8000 });
+          } else {
+            toast.warning(`${summaryStr} - ${errs.length} facture(s) rejetee(s)`, { duration: 6000 });
+          }
+          if (closedPeriodDates.size > 0) {
+            const sortedDates = Array.from(closedPeriodDates).sort();
+            const first = sortedDates[0];
+            const last = sortedDates[sortedDates.length - 1];
+            toast.error(
+              `Exercice fiscal manquant pour ${sortedDates.length} date(s) (${first}${sortedDates.length > 1 ? ` -> ${last}` : ''}). ` +
+              `Creez l'exercice correspondant dans Comptabilite > Exercices fiscaux, puis rejouez l'import.`,
+              { duration: 12000 }
+            );
+          }
+          otherErrs.slice(0, 3).forEach(e => toast.error(`Ligne ${e.row}: ${e.error}`, { duration: 8000 }));
+        } else {
+          toast.success(summaryStr);
+        }
       } else if (step.key === 'journals') {
         // iter90gp : idem que invoices - traite avant la branche `csv` generique.
         r = await api.post(`/import-wizard/sessions/${session.id}/commit-journals`, { transactions: journalsParsed });
