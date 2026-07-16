@@ -3081,9 +3081,15 @@ def create_reports_router(db):
             # facture de ce fournisseur (matching par nom normalise).
             if entry is not None and matching_invoice_ids:
                 if (entry.get("source_invoice_id") or "") in matching_invoice_ids:
-                    # Filtre : ne prendre que la ligne credit (compte tier)
-                    # pour eviter d'inclure la ligne debit charges.
-                    if float(ln.get("credit", 0) or 0) > 0:
+                    # iter90gs : ne prendre QUE la ligne compte tier fournisseur
+                    # (44XXXX PCMN). Ancien filtre `credit > 0` remontait par
+                    # erreur la ligne de charge (61000) pour une NC ecrite en
+                    # DEBIT compte tier / CREDIT charge -> creait 2 lignes
+                    # inversees et cassait la situation de compte (bug
+                    # utilisateur du 16/07 : NC visible au CREDIT au lieu du
+                    # DEBIT). Filtrer par prefixe 44 garantit qu'on prend le
+                    # bon cote de l'ecriture, quel que soit le sens.
+                    if acc.startswith("44"):
                         return True
             return False
 
@@ -3153,18 +3159,16 @@ def create_reports_router(db):
                         an_account = pln.get("account_number", "")
 
         # (b) Ecritures AN dans la periode
-        for e in entries:
-            if (e.get("journal_type") or "") != "AN":
-                continue
-            for idx, ln in enumerate(e.get("lines", []) or []):
-                if not _line_matches(ln, e):
-                    continue
-                an_debit += float(ln.get("debit", 0) or 0)
-                an_credit += float(ln.get("credit", 0) or 0)
-                if not an_account:
-                    an_account = ln.get("account_number", "")
-                # iter90cx : dedup par (entry_id, line_index)
-                seen.add((e.get("id"), idx))
+        # iter90gt : les AN dans la periode courante NE SONT PLUS agregees en
+        # "REPRISE". Regle utilisateur : "le journal A-Nouveau est immuable et
+        # DOIT apparaitre dans les balances". La ligne "Reprise" masquait
+        # l'origine reelle du solde d'ouverture. On les traite maintenant
+        # comme n'importe quel autre mouvement (avec sa date, sa reference
+        # AN-YYYY-XXX, son libelle). Seul le cumul PRE-start_date (a) reste
+        # agrege en REPRISE (car par definition on ne veut pas afficher toutes
+        # les ecritures des exercices anterieurs).
+        # NB : le calcul `an_debit/an_credit` du bloc precedent (avant
+        # start_date) est conserve tel quel pour la ligne "REPRISE" historique.
         if abs(an_debit - an_credit) > 0.001:
             reprise_date = start_date or ""
             movements.append({
