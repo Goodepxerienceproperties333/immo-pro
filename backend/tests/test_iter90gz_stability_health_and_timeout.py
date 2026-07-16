@@ -108,3 +108,27 @@ def test_iter90gz_health_ready_returns_json_content_type():
     r = requests.get(f"{BASE_URL}/api/health/ready", timeout=10)
     ct = r.headers.get("content-type", "").lower()
     assert ct.startswith("application/json"), ct
+
+
+def test_iter90gz_expenses_page_guards_against_missing_copro():
+    """ExpensesPage.load() doit avoir une garde `if (!selectedCopro)` avant de
+    faire l'appel a /fiscal/expenses, sinon le backend retourne 400 et le
+    front declenche un 'Uncaught runtime error' (overlay dev react-scripts).
+    """
+    with open("/app/frontend/src/pages/ExpensesPage.js") as f:
+        content = f.read()
+    # Doit contenir la garde anti-400
+    assert "!selectedCopro" in content, "ExpensesPage.load doit garder selectedCopro"
+    assert "selectedCopro === 'all'" in content, "ExpensesPage.load doit exclure 'all'"
+    # Doit avoir un catch (pas seulement finally)
+    load_snippet = content.split("const load = useCallback")[1].split("useEffect(() => { load(); }")[0]
+    assert "catch" in load_snippet, "ExpensesPage.load doit avoir un catch (swallow -> toast)"
+
+
+def test_iter90gz_global_unhandled_rejection_handler_wired():
+    """App.js doit avoir un handler `window.addEventListener('unhandledrejection',...)`
+    qui suppress l'overlay dev pour les erreurs Axios non-catch."""
+    with open("/app/frontend/src/App.js") as f:
+        content = f.read()
+    assert "unhandledrejection" in content, "Handler unhandledrejection manquant"
+    assert "event.preventDefault()" in content, "Le handler doit preventDefault sur Axios"

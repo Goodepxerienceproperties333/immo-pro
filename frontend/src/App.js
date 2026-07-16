@@ -148,6 +148,25 @@ function App() {
     return () => document.removeEventListener("wheel", handler);
   }, []);
 
+  // iter90gz : catch-all pour les Promise Rejections non-gerees.
+  // Empeche que des erreurs async (Axios sans .catch) ne declenchent
+  // l'overlay dev de react-scripts. En prod build ces erreurs restent
+  // silencieuses mais on les loggue en console pour observabilite.
+  useEffect(() => {
+    const onUnhandled = (event) => {
+      const reason = event?.reason;
+      // Axios errors : deja logue par l'intercepteur, on suppress juste l'overlay
+      const isAxios = reason && (reason.isAxiosError || reason?.response);
+      console.error("[iter90gz unhandledrejection]", reason);
+      if (isAxios) {
+        // Empeche react-scripts d'afficher son overlay rouge
+        event.preventDefault();
+      }
+    };
+    window.addEventListener("unhandledrejection", onUnhandled);
+    return () => window.removeEventListener("unhandledrejection", onUnhandled);
+  }, []);
+
   return (
     <BrowserRouter>
       <ErrorBoundary>

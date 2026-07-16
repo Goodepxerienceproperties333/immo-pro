@@ -62,14 +62,31 @@ export default function ExpensesPage() {
   }, [viewMode]);
 
   const load = useCallback(async () => {
+    // iter90gz : garde anti-400. Le backend exige copropriete_id sinon 400
+    // (chinese walls strict). Ne pas lancer d'appel tant qu'aucune ACP
+    // n'est selectionnee (evite un "Uncaught runtime error" au premier
+    // mount / apres logout).
+    if (!selectedCopro || selectedCopro === 'all') {
+      setData(null);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     try {
       const params = {};
       Object.entries(filters).forEach(([k, v]) => { if (v) params[k] = v; });
       const { data } = await api.get('/fiscal/expenses', { params });
       setData(data);
+    } catch (e) {
+      // iter90gz : swallow + toast plutot que laisser remonter en "Uncaught"
+      // (qui declencherait l'overlay dev de react-scripts).
+      const msg = e?.response?.data?.detail || e?.message || 'Erreur inconnue';
+      if (e?.response?.status !== 400) {
+        toast.error('Erreur chargement des depenses : ' + msg);
+      }
+      setData(null);
     } finally { setLoading(false); }
-  }, [filters]);
+  }, [filters, selectedCopro]);
 
   useEffect(() => { load(); }, [load]);
 

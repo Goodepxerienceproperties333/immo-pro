@@ -27,6 +27,10 @@ export default function AdminRoleTemplatesPage() {
       ]);
       setCatalog(c.data);
       setTemplates(t.data);
+    } catch (e) {
+      // iter90gz : swallow -> toast plutot que "Uncaught runtime error"
+      const msg = e?.response?.data?.detail || e?.message || 'Erreur inconnue';
+      toast.error('Chargement impossible : ' + msg);
     } finally { setLoading(false); }
   };
 
