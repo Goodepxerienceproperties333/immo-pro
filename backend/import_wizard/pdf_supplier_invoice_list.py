@@ -177,12 +177,101 @@ def _cleanup_ref(s: str) -> str:
     return s
 
 
+def _parse_tabular_format(raw: bytes) -> List[Dict]:
+    """iter90gj : parser pour le format TABULAIRE (nouveau PDF Optipro
+    "Factures fournisseurs" simple, sans lignes d'allocation par compte).
+
+    Colonnes attendues : DATE FACTURE | DATE ECHEANCE | REFERENCE INTERNE |
+    REFERENCE EXTERNE | FOURNISSEUR | LIBELLE | MONTANT HT | MONTANT TVAC
+
+    Retourne 1 facture par ligne, sans `allocations` (celles-ci sont dans
+    un autre PDF "Liste des depenses").
+    """
+    import unicodedata
+
+    def _normalize(s: str) -> str:
+        """Remove accents and uppercase for header matching."""
+        if not s:
+            return ""
+        nfkd = unicodedata.normalize("NFKD", s)
+        return "".join(c for c in nfkd if not unicodedata.combining(c)).upper().strip()
+
+    invoices: List[Dict] = []
+    with pdfplumber.open(io.BytesIO(raw)) as pdf:
+        for page in pdf.pages:
+            for table in (page.extract_tables() or []):
+                if not table or len(table) < 2:
+                    continue
+                header = [_normalize(c) for c in (table[0] or [])]
+                # Detection : au moins 4 colonnes cles doivent matcher
+                need = ("DATE FACTURE", "REFERENCE INTERNE", "FOURNISSEUR", "MONTANT")
+                if not all(any(k in h for h in header) for k in need):
+                    continue
+                # Localisation des indices de colonnes
+                def _find(*labels):
+                    for i, h in enumerate(header):
+                        for lbl in labels:
+                            if lbl in h:
+                                return i
+                    return -1
+
+                i_date = _find("DATE FACTURE")
+                i_due = _find("DATE ECHEANCE", "ECHEANCE")
+                i_iref = _find("REFERENCE INTERNE", "REF INTERNE")
+                i_eref = _find("REFERENCE EXTERNE", "REF EXTERNE")
+                i_sup = _find("FOURNISSEUR")
+                i_desc = _find("LIBELLE", "DESCRIPTION")
+                i_ht = _find("MONTANT HT")
+                i_tvac = _find("MONTANT TVAC", "MONTANT TVA")
+
+                for row in table[1:]:
+                    if not row:
+                        continue
+                    # Skip totals row
+                    joined = " ".join(str(c or "").lower() for c in row)
+                    if "totaux" in joined or "total " in joined:
+                        continue
+                    date_raw = str(row[i_date] if 0 <= i_date < len(row) else "").strip()
+                    if not re.match(r"\d{2}/\d{2}/\d{4}", date_raw):
+                        continue
+
+                    def _get(idx: int) -> str:
+                        return str(row[idx] if 0 <= idx < len(row) else "").strip()
+
+                    supplier_raw = _get(i_sup)
+                    # "F0001 SRL Finlead" -> code + name
+                    m = re.match(r"^(F\d{3,5})\s+(.+)$", supplier_raw)
+                    if m:
+                        sup_code, sup_name = m.group(1), m.group(2).strip()
+                    else:
+                        sup_code, sup_name = "", supplier_raw
+
+                    invoices.append({
+                        "date": _iso_date(date_raw),
+                        "date_display": date_raw,
+                        "supplier_code": sup_code,
+                        "supplier_name": sup_name,
+                        "internal_ref": _get(i_iref),
+                        "external_ref": _cleanup_ref(_get(i_eref)),
+                        "description": _get(i_desc),
+                        "ht_amount": _parse_amount(_get(i_ht)),
+                        "tvac_amount": _parse_amount(_get(i_tvac)),
+                        "due_date": _iso_date(_get(i_due)),
+                        "allocations": [],
+                    })
+    return invoices
+
+
 def parse_supplier_invoice_list(raw: bytes) -> List[Dict]:
     """Parse the PDF list of supplier invoices and return list of structured dicts.
 
     Each dict has:
       date (ISO), supplier_code, supplier_name, internal_ref, external_ref,
       description, ht_amount, tvac_amount, allocations (list of dicts)
+
+    iter90gj : essaie d'abord le parseur TEXTE (format "Liste des depenses"
+    avec allocations detaillees), puis fallback sur le parseur TABULAIRE
+    (format "Factures fournisseurs" simple).
     """
     invoices: List[Dict] = []
     current: Dict | None = None
@@ -219,6 +308,10 @@ def parse_supplier_invoice_list(raw: bytes) -> List[Dict]:
 
     if current:
         invoices.append(current)
+
+    # iter90gj : fallback tabulaire si le format texte n'a rien capture
+    if not invoices:
+        invoices = _parse_tabular_format(raw)
 
     return invoices
 
