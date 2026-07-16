@@ -97,6 +97,24 @@ class CommitOpeningBalanceInput(BaseModel):
     passif: List[dict]
     period_end_date: Optional[str] = ""  # DD/MM/YYYY of the balance sheet
     fiscal_year_id: Optional[str] = ""  # FY into which to post the AN entry
+    # iter90gj : appels hors budget declares avant les mutations.
+    # Stocke sur le fiscal_year pour utilisation par le mutation prorata et
+    # les rapports "Etat des fonds".
+    funds_config: Optional[dict] = None
+    # Structure attendue :
+    # {
+    #   "reserve_fund": {
+    #     "opening_balance": float (montant fonds reserve a la cloture N-1),
+    #     "has_annual_call": bool,
+    #     "call_amount": float (montant total appel N),
+    #     "call_frequency": "annual"|"quarterly"|"monthly",
+    #   },
+    #   "roulement_fund": {
+    #     "opening_balance": float (montant fonds roulement a la cloture N-1),
+    #     "has_increase": bool,
+    #     "new_total": float (nouveau total apres augmentation),
+    #   },
+    # }
 
 
 class CommitOdEntriesInput(BaseModel):
@@ -1497,6 +1515,34 @@ def create_import_wizard_router(db):
             "suppliers_linked": suppliers_linked,
             "entry_date": entry_date,
         })
+
+        # iter90gj : sauvegarde des appels hors budget sur l'exercice fiscal.
+        # Ces informations sont utilisees par :
+        # 1. Le calcul de prorata des mutations (roulement_fund.opening_balance)
+        # 2. Les rapports "Etat des fonds" (bilan par fonds)
+        # 3. La generation planifiee des appels de fonds (reserve_fund)
+        funds_config = data.funds_config or {}
+        funds_saved = False
+        if funds_config and fy:
+            fy_update: dict = {}
+            rf = funds_config.get("reserve_fund") or {}
+            rolf = funds_config.get("roulement_fund") or {}
+            if rf:
+                fy_update["reserve_fund_opening_balance"] = round(float(rf.get("opening_balance") or 0), 2)
+                fy_update["reserve_fund_has_annual_call"] = bool(rf.get("has_annual_call"))
+                fy_update["reserve_fund_call_amount"] = round(float(rf.get("call_amount") or 0), 2)
+                fy_update["reserve_fund_call_frequency"] = rf.get("call_frequency") or ""
+            if rolf:
+                fy_update["roulement_fund_opening_balance"] = round(float(rolf.get("opening_balance") or 0), 2)
+                fy_update["roulement_fund_has_increase"] = bool(rolf.get("has_increase"))
+                fy_update["roulement_fund_new_total"] = round(float(rolf.get("new_total") or 0), 2)
+            if fy_update:
+                fy_update["funds_config_updated_at"] = _now_iso()
+                await db.fiscal_years.update_one(
+                    {"id": fy["id"]}, {"$set": fy_update},
+                )
+                funds_saved = True
+
         return {
             "inserted": 1,
             "lines": len(lines),
@@ -1507,6 +1553,7 @@ def create_import_wizard_router(db):
             "owners_linked": owners_linked,
             "suppliers_linked": suppliers_linked,
             "entry_date": entry_date,
+            "funds_saved": funds_saved,
         }
 
     # ----- C-BIS: OD YEAR-END ENTRIES -----

@@ -85,6 +85,21 @@ export default function ImportWizardPage() {
   const [invoicesParsed, setInvoicesParsed] = useState([]);
   const [journalsParsed, setJournalsParsed] = useState([]);
   const [balanceParsed, setBalanceParsed] = useState({ actif: [], passif: [], total_actif: 0, total_passif: 0, balanced: false, period_end_date: '' });
+  // iter90gj : appels hors budget declares AVANT les mutations (fonds reserve
+  // + fonds roulement N-1 pour prorata mutation).
+  const [fundsConfig, setFundsConfig] = useState({
+    reserve_fund: {
+      opening_balance: 0,       // solde N-1 (existe deja dans le bilan mais duplique ici pour reference)
+      has_annual_call: false,   // appel debut d'exercice ?
+      call_amount: 0,           // montant total de l'appel annuel
+      call_frequency: 'annual', // annual | quarterly | monthly
+    },
+    roulement_fund: {
+      opening_balance: 0,       // solde N-1 (CRUCIAL pour prorata mutation)
+      has_increase: false,      // augmentation en cours d'exercice ?
+      new_total: 0,             // nouveau total apres augmentation
+    },
+  });
   const [odEntriesParsed, setOdEntriesParsed] = useState({ format: '', entries: [], total_count: 0, total_amount: 0, period_start: '', period_end: '' });
   // For 'csv_or_pdf' steps : tracks which mode the user picked for THIS step
   // (resets on every step change / file reset).
@@ -308,13 +323,15 @@ export default function ImportWizardPage() {
           passif: balanceParsed.passif,
           period_end_date: balanceParsed.period_end_date,
           fiscal_year_id: session?.steps?.fiscal_year?.fiscal_year_id || '',
+          funds_config: fundsConfig,
         });
         const m = r.data;
         toast.success(
           `OD d'ouverture creee : ${m.lines} ligne(s) au ${m.entry_date} ` +
           `(Debit/Credit ${m.total_debit.toFixed(2)} EUR)` +
           (m.pcmn_created ? ` - ${m.pcmn_created} compte(s) PCMN auto-ajoutes` : '') +
-          ((m.owners_linked || m.suppliers_linked) ? ` - ${m.owners_linked} owner(s) + ${m.suppliers_linked} fournisseur(s) lies via auxiliary_code` : '')
+          ((m.owners_linked || m.suppliers_linked) ? ` - ${m.owners_linked} owner(s) + ${m.suppliers_linked} fournisseur(s) lies via auxiliary_code` : '') +
+          (m.funds_saved ? ' - Config fonds (reserve + roulement) sauvegardee sur l\'exercice' : '')
         );
       } else if (step.key === 'od_entries') {
         const isJournalOd = odEntriesParsed.format === 'od_journal';
@@ -585,7 +602,12 @@ export default function ImportWizardPage() {
           )}
 
           {sniffResult && step.key === 'opening_balance' && (
-            <OpeningBalancePreview balance={balanceParsed} setBalance={setBalanceParsed} />
+            <OpeningBalancePreview
+              balance={balanceParsed}
+              setBalance={setBalanceParsed}
+              fundsConfig={fundsConfig}
+              setFundsConfig={setFundsConfig}
+            />
           )}
 
           {sniffResult && step.key === 'od_entries' && (
@@ -824,7 +846,7 @@ function updateNature(arr, setArr, idx, field, value) {
 }
 
 // ============== OPENING BALANCE PREVIEW (Step I - OD ouverture / Bilan) ==============
-function OpeningBalancePreview({ balance, setBalance }) {
+function OpeningBalancePreview({ balance, setBalance, fundsConfig, setFundsConfig }) {
   if (!balance.actif?.length && !balance.passif?.length) {
     return (
       <div className="text-center py-6 text-amber-600 text-sm">
@@ -940,6 +962,139 @@ function OpeningBalancePreview({ balance, setBalance }) {
         avec toutes les lignes Actif en DEBIT et toutes les lignes Passif en CREDIT.
         Les comptes principaux (ex. 410) qui regroupent des sous-comptes (ex. 4100960, 4100962) sont automatiquement
         exclus du commit pour eviter le double comptage : seuls les comptes detailles (feuilles) sont retenus.
+      </div>
+
+      {/* iter90gj : appels hors budget - fonds reserve + fonds roulement */}
+      <div className="border-2 border-violet-300 bg-gradient-to-br from-violet-50 to-fuchsia-50 rounded-md p-4 space-y-4" data-testid="funds-config-section">
+        <div className="flex items-center gap-2">
+          <Scale size={18} className="text-violet-700" />
+          <h3 className="text-sm font-bold text-violet-900" style={{ fontFamily: 'Chivo, sans-serif' }}>
+            Appels hors budget - Fonds de reserve & roulement
+          </h3>
+        </div>
+        <div className="text-[11px] text-violet-800 bg-white/60 rounded p-2 border border-violet-200">
+          Ces informations sont <strong>indispensables pour calculer correctement les mutations intra-exercice</strong>
+          (prorata jours + transfert du fonds de roulement au nouvel acquereur) et les OD comptables associees.
+          Regle : les appels de fonds de reserve sont TOUJOURS imputes au proprietaire au 1er jour de l&apos;exercice ;
+          une mutation ulterieure genere une OD de reversement.
+        </div>
+
+        {/* Fonds de reserve */}
+        <div className="bg-white rounded border border-violet-200 p-3 space-y-2">
+          <div className="text-xs font-semibold text-violet-900">Fonds de reserve</div>
+          <div className="grid grid-cols-3 gap-3 text-xs">
+            <label className="flex flex-col gap-1">
+              <span className="text-slate-600">Solde a la cloture N-1 (EUR)</span>
+              <input
+                type="number" step="0.01"
+                value={fundsConfig.reserve_fund.opening_balance}
+                onChange={e => setFundsConfig({
+                  ...fundsConfig,
+                  reserve_fund: { ...fundsConfig.reserve_fund, opening_balance: parseFloat(e.target.value) || 0 },
+                })}
+                className="border border-slate-300 rounded px-2 py-1 font-mono text-right"
+                data-testid="reserve-fund-opening-balance"
+              />
+            </label>
+            <label className="flex items-center gap-2 pt-4">
+              <input
+                type="checkbox"
+                checked={fundsConfig.reserve_fund.has_annual_call}
+                onChange={e => setFundsConfig({
+                  ...fundsConfig,
+                  reserve_fund: { ...fundsConfig.reserve_fund, has_annual_call: e.target.checked },
+                })}
+                data-testid="reserve-fund-has-call"
+              />
+              <span>Appel de fonds durant l&apos;exercice</span>
+            </label>
+          </div>
+          {fundsConfig.reserve_fund.has_annual_call && (
+            <div className="grid grid-cols-2 gap-3 text-xs pt-2 border-t border-violet-100">
+              <label className="flex flex-col gap-1">
+                <span className="text-slate-600">Montant total de l&apos;appel (EUR)</span>
+                <input
+                  type="number" step="0.01"
+                  value={fundsConfig.reserve_fund.call_amount}
+                  onChange={e => setFundsConfig({
+                    ...fundsConfig,
+                    reserve_fund: { ...fundsConfig.reserve_fund, call_amount: parseFloat(e.target.value) || 0 },
+                  })}
+                  className="border border-slate-300 rounded px-2 py-1 font-mono text-right"
+                  data-testid="reserve-fund-call-amount"
+                />
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className="text-slate-600">Frequence</span>
+                <select
+                  value={fundsConfig.reserve_fund.call_frequency}
+                  onChange={e => setFundsConfig({
+                    ...fundsConfig,
+                    reserve_fund: { ...fundsConfig.reserve_fund, call_frequency: e.target.value },
+                  })}
+                  className="border border-slate-300 rounded px-2 py-1"
+                  data-testid="reserve-fund-call-frequency"
+                >
+                  <option value="annual">Annuel (unique)</option>
+                  <option value="quarterly">Trimestriel (4x)</option>
+                  <option value="monthly">Mensuel (12x)</option>
+                </select>
+              </label>
+            </div>
+          )}
+        </div>
+
+        {/* Fonds de roulement */}
+        <div className="bg-white rounded border border-violet-200 p-3 space-y-2">
+          <div className="text-xs font-semibold text-violet-900">
+            Fonds de roulement <span className="text-[10px] text-red-600 font-normal">(indispensable pour les mutations)</span>
+          </div>
+          <div className="grid grid-cols-2 gap-3 text-xs">
+            <label className="flex flex-col gap-1">
+              <span className="text-slate-600">Solde a la cloture N-1 (EUR)</span>
+              <input
+                type="number" step="0.01"
+                value={fundsConfig.roulement_fund.opening_balance}
+                onChange={e => setFundsConfig({
+                  ...fundsConfig,
+                  roulement_fund: { ...fundsConfig.roulement_fund, opening_balance: parseFloat(e.target.value) || 0 },
+                })}
+                className="border border-slate-300 rounded px-2 py-1 font-mono text-right"
+                data-testid="roulement-fund-opening-balance"
+              />
+            </label>
+            <label className="flex items-center gap-2 pt-4">
+              <input
+                type="checkbox"
+                checked={fundsConfig.roulement_fund.has_increase}
+                onChange={e => setFundsConfig({
+                  ...fundsConfig,
+                  roulement_fund: { ...fundsConfig.roulement_fund, has_increase: e.target.checked },
+                })}
+                data-testid="roulement-fund-has-increase"
+              />
+              <span>Augmentation en cours d&apos;exercice</span>
+            </label>
+          </div>
+          {fundsConfig.roulement_fund.has_increase && (
+            <label className="flex flex-col gap-1 text-xs pt-2 border-t border-violet-100">
+              <span className="text-slate-600">Nouveau total apres augmentation (EUR)</span>
+              <input
+                type="number" step="0.01"
+                value={fundsConfig.roulement_fund.new_total}
+                onChange={e => setFundsConfig({
+                  ...fundsConfig,
+                  roulement_fund: { ...fundsConfig.roulement_fund, new_total: parseFloat(e.target.value) || 0 },
+                })}
+                className="border border-slate-300 rounded px-2 py-1 font-mono text-right w-64"
+                data-testid="roulement-fund-new-total"
+              />
+              <span className="text-[10px] text-slate-500">
+                Difference = {(fundsConfig.roulement_fund.new_total - fundsConfig.roulement_fund.opening_balance).toFixed(2)} EUR d&apos;augmentation
+              </span>
+            </label>
+          )}
+        </div>
       </div>
     </div>
   );
