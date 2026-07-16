@@ -19,6 +19,7 @@ import { useState, useEffect, useMemo, Fragment } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import api from '@/lib/api';
 import { useAuth } from '@/contexts/AuthContext';
+import { PcmnAccountPicker } from '@/components/PcmnAccountPicker';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -1264,6 +1265,8 @@ function OdExpenseListPreview({ odData, setOdData }) {
     setOdData({ ...odData, entries: odData.entries.filter((_, i) => i !== idx) });
   };
   // Shortlist des comptes de contrepartie OD frequents (mis en avant).
+  // iter90gj : ajout des comptes classe 7 (produits) - notamment 750 pour
+  // les interets crediteurs, souvent utilises dans les OD year-end.
   const SHORTLIST = [
     { number: '490', name: 'Charges a reporter' },
     { number: '491', name: 'Produits a reporter' },
@@ -1273,24 +1276,10 @@ function OdExpenseListPreview({ odData, setOdData }) {
     { number: '494', name: 'Provisions sinistres' },
     { number: '499', name: 'Provisions diverses' },
     { number: '4991', name: 'Arrondis crediteurs' },
+    { number: '750', name: 'Interets crediteurs (classe 7)' },
+    { number: '742', name: 'Recettes loyers (classe 7)' },
+    { number: '76', name: 'Produits exceptionnels (classe 7)' },
   ];
-  // Union : shortlist en tete + PCMN complet dedup par number
-  const counterpartChoices = useMemo(() => {
-    const seen = new Set();
-    const merged = [];
-    // shortlist first (only if the account exists in the loaded PCMN, else keep as suggestion)
-    SHORTLIST.forEach(s => {
-      const inPcmn = pcmnAccounts.find(a => (a.number || '').toString() === s.number);
-      const item = inPcmn ? { number: inPcmn.number, name: inPcmn.name || s.name } : s;
-      if (!seen.has(item.number)) { seen.add(item.number); merged.push(item); }
-    });
-    // Then all PCMN accounts sorted by number
-    pcmnAccounts.forEach(a => {
-      const num = (a.number || '').toString();
-      if (!seen.has(num)) { seen.add(num); merged.push({ number: num, name: a.name || '' }); }
-    });
-    return merged;
-  }, [pcmnAccounts]);
 
   const missing = odData.entries.filter(e => !(e.counterpart_account || '').trim()).length;
   const sumPositive = odData.entries.filter(e => e.amount > 0).reduce((s, e) => s + e.amount, 0);
@@ -1356,29 +1345,18 @@ function OdExpenseListPreview({ odData, setOdData }) {
                   </td>
                   <td className={`px-2 py-0.5 text-right font-mono ${e.amount < 0 ? 'text-red-700' : 'text-slate-800'}`}>{(Number(e.amount) || 0).toFixed(2)}</td>
                   <td className="px-2 py-0.5">
-                    <input
-                      type="text"
-                      list={`od-cp-list-${i}`}
-                      value={e.counterpart_account ? `${e.counterpart_account} - ${e.counterpart_account_name || ''}` : ''}
-                      onChange={ev => {
-                        const raw = ev.target.value || '';
-                        // Formats acceptes : "490", "490 - Charges a reporter"
-                        const numMatch = raw.match(/^(\d{3,7})/);
-                        const num = numMatch ? numMatch[1] : raw.trim();
-                        const found = counterpartChoices.find(c => c.number === num);
-                        upd(i, 'counterpart_account', num);
-                        upd(i, 'counterpart_account_name', found?.name || raw.split(' - ').slice(1).join(' - ').trim() || '');
+                    <PcmnAccountPicker
+                      value={{ number: e.counterpart_account || '', name: e.counterpart_account_name || '' }}
+                      onChange={({ number, name }) => {
+                        upd(i, 'counterpart_account', number);
+                        upd(i, 'counterpart_account_name', name);
                       }}
-                      onFocus={ev => ev.target.select()}
-                      placeholder="Tapez un n° ou libelle..."
-                      className={`w-full text-[10px] border ${hasCounter ? 'border-slate-200' : 'border-red-300 bg-red-50'} rounded px-1 py-0.5`}
-                      data-testid={`od-counterpart-${i}`}
+                      accounts={pcmnAccounts}
+                      shortlist={SHORTLIST}
+                      placeholder="Tapez un n\u00b0 ou libelle..."
+                      invalid={!hasCounter}
+                      testId={`od-counterpart-${i}`}
                     />
-                    <datalist id={`od-cp-list-${i}`}>
-                      {counterpartChoices.slice(0, 500).map(c => (
-                        <option key={c.number} value={`${c.number} - ${c.name}`} />
-                      ))}
-                    </datalist>
                   </td>
                   <td className="px-1 py-0.5 text-center">
                     {confidenceBadge(e.suggested_counterpart?.confidence)}
@@ -1467,20 +1445,15 @@ function InvoicesPreview({ invoices, setInvoices }) {
               </div>
               <div className="mt-2 flex items-center gap-2">
                 <span className="font-semibold">Appliquer un compte a toutes les factures sans compte :</span>
-                <input
-                  type="text"
-                  list="bulk-account-list"
-                  value={bulkAccount}
-                  onChange={e => setBulkAccount(e.target.value)}
-                  placeholder="Ex : 61000"
-                  className="border border-red-300 rounded px-2 py-1 font-mono w-40"
-                  data-testid="bulk-account-input"
-                />
-                <datalist id="bulk-account-list">
-                  {pcmnAccounts.slice(0, 500).map(a => (
-                    <option key={a.number} value={`${a.number} - ${a.name || ''}`} />
-                  ))}
-                </datalist>
+                <div className="w-56">
+                  <PcmnAccountPicker
+                    value={{ number: bulkAccount, name: '' }}
+                    onChange={({ number, name }) => setBulkAccount(number ? (name ? `${number} - ${name}` : number) : '')}
+                    accounts={pcmnAccounts}
+                    placeholder="Ex : 61000"
+                    testId="bulk-account"
+                  />
+                </div>
                 <Button size="sm" onClick={applyBulkAccount} disabled={!bulkAccount.trim()} className="bg-red-600 hover:bg-red-700 text-white" data-testid="bulk-account-apply">
                   Appliquer
                 </Button>
@@ -1524,26 +1497,18 @@ function InvoicesPreview({ invoices, setInvoices }) {
                   </div>
                 </td>
                 <td className="px-1 py-0.5">
-                  <input
-                    list={`pcmn-inv-${idx}`}
-                    value={i.account_number}
-                    onChange={e => {
-                      const raw = e.target.value || '';
-                      const m = raw.match(/^(\d{3,7})/);
-                      const num = m ? m[1] : raw.trim();
-                      const found = pcmnAccounts.find(a => (a.number || '').toString() === num);
-                      upd(idx, 'account_number', num);
-                      if (found) upd(idx, 'account_label', found.name || '');
+                  <PcmnAccountPicker
+                    value={{ number: i.account_number || '', name: i.account_label || '' }}
+                    onChange={({ number, name }) => {
+                      upd(idx, 'account_number', number);
+                      if (name) upd(idx, 'account_label', name);
                     }}
+                    accounts={pcmnAccounts}
                     placeholder="Compte..."
-                    className={`w-32 border ${missing ? 'border-red-400 bg-red-50' : 'border-slate-200'} rounded px-1 py-0.5 font-mono text-[10px]`}
-                    data-testid={`inv-account-${idx}`}
+                    invalid={missing}
+                    testId={`inv-account-${idx}`}
+                    className="w-32"
                   />
-                  <datalist id={`pcmn-inv-${idx}`}>
-                    {pcmnAccounts.slice(0, 500).map(a => (
-                      <option key={a.number} value={`${a.number} - ${a.name || ''}`} />
-                    ))}
-                  </datalist>
                 </td>
                 <td className="px-1 py-0.5"><input value={i.dist_key_code} onChange={e => upd(idx, 'dist_key_code', e.target.value)} className="w-12 border-0 bg-transparent font-mono text-[10px]" /></td>
                 <td className="px-1 py-0.5"><input value={i.nature_code} onChange={e => upd(idx, 'nature_code', e.target.value)} className="w-12 border-0 bg-transparent font-mono text-[10px]" /></td>
