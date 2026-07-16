@@ -23,6 +23,11 @@ export default function OwnersPage() {
   const [form, setForm] = useState(emptyForm);
   const [duplicates, setDuplicates] = useState([]);
   const [showAll, setShowAll] = useState(false);
+  // iter90gk : dialog de confirmation homonyme (nom identique mais email/tel
+  // differents). Le backend renvoie 409 "Homonyme detecte" que l'on catch
+  // pour proposer soit d'utiliser l'existant, soit de creer quand meme
+  // (via force_create_despite_homonym=true).
+  const [homonymDialog, setHomonymDialog] = useState(null);
 
   const load = useCallback(async () => {
     // iter90ad : "Afficher tous" = ignore selectedCopro et charge en global.
@@ -63,13 +68,33 @@ export default function OwnersPage() {
     } catch {}
   };
 
-  const handleSave = async () => {
+  const handleSave = async (opts = {}) => {
+    const forceHomonym = opts.forceHomonym === true;
     try {
       const payload = { ...form, name: `${form.last_name} ${form.first_name}`.trim() };
       if (editing) { await api.put(`/owners/${editing.id}`, payload); toast.success('Proprietaire modifie'); }
-      else { await api.post('/owners', payload); toast.success('Proprietaire cree'); }
-      setDialogOpen(false); load();
-    } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); }
+      else {
+        // iter90gk : passe force_create_despite_homonym=true seulement si le
+        // syndic a explicitement confirme l'homonyme dans la popup.
+        const params = forceHomonym ? { force_create_despite_homonym: true } : {};
+        await api.post('/owners', payload, { params });
+        toast.success('Proprietaire cree');
+      }
+      setDialogOpen(false);
+      setHomonymDialog(null);
+      load();
+    } catch (err) {
+      const msg = err.response?.data?.detail || 'Erreur';
+      // iter90gk : detecte le 409 "Homonyme detecte" (non-strict) pour ouvrir
+      // le dialog de confirmation. Un doublon STRICT (email/tel/BCE) affiche
+      // juste l'erreur toast (bloquant, pas de bypass possible).
+      if (err.response?.status === 409 && msg.toLowerCase().includes('homonyme detecte')) {
+        // Extrait le nom + id de l'existant depuis le message pour l'afficher
+        setHomonymDialog({ message: msg, form: { ...form } });
+      } else {
+        toast.error(msg);
+      }
+    }
   };
   const handleDelete = async (id) => { if (!window.confirm('Supprimer ce proprietaire ?')) return; await api.delete(`/owners/${id}`); toast.success('Supprime'); load(); };
 
@@ -244,6 +269,46 @@ export default function OwnersPage() {
             <div className="flex gap-3 justify-end">
               <Button variant="outline" onClick={() => setDialogOpen(false)} data-testid="owner-cancel-btn">Annuler</Button>
               <Button onClick={handleSave} className="bg-[#022D52] hover:bg-[#1D4ED8]" data-testid="owner-save-btn">{editing ? 'Modifier' : 'Creer'}</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+      {/* iter90gk : dialog de confirmation homonyme (nom identique mais email/tel differents) */}
+      <Dialog open={!!homonymDialog} onOpenChange={(open) => { if (!open) setHomonymDialog(null); }}>
+        <DialogContent className="max-w-lg" data-testid="owner-homonym-dialog">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5 text-yellow-600" />
+              Homonyme detecte
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="p-4 bg-yellow-50 border border-yellow-300 rounded">
+              <div className="text-sm text-slate-700 whitespace-pre-line">{homonymDialog?.message}</div>
+            </div>
+            <div className="text-sm text-slate-600">
+              <strong>Regle metier :</strong> deux personnes peuvent avoir le meme nom.
+              Verifiez que l&apos;email et le telephone que vous avez saisis correspondent
+              bien a une <strong>autre personne</strong> que celle deja en base :
+              <ul className="list-disc pl-6 mt-2 text-xs">
+                <li>Email saisi : <code className="bg-slate-100 px-1">{homonymDialog?.form?.email || '(vide)'}</code></li>
+                <li>Telephone saisi : <code className="bg-slate-100 px-1">{homonymDialog?.form?.phone || '(vide)'}</code></li>
+              </ul>
+              Si c&apos;est bien la <strong>meme personne</strong>, cliquez sur &laquo;&nbsp;Annuler&nbsp;&raquo;
+              et utilisez la fiche existante depuis la liste. Sinon, cliquez sur
+              &laquo;&nbsp;Creer quand meme&nbsp;&raquo; pour confirmer qu&apos;il s&apos;agit d&apos;un homonyme.
+            </div>
+            <div className="flex gap-3 justify-end">
+              <Button variant="outline" onClick={() => setHomonymDialog(null)} data-testid="owner-homonym-cancel">
+                Annuler
+              </Button>
+              <Button
+                onClick={() => handleSave({ forceHomonym: true })}
+                className="bg-yellow-600 hover:bg-yellow-700 text-white"
+                data-testid="owner-homonym-force-create"
+              >
+                Creer quand meme (homonyme confirme)
+              </Button>
             </div>
           </div>
         </DialogContent>

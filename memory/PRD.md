@@ -86,6 +86,45 @@ lignes sans relecture complete).
    (5 comptes tier orphelins fusionnes vers canoniques)
 2. `iter90gl_heal_credit_notes.py --apply` : 1 NC creee (Engie -57.03)
 3. `iter90gm_merge_bank_accounts.py --apply` : 78 lignes migrees
+
+### Iter90gk (part 2, Feb 2026) - Frontend homonyme + Wizard review interactif + BCE cleanup
+
+**Suite du chantier "regle stricte anti-doublon".**
+
+**Frontend Owners - Dialog homonyme** :
+- `OwnersPage.js::handleSave` : catch 409 "Homonyme detecte" -> ouvre le dialog
+- Nouveau composant : dialog jaune avec explication de la regle + bouton
+  "Creer quand meme (homonyme confirme)" qui envoie `force_create_despite_homonym=true`
+- Un doublon STRICT (email/tel/BCE) reste bloquant sans bypass possible
+  (toast d'erreur classique).
+
+**Wizard Optipro - Review interactif fournisseurs** :
+- Nouveau endpoint `POST /api/import-wizard/sessions/{id}/preview-suppliers-pdf`
+  retournant pour chaque fournisseur : `strict_match` (fiche existante dans
+  l'ACP), `fuzzy_matches` (fiches cross-ACP au meme syndic), `suggested_action`
+  (reuse ou create).
+- `commit-suppliers-pdf` accepte maintenant un champ `decisions` (dict indexe
+  par position) : `{idx: {action: "reuse|create", supplier_id: "...", bce_number: "BE..."}}`.
+  Pour action=create le BCE est OBLIGATOIRE. Verification unicite BCE globale.
+- Frontend `SuppliersPdfPreview` : bouton "Analyser les correspondances" qui
+  fetch le preview. Nouveau colonnes "Match", "Action" (dropdown), "BCE"
+  (si Creer). Lien direct kbopub.economie.fgov.be pour verification.
+
+**Migration BCE legacy** :
+- `iter90gk_migrate_empty_bce.py` : `$unset` du champ pour les 35 fiches
+  ayant `bce_number=""`. Cela permet a l'index sparse/partialFilter de les
+  ignorer correctement (sparse ne skip QUE les champs absents, pas les
+  strings vides).
+- Fusion des 3 doublons BCE test (iter90fa) via `iter90gk_merge_bce_duplicates.py`.
+- Index unique BCE actif avec `partialFilterExpression: {bce_number: {$type: "string", $gt: ""}}`.
+
+**Verrous en production apres redeploiement + migrations** :
+- Impossible de creer 2 fiches fournisseur avec le meme BCE (globalement).
+- Impossible de creer 2 comptes PCMN avec le meme numero par ACP.
+- Impossible de creer 2 proprietaires avec le meme email/telephone.
+- Un homonyme (meme nom, coordonnees differentes) exige confirmation UI.
+
+
    (2 paires de comptes bancaires fusionnees)
 
 **Verification finale ACP Maria** :

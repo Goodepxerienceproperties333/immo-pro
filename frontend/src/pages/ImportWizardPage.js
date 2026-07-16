@@ -83,6 +83,9 @@ export default function ImportWizardPage() {
   const [budgetSections, setBudgetSections] = useState([]);
   const [keysParsed, setKeysParsed] = useState([]);
   const [suppliersParsed, setSuppliersParsed] = useState([]);
+  // iter90gk : decisions du syndic par fournisseur pour l'import PDF Optipro.
+  // Structure : {idx_str: {action: "reuse"|"create", supplier_id: "...", bce_number: "BE..."}}
+  const [supplierDecisions, setSupplierDecisions] = useState({});
   const [invoicesParsed, setInvoicesParsed] = useState([]);
   const [journalsParsed, setJournalsParsed] = useState([]);
   const [balanceParsed, setBalanceParsed] = useState({ actif: [], passif: [], total_actif: 0, total_passif: 0, balanced: false, period_end_date: '' });
@@ -277,10 +280,22 @@ export default function ImportWizardPage() {
         ? (uploadMode || (suppliersParsed.length > 0 ? 'pdf' : 'csv'))
         : step.kind;
       if (step.key === 'suppliers' && effectiveKind === 'pdf') {
+        // iter90gk : envoi des decisions du syndic (reuse/create + BCE obligatoire)
         r = await api.post(`/import-wizard/sessions/${session.id}/commit-suppliers-pdf`, {
           suppliers: suppliersParsed,
+          decisions: supplierDecisions,
         });
-        toast.success(`${r.data.inserted} fournisseur(s) importes`);
+        const m = r.data;
+        const summary = [
+          m.inserted ? `${m.inserted} cree(s)` : null,
+          m.reused ? `${m.reused} reutilise(s)` : null,
+          m.skipped_duplicates ? `${m.skipped_duplicates} skip(s) doublon` : null,
+          m.errors?.length ? `${m.errors.length} erreur(s)` : null,
+        ].filter(Boolean).join(' - ');
+        toast.success(`Fournisseurs : ${summary}`);
+        if (m.errors?.length) {
+          m.errors.slice(0, 3).forEach(e => toast.error(`Ligne ${e.row}: ${e.error}`));
+        }
       } else if (effectiveKind === 'csv') {
         r = await api.post(`/import-wizard/sessions/${session.id}/commit-${step.key}`, {
           mapping,
@@ -601,7 +616,13 @@ export default function ImportWizardPage() {
           )}
 
           {sniffResult && step.key === 'suppliers' && uploadMode === 'pdf' && (
-            <SuppliersPdfPreview suppliers={suppliersParsed} setSuppliers={setSuppliersParsed} />
+            <SuppliersPdfPreview
+              suppliers={suppliersParsed}
+              setSuppliers={setSuppliersParsed}
+              sessionId={session?.id}
+              decisions={supplierDecisions}
+              setDecisions={setSupplierDecisions}
+            />
           )}
 
           {sniffResult && step.key === 'invoices' && (
@@ -1599,7 +1620,9 @@ function JournalsPreview({ transactions, setTransactions }) {
 }
 
 // ============== SUPPLIERS PDF PREVIEW (Step C variant for PDF) ==============
-function SuppliersPdfPreview({ suppliers, setSuppliers }) {
+function SuppliersPdfPreview({ suppliers, setSuppliers, sessionId, decisions, setDecisions }) {
+  const [previewData, setPreviewData] = useState(null);
+  const [loading, setLoading] = useState(false);
   if (!suppliers?.length) {
     return (
       <div className="text-center py-6 text-amber-600 text-sm">
@@ -1611,10 +1634,59 @@ function SuppliersPdfPreview({ suppliers, setSuppliers }) {
     const next = suppliers.map((s, i) => i === idx ? { ...s, [field]: value } : s);
     setSuppliers(next);
   };
+  const updateDecision = (idx, patch) => {
+    setDecisions({ ...decisions, [String(idx)]: { ...(decisions[String(idx)] || {}), ...patch } });
+  };
+  // iter90gk : analyse des matches (fetch backend preview-suppliers-pdf).
+  // Pre-remplit les decisions avec l'action suggeree (reuse si match strict trouve
+  // dans l'ACP courante, sinon create).
+  const analyzeMatches = async () => {
+    if (!sessionId) { toast.error('Session non initialisee'); return; }
+    setLoading(true);
+    try {
+      const { data } = await api.post(`/import-wizard/sessions/${sessionId}/preview-suppliers-pdf`, {
+        suppliers,
+      });
+      setPreviewData(data);
+      // Pre-remplit les decisions par defaut
+      const nextDecisions = { ...decisions };
+      for (const row of (data.suppliers || [])) {
+        const key = String(row.index);
+        if (!nextDecisions[key]) {
+          nextDecisions[key] = {
+            action: row.suggested_action,
+            supplier_id: row.suggested_supplier_id || '',
+            bce_number: '',
+          };
+        }
+      }
+      setDecisions(nextDecisions);
+      toast.success(`${data.count} fournisseur(s) analyses`);
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur analyse');
+    } finally {
+      setLoading(false);
+    }
+  };
+  const rowsByIdx = {};
+  for (const r of (previewData?.suppliers || [])) {
+    rowsByIdx[r.index] = r;
+  }
+  const analyzed = !!previewData;
   return (
     <div className="space-y-3">
       <div className="bg-blue-50 border border-blue-200 rounded p-3 text-xs text-blue-900">
-        <strong>Verifiez puis modifiez si necessaire</strong> les fournisseurs extraits du PDF. Chaque ligne peut etre editee, ou supprimee.
+        <strong>Regle stricte anti-doublon (iter90gk) :</strong> avant de creer un fournisseur,
+        cliquez sur <em>&laquo;&nbsp;Analyser les correspondances&nbsp;&raquo;</em>. Pour chaque nom :
+        <ul className="list-disc pl-6 mt-1">
+          <li>Si un fournisseur existant matche : <strong>Reutiliser</strong> (recommande, evite les doublons)</li>
+          <li>Sinon : <strong>Creer nouveau</strong> avec un <strong>BCE obligatoire</strong> (format BE0123456789)</li>
+        </ul>
+      </div>
+      <div className="flex gap-2">
+        <Button size="sm" onClick={analyzeMatches} disabled={loading} data-testid="analyze-supplier-matches">
+          {loading ? 'Analyse...' : 'Analyser les correspondances'}
+        </Button>
       </div>
       <div className="border border-slate-200 rounded overflow-x-auto max-h-96 overflow-y-auto">
         <table className="w-full text-xs">
@@ -1622,35 +1694,92 @@ function SuppliersPdfPreview({ suppliers, setSuppliers }) {
             <tr>
               <th className="px-2 py-1 text-left">Code aux.</th>
               <th className="px-2 py-1 text-left">Nom</th>
+              {analyzed && <th className="px-2 py-1 text-left">Match</th>}
+              {analyzed && <th className="px-2 py-1 text-left">Action</th>}
+              {analyzed && <th className="px-2 py-1 text-left">BCE (si Creer)</th>}
               <th className="px-2 py-1 text-left">Email</th>
               <th className="px-2 py-1 text-left">Telephone</th>
-              <th className="px-2 py-1 text-left">Adresse</th>
-              <th className="px-2 py-1 text-left">CP</th>
-              <th className="px-2 py-1 text-left">Ville</th>
-              <th className="px-2 py-1 text-center">Defaut</th>
               <th className="px-2 py-1"></th>
             </tr>
           </thead>
           <tbody>
-            {suppliers.map((s, i) => (
+            {suppliers.map((s, i) => {
+              const preview = rowsByIdx[i];
+              const dec = decisions[String(i)] || {};
+              return (
               <tr key={i} className="border-t border-slate-100" data-testid={`sup-row-${i}`}>
                 <td className="px-1 py-1 font-mono text-[10px] text-slate-500">{s.auxiliary_code || '-'}</td>
                 <td className="px-1 py-1"><input value={s.name || ''} onChange={e => update(i, 'name', e.target.value)} className="w-full border-0 bg-transparent" data-testid={`sup-name-${i}`} /></td>
+                {analyzed && (
+                  <td className="px-1 py-1">
+                    {preview?.strict_match ? (
+                      <Badge className="bg-emerald-100 text-emerald-800 text-[10px]" title={`Fiche ${preview.strict_match.id.slice(0,8)}, BCE=${preview.strict_match.bce_number||'(vide)'}`}>
+                        Match ACP : {preview.strict_match.name?.slice(0,25)}
+                      </Badge>
+                    ) : preview?.fuzzy_matches?.length ? (
+                      <Badge className="bg-amber-100 text-amber-800 text-[10px]" title={preview.fuzzy_matches.map(m => `${m.name} (BCE ${m.bce_number||'?'})`).join(', ')}>
+                        {preview.fuzzy_matches.length} match cross-ACP
+                      </Badge>
+                    ) : (
+                      <span className="text-slate-400 text-[10px]">Aucun</span>
+                    )}
+                  </td>
+                )}
+                {analyzed && (
+                  <td className="px-1 py-1">
+                    <select
+                      value={dec.action || preview?.suggested_action || 'create'}
+                      onChange={(e) => updateDecision(i, { action: e.target.value })}
+                      className="text-[10px] border border-slate-300 rounded px-1 py-0.5"
+                      data-testid={`sup-action-${i}`}
+                    >
+                      <option value="create">Creer nouveau</option>
+                      {(preview?.strict_match || preview?.fuzzy_matches?.length > 0) && (
+                        <option value="reuse">Reutiliser existant</option>
+                      )}
+                    </select>
+                    {dec.action === 'reuse' && preview?.fuzzy_matches?.length > 0 && !preview?.strict_match && (
+                      <select
+                        value={dec.supplier_id || preview.fuzzy_matches[0].id}
+                        onChange={(e) => updateDecision(i, { supplier_id: e.target.value })}
+                        className="mt-1 text-[10px] border border-slate-300 rounded px-1 py-0.5"
+                      >
+                        {preview.fuzzy_matches.map((m) => (
+                          <option key={m.id} value={m.id}>{m.name} - BCE {m.bce_number || '?'}</option>
+                        ))}
+                      </select>
+                    )}
+                  </td>
+                )}
+                {analyzed && (
+                  <td className="px-1 py-1">
+                    {dec.action === 'create' || preview?.suggested_action === 'create' ? (
+                      <input
+                        value={dec.bce_number || ''}
+                        onChange={(e) => updateDecision(i, { bce_number: e.target.value })}
+                        placeholder="BE0123456789"
+                        className="w-32 text-[10px] border border-slate-300 rounded px-1 py-0.5 font-mono"
+                        data-testid={`sup-bce-${i}`}
+                      />
+                    ) : (
+                      <span className="text-slate-400 text-[10px]">-</span>
+                    )}
+                  </td>
+                )}
                 <td className="px-1 py-1"><input value={s.email || ''} onChange={e => update(i, 'email', e.target.value)} className="w-full border-0 bg-transparent" /></td>
                 <td className="px-1 py-1"><input value={s.phone || ''} onChange={e => update(i, 'phone', e.target.value)} className="w-full border-0 bg-transparent" /></td>
-                <td className="px-1 py-1"><input value={s.address || ''} onChange={e => update(i, 'address', e.target.value)} className="w-full border-0 bg-transparent" /></td>
-                <td className="px-1 py-1"><input value={s.postal_code || ''} onChange={e => update(i, 'postal_code', e.target.value)} className="w-14 border-0 bg-transparent font-mono" /></td>
-                <td className="px-1 py-1"><input value={s.city || ''} onChange={e => update(i, 'city', e.target.value)} className="w-full border-0 bg-transparent" /></td>
-                <td className="px-1 py-1 text-center">
-                  <input type="checkbox" checked={!!s.is_default} onChange={e => update(i, 'is_default', e.target.checked)} />
-                </td>
                 <td className="px-1 py-1"><button onClick={() => setSuppliers(suppliers.filter((_, idx) => idx !== i))} className="text-red-500 hover:text-red-700" data-testid={`sup-del-${i}`}><X size={12} /></button></td>
               </tr>
-            ))}
+            );})}
           </tbody>
         </table>
       </div>
-      <div className="text-xs text-slate-500">{suppliers.length} fournisseur(s) detecte(s)</div>
+      <div className="text-xs text-slate-500">
+        {suppliers.length} fournisseur(s) detecte(s)
+        {analyzed && (
+          <> - <a href="https://kbopub.economie.fgov.be/" target="_blank" rel="noreferrer" className="underline text-blue-600">Verifier les BCE sur kbopub.economie.fgov.be</a></>
+        )}
+      </div>
     </div>
   );
 }

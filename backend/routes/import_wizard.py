@@ -81,6 +81,10 @@ class CommitDistributionKeysInput(BaseModel):
 
 class CommitSuppliersPdfInput(BaseModel):
     suppliers: List[dict]  # parsed suppliers (from PDF) confirmed by user
+    # iter90gk : decisions par position - {idx: {"action": "reuse|create",
+    # "supplier_id": "...", "bce_number": "BE..."}}. Sans decisions, comportement
+    # legacy (skip silencieux sur doublon nom).
+    decisions: Optional[dict] = {}
 
 
 class CommitInvoicesInput(BaseModel):
@@ -578,15 +582,94 @@ def create_import_wizard_router(db):
         return {"inserted": inserted, "skipped_duplicates": skipped_duplicates, "errors": errors}
 
     # ----- C-bis: SUPPLIERS via PDF (no mapping needed - already structured) -----
+    @router.post("/sessions/{session_id}/preview-suppliers-pdf")
+    async def preview_suppliers_pdf(session_id: str, data: CommitSuppliersPdfInput, request: Request):
+        """iter90gk : phase preview avant commit. Pour chaque fournisseur du PDF,
+        retourne les fiches existantes similaires (matching par nom + adresse)
+        pour que le syndic puisse decider :
+          - Utiliser une fiche existante (action="reuse", supplier_id="...")
+          - Creer une nouvelle fiche (action="create", bce="BE...")
+        Le BCE est obligatoire pour toute creation (regle metier utilisateur).
+        """
+        from routes.suppliers import find_duplicate_supplier, _norm_name_candidates
+        session = await db.import_sessions.find_one({"id": session_id})
+        if not session:
+            raise HTTPException(404, "Session introuvable")
+        copro_id = session["copropriete_id"]
+        await _require_acp_access(request, db, copro_id)
+
+        # Precharge tous les fournisseurs accessibles pour le matching par nom
+        all_suppliers = await db.suppliers.find({}, {"_id": 0}).to_list(20000)
+        rows = []
+        for idx, s in enumerate(data.suppliers):
+            name = (s.get("name") or "").strip()
+            if not name:
+                continue
+            # 1. Match STRICT (scope ACP) - via find_duplicate_supplier
+            strict_dup = await find_duplicate_supplier(
+                db, name=name, bce_number="", vat_number="", iban="", copro_id=copro_id,
+            )
+            # 2. Match par NOM sur les fiches accessibles (cross-ACP, pour proposer
+            #    d'attacher une fiche existante d'une autre ACP au meme syndic)
+            name_cands = _norm_name_candidates(name)
+            fuzzy_matches = []
+            for other in all_suppliers:
+                if other.get("copropriete_id") == copro_id:
+                    continue  # deja couvert par strict_dup
+                other_cands = _norm_name_candidates(other.get("name", ""))
+                if name_cands & other_cands:
+                    fuzzy_matches.append({
+                        "id": other["id"],
+                        "name": other.get("name", ""),
+                        "bce_number": other.get("bce_number", ""),
+                        "copropriete_id": other.get("copropriete_id", ""),
+                    })
+            rows.append({
+                "index": idx,
+                "name": name,
+                "auxiliary_code": (s.get("auxiliary_code") or "").strip(),
+                "address": (s.get("address") or "").strip(),
+                "postal_code": (s.get("postal_code") or "").strip(),
+                "city": (s.get("city") or "").strip(),
+                "phone": (s.get("phone") or "").strip(),
+                "email": (s.get("email") or "").strip(),
+                # Match strict (dans l'ACP courante) : forcement reuse (bouton pre-selectionne)
+                "strict_match": ({
+                    "id": strict_dup["supplier"]["id"],
+                    "name": strict_dup["supplier"].get("name", ""),
+                    "bce_number": strict_dup["supplier"].get("bce_number", ""),
+                    "field": strict_dup.get("field", ""),
+                } if strict_dup else None),
+                # Match par nom (cross-ACP) : le syndic peut choisir
+                "fuzzy_matches": fuzzy_matches,
+                # Suggestion par defaut :
+                # - strict_match trouve -> "reuse"
+                # - sinon -> "create" (necessite BCE)
+                "suggested_action": "reuse" if strict_dup else "create",
+                "suggested_supplier_id": strict_dup["supplier"]["id"] if strict_dup else "",
+            })
+        return {"suppliers": rows, "count": len(rows)}
+
     @router.post("/sessions/{session_id}/commit-suppliers-pdf")
     async def commit_suppliers_pdf(session_id: str, data: CommitSuppliersPdfInput, request: Request):
+        """iter90gk : accepte maintenant un champ optionnel `decisions` (dict
+        indexe par position dans data.suppliers) qui specifie l'action decidee
+        par le syndic pour chaque fournisseur :
+          {index: {"action": "reuse"|"create", "supplier_id": "..." (si reuse),
+                   "bce_number": "BE..." (si create - OBLIGATOIRE)}}
+
+        Sans `decisions` : comportement legacy (skip silencieux si doublon nom).
+        Avec `decisions` : applique strictement les choix du syndic.
+        """
         from routes.suppliers import find_duplicate_supplier
         session = await db.import_sessions.find_one({"id": session_id})
         if not session:
             raise HTTPException(404, "Session introuvable")
         copro_id = session["copropriete_id"]
         await _require_acp_access(request, db, copro_id)
+        decisions = getattr(data, "decisions", None) or {}
         inserted = 0
+        reused = 0
         skipped_duplicates = 0
         errors = []
         for idx, s in enumerate(data.suppliers):
@@ -594,19 +677,70 @@ def create_import_wizard_router(db):
                 name = (s.get("name") or "").strip()
                 if not name:
                     continue
-                # Check anti-doublon scope ACP : skip silencieux (PDF Optipro ne contient pas BCE/IBAN)
-                dup = await find_duplicate_supplier(
-                    db, name=name, bce_number="", vat_number="", iban="", copro_id=copro_id,
-                )
-                if dup:
-                    skipped_duplicates += 1
+                # Recupere la decision du syndic pour cette position (str ou int cle)
+                decision = decisions.get(str(idx)) or decisions.get(idx) or {}
+                action = (decision.get("action") or "").strip().lower()
+                if action == "reuse":
+                    # Attache le fournisseur existant a cette ACP (idempotent)
+                    sup_id = (decision.get("supplier_id") or "").strip()
+                    if not sup_id:
+                        errors.append({"row": idx, "error": "action=reuse mais supplier_id vide"})
+                        continue
+                    sup = await db.suppliers.find_one({"id": sup_id}, {"_id": 0})
+                    if not sup:
+                        errors.append({"row": idx, "error": f"supplier_id {sup_id} introuvable"})
+                        continue
+                    # Attache-le a l'ACP courante (multi-ACP support via copropriete_ids)
+                    from tier_accounts import assign_supplier_account
+                    await assign_supplier_account(db, sup, copro_id)
+                    await db.suppliers.update_one(
+                        {"id": sup_id},
+                        {"$addToSet": {"copropriete_ids": copro_id}},
+                    )
+                    reused += 1
                     continue
+
+                if action == "create":
+                    # BCE OBLIGATOIRE pour toute creation (regle metier)
+                    bce = (decision.get("bce_number") or "").strip()
+                    if not bce:
+                        errors.append({
+                            "row": idx,
+                            "error": f"Creation refusee : le BCE est obligatoire pour '{name}' (regle stricte anti-doublon)."
+                        })
+                        continue
+                    # Verifie l'unicite GLOBALE du BCE
+                    dup_bce = await find_duplicate_supplier(
+                        db, name="", bce_number=bce, vat_number="", iban="", copro_id="",
+                    )
+                    if dup_bce:
+                        errors.append({
+                            "row": idx,
+                            "error": (
+                                f"BCE {bce} deja utilise par '{dup_bce['supplier'].get('name','')}' "
+                                f"- utilisez action=reuse avec supplier_id={dup_bce['supplier']['id']}."
+                            ),
+                        })
+                        continue
+                    # Fall-through pour creer la fiche (voir bloc creation ci-dessous)
+                    supplier_bce = bce
+                else:
+                    # Pas de decision : comportement legacy - check anti-doublon
+                    dup = await find_duplicate_supplier(
+                        db, name=name, bce_number="", vat_number="", iban="", copro_id=copro_id,
+                    )
+                    if dup:
+                        skipped_duplicates += 1
+                        continue
+                    supplier_bce = ""
+
+                # Creation du fournisseur (avec ou sans BCE selon la branche)
                 doc = {
                     "id": str(uuid.uuid4()),
                     "name": name,
                     "auxiliary_code": (s.get("auxiliary_code") or "").strip(),
                     "vat_number": "",
-                    "bce_number": "",
+                    "bce_number": supplier_bce,
                     "address": (s.get("address") or "").strip(),
                     "postal_code": (s.get("postal_code") or "").strip(),
                     "city": (s.get("city") or "").strip(),
@@ -627,9 +761,13 @@ def create_import_wizard_router(db):
             except Exception as e:
                 errors.append({"row": idx, "error": str(e)})
         await _update_step(db, session_id, "suppliers", {
-            "count": inserted, "skipped_duplicates": skipped_duplicates, "errors": errors,
+            "count": inserted, "reused": reused,
+            "skipped_duplicates": skipped_duplicates, "errors": errors,
         })
-        return {"inserted": inserted, "skipped_duplicates": skipped_duplicates, "errors": errors}
+        return {
+            "inserted": inserted, "reused": reused,
+            "skipped_duplicates": skipped_duplicates, "errors": errors,
+        }
 
     # ----- G: INVOICES (factures) - CSV Optipro -----
     async def _ensure_pcmn_accounts(copro_id: str, accounts_needed: dict[str, str]) -> int:
