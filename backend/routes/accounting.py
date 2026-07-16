@@ -351,6 +351,26 @@ def create_accounting_router(db):
             raise HTTPException(400, "copropriete_id requis - chinese walls strict")
         # Securisation comptable : la date doit etre dans un exercice OUVERT de l'ACP
         await ensure_period_open(db, copro_id, data.date, context="ecriture")
+        # iter90gj : anti-doublon strict. Une ecriture avec la meme reference,
+        # meme journal_type, meme copropriete et meme date ne peut PAS etre
+        # cree deux fois. Cas typique : le syndic ajoute manuellement une
+        # facture dont l'ecriture a deja ete creee par le wizard d'import.
+        ref = (data.reference or "").strip()
+        if ref:
+            existing_dup = await db.journal_entries.find_one({
+                "copropriete_id": copro_id,
+                "journal_type": data.journal_type,
+                "reference": ref,
+                "date": data.date,
+                "is_reversal": {"$ne": True},
+            }, {"_id": 0, "id": 1, "reference": 1, "created_at": 1})
+            if existing_dup:
+                raise HTTPException(
+                    409,
+                    f"Doublon detecte : une ecriture {data.journal_type} avec la reference "
+                    f"'{ref}' existe deja pour cette ACP au {data.date} "
+                    f"(id {existing_dup['id'][:8]}). Modifiez l'existante ou changez la reference.",
+                )
         total_debit = sum(l.debit for l in data.lines)
         total_credit = sum(l.credit for l in data.lines)
         if abs(total_debit - total_credit) > 0.01:
