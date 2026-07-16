@@ -158,6 +158,46 @@ lignes sans relecture complete).
 - 3 index MongoDB uniques : `pcmn_accounts (copro, number)`, `suppliers.bce_number (partial)`,
   `suppliers.copropriete_id`.
 - 4 dialogs UI : Similar suppliers, BCE attach candidates, Owner homonym single, Owner homonyms batch.
+
+### Iter90gk (part 4, Feb 2026) - Page admin Quality Audit + E2E validation complete
+
+**3 tasks P1 completees en suivant** :
+
+1. **Frontend `/admin/quality-audit`** (`AdminQualityAuditPage.js`) :
+   - Nouvelle page dediee au SuperAdmin visualisant le rapport `/api/admin/duplicates-audit`.
+   - 7 sections dediees : BCE dup, Suppliers sans BCE (top 10), Owner email dup, Owner tel dup,
+     PCMN orphan tier, Bank dup, NC sans ecriture.
+   - Filtre par ACP + bouton "Actualiser" + export CSV.
+   - Header sante global avec badge "Base saine" (vert) ou "Anomalies detectees" (jaune).
+   - Actions rapides par ligne : "Ouvrir" (goto supplier/owner), "Corriger" (edit), commande
+     shell suggeree pour les migrations one-time (iter90gk_cleanup / iter90gl_heal /
+     iter90gm_merge).
+   - Ajout d'une carte "Quality Audit" dans AdminDashboardPage.
+
+2. **Owner Homonym workflow interactif** :
+   - Deja implemente dans `CoproprietesPage.js` (iter90gk part 2 & 3). Le wizard
+     principal n'a pas d'etape owners (deportee dans le "ACP Creation Assistant"),
+     donc le dialog batch homonymes est deja disponible pour l'import PDF Optipro.
+
+3. **E2E tests via testing_agent_v3_fork** :
+   - Fichier cree : `tests/test_iter90gk_scenarios_e2e.py` avec 9 scenarios HTTP.
+   - 9/9 backend PASS + 3/3 frontend (S8 quality-audit, S9 bce-candidates-box, S10 BCE required toast).
+   - Verrouille la chaine complete : BCE required, BCE global unicity, owner strict/homonym,
+     duplicates-audit JSON+CSV, bce-candidates, Bilan Maria = 14351.48 equilibre.
+
+**Fix mineur incidentel** : correction du warning React "div inside p" + "key manquant" dans
+AdminDashboardPage.js (Fragment key + <p> -> <div>).
+
+**Tests iter90gk (part 4)** : **24/24 pytest PASS** au total sur les 3 fichiers de tests iter90gk
+(15 unit + 9 E2E integration HTTP).
+
+**Etat final de l'app** :
+- 6 endpoints anti-doublons + 1 page admin dediee
+- 3 index MongoDB uniques (pcmn_accounts, suppliers.bce)
+- 5 dialogs UI (similar suppliers, BCE attach candidates, owner homonym single, owner homonyms batch, quality-audit page)
+- 5 migrations one-time (cleanup orphans, heal NC, merge banks, merge BCE dup, migrate empty BCE)
+- 24 tests pytest verrouillant tout le comportement
+
 - 5 migrations one-time (dry-run + apply) : cleanup orphans, heal NC, merge banks, merge BCE dup, migrate empty BCE.
 
 - Impossible de creer 2 comptes PCMN avec le meme numero par ACP.

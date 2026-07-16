@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, Fragment } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import api from '@/lib/api';
 import { useAuth } from '@/contexts/AuthContext';
@@ -54,9 +54,9 @@ export default function AdminDashboardPage() {
           </div>
           <div>
             <h1 className="page-title">Administration de la plateforme</h1>
-            <p className="page-subtitle">
+            <div className="page-subtitle">
               Bienvenue {user?.name}. <Badge variant="outline" className="ml-1 border-amber-400 text-amber-700">Super administrateur</Badge>
-            </p>
+            </div>
           </div>
         </div>
       </div>
@@ -176,8 +176,8 @@ export default function AdminDashboardPage() {
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {syndics.map(s => (
-                    <>
-                      <tr key={s.syndic_id} className="hover:bg-slate-50 cursor-pointer" onClick={() => toggle(s.syndic_id)} data-testid={`syndic-row-${s.syndic_id}`}>
+                    <Fragment key={s.syndic_id}>
+                      <tr className="hover:bg-slate-50 cursor-pointer" onClick={() => toggle(s.syndic_id)} data-testid={`syndic-row-${s.syndic_id}`}>
                         <td className="px-2 py-2 text-center text-slate-400">
                           {expanded[s.syndic_id] ? <ChevronDown size={14} /> : <ChevRight size={14} />}
                         </td>
@@ -236,7 +236,7 @@ export default function AdminDashboardPage() {
                           </td>
                         </tr>
                       )}
-                    </>
+                    </Fragment>
                   ))}
                 </tbody>
                 <tfoot className="bg-slate-100 text-slate-700 font-semibold">
