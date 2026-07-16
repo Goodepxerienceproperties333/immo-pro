@@ -253,7 +253,10 @@ async def _build_situation_compte_pdf(db, owner_id, copropriete_id, start_date=N
             date_str = e.get("date", "")
             position = _date_in_range(date_str)
             if position == "before":
-                opening += d_val - c_val
+                # iter90gw : convention POV proprio (extrait de compte) -> C - D
+                # Un credit sur le compte proprio (paiement recu) augmente
+                # le solde "en votre faveur", un debit (appel) le diminue.
+                opening += c_val - d_val
             elif position == "in":
                 line_desc = (ln.get("line_description") or "").strip()
                 entry_desc = (e.get("description", "") or "").strip()
@@ -281,7 +284,9 @@ async def _build_situation_compte_pdf(db, owner_id, copropriete_id, start_date=N
         date_str = txn.get("date", "")
         position = _date_in_range(date_str)
         if position == "before":
-            opening -= abs(float(txn.get("amount", 0) or 0))
+            # iter90gw : bank txn = paiement du proprio (credit) -> augmente
+            # le solde "en votre faveur" en convention POV proprio.
+            opening += abs(float(txn.get("amount", 0) or 0))
         elif position == "in":
             movements.append({
                 "date": date_str,
@@ -294,7 +299,13 @@ async def _build_situation_compte_pdf(db, owner_id, copropriete_id, start_date=N
                 "journal_type": "BANK",
             })
 
-    movements.sort(key=lambda x: (x["date"], x.get("reference", "")))
+    # iter90gw : AN (reprise / solde reporte) en TETE parmi les mouvements
+    # de meme date (typique : AN 01/03 + appels 01/03 -> AN d'abord).
+    movements.sort(key=lambda x: (
+        x["date"],
+        0 if x.get("journal_type") == "AN" else 1,
+        x.get("reference", ""),
+    ))
 
     # iter90bv : fusion des lignes d'un meme proprietaire pour tous ses lots
     # iter90dw : passe self_owner_name pour differencier les mutations par counterpart
@@ -2892,31 +2903,80 @@ def create_reports_router(db):
         # Map supplier -> tier account
         supplier_by_id = {}
         tier_to_supplier = {}  # 44000XXX -> supplier
+        # iter90gv : matching fallback par NOM du fournisseur.
+        # Cas reel client (ACP Maria Test V1) : le journal AN d'ouverture
+        # ecrit sur des comptes "4400001" / "4400015" (variantes anciennes)
+        # avec `account_name="AG Insurance"` etc., SANS `third_party_id`. Ces
+        # lignes ne matchaient ni par tpid ni par tier_account declare
+        # -> l'AN etait totalement ignoree du solde, le fournisseur apparaissait
+        # "trop-paye" alors que la reprise couvrait le paiement. Ce fallback
+        # remonte le nom canonique du supplier pour ces cas.
+        # IMPORTANT : le matching par nom est LIMITE aux suppliers de la
+        # copropriete courante pour eviter le cross-contamination avec des
+        # homonymes d'autres ACPs (bug decouvert : SRL Finlead / Finlead
+        # Properties creaient des doublons quand on autorisait le matching global).
+        from routes.suppliers import _norm_name_candidates
+        import re as _re_supp
+        _OPTIPRO_PREFIX_RE = _re_supp.compile(r"^F\d{3,5}\s*-\s*", _re_supp.IGNORECASE)
+
+        def _strip_optipro_prefix(name: str) -> str:
+            """Retire le prefixe Optipro 'FXXXX - ' des noms importes pour
+            permettre le matching entre 'F0110 - Engie' (fiche) et 'Engie'
+            (account_name des ecritures AN d'ouverture)."""
+            return _OPTIPRO_PREFIX_RE.sub("", (name or "").strip())
+
+        def _all_name_candidates(name: str) -> set:
+            """Candidats normaux + candidats sans prefixe Optipro."""
+            cands = set(_norm_name_candidates(name))
+            stripped = _strip_optipro_prefix(name)
+            if stripped and stripped != name:
+                cands |= _norm_name_candidates(stripped)
+            return cands
+
+        name_to_supplier: dict = {}  # nom_normalise -> supplier (LOCAL a l'ACP)
         for s in suppliers:
             supplier_by_id[s["id"]] = s
             tier_acc = ((s.get("tier_accounts") or {}).get(copropriete_id, {}) or {}).get("main", "")
             if tier_acc:
                 tier_to_supplier[tier_acc] = s
+            # Enregistrer les candidats de nom UNIQUEMENT pour les fournisseurs
+            # de la copropriete courante (chinese wall strict).
+            if s.get("copropriete_id") == copropriete_id:
+                for cand in _all_name_candidates(s.get("name", "")):
+                    name_to_supplier.setdefault(cand, s)
+
+        def _resolve_supplier(ln: dict):
+            """Trouve le supplier attribuable a une ligne JE (priorite : tpid ->
+            tier_account -> nom dans account_name). Renvoie None si aucun match.
+            """
+            acc = ln.get("account_number", "")
+            tpid = ln.get("third_party_id")
+            if tpid and tpid in supplier_by_id:
+                return supplier_by_id[tpid]
+            if acc in tier_to_supplier:
+                return tier_to_supplier[acc]
+            # Fallback iter90gv : matcher par account_name (contient nom du supplier)
+            if acc.startswith("44"):
+                acc_name = (ln.get("account_name") or "").strip()
+                if acc_name:
+                    cands = _all_name_candidates(acc_name)
+                    for c in cands:
+                        s = name_to_supplier.get(c)
+                        if s:
+                            return s
+            return None
 
         # Aggregate by supplier_id (third_party_id) OR by 44000XXX account
         per_supplier = {}  # supplier_id -> {debit, credit, name, tier, invoices_count}
         for e in entries:
             for ln in e.get("lines", []) or []:
                 acc = ln.get("account_number", "")
-                tpid = ln.get("third_party_id")
-                # Compte tier fournisseur reconnu via 44000XXX
-                if not acc.startswith("44000") and not acc.startswith("440000"):
-                    # Tolerance : autre compte fournisseur ? On ne capture que 4400x
-                    if tpid and tpid in supplier_by_id and not acc.startswith("44"):
-                        continue
-                    elif not (tpid and tpid in supplier_by_id):
-                        continue
-                # Determine supplier identity
-                sup = None
-                if tpid and tpid in supplier_by_id:
-                    sup = supplier_by_id[tpid]
-                elif acc in tier_to_supplier:
-                    sup = tier_to_supplier[acc]
+                # iter90gv : accepter TOUS les comptes commencant par "44"
+                # (44XXXXX = fournisseurs PCMN, 5 a 8 chars, tolerant aux
+                # variantes historiques 4400XXX vs 44000XXX).
+                if not acc.startswith("44"):
+                    continue
+                sup = _resolve_supplier(ln)
                 if not sup:
                     continue
                 sid = sup["id"]
@@ -2938,17 +2998,61 @@ def create_reports_router(db):
         for e in entries_cumul:
             for ln in e.get("lines", []) or []:
                 acc = ln.get("account_number", "")
-                tpid = ln.get("third_party_id")
-                if not acc.startswith("44000") and not acc.startswith("440000"):
-                    if tpid and tpid in supplier_by_id and not acc.startswith("44"):
-                        continue
-                    elif not (tpid and tpid in supplier_by_id):
-                        continue
-                sup = None
-                if tpid and tpid in supplier_by_id:
-                    sup = supplier_by_id[tpid]
-                elif acc in tier_to_supplier:
-                    sup = tier_to_supplier[acc]
+                if not acc.startswith("44"):
+                    continue
+                sup = _resolve_supplier(ln)
+                if not sup:
+                    continue
+                sid = sup["id"]
+                tier_acc = ((sup.get("tier_accounts") or {}).get(copropriete_id, {}) or {}).get("main", acc)
+                d = per_supplier.setdefault(sid, {
+                    "supplier_id": sid,
+                    "supplier_name": sup.get("name", ""),
+                    "vat_number": sup.get("vat_number", "") or sup.get("bce_number", ""),
+                    "tier_account": tier_acc,
+                    "orphan": False,
+                    "debit": 0.0, "credit": 0.0,
+                    "cumul_debit": 0.0, "cumul_credit": 0.0,
+                    "invoice_count": 0,
+                })
+                d["cumul_debit"] += float(ln.get("debit", 0) or 0)
+                d["cumul_credit"] += float(ln.get("credit", 0) or 0)
+
+        # Aggregate by supplier_id (third_party_id) OR by 44000XXX account
+        per_supplier = {}  # supplier_id -> {debit, credit, name, tier, invoices_count}
+        for e in entries:
+            for ln in e.get("lines", []) or []:
+                acc = ln.get("account_number", "")
+                # iter90gv : accepter TOUS les comptes commencant par "44"
+                # (44XXXXX = fournisseurs PCMN, 5 a 8 chars, tolerant aux
+                # variantes historiques 4400XXX vs 44000XXX).
+                if not acc.startswith("44"):
+                    continue
+                sup = _resolve_supplier(ln)
+                if not sup:
+                    continue
+                sid = sup["id"]
+                tier_acc = ((sup.get("tier_accounts") or {}).get(copropriete_id, {}) or {}).get("main", acc)
+                d = per_supplier.setdefault(sid, {
+                    "supplier_id": sid,
+                    "supplier_name": sup.get("name", ""),
+                    "vat_number": sup.get("vat_number", "") or sup.get("bce_number", ""),
+                    "tier_account": tier_acc,
+                    "orphan": False,
+                    "debit": 0.0, "credit": 0.0,
+                    "cumul_debit": 0.0, "cumul_credit": 0.0,
+                    "invoice_count": 0,
+                })
+                d["debit"] += float(ln.get("debit", 0) or 0)
+                d["credit"] += float(ln.get("credit", 0) or 0)
+
+        # SOLDE CUMULATIF : aggregation sur entries_cumul (toutes ecritures jusqu'a end_date)
+        for e in entries_cumul:
+            for ln in e.get("lines", []) or []:
+                acc = ln.get("account_number", "")
+                if not acc.startswith("44"):
+                    continue
+                sup = _resolve_supplier(ln)
                 if not sup:
                     continue
                 sid = sup["id"]
@@ -3158,26 +3262,69 @@ def create_reports_router(db):
                     if not an_account:
                         an_account = pln.get("account_number", "")
 
-        # (b) Ecritures AN dans la periode
-        # iter90gt : les AN dans la periode courante NE SONT PLUS agregees en
-        # "REPRISE". Regle utilisateur : "le journal A-Nouveau est immuable et
-        # DOIT apparaitre dans les balances". La ligne "Reprise" masquait
-        # l'origine reelle du solde d'ouverture. On les traite maintenant
-        # comme n'importe quel autre mouvement (avec sa date, sa reference
-        # AN-YYYY-XXX, son libelle). Seul le cumul PRE-start_date (a) reste
-        # agrege en REPRISE (car par definition on ne veut pas afficher toutes
-        # les ecritures des exercices anterieurs).
-        # NB : le calcul `an_debit/an_credit` du bloc precedent (avant
-        # start_date) est conserve tel quel pour la ligne "REPRISE" historique.
-        if abs(an_debit - an_credit) > 0.001:
+        # (b) Ecritures AN dans la periode - AGREGEES en 1 ligne "REPRISE"
+        # iter90gu : regle utilisateur explicite (16/07/2026) :
+        #   "il faut ajouter une ligne dans les situations de compte permettant
+        #    de mentionner le montant de la reprise (journal A-Nouveau) et
+        #    faire le calcul sur cette base"
+        # -> les AN (peu importe qu'elles soient AVANT ou DANS la periode)
+        # sont TOUJOURS agregees en UNE SEULE ligne "REPRISE" en tete de la
+        # situation de compte, portant :
+        #   - la date de la 1ere AN (date d'ouverture d'exercice reelle)
+        #   - la reference du journal A-Nouveau (AN-YYYY-XXX)
+        #   - le solde d'ouverture (debit + credit cumules des AN)
+        # Le running_balance PART de ce montant de reprise (base de calcul).
+        # Immuabilite du journal AN : cette ligne n'est jamais editable par le
+        # syndic - elle refletee 1:1 le contenu du journal A-Nouveau.
+        reprise_ref = "REPRISE"
+        reprise_dates: list = []
+        an_refs: list = []
+        for e in entries:
+            if (e.get("journal_type") or "") != "AN":
+                continue
+            an_ref = e.get("reference") or e.get("id", "")
+            matched_this_entry = False
+            for idx, ln in enumerate(e.get("lines", []) or []):
+                if not _line_matches(ln, e):
+                    continue
+                an_debit += float(ln.get("debit", 0) or 0)
+                an_credit += float(ln.get("credit", 0) or 0)
+                if not an_account:
+                    an_account = ln.get("account_number", "")
+                # iter90cx : dedup par (entry_id, line_index) - marque comme
+                # deja consomme pour eviter double comptabilisation dans la
+                # boucle "mouvements de la periode" plus bas.
+                seen.add((e.get("id"), idx))
+                matched_this_entry = True
+            if matched_this_entry:
+                if e.get("date"):
+                    reprise_dates.append(e.get("date"))
+                if an_ref and an_ref not in an_refs:
+                    an_refs.append(an_ref)
+        # Choix de la date de la ligne REPRISE : la plus ancienne AN (debut
+        # d'exercice reel) prime sur le start_date qui n'est qu'un filtre UI.
+        if reprise_dates:
+            reprise_dates.sort()
+            reprise_date = reprise_dates[0]
+        else:
             reprise_date = start_date or ""
+        # Reference : concat des AN-YYYY-XXX (utile pour audit)
+        if an_refs:
+            reprise_ref = " + ".join(an_refs[:3]) + (" (...)" if len(an_refs) > 3 else "")
+        # Description enrichie mentionnant explicitement "Journal A-Nouveau"
+        # (mot cle metier + rappel de l'immuabilite pour le syndic).
+        if reprise_date:
+            reprise_desc = f"Reprise d'ouverture au {reprise_date} (Journal A-Nouveau - immuable)"
+        else:
+            reprise_desc = "Reprise d'ouverture (Journal A-Nouveau - immuable)"
+        if abs(an_debit) > 0.001 or abs(an_credit) > 0.001:
             movements.append({
                 "date": reprise_date,
-                "description": f"Reprise comptable au {reprise_date}" if reprise_date else "Reprise comptable",
+                "description": reprise_desc,
                 "debit": round(an_debit, 2),
                 "credit": round(an_credit, 2),
                 "type": "reprise",
-                "reference": "REPRISE",
+                "reference": reprise_ref,
                 "account_number": an_account or tier_acc,
                 "journal_type": "AN",
                 "is_reprise": True,
@@ -3208,7 +3355,9 @@ def create_reports_router(db):
                     "journal_type": e.get("journal_type", ""),
                 })
 
-        movements.sort(key=lambda x: (x["date"], x.get("reference", "")))
+        # iter90gu : trier avec la ligne REPRISE en tete parmi les mouvements
+        # de meme date. `is_reprise=True` -> tuple 0 avant `is_reprise=False` -> 1.
+        movements.sort(key=lambda x: (x["date"], 0 if x.get("is_reprise") else 1, x.get("reference", "")))
         # Cote fournisseur : credit a payer = positif (convention NextGe Copro)
         running = 0.0
         for m in movements:

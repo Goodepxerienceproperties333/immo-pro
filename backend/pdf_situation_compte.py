@@ -225,21 +225,31 @@ def build_situation_compte_pdf(
         elems.append(Spacer(1, 8 * mm))
 
     # ---- COMPUTE TOTALS FIRST (for highlighted summary card) ----
+    # iter90gw : convention comptable POV PROPRIETAIRE (extrait de compte
+    # destine au proprio, format Optipro belge standard) :
+    #   Solde = Credit - Debit
+    #   Solde POSITIF  = "EN VOTRE FAVEUR" (proprio a paye plus que du,
+    #                    ACP doit au proprio = crediteur)
+    #   Solde NEGATIF  = "A REGLER" (proprio doit encore, debiteur)
+    # C'est l'inverse de la convention interne "POV ACP" utilisee dans le
+    # grand livre et le bilan (D - C). Ne PAS confondre : cette convention
+    # ne s'applique qu'au PDF envoye au proprietaire.
     running = float(opening_balance or 0.0)
     total_debit = 0.0
     total_credit = 0.0
     for m in movements:
         d = float(m.get("debit", 0) or 0)
         c = float(m.get("credit", 0) or 0)
-        running += d - c
+        running += c - d
         total_debit += d
         total_credit += c
 
     # ---- SUMMARY CARD (very visible) ----
-    sold_color = colors.HexColor("#DC2626") if running > 0.01 else (colors.HexColor("#16A34A") if running < -0.01 else colors.HexColor("#475569"))
-    sold_label = "A REGLER" if running > 0.01 else ("EN VOTRE FAVEUR" if running < -0.01 else "SOLDE NUL")
+    # iter90gw : labels inverses (POV proprio) - positif = en votre faveur
+    sold_color = colors.HexColor("#16A34A") if running > 0.01 else (colors.HexColor("#DC2626") if running < -0.01 else colors.HexColor("#475569"))
+    sold_label = "EN VOTRE FAVEUR" if running > 0.01 else ("A REGLER" if running < -0.01 else "SOLDE NUL")
     sold_value = abs(running)
-    bg_summary = colors.HexColor("#FEF3F2") if running > 0.01 else (colors.HexColor("#F0FDF4") if running < -0.01 else colors.HexColor("#F8FAFC"))
+    bg_summary = colors.HexColor("#F0FDF4") if running > 0.01 else (colors.HexColor("#FEF3F2") if running < -0.01 else colors.HexColor("#F8FAFC"))
 
     summary_rows = [
         [Paragraph("<b>Total des appels</b>", body),
@@ -306,7 +316,8 @@ def build_situation_compte_pdf(
     for m in movements:
         d = float(m.get("debit", 0) or 0)
         c = float(m.get("credit", 0) or 0)
-        running2 += d - c
+        # iter90gw : POV proprio -> Solde = Credit - Debit
+        running2 += c - d
         label = _humanize_label(
             m.get("description", ""), m.get("reference", ""),
             m.get("journal_type", ""), debit=d, credit=c,
@@ -360,11 +371,13 @@ def build_situation_compte_pdf(
     elems.append(Spacer(1, 8 * mm))
 
     # ---- PAYMENT INSTRUCTIONS ----
-    if running > 0.01:
+    # iter90gw : POV proprio -> running < 0 = "A REGLER" (doit),
+    #                            running > 0 = "EN VOTRE FAVEUR" (crediteur)
+    if running < -0.01:
         rib_lines = [
             "<font size='11'><b>Comment regler ce solde ?</b></font>",
             "&nbsp;",
-            f"Veuillez verser <b>{_fmt_eur(running)}</b> sur le compte :",
+            f"Veuillez verser <b>{_fmt_eur(abs(running))}</b> sur le compte :",
             f"<b>IBAN :</b> <font name='Courier'>{iban or '—'}</font>",
             f"<b>BIC :</b> <font name='Courier'>{bic or '—'}</font>",
             f"<b>Beneficiaire :</b> {copropriete.get('name', syndic_info.get('name',''))}",
@@ -386,9 +399,9 @@ def build_situation_compte_pdf(
         ]))
         elems.append(KeepTogether(rib_tbl))
         elems.append(Spacer(1, 6 * mm))
-    elif running < -0.01:
+    elif running > 0.01:
         msg = Paragraph(
-            f"<font size='11'><b>Solde en votre faveur : {_fmt_eur(abs(running))}</b></font><br/>"
+            f"<font size='11'><b>Solde en votre faveur : {_fmt_eur(running)}</b></font><br/>"
             "&nbsp;<br/>"
             "Ce solde sera deduit de votre prochain appel de fonds. "
             "Pour obtenir le remboursement par virement, transmettez votre IBAN au syndic.",

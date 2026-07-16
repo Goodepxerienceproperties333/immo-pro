@@ -77,9 +77,10 @@ def _cleanup(db, sid, je_id):
 
 
 def test_iter90gt_an_visible_in_situation_de_compte_with_date_and_ref(admin_session, db):
-    """La ligne AN doit apparaitre INDIVIDUELLEMENT dans la situation de compte
-    fournisseur, avec sa date d'exercice et sa reference AN-YYYY-XXX.
-    Regle : "immuable, doit etre pris en compte".
+    """iter90gu : la ligne REPRISE (Journal A-Nouveau) apparait en TETE de la
+    situation de compte avec la date d'ouverture d'exercice, la reference
+    AN-YYYY-XXX, et le montant issu du journal AN. Le running_balance part
+    de cette reprise (base de calcul des mouvements suivants).
     """
     copro_id = "ed728e70-1d0d-4057-a37a-d450cc9ac812"
     sid, an_je, tier_acc = _insert_supplier_with_an(db, copro_id, an_amount=500.0)
@@ -92,15 +93,22 @@ def test_iter90gt_an_visible_in_situation_de_compte_with_date_and_ref(admin_sess
         assert r.status_code == 200, r.text[:300]
         data = r.json()
         movements = data["movements"]
-        # Recherche la ligne AN individuelle (avec date et reference, PAS "REPRISE")
-        an_lines = [m for m in movements if m["reference"] == "AN-TEST-001"]
-        assert len(an_lines) == 1, f"Une seule ligne AN attendue, trouve {len(an_lines)} : {movements}"
-        an_m = an_lines[0]
-        assert an_m["date"] == "2026-01-01", f"Date AN doit etre 01/01/2026, got {an_m['date']}"
-        assert an_m["credit"] == 500.0, f"AN au CREDIT 500€, got C={an_m['credit']}"
-        assert an_m["debit"] == 0.0
-        assert an_m["journal_type"] == "AN"
-        # Le solde total inclut bien l'AN
+        # Recherche la ligne REPRISE (is_reprise=True)
+        reprise_lines = [m for m in movements if m.get("is_reprise")]
+        assert len(reprise_lines) == 1, f"Une seule ligne REPRISE attendue, trouve {len(reprise_lines)} : {movements}"
+        reprise = reprise_lines[0]
+        # La date est celle de l'AN (immuable), pas start_date
+        assert reprise["date"] == "2026-01-01", f"Date REPRISE doit etre l'AN 01/01/2026, got {reprise['date']}"
+        # La reference expose l'AN reelle (traçabilite)
+        assert "AN-TEST-001" in reprise["reference"], f"Ref REPRISE doit contenir 'AN-TEST-001', got {reprise['reference']}"
+        assert reprise["credit"] == 500.0
+        assert reprise["debit"] == 0.0
+        assert reprise["journal_type"] == "AN"
+        # Description mentionne "Journal A-Nouveau" (rappel metier / immuabilite)
+        assert "A-Nouveau" in reprise["description"]
+        # Running balance PART de la reprise (500€ apres cette 1ere ligne)
+        assert reprise["running_balance"] == 500.0
+        # Solde global inclut l'AN
         assert data["total_credit"] == 500.0
         assert data["balance"] == 500.0
         assert data["status"] == "crediteur"
@@ -108,29 +116,52 @@ def test_iter90gt_an_visible_in_situation_de_compte_with_date_and_ref(admin_sess
         _cleanup(db, sid, an_je)
 
 
-def test_iter90gt_an_never_aggregated_into_reprise_when_in_period(admin_session, db):
-    """La ligne 'Reprise comptable' NE DOIT PAS masquer un AN qui est dans la
-    periode courante. Ancien comportement (bug) : ligne synthetique 'REPRISE'
-    sans date qui absorbait les AN de la periode -> user perdait la reference.
+def test_iter90gt_reprise_line_is_first_row_even_when_other_movements_share_date(admin_session, db):
+    """iter90gu : la ligne REPRISE doit apparaitre AVANT tout autre mouvement
+    partageant la meme date (AN au 01/01/YYYY, souvent = date d'une facture
+    d'ouverture ou d'un OD). Le tri secondaire respecte `is_reprise` en tete.
     """
     copro_id = "ed728e70-1d0d-4057-a37a-d450cc9ac812"
-    sid, an_je, _ = _insert_supplier_with_an(db, copro_id, an_amount=250.0)
+    sid, an_je, tier_acc = _insert_supplier_with_an(db, copro_id, an_amount=100.0)
+    # Ajoute une facture AC au meme jour que l'AN (01/01/2026)
+    inv_id = f"iter90gu-inv-{uuid.uuid4()}"
+    ac_je = f"iter90gu-ac-{uuid.uuid4()}"
+    db.invoices.insert_one({
+        "id": inv_id, "supplier_id": sid, "supplier": "Test",
+        "total_amount": 200.0, "copropriete_id": copro_id, "date": "2026-01-01",
+        "internal_reference": "TEST-AC-001",
+    })
+    db.journal_entries.insert_one({
+        "id": ac_je, "journal_type": "AC", "date": "2026-01-01",
+        "reference": "TEST-AC-001", "description": "Facture jour AN",
+        "source_invoice_id": inv_id, "copropriete_id": copro_id,
+        "lines": [
+            {"account_number": "61099998", "debit": 200.0, "credit": 0.0},
+            {"account_number": tier_acc, "third_party_id": sid,
+             "debit": 0.0, "credit": 200.0},
+        ],
+        "total_debit": 200.0, "total_credit": 200.0,
+    })
     try:
         r = admin_session.get(
             f"{BASE_URL}/api/reports/balance-tiers/suppliers/{sid}",
-            params={"copropriete_id": copro_id},  # PAS de start_date
+            params={"copropriete_id": copro_id},
             timeout=30,
         )
         assert r.status_code == 200
         movements = r.json()["movements"]
-        # Il ne doit y avoir AUCUNE ligne "REPRISE" sans start_date fourni
-        # (car pas de "cumul historique" a agreger dans ce cas)
-        reprises = [m for m in movements if m.get("reference") == "REPRISE"]
-        assert len(reprises) == 0, f"Aucune ligne REPRISE attendue sans start_date, trouve : {reprises}"
-        # La ligne AN doit etre presente sous sa vraie reference
-        assert any(m["reference"] == "AN-TEST-001" for m in movements)
+        # La 1ere ligne DOIT etre la REPRISE
+        assert movements[0].get("is_reprise") is True, f"1ere ligne devrait etre REPRISE, got {movements[0]}"
+        assert movements[0]["credit"] == 100.0
+        assert movements[0]["running_balance"] == 100.0
+        # 2eme : la facture (running = 100 + 200 = 300)
+        assert not movements[1].get("is_reprise")
+        assert movements[1]["credit"] == 200.0
+        assert movements[1]["running_balance"] == 300.0
     finally:
         _cleanup(db, sid, an_je)
+        db.invoices.delete_one({"id": inv_id})
+        db.journal_entries.delete_one({"id": ac_je})
 
 
 def test_iter90gt_an_immutable_in_cumulative_balance_with_start_date_filter(admin_session, db):

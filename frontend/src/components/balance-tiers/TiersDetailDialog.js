@@ -67,12 +67,23 @@ export default function TiersDetailDialog({
               </TableRow></TableHeader>
               <TableBody>
                 {(detail?.movements || []).map((m, i) => (
-                  <TableRow key={i} className="hover:bg-slate-50/50">
+                  <TableRow
+                    key={i}
+                    className={m.is_reprise ? "bg-blue-50 hover:bg-blue-100/70 border-b-2 border-blue-200" : "hover:bg-slate-50/50"}
+                    data-testid={m.is_reprise ? "tiers-reprise-row" : undefined}
+                  >
                     <TableCell className="font-mono text-xs">{fmtDate(m.date)}</TableCell>
-                    <TableCell className="text-sm">{m.description}</TableCell>
+                    <TableCell className="text-sm">
+                      {m.is_reprise && (
+                        <Badge variant="outline" className="mr-2 text-[9px] bg-blue-100 text-blue-800 border-blue-300 font-semibold">
+                          REPRISE
+                        </Badge>
+                      )}
+                      {m.description}
+                    </TableCell>
                     <TableCell className="text-xs text-slate-400">{m.reference}</TableCell>
-                    <TableCell className="text-right font-mono text-sm">{m.debit > 0 ? m.debit.toFixed(2) : ''}</TableCell>
-                    <TableCell className="text-right font-mono text-sm">{m.credit > 0 ? m.credit.toFixed(2) : ''}</TableCell>
+                    <TableCell className={`text-right font-mono text-sm ${m.is_reprise ? 'font-semibold' : ''}`}>{m.debit > 0 ? m.debit.toFixed(2) : ''}</TableCell>
+                    <TableCell className={`text-right font-mono text-sm ${m.is_reprise ? 'font-semibold' : ''}`}>{m.credit > 0 ? m.credit.toFixed(2) : ''}</TableCell>
                     <TableCell className={`text-right font-mono text-sm font-semibold ${m.running_balance > 0 ? 'text-red-700' : m.running_balance < 0 ? 'text-green-700' : ''}`}>{m.running_balance?.toFixed(2)}</TableCell>
                   </TableRow>
                 ))}
