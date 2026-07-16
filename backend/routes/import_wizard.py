@@ -2193,6 +2193,39 @@ def create_import_wizard_router(db):
             }
             await db.distribution_keys.insert_one(doc)
             inserted += 1
+        # iter90gj : garantir qu'au moins UNE cle de repartition est marquee
+        # comme "par defaut" pour cette ACP. Sans cela, l'endpoint mutation
+        # (calcul du prorata fonds de roulement) tombe en erreur "Aucune cle
+        # de repartition par defaut trouvee".
+        # Priorite : cle "Charges communes" (code 0001) > 1ere cle inseree
+        # avec le plus grand nombre de lots.
+        default_key = await db.distribution_keys.find_one(
+            {"copropriete_id": copro_id, "is_default": True}, {"_id": 0, "id": 1},
+        )
+        if not default_key:
+            candidate = await db.distribution_keys.find_one(
+                {"copropriete_id": copro_id, "$or": [
+                    {"code": "0001"},
+                    {"code": "1"},
+                    {"name": {"$regex": "^Charges communes", "$options": "i"}},
+                ]},
+                {"_id": 0, "id": 1, "name": 1},
+            )
+            if not candidate:
+                # Fallback : la 1ere cle triee par nombre de lots decroissant
+                all_keys = await db.distribution_keys.find(
+                    {"copropriete_id": copro_id}, {"_id": 0, "id": 1, "name": 1, "lots": 1},
+                ).to_list(50)
+                if all_keys:
+                    all_keys.sort(key=lambda x: -len(x.get("lots") or []))
+                    candidate = all_keys[0]
+            if candidate:
+                await db.distribution_keys.update_one(
+                    {"id": candidate["id"]}, {"$set": {"is_default": True}},
+                )
+                await _update_step(db, session_id, "distribution_keys",
+                                    {"count": inserted, "default_key": candidate.get("name", "")})
+                return {"inserted": inserted, "default_key_auto": candidate.get("name", "")}
         await _update_step(db, session_id, "distribution_keys", {"count": inserted})
         return {"inserted": inserted}
 
