@@ -656,6 +656,39 @@ export default function ImportWizardPage() {
                 </Button>
               );
             }
+            // iter90gj : sur la DERNIERE etape optionnelle sans fichier, on
+            // propose de terminer le wizard sans importer cette etape.
+            if (step.optional && stepIdx === STEPS.length - 1 && !sniffResult) {
+              return (
+                <Button
+                  variant="outline"
+                  onClick={async () => {
+                    if (!session) return;
+                    setCommitting(true);
+                    try {
+                      await api.post(`/import-wizard/sessions/${session.id}/finish`);
+                      const pendingMutations = params.get('pending_mutations') === '1';
+                      if (pendingMutations) {
+                        toast.success('Import termine ! Place aux mutations intra-exercice.');
+                        navigate(`/lots?post_import_mutations=1&copropriete_id=${effectiveCopro}`);
+                      } else {
+                        toast.success('Import termine ! Toutes les donnees sont integrees.');
+                        navigate(`/?copropriete_id=${effectiveCopro}`);
+                      }
+                    } catch (e) {
+                      toast.error(e.response?.data?.detail || 'Echec de finalisation');
+                    } finally {
+                      setCommitting(false);
+                    }
+                  }}
+                  disabled={committing}
+                  className="border-emerald-300 text-emerald-700 hover:bg-emerald-50"
+                  data-testid="skip-and-finish"
+                >
+                  {committing ? <><Loader2 size={14} className="animate-spin mr-1" /> ...</> : <>Passer et terminer le wizard <CheckCircle2 size={14} className="ml-1" /></>}
+                </Button>
+              );
+            }
             return (
               <Button
                 disabled={!sniffResult || committing}
