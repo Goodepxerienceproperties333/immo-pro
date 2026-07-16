@@ -137,6 +137,13 @@ export default function AdminDashboardPage() {
             <Button variant="link" className="px-0 mt-2 text-amber-600" data-testid="btn-go-mutations-audit">Ouvrir <ArrowRight size={14} className="ml-1" /></Button>
           </CardContent>
         </Card>
+        <Card className="hover:shadow-md transition cursor-pointer border-emerald-200" onClick={() => navigate('/admin/quality-audit')} data-testid="card-quality-audit">
+          <CardHeader className="pb-2"><CardTitle className="text-base flex items-center gap-2 text-slate-900"><ShieldCheck size={18} className="text-emerald-600" />Quality Audit (anti-doublons)</CardTitle></CardHeader>
+          <CardContent className="text-sm text-slate-600 pt-1">
+            <p>Rapport global : BCE dup, PCMN orphelins, comptes bancaires dup, NC sans ecriture. Export CSV.</p>
+            <Button variant="link" className="px-0 mt-2 text-emerald-600" data-testid="btn-go-quality-audit">Ouvrir <ArrowRight size={14} className="ml-1" /></Button>
+          </CardContent>
+        </Card>
       </div>
 
       {/* Vue par syndic (la grosse table) */}

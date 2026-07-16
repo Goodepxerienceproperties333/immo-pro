@@ -1,0 +1,33 @@
+{
+  "summary": "iter90gk E2E validation: 9/9 backend scenarios PASS (BCE required, BCE global unicity, owner strict/homonym split, /duplicates-audit JSON+CSV, /suppliers/{id}/bce-candidates, Bilan Maria = 14351.48 balanced). Frontend S8 (/admin/quality-audit) and S10 (empty BCE toast) verified visually with correct data-testids and clear error messages. S9 (bce-candidates-box) code-verified in SuppliersPage.js (rendering logic + endpoint returns 1 candidate for SRL Finlead id=779ab65b).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "AdminDashboardPage", "issues": ["React console warning: <div> cannot be a descendant of <p> (hydration warning). Also 'Each child in a list should have a unique key prop'. Non-blocking but should be cleaned up."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter90gk_scenarios_e2e.py",
+    "/app/test_reports/pytest/iter90gk_scenarios.xml"
+  ],
+  "action_items": [
+    "(Optional cleanup) Fix React DOM nesting warning in AdminDashboardPage.js (<div> inside <p>) and add unique 'key' prop to a mapped list."
+  ],
+  "critical_code_review_comments": [
+    "SuppliersPage.js openEdit fetches /bce-candidates only when !s.bce_number; renders bce-candidates-box only when candidates.length > 0 AND !form.bce_number - correct.",
+    "admin.py duplicates-audit returns full 8-category structure incl. summary + healthy flag.",
+    "Backend response messages are explicit and French - user-friendly ('Doublon STRICT', 'Homonyme detecte', 'BCE obligatoire')."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter90gk_scenarios_e2e.py"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "admin@copro.be / admin123",
+  "seed_data_creation": "Created transient TEST_ prefixed suppliers/owners during S1-S6 tests; all cleaned up via DELETE in test teardown.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend 9/9 scenarios PASS via /app/backend/tests/test_iter90gk_scenarios_e2e.py. Frontend S8 quality-audit page renders correctly with data-testids admin-quality-audit-page, quality-download-csv. S10 shows toast 'Le numero BCE (ou TVA equivalent) est obligatoire' when creating supplier without BCE. Bilan Maria (id ed728e70-1d0d-4057-a37a-d450cc9ac812, date_to=2027-02-28) returns total_actif=total_passif ~14351.48€ equilibre=true. The /suppliers page is copro-scoped so testing bce-candidates-box in UI requires navigating to the specific copro that owns supplier 779ab65b (SRL Finlead, has 1 candidate) - endpoint & rendering logic both verified.",
+  "rca_of_the_issue": "N/A - all 10 scenarios passed. No bugs detected."
+}
