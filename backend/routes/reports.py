@@ -1154,6 +1154,37 @@ async def compute_bilan_data(db, copropriete_id: str, date_to: Optional[str] = N
 def create_reports_router(db):
     router = APIRouter(prefix="/api/reports")
 
+    # ==================== iter90go : CACHE BILAN ====================
+    # Le stress test iter90gn a mesure /reports/bilan p95=1030ms sous
+    # 20 concurrent (le seul WARN restant apres le fix duplicates-audit).
+    # Pic reel attendu : envoi groupe de decomptes en fin d'exercice ou
+    # consultation simultanee par plusieurs gestionnaires.
+    # Cache in-memory {key -> (timestamp, data)} avec TTL court (60s) :
+    #   - assez court pour rester "vivant" apres import bancaire / passage
+    #     d'ecritures ;
+    #   - assez long pour absorber les acces concurrent lors d'une consultation
+    #     collective (AG, envoi groupe).
+    # La cle inclut (copro_id, date_to, fiscal_year_id, view_mode) - toutes
+    # les entrees qui changent le resultat du calcul. `force_refresh=true`
+    # bypasse le cache. Header `_cache_hit=true` retourne pour l'observabilite.
+    _bilan_cache: dict = {}
+    _BILAN_CACHE_TTL = 60  # 60 secondes - compromis fraicheur/perf
+
+    def _bilan_cache_get(key: str):
+        import time as _t
+        entry = _bilan_cache.get(key)
+        if not entry:
+            return None
+        ts, data = entry
+        if _t.time() - ts > _BILAN_CACHE_TTL:
+            _bilan_cache.pop(key, None)
+            return None
+        return data
+
+    def _bilan_cache_set(key: str, data):
+        import time as _t
+        _bilan_cache[key] = (_t.time(), data)
+
     # ---- GRAND LIVRE (General Ledger) ----
     @router.get("/grand-livre")
     async def grand_livre(
@@ -1271,18 +1302,30 @@ def create_reports_router(db):
     @router.get("/bilan")
     async def bilan(request: Request, date_to: Optional[str] = None, copropriete_id: Optional[str] = None,
                     fiscal_year_id: Optional[str] = None,
-                    view_mode: Optional[str] = "before_distribution"):
+                    view_mode: Optional[str] = "before_distribution",
+                    force_refresh: bool = False):
         """Bilan PCMN belge structure (Actif / Passif par rubriques). Chinese walls strict.
         view_mode :
           - 'before_distribution' (defaut) : le boni/mali apparait sur le compte 499.
           - 'after_distribution' : le 499 est reparti sur les comptes 4000XX des proprietaires
             (par quotites globales + cles speciales eventuelles par compte).
+
+        iter90go : cache in-memory TTL 60s par (copro, date_to, fy, view_mode).
+        `force_refresh=true` bypasse le cache.
         """
         copropriete_id = _require_copro(copropriete_id, request)
-        return await compute_bilan_data(
+        # iter90go : cache lookup - key inclut TOUS les parametres qui changent le calcul
+        cache_key = f"{copropriete_id}|{date_to or ''}|{fiscal_year_id or ''}|{view_mode or 'before_distribution'}"
+        if not force_refresh:
+            cached = _bilan_cache_get(cache_key)
+            if cached is not None:
+                return {**cached, "_cache_hit": True}
+        data = await compute_bilan_data(
             db, copropriete_id, date_to=date_to,
             fiscal_year_id=fiscal_year_id, view_mode=view_mode,
         )
+        _bilan_cache_set(cache_key, data)
+        return data
 
     # ---- PDF BILAN (par exercice) ----
     @router.get("/bilan/pdf")

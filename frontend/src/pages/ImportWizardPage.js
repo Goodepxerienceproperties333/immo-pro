@@ -296,6 +296,37 @@ export default function ImportWizardPage() {
         if (m.errors?.length) {
           m.errors.slice(0, 3).forEach(e => toast.error(`Ligne ${e.row}: ${e.error}`));
         }
+      } else if (step.key === 'invoices') {
+        // iter90gp : DOIT etre traite avant la branche `effectiveKind === 'csv'`
+        // car pour un CSV Optipro `sniff-csv?kind=invoices` peuple `invoicesParsed`
+        // et le backend `/commit-invoices` attend `{invoices: [...]}`, PAS
+        // `{mapping, rows}`. Sans ce reorder, on obtenait "invoices: Field required".
+        // iter90gj : bloque le commit si des factures n'ont pas de compte
+        // comptable (verrou PCMN iter90g9). Le PDF tabulaire "Factures
+        // fournisseurs" ne fournit pas les comptes -> le syndic doit les
+        // saisir dans la preview.
+        const missing = (invoicesParsed || []).filter(i => !(i.account_number || '').trim()).length;
+        if (missing > 0) {
+          toast.error(`${missing} facture(s) sans compte comptable. Saisissez-les dans la colonne "Cpte" avant de valider.`);
+          setCommitting(false);
+          return;
+        }
+        r = await api.post(`/import-wizard/sessions/${session.id}/commit-invoices`, { invoices: invoicesParsed });
+        const m = r.data;
+        toast.success(
+          `${m.inserted} facture(s) validee(s)${m.grouped ? ` (${m.grouped} lignes de detail regroupees)` : ''} + ${m.journal_entries || 0} ecriture(s) AC creee(s)` +
+          (m.pcmn_created ? ` - ${m.pcmn_created} compte(s) PCMN auto-ajoutes` : '') +
+          ` - ${m.matched_supplier} avec fournisseur, ${m.matched_key} avec cle, ${m.matched_category} avec nature` +
+          (m.private_fees_detected ? ` - ${m.private_fees_detected} FRAIS PRIVATIF(S) 643 detecte(s) : assignez les proprietaires en fin de wizard` : '')
+        );
+      } else if (step.key === 'journals') {
+        // iter90gp : idem que invoices - traite avant la branche `csv` generique.
+        r = await api.post(`/import-wizard/sessions/${session.id}/commit-journals`, { transactions: journalsParsed });
+        const m = r.data;
+        toast.success(
+          `${m.inserted} transaction(s) bancaire(s) importee(s) + ${m.journal_entries || 0} ecriture(s) FI` +
+          (m.pcmn_created ? ` - ${m.pcmn_created} compte(s) PCMN auto-ajoutes` : '')
+        );
       } else if (effectiveKind === 'csv') {
         r = await api.post(`/import-wizard/sessions/${session.id}/commit-${step.key}`, {
           mapping,
@@ -317,32 +348,6 @@ export default function ImportWizardPage() {
       } else if (step.key === 'distribution_keys') {
         r = await api.post(`/import-wizard/sessions/${session.id}/commit-distribution-keys`, { keys: keysParsed });
         toast.success(`${r.data.inserted} cle(s) de repartition creees`);
-      } else if (step.key === 'invoices') {
-        // iter90gj : bloque le commit si des factures n'ont pas de compte
-        // comptable (verrou PCMN iter90g9). Le PDF tabulaire "Factures
-        // fournisseurs" ne fournit pas les comptes -> le syndic doit les
-        // saisir dans la preview.
-        const missing = (invoicesParsed || []).filter(i => !(i.account_number || '').trim()).length;
-        if (missing > 0) {
-          toast.error(`${missing} facture(s) sans compte comptable. Saisissez-les dans la colonne "Cpte" avant de valider.`);
-          setCommitting(false);
-          return;
-        }
-        r = await api.post(`/import-wizard/sessions/${session.id}/commit-invoices`, { invoices: invoicesParsed });
-        const m = r.data;
-        toast.success(
-          `${m.inserted} facture(s) validee(s)${m.grouped ? ` (${m.grouped} lignes de detail regroupees)` : ''} + ${m.journal_entries || 0} ecriture(s) AC creee(s)` +
-          (m.pcmn_created ? ` - ${m.pcmn_created} compte(s) PCMN auto-ajoutes` : '') +
-          ` - ${m.matched_supplier} avec fournisseur, ${m.matched_key} avec cle, ${m.matched_category} avec nature` +
-          (m.private_fees_detected ? ` - ${m.private_fees_detected} FRAIS PRIVATIF(S) 643 detecte(s) : assignez les proprietaires en fin de wizard` : '')
-        );
-      } else if (step.key === 'journals') {
-        r = await api.post(`/import-wizard/sessions/${session.id}/commit-journals`, { transactions: journalsParsed });
-        const m = r.data;
-        toast.success(
-          `${m.inserted} transaction(s) bancaire(s) importee(s) + ${m.journal_entries || 0} ecriture(s) FI` +
-          (m.pcmn_created ? ` - ${m.pcmn_created} compte(s) PCMN auto-ajoutes` : '')
-        );
       } else if (step.key === 'opening_balance') {
         r = await api.post(`/import-wizard/sessions/${session.id}/commit-opening-balance`, {
           actif: balanceParsed.actif,
@@ -606,7 +611,7 @@ export default function ImportWizardPage() {
             </div>
           )}
 
-          {sniffResult && (step.kind === 'csv' || (step.kind === 'csv_or_pdf' && uploadMode === 'csv')) && (
+          {sniffResult && (step.kind === 'csv' || (step.kind === 'csv_or_pdf' && uploadMode === 'csv')) && step.key !== 'invoices' && step.key !== 'journals' && (
             <CsvMappingView
               sniff={sniffResult}
               targetFields={TARGET_FIELDS[step.key] || []}
@@ -763,12 +768,27 @@ export default function ImportWizardPage() {
 }
 
 function CsvMappingView({ sniff, targetFields, mapping, setMapping }) {
+  // iter90gp : protection defensive - si le sniff est une reponse d'endpoint
+  // structure (kind=invoices/journals), il n'a pas de `headers`/`rows`.
+  // On evite le crash "Cannot read properties of undefined (reading 'map')"
+  // au cas ou le montage conditionnel amont serait mal filtre.
+  const headers = Array.isArray(sniff?.headers) ? sniff.headers : [];
+  const rows = Array.isArray(sniff?.rows) ? sniff.rows : [];
+  const totalRows = sniff?.total_rows ?? rows.length;
+  const fields = Array.isArray(targetFields) ? targetFields : [];
+  if (headers.length === 0) {
+    return (
+      <div className="bg-amber-50 border border-amber-200 rounded p-3 text-xs text-amber-900" data-testid="csv-mapping-no-headers">
+        Aucun en-tete detecte dans ce fichier - impossible d&apos;afficher le mapping.
+      </div>
+    );
+  }
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-3 gap-3 text-xs">
         <div className="bg-slate-50 rounded p-2"><div className="text-slate-500">Encoding</div><div className="font-mono font-semibold">{sniff.encoding}</div></div>
         <div className="bg-slate-50 rounded p-2"><div className="text-slate-500">Separateur</div><div className="font-mono font-semibold">&laquo;{sniff.separator === ',' ? ',' : sniff.separator === ';' ? ';' : 'TAB'}&raquo;</div></div>
-        <div className="bg-slate-50 rounded p-2"><div className="text-slate-500">Lignes detectees</div><div className="font-mono font-semibold">{sniff.total_rows}</div></div>
+        <div className="bg-slate-50 rounded p-2"><div className="text-slate-500">Lignes detectees</div><div className="font-mono font-semibold">{totalRows}</div></div>
       </div>
 
       <div className="bg-blue-50 border border-blue-200 rounded p-3 text-xs text-blue-900">
@@ -776,7 +796,7 @@ function CsvMappingView({ sniff, targetFields, mapping, setMapping }) {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        {targetFields.map(f => (
+        {fields.map(f => (
           <div key={f.key} className="flex items-center gap-2">
             <label className="text-xs font-medium text-slate-700 w-40 flex-shrink-0">{f.label}</label>
             <Select
@@ -788,7 +808,7 @@ function CsvMappingView({ sniff, targetFields, mapping, setMapping }) {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="__none__">-- Ignorer --</SelectItem>
-                {sniff.headers.map((h, i) => (
+                {headers.map((h, i) => (
                   <SelectItem key={i} value={i.toString()}>{h || `Colonne ${i+1}`}</SelectItem>
                 ))}
               </SelectContent>
@@ -801,7 +821,7 @@ function CsvMappingView({ sniff, targetFields, mapping, setMapping }) {
         <table className="w-full text-xs">
           <thead className="bg-slate-50">
             <tr>
-              {sniff.headers.map((h, i) => (
+              {headers.map((h, i) => (
                 <th key={i} className="px-2 py-1 text-left font-medium text-slate-700 border-r border-slate-200 whitespace-nowrap">
                   {h || `Col ${i+1}`}
                 </th>
@@ -809,9 +829,9 @@ function CsvMappingView({ sniff, targetFields, mapping, setMapping }) {
             </tr>
           </thead>
           <tbody>
-            {sniff.rows.slice(0, 8).map((row, ri) => (
+            {rows.slice(0, 8).map((row, ri) => (
               <tr key={ri} className="border-t border-slate-100">
-                {sniff.headers.map((_, ci) => (
+                {headers.map((_, ci) => (
                   <td key={ci} className="px-2 py-1 text-slate-600 border-r border-slate-100 truncate max-w-[180px]" title={row[ci]}>
                     {row[ci]}
                   </td>
@@ -820,7 +840,7 @@ function CsvMappingView({ sniff, targetFields, mapping, setMapping }) {
             ))}
           </tbody>
         </table>
-        {sniff.total_rows > 8 && <div className="text-[10px] text-slate-400 px-2 py-1 bg-slate-50">... et {sniff.total_rows - 8} autres lignes</div>}
+        {totalRows > 8 && <div className="text-[10px] text-slate-400 px-2 py-1 bg-slate-50">... et {totalRows - 8} autres lignes</div>}
       </div>
     </div>
   );

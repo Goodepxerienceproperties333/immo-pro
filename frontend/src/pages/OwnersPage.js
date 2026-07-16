@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import api from '@/lib/api';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
@@ -7,10 +7,11 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { Plus, Pencil, Trash2, Search, AlertTriangle } from 'lucide-react';
+import { Plus, Pencil, Trash2, Search, AlertTriangle, ChevronLeft, ChevronRight } from 'lucide-react';
 import OwnerAccessSection from '@/components/OwnerAccessSection';
 
 const emptyForm = { first_name: '', last_name: '', address: '', postal_code: '', city: '', country: 'Belgique', email: '', email2: '', phone: '', phone2: '' };
+const PAGE_SIZE = 100;
 
 export default function OwnersPage() {
   // iter85k : selectedCopro vient du AuthContext (source de verite unique).
@@ -18,6 +19,7 @@ export default function OwnersPage() {
   const { selectedCopro } = useAuth();
   const [owners, setOwners] = useState([]);
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState(emptyForm);
@@ -29,29 +31,61 @@ export default function OwnersPage() {
   // (via force_create_despite_homonym=true).
   const [homonymDialog, setHomonymDialog] = useState(null);
 
+  // iter90go : pagination server-side (backend supporte skip/limit/search).
+  // Objectif : ne pas charger les 9000 proprios d'un coup pour un syndic multi-ACPs.
+  const [page, setPage] = useState(0);  // 0-indexed
+  const [total, setTotal] = useState(0);
+  const searchTimer = useRef(null);
+
+  // Debounce search a 350ms pour eviter de spammer le backend.
+  useEffect(() => {
+    if (searchTimer.current) clearTimeout(searchTimer.current);
+    searchTimer.current = setTimeout(() => {
+      setDebouncedSearch(search);
+      setPage(0);  // reset a la page 1 des qu'on cherche
+    }, 350);
+    return () => { if (searchTimer.current) clearTimeout(searchTimer.current); };
+  }, [search]);
+
   const load = useCallback(async () => {
+    // iter90go : appel toujours paginated (limit fourni) + search server-side.
+    const baseParams = {
+      skip: page * PAGE_SIZE,
+      limit: PAGE_SIZE,
+    };
+    if (debouncedSearch && debouncedSearch.length >= 1) {
+      baseParams.search = debouncedSearch;
+    }
     // iter90ad : "Afficher tous" = ignore selectedCopro et charge en global.
     // Utilise `syndic_wide=true` pour bypasser aussi le header X-Copropriete-Id
     // injecte par le middleware (indispensable, sinon retour du scope ACP seul).
     if (showAll) {
-      const { data } = await api.get('/owners', { params: { syndic_wide: true } });
-      setOwners(data);
+      const { data } = await api.get('/owners', { params: { ...baseParams, syndic_wide: true } });
+      setOwners(data.items || []);
+      setTotal(data.total || 0);
       return;
     }
     if (!selectedCopro || selectedCopro === 'all') {
       setOwners([]);
+      setTotal(0);
       return;
     }
-    const params = { copropriete_id: selectedCopro };
+    const params = { ...baseParams, copropriete_id: selectedCopro };
     const { data } = await api.get('/owners', { params });
-    setOwners(data);
-  }, [selectedCopro, showAll]);
+    setOwners(data.items || []);
+    setTotal(data.total || 0);
+  }, [selectedCopro, showAll, page, debouncedSearch]);
   useEffect(() => { load(); }, [load]);
 
-  const filtered = owners.filter(o => {
-    const s = search.toLowerCase();
-    return (o.name || '').toLowerCase().includes(s) || (o.last_name || '').toLowerCase().includes(s) || (o.first_name || '').toLowerCase().includes(s) || (o.email || '').toLowerCase().includes(s) || (o.vcs_code || '').includes(s);
-  });
+  // Reset pagination quand on switche entre "showAll" ou ACP
+  useEffect(() => { setPage(0); }, [selectedCopro, showAll]);
+
+  // iter90go : plus de filtre client (search server-side). On garde le nom `filtered`
+  // pour minimiser le diff dans la table plus bas.
+  const filtered = owners;
+  const pageStart = total === 0 ? 0 : (page * PAGE_SIZE) + 1;
+  const pageEnd = Math.min(total, (page + 1) * PAGE_SIZE);
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   const openCreate = () => { setEditing(null); setForm(emptyForm); setDuplicates([]); setDialogOpen(true); };
   const openEdit = (o) => { setEditing(o); setForm({ first_name: o.first_name || '', last_name: o.last_name || o.name || '', address: o.address || '', postal_code: o.postal_code || '', city: o.city || '', country: o.country || 'Belgique', email: o.email || '', email2: o.email2 || '', phone: o.phone || '', phone2: o.phone2 || '' }); setDuplicates([]); setDialogOpen(true); };
@@ -144,8 +178,8 @@ export default function OwnersPage() {
           <input type="checkbox" checked={showAll} onChange={e => setShowAll(e.target.checked)} className="rounded" />
           <span>Afficher tous les proprietaires (toutes ACPs)</span>
         </label>
-        <Badge variant="outline" className="text-[11px] bg-slate-50">
-          {filtered.length} proprietaire{filtered.length > 1 ? 's' : ''}{!showAll && selectedCopro && selectedCopro !== 'all' ? ' (ACP active)' : ' (toutes ACPs)'}
+        <Badge variant="outline" className="text-[11px] bg-slate-50" data-testid="owners-total-badge">
+          {total} proprietaire{total > 1 ? 's' : ''}{!showAll && selectedCopro && selectedCopro !== 'all' ? ' (ACP active)' : ' (toutes ACPs)'}
         </Badge>
         <Button
           variant="outline"
@@ -193,6 +227,37 @@ export default function OwnersPage() {
         </Table>
         )}
       </div>
+      {/* iter90go : contrôles de pagination server-side. Visible dès qu'il y a >1 page. */}
+      {total > PAGE_SIZE && (
+        <div className="mt-3 flex items-center justify-between text-xs text-slate-600" data-testid="owners-pagination">
+          <div>
+            {pageStart}-{pageEnd} sur <span className="font-semibold">{total}</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setPage(p => Math.max(0, p - 1))}
+              disabled={page === 0}
+              data-testid="owners-page-prev"
+            >
+              <ChevronLeft size={14} className="mr-1" /> Precedent
+            </Button>
+            <span className="px-2 font-mono">
+              Page {page + 1} / {totalPages}
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))}
+              disabled={page + 1 >= totalPages}
+              data-testid="owners-page-next"
+            >
+              Suivant <ChevronRight size={14} className="ml-1" />
+            </Button>
+          </div>
+        </div>
+      )}
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto" data-testid="owner-dialog">

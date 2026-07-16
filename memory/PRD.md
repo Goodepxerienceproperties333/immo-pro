@@ -6,6 +6,58 @@ scinder au prochain grand chantier en `PRD.md` (statique) / `CHANGELOG.md`
 session par prudence (risque de perte d'info sur un fichier de 9400+
 lignes sans relecture complete).
 
+### Iter90go / iter90gp (Feb 2026) — Cache Bilan + Pagination Owners + Fix crash import CSV
+
+**Origine** : stress test iter90gn (P95 `/reports/bilan` = 1030 ms sous 20 concurrent
++ 183 ms sur 9000 owners) + bug utilisateur "invoices: Field required" + crash
+"Cannot read properties of undefined (reading 'map')" en import CSV factures.
+
+**iter90go — Cache Bilan** (`routes/reports.py`)
+- Cache in-memory TTL 60s, cle `(copro_id, date_to, fiscal_year_id, view_mode)`.
+- Param `force_refresh=true` bypasse (permet reload force apres import bancaire).
+- Header de reponse `_cache_hit: true` sur hit (observabilite).
+- Miss ~220 ms, hit ~115 ms mesure via curl production preview.
+
+**iter90go — Pagination Owners** (`routes/properties.py` + `pages/OwnersPage.js`)
+- Backend : nouveaux params `skip`, `limit`, `search` sur `GET /api/owners`.
+  - Si `limit` fourni : reponse enveloppee `{items, total, skip, limit}`.
+  - Sinon : tableau brut (backward compat pour tous les autres appelants).
+  - `search` filtre server-side (regex insensible casse) sur
+    last_name/first_name/name/email/vcs_code.
+- Frontend `OwnersPage.js` :
+  - Bascule en mode paginated (limit=100).
+  - Search debounce 350 ms envoyee au serveur (plus de filtre client).
+  - Controles Precedent/Suivant + affichage "X-Y sur N".
+  - Testids : `owners-total-badge`, `owners-pagination`, `owners-page-prev`,
+    `owners-page-next`.
+
+**iter90gp — Fix crash import CSV factures** (`pages/ImportWizardPage.js`)
+- Bug 1 : le `CsvMappingView` etait monte pour `step.key==='invoices'` /
+  `journals` alors que `sniff-csv?kind=invoices/journals` retourne
+  `{invoices/transactions: [...]}` sans `headers/rows` -> crash sur `.map`.
+  - Fix : exclusion `step.key !== 'invoices' && step.key !== 'journals'`
+    dans la condition de montage + garde defensive dans `CsvMappingView`
+    (retourne banniere si `headers.length === 0`).
+- Bug 2 : `handleCommit` interceptait la branche `effectiveKind === 'csv'`
+  AVANT `step.key === 'invoices'`, envoyant `{mapping, rows}` au lieu de
+  `{invoices: [...]}` -> backend renvoyait "invoices: Field required".
+  - Fix : reordonner les conditions (invoices/journals traites AVANT le
+    generique CSV, deduplique le code).
+
+**Tests**
+- `tests/test_iter90go_bilan_cache_and_owners_pagination.py` : 8 tests
+  (miss/hit, force_refresh bypass, view_mode separe, meta envelope,
+  skip beyond total, search server-side, syndic_wide paginated).
+- `tests/test_iter90gp_import_wizard_csv_contract.py` : 3 tests
+  (contrat sniff-csv?kind=invoices/journals vs generique).
+- **42/42 pytest iter90g* PASS** au total (0 regression).
+
+**A refaire ensuite**
+- `/reports/pnl` (compte de resultat) beneficierait du meme pattern cache.
+- Documentation utilisateur : bouton "Recharger" force `force_refresh=true`
+  pour eviter d'attendre les 60s apres un import bancaire.
+
+
 ### Iter90gk / iter90gl / iter90gm (Feb 2026) - Bilan vs Balance des Tiers - regle stricte anti-doublon
 
 **Ticket utilisateur** (multiple messages) :

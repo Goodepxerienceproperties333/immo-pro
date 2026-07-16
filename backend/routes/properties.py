@@ -405,7 +405,8 @@ def create_properties_router(db):
         return None
 
     @router.get("/owners")
-    async def list_owners(request: Request, copropriete_id: Optional[str] = None, include_unassigned: bool = False, syndic_wide: bool = False):
+    async def list_owners(request: Request, copropriete_id: Optional[str] = None, include_unassigned: bool = False, syndic_wide: bool = False,
+                          skip: int = 0, limit: Optional[int] = None, search: Optional[str] = None):
         """Liste des proprietaires - chinese wall STRICT (RGPD).
 
         - Superadmin/admin : voit tout.
@@ -421,6 +422,14 @@ def create_properties_router(db):
           et l'header `X-Copropriete-Id`. Indispensable pour le picker de
           mutation (l'acquereur peut etre un proprio existant dans une AUTRE
           ACP du meme syndic). Sans ca, on force l'utilisateur a creer un doublon.
+
+        iter90go : pagination systematique (stress test iter90gn : 184ms sur 9000
+        owners, devient lent au-dela). `skip` (defaut 0), `limit` (optionnel).
+        `search` filtre server-side sur last_name/first_name/name/email/vcs_code
+        (regex insensible casse).
+          - Si `limit` fourni : retourne `{items: [...], total: N, skip: X, limit: Y}`.
+          - Sinon : comportement legacy (tableau brut) - garde la retrocompat pour
+            tous les appelants existants (LotsPage, CoproprietesPage, etc.).
         """
         # Aussi accepter le header X-Copropriete-Id pour homogeneiser
         if not copropriete_id:
@@ -431,6 +440,33 @@ def create_properties_router(db):
         if copropriete_id == "all":
             copropriete_id = None
         is_super, allowed_copros = await _get_user_scope(request)
+
+        # iter90go : helper pagination / search side-serveur, sans casser l'API legacy.
+        # On construit UN filtre Mongo global, puis on applique sort/skip/limit/search
+        # UNIQUEMENT si `limit` est fourni. Sinon on garde l'existant qui charge tout
+        # avec `.to_list(2000)`.
+        import re as _re
+        def _search_filter():
+            if not search:
+                return {}
+            # Escape regex meta pour eviter les injections
+            pat = _re.escape(search)
+            rx = {"$regex": pat, "$options": "i"}
+            return {"$or": [
+                {"last_name": rx}, {"first_name": rx}, {"name": rx},
+                {"email": rx}, {"email2": rx}, {"vcs_code": rx},
+            ]}
+
+        async def _paginated_response(base_query: dict):
+            """Renvoie `{items, total, skip, limit}` avec sort/skip/limit MongoDB."""
+            q = {**base_query, **_search_filter()}
+            total = await db.owners.count_documents(q)
+            cursor = db.owners.find(q, {"_id": 0}).sort("last_name", 1).skip(max(0, int(skip)))
+            if limit is not None and limit > 0:
+                cursor = cursor.limit(int(limit))
+            items = await cursor.to_list(limit if limit else 5000)
+            return {"items": items, "total": total, "skip": int(skip), "limit": int(limit) if limit else None}
+
         # Helper to also fetch orphan owners (copropriete_id == "" or missing) when requested
         async def _fetch_orphans():
             return await db.owners.find(
@@ -440,10 +476,14 @@ def create_properties_router(db):
         # iter89b : syndic_wide -> ignorer le scope ACP courant
         if syndic_wide:
             if is_super:
+                if limit is not None:
+                    return await _paginated_response({})
                 return await db.owners.find({}, {"_id": 0}).sort("last_name", 1).to_list(2000)
             allowed_owner_ids = await _allowed_owner_ids(allowed_copros)
             if not allowed_owner_ids:
-                return []
+                return {"items": [], "total": 0, "skip": int(skip), "limit": int(limit) if limit else None} if limit is not None else []
+            if limit is not None:
+                return await _paginated_response({"id": {"$in": list(allowed_owner_ids)}})
             return await db.owners.find(
                 {"id": {"$in": list(allowed_owner_ids)}}, {"_id": 0}
             ).sort("last_name", 1).to_list(2000)
@@ -460,16 +500,33 @@ def create_properties_router(db):
                 | {oid for oid in (owner_ids_multi or []) if oid}
                 | {oid for oid in (owner_ids_linked or []) if oid}
             )
+            if limit is not None:
+                # `include_unassigned` non supporte en mode paginated (aurait besoin
+                # d'un $or complexe cross-collections) - fallback legacy si demande.
+                if include_unassigned:
+                    pass  # tomber en legacy en dessous
+                else:
+                    if not allowed:
+                        return {"items": [], "total": 0, "skip": int(skip), "limit": int(limit) if limit else None}
+                    return await _paginated_response({"id": {"$in": list(allowed)}})
             owners = await db.owners.find({"id": {"$in": list(allowed)}}, {"_id": 0}).sort("last_name", 1).to_list(2000) if allowed else []
             if include_unassigned:
                 owners.extend(await _fetch_orphans())
             return owners
         if is_super:
             # Superadmin sans param : tous les owners (vue plateforme)
+            if limit is not None:
+                return await _paginated_response({})
             owners = await db.owners.find({}, {"_id": 0}).sort("last_name", 1).to_list(2000)
             return owners
         # Syndic / gestionnaire sans param : owners de TOUTES SES ACPs
         allowed_owner_ids = await _allowed_owner_ids(allowed_copros)
+        if limit is not None:
+            if not allowed_owner_ids:
+                return {"items": [], "total": 0, "skip": int(skip), "limit": int(limit) if limit else None}
+            # `include_unassigned` non supporte en mode paginated (voir plus haut).
+            if not include_unassigned:
+                return await _paginated_response({"id": {"$in": list(allowed_owner_ids)}})
         owners = []
         if allowed_owner_ids:
             owners = await db.owners.find(
