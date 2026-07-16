@@ -995,6 +995,10 @@ export default function LotsPage() {
   const [form, setForm] = useState({ number: '', description: '', lot_type: 'apartment', floor: 0, area: 0, quotity: 0, owner_id: '', owner_ids: [] });
   const [mutationLot, setMutationLot] = useState(null);
   const [linkLot, setLinkLot] = useState(null);
+  // iter90gj Phase 3 : liste des frais privatifs (compte 643xxx) importes
+  // sans allocation proprietaire, a assigner via une modale post-import.
+  const [pendingPrivateFees, setPendingPrivateFees] = useState([]);
+  const [showPrivateFeesDialog, setShowPrivateFeesDialog] = useState(false);
 
   // Derived : map lot.id -> children + parent lookup
   const childrenByParent = useMemo(() => {
@@ -1021,7 +1025,16 @@ export default function LotsPage() {
     ]);
     setLots(lotsRes.data);
     setOwners(ownersRes.data);
-  }, []);
+    // iter90gj Phase 3 : charge les frais privatifs en attente d'allocation
+    // pour l'ACP courante (header X-Copropriete-Id gere par api client).
+    const coproIdParam = searchParams.get('copropriete_id') || localStorage.getItem('selectedCopro') || localStorage.getItem('copropriete_id') || '';
+    if (coproIdParam) {
+      try {
+        const pfRes = await api.get('/invoices/private-fees-pending', { params: { copropriete_id: coproIdParam } });
+        setPendingPrivateFees(pfRes.data.invoices || []);
+      } catch { /* silent : pas bloquant */ }
+    }
+  }, [searchParams]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -1158,6 +1171,31 @@ export default function LotsPage() {
               data-testid="dismiss-mutation-banner"
             >
               <X size={16} />
+            </Button>
+          </div>
+        </div>
+      )}
+      {/* iter90gj Phase 3 : bandeau frais privatifs a assigner */}
+      {pendingPrivateFees.length > 0 && (
+        <div className="mb-4 rounded-lg border-2 border-violet-400 bg-gradient-to-r from-violet-50 to-fuchsia-50 p-4 shadow-sm" data-testid="pending-private-fees-banner">
+          <div className="flex items-start gap-3">
+            <UserPlus className="text-violet-600 flex-shrink-0 mt-0.5" size={22} />
+            <div className="flex-1">
+              <div className="text-sm font-bold text-violet-900">
+                {pendingPrivateFees.length} frais privatif(s) 643xxx a assigner
+              </div>
+              <div className="text-xs text-violet-800 mt-1 leading-relaxed">
+                Des factures marquees comme <strong>frais privatifs</strong> (compte 643) ont ete importees sans
+                proprietaire beneficiaire. Cliquez pour les repartir manuellement entre les coproprietaires concernes.
+              </div>
+            </div>
+            <Button
+              size="sm"
+              onClick={() => setShowPrivateFeesDialog(true)}
+              className="bg-violet-600 hover:bg-violet-700 text-white flex-shrink-0"
+              data-testid="open-private-fees-dialog-btn"
+            >
+              Assigner
             </Button>
           </div>
         </div>
@@ -1363,6 +1401,16 @@ export default function LotsPage() {
         />
       )}
 
+      {/* iter90gj Phase 3 : Private fees allocation dialog */}
+      {showPrivateFeesDialog && (
+        <PrivateFeesDialog
+          invoices={pendingPrivateFees}
+          owners={owners}
+          onClose={() => setShowPrivateFeesDialog(false)}
+          onDone={() => { setShowPrivateFeesDialog(false); load(); }}
+        />
+      )}
+
       {/* iter90cm : Audit ownership dialog */}
       <Dialog open={auditOpen} onOpenChange={setAuditOpen}>
         <DialogContent className="max-w-5xl w-[min(95vw,1100px)] max-h-[85vh] overflow-y-auto" data-testid="audit-ownership-dialog">
@@ -1538,5 +1586,231 @@ export default function LotsPage() {
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+
+// ============================================================
+// iter90gj Phase 3 : PrivateFeesDialog
+// Modale d'assignation des proprietaires beneficiaires pour les factures
+// de frais privatifs (compte 643xxx) importees sans allocation.
+// - Chaque facture peut etre attribuee a 1 ou plusieurs proprietaires.
+// - Par defaut, on repartit egalement le montant total entre proprietaires
+//   selectionnes. Le syndic peut ajuster manuellement chaque montant.
+// - La somme des allocations doit egaler le total de la facture.
+// ============================================================
+function PrivateFeesDialog({ invoices, owners, onClose, onDone }) {
+  // state : { [invoice_id]: [{owner_id, amount}] }
+  const [alloc, setAlloc] = useState(() =>
+    Object.fromEntries(invoices.map(i => [i.id, []]))
+  );
+  const [saving, setSaving] = useState(false);
+  const [openInvoiceId, setOpenInvoiceId] = useState(invoices[0]?.id || null);
+
+  const distributeEqual = (invId, ownerIds) => {
+    const inv = invoices.find(i => i.id === invId);
+    const total = parseFloat(inv?.total_amount || 0);
+    const n = ownerIds.length;
+    if (n === 0) {
+      setAlloc(a => ({ ...a, [invId]: [] }));
+      return;
+    }
+    // Repartition egale avec ajustement des centimes sur la derniere ligne
+    const base = Math.floor((total * 100) / n) / 100;
+    const list = ownerIds.map((oid, idx) => ({
+      owner_id: oid,
+      amount: idx === n - 1 ? Math.round((total - base * (n - 1)) * 100) / 100 : base,
+    }));
+    setAlloc(a => ({ ...a, [invId]: list }));
+  };
+
+  const addOwner = (invId, ownerId) => {
+    const current = alloc[invId] || [];
+    if (current.find(a => a.owner_id === ownerId)) return;
+    const newIds = [...current.map(a => a.owner_id), ownerId];
+    distributeEqual(invId, newIds);
+  };
+
+  const removeOwner = (invId, ownerId) => {
+    const current = alloc[invId] || [];
+    const newIds = current.filter(a => a.owner_id !== ownerId).map(a => a.owner_id);
+    distributeEqual(invId, newIds);
+  };
+
+  const updateAmount = (invId, ownerId, value) => {
+    const parsed = parseFloat(value) || 0;
+    setAlloc(a => ({
+      ...a,
+      [invId]: (a[invId] || []).map(x => x.owner_id === ownerId ? { ...x, amount: parsed } : x),
+    }));
+  };
+
+  const totalAllocated = (invId) => {
+    return (alloc[invId] || []).reduce((s, x) => s + (parseFloat(x.amount) || 0), 0);
+  };
+
+  const saveAll = async () => {
+    setSaving(true);
+    let ok = 0;
+    let ko = 0;
+    for (const inv of invoices) {
+      const list = alloc[inv.id] || [];
+      if (list.length === 0) {
+        ko++;
+        continue;
+      }
+      const total = parseFloat(inv.total_amount || 0);
+      const sum = list.reduce((s, x) => s + (parseFloat(x.amount) || 0), 0);
+      if (Math.abs(sum - total) > 0.01) {
+        toast.error(`Facture ${inv.number} : somme ${sum.toFixed(2)} ≠ total ${total.toFixed(2)}`);
+        ko++;
+        continue;
+      }
+      try {
+        await api.post(`/invoices/${inv.id}/private-fee-allocations`, {
+          allocations: list.map(a => ({ owner_id: a.owner_id, amount: a.amount })),
+        });
+        ok++;
+      } catch (e) {
+        toast.error(`Facture ${inv.number} : ${e.response?.data?.detail || 'erreur'}`);
+        ko++;
+      }
+    }
+    setSaving(false);
+    if (ok > 0) toast.success(`${ok} frais privatif(s) assigne(s)${ko ? ` (${ko} en attente)` : ''}`);
+    if (ok > 0 && ko === 0) onDone();
+    else if (ok > 0) {
+      // Retire les factures deja OK et laisse la modale ouverte pour les autres
+      onDone();
+    }
+  };
+
+  const ownerName = (id) => owners.find(o => o.id === id)?.name || id;
+
+  return (
+    <Dialog open={true} onOpenChange={onClose}>
+      <DialogContent className="max-w-4xl w-[min(96vw,1100px)] max-h-[85vh] overflow-y-auto" data-testid="private-fees-dialog">
+        <DialogHeader>
+          <DialogTitle style={{ fontFamily: 'Chivo,sans-serif' }}>
+            Assignation des frais privatifs ({invoices.length})
+          </DialogTitle>
+        </DialogHeader>
+        <div className="text-xs text-slate-600 mb-3">
+          Pour chaque facture <strong>compte 643xxx</strong> ci-dessous, selectionnez le(s) proprietaire(s)
+          beneficiaire(s). Le total est reparti par defaut a parts egales : ajustez manuellement
+          si necessaire. La somme des montants doit egaler le total de la facture.
+        </div>
+        <div className="space-y-3">
+          {invoices.map(inv => {
+            const isOpen = openInvoiceId === inv.id;
+            const list = alloc[inv.id] || [];
+            const total = parseFloat(inv.total_amount || 0);
+            const sum = totalAllocated(inv.id);
+            const delta = sum - total;
+            const balanced = Math.abs(delta) < 0.01 && list.length > 0;
+            return (
+              <div key={inv.id} className={`border rounded ${balanced ? 'border-emerald-300 bg-emerald-50/40' : 'border-slate-200 bg-white'}`} data-testid={`private-fee-row-${inv.id}`}>
+                <div
+                  className="px-3 py-2 flex items-center gap-3 cursor-pointer text-sm"
+                  onClick={() => setOpenInvoiceId(isOpen ? null : inv.id)}
+                >
+                  <div className="font-mono text-xs bg-slate-100 rounded px-1.5 py-0.5">{inv.account_number}</div>
+                  <div className="font-semibold flex-1 truncate">{inv.supplier} - {inv.number}</div>
+                  <div className="text-xs text-slate-500 font-mono">{fmtDate(inv.date)}</div>
+                  <div className="text-sm font-semibold">{total.toFixed(2)} EUR</div>
+                  {balanced && <span className="text-xs bg-emerald-600 text-white px-1.5 py-0.5 rounded">OK</span>}
+                  {!balanced && list.length > 0 && (
+                    <span className="text-xs bg-amber-500 text-white px-1.5 py-0.5 rounded" title={`Ecart : ${delta.toFixed(2)}`}>
+                      ecart {delta > 0 ? '+' : ''}{delta.toFixed(2)}
+                    </span>
+                  )}
+                </div>
+                {isOpen && (
+                  <div className="px-3 pb-3 space-y-2 border-t border-slate-200">
+                    <div className="text-xs text-slate-600 mt-2">
+                      {inv.description || <em className="text-slate-400">(pas de libelle)</em>}
+                    </div>
+                    {/* Owner picker */}
+                    <div>
+                      <label className="text-xs font-semibold text-slate-700">Ajouter un proprietaire :</label>
+                      <Select value="" onValueChange={(v) => v && addOwner(inv.id, v)}>
+                        <SelectTrigger className="h-8 text-xs" data-testid={`private-fee-owner-picker-${inv.id}`}>
+                          <SelectValue placeholder="Choisir..." />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {owners
+                            .filter(o => !list.find(a => a.owner_id === o.id))
+                            .slice(0, 200)
+                            .map(o => (
+                              <SelectItem key={o.id} value={o.id}>
+                                {o.name || `${o.first_name || ''} ${o.last_name || ''}`.trim()}
+                              </SelectItem>
+                            ))
+                          }
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    {/* Allocations table */}
+                    {list.length > 0 && (
+                      <table className="w-full text-xs mt-2">
+                        <thead className="bg-slate-50">
+                          <tr>
+                            <th className="text-left px-2 py-1">Proprietaire</th>
+                            <th className="text-right px-2 py-1 w-32">Montant (EUR)</th>
+                            <th className="w-8"></th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {list.map(a => (
+                            <tr key={a.owner_id} className="border-t">
+                              <td className="px-2 py-1">{ownerName(a.owner_id)}</td>
+                              <td className="px-2 py-1 text-right">
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  value={a.amount}
+                                  onChange={(e) => updateAmount(inv.id, a.owner_id, e.target.value)}
+                                  className="w-24 border border-slate-300 rounded px-1 py-0.5 text-right font-mono"
+                                  data-testid={`private-fee-amount-${inv.id}-${a.owner_id.slice(0, 8)}`}
+                                />
+                              </td>
+                              <td className="text-center">
+                                <button
+                                  onClick={() => removeOwner(inv.id, a.owner_id)}
+                                  className="text-red-500 hover:text-red-700"
+                                  data-testid={`private-fee-remove-${inv.id}-${a.owner_id.slice(0, 8)}`}
+                                >
+                                  <X size={12} />
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                          <tr className="font-semibold border-t-2 bg-slate-50">
+                            <td className="px-2 py-1 text-right">Somme :</td>
+                            <td className="px-2 py-1 text-right font-mono">{sum.toFixed(2)}</td>
+                            <td></td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+        <div className="flex justify-end gap-2 mt-4">
+          <Button variant="outline" onClick={onClose} disabled={saving}>Fermer</Button>
+          <Button
+            onClick={saveAll}
+            disabled={saving}
+            className="bg-violet-600 hover:bg-violet-700 text-white"
+            data-testid="save-all-private-fees-btn"
+          >
+            {saving ? 'Enregistrement...' : 'Enregistrer les allocations'}
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }

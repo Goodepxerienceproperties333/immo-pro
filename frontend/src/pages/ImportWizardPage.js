@@ -285,9 +285,10 @@ export default function ImportWizardPage() {
         r = await api.post(`/import-wizard/sessions/${session.id}/commit-invoices`, { invoices: invoicesParsed });
         const m = r.data;
         toast.success(
-          `${m.inserted} facture(s) validee(s) + ${m.journal_entries || 0} ecriture(s) AC creee(s)` +
+          `${m.inserted} facture(s) validee(s)${m.grouped ? ` (${m.grouped} lignes de detail regroupees)` : ''} + ${m.journal_entries || 0} ecriture(s) AC creee(s)` +
           (m.pcmn_created ? ` - ${m.pcmn_created} compte(s) PCMN auto-ajoutes` : '') +
-          ` - ${m.matched_supplier} avec fournisseur, ${m.matched_key} avec cle, ${m.matched_category} avec nature`
+          ` - ${m.matched_supplier} avec fournisseur, ${m.matched_key} avec cle, ${m.matched_category} avec nature` +
+          (m.private_fees_detected ? ` - ${m.private_fees_detected} FRAIS PRIVATIF(S) 643 detecte(s) : assignez les proprietaires en fin de wizard` : '')
         );
       } else if (step.key === 'journals') {
         r = await api.post(`/import-wizard/sessions/${session.id}/commit-journals`, { transactions: journalsParsed });

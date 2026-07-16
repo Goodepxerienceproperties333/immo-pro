@@ -1710,12 +1710,102 @@ def create_invoices_router(db):
                 "requested": len(data.invoice_ids),
                 "errors": errors}
 
+    class PrivateFeeAllocInput(BaseModel):
+        allocations: List[dict] = []  # [{owner_id: str, amount: float}, ...]
+
+    @router.get("/invoices/private-fees-pending")
+    async def list_pending_private_fees(request: Request, copropriete_id: Optional[str] = None,
+                                          import_session_id: Optional[str] = None):
+        """iter90gj Phase 3 : liste les factures marquees `is_private_fee=True`
+        qui n'ont PAS encore d'allocation propietaire. Utilise par le frontend
+        pour afficher la modale d'assignation post-import.
+
+        Filtre :
+        - copropriete_id (obligatoire ou header X-Copropriete-Id)
+        - import_session_id (optionnel : restreint aux factures d'une session
+          particuliere pour l'affichage post-wizard).
+        """
+        if not copropriete_id:
+            copropriete_id = request.headers.get("X-Copropriete-Id") or None
+        if not copropriete_id:
+            raise HTTPException(400, "copropriete_id requis")
+        q: dict = {
+            "copropriete_id": copropriete_id,
+            "is_private_fee": True,
+            "$or": [
+                {"private_fee_allocations": {"$exists": False}},
+                {"private_fee_allocations": {"$size": 0}},
+            ],
+        }
+        if import_session_id:
+            q["import_session_id"] = import_session_id
+        pending = await db.invoices.find(q, {
+            "_id": 0, "id": 1, "number": 1, "internal_reference": 1, "date": 1,
+            "supplier": 1, "description": 1, "total_amount": 1, "account_number": 1,
+        }).sort("date", 1).to_list(500)
+        return {"count": len(pending), "invoices": pending}
+
     @router.get("/invoices/{invoice_id}")
     async def get_invoice(invoice_id: str):
         inv = await db.invoices.find_one({"id": invoice_id}, {"_id": 0})
         if not inv:
             raise HTTPException(404, "Facture non trouvee")
         return inv
+
+    @router.post("/invoices/{invoice_id}/private-fee-allocations")
+    async def set_private_fee_allocations(invoice_id: str, data: PrivateFeeAllocInput):
+        """iter90gj Phase 3 : assigne le/les proprietaire(s) beneficiant d'un
+        frais privatif. Format : `allocations=[{owner_id, amount}]`.
+
+        Contraintes :
+        - La somme des `amount` doit egaler `total_amount` (tolerance 0.01).
+        - Chaque `owner_id` doit exister.
+        - La facture doit avoir `is_private_fee=True`.
+        """
+        inv = await db.invoices.find_one({"id": invoice_id}, {"_id": 0})
+        if not inv:
+            raise HTTPException(404, "Facture non trouvee")
+        if not inv.get("is_private_fee"):
+            raise HTTPException(400, "Cette facture n'est pas marquee comme frais privatif")
+        allocs = data.allocations or []
+        if not allocs:
+            raise HTTPException(400, "Au moins un proprietaire requis")
+
+        total = float(inv.get("total_amount") or 0)
+        allocated_total = 0.0
+        clean_allocs: list[dict] = []
+        for a in allocs:
+            oid = (a.get("owner_id") or "").strip()
+            if not oid:
+                raise HTTPException(400, "owner_id manquant dans une allocation")
+            owner = await db.owners.find_one({"id": oid}, {"_id": 0, "id": 1, "name": 1})
+            if not owner:
+                raise HTTPException(400, f"Proprietaire introuvable : {oid}")
+            amt = round(float(a.get("amount") or 0), 2)
+            if amt <= 0:
+                raise HTTPException(400, f"Montant invalide pour {owner.get('name','?')} : {amt}")
+            allocated_total += amt
+            clean_allocs.append({"owner_id": oid, "owner_name": owner.get("name", ""),
+                                   "amount": amt})
+
+        if abs(allocated_total - total) > 0.01:
+            raise HTTPException(
+                400,
+                f"La somme des allocations ({allocated_total:.2f}) doit egaler le "
+                f"total de la facture ({total:.2f}). Ecart : {allocated_total - total:+.2f}",
+            )
+
+        # Legacy : private_fee_owner_id = premier owner si allocation unique
+        primary_owner = clean_allocs[0]["owner_id"] if len(clean_allocs) == 1 else ""
+
+        await db.invoices.update_one(
+            {"id": invoice_id},
+            {"$set": {
+                "private_fee_allocations": clean_allocs,
+                "private_fee_owner_id": primary_owner,
+            }},
+        )
+        return {"id": invoice_id, "allocations": clean_allocs, "total": total}
 
     @router.put("/invoices/{invoice_id}")
     async def update_invoice(invoice_id: str, data: InvoiceInput, force: bool = Query(default=False)):

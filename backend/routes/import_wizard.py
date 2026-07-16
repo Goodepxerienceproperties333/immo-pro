@@ -646,13 +646,72 @@ def create_import_wizard_router(db):
             if a:
                 cats_by_account[a] = c["id"]
 
+        # ---- iter90gj : regroupement des lignes de detail multi-ligne ----
+        # Optipro exporte 1 ligne CSV/PDF par ligne de detail comptable
+        # (compte 61300 + compte 6160 sur la meme facture => 2 lignes).
+        # Sans regroupement, on cree 2 factures avec le meme n° externe -> doublons.
+        # Strategie : regrouper par (internal_ref_optipro OU (external_ref + supplier + date)).
+        def _group_key(inv: dict) -> str:
+            ir = (inv.get("internal_ref_optipro") or inv.get("internal_ref") or "").strip()
+            if ir:
+                return f"IR:{ir}"
+            er = (inv.get("external_ref") or "").strip()
+            sup = (inv.get("supplier_aux_code") or "").strip()
+            dt = (inv.get("date") or "").strip()
+            return f"EX:{er}|{sup}|{dt}"
+
+        groups: dict[str, list[dict]] = {}
+        order: list[str] = []
+        for inv in data.invoices:
+            k = _group_key(inv)
+            if k not in groups:
+                groups[k] = []
+                order.append(k)
+            groups[k].append(inv)
+
+        merged_invoices: list[dict] = []
+        for k in order:
+            lines = groups[k]
+            if len(lines) == 1:
+                merged_invoices.append(lines[0])
+                continue
+            head = dict(lines[0])
+            # Recalcule les totaux depuis les lignes (fiable si Optipro ne
+            # fournit le total qu'a la 1ere ligne ou 0 sur les suivantes).
+            total_ht = round(sum(float(l.get("montant_ht") or 0) for l in lines), 2)
+            total_tvac = round(sum(float(l.get("montant_tvac") or 0) for l in lines), 2)
+            head["montant_ht"] = total_ht
+            head["montant_tvac"] = total_tvac
+            head["montant_tva"] = round(total_tvac - total_ht, 2)
+            # Serialise les lignes de detail pour la persistance dans
+            # invoice.distribution_lines (voir commit_invoices ci-dessous).
+            head["_split_lines"] = [
+                {
+                    "account_number": (l.get("account_number") or "").strip(),
+                    "account_label": (l.get("account_label") or "").strip(),
+                    "dist_key_code": (l.get("dist_key_code") or "").strip(),
+                    "nature_code": (l.get("nature_code") or "").strip(),
+                    "libelle": (l.get("libelle") or "").strip(),
+                    "montant_ht": float(l.get("montant_ht") or 0),
+                    "montant_tvac": float(l.get("montant_tvac") or 0),
+                    "part_occupant": float(l.get("part_occupant") or 0),
+                    "part_proprietaire": float(l.get("part_proprietaire") or 0),
+                }
+                for l in lines
+            ]
+            merged_invoices.append(head)
+
         # ---- Pre-pass : collect all PCMN accounts that will be needed ----
         accounts_needed: dict[str, str] = {}
-        for inv in data.invoices:
+        for inv in merged_invoices:
             acc_num = (inv.get("account_number") or "").strip()
             acc_lbl = (inv.get("account_label") or "").strip()
             if acc_num:
                 accounts_needed[acc_num] = acc_lbl
+            # iter90gj : couvre aussi les comptes des lignes de detail regroupees
+            for sl in (inv.get("_split_lines") or []):
+                if sl.get("account_number"):
+                    accounts_needed[sl["account_number"]] = sl.get("account_label") or ""
             sup_aux = (inv.get("supplier_aux_code") or "").upper().strip()
             if sup_aux.startswith("F") and len(sup_aux) >= 5:
                 # PCMN supplier sub-account: 4400 + last 3 digits of F-code
@@ -680,7 +739,8 @@ def create_import_wizard_router(db):
         matched_supplier = 0
         matched_key = 0
         matched_category = 0
-        for idx, inv in enumerate(data.invoices):
+        private_fees_detected = 0
+        for idx, inv in enumerate(merged_invoices):
             try:
                 date_str = (inv.get("date") or "").strip()
                 if not date_str:
@@ -817,11 +877,16 @@ def create_import_wizard_router(db):
                     "account_number": account_num,
                     "expense_category_id": expense_cat_id,
                     "distribution_key_id": dist_key_id,
-                    "distribution_lines": [],
+                    # iter90gj : lignes de detail multi-compte regroupees en une seule facture
+                    "distribution_lines": inv.get("_split_lines") or [],
                     "status": "do_not_pay" if inv.get("ne_pas_payer") else "unpaid",
                     "copropriete_id": copro_id,
-                    "is_private_fee": False,
+                    # iter90gj : detection auto des frais privatifs par compte 643xxx.
+                    # `private_fee_owner_id` reste vide : le syndic doit assigner
+                    # le/les proprietaire(s) via l'invite post-mutations (Phase 3).
+                    "is_private_fee": account_num.startswith("643"),
                     "private_fee_owner_id": "",
+                    "private_fee_allocations": [],  # rempli par la modale post-import
                     "occupant_pct": occ_pct,
                     "proprietaire_pct": prop_pct,
                     "occupant_amount": round(total_amount * occ_pct / 100, 2),
@@ -832,6 +897,8 @@ def create_import_wizard_router(db):
                     "import_session_id": session_id,
                     "created_at": _now_iso(),
                 }
+                if doc["is_private_fee"]:
+                    private_fees_detected += 1
                 await db.invoices.insert_one(doc)
                 inserted += 1
             except Exception as e:
@@ -845,6 +912,8 @@ def create_import_wizard_router(db):
             "matched_supplier": matched_supplier,
             "matched_key": matched_key,
             "matched_category": matched_category,
+            "grouped": len(data.invoices) - len(merged_invoices),
+            "private_fees_detected": private_fees_detected,
         })
         return {
             "inserted": inserted,
@@ -854,6 +923,8 @@ def create_import_wizard_router(db):
             "matched_supplier": matched_supplier,
             "matched_key": matched_key,
             "matched_category": matched_category,
+            "grouped": len(data.invoices) - len(merged_invoices),
+            "private_fees_detected": private_fees_detected,
         }
 
     # ----- H: JOURNALS (extraits bancaires) - CSV Optipro -----

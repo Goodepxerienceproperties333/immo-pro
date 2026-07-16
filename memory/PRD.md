@@ -10790,3 +10790,39 @@ test end-to-end sur le vrai PDF utilisateur.
 - **10 tests unitaires** (3+3+2+2) tous verts.
 - Redeploiement necessaire sur production (`immo-pcmn.emergent.host`).
 
+
+
+---
+
+## iter90gj (Jul 2026) — Import factures : dedoublonnage + frais privatifs
+
+**Ticket utilisateur (2 sous-tickets successifs)** :
+1. "attention lors de l'import des facture tu dedoubles les factures ayant le meme nr de facture."
+2. "en cas de frais privatifs ajouter une invite pour pouver selectionner le ou les proprietaire(s) concerne"
+
+### Phase 1 : dedoublonnage des factures multi-ligne (backend)
+**Cause** : Optipro exporte 1 ligne CSV/PDF par ligne comptable. Une facture avec 2 comptes (61300 + 6160) genere 2 rows partageant la meme ref. interne (ex 0038). Sans regroupement -> 2 factures avec meme N° externe.
+
+**Fix** : dans `commit-invoices`, regroupement par `internal_ref_optipro` (fallback : ext_ref+supplier+date). Les lignes de detail sont serialisees dans `invoice.distribution_lines[]`. Totaux recalcules depuis la somme des lignes.
+
+### Phase 2 : detection automatique des frais privatifs 643xxx
+**Fix** : lors de l'insert, `is_private_fee = account_number.startswith("643")`. `private_fee_owner_id` reste vide -> a assigner via la modale post-mutations (Phase 3).
+
+### Phase 3 : modale d'assignation post-mutations
+**Endpoints backend** :
+- `GET /api/invoices/private-fees-pending?copropriete_id=X` -> liste des factures 643 sans allocation.
+- `POST /api/invoices/{id}/private-fee-allocations` -> valide `sum(amount) == total_amount`, accepte 1+ proprietaires.
+
+**Frontend** (`LotsPage.js`) :
+- Bandeau violet automatique quand des frais privatifs sont en attente.
+- `PrivateFeesDialog` : liste des factures repliables, picker proprietaire, repartition egale par defaut avec ajustement manuel, validation somme.
+
+### Fichiers modifies
+- Backend : `routes/import_wizard.py` (regroupement + detection 643), `routes/invoices.py` (2 nouveaux endpoints).
+- Frontend : `pages/LotsPage.js` (bandeau + PrivateFeesDialog), `pages/ImportWizardPage.js` (toast enrichi).
+
+### Tests
+- `test_iter90gj_invoice_grouping_and_private_fees.py` (2/2 pass) : multi-ligne + detection 643.
+- `test_iter90gj_private_fees_allocations.py` (3/3 pass) : happy path + rejets somme != total + rejet non-privatif.
+
+**Total iter90gj : 5/5 tests verts.**
