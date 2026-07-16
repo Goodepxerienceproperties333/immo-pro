@@ -189,24 +189,28 @@ export default function CoproprietesPage() {
         toast.success(nLots > 0 ? `ACP creee avec ${nLots} lot(s)` : 'Copropriete creee');
         setDialogOpen(false); load();
 
-        // iter90gg BLOC C : si le syndic a declare des ventes intra-exercice,
-        // redirige direct vers la page Lots avec un banner d'invitation
-        if (hadIntraFySales && newCopro?.id) {
-          setTimeout(() => {
-            navigate(`/lots?post_import_mutations=1&copropriete_id=${newCopro.id}`);
-          }, 300);
-          return;
-        }
-
-        // Reprise Optipro/Sogis ? (fallback si pas de ventes intra-FY)
+        // iter90gi : ne PLUS skipper le wizard. Toujours proposer l'import
+        // Optipro (fournisseurs, natures, budget, factures, journaux, OD).
+        // Si le syndic a declare des ventes intra-exercice, on passe le flag
+        // `pending_mutations=1` : le wizard le propagera a /lots a la fin.
         setTimeout(() => {
-          if (newCopro?.id && window.confirm(
-            `L'ACP "${newCopro.name}" a ete creee.\n\n` +
-            `S'agit-il d'une REPRISE depuis Optipro / Sogis ?\n\n` +
-            `[OK] : Lancer le wizard d'import (proprietaires, fournisseurs, lots, natures, factures...).\n` +
-            `[Annuler] : Continuer normalement.`
-          )) {
-            navigate(`/import-wizard?copropriete_id=${newCopro.id}`);
+          if (!newCopro?.id) return;
+          const msg = hadIntraFySales
+            ? `L'ACP "${newCopro.name}" a ete creee avec ${nLots} lot(s).\n\n`
+              + `Vous avez declare des VENTES intra-exercice. Le workflow recommande :\n\n`
+              + `[OK] : Lancer le wizard d'import Optipro (fournisseurs, natures, budget, factures, journaux...). Les mutations seront saisies A LA FIN.\n`
+              + `[Annuler] : Passer directement a la saisie des mutations (les autres imports pourront etre faits plus tard).`
+            : `L'ACP "${newCopro.name}" a ete creee.\n\n`
+              + `S'agit-il d'une REPRISE depuis Optipro / Sogis ?\n\n`
+              + `[OK] : Lancer le wizard d'import (fournisseurs, natures, budget, factures...).\n`
+              + `[Annuler] : Continuer normalement.`;
+          const goWizard = window.confirm(msg);
+          if (goWizard) {
+            const suffix = hadIntraFySales ? '&pending_mutations=1' : '';
+            navigate(`/import-wizard?copropriete_id=${newCopro.id}${suffix}`);
+          } else if (hadIntraFySales) {
+            // Fallback historique : le syndic veut ne saisir que les mutations
+            navigate(`/lots?post_import_mutations=1&copropriete_id=${newCopro.id}`);
           }
         }, 200);
       }
@@ -790,19 +794,20 @@ export default function CoproprietesPage() {
         onImport={async (rows) => {
           if (importingOwners) return;
           setImportingOwners(true);
-          let ok = 0, ko = 0;
+          let ok = 0, reused = 0, ko = 0;
           for (const r of rows) {
             try {
               const last = r.last_name || '';
               const first = r.first_name || '';
               const name = (last + ' ' + first).trim();
               if (!last) { ko++; continue; }
-              await api.post('/owners', {
+              const resp = await api.post('/owners?reuse_on_duplicate=true', {
                 first_name: first, last_name: last, name,
                 address: r.address || '', postal_code: r.postal_code || '', city: r.city || '',
                 country: 'Belgique', email: r.email || '', phone: r.phone || '', iban: r.iban || '',
               });
-              ok++;
+              if (resp?.data?._reused) reused++;
+              else ok++;
             } catch (_e) { ko++; }
           }
           // Reload owners so the lot autocomplete sees them
@@ -835,7 +840,7 @@ export default function CoproprietesPage() {
             return { ...f, lots };
           });
           toast.success(
-            `${ok} proprietaire(s) crees${ko ? ` (${ko} echec(s))` : ''}` +
+            `${ok} propr. crees${reused ? ` + ${reused} reutilises` : ''}${ko ? ` (${ko} echec(s))` : ''}` +
             (retroMatched ? ` - ${retroMatched} lot(s) auto-affectes` : '')
           );
           setImportingOwners(false);
@@ -863,7 +868,7 @@ export default function CoproprietesPage() {
           if (importingOwners) return;
           setImportingOwners(true);
           const created = [];
-          let ok = 0, ko = 0;
+          let ok = 0, reused = 0, ko = 0;
           for (const r of rows) {
             try {
               const last = r.last_name || '';
@@ -871,7 +876,7 @@ export default function CoproprietesPage() {
               const civ = r.civility ? `${r.civility} ` : '';
               const name = (civ + last + ' ' + first).trim() || (r.name || '');
               if (!last && !r.name) { ko++; continue; }
-              const resp = await api.post('/owners', {
+              const resp = await api.post('/owners?reuse_on_duplicate=true', {
                 first_name: first,
                 last_name: last || r.name,
                 name,
@@ -888,7 +893,8 @@ export default function CoproprietesPage() {
                 identifier: r.identifier || '',
               });
               if (resp?.data) created.push(resp.data);
-              ok++;
+              if (resp?.data?._reused) reused++;
+              else ok++;
             } catch (_e) { ko++; }
           }
           // Re-fetch the full list so the local state is consistent
@@ -927,7 +933,7 @@ export default function CoproprietesPage() {
             return { ...f, lots };
           });
           toast.success(
-            `${ok} proprietaire(s) crees${ko ? ` (${ko} echec(s))` : ''}` +
+            `${ok} propr. crees${reused ? ` + ${reused} reutilises` : ''}${ko ? ` (${ko} echec(s))` : ''}` +
             (retroMatched ? ` - ${retroMatched} lot(s) auto-affectes` : '')
           );
           setImportingOwners(false);

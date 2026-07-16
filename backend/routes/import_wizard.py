@@ -153,14 +153,47 @@ def create_import_wizard_router(db):
             "status": "active",
         }, {"_id": 0})
         if existing:
+            # iter90gi : hydrate `steps.fiscal_year` a partir de l'exercice
+            # ouvert de l'ACP si absent (cas ou l'exercice a ete cree via
+            # l'Assistant ACP - iter90gg - sans passer par le wizard).
+            if not (existing.get("steps") or {}).get("fiscal_year"):
+                fy_open = await db.fiscal_years.find_one(
+                    {"copropriete_id": data.copropriete_id, "status": "open"},
+                    {"_id": 0}, sort=[("created_at", -1)],
+                )
+                if fy_open:
+                    await db.import_sessions.update_one(
+                        {"id": existing["id"]},
+                        {"$set": {"steps.fiscal_year": {
+                            "count": 1, "fiscal_year_id": fy_open["id"],
+                            "auto_hydrated": True,
+                        }}},
+                    )
+                    existing.setdefault("steps", {})["fiscal_year"] = {
+                        "count": 1, "fiscal_year_id": fy_open["id"],
+                        "auto_hydrated": True,
+                    }
             return existing
+        # iter90gi : hydrate `steps.fiscal_year` a partir de l'exercice ouvert
+        # de l'ACP (cree via l'Assistant ACP - iter90gg). Le wizard doit
+        # pouvoir utiliser directement cet exercice pour le budget, les OD,
+        # etc. sans redemander a l'utilisateur.
+        steps: dict = {}
+        fy_open = await db.fiscal_years.find_one(
+            {"copropriete_id": data.copropriete_id, "status": "open"},
+            {"_id": 0}, sort=[("created_at", -1)],
+        )
+        if fy_open:
+            steps["fiscal_year"] = {
+                "count": 1, "fiscal_year_id": fy_open["id"], "auto_hydrated": True,
+            }
         session = {
             "id": str(uuid.uuid4()),
             "copropriete_id": data.copropriete_id,
             "syndic_id": str(user.get("_id", "")),
             "source_system": data.source_system or "Optipro",
             "status": "active",
-            "steps": {},  # filled progressively
+            "steps": steps,
             "created_at": _now_iso(),
         }
         await db.import_sessions.insert_one(session)
@@ -174,6 +207,26 @@ def create_import_wizard_router(db):
         session = await db.import_sessions.find_one({
             "copropriete_id": copropriete_id, "status": "active"
         }, {"_id": 0})
+        # iter90gi : hydrate `steps.fiscal_year` a partir de l'exercice ouvert
+        # de l'ACP (self-healing pour les sessions creees avant iter90gi ou
+        # dont le step fiscal_year n'a jamais ete rempli).
+        if session and not (session.get("steps") or {}).get("fiscal_year"):
+            fy_open = await db.fiscal_years.find_one(
+                {"copropriete_id": copropriete_id, "status": "open"},
+                {"_id": 0}, sort=[("created_at", -1)],
+            )
+            if fy_open:
+                await db.import_sessions.update_one(
+                    {"id": session["id"]},
+                    {"$set": {"steps.fiscal_year": {
+                        "count": 1, "fiscal_year_id": fy_open["id"],
+                        "auto_hydrated": True,
+                    }}},
+                )
+                session.setdefault("steps", {})["fiscal_year"] = {
+                    "count": 1, "fiscal_year_id": fy_open["id"],
+                    "auto_hydrated": True,
+                }
         return session
 
     @router.delete("/sessions/{session_id}")
@@ -1168,12 +1221,20 @@ def create_import_wizard_router(db):
 
         # Determine entry date : 1st day of the FY containing the year+1 of period_end_date
         # OR the FY's start_date if available
+        # iter90gi : fallback sur l'exercice ouvert de l'ACP si aucun fiscal_year_id
+        # n'est fourni (etape fiscal_year retiree du wizard).
         entry_date = ""
         fy = None
         if data.fiscal_year_id:
             fy = await db.fiscal_years.find_one({"id": data.fiscal_year_id, "copropriete_id": copro_id})
-            if fy:
-                entry_date = (fy.get("start_date") or "").strip()
+        if not fy:
+            fy = await db.fiscal_years.find_one(
+                {"copropriete_id": copro_id, "status": "open"},
+                sort=[("created_at", -1)],
+            )
+        if fy:
+            data.fiscal_year_id = fy["id"]
+            entry_date = (fy.get("start_date") or "").strip()
         if not entry_date and data.period_end_date:
             # Convert DD/MM/YYYY -> YYYY+1-01-01
             try:
@@ -1768,10 +1829,21 @@ def create_import_wizard_router(db):
             raise HTTPException(404, "Session introuvable")
         copro_id = session["copropriete_id"]
         await _require_acp_access(request, db, copro_id)
-        # Verifie que l'exercice existe
-        fy = await db.fiscal_years.find_one({"id": data.fiscal_year_id})
+        # iter90gi : si le client n'a pas transmis de fiscal_year_id (etape
+        # fiscal_year retiree du wizard), on resout via l'exercice ouvert de
+        # l'ACP. Fallback safe car iter90gg impose la creation du FY a la
+        # creation de l'ACP.
+        fy = None
+        if data.fiscal_year_id:
+            fy = await db.fiscal_years.find_one({"id": data.fiscal_year_id})
         if not fy:
-            raise HTTPException(400, "Exercice fiscal introuvable")
+            fy = await db.fiscal_years.find_one(
+                {"copropriete_id": copro_id, "status": "open"},
+                sort=[("created_at", -1)],
+            )
+        if not fy:
+            raise HTTPException(400, "Aucun exercice fiscal ouvert pour cette ACP")
+        data.fiscal_year_id = fy["id"]
 
         # ---- Auto-create distribution_keys for each unique section code ----
         # The Optipro budget PDF structures lines by 'key_code' (e.g. 0001, 0006).

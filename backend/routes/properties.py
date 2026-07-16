@@ -469,7 +469,15 @@ def create_properties_router(db):
         return owners
 
     @router.post("/owners")
-    async def create_owner(data: OwnerInput):
+    async def create_owner(data: OwnerInput, reuse_on_duplicate: bool = False):
+        """Cree un proprietaire.
+
+        iter90gi : `reuse_on_duplicate=true` -> si l'anti-doublon detecte un
+        proprietaire existant, retourne ce dernier avec le flag `_reused: true`
+        (statut 200) au lieu de lever une 409. Indispensable pour les wizards
+        d'import CSV/PDF Optipro qui doivent etre idempotents (re-lancer le
+        meme import ne doit PAS bloquer : les doublons sont reutilises).
+        """
         from server import generate_vcs
         # Check anti-doublon avant creation
         dup = await find_duplicate_owner(
@@ -482,6 +490,19 @@ def create_properties_router(db):
             copro_id=data.copropriete_id or "",
         )
         if dup:
+            existing = dup["owner"]
+            # iter90gi : mode reuse -> retourne l'owner existant + rattache
+            # eventuellement a l'ACP demandee (pour que les imports repetes
+            # soient idempotents).
+            if reuse_on_duplicate:
+                if data.copropriete_id:
+                    await db.owners.update_one(
+                        {"id": existing.get("id")},
+                        {"$addToSet": {"copropriete_ids": data.copropriete_id}},
+                    )
+                    await assign_owner_accounts(db, existing, data.copropriete_id)
+                    existing = await db.owners.find_one({"id": existing["id"]}, {"_id": 0}) or existing
+                return {**{k: v for k, v in existing.items() if k != "_id"}, "_reused": True, "_dup_field": dup.get("field", "")}
             field_label = {
                 "name": "nom + prenom",
                 "email": "email",
@@ -489,7 +510,6 @@ def create_properties_router(db):
                 "bce_number": "numero BCE",
                 "address": "adresse postale",
             }.get(dup["field"], dup["field"])
-            existing = dup["owner"]
             existing_name = existing.get("name") or f"{existing.get('first_name','')} {existing.get('last_name','')}".strip()
             raise HTTPException(
                 409,

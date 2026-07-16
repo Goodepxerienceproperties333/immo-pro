@@ -35,9 +35,12 @@ const STEPS = [
   // NOTE: 'owners' and 'lots' are now imported in the ACP Creation Assistant
   // (Step 2 - PDF/CSV from Optipro). They are NOT part of this post-creation
   // migration wizard to avoid redundancy.
+  // iter90gi : 'fiscal_year' removed - the FY is now created upfront in the
+  // ACP Creation Assistant (iter90gg), and auto-hydrated into the session on
+  // creation. Users see one less step; downstream commits still find the FY
+  // via `session.steps.fiscal_year.fiscal_year_id`.
   { key: 'suppliers', label: 'Fournisseurs',      icon: Truck,    optional: false, kind: 'csv_or_pdf' },
   { key: 'natures',   label: 'Natures depense',   icon: Tag,      optional: false, kind: 'pdf' },
-  { key: 'fiscal_year', label: 'Exercice fiscal', icon: Calendar, optional: false, kind: 'form' },
   { key: 'budget',    label: 'Budget',            icon: Wallet,   optional: true,  kind: 'pdf' },
   { key: 'distribution_keys', label: 'Cles de repartition', icon: PieChart, optional: true, kind: 'pdf' },
   { key: 'invoices',  label: 'Factures',          icon: FileText, optional: true,  kind: 'csv_invoices' },
@@ -267,12 +270,10 @@ export default function ImportWizardPage() {
         r = await api.post(`/import-wizard/sessions/${session.id}/commit-natures`, { natures: naturesParsed });
         toast.success(`${r.data.inserted} natures importees`);
       } else if (step.key === 'budget') {
-        const fyId = session?.steps?.fiscal_year?.fiscal_year_id;
-        if (!fyId) {
-          toast.error('Creez d\'abord l\'exercice fiscal a l\'etape precedente');
-          setCommitting(false);
-          return;
-        }
+        // iter90gi : le backend resout `fiscal_year_id` automatiquement via
+        // l'exercice ouvert de l'ACP si absent (l'etape fiscal_year est
+        // retiree du wizard - le FY est cree a la creation de l'ACP).
+        const fyId = session?.steps?.fiscal_year?.fiscal_year_id || '';
         r = await api.post(`/import-wizard/sessions/${session.id}/commit-budget`, {
           fiscal_year_id: fyId, sections: budgetSections
         });
@@ -341,15 +342,9 @@ export default function ImportWizardPage() {
         if (m.errors?.length) {
           toast.error(`${m.errors.length} erreur(s) : ${m.errors[0].error}`);
         }
-      } else if (step.key === 'fiscal_year') {
-        if (!fyForm.name || !fyForm.start_date || !fyForm.end_date) {
-          toast.error('Nom, date debut et date fin sont obligatoires');
-          setCommitting(false);
-          return;
-        }
-        r = await api.post(`/import-wizard/sessions/${session.id}/commit-fiscal-year`, fyForm);
-        toast.success(`Exercice "${r.data.name}" cree`);
       }
+      // iter90gi : 'fiscal_year' step removed - the FY is auto-hydrated on
+      // session creation from the ACP's active fiscal year (iter90gg).
       // Refresh session to update step counters
       const sRes = await api.get('/import-wizard/sessions/active', { params: { copropriete_id: effectiveCopro } });
       setSession(sRes.data);
@@ -370,8 +365,17 @@ export default function ImportWizardPage() {
       } else {
         // Final step : finish
         await api.post(`/import-wizard/sessions/${session.id}/finish`);
-        toast.success('Import termine ! Toutes les donnees sont integrees.');
-        navigate(`/?copropriete_id=${effectiveCopro}`);
+        // iter90gi : si le syndic avait declare des ventes intra-exercice a la
+        // creation de l'ACP, on redirige vers la page Lots avec le banner de
+        // saisie des mutations. Sinon, retour au dashboard classique.
+        const pendingMutations = params.get('pending_mutations') === '1';
+        if (pendingMutations) {
+          toast.success('Import termine ! Place aux mutations intra-exercice.');
+          navigate(`/lots?post_import_mutations=1&copropriete_id=${effectiveCopro}`);
+        } else {
+          toast.success('Import termine ! Toutes les donnees sont integrees.');
+          navigate(`/?copropriete_id=${effectiveCopro}`);
+        }
       }
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Erreur de validation');
@@ -417,6 +421,21 @@ export default function ImportWizardPage() {
           <RotateCcw size={14} className="mr-1" /> Annuler l&apos;import
         </Button>
       </div>
+
+      {/* iter90gi : banner rappel mutations en attente */}
+      {params.get('pending_mutations') === '1' && (
+        <div className="mb-4 rounded-lg border-2 border-orange-400 bg-gradient-to-r from-orange-50 to-amber-50 p-3 shadow-sm" data-testid="pending-mutations-reminder">
+          <div className="flex items-start gap-3">
+            <AlertTriangle size={20} className="text-orange-600 flex-shrink-0 mt-0.5" />
+            <div className="flex-1 text-sm">
+              <div className="font-bold text-orange-900">Mutations intra-exercice en attente</div>
+              <div className="text-orange-800">
+                Vous avez declare des ventes de lots pendant l&apos;exercice. Terminez d&apos;abord ce wizard d&apos;import (fournisseurs, natures, budget, factures, journaux, OD). A la <strong>fin</strong>, vous serez redirige vers la page Lots pour saisir les mutations.
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Stepper */}
       <div className="flex items-center mb-6 gap-1 overflow-x-auto pb-2">
@@ -533,10 +552,6 @@ export default function ImportWizardPage() {
             </div>
           )}
 
-          {step.kind === 'form' && step.key === 'fiscal_year' && (
-            <FiscalYearForm fyForm={fyForm} setFyForm={setFyForm} />
-          )}
-
           {sniffResult && (step.kind === 'csv' || (step.kind === 'csv_or_pdf' && uploadMode === 'csv')) && (
             <CsvMappingView
               sniff={sniffResult}
@@ -623,7 +638,7 @@ export default function ImportWizardPage() {
                 </Button>
               );
             }
-            if (step.optional && stepIdx < STEPS.length - 1 && !sniffResult && step.kind !== 'form') {
+            if (step.optional && stepIdx < STEPS.length - 1 && !sniffResult) {
               return (
                 <Button variant="outline" size="sm" onClick={() => { setStepIdx(stepIdx + 1); setSniffResult(null); }} data-testid="skip-step">
                   Passer cette etape
@@ -632,7 +647,7 @@ export default function ImportWizardPage() {
             }
             return (
               <Button
-                disabled={(step.kind === 'form' ? !fyForm.name : !sniffResult) || committing}
+                disabled={!sniffResult || committing}
                 onClick={handleCommit}
                 className="bg-[#022D52] hover:bg-[#1D4ED8]"
                 data-testid="commit-step"
