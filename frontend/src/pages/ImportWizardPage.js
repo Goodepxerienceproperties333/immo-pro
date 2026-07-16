@@ -43,7 +43,7 @@ const STEPS = [
   { key: 'natures',   label: 'Natures depense',   icon: Tag,      optional: false, kind: 'pdf' },
   { key: 'budget',    label: 'Budget',            icon: Wallet,   optional: true,  kind: 'pdf' },
   { key: 'distribution_keys', label: 'Cles de repartition', icon: PieChart, optional: true, kind: 'pdf' },
-  { key: 'invoices',  label: 'Factures',          icon: FileText, optional: true,  kind: 'csv_invoices' },
+  { key: 'invoices',  label: 'Factures',          icon: FileText, optional: true,  kind: 'csv_or_pdf' },
   { key: 'journals',  label: 'Journaux financiers', icon: Landmark, optional: true, kind: 'csv_journals' },
   { key: 'opening_balance', label: 'OD d\'ouverture', icon: Scale, optional: true, kind: 'pdf_balance' },
   { key: 'od_entries', label: 'OD year-end', icon: ClipboardList, optional: true, kind: 'pdf_od_entries' },
@@ -151,16 +151,21 @@ export default function ImportWizardPage() {
         ? (uploadMode || (file.name.toLowerCase().endsWith('.pdf') ? 'pdf' : 'csv'))
         : step.kind;
       const isPdf = effectiveKind === 'pdf' || effectiveKind === 'pdf_balance' || effectiveKind === 'pdf_od_entries';
-      const isStructuredCsv = effectiveKind === 'csv_invoices' || effectiveKind === 'csv_journals';
+      // iter90gj : les etapes 'invoices' et 'journals' sont "structured CSV"
+      // (parsing serveur direct sans mapping). Meme en mode csv_or_pdf, un CSV
+      // sur ces etapes doit passer par sniff-csv?kind=invoices|journals.
+      const isStructuredCsv = effectiveKind === 'csv_invoices' || effectiveKind === 'csv_journals'
+        || (effectiveKind === 'csv' && (step.key === 'invoices' || step.key === 'journals'));
       let r;
       if (isPdf) {
-        const kindMap = { natures: 'natures', budget: 'budget', distribution_keys: 'keys', suppliers: 'suppliers', opening_balance: 'balance', od_entries: 'od_entries' };
+        const kindMap = { natures: 'natures', budget: 'budget', distribution_keys: 'keys', suppliers: 'suppliers', opening_balance: 'balance', od_entries: 'od_entries', invoices: 'invoices' };
         fd.append('kind', kindMap[step.key] || 'generic');
         r = await api.post(`/import-wizard/sessions/${session.id}/sniff-pdf`, fd, {
           headers: { 'Content-Type': 'multipart/form-data' },
         });
         if (step.key === 'natures') setNaturesParsed(r.data.natures || []);
         if (step.key === 'budget') setBudgetSections(r.data.sections || []);
+        if (step.key === 'invoices') setInvoicesParsed(r.data.invoices || []);
         if (step.key === 'distribution_keys') {
           const incoming = r.data.keys || [];
           if (append && keysParsed.length > 0) {
@@ -226,13 +231,13 @@ export default function ImportWizardPage() {
           });
         }
       } else if (isStructuredCsv) {
-        const kindParam = effectiveKind === 'csv_invoices' ? 'invoices' : 'journals';
+        const kindParam = (effectiveKind === 'csv_journals' || step.key === 'journals') ? 'journals' : 'invoices';
         fd.append('kind', kindParam);
         r = await api.post(`/import-wizard/sessions/${session.id}/sniff-csv?kind=${kindParam}`, fd, {
           headers: { 'Content-Type': 'multipart/form-data' },
         });
-        if (effectiveKind === 'csv_invoices') setInvoicesParsed(r.data.invoices || []);
-        if (effectiveKind === 'csv_journals') setJournalsParsed(r.data.transactions || []);
+        if (kindParam === 'invoices') setInvoicesParsed(r.data.invoices || []);
+        if (kindParam === 'journals') setJournalsParsed(r.data.transactions || []);
       } else if (effectiveKind === 'csv') {
         r = await api.post(`/import-wizard/sessions/${session.id}/sniff-csv`, fd, {
           headers: { 'Content-Type': 'multipart/form-data' },
@@ -517,7 +522,9 @@ export default function ImportWizardPage() {
                 {step.kind === 'csv'
                   ? 'Chargez le fichier CSV exporte d\'Optipro/Sogis'
                   : step.kind === 'csv_or_pdf'
-                    ? 'Chargez le fichier CSV ou PDF exporte d\'Optipro/Sogis'
+                    ? (step.key === 'invoices'
+                        ? 'Chargez le fichier "facture_xxx.csv" ou le PDF "Factures fournisseurs" Optipro'
+                        : 'Chargez le fichier CSV ou PDF exporte d\'Optipro/Sogis')
                     : step.kind === 'csv_invoices'
                       ? 'Chargez le CSV "facture_xxx.csv" Optipro'
                       : step.kind === 'csv_journals'

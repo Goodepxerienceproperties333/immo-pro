@@ -335,6 +335,57 @@ def create_import_wizard_router(db):
             res = parse_od_entries_pdf(raw)
             res["filename"] = file.filename
             return res
+        if kind == "invoices":
+            # iter90gj : import PDF "Factures fournisseurs" (Optipro).
+            # Le parser retourne 1 dict par facture avec `allocations[]`.
+            # On aplatit en 1 entree par ligne comptable pour reutiliser
+            # le meme pipeline que le CSV (le regroupement multi-ligne est
+            # gere par commit-invoices via `_group_key`).
+            from import_wizard.pdf_supplier_invoice_list import parse_supplier_invoice_list
+            parsed = parse_supplier_invoice_list(raw)
+            invoices: list[dict] = []
+            for head in parsed:
+                sup_code = (head.get("supplier_code") or "").strip()
+                sup_name = (head.get("supplier_name") or "").strip()
+                base = {
+                    "date": head.get("date", ""),
+                    "due_date": "",
+                    "internal_ref_optipro": (head.get("internal_ref") or "").strip(),
+                    "external_ref": (head.get("external_ref") or "").strip(),
+                    "libelle": (head.get("description") or "").strip(),
+                    "ne_pas_payer": False,
+                    "supplier_aux_code": sup_code,
+                    "supplier_name": sup_name,
+                    "vat_code": "",
+                    "part_occupant": 0.0,
+                    "part_proprietaire": 100.0,
+                    "dist_key_code": "",
+                    "dist_key_label": "",
+                    "nature_code": "",
+                    "nature_label": "",
+                }
+                allocs = head.get("allocations") or []
+                if allocs:
+                    for a in allocs:
+                        invoices.append({
+                            **base,
+                            "account_number": (a.get("account_number") or "").strip(),
+                            "account_label": (a.get("description") or "").strip(),
+                            "montant_ht": float(a.get("ht_amount") or 0),
+                            "montant_tvac": float(a.get("tvac_amount") or 0),
+                            "montant_tva": round(float(a.get("tvac_amount") or 0) - float(a.get("ht_amount") or 0), 2),
+                        })
+                else:
+                    # Facture sans allocation detaillee : 1 ligne unique avec totaux entete.
+                    invoices.append({
+                        **base,
+                        "account_number": "",
+                        "account_label": "",
+                        "montant_ht": float(head.get("ht_amount") or 0),
+                        "montant_tvac": float(head.get("tvac_amount") or 0),
+                        "montant_tva": round(float(head.get("tvac_amount") or 0) - float(head.get("ht_amount") or 0), 2),
+                    })
+            return {"filename": file.filename, "invoices": invoices, "count": len(invoices)}
         info = extract_pdf(raw)
         info["filename"] = file.filename
         return info
