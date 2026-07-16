@@ -54,6 +54,7 @@ import AdminRgpdRegisterPage from "@/pages/AdminRgpdRegisterPage";
 import CookieBanner from "@/components/CookieBanner";
 import LegalAcceptanceModal from "@/components/LegalAcceptanceModal";
 import ReleaseNotesModal from "@/components/ReleaseNotesModal";
+import ErrorBoundary from "@/components/ErrorBoundary";
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
@@ -149,14 +150,16 @@ function App() {
 
   return (
     <BrowserRouter>
-      <AuthProvider>
-        <AppRoutes />
-        <SyndicOnboardingWizard />
-        <LegalAcceptanceModal />
-        <ReleaseNotesModal />
-        <CookieBanner />
-        <Toaster position="top-right" />
-      </AuthProvider>
+      <ErrorBoundary>
+        <AuthProvider>
+          <AppRoutes />
+          <SyndicOnboardingWizard />
+          <LegalAcceptanceModal />
+          <ReleaseNotesModal />
+          <CookieBanner />
+          <Toaster position="top-right" />
+        </AuthProvider>
+      </ErrorBoundary>
     </BrowserRouter>
   );
 }

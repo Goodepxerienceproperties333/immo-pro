@@ -101,6 +101,9 @@ class SafeResponseMiddleware(BaseHTTPMiddleware):
     non-attrapee en aval produit un 503 JSON propre (au lieu de rien).
     L'exception reste loguee pour debug, mais le client recoit toujours
     une reponse valide.
+
+    iter90gz : logging structure vers `backend_errors.log` (contexte:
+    method, path, user_id, status_code, duration_ms).
     """
     async def dispatch(self, request, call_next):
         try:
@@ -108,6 +111,7 @@ class SafeResponseMiddleware(BaseHTTPMiddleware):
         except RuntimeError as e:
             # "No response returned" -> l'endpoint a plante sans repondre
             if "No response returned" in str(e):
+                _log_error_context(request, 503, "No response returned")
                 logging.getLogger(__name__).error(
                     "iter90gy safe-net: endpoint %s %s a plante sans reponse",
                     request.method, request.url.path,
@@ -118,10 +122,11 @@ class SafeResponseMiddleware(BaseHTTPMiddleware):
                     media_type="application/json",
                 )
             raise
-        except Exception:
+        except Exception as _exc:
             # Toute autre exception non-attrapee (asyncio.CancelledError,
             # ExceptionGroup, etc.) - loguer + retourner 500 propre plutot
             # que laisser Cloudflare voir un stream tronque.
+            _log_error_context(request, 500, repr(_exc))
             logging.getLogger(__name__).exception(
                 "iter90gy safe-net: exception non-geree sur %s %s",
                 request.method, request.url.path,
@@ -133,7 +138,88 @@ class SafeResponseMiddleware(BaseHTTPMiddleware):
             )
 
 
+# iter90gz : Watchdog Uvicorn - kill toute requete depassant REQUEST_TIMEOUT_SEC
+# (default 60s) avec un 504 propre. Empeche Cloudflare de timeout a 100s
+# (ce qui coupe la connexion sans reponse). Certains paths legitimes (import
+# CSV/PDF, migrations, PDFs de masse) peuvent depasser ce seuil : ils sont
+# exemptes via REQUEST_TIMEOUT_SKIP_PREFIXES.
+_REQUEST_TIMEOUT_SEC = float(os.environ.get("REQUEST_TIMEOUT_SEC", "60"))
+_REQUEST_TIMEOUT_SKIP_PREFIXES = (
+    "/api/import-wizard/",       # imports Optipro/CODA lourds
+    "/api/admin/gridfs-migration",  # migration one-time
+    "/api/admin/duplicates-audit",  # audit global cross-ACP (peut etre long)
+    "/api/backups/",             # backup / restore
+    "/api/communication/send/",  # envoi email groupe (peut etre long)
+    "/api/reports/decompte",     # PDF decomptes de masse
+)
+
+
+class RequestTimeoutMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        path = request.url.path
+        if any(path.startswith(p) for p in _REQUEST_TIMEOUT_SKIP_PREFIXES):
+            return await call_next(request)
+        import asyncio as _asyncio
+        try:
+            return await _asyncio.wait_for(call_next(request), timeout=_REQUEST_TIMEOUT_SEC)
+        except _asyncio.TimeoutError:
+            _log_error_context(request, 504, f"timeout after {_REQUEST_TIMEOUT_SEC}s")
+            logging.getLogger(__name__).warning(
+                "iter90gz timeout: %s %s a depasse %ss",
+                request.method, path, _REQUEST_TIMEOUT_SEC,
+            )
+            return StarletteResponse(
+                content=('{"detail":"La requete a depasse le delai imparti (%ss). '
+                         'Reessayez ou reduisez la periode/le volume."}' % int(_REQUEST_TIMEOUT_SEC)),
+                status_code=504,
+                media_type="application/json",
+            )
+
+
+# iter90gz : Logger dedie aux erreurs 5xx (fichier rotatif 5MB x 3).
+def _setup_error_file_logger():
+    from logging.handlers import RotatingFileHandler
+    logger_5xx = logging.getLogger("backend_errors")
+    if logger_5xx.handlers:
+        return logger_5xx
+    logger_5xx.setLevel(logging.INFO)
+    logger_5xx.propagate = False
+    log_dir = Path(os.environ.get("ERROR_LOG_DIR", "/var/log/supervisor"))
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = log_dir / "backend_errors.log"
+        handler = RotatingFileHandler(str(log_path), maxBytes=5_000_000, backupCount=3, encoding="utf-8")
+        handler.setFormatter(logging.Formatter(
+            "%(asctime)s | %(levelname)s | %(message)s"
+        ))
+        logger_5xx.addHandler(handler)
+    except Exception as _e:
+        # Fallback : si le repertoire n'est pas accessible, on log en stderr
+        # (visible dans /var/log/supervisor/backend.err.log).
+        print(f"[startup] backend_errors.log handler skipped: {_e}")
+    return logger_5xx
+
+
+_error_logger = _setup_error_file_logger()
+
+
+def _log_error_context(request, status_code, error_detail):
+    """iter90gz : log structure d'une erreur 5xx avec contexte utilisateur."""
+    try:
+        user_id = getattr(request.state, "user_id", None)
+        user_email = getattr(request.state, "user_email", None)
+        _error_logger.error(
+            "%s %s | status=%s | user_id=%s | email=%s | error=%s",
+            request.method, request.url.path,
+            status_code, user_id or "-", user_email or "-",
+            (error_detail or "")[:500],
+        )
+    except Exception:
+        pass
+
+
 app.add_middleware(BodySizeLimitMiddleware)
+app.add_middleware(RequestTimeoutMiddleware)
 # iter90gy : le SafeResponseMiddleware DOIT etre ajoute EN DERNIER (donc
 # execute EN PREMIER dans la chaine) pour attraper toutes les exceptions
 # des autres middlewares en aval (auth, security, cors, body_size...).
@@ -176,6 +262,10 @@ AUTH_EXEMPT_PATHS = {
     "/api/auth/check-must-change-password",
     "/api/auth/forgot-password",
     "/api/auth/reset-password",
+    # iter90gz : health checks publics pour monitoring K8s/Cloudflare
+    "/api/health",
+    "/api/health/live",
+    "/api/health/ready",
 }
 
 # Prefix-based exemption for public legal document reads (unauthenticated users
@@ -893,6 +983,61 @@ async def dashboard_stats(request: Request, copropriete_id: Optional[str] = None
         "total_charges": round(total_charges, 2),
         "recent_entries": recent_entries
     }
+
+@app.get("/api/health")
+@app.get("/api/health/live")
+async def health_liveness():
+    """iter90gz : liveness probe - retourne 200 tant que le process repond.
+    Utilise par K8s / Cloudflare / UptimeRobot pour verifier que l'app tourne.
+    N'exige PAS d'auth. Aucun acces DB (rapide, sans dependance externe)."""
+    return {
+        "status": "ok",
+        "service": "nextge-copro",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@app.get("/api/health/ready")
+async def health_readiness():
+    """iter90gz : readiness probe - verifie que l'app peut servir du trafic.
+    Ping MongoDB (max 2s), mesure la latence, expose le statut des caches.
+    - 200 si MongoDB repond en < 2s.
+    - 503 sinon (K8s / Cloudflare enleveront l'instance du load balancer).
+    N'exige PAS d'auth."""
+    import asyncio as _asyncio
+    import time as _time
+    checks = {"service": "nextge-copro", "timestamp": datetime.now(timezone.utc).isoformat()}
+    # 1. Ping MongoDB avec timeout dur
+    t0 = _time.perf_counter()
+    mongo_ok = False
+    mongo_error = None
+    try:
+        await _asyncio.wait_for(db.command("ping"), timeout=2.0)
+        mongo_ok = True
+    except _asyncio.TimeoutError:
+        mongo_error = "timeout (>2s)"
+    except Exception as _e:
+        mongo_error = str(_e)[:100]
+    mongo_ms = round((_time.perf_counter() - t0) * 1000, 1)
+    checks["mongodb"] = {"ok": mongo_ok, "latency_ms": mongo_ms, "error": mongo_error}
+
+    # 2. Statut caches in-memory (bilan + duplicates-audit) - non-fatal, indicatif
+    try:
+        from routes.reports import _bilan_cache_stats  # type: ignore
+        checks["bilan_cache"] = _bilan_cache_stats()
+    except Exception:
+        checks["bilan_cache"] = {"available": False}
+    try:
+        from routes.admin import _dup_audit_cache_stats  # type: ignore
+        checks["duplicates_audit_cache"] = _dup_audit_cache_stats()
+    except Exception:
+        checks["duplicates_audit_cache"] = {"available": False}
+
+    status_code = 200 if mongo_ok else 503
+    checks["status"] = "ok" if mongo_ok else "degraded"
+    from fastapi.responses import JSONResponse
+    return JSONResponse(status_code=status_code, content=checks)
+
 
 @app.get("/api/dashboard/health-audit")
 async def dashboard_health_audit(request: Request, copropriete_id: Optional[str] = None,

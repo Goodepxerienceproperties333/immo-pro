@@ -1,4 +1,69 @@
 # CoproManager PRD
+### Iter90gz (Feb 2026) — Stabilite proactive : Health checks + Timeout watchdog + Error logging + ErrorBoundary
+
+**Ticket utilisateur** :
+> "je veux toujours maintenir la stabilite donc trouve des solutions en vue
+> de permettre cela"
+
+Post iter90gy (SafeResponseMiddleware anti-502 Cloudflare), l'utilisateur
+demande des solutions proactives pour maintenir la stabilite en PROD.
+4 quick-wins livres :
+
+**a) Endpoints /api/health** (public, sans auth) — `server.py` :
+- `/api/health` et `/api/health/live` : liveness minimale (200 + timestamp),
+  aucune dependance externe. Pour K8s liveness probe / Cloudflare / UptimeRobot.
+- `/api/health/ready` : readiness reelle (ping MongoDB avec timeout 2s,
+  latence exposee en ms, statut caches optionnel). 200 si Mongo repond,
+  503 sinon (K8s enleve l'instance du load balancer automatiquement).
+- Ajout aux `AUTH_EXEMPT_PATHS` pour rester publics.
+
+**b) RequestTimeoutMiddleware** — `server.py` :
+- Wrap tous les `call_next(request)` dans `asyncio.wait_for(REQUEST_TIMEOUT_SEC)`.
+- `REQUEST_TIMEOUT_SEC` configurable via env (default 60s).
+- `_REQUEST_TIMEOUT_SKIP_PREFIXES` pour les paths legitimes longs :
+  `/api/import-wizard/*`, `/api/admin/gridfs-migration`,
+  `/api/admin/duplicates-audit`, `/api/backups/*`,
+  `/api/communication/send/*`, `/api/reports/decompte`.
+- Retourne 504 JSON propre au lieu de laisser Cloudflare timeout a 100s
+  (ce qui coupe la connexion sans reponse et retourne un 524 opaque).
+
+**c) Logging structure des 5xx** — `server.py` :
+- `RotatingFileHandler` -> `/var/log/supervisor/backend_errors.log`
+  (5MB x 3 backups). Configurable via `ERROR_LOG_DIR`.
+- Helper `_log_error_context(request, status_code, error_detail)` :
+  logue method, path, status, user_id, email, extrait de l'erreur.
+- Appele depuis `SafeResponseMiddleware` (500/503) et
+  `RequestTimeoutMiddleware` (504).
+- Permet un debug rapide en PROD sans devoir grepper backend.err.log complet.
+
+**d) Frontend ErrorBoundary** — `components/ErrorBoundary.js` (nouveau) :
+- Composant React classe global wrapping `<AppRoutes />` dans `App.js`.
+- `getDerivedStateFromError` + `componentDidCatch` : rattrape TOUT crash
+  React pendant render/lifecycle qui produirait un ecran blanc.
+- Affiche une carte propre avec 2 actions : "Recharger la page" /
+  "Retour au tableau de bord". Details techniques repliables (details/summary).
+- Test-IDs : `global-error-boundary`, `global-error-message`,
+  `global-error-reload`, `global-error-home`.
+
+**Tests** (`tests/test_iter90gz_stability_health_and_timeout.py`, 8/8 verts) :
+- `liveness_endpoint_public_and_fast` : /api/health -> 200 sans auth
+- `liveness_alias_endpoint` : /api/health/live -> 200
+- `readiness_endpoint_pings_mongo` : /api/health/ready ping OK + latency < 500ms
+- `health_does_not_require_auth` : les 3 endpoints publics
+- `request_timeout_middleware_registered` : middleware + skip prefixes en place
+- `error_logger_configured` : RotatingFileHandler + _log_error_context appele 3x+
+- `error_boundary_frontend_component_exists` : composant + wrap dans App.js
+- `health_ready_returns_json_content_type` : Cloudflare / monitoring OK
+
+Regression complete : 20/20 tests verts (iter90gy + iter90gz + iter90gs/gw/gx).
+Zero erreur de lint (Python + JavaScript).
+
+**Redeploiement PROD requis** pour activer les 4 quick-wins sur immo-pcmn.emergent.host.
+Post-deploy, configurer Cloudflare pour pinger `/api/health/ready` toutes les
+30s (health check natif) et alerter si 503 consecutifs.
+
+
+
 
 **NOTE** : ce fichier depasse largement les 700 lignes recommandees. A
 scinder au prochain grand chantier en `PRD.md` (statique) / `CHANGELOG.md`
