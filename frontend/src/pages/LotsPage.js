@@ -1019,15 +1019,26 @@ export default function LotsPage() {
     // ayant deja un lot dans l'ACP courante (chinese wall iter85k).
     // Le backend assign_owner_accounts() ajoute automatiquement l'ACP a
     // owner.copropriete_ids[] au moment de la mutation -> integration propre.
+    // iter90gj : quand un `copropriete_id` est present dans l'URL ou en
+    // localStorage, filtrer les lots pour n'afficher QUE ceux de cette ACP.
+    // Sinon on affiche les doublons apparents des lots issus d'ACPs de test
+    // multiples (Matexi / MatexiBug / MATEXI etc.).
+    const coproIdParam = searchParams.get('copropriete_id') || localStorage.getItem('selectedCopro') || localStorage.getItem('copropriete_id') || '';
+    // iter90gj : persiste le copropriete_id de l'URL en localStorage pour que
+    // les navigations ulterieures (nouveau lot, mutation, refresh) restent
+    // filtrees sur la meme ACP.
+    if (searchParams.get('copropriete_id')) {
+      localStorage.setItem('selectedCopro', searchParams.get('copropriete_id'));
+    }
+    const lotsParams = coproIdParam ? { copropriete_id: coproIdParam } : {};
     const [lotsRes, ownersRes] = await Promise.all([
-      api.get('/lots'),
+      api.get('/lots', { params: lotsParams }),
       api.get('/owners', { params: { syndic_wide: true } }),
     ]);
     setLots(lotsRes.data);
     setOwners(ownersRes.data);
     // iter90gj Phase 3 : charge les frais privatifs en attente d'allocation
     // pour l'ACP courante (header X-Copropriete-Id gere par api client).
-    const coproIdParam = searchParams.get('copropriete_id') || localStorage.getItem('selectedCopro') || localStorage.getItem('copropriete_id') || '';
     if (coproIdParam) {
       try {
         const pfRes = await api.get('/invoices/private-fees-pending', { params: { copropriete_id: coproIdParam } });
