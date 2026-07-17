@@ -1334,7 +1334,18 @@ def create_fiscal_router(db):
     # ---- BUDGET VS ACTUAL ----
     @router.get("/budget-comparison/{fiscal_year_id}")
     async def budget_vs_actual(fiscal_year_id: str):
-        """Compare budget vs actual expenses for a fiscal year."""
+        """Compare budget vs actual expenses for a fiscal year.
+
+        iter90i5 : `actual` DOIT correspondre exactement au total de la
+        Liste des depenses (compute_expense_rows) - meme source de verite
+        que le dashboard total_charges et le PDF Liste des depenses.
+        Avant : aggregation naive `debit - credit` sur toutes les
+        journal_entries de classe 6 -> incluait les contre-passations
+        (reversals) et les JE liees aux factures privatives (double
+        comptabilise ensuite reneutralise par OD-PRIV, susceptible de
+        casser l'invariant selon l'ordre).
+        """
+        from expense_rows import compute_expense_rows
         fy = await db.fiscal_years.find_one({"id": fiscal_year_id}, {"_id": 0})
         if not fy:
             raise HTTPException(404, "Exercice non trouve")
@@ -1344,19 +1355,33 @@ def create_fiscal_router(db):
 
         # Chinese wall: scope entries by fiscal year's ACP
         copro_id = fy.get("copropriete_id", "")
-        je_q = {"date": {"$gte": fy["start_date"], "$lte": fy["end_date"]}}
-        if copro_id:
-            je_q["copropriete_id"] = copro_id
-        entries = await db.journal_entries.find(je_q, {"_id": 0}).to_list(100000)
 
-        actuals = {}
-        for entry in entries:
-            for line in entry.get("lines", []):
-                acc = line["account_number"]
-                if acc not in actuals:
-                    actuals[acc] = {"debit": 0, "credit": 0, "name": line.get("account_name", "")}
-                actuals[acc]["debit"] += line.get("debit", 0)
-                actuals[acc]["credit"] += line.get("credit", 0)
+        # iter90i5 : source unique = compute_expense_rows. On garde le nom
+        # de compte via journal_entries pour les cas ou le pcmn_name n'est
+        # pas embarque dans les rows.
+        rows, _totals = await compute_expense_rows(
+            db, copro_id,
+            date_from=fy["start_date"], date_to=fy["end_date"],
+        )
+        actuals: dict = {}
+        account_names: dict = {}
+        for r in rows:
+            acc = (r.get("account_number") or "").strip()
+            if not acc:
+                continue
+            actuals[acc] = round(actuals.get(acc, 0.0) + float(r.get("total_amount", 0) or 0), 2)
+            if acc not in account_names and r.get("account_name"):
+                account_names[acc] = r["account_name"]
+
+        # Enrichit les noms de compte via pcmn_accounts si manquants
+        missing_names = [a for a in actuals if a not in account_names]
+        if missing_names:
+            pcmn_docs = await db.pcmn_accounts.find(
+                {"copropriete_id": copro_id, "number": {"$in": missing_names}},
+                {"_id": 0, "number": 1, "name": 1},
+            ).to_list(500)
+            for p in pcmn_docs:
+                account_names[p["number"]] = p.get("name", "")
 
         comparison = []
         all_accounts = sorted(set(list(budget_lines.keys()) + list(actuals.keys())))
@@ -1364,12 +1389,11 @@ def create_fiscal_router(db):
             if not acc.startswith("6"):
                 continue
             bl = budget_lines.get(acc, {})
-            act = actuals.get(acc, {"debit": 0, "credit": 0, "name": ""})
+            actual = round(actuals.get(acc, 0.0), 2)
             budgeted = bl.get("amount", 0)
-            actual = round(act["debit"] - act["credit"], 2)
             comparison.append({
                 "account_number": acc,
-                "account_name": bl.get("account_name", "") or act.get("name", ""),
+                "account_name": bl.get("account_name", "") or account_names.get(acc, ""),
                 "budgeted": round(budgeted, 2),
                 "actual": actual,
                 "difference": round(budgeted - actual, 2),
