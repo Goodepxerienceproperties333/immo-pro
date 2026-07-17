@@ -454,6 +454,7 @@ def create_communication_router(db):
                             copropriete_id=copropriete_id, owner_ids=owner_ids or [],
                             dry_run=False, status="failed",
                             error_msg=err_detail, request=request,
+                            attachment_pdf=None,  # iter90hs : n'archive pas les PJ des envois failed
                         )
                     except Exception as pe:
                         logger.warning("Persist failed comm log failed : %s", pe)
@@ -468,6 +469,7 @@ def create_communication_router(db):
                 copropriete_id=copropriete_id, owner_ids=owner_ids or [],
                 dry_run=dry_run, status=status,
                 error_msg="", request=request,
+                attachment_pdf=attachment_pdf,  # iter90hs : archive la PJ pour consultation proprio
             )
         except Exception as pe:
             logger.warning("Persist sent_communications failed : %s", pe)
@@ -480,14 +482,96 @@ def create_communication_router(db):
         kind: str, copropriete_id: str, owner_ids: List[str],
         dry_run: bool, status: str, error_msg: str,
         request: Optional[Request],
+        attachment_pdf: Optional[bytes] = None,
     ) -> None:
         """Iter90db : insertion dans db.sent_communications (sync a chaque envoi
-        via _send_email). Tolerance : ne remonte jamais d'erreur au caller."""
+        via _send_email). Tolerance : ne remonte jamais d'erreur au caller.
+
+        iter90hs : si `attachment_pdf` est fourni, stocke la PJ en GridFS
+        (bucket `documents`) et cree une entree dans `db.documents` pour chaque
+        proprietaire cible - permet au proprio de retrouver le document dans
+        l'onglet Documents et de le consulter depuis l'onglet Communications.
+        """
         sent_by = ""
         if request is not None:
             sent_by = getattr(request.state, "user_id", "") or ""
+        comm_id = str(uuid.uuid4())
+
+        # iter90hs : persist PJ en GridFS (une seule fois) + docs par proprio
+        attachment_gridfs_id = ""
+        attachment_size = 0
+        if attachment_pdf and has_attachment and status != "failed":
+            try:
+                from storage.documents_storage import get_documents_storage
+                storage = get_documents_storage(db)
+                attachment_gridfs_id = await storage.upload(
+                    filename=attachment_filename or f"comm-{comm_id}.pdf",
+                    contents=attachment_pdf,
+                    metadata={
+                        "communication_id": comm_id,
+                        "copropriete_id": copropriete_id or "",
+                        "kind": kind or "generic",
+                        "mime_type": "application/pdf",
+                        "uploaded_at": datetime.now(timezone.utc).isoformat(),
+                    },
+                )
+                attachment_size = len(attachment_pdf)
+                # iter90hs : creer une entree documents/ pour chaque proprio
+                # cible. Categorie par defaut derivee du kind (decompte / rappel
+                # / appel / generic).
+                cat_name = {
+                    "decompte": "Decomptes annuels",
+                    "reminder": "Rappels de paiement",
+                    "fund_call": "Appels de fonds",
+                    "situation": "Situations de compte",
+                }.get((kind or "").lower(), "Communications du syndic")
+                # Cherche la category existante par nom pour l'ACP, sinon la cree
+                category_id = ""
+                if copropriete_id:
+                    existing_cat = await db.document_categories.find_one({
+                        "copropriete_id": copropriete_id, "name": cat_name,
+                    })
+                    if existing_cat:
+                        category_id = existing_cat["id"]
+                    else:
+                        category_id = str(uuid.uuid4())
+                        await db.document_categories.insert_one({
+                            "id": category_id,
+                            "name": cat_name,
+                            "description": f"Documents envoyes par le syndic ({cat_name})",
+                            "copropriete_id": copropriete_id,
+                            "created_at": datetime.now(timezone.utc).isoformat(),
+                        })
+                # Cree UN document par proprio destinataire (owner_id_visible
+                # sert au chinese wall dans /api/owner/documents).
+                now_iso = datetime.now(timezone.utc).isoformat()
+                docs_to_insert = []
+                for oid in (owner_ids or []):
+                    docs_to_insert.append({
+                        "id": str(uuid.uuid4()),
+                        "title": subject or attachment_filename or "Communication",
+                        "description": f"Communication du syndic - {subject or 'sans sujet'}",
+                        "category_id": category_id,
+                        "filename": attachment_filename or f"comm-{comm_id}.pdf",
+                        "gridfs_id": attachment_gridfs_id,
+                        "mime_type": "application/pdf",
+                        "size_bytes": attachment_size,
+                        "copropriete_id": copropriete_id or "",
+                        "owner_id": oid,  # chinese wall proprio
+                        "source": "communication",
+                        "communication_id": comm_id,
+                        "kind": kind or "generic",
+                        "created_at": now_iso,
+                    })
+                if docs_to_insert:
+                    await db.documents.insert_many(docs_to_insert)
+            except Exception as e:
+                logger.warning("iter90hs GridFS/documents persist failed : %s", e)
+                attachment_gridfs_id = ""
+                attachment_size = 0
+
         doc = {
-            "id": str(uuid.uuid4()),
+            "id": comm_id,
             "from_mailbox": from_mailbox,
             "to": to,
             "subject": subject or "(sans sujet)",
@@ -495,6 +579,8 @@ def create_communication_router(db):
             "body_preview": _extract_preview(html_body),
             "has_attachment": bool(has_attachment),
             "attachment_filename": attachment_filename or "",
+            "attachment_gridfs_id": attachment_gridfs_id,
+            "attachment_size": attachment_size,
             "kind": kind or "generic",
             "copropriete_id": copropriete_id or "",
             "owner_ids": owner_ids or [],

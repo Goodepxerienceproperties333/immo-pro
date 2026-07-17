@@ -814,8 +814,61 @@ def create_owner_portal_router(db):
 
         return comm
 
+    # iter90hs : download de la piece jointe d'une communication (archivee en GridFS)
+    @router.get("/communications/{comm_id}/attachment/download")
+    async def download_communication_attachment(comm_id: str, request: Request):
+        """Retourne la PJ PDF d'une communication - avec verif chinese wall.
+        La PJ est archivee dans GridFS `documents` au moment de l'envoi
+        (iter90hs) pour permettre au proprio de la consulter a posteriori."""
+        owner_ids, _primary = await _resolve_owner_ids(db, request)
+        owner_id_set = set(owner_ids)
+        emails_owner = []
+        all_owners_docs = await db.owners.find(
+            {"id": {"$in": owner_ids}}, {"_id": 0, "email": 1, "email2": 1},
+        ).to_list(len(owner_ids))
+        for o in all_owners_docs:
+            for e in (o.get("email", ""), o.get("email2", "")):
+                if e:
+                    emails_owner.append(e.lower().strip())
+        emails_owner = list(set(emails_owner))
 
-    @router.get("/situation/{copropriete_id}")
+        comm = await db.sent_communications.find_one({"id": comm_id}, {"_id": 0})
+        if not comm:
+            raise HTTPException(404, "Communication introuvable")
+        if comm.get("dry_run") or comm.get("status") == "failed":
+            raise HTTPException(404, "Communication indisponible")
+        # Chinese wall : owner_ids ou email
+        if not any(oid in owner_id_set for oid in (comm.get("owner_ids") or [])):
+            to_lower = [str(e).lower().strip() for e in (comm.get("to") or [])]
+            if not any(e in to_lower for e in emails_owner):
+                raise HTTPException(403, "Acces refuse a cette communication")
+        # Verifier ACP
+        copro_id = comm.get("copropriete_id", "")
+        if copro_id:
+            has_lot = await db.lots.find_one(
+                {"copropriete_id": copro_id,
+                 "$or": [{"owner_id": {"$in": owner_ids}}, {"owner_ids": {"$in": owner_ids}}]},
+                {"_id": 0, "id": 1},
+            )
+            if not has_lot:
+                raise HTTPException(403, "Acces refuse a cette communication")
+        gid = comm.get("attachment_gridfs_id", "")
+        if not gid:
+            raise HTTPException(404, "Cette communication n'a pas de piece jointe archivee")
+        from storage.documents_storage import get_documents_storage
+        from fastapi.responses import Response
+        storage = get_documents_storage(db)
+        try:
+            data = await storage.download(gid)
+        except Exception:
+            raise HTTPException(404, "Fichier introuvable dans le stockage")
+        filename = comm.get("attachment_filename") or "document.pdf"
+        safe_name = filename.replace('"', "")
+        return Response(
+            content=data,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'inline; filename="{safe_name}"'},
+        )
     async def my_situation(copropriete_id: str, request: Request):
         """Detailed account situation (mouvements) for owner within a specific ACP."""
         # Iter90df : accepte multi-fiches owner via email match

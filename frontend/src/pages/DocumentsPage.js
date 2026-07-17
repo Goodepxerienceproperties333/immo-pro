@@ -18,6 +18,7 @@ export default function DocumentsPage() {
   const [categories, setCategories] = useState([]);
   const [filterCategory, setFilterCategory] = useState('all');
   const [docDialog, setDocDialog] = useState(false);
+  const [editingDoc, setEditingDoc] = useState(null); // iter90ht : id du doc en cours d'edition
   const [catDialog, setCatDialog] = useState(false);
   const [editingCat, setEditingCat] = useState(null);
   const [docForm, setDocForm] = useState({ title: '', description: '', category_id: '', content: '' });
@@ -38,11 +39,29 @@ export default function DocumentsPage() {
   const getCatName = (id) => categories.find(c => c.id === id)?.name || '-';
 
   // Document handlers
-  const openCreateDoc = () => { setDocForm({ title: '', description: '', category_id: '', content: '' }); setDocDialog(true); };
+  const openCreateDoc = () => { setEditingDoc(null); setDocForm({ title: '', description: '', category_id: '', content: '' }); setDocDialog(true); };
+  // iter90ht : ouvre le dialog en mode edition pour reclasser un doc
+  const openEditDoc = (doc) => {
+    setEditingDoc(doc);
+    setDocForm({
+      title: doc.title || '',
+      description: doc.description || '',
+      category_id: doc.category_id || '',
+      content: doc.content || '',
+    });
+    setDocDialog(true);
+  };
   const saveDoc = async () => {
     try {
-      await api.post('/documents', docForm);
-      toast.success('Document cree'); setDocDialog(false); load();
+      if (editingDoc) {
+        // iter90ht : PUT pour modifier le doc existant (titre, description, categorie)
+        await api.put(`/documents/${editingDoc.id}`, docForm);
+        toast.success('Document modifie');
+      } else {
+        await api.post('/documents', docForm);
+        toast.success('Document cree');
+      }
+      setDocDialog(false); setEditingDoc(null); load();
     } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); }
   };
   const deleteDoc = async (id) => {
@@ -128,12 +147,16 @@ export default function DocumentsPage() {
                         <span className="font-medium text-sm text-slate-900 truncate">{doc.title}</span>
                       </div>
                       <div className="flex gap-0 flex-shrink-0">
-                        {doc.stored_path && (
-                          <Button variant="ghost" size="sm" onClick={() => window.open(`${process.env.REACT_APP_BACKEND_URL}/api/documents/${doc.id}/download`, '_blank')} className="h-6 w-6 p-0 text-slate-400" title="Telecharger">
+                        {(doc.stored_path || doc.gridfs_id) && (
+                          <Button variant="ghost" size="sm" onClick={() => window.open(`${process.env.REACT_APP_BACKEND_URL}/api/documents/${doc.id}/download`, '_blank')} className="h-6 w-6 p-0 text-slate-400" title="Telecharger" data-testid={`doc-download-${doc.id}`}>
                             <Download size={12} />
                           </Button>
                         )}
-                        <Button variant="ghost" size="sm" onClick={() => deleteDoc(doc.id)} className="text-red-400 h-6 w-6 p-0"><Trash2 size={12} /></Button>
+                        {/* iter90ht : bouton edition pour reclasser / renommer */}
+                        <Button variant="ghost" size="sm" onClick={() => openEditDoc(doc)} className="h-6 w-6 p-0 text-slate-400 hover:text-[#022D52]" title="Modifier" data-testid={`doc-edit-${doc.id}`}>
+                          <Pencil size={12} />
+                        </Button>
+                        <Button variant="ghost" size="sm" onClick={() => deleteDoc(doc.id)} className="text-red-400 h-6 w-6 p-0" data-testid={`doc-delete-${doc.id}`}><Trash2 size={12} /></Button>
                       </div>
                     </div>
                     {doc.description && <p className="text-xs text-slate-500 mb-2 line-clamp-2">{doc.description}</p>}
@@ -142,6 +165,13 @@ export default function DocumentsPage() {
                         <Sparkles size={10} />
                         <span>Auto-classifie</span>
                         {doc.doc_date && <span className="text-slate-400">- {doc.doc_date}</span>}
+                      </div>
+                    )}
+                    {/* iter90hs : indicateur source Communication */}
+                    {doc.source === 'communication' && (
+                      <div className="flex items-center gap-1 mb-2 text-[10px] text-blue-600">
+                        <span className="inline-block w-1.5 h-1.5 bg-blue-500 rounded-full" />
+                        <span>Piece jointe communication</span>
                       </div>
                     )}
                     <div className="flex items-center justify-between">
@@ -186,25 +216,30 @@ export default function DocumentsPage() {
       </Tabs>
 
       {/* Document Dialog */}
-      <Dialog open={docDialog} onOpenChange={setDocDialog}>
+      <Dialog open={docDialog} onOpenChange={(open) => { setDocDialog(open); if (!open) setEditingDoc(null); }}>
         <DialogContent data-testid="doc-dialog">
-          <DialogHeader><DialogTitle style={{fontFamily:'Chivo,sans-serif'}}>Nouveau document</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle style={{fontFamily:'Chivo,sans-serif'}}>{editingDoc ? 'Modifier le document' : 'Nouveau document'}</DialogTitle></DialogHeader>
           <div className="space-y-4 mt-2">
             <div><label className="form-label">Titre *</label><Input value={docForm.title} onChange={e => setDocForm({...docForm, title: e.target.value})} data-testid="doc-title" /></div>
             <div><label className="form-label">Categorie</label>
-              <Select value={docForm.category_id} onValueChange={v => setDocForm({...docForm, category_id: v})}>
-                <SelectTrigger><SelectValue placeholder="Selectionner" /></SelectTrigger>
+              <Select value={docForm.category_id || 'none'} onValueChange={v => setDocForm({...docForm, category_id: v === 'none' ? '' : v})}>
+                <SelectTrigger data-testid="doc-category-select"><SelectValue placeholder="Selectionner" /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="none">Aucune</SelectItem>
                   {categories.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>
-            <div><label className="form-label">Description</label><Input value={docForm.description} onChange={e => setDocForm({...docForm, description: e.target.value})} /></div>
-            <div><label className="form-label">Contenu</label><Textarea value={docForm.content} onChange={e => setDocForm({...docForm, content: e.target.value})} rows={4} /></div>
+            <div><label className="form-label">Description</label><Input value={docForm.description} onChange={e => setDocForm({...docForm, description: e.target.value})} data-testid="doc-description" /></div>
+            <div><label className="form-label">Contenu (note interne)</label><Textarea value={docForm.content} onChange={e => setDocForm({...docForm, content: e.target.value})} rows={4} data-testid="doc-content" /></div>
+            {editingDoc?.filename && (
+              <div className="text-xs text-slate-500 border-l-2 border-slate-200 pl-3">
+                Fichier : <b>{editingDoc.filename}</b> {editingDoc.size_bytes ? `- ${Math.round(editingDoc.size_bytes/1024)} Ko` : ''}
+              </div>
+            )}
             <div className="flex gap-3 justify-end">
-              <Button variant="outline" onClick={() => setDocDialog(false)}>Annuler</Button>
-              <Button onClick={saveDoc} className="bg-[#022D52] hover:bg-[#1D4ED8]" data-testid="doc-save-btn">Creer</Button>
+              <Button variant="outline" onClick={() => { setDocDialog(false); setEditingDoc(null); }} data-testid="doc-cancel-btn">Annuler</Button>
+              <Button onClick={saveDoc} className="bg-[#022D52] hover:bg-[#1D4ED8]" data-testid="doc-save-btn">{editingDoc ? 'Enregistrer' : 'Creer'}</Button>
             </div>
           </div>
         </DialogContent>

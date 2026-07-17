@@ -10,7 +10,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { toast } from 'sonner';
-import { LogOut, Home, Wallet, FileText, Receipt, Megaphone, Building2, User, AlertCircle, CheckCircle2, ArrowDownToLine, Copy, UserCog, Users, Plus, Pencil, Trash2, Save, Eye, Gauge, CalendarClock, PieChart as PieChartIcon, TrendingUp, Clock, Sparkles, Mail, MailOpen, Send, Paperclip, ChevronRight, Download } from 'lucide-react';
+import { LogOut, Home, Wallet, FileText, Receipt, Megaphone, Building2, User, AlertCircle, CheckCircle2, ArrowDownToLine, ArrowLeft, ArrowRight, Copy, UserCog, Users, Plus, Pencil, Trash2, Save, Eye, Gauge, CalendarClock, PieChart as PieChartIcon, TrendingUp, Clock, Sparkles, Mail, MailOpen, Send, Paperclip, ChevronRight, Download } from 'lucide-react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RechartsTooltip } from 'recharts';
 import { sanitizeHtml } from '@/lib/sanitizeHtml';
 import OwnerOnboardingTour, { ownerTourStorageKey } from '@/components/OwnerOnboardingTour';
@@ -809,62 +809,7 @@ export default function OwnerPortalPage() {
           </TabsContent>
 
           <TabsContent value="documents" className="mt-0">
-            {filteredDocs.length === 0 ? (
-              <Card><CardContent className="p-8 text-center text-slate-400">Aucun document partage</CardContent></Card>
-            ) : (
-              <>
-                {/* Iter90db : legende des categories */}
-                <DocumentCategoryLegend documents={filteredDocs} />
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                  {filteredDocs.map(d => {
-                    const catName = d.category_name || 'Sans categorie';
-                    const color = categoryColor(catName);
-                    return (
-                      <Card
-                        key={d.id}
-                        className={`border-l-4 hover:shadow-md transition-shadow ${color.border} border-slate-200`}
-                        data-testid={`doc-card-${d.id}`}
-                      >
-                        <CardContent className="p-3">
-                          <div className="flex items-start gap-2 mb-1">
-                            <div className={`w-8 h-8 rounded-md ${color.bg} flex items-center justify-center flex-shrink-0`}>
-                              <FileText size={15} className={color.text} />
-                            </div>
-                            <div className="min-w-0 flex-1">
-                              <div className="text-sm font-medium text-slate-900 truncate">{d.title}</div>
-                              {d.description && <div className="text-[11px] text-slate-500 line-clamp-2">{d.description}</div>}
-                            </div>
-                          </div>
-                          <div className="flex items-center justify-between mt-2 gap-2">
-                            <Badge
-                              variant="outline"
-                              className={`text-[10px] ${color.bg} ${color.text} ${color.border}`}
-                              data-testid={`doc-category-${d.id}`}
-                            >
-                              <span className={`inline-block w-1.5 h-1.5 rounded-full ${color.dot} mr-1`} />
-                              {catName}
-                            </Badge>
-                            {d.filename && (
-                              <a
-                                href={`${process.env.REACT_APP_BACKEND_URL}/api/documents/${d.id}/download`}
-                                target="_blank" rel="noreferrer"
-                                className="text-[#022D52] hover:bg-blue-50 p-1 rounded"
-                                title="Telecharger"
-                              >
-                                <ArrowDownToLine size={13} />
-                              </a>
-                            )}
-                          </div>
-                          {d.created_at && (
-                            <div className="text-[10px] text-slate-400 mt-1.5">{fmtDate(d.created_at)}</div>
-                          )}
-                        </CardContent>
-                      </Card>
-                    );
-                  })}
-                </div>
-              </>
-            )}
+            <OwnerDocumentsView documents={filteredDocs} />
           </TabsContent>
 
           {/* Iter90db : Communications - historique des emails envoyes par le syndic */}
@@ -1517,6 +1462,153 @@ function DocumentCategoryLegend({ documents }) {
           </span>
         );
       })}
+    </div>
+  );
+}
+
+// iter90hu (juil 2026) : nouvelle vue documents cote proprietaire.
+// - Encart "Dernier document ajoute" en haut
+// - Tuiles par categorie avec code couleur (grand format cliquable)
+// - Click sur une tuile -> vue detaillee des documents de cette categorie
+function OwnerDocumentsView({ documents }) {
+  const [selectedCategory, setSelectedCategory] = useState(null);
+  if (!documents || documents.length === 0) {
+    return (
+      <Card><CardContent className="p-8 text-center text-slate-400">
+        Aucun document partage
+      </CardContent></Card>
+    );
+  }
+  // Groupement par categorie
+  const byCategory = documents.reduce((acc, d) => {
+    const name = d.category_name || 'Sans categorie';
+    if (!acc[name]) acc[name] = [];
+    acc[name].push(d);
+    return acc;
+  }, {});
+  const categoryList = Object.keys(byCategory).sort();
+  // Dernier document (tri par created_at desc)
+  const lastDoc = [...documents].sort((a, b) => {
+    const da = a.created_at || '';
+    const db = b.created_at || '';
+    return db.localeCompare(da);
+  })[0];
+
+  // Vue "dans une categorie"
+  if (selectedCategory) {
+    const catDocs = byCategory[selectedCategory] || [];
+    const color = categoryColor(selectedCategory);
+    return (
+      <div data-testid="owner-docs-category-view">
+        <div className="flex items-center gap-3 mb-4">
+          <Button variant="outline" size="sm" onClick={() => setSelectedCategory(null)} data-testid="docs-back-to-categories">
+            <ArrowLeft size={14} className="mr-1" /> Retour
+          </Button>
+          <Badge className={`${color.bg} ${color.text} ${color.border} border`}>
+            <span className={`inline-block w-2 h-2 rounded-full ${color.dot} mr-1.5`} />
+            {selectedCategory}
+          </Badge>
+          <span className="text-xs text-slate-500">{catDocs.length} document{catDocs.length > 1 ? 's' : ''}</span>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+          {catDocs.map(d => (
+            <Card key={d.id} className={`border-l-4 hover:shadow-md transition-shadow ${color.border} border-slate-200`} data-testid={`doc-card-${d.id}`}>
+              <CardContent className="p-3">
+                <div className="flex items-start gap-2 mb-1">
+                  <div className={`w-8 h-8 rounded-md ${color.bg} flex items-center justify-center flex-shrink-0`}>
+                    <FileText size={15} className={color.text} />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm font-medium text-slate-900 truncate">{d.title}</div>
+                    {d.description && <div className="text-[11px] text-slate-500 line-clamp-2">{d.description}</div>}
+                  </div>
+                </div>
+                <div className="flex items-center justify-between mt-2 gap-2">
+                  <span className="text-[10px] text-slate-400">{fmtDate(d.created_at)}</span>
+                  {(d.filename || d.gridfs_id) && (
+                    <a
+                      href={`${process.env.REACT_APP_BACKEND_URL}/api/documents/${d.id}/download`}
+                      target="_blank" rel="noreferrer"
+                      className="text-[#022D52] hover:bg-blue-50 p-1 rounded flex items-center gap-1 text-[11px]"
+                      title="Telecharger"
+                    >
+                      <ArrowDownToLine size={13} /> Consulter
+                    </a>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  // Vue par defaut : encart dernier + tuiles catégories
+  return (
+    <div data-testid="owner-docs-categories-view">
+      {/* Encart dernier document ajoute */}
+      {lastDoc && (
+        <Card className="mb-4 border-blue-200 bg-blue-50/30" data-testid="owner-docs-latest-card">
+          <CardContent className="p-4">
+            <div className="flex items-center gap-3">
+              <div className="w-11 h-11 rounded-lg bg-blue-100 flex items-center justify-center flex-shrink-0">
+                <FileText size={20} className="text-[#022D52]" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-[10px] uppercase tracking-wider text-slate-500 mb-0.5">Dernier document ajoute</div>
+                <div className="font-semibold text-sm text-slate-900 truncate">{lastDoc.title}</div>
+                <div className="text-[11px] text-slate-500 flex items-center gap-2 mt-0.5">
+                  <span>{lastDoc.category_name || 'Sans categorie'}</span>
+                  <span>-</span>
+                  <span>{fmtDate(lastDoc.created_at)}</span>
+                </div>
+              </div>
+              {(lastDoc.filename || lastDoc.gridfs_id) && (
+                <a
+                  href={`${process.env.REACT_APP_BACKEND_URL}/api/documents/${lastDoc.id}/download`}
+                  target="_blank" rel="noreferrer"
+                  className="bg-[#022D52] hover:bg-[#1D4ED8] text-white px-3 py-1.5 rounded text-xs flex items-center gap-1"
+                  data-testid="owner-docs-latest-download"
+                >
+                  <ArrowDownToLine size={13} /> Consulter
+                </a>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+      {/* Tuiles par categorie */}
+      <div className="text-[11px] uppercase tracking-wider text-slate-500 mb-2">Categories</div>
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+        {categoryList.map(name => {
+          const color = categoryColor(name);
+          const catDocs = byCategory[name];
+          return (
+            <Card
+              key={name}
+              className={`cursor-pointer hover:shadow-md transition-all border-2 ${color.border}`}
+              onClick={() => setSelectedCategory(name)}
+              data-testid={`docs-category-tile-${name.replace(/\s+/g, '-').toLowerCase()}`}
+            >
+              <CardContent className={`p-4 ${color.bg}`}>
+                <div className="flex items-center gap-3">
+                  <div className={`w-11 h-11 rounded-lg bg-white/50 flex items-center justify-center flex-shrink-0`}>
+                    <FileText size={20} className={color.text} />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className={`text-sm font-semibold truncate ${color.text}`}>{name}</div>
+                    <div className={`text-[11px] mt-0.5 ${color.text} opacity-75`}>
+                      {catDocs.length} document{catDocs.length > 1 ? 's' : ''}
+                    </div>
+                  </div>
+                  <ArrowRight size={16} className={color.text} />
+                </div>
+              </CardContent>
+            </Card>
+          );
+        })}
+      </div>
     </div>
   );
 }
