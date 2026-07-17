@@ -164,6 +164,17 @@ def create_owner_access_router(db):
                 )
                 return result
             mail_enabled = os.environ.get("MAIL_ENABLED", "true").lower() != "false"
+            # iter90hr : si l'inviter a une config par-syndic Graph valide en DB,
+            # celle-ci bypass MAIL_ENABLED (le syndic a explicitement fourni ses
+            # credentials -> l'envoi est reel meme en dry-run global).
+            inviter_id_precheck = str((inviter or {}).get("_id", "")) if inviter else ""
+            has_per_syndic = False
+            if inviter_id_precheck:
+                try:
+                    from graph_email import is_configured_for_syndic
+                    has_per_syndic = await is_configured_for_syndic(db, inviter_id_precheck)
+                except Exception:
+                    has_per_syndic = False
             subject, html = build_invitation_email(
                 recipient_name=recipient_name or "Proprietaire",
                 role_label="Proprietaire",
@@ -171,16 +182,23 @@ def create_owner_access_router(db):
                 inviter_name=(inviter or {}).get("name"),
                 inviter_email=(inviter or {}).get("email"),
             )
-            # iter90ca : await bloquant (2-3s) pour capturer l'echec eventuel
+            # iter90ca/hr : await bloquant + config par-syndic pour bypass
+            # MAIL_ENABLED=false quand une config MS Graph est en DB.
+            inviter_id = str((inviter or {}).get("_id", "")) if inviter else ""
             try:
-                await send_html_email([email], subject, html)
+                await send_html_email(
+                    [email], subject, html,
+                    db=db,
+                    for_syndic_user_id=inviter_id or None,
+                )
             except Exception as e:
                 logger.exception(f"Owner invitation email SEND FAILED for {email}: {e}")
                 result["reason"] = "graph_error"
                 result["detail"] = f"Erreur Microsoft Graph : {str(e)[:250]}"
                 return result
-            if not mail_enabled:
-                # send_html_email a retourne sans exception mais MAIL_ENABLED=false -> dry-run
+            if not mail_enabled and not has_per_syndic:
+                # send_html_email a retourne sans exception mais MAIL_ENABLED=false
+                # ET aucune config par-syndic -> dry-run
                 logger.info(f"[DRY-RUN] Invitation suppressed for {email}; link: {setup_url}")
                 result["reason"] = "dry_run"
                 result["detail"] = (
