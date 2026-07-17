@@ -265,12 +265,32 @@ def create_reminders_router(db):
     router = APIRouter(prefix="/api/reminders")
 
     @router.get("/late-payments")
-    async def list_late_payments(copropriete_id: Optional[str] = None, grace_days: int = 0):
+    async def list_late_payments(
+        copropriete_id: Optional[str] = None,
+        grace_days: int = 0,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+    ):
         """List unpaid fund call distributions past due_date.
-        grace_days: optional grace period in days before flagging as late."""
+        grace_days: optional grace period in days before flagging as late.
+        date_from / date_to: iter90hg - filtre optionnel sur `due_date` (format YYYY-MM-DD).
+        Permet de ne considerer que les appels dont l'echeance tombe dans la periode."""
         q = {"copropriete_id": copropriete_id} if copropriete_id else {}
         fund_calls = await db.fund_calls.find(q, {"_id": 0}).to_list(10000)
         today = datetime.now(timezone.utc).date()
+        # Parsing des bornes de periode (iter90hg)
+        df_date = None
+        dt_date = None
+        try:
+            if date_from:
+                df_date = datetime.strptime(date_from, "%Y-%m-%d").date()
+        except Exception:
+            df_date = None
+        try:
+            if date_to:
+                dt_date = datetime.strptime(date_to, "%Y-%m-%d").date()
+        except Exception:
+            dt_date = None
         late = []
         for fc in fund_calls:
             due_str = fc.get("due_date") or ""
@@ -279,6 +299,11 @@ def create_reminders_router(db):
             try:
                 due_date = datetime.strptime(due_str, "%Y-%m-%d").date()
             except Exception:
+                continue
+            # iter90hg : filtre par periode d'echeance
+            if df_date and due_date < df_date:
+                continue
+            if dt_date and due_date > dt_date:
                 continue
             days_late = (today - due_date).days
             if days_late <= grace_days:
@@ -311,6 +336,97 @@ def create_reminders_router(db):
                     "severity": severity,
                 })
         # Group by severity
+        by_severity = {"critique": 0, "urgent": 0, "rappel2": 0, "rappel1": 0}
+        total_amount = 0.0
+        for item in late:
+            by_severity[item["severity"]] += 1
+            total_amount += item["amount"]
+        late.sort(key=lambda x: -x["days_late"])
+        return {
+            "late_payments": late,
+            "summary": {
+                "total_count": len(late),
+                "total_amount": round(total_amount, 2),
+                "by_severity": by_severity,
+            },
+        }
+
+    # iter90hh : rappels fournisseurs (factures impayees echues)
+    @router.get("/supplier-late-payments")
+    async def list_supplier_late_payments(
+        copropriete_id: Optional[str] = None,
+        grace_days: int = 0,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+    ):
+        """Liste les factures fournisseurs impayees dont la date d'echeance
+        est depassee. Sert a suivre ce que l'ACP doit encore payer.
+        Filtres :
+          - copropriete_id : chinese wall par ACP.
+          - grace_days : jours de tolerance apres due_date.
+          - date_from / date_to : plage d'echeance (YYYY-MM-DD).
+        Les avoirs (is_credit_note=True) sont exclus."""
+        q = {"status": {"$in": ["unpaid", "partially_paid"]}}
+        if copropriete_id:
+            q["copropriete_id"] = copropriete_id
+        invoices = await db.invoices.find(q, {"_id": 0}).to_list(20000)
+        today = datetime.now(timezone.utc).date()
+        df_date = None
+        dt_date = None
+        try:
+            if date_from:
+                df_date = datetime.strptime(date_from, "%Y-%m-%d").date()
+        except Exception:
+            df_date = None
+        try:
+            if date_to:
+                dt_date = datetime.strptime(date_to, "%Y-%m-%d").date()
+        except Exception:
+            dt_date = None
+        late = []
+        for inv in invoices:
+            if inv.get("is_credit_note"):
+                continue
+            due_str = inv.get("due_date") or ""
+            if not due_str:
+                continue
+            try:
+                due_date = datetime.strptime(due_str, "%Y-%m-%d").date()
+            except Exception:
+                continue
+            if df_date and due_date < df_date:
+                continue
+            if dt_date and due_date > dt_date:
+                continue
+            days_late = (today - due_date).days
+            if days_late <= grace_days:
+                continue
+            amount_total = float(inv.get("total_amount", 0) or 0)
+            paid = float(inv.get("paid_amount", 0) or 0)
+            amount_due = max(0.0, amount_total - paid)
+            if amount_due <= 0:
+                continue
+            if days_late > 90:
+                severity = "critique"
+            elif days_late > 30:
+                severity = "urgent"
+            elif days_late > 7:
+                severity = "rappel2"
+            else:
+                severity = "rappel1"
+            late.append({
+                "invoice_id": inv.get("id"),
+                "invoice_number": inv.get("number", ""),
+                "due_date": due_str,
+                "days_late": days_late,
+                "supplier_id": inv.get("supplier_id"),
+                "supplier_name": inv.get("supplier_name", "") or "Fournisseur inconnu",
+                "amount": round(amount_due, 2),
+                "amount_total": round(amount_total, 2),
+                "amount_paid": round(paid, 2),
+                "copropriete_id": inv.get("copropriete_id", ""),
+                "severity": severity,
+            })
         by_severity = {"critique": 0, "urgent": 0, "rappel2": 0, "rappel1": 0}
         total_amount = 0.0
         for item in late:
