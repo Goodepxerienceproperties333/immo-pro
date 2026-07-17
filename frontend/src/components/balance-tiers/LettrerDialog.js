@@ -12,6 +12,7 @@ export default function LettrerDialog({
   lettrerOrphan, lettrerSuppliers,
   lettrerSearch, setLettrerSearch,
   lettrerLoading, commitLettrer,
+  lettrerCopro,
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -48,7 +49,12 @@ export default function LettrerDialog({
                   || (sp.bce_number || '').toLowerCase().includes(q));
               })
               .slice(0, 60)
-              .map(sp => (
+              .map(sp => {
+                // iter90hf : compte tier 44000XXX pour la copro courante
+                const tierAcc = (sp.tier_accounts && lettrerCopro && sp.tier_accounts[lettrerCopro])
+                  ? (sp.tier_accounts[lettrerCopro].main || sp.tier_accounts[lettrerCopro])
+                  : null;
+                return (
                 <button
                   key={sp.id}
                   onClick={() => commitLettrer(sp.id)}
@@ -58,14 +64,23 @@ export default function LettrerDialog({
                 >
                   <div>
                     <div className="font-medium">{sp.name}</div>
-                    <div className="text-xs text-slate-500">{sp.bce_number || sp.vat_number || '—'}</div>
+                    <div className="text-xs text-slate-500 flex items-center gap-2 mt-0.5">
+                      <span>{sp.bce_number || sp.vat_number || '—'}</span>
+                      {tierAcc && (
+                        <Badge variant="outline" className="bg-blue-50 border-blue-200 text-blue-900 font-mono text-[10px] px-1.5 py-0"
+                               title="Compte tier fournisseur 44000XXX - a rapprocher avec le journal A-Nouveau">
+                          {tierAcc}
+                        </Badge>
+                      )}
+                    </div>
                   </div>
                   <div className="flex items-center gap-2">
                     {sp.auxiliary_code && <Badge variant="outline" className="font-mono text-[10px] bg-slate-50">{sp.auxiliary_code}</Badge>}
                     <Link2 size={14} className="text-amber-600" />
                   </div>
                 </button>
-              ))}
+                );
+              })}
             {lettrerSuppliers.length === 0 && (
               <div className="px-3 py-6 text-center text-sm text-slate-500">
                 Chargement des fournisseurs...

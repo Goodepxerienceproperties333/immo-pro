@@ -1276,6 +1276,32 @@ export default function BankingPage() {
                               )}
                             </div>
                           </div>
+                          {/* iter90hf : compte comptable de la depense + alerte
+                              si la facture est d'un exercice anterieur au FY courant */}
+                          {(() => {
+                            const acctList = Array.isArray(inv.lines) && inv.lines.length > 0
+                              ? [...new Set(inv.lines.map(l => l.account_number).filter(Boolean))]
+                              : (inv.account_number ? [inv.account_number] : []);
+                            const fyStart = selectedFiscalYear?.start_date;
+                            const isPrevFY = fyStart && inv.date && inv.date < fyStart;
+                            if (!acctList.length && !isPrevFY) return null;
+                            return (
+                              <div className="mt-1 flex items-center gap-1.5 flex-wrap text-[10px]">
+                                {acctList.map(a => (
+                                  <Badge key={a} variant="outline" className="bg-slate-50 text-slate-700 font-mono text-[10px] px-1.5 py-0 border-slate-300"
+                                         title={`Compte de charges : ${a}`}>
+                                    {a}
+                                  </Badge>
+                                ))}
+                                {isPrevFY && (
+                                  <Badge className="bg-orange-100 text-orange-800 border border-orange-300 text-[10px] px-1.5 py-0"
+                                         title={`Facture datee du ${inv.date} - anterieure au debut d'exercice ${fyStart}. Verifier la balance A-Nouveau : le solde a peut-etre deja ete repris.`}>
+                                    Exercice precedent
+                                  </Badge>
+                                )}
+                              </div>
+                            );
+                          })()}
                         </div>
                       );
                     });
@@ -1286,17 +1312,31 @@ export default function BankingPage() {
               <TabsContent value="suppliers" className="mt-0">
                 <Input placeholder="Rechercher par nom ou TVA..." value={lookupQuery} onChange={e => setLookupQuery(e.target.value)} className="mb-3" />
                 <div className="space-y-1.5 max-h-72 overflow-y-auto pr-1">
-                  {suppliers.filter(s => !lookupQuery || (s.name || '').toLowerCase().includes(lookupQuery.toLowerCase()) || (s.vat_number || '').includes(lookupQuery)).map(s => (
-                    <div key={s.id} className="flex items-center justify-between gap-3 border border-slate-200 rounded-md px-3 py-2.5 hover:border-[#022D52]/40 hover:bg-slate-50 transition-colors">
-                      <div className="flex-1 min-w-0">
-                        <div className="text-sm font-medium text-slate-900 truncate">{s.name}</div>
-                        {s.vat_number && <div className="text-[11px] font-mono text-slate-500 mt-0.5">{s.vat_number}</div>}
+                  {suppliers.filter(s => !lookupQuery || (s.name || '').toLowerCase().includes(lookupQuery.toLowerCase()) || (s.vat_number || '').includes(lookupQuery)).map(s => {
+                    // iter90hf : afficher le compte tier 44000XXX du fournisseur
+                    // pour la copro courante (aide au rapprochement avec le journal AN).
+                    const ta = s.tier_accounts && selectedCopro ? s.tier_accounts[selectedCopro] : null;
+                    const tierAcc = ta ? (ta.main || ta) : null;
+                    return (
+                      <div key={s.id} className="flex items-center justify-between gap-3 border border-slate-200 rounded-md px-3 py-2.5 hover:border-[#022D52]/40 hover:bg-slate-50 transition-colors">
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm font-medium text-slate-900 truncate">{s.name}</div>
+                          <div className="flex items-center gap-2 flex-wrap mt-0.5">
+                            {s.vat_number && <span className="text-[11px] font-mono text-slate-500">{s.vat_number}</span>}
+                            {tierAcc && (
+                              <Badge variant="outline" className="bg-blue-50 border-blue-200 text-blue-900 font-mono text-[10px] px-1.5 py-0"
+                                     title="Compte tier fournisseur 44000XXX pour cette ACP">
+                                {typeof tierAcc === 'string' ? tierAcc : ''}
+                              </Badge>
+                            )}
+                          </div>
+                        </div>
+                        <Button size="sm" onClick={() => doLettrage(s.id, 'supplier_payment')} className="bg-[#022D52] hover:bg-[#1D4ED8] text-white h-7 text-xs shrink-0">
+                          <Link2 size={11} className="mr-1" /> Lettrer
+                        </Button>
                       </div>
-                      <Button size="sm" onClick={() => doLettrage(s.id, 'supplier_payment')} className="bg-[#022D52] hover:bg-[#1D4ED8] text-white h-7 text-xs shrink-0">
-                        <Link2 size={11} className="mr-1" /> Lettrer
-                      </Button>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </TabsContent>
             </Tabs>
