@@ -299,11 +299,11 @@ async def _build_situation_compte_pdf(db, owner_id, copropriete_id, start_date=N
                 "journal_type": "BANK",
             })
 
-    # iter90gw : AN (reprise / solde reporte) en TETE parmi les mouvements
-    # de meme date (typique : AN 01/03 + appels 01/03 -> AN d'abord).
+    # iter90gw + iter90he : AN (reprise / solde reporte) TOUJOURS en tete,
+    # quelle que soit sa date (avant la 1ere VE de la periode).
     movements.sort(key=lambda x: (
-        x["date"],
         0 if x.get("journal_type") == "AN" else 1,
+        x["date"],
         x.get("reference", ""),
     ))
 
@@ -2659,7 +2659,9 @@ def create_reports_router(db):
             reprise_date = start_date or ""
             movements.append({
                 "date": reprise_date,
-                "description": f"Reprise comptable au {reprise_date}" if reprise_date else "Reprise comptable",
+                # iter90he : mention explicite "Decompte periode precedente"
+                # demandee par l'utilisateur pour clarifier l'origine du solde.
+                "description": f"Reprise comptable au {reprise_date} (Decompte periode precedente)" if reprise_date else "Reprise comptable (Decompte periode precedente)",
                 "debit": round(an_debit, 2),
                 "credit": round(an_credit, 2),
                 "type": "reprise",
@@ -2757,7 +2759,10 @@ def create_reports_router(db):
                     "journal_type": "BANK",
                 })
 
-        movements.sort(key=lambda x: (x["date"], x.get("reference", "")))
+        # iter90he : ligne REPRISE TOUJOURS en tete de la situation de
+        # compte (avant meme la 1ere ecriture VE de la periode), quelle que
+        # soit la date de l'AN. `is_reprise=True` -> tuple 0 avant 1.
+        movements.sort(key=lambda x: (0 if x.get("is_reprise") else 1, x["date"], x.get("reference", "")))
 
         # iter90bv : fusion des lignes d'un meme proprietaire pour tous ses lots.
         # Un appel de fonds VE cree N lignes debit par lot ; on les cumule en 1.
@@ -2838,6 +2843,59 @@ def create_reports_router(db):
         pdf_bytes, filename = await _build_situation_compte_pdf(
             db, owner_id, copropriete_id, start_date, end_date,
         )
+        return FastAPIResponse(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    # iter90hd : PDF de situation de compte pour UN fournisseur specifique
+    # (equivalent de /situation-compte/{owner_id}/pdf pour les proprietaires).
+    # Utilise le PDF "balance-tiers detaillee" avec suppliers_detail=[1 seul].
+    @router.get("/balance-tiers/suppliers/{supplier_id}/pdf")
+    async def balance_tiers_supplier_pdf(
+        supplier_id: str,
+        request: Request,
+        copropriete_id: str,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+    ):
+        """PDF situation de compte fournisseur (avec ligne REPRISE si presente).
+
+        iter90hd : la logique de reprise (journal A-Nouveau agregge en 1 ligne
+        au sommet) est deja implementee dans situation_compte_supplier, donc
+        les soldes crediteurs de l'exercice precedent apparaissent naturellement
+        dans le PDF genere.
+        """
+        from fastapi.responses import Response as FastAPIResponse
+        from pdf_balance_tiers import build_balance_tiers_detailed_pdf
+        from pdf_layout import resolve_syndic_pdf_context
+
+        copro = await db.coproprietes.find_one({"id": copropriete_id}, {"_id": 0})
+        if not copro:
+            raise HTTPException(404, "Copropriete non trouvee")
+        supplier = await db.suppliers.find_one({"id": supplier_id}, {"_id": 0})
+        if not supplier:
+            raise HTTPException(404, "Fournisseur non trouve")
+
+        detail = await situation_compte_supplier(
+            supplier_id=supplier_id,
+            copropriete_id=copropriete_id,
+            start_date=start_date,
+            end_date=end_date,
+        )
+        syndic_pdf_ctx = await resolve_syndic_pdf_context(db, copro)
+        pdf_bytes = build_balance_tiers_detailed_pdf(
+            copropriete=copro,
+            owners_detail=None,
+            suppliers_detail=[detail],
+            period_start=start_date or "",
+            period_end=end_date or datetime.now(timezone.utc).date().isoformat(),
+            syndic_pdf_ctx=syndic_pdf_ctx,
+        )
+        safe_name = (supplier.get("name", "fournisseur") or "fournisseur").replace(" ", "_").replace("/", "_")
+        suffix = (end_date or datetime.now(timezone.utc).date().isoformat())
+        filename = f"situation-fournisseur-{safe_name}-{suffix}.pdf"
         return FastAPIResponse(
             content=pdf_bytes,
             media_type="application/pdf",
@@ -3313,10 +3371,12 @@ def create_reports_router(db):
             reprise_ref = " + ".join(an_refs[:3]) + (" (...)" if len(an_refs) > 3 else "")
         # Description enrichie mentionnant explicitement "Journal A-Nouveau"
         # (mot cle metier + rappel de l'immuabilite pour le syndic).
+        # iter90he : mention "Decompte periode precedente" demandee par
+        # l'utilisateur pour clarifier l'origine du solde reporte.
         if reprise_date:
-            reprise_desc = f"Reprise d'ouverture au {reprise_date} (Journal A-Nouveau - immuable)"
+            reprise_desc = f"Reprise comptable au {reprise_date} (Decompte periode precedente - Journal A-Nouveau immuable)"
         else:
-            reprise_desc = "Reprise d'ouverture (Journal A-Nouveau - immuable)"
+            reprise_desc = "Reprise comptable (Decompte periode precedente - Journal A-Nouveau immuable)"
         if abs(an_debit) > 0.001 or abs(an_credit) > 0.001:
             movements.append({
                 "date": reprise_date,
@@ -3355,9 +3415,10 @@ def create_reports_router(db):
                     "journal_type": e.get("journal_type", ""),
                 })
 
-        # iter90gu : trier avec la ligne REPRISE en tete parmi les mouvements
-        # de meme date. `is_reprise=True` -> tuple 0 avant `is_reprise=False` -> 1.
-        movements.sort(key=lambda x: (x["date"], 0 if x.get("is_reprise") else 1, x.get("reference", "")))
+        # iter90he : ligne REPRISE TOUJOURS en tete de la situation de
+        # compte (avant meme la 1ere ecriture VE de la periode), quelle que
+        # soit la date. `is_reprise=True` -> tuple 0 avant `is_reprise=False` -> 1.
+        movements.sort(key=lambda x: (0 if x.get("is_reprise") else 1, x["date"], x.get("reference", "")))
         # Cote fournisseur : credit a payer = positif (convention NextGe Copro)
         running = 0.0
         for m in movements:

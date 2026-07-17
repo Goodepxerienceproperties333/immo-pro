@@ -90,6 +90,37 @@ export default function BalanceTiersPage() {
     } catch { toast.error('Erreur'); }
   };
 
+  // iter90hd : Telechargement PDF situation de compte fournisseur
+  // (equivalent de la fonction correspondante pour les proprietaires).
+  // La ligne REPRISE issue du journal A-Nouveau apparait automatiquement
+  // dans le PDF si le fournisseur avait un solde crediteur en cloture N-1.
+  const downloadSupplierPdf = async (supplierId) => {
+    try {
+      const coproId = localStorage.getItem('selectedCopro') || localStorage.getItem('copropriete_id') || '';
+      if (!coproId || coproId === 'all') {
+        toast.error('Selectionnez une ACP avant de telecharger'); return;
+      }
+      const params = { copropriete_id: coproId };
+      if (filters.startDate) params.start_date = filters.startDate;
+      if (filters.endDate) params.end_date = filters.endDate;
+      const r = await api.get(`/reports/balance-tiers/suppliers/${supplierId}/pdf`, { params, responseType: 'blob' });
+      const url = window.URL.createObjectURL(new Blob([r.data], { type: 'application/pdf' }));
+      const a = document.createElement('a');
+      a.href = url;
+      // Extract filename from Content-Disposition
+      const cd = r.headers?.['content-disposition'] || '';
+      const m = cd.match(/filename="?([^";]+)"?/);
+      a.download = m ? m[1] : 'situation-fournisseur.pdf';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
+      toast.success('PDF telecharge');
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || 'Erreur telechargement PDF');
+    }
+  };
+
   // ----- Manual reconciliation (lettrage manuel d'un fournisseur orphelin) -----
   const openLettrerDialog = async (orphanRow) => {
     setLettrerOrphan(orphanRow);
@@ -435,7 +466,10 @@ export default function BalanceTiersPage() {
                           </Badge>
                         </TableCell>
                         <TableCell>{s.supplier_id ? (
-                          <Button variant="ghost" size="sm" onClick={() => viewSupplierDetail(s.supplier_id)} data-testid={`view-supplier-${s.supplier_id}`}><Eye size={14} /></Button>
+                          <div className="flex items-center gap-1">
+                            <Button variant="ghost" size="sm" onClick={() => viewSupplierDetail(s.supplier_id)} data-testid={`view-supplier-${s.supplier_id}`} title="Detail des mouvements"><Eye size={14} /></Button>
+                            <Button variant="ghost" size="sm" onClick={() => downloadSupplierPdf(s.supplier_id)} data-testid={`pdf-supplier-${s.supplier_id}`} title="Telecharger PDF situation de compte"><Download size={14} /></Button>
+                          </div>
                         ) : s.orphan ? (
                           <Button variant="ghost" size="sm" onClick={() => openLettrerDialog(s)} className="text-amber-600 hover:text-amber-700 hover:bg-amber-50" title="Lettrer manuellement avec un fournisseur en base" data-testid={`lettrer-orphan-${i}`}><Link2 size={14} /></Button>
                         ) : null}</TableCell>
