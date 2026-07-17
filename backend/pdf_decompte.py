@@ -86,7 +86,7 @@ def build_decompte_pdf(
     transferts de dettes reprises au vendeur ne sont pas imputes, son solde
     apparait faussement crediteur.
     """
-    use_new_layout = bool(syndic_pdf_ctx and syndic_pdf_ctx.get("syndic_config"))
+    use_new_layout = bool(syndic_pdf_ctx)  # iter90hm : nouveau layout TOUJOURS actif si contexte fourni
     from pdf_layout import build_header_with_logo, build_recipient_address_flowable, draw_legal_footer
     buf = BytesIO()
     doc = SimpleDocTemplate(

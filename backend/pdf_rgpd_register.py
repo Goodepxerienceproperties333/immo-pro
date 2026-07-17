@@ -309,7 +309,7 @@ def build_rgpd_register_pdf(register_data: dict, syndic_pdf_ctx: dict = None) ->
     page legal avec numeros de page sur toutes les pages.
     """
     from pdf_layout import build_header_with_logo, make_footer_callback
-    use_new_layout = bool(syndic_pdf_ctx and syndic_pdf_ctx.get("syndic_config"))
+    use_new_layout = bool(syndic_pdf_ctx)  # iter90hm : nouveau layout TOUJOURS actif si contexte fourni
 
     styles = _styles()
 

@@ -107,7 +107,7 @@ def build_situation_compte_pdf(
     """iter90av : `syndic_pdf_ctx` (optionnel) permet d'utiliser le nouveau
     layout avec logo cabinet, adresse destinataire alignee pour fenetre C6
     droite, et pied de page avec mentions legales."""
-    use_new_layout = bool(syndic_pdf_ctx and syndic_pdf_ctx.get("syndic_config"))
+    use_new_layout = bool(syndic_pdf_ctx)  # iter90hm : nouveau layout TOUJOURS actif si contexte fourni
     buf = BytesIO()
     from pdf_layout import (
         build_header_with_logo, build_recipient_address_flowable,

@@ -77,7 +77,7 @@ def build_mutation_decompte_pdf(
     if not lots_group:
         lots_group = [{"lot": lot, "breakdown": breakdown}]
     is_multi_lot = len(lots_group) > 1
-    use_new_layout = bool(syndic_pdf_ctx and syndic_pdf_ctx.get("syndic_config"))
+    use_new_layout = bool(syndic_pdf_ctx)  # iter90hm : nouveau layout TOUJOURS actif si contexte fourni
     from pdf_layout import (
         build_header_with_logo, build_recipient_address_flowable,
         make_footer_callback,

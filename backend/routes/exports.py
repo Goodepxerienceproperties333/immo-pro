@@ -264,6 +264,74 @@ def create_reminders_router(db):
     """Rappels automatiques pour appels de fonds en retard."""
     router = APIRouter(prefix="/api/reminders")
 
+    async def _compute_tier_balances_at_date(copropriete_ids: set, cutoff_iso: str):
+        """iter90hn : Retourne {(copro_id, owner_id): balance} calculee A LA DATE
+        `cutoff_iso` incluse. Positif = debiteur, negatif = crediteur.
+        Inclut les journal_entries (hors extournes) + bank_transactions non
+        lettrees matchees par VCS. Exclut par definition les JE post-cutoff
+        (appels futurs, non echus)."""
+        tier_balances = {}
+        for cid in copropriete_ids:
+            if not cid:
+                continue
+            lots = await db.lots.find({"copropriete_id": cid}, {"_id": 0}).to_list(10000)
+            owner_ids_set = set(lt.get("owner_id") for lt in lots if lt.get("owner_id"))
+            tpids_in_je = await db.journal_entries.distinct(
+                "lines.third_party_id", {"copropriete_id": cid}
+            )
+            for tpid in tpids_in_je:
+                if tpid:
+                    owner_ids_set.add(tpid)
+            owners_docs = await db.owners.find(
+                {"id": {"$in": list(owner_ids_set)}}, {"_id": 0}
+            ).to_list(2000) if owner_ids_set else []
+
+            cumul_by_owner = {}
+            cumul_by_acc = {}
+            je_q = {
+                "copropriete_id": cid,
+                "date": {"$lte": cutoff_iso},
+                "reversed": {"$ne": True},
+                "is_reversal": {"$ne": True},
+            }
+            async for e in db.journal_entries.find(je_q, {"_id": 0}):
+                for ln in e.get("lines", []) or []:
+                    d_val = float(ln.get("debit", 0) or 0)
+                    c_val = float(ln.get("credit", 0) or 0)
+                    tpid = ln.get("third_party_id")
+                    acc = ln.get("account_number", "")
+                    if tpid:
+                        cumul_by_owner[tpid] = cumul_by_owner.get(tpid, 0.0) + (d_val - c_val)
+                    else:
+                        cumul_by_acc[acc] = cumul_by_acc.get(acc, 0.0) + (d_val - c_val)
+            vcs_to_owner = {}
+            for owner in owners_docs:
+                if owner.get("vcs_digits"):
+                    vcs_to_owner[owner["vcs_digits"]] = owner["id"]
+                if owner.get("vcs_code"):
+                    vcs_to_owner[owner["vcs_code"]] = owner["id"]
+            bank_q = {
+                "copropriete_id": cid, "matched": {"$ne": True},
+                "date": {"$lte": cutoff_iso},
+            }
+            async for txn in db.bank_transactions.find(bank_q, {"_id": 0}):
+                comm = (txn.get("communication") or "").replace("+", "").replace("/", "").replace(" ", "")
+                oid = vcs_to_owner.get(comm) or vcs_to_owner.get(txn.get("communication") or "")
+                if oid:
+                    cumul_by_owner[oid] = cumul_by_owner.get(oid, 0.0) - abs(float(txn.get("amount", 0) or 0))
+            for owner in owners_docs:
+                oid = owner["id"]
+                tier_acc = (owner.get("tier_accounts") or {}).get(cid, {}) or {}
+                acc_prov = tier_acc.get("provisions", "")
+                acc_res = tier_acc.get("reserve", "")
+                balance = cumul_by_owner.get(oid, 0.0)
+                for acc in (acc_prov, acc_res):
+                    if acc and acc in cumul_by_acc:
+                        balance += cumul_by_acc[acc]
+                        cumul_by_acc[acc] = 0.0
+                tier_balances[(cid, oid)] = balance
+        return tier_balances
+
     @router.get("/late-payments")
     async def list_late_payments(
         copropriete_id: Optional[str] = None,
@@ -271,14 +339,19 @@ def create_reminders_router(db):
         date_from: Optional[str] = None,
         date_to: Optional[str] = None,
     ):
-        """List unpaid fund call distributions past due_date.
+        """Liste UNE ligne par proprietaire debiteur (solde tier > 0.01 EUR).
 
-        iter90hk : la logique se base MAINTENANT sur le SOLDE REEL des comptes
-        tiers du proprietaire. Un proprietaire crediteur (ou solde nul) n'est
-        JAMAIS en retard, meme si le flag `distribution[].paid` du fund_call
-        n'a pas ete marque manuellement (cas classique : lettrage bancaire).
+        iter90ho : refactor majeur - au lieu de retourner une ligne par
+        `fund_call.distribution` non-paye, on retourne UNE seule ligne
+        agregee par proprietaire, avec `amount` = solde tier reel du
+        proprietaire a la date_to. Ce solde correspond EXACTEMENT a la
+        colonne 'Solde' de la Balance des Tiers (source de verite comptable).
 
-        grace_days: jours de tolerance apres due_date.
+        Contexte des appels concernes : listes des noms + oldest due_date
+        pour calculer la severite (jours de retard depuis l'appel le plus
+        ancien de la periode).
+
+        grace_days: jours de tolerance apres due_date (base sur oldest due).
         date_from / date_to: filtre optionnel sur `due_date` (YYYY-MM-DD).
         """
         q = {"copropriete_id": copropriete_id} if copropriete_id else {}
@@ -297,24 +370,16 @@ def create_reminders_router(db):
         except Exception:
             dt_date = None
 
-        # iter90hk : precompute owner tier balances par (copro, owner) via la
-        # source de verite `_compute_balance_tiers_for_ui` (utilisee par la
-        # Balance des Tiers, le PDF situation compte, etc.). Elle prend en
-        # compte les journal_entries ET les bank_transactions non lettrees
-        # matchees par VCS, contrairement a un calcul naif sur les JE.
-        # Convention : positif = debiteur, negatif = crediteur.
-        from routes.reports import _compute_balance_tiers_for_ui  # eviter circ imports
+        # iter90hk/hn : precompute owner tier balances via le helper partage.
         needed_copros = {fc.get("copropriete_id", "") for fc in fund_calls if fc.get("copropriete_id")}
-        tier_balances = {}  # (copro_id, owner_id) -> float
-        for cid in needed_copros:
-            try:
-                bal_data = await _compute_balance_tiers_for_ui(db, cid)
-            except Exception:
-                continue
-            for o in bal_data.get("owners", []) or []:
-                tier_balances[(cid, o["owner_id"])] = float(o.get("balance", 0.0) or 0.0)
+        balance_cutoff = dt_date or today
+        cutoff_iso = balance_cutoff.strftime("%Y-%m-%d")
+        tier_balances = await _compute_tier_balances_at_date(needed_copros, cutoff_iso)
 
-        late = []
+        # iter90ho : agregation par (copro_id, owner_id)
+        # - collecter la liste des appels concernes dans la periode
+        # - oldest_due_date determine la severite et days_late
+        per_owner = {}  # (copro_id, owner_id) -> aggregate dict
         for fc in fund_calls:
             due_str = fc.get("due_date") or ""
             if not due_str:
@@ -327,8 +392,9 @@ def create_reminders_router(db):
                 continue
             if dt_date and due_date > dt_date:
                 continue
-            days_late = (today - due_date).days
-            if days_late <= grace_days:
+            # iter90ho : exclure les appels dont l'echeance est encore future
+            # (pas de rappel avant l'echeance).
+            if due_date > today:
                 continue
             fc_copro = fc.get("copropriete_id", "")
             for d in fc.get("distribution", []):
@@ -338,34 +404,67 @@ def create_reminders_router(db):
                 if amount <= 0:
                     continue
                 owner_id = d.get("owner_id")
-                # iter90hk : si le proprietaire est crediteur/nul, on ignore
-                # ses appels en retard (paiement fait par lettrage bancaire).
-                # Marge de tolerance de 0.01 EUR pour eviter les arrondis.
-                if owner_id:
-                    bal = tier_balances.get((fc_copro, owner_id), 0.0)
-                    if bal <= 0.01:
-                        continue
-                if days_late > 90:
-                    severity = "critique"
-                elif days_late > 30:
-                    severity = "urgent"
-                elif days_late > 7:
-                    severity = "rappel2"
-                else:
-                    severity = "rappel1"
-                late.append({
-                    "fund_call_id": fc["id"],
-                    "fund_call_name": fc.get("name", ""),
-                    "due_date": due_str,
-                    "days_late": days_late,
+                if not owner_id:
+                    continue
+                key = (fc_copro, owner_id)
+                agg = per_owner.setdefault(key, {
+                    "copropriete_id": fc_copro,
                     "owner_id": owner_id,
                     "owner_name": d.get("owner_name", ""),
                     "vcs_code": d.get("vcs_code", ""),
-                    "amount": amount,
-                    "copropriete_id": fc_copro,
-                    "severity": severity,
-                    "tier_balance": round(tier_balances.get((fc_copro, owner_id), 0.0), 2) if owner_id else 0.0,
+                    "oldest_due_date": due_str,
+                    "fund_calls_names": set(),
+                    "total_called": 0.0,
                 })
+                # Trace l'echeance la plus ancienne (pour severite)
+                if due_str < agg["oldest_due_date"]:
+                    agg["oldest_due_date"] = due_str
+                agg["fund_calls_names"].add(fc.get("name", ""))
+                agg["total_called"] += float(amount)
+                # Refresh nom du proprio (au cas ou distributions differentes)
+                if not agg["owner_name"] and d.get("owner_name"):
+                    agg["owner_name"] = d.get("owner_name")
+                if not agg["vcs_code"] and d.get("vcs_code"):
+                    agg["vcs_code"] = d.get("vcs_code")
+
+        late = []
+        for (fc_copro, owner_id), agg in per_owner.items():
+            # iter90hk/ho : filtre sur solde tier reel > 0.01 EUR
+            bal = round(tier_balances.get((fc_copro, owner_id), 0.0), 2)
+            if bal <= 0.01:
+                continue
+            # Days late base sur echeance la plus ancienne
+            try:
+                oldest = datetime.strptime(agg["oldest_due_date"], "%Y-%m-%d").date()
+                days_late = (today - oldest).days
+            except Exception:
+                days_late = 0
+            if days_late <= grace_days:
+                continue
+            if days_late > 90:
+                severity = "critique"
+            elif days_late > 30:
+                severity = "urgent"
+            elif days_late > 7:
+                severity = "rappel2"
+            else:
+                severity = "rappel1"
+            late.append({
+                "owner_id": owner_id,
+                "owner_name": agg["owner_name"],
+                "vcs_code": agg["vcs_code"],
+                "copropriete_id": fc_copro,
+                "fund_call_names": sorted(agg["fund_calls_names"]),
+                "fund_call_name": " + ".join(sorted(agg["fund_calls_names"]))[:80],
+                "oldest_due_date": agg["oldest_due_date"],
+                "due_date": agg["oldest_due_date"],  # compat frontend
+                "days_late": days_late,
+                # iter90ho : montant = solde tier reel (= Balance des Tiers)
+                "amount": bal,
+                "tier_balance": bal,
+                "total_called_period": round(agg["total_called"], 2),
+                "severity": severity,
+            })
         by_severity = {"critique": 0, "urgent": 0, "rappel2": 0, "rappel1": 0}
         total_amount = 0.0
         for item in late:
@@ -556,6 +655,50 @@ def create_reminders_router(db):
         # Tri par date d'appel pour une lecture chronologique
         unpaid_items.sort(key=lambda x: x.get("period", ""))
 
+        # iter90hn : coherence avec /late-payments - calculer le solde tier
+        # a la date de fin de periode et retirer les items si crediteur.
+        balance_cutoff = dt_date or today
+        cutoff_iso = balance_cutoff.strftime("%Y-%m-%d")
+        tier_balances = await _compute_tier_balances_at_date({copropriete_id}, cutoff_iso)
+        owner_balance = tier_balances.get((copropriete_id, owner_id), 0.0)
+        is_creditor = owner_balance <= 0.01
+
+        # iter90hn : recuperer aussi les paiements reçus dans la periode pour
+        # les afficher dans la lettre (repond a la demande utilisateur
+        # "les paiements effectues ne sont pas visibles dans les rappels").
+        payments_received = []
+        total_paid_period = 0.0
+        pay_q = {
+            "copropriete_id": copropriete_id,
+            "lines.third_party_id": owner_id,
+            "reversed": {"$ne": True},
+            "is_reversal": {"$ne": True},
+        }
+        if df_date or dt_date:
+            pay_q["date"] = {}
+            if df_date:
+                pay_q["date"]["$gte"] = df_date.strftime("%Y-%m-%d")
+            if dt_date:
+                pay_q["date"]["$lte"] = dt_date.strftime("%Y-%m-%d")
+        async for e in db.journal_entries.find(pay_q, {"_id": 0}):
+            for ln in e.get("lines", []) or []:
+                if ln.get("third_party_id") != owner_id:
+                    continue
+                c_val = float(ln.get("credit", 0) or 0)
+                if c_val <= 0:
+                    continue
+                # On considere uniquement les credits sur compte tier (paiements)
+                acc = ln.get("account_number", "")
+                if not (acc.startswith("410") or acc.startswith("41")):
+                    continue
+                payments_received.append({
+                    "date": _fmt_date(e.get("date", "")),
+                    "description": (e.get("description") or "Paiement recu")[:80],
+                    "amount": c_val,
+                })
+                total_paid_period += c_val
+        payments_received.sort(key=lambda x: x.get("date", ""))
+
         buf = io.BytesIO()
         doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=20 * mm, bottomMargin=20 * mm,
                                 leftMargin=20 * mm, rightMargin=20 * mm)
@@ -571,53 +714,88 @@ def create_reminders_router(db):
         elements.append(Spacer(1, 8 * mm))
         elements.append(Paragraph(f"Edite le {today.strftime('%d/%m/%Y')}", body))
         elements.append(Spacer(1, 10 * mm))
-        elements.append(Paragraph("RAPPEL DE PAIEMENT", h1))
+        # iter90hn : titre adapte au statut (rappel ou confirmation en regle)
+        title_text = "RAPPEL DE PAIEMENT" if not is_creditor else "SITUATION EN REGLE"
+        title_color = "#0055FF" if not is_creditor else "#059669"
+        h1_dynamic = ParagraphStyle(
+            "h1_dyn", parent=styles["Title"], fontSize=14, leading=18, alignment=1,
+            textColor=colors.HexColor(title_color),
+        )
+        elements.append(Paragraph(title_text, h1_dynamic))
         elements.append(Spacer(1, 8 * mm))
 
         elements.append(Paragraph(f"Cher(e) {owner.get('first_name') or owner['name']},", body))
         elements.append(Spacer(1, 4 * mm))
-        # iter90hl : mention explicite de la periode filtree
-        period_line = ""
-        if df_date and dt_date:
-            period_line = (
-                f"Sauf erreur de notre part, les appels de fonds dont l'echeance se situe "
-                f"entre le <b>{df_date.strftime('%d/%m/%Y')}</b> et le "
-                f"<b>{dt_date.strftime('%d/%m/%Y')}</b> restent impayes a ce jour. "
-            )
-        elif df_date:
-            period_line = (
-                f"Sauf erreur de notre part, les appels de fonds echus depuis le "
-                f"<b>{df_date.strftime('%d/%m/%Y')}</b> restent impayes a ce jour. "
-            )
-        elif dt_date:
-            period_line = (
-                f"Sauf erreur de notre part, les appels de fonds echus jusqu'au "
-                f"<b>{dt_date.strftime('%d/%m/%Y')}</b> restent impayes a ce jour. "
-            )
+        # iter90hl/hn : construction du message adaptee au statut du proprio
+        if is_creditor:
+            # Proprietaire crediteur ou solde nul -> pas de rappel a envoyer
+            period_line = ""
+            if df_date and dt_date:
+                period_line = (
+                    f"Nous vous confirmons qu'au terme de la periode du "
+                    f"<b>{df_date.strftime('%d/%m/%Y')}</b> au "
+                    f"<b>{dt_date.strftime('%d/%m/%Y')}</b>, votre situation de compte "
+                    f"est <b>en regle</b>. "
+                )
+            else:
+                period_line = "Nous vous confirmons que votre situation de compte est <b>en regle</b>. "
+            if owner_balance < -0.01:
+                period_line += (
+                    f"Solde en votre faveur : <b><font color='#059669'>"
+                    f"{abs(owner_balance):.2f} EUR</font></b>. Ce montant sera deduit "
+                    "de votre prochain appel de fonds."
+                )
+            else:
+                period_line += "Aucun montant n'est du a ce jour."
+            elements.append(Paragraph(period_line, body))
         else:
-            period_line = "Sauf erreur de notre part, les appels de fonds suivants restent impayes a ce jour. "
-        elements.append(Paragraph(
-            period_line + "Nous vous prions de bien vouloir regulariser dans les plus brefs delais.",
-            body
-        ))
+            period_line = ""
+            if df_date and dt_date:
+                period_line = (
+                    f"Sauf erreur de notre part, les appels de fonds dont l'echeance se situe "
+                    f"entre le <b>{df_date.strftime('%d/%m/%Y')}</b> et le "
+                    f"<b>{dt_date.strftime('%d/%m/%Y')}</b> restent partiellement ou "
+                    f"totalement impayes a ce jour. "
+                )
+            elif df_date:
+                period_line = (
+                    f"Sauf erreur de notre part, les appels de fonds echus depuis le "
+                    f"<b>{df_date.strftime('%d/%m/%Y')}</b> restent partiellement ou "
+                    f"totalement impayes a ce jour. "
+                )
+            elif dt_date:
+                period_line = (
+                    f"Sauf erreur de notre part, les appels de fonds echus jusqu'au "
+                    f"<b>{dt_date.strftime('%d/%m/%Y')}</b> restent partiellement ou "
+                    f"totalement impayes a ce jour. "
+                )
+            else:
+                period_line = "Sauf erreur de notre part, les appels de fonds suivants restent partiellement ou totalement impayes a ce jour. "
+            elements.append(Paragraph(
+                period_line + "Nous vous prions de bien vouloir regulariser dans les plus brefs delais.",
+                body
+            ))
         elements.append(Spacer(1, 6 * mm))
 
-        if unpaid_items:
-            # Style pour cellules avec word-wrap (evite la superposition de texte
-            # quand le libelle de l'appel depasse la largeur de la colonne).
-            cell_style = ParagraphStyle(
-                "tbl_cell", parent=styles["Normal"], fontSize=9, leading=11,
-            )
-            cell_right = ParagraphStyle(
-                "tbl_cell_r", parent=cell_style, alignment=2,  # right
-            )
-            header_style = ParagraphStyle(
-                "tbl_hdr", parent=styles["Normal"], fontSize=9, leading=11,
-                fontName="Helvetica-Bold", textColor=colors.white,
-            )
-            header_right = ParagraphStyle(
-                "tbl_hdr_r", parent=header_style, alignment=2,
-            )
+        # iter90hn : Table des paiements recus dans la periode (transparence)
+        cell_style = ParagraphStyle(
+            "tbl_cell", parent=styles["Normal"], fontSize=9, leading=11,
+        )
+        cell_right = ParagraphStyle(
+            "tbl_cell_r", parent=cell_style, alignment=2,
+        )
+        header_style = ParagraphStyle(
+            "tbl_hdr", parent=styles["Normal"], fontSize=9, leading=11,
+            fontName="Helvetica-Bold", textColor=colors.white,
+        )
+        header_right = ParagraphStyle(
+            "tbl_hdr_r", parent=header_style, alignment=2,
+        )
+
+        # ---- Tableau appels impayes (uniquement si debiteur) ----
+        if unpaid_items and not is_creditor:
+            elements.append(Paragraph("<b>Appels de fonds concernes</b>", body))
+            elements.append(Spacer(1, 2 * mm))
             rows = [[
                 Paragraph("Appel", header_style),
                 Paragraph("Periode", header_style),
@@ -635,7 +813,7 @@ def create_reminders_router(db):
                 ])
             rows.append([
                 "", "", "",
-                Paragraph("<b>TOTAL</b>", cell_style),
+                Paragraph("<b>TOTAL APPELS</b>", cell_style),
                 Paragraph(f"<b>{total_due:.2f} EUR</b>", cell_right),
             ])
             t = Table(
@@ -656,15 +834,68 @@ def create_reminders_router(db):
                 ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#F1F5F9")),
             ]))
             elements.append(t)
+            elements.append(Spacer(1, 5 * mm))
+
+        # ---- iter90hn : Table paiements recus (transparence) ----
+        if payments_received:
+            elements.append(Paragraph("<b>Paiements pris en compte</b>", body))
+            elements.append(Spacer(1, 2 * mm))
+            rows_pay = [[
+                Paragraph("Date", header_style),
+                Paragraph("Operation", header_style),
+                Paragraph("Montant paye", header_right),
+            ]]
+            for p in payments_received:
+                rows_pay.append([
+                    Paragraph(p["date"], cell_style),
+                    Paragraph(p["description"], cell_style),
+                    Paragraph(f"{p['amount']:.2f} EUR", cell_right),
+                ])
+            rows_pay.append([
+                "",
+                Paragraph("<b>TOTAL PAIEMENTS</b>", cell_style),
+                Paragraph(f"<b>{total_paid_period:.2f} EUR</b>", cell_right),
+            ])
+            tp = Table(
+                rows_pay,
+                colWidths=[25 * mm, 105 * mm, 25 * mm],
+                repeatRows=1,
+            )
+            tp.setStyle(TableStyle([
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#059669")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                ("FONTSIZE", (0, 0), (-1, -1), 9),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 4),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+                ("TOPPADDING", (0, 0), (-1, -1), 3),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+                ("GRID", (0, 0), (-1, -1), 0.3, colors.HexColor("#CCCCCC")),
+                ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#F0FDF4")),
+            ]))
+            elements.append(tp)
+            elements.append(Spacer(1, 5 * mm))
+
+        # ---- iter90hn : Encart solde final (debiteur/crediteur) ----
+        if not is_creditor and unpaid_items:
+            # Debiteur : montrer le solde restant du (peut differer de total_due
+            # si des paiements partiels ont deja reduit la dette).
+            balance_line = (
+                f"<b>Solde restant du a ce jour : "
+                f"<font color='#DC2626'>{owner_balance:.2f} EUR</font></b>"
+            )
+            elements.append(Paragraph(balance_line, body))
+            elements.append(Spacer(1, 3 * mm))
 
         elements.append(Spacer(1, 8 * mm))
-        elements.append(Paragraph(
-            f"Le versement doit etre effectue sur le compte de la copropriete "
-            f"avec la <b>communication structuree obligatoire</b>: "
-            f"<font color='#0055FF'><b>{owner.get('vcs_code','-')}</b></font>.",
-            body
-        ))
-        elements.append(Spacer(1, 10 * mm))
+        if not is_creditor:
+            elements.append(Paragraph(
+                f"Le versement doit etre effectue sur le compte de la copropriete "
+                f"avec la <b>communication structuree obligatoire</b>: "
+                f"<font color='#0055FF'><b>{owner.get('vcs_code','-')}</b></font>.",
+                body
+            ))
+            elements.append(Spacer(1, 10 * mm))
         elements.append(Paragraph(
             "Nous restons a votre disposition pour toute question.<br/><br/>Cordialement,<br/>Le syndic.",
             body

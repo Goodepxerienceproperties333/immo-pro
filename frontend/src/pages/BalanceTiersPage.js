@@ -222,6 +222,26 @@ export default function BalanceTiersPage() {
         </div>
       </div>
 
+      {/* iter90hq : empty state clair quand aucune ACP n'est selectionnee */}
+      {(() => {
+        const currentCopro = localStorage.getItem('selectedCopro') || localStorage.getItem('copropriete_id') || '';
+        if (!currentCopro || currentCopro === 'all') {
+          return (
+            <div className="mt-8 p-6 rounded-lg border border-amber-200 bg-amber-50 text-center" data-testid="balance-tiers-empty-no-copro">
+              <div className="text-lg font-semibold text-amber-900 mb-1">Aucune copropriete selectionnee</div>
+              <p className="text-sm text-amber-800 max-w-2xl mx-auto">
+                Pour afficher la Balance des Tiers, veuillez d&apos;abord entrer dans une copropriete via la page
+                <b> &laquo; Gerer les ACPs &raquo;</b> puis cliquer sur celle dont vous voulez consulter la situation comptable.
+              </p>
+              <Button className="mt-3 bg-[#022D52] hover:bg-[#1D4ED8]" size="sm" onClick={() => window.location.href = '/coproprietes'} data-testid="goto-coproprietes-btn">
+                Aller a Gerer les ACPs
+              </Button>
+            </div>
+          );
+        }
+        return null;
+      })()}
+
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList className="mb-4" data-testid="tiers-tabs">
           <TabsTrigger value="owners"><Users size={14} className="mr-2" /> Proprietaires</TabsTrigger>

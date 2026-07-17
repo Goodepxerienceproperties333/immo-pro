@@ -69,7 +69,7 @@ def build_budget_pdf(
     """iter90dj : `syndic_pdf_ctx` (optionnel) ajoute logo cabinet + pied de
     page legal avec numeros de page sur toutes les pages."""
     from pdf_layout import build_header_with_logo, make_footer_callback
-    use_new_layout = bool(syndic_pdf_ctx and syndic_pdf_ctx.get("syndic_config"))
+    use_new_layout = bool(syndic_pdf_ctx)  # iter90hm : nouveau layout TOUJOURS actif si contexte fourni
     footer_cb = make_footer_callback(syndic_pdf_ctx.get("legal_mentions", "")) if use_new_layout else None
 
     buf = BytesIO()

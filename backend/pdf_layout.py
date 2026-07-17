@@ -88,6 +88,12 @@ async def resolve_syndic_pdf_context(db, copropriete: dict) -> dict:
     2. copropriete.created_by -> user.role=syndic ou parent_syndic_id du createur
        (iter90dj : superadmin accepte aussi si config presente)
     3. Recherche un syndic dont copropriete_ids contient l'id de l'ACP
+    4. iter90hm : Fallback ORGANISATION - matcher via domaine email du createur
+       (ex: gerald@gep.be sans config -> welcome@goodexperienceproperties.be
+       ou tout admin/superadmin avec un domaine equivalent qui A une config).
+    5. iter90hm : Dernier recours - PREMIERE config disponible avec un logo
+       (evite l'ancien layout sans logo dans les cas d'installation avec un
+       seul cabinet syndic).
     """
     from bson import ObjectId
     syndic_user_id = (copropriete or {}).get("syndic_user_id", "") or ""
@@ -109,6 +115,63 @@ async def resolve_syndic_pdf_context(db, copropriete: dict) -> dict:
                         cfg = await db.syndic_configs.find_one({"syndic_user_id": str(creator["_id"])})
                         if cfg:
                             syndic_user_id = str(creator["_id"])
+                        else:
+                            # iter90hm/hp : fallback ORGANISATION multi-critere.
+                            # On score chaque config candidate selon :
+                            # - Match du domaine email creator vs syndic_user
+                            # - Mots-cles communs entre creator's name/email et
+                            #   config's legal_name (ex: "GEP" et "Good
+                            #   Experience Properties" partagent l'acronyme).
+                            creator_email = (creator.get("email") or "").lower()
+                            creator_name = (creator.get("name") or "").lower()
+                            creator_domain = ""
+                            if "@" in creator_email:
+                                creator_domain = creator_email.split("@")[1]
+                            # Extraire tokens significatifs du createur (>=3 lettres)
+                            import re
+                            tokens_creator = set(re.findall(r"[a-z]{3,}", creator_email + " " + creator_name + " " + creator_domain))
+                            # Retirer les mots communs peu discriminants
+                            tokens_creator -= {"com", "net", "org", "user", "admin", "super", "administrateur", "syndic", "gmail", "outlook", "hotmail", "yahoo"}
+                            best_score = 0
+                            best_uid = ""
+                            async for cfg2 in db.syndic_configs.find({}):
+                                lg = cfg2.get("logo_gridfs_id")
+                                if not lg:
+                                    continue
+                                s_uid = cfg2.get("syndic_user_id", "")
+                                if not s_uid or s_uid == str(creator["_id"]):
+                                    continue
+                                score = 0
+                                # Recuperer le user de la config pour comparer
+                                try:
+                                    su = await db.users.find_one({"_id": ObjectId(s_uid)})
+                                except Exception:
+                                    su = None
+                                cfg_email = ((su or {}).get("email") or "").lower()
+                                cfg_name = ((su or {}).get("name") or "").lower()
+                                cfg_legal = (cfg2.get("legal_name") or "").lower()
+                                cfg_display = (cfg2.get("display_name") or "").lower()
+                                # 1. Meme domaine exact
+                                if creator_domain and "@" in cfg_email:
+                                    cfg_domain = cfg_email.split("@")[1]
+                                    if cfg_domain == creator_domain:
+                                        score += 100
+                                # 2. Tokens communs (>=3 chars)
+                                tokens_cfg = set(re.findall(r"[a-z]{3,}", cfg_email + " " + cfg_name + " " + cfg_legal + " " + cfg_display))
+                                tokens_cfg -= {"com", "net", "org", "user", "admin", "super", "administrateur", "syndic", "gmail", "outlook", "hotmail", "yahoo"}
+                                score += 10 * len(tokens_creator & tokens_cfg)
+                                # 3. Acronyme : les initiales de legal_name matchent creator token ?
+                                # Ex: "GEP" = acronyme de "Good Experience Properties"
+                                for tk in tokens_creator:
+                                    if len(tk) <= 6:  # potentiel acronyme
+                                        acronym = "".join(w[0] for w in cfg_legal.split() if w and w[0].isalpha())
+                                        if tk == acronym:
+                                            score += 50
+                                if score > best_score:
+                                    best_score = score
+                                    best_uid = s_uid
+                            if best_uid:
+                                syndic_user_id = best_uid
             except Exception:
                 pass
     if not syndic_user_id and copropriete and copropriete.get("id"):
@@ -120,6 +183,19 @@ async def resolve_syndic_pdf_context(db, copropriete: dict) -> dict:
             )
             if u:
                 syndic_user_id = str(u["_id"])
+        except Exception:
+            pass
+
+    # iter90hm : Dernier fallback - premiere config avec logo si aucune resolution
+    if not syndic_user_id:
+        try:
+            async for fallback_cfg in db.syndic_configs.find(
+                {"logo_gridfs_id": {"$exists": True}}
+            ).sort("_id", 1):
+                lg = fallback_cfg.get("logo_gridfs_id")
+                if lg:  # exclut None et chaine vide
+                    syndic_user_id = fallback_cfg.get("syndic_user_id", "")
+                    break
         except Exception:
             pass
 
@@ -174,22 +250,19 @@ def build_recipient_address_flowable(recipient: dict, small_style) -> Table:
     return tbl
 
 
-def build_header_with_logo(logo_bytes: Optional[bytes], acp_info: dict, small_style) -> Table:
+def build_header_with_logo(logo_bytes: Optional[bytes], acp_info: dict, small_style,
+                            syndic_config: Optional[dict] = None) -> Table:
     """Construit le header PDF avec logo a gauche + coordonnees de l'ACP a droite.
 
     iter90dm : le header n'affiche PLUS les coordonnees du syndic. Le bloc a
-    droite du logo contient uniquement les informations de la copropriete :
-      - Nom (bold)
-      - Adresse
-      - Code postal + ville
-      - BCE (si present)
-      - Reference (si presente)
+    droite du logo contient uniquement les informations de la copropriete.
+
+    iter90hm : `syndic_config` (optionnel) permet d'afficher le NOM du cabinet
+    a la place du logo quand ce dernier est absent. Ainsi le PDF a toujours
+    un branding visible en haut a gauche (le nom du cabinet syndic en gras).
 
     Les coordonnees du syndic (nom, adresse, IPI, contact) apparaissent
     uniquement en pied de page via `legal_mentions` (draw_legal_footer).
-
-    `acp_info` = copropriete dict (name, address, postal_code, city, bce,
-    reference, ...).
     """
     logo_flow = load_logo_image(logo_bytes)
     # Bloc texte ACP a droite du logo.
@@ -211,7 +284,32 @@ def build_header_with_logo(logo_bytes: Optional[bytes], acp_info: dict, small_st
         lines.append(f"Reference : {ref}")
 
     acp_para = Paragraph("<br/>".join(lines), small_style)
-    left_cell = logo_flow if logo_flow else Paragraph("", small_style)
+    # iter90hm : si le logo est absent, afficher le nom du cabinet syndic
+    # en gras a la place - branding textuel visible.
+    if logo_flow:
+        left_cell = logo_flow
+    else:
+        syndic_name = ""
+        if syndic_config:
+            syndic_name = (
+                syndic_config.get("display_name")
+                or syndic_config.get("legal_name")
+                or ""
+            )
+        if syndic_name:
+            # Style plus grand pour le nom du cabinet en fallback
+            from reportlab.lib.styles import ParagraphStyle
+            brand_style = ParagraphStyle(
+                "brand_fallback",
+                parent=small_style,
+                fontSize=11,
+                leading=13,
+                fontName="Helvetica-Bold",
+                textColor=colors.HexColor("#0055FF"),
+            )
+            left_cell = Paragraph(syndic_name, brand_style)
+        else:
+            left_cell = Paragraph("", small_style)
 
     tbl = Table(
         [[left_cell, acp_para]],
