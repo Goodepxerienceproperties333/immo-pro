@@ -1677,8 +1677,20 @@ def create_reports_router(db):
         # coup d'oeil qui doit / a paye trop, sans deployer chaque decompte.
         # On exclut les extournes (is_reversal + reversed) comme
         # `_compute_balance_tiers_for_ui` et health_audit le font.
+        # iter90ib : appliquer le MEME filtre AN que balance_tiers_owners
+        # et la Situation de compte : inclure UNIQUEMENT les AN avec
+        # is_opening_balance=True (vraies reprises) et EXCLURE les AN de
+        # cloture (report technique du solde N-1). Sans ce filtre, le
+        # tableau compact des decomptes diverge de la Situation PDF et de
+        # la Balance des Tiers (bug user Boxus Wivine : 930 vs 638.75).
         entries_for_balance = await db.journal_entries.find(
-            {"copropriete_id": copropriete_id, "journal_type": {"$ne": "AN"}},
+            {
+                "copropriete_id": copropriete_id,
+                "$or": [
+                    {"journal_type": {"$ne": "AN"}},
+                    {"journal_type": "AN", "is_opening_balance": True},
+                ],
+            },
             {"_id": 0, "id": 1, "lines": 1, "is_reversal": 1, "reversed": 1},
         ).to_list(100000)
         owner_acc_to_id = {}
