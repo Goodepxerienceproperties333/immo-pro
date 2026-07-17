@@ -1,4 +1,54 @@
 # CoproManager PRD
+### Iter90h7 + h8 (Feb 2026) — Envois Communication utilisent config par-syndic
+
+**Ticket** : "les mails via l'onglet communication ne fonctionnent toujours pas !!"
+Resolu le 17/07/2026 : "probleme semble resolu je viens de recevoir le mail"
+
+**Root cause** :
+  Deux systemes d'envoi coexistaient :
+  - `graph_email.send_html_email()` (invitations superadmin, resets password)
+    utilisait AZURE_TENANT_ID / AZURE_CLIENT_ID / AZURE_CLIENT_SECRET (env vars).
+  - `routes/communication._send_email()` (Communication UI : appels de fonds,
+    situations, decomptes, generic) idem.
+  En preview, `MAIL_ENABLED=false` -> tous les envois "silently dropped" en
+  dry-run, meme si le syndic avait configure ses vrais credentials Azure
+  dans `syndic_configs`. Seul le bouton "Test admin" iter90h3 marchait car
+  il utilisait directement la config DB.
+
+**Fix iter90h7** :
+- `communication._send_email()` resout la config par-syndic via
+  `get_effective_email_config(db, syndic_uid)`. Si presente et complete
+  (provider=graph + tenant + client + secret), elle REMPLACE les env vars
+  ET bypasse le check `MAIL_ENABLED=false` (le syndic a explicitement
+  configure son compte -> intention claire).
+- `graph_email.send_html_email()` accepte `db` + `for_syndic_user_id`
+  optionnels pour beneficier du meme mecanisme.
+- Nouveau helper `is_configured_for_syndic(db, uid)` async.
+- Logs de diagnostic : `graph_source="db_per_syndic"` vs `graph_source="env"`.
+- Fallback env vars preserve pour retro-compat.
+
+**Fix iter90h8** :
+- Nouveau endpoint `GET /api/communication/sent-log?limit=100&only_failed=false`
+  pour visualiser l'historique des envois avec statut, dry_run, error_msg.
+  Utile pour diagnostiquer les mails "acceptes par Graph (202) mais jamais
+  delivres" (ex: permission Mail.Send manquante).
+- Messages d'erreur explicites quand Microsoft renvoie :
+  * `AccessDenied` -> "Permission Mail.Send manquante. Dans Azure Portal >
+    App registrations > API permissions, ajoutez 'Mail.Send' (Application,
+    pas Delegated) puis 'Grant admin consent'."
+  * `MailboxNotEnabled` -> "La boite X n'a pas de licence Exchange Online
+    active."
+  * `TooManyRequests` -> "Limite d'envoi Microsoft depassee, reessayez."
+
+**Tests** :
+- `test_iter90h7_per_syndic_email_priority.py` (5/5 verts)
+- `test_iter90h8_sent_log_and_friendly_send_errors.py` (4/4 verts)
+
+**Confirmation utilisateur** : le mail est arrive apres iter90h7 (deploiement
+preview). Redeploiement PROD requis pour propager sur immo-pcmn.emergent.host.
+
+
+
 ### Iter90h6 (Feb 2026) — Bonus : protections email etendues au self-service
 
 **Ticket** : "Applique le bonus"

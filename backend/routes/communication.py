@@ -420,7 +420,28 @@ def create_communication_router(db):
                         gerr = (j or {}).get("error", {})
                         gcode = gerr.get("code", "")
                         gmsg = gerr.get("message", "")[:200]
-                        if gcode or gmsg:
+                        # iter90h8 : messages plus explicites pour les erreurs
+                        # Mail.Send frequentes qui bloquent les envois Communication
+                        low = (gcode + " " + gmsg).lower()
+                        if "accessdenied" in low or "authorization" in low:
+                            err_detail = (
+                                f"Permission Mail.Send manquante. "
+                                f"Dans Azure Portal > App registrations > votre app > API permissions, "
+                                f"ajoutez 'Mail.Send' (Application, pas Delegated) puis cliquez 'Grant admin consent'. "
+                                f"(Detail Microsoft : {gcode} - {gmsg})"
+                            )
+                        elif "mailboxnotenabled" in low or "requestedmailboxnotfound" in low:
+                            err_detail = (
+                                f"La boite '{from_mailbox}' n'a pas de licence Exchange Online active. "
+                                f"Verifiez dans Microsoft 365 Admin Center que la boite est activee. "
+                                f"(Detail Microsoft : {gcode} - {gmsg})"
+                            )
+                        elif "throttled" in low or "toomanyrequests" in low:
+                            err_detail = (
+                                f"Limite d'envoi Microsoft depassee, reessayez plus tard. "
+                                f"(Detail : {gcode} - {gmsg})"
+                            )
+                        elif gcode or gmsg:
                             err_detail = f"Graph {r.status_code} {gcode} : {gmsg}"
                     except Exception:
                         pass
@@ -510,6 +531,46 @@ def create_communication_router(db):
                 + (f"<br>Tel : {cur.get('phone', '')}" if cur.get("phone") else "")
             )
         return f"{body_html}<br><br>{sig}"
+
+    # iter90h8 : endpoint pour visualiser l'historique des envois email
+    # avec leur statut Microsoft. Utile pour diagnostiquer les envois
+    # silencieusement rejetes (202 Accepted mais mail non delivre).
+    @router.get("/sent-log")
+    async def get_sent_log(
+        request: Request,
+        limit: int = 100,
+        copropriete_id: Optional[str] = None,
+        only_failed: bool = False,
+    ):
+        """Retourne l'historique des envois email (kind, from, to, status,
+        error_msg, dry_run) pour le syndic connecte.
+
+        iter90h8 : critique pour diagnostiquer les mails "acceptes par Graph
+        mais jamais delivres" (permission Mail.Send manquante, boite sans
+        licence Exchange, Application Access Policy restrictive).
+        """
+        _, scope_id = await _resolve_syndic_scope(db, request)
+        query = {"syndic_user_id": scope_id}
+        if copropriete_id:
+            query["copropriete_id"] = copropriete_id
+        if only_failed:
+            query["status"] = "failed"
+        rows = await db.sent_communications.find(query).sort("sent_at", -1).limit(min(limit, 500)).to_list(500)
+        for r in rows:
+            r["_id"] = str(r.get("_id", ""))
+            # Retirer html_body volumineux du payload (envois de masse)
+            r.pop("html_body", None)
+        # Statistiques rapides
+        total = len(rows)
+        counts = {"sent": 0, "failed": 0, "dry_run": 0}
+        for r in rows:
+            if r.get("dry_run"):
+                counts["dry_run"] += 1
+            elif r.get("status") == "sent":
+                counts["sent"] += 1
+            elif r.get("status") == "failed":
+                counts["failed"] += 1
+        return {"rows": rows, "count": total, "counts": counts}
 
     @router.post("/send/generic")
     async def send_generic(
