@@ -550,7 +550,17 @@ async def _compute_balance_tiers_for_ui(db, copropriete_id):
     current_owner_ids = set(lt.get("owner_id") for lt in lots if lt.get("owner_id"))
 
     # Cumul entries (toutes dates, hors extournes)
-    je_q = {"copropriete_id": copropriete_id}
+    # iter90ia : appliquer le MEME filtre AN que la Situation de compte et
+    # le Bilan : inclure UNIQUEMENT les AN avec is_opening_balance=True
+    # (vraies reprises comptables) et EXCLURE les AN de cloture (report
+    # de solde en double, cree lors du closing de l'exercice N-1).
+    je_q = {
+        "copropriete_id": copropriete_id,
+        "$or": [
+            {"journal_type": {"$ne": "AN"}},
+            {"journal_type": "AN", "is_opening_balance": True},
+        ],
+    }
     _exclude_reversals(je_q)
     entries = await db.journal_entries.find(je_q, {"_id": 0}).to_list(200000)
 
@@ -2228,7 +2238,17 @@ def create_reports_router(db):
         # SECURISATION : exclure les contre-passations et leurs ecritures
         # extournees -> elles s'annulent au bilan, ne doivent pas figurer
         # dans les balances tiers operationnelles.
-        je_q = {"copropriete_id": copropriete_id}
+        # iter90ia : appliquer le MEME filtre AN que la Situation de compte
+        # et le Bilan : inclure UNIQUEMENT les AN avec is_opening_balance=True
+        # (vraies reprises comptables) et EXCLURE les AN de cloture (report
+        # de solde en double, cree lors du closing de l'exercice N-1).
+        je_q = {
+            "copropriete_id": copropriete_id,
+            "$or": [
+                {"journal_type": {"$ne": "AN"}},
+                {"journal_type": "AN", "is_opening_balance": True},
+            ],
+        }
         if start_date or end_date:
             je_q["date"] = {}
             if start_date:
@@ -2239,7 +2259,14 @@ def create_reports_router(db):
         entries = await db.journal_entries.find(je_q, {"_id": 0}).to_list(100000)
 
         # Pour le SOLDE CUMULATIF : entries de toutes les dates jusqu'a end_date (inclus anterieurs)
-        je_q_cumul = {"copropriete_id": copropriete_id}
+        # iter90ia : meme filtre AN que ci-dessus
+        je_q_cumul = {
+            "copropriete_id": copropriete_id,
+            "$or": [
+                {"journal_type": {"$ne": "AN"}},
+                {"journal_type": "AN", "is_opening_balance": True},
+            ],
+        }
         if end_date:
             je_q_cumul["date"] = {"$lte": end_date}
         _exclude_reversals(je_q_cumul)
@@ -2360,23 +2387,40 @@ def create_reports_router(db):
 
             total_called = round(prov_debit + res_debit, 2)
             total_paid = round(prov_credit + res_credit + unmatched_paid, 2)
-            # Balance CUMULATIF du compte tier (toutes ecritures jusqu'a end_date)
-            owner_cumul_accs = (cumul_per_owner.get(oid) or {"by_acc": {}}).get("by_acc", {})
-            prov_d_cumul = owner_cumul_accs.get(acc_prov, {}).get("debit", 0.0)
-            prov_c_cumul = owner_cumul_accs.get(acc_prov, {}).get("credit", 0.0)
-            res_d_cumul = owner_cumul_accs.get(acc_res, {}).get("debit", 0.0)
-            res_c_cumul = owner_cumul_accs.get(acc_res, {}).get("credit", 0.0)
-            # Fallback : ecritures sans third_party_id mais sur les comptes de l'owner
+            # iter90ia : Balance CUMULATIF - MEME source que la Situation de
+            # compte (PDF). On somme TOUTES les lignes du grand livre marquees
+            # avec `third_party_id = owner_id`, quel que soit le compte
+            # (provisions, reserve, MAIS AUSSI comptes historiques post-
+            # renumerotation, ODs d'imputation charges, ODs de mutation, etc.).
+            # Avant iter90ia : la balance ne comptait que les comptes canoniques
+            # acc_prov + acc_res -> divergence avec le PDF Situation (ex : 930
+            # dans la liste vs 638.75 dans le PDF pour Boxus Wivine).
+            owner_cumul_all = (cumul_per_owner.get(oid) or {"by_acc": {}}).get("by_acc", {})
+            cumul_called_all = 0.0
+            cumul_paid_all = 0.0
+            for _acc, _dc in owner_cumul_all.items():
+                cumul_called_all += float(_dc.get("debit", 0) or 0)
+                cumul_paid_all += float(_dc.get("credit", 0) or 0)
+            # Fallback : lignes sans third_party_id mais sur les comptes tiers
+            # canoniques du proprio (retrocompat pour anciens imports).
+            prov_d_cumul = owner_cumul_all.get(acc_prov, {}).get("debit", 0.0)
+            prov_c_cumul = owner_cumul_all.get(acc_prov, {}).get("credit", 0.0)
+            res_d_cumul = owner_cumul_all.get(acc_res, {}).get("debit", 0.0)
+            res_c_cumul = owner_cumul_all.get(acc_res, {}).get("credit", 0.0)
             if acc_prov and acc_prov in cumul_per_acc:
                 prov_d_cumul += cumul_per_acc[acc_prov]["debit"]
                 prov_c_cumul += cumul_per_acc[acc_prov]["credit"]
+                cumul_called_all += cumul_per_acc[acc_prov]["debit"]
+                cumul_paid_all += cumul_per_acc[acc_prov]["credit"]
                 cumul_per_acc[acc_prov] = {"debit": 0.0, "credit": 0.0}
             if acc_res and acc_res in cumul_per_acc:
                 res_d_cumul += cumul_per_acc[acc_res]["debit"]
                 res_c_cumul += cumul_per_acc[acc_res]["credit"]
+                cumul_called_all += cumul_per_acc[acc_res]["debit"]
+                cumul_paid_all += cumul_per_acc[acc_res]["credit"]
                 cumul_per_acc[acc_res] = {"debit": 0.0, "credit": 0.0}
-            cumul_called = prov_d_cumul + res_d_cumul
-            cumul_paid = prov_c_cumul + res_c_cumul + unmatched_paid
+            cumul_called = cumul_called_all
+            cumul_paid = cumul_paid_all + unmatched_paid
             balance = round(cumul_called - cumul_paid, 2)
 
             movements = sorted(owner_lines + unmatched_movements, key=lambda x: x["date"])
