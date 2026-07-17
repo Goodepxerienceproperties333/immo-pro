@@ -503,7 +503,7 @@ export default function BalanceTiersPage() {
         setLettrerSearch={setLettrerSearch}
         lettrerLoading={lettrerLoading}
         commitLettrer={commitLettrer}
-        lettrerCopro={selectedCopro || localStorage.getItem('selectedCopro') || ''}
+        lettrerCopro={localStorage.getItem('selectedCopro') || localStorage.getItem('copropriete_id') || ''}
       />
 
       <SupplierMergeDialog
