@@ -298,28 +298,60 @@ export default function AdminSyndicConfigPage() {
             </CardHeader>
             <CardContent className="space-y-3">
               <div>
-                <Label className="text-xs">Fournisseur</Label>
+                <Label className="text-xs">
+                  <span className="text-slate-900">Fournisseur d&apos;envoi</span>
+                  <span className="text-slate-500 ml-1">/ Email Provider</span>
+                </Label>
                 <Select value={emailCfg.provider} onValueChange={(v) => setEmailCfg({ ...emailCfg, provider: v })}>
                   <SelectTrigger data-testid="admin-select-provider"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="none">Aucun (fallback)</SelectItem>
-                    <SelectItem value="graph">Microsoft Graph</SelectItem>
-                    <SelectItem value="smtp">SMTP</SelectItem>
+                    <SelectItem value="none">Aucun / Fallback (utilise la config globale)</SelectItem>
+                    <SelectItem value="graph">Microsoft Graph (Azure AD + Office 365)</SelectItem>
+                    <SelectItem value="smtp">SMTP (serveur email standard)</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
               {emailCfg.provider === 'graph' && (
                 <>
-                  <div><Label className="text-xs">Azure Tenant ID</Label>
+                  {/* iter90h4 : bandeau d'aide avec le chemin Azure Portal */}
+                  <div className="bg-blue-50 border border-blue-200 rounded p-2 text-[11px] text-blue-900 leading-relaxed">
+                    <strong>Azure Portal :</strong> <em>portal.azure.com</em> &rarr; Azure Active Directory
+                    &rarr; App registrations &rarr; votre application. Les 3 valeurs
+                    ci-dessous se trouvent sous <em>Overview</em> (Tenant ID, Client ID)
+                    et <em>Certificates &amp; secrets</em> (Client Secret Value).
+                  </div>
+                  <div>
+                    <Label className="text-xs">
+                      <span className="text-slate-900">Identifiant du repertoire (locataire)</span>
+                      <span className="text-slate-500 ml-1">/ Directory (tenant) ID</span>
+                    </Label>
                     <Input value={emailCfg.graph_tenant_id}
-                           onChange={(e) => setEmailCfg({ ...emailCfg, graph_tenant_id: e.target.value })}
-                           data-testid="admin-input-tenant" /></div>
-                  <div><Label className="text-xs">Client ID</Label>
+                           onChange={(e) => setEmailCfg({ ...emailCfg, graph_tenant_id: e.target.value.trim() })}
+                           placeholder="UUID du tenant Azure AD (ex : xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)"
+                           data-testid="admin-input-tenant" />
+                    <p className="text-[10px] text-slate-500 mt-1">
+                      Azure Portal &rarr; Azure Active Directory &rarr; Overview &rarr; <em>Tenant ID</em>.
+                      C&apos;est l&apos;identifiant de votre organisation Azure (pas de l&apos;app).
+                    </p>
+                  </div>
+                  <div>
+                    <Label className="text-xs">
+                      <span className="text-slate-900">Identifiant de l&apos;application (client)</span>
+                      <span className="text-slate-500 ml-1">/ Application (client) ID</span>
+                    </Label>
                     <Input value={emailCfg.graph_client_id}
-                           onChange={(e) => setEmailCfg({ ...emailCfg, graph_client_id: e.target.value })} /></div>
+                           onChange={(e) => setEmailCfg({ ...emailCfg, graph_client_id: e.target.value.trim() })}
+                           placeholder="UUID de l'App registration"
+                           data-testid="admin-input-client-id" />
+                    <p className="text-[10px] text-slate-500 mt-1">
+                      Azure Portal &rarr; App registrations &rarr; votre app &rarr; Overview &rarr;
+                      <em> Application (client) ID</em>. C&apos;est l&apos;identifiant de l&apos;app elle-meme.
+                    </p>
+                  </div>
                   <div>
                     <Label className="text-xs flex items-center gap-2">
-                      Client Secret
+                      <span className="text-slate-900">Cle secrete client</span>
+                      <span className="text-slate-500">/ Client Secret (Value)</span>
                       {graphSecretConfigured && (
                         <span className="inline-flex items-center gap-1 text-emerald-700 text-[10px] font-medium" data-testid="graph-secret-configured">
                           <CheckCircle2 className="h-3 w-3" /> Secret configure
@@ -328,32 +360,64 @@ export default function AdminSyndicConfigPage() {
                     </Label>
                     <Input type="password" value={emailCfg.graph_client_secret}
                            onChange={(e) => setEmailCfg({ ...emailCfg, graph_client_secret: e.target.value })}
-                           placeholder={graphSecretConfigured ? 'Laisser vide pour conserver le secret existant' : 'Colle ici le secret Azure AD'}
+                           placeholder={graphSecretConfigured ? 'Laisser vide pour conserver le secret existant' : 'Colle ici le Value du secret (pas le Secret ID)'}
                            data-testid="admin-input-graph-secret" />
+                    <p className="text-[10px] text-amber-700 mt-1">
+                      <strong>Attention :</strong> copiez la colonne <em>Value</em> (et non
+                      <em> Secret ID</em>) apres avoir cree le secret. Elle n&apos;est visible qu&apos;une seule fois.
+                    </p>
                   </div>
                 </>
               )}
               {emailCfg.provider === 'smtp' && (
                 <div className="grid grid-cols-2 gap-2">
-                  <div className="col-span-2"><Label className="text-xs">Serveur</Label>
+                  <div className="col-span-2 bg-blue-50 border border-blue-200 rounded p-2 text-[11px] text-blue-900">
+                    <strong>Serveur SMTP :</strong> renseignez les parametres fournis
+                    par votre hebergeur email. Ports typiques : <em>587</em> (STARTTLS,
+                    recommande) ou <em>465</em> (SSL/TLS implicite).
+                  </div>
+                  <div className="col-span-2">
+                    <Label className="text-xs">
+                      <span className="text-slate-900">Serveur SMTP</span>
+                      <span className="text-slate-500 ml-1">/ SMTP Host</span>
+                    </Label>
                     <Input value={emailCfg.smtp_host}
-                           onChange={(e) => setEmailCfg({ ...emailCfg, smtp_host: e.target.value })} /></div>
-                  <div><Label className="text-xs">Port</Label>
+                           onChange={(e) => setEmailCfg({ ...emailCfg, smtp_host: e.target.value.trim() })}
+                           placeholder="smtp.office365.com, smtp.gmail.com, ..."
+                           data-testid="admin-input-smtp-host" />
+                  </div>
+                  <div>
+                    <Label className="text-xs">
+                      <span className="text-slate-900">Port</span>
+                      <span className="text-slate-500 ml-1">/ Port</span>
+                    </Label>
                     <Input type="number" value={emailCfg.smtp_port}
-                           onChange={(e) => setEmailCfg({ ...emailCfg, smtp_port: parseInt(e.target.value) || 0 })} /></div>
+                           onChange={(e) => setEmailCfg({ ...emailCfg, smtp_port: parseInt(e.target.value) || 0 })}
+                           placeholder="587 ou 465"
+                           data-testid="admin-input-smtp-port" />
+                  </div>
                   <div className="flex items-end">
-                    <label className="flex items-center gap-2 text-sm">
+                    <label className="flex items-center gap-2 text-sm cursor-pointer">
                       <input type="checkbox" checked={emailCfg.smtp_use_tls}
-                             onChange={(e) => setEmailCfg({ ...emailCfg, smtp_use_tls: e.target.checked })} />
-                      STARTTLS
+                             onChange={(e) => setEmailCfg({ ...emailCfg, smtp_use_tls: e.target.checked })}
+                             data-testid="admin-input-smtp-tls" />
+                      <span>Chiffrement STARTTLS <span className="text-slate-500">(port 587)</span></span>
                     </label>
                   </div>
-                  <div><Label className="text-xs">Utilisateur</Label>
+                  <div>
+                    <Label className="text-xs">
+                      <span className="text-slate-900">Nom d&apos;utilisateur</span>
+                      <span className="text-slate-500 ml-1">/ SMTP Username</span>
+                    </Label>
                     <Input value={emailCfg.smtp_username}
-                           onChange={(e) => setEmailCfg({ ...emailCfg, smtp_username: e.target.value })} /></div>
+                           onChange={(e) => setEmailCfg({ ...emailCfg, smtp_username: e.target.value.trim() })}
+                           placeholder="Souvent : votre adresse email complete"
+                           data-testid="admin-input-smtp-username" />
+                  </div>
                   <div>
                     <Label className="text-xs flex items-center gap-2">
-                      Mot de passe
+                      <span className="text-slate-900">Mot de passe</span>
+                      <span className="text-slate-500">/ SMTP Password</span>
                       {smtpPasswordConfigured && (
                         <span className="inline-flex items-center gap-1 text-emerald-700 text-[10px] font-medium" data-testid="smtp-password-configured">
                           <CheckCircle2 className="h-3 w-3" /> Configure
@@ -362,7 +426,7 @@ export default function AdminSyndicConfigPage() {
                     </Label>
                     <Input type="password" value={emailCfg.smtp_password}
                            onChange={(e) => setEmailCfg({ ...emailCfg, smtp_password: e.target.value })}
-                           placeholder={smtpPasswordConfigured ? 'Laisser vide pour conserver' : 'Mot de passe SMTP'}
+                           placeholder={smtpPasswordConfigured ? 'Laisser vide pour conserver' : 'Mot de passe ou App Password'}
                            data-testid="admin-input-smtp-password" />
                   </div>
                 </div>
