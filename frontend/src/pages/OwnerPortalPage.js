@@ -10,7 +10,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { toast } from 'sonner';
-import { LogOut, Home, Wallet, FileText, Receipt, Megaphone, Building2, User, AlertCircle, CheckCircle2, ArrowDownToLine, ArrowLeft, ArrowRight, Copy, UserCog, Users, Plus, Pencil, Trash2, Save, Eye, Gauge, CalendarClock, PieChart as PieChartIcon, TrendingUp, Clock, Sparkles, Mail, MailOpen, Send, Paperclip, ChevronRight, Download } from 'lucide-react';
+import { LogOut, Home, Wallet, FileText, Receipt, Megaphone, Building2, User, AlertCircle, CheckCircle2, ArrowDownToLine, ArrowLeft, ArrowRight, Copy, UserCog, Users, Plus, Pencil, Trash2, Save, Eye, Gauge, CalendarClock, PieChart as PieChartIcon, TrendingUp, Clock, Sparkles, Mail, MailOpen, Send, Paperclip, ChevronRight, ChevronDown, Download, TrendingDown } from 'lucide-react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RechartsTooltip } from 'recharts';
 import { sanitizeHtml } from '@/lib/sanitizeHtml';
 import OwnerOnboardingTour, { ownerTourStorageKey } from '@/components/OwnerOnboardingTour';
@@ -2199,14 +2199,43 @@ function MovementsTab({
 }
 
 
-// iter90hw + iter90hz + iter90i0 : onglet "Comptes bancaires" - transparence
-// totale pour le proprio : IBAN + solde comptable + mouvements filtrables
-// par plage de dates (defaut : exercice comptable courant).
+// iter90hw + iter90hz + iter90i0 + iter90i3 : onglet "Comptes bancaires" -
+// transparence totale pour le proprio : IBAN + solde comptable + totaux
+// credits/debits par periode ; les mouvements detailles se deplient au clic
+// sur l'entete du compte (compact par defaut, extensible a la demande).
 function BankAccountsTab({
   bankAccounts, loading, acpSelected,
   startDate, endDate, onStartDateChange, onEndDateChange, fiscalYear,
 }) {
-  const copyIban = (iban) => {
+  // iter90i3 : etat "developpe" par IBAN (rendu compact par defaut)
+  const [expanded, setExpanded] = useState({});
+  const toggleExpanded = (key) => setExpanded(prev => ({ ...prev, [key]: !prev[key] }));
+
+  // iter90i3 : calcul des totaux (credit / debit / net) par compte, sur les
+  // mouvements de la periode. Utilise `transaction_type` s'il est present,
+  // sinon deduit du signe de `amount`.
+  const summaryByAccount = useMemo(() => {
+    return (bankAccounts || []).map((ba) => {
+      const mvs = ba.recent_movements || [];
+      let totalCredit = 0;
+      let totalDebit = 0;
+      for (const m of mvs) {
+        const amt = Number(m.amount || 0);
+        const isCredit = m.transaction_type === 'credit' || (!m.transaction_type && amt >= 0);
+        if (isCredit) totalCredit += Math.abs(amt);
+        else totalDebit += Math.abs(amt);
+      }
+      return {
+        totalCredit: +totalCredit.toFixed(2),
+        totalDebit: +totalDebit.toFixed(2),
+        net: +(totalCredit - totalDebit).toFixed(2),
+        count: mvs.length,
+      };
+    });
+  }, [bankAccounts]);
+
+  const copyIban = (iban, e) => {
+    if (e && e.stopPropagation) e.stopPropagation();
     if (!iban) return;
     try {
       navigator.clipboard.writeText(iban.replace(/\s+/g, ''));
@@ -2310,142 +2339,223 @@ function BankAccountsTab({
   return (
     <div className="space-y-4" data-testid="bank-accounts-list">
       {dateFilterBar}
-      <div className="text-xs text-slate-500 italic">
-        Vue transparente des comptes de l&apos;ACP. Les IBAN sont partiellement masques
-        pour votre securite ; le solde comptable est actualise en temps reel
-        (independant du filtre de date).
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="text-xs text-slate-500 italic flex-1">
+          Vue transparente des comptes de l&apos;ACP. Les IBAN sont partiellement masques
+          pour votre securite ; le solde comptable est actualise en temps reel
+          (independant du filtre de date). Cliquez sur l&apos;entete d&apos;un compte
+          pour deplier/replier ses mouvements.
+        </div>
+        {bankAccounts.length > 1 && (
+          <div className="flex items-center gap-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                const all = {};
+                bankAccounts.forEach((ba, i) => { all[`${ba.iban}-${i}`] = true; });
+                setExpanded(all);
+              }}
+              className="text-xs h-7"
+              data-testid="bank-accounts-expand-all"
+            >
+              <ChevronDown size={12} className="mr-1" /> Tout deplier
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setExpanded({})}
+              className="text-xs h-7"
+              data-testid="bank-accounts-collapse-all"
+            >
+              <ChevronRight size={12} className="mr-1" /> Tout replier
+            </Button>
+          </div>
+        )}
       </div>
-      {bankAccounts.map((ba, idx) => (
-        <Card key={`${ba.iban}-${idx}`} className="border-slate-200" data-testid={`bank-account-card-${idx}`}>
-          <CardHeader className="pb-2">
-            <div className="flex items-start justify-between gap-3 flex-wrap">
-              <div>
-                <CardTitle className="text-base flex items-center gap-2" style={{fontFamily:'Chivo,sans-serif'}}>
-                  <Wallet size={16} className="text-[#022D52]" />
-                  {ba.label || (ba.type === 'vue' ? 'Compte a vue' : 'Compte epargne')}
-                  {ba.is_default && (
-                    <Badge variant="outline" className="text-[9px] bg-emerald-50 text-emerald-700 border-emerald-200">
-                      Par defaut
-                    </Badge>
-                  )}
-                </CardTitle>
-                <div className="flex items-center gap-2 mt-1.5">
-                  <code className="text-xs font-mono text-[#022D52] bg-blue-50 border border-blue-200 px-2 py-1 rounded" data-testid={`bank-account-iban-${idx}`}>
-                    {ba.iban || '-'}
-                  </code>
-                  {ba.iban && (
-                    <button
-                      onClick={() => copyIban(ba.iban)}
-                      className="p-1.5 hover:bg-slate-100 rounded text-slate-500"
-                      title="Copier l'IBAN"
-                      data-testid={`bank-account-copy-iban-${idx}`}
-                    >
-                      <Copy size={12} />
-                    </button>
-                  )}
+      {bankAccounts.map((ba, idx) => {
+        const key = `${ba.iban}-${idx}`;
+        const isOpen = !!expanded[key];
+        const summary = summaryByAccount[idx] || { totalCredit: 0, totalDebit: 0, net: 0, count: 0 };
+        return (
+        <Card key={key} className="border-slate-200 overflow-hidden" data-testid={`bank-account-card-${idx}`}>
+          {/* Entete cliquable = toggle expanded */}
+          <button
+            type="button"
+            onClick={() => toggleExpanded(key)}
+            className="w-full text-left hover:bg-slate-50/70 transition-colors"
+            data-testid={`bank-account-toggle-${idx}`}
+            aria-expanded={isOpen}
+          >
+            <CardHeader className="pb-3">
+              <div className="flex items-start justify-between gap-3 flex-wrap">
+                <div className="flex items-start gap-2 flex-1 min-w-0">
+                  <div className="mt-1 shrink-0 text-slate-400">
+                    {isOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                  </div>
+                  <div className="min-w-0">
+                    <CardTitle className="text-base flex items-center gap-2 flex-wrap" style={{fontFamily:'Chivo,sans-serif'}}>
+                      <Wallet size={16} className="text-[#022D52]" />
+                      {ba.label || (ba.type === 'vue' ? 'Compte a vue' : 'Compte epargne')}
+                      {ba.is_default && (
+                        <Badge variant="outline" className="text-[9px] bg-emerald-50 text-emerald-700 border-emerald-200">
+                          Par defaut
+                        </Badge>
+                      )}
+                    </CardTitle>
+                    <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+                      <code className="text-xs font-mono text-[#022D52] bg-blue-50 border border-blue-200 px-2 py-1 rounded" data-testid={`bank-account-iban-${idx}`}>
+                        {ba.iban || '-'}
+                      </code>
+                      {ba.iban && (
+                        <span
+                          role="button"
+                          tabIndex={0}
+                          onClick={(e) => copyIban(ba.iban, e)}
+                          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') copyIban(ba.iban, e); }}
+                          className="p-1.5 hover:bg-slate-100 rounded text-slate-500 cursor-pointer"
+                          title="Copier l'IBAN"
+                          data-testid={`bank-account-copy-iban-${idx}`}
+                        >
+                          <Copy size={12} />
+                        </span>
+                      )}
+                      {ba.pcmn_number && (
+                        <span className="text-[10px] text-slate-400">PCMN {ba.pcmn_number}</span>
+                      )}
+                    </div>
+                  </div>
                 </div>
-                {ba.pcmn_number && (
-                  <div className="text-[10px] text-slate-400 mt-1">PCMN : {ba.pcmn_number}</div>
-                )}
-              </div>
-              <div className="text-right">
-                <div className="text-[10px] uppercase tracking-wider text-slate-500">Solde comptable</div>
-                <div className={`text-2xl font-black mt-0.5 ${ba.balance > 0.01 ? 'text-emerald-600' : ba.balance < -0.01 ? 'text-red-600' : 'text-slate-500'}`} style={{fontFamily:'Chivo,sans-serif'}} data-testid={`bank-account-balance-${idx}`}>
-                  {fmt(ba.balance || 0)}
+                <div className="text-right shrink-0">
+                  <div className="text-[10px] uppercase tracking-wider text-slate-500">Solde comptable</div>
+                  <div className={`text-2xl font-black mt-0.5 ${ba.balance > 0.01 ? 'text-emerald-600' : ba.balance < -0.01 ? 'text-red-600' : 'text-slate-500'}`} style={{fontFamily:'Chivo,sans-serif'}} data-testid={`bank-account-balance-${idx}`}>
+                    {fmt(ba.balance || 0)}
+                  </div>
                 </div>
               </div>
-            </div>
-          </CardHeader>
-          <CardContent className="pt-0">
-            {/* iter90i0 : compteur de mouvements dans la periode filtree */}
-            {typeof ba.movements_total_count === 'number' && (
-              <div className="text-[11px] text-slate-500 mb-2 flex items-center gap-2">
-                <Badge variant="outline" className="text-[9px] bg-blue-50 text-[#01213e] border-blue-200">
-                  {ba.movements_total_count} mouvement{ba.movements_total_count > 1 ? 's' : ''}
-                </Badge>
-                {ba.movements_total_count > (ba.movements_limit || 0) && (
-                  <span className="italic">
-                    (limite affichee : {ba.movements_limit} plus recents)
-                  </span>
-                )}
+              {/* iter90i3 : bandeau totaux periode (toujours visible) */}
+              <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-2" data-testid={`bank-account-totals-${idx}`}>
+                <div className="rounded border border-slate-200 bg-slate-50 px-2 py-1.5">
+                  <div className="text-[9px] uppercase tracking-wider text-slate-500">Mouvements</div>
+                  <div className="text-sm font-bold text-slate-700 font-mono">
+                    {typeof ba.movements_total_count === 'number' ? ba.movements_total_count : summary.count}
+                  </div>
+                </div>
+                <div className="rounded border border-emerald-200 bg-emerald-50 px-2 py-1.5">
+                  <div className="text-[9px] uppercase tracking-wider text-emerald-700 flex items-center gap-1">
+                    <TrendingUp size={10} /> Credits
+                  </div>
+                  <div className="text-sm font-bold text-emerald-700 font-mono" data-testid={`bank-account-credit-total-${idx}`}>
+                    {fmt(summary.totalCredit)}
+                  </div>
+                </div>
+                <div className="rounded border border-red-200 bg-red-50 px-2 py-1.5">
+                  <div className="text-[9px] uppercase tracking-wider text-red-700 flex items-center gap-1">
+                    <TrendingDown size={10} /> Debits
+                  </div>
+                  <div className="text-sm font-bold text-red-700 font-mono" data-testid={`bank-account-debit-total-${idx}`}>
+                    {fmt(summary.totalDebit)}
+                  </div>
+                </div>
+                <div className={`rounded border px-2 py-1.5 ${summary.net > 0.01 ? 'border-emerald-200 bg-emerald-50/60' : summary.net < -0.01 ? 'border-red-200 bg-red-50/60' : 'border-slate-200 bg-slate-50'}`}>
+                  <div className="text-[9px] uppercase tracking-wider text-slate-500">Net periode</div>
+                  <div className={`text-sm font-bold font-mono ${summary.net > 0.01 ? 'text-emerald-700' : summary.net < -0.01 ? 'text-red-700' : 'text-slate-700'}`} data-testid={`bank-account-net-${idx}`}>
+                    {fmt(summary.net)}
+                  </div>
+                </div>
               </div>
-            )}
-            {(ba.recent_movements || []).length === 0 ? (
-              <div className="text-xs text-slate-400 italic py-2 text-center border border-dashed border-slate-200 rounded">
-                Aucun mouvement bancaire sur la periode selectionnee
-              </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead className="text-[10px] uppercase tracking-wider">Date</TableHead>
-                      <TableHead className="text-[10px] uppercase tracking-wider">Sens</TableHead>
-                      <TableHead className="text-[10px] uppercase tracking-wider">Contrepartie</TableHead>
-                      <TableHead className="text-[10px] uppercase tracking-wider">Communication / Detail</TableHead>
-                      <TableHead className="text-[10px] uppercase tracking-wider text-right">Montant</TableHead>
-                      <TableHead className="text-[10px] uppercase tracking-wider text-center">Statut</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {ba.recent_movements.map((mv, midx) => {
-                      const isCredit = mv.transaction_type === 'credit' || mv.amount >= 0;
-                      return (
-                        <TableRow key={`${idx}-mv-${midx}`} data-testid={`bank-account-mv-${idx}-${midx}`}>
-                          <TableCell className="text-xs font-mono text-slate-600 whitespace-nowrap">{fmtDate(mv.date)}</TableCell>
-                          <TableCell>
-                            <Badge
-                              variant="outline"
-                              className={`text-[9px] ${isCredit
-                                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                                : 'bg-red-50 text-red-700 border-red-200'}`}
-                            >
-                              {isCredit ? 'Credit' : 'Debit'}
-                            </Badge>
-                          </TableCell>
-                          <TableCell className="text-xs text-slate-800 max-w-[200px]">
-                            {mv.counterparty ? (
-                              <div className="font-medium truncate" title={mv.counterparty}>{mv.counterparty}</div>
-                            ) : (
-                              <span className="text-slate-300 italic">Non renseigne</span>
-                            )}
-                            {mv.counterparty_account && (
-                              <div className="text-[10px] font-mono text-slate-400 truncate" title={mv.counterparty_account}>
-                                {mv.counterparty_account}
-                              </div>
-                            )}
-                          </TableCell>
-                          <TableCell className="text-[11px] max-w-[280px]">
-                            {mv.communication ? (
-                              <div className="text-slate-700 break-words" title={mv.communication}>
-                                {mv.communication}
-                              </div>
-                            ) : (
-                              <span className="text-slate-300 italic">-</span>
-                            )}
-                          </TableCell>
-                          <TableCell className={`text-right font-mono text-xs font-semibold whitespace-nowrap ${isCredit ? 'text-emerald-600' : 'text-red-600'}`}>
-                            {fmt(mv.amount)}
-                          </TableCell>
-                          <TableCell className="text-center">
-                            <Badge
-                              variant="outline"
-                              className={`text-[9px] ${mv.matched ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-slate-50 text-slate-500 border-slate-200'}`}
-                              title={mv.matched ? (mv.match_type ? `Lettre (${mv.match_type})` : 'Lettre') : 'A traiter (non lettree)'}
-                            >
-                              {mv.matched ? 'Lettre' : 'A traiter'}
-                            </Badge>
-                          </TableCell>
-                        </TableRow>
-                      );
-                    })}
-                  </TableBody>
-                </Table>
-              </div>
-            )}
-          </CardContent>
+              {!isOpen && (
+                <div className="mt-2 text-[10px] text-slate-400 italic">
+                  Cliquez pour afficher le detail des mouvements
+                </div>
+              )}
+            </CardHeader>
+          </button>
+          {/* iter90i3 : detail des mouvements affichable uniquement quand deplie */}
+          {isOpen && (
+            <CardContent className="pt-0 border-t border-slate-100" data-testid={`bank-account-detail-${idx}`}>
+              {ba.movements_total_count > (ba.movements_limit || 0) && (
+                <div className="text-[11px] text-amber-600 italic pt-2">
+                  Affichage des {ba.movements_limit} plus recents (total {ba.movements_total_count})
+                </div>
+              )}
+              {(ba.recent_movements || []).length === 0 ? (
+                <div className="text-xs text-slate-400 italic py-4 text-center border border-dashed border-slate-200 rounded mt-2">
+                  Aucun mouvement bancaire sur la periode selectionnee
+                </div>
+              ) : (
+                <div className="overflow-x-auto mt-2">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead className="text-[10px] uppercase tracking-wider">Date</TableHead>
+                        <TableHead className="text-[10px] uppercase tracking-wider">Sens</TableHead>
+                        <TableHead className="text-[10px] uppercase tracking-wider">Contrepartie</TableHead>
+                        <TableHead className="text-[10px] uppercase tracking-wider">Communication / Detail</TableHead>
+                        <TableHead className="text-[10px] uppercase tracking-wider text-right">Montant</TableHead>
+                        <TableHead className="text-[10px] uppercase tracking-wider text-center">Statut</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {ba.recent_movements.map((mv, midx) => {
+                        const isCredit = mv.transaction_type === 'credit' || mv.amount >= 0;
+                        return (
+                          <TableRow key={`${idx}-mv-${midx}`} data-testid={`bank-account-mv-${idx}-${midx}`}>
+                            <TableCell className="text-xs font-mono text-slate-600 whitespace-nowrap">{fmtDate(mv.date)}</TableCell>
+                            <TableCell>
+                              <Badge
+                                variant="outline"
+                                className={`text-[9px] ${isCredit
+                                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                  : 'bg-red-50 text-red-700 border-red-200'}`}
+                              >
+                                {isCredit ? 'Credit' : 'Debit'}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="text-xs text-slate-800 max-w-[200px]">
+                              {mv.counterparty ? (
+                                <div className="font-medium truncate" title={mv.counterparty}>{mv.counterparty}</div>
+                              ) : (
+                                <span className="text-slate-300 italic">Non renseigne</span>
+                              )}
+                              {mv.counterparty_account && (
+                                <div className="text-[10px] font-mono text-slate-400 truncate" title={mv.counterparty_account}>
+                                  {mv.counterparty_account}
+                                </div>
+                              )}
+                            </TableCell>
+                            <TableCell className="text-[11px] max-w-[280px]">
+                              {mv.communication ? (
+                                <div className="text-slate-700 break-words" title={mv.communication}>
+                                  {mv.communication}
+                                </div>
+                              ) : (
+                                <span className="text-slate-300 italic">-</span>
+                              )}
+                            </TableCell>
+                            <TableCell className={`text-right font-mono text-xs font-semibold whitespace-nowrap ${isCredit ? 'text-emerald-600' : 'text-red-600'}`}>
+                              {fmt(mv.amount)}
+                            </TableCell>
+                            <TableCell className="text-center">
+                              <Badge
+                                variant="outline"
+                                className={`text-[9px] ${mv.matched ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-slate-50 text-slate-500 border-slate-200'}`}
+                                title={mv.matched ? (mv.match_type ? `Lettre (${mv.match_type})` : 'Lettre') : 'A traiter (non lettree)'}
+                              >
+                                {mv.matched ? 'Lettre' : 'A traiter'}
+                              </Badge>
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </CardContent>
+          )}
         </Card>
-      ))}
+      );})}
     </div>
   );
 }
