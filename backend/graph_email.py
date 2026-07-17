@@ -44,7 +44,28 @@ def _get_msal_app() -> msal.ConfidentialClientApplication:
 
 
 def is_configured() -> bool:
+    """iter90h7 : True si les env vars globales sont pretes. Attention : ceci
+    ne verifie PAS la config par-syndic en DB (utiliser is_configured_for_syndic
+    avec un handle DB pour cela)."""
     return bool(_TENANT_ID and _CLIENT_ID and _CLIENT_SECRET and _SENDER_UPN)
+
+
+async def is_configured_for_syndic(db, syndic_user_id: Optional[str]) -> bool:
+    """iter90h7 : True si un envoi peut aboutir pour ce syndic (env OU par-syndic)."""
+    if is_configured() and _MAIL_ENABLED:
+        return True
+    if not syndic_user_id or db is None:
+        return False
+    try:
+        from routes.syndic_config import get_effective_email_config
+        eff = await get_effective_email_config(db, syndic_user_id)
+        return bool(
+            eff and eff.get("provider") == "graph"
+            and eff.get("graph_tenant_id") and eff.get("graph_client_id")
+            and eff.get("graph_client_secret")
+        )
+    except Exception:
+        return False
 
 
 def _acquire_token() -> str:
@@ -64,23 +85,61 @@ async def send_html_email(
     sender_upn: Optional[str] = None,
     save_to_sent: bool = True,
     reply_to: Optional[str] = None,
+    db=None,
+    for_syndic_user_id: Optional[str] = None,
 ) -> None:
     """Send an HTML email via Microsoft Graph (sendMail).
 
     Raises RuntimeError on failure. Use within a background task to avoid blocking.
     iter90r : `reply_to` sets the Reply-To header so support can respond
     directly to the requester (e.g. syndic asking a support question).
+    iter90h7 : `db` + `for_syndic_user_id` optionnels permettent de resoudre
+    la config Graph par-syndic depuis `syndic_configs`. Si trouvee, elle
+    remplace les env vars globales et bypasse le check MAIL_ENABLED (le
+    syndic a explicitement configure ses credentials).
     """
-    if not _MAIL_ENABLED:
+    # iter90h7 : resolution config par-syndic (prioritaire sur env vars)
+    per_syndic = None
+    if db is not None and for_syndic_user_id:
+        try:
+            from routes.syndic_config import get_effective_email_config
+            eff = await get_effective_email_config(db, for_syndic_user_id)
+            if eff and eff.get("provider") == "graph" \
+                    and eff.get("graph_tenant_id") and eff.get("graph_client_id") \
+                    and eff.get("graph_client_secret"):
+                per_syndic = eff
+        except Exception as _e:
+            logger.info("Fallback env vars (per-syndic lookup failed) : %s", _e)
+
+    if not per_syndic and not _MAIL_ENABLED:
         logger.info(
-            "[DRY-RUN] Email suppressed (MAIL_ENABLED=false). To: %s, Subject: %s",
+            "[DRY-RUN] Email suppressed (MAIL_ENABLED=false, pas de config par-syndic). To: %s, Subject: %s",
             list(recipients), subject,
         )
         return
+
     sender = sender_upn or _SENDER_UPN
     if not sender:
         raise RuntimeError("GRAPH_SENDER_UPN not configured")
-    token = _acquire_token()
+
+    # Acquisition token : per-syndic (via httpx direct) ou env (via msal)
+    if per_syndic:
+        async with httpx.AsyncClient(timeout=15.0) as _c:
+            tok = await _c.post(
+                f"https://login.microsoftonline.com/{per_syndic['graph_tenant_id']}/oauth2/v2.0/token",
+                data={
+                    "client_id": per_syndic["graph_client_id"],
+                    "client_secret": per_syndic["graph_client_secret"],
+                    "scope": _SCOPE,
+                    "grant_type": "client_credentials",
+                },
+            )
+        if tok.status_code >= 400:
+            raise RuntimeError(f"Graph OAuth (per-syndic) failed: HTTP {tok.status_code} - {tok.text[:300]}")
+        token = tok.json()["access_token"]
+    else:
+        token = _acquire_token()
+
     to_list: List[dict] = [
         {"emailAddress": {"address": str(r)}}
         for r in recipients if r

@@ -324,29 +324,62 @@ def create_communication_router(db):
         except Exception as e:
             raise HTTPException(500, f"Module email indisponible : {e}")
 
-        # Dry-run mode : compte les envois mais n'appelle pas Graph
-        if not _MAIL_ENABLED:
-            logger.info("[DRY-RUN] Email suppressed. From=%s To=%s Subject=%s Attach=%s",
-                        from_mailbox, to, subject, bool(attachment_pdf))
+        # iter90h7 : privilegier la config Graph par-syndic (stockee en DB)
+        # sur les env vars globales. Le syndic a soigneusement configure ses
+        # credentials Azure via /admin/syndic-config ou /mon-bureau. Si cette
+        # config est complete, on l'utilise directement (bypass MAIL_ENABLED
+        # global qui n'est utile qu'en preview sans config par-syndic).
+        graph_tid = _TENANT_ID
+        graph_cid = _CLIENT_ID
+        graph_cs = _CLIENT_SECRET
+        graph_source = "env"
+        use_per_syndic = False
+        if request is not None:
+            try:
+                from routes.syndic_config import get_effective_email_config, _resolve_syndic_user_id
+                syndic_uid = await _resolve_syndic_user_id(db, request)
+                effective = await get_effective_email_config(db, syndic_uid)
+                if effective and effective.get("provider") == "graph":
+                    eff_tid = effective.get("graph_tenant_id")
+                    eff_cid = effective.get("graph_client_id")
+                    eff_cs = effective.get("graph_client_secret")
+                    if eff_tid and eff_cid and eff_cs:
+                        graph_tid, graph_cid, graph_cs = eff_tid, eff_cid, eff_cs
+                        graph_source = "db_per_syndic"
+                        use_per_syndic = True
+            except Exception as _e:
+                # Pas grave - on retombe sur env vars
+                logger.info("Config par-syndic indisponible, fallback env : %s", _e)
+
+        # Dry-run mode : compte les envois mais n'appelle pas Graph.
+        # Si on a une config par-syndic valide, on N'APPLIQUE PAS le dry-run
+        # global (l'utilisateur a explicitement configure son compte).
+        if not _MAIL_ENABLED and not use_per_syndic:
+            logger.info("[DRY-RUN] Email suppressed (no per-syndic + MAIL_ENABLED=false). From=%s To=%s Subject=%s",
+                        from_mailbox, to, subject)
             dry_run = True
-        elif not (_TENANT_ID and _CLIENT_ID and _CLIENT_SECRET):
-            raise HTTPException(500, "Microsoft Graph non configure (AZURE_TENANT_ID/CLIENT_ID/CLIENT_SECRET manquants)")
+        elif not (graph_tid and graph_cid and graph_cs):
+            raise HTTPException(500,
+                "Microsoft Graph non configure : ni credentials globaux "
+                "(AZURE_TENANT_ID/CLIENT_ID/CLIENT_SECRET) ni config par-syndic "
+                "en DB. Configurez /admin/syndic-config ou /mon-bureau.")
         else:
             # Token OAuth2 client credentials
             async with httpx.AsyncClient(timeout=30) as client:
                 tok = await client.post(
-                    f"https://login.microsoftonline.com/{_TENANT_ID}/oauth2/v2.0/token",
+                    f"https://login.microsoftonline.com/{graph_tid}/oauth2/v2.0/token",
                     data={
-                        "client_id": _CLIENT_ID,
-                        "client_secret": _CLIENT_SECRET,
+                        "client_id": graph_cid,
+                        "client_secret": graph_cs,
                         "scope": "https://graph.microsoft.com/.default",
                         "grant_type": "client_credentials",
                     },
                 )
                 if tok.status_code >= 400:
-                    logger.error("Graph OAuth failed : %s %s", tok.status_code, tok.text)
+                    logger.error("Graph OAuth failed (source=%s) : %s %s", graph_source, tok.status_code, tok.text)
                     err_body = tok.text[:200] if tok.text else ""
-                    raise HTTPException(500, f"Auth Graph echouee : HTTP {tok.status_code} - {err_body}")
+                    raise HTTPException(500,
+                        f"Auth Graph echouee (source={graph_source}) : HTTP {tok.status_code} - {err_body}")
                 token = tok.json()["access_token"]
 
                 message = {
