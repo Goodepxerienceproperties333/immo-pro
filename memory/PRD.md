@@ -1,4 +1,33 @@
 # CoproManager PRD
+### Iter90i1 (17/07/2026) — Migration GridFS deployable en 1 clic superadmin
+
+**Context** : le user avait besoin d'executer `migrate_uploads_to_gridfs.py` sur PROD sans acces SSH. On expose l'operation via un endpoint superadmin securise + une UI dediee dans Quality Audit.
+
+**Livrables**
+- `POST /api/admin/migrate-uploads-to-gridfs?dry_run=true|false` (superadmin only)
+  - Reutilise les helpers de `scripts/migrate_uploads_to_gridfs.py` (idempotent).
+  - Retourne le detail par bucket + totaux + `bytes_human` + `duration_seconds`.
+  - Crée l'index TTL `invoice_bundle_sessions.expires_at` en mode live.
+- UI dans **Quality Audit** (`AdminQualityAuditPage.js`) :
+  - Panneau "Migration des uploads vers MongoDB GridFS" avec explication claire.
+  - Boutons "Dry-run" et "Executer la migration" (confirmation modale).
+  - Affichage des resultats detailles par bucket + badges de synthese.
+- Tests `test_iter90i1_gridfs_migration_endpoint.py` (4 tests) :
+  - 403 pour non-superadmin, structure dry-run, migration live effective,
+    idempotence.
+
+**Marche a suivre pour la PROD**
+1. **Save to Github** dans Emergent -> push le code sur main.
+2. **Redeployer** la PROD.
+3. Se connecter en superadmin sur `immo-pcmn.emergent.host`.
+4. Menu **Quality Audit** -> Panneau bleu "Migration des uploads vers MongoDB GridFS".
+5. Cliquer **Dry-run** pour voir combien de fichiers seront migres.
+6. Cliquer **Executer la migration** -> confirmer -> attendre le retour.
+7. L'operation est **idempotente** : elle peut etre rejouee sans risque
+   apres chaque redeploiement (chaque fichier deja migre = skipped).
+
+---
+
 ### Iter90hz -> i0 (17/07/2026) — Lien explicite logo/ACP, re-invitation email owner, comptes bancaires filtrables
 
 **Contexte** : Suite du fork iter90hy. Session focus sur robustesse SaaS et

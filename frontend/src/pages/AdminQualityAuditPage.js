@@ -15,7 +15,7 @@ import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { toast } from 'sonner';
-import { AlertTriangle, CheckCircle2, RefreshCw, Download, Users, Truck, FileWarning, Landmark, FileText } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, RefreshCw, Download, Users, Truck, FileWarning, Landmark, FileText, HardDrive, Play } from 'lucide-react';
 import api from '@/lib/api';
 
 const SEV_COLOR = {
@@ -80,6 +80,44 @@ export default function AdminQualityAuditPage() {
 
   const s = report?.summary || {};
   const healthy = report?.healthy === true;
+
+  // iter90i1 : Migration GridFS des uploads (superadmin only)
+  const [gridfsBusy, setGridfsBusy] = useState(false);
+  const [gridfsResult, setGridfsResult] = useState(null);
+  const runGridfsMigration = async (dryRun) => {
+    if (!dryRun && !window.confirm(
+      "ATTENTION : lancer la migration REELLE des uploads vers MongoDB GridFS ?\n\n" +
+      "* Idempotent : les fichiers deja migres seront ignores.\n" +
+      "* Les fichiers presents sur le filesystem seront copies dans MongoDB.\n" +
+      "* Cette operation est SAFE et peut etre rejouee. Elle protege les fichiers\n" +
+      "  contre la perte lors des redeploiements du container.\n\n" +
+      "Confirmez pour lancer.",
+    )) return;
+    setGridfsBusy(true);
+    setGridfsResult(null);
+    try {
+      const { data } = await api.post(
+        `/admin/migrate-uploads-to-gridfs?dry_run=${dryRun}`,
+      );
+      setGridfsResult(data);
+      const t = data.totals || {};
+      if (dryRun) {
+        toast.info(
+          `Dry-run : ${t.migrated} a migrer, ${t.skipped_already_in_gridfs} deja OK, ${t.missing_file_on_disk} fichier(s) absent(s) - ${t.total_bytes_human}`,
+          { duration: 8000 },
+        );
+      } else {
+        toast.success(
+          `Migration LIVE terminee : ${t.migrated} fichier(s) copies vers GridFS (${t.total_bytes_human})`,
+          { duration: 10000 },
+        );
+      }
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur migration GridFS');
+    } finally {
+      setGridfsBusy(false);
+    }
+  };
 
   return (
     <div className="space-y-6" data-testid="admin-quality-audit-page">
@@ -147,6 +185,97 @@ export default function AdminQualityAuditPage() {
           </div>
         </div>
       )}
+
+      {/* iter90i1 : Panneau migration GridFS - resistance au redeploiement */}
+      <Card className="border-blue-200" data-testid="gridfs-migration-panel">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <HardDrive size={16} className="text-[#022D52]" />
+            Migration des uploads vers MongoDB GridFS
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="text-xs text-slate-600 mb-3 leading-relaxed">
+            Copie les fichiers du filesystem <code className="bg-slate-100 px-1 rounded">/app/uploads/</code>
+            vers MongoDB GridFS. Idempotent (skip les fichiers deja migres). A executer une fois apres chaque
+            redeploiement pour proteger les nouveaux fichiers uploades. Recommande : d&apos;abord un dry-run,
+            puis un run reel.
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => runGridfsMigration(true)}
+              disabled={gridfsBusy}
+              data-testid="gridfs-dry-run-btn"
+              className="text-[#022D52] border-[#022D52]/30 hover:bg-blue-50"
+            >
+              <RefreshCw size={13} className={`mr-1 ${gridfsBusy ? 'animate-spin' : ''}`} />
+              Dry-run (compte les fichiers)
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => runGridfsMigration(false)}
+              disabled={gridfsBusy}
+              data-testid="gridfs-live-run-btn"
+              className="bg-[#022D52] hover:bg-[#01213e] text-white"
+            >
+              <Play size={13} className="mr-1" />
+              Executer la migration
+            </Button>
+            {gridfsBusy && <span className="text-xs text-slate-500 italic">En cours...</span>}
+          </div>
+          {gridfsResult && (
+            <div className="mt-4 border-t border-slate-200 pt-3" data-testid="gridfs-result-panel">
+              <div className="text-xs font-semibold mb-2">
+                Resultat ({gridfsResult.mode === 'dry_run' ? 'Dry-run' : 'Migration live'}) - {gridfsResult.duration_seconds}s
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                {[
+                  { key: 'invoices_attachments', label: 'Factures - PJ' },
+                  { key: 'journal_attachments', label: 'Ecritures - PJ' },
+                  { key: 'documents', label: 'Documents' },
+                ].map(({ key, label }) => {
+                  const b = gridfsResult[key] || {};
+                  return (
+                    <div key={key} className="p-2 border border-slate-200 rounded bg-slate-50" data-testid={`gridfs-block-${key}`}>
+                      <div className="text-[10px] uppercase tracking-wider text-slate-500 mb-1">{label}</div>
+                      <div className="text-xs">
+                        <span className="font-mono font-bold text-emerald-700">{b.migrated || 0}</span> migres,{' '}
+                        <span className="font-mono text-slate-500">{b.skipped || 0}</span> deja OK,{' '}
+                        <span className={`font-mono ${b.missing ? 'text-amber-600 font-bold' : 'text-slate-500'}`}>{b.missing || 0}</span> absents
+                      </div>
+                      <div className="text-[10px] text-slate-500 mt-0.5">{b.bytes_human || '0 B'}</div>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="mt-3 flex items-center gap-2 flex-wrap text-xs">
+                <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200">
+                  Total migres : {gridfsResult.totals?.migrated || 0}
+                </Badge>
+                <Badge variant="outline" className="bg-slate-100 text-slate-600 border-slate-200">
+                  Deja OK : {gridfsResult.totals?.skipped_already_in_gridfs || 0}
+                </Badge>
+                {(gridfsResult.totals?.missing_file_on_disk || 0) > 0 && (
+                  <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200">
+                    Fichiers absents du disque : {gridfsResult.totals.missing_file_on_disk}
+                  </Badge>
+                )}
+                <span className="text-slate-500">
+                  ({gridfsResult.totals?.total_bytes_human || '0 B'})
+                </span>
+                {gridfsResult.ttl_index_invoice_bundle_sessions && (
+                  <span className="text-slate-400 italic">
+                    TTL index : {gridfsResult.ttl_index_invoice_bundle_sessions}
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
 
       {report && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">

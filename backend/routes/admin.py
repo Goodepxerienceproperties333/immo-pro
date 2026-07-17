@@ -1571,4 +1571,90 @@ def create_admin_router(db):
             )
         return report
 
+    # iter90i1 : Endpoint superadmin pour executer la migration des uploads
+    # vers MongoDB GridFS en production. Idempotent (skip les documents deja
+    # migres), supporte le mode dry-run pour prevoir avant execution.
+    @router.post("/migrate-uploads-to-gridfs")
+    async def migrate_uploads_to_gridfs(request: Request, dry_run: bool = True):
+        """Execute la migration des pieces jointes/documents du filesystem
+        vers MongoDB GridFS. Superadmin uniquement (protection critique :
+        cette operation lit/ecrit sur tous les buckets).
+
+        - `dry_run=True` (defaut) : compte les fichiers, aucune ecriture.
+        - `dry_run=False` : effectue la migration reelle et retourne le
+          resume complet.
+
+        La collection `db.invoice_bundle_sessions` recoit un index TTL
+        automatique (expires_at, expireAfterSeconds=0) uniquement en mode
+        live.
+        """
+        await _get_superadmin_only(request)
+        from pathlib import Path
+        # Import differe pour eviter les imports transitifs au demarrage
+        import sys as _sys
+        _sys.path.insert(0, "/app/backend")
+        from scripts.migrate_uploads_to_gridfs import (
+            _migrate_attachments_collection,
+            _migrate_documents,
+            _create_bundles_ttl_index,
+            _human_bytes,
+        )
+        from gridfs_storage import (
+            get_invoice_attachments_storage,
+            get_journal_attachments_storage,
+        )
+        started = datetime.now(timezone.utc)
+        inv_storage = get_invoice_attachments_storage(db)
+        je_storage = get_journal_attachments_storage(db)
+
+        # 1) invoices.attachments[]
+        m1, s1, mi1, b1 = await _migrate_attachments_collection(
+            db, "invoices", inv_storage,
+            Path("/app/uploads/invoice_attachments"), dry_run,
+        )
+        # 2) journal_entries.attachments[]
+        m2, s2, mi2, b2 = await _migrate_attachments_collection(
+            db, "journal_entries", je_storage,
+            Path("/app/uploads/journal_attachments"), dry_run,
+        )
+        # 3) documents
+        m3, s3, mi3, b3 = await _migrate_documents(db, dry_run)
+        # 4) TTL index (live seulement)
+        ttl_info = "skipped (dry_run)"
+        if not dry_run:
+            try:
+                await _create_bundles_ttl_index(db)
+                ttl_info = "created (or already present)"
+            except Exception as e:
+                ttl_info = f"failed: {e}"
+
+        finished = datetime.now(timezone.utc)
+        totals = {
+            "migrated": m1 + m2 + m3,
+            "skipped_already_in_gridfs": s1 + s2 + s3,
+            "missing_file_on_disk": mi1 + mi2 + mi3,
+            "total_bytes": b1 + b2 + b3,
+            "total_bytes_human": _human_bytes(b1 + b2 + b3),
+        }
+        return {
+            "mode": "dry_run" if dry_run else "live",
+            "started_at": started.isoformat(),
+            "finished_at": finished.isoformat(),
+            "duration_seconds": round((finished - started).total_seconds(), 2),
+            "invoices_attachments": {
+                "migrated": m1, "skipped": s1, "missing": mi1,
+                "bytes": b1, "bytes_human": _human_bytes(b1),
+            },
+            "journal_attachments": {
+                "migrated": m2, "skipped": s2, "missing": mi2,
+                "bytes": b2, "bytes_human": _human_bytes(b2),
+            },
+            "documents": {
+                "migrated": m3, "skipped": s3, "missing": mi3,
+                "bytes": b3, "bytes_human": _human_bytes(b3),
+            },
+            "ttl_index_invoice_bundle_sessions": ttl_info,
+            "totals": totals,
+        }
+
     return router
