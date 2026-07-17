@@ -73,13 +73,14 @@ def create_admin_router(db):
         # Seul le superadmin peut creer des comptes syndic (pas d'autres roles)
         await _get_superadmin_only(request)
         from server import hash_password
-        # ENFORCE : le superadmin ne cree QUE des syndics. Les gestionnaires
-        # sont crees par leur syndic dans /api/team/members. Les owners par
-        # le syndic via /api/owners (ou inscription).
-        if data.role not in ("syndic",):
+        # ENFORCE : le superadmin cree des comptes 'syndic' ou 'superadmin'.
+        # iter90h0 : creation d'autres superadmins autorisee (co-gerance plateforme).
+        # Les gestionnaires sont crees par leur syndic dans /api/team/members.
+        # Les owners par le syndic via /api/owners (ou inscription).
+        if data.role not in ("syndic", "superadmin"):
             raise HTTPException(
                 400,
-                "Le superadmin ne cree que des comptes syndic. "
+                "Le superadmin ne cree que des comptes 'syndic' ou 'superadmin'. "
                 "Les gestionnaires sont crees par chaque syndic via /team, "
                 "et les proprietaires via la gestion des proprietaires de l'ACP."
             )
@@ -95,13 +96,15 @@ def create_admin_router(db):
             pwd_hash = hash_password(placeholder)
         else:
             pwd_hash = hash_password(data.password)
-        # Pas de role_template ni permissions sur un syndic (acces total a son perimetre).
-        # Pas d'ACPs assignees ici : le syndic les creera lui-meme.
+        # iter90h0 : Ni role_template ni permissions ne s'appliquent ici
+        # (syndic et superadmin ont un acces total sur leur perimetre).
+        # Pas d'ACPs assignees : le syndic les creera lui-meme, le superadmin
+        # voit toutes les ACPs de la plateforme.
         doc = {
             "email": email,
             "password_hash": pwd_hash,
             "name": data.name,
-            "role": "syndic",
+            "role": data.role,  # iter90h0 : syndic OU superadmin
             "copropriete_ids": [],
             "must_change_password": must_change,
             "role_template_id": None,
@@ -118,9 +121,10 @@ def create_admin_router(db):
                 frontend_url = os.environ.get("FRONTEND_URL", "")
                 setup_url = f"{frontend_url}/login?invite={email}"
                 inviter = request.state.user if hasattr(request, "state") and hasattr(request.state, "user") else None
+                role_label = "Super Administrateur" if data.role == "superadmin" else "Syndic"
                 subject, html = build_invitation_email(
                     recipient_name=data.name,
-                    role_label="Syndic",
+                    role_label=role_label,
                     setup_url=setup_url,
                     inviter_name=(inviter or {}).get("name"),
                     inviter_email=(inviter or {}).get("email"),
@@ -286,12 +290,25 @@ def create_admin_router(db):
         # ses copropriete_ids (les ACPs sont gerees par le syndic lui-meme).
         # Il peut juste : modifier le nom, reinitialiser le mot de passe, ou
         # forcer un changement de mdp au prochain login.
+        # iter90h0 : le superadmin peut basculer un compte entre 'syndic' et
+        # 'superadmin' (co-gerance plateforme). Toute autre valeur reste
+        # interdite (gestionnaires -> /team, owners -> /owners).
         if data.role is not None and data.role != target.get("role"):
-            raise HTTPException(
-                400,
-                "Le role d'un utilisateur ne se change pas depuis ici. "
-                "Le superadmin gere uniquement les comptes syndic principaux."
-            )
+            if data.role not in ("syndic", "superadmin"):
+                raise HTTPException(
+                    400,
+                    "Le role d'un compte gere ici doit etre 'syndic' ou 'superadmin'. "
+                    "Les gestionnaires sont geres par leur syndic dans /team."
+                )
+            # Empeche un superadmin de se retrograder lui-meme (evite le
+            # scenario ou plus aucun superadmin n'existe sur la plateforme).
+            requester_id = getattr(request.state, "user_id", "") or ""
+            if requester_id == user_id and target.get("role") == "superadmin" and data.role != "superadmin":
+                raise HTTPException(
+                    400,
+                    "Vous ne pouvez pas retrograder votre propre compte superadmin. "
+                    "Demandez a un autre superadmin de le faire, ou creez un autre superadmin avant."
+                )
         if data.copropriete_ids is not None:
             raise HTTPException(
                 400,
@@ -308,6 +325,10 @@ def create_admin_router(db):
         update = {}
         if data.name is not None:
             update["name"] = data.name
+        # iter90h0 : le role peut evoluer entre syndic <-> superadmin (deja
+        # valide plus haut). Sauvegarde du changement effectif.
+        if data.role is not None and data.role != target.get("role"):
+            update["role"] = data.role
         if data.password:
             update["password_hash"] = hash_password(data.password)
             update["must_change_password"] = False

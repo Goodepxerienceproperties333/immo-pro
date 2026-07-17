@@ -130,7 +130,20 @@ export default function OwnersPage() {
       }
     }
   };
-  const handleDelete = async (id) => { if (!window.confirm('Supprimer ce proprietaire ?')) return; await api.delete(`/owners/${id}`); toast.success('Supprime'); load(); };
+  const handleDelete = async (id) => {
+    if (!window.confirm('Supprimer ce proprietaire ?')) return;
+    try {
+      await api.delete(`/owners/${id}`);
+      toast.success('Proprietaire supprime');
+      load();
+    } catch (err) {
+      // iter90gz : swallow -> toast plutot que "Uncaught runtime error".
+      // Le backend renvoie 409 avec un message detaille listant les
+      // references bloquantes (ecritures, lots, appels de fonds, factures).
+      const msg = err?.response?.data?.detail || err?.message || 'Suppression impossible';
+      toast.error(msg, { duration: 8000 });
+    }
+  };
 
   // iter88d : "selectionner" un proprio doublon -> on bascule en mode edition
   // sur lui (sans creer un nouveau). Utile quand on a tape un email et qu'un

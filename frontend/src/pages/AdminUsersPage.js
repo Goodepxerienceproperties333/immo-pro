@@ -7,13 +7,17 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { toast } from 'sonner';
-import { Plus, Pencil, Trash2, Shield, Search, Building, Info, Mail } from 'lucide-react';
+import { Plus, Pencil, Trash2, Shield, Search, Building, Info, Mail, AlertTriangle } from 'lucide-react';
 import { fmtDate } from '@/lib/dateFmt';
 
-// Seuls les syndics principaux sont creables par le superadmin.
+// iter90h0 : le superadmin peut creer des comptes 'syndic' OU 'superadmin'.
 // Les gestionnaires (utilisateurs sous un syndic) sont crees par le syndic dans /team.
-const ALLOWED_ROLE = 'syndic';
+const CREATABLE_ROLES = [
+  { value: 'syndic', label: 'Syndic (responsable d\'agence)' },
+  { value: 'superadmin', label: 'Super Administrateur (co-gestionnaire plateforme)' },
+];
 
 export default function AdminUsersPage() {
   const { isSuperadmin, user } = useAuth();
@@ -21,7 +25,7 @@ export default function AdminUsersPage() {
   const [search, setSearch] = useState('');
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState(null);
-  const [form, setForm] = useState({ email: '', password: '', name: '', must_change_password: true });
+  const [form, setForm] = useState({ email: '', password: '', name: '', role: 'syndic', must_change_password: true });
 
   const load = useCallback(async () => {
     if (!isSuperadmin) return;
@@ -60,12 +64,12 @@ export default function AdminUsersPage() {
 
   const openCreate = () => {
     setEditing(null);
-    setForm({ email: '', password: '', name: '', must_change_password: true });
+    setForm({ email: '', password: '', name: '', role: 'syndic', must_change_password: true });
     setDialogOpen(true);
   };
   const openEdit = (u) => {
     setEditing(u);
-    setForm({ email: u.email, password: '', name: u.name, must_change_password: false });
+    setForm({ email: u.email, password: '', name: u.name, role: u.role, must_change_password: false });
     setDialogOpen(true);
   };
 
@@ -79,13 +83,15 @@ export default function AdminUsersPage() {
         const payload = { name: form.name };
         if (form.password) payload.password = form.password;
         if (form.must_change_password) payload.must_change_password = true;
+        // iter90h0 : permet la bascule syndic <-> superadmin
+        if (form.role && form.role !== editing.role) payload.role = form.role;
         await api.put(`/admin/users/${editing.id}`, payload);
-        toast.success('Compte syndic modifie');
+        toast.success('Compte modifie');
       } else {
         const payload = {
           email: form.email,
           name: form.name,
-          role: ALLOWED_ROLE,  // FORCE syndic
+          role: form.role,  // iter90h0 : 'syndic' ou 'superadmin'
           copropriete_ids: [],  // PAS d'affectation ACP - delegue au syndic
           must_change_password: form.must_change_password,
         };
@@ -97,9 +103,10 @@ export default function AdminUsersPage() {
           payload.password = form.password;
         }
         await api.post('/admin/users', payload);
+        const roleLabel = form.role === 'superadmin' ? 'Super Administrateur' : 'syndic';
         toast.success(form.must_change_password
-          ? 'Compte syndic cree. Il devra definir son mot de passe a la 1ere connexion.'
-          : 'Compte syndic cree.');
+          ? `Compte ${roleLabel} cree. L'utilisateur devra definir son mot de passe a la 1ere connexion.`
+          : `Compte ${roleLabel} cree.`);
       }
       setDialogOpen(false);
       load();
@@ -109,7 +116,12 @@ export default function AdminUsersPage() {
   };
 
   const handleDelete = async (id) => {
-    if (!window.confirm('Supprimer ce compte syndic ?\n\nATTENTION : ses ACPs et son equipe restent en base mais deviendront orphelines. Verifiez d\'avoir rattache au prealable.')) return;
+    const target = users.find(x => x.id === id);
+    const isSuper = target && target.role === 'superadmin';
+    const msg = isSuper
+      ? 'Supprimer ce Super Administrateur ?\n\nATTENTION : action DEFINITIVE. Ce compte perdra tout acces a la plateforme.'
+      : 'Supprimer ce compte syndic ?\n\nATTENTION : ses ACPs et son equipe restent en base mais deviendront orphelines. Verifiez d\'avoir rattache au prealable.';
+    if (!window.confirm(msg)) return;
     try {
       await api.delete(`/admin/users/${id}`);
       toast.success('Compte supprime');
@@ -140,26 +152,28 @@ export default function AdminUsersPage() {
     <div data-testid="admin-users-page">
       <div className="page-header flex items-center justify-between">
         <div>
-          <h1 className="page-title"><Shield size={24} className="inline mr-2" />Comptes syndic</h1>
-          <p className="page-subtitle">Creez les comptes principaux des syndics. Chaque syndic gerera ensuite ses ACPs et son equipe.</p>
+          <h1 className="page-title"><Shield size={24} className="inline mr-2" />Comptes plateforme</h1>
+          <p className="page-subtitle">Creez et gerez les comptes syndic et super administrateur de la plateforme.</p>
         </div>
         <Button onClick={openCreate} className="bg-[#022D52] hover:bg-[#1D4ED8]" data-testid="create-user-btn">
-          <Plus size={16} className="mr-2" /> Nouveau syndic
+          <Plus size={16} className="mr-2" /> Nouveau compte
         </Button>
       </div>
 
       <div className="bg-blue-50 border border-blue-200 rounded-md p-3 mb-4 flex items-start gap-2">
         <Info size={16} className="text-[#022D52] mt-0.5 flex-shrink-0" />
         <div className="text-xs text-blue-900">
-          <strong>Perimetre de cette page :</strong> creation du compte syndic uniquement (email + nom + mot de passe).
-          C'est ensuite le syndic lui-meme qui cree ses coproprietes (ACPs) et son equipe de gestionnaires depuis son interface.
-          Vous n'attribuez aucune ACP ici.
+          <strong>Perimetre de cette page :</strong> creation des comptes <em>Syndic</em>
+          (responsable d&apos;agence) et <em>Super Administrateur</em> (co-gestionnaire
+          plateforme). Les gestionnaires d&apos;une agence sont crees par leur syndic
+          dans <a href="/team" className="underline">/team</a>. Les proprietaires
+          sont crees via la gestion des proprietaires de chaque ACP.
         </div>
       </div>
 
       <div className="mb-4 relative max-w-sm">
         <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-        <Input placeholder="Rechercher un syndic..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9" data-testid="users-search" />
+        <Input placeholder="Rechercher un compte..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9" data-testid="users-search" />
       </div>
 
       <div className="bg-white rounded-md border border-slate-200 overflow-hidden">
@@ -174,7 +188,7 @@ export default function AdminUsersPage() {
           </TableRow></TableHeader>
           <TableBody>
             {filtered.length === 0 ? (
-              <TableRow><TableCell colSpan={6} className="text-center py-8 text-slate-400">Aucun compte syndic</TableCell></TableRow>
+              <TableRow><TableCell colSpan={6} className="text-center py-8 text-slate-400">Aucun compte</TableCell></TableRow>
             ) : filtered.map(u => (
               <TableRow key={u.id} className="hover:bg-slate-50/50">
                 <TableCell className="font-medium text-slate-900">{u.name}</TableCell>
@@ -184,13 +198,11 @@ export default function AdminUsersPage() {
                 <TableCell className="text-xs text-slate-500">{fmtDate(u.created_at)}</TableCell>
                 <TableCell>
                   <div className="flex gap-1">
-                    {u.must_change_password && u.role !== 'superadmin' && (
+                    {u.must_change_password && (
                       <Button variant="ghost" size="sm" onClick={() => handleResendInvitation(u)} className="text-[#022D52] hover:text-[#01213e]" title="Renvoyer l'email d'invitation" data-testid={`resend-invite-${u.id}`}><Mail size={14} /></Button>
                     )}
-                    {u.role !== 'superadmin' && (
-                      <Button variant="ghost" size="sm" onClick={() => openEdit(u)} data-testid={`edit-user-${u.id}`}><Pencil size={14} /></Button>
-                    )}
-                    {isSuperadmin && u.id !== user?.id && u.role !== 'superadmin' && (
+                    <Button variant="ghost" size="sm" onClick={() => openEdit(u)} data-testid={`edit-user-${u.id}`}><Pencil size={14} /></Button>
+                    {isSuperadmin && u.id !== user?.id && (
                       <Button variant="ghost" size="sm" onClick={() => handleDelete(u.id)} className="text-red-500" data-testid={`delete-user-${u.id}`}><Trash2 size={14} /></Button>
                     )}
                   </div>
@@ -205,31 +217,63 @@ export default function AdminUsersPage() {
         <DialogContent className="max-w-lg" data-testid="user-dialog">
           <DialogHeader>
             <DialogTitle style={{fontFamily:'Chivo,sans-serif'}}>
-              {editing ? `Modifier ${editing.name}` : 'Nouveau syndic'}
+              {editing ? `Modifier ${editing.name}` : 'Nouveau compte'}
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-3 mt-2">
-            <div className="bg-slate-50 border border-slate-200 rounded p-2 text-xs text-slate-600">
-              <strong>Role :</strong> Syndic (responsable d&apos;agence). Il pourra creer ses ACPs et son equipe.
+            <div>
+              <label className="form-label">Type de compte *</label>
+              <Select
+                value={form.role}
+                onValueChange={(v) => setForm({...form, role: v})}
+              >
+                <SelectTrigger data-testid="user-role-select">
+                  <SelectValue placeholder="Choisir le role" />
+                </SelectTrigger>
+                <SelectContent>
+                  {CREATABLE_ROLES.map(r => (
+                    <SelectItem key={r.value} value={r.value} data-testid={`user-role-option-${r.value}`}>
+                      {r.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {form.role === 'superadmin' ? (
+                <div className="mt-2 bg-purple-50 border border-purple-200 rounded p-2 text-xs text-purple-800 flex items-start gap-2">
+                  <AlertTriangle size={14} className="mt-0.5 flex-shrink-0" />
+                  <div>
+                    <strong>Attention :</strong> un Super Administrateur a acces
+                    TOTAL a la plateforme : toutes les ACPs, tous les utilisateurs,
+                    toutes les donnees comptables. A creer uniquement pour un
+                    co-gestionnaire de confiance de la plateforme.
+                  </div>
+                </div>
+              ) : (
+                <div className="mt-2 bg-slate-50 border border-slate-200 rounded p-2 text-xs text-slate-600">
+                  <strong>Syndic :</strong> responsable d&apos;agence. Il pourra creer
+                  ses propres ACPs, son equipe de gestionnaires et voir uniquement
+                  ses propres coproprietes.
+                </div>
+              )}
             </div>
             <div>
               <label className="form-label">Nom complet *</label>
-              <Input value={form.name} onChange={e => setForm({...form, name: e.target.value})} data-testid="user-name-input" placeholder="Marie Dupont" />
+              <Input value={form.name} onChange={e => setForm({...form, name: e.target.value})} data-testid="user-name-input" placeholder={form.role === 'superadmin' ? 'Nom du co-gestionnaire' : 'Marie Dupont'} />
             </div>
             <div>
               <label className="form-label">Email *</label>
-              <Input type="email" value={form.email} onChange={e => setForm({...form, email: e.target.value})} disabled={!!editing} data-testid="user-email-input" placeholder="syndic@agence.be" />
+              <Input type="email" value={form.email} onChange={e => setForm({...form, email: e.target.value})} disabled={!!editing} data-testid="user-email-input" placeholder={form.role === 'superadmin' ? 'admin@plateforme.be' : 'syndic@agence.be'} />
             </div>
             <div>
               <label className="form-label">
-                {editing ? 'Nouveau mot de passe (laisser vide pour garder)' : (form.must_change_password ? 'Mot de passe (sera defini par le syndic)' : 'Mot de passe initial *')}
+                {editing ? 'Nouveau mot de passe (laisser vide pour garder)' : (form.must_change_password ? 'Mot de passe (sera defini par l\'utilisateur)' : 'Mot de passe initial *')}
               </label>
               <Input
                 type="password"
                 value={form.password}
                 onChange={e => setForm({...form, password: e.target.value})}
                 disabled={!editing && form.must_change_password}
-                placeholder={!editing && form.must_change_password ? 'Le syndic le definira a sa 1ere connexion' : 'Min 6 caracteres'}
+                placeholder={!editing && form.must_change_password ? 'Il/elle le definira a sa 1ere connexion' : 'Min 6 caracteres'}
                 data-testid="user-password-input"
               />
             </div>
@@ -239,12 +283,12 @@ export default function AdminUsersPage() {
                 onCheckedChange={(v) => setForm({...form, must_change_password: !!v, password: v ? '' : form.password})}
                 data-testid="user-must-change-password"
               />
-              <span>{editing ? 'Forcer la redefinition du mot de passe a la prochaine connexion' : 'Le syndic definira son mot de passe a la 1ere connexion'}</span>
+              <span>{editing ? 'Forcer la redefinition du mot de passe a la prochaine connexion' : 'L\'utilisateur definira son mot de passe a la 1ere connexion'}</span>
             </label>
             <div className="flex gap-3 justify-end pt-2">
               <Button variant="outline" onClick={() => setDialogOpen(false)} data-testid="user-cancel">Annuler</Button>
               <Button onClick={handleSave} className="bg-[#022D52] hover:bg-[#1D4ED8]" data-testid="user-save-btn">
-                {editing ? 'Mettre a jour' : 'Creer le compte syndic'}
+                {editing ? 'Mettre a jour' : (form.role === 'superadmin' ? 'Creer le Super Admin' : 'Creer le compte syndic')}
               </Button>
             </div>
           </div>
