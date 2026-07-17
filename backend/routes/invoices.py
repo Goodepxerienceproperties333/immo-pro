@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Request, Query
 from fastapi.responses import FileResponse, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from typing import Optional, List
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -105,6 +105,19 @@ class InvoiceInput(BaseModel):
     # le total des lignes doit egal total_amount. Une ecriture comptable
     # unique sera generee avec N debits (un par ligne) + 1 credit fournisseur.
     lines: Optional[List[InvoiceLineInput]] = None
+
+    # iter90h9 : description obligatoire (permet d'identifier l'objet de
+    # la facture dans les listes/decomptes/PDFs et evite les libelles vides).
+    @field_validator("description")
+    @classmethod
+    def _description_required(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError(
+                "Description obligatoire : precisez l'objet de la facture "
+                "(ex : 'Reparation ascenseur cage B - visite du 04/05/2026'). "
+                "Ce libelle apparait sur les decomptes et rapports."
+            )
+        return v.strip()
     # iter90fj : le syndic a explicitement confirme le fournisseur (choix
     # dans le dialog d'homonymes cote frontend, ou nom deja verifie). Tant
     # que ce flag n'est pas True ET qu'aucun snap exact n'a eu lieu, la

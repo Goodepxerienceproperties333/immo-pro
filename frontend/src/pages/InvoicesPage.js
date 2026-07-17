@@ -268,7 +268,14 @@ export default function InvoicesPage() {
         expense_category_id: l.expense_category_id || '',
         distribution_key_id: l.distribution_key_id || '',
         amount: l.amount || 0,
-        description: l.description || '',
+        // iter90ha : si le commentaire de ligne est vide en base, on
+        // pre-remplit avec la description generale de la facture. Comme ca,
+        // ce que l'utilisateur voit dans le champ = ce qui sera reellement
+        // sauvegarde (fin de la confusion "placeholder qui ressemble a une
+        // valeur mais qui est en fait vide en base").
+        description: l.description || inv.description || '',
+        occupant_pct: l.occupant_pct ?? null,
+        proprietaire_pct: l.proprietaire_pct ?? null,
       })),
     });
     setAiHint(''); setPendingPdf(null); setOwnerSearch('');
@@ -435,6 +442,15 @@ export default function InvoicesPage() {
 
   const saveInvoice = async () => {
     try {
+      // iter90h9 : description obligatoire (aligne avec le validator backend)
+      if (!(invForm.description || '').trim()) {
+        toast.error(
+          'Description obligatoire : precisez l\'objet de la facture. '
+          + 'Ce libelle apparait sur les decomptes et rapports.',
+          { duration: 6000 }
+        );
+        return;
+      }
       // Validation cote front : si mode multi-lignes, somme = total
       const usesMultiLines = (invForm.lines || []).length > 0;
       if (usesMultiLines) {
@@ -1194,7 +1210,7 @@ export default function InvoicesPage() {
                   testId="inv-supplier"
                 />
               </div>
-              <div><label className="form-label">Description</label><Input value={invForm.description} onChange={e => setInvForm({...invForm, description: e.target.value})} /></div>
+              <div><label className="form-label">Description *</label><Input value={invForm.description} onChange={e => setInvForm({...invForm, description: e.target.value})} placeholder="Ex : Reparation ascenseur cage B - visite 04/05/2026" data-testid="inv-description" required /></div>
             </div>
             <div className="grid grid-cols-3 gap-4">
               <div><label className="form-label">Montant TTC *</label><Input type="number" step="0.01" value={invForm.total_amount} onChange={e => setInvForm({...invForm, total_amount: e.target.value})} data-testid="inv-amount" /></div>
@@ -1432,15 +1448,20 @@ export default function InvoicesPage() {
                 <button
                   type="button"
                   onClick={() => {
+                    // iter90ha : hydrate les descriptions par-ligne avec la
+                    // description generale pour eviter la confusion "placeholder
+                    // qui ressemble a une valeur mais qui est vide en base".
+                    const baseDesc = invForm.description || '';
                     // Initialise avec la ligne courante (si compte rempli) + une ligne vide
                     const firstLine = invForm.account_number ? [{
+                      _key: (crypto?.randomUUID?.() || `k-${Date.now()}-${Math.random()}`),
                       account_number: invForm.account_number,
                       expense_category_id: invForm.expense_category_id || '',
                       distribution_key_id: invForm.distribution_key_id || defaultKeyId,
                       amount: Number(invForm.total_amount) || 0,
-                      description: '',
+                      description: baseDesc,
                     }] : [];
-                    setInvForm(f => ({ ...f, lines: [...firstLine, { _key: (crypto?.randomUUID?.() || `k-${Date.now()}-${Math.random()}`), account_number: '', expense_category_id: '', distribution_key_id: defaultKeyId, amount: 0, description: '' }] }));
+                    setInvForm(f => ({ ...f, lines: [...firstLine, { _key: (crypto?.randomUUID?.() || `k-${Date.now()}-${Math.random()}`), account_number: '', expense_category_id: '', distribution_key_id: defaultKeyId, amount: 0, description: baseDesc }] }));
                   }}
                   className="text-xs text-[#022D52] hover:text-[#1D4ED8] underline"
                   data-testid="enable-multi-lines-btn"
@@ -1665,7 +1686,7 @@ export default function InvoicesPage() {
                   <div className="flex items-center justify-between pt-2 border-t border-[#022D52]/20">
                     <button
                       type="button"
-                      onClick={() => setInvForm(f => ({ ...f, lines: [...f.lines, { _key: (crypto?.randomUUID?.() || `k-${Date.now()}-${Math.random()}`), account_number: '', expense_category_id: '', distribution_key_id: defaultKeyId, amount: 0, description: '' }] }))}
+                      onClick={() => setInvForm(f => ({ ...f, lines: [...f.lines, { _key: (crypto?.randomUUID?.() || `k-${Date.now()}-${Math.random()}`), account_number: '', expense_category_id: '', distribution_key_id: defaultKeyId, amount: 0, description: f.description || '' }] }))}
                       className="text-xs text-[#022D52] hover:text-[#1D4ED8] font-semibold"
                       data-testid="invoice-line-add"
                     >
