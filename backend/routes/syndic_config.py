@@ -68,6 +68,106 @@ class TestEmailPayload(BaseModel):
     to: EmailStr
 
 
+# ============================================================================
+# iter90h5 : PROTECTIONS anti-ecrasement + audit log
+# ============================================================================
+# 3 protections livrees suite a l'incident du 17/07/2026 (secret du user
+# `welcome@goodexperienceproperties.be` ecrase par la valeur de test
+# `secret_test_123`) :
+#
+# 1. Anti-motifs faux : refuse les secrets ressemblant a des valeurs de test
+#    (test_*, dummy_*, faux*, xxxx*, 1234*, etc.) avec un 400 explicite.
+#
+# 2. Verrou (lock) : chaque config email peut etre verrouillee. Une fois
+#    locked=True, tout PUT sur /email est refuse (423 Locked). Un endpoint
+#    dedie POST /email/unlock est necessaire pour deverrouiller (avec
+#    confirmation + audit).
+#
+# 3. Audit log : chaque modification (identity, email, lock, unlock) est
+#    enregistree dans `syndic_config_audit` avec who + when + fields + before.
+
+_FAKE_SECRET_PATTERNS = [
+    "secret_test", "test_secret", "fake_", "faux_", "faux-", "dummy_",
+    "example_", "sample_", "changeme", "toChange", "placeholder", "yourpassword",
+    "yoursecret", "1234abcd", "aaaaaaaa", "bbbbbbbb", "test123", "test1234",
+    "abcdef123",
+]
+
+
+def _looks_like_fake_secret(value: str) -> Optional[str]:
+    """iter90h5 : detecte les valeurs qui ressemblent a un secret de test.
+    Retourne le motif matche (str) ou None si valide. Utilise avant tout
+    ecrasement d'un secret existant en DB.
+    """
+    if not value:
+        return None
+    v = value.strip()
+    if len(v) < 8:
+        return "trop court (< 8 caracteres)"
+    v_low = v.lower()
+    for pat in _FAKE_SECRET_PATTERNS:
+        if pat.lower() in v_low:
+            return f"motif '{pat}'"
+    # Chiffres/lettres repetes (aaaaaa, 111111, xxxxxx)
+    if len(set(v_low)) <= 3 and len(v) >= 6:
+        return "trop peu de caracteres distincts (secret trivial)"
+    # UUID compose uniquement de 0 ou 1 (11111111-1111-...)
+    if v_low.replace("-", "").replace("0", "").replace("1", "") == "":
+        return "UUID trivial (n'existe pas en Azure)"
+    return None
+
+
+def _looks_like_fake_uuid(value: str) -> Optional[str]:
+    """iter90h5 : detecte un UUID trivial (que Microsoft rejettera de toute
+    facon)."""
+    if not value:
+        return None
+    v = value.strip().lower().replace("-", "")
+    if len(v) != 32:
+        return None  # pas un UUID, autre validation
+    if v.count("0") + v.count("1") == 32:
+        return "UUID trivial (0 et 1 uniquement)"
+    if len(set(v)) <= 3:
+        return "UUID trop peu de caracteres distincts"
+    return None
+
+
+async def _audit_log(
+    db,
+    syndic_user_id: str,
+    action: str,
+    request: Request,
+    fields_changed: Optional[list] = None,
+    secret_changed: bool = False,
+    snapshot_before: Optional[dict] = None,
+    extra: Optional[dict] = None,
+) -> None:
+    """iter90h5 : enregistre chaque modification dans `syndic_config_audit`.
+    Snapshot masque les secrets."""
+    actor_id = getattr(request.state, "user_id", None)
+    actor_email = getattr(request.state, "user_email", None)
+    snap = None
+    if snapshot_before:
+        snap = _redact_config(snapshot_before)
+        snap.pop("_id", None)
+    entry = {
+        "syndic_user_id": syndic_user_id,
+        "action": action,  # 'email_update' | 'identity_update' | 'lock' | 'unlock' | 'reject_fake_secret'
+        "at": datetime.now(timezone.utc).isoformat(),
+        "actor_user_id": actor_id,
+        "actor_email": actor_email,
+        "fields_changed": fields_changed or [],
+        "secret_changed": bool(secret_changed),
+        "snapshot_before": snap,
+        "extra": extra or {},
+    }
+    try:
+        await db.syndic_config_audit.insert_one(entry)
+    except Exception as _e:
+        # Ne pas planter la requete si l'audit echoue - juste logger
+        logging.getLogger("syndic_config").warning(f"audit log skipped: {_e}")
+
+
 def _redact_config(cfg: dict) -> dict:
     """Retourne une copie safe-for-UI (secrets masques)."""
     if not cfg:
@@ -514,15 +614,78 @@ def create_syndic_config_router(db):
     @router.put("/admin/syndic-config/{syndic_user_id}/email")
     async def admin_update_email(syndic_user_id: str, payload: EmailConfigUpdate, request: Request):
         await _require_superadmin(request)
+        # iter90h5 : verifier le verrou. Si locked, refuser toute modification.
+        current = await db.syndic_configs.find_one({"syndic_user_id": syndic_user_id}) or {}
+        if current.get("email_config_locked"):
+            locked_at = current.get("email_locked_at", "?")
+            locked_by = current.get("email_locked_by_email", "?")
+            raise HTTPException(
+                423,  # Locked
+                f"Configuration email verrouillee (le {locked_at} par {locked_by}). "
+                f"Utilisez POST /admin/syndic-config/{syndic_user_id}/email/unlock "
+                f"avant toute modification."
+            )
         data = payload.model_dump(exclude_unset=True)
+        # iter90h5 : Anti-motifs faux - REJETER un secret suspect. Ceci
+        # empeche l'incident du 17/07/2026 (ecrasement par 'secret_test_123').
+        if data.get("graph_client_secret"):
+            reason = _looks_like_fake_secret(data["graph_client_secret"])
+            if reason:
+                await _audit_log(
+                    db, syndic_user_id, "reject_fake_secret", request,
+                    fields_changed=["graph_client_secret"],
+                    extra={"reason": reason},
+                )
+                raise HTTPException(
+                    400,
+                    f"Secret refuse (ressemble a une valeur de test : {reason}). "
+                    f"Verifiez que vous collez bien le vrai 'Value' du Client Secret "
+                    f"depuis Azure Portal, pas une valeur de placeholder."
+                )
+        if data.get("smtp_password"):
+            reason = _looks_like_fake_secret(data["smtp_password"])
+            if reason:
+                await _audit_log(
+                    db, syndic_user_id, "reject_fake_secret", request,
+                    fields_changed=["smtp_password"],
+                    extra={"reason": reason},
+                )
+                raise HTTPException(
+                    400,
+                    f"Mot de passe SMTP refuse (ressemble a une valeur de test : {reason})."
+                )
+        # iter90h5 : idem pour les UUID triviaux (Microsoft les rejettera)
+        for key in ("graph_tenant_id", "graph_client_id"):
+            if data.get(key):
+                r = _looks_like_fake_uuid(data[key])
+                if r:
+                    await _audit_log(
+                        db, syndic_user_id, "reject_fake_uuid", request,
+                        fields_changed=[key], extra={"reason": r},
+                    )
+                    raise HTTPException(
+                        400,
+                        f"{key} refuse ({r}). Verifiez le UUID dans Azure Portal."
+                    )
+        # OK : on peut encrypter et sauvegarder
+        secret_changed = False
         if data.get("graph_client_secret"):
             data["graph_client_secret"] = encrypt_secret(data["graph_client_secret"])
+            secret_changed = True
         if data.get("smtp_password"):
             data["smtp_password"] = encrypt_secret(data["smtp_password"])
+            secret_changed = True
         data["email_provider"] = data.pop("provider", "none")
         data["email_verified"] = False
         data["updated_at"] = datetime.now(timezone.utc).isoformat()
         data["updated_by_admin"] = True
+        # iter90h5 : audit log AVANT le write (snapshot_before)
+        await _audit_log(
+            db, syndic_user_id, "email_update", request,
+            fields_changed=list(data.keys()),
+            secret_changed=secret_changed,
+            snapshot_before=current,
+        )
         await db.syndic_configs.update_one(
             {"syndic_user_id": syndic_user_id},
             {"$set": data, "$setOnInsert": {"created_at": data["updated_at"]}},
@@ -530,6 +693,56 @@ def create_syndic_config_router(db):
         )
         cfg = await _get_config_for(db, syndic_user_id)
         return _redact_config(cfg)
+
+    # ========================================================================
+    # iter90h5 : Endpoints verrou/audit pour proteger la config email
+    # ========================================================================
+    @router.post("/admin/syndic-config/{syndic_user_id}/email/lock")
+    async def admin_lock_email(syndic_user_id: str, request: Request):
+        """Verrouille la config email : tout PUT sur /email retournera 423 Locked
+        tant que /unlock n'a pas ete appele. Protege contre les modifications
+        accidentelles."""
+        actor = await _require_superadmin(request)
+        now = datetime.now(timezone.utc).isoformat()
+        await db.syndic_configs.update_one(
+            {"syndic_user_id": syndic_user_id},
+            {"$set": {
+                "email_config_locked": True,
+                "email_locked_at": now,
+                "email_locked_by": str(actor.get("_id", "")),
+                "email_locked_by_email": actor.get("email", ""),
+            }},
+            upsert=True,
+        )
+        await _audit_log(db, syndic_user_id, "lock", request)
+        return {"locked": True, "at": now}
+
+    @router.post("/admin/syndic-config/{syndic_user_id}/email/unlock")
+    async def admin_unlock_email(syndic_user_id: str, request: Request):
+        """Deverouille la config email pour permettre une modification."""
+        actor = await _require_superadmin(request)
+        await db.syndic_configs.update_one(
+            {"syndic_user_id": syndic_user_id},
+            {"$set": {
+                "email_config_locked": False,
+                "email_unlocked_at": datetime.now(timezone.utc).isoformat(),
+                "email_unlocked_by": str(actor.get("_id", "")),
+                "email_unlocked_by_email": actor.get("email", ""),
+            }},
+        )
+        await _audit_log(db, syndic_user_id, "unlock", request)
+        return {"locked": False}
+
+    @router.get("/admin/syndic-config/{syndic_user_id}/audit")
+    async def admin_get_audit(syndic_user_id: str, request: Request, limit: int = 50):
+        """Retourne l'historique des modifications de config (audit log)."""
+        await _require_superadmin(request)
+        rows = await db.syndic_config_audit.find(
+            {"syndic_user_id": syndic_user_id}
+        ).sort("at", -1).limit(min(limit, 200)).to_list(200)
+        for r in rows:
+            r["_id"] = str(r.get("_id", ""))
+        return {"audit": rows, "count": len(rows)}
 
     # iter90h3 : endpoint superadmin pour tester la config email d'un
     # syndic OU d'un autre superadmin. Comme _send_test_email_impl est

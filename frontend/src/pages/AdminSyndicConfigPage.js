@@ -15,7 +15,7 @@ import {
 } from '@/components/ui/dialog';
 import { toast } from 'sonner';
 import {
-  Building2, Mail, CheckCircle2, XCircle, ImageIcon, Settings, RefreshCw, Save, Send, Loader2,
+  Building2, Mail, CheckCircle2, XCircle, ImageIcon, Settings, RefreshCw, Save, Send, Loader2, Lock, Unlock, History,
 } from 'lucide-react';
 
 export default function AdminSyndicConfigPage() {
@@ -142,6 +142,42 @@ export default function AdminSyndicConfigPage() {
     } finally {
       setTestSending(false);
     }
+  };
+
+  // iter90h5 : Lock / Unlock / Audit
+  const lockEmailConfig = async () => {
+    if (!selected) return;
+    if (!window.confirm(
+      'Verrouiller la config email de ce compte ?\n\nAucune modification ne sera plus possible tant que le verrou n\'est pas relache. Utile pour proteger une config verifiee contre un ecrasement accidentel.'
+    )) return;
+    try {
+      await api.post(`/admin/syndic-config/${selected.syndic_user_id}/email/lock`);
+      toast.success('Configuration verrouillee');
+      await reloadCurrentDetail();
+      load();
+    } catch (e) { toast.error(extractApiError(e)); }
+  };
+
+  const unlockEmailConfig = async () => {
+    if (!selected) return;
+    if (!window.confirm(
+      'Deverouiller la config email ?\n\nAttention : toute modification sera desormais autorisee. Pensez a re-verrouiller apres avoir termine.'
+    )) return;
+    try {
+      await api.post(`/admin/syndic-config/${selected.syndic_user_id}/email/unlock`);
+      toast.success('Configuration deverrouillee');
+      await reloadCurrentDetail();
+      load();
+    } catch (e) { toast.error(extractApiError(e)); }
+  };
+
+  const [auditDialog, setAuditDialog] = useState(null);  // { rows: [] } | null
+  const openAuditLog = async () => {
+    if (!selected) return;
+    try {
+      const r = await api.get(`/admin/syndic-config/${selected.syndic_user_id}/audit`, { params: { limit: 50 } });
+      setAuditDialog({ rows: r.data?.audit || [] });
+    } catch (e) { toast.error(extractApiError(e)); }
   };
 
   // iter90h3 : indicateurs "secret deja configure ? Laisser vide pour conserver"
@@ -294,9 +330,38 @@ export default function AdminSyndicConfigPage() {
                     <CheckCircle2 className="h-3 w-3 mr-1" /> Verifiee
                   </Badge>
                 )}
+                {detail.email_config_locked && (
+                  <Badge className="bg-red-100 text-red-800 border border-red-200 ml-1" data-testid="badge-email-locked">
+                    <Lock className="h-3 w-3 mr-1" /> Verrouillee
+                  </Badge>
+                )}
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
+              {/* iter90h5 : bandeau verrou */}
+              {detail.email_config_locked && (
+                <div className="bg-red-50 border border-red-200 rounded p-3 text-xs text-red-900" data-testid="lock-banner">
+                  <div className="flex items-center gap-2 font-semibold mb-1">
+                    <Lock className="h-4 w-4" /> Configuration verrouillee
+                  </div>
+                  <div>
+                    Verrouillee le {(detail.email_locked_at || '').slice(0,19)} par{' '}
+                    <span className="font-mono">{detail.email_locked_by_email || '?'}</span>.
+                    Toute modification est bloquee tant qu&apos;elle n&apos;est pas
+                    deverrouillee. C&apos;est une protection contre les
+                    ecrasements accidentels.
+                  </div>
+                  <Button
+                    onClick={unlockEmailConfig}
+                    variant="outline"
+                    size="sm"
+                    className="mt-2 border-red-300 text-red-800 hover:bg-red-100"
+                    data-testid="btn-unlock-email"
+                  >
+                    <Unlock className="h-4 w-4 mr-1" /> Deverouiller
+                  </Button>
+                </div>
+              )}
               <div>
                 <Label className="text-xs">
                   <span className="text-slate-900">Fournisseur d&apos;envoi</span>
@@ -432,7 +497,7 @@ export default function AdminSyndicConfigPage() {
                 </div>
               )}
               <div className="flex flex-wrap gap-2 pt-1">
-                <Button onClick={saveEmail} disabled={saving} variant="outline" size="sm"
+                <Button onClick={saveEmail} disabled={saving || detail.email_config_locked} variant="outline" size="sm"
                         data-testid="admin-btn-save-email">
                   {saving ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Save className="h-4 w-4 mr-1" />}
                   Enregistrer la config
@@ -445,6 +510,38 @@ export default function AdminSyndicConfigPage() {
                   data-testid="admin-btn-test-email"
                 >
                   <Send className="h-4 w-4 mr-1" /> Tester la configuration
+                </Button>
+                {/* iter90h5 : Lock / Audit */}
+                {!detail.email_config_locked ? (
+                  <Button
+                    onClick={lockEmailConfig}
+                    variant="outline"
+                    size="sm"
+                    className="border-amber-300 text-amber-800 hover:bg-amber-50"
+                    data-testid="admin-btn-lock-email"
+                    title="Verrouiller pour empecher les modifications futures"
+                  >
+                    <Lock className="h-4 w-4 mr-1" /> Verrouiller
+                  </Button>
+                ) : (
+                  <Button
+                    onClick={unlockEmailConfig}
+                    variant="outline"
+                    size="sm"
+                    className="border-red-300 text-red-800 hover:bg-red-50"
+                    data-testid="admin-btn-unlock-email-2"
+                  >
+                    <Unlock className="h-4 w-4 mr-1" /> Deverouiller
+                  </Button>
+                )}
+                <Button
+                  onClick={openAuditLog}
+                  variant="outline"
+                  size="sm"
+                  data-testid="admin-btn-audit-log"
+                  title="Voir l'historique des modifications"
+                >
+                  <History className="h-4 w-4 mr-1" /> Historique
                 </Button>
               </div>
               {emailCfg.provider !== 'none' && !detail.email_verified && (
@@ -524,6 +621,63 @@ export default function AdminSyndicConfigPage() {
                 <><Send className="h-4 w-4 mr-1" /> Envoyer le test</>
               )}
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      {/* iter90h5 : Dialog historique/audit */}
+      <Dialog open={!!auditDialog} onOpenChange={(open) => !open && setAuditDialog(null)}>
+        <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto" data-testid="dialog-audit-log">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <History className="h-5 w-5 text-[#022D52]" />
+              Historique des modifications — {selected?.user_email}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="mt-2">
+            {auditDialog?.rows?.length ? (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Date/Heure</TableHead>
+                    <TableHead>Action</TableHead>
+                    <TableHead>Utilisateur</TableHead>
+                    <TableHead>Champs</TableHead>
+                    <TableHead className="text-center">Secret</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {auditDialog.rows.map((row, idx) => (
+                    <TableRow key={idx} data-testid={`audit-row-${idx}`}>
+                      <TableCell className="font-mono text-xs">
+                        {(row.at || '').replace('T', ' ').slice(0, 19)}
+                      </TableCell>
+                      <TableCell>
+                        {row.action === 'email_update' && <Badge className="bg-blue-100 text-blue-800">Modification email</Badge>}
+                        {row.action === 'identity_update' && <Badge className="bg-slate-100 text-slate-700">Identite</Badge>}
+                        {row.action === 'lock' && <Badge className="bg-amber-100 text-amber-800"><Lock className="h-3 w-3 mr-1 inline" />Verrouillage</Badge>}
+                        {row.action === 'unlock' && <Badge className="bg-emerald-100 text-emerald-700"><Unlock className="h-3 w-3 mr-1 inline" />Deverouillage</Badge>}
+                        {row.action === 'reject_fake_secret' && <Badge className="bg-red-100 text-red-800">Secret suspect refuse</Badge>}
+                        {row.action === 'reject_fake_uuid' && <Badge className="bg-red-100 text-red-800">UUID suspect refuse</Badge>}
+                      </TableCell>
+                      <TableCell className="font-mono text-xs">{row.actor_email || '-'}</TableCell>
+                      <TableCell className="text-xs text-slate-600">
+                        {(row.fields_changed || []).length > 0
+                          ? (row.fields_changed || []).join(', ')
+                          : (row.extra?.reason ? `[${row.extra.reason}]` : '-')}
+                      </TableCell>
+                      <TableCell className="text-center">
+                        {row.secret_changed && <Badge className="bg-purple-100 text-purple-800 text-[10px]">Modifie</Badge>}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            ) : (
+              <p className="text-sm text-slate-500 text-center py-8">Aucune entree dans l&apos;audit log.</p>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setAuditDialog(null)}>Fermer</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
