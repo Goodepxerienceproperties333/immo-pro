@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '@/lib/api';
+import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -29,22 +30,24 @@ const SEVERITY_LABEL = {
 
 export default function RemindersPage() {
   const navigate = useNavigate();
+  const { selectedFiscalYear } = useAuth();
   const [tab, setTab] = useState('owners');
   const [ownersData, setOwnersData] = useState(null);
   const [suppliersData, setSuppliersData] = useState(null);
   const [graceDays, setGraceDays] = useState(0);
-  // iter90hi : par defaut on affiche le trimestre en cours
-  const [dateFrom, setDateFrom] = useState(() => {
-    const t = new Date();
-    const qStart = Math.floor(t.getMonth() / 3) * 3;
-    return new Date(t.getFullYear(), qStart, 1).toISOString().slice(0, 10);
-  });
-  const [dateTo, setDateTo] = useState(() => {
-    const t = new Date();
-    const qStart = Math.floor(t.getMonth() / 3) * 3;
-    return new Date(t.getFullYear(), qStart + 3, 0).toISOString().slice(0, 10);
-  });
+  // iter90hi/hj : par defaut on affiche depuis le debut de l'exercice comptable
+  // en cours jusqu'a aujourd'hui. Fallback annee civile si FY absent.
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
   const [loading, setLoading] = useState(true);
+
+  // iter90hj : quand l'exercice change ou est resolu, aligne les dates
+  useEffect(() => {
+    const todayIso = new Date().toISOString().slice(0, 10);
+    const fyStart = selectedFiscalYear?.start_date || `${new Date().getFullYear()}-01-01`;
+    setDateFrom(fyStart);
+    setDateTo(todayIso);
+  }, [selectedFiscalYear]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -65,13 +68,17 @@ export default function RemindersPage() {
 
   useEffect(() => { load(); }, [load]);
 
-  // iter90hg : raccourcis periode
+  // iter90hg/hj : raccourcis periode
   const setPeriodPreset = (preset) => {
     const today = new Date();
     const y = today.getFullYear();
     const m = today.getMonth();
     const fmt = (d) => d.toISOString().slice(0, 10);
-    if (preset === 'this-month') {
+    if (preset === 'fiscal-year') {
+      const fyStart = selectedFiscalYear?.start_date || `${y}-01-01`;
+      setDateFrom(fyStart);
+      setDateTo(fmt(today));
+    } else if (preset === 'this-month') {
       setDateFrom(fmt(new Date(y, m, 1)));
       setDateTo(fmt(new Date(y, m + 1, 0)));
     } else if (preset === 'last-month') {
@@ -92,7 +99,13 @@ export default function RemindersPage() {
 
   const downloadLetter = (ownerId, coproId) => {
     if (!coproId) { toast.error('Copropriete inconnue'); return; }
-    window.open(`${API}/api/reminders/owner/${ownerId}/letter?copropriete_id=${coproId}`, '_blank');
+    // iter90hl : transmet la periode selectionnee au PDF pour ne reprendre
+    // que les appels dont l'echeance tombe dans cette periode.
+    const params = new URLSearchParams();
+    params.append('copropriete_id', coproId);
+    if (dateFrom) params.append('date_from', dateFrom);
+    if (dateTo) params.append('date_to', dateTo);
+    window.open(`${API}/api/reminders/owner/${ownerId}/letter?${params.toString()}`, '_blank');
   };
 
   const openInvoice = (invoiceId) => {
@@ -102,13 +115,16 @@ export default function RemindersPage() {
 
   const currentData = tab === 'owners' ? ownersData : suppliersData;
 
-  // iter90hi : detecte quel preset est actif (pour surligner le bouton)
+  // iter90hi/hj : detecte quel preset est actif (pour surligner le bouton)
   const activePreset = (() => {
     if (!dateFrom && !dateTo) return 'all';
     const t = new Date();
     const y = t.getFullYear();
     const m = t.getMonth();
+    const todayIso = t.toISOString().slice(0, 10);
     const fmt = (d) => d.toISOString().slice(0, 10);
+    const fyStart = selectedFiscalYear?.start_date;
+    if (fyStart && dateFrom === fyStart && dateTo === todayIso) return 'fiscal-year';
     if (dateFrom === fmt(new Date(y, m, 1)) && dateTo === fmt(new Date(y, m + 1, 0))) return 'this-month';
     if (dateFrom === fmt(new Date(y, m - 1, 1)) && dateTo === fmt(new Date(y, m, 0))) return 'last-month';
     const qStart = Math.floor(m / 3) * 3;
@@ -147,10 +163,11 @@ export default function RemindersPage() {
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-xs text-slate-500 uppercase font-semibold">Periode :</span>
+          <Button variant="outline" size="sm" onClick={() => setPeriodPreset('fiscal-year')} data-testid="preset-fiscal-year" className={presetBtnClass('fiscal-year')}>Exercice en cours</Button>
           <Button variant="outline" size="sm" onClick={() => setPeriodPreset('this-month')} data-testid="preset-this-month" className={presetBtnClass('this-month')}>Ce mois</Button>
           <Button variant="outline" size="sm" onClick={() => setPeriodPreset('last-month')} data-testid="preset-last-month" className={presetBtnClass('last-month')}>Mois -1</Button>
           <Button variant="outline" size="sm" onClick={() => setPeriodPreset('this-quarter')} data-testid="preset-this-quarter" className={presetBtnClass('this-quarter')}>Trimestre</Button>
-          <Button variant="outline" size="sm" onClick={() => setPeriodPreset('year')} data-testid="preset-year" className={presetBtnClass('year')}>Annee</Button>
+          <Button variant="outline" size="sm" onClick={() => setPeriodPreset('year')} data-testid="preset-year" className={presetBtnClass('year')}>Annee civile</Button>
           <Button variant="outline" size="sm" onClick={() => setPeriodPreset('all')} data-testid="preset-all" className={presetBtnClass('all')}>Tout</Button>
         </div>
       </div>

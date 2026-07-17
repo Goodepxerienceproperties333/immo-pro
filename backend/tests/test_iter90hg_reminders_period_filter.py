@@ -24,10 +24,41 @@ load_dotenv("/app/backend/.env")
 
 async def _seed(db, copro_id: str):
     await db.fund_calls.delete_many({"copropriete_id": copro_id})
+    await db.owners.delete_many({"copropriete_ids": copro_id})
+    await db.journal_entries.delete_many({"copropriete_id": copro_id})
+    await db.lots.delete_many({"copropriete_id": copro_id})
     today = datetime.now(timezone.utc).date()
     old_due = (today - timedelta(days=60)).strftime("%Y-%m-%d")
     recent_due = (today - timedelta(days=5)).strftime("%Y-%m-%d")
     veryold_due = (today - timedelta(days=200)).strftime("%Y-%m-%d")
+    # iter90hk : creer 3 proprietaires DEBITEURS (JE debit sur leurs
+    # comptes tiers) pour que list_late_payments les retourne comme
+    # "en retard" via `_compute_balance_tiers_for_ui`.
+    owners = [
+        ("o1", "Alice", 100.0, "acc-o1"),
+        ("o2", "Bob", 200.0, "acc-o2"),
+        ("o3", "Carol", 300.0, "acc-o3"),
+    ]
+    for oid, name, amt, acc in owners:
+        await db.owners.insert_one({
+            "id": oid, "name": name, "copropriete_ids": [copro_id],
+            "tier_accounts": {copro_id: {"provisions": acc}},
+        })
+        await db.lots.insert_one({
+            "id": f"lot-{oid}", "copropriete_id": copro_id,
+            "owner_id": oid, "reference": f"L-{oid}",
+        })
+        # JE debit sur le compte tier -> proprietaire debiteur
+        await db.journal_entries.insert_one({
+            "id": f"je-{oid}", "copropriete_id": copro_id,
+            "date": (today - timedelta(days=30)).strftime("%Y-%m-%d"),
+            "journal_type": "OD",
+            "lines": [
+                {"account_number": acc, "third_party_id": oid,
+                 "debit": amt, "credit": 0},
+                {"account_number": "70000001", "debit": 0, "credit": amt},
+            ],
+        })
     await db.fund_calls.insert_many([
         {
             "id": f"fc-old-{copro_id}", "copropriete_id": copro_id,
@@ -58,6 +89,9 @@ async def _seed(db, copro_id: str):
 
 async def _cleanup(db, copro_id: str):
     await db.fund_calls.delete_many({"copropriete_id": copro_id})
+    await db.owners.delete_many({"copropriete_ids": copro_id})
+    await db.journal_entries.delete_many({"copropriete_id": copro_id})
+    await db.lots.delete_many({"copropriete_id": copro_id})
 
 
 async def _call_list_late(copro_id: str, **kwargs):

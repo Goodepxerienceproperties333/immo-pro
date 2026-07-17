@@ -272,13 +272,18 @@ def create_reminders_router(db):
         date_to: Optional[str] = None,
     ):
         """List unpaid fund call distributions past due_date.
-        grace_days: optional grace period in days before flagging as late.
-        date_from / date_to: iter90hg - filtre optionnel sur `due_date` (format YYYY-MM-DD).
-        Permet de ne considerer que les appels dont l'echeance tombe dans la periode."""
+
+        iter90hk : la logique se base MAINTENANT sur le SOLDE REEL des comptes
+        tiers du proprietaire. Un proprietaire crediteur (ou solde nul) n'est
+        JAMAIS en retard, meme si le flag `distribution[].paid` du fund_call
+        n'a pas ete marque manuellement (cas classique : lettrage bancaire).
+
+        grace_days: jours de tolerance apres due_date.
+        date_from / date_to: filtre optionnel sur `due_date` (YYYY-MM-DD).
+        """
         q = {"copropriete_id": copropriete_id} if copropriete_id else {}
         fund_calls = await db.fund_calls.find(q, {"_id": 0}).to_list(10000)
         today = datetime.now(timezone.utc).date()
-        # Parsing des bornes de periode (iter90hg)
         df_date = None
         dt_date = None
         try:
@@ -291,6 +296,24 @@ def create_reminders_router(db):
                 dt_date = datetime.strptime(date_to, "%Y-%m-%d").date()
         except Exception:
             dt_date = None
+
+        # iter90hk : precompute owner tier balances par (copro, owner) via la
+        # source de verite `_compute_balance_tiers_for_ui` (utilisee par la
+        # Balance des Tiers, le PDF situation compte, etc.). Elle prend en
+        # compte les journal_entries ET les bank_transactions non lettrees
+        # matchees par VCS, contrairement a un calcul naif sur les JE.
+        # Convention : positif = debiteur, negatif = crediteur.
+        from routes.reports import _compute_balance_tiers_for_ui  # eviter circ imports
+        needed_copros = {fc.get("copropriete_id", "") for fc in fund_calls if fc.get("copropriete_id")}
+        tier_balances = {}  # (copro_id, owner_id) -> float
+        for cid in needed_copros:
+            try:
+                bal_data = await _compute_balance_tiers_for_ui(db, cid)
+            except Exception:
+                continue
+            for o in bal_data.get("owners", []) or []:
+                tier_balances[(cid, o["owner_id"])] = float(o.get("balance", 0.0) or 0.0)
+
         late = []
         for fc in fund_calls:
             due_str = fc.get("due_date") or ""
@@ -300,7 +323,6 @@ def create_reminders_router(db):
                 due_date = datetime.strptime(due_str, "%Y-%m-%d").date()
             except Exception:
                 continue
-            # iter90hg : filtre par periode d'echeance
             if df_date and due_date < df_date:
                 continue
             if dt_date and due_date > dt_date:
@@ -308,13 +330,21 @@ def create_reminders_router(db):
             days_late = (today - due_date).days
             if days_late <= grace_days:
                 continue
+            fc_copro = fc.get("copropriete_id", "")
             for d in fc.get("distribution", []):
                 if d.get("paid"):
                     continue
                 amount = d.get("amount", 0)
                 if amount <= 0:
                     continue
-                # Determine severity by days late
+                owner_id = d.get("owner_id")
+                # iter90hk : si le proprietaire est crediteur/nul, on ignore
+                # ses appels en retard (paiement fait par lettrage bancaire).
+                # Marge de tolerance de 0.01 EUR pour eviter les arrondis.
+                if owner_id:
+                    bal = tier_balances.get((fc_copro, owner_id), 0.0)
+                    if bal <= 0.01:
+                        continue
                 if days_late > 90:
                     severity = "critique"
                 elif days_late > 30:
@@ -328,14 +358,14 @@ def create_reminders_router(db):
                     "fund_call_name": fc.get("name", ""),
                     "due_date": due_str,
                     "days_late": days_late,
-                    "owner_id": d.get("owner_id"),
+                    "owner_id": owner_id,
                     "owner_name": d.get("owner_name", ""),
                     "vcs_code": d.get("vcs_code", ""),
                     "amount": amount,
-                    "copropriete_id": fc.get("copropriete_id", ""),
+                    "copropriete_id": fc_copro,
                     "severity": severity,
+                    "tier_balance": round(tier_balances.get((fc_copro, owner_id), 0.0), 2) if owner_id else 0.0,
                 })
-        # Group by severity
         by_severity = {"critique": 0, "urgent": 0, "rappel2": 0, "rappel1": 0}
         total_amount = 0.0
         for item in late:
@@ -443,8 +473,17 @@ def create_reminders_router(db):
         }
 
     @router.get("/owner/{owner_id}/letter")
-    async def generate_reminder_letter(owner_id: str, copropriete_id: str):
-        """Generate a reminder letter PDF for a specific owner & ACP."""
+    async def generate_reminder_letter(
+        owner_id: str,
+        copropriete_id: str,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+    ):
+        """Generate a reminder letter PDF for a specific owner & ACP.
+        iter90hl : accepte date_from/date_to (format YYYY-MM-DD) et ne reprend
+        dans la lettre que les appels dont l'echeance tombe dans la periode
+        choisie par le syndic (coherent avec la vue UI /reminders).
+        """
         from reportlab.lib.pagesizes import A4
         from reportlab.lib.units import mm
         from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
@@ -462,6 +501,20 @@ def create_reminders_router(db):
         fund_calls = await db.fund_calls.find({"copropriete_id": copropriete_id}, {"_id": 0}).to_list(10000)
         today = datetime.now(timezone.utc).date()
 
+        # iter90hl : parsing des bornes periode
+        df_date = None
+        dt_date = None
+        try:
+            if date_from:
+                df_date = datetime.strptime(date_from, "%Y-%m-%d").date()
+        except Exception:
+            df_date = None
+        try:
+            if date_to:
+                dt_date = datetime.strptime(date_to, "%Y-%m-%d").date()
+        except Exception:
+            dt_date = None
+
         def _fmt_date(s: str) -> str:
             """ISO YYYY-MM-DD -> DD/MM/YYYY. Renvoie la valeur d'origine si parse echoue."""
             if not s:
@@ -474,15 +527,24 @@ def create_reminders_router(db):
         unpaid_items = []
         total_due = 0.0
         for fc in fund_calls:
+            due_str = fc.get("due_date") or fc.get("date") or ""
+            # iter90hl : filtrer par periode d'echeance
+            try:
+                due_date = datetime.strptime(due_str, "%Y-%m-%d").date() if due_str else None
+            except Exception:
+                due_date = None
+            if df_date and due_date and due_date < df_date:
+                continue
+            if dt_date and due_date and due_date > dt_date:
+                continue
+            # iter90hl : exclure les appels dont l'echeance est encore future
+            # (pas de rappel avant l'echeance).
+            if due_date and due_date > today:
+                continue
             for d in fc.get("distribution", []):
                 if d.get("owner_id") == owner_id and not d.get("paid"):
-                    due_str = fc.get("due_date") or fc.get("date") or ""
                     period_str = fc.get("date") or ""
-                    try:
-                        due_date = datetime.strptime(due_str, "%Y-%m-%d").date()
-                        days = (today - due_date).days
-                    except Exception:
-                        days = 0
+                    days = (today - due_date).days if due_date else 0
                     unpaid_items.append({
                         "name": fc.get("name", ""),
                         "period": _fmt_date(period_str),
@@ -514,9 +576,28 @@ def create_reminders_router(db):
 
         elements.append(Paragraph(f"Cher(e) {owner.get('first_name') or owner['name']},", body))
         elements.append(Spacer(1, 4 * mm))
+        # iter90hl : mention explicite de la periode filtree
+        period_line = ""
+        if df_date and dt_date:
+            period_line = (
+                f"Sauf erreur de notre part, les appels de fonds dont l'echeance se situe "
+                f"entre le <b>{df_date.strftime('%d/%m/%Y')}</b> et le "
+                f"<b>{dt_date.strftime('%d/%m/%Y')}</b> restent impayes a ce jour. "
+            )
+        elif df_date:
+            period_line = (
+                f"Sauf erreur de notre part, les appels de fonds echus depuis le "
+                f"<b>{df_date.strftime('%d/%m/%Y')}</b> restent impayes a ce jour. "
+            )
+        elif dt_date:
+            period_line = (
+                f"Sauf erreur de notre part, les appels de fonds echus jusqu'au "
+                f"<b>{dt_date.strftime('%d/%m/%Y')}</b> restent impayes a ce jour. "
+            )
+        else:
+            period_line = "Sauf erreur de notre part, les appels de fonds suivants restent impayes a ce jour. "
         elements.append(Paragraph(
-            "Sauf erreur de notre part, les appels de fonds suivants restent impayes a ce jour. "
-            "Nous vous prions de bien vouloir regulariser dans les plus brefs delais.",
+            period_line + "Nous vous prions de bien vouloir regulariser dans les plus brefs delais.",
             body
         ))
         elements.append(Spacer(1, 6 * mm))
