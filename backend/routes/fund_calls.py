@@ -957,10 +957,45 @@ def create_fund_calls_router(db):
 
     @router.post("/{call_id}/generate-entries")
     async def generate_journal_entries(call_id: str):
-        """Generate accounting entries for a fund call."""
+        """Generate accounting entries for a fund call.
+
+        iter90i7 : DEPRECATED - cette route legacy creait un JE de type AP
+        alors que le systeme auto-genere deja un JE VE (via `generate_sale_entry`)
+        lors du POST /fund-calls. Le double-booking creait un
+        DOUBLE-COMPTAGE du fonds de reserve (bug reporte par user :
+        bilan affiche 9000 au lieu de 7000). La route est conservee pour
+        retro-compat, mais retourne 409 si une ecriture VE existe deja pour
+        cet appel afin d'empecher le doublon.
+        """
         fc = await db.fund_calls.find_one({"id": call_id}, {"_id": 0})
         if not fc:
             raise HTTPException(404, "Appel non trouve")
+
+        # iter90i7 : verifier qu'aucune ecriture VE n'existe deja pour cet appel
+        existing_ve = await db.journal_entries.find_one(
+            {"source_type": "fund_call", "source_id": call_id,
+             "journal_type": "VE",
+             "reversed": {"$ne": True}, "is_reversal": {"$ne": True}},
+            {"_id": 0, "id": 1, "reference": 1},
+        )
+        if existing_ve:
+            raise HTTPException(
+                409,
+                f"Une ecriture VE (id={existing_ve['id']}, ref={existing_ve.get('reference','')}) "
+                f"a deja ete auto-generee pour cet appel. La route legacy "
+                f"generate-entries est desactivee pour prevenir un double-comptage."
+            )
+        # iter90i7 : aussi verifier l'idempotence sur AP legacy lui-meme
+        existing_ap = await db.journal_entries.find_one(
+            {"fund_call_id": call_id, "journal_type": "AP",
+             "reversed": {"$ne": True}, "is_reversal": {"$ne": True}},
+            {"_id": 0, "id": 1},
+        )
+        if existing_ap:
+            raise HTTPException(
+                409,
+                f"Une ecriture AP existe deja pour cet appel (id={existing_ap['id']})",
+            )
 
         account_map = {
             "provisions": ("400000", "700000"),

@@ -87,6 +87,41 @@ export default function AdminQualityAuditPage() {
   // iter90i6 : Backfill notes de credit sans ecriture AC
   const [ncBusy, setNcBusy] = useState(false);
   const [ncResult, setNcResult] = useState(null);
+  // iter90i7 : Nettoyage doublons AP/VE (fonds de reserve/roulement)
+  const [dupBusy, setDupBusy] = useState(false);
+  const [dupResult, setDupResult] = useState(null);
+  const runHealDuplicateFundCalls = async (dryRun) => {
+    if (!dryRun && !window.confirm(
+      "ATTENTION : supprimer les ecritures AP en doublon avec les VE deja auto-generees ?\n\n" +
+      "* Idempotent : uniquement les paires AP+VE detectees sur le meme fund_call_id.\n" +
+      "* Le VE est conserve, l'AP legacy est supprime.\n" +
+      "* Corrige le double-comptage du fonds de reserve/roulement sur le bilan.\n\n" +
+      "Confirmez pour lancer.",
+    )) return;
+    setDupBusy(true);
+    setDupResult(null);
+    try {
+      const { data } = await api.post(
+        `/admin/heal-duplicate-fund-call-entries?dry_run=${dryRun}`,
+      );
+      setDupResult(data);
+      if (dryRun) {
+        toast.info(
+          `Dry-run : ${data.duplicates_found} doublon(s) AP/VE detectes`,
+          { duration: 6000 },
+        );
+      } else {
+        toast.success(
+          `${data.removed} ecriture(s) AP supprimee(s) - bilan reserve corrige`,
+          { duration: 8000 },
+        );
+      }
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur heal-duplicate');
+    } finally {
+      setDupBusy(false);
+    }
+  };
   const runHealCreditNotes = async (dryRun) => {
     if (!dryRun && !window.confirm(
       "ATTENTION : creer les ecritures AC MANQUANTES pour toutes les notes de credit ?\n\n" +
@@ -382,6 +417,91 @@ export default function AdminQualityAuditPage() {
                           </td>
                           <td className="px-2 py-1 font-mono text-emerald-700 truncate max-w-[160px]" title={h.reference || h.je_id}>
                             {h.reference || (h.would_create_je ? '(a creer)' : '-')}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* iter90i7 : Panneau nettoyage doublons AP/VE fund calls */}
+      <Card className="border-red-200" data-testid="heal-dup-panel">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <AlertTriangle size={16} className="text-red-600" />
+            Doublons d&apos;appels de fonds (AP + VE)
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="text-xs text-slate-600 mb-3 leading-relaxed">
+            Detecte et supprime les ecritures <code className="bg-slate-100 px-1 rounded">AP</code> (Appel legacy)
+            en doublon avec les <code className="bg-slate-100 px-1 rounded">VE</code> (Ventes auto-generees).
+            Bug historique : l&apos;endpoint <code className="bg-slate-100 px-1 rounded">/fund-calls/&#123;id&#125;/generate-entries</code>
+            creait un AP alors que le POST /fund-calls creait deja un VE via <code>generate_sale_entry</code>.
+            <strong> Consequence : fonds de reserve/roulement surestime de 2x l&apos;appel</strong> (ex : bilan 9000 au lieu de 7000).
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => runHealDuplicateFundCalls(true)}
+              disabled={dupBusy}
+              data-testid="heal-dup-dry-run-btn"
+              className="text-red-600 border-red-300 hover:bg-red-50"
+            >
+              <RefreshCw size={13} className={`mr-1 ${dupBusy ? 'animate-spin' : ''}`} />
+              Dry-run (detecte)
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => runHealDuplicateFundCalls(false)}
+              disabled={dupBusy}
+              data-testid="heal-dup-live-btn"
+              className="bg-red-600 hover:bg-red-700 text-white"
+            >
+              <Play size={13} className="mr-1" />
+              Supprimer les AP en doublon
+            </Button>
+            {dupBusy && <span className="text-xs text-slate-500 italic">En cours...</span>}
+          </div>
+          {dupResult && (
+            <div className="mt-4 border-t border-slate-200 pt-3" data-testid="heal-dup-result">
+              <div className="text-xs font-semibold mb-2">
+                <span className="font-mono text-red-700">{dupResult.duplicates_found}</span> doublon(s) detecte(s)
+                {dupResult.mode === 'live' && (
+                  <span className="ml-2 font-mono text-emerald-700">
+                    - {dupResult.removed} supprime(s)
+                  </span>
+                )}
+              </div>
+              {(dupResult.duplicates || []).length > 0 && (
+                <div className="overflow-x-auto border border-slate-200 rounded">
+                  <table className="w-full text-xs">
+                    <thead className="bg-slate-50">
+                      <tr>
+                        <th className="text-left px-2 py-1 text-[10px] uppercase tracking-wider">Date</th>
+                        <th className="text-left px-2 py-1 text-[10px] uppercase tracking-wider">AP (a supprimer)</th>
+                        <th className="text-left px-2 py-1 text-[10px] uppercase tracking-wider">VE (conserve)</th>
+                        <th className="text-right px-2 py-1 text-[10px] uppercase tracking-wider">Montant</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {dupResult.duplicates.map((d, i) => (
+                        <tr key={i} className="border-t border-slate-100">
+                          <td className="px-2 py-1 font-mono text-slate-600">{d.date}</td>
+                          <td className="px-2 py-1 truncate max-w-[200px] text-red-600" title={d.ap_reference}>
+                            {d.ap_reference}
+                          </td>
+                          <td className="px-2 py-1 truncate max-w-[200px] text-emerald-600" title={d.ve_reference}>
+                            {d.ve_reference}
+                          </td>
+                          <td className="px-2 py-1 text-right font-mono text-slate-700">
+                            {d.ap_amount?.toFixed(2)} EUR
                           </td>
                         </tr>
                       ))}

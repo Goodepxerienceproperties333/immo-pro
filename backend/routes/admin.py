@@ -1752,4 +1752,60 @@ def create_admin_router(db):
             "skipped_total": len(skipped_details),
         }
 
+    # iter90i7 : Nettoie les ecritures AP legacy en doublon avec les VE
+    # auto-generees. Bug historique : la route legacy /fund-calls/{id}/generate-entries
+    # creait un JE AP alors que le POST /fund-calls creait deja un VE via
+    # generate_sale_entry, ce qui doublait le solde du fonds de reserve/roulement
+    # sur le bilan (5000 AN + 2000 VE + 2000 AP = 9000 au lieu de 7000).
+    @router.post("/heal-duplicate-fund-call-entries")
+    async def heal_duplicate_fund_call_entries(
+        request: Request,
+        copropriete_id: str = "",
+        dry_run: bool = True,
+    ):
+        """Trouve les JE AP en doublon (meme `fund_call_id` qu'une JE VE
+        existante non-contre-passee) et les supprime (mode live) ou les
+        liste (dry_run). Superadmin only, idempotent."""
+        await _get_superadmin_only(request)
+        dupes = []
+        query: dict = {"journal_type": "AP", "fund_call_id": {"$exists": True}}
+        if copropriete_id:
+            query["copropriete_id"] = copropriete_id
+        async for ap in db.journal_entries.find(query, {"_id": 0}):
+            call_id = ap.get("fund_call_id")
+            if not call_id:
+                continue
+            ve = await db.journal_entries.find_one(
+                {"source_type": "fund_call", "source_id": call_id,
+                 "journal_type": "VE",
+                 "reversed": {"$ne": True}, "is_reversal": {"$ne": True}},
+                {"_id": 0, "id": 1, "reference": 1, "total_debit": 1},
+            )
+            if not ve:
+                continue
+            dupes.append({
+                "ap_id": ap["id"],
+                "ap_reference": ap.get("reference", ""),
+                "ap_amount": float(ap.get("total_debit", 0) or 0),
+                "ve_id": ve["id"],
+                "ve_reference": ve.get("reference", ""),
+                "ve_amount": float(ve.get("total_debit", 0) or 0),
+                "fund_call_id": call_id,
+                "copropriete_id": ap.get("copropriete_id", ""),
+                "date": ap.get("date", ""),
+            })
+        removed = 0
+        if not dry_run:
+            for d in dupes:
+                r = await db.journal_entries.delete_one({"id": d["ap_id"]})
+                if r.deleted_count:
+                    removed += 1
+        return {
+            "mode": "dry_run" if dry_run else "live",
+            "copropriete_id": copropriete_id or "all",
+            "duplicates_found": len(dupes),
+            "removed": removed,
+            "duplicates": dupes[:200],
+        }
+
     return router
