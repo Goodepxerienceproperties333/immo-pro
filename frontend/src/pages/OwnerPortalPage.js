@@ -2380,35 +2380,65 @@ function BankAccountsTab({
                   <TableHeader>
                     <TableRow>
                       <TableHead className="text-[10px] uppercase tracking-wider">Date</TableHead>
+                      <TableHead className="text-[10px] uppercase tracking-wider">Sens</TableHead>
                       <TableHead className="text-[10px] uppercase tracking-wider">Contrepartie</TableHead>
-                      <TableHead className="text-[10px] uppercase tracking-wider">Communication</TableHead>
+                      <TableHead className="text-[10px] uppercase tracking-wider">Communication / Detail</TableHead>
                       <TableHead className="text-[10px] uppercase tracking-wider text-right">Montant</TableHead>
                       <TableHead className="text-[10px] uppercase tracking-wider text-center">Statut</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {ba.recent_movements.map((mv, midx) => (
-                      <TableRow key={`${idx}-mv-${midx}`} data-testid={`bank-account-mv-${idx}-${midx}`}>
-                        <TableCell className="text-xs font-mono text-slate-600">{fmtDate(mv.date)}</TableCell>
-                        <TableCell className="text-xs text-slate-800 max-w-[180px] truncate" title={mv.counterparty}>
-                          {mv.counterparty || <span className="text-slate-300 italic">-</span>}
-                        </TableCell>
-                        <TableCell className="text-[11px] font-mono text-slate-500 max-w-[220px] truncate" title={mv.communication}>
-                          {mv.communication || <span className="text-slate-300 italic">-</span>}
-                        </TableCell>
-                        <TableCell className={`text-right font-mono text-xs font-semibold ${mv.amount >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
-                          {fmt(mv.amount)}
-                        </TableCell>
-                        <TableCell className="text-center">
-                          <Badge
-                            variant="outline"
-                            className={`text-[9px] ${mv.matched ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-slate-50 text-slate-500 border-slate-200'}`}
-                          >
-                            {mv.matched ? 'Lettre' : 'A traiter'}
-                          </Badge>
-                        </TableCell>
-                      </TableRow>
-                    ))}
+                    {ba.recent_movements.map((mv, midx) => {
+                      const isCredit = mv.transaction_type === 'credit' || mv.amount >= 0;
+                      return (
+                        <TableRow key={`${idx}-mv-${midx}`} data-testid={`bank-account-mv-${idx}-${midx}`}>
+                          <TableCell className="text-xs font-mono text-slate-600 whitespace-nowrap">{fmtDate(mv.date)}</TableCell>
+                          <TableCell>
+                            <Badge
+                              variant="outline"
+                              className={`text-[9px] ${isCredit
+                                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                : 'bg-red-50 text-red-700 border-red-200'}`}
+                            >
+                              {isCredit ? 'Credit' : 'Debit'}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-xs text-slate-800 max-w-[200px]">
+                            {mv.counterparty ? (
+                              <div className="font-medium truncate" title={mv.counterparty}>{mv.counterparty}</div>
+                            ) : (
+                              <span className="text-slate-300 italic">Non renseigne</span>
+                            )}
+                            {mv.counterparty_account && (
+                              <div className="text-[10px] font-mono text-slate-400 truncate" title={mv.counterparty_account}>
+                                {mv.counterparty_account}
+                              </div>
+                            )}
+                          </TableCell>
+                          <TableCell className="text-[11px] max-w-[280px]">
+                            {mv.communication ? (
+                              <div className="text-slate-700 break-words" title={mv.communication}>
+                                {mv.communication}
+                              </div>
+                            ) : (
+                              <span className="text-slate-300 italic">-</span>
+                            )}
+                          </TableCell>
+                          <TableCell className={`text-right font-mono text-xs font-semibold whitespace-nowrap ${isCredit ? 'text-emerald-600' : 'text-red-600'}`}>
+                            {fmt(mv.amount)}
+                          </TableCell>
+                          <TableCell className="text-center">
+                            <Badge
+                              variant="outline"
+                              className={`text-[9px] ${mv.matched ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-slate-50 text-slate-500 border-slate-200'}`}
+                              title={mv.matched ? (mv.match_type ? `Lettre (${mv.match_type})` : 'Lettre') : 'A traiter (non lettree)'}
+                            >
+                              {mv.matched ? 'Lettre' : 'A traiter'}
+                            </Badge>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
                   </TableBody>
                 </Table>
               </div>

@@ -153,22 +153,57 @@ def create_owner_portal_router(db):
                             balance -= float(ln.get("credit", 0) or 0)
 
             # Mouvements bancaires : filtre par IBAN + plage de dates
-            txn_query: dict = {"copropriete_id": copropriete_id, "iban": iban}
+            # iter90i2 : les transactions sont liees au compte via
+            # `bank_statements.account_number` (IBAN normalise sans espace).
+            # Le champ `iban` sur bank_transactions n'existe pas dans les
+            # imports CODA/Optipro standards.
+            iban_norm = iban.replace(" ", "").upper()
+            statement_ids: list[str] = []
+            if iban_norm:
+                async for st in db.bank_statements.find(
+                    {"copropriete_id": copropriete_id,
+                     "account_number": {"$regex": f"^{iban_norm}$", "$options": "i"}},
+                    {"_id": 0, "id": 1},
+                ):
+                    if st.get("id"):
+                        statement_ids.append(st["id"])
+            # Base query : statement_id in liste ci-dessus OU champ iban legacy
+            or_clauses: list[dict] = []
+            if statement_ids:
+                or_clauses.append({"statement_id": {"$in": statement_ids}})
+            if iban:
+                # Compat retro : transactions avec un champ `iban` explicite
+                # (importe hors flow statement). Match tolerant aux espaces.
+                iban_regex = f"^{iban_norm}$"
+                or_clauses.append({"iban": {"$regex": iban_regex, "$options": "i"}})
+            txn_query: dict = {"copropriete_id": copropriete_id}
+            if or_clauses:
+                txn_query["$or"] = or_clauses
             if date_filter:
                 txn_query["date"] = date_filter
             movements = []
             async for txn in db.bank_transactions.find(
                 txn_query,
-                {"_id": 0, "date": 1, "amount": 1, "description": 1,
-                 "counterparty_name": 1, "communication": 1, "matched": 1},
+                {"_id": 0, "date": 1, "amount": 1,
+                 "counterparty_name": 1, "counterparty_account": 1,
+                 "communication": 1, "matched": 1,
+                 "transaction_type": 1, "match_type": 1},
             ).sort("date", -1).limit(limit):
+                amount = float(txn.get("amount", 0) or 0)
+                # Le sens du montant : le vrai signe est amount ; transaction_type
+                # est redondant mais fournit une lecture rapide (credit=entree,
+                # debit=sortie de l'ACP).
                 movements.append({
                     "date": txn.get("date", ""),
-                    "amount": float(txn.get("amount", 0) or 0),
-                    "description": txn.get("description", "") or "",
+                    "amount": amount,
                     "counterparty": txn.get("counterparty_name", "") or "",
-                    "communication": (txn.get("communication", "") or "")[:50],
+                    "counterparty_account": txn.get("counterparty_account", "") or "",
+                    "communication": (txn.get("communication", "") or "")[:120],
                     "matched": bool(txn.get("matched")),
+                    "transaction_type": txn.get("transaction_type") or (
+                        "credit" if amount >= 0 else "debit"
+                    ),
+                    "match_type": txn.get("match_type", "") or "",
                 })
 
             # Total du nombre de mouvements sur la periode (peut depasser limit)

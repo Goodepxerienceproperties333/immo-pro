@@ -26,17 +26,22 @@ load_dotenv("/app/backend/.env")
 
 async def _seed(db, copro_id, owner_id, pcmn):
     """Cree 5 mouvements bancaires etalees sur 5 mois + solde comptable
-    coherent via journal_entries (700 EUR credit)."""
+    coherent via journal_entries (700 EUR credit). iter90i2 : les
+    transactions sont liees au compte via `bank_statements.account_number`
+    (schema reel de la production, pas via un champ `iban` sur txn)."""
     await db.owners.delete_many({"id": owner_id})
     await db.lots.delete_many({"copropriete_id": copro_id})
     await db.coproprietes.delete_many({"id": copro_id})
     await db.bank_transactions.delete_many({"copropriete_id": copro_id})
+    await db.bank_statements.delete_many({"copropriete_id": copro_id})
     await db.journal_entries.delete_many({"copropriete_id": copro_id})
 
+    iban_normal = "BE00 1111 2222 3333"
+    iban_norm = iban_normal.replace(" ", "").upper()
     await db.coproprietes.insert_one({
         "id": copro_id, "name": "ACP i0", "status": "active",
         "bank_accounts": [
-            {"iban": "BE00 1111 2222 3333", "bic": "TESTBEBB",
+            {"iban": iban_normal, "bic": "TESTBEBB",
              "account_type": "vue", "is_default": True, "label": "Compte principal",
              "pcmn_number": pcmn},
         ],
@@ -48,17 +53,25 @@ async def _seed(db, copro_id, owner_id, pcmn):
         "id": f"lot-{owner_id}", "copropriete_id": copro_id,
         "owner_id": owner_id, "number": "01",
     })
+    # iter90i2 : cree un statement lie au compte (account_number = IBAN)
+    stmt_id = f"stmt-{copro_id}"
+    await db.bank_statements.insert_one({
+        "id": stmt_id, "copropriete_id": copro_id,
+        "account_number": iban_norm, "date": "2024-01-01",
+        "opening_balance": 0.0, "closing_balance": 0.0,
+    })
     # 5 transactions bancaires : 2024-01-15, 2024-03-15, 2024-06-15,
     # 2024-09-15, 2024-12-15
     dates = ["2024-01-15", "2024-03-15", "2024-06-15", "2024-09-15", "2024-12-15"]
     for i, d in enumerate(dates):
         await db.bank_transactions.insert_one({
             "id": f"txn-{copro_id}-{i}", "copropriete_id": copro_id,
-            "iban": "BE00 1111 2222 3333",
+            "statement_id": stmt_id,  # iter90i2 : lien via statement
             "date": d, "amount": 100.0 + i * 10.0,
-            "description": f"Mouvement {i+1}",
             "counterparty_name": f"CP {i}",
-            "communication": f"COMM-{i}",
+            "counterparty_account": f"BE99 2222 3333 444{i}",
+            "communication": f"COMM-{i} facture n{i}",
+            "transaction_type": "credit" if i % 2 == 0 else "debit",
             "matched": bool(i % 2),
         })
     # Journal entry : credit 700 sur pcmn -> solde comptable = -700
@@ -77,6 +90,7 @@ async def _cleanup(db, copro_id, owner_id):
     await db.lots.delete_many({"copropriete_id": copro_id})
     await db.coproprietes.delete_many({"id": copro_id})
     await db.bank_transactions.delete_many({"copropriete_id": copro_id})
+    await db.bank_statements.delete_many({"copropriete_id": copro_id})
     await db.journal_entries.delete_many({"copropriete_id": copro_id})
 
 
@@ -205,6 +219,107 @@ def test_bank_accounts_range_filter_intersects():
             assert data["end_date"] == "2024-09-30"
         finally:
             await _cleanup(db, copro_id, owner_id)
+            client.close()
+
+    asyncio.run(_run())
+
+
+def test_bank_accounts_movement_details_are_complete():
+    """iter90i2 : le detail de chaque transaction est expose au proprio
+    avec les 7 champs attendus (date, amount, counterparty, IBAN
+    contrepartie, communication, transaction_type, matched)."""
+    copro_id = f"acp-i2-{uuid.uuid4().hex[:8]}"
+    owner_id = f"own-i2-{uuid.uuid4().hex[:8]}"
+    pcmn = "551333100"
+
+    async def _run():
+        from motor.motor_asyncio import AsyncIOMotorClient
+        client = AsyncIOMotorClient(os.environ["MONGO_URL"])
+        db = client[os.environ["DB_NAME"]]
+        try:
+            await _seed(db, copro_id, owner_id, pcmn)
+            data = await _call_bank_accounts(db, copro_id, owner_id)
+            ba = data["bank_accounts"][0]
+            assert len(ba["recent_movements"]) == 5, (
+                "5 mouvements attendus - le linking statement_id/iban "
+                "est probablement casse si on obtient 0"
+            )
+            mv = ba["recent_movements"][0]
+            # Verifier la presence des champs cles
+            for field in ("date", "amount", "counterparty", "counterparty_account",
+                          "communication", "matched", "transaction_type"):
+                assert field in mv, f"Champ manquant : {field}"
+            # Verifier que les valeurs ne sont pas nulles pour au moins 1 txn
+            all_mvs = ba["recent_movements"]
+            assert any(m["counterparty"] for m in all_mvs), (
+                "Aucun mouvement n'a de counterparty_name -> mapping brise"
+            )
+            assert any(m["communication"] for m in all_mvs)
+            assert any(m["counterparty_account"] for m in all_mvs)
+            # Un mouvement a `transaction_type` (credit ou debit)
+            for m in all_mvs:
+                assert m["transaction_type"] in ("credit", "debit"), (
+                    f"transaction_type invalide : {m['transaction_type']}"
+                )
+        finally:
+            await _cleanup(db, copro_id, owner_id)
+            client.close()
+
+    asyncio.run(_run())
+
+
+def test_bank_accounts_supports_legacy_iban_field_on_txn():
+    """iter90i2 - compat retro : si une transaction a un champ `iban` explicite
+    (ancien flow d'import), elle est aussi remontee meme sans statement lie."""
+    copro_id = f"acp-i2-{uuid.uuid4().hex[:8]}"
+    owner_id = f"own-i2-{uuid.uuid4().hex[:8]}"
+    pcmn = "551333100"
+
+    async def _run():
+        from motor.motor_asyncio import AsyncIOMotorClient
+        client = AsyncIOMotorClient(os.environ["MONGO_URL"])
+        db = client[os.environ["DB_NAME"]]
+        try:
+            iban_normal = "BE00 4444 5555 6666"
+            iban_norm = iban_normal.replace(" ", "").upper()
+            await db.coproprietes.delete_many({"id": copro_id})
+            await db.owners.delete_many({"id": owner_id})
+            await db.bank_transactions.delete_many({"copropriete_id": copro_id})
+            await db.lots.delete_many({"copropriete_id": copro_id})
+            await db.coproprietes.insert_one({
+                "id": copro_id, "name": "ACP legacy", "status": "active",
+                "bank_accounts": [
+                    {"iban": iban_normal, "account_type": "vue",
+                     "is_default": True, "pcmn_number": pcmn},
+                ],
+            })
+            await db.owners.insert_one({
+                "id": owner_id, "name": "Bob", "copropriete_ids": [copro_id],
+            })
+            await db.lots.insert_one({
+                "id": f"lot-{owner_id}", "copropriete_id": copro_id,
+                "owner_id": owner_id, "number": "01",
+            })
+            # Transaction LEGACY avec iban en direct (pas de statement)
+            await db.bank_transactions.insert_one({
+                "id": f"txn-legacy-{copro_id}", "copropriete_id": copro_id,
+                "iban": iban_norm,  # legacy field
+                "date": "2024-05-15", "amount": 42.42,
+                "counterparty_name": "Legacy Payer",
+                "communication": "Payment via old import",
+                "matched": False,
+            })
+            data = await _call_bank_accounts(db, copro_id, owner_id)
+            assert len(data["bank_accounts"]) == 1
+            ba = data["bank_accounts"][0]
+            assert ba["movements_total_count"] >= 1
+            assert any(m["counterparty"] == "Legacy Payer"
+                       for m in ba["recent_movements"])
+        finally:
+            await db.coproprietes.delete_many({"id": copro_id})
+            await db.owners.delete_many({"id": owner_id})
+            await db.bank_transactions.delete_many({"copropriete_id": copro_id})
+            await db.lots.delete_many({"copropriete_id": copro_id})
             client.close()
 
     asyncio.run(_run())
