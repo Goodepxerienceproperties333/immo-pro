@@ -17,9 +17,13 @@ export default function DistributionKeysPage() {
   const [distKeys, setDistKeys] = useState([]);
   const [lots, setLots] = useState([]);
   const [keyDialog, setKeyDialog] = useState(false);
-  const [keyForm, setKeyForm] = useState({ name: '', code: '', description: '', key_type: 'quotity', lots: [], is_default: false });
+  const [keyForm, setKeyForm] = useState({ name: '', code: '', description: '', key_type: 'quotity', lots: [], is_default: false, meter_type: '', fallback_key_id: '' });
   const [editingKey, setEditingKey] = useState(null);
   const [keyUsage, setKeyUsage] = useState(null);
+  // iter90ie : preview compteurs
+  const [meterPreview, setMeterPreview] = useState(null);
+  const [meterPreviewLoading, setMeterPreviewLoading] = useState(false);
+  const [meterPeriod, setMeterPeriod] = useState({ start_date: '', end_date: '' });
   // iter90du : nettoyage des cles phantoms
   const [cleanupDialog, setCleanupDialog] = useState(false);
   const [cleanupReport, setCleanupReport] = useState(null);
@@ -90,22 +94,25 @@ export default function DistributionKeysPage() {
   };
 
   const openCreateKey = () => {
-    setEditingKey(null); setKeyUsage(null);
+    setEditingKey(null); setKeyUsage(null); setMeterPreview(null);
     setKeyForm({
       name: '', code: '', description: '', key_type: 'quotity',
       lots: lots.map(l => ({ lot_id: l.id, lot_number: l.number, share: l.quotity || 0, excluded: false })),
       is_default: false,
+      meter_type: '', fallback_key_id: '',
     });
     setKeyDialog(true);
   };
 
   const openEditKey = async (k) => {
-    setEditingKey(k);
+    setEditingKey(k); setMeterPreview(null);
     setKeyForm({
       name: k.name, code: k.code || '', description: k.description || '',
       key_type: k.key_type,
       lots: (k.lots || []).map(l => ({ ...l, excluded: !!l.excluded })),
       is_default: !!k.is_default,
+      meter_type: k.meter_type || '',
+      fallback_key_id: k.fallback_key_id || '',
     });
     try {
       const { data } = await api.get(`/distribution-keys/${k.id}/usage`);
@@ -156,6 +163,63 @@ export default function DistributionKeysPage() {
       load();
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Erreur');
+    }
+  };
+
+  // iter90ie : preview du calcul depuis les compteurs
+  const previewFromMeters = async () => {
+    if (!editingKey) {
+      toast.error('Enregistrez la cle avant de calculer depuis les compteurs.');
+      return;
+    }
+    if (!keyForm.meter_type) {
+      toast.error('Selectionnez un type de compteur.');
+      return;
+    }
+    if (!meterPeriod.start_date || !meterPeriod.end_date) {
+      toast.error('Selectionnez une periode (dates de debut et fin).');
+      return;
+    }
+    setMeterPreviewLoading(true);
+    try {
+      const { data } = await api.post(`/distribution-keys/${editingKey.id}/compute-from-meters`, {
+        start_date: meterPeriod.start_date,
+        end_date: meterPeriod.end_date,
+        dry_run: true,
+      });
+      setMeterPreview(data);
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur calcul compteurs');
+    } finally {
+      setMeterPreviewLoading(false);
+    }
+  };
+
+  const applyFromMeters = async () => {
+    if (!editingKey || !meterPreview) return;
+    setMeterPreviewLoading(true);
+    try {
+      await api.post(`/distribution-keys/${editingKey.id}/compute-from-meters`, {
+        start_date: meterPeriod.start_date,
+        end_date: meterPeriod.end_date,
+        dry_run: false,
+      });
+      toast.success('Cle mise a jour depuis les releves');
+      setMeterPreview(null);
+      await load();
+      // Reload the form with new lots
+      const { data: fresh } = await api.get('/distribution-keys');
+      const updated = (fresh || []).find(k => k.id === editingKey.id);
+      if (updated) {
+        setKeyForm(f => ({
+          ...f,
+          lots: (updated.lots || []).map(l => ({ ...l, excluded: !!l.excluded })),
+        }));
+      }
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur application');
+    } finally {
+      setMeterPreviewLoading(false);
     }
   };
 
@@ -328,15 +392,129 @@ export default function DistributionKeysPage() {
               <div>
                 <label className="form-label">Type</label>
                 <Select value={keyForm.key_type} onValueChange={v => setKeyForm({...keyForm, key_type: v})}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectTrigger data-testid="key-type-select"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="quotity">Tantiemes</SelectItem>
                     <SelectItem value="equal">Egal</SelectItem>
                     <SelectItem value="custom">Personnalise</SelectItem>
+                    <SelectItem value="meter">Compteur (releves)</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
             </div>
+            {/* iter90ie : bloc de configuration cle "meter" */}
+            {keyForm.key_type === 'meter' && (
+              <div className="border border-purple-200 bg-purple-50/40 rounded-md p-3 space-y-3" data-testid="meter-config-block">
+                <div className="flex items-center gap-2 text-sm font-semibold text-purple-900">
+                  <Wrench size={14} /> Configuration cle compteur
+                </div>
+                <p className="text-xs text-slate-600 leading-relaxed">
+                  Les quote-parts sont calculees dynamiquement au moment du decompte, a partir des
+                  consommations reelles enregistrees sur la periode de l&apos;exercice. Un lot sans releve
+                  utilise la <b>cle de repli</b> (typiquement les tantiemes generaux).
+                </p>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="form-label">Type de compteur</label>
+                    <Select
+                      value={keyForm.meter_type}
+                      onValueChange={v => setKeyForm({...keyForm, meter_type: v})}
+                    >
+                      <SelectTrigger data-testid="meter-type-select"><SelectValue placeholder="Choisir..." /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="water">Eau</SelectItem>
+                        <SelectItem value="heating">Chauffage</SelectItem>
+                        <SelectItem value="electricity">Electricite</SelectItem>
+                        <SelectItem value="gas">Gaz</SelectItem>
+                        <SelectItem value="boiler_maintenance">Entretien chaudiere</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <label className="form-label">Cle de repli (fallback)</label>
+                    <Select
+                      value={keyForm.fallback_key_id || 'none'}
+                      onValueChange={v => setKeyForm({...keyForm, fallback_key_id: v === 'none' ? '' : v})}
+                    >
+                      <SelectTrigger data-testid="fallback-key-select"><SelectValue placeholder="Aucune (lots exclus si pas de releve)" /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">Aucune (lots sans releve exclus)</SelectItem>
+                        {distKeys.filter(k => k.id !== editingKey?.id && k.key_type !== 'meter').map(k => (
+                          <SelectItem key={k.id} value={k.id}>{k.code ? `${k.code} - ` : ''}{k.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                {editingKey ? (
+                  <div className="border-t border-purple-200 pt-3 space-y-2">
+                    <div className="grid grid-cols-3 gap-2 items-end">
+                      <div>
+                        <label className="form-label text-[11px]">Debut periode</label>
+                        <Input type="date" value={meterPeriod.start_date} onChange={e => setMeterPeriod({...meterPeriod, start_date: e.target.value})} data-testid="meter-period-start" />
+                      </div>
+                      <div>
+                        <label className="form-label text-[11px]">Fin periode</label>
+                        <Input type="date" value={meterPeriod.end_date} onChange={e => setMeterPeriod({...meterPeriod, end_date: e.target.value})} data-testid="meter-period-end" />
+                      </div>
+                      <div className="flex gap-1.5">
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          onClick={previewFromMeters}
+                          disabled={meterPreviewLoading || !keyForm.meter_type}
+                          data-testid="meter-preview-btn"
+                        >
+                          Apercu
+                        </Button>
+                        {meterPreview && (
+                          <Button
+                            type="button"
+                            size="sm"
+                            className="bg-purple-600 hover:bg-purple-700 text-white"
+                            onClick={applyFromMeters}
+                            disabled={meterPreviewLoading}
+                            data-testid="meter-apply-btn"
+                          >
+                            Appliquer
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                    {meterPreview && (
+                      <div className="bg-white border border-purple-200 rounded p-2 max-h-40 overflow-y-auto">
+                        <div className="text-[11px] text-slate-600 mb-1">
+                          <b>{meterPreview.report.coverage.with_meter_reading}</b> lot(s) avec releve
+                          {meterPreview.report.coverage.via_fallback > 0 && (<> - <b>{meterPreview.report.coverage.via_fallback}</b> via fallback</>)}
+                          {meterPreview.report.coverage.excluded > 0 && (<> - <b className="text-amber-700">{meterPreview.report.coverage.excluded}</b> exclus</>)}
+                        </div>
+                        <table className="w-full text-[11px]">
+                          <thead className="bg-slate-50"><tr>
+                            <th className="p-1 text-left">Lot</th>
+                            <th className="p-1 text-right">Conso/Share</th>
+                            <th className="p-1 text-left">Source</th>
+                          </tr></thead>
+                          <tbody>
+                            {(meterPreview.report.lots || []).map((l, i) => (
+                              <tr key={i} className="border-t border-slate-100">
+                                <td className="p-1">Lot {l.lot_number}</td>
+                                <td className="p-1 text-right font-mono">{Number(l.share).toFixed(3)}</td>
+                                <td className="p-1"><Badge variant="outline" className={l.source === 'meter' ? 'bg-green-50 text-green-700' : 'bg-amber-50 text-amber-700'}>{l.source === 'meter' ? 'Releve' : 'Fallback'}</Badge></td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-[11px] text-purple-700 italic">
+                    Enregistrez d&apos;abord la cle pour pouvoir calculer les shares depuis les compteurs.
+                  </p>
+                )}
+              </div>
+            )}
             <div>
               <label className="form-label">Description</label>
               <Input value={keyForm.description} onChange={e => setKeyForm({...keyForm, description: e.target.value})} />

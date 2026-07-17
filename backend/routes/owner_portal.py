@@ -1431,6 +1431,17 @@ def create_owner_portal_router(db):
         for c in cats:
             nature_map[c["account_number"]] = c["name"]
 
+        # iter90ie : compteurs + releves pour cles de type "meter"
+        _meters_op = await db.meters.find(
+            {"copropriete_id": copropriete_id}, {"_id": 0}
+        ).to_list(1000)
+        _meter_ids_op = [m["id"] for m in _meters_op]
+        _readings_op = []
+        if _meter_ids_op:
+            _readings_op = await db.meter_readings.find(
+                {"meter_id": {"$in": _meter_ids_op}}, {"_id": 0}
+            ).to_list(100000)
+
         pdf_bytes = build_decompte_pdf(
             owner=owner, copropriete=copro, fiscal_year=fy,
             owner_lots=owner_lots, all_lots=all_lots,
@@ -1440,6 +1451,8 @@ def create_owner_portal_router(db):
             mutations=mutations_op,  # iter90g5 : prorata mutation
             mutation_entries=mutation_entries_op,  # iter90g6 : OD MUT-R/P/F
             owner_ledger_entries=owner_ledger_entries_op,  # iter90i9 : align Situation
+            meters=_meters_op,  # iter90ie : cles meter
+            meter_readings=_readings_op,
         )
 
         filename = f"decompte_{owner['name'].replace(' ', '_')}_{fy.get('name','').replace(' ', '_')}.pdf"

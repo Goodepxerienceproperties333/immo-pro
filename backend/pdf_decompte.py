@@ -71,6 +71,8 @@ def build_decompte_pdf(
     mutations: list = None,
     mutation_entries: list = None,
     owner_ledger_entries: list = None,
+    meters: list = None,
+    meter_readings: list = None,
 ) -> bytes:
     """Genere le PDF Decompte annuel pour un proprietaire.
 
@@ -307,9 +309,53 @@ def build_decompte_pdf(
     # ---- COMPUTE TOTALS (style Finlead : Lot -> Cle de repartition -> Compte) ----
     # Build distribution key index : dk_id -> {lots: {lot_id: quotity}, total_quotity}
     # Note: distribution_keys.lots use the field "share" (not "quotity")
+    #
+    # iter90ie : les cles `key_type == "meter"` ont leurs `lots` calcules
+    # DYNAMIQUEMENT ici depuis les compteurs (`meters`) et les releves
+    # (`meter_readings`) sur la periode de l'exercice. Un lot sans releve
+    # tombe automatiquement sur la cle de repli `fallback_key_id` (si
+    # renseignee). Cela remplace la valeur potentiellement obsolete
+    # stockee dans `dk.lots` (elle-meme mise a jour au dernier "recalcul"
+    # ecran syndic) par un calcul frais et deterministe base sur les
+    # dates de l'exercice courant.
+    from meter_shares import compute_meter_key_lots as _compute_meter_key_lots
+    _meters_all = meters or []
+    _readings_all = meter_readings or []
+    _fy_start_meter = fiscal_year.get("start_date", "") or ""
+    _fy_end_meter = fiscal_year.get("end_date", "") or ""
+    _dk_by_id_local = {dk.get("id"): dk for dk in distribution_keys}
+
+    def _resolve_key_lot_entries(dk):
+        """Retourne la liste d'entrees `[{lot_id, share, excluded}]` a
+        utiliser pour cette cle. Meme signature pour tous les types :
+        - quotity/equal/custom : renvoie `dk.lots` (schema historique).
+        - meter                : calcule via meter_shares.
+        """
+        if (dk.get("key_type") or "") != "meter":
+            return dk.get("lots", []) or []
+        # Cle meter - resolution dynamique
+        m_type = (dk.get("meter_type") or "").strip()
+        if not m_type or not _fy_start_meter or not _fy_end_meter:
+            return dk.get("lots", []) or []  # fallback safe
+        fb_key = _dk_by_id_local.get(dk.get("fallback_key_id") or "")
+        fb_lots = (fb_key or {}).get("lots") if fb_key else None
+        report = _compute_meter_key_lots(
+            meter_type=m_type,
+            meters=_meters_all,
+            readings=_readings_all,
+            all_lots=all_lots,
+            start_date=_fy_start_meter,
+            end_date=_fy_end_meter,
+            fallback_key_lots=fb_lots,
+        )
+        return [
+            {"lot_id": l["lot_id"], "share": l["share"], "excluded": False}
+            for l in (report.get("lots") or [])
+        ]
+
     dk_index = {}
     for dk in distribution_keys:
-        items = dk.get("lots", []) or []
+        items = _resolve_key_lot_entries(dk)
         lots_map = {}
         for it in items:
             # iter90ac : ignorer les lots explicitement exclus de la cle

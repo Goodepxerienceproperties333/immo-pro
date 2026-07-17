@@ -1,4 +1,68 @@
 # CoproManager PRD
+### Iter90ie (17/07/2026) — Feature Compteurs (Compteurs) : repartition dynamique des charges par consommation reelle
+
+**Context** : le syndic veut ventiler les factures Eau/Gaz/Electricite/Chauffage/Entretien chaudiere selon les **consommations reelles** de chaque lot, pas les tantiemes generaux. Les releves d'index sont saisis 1x par an (releve annuel) + eventuels releves intermediaires lors des mutations.
+
+**Livrables**
+
+Backend :
+- `routes/meters.py` :
+  - Types autorises etendus : `water`, `heating`, `electricity`, **`gas`**, **`boiler_maintenance`** (nouveau).
+  - Nouveau endpoint `GET /api/meters/consumption/by-lot?copropriete_id&meter_type&start_date&end_date[&fallback_key_id]` :
+    calcule la conso par lot sur la periode via le meme helper que le decompte.
+- `meter_shares.py` (nouveau module) :
+  - `compute_meter_key_lots(...)` : logique unique de repartition compteur.
+  - Priorite 1 : conso via 2 bornes de releves (index_end - index_start).
+  - Priorite 2 : somme des `consumption` sur la periode (fallback).
+  - Priorite 3 : cle de repli (`fallback_key_id`) pour lots sans compteur/releve.
+  - Retourne aussi les `coverage` stats (with_meter/via_fallback/excluded).
+- `routes/invoices.py` :
+  - `DistKeyInput` etendu : `key_type='meter'` + `meter_type` + `fallback_key_id`.
+  - Nouveau endpoint `POST /api/distribution-keys/{id}/compute-from-meters` :
+    `{start_date, end_date, dry_run:bool}` -> renvoie le rapport de calcul, et si `dry_run=false` persiste `lots[]` avec traceabilite (`source=meter|fallback`, `meter_computed_at`, `meter_computed_period`).
+- `pdf_decompte.py` :
+  - Nouveaux parametres `meters` + `meter_readings`.
+  - Les cles `key_type=meter` sont resolues **dynamiquement** au moment de la generation du decompte (les shares stockees deviennent secondaires - c'est TOUJOURS le calcul frais qui gagne). Un lot sans releve est basculé sur le fallback automatiquement.
+- `routes/reports.py` (2 appels) et `routes/owner_portal.py` (1 appel) :
+  - Chargent les meters + readings et les passent a `build_decompte_pdf`.
+
+Frontend :
+- `MetersPage.js` :
+  - Support des types `gas` (icone Flame orange) + `boiler_maintenance` (icone Wrench violet).
+  - Compteur "Commun" (sans lot_id) explicitement gere.
+- `DistributionKeysPage.js` :
+  - Nouvelle option `key_type=meter` dans le selecteur (label "Compteur (releves)").
+  - Bloc conditionnel violet "Configuration cle compteur" affichant :
+    - Selecteur `meter_type` (water/heating/electricity/gas/boiler_maintenance).
+    - Selecteur `fallback_key_id` (liste des cles non-meter).
+    - En mode edition : date pickers debut/fin + boutons "Apercu" et "Appliquer".
+    - Tableau d'apercu detaillant conso par lot avec badge `Releve` (vert) / `Fallback` (ambre).
+
+Tests (`test_iter90ie_meters_based_distribution_keys.py`, 8/8 verts) :
+1. Cas basique : 2 compteurs eau, conso 10 et 30 -> shares proportionnelles.
+2. Fallback : lot sans compteur -> tombe dans la cle fallback.
+3. Sans fallback : lot sans releve -> exclu.
+4. Filtre meter_type : compteur `gas` ignore pour cle `water`.
+5. Releves intermediaires (mutation) : conso vendeur/acheteur calculee correctement selon les bornes.
+6. Endpoint compute-from-meters dry_run + live (verifie persistance des shares).
+7. Endpoint refuse une cle non-meter (400).
+8. **End-to-end** : facture eau 400€ sur cle meter -> le PDF Decompte impute 32,14€ au lot A (conso 30 sur 373,34 total). Verifie via `fitz.get_text()` sur le PDF genere.
+
+**Verrous conserves** : `test_iter90ic_LOCK_...` (2/2) et `test_iter90hz`->`i9` continuent de passer.
+
+**Marche a suivre pour la PROD**
+1. **Save to Github** dans Emergent -> push le code sur main.
+2. **Redeployer** la PROD.
+3. Menu **Compteurs** : creer les compteurs eau/gaz/electricite par lot + relevés annuels (index).
+4. Menu **Cles de repartition** -> `Nouvelle cle` -> Type = `Compteur (releves)`.
+5. Choisir `meter_type` + `fallback_key_id` (typiquement la cle par defaut de l'ACP).
+6. Sauvegarder -> Editer -> saisir la periode (dates de l'exercice) -> `Apercu` -> `Appliquer`.
+7. Attacher la cle a une nature de depense (Eau/Gaz/Electricite) via ExpenseCategoriesPage OU directement sur la facture (`distribution_key_id`).
+8. Le decompte annuel utilise **dynamiquement** les consos, meme si les shares stockees sont obsoletes.
+
+---
+
+
 ### Iter90i1 (17/07/2026) — Migration GridFS deployable en 1 clic superadmin
 
 **Context** : le user avait besoin d'executer `migrate_uploads_to_gridfs.py` sur PROD sans acces SSH. On expose l'operation via un endpoint superadmin securise + une UI dediee dans Quality Audit.

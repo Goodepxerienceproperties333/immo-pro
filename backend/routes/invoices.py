@@ -37,7 +37,7 @@ class DistKeyLot(BaseModel):
 class DistKeyInput(BaseModel):
     name: str
     description: Optional[str] = ""
-    key_type: Optional[str] = "quotity"  # quotity, equal, custom
+    key_type: Optional[str] = "quotity"  # quotity, equal, custom, meter (iter90ie)
     lots: Optional[List[DistKeyLot]] = []
     copropriete_id: Optional[str] = ""
     # iter88 : numero alphanumerique unique par ACP (optionnel mais recommande)
@@ -47,6 +47,11 @@ class DistKeyInput(BaseModel):
     # Utilisee comme fallback quand une nature de depense n'a pas de cle
     # explicite et que la facture n'en specifie pas non plus.
     is_default: Optional[bool] = False
+    # iter90ie : cles basees sur les compteurs (releves eau/gaz/elec/chaudiere).
+    # meter_type : filtre les compteurs a inclure dans le calcul dynamique.
+    # fallback_key_id : cle de repli pour les lots sans releve sur la periode.
+    meter_type: Optional[str] = ""
+    fallback_key_id: Optional[str] = ""
 
 
 class InvoiceLineInput(BaseModel):
@@ -173,6 +178,9 @@ def create_invoices_router(db):
             "copropriete_id": copro_id,
             "code": code,
             "is_default": bool(data.is_default),
+            # iter90ie : clés meter
+            "meter_type": data.meter_type or "",
+            "fallback_key_id": data.fallback_key_id or "",
             "created_at": datetime.now(timezone.utc).isoformat()
         }
         await db.distribution_keys.insert_one(doc)
@@ -214,6 +222,9 @@ def create_invoices_router(db):
             "key_type": data.key_type, "lots": [l.model_dump() for l in data.lots],
             "code": code,
             "is_default": bool(data.is_default),
+            # iter90ie : propager les champs cle "meter"
+            "meter_type": data.meter_type or "",
+            "fallback_key_id": data.fallback_key_id or "",
         }
         await db.distribution_keys.update_one({"id": key_id}, {"$set": update})
         if update["is_default"]:
@@ -415,6 +426,109 @@ def create_invoices_router(db):
             )
             response["applied"] = True
 
+        return response
+
+    # ---- COMPUTE FROM METERS (iter90ie) ----
+    @router.post("/distribution-keys/{key_id}/compute-from-meters")
+    async def compute_key_from_meters(key_id: str, data: dict):
+        """iter90ie : Recalcule les `lots` d'une cle `key_type=meter` a partir
+        des relevas de compteurs de l'ACP sur la periode demandee.
+
+        Input body :
+          {
+            "start_date": "YYYY-MM-DD",
+            "end_date":   "YYYY-MM-DD",
+            "dry_run":    bool (default True)
+          }
+
+        En dry_run, on renvoie le rapport de calcul sans persister.
+        En live, on met a jour `distribution_keys.lots` (chaque entree porte
+        share + source="meter"|"fallback"). L'ordre des lots est preserve
+        selon l'ordre de `lots` de l'ACP.
+        """
+        from meter_shares import compute_meter_key_lots
+        existing = await db.distribution_keys.find_one({"id": key_id}, {"_id": 0})
+        if not existing:
+            raise HTTPException(404, "Cle non trouvee")
+        if (existing.get("key_type") or "") != "meter":
+            raise HTTPException(
+                400,
+                f"Cette cle est de type '{existing.get('key_type')}', "
+                "seules les cles de type 'meter' peuvent etre recalculees "
+                "depuis les compteurs.",
+            )
+        meter_type = (existing.get("meter_type") or "").strip()
+        if not meter_type:
+            raise HTTPException(400, "meter_type manquant sur la cle.")
+        copro_id = existing.get("copropriete_id") or ""
+        start_date = (data.get("start_date") or "").strip()
+        end_date = (data.get("end_date") or "").strip()
+        if not start_date or not end_date:
+            raise HTTPException(400, "start_date et end_date sont obligatoires.")
+        dry_run = bool(data.get("dry_run", True))
+
+        meters = await db.meters.find(
+            {"copropriete_id": copro_id, "meter_type": meter_type},
+            {"_id": 0},
+        ).to_list(1000)
+        meter_ids = [m["id"] for m in meters]
+        readings = []
+        if meter_ids:
+            readings = await db.meter_readings.find(
+                {"meter_id": {"$in": meter_ids}}, {"_id": 0}
+            ).to_list(100000)
+        all_lots = await db.lots.find(
+            {"copropriete_id": copro_id}, {"_id": 0}
+        ).to_list(10000)
+
+        fallback_key_lots = None
+        fallback_key_id = (existing.get("fallback_key_id") or "").strip()
+        if fallback_key_id:
+            fbk = await db.distribution_keys.find_one(
+                {"id": fallback_key_id, "copropriete_id": copro_id},
+                {"_id": 0},
+            )
+            if fbk:
+                fallback_key_lots = fbk.get("lots") or []
+
+        report = compute_meter_key_lots(
+            meter_type=meter_type,
+            meters=meters,
+            readings=readings,
+            all_lots=all_lots,
+            start_date=start_date,
+            end_date=end_date,
+            fallback_key_lots=fallback_key_lots,
+        )
+
+        response = {
+            "key_id": key_id,
+            "meter_type": meter_type,
+            "period": {"start_date": start_date, "end_date": end_date},
+            "report": report,
+        }
+
+        if not dry_run:
+            # Persistance : on ecrit les lots avec share + source (traceabilite).
+            new_lots = [
+                {
+                    "lot_id": l["lot_id"],
+                    "lot_number": l["lot_number"],
+                    "share": round(float(l["share"]), 4),
+                    "excluded": False,
+                    "source": l["source"],
+                }
+                for l in report["lots"]
+            ]
+            await db.distribution_keys.update_one(
+                {"id": key_id},
+                {"$set": {
+                    "lots": new_lots,
+                    "meter_computed_at": datetime.now(timezone.utc).isoformat(),
+                    "meter_computed_period": {"start_date": start_date, "end_date": end_date},
+                }},
+            )
+            response["applied"] = True
         return response
 
     @router.post("/distribution-keys/bulk-rebuild")

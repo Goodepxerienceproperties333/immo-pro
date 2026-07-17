@@ -506,6 +506,18 @@ async def _build_decompte_annuel_pdf(db, owner_id, copropriete_id, fiscal_year_i
     for c in cats:
         nature_map[c["account_number"]] = c["name"]
 
+    # iter90ie : charger les compteurs + releves de l'ACP pour que les cles
+    # de type "meter" soient resolues dynamiquement lors du calcul du decompte.
+    meters_ = await db.meters.find(
+        {"copropriete_id": copropriete_id}, {"_id": 0}
+    ).to_list(1000)
+    meter_ids = [m["id"] for m in meters_]
+    meter_readings_ = []
+    if meter_ids:
+        meter_readings_ = await db.meter_readings.find(
+            {"meter_id": {"$in": meter_ids}}, {"_id": 0}
+        ).to_list(100000)
+
     pdf_bytes = build_decompte_pdf(
         owner=owner, copropriete=copro, fiscal_year=fy,
         owner_lots=owner_lots, all_lots=all_lots,
@@ -517,6 +529,8 @@ async def _build_decompte_annuel_pdf(db, owner_id, copropriete_id, fiscal_year_i
         mutations=mutations_docs,  # iter90g5 : prorata mutation
         mutation_entries=mutation_entries_docs,  # iter90g6 : OD lot_mutation
         owner_ledger_entries=owner_ledger_entries,  # iter90i9 : align Situation<->Decompte
+        meters=meters_,  # iter90ie : cles de type meter
+        meter_readings=meter_readings_,
     )
     safe_name = (owner.get("name", "owner") or "owner").replace(" ", "_").replace("/", "_")
     fy_name = (fy.get("name", "") or "").replace(" ", "_")
@@ -2035,6 +2049,17 @@ def create_reports_router(db):
         for c in cats:
             nature_map[c["account_number"]] = c["name"]
 
+        # iter90ie : compteurs + releves pour cles de type "meter"
+        meters_ = await db.meters.find(
+            {"copropriete_id": copropriete_id}, {"_id": 0}
+        ).to_list(1000)
+        meter_ids = [m["id"] for m in meters_]
+        meter_readings_ = []
+        if meter_ids:
+            meter_readings_ = await db.meter_readings.find(
+                {"meter_id": {"$in": meter_ids}}, {"_id": 0}
+            ).to_list(100000)
+
         pdf_bytes = build_decompte_pdf(
             owner=owner, copropriete=copro, fiscal_year=fy,
             owner_lots=owner_lots, all_lots=all_lots,
@@ -2053,6 +2078,9 @@ def create_reports_router(db):
             mutation_entries=mutation_entries_docs,
             # iter90i9 : align Decompte totals with Situation
             owner_ledger_entries=owner_ledger_entries,
+            # iter90ie : cles meter
+            meters=meters_,
+            meter_readings=meter_readings_,
         )
 
         filename = f"decompte_{owner['name'].replace(' ', '_')}_{fy.get('name','').replace(' ', '_')}.pdf"

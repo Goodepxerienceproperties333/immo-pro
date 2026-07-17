@@ -8,13 +8,15 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { toast } from 'sonner';
-import { Plus, Trash2, Droplets, Flame, Zap, Activity } from 'lucide-react';
+import { Plus, Trash2, Droplets, Flame, Zap, Activity, Wrench, Flame as FlameGas } from 'lucide-react';
 import { fmtDate } from '@/lib/dateFmt';
 
 const METER_TYPES = [
   { value: 'water', label: 'Eau', icon: Droplets, color: '#0284C7' },
   { value: 'heating', label: 'Chauffage', icon: Flame, color: '#FF6B00' },
   { value: 'electricity', label: 'Electricite', icon: Zap, color: '#00A650' },
+  { value: 'gas', label: 'Gaz', icon: FlameGas, color: '#D97706' },
+  { value: 'boiler_maintenance', label: 'Entretien chaudiere', icon: Wrench, color: '#7C3AED' },
 ];
 
 export default function MetersPage() {
@@ -40,13 +42,19 @@ export default function MetersPage() {
     setReadings(data);
   };
 
-  const getLotNumber = (lotId) => lots.find(l => l.id === lotId)?.number || '-';
+  const getLotNumber = (lotId) => {
+    if (!lotId) return 'Commun';
+    return lots.find(l => l.id === lotId)?.number || '-';
+  };
 
   const openCreateMeter = () => { setMeterForm({ name: '', meter_type: 'water', unit: '', lot_id: '', serial_number: '' }); setMeterDialog(true); };
 
   const saveMeter = async () => {
     try {
-      await api.post('/meters', meterForm);
+      const payload = { ...meterForm };
+      // Un compteur "Commun" est stocke sans lot_id
+      if (payload.lot_id === 'none') payload.lot_id = '';
+      await api.post('/meters', payload);
       toast.success('Compteur cree'); setMeterDialog(false); load();
     } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); }
   };
