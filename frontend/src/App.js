@@ -37,6 +37,7 @@ import AdminMutationsAuditPage from "@/pages/AdminMutationsAuditPage";
 import TeamMembersPage from "@/pages/TeamMembersPage";
 import ProfilePage from "@/pages/ProfilePage";
 import CommunicationPage from "@/pages/CommunicationPage";
+import CommunicationHistoryPage from "@/pages/CommunicationHistoryPage";
 import EmailTemplatesPage from "@/pages/EmailTemplatesPage";
 import AdminSyndicConfigPage from "@/pages/AdminSyndicConfigPage";
 import MonBureauPage from "@/pages/MonBureauPage";
@@ -118,6 +119,7 @@ function AppRoutes() {
         <Route path="admin/mutations-audit" element={<AdminMutationsAuditPage />} />
         <Route path="team" element={<TeamMembersPage />} />
         <Route path="communication" element={<CommunicationPage />} />
+        <Route path="communication/history" element={<CommunicationHistoryPage />} />
         <Route path="email-templates" element={<EmailTemplatesPage />} />
         <Route path="admin/syndic-config" element={<AdminSyndicConfigPage />} />
         <Route path="mon-bureau" element={<MonBureauPage />} />

@@ -6,7 +6,7 @@ import {
   LayoutDashboard, Users, Building2, UserCheck, BookOpen, FileText,
   Receipt, Gauge, Landmark, FolderOpen, LogOut, ChevronLeft, ChevronRight,
   Menu, Shield, Home, Truck, Calendar, BookMarked, Megaphone, BarChart3, Bell, Wallet, Tag, UserCog, Pencil,
-  ShieldAlert, Unlock, ScrollText, IdCard, Activity, FileCheck, FileArchive, Mail, HardDrive, Key
+  ShieldAlert, Unlock, ScrollText, IdCard, Activity, FileCheck, FileArchive, Mail, HardDrive, Key, Send
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -44,6 +44,7 @@ const sections = [
     { to: '/balance-tiers', icon: Users, label: 'Balance de Tiers' },
     { to: '/reminders', icon: Bell, label: 'Rappels paiement' },
     { to: '/communication', icon: Mail, label: 'Communication' },
+    { to: '/communication/history', icon: Send, label: 'Historique envois' },
     { to: '/email-templates', icon: FileText, label: 'Modeles emails' },
     { to: '/documents', icon: FolderOpen, label: 'Documents' },
   ]},
