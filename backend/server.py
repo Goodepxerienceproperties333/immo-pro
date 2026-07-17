@@ -947,12 +947,25 @@ async def dashboard_stats(request: Request, copropriete_id: Optional[str] = None
         tenants_count = await db.tenants.count_documents(q)
         invoices_count = await db.invoices.count_documents(q)
         unpaid = await db.invoices.count_documents({**q, "status": "unpaid"})
-        pipeline = [
-            {"$match": {**q, "status": {"$in": ["paid", "unpaid"]}}},
-            {"$group": {"_id": None, "total": {"$sum": "$total_amount"}}},
-        ]
-        agg = await db.invoices.aggregate(pipeline).to_list(1)
-        total_charges = agg[0]["total"] if agg else 0
+        # iter90i4 : total_charges DOIT correspondre exactement au total de la
+        # page "Liste des depenses" (`compute_expense_rows`). Avant : simple
+        # agregation `sum(total_amount) WHERE status IN [paid, unpaid]` qui
+        # excluait les notes de credit, les factures non lettrees et surtout
+        # ne comptabilisait pas les ecritures FI/OD directes sur classe 6.
+        # Aligner les deux vues evite les ecarts perturbants pour le syndic.
+        try:
+            from expense_rows import compute_expense_rows
+            _rows, _totals = await compute_expense_rows(db, copropriete_id)
+            total_charges = float(_totals.get("total", 0) or 0)
+        except Exception:
+            # Fallback defensif : garde l'ancienne agregation si le calcul
+            # riche echoue (evite un dashboard casse).
+            pipeline = [
+                {"$match": {**q, "status": {"$in": ["paid", "unpaid"]}}},
+                {"$group": {"_id": None, "total": {"$sum": "$total_amount"}}},
+            ]
+            agg = await db.invoices.aggregate(pipeline).to_list(1)
+            total_charges = agg[0]["total"] if agg else 0
         recent_entries = await db.journal_entries.find(
             q, {"_id": 0}
         ).sort("created_at", -1).to_list(5)
