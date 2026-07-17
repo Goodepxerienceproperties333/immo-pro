@@ -419,6 +419,12 @@ async def generate_sale_entry(db, fund_call: dict) -> dict | None:
     Roulement part: Dr 40000XXX per owner + Cr 100 (Fonds de roulement, classe 1).
     Reserve et Roulement sont des augmentations de PASSIF (classe 1), pas
     des produits (classe 7) - conforme PCMN belge copropriete.
+
+    iter90i7 : garde symetrique - si un JE AP legacy existe deja pour le
+    meme fund_call, le supprime AVANT de creer le VE. Cela verrouille le
+    fix cote generateur : impossible d'obtenir un doublon AP/VE, meme si
+    la route legacy /fund-calls/{id}/generate-entries a ete appelee en
+    premier.
     """
     copro_id = fund_call.get("copropriete_id", "")
     if not copro_id:
@@ -426,6 +432,25 @@ async def generate_sale_entry(db, fund_call: dict) -> dict | None:
     distribution = fund_call.get("distribution") or []
     if not distribution:
         return None
+
+    # iter90i7 : purge des AP legacy en doublon
+    fc_id = fund_call.get("id", "")
+    if fc_id:
+        try:
+            purge = await db.journal_entries.delete_many({
+                "journal_type": "AP",
+                "fund_call_id": fc_id,
+                "reversed": {"$ne": True},
+                "is_reversal": {"$ne": True},
+            })
+            if purge.deleted_count:
+                import logging
+                logging.getLogger(__name__).info(
+                    f"[iter90i7] generate_sale_entry: purged "
+                    f"{purge.deleted_count} legacy AP for fund_call {fc_id}"
+                )
+        except Exception:
+            pass
 
     # Fetch owners for tier accounts
     owner_ids = [d.get("owner_id") for d in distribution if d.get("owner_id")]

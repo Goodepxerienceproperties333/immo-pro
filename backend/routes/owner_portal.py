@@ -1378,6 +1378,26 @@ def create_owner_portal_router(db):
             {"_id": 0},
         ).to_list(10000)
 
+        # iter90i9 : grand livre canonique du proprio (source Situation) -
+        # aligne les totaux du Decompte sur la Situation de compte.
+        _tier_vals_op = [
+            v for v in ((owner.get("tier_accounts") or {}).get(copropriete_id, {}) or {}).values()
+            if isinstance(v, str) and v
+        ]
+        _owner_ledger_q_op = {
+            "copropriete_id": copropriete_id,
+            "date": {"$gte": fy["start_date"], "$lte": fy["end_date"]},
+            "reversed": {"$ne": True},
+            "is_reversal": {"$ne": True},
+        }
+        _or_op = [{"lines.third_party_id": owner_id}]
+        if _tier_vals_op:
+            _or_op.append({"lines.account_number": {"$in": _tier_vals_op}})
+        _owner_ledger_q_op["$or"] = _or_op
+        owner_ledger_entries_op = await db.journal_entries.find(
+            _owner_ledger_q_op, {"_id": 0},
+        ).to_list(100000)
+
         fcs = await db.fund_calls.find(
             {"copropriete_id": copropriete_id, "date": {"$gte": fy["start_date"], "$lte": fy["end_date"]}},
             {"_id": 0}
@@ -1419,6 +1439,7 @@ def create_owner_portal_router(db):
             expense_accounts_map=nature_map,
             mutations=mutations_op,  # iter90g5 : prorata mutation
             mutation_entries=mutation_entries_op,  # iter90g6 : OD MUT-R/P/F
+            owner_ledger_entries=owner_ledger_entries_op,  # iter90i9 : align Situation
         )
 
         filename = f"decompte_{owner['name'].replace(' ', '_')}_{fy.get('name','').replace(' ', '_')}.pdf"

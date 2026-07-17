@@ -448,6 +448,30 @@ async def _build_decompte_annuel_pdf(db, owner_id, copropriete_id, fiscal_year_i
         {"_id": 0},
     ).to_list(10000)
 
+    # iter90i9 : grand livre canonique du proprio - TOUTES les JE (non
+    # contre-passees) qui touchent son compte tier ou dont une ligne porte
+    # `third_party_id = owner_id`. Utilise pour recalculer total_called et
+    # total_payments (meme source que la Situation de compte) et garantir
+    # que Decompte et Situation restent alignes meme apres une mutation
+    # mid-year.
+    _tier_vals_i9 = [
+        v for v in ((owner.get("tier_accounts") or {}).get(copropriete_id, {}) or {}).values()
+        if isinstance(v, str) and v
+    ]
+    owner_ledger_query = {
+        "copropriete_id": copropriete_id,
+        "date": {"$gte": fy["start_date"], "$lte": fy["end_date"]},
+        "reversed": {"$ne": True},
+        "is_reversal": {"$ne": True},
+    }
+    _or_clauses = [{"lines.third_party_id": owner_id}]
+    if _tier_vals_i9:
+        _or_clauses.append({"lines.account_number": {"$in": _tier_vals_i9}})
+    owner_ledger_query["$or"] = _or_clauses
+    owner_ledger_entries = await db.journal_entries.find(
+        owner_ledger_query, {"_id": 0},
+    ).to_list(100000)
+
     fund_calls = await db.fund_calls.find(
         {"copropriete_id": copropriete_id,
          "date": {"$gte": fy["start_date"], "$lte": fy["end_date"]}},
@@ -491,6 +515,8 @@ async def _build_decompte_annuel_pdf(db, owner_id, copropriete_id, fiscal_year_i
         preview=preview,
         syndic_pdf_ctx=await resolve_syndic_pdf_context(db, copro),
         mutations=mutations_docs,  # iter90g5 : prorata mutation
+        mutation_entries=mutation_entries_docs,  # iter90g6 : OD lot_mutation
+        owner_ledger_entries=owner_ledger_entries,  # iter90i9 : align Situation<->Decompte
     )
     safe_name = (owner.get("name", "owner") or "owner").replace(" ", "_").replace("/", "_")
     fy_name = (fy.get("name", "") or "").replace(" ", "_")
@@ -1931,6 +1957,25 @@ def create_reports_router(db):
             {"_id": 0},
         ).to_list(10000)
 
+        # iter90i9 : grand livre canonique du proprio (source Situation)
+        _tier_vals_i9 = [
+            v for v in ((owner.get("tier_accounts") or {}).get(copro_id_use, {}) or {}).values()
+            if isinstance(v, str) and v
+        ]
+        _owner_ledger_q = {
+            "copropriete_id": copro_id_use,
+            "date": {"$gte": fy["start_date"], "$lte": fy["end_date"]},
+            "reversed": {"$ne": True},
+            "is_reversal": {"$ne": True},
+        }
+        _or_i9 = [{"lines.third_party_id": owner_id}]
+        if _tier_vals_i9:
+            _or_i9.append({"lines.account_number": {"$in": _tier_vals_i9}})
+        _owner_ledger_q["$or"] = _or_i9
+        owner_ledger_entries = await db.journal_entries.find(
+            _owner_ledger_q, {"_id": 0},
+        ).to_list(100000)
+
         # Fund calls in period
         fund_calls = await db.fund_calls.find(
             {"copropriete_id": copro_id_use,
@@ -1984,6 +2029,8 @@ def create_reports_router(db):
             mutations=mutations_docs,
             # iter90g6 : OD MUT-R/P/F pour solde exact
             mutation_entries=mutation_entries_docs,
+            # iter90i9 : align Decompte totals with Situation
+            owner_ledger_entries=owner_ledger_entries,
         )
 
         filename = f"decompte_{owner['name'].replace(' ', '_')}_{fy.get('name','').replace(' ', '_')}.pdf"

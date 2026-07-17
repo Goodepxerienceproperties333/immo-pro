@@ -70,6 +70,7 @@ def build_decompte_pdf(
     syndic_pdf_ctx: dict = None,
     mutations: list = None,
     mutation_entries: list = None,
+    owner_ledger_entries: list = None,
 ) -> bytes:
     """Genere le PDF Decompte annuel pour un proprietaire.
 
@@ -85,6 +86,16 @@ def build_decompte_pdf(
     parametre, un acheteur mid-year voit un decompte incomplet : ses
     transferts de dettes reprises au vendeur ne sont pas imputes, son solde
     apparait faussement crediteur.
+
+    iter90i9 : `owner_ledger_entries` (optionnel) contient TOUTES les JE non
+    contre-passees dont une ligne porte `third_party_id = owner_id` OU un
+    compte tier du proprietaire (`tier_accounts.[copro_id]`). C'est la MEME
+    source que la Situation de compte : quand fourni, on l'utilise pour
+    calculer `total_called`, `total_payments` et `balance` afin que le
+    Decompte et la Situation restent alignes. Sans ce parametre, on tombe
+    dans le calcul legacy base sur `fund_calls.distribution[owner_id]` qui
+    peut rater des appels si la distribution pointe vers l'ancien
+    proprietaire (bug legacy MATEXI/TEUWEN mutations mid-year).
     """
     use_new_layout = bool(syndic_pdf_ctx)  # iter90hm : nouveau layout TOUJOURS actif si contexte fourni
     from pdf_layout import build_header_with_logo, build_recipient_address_flowable, draw_legal_footer
@@ -606,6 +617,48 @@ def build_decompte_pdf(
 
     total_payments = sum(abs(float(p.get("amount", 0) or 0)) for p in payments)
 
+    # iter90i9 : override total_called et total_payments depuis le grand
+    # livre canonique du proprietaire (meme source que la Situation de
+    # compte). Assure l'egalite Decompte.header == Situation.total_called
+    # meme quand fund_calls.distribution pointe vers l'ancien proprietaire
+    # suite a une mutation. Le detail par type d'appel (provisions /
+    # reserve / roulement) reste calcule via fund_calls.distribution pour
+    # l'affichage de la section 3.
+    if owner_ledger_entries:
+        # tier accounts explicites du proprietaire pour cette ACP
+        _tier_accs = (owner.get("tier_accounts") or {}).get(copropriete.get("id", ""), {}) or {}
+        _valid_accs = {a for a in _tier_accs.values() if isinstance(a, str) and a}
+        _oid = owner.get("id", "")
+        _fy_start = fiscal_year.get("start_date", "")
+        _fy_end = fiscal_year.get("end_date", "")
+        _debit_ledger = 0.0
+        _credit_ledger = 0.0
+        seen_lines = set()
+        for e in owner_ledger_entries:
+            if e.get("reversed") or e.get("is_reversal"):
+                continue
+            e_date = e.get("date", "")
+            if _fy_start and e_date < _fy_start:
+                continue
+            if _fy_end and e_date > _fy_end:
+                continue
+            for idx, ln in enumerate(e.get("lines", []) or []):
+                acc = ln.get("account_number", "")
+                tpid = ln.get("third_party_id")
+                # Accepte les lignes marquees par third_party_id OU par
+                # compte tier canonique du proprio (couvre les JE legacy
+                # sans third_party_id sur les lignes).
+                if tpid != _oid and acc not in _valid_accs:
+                    continue
+                key = (e.get("id"), idx)
+                if key in seen_lines:
+                    continue
+                seen_lines.add(key)
+                _debit_ledger += float(ln.get("debit", 0) or 0)
+                _credit_ledger += float(ln.get("credit", 0) or 0)
+        total_called = round(_debit_ledger, 2)
+        total_payments = round(_credit_ledger, 2)
+
     # iter90g6 : agrege les ecritures de mutation (OD MUT-R / MUT-P / MUT-F)
     # touchant le compte tier du proprietaire. Un ACHETEUR mid-year recoit
     # un DEBIT (dette reprise du vendeur). Un VENDEUR recoit un CREDIT
@@ -658,7 +711,15 @@ def build_decompte_pdf(
         2,
     )
     boni_provisions = round(total_called_provisions - total_owner_charges, 2)
-    balance = round(total_imputed - total_payments, 2)
+    # iter90i9 : quand le grand livre du proprietaire est fourni (source
+    # canonique), on utilise la formule Situation `total_called - total_payments`.
+    # Cela evite toute divergence entre Decompte et Situation. Sinon, on
+    # tombe sur l'ancien calcul base sur fund_calls (peut ecarter les
+    # appels post-mutation pour un acheteur mid-year).
+    if owner_ledger_entries:
+        balance = round(total_called - total_payments, 2)
+    else:
+        balance = round(total_imputed - total_payments, 2)
 
     # ---- SUMMARY CARD ----
     sold_color = RED if balance > 0.01 else (GREEN if balance < -0.01 else SLATE_500)

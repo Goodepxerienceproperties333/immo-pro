@@ -305,21 +305,110 @@ export default function OwnerPortalPage() {
     () => (dashboard?.pending_calls || []).filter(p => p.copropriete_id === selectedAcp),
     [dashboard, selectedAcp],
   );
+
+  // iter90i8 : selecteur de trimestre pour lecture apaisante. Par defaut,
+  // le proprio voit UNIQUEMENT son trimestre courant (pas l'annee complete
+  // qui peut faire peur en debut d'exercice). Peut basculer sur T1..T4 ou
+  // 'year' pour la vue annuelle complete.
+  const currentQuarter = useMemo(() => {
+    const m = new Date().getMonth(); // 0-indexed
+    if (m < 3) return 'T1';
+    if (m < 6) return 'T2';
+    if (m < 9) return 'T3';
+    return 'T4';
+  }, []);
+  const [selectedQuarter, setSelectedQuarter] = useState(currentQuarter);
+  const currentYear = useMemo(() => new Date().getFullYear(), []);
+
+  // Bornes du trimestre selectionne (ou de l'annee complete)
+  const quarterBounds = useMemo(() => {
+    if (selectedQuarter === 'year') {
+      return { start: new Date(currentYear, 0, 1), end: new Date(currentYear, 11, 31, 23, 59, 59) };
+    }
+    const qMap = { T1: 0, T2: 3, T3: 6, T4: 9 };
+    const startMonth = qMap[selectedQuarter] ?? 0;
+    const start = new Date(currentYear, startMonth, 1);
+    const end = new Date(currentYear, startMonth + 3, 0, 23, 59, 59);
+    return { start, end };
+  }, [selectedQuarter, currentYear]);
+
+  const inQuarter = useMemo(() => {
+    return (isoStr) => {
+      if (!isoStr) return false;
+      const d = new Date(isoStr);
+      if (isNaN(d.getTime())) return false;
+      return d >= quarterBounds.start && d <= quarterBounds.end;
+    };
+  }, [quarterBounds]);
+
+  // iter90i8 : agregats du trimestre selectionne (defaut = trimestre courant).
+  // Calcules a partir de fundCalls (source fund_calls.distribution : la
+  // vraie repartition avec dates et statut de paiement par owner_share).
+  const quarterAgg = useMemo(() => {
+    let called = 0;
+    let paid = 0;
+    let pendingCount = 0;
+    let nextCall = null;
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+    for (const fc of fundCalls) {
+      // On considere qu'un appel appartient au trimestre selon sa `date`
+      // (date d'emission), qui reflete le moment ou il devient "du".
+      const inQ = inQuarter(fc.date) || inQuarter(fc.due_date);
+      if (!inQ) continue;
+      const amt = Number(fc.my_amount || 0);
+      called += amt;
+      if (fc.paid) {
+        paid += amt;
+      } else {
+        pendingCount += 1;
+        // Prochain paiement du trimestre : celui avec l'echeance la plus proche
+        const dueIso = fc.due_date || fc.date;
+        if (dueIso) {
+          const due = new Date(dueIso);
+          due.setHours(0, 0, 0, 0);
+          const daysDelta = Math.round((due - now) / (1000 * 60 * 60 * 24));
+          let urgency = 'ok';
+          if (daysDelta < 0) urgency = 'overdue';
+          else if (daysDelta <= 7) urgency = 'urgent';
+          else if (daysDelta <= 30) urgency = 'soon';
+          const cand = {
+            fund_call_name: fc.name,
+            amount: amt,
+            due_date: dueIso,
+            vcs_code: fc.vcs_code,
+            daysDelta, urgency,
+          };
+          if (!nextCall || (cand.daysDelta !== null && (nextCall.daysDelta === null || cand.daysDelta < nextCall.daysDelta))) {
+            nextCall = cand;
+          }
+        }
+      }
+    }
+    return {
+      totalCalled: +called.toFixed(2),
+      totalPaid: +paid.toFixed(2),
+      balance: +(called - paid).toFixed(2),
+      status: called - paid > 0.01 ? 'debiteur' : called - paid < -0.01 ? 'crediteur' : 'solde',
+      pendingCount,
+      nextCall,
+    };
+  }, [fundCalls, inQuarter]);
+
   const chargesByCategory = useMemo(() => {
-    const twelveMonthsAgo = new Date();
-    twelveMonthsAgo.setMonth(twelveMonthsAgo.getMonth() - 12);
+    // iter90i8 : filtre les charges par trimestre selectionne (au lieu des
+    // 12 derniers mois). Rend le donut coherent avec la vue trimestrielle.
     const totals = {};
     for (const c of chargesMemo) {
       if (!c.date) continue;
-      const d = new Date(c.date);
-      if (d < twelveMonthsAgo) continue;
+      if (!inQuarter(c.date)) continue;
       const cat = c.category || 'Autres';
       totals[cat] = (totals[cat] || 0) + (c.my_amount || 0);
     }
     return Object.entries(totals)
       .map(([name, value]) => ({ name, value: Math.round(value * 100) / 100 }))
       .sort((a, b) => b.value - a.value);
-  }, [chargesMemo]);
+  }, [chargesMemo, inQuarter]);
   const upcomingWithCountdown = useMemo(() => {
     const now = new Date();
     now.setHours(0, 0, 0, 0);
@@ -681,19 +770,28 @@ export default function OwnerPortalPage() {
           </div>
 
           <TabsContent value="situation" className="mt-0 space-y-5" data-testid="situation-tab-content">
+            {/* iter90i8 : selecteur de trimestre - vue apaisante par periode */}
+            <QuarterSelector
+              selected={selectedQuarter}
+              onChange={setSelectedQuarter}
+              currentQuarter={currentQuarter}
+              year={currentYear}
+            />
             <SituationHero
-              status={stats.status}
-              balance={stats.balance || 0}
-              totalCalled={stats.total_called || 0}
-              totalPaid={stats.total_paid || 0}
-              nextCall={nextCall}
-              totalPending={totalPending}
+              status={quarterAgg.status}
+              balance={quarterAgg.balance}
+              totalCalled={quarterAgg.totalCalled}
+              totalPaid={quarterAgg.totalPaid}
+              nextCall={quarterAgg.nextCall}
+              totalPending={quarterAgg.balance > 0.01 ? quarterAgg.balance : 0}
               totalCharges12m={totalCharges12m}
-              pendingCount={upcomingWithCountdown.length}
+              pendingCount={quarterAgg.pendingCount}
               copyVcs={copyVcs}
+              periodLabel={selectedQuarter === 'year' ? `Annee ${currentYear}` : `${selectedQuarter} ${currentYear}`}
+              isYearView={selectedQuarter === 'year'}
             />
             <div className="grid grid-cols-1 lg:grid-cols-5 gap-5">
-              <ChargesDonut data={chargesByCategory} total={totalCharges12m} />
+              <ChargesDonut data={chargesByCategory} total={totalCharges12m} periodLabel={selectedQuarter === 'year' ? `Annee ${currentYear}` : `${selectedQuarter} ${currentYear}`} />
               <UpcomingTimeline items={upcomingWithCountdown} copyVcs={copyVcs} />
             </div>
           </TabsContent>
@@ -1196,27 +1294,100 @@ function StatCard({ icon, label, value, highlight, badge }) {
 
 // ==============================================================
 // iter90da (Feb 2026) : onglet "Ma situation" - visuels executifs
+// iter90i8 : sélecteur de trimestre pour lecture apaisante
 // ==============================================================
 
 // Palette pour donut charges (categoriel, contrastee)
 const CHARGE_COLORS = ['#022D52', '#8B5CF6', '#10B981', '#F59E0B', '#EF4444', '#EC4899', '#06B6D4', '#84CC16', '#F97316', '#6366F1', '#14B8A6', '#A855F7'];
 
-function SituationHero({ status, balance, totalCalled, totalPaid, nextCall, totalPending, totalCharges12m, pendingCount, copyVcs }) {
+// iter90i8 : selecteur de trimestre - vue apaisante. Le proprio choisit une
+// periode (T1..T4 ou annee complete). Le trimestre courant est mis en avant
+// visuellement (badge "En cours"). Chaque bouton indique le range de dates
+// pour eviter toute ambiguite.
+function QuarterSelector({ selected, onChange, currentQuarter, year }) {
+  const quarters = [
+    { id: 'T1', label: 'T1', range: `Jan - Mar` },
+    { id: 'T2', label: 'T2', range: `Avr - Jun` },
+    { id: 'T3', label: 'T3', range: `Jul - Sep` },
+    { id: 'T4', label: 'T4', range: `Oct - Dec` },
+  ];
+  return (
+    <div className="rounded-lg border border-slate-200 bg-white p-3" data-testid="quarter-selector">
+      <div className="flex items-center gap-3 flex-wrap">
+        <div className="flex items-center gap-2 min-w-0">
+          <CalendarClock size={16} className="text-[#022D52] shrink-0" />
+          <div className="flex flex-col">
+            <span className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold">Periode</span>
+            <span className="text-[10px] text-slate-400">Cliquez pour changer de vue</span>
+          </div>
+        </div>
+        <div className="flex items-center gap-1.5 flex-wrap ml-auto">
+          {quarters.map((q) => {
+            const isCurrent = q.id === currentQuarter;
+            const isSelected = q.id === selected;
+            return (
+              <button
+                key={q.id}
+                type="button"
+                onClick={() => onChange(q.id)}
+                className={`relative flex flex-col items-center px-3 py-1.5 rounded-md border transition-all ${isSelected
+                  ? 'bg-[#022D52] text-white border-[#022D52] shadow-sm'
+                  : 'bg-white text-slate-700 border-slate-200 hover:border-[#022D52]/40 hover:bg-slate-50'}`}
+                data-testid={`quarter-btn-${q.id}`}
+              >
+                <span className="text-xs font-semibold">{q.label}</span>
+                <span className={`text-[9px] mt-0.5 ${isSelected ? 'text-white/70' : 'text-slate-400'}`}>
+                  {q.range}
+                </span>
+                {isCurrent && !isSelected && (
+                  <span className="absolute -top-1.5 -right-1 bg-emerald-500 text-white text-[8px] rounded-full px-1 py-0.5 leading-none">
+                    En cours
+                  </span>
+                )}
+              </button>
+            );
+          })}
+          <div className="w-px h-8 bg-slate-200 mx-1" />
+          <button
+            type="button"
+            onClick={() => onChange('year')}
+            className={`px-3 py-1.5 rounded-md border transition-all text-xs font-semibold ${selected === 'year'
+              ? 'bg-[#022D52] text-white border-[#022D52] shadow-sm'
+              : 'bg-white text-slate-700 border-slate-200 hover:border-[#022D52]/40 hover:bg-slate-50'}`}
+            data-testid="quarter-btn-year"
+            title="Vue de l'annee complete"
+          >
+            {year} entier
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SituationHero({ status, balance, totalCalled, totalPaid, nextCall, totalPending, totalCharges12m, pendingCount, copyVcs, periodLabel, isYearView }) {
   // Bloc solde : couleur selon statut
   const isDebtor = status === 'debiteur';
   const isCreditor = status === 'crediteur';
+  // iter90i8 : palette apaisante quand le proprio n'a rien a payer sur la
+  // periode (bleu doux au lieu de gris terne, pour valoriser la bonne situation).
   const soldeBg = isDebtor
     ? 'bg-gradient-to-br from-red-50 to-red-100 border-red-200'
     : isCreditor
       ? 'bg-gradient-to-br from-emerald-50 to-emerald-100 border-emerald-200'
-      : 'bg-gradient-to-br from-slate-50 to-slate-100 border-slate-200';
-  const soldeText = isDebtor ? 'text-red-700' : isCreditor ? 'text-emerald-700' : 'text-slate-700';
-  const soldeLabel = isDebtor ? 'Vous devez' : isCreditor ? 'Solde en votre faveur' : 'Compte solde';
+      : 'bg-gradient-to-br from-sky-50 to-blue-50 border-sky-200';
+  const soldeText = isDebtor ? 'text-red-700' : isCreditor ? 'text-emerald-700' : 'text-sky-800';
+  // iter90i8 : label plus apaisant pour la situation en regle
+  const soldeLabel = isDebtor
+    ? 'A payer'
+    : isCreditor
+      ? 'Solde en votre faveur'
+      : 'Rien a payer pour cette periode';
   const soldeIcon = isDebtor
     ? <AlertCircle size={20} className="text-red-600" />
     : isCreditor
       ? <CheckCircle2 size={20} className="text-emerald-600" />
-      : <Gauge size={20} className="text-slate-500" />;
+      : <CheckCircle2 size={20} className="text-sky-600" />;
 
   // Ratio paye/appele pour barre de progression
   const paidRatio = totalCalled > 0 ? Math.max(0, Math.min(100, (totalPaid / totalCalled) * 100)) : 100;
@@ -1265,9 +1436,18 @@ function SituationHero({ status, balance, totalCalled, totalPaid, nextCall, tota
               {soldeIcon}
               <span className={`text-[11px] uppercase tracking-wider font-semibold ${soldeText}`}>{soldeLabel}</span>
             </div>
-            <Badge variant="outline" className={`text-[10px] ${soldeText} border-current`}>{status || '—'}</Badge>
+            {/* iter90i8 : badge periode active */}
+            {periodLabel && (
+              <Badge variant="outline" className={`text-[10px] ${soldeText} border-current`} data-testid="situation-period-badge">
+                {periodLabel}
+              </Badge>
+            )}
           </div>
-          <div className={`text-3xl font-bold ${soldeText}`} style={{fontFamily:'Chivo,sans-serif'}}>{fmt(Math.abs(balance))}</div>
+          <div className={`text-3xl font-bold ${soldeText}`} style={{fontFamily:'Chivo,sans-serif'}}>
+            {balance > 0.01 ? fmt(balance) : (
+              <span className="text-2xl">Aucun montant du</span>
+            )}
+          </div>
           <div className="mt-3 text-[11px] text-slate-600 space-y-0.5">
             <div className="flex justify-between"><span>Total appele :</span><span className="font-mono">{fmt(totalCalled)}</span></div>
             <div className="flex justify-between"><span>Total paye :</span><span className="font-mono">{fmt(totalPaid)}</span></div>
@@ -1342,17 +1522,28 @@ function SituationHero({ status, balance, totalCalled, totalPaid, nextCall, tota
         </CardContent>
       </Card>
 
-      {/* Carte 3 : Total charges 12 mois */}
+      {/* Carte 3 : Total charges de la periode selectionnee (trimestre ou annee) */}
       <Card className="bg-gradient-to-br from-blue-50 to-indigo-100 border-2 border-blue-200" data-testid="situation-charges-card">
         <CardContent className="p-5">
           <div className="flex items-start justify-between mb-3">
             <div className="flex items-center gap-2">
               <TrendingUp size={20} className="text-[#022D52]" />
-              <span className="text-[11px] uppercase tracking-wider font-semibold text-[#01213e]">Charges 12 mois</span>
+              <span className="text-[11px] uppercase tracking-wider font-semibold text-[#01213e]">
+                {isYearView ? 'Charges annee' : 'Charges trimestre'}
+              </span>
             </div>
+            {periodLabel && (
+              <Badge variant="outline" className="text-[10px] text-blue-800 border-blue-300">
+                {periodLabel}
+              </Badge>
+            )}
           </div>
           <div className="text-3xl font-bold text-blue-800" style={{fontFamily:'Chivo,sans-serif'}}>{fmt(totalCharges12m)}</div>
-          <div className="mt-2 text-xs text-slate-600">Cumul de votre quote-part sur les 12 derniers mois</div>
+          <div className="mt-2 text-xs text-slate-600">
+            {isYearView
+              ? "Cumul de votre quote-part sur l'annee civile en cours"
+              : "Cumul de votre quote-part sur le trimestre selectionne"}
+          </div>
           <div className="mt-3 text-[11px] text-slate-500 pt-2 border-t border-white/60">
             {totalCharges12m > 0 ? "Voir la repartition par categorie ci-dessous" : "Aucune charge sur la periode"}
           </div>
@@ -1362,13 +1553,18 @@ function SituationHero({ status, balance, totalCalled, totalPaid, nextCall, tota
   );
 }
 
-function ChargesDonut({ data, total }) {
+function ChargesDonut({ data, total, periodLabel }) {
   return (
     <Card className="lg:col-span-3 border-slate-200" data-testid="situation-donut-card">
       <CardHeader className="pb-2">
-        <div className="flex items-center gap-2">
-          <PieChartIcon size={16} className="text-[#022D52]" />
-          <CardTitle className="text-base" style={{fontFamily:'Chivo,sans-serif'}}>Charges par categorie (12 mois)</CardTitle>
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <div className="flex items-center gap-2">
+            <PieChartIcon size={16} className="text-[#022D52]" />
+            <CardTitle className="text-base" style={{fontFamily:'Chivo,sans-serif'}}>
+              Charges par categorie{periodLabel ? ` - ${periodLabel}` : ''}
+            </CardTitle>
+          </div>
+          <span className="text-[11px] text-slate-500 font-mono">Total : {fmt(total)}</span>
         </div>
       </CardHeader>
       <CardContent>

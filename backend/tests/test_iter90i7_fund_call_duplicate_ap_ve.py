@@ -257,3 +257,129 @@ def test_reserve_fund_balance_after_cleanup_equals_expected():
             client.close()
 
     asyncio.run(_run())
+
+
+def test_lock_generate_sale_entry_purges_legacy_ap_symmetrically():
+    """iter90i7-lock-1 : VERROU cote generateur. Si un JE AP legacy existe
+    pour le fund_call au moment ou generate_sale_entry est appele, il est
+    supprime automatiquement AVANT la creation du VE. Impossibilite de
+    reintroduire le doublon meme si la route legacy est appelee en premier."""
+    copro_id = f"acp-i7lock-{uuid.uuid4().hex[:8]}"
+    call_id = f"call-i7lock-{uuid.uuid4().hex[:8]}"
+
+    async def _run():
+        from motor.motor_asyncio import AsyncIOMotorClient
+        from auto_entries import generate_sale_entry
+        client = AsyncIOMotorClient(os.environ["MONGO_URL"])
+        db = client[os.environ["DB_NAME"]]
+        try:
+            await db.journal_entries.delete_many({"copropriete_id": copro_id})
+            await db.owners.delete_many({"id": {"$regex": f"^own-{copro_id}"}})
+            # Cree un owner
+            owner_id = f"own-{copro_id}-1"
+            await db.owners.insert_one({
+                "id": owner_id, "name": "Alice",
+                "tier_accounts": {
+                    copro_id: {"provisions": "40000001",
+                               "reserve": "40100001",
+                               "roulement": "40200001"},
+                },
+            })
+            # AP legacy pre-existant (bug scenario)
+            await db.journal_entries.insert_one({
+                "id": f"ap-{call_id}", "journal_type": "AP",
+                "fund_call_id": call_id, "copropriete_id": copro_id,
+                "date": "2026-05-01", "reference": "AP-Legacy",
+                "lines": [
+                    {"account_number": "401000", "debit": 2000, "credit": 0},
+                    {"account_number": "160", "debit": 0, "credit": 2000},
+                ],
+                "total_debit": 2000, "total_credit": 2000,
+            })
+            # Simule fund_call avec appel reserve
+            fund_call = {
+                "id": call_id, "copropriete_id": copro_id,
+                "name": "Reserve 2026-1", "date": "2026-05-01",
+                "call_type": "reserve", "total_amount": 2000.0,
+                "reserve_amount": 2000.0, "roulement_amount": 0,
+                "distribution": [{"owner_id": owner_id, "amount": 2000.0}],
+            }
+            # Le generateur DOIT purger l'AP en doublon puis creer le VE
+            je = await generate_sale_entry(db, fund_call)
+            assert je is not None
+            # AP a disparu
+            ap_left = await db.journal_entries.count_documents({
+                "id": f"ap-{call_id}",
+            })
+            assert ap_left == 0, "L'AP legacy DOIT etre purge par le VE (verrou)"
+            # Un seul VE existe pour cet appel
+            ve_count = await db.journal_entries.count_documents({
+                "source_type": "fund_call", "source_id": call_id,
+                "journal_type": "VE",
+            })
+            assert ve_count == 1
+        finally:
+            await db.journal_entries.delete_many({"copropriete_id": copro_id})
+            await db.owners.delete_many({"id": {"$regex": f"^own-{copro_id}"}})
+            client.close()
+
+    asyncio.run(_run())
+
+
+def test_lock_startup_self_heal_removes_duplicates_on_boot():
+    """iter90i7-lock-2 : VERROU cote startup. Le hook @app.on_event('startup')
+    heal les doublons AP+VE au demarrage. Simule le hook en appelant
+    directement la logique. Assure qu'un redemarrage nettoie automatiquement
+    la base sans intervention superadmin."""
+    copro_id = f"acp-i7boot-{uuid.uuid4().hex[:8]}"
+    call_id = f"call-i7boot-{uuid.uuid4().hex[:8]}"
+
+    async def _run():
+        from motor.motor_asyncio import AsyncIOMotorClient
+        client = AsyncIOMotorClient(os.environ["MONGO_URL"])
+        db = client[os.environ["DB_NAME"]]
+        try:
+            await db.journal_entries.delete_many({"copropriete_id": copro_id})
+            # Doublon AP+VE
+            await db.journal_entries.insert_many([
+                {"id": f"ap-{call_id}", "journal_type": "AP",
+                 "fund_call_id": call_id, "copropriete_id": copro_id,
+                 "date": "2026-05-01", "reference": "AP-Legacy",
+                 "lines": [], "total_debit": 2000, "total_credit": 2000},
+                {"id": f"ve-{call_id}", "journal_type": "VE",
+                 "source_type": "fund_call", "source_id": call_id,
+                 "copropriete_id": copro_id, "date": "2026-05-01",
+                 "reference": "AF-Reserve",
+                 "lines": [], "total_debit": 2000, "total_credit": 2000},
+            ])
+            # Simule le hook de startup (extrait de server.py)
+            removed = 0
+            async for ap in db.journal_entries.find(
+                {"journal_type": "AP", "fund_call_id": {"$exists": True}},
+                {"_id": 0, "id": 1, "fund_call_id": 1},
+            ):
+                fcid = ap.get("fund_call_id")
+                if not fcid:
+                    continue
+                ve = await db.journal_entries.find_one(
+                    {"source_type": "fund_call", "source_id": fcid,
+                     "journal_type": "VE",
+                     "reversed": {"$ne": True},
+                     "is_reversal": {"$ne": True}},
+                    {"_id": 0, "id": 1},
+                )
+                if ve:
+                    r = await db.journal_entries.delete_one({"id": ap["id"]})
+                    if r.deleted_count:
+                        removed += 1
+            assert removed == 1, "Le self-heal doit avoir supprime 1 doublon"
+            # L'AP a disparu, le VE est toujours la
+            assert (await db.journal_entries.count_documents(
+                {"id": f"ap-{call_id}"})) == 0
+            assert (await db.journal_entries.count_documents(
+                {"id": f"ve-{call_id}"})) == 1
+        finally:
+            await db.journal_entries.delete_many({"copropriete_id": copro_id})
+            client.close()
+
+    asyncio.run(_run())

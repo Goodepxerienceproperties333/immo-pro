@@ -1258,6 +1258,39 @@ async def startup():
     except Exception as _e:
         print(f"[startup][iter90g2] mailbox seed skipped: {_e}")
 
+    # iter90i7 : Self-heal automatique des doublons AP+VE sur les appels de
+    # fonds. Bug historique : la route legacy /fund-calls/{id}/generate-entries
+    # creait un JE AP en plus du VE deja auto-genere -> double-comptage du
+    # fonds de reserve/roulement (bilan surevalue de 2x l'appel).
+    # Ce heal est IDEMPOTENT : cherche les paires (AP.fund_call_id == VE.source_id)
+    # et supprime l'AP. Peut etre desactive par IT7_HEAL_DISABLED=1.
+    try:
+        if os.environ.get("IT7_HEAL_DISABLED") != "1":
+            removed_i7 = 0
+            async for ap in db.journal_entries.find(
+                {"journal_type": "AP", "fund_call_id": {"$exists": True}},
+                {"_id": 0, "id": 1, "fund_call_id": 1, "reference": 1,
+                 "copropriete_id": 1},
+            ):
+                fcid = ap.get("fund_call_id")
+                if not fcid:
+                    continue
+                ve = await db.journal_entries.find_one(
+                    {"source_type": "fund_call", "source_id": fcid,
+                     "journal_type": "VE",
+                     "reversed": {"$ne": True},
+                     "is_reversal": {"$ne": True}},
+                    {"_id": 0, "id": 1},
+                )
+                if ve:
+                    r = await db.journal_entries.delete_one({"id": ap["id"]})
+                    if r.deleted_count:
+                        removed_i7 += 1
+            if removed_i7:
+                print(f"[startup][iter90i7] AP/VE doublons cleaned: {removed_i7}")
+    except Exception as _e:
+        print(f"[startup][iter90i7] duplicate AP/VE heal skipped: {_e}")
+
     # iter90as : ecriture test_credentials.md en dev/preview UNIQUEMENT.
     # En production K8s, /app/memory peut ne pas etre writable (filesystem
     # hardened, volume ephemere) -> le crash faisait timeout le readiness probe.
