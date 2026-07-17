@@ -446,15 +446,67 @@ def create_syndic_config_router(db):
     async def update_email_config(payload: EmailConfigUpdate, request: Request):
         await _require_syndic(request)
         syndic_uid = await _resolve_syndic_user_id(db, request)
+        # iter90h6 : les 3 protections du bonus admin sont aussi appliquees
+        # au self-service (le syndic peut ecraser accidentellement sa propre config).
+        current = await db.syndic_configs.find_one({"syndic_user_id": syndic_uid}) or {}
+        if current.get("email_config_locked"):
+            locked_at = current.get("email_locked_at", "?")
+            locked_by = current.get("email_locked_by_email", "un administrateur")
+            raise HTTPException(
+                423,
+                f"Votre configuration email est verrouillee (le {locked_at} par {locked_by}). "
+                f"Contactez votre administrateur pour la deverrouiller avant modification."
+            )
         data = payload.model_dump(exclude_unset=True)
+        # Anti-motifs faux
+        if data.get("graph_client_secret"):
+            reason = _looks_like_fake_secret(data["graph_client_secret"])
+            if reason:
+                await _audit_log(
+                    db, syndic_uid, "reject_fake_secret", request,
+                    fields_changed=["graph_client_secret"], extra={"reason": reason, "self_service": True},
+                )
+                raise HTTPException(
+                    400,
+                    f"Secret refuse (ressemble a une valeur de test : {reason}). "
+                    f"Verifiez que vous collez bien le vrai 'Value' du Client Secret depuis Azure Portal."
+                )
+        if data.get("smtp_password"):
+            reason = _looks_like_fake_secret(data["smtp_password"])
+            if reason:
+                await _audit_log(
+                    db, syndic_uid, "reject_fake_secret", request,
+                    fields_changed=["smtp_password"], extra={"reason": reason, "self_service": True},
+                )
+                raise HTTPException(400, f"Mot de passe SMTP refuse (ressemble a une valeur de test : {reason}).")
+        for key in ("graph_tenant_id", "graph_client_id"):
+            if data.get(key):
+                r = _looks_like_fake_uuid(data[key])
+                if r:
+                    await _audit_log(
+                        db, syndic_uid, "reject_fake_uuid", request,
+                        fields_changed=[key], extra={"reason": r, "self_service": True},
+                    )
+                    raise HTTPException(400, f"{key} refuse ({r}). Verifiez le UUID dans Azure Portal.")
         # Chiffre les secrets
+        secret_changed = False
         if "graph_client_secret" in data and data["graph_client_secret"]:
             data["graph_client_secret"] = encrypt_secret(data["graph_client_secret"])
+            secret_changed = True
         if "smtp_password" in data and data["smtp_password"]:
             data["smtp_password"] = encrypt_secret(data["smtp_password"])
+            secret_changed = True
         data["email_provider"] = data.pop("provider", "none")
         data["email_verified"] = False  # Reset verification apres modif
         data["updated_at"] = datetime.now(timezone.utc).isoformat()
+        # Audit log avant write
+        await _audit_log(
+            db, syndic_uid, "email_update", request,
+            fields_changed=list(data.keys()),
+            secret_changed=secret_changed,
+            snapshot_before=current,
+            extra={"self_service": True},
+        )
         await db.syndic_configs.update_one(
             {"syndic_user_id": syndic_uid},
             {"$set": data, "$setOnInsert": {"created_at": data["updated_at"]}},

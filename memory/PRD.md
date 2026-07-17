@@ -1,4 +1,70 @@
 # CoproManager PRD
+### Iter90h6 (Feb 2026) — Bonus : protections email etendues au self-service
+
+**Ticket** : "Applique le bonus"
+
+Etend les 3 protections d'iter90h5 (anti-fake secret, anti-fake UUID,
+audit log) a l'endpoint self-service `PUT /api/syndic-config/me/email`
+utilise par MonBureau. En plus, si l'admin a verrouille la config d'un
+syndic (`email_config_locked=True`), le PUT self renvoie 423 avec un
+message clair "Contactez votre administrateur pour la deverrouiller".
+
+**Tests** (`test_iter90h6_self_service_email_protections.py`, 4/4 verts) :
+- `self_service_rejects_fake_secret` : secret 'secret_test_123' -> 400 + audit
+- `self_service_rejects_fake_uuid` : UUID 00000000-... -> 400
+- `self_service_locked_by_admin_returns_423` : verrouille par admin -> 423
+  avec message "administrateur" + email de l'admin qui a verrouille
+- `self_service_valid_config_saved_and_audited` : vrai secret valide + audit
+  avec `self_service=True`, `secret_changed=True`
+
+Regression totale session : 39/39 tests verts (iter90gz + h0 + h1 + h2 +
+h3 + h4 + h5 + h6).
+
+
+### Iter90h5 (Feb 2026) — Protections anti-ecrasement config email (admin)
+
+**Ticket** : "Corrige et mets en place des protections pour que ca n'arrive plus"
+"Et mets en place un verrouillage pour ne plus modifier le code a ce sujet"
+
+**Incident racine** : L'agent a ecrase par erreur le Client Secret Azure
+du compte `welcome@goodexperienceproperties.be` avec `secret_test_123`
+lors d'un test curl de diagnostic. Le vrai secret, chiffre en DB, est
+irrecuperable -> l'utilisateur doit regenerer un secret dans Azure Portal.
+
+**3 protections livrees** :
+
+1. **Anti-motifs faux** — `_looks_like_fake_secret()` + `_looks_like_fake_uuid()` :
+   refus 400 des secrets contenant test_, fake_, dummy_, faux_, changeme,
+   placeholder, secret_test, 1234abcd, aaaaaa (peu distinct), 111111. Idem
+   pour UUIDs trivial (11111111-1111-..., 00000000-...).
+
+2. **Verrou (lock)** :
+   - `POST /admin/syndic-config/{id}/email/lock` (pose flag `email_config_locked=True`)
+   - `POST /admin/syndic-config/{id}/email/unlock`
+   - Tant que locked, tout PUT sur `/email` renvoie 423 Locked
+   - UI : bouton Verrouiller/Deverouiller + bandeau rouge + Save disabled
+   - Le compte welcome@goodexperienceproperties.be a ete verrouille par
+     defaut suite a l'incident.
+
+3. **Audit log** — collection `syndic_config_audit` :
+   - Chaque action logguee (email_update, lock, unlock, reject_fake_*)
+   - Champs : at, actor_user_id, actor_email, fields_changed, secret_changed,
+     snapshot_before (secrets rediges), extra (raison rejet)
+   - Endpoint `GET /admin/syndic-config/{id}/audit?limit=50`
+   - UI : bouton Historique -> Dialog avec table triee par date
+
+**Tests** (`test_iter90h5_email_config_protections.py`, 7/7 verts) :
+- Detection anti-fake secret + UUID (helpers unitaires)
+- Rejet 400 avec message clair + audit
+- Lock -> 423 sur PUT ; unlock -> autorise
+- Audit log liste toutes les actions
+- Frontend expose bouton lock + audit + bandeau + badge Verrouillee
+
+**Redeploiement PROD requis** pour propager les protections sur
+immo-pcmn.emergent.host. Le compte welcome@ restera verrouille apres deploy.
+
+
+
 ### Iter90gz (Feb 2026) — Stabilite proactive : Health checks + Timeout watchdog + Error logging + ErrorBoundary
 
 **Ticket utilisateur** :
