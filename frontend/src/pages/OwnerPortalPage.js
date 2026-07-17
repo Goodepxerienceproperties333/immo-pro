@@ -73,6 +73,13 @@ export default function OwnerPortalPage() {
   const [closingBalance, setClosingBalance] = useState(0);
   const [periodStart, setPeriodStart] = useState('');
   const [periodEnd, setPeriodEnd] = useState('');
+  // iter90hz : comptes bancaires de l'ACP (transparence + affichage IBAN)
+  const [bankAccounts, setBankAccounts] = useState([]);
+  const [bankAccountsLoading, setBankAccountsLoading] = useState(false);
+  // iter90i0 : filtre par plage de dates (defaut : 1er jour de l'exercice
+  // comptable selectionne -> aujourd'hui). Le proprio peut modifier.
+  const [bankAccountsStart, setBankAccountsStart] = useState('');
+  const [bankAccountsEnd, setBankAccountsEnd] = useState('');
   // iter90fy : exercices comptables de l'ACP selectionnee (remplace les
   // selecteurs de date libres par une liste d'exercices comptables). L'user
   // ne peut voir que les FY de ses ACPs (backend /owner/fiscal-years/{cid}).
@@ -244,6 +251,49 @@ export default function OwnerPortalPage() {
       .catch(() => { setMovements([]); setOpeningBalance(0); setClosingBalance(0); })
       .finally(() => setMovementsLoading(false));
   }, [selectedAcp, periodStart, periodEnd, dashboard]);
+
+  // iter90hz : charge les comptes bancaires de l'ACP (transparence pour le
+  // proprio + affichage de l'IBAN de virement dans le panneau paiement rapide).
+  // iter90i0 : filtre par plage de dates (start_date / end_date). Par
+  // defaut initialise au 1er jour de l'exercice comptable courant, la fin
+  // etant fixee a aujourd'hui. Le proprio peut modifier les deux.
+  useEffect(() => {
+    if (!selectedAcp) {
+      setBankAccounts([]);
+      return;
+    }
+    setBankAccountsLoading(true);
+    const params = {};
+    if (bankAccountsStart) params.start_date = bankAccountsStart;
+    if (bankAccountsEnd) params.end_date = bankAccountsEnd;
+    api.get(`/owner/bank-accounts/${selectedAcp}`, { params })
+      .then((r) => setBankAccounts(r.data?.bank_accounts || []))
+      .catch(() => setBankAccounts([]))
+      .finally(() => setBankAccountsLoading(false));
+  }, [selectedAcp, bankAccountsStart, bankAccountsEnd]);
+
+  // iter90i0 : quand l'ACP ou l'exercice comptable change, on repositionne
+  // automatiquement la periode Comptes bancaires au 1er jour de l'exercice
+  // -> aujourd'hui. Le proprio peut ensuite affiner via les 2 date pickers.
+  useEffect(() => {
+    if (!selectedFyId || !fiscalYears || fiscalYears.length === 0) return;
+    const fy = fiscalYears.find(y => y.id === selectedFyId);
+    if (!fy) return;
+    const todayIso = new Date().toISOString().slice(0, 10);
+    setBankAccountsStart(fy.start_date || '');
+    setBankAccountsEnd(todayIso);
+  }, [selectedFyId, fiscalYears, selectedAcp]);
+
+  // iter90hz : compte "vue" par defaut de l'ACP (celui vers lequel le
+  // proprio doit virer). Fallback : le premier compte de la liste.
+  const defaultAcpAccount = useMemo(() => {
+    if (!bankAccounts || bankAccounts.length === 0) return null;
+    return bankAccounts.find(b => b.type === 'vue' && b.is_default)
+        || bankAccounts.find(b => b.type === 'vue')
+        || bankAccounts.find(b => b.is_default)
+        || bankAccounts[0];
+  }, [bankAccounts]);
+
 
   // iter90da : calculs memoized pour l'onglet "Ma situation".
   // Doivent etre AVANT les early returns (loading / error) pour respecter
@@ -599,6 +649,7 @@ export default function OwnerPortalPage() {
               <TabsTrigger value="coproprietes" data-testid="tab-coproprietes"><Building2 size={14} className="mr-1.5" /> Mes coproprietes</TabsTrigger>
               <TabsTrigger value="fund-calls" data-testid="tab-fund-calls"><Megaphone size={14} className="mr-1.5" /> Appels de fonds</TabsTrigger>
               <TabsTrigger value="charges" data-testid="tab-charges"><Receipt size={14} className="mr-1.5" /> Charges</TabsTrigger>
+              <TabsTrigger value="bank-accounts" data-testid="tab-bank-accounts"><Wallet size={14} className="mr-1.5" /> Comptes bancaires</TabsTrigger>
               <TabsTrigger value="documents" data-testid="tab-documents"><FileText size={14} className="mr-1.5" /> Documents</TabsTrigger>
               <TabsTrigger value="communications" data-testid="tab-communications"><Mail size={14} className="mr-1.5" /> Communications</TabsTrigger>
               <TabsTrigger value="profile" data-testid="tab-profile"><UserCog size={14} className="mr-1.5" /> Mon profil</TabsTrigger>
@@ -724,6 +775,7 @@ export default function OwnerPortalPage() {
               periodEnd={periodEnd}
               onPeriodStartChange={setPeriodStart}
               onPeriodEndChange={setPeriodEnd}
+              defaultAcpAccount={defaultAcpAccount}
             />
           </TabsContent>
 
@@ -817,6 +869,22 @@ export default function OwnerPortalPage() {
 
           <TabsContent value="documents" className="mt-0">
             <OwnerDocumentsView documents={filteredDocs} />
+          </TabsContent>
+
+          {/* iter90hw + iter90hz + iter90i0 : nouvel onglet "Comptes bancaires"
+              (transparence totale sur les comptes de l'ACP : IBAN, solde
+              comptable, mouvements filtres par periode) */}
+          <TabsContent value="bank-accounts" className="mt-0" data-testid="bank-accounts-tab-content">
+            <BankAccountsTab
+              bankAccounts={bankAccounts}
+              loading={bankAccountsLoading}
+              acpSelected={!!selectedAcp && selectedAcp !== 'all'}
+              startDate={bankAccountsStart}
+              endDate={bankAccountsEnd}
+              onStartDateChange={setBankAccountsStart}
+              onEndDateChange={setBankAccountsEnd}
+              fiscalYear={fiscalYears.find(y => y.id === selectedFyId) || null}
+            />
           </TabsContent>
 
           {/* Iter90db : Communications - historique des emails envoyes par le syndic */}
@@ -1781,6 +1849,7 @@ function MovementsTab({
   acpFiltered, copyVcs, vcsCode,
   copropriete_id, periodStart, periodEnd,
   onPeriodStartChange, onPeriodEndChange,
+  defaultAcpAccount,
 }) {
   const selectedFy = fiscalYears.find(y => y.id === selectedFyId);
   // iter90hx : montant a payer = solde debiteur (debit-credit sur la periode)
@@ -1924,6 +1993,38 @@ function MovementsTab({
                       ? amountToPay.toLocaleString('fr-BE', {minimumFractionDigits: 2, maximumFractionDigits: 2}) + ' EUR'
                       : 'Situation en regle'}
                   </div>
+                  {/* iter90hz : IBAN du compte de virement de l'ACP (transparence) */}
+                  {defaultAcpAccount && defaultAcpAccount.iban && (
+                    <div className="mt-3 pt-3 border-t border-slate-200" data-testid="quickpay-iban-block">
+                      <div className="text-[10px] uppercase tracking-wider text-slate-500 flex items-center justify-between">
+                        <span>Compte a crediter</span>
+                        {defaultAcpAccount.label && (
+                          <span className="normal-case tracking-normal text-[10px] text-slate-400 italic">
+                            {defaultAcpAccount.label}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 mt-1">
+                        <code className="text-xs font-mono text-[#022D52] bg-emerald-50 border border-emerald-200 px-2 py-1 rounded flex-1 truncate" data-testid="quickpay-iban">
+                          {defaultAcpAccount.iban}
+                        </code>
+                        <button
+                          onClick={() => {
+                            try {
+                              navigator.clipboard.writeText(defaultAcpAccount.iban.replace(/\s+/g, ''));
+                              copyVcs && (toast.success ? null : null);
+                            } catch { /* no-op */ }
+                            toast.success('IBAN copie dans le presse-papier');
+                          }}
+                          className="p-1.5 hover:bg-slate-100 rounded text-slate-500"
+                          data-testid="quickpay-copy-iban"
+                          title="Copier l'IBAN"
+                        >
+                          <Copy size={12} />
+                        </button>
+                      </div>
+                    </div>
+                  )}
                   {vcsCode && (
                     <div className="mt-3 pt-3 border-t border-slate-200">
                       <div className="text-[10px] uppercase tracking-wider text-slate-500">Communication structuree</div>
@@ -2096,5 +2197,228 @@ function MovementsTab({
     </div>
   );
 }
+
+
+// iter90hw + iter90hz + iter90i0 : onglet "Comptes bancaires" - transparence
+// totale pour le proprio : IBAN + solde comptable + mouvements filtrables
+// par plage de dates (defaut : exercice comptable courant).
+function BankAccountsTab({
+  bankAccounts, loading, acpSelected,
+  startDate, endDate, onStartDateChange, onEndDateChange, fiscalYear,
+}) {
+  const copyIban = (iban) => {
+    if (!iban) return;
+    try {
+      navigator.clipboard.writeText(iban.replace(/\s+/g, ''));
+      toast.success('IBAN copie dans le presse-papier');
+    } catch {
+      toast.error('Impossible de copier l\'IBAN');
+    }
+  };
+
+  const resetToFiscalYear = () => {
+    if (!fiscalYear) return;
+    const todayIso = new Date().toISOString().slice(0, 10);
+    onStartDateChange && onStartDateChange(fiscalYear.start_date || '');
+    onEndDateChange && onEndDateChange(todayIso);
+  };
+
+  if (!acpSelected) {
+    return (
+      <Card className="border-amber-200 bg-amber-50/40">
+        <CardContent className="p-6 text-center text-sm text-amber-700" data-testid="bank-accounts-no-acp">
+          Selectionnez une copropriete pour voir ses comptes bancaires.
+        </CardContent>
+      </Card>
+    );
+  }
+
+  // iter90i0 : bandeau de filtre par date - toujours affiche, meme quand
+  // il n'y a pas encore de resultat charge (loading / empty).
+  const dateFilterBar = (
+    <Card className="border-slate-200 bg-slate-50/60" data-testid="bank-accounts-date-filter">
+      <CardContent className="p-3">
+        <div className="flex items-center gap-3 flex-wrap">
+          <div className="text-xs font-semibold text-slate-600 flex items-center gap-1.5">
+            <CalendarClock size={13} className="text-[#022D52]" />
+            Periode :
+          </div>
+          <div className="flex items-center gap-2">
+            <label className="text-[10px] uppercase tracking-wider text-slate-500">Du</label>
+            <input
+              type="date"
+              value={startDate || ''}
+              onChange={(e) => onStartDateChange && onStartDateChange(e.target.value)}
+              className="h-8 px-2 text-xs border border-slate-300 rounded"
+              data-testid="bank-accounts-start-date"
+            />
+            <label className="text-[10px] uppercase tracking-wider text-slate-500">Au</label>
+            <input
+              type="date"
+              value={endDate || ''}
+              onChange={(e) => onEndDateChange && onEndDateChange(e.target.value)}
+              className="h-8 px-2 text-xs border border-slate-300 rounded"
+              data-testid="bank-accounts-end-date"
+            />
+          </div>
+          {fiscalYear && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={resetToFiscalYear}
+              className="h-8 text-[11px] text-[#022D52] border-[#022D52]/30"
+              data-testid="bank-accounts-reset-fy"
+              title={`Reinitialiser au 1er jour de l'exercice ${fiscalYear.name || ''}`}
+            >
+              <ArrowLeft size={11} className="mr-1" /> Exercice {fiscalYear.name || ''}
+            </Button>
+          )}
+          <div className="ml-auto text-[10px] text-slate-500 italic">
+            Debut par defaut : 1er jour de l&apos;exercice courant
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+
+  if (loading) {
+    return (
+      <div className="space-y-4" data-testid="bank-accounts-body-loading">
+        {dateFilterBar}
+        <Card>
+          <CardContent className="p-8 text-center text-slate-400 text-sm">
+            Chargement des comptes bancaires...
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  if (!bankAccounts || bankAccounts.length === 0) {
+    return (
+      <div className="space-y-4" data-testid="bank-accounts-body-empty">
+        {dateFilterBar}
+        <Card>
+          <CardContent className="p-8 text-center text-slate-400 text-sm">
+            Aucun compte bancaire configure pour cette copropriete.
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4" data-testid="bank-accounts-list">
+      {dateFilterBar}
+      <div className="text-xs text-slate-500 italic">
+        Vue transparente des comptes de l&apos;ACP. Les IBAN sont partiellement masques
+        pour votre securite ; le solde comptable est actualise en temps reel
+        (independant du filtre de date).
+      </div>
+      {bankAccounts.map((ba, idx) => (
+        <Card key={`${ba.iban}-${idx}`} className="border-slate-200" data-testid={`bank-account-card-${idx}`}>
+          <CardHeader className="pb-2">
+            <div className="flex items-start justify-between gap-3 flex-wrap">
+              <div>
+                <CardTitle className="text-base flex items-center gap-2" style={{fontFamily:'Chivo,sans-serif'}}>
+                  <Wallet size={16} className="text-[#022D52]" />
+                  {ba.label || (ba.type === 'vue' ? 'Compte a vue' : 'Compte epargne')}
+                  {ba.is_default && (
+                    <Badge variant="outline" className="text-[9px] bg-emerald-50 text-emerald-700 border-emerald-200">
+                      Par defaut
+                    </Badge>
+                  )}
+                </CardTitle>
+                <div className="flex items-center gap-2 mt-1.5">
+                  <code className="text-xs font-mono text-[#022D52] bg-blue-50 border border-blue-200 px-2 py-1 rounded" data-testid={`bank-account-iban-${idx}`}>
+                    {ba.iban || '-'}
+                  </code>
+                  {ba.iban && (
+                    <button
+                      onClick={() => copyIban(ba.iban)}
+                      className="p-1.5 hover:bg-slate-100 rounded text-slate-500"
+                      title="Copier l'IBAN"
+                      data-testid={`bank-account-copy-iban-${idx}`}
+                    >
+                      <Copy size={12} />
+                    </button>
+                  )}
+                </div>
+                {ba.pcmn_number && (
+                  <div className="text-[10px] text-slate-400 mt-1">PCMN : {ba.pcmn_number}</div>
+                )}
+              </div>
+              <div className="text-right">
+                <div className="text-[10px] uppercase tracking-wider text-slate-500">Solde comptable</div>
+                <div className={`text-2xl font-black mt-0.5 ${ba.balance > 0.01 ? 'text-emerald-600' : ba.balance < -0.01 ? 'text-red-600' : 'text-slate-500'}`} style={{fontFamily:'Chivo,sans-serif'}} data-testid={`bank-account-balance-${idx}`}>
+                  {fmt(ba.balance || 0)}
+                </div>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="pt-0">
+            {/* iter90i0 : compteur de mouvements dans la periode filtree */}
+            {typeof ba.movements_total_count === 'number' && (
+              <div className="text-[11px] text-slate-500 mb-2 flex items-center gap-2">
+                <Badge variant="outline" className="text-[9px] bg-blue-50 text-[#01213e] border-blue-200">
+                  {ba.movements_total_count} mouvement{ba.movements_total_count > 1 ? 's' : ''}
+                </Badge>
+                {ba.movements_total_count > (ba.movements_limit || 0) && (
+                  <span className="italic">
+                    (limite affichee : {ba.movements_limit} plus recents)
+                  </span>
+                )}
+              </div>
+            )}
+            {(ba.recent_movements || []).length === 0 ? (
+              <div className="text-xs text-slate-400 italic py-2 text-center border border-dashed border-slate-200 rounded">
+                Aucun mouvement bancaire sur la periode selectionnee
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="text-[10px] uppercase tracking-wider">Date</TableHead>
+                      <TableHead className="text-[10px] uppercase tracking-wider">Contrepartie</TableHead>
+                      <TableHead className="text-[10px] uppercase tracking-wider">Communication</TableHead>
+                      <TableHead className="text-[10px] uppercase tracking-wider text-right">Montant</TableHead>
+                      <TableHead className="text-[10px] uppercase tracking-wider text-center">Statut</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {ba.recent_movements.map((mv, midx) => (
+                      <TableRow key={`${idx}-mv-${midx}`} data-testid={`bank-account-mv-${idx}-${midx}`}>
+                        <TableCell className="text-xs font-mono text-slate-600">{fmtDate(mv.date)}</TableCell>
+                        <TableCell className="text-xs text-slate-800 max-w-[180px] truncate" title={mv.counterparty}>
+                          {mv.counterparty || <span className="text-slate-300 italic">-</span>}
+                        </TableCell>
+                        <TableCell className="text-[11px] font-mono text-slate-500 max-w-[220px] truncate" title={mv.communication}>
+                          {mv.communication || <span className="text-slate-300 italic">-</span>}
+                        </TableCell>
+                        <TableCell className={`text-right font-mono text-xs font-semibold ${mv.amount >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                          {fmt(mv.amount)}
+                        </TableCell>
+                        <TableCell className="text-center">
+                          <Badge
+                            variant="outline"
+                            className={`text-[9px] ${mv.matched ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-slate-50 text-slate-500 border-slate-200'}`}
+                          >
+                            {mv.matched ? 'Lettre' : 'A traiter'}
+                          </Badge>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      ))}
+    </div>
+  );
+}
+
 
 

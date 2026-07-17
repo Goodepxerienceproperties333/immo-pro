@@ -773,6 +773,10 @@ def create_properties_router(db):
                 f"({existing_name}).",
             )
         full_name = data.name or f"{data.last_name} {data.first_name}".strip()
+        # iter90hz : detecter un changement d'email pour renvoyer une invitation
+        old_email = ((existing_doc or {}).get("email") or "").lower().strip()
+        new_email = ((data.email or "").lower().strip())
+        email_changed = bool(new_email) and (old_email != new_email)
         result = await db.owners.update_one(
             {"id": owner_id},
             {"$set": {
@@ -790,6 +794,26 @@ def create_properties_router(db):
         if copro_id:
             await assign_owner_accounts(db, owner, copro_id)
             owner = await db.owners.find_one({"id": owner_id}, {"_id": 0})
+        # iter90hz : synchro user.email + renvoi invitation SI le proprio avait
+        # deja un acces portail actif (compte user lie). Sinon no-op.
+        invitation_info = None
+        if email_changed:
+            try:
+                from routes.owner_access import handle_owner_email_change
+                from server import get_current_user
+                actor = await get_current_user(request)
+                invitation_info = await handle_owner_email_change(
+                    db, owner_id, old_email, new_email, actor,
+                )
+            except Exception as _e:
+                # Ne pas faire echouer l'update d'un owner si l'invitation
+                # ne part pas. On log seulement.
+                import logging
+                logging.getLogger(__name__).warning(
+                    f"handle_owner_email_change failed for owner {owner_id}: {_e}",
+                )
+        if invitation_info:
+            owner["_reinvitation"] = invitation_info
         return owner
 
     @router.delete("/owners/{owner_id}")

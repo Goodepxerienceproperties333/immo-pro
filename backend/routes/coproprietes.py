@@ -312,6 +312,69 @@ def create_coproprietes_router(db):
             raise HTTPException(404, "Copropriete non trouvee")
         return copro
 
+    # iter90hz : Lie explicitement le syndic (et donc son logo/mentions
+    # legales/config email) a cette ACP. Cela remplace l'heuristique de
+    # `resolve_syndic_pdf_context` (fallback organisation / acronyme /
+    # domaine email) par un lien base de donnees explicite : la source de
+    # verite est desormais `copropriete.syndic_user_id`.
+    #
+    # Roles autorises :
+    # - syndic : lie SA config a l'ACP (syndic_user_id = son propre user._id).
+    # - gestionnaire : lie la config du parent_syndic_id.
+    # - admin/superadmin : peut lier SA config (utile en mono-cabinet ou pour
+    #   les ACPs geres directement par un admin).
+    @router.post("/{copro_id}/link-syndic-config")
+    async def link_syndic_config(copro_id: str, request: Request):
+        from server import get_current_user
+        user = await get_current_user(request)
+        role = user.get("role", "")
+        if role not in ("syndic", "admin", "superadmin", "gestionnaire"):
+            raise HTTPException(403, "Seul un syndic peut lier sa config a une ACP")
+        # Resoudre le syndic_user_id "proprietaire du cabinet"
+        target_syndic_uid = ""
+        if role in ("syndic", "admin", "superadmin"):
+            target_syndic_uid = str(user.get("_id"))
+        elif role == "gestionnaire":
+            parent = user.get("parent_syndic_id")
+            if not parent:
+                raise HTTPException(
+                    403,
+                    "Ce gestionnaire n'a pas de cabinet syndic parent configure",
+                )
+            target_syndic_uid = str(parent)
+        # Verifier que la config existe (au moins un legal_name OU un logo).
+        # Si aucune config n'existe encore, on cree une entree vide pour que
+        # le lien soit stable meme avant que le syndic n'ait complete son
+        # identite (idempotent).
+        cfg = await db.syndic_configs.find_one({"syndic_user_id": target_syndic_uid})
+        if not cfg:
+            await db.syndic_configs.insert_one({
+                "syndic_user_id": target_syndic_uid,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            })
+        # Met a jour l'ACP
+        result = await db.coproprietes.update_one(
+            {"id": copro_id},
+            {"$set": {
+                "syndic_user_id": target_syndic_uid,
+                "syndic_config_linked_at": datetime.now(timezone.utc).isoformat(),
+                "syndic_config_linked_by": str(user.get("_id")),
+            }},
+        )
+        if result.matched_count == 0:
+            raise HTTPException(404, "Copropriete non trouvee")
+        # Recharger la config pour informer le client de l'etat resultant
+        cfg_after = await db.syndic_configs.find_one(
+            {"syndic_user_id": target_syndic_uid}, {"_id": 0, "legal_name": 1, "logo_gridfs_id": 1},
+        ) or {}
+        return {
+            "success": True,
+            "copropriete_id": copro_id,
+            "syndic_user_id": target_syndic_uid,
+            "has_logo": bool(cfg_after.get("logo_gridfs_id")),
+            "legal_name": cfg_after.get("legal_name", ""),
+        }
+
     @router.delete("/{copro_id}")
     async def delete_copropriete(copro_id: str, request: Request):
         from server import get_current_user, is_admin_role

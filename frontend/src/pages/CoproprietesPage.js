@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { Plus, Pencil, Trash2, Home, Search, Archive, RotateCcw, Landmark, PlusCircle, X, Eraser, Wand2, Upload, UserPlus, FileText, Download } from 'lucide-react';
+import { Plus, Pencil, Trash2, Home, Search, Archive, RotateCcw, Landmark, PlusCircle, X, Eraser, Wand2, Upload, UserPlus, FileText, Download, Image as ImageIcon, CheckCircle2 } from 'lucide-react';
 import BulkCsvImportDialog from '@/components/BulkCsvImportDialog';
 import PdfImportDialog from '@/components/PdfImportDialog';
 import { useDirtyGuard } from '@/hooks/useDirtyGuard';
@@ -29,7 +29,7 @@ const emptyForm = {
 };
 
 export default function CoproprietesPage() {
-  const { isAdmin, isManager, isSuperadmin } = useAuth();
+  const { user, isAdmin, isManager, isSuperadmin } = useAuth();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [coproprietes, setCoproprietes] = useState([]);
@@ -295,6 +295,37 @@ export default function CoproprietesPage() {
 
   const getDefaultIban = (c) => (c.bank_accounts || []).find(b => b.is_default)?.iban || (c.bank_accounts || [])[0]?.iban || c.bank_account || '-';
 
+  // iter90hz : Lie explicitement le syndic connecte a l'ACP -> son logo et
+  // ses mentions legales seront utilises dans TOUS les PDFs et emails de
+  // cette ACP (source de verite deterministe, remplace l'heuristique).
+  const handleLinkSyndicConfig = async (c) => {
+    const msg = `Lier VOTRE logo et VOTRE identite syndic (mentions legales, cabinet, IPI, TVA)\n`
+              + `a l'ACP "${c.name}" ?\n\n`
+              + `Tous les documents (PDF, emails, rappels, decomptes) generes pour cette ACP\n`
+              + `utiliseront desormais votre configuration syndic.`;
+    if (!window.confirm(msg)) return;
+    try {
+      const { data } = await api.post(`/coproprietes/${c.id}/link-syndic-config`);
+      if (data?.has_logo) {
+        toast.success(`Logo et identite syndic "${data.legal_name || ''}" lies a "${c.name}"`);
+      } else {
+        toast.info(
+          `L'ACP est liee a votre profil syndic, mais aucun logo n'est encore uploade. ` +
+          `Rendez-vous dans "Profil" pour ajouter votre logo.`,
+          { duration: 6000 },
+        );
+      }
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur : impossible de lier la config');
+    }
+  };
+
+  const isLinkedToMe = (c) => {
+    if (!user || !user.id) return false;
+    return String(c.syndic_user_id || '') === String(user.id);
+  };
+
   return (
     <div data-testid="coproprietes-page">
       <div className="page-header flex items-center justify-between">
@@ -321,6 +352,23 @@ export default function CoproprietesPage() {
                 <TableCell><Badge variant="outline" className={c.status === 'archived' ? 'bg-slate-100 text-slate-500' : 'bg-green-50 text-green-700 border-green-200'}>{c.status === 'archived' ? 'Archive' : 'Active'}</Badge></TableCell>
                 <TableCell><div className="flex gap-0">
                   {isManager && <Button variant="outline" size="sm" onClick={() => openEdit(c)} title="Modifier l'ACP (nom, adresse, banques, parametres)" data-testid={`edit-copro-${c.id}`} className="text-[#022D52] border-[#022D52]/30 hover:bg-[#022D52]/10 mr-1"><Pencil size={13} className="mr-1" /> Modifier</Button>}
+                  {isManager && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handleLinkSyndicConfig(c)}
+                      title={isLinkedToMe(c)
+                        ? "ACP deja liee a votre profil syndic - cliquez pour re-synchroniser"
+                        : "Lier mon logo, mon cabinet, mes mentions legales a cette ACP"}
+                      data-testid={`link-syndic-${c.id}`}
+                      className={`mr-1 ${isLinkedToMe(c)
+                        ? 'bg-emerald-50 text-emerald-700 border-emerald-300 hover:bg-emerald-100'
+                        : 'text-amber-700 border-amber-300 hover:bg-amber-50'}`}
+                    >
+                      {isLinkedToMe(c) ? <CheckCircle2 size={13} className="mr-1" /> : <ImageIcon size={13} className="mr-1" />}
+                      {isLinkedToMe(c) ? 'Logo lie' : 'Lier mon logo'}
+                    </Button>
+                  )}
                   {isSuperadmin && <Button variant="ghost" size="sm" onClick={() => handleCleanupOrphans(c)} className="text-[#022D52] hover:text-[#01213e]" title="Nettoyer les ecritures orphelines (re-synchroniser bilan/grand livre)" data-testid={`cleanup-orphans-${c.id}`}><Wand2 size={13} /></Button>}
                   {isSuperadmin && <Button variant="outline" size="sm" onClick={() => handleResetData(c)} className="text-amber-700 border-amber-300 hover:bg-amber-50 mr-1" title="Vider TOUTES les donnees comptables (factures, ecritures, exercices, budgets...)" data-testid={`reset-data-${c.id}`}><Eraser size={13} className="mr-1" /> Vider</Button>}
                   {isManager && c.status !== 'archived' && <Button variant="ghost" size="sm" onClick={() => handleArchive(c.id)} className="text-orange-500" title="Archiver"><Archive size={13} /></Button>}

@@ -1,4 +1,54 @@
 # CoproManager PRD
+### Iter90hz -> i0 (17/07/2026) — Lien explicite logo/ACP, re-invitation email owner, comptes bancaires filtrables
+
+**Contexte** : Suite du fork iter90hy. Session focus sur robustesse SaaS et
+observabilite pour le proprietaire.
+
+**Corrections & features**
+1. **Pytest reparee** : `test_letter_pdf_debtor_shows_payments_and_calls` a
+   commence a echouer suite a un line-wrap naturel du PDF ("communication
+   structuree\nobligatoire"). Assertion assouplie via `" ".join(txt.split())`.
+2. **iter90hz - Lien explicite syndic <-> ACP** (fixe le bug branding
+   "Cabinet Immosud" vs "GEP") :
+   - Endpoint `POST /api/coproprietes/{id}/link-syndic-config` : ecrit
+     `syndic_user_id` sur la copropriete (source de verite deterministe).
+   - Bouton UI "Lier mon logo" (jaune) / "Logo lie" (vert) dans la liste
+     des ACPs (`data-testid="link-syndic-{id}"`).
+   - Cree une entree `syndic_configs` vide si absente (idempotent).
+3. **iter90hz - Re-invitation automatique sur changement email owner** :
+   - Helper module-level `handle_owner_email_change(db, owner_id, old, new, actor)`
+     dans `routes/owner_access.py`.
+   - Appele depuis `PUT /api/owner/me` (self-service) et `PUT /api/owners/{id}` (syndic).
+   - Actions : `user.email = new`, `must_change_password = True`,
+     tokens reset invalides, envoi invitation, audit `email_change_reinvite`.
+   - Gestion conflit email (reason=`email_conflict`), skip pour role non-owner.
+4. **iter90hz - IBAN visible dans Portail (QuickPay)** :
+   - `defaultAcpAccount` charge depuis `/api/owner/bank-accounts/{id}`.
+   - Bloc "Compte a crediter" (fond vert) + bouton copier IBAN,
+     juste au-dessus de la communication structuree.
+5. **iter90hz - Nouvel onglet "Comptes bancaires" cote proprio** :
+   - `BankAccountsTab` : Card par compte avec IBAN masque, solde comptable,
+     libelle par defaut, PCMN, mouvements bancaires (matched / a traiter).
+6. **iter90i0 - Filtre par plage de dates sur comptes bancaires** :
+   - Backend `/api/owner/bank-accounts/{id}?start_date&end_date` (defaut 200
+     mouvements, avec `movements_total_count` pour indiquer si tronque).
+   - Frontend : 2 date pickers dans l'onglet + bouton "Exercice YYYY-YYYY"
+     pour reset au 1er jour de l'exercice comptable courant.
+   - Auto-init au 1er jour de l'exercice a chaque changement d'ACP / FY.
+
+**Tests ajoutes / MAJ**
+- `test_iter90hk_hl_reminders_tier_balance_and_period_letter.py` : pytest debtor letter fixed.
+- `test_iter90hz_link_syndic_config_and_email_reinvite.py` (5 tests) :
+  link config + email change (nominal, no-op, conflict).
+- `test_iter90i0_bank_accounts_date_range.py` (4 tests) : filtres date.
+
+**Reste a faire** (prochaine session)
+- **P0 TEUWEN** (7e session ignoree !) : `reports.py:1558` + `pdf_decompte.py:420` doivent combiner `lot.owner_id` + distribution keys.
+- Periode d'essai syndics (Superadmin).
+- Migration GridFS PRODUCTION.
+
+---
+
 ### Iter90hg -> hy (17/07/2026) — Rafale : Rappels, Documents, PDFs, Portail proprio, QR paiement
 
 Session tres dense en features utilisateur, portee sur 3 axes :

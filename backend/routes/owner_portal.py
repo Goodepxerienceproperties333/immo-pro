@@ -91,13 +91,22 @@ def create_owner_portal_router(db):
         return await _resolve_owner(db, request)
 
     # iter90hw : apercu des comptes bancaires de l'ACP + leurs mouvements
+    # iter90i0 : filtre par plage de dates (start_date / end_date) sur les
+    # transactions bancaires. Par defaut : 200 transactions max, sinon aucune
+    # limite (le proprio a demande la liste complete sur l'exercice).
     @router.get("/bank-accounts/{copropriete_id}")
-    async def owner_bank_accounts(copropriete_id: str, request: Request, limit: int = 15):
+    async def owner_bank_accounts(
+        copropriete_id: str, request: Request,
+        limit: int = 200,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+    ):
         """Vue transparente pour le proprio : liste des comptes bancaires de
-        l'ACP avec solde comptable actuel + N derniers mouvements.
+        l'ACP avec solde comptable actuel + mouvements filtres par date.
 
         Chinese wall : verifie que le proprio a au moins un lot dans l'ACP.
         Les IBAN sont masques (only last 4 digits visibles).
+        `start_date` / `end_date` (YYYY-MM-DD) filtrent les mouvements.
         """
         owner_ids, _ = await _resolve_owner_ids(db, request)
         # Verification lot -> ACP
@@ -114,6 +123,12 @@ def create_owner_portal_router(db):
             raise HTTPException(404, "Copropriete introuvable")
 
         bank_list = copro.get("bank_accounts") or []
+        # Construit le filtre date une seule fois (reutilise pour chaque compte)
+        date_filter: dict = {}
+        if start_date:
+            date_filter["$gte"] = start_date
+        if end_date:
+            date_filter["$lte"] = end_date
         result = []
         for ba in bank_list:
             iban = ba.get("iban", "") or ""
@@ -122,6 +137,8 @@ def create_owner_portal_router(db):
             label = ba.get("label") or ("Compte a vue" if acc_type == "vue" else "Compte epargne")
 
             # Solde = somme debit - credit sur pcmn_number dans journal_entries
+            # (solde COMPTABLE global, independant du filtre de date : le
+            # proprio veut voir le solde actuel meme si la periode est passee)
             balance = 0.0
             if pcmn:
                 async for e in db.journal_entries.find(
@@ -135,10 +152,13 @@ def create_owner_portal_router(db):
                             balance += float(ln.get("debit", 0) or 0)
                             balance -= float(ln.get("credit", 0) or 0)
 
-            # Derniers mouvements bancaires
+            # Mouvements bancaires : filtre par IBAN + plage de dates
+            txn_query: dict = {"copropriete_id": copropriete_id, "iban": iban}
+            if date_filter:
+                txn_query["date"] = date_filter
             movements = []
             async for txn in db.bank_transactions.find(
-                {"copropriete_id": copropriete_id, "iban": iban},
+                txn_query,
                 {"_id": 0, "date": 1, "amount": 1, "description": 1,
                  "counterparty_name": 1, "communication": 1, "matched": 1},
             ).sort("date", -1).limit(limit):
@@ -150,6 +170,9 @@ def create_owner_portal_router(db):
                     "communication": (txn.get("communication", "") or "")[:50],
                     "matched": bool(txn.get("matched")),
                 })
+
+            # Total du nombre de mouvements sur la periode (peut depasser limit)
+            total_count = await db.bank_transactions.count_documents(txn_query)
 
             # Masquage IBAN : BE04XXXXXXXX9331
             masked = iban
@@ -164,8 +187,15 @@ def create_owner_portal_router(db):
                 "balance": round(balance, 2),
                 "is_default": bool(ba.get("is_default")),
                 "recent_movements": movements,
+                "movements_total_count": total_count,
+                "movements_limit": limit,
             })
-        return {"copropriete_id": copropriete_id, "bank_accounts": result}
+        return {
+            "copropriete_id": copropriete_id,
+            "bank_accounts": result,
+            "start_date": start_date or "",
+            "end_date": end_date or "",
+        }
 
     # iter90hx : QR code de paiement EPC069-12 (norme SEPA europeenne).
     # Format standard reconnu par toutes les apps bancaires belges (Belfius,
@@ -1485,6 +1515,13 @@ def create_owner_portal_router(db):
         new_first = update.get("first_name", owner.get("first_name", "")) or ""
         if "last_name" in update or "first_name" in update:
             update["name"] = f"{new_last} {new_first}".strip()
+        # iter90hz : detecter changement d'email AVANT le write pour renvoyer
+        # une invitation apres le save.
+        old_email = (owner.get("email") or "").lower().strip()
+        new_email = ""
+        if "email" in update:
+            new_email = (update["email"] or "").lower().strip()
+        email_changed = bool(new_email) and (old_email != new_email)
         await db.owners.update_one({"id": owner_id}, {"$set": update})
         updated_owner = await db.owners.find_one({"id": owner_id}, {"_id": 0})
         # Notify syndic
@@ -1495,7 +1532,32 @@ def create_owner_portal_router(db):
             summary_lines=diffs,
             copropriete_ids=copro_ids,
         )
-        return {"updated": True, "owner": updated_owner, "notification": notif_result}
+        # iter90hz : si l'email a change, sync le user account lie et
+        # renvoyer une invitation au NOUVEL email. Le proprio devra alors
+        # se reconnecter avec cet email.
+        invitation_info = None
+        if email_changed:
+            try:
+                from routes.owner_access import handle_owner_email_change
+                # Note : l'"actor" ici est le proprio lui-meme (self-service).
+                # On passe l'owner en tant que actor pour le nom / traca.
+                invitation_info = await handle_owner_email_change(
+                    db, owner_id, old_email, new_email,
+                    {"name": updated_owner.get("name", ""),
+                     "email": updated_owner.get("email", ""),
+                     "role": "owner"},
+                )
+            except Exception as _e:
+                import logging
+                logging.getLogger(__name__).warning(
+                    f"handle_owner_email_change (self) failed for owner {owner_id}: {_e}",
+                )
+        return {
+            "updated": True,
+            "owner": updated_owner,
+            "notification": notif_result,
+            "reinvitation": invitation_info,
+        }
 
     @router.get("/tenants")
     async def my_tenants(request: Request):

@@ -26,6 +26,188 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+# iter90hz : Fonctions module-level reutilisables pour la synchronisation
+# email owner <-> user account. Appelees depuis owner_portal.py (self-update)
+# et properties.py (syndic update) pour renvoyer automatiquement une
+# invitation quand l'email du proprietaire change.
+
+def _build_setup_url_module(email: str) -> str:
+    """Construit l'URL de set-password / invitation. Duplique intentionnellement
+    _build_setup_url pour rester utilisable hors closure du router."""
+    frontend_url = os.environ.get("FRONTEND_URL", "")
+    return f"{frontend_url}/login?invite={email}"
+
+
+async def _send_invitation_email_module(
+    db, email: str, recipient_name: str, inviter: dict | None,
+) -> dict:
+    """Version module-level de _send_invitation_email (miroir strict, utilisable
+    depuis d'autres routers). Renvoie le meme dict {sent, reason, detail,
+    invitation_link}."""
+    setup_url = _build_setup_url_module(email)
+    result = {"sent": False, "reason": "unknown", "detail": "", "invitation_link": setup_url}
+    try:
+        from graph_email import is_configured, send_html_email, build_invitation_email
+        if not is_configured():
+            logger.warning(f"MSGRAPH not configured; invitation link for {email}: {setup_url}")
+            result["reason"] = "not_configured"
+            result["detail"] = (
+                "MS Graph n'est pas configure sur ce serveur. "
+                "Le lien d'invitation ci-dessous peut etre transmis manuellement."
+            )
+            return result
+        mail_enabled = os.environ.get("MAIL_ENABLED", "true").lower() != "false"
+        inviter_id = str((inviter or {}).get("_id", "")) if inviter else ""
+        has_per_syndic = False
+        if inviter_id:
+            try:
+                from graph_email import is_configured_for_syndic
+                has_per_syndic = await is_configured_for_syndic(db, inviter_id)
+            except Exception:
+                has_per_syndic = False
+        subject, html = build_invitation_email(
+            recipient_name=recipient_name or "Proprietaire",
+            role_label="Proprietaire",
+            setup_url=setup_url,
+            inviter_name=(inviter or {}).get("name"),
+            inviter_email=(inviter or {}).get("email"),
+        )
+        try:
+            await send_html_email(
+                [email], subject, html,
+                db=db,
+                for_syndic_user_id=inviter_id or None,
+            )
+        except Exception as e:
+            logger.exception(f"Owner invitation email SEND FAILED for {email}: {e}")
+            result["reason"] = "graph_error"
+            result["detail"] = f"Erreur Microsoft Graph : {str(e)[:250]}"
+            return result
+        if not mail_enabled and not has_per_syndic:
+            logger.info(f"[DRY-RUN] Invitation suppressed for {email}; link: {setup_url}")
+            result["reason"] = "dry_run"
+            result["detail"] = (
+                "Envoi email desactive sur ce serveur (MAIL_ENABLED=false). "
+                "Le lien d'invitation ci-dessous peut etre transmis manuellement."
+            )
+            return result
+        logger.info(f"Owner invitation email sent to {email}")
+        result["sent"] = True
+        result["reason"] = "sent"
+        result["detail"] = "Email d'invitation envoye avec succes."
+        return result
+    except Exception as e:
+        logger.exception(f"Unexpected error preparing invitation for {email}: {e}")
+        result["reason"] = "unexpected_error"
+        result["detail"] = str(e)[:250]
+        return result
+
+
+async def handle_owner_email_change(
+    db,
+    owner_id: str,
+    old_email: str,
+    new_email: str,
+    actor: dict | None = None,
+) -> dict | None:
+    """iter90hz : Quand l'email d'un proprietaire change, si le proprietaire
+    possede un compte user lie (invited ou actif), synchroniser :
+       1. user.email = new_email   (car l'email est la cle de connexion)
+       2. user.must_change_password = True (force re-set du mot de passe
+          avec le nouveau email pour prevenir les detournements de compte)
+       3. Envoyer une nouvelle invitation au NEW email
+       4. Auditer l'evenement dans owner_access_audit
+
+    Retourne un dict compatible avec les autres endpoints (sent, reason,
+    detail, invitation_link) OU None si aucun compte lie / pas de vrai
+    changement d'email.
+    """
+    old = (old_email or "").lower().strip()
+    new = (new_email or "").lower().strip()
+    if not new or old == new or "@" not in new:
+        return None
+    owner_doc = await db.owners.find_one({"id": owner_id})
+    if not owner_doc:
+        return None
+    # Chercher le user lie : via user_id (source primaire) puis fallback email
+    user = None
+    uid = owner_doc.get("user_id")
+    if uid:
+        try:
+            user = await db.users.find_one({"_id": ObjectId(uid)})
+        except Exception:
+            user = None
+    if not user and old:
+        user = await db.users.find_one({"email": old})
+    if not user:
+        return None
+    # Securite : ne jamais toucher un compte non-owner (email partage avec
+    # un compte syndic/gestionnaire/superadmin). On log et on skip.
+    if user.get("role") != "owner":
+        logger.info(
+            f"handle_owner_email_change: user {user.get('email')} is role="
+            f"{user.get('role')}, skipping email sync",
+        )
+        return None
+    # Verifier l'unicite de l'email cible
+    conflict = await db.users.find_one({"email": new, "_id": {"$ne": user["_id"]}})
+    if conflict:
+        return {
+            "sent": False,
+            "reason": "email_conflict",
+            "detail": (
+                f"Un autre compte utilise deja l'email {new}. Impossible de "
+                f"synchroniser le compte de connexion du proprietaire."
+            ),
+            "invitation_link": _build_setup_url_module(new),
+        }
+    now_iso = datetime.now(timezone.utc).isoformat()
+    # 1 + 2 : synchroniser user.email + forcer re-invitation
+    await db.users.update_one(
+        {"_id": user["_id"]},
+        {"$set": {
+            "email": new,
+            "must_change_password": True,
+            "email_changed_at": now_iso,
+        }},
+    )
+    # Invalider les tokens reset actifs (defense-in-depth : ils pointent
+    # peut-etre encore vers l'ancienne adresse)
+    try:
+        await db.password_reset_tokens.update_many(
+            {"user_id": str(user["_id"]), "consumed_at": None},
+            {"$set": {"consumed_at": now_iso}},
+        )
+    except Exception as e:
+        logger.warning(f"reset tokens invalidation failed: {e}")
+    # 3 : envoyer invitation au NOUVEL email
+    name = user.get("name") or owner_doc.get("name") or "Proprietaire"
+    invitation = await _send_invitation_email_module(db, new, name, actor)
+    # 4 : audit trail
+    try:
+        await db.owner_access_audit.insert_one({
+            "id": str(uuid.uuid4()),
+            "action": "email_change_reinvite",
+            "owner_id": owner_id,
+            "owner_name": owner_doc.get("name") or "",
+            "owner_email_old": old,
+            "owner_email_new": new,
+            "target_user_id": str(user["_id"]),
+            "target_user_email": new,
+            "actor_user_id": str((actor or {}).get("_id") or (actor or {}).get("id") or ""),
+            "actor_email": (actor or {}).get("email", ""),
+            "actor_role": (actor or {}).get("role", ""),
+            "details": {
+                "invitation_sent": invitation.get("sent"),
+                "invitation_reason": invitation.get("reason"),
+            },
+            "created_at": now_iso,
+        })
+    except Exception as e:
+        logger.warning(f"owner_access_audit insert (email_change_reinvite) failed: {e}")
+    return invitation
+
+
 def create_owner_access_router(db):
     router = APIRouter(prefix="/api/owners")
 

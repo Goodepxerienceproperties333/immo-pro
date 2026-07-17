@@ -328,8 +328,10 @@ def test_letter_pdf_debtor_shows_payments_and_calls():
             # Solde restant du affiche (debit-credit = 700-500=200)
             assert "Solde restant du" in txt
             assert "200.00" in txt or "200,00" in txt
-            # VCS de virement present
-            assert "communication structuree obligatoire" in txt
+            # VCS de virement present (tolerance line-wrap naturel du PDF)
+            txt_norm = " ".join(txt.split())
+            assert "communication structuree obligatoire" in txt_norm
+            assert "+++111/2222/33333+++" in txt_norm
         finally:
             await _cleanup(db, copro_id, owner_id)
             client.close()
