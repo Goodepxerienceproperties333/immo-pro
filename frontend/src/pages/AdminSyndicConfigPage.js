@@ -90,10 +90,11 @@ export default function AdminSyndicConfigPage() {
         <div>
           <h1 className="text-2xl font-semibold flex items-center gap-2">
             <Settings className="h-6 w-6 text-[#022D52]" />
-            Configuration des cabinets syndics
+            Configuration des comptes plateforme
           </h1>
           <p className="text-sm text-slate-500 mt-1">
-            Gerer l&apos;identite, le logo, les mentions legales et la config email de chaque cabinet.
+            Gerer l&apos;identite, le logo, les mentions legales et la config email de chaque
+            cabinet syndic et super administrateur.
           </p>
         </div>
         <Button variant="ghost" onClick={load} data-testid="btn-refresh-list">
@@ -106,7 +107,8 @@ export default function AdminSyndicConfigPage() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Cabinet</TableHead>
+                <TableHead>Compte</TableHead>
+                <TableHead>Role</TableHead>
                 <TableHead>Email login</TableHead>
                 <TableHead>Ville</TableHead>
                 <TableHead className="text-center">Logo</TableHead>
@@ -117,9 +119,9 @@ export default function AdminSyndicConfigPage() {
             </TableHeader>
             <TableBody>
               {loading ? (
-                <TableRow><TableCell colSpan={7} className="text-center p-6">Chargement...</TableCell></TableRow>
+                <TableRow><TableCell colSpan={8} className="text-center p-6">Chargement...</TableCell></TableRow>
               ) : syndics.length === 0 ? (
-                <TableRow><TableCell colSpan={7} className="text-center p-6 text-slate-500">Aucun syndic</TableCell></TableRow>
+                <TableRow><TableCell colSpan={8} className="text-center p-6 text-slate-500">Aucun compte</TableCell></TableRow>
               ) : syndics.map(s => (
                 <TableRow key={s.syndic_user_id} data-testid={`row-syndic-${s.syndic_user_id}`}>
                   <TableCell className="font-medium">
@@ -130,6 +132,17 @@ export default function AdminSyndicConfigPage() {
                         {s.display_name && <div className="text-xs text-slate-500">{s.display_name}</div>}
                       </div>
                     </div>
+                  </TableCell>
+                  <TableCell>
+                    {s.user_role === 'superadmin' ? (
+                      <Badge className="bg-purple-100 text-purple-800 border border-purple-200" data-testid={`role-badge-${s.syndic_user_id}`}>
+                        Super Admin
+                      </Badge>
+                    ) : (
+                      <Badge className="bg-blue-50 text-blue-700 border border-blue-200" data-testid={`role-badge-${s.syndic_user_id}`}>
+                        Syndic
+                      </Badge>
+                    )}
                   </TableCell>
                   <TableCell className="font-mono text-xs">{s.user_email}</TableCell>
                   <TableCell>{s.city || '-'}</TableCell>

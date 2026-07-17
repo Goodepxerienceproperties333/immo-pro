@@ -398,7 +398,13 @@ def create_syndic_config_router(db):
     @router.get("/admin/syndic-config/list")
     async def admin_list_configs(request: Request):
         await _require_superadmin(request)
-        syndics = await db.users.find({"role": "syndic"}, {"_id": 1, "email": 1, "name": 1}).to_list(1000)
+        # iter90h2 : inclure les superadmins dans la liste (co-gerants
+        # plateforme qui ont aussi besoin d'une config email pour envoyer
+        # des communications aux syndics / owners).
+        syndics = await db.users.find(
+            {"role": {"$in": ["syndic", "superadmin"]}},
+            {"_id": 1, "email": 1, "name": 1, "role": 1, "authorized_mailboxes": 1}
+        ).sort([("role", 1), ("name", 1)]).to_list(1000)
         result = []
         for s in syndics:
             uid = str(s["_id"])
@@ -407,6 +413,7 @@ def create_syndic_config_router(db):
                 "syndic_user_id": uid,
                 "user_email": s.get("email", ""),
                 "user_name": s.get("name", ""),
+                "user_role": s.get("role", "syndic"),  # iter90h2 : 'syndic' | 'superadmin'
                 "legal_name": cfg.get("legal_name", ""),
                 "display_name": cfg.get("display_name", ""),
                 "city": cfg.get("city", ""),
