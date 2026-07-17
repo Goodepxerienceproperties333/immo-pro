@@ -90,6 +90,192 @@ def create_owner_portal_router(db):
         """Owner's own profile (read-only)."""
         return await _resolve_owner(db, request)
 
+    # iter90hw : apercu des comptes bancaires de l'ACP + leurs mouvements
+    @router.get("/bank-accounts/{copropriete_id}")
+    async def owner_bank_accounts(copropriete_id: str, request: Request, limit: int = 15):
+        """Vue transparente pour le proprio : liste des comptes bancaires de
+        l'ACP avec solde comptable actuel + N derniers mouvements.
+
+        Chinese wall : verifie que le proprio a au moins un lot dans l'ACP.
+        Les IBAN sont masques (only last 4 digits visibles).
+        """
+        owner_ids, _ = await _resolve_owner_ids(db, request)
+        # Verification lot -> ACP
+        has_lot = await db.lots.find_one(
+            {"copropriete_id": copropriete_id,
+             "$or": [{"owner_id": {"$in": owner_ids}}, {"owner_ids": {"$in": owner_ids}}]},
+            {"_id": 0, "id": 1},
+        )
+        if not has_lot:
+            raise HTTPException(403, "Vous n'avez aucun lot dans cette copropriete")
+
+        copro = await db.coproprietes.find_one({"id": copropriete_id}, {"_id": 0, "bank_accounts": 1})
+        if not copro:
+            raise HTTPException(404, "Copropriete introuvable")
+
+        bank_list = copro.get("bank_accounts") or []
+        result = []
+        for ba in bank_list:
+            iban = ba.get("iban", "") or ""
+            pcmn = ba.get("pcmn_number", "") or ""
+            acc_type = ba.get("account_type", "") or ""
+            label = ba.get("label") or ("Compte a vue" if acc_type == "vue" else "Compte epargne")
+
+            # Solde = somme debit - credit sur pcmn_number dans journal_entries
+            balance = 0.0
+            if pcmn:
+                async for e in db.journal_entries.find(
+                    {"copropriete_id": copropriete_id,
+                     "lines.account_number": pcmn,
+                     "reversed": {"$ne": True}, "is_reversal": {"$ne": True}},
+                    {"_id": 0, "lines": 1},
+                ):
+                    for ln in e.get("lines", []) or []:
+                        if ln.get("account_number") == pcmn:
+                            balance += float(ln.get("debit", 0) or 0)
+                            balance -= float(ln.get("credit", 0) or 0)
+
+            # Derniers mouvements bancaires
+            movements = []
+            async for txn in db.bank_transactions.find(
+                {"copropriete_id": copropriete_id, "iban": iban},
+                {"_id": 0, "date": 1, "amount": 1, "description": 1,
+                 "counterparty_name": 1, "communication": 1, "matched": 1},
+            ).sort("date", -1).limit(limit):
+                movements.append({
+                    "date": txn.get("date", ""),
+                    "amount": float(txn.get("amount", 0) or 0),
+                    "description": txn.get("description", "") or "",
+                    "counterparty": txn.get("counterparty_name", "") or "",
+                    "communication": (txn.get("communication", "") or "")[:50],
+                    "matched": bool(txn.get("matched")),
+                })
+
+            # Masquage IBAN : BE04XXXXXXXX9331
+            masked = iban
+            if iban and len(iban) >= 8:
+                masked = iban[:4] + "X" * (len(iban) - 8) + iban[-4:]
+
+            result.append({
+                "iban": masked,
+                "type": acc_type,
+                "label": label,
+                "pcmn_number": pcmn,
+                "balance": round(balance, 2),
+                "is_default": bool(ba.get("is_default")),
+                "recent_movements": movements,
+            })
+        return {"copropriete_id": copropriete_id, "bank_accounts": result}
+
+    # iter90hx : QR code de paiement EPC069-12 (norme SEPA europeenne).
+    # Format standard reconnu par toutes les apps bancaires belges (Belfius,
+    # BNP, ING, KBC, Bpost, etc). Le proprio scanne -> le paiement est prerempli.
+    @router.get("/payment-qr/{copropriete_id}")
+    async def owner_payment_qr(copropriete_id: str, request: Request, amount: Optional[float] = None):
+        """Genere un QR code EPC069-12 pour paiement sur le compte a vue de l'ACP.
+
+        Le contenu est :
+          - Beneficiaire : nom de l'ACP + IBAN du compte 'vue' par defaut
+          - Montant : parametre optionnel `amount` (sinon solde debiteur actuel)
+          - Communication structuree : VCS du proprio
+
+        Retourne un PNG.
+        """
+        owner_ids, primary = await _resolve_owner_ids(db, request)
+        # Chinese wall : verifier lot dans l'ACP
+        has_lot = await db.lots.find_one(
+            {"copropriete_id": copropriete_id,
+             "$or": [{"owner_id": {"$in": owner_ids}}, {"owner_ids": {"$in": owner_ids}}]},
+            {"_id": 0, "id": 1},
+        )
+        if not has_lot:
+            raise HTTPException(403, "Vous n'avez aucun lot dans cette copropriete")
+
+        copro = await db.coproprietes.find_one(
+            {"id": copropriete_id},
+            {"_id": 0, "name": 1, "bank_accounts": 1},
+        )
+        if not copro:
+            raise HTTPException(404, "Copropriete introuvable")
+
+        # Choisir le compte "vue" par defaut (fallback : premier)
+        bank_list = copro.get("bank_accounts") or []
+        vue = next((b for b in bank_list if b.get("account_type") == "vue"), None)
+        if not vue:
+            vue = bank_list[0] if bank_list else None
+        if not vue or not vue.get("iban"):
+            raise HTTPException(400, "Aucun compte bancaire configure pour cette ACP")
+
+        iban = (vue.get("iban") or "").replace(" ", "").upper()
+        bic = (vue.get("bic") or "NOTPROVIDED").replace(" ", "").upper()
+        beneficiary_name = (copro.get("name") or "ACP")[:70]
+
+        # Recuperer le VCS du proprio pour cette ACP
+        all_owners_docs = await db.owners.find({"id": {"$in": owner_ids}}, {"_id": 0}).to_list(len(owner_ids))
+        vcs_code = ""
+        for o in all_owners_docs:
+            if o.get("vcs_code"):
+                vcs_code = o["vcs_code"]
+                break
+
+        # Montant : parametre explicite sinon solde debiteur reel du proprio
+        pay_amount = 0.0
+        if amount is not None and amount > 0:
+            pay_amount = round(float(amount), 2)
+        else:
+            # Recalculer le solde tier sur cette ACP
+            je_q = {"copropriete_id": copropriete_id,
+                    "reversed": {"$ne": True}, "is_reversal": {"$ne": True}}
+            async for e in db.journal_entries.find(je_q, {"_id": 0, "lines": 1}):
+                for ln in e.get("lines", []) or []:
+                    if ln.get("third_party_id") in set(owner_ids):
+                        pay_amount += float(ln.get("debit", 0) or 0)
+                        pay_amount -= float(ln.get("credit", 0) or 0)
+            pay_amount = round(pay_amount, 2) if pay_amount > 0.01 else 0.0
+
+        # Format EPC069-12 (11 lignes fixes) - specifie par European Payments Council
+        # cf https://www.europeanpaymentscouncil.eu/document-library/guidance-documents/quick-response-code-guidelines-enable-data-capture-initiation
+        lines = [
+            "BCD",                          # Service Tag (fixe)
+            "002",                          # Version (002 = permet BIC vide)
+            "1",                            # Character set (1 = UTF-8)
+            "SCT",                          # SEPA Credit Transfer identification
+            bic if bic else "",             # BIC du beneficiaire (facultatif si vide/002)
+            beneficiary_name,               # Nom du beneficiaire (max 70)
+            iban,                           # IBAN du beneficiaire
+            f"EUR{pay_amount:.2f}" if pay_amount > 0 else "",  # Montant (facultatif)
+            "",                             # Purpose (facultatif)
+            vcs_code or "",                 # Structured reference (VCS)
+            "",                             # Unstructured remittance (mutuellement exclusif avec VCS)
+        ]
+        payload = "\n".join(lines)
+
+        import qrcode
+        from io import BytesIO
+        qr = qrcode.QRCode(
+            version=None,
+            error_correction=qrcode.constants.ERROR_CORRECT_M,
+            box_size=8,
+            border=2,
+        )
+        qr.add_data(payload)
+        qr.make(fit=True)
+        img = qr.make_image(fill_color="black", back_color="white")
+        buf = BytesIO()
+        img.save(buf, format="PNG")
+        from fastapi.responses import Response
+        return Response(
+            content=buf.getvalue(),
+            media_type="image/png",
+            headers={
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "X-Payment-Amount": f"{pay_amount:.2f}",
+                "X-Payment-VCS": vcs_code or "",
+                "X-Payment-IBAN": iban,
+                "X-Payment-Beneficiary": beneficiary_name,
+            },
+        )
+
     @router.get("/coproprietes")
     async def my_coproprietes(request: Request):
         """ACPs where the owner has at least one lot (across all owner fiches matching email)."""
@@ -430,7 +616,11 @@ def create_owner_portal_router(db):
                         opening += float(ln.get("debit", 0) or 0)
                         opening -= float(ln.get("credit", 0) or 0)
 
-        # Movements dans la periode
+        # iter90hy : regroupement par journal_entry - 1 ligne par "type d'appel"
+        # meme si le proprio a plusieurs lots (2 distribution_lines sur un meme
+        # fund_call -> 1 ligne aggregee dans les mouvements). Sommes debit/credit
+        # sur toutes les lignes de l'entry qui concernent les comptes tiers
+        # du proprio.
         movements = []
         running = opening
         for e in entries:
@@ -438,6 +628,13 @@ def create_owner_portal_router(db):
             valid_accs = tier_accounts_by_copro.get(cp, set())
             fcid = e.get("fund_call_id")
             fc_info = fc_map.get(fcid, {}) if fcid else {}
+            # iter90hy : agregation multi-lots sur ce journal_entry
+            agg_debit = 0.0
+            agg_credit = 0.0
+            # Description : prendre la premiere line_description non vide sinon entry desc
+            first_line_desc = ""
+            first_acc = ""
+            first_counter = ""
             for ln in e.get("lines", []) or []:
                 tpid = ln.get("third_party_id")
                 acc = ln.get("account_number", "")
@@ -447,38 +644,43 @@ def create_owner_portal_router(db):
                 c_val = float(ln.get("credit", 0) or 0)
                 if d_val == 0 and c_val == 0:
                     continue
-                # Compose description lisible
-                desc = (ln.get("line_description") or e.get("description") or "").strip()
-                if fc_info.get("name") and fc_info["name"] not in desc:
-                    desc = f"{fc_info['name']} - {desc}" if desc else fc_info["name"]
-                # iter90eg : sur mouvement bancaire (FI) touchant le compte tier
-                # proprietaire, remplace le libelle par une formulation claire :
-                # - Ligne au CREDIT (paiement du proprio) -> "Paiement recu"
-                # - Ligne au DEBIT (remboursement de l'ACP) -> "Votre remboursement"
-                if e.get("journal_type", "") == "FI":
-                    counterpart = (ln.get("counterparty_name") or ln.get("third_party_name") or "").strip()
-                    ref = (e.get("reference") or "").strip()
-                    detail_parts = [p for p in (counterpart, ref) if p]
-                    detail_suffix = f" - {' / '.join(detail_parts)}" if detail_parts else ""
-                    if c_val > 0.001:
-                        desc = f"Paiement recu{detail_suffix}"
-                    elif d_val > 0.001:
-                        desc = f"Votre remboursement{detail_suffix}"
-                running += (d_val - c_val)
-                movements.append({
-                    "date": e.get("date", ""),
-                    "journal_type": e.get("journal_type", "OD"),
-                    "reference": e.get("reference", "") or (e.get("id", "")[:8] if e.get("id") else ""),
-                    "description": desc,
-                    "debit": round(d_val, 2),
-                    "credit": round(c_val, 2),
-                    "running_balance": round(running, 2),
-                    "account_number": acc,
-                    "fund_call_id": fcid or "",
-                    "fund_call_name": fc_info.get("name", ""),
-                    "copropriete_id": cp,
-                    "is_mutation": (e.get("source_type") == "lot_mutation") or (e.get("reference", "") or "").startswith("MUT-"),
-                })
+                agg_debit += d_val
+                agg_credit += c_val
+                if not first_line_desc:
+                    first_line_desc = (ln.get("line_description") or "").strip()
+                if not first_acc:
+                    first_acc = acc
+                if not first_counter:
+                    first_counter = (ln.get("counterparty_name") or ln.get("third_party_name") or "").strip()
+            if agg_debit == 0 and agg_credit == 0:
+                continue
+            desc = (first_line_desc or e.get("description") or "").strip()
+            if fc_info.get("name") and fc_info["name"] not in desc:
+                desc = f"{fc_info['name']} - {desc}" if desc else fc_info["name"]
+            # iter90eg : formulation claire pour les mouvements bancaires (FI)
+            if e.get("journal_type", "") == "FI":
+                ref = (e.get("reference") or "").strip()
+                detail_parts = [p for p in (first_counter, ref) if p]
+                detail_suffix = f" - {' / '.join(detail_parts)}" if detail_parts else ""
+                if agg_credit > 0.001:
+                    desc = f"Paiement recu{detail_suffix}"
+                elif agg_debit > 0.001:
+                    desc = f"Votre remboursement{detail_suffix}"
+            running += (agg_debit - agg_credit)
+            movements.append({
+                "date": e.get("date", ""),
+                "journal_type": e.get("journal_type", "OD"),
+                "reference": e.get("reference", "") or (e.get("id", "")[:8] if e.get("id") else ""),
+                "description": desc,
+                "debit": round(agg_debit, 2),
+                "credit": round(agg_credit, 2),
+                "running_balance": round(running, 2),
+                "account_number": first_acc,
+                "fund_call_id": fcid or "",
+                "fund_call_name": fc_info.get("name", ""),
+                "copropriete_id": cp,
+                "is_mutation": (e.get("source_type") == "lot_mutation") or (e.get("reference", "") or "").startswith("MUT-"),
+            })
 
         return {
             "movements": movements,
@@ -574,7 +776,10 @@ def create_owner_portal_router(db):
                 dl_lot_num = _norm_num(dl.get("lot_number", ""))
                 if dl_lot_num and dl_lot_num != "0" and dl_lot_num in my_lots_by_number:
                     my_amount += dl_amount
-            if my_amount <= 0:
+            if abs(my_amount) < 0.01:
+                # iter90hv : garder les notes de credit (my_amount < 0) et
+                # exclure uniquement les factures dont la quote-part est nulle
+                # (le proprio n'est pas concerne du tout).
                 continue
             # iter90cz : expose attachments (id + filename + mime) pour lien
             # "Voir la facture" cote portail proprietaire.

@@ -213,7 +213,12 @@ export default function OwnerPortalPage() {
     const fy = fiscalYears.find(y => y.id === selectedFyId);
     if (fy) {
       setPeriodStart(fy.start_date || '');
-      setPeriodEnd(fy.end_date || '');
+      // iter90hx : par defaut, la periode se termine A LA DATE D'AUJOURD'HUI
+      // (pas la fin de l'exercice) car le proprio veut voir sa situation
+      // actuelle - modifiable via le nouveau selecteur de date dans MovementsTab.
+      const todayIso = new Date().toISOString().slice(0, 10);
+      const fyEnd = fy.end_date || todayIso;
+      setPeriodEnd(fyEnd < todayIso ? fyEnd : todayIso);
     }
   }, [selectedFyId, fiscalYears]);
 
@@ -717,6 +722,8 @@ export default function OwnerPortalPage() {
               copropriete_id={selectedAcp}
               periodStart={periodStart}
               periodEnd={periodEnd}
+              onPeriodStartChange={setPeriodStart}
+              onPeriodEndChange={setPeriodEnd}
             />
           </TabsContent>
 
@@ -1722,10 +1729,25 @@ function CommunicationDetailDialog({ commId, onClose }) {
             {data.has_attachment && (
               <div className="flex items-center gap-2 p-2 bg-blue-50 border border-blue-200 rounded text-xs">
                 <Paperclip size={13} className="text-[#022D52]" />
-                <span className="text-blue-800">Piece jointe : {data.attachment_filename || 'document.pdf'}</span>
-                <span className="text-[10px] text-[#022D52] italic ml-auto">
-                  (envoyee par email, non stockee dans le portail)
+                <span className="text-blue-800 flex-1">
+                  Piece jointe : <b>{data.attachment_filename || 'document.pdf'}</b>
                 </span>
+                {/* iter90hs : PJ archivee en GridFS -> consultable et disponible en onglet Documents */}
+                {data.attachment_gridfs_id ? (
+                  <a
+                    href={`${process.env.REACT_APP_BACKEND_URL}/api/owner/communications/${data.id}/attachment/download`}
+                    target="_blank" rel="noreferrer"
+                    className="inline-flex items-center gap-1 bg-[#022D52] hover:bg-[#1D4ED8] text-white px-2.5 py-1 rounded text-[11px]"
+                    data-testid="comm-attachment-download"
+                    title="Consulter le document"
+                  >
+                    <ArrowDownToLine size={11} /> Consulter
+                  </a>
+                ) : (
+                  <span className="text-[10px] text-slate-500 italic">
+                    (retrouvez la aussi dans l&apos;onglet Documents)
+                  </span>
+                )}
               </div>
             )}
             <div
@@ -1758,8 +1780,30 @@ function MovementsTab({
   fiscalYears, selectedFyId, onSelectedFyId,
   acpFiltered, copyVcs, vcsCode,
   copropriete_id, periodStart, periodEnd,
+  onPeriodStartChange, onPeriodEndChange,
 }) {
   const selectedFy = fiscalYears.find(y => y.id === selectedFyId);
+  // iter90hx : montant a payer = solde debiteur (debit-credit sur la periode)
+  const amountToPay = useMemo(() => {
+    if (!movements || movements.length === 0) return 0;
+    const sum = movements.reduce((acc, m) => {
+      const d = Number(m.debit || 0);
+      const c = Number(m.credit || 0);
+      return acc + d - c;
+    }, 0);
+    // Ajouter le solde d'ouverture (a nouveau)
+    const opening = Number(openingBalance || 0);
+    return Math.max(0, +(sum + opening).toFixed(2));
+  }, [movements, openingBalance]);
+  // iter90hx : URL du QR code, rafraichie a chaque changement de periode
+  const qrHref = useMemo(() => {
+    if (!copropriete_id || !acpFiltered) return null;
+    const p = new URLSearchParams();
+    if (amountToPay > 0) p.set('amount', amountToPay.toFixed(2));
+    // Nonce sur le hash pour forcer le refresh de l'image cote navigateur
+    const url = `${process.env.REACT_APP_BACKEND_URL}/api/owner/payment-qr/${copropriete_id}`;
+    return `${url}?${p.toString()}&t=${Date.now()}`;
+  }, [copropriete_id, acpFiltered, amountToPay]);
   // iter90g3 : URL de telechargement PDF des mouvements. Utilise
   // process.env.REACT_APP_BACKEND_URL avec les cookies d'auth (target=_blank
   // + credentials='include' via header <a>). Les query params passent
@@ -1839,6 +1883,86 @@ function MovementsTab({
           </div>
         </CardContent>
       </Card>
+
+      {/* iter90hx : Panneau paiement rapide avec selecteur de date + QR code */}
+      {acpFiltered && (
+        <Card className="border-slate-200 overflow-hidden" data-testid="quickpay-panel">
+          <CardContent className="p-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="md:col-span-2 space-y-3">
+                <div className="text-xs font-semibold text-slate-600 flex items-center gap-1.5">
+                  <CalendarClock size={13} className="text-[#022D52]" />
+                  Situation a la date de votre choix
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-[10px] uppercase tracking-wider text-slate-500 mb-0.5 block">Du</label>
+                    <input
+                      type="date"
+                      value={periodStart || ''}
+                      onChange={(e) => onPeriodStartChange && onPeriodStartChange(e.target.value)}
+                      className="w-full h-8 px-2 text-xs border border-slate-300 rounded"
+                      data-testid="quickpay-date-from"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] uppercase tracking-wider text-slate-500 mb-0.5 block">Au</label>
+                    <input
+                      type="date"
+                      value={periodEnd || ''}
+                      onChange={(e) => onPeriodEndChange && onPeriodEndChange(e.target.value)}
+                      className="w-full h-8 px-2 text-xs border border-slate-300 rounded"
+                      data-testid="quickpay-date-to"
+                    />
+                  </div>
+                </div>
+                <div className="rounded-md bg-gradient-to-br from-slate-50 to-white border border-slate-200 p-4">
+                  <div className="text-[10px] uppercase tracking-wider text-slate-500">Somme a payer</div>
+                  <div className={`text-3xl font-black mt-1 ${amountToPay > 0.01 ? 'text-[#DC2626]' : 'text-emerald-600'}`}
+                       style={{fontFamily:'Chivo,sans-serif'}} data-testid="quickpay-amount">
+                    {amountToPay > 0.01
+                      ? amountToPay.toLocaleString('fr-BE', {minimumFractionDigits: 2, maximumFractionDigits: 2}) + ' EUR'
+                      : 'Situation en regle'}
+                  </div>
+                  {vcsCode && (
+                    <div className="mt-3 pt-3 border-t border-slate-200">
+                      <div className="text-[10px] uppercase tracking-wider text-slate-500">Communication structuree</div>
+                      <div className="flex items-center gap-2 mt-1">
+                        <code className="text-xs font-mono text-[#022D52] bg-blue-50 border border-blue-200 px-2 py-1 rounded flex-1 truncate">{vcsCode}</code>
+                        <button onClick={() => copyVcs && copyVcs(vcsCode)} className="p-1.5 hover:bg-slate-100 rounded text-slate-500" data-testid="quickpay-copy-vcs">
+                          <Copy size={12} />
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+              <div className="flex flex-col items-center justify-center bg-blue-50/40 rounded-md p-3 border border-blue-200">
+                {amountToPay > 0.01 && qrHref ? (
+                  <>
+                    <img
+                      src={qrHref}
+                      alt="Code QR de paiement"
+                      className="w-40 h-40 rounded bg-white p-2 border border-slate-200 shadow-sm"
+                      data-testid="quickpay-qr-img"
+                    />
+                    <div className="text-[10px] text-center text-slate-600 mt-2 leading-tight font-medium">
+                      Scannez pour payer avec votre app bancaire
+                    </div>
+                    <div className="text-[9px] text-slate-400 mt-0.5">Belfius / BNP / ING / KBC / ...</div>
+                  </>
+                ) : (
+                  <div className="text-center text-emerald-700 py-8">
+                    <CheckCircle2 size={40} className="mx-auto mb-2 text-emerald-500" />
+                    <div className="text-xs font-semibold">Rien a payer</div>
+                    <div className="text-[10px] text-slate-500">sur cette periode</div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {loading ? (
         <Card><CardContent className="p-8 text-center text-slate-400 text-sm">Chargement des mouvements...</CardContent></Card>

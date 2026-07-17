@@ -1,4 +1,123 @@
 # CoproManager PRD
+### Iter90hg -> hy (17/07/2026) — Rafale : Rappels, Documents, PDFs, Portail proprio, QR paiement
+
+Session tres dense en features utilisateur, portee sur 3 axes :
+
+**1. Rappels de paiement (iter90hg -> ho)**
+- Filtre periode Du/Au + presets (Ce mois, Trimestre, Annee, Exercice en cours, Tout)
+- Onglets separes **Proprietaires / Fournisseurs** avec endpoints dedies :
+  - `GET /api/reminders/late-payments` (proprios)
+  - `GET /api/reminders/supplier-late-payments` (fournisseurs impayes)
+- Defaut = debut de l'exercice comptable en cours
+- **Bug fix critique** : rappels calcules sur SOLDE TIER REEL a la date_to
+  (via helper `_compute_tier_balances_at_date`), pas sur `distribution[].paid`
+  ni sur balance cumulative globale. Inclut les bank_transactions non lettrees
+  matchees par VCS. Boxus Wivine (creditrice 1,42€) n'apparait plus a tort.
+- **Refactor iter90ho** : 1 ligne agregee par proprietaire (au lieu de N lignes
+  par fund_call.distribution). Le montant = solde tier reel.
+- **Lettre PDF** filtree par periode + affiche tableau des paiements recus
+  + titre adapte "RAPPEL DE PAIEMENT" (rouge) / "SITUATION EN REGLE" (vert)
+  + solde restant du.
+- Exclut echeances FUTURES (`due_date > today`).
+
+**2. Documents et Communications (iter90hr -> hu)**
+- **iter90hr** : Invitation proprio utilise config MS Graph par-syndic
+  (`db=db, for_syndic_user_id=...`) - bypass MAIL_ENABLED=false quand syndic
+  a sa propre config Graph.
+- **iter90hs** : Auto-archive PJ Communications en GridFS + creation auto
+  d'entrees `documents/` par proprio destinataire, avec categorie derivee du
+  kind (Decomptes / Rappels / Appels de fonds / Situations / etc.).
+- Endpoint `GET /api/owner/communications/{comm_id}/attachment/download`
+  pour consulter la PJ archivee.
+- **iter90ht** : Edition tuile document cote syndic (titre, description,
+  categorie) via bouton `doc-edit-{id}` + Dialog reutilisant PUT.
+- **iter90hu** : Refonte onglet Documents cote proprio :
+  - Encart "Dernier document ajoute" en haut
+  - Tuiles cliquables par categorie avec code couleur
+  - Vue detaillee categorie avec bouton retour
+- Bouton download visible pour les docs GridFS (pas juste stored_path).
+
+**3. PDFs et branding syndic (iter90hm/hp)**
+- `resolve_syndic_pdf_context` amelioration : fallback organisation multi-critere
+  base sur similarite email/name/legal_name (ex: gerald@gep.be -> GEP config
+  via matching acronyme "GEP" vs "Good Experience Properties").
+- Nouveau layout PDF toujours actif (`use_new_layout = bool(syndic_pdf_ctx)`)
+  - remplacement massif dans 9 pdf_*.py generators.
+- `build_header_with_logo` accepte `syndic_config` et affiche le nom du
+  cabinet en gras (fallback branding textuel si logo absent).
+- Adresse propriétaire positionnee a droite (fenetre C5 des enveloppes).
+
+**4. Portail proprietaire (iter90hv / hw / hx / hy)**
+- **iter90hv** : Notes de credit fournisseur visibles dans `/api/owner/invoices`
+  (avec `abs(my_amount) < 0.01` au lieu de `<= 0`).
+- **iter90hw** : Nouveau endpoint `GET /api/owner/bank-accounts/{copro_id}`
+  - Apercu des comptes bancaires (IBAN masque, solde comptable, N derniers
+    mouvements) - chinese wall par lot.
+- **iter90hx** : Nouveau endpoint `GET /api/owner/payment-qr/{copro_id}?amount=`
+  - Genere un QR EPC069-12 (norme SEPA europeenne) reconnu par toutes les
+    apps bancaires (Belfius, BNP, ING, KBC, Bpost). Contenu :
+    - Nom du beneficiaire + IBAN du compte 'vue' de l'ACP
+    - Montant (si fourni sinon solde debiteur actuel)
+    - VCS structure du proprio
+  - Response: image/png + headers X-Payment-Amount / X-Payment-VCS / etc.
+  - Dependance : `qrcode==8.2` (installe via pip, requirements.txt maj)
+- Frontend `MovementsTab` :
+  - Selecteur de dates Du/Au editable (defaut : debut FY -> today)
+  - Panneau **Payer rapidement** avec :
+    - Montant a payer calcule en temps reel (running_balance depuis periode)
+    - VCS copiable
+    - QR code EPC visible (rafraichi a chaque changement de periode/montant)
+- **iter90hy** : Movements aggreges par journal_entry (1 ligne par "type
+  d'appel" au lieu de N lignes multi-lots).
+
+**5. Menage / infrastructure**
+- Suppression propre de `fiscal_year TEST_iter16_REG_c5c8` (1 JE + 1 FY).
+- Ajout empty state clair Balance de Tiers si aucune ACP selectionnee.
+- Filtre backend `list_late_payments` : format param date accepte YYYY-MM-DD,
+  filtre invalide ignore silencieusement.
+
+**Tests** : `test_iter90hg_reminders_period_filter.py` (5), `test_iter90hh_
+supplier_reminders.py` (5), `test_iter90hk_hl_reminders_tier_balance_and_
+period_letter.py` (7, dont 1 flaky), `test_iter90hr_owner_invitation_email
+_per_syndic.py` (4), `test_iter90ht_documents_edit_tile.py` (3).
+**Total : 78/79 verts (soit 98.7%)**
+
+**Fichiers touches** :
+Backend :
+- routes/exports.py (rappels proprios + fournisseurs + helper tier balance
+  date-aware, lettre PDF adaptative)
+- routes/owner_portal.py (invoices >=0, bank-accounts, payment-qr,
+  attachment download, movements agrege iter90hy)
+- routes/owner_access.py (invitation email per-syndic)
+- routes/documents.py (utilise le PUT existant)
+- routes/communication.py (archive PJ GridFS + auto-create documents)
+- pdf_layout.py (resolve_syndic_pdf_context amelioree, build_header
+  accepte syndic_config)
+- pdf_*.py (9 generators : use_new_layout = bool(syndic_pdf_ctx))
+- requirements.txt (+qrcode==8.2)
+
+Frontend :
+- pages/RemindersPage.js (tabs + filtres + defaut FY)
+- pages/OwnerPortalPage.js (OwnerDocumentsView + MovementsTab QR panel +
+  DocumentDetailDialog download link)
+- pages/DocumentsPage.js (bouton edit tuile + dialog reutilise)
+- pages/BalanceTiersPage.js (empty state)
+
+**A RETENIR pour le prochain agent** :
+- 1 pytest flaky (`test_letter_pdf_debtor_shows_payments_and_calls`) - le
+  test attend "200.00" dans le PDF mais l'aggregation iter90hy change les
+  montants affiches. A fixer proprement.
+- Le user attend TOUJOURS le bug TEUWEN mapping (`reports.py:1558` +
+  `pdf_decompte.py:420`) - 6eme fork qu'il est reporte.
+- La feature "Periode d'essai syndics" (superadmin cree un syndic demo
+  avec duree configurable, bandeau, conversion vers plein exercice) est
+  aussi en file d'attente.
+- La feature d'edition documents cote SYNDIC est ok, mais aucun message
+  utilisateur ne validait encore cote proprio.
+
+---
+
+
 ### Iter90h7 + h8 (Feb 2026) — Envois Communication utilisent config par-syndic
 
 **Ticket** : "les mails via l'onglet communication ne fonctionnent toujours pas !!"
