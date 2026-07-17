@@ -15,7 +15,7 @@ import {
 } from '@/components/ui/dialog';
 import { toast } from 'sonner';
 import {
-  Building2, Mail, CheckCircle2, XCircle, ImageIcon, Settings, RefreshCw, Save,
+  Building2, Mail, CheckCircle2, XCircle, ImageIcon, Settings, RefreshCw, Save, Send, Loader2,
 } from 'lucide-react';
 
 export default function AdminSyndicConfigPage() {
@@ -25,6 +25,9 @@ export default function AdminSyndicConfigPage() {
   const [detail, setDetail] = useState({});
   const [saving, setSaving] = useState(false);
   const [emailCfg, setEmailCfg] = useState({ provider: 'none' });
+  // iter90h3 : etat pour le dialog "Tester la config email"
+  const [testDialog, setTestDialog] = useState(null); // { from, to } | null
+  const [testSending, setTestSending] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -56,6 +59,28 @@ export default function AdminSyndicConfigPage() {
     } catch (e) { toast.error(extractApiError(e)); }
   };
 
+  // iter90h3 : re-charge le detail du compte selectionne (sans changer selection).
+  // Appele apres chaque save pour rafraichir les badges "verifie" / "secret set".
+  const reloadCurrentDetail = async () => {
+    if (!selected) return;
+    try {
+      const r = await api.get(`/admin/syndic-config/${selected.syndic_user_id}`);
+      setDetail(r.data || {});
+      setEmailCfg((prev) => ({
+        ...prev,
+        provider: r.data.email_provider || 'none',
+        graph_tenant_id: r.data.graph_tenant_id || '',
+        graph_client_id: r.data.graph_client_id || '',
+        graph_client_secret: '',  // on ne re-affiche jamais un secret
+        smtp_host: r.data.smtp_host || '',
+        smtp_port: r.data.smtp_port || 587,
+        smtp_username: r.data.smtp_username || '',
+        smtp_password: '',
+        smtp_use_tls: r.data.smtp_use_tls !== false,
+      }));
+    } catch (_e) { /* iter90h3 : silent - reloadCurrentDetail is best-effort */ }
+  };
+
   const saveIdent = async () => {
     setSaving(true);
     try {
@@ -64,7 +89,8 @@ export default function AdminSyndicConfigPage() {
       delete payload.smtp_password;
       delete payload.email_provider;
       await api.put(`/admin/syndic-config/${selected.syndic_user_id}`, payload);
-      toast.success('Config identite mise a jour');
+      toast.success('Config identite enregistree');
+      await reloadCurrentDetail();
       load();
     } catch (e) { toast.error(extractApiError(e)); }
     finally { setSaving(false); }
@@ -78,11 +104,49 @@ export default function AdminSyndicConfigPage() {
       if (!payload.graph_client_secret) delete payload.graph_client_secret;
       if (!payload.smtp_password) delete payload.smtp_password;
       await api.put(`/admin/syndic-config/${selected.syndic_user_id}/email`, payload);
-      toast.success('Config email mise a jour');
+      toast.success('Config email enregistree');
+      await reloadCurrentDetail();
       load();
     } catch (e) { toast.error(extractApiError(e)); }
     finally { setSaving(false); }
   };
+
+  // iter90h3 : ouvre le dialog de test avec la boite d'envoi et le destinataire
+  // pre-remplis (par defaut : email du compte cible).
+  const openTestDialog = () => {
+    if (!selected) return;
+    setTestDialog({
+      from: selected.user_email || '',
+      to: selected.user_email || '',
+    });
+  };
+
+  const runTestEmail = async () => {
+    if (!testDialog || !selected) return;
+    if (!testDialog.from || !testDialog.to) {
+      toast.error('Boite d\'envoi et destinataire requis');
+      return;
+    }
+    setTestSending(true);
+    try {
+      await api.post(`/admin/syndic-config/${selected.syndic_user_id}/test-email`, {
+        from_mailbox: testDialog.from,
+        to: testDialog.to,
+      });
+      toast.success(`Email de test envoye a ${testDialog.to} — verifiez la boite de reception.`, { duration: 6000 });
+      setTestDialog(null);
+      await reloadCurrentDetail();
+      load();
+    } catch (e) {
+      toast.error(extractApiError(e), { duration: 8000 });
+    } finally {
+      setTestSending(false);
+    }
+  };
+
+  // iter90h3 : indicateurs "secret deja configure ? Laisser vide pour conserver"
+  const graphSecretConfigured = Boolean(detail.graph_client_secret);
+  const smtpPasswordConfigured = Boolean(detail.smtp_password);
 
   return (
     <div className="p-4 md:p-6 max-w-7xl mx-auto space-y-4" data-testid="admin-syndic-config-page">
@@ -225,6 +289,11 @@ export default function AdminSyndicConfigPage() {
             <CardHeader className="pb-3">
               <CardTitle className="text-sm flex items-center gap-2">
                 <Mail className="h-4 w-4 text-[#022D52]" /> Configuration email
+                {detail.email_verified && (
+                  <Badge className="bg-emerald-100 text-emerald-700 ml-2" data-testid="badge-email-verified">
+                    <CheckCircle2 className="h-3 w-3 mr-1" /> Verifiee
+                  </Badge>
+                )}
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
@@ -248,9 +317,20 @@ export default function AdminSyndicConfigPage() {
                   <div><Label className="text-xs">Client ID</Label>
                     <Input value={emailCfg.graph_client_id}
                            onChange={(e) => setEmailCfg({ ...emailCfg, graph_client_id: e.target.value })} /></div>
-                  <div><Label className="text-xs">Client Secret (laisser vide pour ne pas modifier)</Label>
+                  <div>
+                    <Label className="text-xs flex items-center gap-2">
+                      Client Secret
+                      {graphSecretConfigured && (
+                        <span className="inline-flex items-center gap-1 text-emerald-700 text-[10px] font-medium" data-testid="graph-secret-configured">
+                          <CheckCircle2 className="h-3 w-3" /> Secret configure
+                        </span>
+                      )}
+                    </Label>
                     <Input type="password" value={emailCfg.graph_client_secret}
-                           onChange={(e) => setEmailCfg({ ...emailCfg, graph_client_secret: e.target.value })} /></div>
+                           onChange={(e) => setEmailCfg({ ...emailCfg, graph_client_secret: e.target.value })}
+                           placeholder={graphSecretConfigured ? 'Laisser vide pour conserver le secret existant' : 'Colle ici le secret Azure AD'}
+                           data-testid="admin-input-graph-secret" />
+                  </div>
                 </>
               )}
               {emailCfg.provider === 'smtp' && (
@@ -271,15 +351,45 @@ export default function AdminSyndicConfigPage() {
                   <div><Label className="text-xs">Utilisateur</Label>
                     <Input value={emailCfg.smtp_username}
                            onChange={(e) => setEmailCfg({ ...emailCfg, smtp_username: e.target.value })} /></div>
-                  <div><Label className="text-xs">Mot de passe (laisser vide pour ne pas modifier)</Label>
+                  <div>
+                    <Label className="text-xs flex items-center gap-2">
+                      Mot de passe
+                      {smtpPasswordConfigured && (
+                        <span className="inline-flex items-center gap-1 text-emerald-700 text-[10px] font-medium" data-testid="smtp-password-configured">
+                          <CheckCircle2 className="h-3 w-3" /> Configure
+                        </span>
+                      )}
+                    </Label>
                     <Input type="password" value={emailCfg.smtp_password}
-                           onChange={(e) => setEmailCfg({ ...emailCfg, smtp_password: e.target.value })} /></div>
+                           onChange={(e) => setEmailCfg({ ...emailCfg, smtp_password: e.target.value })}
+                           placeholder={smtpPasswordConfigured ? 'Laisser vide pour conserver' : 'Mot de passe SMTP'}
+                           data-testid="admin-input-smtp-password" />
+                  </div>
                 </div>
               )}
-              <Button onClick={saveEmail} disabled={saving} variant="outline" size="sm"
-                      data-testid="admin-btn-save-email">
-                <Save className="h-4 w-4 mr-1" /> Enregistrer config email
-              </Button>
+              <div className="flex flex-wrap gap-2 pt-1">
+                <Button onClick={saveEmail} disabled={saving} variant="outline" size="sm"
+                        data-testid="admin-btn-save-email">
+                  {saving ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Save className="h-4 w-4 mr-1" />}
+                  Enregistrer la config
+                </Button>
+                <Button
+                  onClick={openTestDialog}
+                  disabled={saving || emailCfg.provider === 'none'}
+                  size="sm"
+                  className="bg-[#022D52] hover:bg-[#1D4ED8] text-white"
+                  data-testid="admin-btn-test-email"
+                >
+                  <Send className="h-4 w-4 mr-1" /> Tester la configuration
+                </Button>
+              </div>
+              {emailCfg.provider !== 'none' && !detail.email_verified && (
+                <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
+                  Config enregistree mais <strong>non verifiee</strong>. Cliquez sur
+                  &quot;Tester la configuration&quot; pour envoyer un email de test et
+                  valider les credentials.
+                </p>
+              )}
             </CardContent>
           </Card>
 
@@ -288,6 +398,67 @@ export default function AdminSyndicConfigPage() {
             <Button onClick={saveIdent} disabled={saving} className="bg-[#022D52] hover:bg-[#01213e]"
                     data-testid="admin-btn-save-ident">
               <Save className="h-4 w-4 mr-1" /> Enregistrer identite
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* iter90h3 : Dialog de test email admin */}
+      <Dialog open={!!testDialog} onOpenChange={(open) => !open && !testSending && setTestDialog(null)}>
+        <DialogContent className="max-w-lg" data-testid="dialog-test-email">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Send className="h-5 w-5 text-[#022D52]" />
+              Tester la configuration email
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 mt-2">
+            <p className="text-sm text-slate-600">
+              Un email de test va etre envoye <strong>en utilisant la configuration
+              actuellement enregistree</strong> pour <span className="font-mono text-xs">{selected?.user_email}</span>.
+              L&apos;envoi echouera si les credentials sont incorrects, ce qui permet de
+              valider la configuration avant activation.
+            </p>
+            <div>
+              <Label className="text-xs">Boite d&apos;envoi (from)</Label>
+              <Input
+                value={testDialog?.from || ''}
+                onChange={(e) => setTestDialog({ ...testDialog, from: e.target.value })}
+                placeholder="expediteur@domaine.be"
+                data-testid="test-email-from"
+              />
+              <p className="text-[11px] text-slate-500 mt-1">
+                Doit correspondre a l&apos;email du compte ou a une boite autorisee.
+              </p>
+            </div>
+            <div>
+              <Label className="text-xs">Destinataire du test</Label>
+              <Input
+                value={testDialog?.to || ''}
+                onChange={(e) => setTestDialog({ ...testDialog, to: e.target.value })}
+                placeholder="test@domaine.be"
+                data-testid="test-email-to"
+              />
+              <p className="text-[11px] text-slate-500 mt-1">
+                Verifiez cette boite (et le dossier Spam) apres l&apos;envoi.
+              </p>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setTestDialog(null)} disabled={testSending}>
+              Annuler
+            </Button>
+            <Button
+              onClick={runTestEmail}
+              disabled={testSending}
+              className="bg-[#022D52] hover:bg-[#01213e] text-white"
+              data-testid="test-email-confirm"
+            >
+              {testSending ? (
+                <><Loader2 className="h-4 w-4 mr-1 animate-spin" /> Envoi en cours...</>
+              ) : (
+                <><Send className="h-4 w-4 mr-1" /> Envoyer le test</>
+              )}
             </Button>
           </DialogFooter>
         </DialogContent>

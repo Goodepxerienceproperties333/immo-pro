@@ -146,6 +146,63 @@ async def get_effective_email_config(db, syndic_user_id: str) -> dict:
     }
 
 
+def _friendly_graph_auth_error(body: str, tenant_id: str, client_id: str) -> str:
+    """iter90h3 : traduit les erreurs Azure AD OAuth (AADSTS xxxxx) en messages
+    lisibles pour l'utilisateur non-technique. Le body est le JSON brut renvoye
+    par login.microsoftonline.com."""
+    lower = (body or "").lower()
+    if "aadsts90002" in lower or "tenant" in lower and "not found" in lower:
+        return (
+            f"Tenant ID Azure introuvable : '{tenant_id}'. "
+            f"Verifiez le Directory (tenant) ID dans le portail Azure AD "
+            f"(Azure Portal > Azure Active Directory > Overview)."
+        )
+    if "aadsts7000215" in lower or "invalid client secret" in lower:
+        return (
+            "Client Secret Azure invalide ou expire. Regenerez un nouveau secret "
+            "dans Azure Portal > App registrations > Certificates & secrets > "
+            "New client secret, puis mettez a jour la config ici."
+        )
+    if "aadsts700016" in lower or "application with identifier" in lower:
+        return (
+            f"Client ID Azure introuvable : '{client_id}'. "
+            f"Verifiez l'Application (client) ID dans Azure Portal > App registrations."
+        )
+    if "aadsts50034" in lower:
+        return (
+            "L'utilisateur specifie n'existe pas dans le tenant Azure. "
+            "Verifiez que la boite d'envoi correspond a un compte du tenant."
+        )
+    if "aadsts50126" in lower or "invalid_grant" in lower:
+        return "Identifiants Azure invalides (grant refuse par Microsoft)."
+    # Fallback : renvoie une extraction utile
+    return f"Authentification Microsoft Graph refusee : {body[:300]}"
+
+
+def _friendly_graph_send_error(body: str, from_mailbox: str) -> str:
+    """iter90h3 : traduit les erreurs Graph sendMail en messages lisibles."""
+    lower = (body or "").lower()
+    if "requestedmailboxnotfound" in lower or "mailboxnotenabled" in lower:
+        return (
+            f"La boite '{from_mailbox}' n'existe pas dans Microsoft 365 ou n'a pas "
+            f"de licence Exchange Online. Verifiez que ce compte est un mailbox actif."
+        )
+    if "accessdenied" in lower or "authorization" in lower and "permission" in lower:
+        return (
+            "L'application Azure n'a pas la permission d'envoyer des emails. "
+            "Ajoutez la permission 'Mail.Send' (Application) dans Azure Portal > "
+            "App registrations > API permissions, puis 'Grant admin consent'."
+        )
+    if "erroraccessdenied" in lower:
+        return (
+            f"Acces refuse a la boite '{from_mailbox}'. Restreignez la portee "
+            f"'Mail.Send' via une Application Access Policy Exchange Online."
+        )
+    if "invalidauthenticationtoken" in lower:
+        return "Token Graph invalide (renouvellement necessaire, ressayez)."
+    return f"Envoi Microsoft Graph refuse : {body[:300]}"
+
+
 async def _send_test_email_impl(effective_cfg: dict, from_mailbox: str, to: str) -> dict:
     """Envoie un email test avec la config effective, sans dry-run. Utilise pour
     valider la config avant activation."""
@@ -176,7 +233,10 @@ async def _send_test_email_impl(effective_cfg: dict, from_mailbox: str, to: str)
                       "grant_type": "client_credentials"},
             )
             if tok.status_code >= 400:
-                raise HTTPException(400, f"Auth Graph echouee : {tok.status_code} {tok.text[:200]}")
+                # iter90h3 : messages d'erreur Azure AD plus lisibles
+                body = tok.text or ""
+                friendly = _friendly_graph_auth_error(body, tid, cid)
+                raise HTTPException(400, friendly)
             token = tok.json()["access_token"]
             r = await client.post(
                 f"https://graph.microsoft.com/v1.0/users/{from_mailbox}/sendMail",
@@ -191,7 +251,10 @@ async def _send_test_email_impl(effective_cfg: dict, from_mailbox: str, to: str)
                 },
             )
             if r.status_code >= 400:
-                raise HTTPException(400, f"Envoi Graph echoue : {r.status_code} {r.text[:200]}")
+                # iter90h3 : erreur d'envoi (mailbox n'existe pas, permissions manquantes, etc.)
+                body = r.text or ""
+                friendly = _friendly_graph_send_error(body, from_mailbox)
+                raise HTTPException(400, friendly)
         return {"success": True, "provider": "graph"}
 
     if prov == "smtp":
@@ -467,5 +530,51 @@ def create_syndic_config_router(db):
         )
         cfg = await _get_config_for(db, syndic_user_id)
         return _redact_config(cfg)
+
+    # iter90h3 : endpoint superadmin pour tester la config email d'un
+    # syndic OU d'un autre superadmin. Comme _send_test_email_impl est
+    # deja mutualise avec le self-endpoint, on le reutilise directement.
+    @router.post("/admin/syndic-config/{syndic_user_id}/test-email")
+    async def admin_test_email(syndic_user_id: str, payload: TestEmailPayload, request: Request):
+        """Envoie un email de test avec la config du compte cible. L'admin
+        peut ainsi valider la configuration avant activation, sans devoir
+        se connecter en tant que ce syndic."""
+        await _require_superadmin(request)
+        # Verifie que le compte existe et a un role gerable ici
+        try:
+            target = await db.users.find_one({"_id": ObjectId(syndic_user_id)})
+        except Exception:
+            target = None
+        if not target:
+            raise HTTPException(404, "Compte non trouve")
+        if target.get("role") not in ("syndic", "superadmin", "admin"):
+            raise HTTPException(400, "Le test email n'est disponible que pour syndic/superadmin")
+        # Verifie que la boite d'envoi est autorisee (email principal ou
+        # boite autorisee du compte cible).
+        boxes = target.get("authorized_mailboxes") or []
+        addr_low = payload.from_mailbox.strip().lower()
+        allowed = {b.get("address", "").lower() for b in boxes if b.get("active", True)}
+        target_email = (target.get("email") or "").lower()
+        if target_email != addr_low and addr_low not in allowed:
+            raise HTTPException(
+                403,
+                f"Boite '{payload.from_mailbox}' non autorisee pour ce compte. "
+                f"Boites disponibles : {target_email}"
+                + (f", " + ", ".join(sorted(allowed)) if allowed else "")
+            )
+        effective = await get_effective_email_config(db, syndic_user_id)
+        try:
+            result = await _send_test_email_impl(effective, payload.from_mailbox, payload.to)
+        except HTTPException:
+            raise
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(500, f"Erreur test email : {e}") from e
+        # Marque la config comme verifiee sur le doc cible
+        await db.syndic_configs.update_one(
+            {"syndic_user_id": syndic_user_id},
+            {"$set": {"email_verified": True,
+                      "email_verified_at": datetime.now(timezone.utc).isoformat()}},
+        )
+        return {"success": True, **result}
 
     return router
