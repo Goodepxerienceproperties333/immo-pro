@@ -1657,4 +1657,99 @@ def create_admin_router(db):
             "totals": totals,
         }
 
+    # iter90i6 : Endpoint superadmin pour "guerir" les notes de credit sans
+    # ecriture AC (bug historique : `if amount <= 0: return None` skipait la
+    # generation d'ecriture pour les NC). Regenere les entrees AC manquantes
+    # via generate_purchase_entry (qui gere desormais les NC correctement :
+    # Dr fournisseur / Cr charge).
+    @router.post("/heal-credit-notes")
+    async def heal_credit_notes_endpoint(
+        request: Request,
+        copropriete_id: str = "",
+        dry_run: bool = True,
+    ):
+        """Trouve toutes les invoices avec `total_amount < 0` sans
+        journal_entry AC associee et regenere l'ecriture. Idempotent.
+        Superadmin only.
+
+        Params :
+          - `copropriete_id` : scope optionnel a une ACP (defaut : toutes)
+          - `dry_run=True` (defaut) : compte sans creer
+          - `dry_run=False` : cree les ecritures manquantes
+        """
+        await _get_superadmin_only(request)
+        from auto_entries import generate_purchase_entry
+        query: dict = {"total_amount": {"$lt": 0}}
+        if copropriete_id:
+            query["copropriete_id"] = copropriete_id
+        healed_details = []
+        skipped_details = []
+        cursor = db.invoices.find(query, {"_id": 0})
+        async for inv in cursor:
+            inv_id = inv["id"]
+            # Existe-t-il deja une AC pour cette NC ?
+            existing = await db.journal_entries.find_one(
+                {"source_id": inv_id, "source_type": "invoice",
+                 "journal_type": "AC",
+                 "reversed": {"$ne": True}, "is_reversal": {"$ne": True}},
+                {"_id": 0, "id": 1},
+            )
+            if existing:
+                skipped_details.append({
+                    "invoice_id": inv_id,
+                    "number": inv.get("number", ""),
+                    "supplier": inv.get("supplier", ""),
+                    "amount": float(inv.get("total_amount", 0) or 0),
+                    "reason": "je_exists",
+                    "je_id": existing["id"],
+                })
+                continue
+            if dry_run:
+                healed_details.append({
+                    "invoice_id": inv_id,
+                    "number": inv.get("number", ""),
+                    "supplier": inv.get("supplier", ""),
+                    "amount": float(inv.get("total_amount", 0) or 0),
+                    "date": inv.get("date", ""),
+                    "would_create_je": True,
+                })
+                continue
+            # Live : appelle le generateur (qui gere is_credit_note)
+            try:
+                je = await generate_purchase_entry(db, inv)
+                if je:
+                    healed_details.append({
+                        "invoice_id": inv_id,
+                        "number": inv.get("number", ""),
+                        "supplier": inv.get("supplier", ""),
+                        "amount": float(inv.get("total_amount", 0) or 0),
+                        "je_id": je["id"],
+                        "reference": je.get("reference", ""),
+                    })
+                else:
+                    skipped_details.append({
+                        "invoice_id": inv_id,
+                        "number": inv.get("number", ""),
+                        "supplier": inv.get("supplier", ""),
+                        "amount": float(inv.get("total_amount", 0) or 0),
+                        "reason": "generator_returned_none",
+                    })
+            except Exception as e:
+                skipped_details.append({
+                    "invoice_id": inv_id,
+                    "number": inv.get("number", ""),
+                    "reason": "generator_error",
+                    "error": str(e)[:200],
+                })
+        return {
+            "mode": "dry_run" if dry_run else "live",
+            "copropriete_id": copropriete_id or "all",
+            "healed_count": len(healed_details),
+            "skipped_count": len(skipped_details),
+            "healed": healed_details[:100],
+            "skipped": skipped_details[:100],
+            "healed_total": len(healed_details),
+            "skipped_total": len(skipped_details),
+        }
+
     return router

@@ -170,13 +170,24 @@ async def _resolve_bank_counterpart(db, txn: dict, copro_id: str) -> tuple[str, 
 
 async def generate_purchase_entry(db, invoice: dict) -> dict | None:
     """AC: Dr 6xxxxx (expense) + Cr 44000XXX (supplier).
-    Skips if invoice has no supplier name or no account_number."""
+
+    iter90i6 : pour les notes de credit (amount < 0), l'ecriture est
+    INVERSEE :
+      - Dr 44000XXX (supplier) : reduit la dette au fournisseur.
+      - Cr 6xxxxx (expense)     : reduit la charge (contrepassation).
+    Cela permet la comptabilisation correcte des notes de credit dans le
+    journal des achats ET dans la situation de compte fournisseur.
+    Skips uniquement si amount == 0 ou pas de fournisseur.
+    """
     copro_id = invoice.get("copropriete_id", "")
     if not copro_id:
         return None
-    amount = float(invoice.get("total_amount", 0) or 0)
-    if amount <= 0:
+    amount_signed = float(invoice.get("total_amount", 0) or 0)
+    if abs(amount_signed) < 0.01:
         return None
+    # iter90i6 : deux cas -> facture (positif) ou note de credit (negatif)
+    is_credit_note = amount_signed < 0
+    amount = abs(amount_signed)  # les colonnes debit/credit sont TOUJOURS positives
     expense_acc = invoice.get("account_number", "") or "600000"
     supplier_name = (invoice.get("supplier") or "").strip()
     # iter90by : resolution du compte fournisseur extraite en helper
@@ -331,8 +342,11 @@ async def generate_purchase_entry(db, invoice: dict) -> dict | None:
         lines = []
         for ln in invoice_lines:
             acc = ln.get("account_number", "")
-            amt = round(float(ln.get("amount", 0) or 0), 2)
-            if amt <= 0 or not acc:
+            # iter90i6 : accepter les lignes de NC (amount < 0). On travaille
+            # sur la valeur absolue et on inverse le sens debit/credit selon
+            # `is_credit_note`.
+            amt = round(abs(float(ln.get("amount", 0) or 0)), 2)
+            if amt < 0.01 or not acc:
                 continue
             desc = (ln.get("description") or "").strip()
             occ_pct, prop_pct = _resolve_line_pct(
@@ -341,7 +355,9 @@ async def generate_purchase_entry(db, invoice: dict) -> dict | None:
             lines.append({
                 "account_number": acc,
                 "account_name": pcmn_names_multi.get(acc, "") + (f" - {desc}" if desc else ""),
-                "debit": amt, "credit": 0.0,
+                # iter90i6 : facture = Dr charge / NC = Cr charge (contrepasse)
+                "debit": 0.0 if is_credit_note else amt,
+                "credit": amt if is_credit_note else 0.0,
                 "third_party_id": None, "third_party_name": "",
                 "occupant_pct": occ_pct,
                 "proprietaire_pct": prop_pct,
@@ -350,7 +366,9 @@ async def generate_purchase_entry(db, invoice: dict) -> dict | None:
         lines.append({
             "account_number": supplier_acc,
             "account_name": pcmn_names_multi.get(supplier_acc, supplier_name),
-            "debit": 0.0, "credit": amount,
+            # iter90i6 : facture = Cr fournisseur / NC = Dr fournisseur
+            "debit": amount if is_credit_note else 0.0,
+            "credit": 0.0 if is_credit_note else amount,
             "third_party_id": (supplier_doc or {}).get("id"),
             "third_party_name": supplier_name,
         })
@@ -359,12 +377,16 @@ async def generate_purchase_entry(db, invoice: dict) -> dict | None:
         lines = [
             {"account_number": expense_acc,
              "account_name": pcmn_names.get(expense_acc, ""),
-             "debit": amount, "credit": 0.0,
+             # iter90i6 : facture Dr charge / NC Cr charge
+             "debit": 0.0 if is_credit_note else amount,
+             "credit": amount if is_credit_note else 0.0,
              "third_party_id": None, "third_party_name": "",
              "occupant_pct": occ_pct, "proprietaire_pct": prop_pct},
             {"account_number": supplier_acc,
              "account_name": pcmn_names.get(supplier_acc, supplier_name),
-             "debit": 0.0, "credit": amount,
+             # iter90i6 : facture Cr fournisseur / NC Dr fournisseur
+             "debit": amount if is_credit_note else 0.0,
+             "credit": 0.0 if is_credit_note else amount,
              "third_party_id": (supplier_doc or {}).get("id"),
              "third_party_name": supplier_name},
         ]
@@ -374,8 +396,10 @@ async def generate_purchase_entry(db, invoice: dict) -> dict | None:
         "id": str(uuid.uuid4()),
         "journal_type": "AC",
         "date": invoice.get("date") or datetime.now(timezone.utc).date().isoformat(),
-        "reference": f"FA-{invoice.get('number','')}",
-        "description": f"Facture {invoice.get('supplier','')} - {invoice.get('description','')}".strip(" -"),
+        # iter90i6 : reference "NC-..." si note de credit, "FA-..." sinon
+        "reference": ("NC-" if is_credit_note else "FA-") + f"{invoice.get('number','')}",
+        "description": (("Note de credit " if is_credit_note else "Facture ") +
+                        f"{invoice.get('supplier','')} - {invoice.get('description','')}").strip(" -"),
         "lines": lines,
         "total_debit": amount,
         "total_credit": amount,

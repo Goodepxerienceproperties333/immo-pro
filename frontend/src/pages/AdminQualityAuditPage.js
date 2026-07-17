@@ -84,6 +84,40 @@ export default function AdminQualityAuditPage() {
   // iter90i1 : Migration GridFS des uploads (superadmin only)
   const [gridfsBusy, setGridfsBusy] = useState(false);
   const [gridfsResult, setGridfsResult] = useState(null);
+  // iter90i6 : Backfill notes de credit sans ecriture AC
+  const [ncBusy, setNcBusy] = useState(false);
+  const [ncResult, setNcResult] = useState(null);
+  const runHealCreditNotes = async (dryRun) => {
+    if (!dryRun && !window.confirm(
+      "ATTENTION : creer les ecritures AC MANQUANTES pour toutes les notes de credit ?\n\n" +
+      "* Idempotent : les NC deja liees a une ecriture sont ignorees.\n" +
+      "* Sens comptable : Dr fournisseur (44xxx) / Cr charge (6xxx).\n" +
+      "* Confirmez pour lancer.",
+    )) return;
+    setNcBusy(true);
+    setNcResult(null);
+    try {
+      const { data } = await api.post(
+        `/admin/heal-credit-notes?dry_run=${dryRun}`,
+      );
+      setNcResult(data);
+      if (dryRun) {
+        toast.info(
+          `Dry-run : ${data.healed_total} NC a corriger, ${data.skipped_total} deja OK`,
+          { duration: 6000 },
+        );
+      } else {
+        toast.success(
+          `${data.healed_total} ecriture(s) AC creees pour les notes de credit`,
+          { duration: 8000 },
+        );
+      }
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur heal-credit-notes');
+    } finally {
+      setNcBusy(false);
+    }
+  };
   const runGridfsMigration = async (dryRun) => {
     if (!dryRun && !window.confirm(
       "ATTENTION : lancer la migration REELLE des uploads vers MongoDB GridFS ?\n\n" +
@@ -271,6 +305,90 @@ export default function AdminQualityAuditPage() {
                   </span>
                 )}
               </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* iter90i6 : Panneau backfill notes de credit sans ecriture AC */}
+      <Card className="border-amber-200" data-testid="heal-nc-panel">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <FileWarning size={16} className="text-amber-700" />
+            Notes de credit sans ecriture comptable
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="text-xs text-slate-600 mb-3 leading-relaxed">
+            Corrige les notes de credit (factures avec montant negatif) importees ou creees
+            <strong> avant </strong>le fix iter90i6, qui n&apos;avaient pas d&apos;ecriture dans le
+            journal des achats (bug : le generateur skipait <code className="bg-slate-100 px-1 rounded">amount &lt;= 0</code>).
+            Idempotent (les NC deja liees a une AC sont ignorees). Comptabilise en respectant
+            le principe belge PCMN : <strong>Dr fournisseur</strong> / <strong>Cr charge</strong>.
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => runHealCreditNotes(true)}
+              disabled={ncBusy}
+              data-testid="heal-nc-dry-run-btn"
+              className="text-amber-700 border-amber-300 hover:bg-amber-50"
+            >
+              <RefreshCw size={13} className={`mr-1 ${ncBusy ? 'animate-spin' : ''}`} />
+              Dry-run (compte les NC)
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => runHealCreditNotes(false)}
+              disabled={ncBusy}
+              data-testid="heal-nc-live-btn"
+              className="bg-amber-600 hover:bg-amber-700 text-white"
+            >
+              <Play size={13} className="mr-1" />
+              Creer les ecritures manquantes
+            </Button>
+            {ncBusy && <span className="text-xs text-slate-500 italic">En cours...</span>}
+          </div>
+          {ncResult && (
+            <div className="mt-4 border-t border-slate-200 pt-3" data-testid="heal-nc-result-panel">
+              <div className="text-xs font-semibold mb-2">
+                Resultat ({ncResult.mode === 'dry_run' ? 'Dry-run' : 'Live'}) :
+                <span className="ml-2 font-mono text-emerald-700">{ncResult.healed_total} a corriger / crees</span>
+                {ncResult.skipped_total > 0 && (
+                  <span className="ml-2 font-mono text-slate-500">{ncResult.skipped_total} deja OK</span>
+                )}
+              </div>
+              {(ncResult.healed || []).length > 0 && (
+                <div className="overflow-x-auto border border-slate-200 rounded">
+                  <table className="w-full text-xs">
+                    <thead className="bg-slate-50">
+                      <tr>
+                        <th className="text-left px-2 py-1 text-[10px] uppercase tracking-wider">Fournisseur</th>
+                        <th className="text-left px-2 py-1 text-[10px] uppercase tracking-wider">Numero</th>
+                        <th className="text-left px-2 py-1 text-[10px] uppercase tracking-wider">Date</th>
+                        <th className="text-right px-2 py-1 text-[10px] uppercase tracking-wider">Montant</th>
+                        <th className="text-left px-2 py-1 text-[10px] uppercase tracking-wider">Ref AC</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {ncResult.healed.map((h, i) => (
+                        <tr key={i} className="border-t border-slate-100">
+                          <td className="px-2 py-1 truncate max-w-[180px]" title={h.supplier}>{h.supplier}</td>
+                          <td className="px-2 py-1 font-mono text-slate-600">{h.number}</td>
+                          <td className="px-2 py-1 font-mono text-slate-500">{h.date || '-'}</td>
+                          <td className="px-2 py-1 text-right font-mono text-red-600">
+                            {h.amount?.toFixed(2)} EUR
+                          </td>
+                          <td className="px-2 py-1 font-mono text-emerald-700 truncate max-w-[160px]" title={h.reference || h.je_id}>
+                            {h.reference || (h.would_create_je ? '(a creer)' : '-')}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           )}
         </CardContent>
