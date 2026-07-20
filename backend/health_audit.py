@@ -163,10 +163,19 @@ async def compute_health_audit(db, copropriete_id: str, days_threshold: int = 60
             owner_tier_accs[o["id"]] = all_accs
             owner_balance[o["id"]] = 0.0
 
-    # Comptes attendus pour les suppliers (filtres sur cette copropriete)
+    # Comptes attendus pour les suppliers (filtres sur cette copropriete).
+    # iter90in : inclure aussi les fournisseurs rattaches a l'ACP via
+    # `tier_accounts.<copro_id>` (fournisseurs partages cross-ACP au sein
+    # d'un meme syndic). Sans ce fix, les suppliers ne portant pas
+    # `copropriete_id == copro_id` directement etaient ignores et leurs
+    # comptes tiers etaient a tort marques comme orphelins.
+    # Reference : meme pattern $or que routes/suppliers.py::find_duplicate_supplier.
     suppliers = await db.suppliers.find(
-        {"copropriete_id": copropriete_id},
-        {"_id": 0, "id": 1, "name": 1, "tier_accounts": 1},
+        {"$or": [
+            {"copropriete_id": copropriete_id},
+            {f"tier_accounts.{copropriete_id}": {"$exists": True}},
+        ]},
+        {"_id": 0, "id": 1, "name": 1, "copropriete_id": 1, "tier_accounts": 1},
     ).to_list(5000)
     valid_sup_accs = set()
     for s in suppliers:

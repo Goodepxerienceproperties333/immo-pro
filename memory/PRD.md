@@ -1,4 +1,77 @@
 # CoproManager PRD
+### Iter90in (20/07/2026) — Detection fournisseurs orphelins cross-ACP (Health Audit + Balance Tiers)
+
+**Ticket utilisateur** :
+> "Corrige les erreurs de detection des fournisseurs orphelins : Dans
+> backend/health_audit.py (vers la ligne 167), modifie la requete des
+> fournisseurs pour qu'elle inclue non seulement copropriete_id, mais
+> aussi ceux rattaches via tier_accounts. Dans backend/routes/reports.py
+> (ligne 3133), applique la meme modification dans la fonction
+> balance_tiers_suppliers pour que les fournisseurs partages entre ACP
+> ne soient plus ignores. Utilise le pattern de recherche $or deja
+> present dans find_duplicate_supplier comme reference"
+
+**Root cause** :
+Un fournisseur peut etre cree dans une ACP-A (`copropriete_id = ACP-A`)
+puis "etendu" a une ACP-B via l'ajout d'entrees dans son dict
+`tier_accounts` (`tier_accounts.ACP-B = {main: '44000099'}`). Deux
+requetes MongoDB filtraient uniquement sur `copropriete_id`, ratant ces
+fournisseurs partages :
+
+1. `health_audit.py:167` : `find({"copropriete_id": copropriete_id})`
+   -> les comptes tier utilises dans les JE mais dont le supplier n'a
+   pas ce `copropriete_id` direct etaient marques ORPHELINS a tort.
+
+2. `routes/reports.py::balance_tiers_suppliers:3062` : `find({}, ...)`
+   chargeait TOUS les fournisseurs globalement (fuite cross-tenant),
+   mais le fallback name matching (`name_to_supplier`, ligne 3133)
+   filtrait ensuite sur `s.copropriete_id == copropriete_id` -> les
+   suppliers partages via `tier_accounts` etaient exclus de l'index de
+   nom et non resolus dans les AN d'ouverture (`account_name` seul, sans
+   `third_party_id`).
+
+**Fix** (pattern `$or` deja utilise dans
+`routes/suppliers.py::find_duplicate_supplier` ligne 172-175) :
+
+```python
+suppliers = await db.suppliers.find(
+    {"$or": [
+        {"copropriete_id": copropriete_id},
+        {f"tier_accounts.{copropriete_id}": {"$exists": True}},
+    ]},
+    {...},
+).to_list(...)
+```
+
+Applique dans :
+- `health_audit.py` : la query directe.
+- `routes/reports.py::balance_tiers_suppliers` : la query directe (fuite
+  cross-tenant `find({}, ...)` fermee au passage) ET le filtre in-memory
+  du fallback name matching (`_sup_copro_ok OR _sup_tier_ok`).
+
+**Tests** (`test_iter90in_cross_acp_suppliers_visibility.py`, 4/4 verts) :
+1. `does_not_flag_shared_supplier_as_orphan` : supplier `copropriete_id
+   = ACP-B` mais `tier_accounts.ACP-A = {main: '44000099'}` + JE dans
+   ACP-A utilisant `44000099` -> compte non flag orphelin.
+2. `still_flags_truly_orphan_account` : regression check, un compte
+   44XXXXX sans AUCUN supplier (ni direct ni tier_accounts) reste
+   detecte orphelin.
+3. `supplier_query_uses_or_pattern_health_audit` : contrat MongoDB pur
+   ($or) sur 3 suppliers (proprio ACP-A, partage cross-ACP, etranger)
+   -> les 2 premiers remontent, le 3e reste hors scope (chinese wall).
+4. `balance_tiers_suppliers_indexes_shared_supplier_by_name` : AN
+   d'ouverture avec `account_name = 'Shared-XYZ'` mais sans
+   `third_party_id` -> le supplier partage apparait dans la balance
+   avec le bon solde (250 EUR credit), non orphelin.
+
+**Redeploiement PROD requis** (Save to Github -> Deploy) pour activer
+la correction sur `immo-pcmn.emergent.host`. Sans redeploiement, les
+fournisseurs partages entre ACPs continueront d'etre flagges orphelins
+dans Quality Audit et absents de Balance des Tiers.
+
+---
+
+
 ### Iter90ie (17/07/2026) — Feature Compteurs (Compteurs) : repartition dynamique des charges par consommation reelle
 
 **Context** : le syndic veut ventiler les factures Eau/Gaz/Electricite/Chauffage/Entretien chaudiere selon les **consommations reelles** de chaque lot, pas les tantiemes generaux. Les releves d'index sont saisis 1x par an (releve annuel) + eventuels releves intermediaires lors des mutations.
