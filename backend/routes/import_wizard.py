@@ -689,22 +689,22 @@ def create_import_wizard_router(db):
     # ----- C-bis: SUPPLIERS via PDF (no mapping needed - already structured) -----
     @router.post("/sessions/{session_id}/preview-suppliers-pdf")
     async def preview_suppliers_pdf(session_id: str, data: CommitSuppliersPdfInput, request: Request):
-        """iter90gk : phase preview avant commit. Pour chaque fournisseur du PDF,
-        retourne les fiches existantes similaires (matching par nom + adresse)
-        pour que le syndic puisse decider :
-          - Utiliser une fiche existante (action="reuse", supplier_id="...")
-          - Creer une nouvelle fiche (action="create", bce="BE...")
-        Le BCE est obligatoire pour toute creation (regle metier utilisateur).
+        """iter90is (Chinese Wall strict) : phase preview avant commit.
+        Pour chaque fournisseur du PDF, retourne uniquement le match INTRA-ACP
+        (aucune proposition cross-ACP). Chaque fiche est locale a l'ACP.
+        Les candidats BCE (KBO) restent proposes si le BCE est manquant.
+
+        Decisions possibles :
+          - reuse : une fiche existe deja dans CETTE ACP (match strict par nom/BCE).
+          - create : creer une nouvelle fiche LOCALE (BCE obligatoire).
         """
-        from routes.suppliers import find_duplicate_supplier, _norm_name_candidates
+        from routes.suppliers import find_duplicate_supplier
         session = await db.import_sessions.find_one({"id": session_id})
         if not session:
             raise HTTPException(404, "Session introuvable")
         copro_id = session["copropriete_id"]
         await _require_acp_access(request, db, copro_id)
 
-        # Precharge tous les fournisseurs accessibles pour le matching par nom
-        all_suppliers = await db.suppliers.find({}, {"_id": 0}).to_list(20000)
         # iter90ip : import pour la lookup BCE automatique
         from bce_lookup import search_kbo_by_name
         rows = []
@@ -712,35 +712,17 @@ def create_import_wizard_router(db):
             name = (s.get("name") or "").strip()
             if not name:
                 continue
-            # 1. Match STRICT (scope ACP) - via find_duplicate_supplier
+            # Match STRICT INTRA-ACP uniquement (chinese wall)
             strict_dup = await find_duplicate_supplier(
                 db, name=name, bce_number="", vat_number="", iban="", copro_id=copro_id,
             )
-            # 2. Match par NOM sur les fiches accessibles (cross-ACP, pour proposer
-            #    d'attacher une fiche existante d'une autre ACP au meme syndic)
-            name_cands = _norm_name_candidates(name)
-            fuzzy_matches = []
-            for other in all_suppliers:
-                if other.get("copropriete_id") == copro_id:
-                    continue  # deja couvert par strict_dup
-                other_cands = _norm_name_candidates(other.get("name", ""))
-                if name_cands & other_cands:
-                    fuzzy_matches.append({
-                        "id": other["id"],
-                        "name": other.get("name", ""),
-                        "bce_number": other.get("bce_number", ""),
-                        "copropriete_id": other.get("copropriete_id", ""),
-                    })
 
-            # iter90ip : lookup BCE automatique SI aucun match strict/fuzzy avec
-            # BCE deja renseigne + aucun BCE dans les donnees d'import. On cherche
-            # sur le KBO Public Search. Silent : ne bloque jamais l'import
-            # (retour [] en cas d'erreur).
+            # iter90ip : lookup BCE automatique SI aucun match strict avec BCE
+            # + aucun BCE dans les donnees d'import.
             src_bce = (s.get("bce_number") or s.get("vat_number") or "").strip()
-            fuzzy_has_bce = any((fm.get("bce_number") or "").strip() for fm in fuzzy_matches)
             strict_has_bce = bool(strict_dup and (strict_dup["supplier"].get("bce_number") or "").strip())
             bce_candidates: list[dict] = []
-            if not src_bce and not strict_has_bce and not fuzzy_has_bce:
+            if not src_bce and not strict_has_bce:
                 bce_candidates = await search_kbo_by_name(
                     name,
                     postal_code=(s.get("postal_code") or "").strip(),
@@ -757,20 +739,18 @@ def create_import_wizard_router(db):
                 "city": (s.get("city") or "").strip(),
                 "phone": (s.get("phone") or "").strip(),
                 "email": (s.get("email") or "").strip(),
-                # Match strict (dans l'ACP courante) : forcement reuse (bouton pre-selectionne)
+                # Match strict INTRA-ACP : si trouve, on pre-selectionne reuse.
                 "strict_match": ({
                     "id": strict_dup["supplier"]["id"],
                     "name": strict_dup["supplier"].get("name", ""),
                     "bce_number": strict_dup["supplier"].get("bce_number", ""),
                     "field": strict_dup.get("field", ""),
                 } if strict_dup else None),
-                # Match par nom (cross-ACP) : le syndic peut choisir
-                "fuzzy_matches": fuzzy_matches,
+                # iter90is : fuzzy_matches cross-ACP supprime (chinese wall strict).
+                # Le champ reste pour compat frontend mais est TOUJOURS vide.
+                "fuzzy_matches": [],
                 # iter90ip : candidats BCE proposes par KBO (top 3, similarite decroissante)
                 "bce_candidates": bce_candidates,
-                # Suggestion par defaut :
-                # - strict_match trouve -> "reuse"
-                # - sinon -> "create" (necessite BCE)
                 "suggested_action": "reuse" if strict_dup else "create",
                 "suggested_supplier_id": strict_dup["supplier"]["id"] if strict_dup else "",
             })
@@ -1880,7 +1860,10 @@ def create_import_wizard_router(db):
                 aux = "F" + acc[-4:]
                 sup = suppliers_by_aux.get(aux)
                 if sup:
-                    canonical = ((sup.get("tier_accounts") or {}).get(copro_id, {}) or {}).get("main", "")
+                    # iter90is : lit directement `tier_account_number` (chinese wall).
+                    canonical = (sup.get("tier_account_number") or "").strip() or (
+                        (sup.get("tier_accounts") or {}).get(copro_id, {}) or {}
+                    ).get("main", "")
                     return sup["id"], "supplier", sup, canonical or None
                 # iter90gk : fallback name matching (Levenshtein-lite via
                 # _norm_name_candidates). Evite les orphelins pour les
@@ -1893,7 +1876,9 @@ def create_import_wizard_router(db):
                         for cand in all_suppliers_acp:
                             other_cands = _norm_name_candidates(cand.get("name", ""))
                             if lbl_cands & other_cands:
-                                canonical = ((cand.get("tier_accounts") or {}).get(copro_id, {}) or {}).get("main", "")
+                                canonical = (cand.get("tier_account_number") or "").strip() or (
+                                    (cand.get("tier_accounts") or {}).get(copro_id, {}) or {}
+                                ).get("main", "")
                                 return cand["id"], "supplier", cand, canonical or None
             return None, None, None, None
 

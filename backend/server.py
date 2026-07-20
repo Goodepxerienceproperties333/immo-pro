@@ -1187,15 +1187,20 @@ async def startup():
     except Exception as _e:
         print(f"[startup] suppliers unique name index skipped: {_e}")
 
-    # iter90im : UNICITE GLOBALE des `vat_number` des suppliers (regle
-    # metier user : "le numero de TVA est la cle unique"). Une meme TVA ne
-    # peut identifier qu'UNE seule entreprise dans le systeme, meme entre
-    # ACPs differentes. Partial pour ignorer les fournisseurs sans TVA.
+    # iter90is (Chinese Wall strict) : UNICITE TVA **par ACP** (plus globale).
+    # Precedemment (iter90im) : la TVA etait cle unique globale. Ceci est
+    # incompatible avec le chinese wall qui autorise 2 fiches distinctes
+    # pour la meme entreprise dans 2 ACPs. Passage per-ACP.
     try:
+        # Drop l'ancien index global (best-effort).
+        try:
+            await db.suppliers.drop_index("uq_supplier_vat_global")
+        except Exception:
+            pass
         await db.suppliers.create_index(
-            [("vat_number", 1)],
+            [("copropriete_id", 1), ("vat_number", 1)],
             unique=True,
-            name="uq_supplier_vat_global",
+            name="uq_supplier_copro_vat",
             partialFilterExpression={"vat_number": {"$type": "string", "$gt": ""}},
         )
     except Exception as _e:
@@ -1216,18 +1221,24 @@ async def startup():
         )
     except Exception as _e:
         print(f"[startup] owners unique aux index skipped: {_e}")
-    # iter90gk : UNICITE GLOBALE du BCE fournisseur. Empeche 2 fiches
-    # fournisseur ayant le meme BCE (identifiant unique d'entreprise).
-    # `partialFilterExpression` ignore les documents ayant bce_number="" (les
-    # fiches legacy sans BCE - a migrer manuellement). `sparse` ne suffit pas
-    # car il n'ignore que les champs absents, pas les strings vides.
+    # iter90is (Chinese Wall strict) : UNICITE BCE **par ACP** (plus globale).
+    # Chaque ACP a sa propre fiche pour chaque BCE ; le partage cross-ACP
+    # est supprime. Deux fiches "Engie" (BE0403201185) peuvent coexister
+    # dans 2 ACPs distinctes, mais pas 2 fois dans la meme ACP.
+    # `partialFilterExpression` ignore les fiches sans BCE (bce_number="").
     try:
+        # Drop l'ancien index global (best-effort).
+        try:
+            await db.suppliers.drop_index("uq_supplier_bce")
+        except Exception:
+            pass
         await db.suppliers.create_index(
-            "bce_number", unique=True, name="uq_supplier_bce",
+            [("copropriete_id", 1), ("bce_number", 1)],
+            unique=True, name="uq_supplier_copro_bce",
             partialFilterExpression={"bce_number": {"$type": "string", "$gt": ""}},
         )
     except Exception as _e:
-        print(f"[startup] suppliers.bce_number unique index skipped: {_e}")
+        print(f"[startup] suppliers.uq_supplier_copro_bce index skipped: {_e}")
     # iter87 : TTL index on invoice_bundle_sessions for auto-cleanup of bundle
     # PDF sessions after 24h (uses `expires_at` ISODate field set on creation).
     try:

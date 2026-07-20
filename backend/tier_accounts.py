@@ -161,21 +161,35 @@ async def assign_owner_accounts(db, owner: dict, copro_id: Optional[str] = None)
 
 
 async def assign_supplier_account(db, supplier: dict, copro_id: Optional[str] = None) -> dict:
-    """Ensure the supplier has a unique 44000XXX account in the given ACP.
-    Suppliers are global; we store one account per ACP they appear in."""
+    """iter90is (Chinese Wall strict) : chaque fournisseur est LOCAL a UNE
+    seule ACP. Le compte tier PCMN 44000XXX est stocke directement dans
+    `supplier.tier_account_number` (plus de dict `tier_accounts`).
+
+    Idempotent : si le supplier a deja un `tier_account_number`, on ne
+    reassigne pas.
+    """
     target_copro = copro_id or supplier.get("copropriete_id", "")
     if not target_copro:
         return supplier
-    accounts_map = supplier.get("tier_accounts", {}) or {}
-    if target_copro in accounts_map:
+    # iter90is : chinese wall - refuse d'assigner un compte a une ACP
+    # differente de celle de la fiche (isolation totale).
+    fiche_copro = supplier.get("copropriete_id", "")
+    if fiche_copro and fiche_copro != target_copro:
+        return supplier  # ne pas polluer d'autres ACPs avec cette fiche
+    # Deja assigne ?
+    existing_num = (supplier.get("tier_account_number") or "").strip()
+    if existing_num:
         return supplier
     seq = await _next_seq(db, target_copro, "44000")
     num = _format_seq("44000", seq, width=3)
     name = (supplier.get("name") or "Fournisseur")[:40]
     await _ensure_account(db, target_copro, num, name.strip(), 4)
-    accounts_map[target_copro] = {"main": num}
-    await db.suppliers.update_one({"id": supplier["id"]}, {"$set": {"tier_accounts": accounts_map}})
-    supplier["tier_accounts"] = accounts_map
+    await db.suppliers.update_one(
+        {"id": supplier["id"]},
+        {"$set": {"tier_account_number": num, "copropriete_id": target_copro}},
+    )
+    supplier["tier_account_number"] = num
+    supplier["copropriete_id"] = target_copro
     return supplier
 
 
@@ -185,7 +199,27 @@ def get_owner_accounts(owner: dict, copro_id: str) -> dict:
 
 
 def get_supplier_account(supplier: dict, copro_id: str) -> str:
-    """Return supplier main account in given ACP, or '' if absent."""
+    """iter90is (Chinese Wall strict) : retourne le compte tier
+    fournisseur SI ET SEULEMENT SI le supplier appartient a `copro_id`
+    (isolation totale entre ACPs).
+
+    Lecture backward-compatible :
+    1. Fiches modernes (`copropriete_id` renseigne) : refuse si != copro_id.
+    2. Fiches legacy (`copropriete_id` vide, dict `tier_accounts` populate) :
+       autorisees pour compat. Le nouveau code n'en creera plus.
+    3. Privilegie `tier_account_number` (nouveau champ), fallback
+       `tier_accounts[copro_id].main` pour data legacy non migree.
+    """
+    if not copro_id or not supplier:
+        return ""
+    fiche_copro = supplier.get("copropriete_id", "")
+    if fiche_copro and fiche_copro != copro_id:
+        return ""  # chinese wall - refuse l'acces cross-ACP (fiche moderne)
+    # Priorite : nouveau champ (post-iter90is)
+    num = (supplier.get("tier_account_number") or "").strip()
+    if num:
+        return num
+    # Fallback legacy (dict tier_accounts) - progressif retrait
     return ((supplier.get("tier_accounts") or {}).get(copro_id, {}) or {}).get("main", "")
 
 

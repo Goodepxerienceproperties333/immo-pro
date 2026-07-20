@@ -39,6 +39,9 @@ from dotenv import load_dotenv
 load_dotenv("/app/backend/.env")
 
 
+import pytest  # noqa: E402
+
+
 def _run(coro):
     return asyncio.run(coro)
 
@@ -46,6 +49,9 @@ def _run(coro):
 # ---------------------------------------------------------------------------
 # Test 1 : health_audit ne signale plus le compte tier partage comme orphelin
 # ---------------------------------------------------------------------------
+@pytest.mark.skip(reason="OBSOLETE iter90is (Chinese Wall strict) : le partage "
+                         "cross-ACP via tier_accounts a ete supprime. Cf. "
+                         "test_iter90is_chinese_wall_strict.py.")
 def test_health_audit_does_not_flag_shared_supplier_as_orphan():
     """iter90in-1 : un fournisseur rattache a ACP-A via `tier_accounts.ACP-A`
     (mais dont `copropriete_id` pointe sur ACP-B) doit etre reconnu par
@@ -228,6 +234,9 @@ def test_supplier_query_uses_or_pattern_health_audit():
 # ---------------------------------------------------------------------------
 # Test 4 : balance_tiers_suppliers indexe les noms des suppliers partages
 # ---------------------------------------------------------------------------
+@pytest.mark.skip(reason="OBSOLETE iter90is (Chinese Wall strict) : le partage "
+                         "cross-ACP via tier_accounts a ete supprime. Cf. "
+                         "test_iter90is_chinese_wall_strict.py.")
 def test_balance_tiers_suppliers_indexes_shared_supplier_by_name():
     """iter90in-4 : verifie que `balance_tiers_suppliers` inclut, dans son
     index `name_to_supplier` (utilise pour le fallback matching account_name),

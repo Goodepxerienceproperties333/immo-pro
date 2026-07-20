@@ -17,11 +17,22 @@ import os
 import sys
 import uuid
 
+import pytest
+
 sys.path.insert(0, "/app/backend")
 from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv("/app/backend/.env")
 
+# iter90is : tous les tests de ce module sont OBSOLETES.
+# L'endpoint /api/admin/heal-link-suppliers-to-acp ecrit dans le dict
+# `tier_accounts` qui a ete supprime par le refactor Chinese Wall strict.
+# Le nouveau modele "1 supplier = 1 ACP" ne permet plus de rattacher une
+# fiche existante a une autre ACP. Voir test_iter90is_chinese_wall_strict.py.
+pytestmark = pytest.mark.skip(
+    reason="OBSOLETE iter90is (Chinese Wall strict) : le partage cross-ACP "
+           "via tier_accounts a ete supprime. Voir test_iter90is_chinese_wall_strict.py."
+)
 
 def _run(coro):
     return asyncio.run(coro)

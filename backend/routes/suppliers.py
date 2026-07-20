@@ -121,63 +121,33 @@ async def find_duplicate_supplier(
     db, *, name: str, bce_number: str = "", vat_number: str = "",
     iban: str = "", copro_id: str = "", exclude_id: Optional[str] = None,
 ) -> Optional[dict]:
-    """Recherche un fournisseur en doublon sur 3 criteres (l'un suffit) :
+    """Recherche un fournisseur en doublon INTRA-ACP sur 3 criteres (l'un suffit) :
         1. BCE ou TVA identique (normalises)
         2. Nom identique (normalise, incluant les candidats parentheses - iter90fd)
         3. IBAN identique (normalise)
 
-    Scope : limite aux fournisseurs rattaches a `copro_id` (direct ou via
-    tier_accounts.<copro_id>). Si copro_id vide, recherche globale.
+    iter90is (Chinese Wall strict) : la recherche est STRICTEMENT LIMITEE
+    a l'ACP `copro_id`. Un meme "Engie" peut exister comme fiches
+    distinctes dans plusieurs ACPs sans que ce soit considere doublon.
 
     Retourne {"supplier": <doc>, "field": "bce|vat|name|iban", "value": <str>}
     ou None.
     """
-    # iter90fd : blocage strict des doublons. On genere TOUS les candidats
-    # de normalisation (nom complet + chaque fragment entre parentheses)
-    # -> matcher meme les cas "Finlead Properties (Finlead srl)".
     name_candidates = _norm_name_candidates(name)
-    norm_name = _norm_name(name)  # cle principale (pour retro-compat champ "value")
+    norm_name = _norm_name(name)  # cle principale (pour retro-compat champ "value")  # noqa: F841
     norm_bce = _norm_id(bce_number)
     norm_vat = _norm_id(vat_number)
     norm_iban = _norm_id(iban)
     if not (name_candidates or norm_bce or norm_vat or norm_iban):
         return None
+    if not copro_id:
+        # iter90is : plus de fallback global. Sans ACP, on ne cherche pas.
+        return None
 
-    # iter90gk : verifie D'ABORD la duplication BCE/TVA/IBAN au niveau GLOBAL
-    # (sans scope ACP). Le BCE identifie univoquement une entreprise -> deux
-    # ACPs ne peuvent PAS creer 2 fiches distinctes pour la meme societe.
-    # Regle strictement demandee par l'utilisateur (message de production
-    # apres avoir detecte 5 doublons de comptes tier).
-    if norm_bce or norm_vat or norm_iban:
-        global_candidates = await db.suppliers.find({}, {"_id": 0}).to_list(20000)
-        for s in global_candidates:
-            if exclude_id and s.get("id") == exclude_id:
-                continue
-            if norm_bce:
-                if _norm_id(s.get("bce_number", "")) == norm_bce:
-                    return {"supplier": s, "field": "bce_number", "value": s.get("bce_number", "")}
-                if _norm_id(s.get("vat_number", "")) == norm_bce:
-                    return {"supplier": s, "field": "vat_number", "value": s.get("vat_number", "")}
-            if norm_vat:
-                if _norm_id(s.get("vat_number", "")) == norm_vat:
-                    return {"supplier": s, "field": "vat_number", "value": s.get("vat_number", "")}
-                if _norm_id(s.get("bce_number", "")) == norm_vat:
-                    return {"supplier": s, "field": "bce_number", "value": s.get("bce_number", "")}
-            if norm_iban and _norm_id(s.get("iban", "")) == norm_iban:
-                return {"supplier": s, "field": "iban", "value": s.get("iban", "")}
-
-    # Construit la projection scope ACP
-    base_query: dict = {}
-    if copro_id:
-        base_query["$or"] = [
-            {"copropriete_id": copro_id},
-            {f"tier_accounts.{copro_id}": {"$exists": True}},
-        ]
+    # Scope ACP STRICT (chinese wall)
+    base_query: dict = {"copropriete_id": copro_id}
     if exclude_id:
         base_query["id"] = {"$ne": exclude_id}
-
-    # On charge tous les candidats du scope et on compare en python (les
-    # normalisations cote DB seraient fragiles avec les espaces / points / etc).
     candidates = await db.suppliers.find(base_query, {"_id": 0}).to_list(5000)
     for s in candidates:
         if norm_bce:
@@ -192,8 +162,6 @@ async def find_duplicate_supplier(
                 return {"supplier": s, "field": "bce_number", "value": s.get("bce_number", "")}
         if norm_iban and _norm_id(s.get("iban", "")) == norm_iban:
             return {"supplier": s, "field": "iban", "value": s.get("iban", "")}
-        # iter90fd : cross-check TOUS les candidats de nom (nom complet +
-        # parentheses) vs le nom normalise de la fiche existante ET vice-versa.
         if name_candidates:
             other_candidates = _norm_name_candidates(s.get("name", ""))
             if name_candidates & other_candidates:
@@ -215,7 +183,11 @@ class SupplierInput(BaseModel):
     bic: Optional[str] = ""
     default_account: Optional[str] = ""
     notes: Optional[str] = ""
-    copropriete_id: Optional[str] = ""
+    # iter90is : copropriete_id OBLIGATOIRE (Chinese Wall strict).
+    # Chaque fiche fournisseur est locale a UNE seule ACP. Un meme
+    # fournisseur "Engie" existera comme DEUX fiches distinctes si utilise
+    # dans ACP Acacia + ACP Maria Auto 2. Plus de partage global.
+    copropriete_id: str
     # iter85g : ignorer la detection de similarites (l'utilisateur a deja confirme
     # via le dialog frontend). N'a aucun effet sur la detection EXACTE (BCE/TVA/IBAN/nom
     # strict) qui reste bloquante.
@@ -343,11 +315,14 @@ def create_suppliers_router(db):
     @router.post("")
     async def create_supplier(request: Request, data: SupplierInput):
         is_super, allowed_copros = await _get_user_scope(request)
-        copro_id = data.copropriete_id or getattr(request.state, "copropriete_id", "") or ""
-        # Pour un syndic : un fournisseur DOIT etre rattache a une de ses ACPs (RGPD)
+        copro_id = (data.copropriete_id or "").strip() or getattr(request.state, "copropriete_id", "") or ""
+        # iter90is (Chinese Wall strict) : copropriete_id est OBLIGATOIRE
+        # pour TOUS les roles (superadmin inclus). Aucune fiche fournisseur
+        # "globale" ne peut plus etre creee - chaque fiche est locale a UNE ACP.
+        if not copro_id:
+            raise HTTPException(400, "Un fournisseur doit etre rattache a une copropriete (chinese wall + RGPD)")
+        # Pour un syndic : verifie que l'ACP fait partie de ses ACPs
         if not is_super:
-            if not copro_id:
-                raise HTTPException(400, "Un fournisseur doit etre rattache a une copropriete (chinese wall + RGPD)")
             if copro_id not in (allowed_copros or []):
                 raise HTTPException(403, "Vous ne pouvez attribuer ce fournisseur qu'a une de vos ACPs")
         # iter90gk : nom + BCE OBLIGATOIRES (regle utilisateur : verrouiller

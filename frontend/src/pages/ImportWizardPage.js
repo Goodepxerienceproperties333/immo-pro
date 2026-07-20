@@ -1865,12 +1865,8 @@ function SuppliersPdfPreview({ suppliers, setSuppliers, sessionId, decisions, se
                       <Badge className="bg-emerald-100 text-emerald-800 text-[10px]" title={`Fiche ${preview.strict_match.id.slice(0,8)}, BCE=${preview.strict_match.bce_number||'(vide)'}`}>
                         Match ACP : {preview.strict_match.name?.slice(0,25)}
                       </Badge>
-                    ) : preview?.fuzzy_matches?.length ? (
-                      <Badge className="bg-amber-100 text-amber-800 text-[10px]" title={preview.fuzzy_matches.map(m => `${m.name} (BCE ${m.bce_number||'?'})`).join(', ')}>
-                        {preview.fuzzy_matches.length} match cross-ACP
-                      </Badge>
                     ) : (
-                      <span className="text-slate-400 text-[10px]">Aucun</span>
+                      <span className="text-slate-400 text-[10px]">Aucun (fiche locale sera creee)</span>
                     )}
                   </td>
                 )}
@@ -1882,22 +1878,12 @@ function SuppliersPdfPreview({ suppliers, setSuppliers, sessionId, decisions, se
                       className="text-[10px] border border-slate-300 rounded px-1 py-0.5"
                       data-testid={`sup-action-${i}`}
                     >
-                      <option value="create">Creer nouveau</option>
-                      {(preview?.strict_match || preview?.fuzzy_matches?.length > 0) && (
+                      <option value="create">Creer nouveau (local ACP)</option>
+                      {preview?.strict_match && (
                         <option value="reuse">Reutiliser existant</option>
                       )}
                     </select>
-                    {dec.action === 'reuse' && preview?.fuzzy_matches?.length > 0 && !preview?.strict_match && (
-                      <select
-                        value={dec.supplier_id || preview.fuzzy_matches[0].id}
-                        onChange={(e) => updateDecision(i, { supplier_id: e.target.value })}
-                        className="mt-1 text-[10px] border border-slate-300 rounded px-1 py-0.5"
-                      >
-                        {preview.fuzzy_matches.map((m) => (
-                          <option key={m.id} value={m.id}>{m.name} - BCE {m.bce_number || '?'}</option>
-                        ))}
-                      </select>
-                    )}
+                    {/* iter90is : fuzzy_matches cross-ACP retire (chinese wall strict) */}
                   </td>
                 )}
                 {analyzed && (

@@ -163,25 +163,24 @@ async def compute_health_audit(db, copropriete_id: str, days_threshold: int = 60
             owner_tier_accs[o["id"]] = all_accs
             owner_balance[o["id"]] = 0.0
 
-    # Comptes attendus pour les suppliers (filtres sur cette copropriete).
-    # iter90in : inclure aussi les fournisseurs rattaches a l'ACP via
-    # `tier_accounts.<copro_id>` (fournisseurs partages cross-ACP au sein
-    # d'un meme syndic). Sans ce fix, les suppliers ne portant pas
-    # `copropriete_id == copro_id` directement etaient ignores et leurs
-    # comptes tiers etaient a tort marques comme orphelins.
-    # Reference : meme pattern $or que routes/suppliers.py::find_duplicate_supplier.
+    # iter90is (Chinese Wall strict) : lookup UNIQUEMENT par copropriete_id
+    # direct. Chaque fiche fournisseur est locale a UNE ACP -- le partage
+    # cross-ACP via `tier_accounts` est definitivement supprime.
     suppliers = await db.suppliers.find(
-        {"$or": [
-            {"copropriete_id": copropriete_id},
-            {f"tier_accounts.{copropriete_id}": {"$exists": True}},
-        ]},
-        {"_id": 0, "id": 1, "name": 1, "copropriete_id": 1, "tier_accounts": 1},
+        {"copropriete_id": copropriete_id},
+        {"_id": 0, "id": 1, "name": 1, "copropriete_id": 1,
+         "tier_account_number": 1, "tier_accounts": 1},  # tier_accounts pour legacy read
     ).to_list(5000)
     valid_sup_accs = set()
     for s in suppliers:
-        accs = ((s.get("tier_accounts") or {}).get(copropriete_id, {}) or {})
-        if accs.get("main"):
-            valid_sup_accs.add(accs["main"])
+        # iter90is : le compte tier est desormais un champ simple
+        # `tier_account_number` (chinese wall). Fallback lecture `tier_accounts`
+        # pour eventuels docs legacy non migres.
+        main_acc = (s.get("tier_account_number") or "").strip()
+        if not main_acc:
+            main_acc = ((s.get("tier_accounts") or {}).get(copropriete_id, {}) or {}).get("main", "")
+        if main_acc:
+            valid_sup_accs.add(main_acc)
 
     accs_used = {}
     unbalanced = []

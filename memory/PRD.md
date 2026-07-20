@@ -1,4 +1,111 @@
 # CoproManager PRD
+### Iter90is (20/07/2026) — Chinese Wall STRICT : 1 fournisseur = 1 ACP
+
+**Ticket utilisateur (execution PREVIEW)** :
+> "Vider la base : Supprime l'integralite des documents de la collection
+> suppliers dans cet environnement de preview. Appliquer la structure
+> isolee : Chinese Wall - chaque nouveau fournisseur cree doit avoir un
+> champ copropriete_id obligatoire. Prepare l'import : import Optipro
+> cree systematiquement un nouveau fournisseur local a l'ACP en cours,
+> sans chercher de correspondance globale."
+
+**Actions effectuees**
+
+1. **Purge PREVIEW** : 47 documents supprimes de `db.suppliers`. Index
+   global `uq_supplier_bce` retire.
+
+2. **Model `Supplier`** :
+   - `SupplierInput.copropriete_id` : passe de `Optional[str] = ""` a
+     `str` OBLIGATOIRE (Pydantic requis).
+   - `create_supplier` : rejette si `copropriete_id` vide (400) pour
+     TOUS les roles (superadmin inclus).
+   - Nouveau champ `tier_account_number: str` remplace le dict
+     `tier_accounts` pour les nouvelles fiches.
+
+3. **`tier_accounts.py`** :
+   - `assign_supplier_account` : persiste `tier_account_number` (champ
+     simple) au lieu de `tier_accounts[copro].main`. Refuse le
+     cross-ACP pollution (`copro_id != fiche.copropriete_id` -> no-op).
+   - `get_supplier_account` : Chinese Wall strict - refuse si
+     `supplier.copropriete_id != copro_id`. Priorite au nouveau champ,
+     fallback dict `tier_accounts` uniquement pour data legacy.
+
+4. **`find_duplicate_supplier`** :
+   - Retrait du fallback global BCE/TVA/IBAN.
+   - Retrait du pattern `$or` sur `tier_accounts.<copro>` (iter90in).
+   - Recherche STRICTEMENT intra-ACP. Sans `copro_id` -> retourne None.
+
+5. **Import Optipro (`import_wizard.py`)** :
+   - `preview-suppliers-pdf` : `fuzzy_matches` (cross-ACP) supprime,
+     toujours retourne `[]`. Le champ reste pour compat frontend. Match
+     strict INTRA-ACP + candidats BCE (KBO) restent proposes.
+   - `_resolve_third_party` : lit `tier_account_number` en priorite,
+     fallback legacy.
+   - `commit_invoices` : deja scope ACP par `copropriete_id`, aucun
+     changement.
+
+6. **`health_audit.py`** : simplifie sur `copropriete_id` direct.
+   Lecture backward-compat via `tier_account_number` OU legacy dict.
+
+7. **`reports.py::balance_tiers_suppliers`** : simplifie sur
+   `copropriete_id` direct (retrait iter90in `$or`).
+
+8. **Indexes MongoDB** :
+   - Drop : `uq_supplier_bce` (global).
+   - Rename : `uq_supplier_vat_global` -> `uq_supplier_copro_vat`
+     (partial, per-ACP).
+   - Create : `uq_supplier_copro_bce` (partial, per-ACP).
+   - Existant conserve : `uq_supplier_copro_name` (partial, per-ACP).
+
+9. **Frontend (`ImportWizardPage.js::SuppliersPdfPreview`)** :
+   - Retrait de l'affichage "N match cross-ACP".
+   - Retrait du dropdown "Choisir fiche cross-ACP".
+   - Option "Reutiliser existant" ne s'affiche QUE si match strict INTRA-ACP.
+
+**Tests** (`test_iter90is_chinese_wall_strict.py`, 12/12 verts) :
+- `SupplierInput` requiert `copropriete_id` (Pydantic ValidationError).
+- `find_duplicate_supplier` : jamais de match cross-ACP + `None` sans copro_id.
+- `get_supplier_account` : refuse cross-ACP + priorite nouveau champ.
+- `assign_supplier_account` : ecrit `tier_account_number` + refuse
+  pollution cross-ACP.
+- Indexes MongoDB : `uq_supplier_bce` retire, `uq_supplier_copro_bce`
+  actif. Meme BCE autorise dans 2 ACPs distinctes, refuse dans meme ACP.
+- `preview-suppliers-pdf` : `fuzzy_matches` toujours vide.
+
+**Tests marques OBSOLETE (skip)** :
+- `test_iter90in_cross_acp_suppliers_visibility.py` : les 2 tests qui
+  verifiaient l'inverse (partage cross-ACP via `tier_accounts.$or`).
+- `test_iter90ir_heal_link_suppliers_to_acp.py` : le endpoint
+  `heal-link-suppliers-to-acp` ecrit dans `tier_accounts` qui n'est
+  plus le modele. Le endpoint reste en place (dead code) mais ne sera
+  plus jamais atteint par le flow normal.
+
+**Adaptation collateraux** :
+- `test_iter90i6_credit_notes_ac_journal_and_supplier_balance.py` :
+  fixture `_seed_supplier_and_pcmn` migree du dict `tier_accounts` vers
+  le champ simple `tier_account_number` + ajout `copropriete_id`. 6/6 verts.
+
+**Etat PREVIEW final** :
+```
+db.suppliers : 0 documents
+Indexes suppliers : uq_supplier_copro_name, uq_supplier_copro_bce,
+                    uq_supplier_copro_vat (tous partial, per-ACP)
+```
+
+**Marche a suivre POUR L'UTILISATEUR** :
+1. Base PREVIEW propre et prete pour un nouvel import Optipro.
+2. Sur chaque ACP, relancer l'import Optipro : les fournisseurs seront
+   crees LOCALEMENT (Engie Acacia sera une fiche distincte de Engie
+   Maria Auto 2, meme si meme BCE).
+3. Le lookup BCE (KBO) reste actif : rempli automatiquement le BCE
+   manquant lors du preview.
+4. **Pour PROD** : Save to Github + redeploy. La collection PROD
+   `suppliers` NE SERA PAS purgee (PREVIEW only) - un futur migrations
+   one-shot pourra cloner les fiches multi-ACP si necessaire.
+
+---
+
+
 ### Iter90ir (20/07/2026) — Reparation ciblee : lier fournisseurs orphelins a une ACP
 
 **Ticket utilisateur** :

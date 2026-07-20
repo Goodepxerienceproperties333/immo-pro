@@ -3059,15 +3059,11 @@ def create_reports_router(db):
             return {"suppliers": [], "total_a_payer": 0}
 
         # Charge fournisseurs
-        # iter90in : restriction stricte au scope ACP courant (chinese wall)
-        # via $or [copropriete_id direct, tier_accounts.<copro_id> present].
-        # Avant : `find({}, ...)` chargeait TOUS les fournisseurs de la DB
-        # (fuite cross-ACP + bruit inutile). Reference : suppliers.py::find_duplicate_supplier.
+        # iter90is (Chinese Wall strict) : STRICTEMENT limite a `copropriete_id`
+        # direct. Le partage cross-ACP via `tier_accounts` est definitivement
+        # supprime -- chaque fiche fournisseur est locale a UNE ACP.
         suppliers = await db.suppliers.find(
-            {"$or": [
-                {"copropriete_id": copropriete_id},
-                {f"tier_accounts.{copropriete_id}": {"$exists": True}},
-            ]},
+            {"copropriete_id": copropriete_id},
             {"_id": 0},
         ).to_list(10000)
         # Charge journal entries de l'ACP + filtre periode
@@ -3138,13 +3134,11 @@ def create_reports_router(db):
             tier_acc = ((s.get("tier_accounts") or {}).get(copropriete_id, {}) or {}).get("main", "")
             if tier_acc:
                 tier_to_supplier[tier_acc] = s
-            # Enregistrer les candidats de nom pour les fournisseurs
-            # rattaches a l'ACP courante (chinese wall strict).
-            # iter90in : inclure aussi les fournisseurs rattaches via
-            # `tier_accounts.<copro_id>` (partages entre ACPs d'un meme syndic).
-            _sup_copro_ok = s.get("copropriete_id") == copropriete_id
-            _sup_tier_ok = copropriete_id in (s.get("tier_accounts") or {})
-            if _sup_copro_ok or _sup_tier_ok:
+            # iter90is (Chinese Wall strict) : les suppliers sont deja
+            # filtres par copropriete_id direct au fetch (plus de $or sur
+            # tier_accounts). Le check ci-dessous est donc devenu un noop
+            # defensif -- on l'ecrit simplement pour rester lisible.
+            if s.get("copropriete_id") == copropriete_id:
                 for cand in _all_name_candidates(s.get("name", "")):
                     name_to_supplier.setdefault(cand, s)
 

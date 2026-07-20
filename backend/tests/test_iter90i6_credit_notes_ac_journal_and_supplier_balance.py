@@ -28,13 +28,17 @@ load_dotenv("/app/backend/.env")
 
 
 async def _seed_supplier_and_pcmn(db, copro_id, supplier_name):
-    """Cree un fournisseur + son compte tier PCMN + le compte de charge."""
+    """Cree un fournisseur + son compte tier PCMN + le compte de charge.
+    iter90is (Chinese Wall) : le supplier est LOCAL a l'ACP (copropriete_id
+    obligatoire) et utilise le champ simple `tier_account_number`."""
     supp_id = f"supp-{uuid.uuid4().hex[:8]}"
     tier_acc = "44000099"
     expense_acc = "61210"
     await db.suppliers.insert_one({
         "id": supp_id, "name": supplier_name,
-        "tier_accounts": {copro_id: {"main": tier_acc}},
+        "copropriete_id": copro_id,
+        "tier_account_number": tier_acc,
+        "bce_number": f"BE{uuid.uuid4().int % 10**10:010d}",
     })
     await db.pcmn_accounts.insert_one({
         "copropriete_id": copro_id, "number": tier_acc,
