@@ -3207,17 +3207,33 @@ def create_admin_router(db):
                 "supplier_id": "",
                 "lines_repointed": 0,
             }
-            # Cherche si une fiche existe deja avec ce tier_account ou ce nom.
-            sup = sup_by_tier.get(acc)
+            # iter90iv (change de strategie) : matching par NOM d'ABORD,
+            # compte tier en FALLBACK. Cette strategie evite de creer de
+            # nouvelles fiches quand un homonyme existe deja dans l'ACP
+            # (ex: Engie deja cree avec 44000005, on ne cree PAS Engie-bis
+            # avec 44000110 - on repointe la ligne JE vers Engie et on
+            # reecrit le compte de la ligne avec 44000005).
+            sup = None
+            matched_by = ""
+            for cand in _norm_name_candidates(best_name):
+                if cand in sup_by_name_cand:
+                    sup = sup_by_name_cand[cand]
+                    matched_by = "name"
+                    break
             if not sup:
-                for cand in _norm_name_candidates(best_name):
-                    if cand in sup_by_name_cand:
-                        sup = sup_by_name_cand[cand]
-                        break
+                # Fallback : matching par compte tier (cas rare : ligne JE
+                # avec compte tier + account_name absent/non-canonique)
+                sup = sup_by_tier.get(acc)
+                if sup:
+                    matched_by = "account"
             if sup:
-                # Fiche existante : verifie qu'elle a bien ce tier_account.
+                # Fiche existante trouvee. iter90iv : la ligne JE sera
+                # reecrite avec le tier_account_number CANONIQUE de la
+                # fiche (voir plus bas), pas avec le compte source `acc`.
                 cur_num = (sup.get("tier_account_number") or "").strip()
                 if not cur_num:
+                    # Fiche sans tier_account_number : on en attribue un
+                    # (le compte source de la ligne orpheline, canonique).
                     if not dry_run:
                         await db.suppliers.update_one(
                             {"id": sup["id"]},
@@ -3226,6 +3242,7 @@ def create_admin_router(db):
                     sup["tier_account_number"] = acc
                 item["action"] = "reused"
                 item["supplier_id"] = sup["id"]
+                item["matched_by"] = matched_by
                 totals["suppliers_reused"] += 1
             else:
                 # Creer une nouvelle fiche LOCALE a l'ACP.

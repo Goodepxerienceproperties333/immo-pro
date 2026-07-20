@@ -162,16 +162,21 @@ export default function SuppliersPage() {
         <Table>
           <TableHeader><TableRow>
             <TableHead>Nom</TableHead><TableHead>N TVA</TableHead><TableHead>Ville</TableHead>
+            <TableHead>Compte tier</TableHead>
             <TableHead>IBAN</TableHead><TableHead>Email</TableHead><TableHead className="w-24">Actions</TableHead>
           </TableRow></TableHeader>
           <TableBody>
             {filtered.length === 0 ? (
-              <TableRow><TableCell colSpan={6} className="text-center py-8 text-slate-400">Aucun fournisseur</TableCell></TableRow>
+              <TableRow><TableCell colSpan={7} className="text-center py-8 text-slate-400">Aucun fournisseur</TableCell></TableRow>
             ) : filtered.map(s => (
               <TableRow key={s.id} className="hover:bg-slate-50/50">
-                <TableCell className="font-medium">{s.name}</TableCell>
+                <TableCell className="font-medium" data-testid={`supplier-name-${s.id}`}>{s.name}</TableCell>
                 <TableCell className="font-mono text-sm">{s.vat_number || '-'}</TableCell>
                 <TableCell>{s.city}</TableCell>
+                {/* iter90iw : nouvelle colonne "Compte tier" (44000XXX) */}
+                <TableCell className="font-mono text-sm" data-testid={`supplier-tier-account-${s.id}`}>
+                  {s.tier_account_number || '-'}
+                </TableCell>
                 <TableCell className="font-mono text-sm">{s.iban || '-'}</TableCell>
                 <TableCell>{s.email}</TableCell>
                 <TableCell><div className="flex gap-1">

@@ -1,0 +1,18 @@
+{
+  "summary": "iter90iw + iter90iv backend testing : 5/5 nouveaux tests passent + 29/29 regressions iter90is/it/iu/io toujours vertes. GET /api/suppliers expose bien tier_account_number ; reconcile-orphan-suppliers-from-je matche par NOM d'abord (Maria Auto scenario OK) avec fallback compte ; report expose 'matched_by' ('name' | 'account'). Verifie aussi via HTTP live sur preview URL (13/37 fournisseurs seed ont tier_account_number populated - normal, frontend gere fallback '-').",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter90iw_supplier_list_column_and_name_first_matching.py",
+    "/app/test_reports/pytest/iter90iw.xml",
+    "/app/test_reports/pytest/iter90_regression.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (34/34)", "frontend": "not tested (backend only per request)"},
+  "seed_data_creation": "Chaque test cree ses propres fixtures (acp/supplier/journal_entry avec uuid suffix) et cleanup via delete_many en teardown.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "iter90iw = ajout tier_account_number colonne + strategie matching NOM-d'abord. Frontend non teste par demande explicite. Endpoint POST /api/admin/reconcile-orphan-suppliers-from-je expose maintenant 'matched_by' dans results ('name' ou 'account')."
+}

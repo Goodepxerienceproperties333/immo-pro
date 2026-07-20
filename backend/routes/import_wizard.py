@@ -1087,24 +1087,26 @@ def create_import_wizard_router(db):
                     continue
 
                 supplier_aux = (inv.get("supplier_aux_code") or "").upper().strip()
-                supplier_doc = sup_by_aux.get(supplier_aux) if supplier_aux else None
-                # iter90gk : fallback matching par nom si aux_code absent/inconnu.
-                # Certaines factures Optipro n'ont pas d'aux_code ou l'aux_code
-                # ne matche pas la fiche existante -> matcher par nom pour eviter
-                # de creer des lignes AC orphelines (sans tpid) sur un compte
-                # tier calcule "4400" + aux[1:] different du tier de la fiche.
-                if not supplier_doc:
+                # iter90iv (change de strategie) : matching par NOM d'ABORD,
+                # aux_code Optipro en fallback. Strategie utilisateur pour eviter
+                # les orphelins compta et privilegier la fiche fournisseur
+                # existante (memes homonymes = meme fournisseur, on repointe
+                # la ligne vers son tier_account_number canonique).
+                supplier_doc = None
+                inv_name = (inv.get("supplier_name") or "").strip()
+                if inv_name:
                     from routes.suppliers import _norm_name_candidates
-                    inv_name = (inv.get("supplier_name") or "").strip()
-                    if inv_name:
-                        inv_cands = _norm_name_candidates(inv_name)
-                        for aux_key, s_doc in sup_by_aux.items():
+                    inv_cands = _norm_name_candidates(inv_name)
+                    if inv_cands:
+                        # 1) parcours des fiches deja indexees par aux (rapide)
+                        for _aux_key, s_doc in sup_by_aux.items():
                             other_cands = _norm_name_candidates(s_doc.get("name", ""))
                             if inv_cands & other_cands:
                                 supplier_doc = s_doc
                                 break
-                        # Elargir : chercher parmi TOUS les fournisseurs de l'ACP
-                        # (pas seulement ceux avec aux_code).
+                        # 2) parcours de TOUS les fournisseurs de l'ACP
+                        #    (fiches sans aux_code Optipro : creees manuellement,
+                        #    reconciliees, etc.)
                         if not supplier_doc:
                             async for cand in db.suppliers.find(
                                 {"copropriete_id": copro_id}, {"_id": 0}
@@ -1113,6 +1115,9 @@ def create_import_wizard_router(db):
                                 if inv_cands & other_cands:
                                     supplier_doc = cand
                                     break
+                # Fallback : aux_code Optipro (cas ou nom absent/inutilisable)
+                if not supplier_doc and supplier_aux:
+                    supplier_doc = sup_by_aux.get(supplier_aux)
                 # iter90gk : s'assurer que la fiche fournisseur a un tier_account
                 # dans cette ACP AVANT de creer l'ecriture AC (evite la creation
                 # d'un compte tier oriente Optipro qui ne correspond pas au
@@ -1854,20 +1859,15 @@ def create_import_wizard_router(db):
                 if o:
                     canonical = ((o.get("tier_accounts") or {}).get(copro_id, {}) or {}).get("reserve", "")
                     return o["id"], "owner", o, canonical or None
-            # 440xxxx -> supplier (aux match first, then name match)
+            # 440xxxx -> supplier (iter90iv : NAME MATCH FIRST, aux_code en fallback)
             if acc.startswith("440") and len(acc) >= 5:
-                aux = "F" + acc[-4:]
-                sup = suppliers_by_aux.get(aux)
-                if sup:
-                    # iter90is : lit directement `tier_account_number` (chinese wall).
-                    canonical = (sup.get("tier_account_number") or "").strip() or (
-                        (sup.get("tier_accounts") or {}).get(copro_id, {}) or {}
-                    ).get("main", "")
-                    return sup["id"], "supplier", sup, canonical or None
-                # iter90gk : fallback name matching (Levenshtein-lite via
-                # _norm_name_candidates). Evite les orphelins pour les
-                # bilans d'ouverture ou l'Optipro utilise un numero de
-                # compte different de celui declare dans la fiche.
+                # iter90iv : Strategie utilisateur - "d'abord le matching par
+                # Nom, puis l'attribution du compte comptable a la toute fin".
+                # 1. Cherche d'abord par NOM (`label` = intitule ligne AN)
+                # 2. Fallback sur aux_code F+4derniers-chars
+                # Objectif : eviter de creer des orphelins compta quand un
+                # homonyme existe deja dans l'ACP. La ligne AN sera reecrite
+                # avec le tier_account_number canonique de la fiche trouvee.
                 if label:
                     from routes.suppliers import _norm_name_candidates
                     lbl_cands = _norm_name_candidates(label)
@@ -1879,6 +1879,14 @@ def create_import_wizard_router(db):
                                     (cand.get("tier_accounts") or {}).get(copro_id, {}) or {}
                                 ).get("main", "")
                                 return cand["id"], "supplier", cand, canonical or None
+                # Fallback : aux_code Optipro
+                aux = "F" + acc[-4:]
+                sup = suppliers_by_aux.get(aux)
+                if sup:
+                    canonical = (sup.get("tier_account_number") or "").strip() or (
+                        (sup.get("tier_accounts") or {}).get(copro_id, {}) or {}
+                    ).get("main", "")
+                    return sup["id"], "supplier", sup, canonical or None
             return None, None, None, None
 
         # iter90ig : PRE-ASSIGN tier_accounts pour tous les owners de l'ACP
