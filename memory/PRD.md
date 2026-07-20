@@ -1,4 +1,92 @@
 # CoproManager PRD
+### Iter90ir (20/07/2026) — Reparation ciblee : lier fournisseurs orphelins a une ACP
+
+**Ticket utilisateur** :
+> "Le code est pret mais les donnees sont mal liees sur Maria Auto 2.
+> Repare la base de donnees maintenant : Cherche dans la base globale
+> les fournisseurs 'SRL Finlead', 'Engie', 'Baloise Insurance', 'Euromex',
+> 'AG Insurance' et 'Sneyers Philippe SRL'. Ajoute l'ID de l'ACP 'Maria
+> Auto 2' a leur liste tier_accounts avec les numeros de comptes affiches
+> dans mes orphelins (ex: 44000110 pour Engie). Verifie que chaque
+> ecriture de journal de Maria Auto 2 possede bien un third_party_id
+> pointant vers ces fiches. Relance l'audit sante."
+
+**Livrables**
+
+Backend :
+- `routes/admin.py` : nouveau endpoint superadmin
+  `POST /api/admin/heal-link-suppliers-to-acp` avec payload :
+  ```
+  {
+    "copropriete_id": "<acp_id>",
+    "mapping": [
+      {"name": "Engie", "account": "44000110"},
+      {"name": "SRL Finlead", "account": "44000004"},
+      ...
+    ],
+    "dry_run": true|false
+  }
+  ```
+  Pour chaque entree :
+  1. Cherche le supplier en GLOBAL par nom via `_norm_name_candidates`
+     (matching robuste : gere accents, casse, ponctuation, parentheses).
+  2. Normalise le compte au format canonique 8 chars via
+     `canonize_supplier_tier_account` (iter90io).
+  3. Set idempotent `tier_accounts.<copro_id>.main = <account>` (garde
+     les autres ACPs intactes).
+  4. Cree le compte PCMN s'il n'existe pas (`is_tier_account=True`).
+  5. Repare les lignes journal_entries de l'ACP qui utilisent ce compte
+     mais sans `third_party_id` (ou avec un tpid orphelin) : set
+     `third_party_id = supplier.id` + `third_party_type = "supplier"`.
+     Preserve les tpid valides pointant vers d'autres suppliers.
+  Report detaille : totaux (matches, non trouves, tiers poses, PCMN
+  crees, JE reparees, JE deja OK) + `results[]` par entree.
+
+Frontend (`AdminQualityAuditPage.js`) :
+- Nouvelle carte orange "Reparation ciblee : lier des fournisseurs a
+  une ACP" avec :
+  - Selecteur d'ACP cible (liste des `copros`).
+  - Textarea JSON pre-rempli avec le mapping des 6 fournisseurs
+    utilisateur (Engie 44000110 + Finlead 44000004 + 4 autres a
+    completer).
+  - Boutons "Dry-run" et "Executer la reparation" (confirmation modale).
+  - Tableau resultat : par ligne, action (Non trouve / Deja lie / linked
+    / remapped_from_XXX), compte canonique, nb JE reparees.
+  - Badges de synthese : matches, non trouves, tiers poses, PCMN crees,
+    JE reparees, JE deja OK.
+
+**Tests** (`test_iter90ir_heal_link_suppliers_to_acp.py`, 5/5 verts) :
+- Dry-run : detecte 2 matches + 2 tiers a poser + 2 PCMN + 2 JE a
+  reparer sans muter la DB.
+- Live : verifie tier_accounts pose, ancien lien preserve (multi-ACP),
+  PCMN cree avec `is_tier_account=True`, lignes JE marquees avec
+  `third_party_id` + `third_party_type=supplier`.
+- Idempotence : 2eme appel live -> tier_accounts_set=0, PCMN_created=0,
+  je_lines_repaired=0, je_lines_already_ok=1.
+- Supplier non trouve : rapporte proprement, ne casse pas l'endpoint.
+- Normalisation compte : "4400110" (7 chars) auto-normalise en
+  "44000110" avant le tier update.
+
+**Marche a suivre PROD** :
+1. **Save to Github** + redeployer immo-pcmn.emergent.host.
+2. Superadmin -> Quality Audit -> carte orange "Reparation ciblee".
+3. Selectionner l'ACP "Maria Auto 2".
+4. Editer le JSON pour completer les 4 comptes tier orphelins manquants
+   (Baloise Insurance, Euromex, AG Insurance, Sneyers Philippe SRL)
+   avec les numeros affiches dans la section "Comptes tiers orphelins"
+   du rapport Quality Audit.
+5. Lancer d'abord **Dry-run** pour verifier le plan (matches attendus).
+6. Puis **Executer la reparation** apres confirmation.
+7. Cliquer sur **Actualiser** pour relancer l'audit sante -> les 6
+   fournisseurs orphelins doivent avoir disparu.
+
+**Note technique** : idempotent + safe. Peut etre relance sans risque
+apres chaque redeploiement. Preserve les tpid valides deja poses
+(pas d'ecrasement).
+
+---
+
+
 ### Iter90iq (20/07/2026) — BCE Open Data (dataset local + priorite sur KBO scrape)
 
 **Ticket utilisateur** (potential improvement iter90ip) :

@@ -408,6 +408,58 @@ export default function AdminQualityAuditPage() {
     }
   };
 
+  // iter90ir : Reparation ciblee - lier fournisseurs a une ACP
+  const [healLinkAcp, setHealLinkAcp] = useState('');
+  const [healLinkMapping, setHealLinkMapping] = useState(
+    '[\n  {"name": "Engie", "account": "44000110"},\n  {"name": "SRL Finlead", "account": "44000004"},\n  {"name": "Baloise Insurance", "account": ""},\n  {"name": "Euromex", "account": ""},\n  {"name": "AG Insurance", "account": ""},\n  {"name": "Sneyers Philippe SRL", "account": ""}\n]'
+  );
+  const [healLinkBusy, setHealLinkBusy] = useState(false);
+  const [healLinkResult, setHealLinkResult] = useState(null);
+  const runHealLink = async (dryRun) => {
+    if (!healLinkAcp) { toast.error('Selectionnez une ACP cible'); return; }
+    let mapping;
+    try {
+      mapping = JSON.parse(healLinkMapping);
+      if (!Array.isArray(mapping)) throw new Error('doit etre un tableau');
+    } catch (e) {
+      toast.error('JSON mapping invalide : ' + e.message);
+      return;
+    }
+    const filtered = mapping.filter((m) => (m.name || '').trim() && (m.account || '').trim());
+    if (filtered.length === 0) {
+      toast.error('Aucune entree valide (nom + compte requis).');
+      return;
+    }
+    if (!dryRun && !window.confirm(
+      `Executer la reparation LIVE sur cette ACP ?\n\n` +
+      `* ${filtered.length} fournisseur(s) a lier via tier_accounts.\n` +
+      `* Les comptes PCMN manquants seront crees.\n` +
+      `* Les lignes journal_entries orphelines seront rattachees.\n` +
+      `* Idempotent : peut etre relance sans risque.\n\n` +
+      `Confirmez pour lancer.`,
+    )) return;
+    setHealLinkBusy(true);
+    setHealLinkResult(null);
+    try {
+      const { data } = await api.post('/admin/heal-link-suppliers-to-acp', {
+        copropriete_id: healLinkAcp,
+        mapping: filtered,
+        dry_run: dryRun,
+      });
+      setHealLinkResult(data);
+      const t = data.totals || {};
+      if (dryRun) {
+        toast.info(`Dry-run : ${t.suppliers_matched} match(s), ${t.tier_accounts_set} tier(s) a poser, ${t.je_lines_repaired} ligne(s) JE a reparer`, { duration: 8000 });
+      } else {
+        toast.success(`Live : ${t.tier_accounts_set} tier(s) pose(s), ${t.pcmn_accounts_created} compte(s) PCMN cree(s), ${t.je_lines_repaired} ligne(s) JE reparee(s)`, { duration: 10000 });
+      }
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur reparation');
+    } finally {
+      setHealLinkBusy(false);
+    }
+  };
+
 
   return (
     <div className="space-y-6" data-testid="admin-quality-audit-page">
@@ -569,6 +621,142 @@ export default function AdminQualityAuditPage() {
         </CardContent>
       </Card>
 
+      {/* iter90ir : Reparation ciblee - lier fournisseurs orphelins a une ACP */}
+      <Card className="border-orange-200" data-testid="heal-link-suppliers-panel">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <Users size={16} className="text-orange-700" />
+            Reparation ciblee : lier des fournisseurs a une ACP
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="text-xs text-slate-600 mb-3 leading-relaxed">
+            Quand des <strong>fournisseurs orphelins</strong> apparaissent dans une ACP
+            (comptes 44000XXX utilises dans des JE mais aucune fiche fournisseur rattachee
+            a l&apos;ACP), utilisez ce panneau pour lier explicitement les fiches existantes
+            (creees dans d&apos;autres ACPs) a l&apos;ACP cible et reparer les
+            <code className="bg-slate-100 px-1 rounded">third_party_id</code> des lignes JE.
+            Idempotent : peut etre relance sans risque.
+          </div>
+          <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              <label className="text-xs font-semibold text-slate-700 w-40">ACP cible :</label>
+              <select
+                value={healLinkAcp}
+                onChange={(e) => setHealLinkAcp(e.target.value)}
+                className="text-xs border border-slate-300 rounded px-2 py-1 flex-1 max-w-md"
+                data-testid="heal-link-acp-select"
+              >
+                <option value="">-- Selectionnez une ACP --</option>
+                {copros.map((c) => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="text-xs font-semibold text-slate-700 block mb-1">
+                Mapping (JSON) : nom du fournisseur + compte tier orphelin
+              </label>
+              <textarea
+                value={healLinkMapping}
+                onChange={(e) => setHealLinkMapping(e.target.value)}
+                rows={8}
+                className="w-full text-xs font-mono border border-slate-300 rounded p-2"
+                placeholder='[{"name": "Engie", "account": "44000110"}, ...]'
+                data-testid="heal-link-mapping-textarea"
+              />
+              <div className="text-[10px] text-slate-500 mt-1">
+                Le compte est normalise en 8 chars (ex: 4400110 -&gt; 44000110). Un match par nom
+                cross-ACP est fait (matching robuste sur les variantes normalisees).
+              </div>
+            </div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => runHealLink(true)}
+                disabled={healLinkBusy || !healLinkAcp}
+                className="text-orange-700 border-orange-300 hover:bg-orange-50"
+                data-testid="heal-link-dry-run-btn"
+              >
+                <RefreshCw size={13} className={`mr-1 ${healLinkBusy ? 'animate-spin' : ''}`} />
+                Dry-run (simule)
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => runHealLink(false)}
+                disabled={healLinkBusy || !healLinkAcp}
+                className="bg-orange-600 hover:bg-orange-700 text-white"
+                data-testid="heal-link-live-btn"
+              >
+                <Play size={13} className="mr-1" />
+                Executer la reparation
+              </Button>
+              {healLinkBusy && <span className="text-xs text-slate-500 italic">En cours...</span>}
+            </div>
+          </div>
+          {healLinkResult && (
+            <div className="mt-3 border-t border-slate-200 pt-3" data-testid="heal-link-result">
+              <div className="text-xs font-semibold mb-2">
+                Resultat ({healLinkResult.mode}) - ACP : {healLinkResult.copropriete_name}
+              </div>
+              <div className="flex items-center gap-2 flex-wrap text-xs mb-2">
+                <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200">
+                  Match : {healLinkResult.totals?.suppliers_matched || 0}
+                </Badge>
+                {(healLinkResult.totals?.suppliers_not_found || 0) > 0 && (
+                  <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200">
+                    Non trouves : {healLinkResult.totals.suppliers_not_found}
+                  </Badge>
+                )}
+                <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200">
+                  Tier poses : {healLinkResult.totals?.tier_accounts_set || 0}
+                </Badge>
+                <Badge variant="outline" className="bg-purple-50 text-purple-700 border-purple-200">
+                  PCMN crees : {healLinkResult.totals?.pcmn_accounts_created || 0}
+                </Badge>
+                <Badge variant="outline" className="bg-emerald-100 text-emerald-800 border-emerald-300">
+                  JE reparees : {healLinkResult.totals?.je_lines_repaired || 0}
+                </Badge>
+                <Badge variant="outline" className="bg-slate-100 text-slate-600 border-slate-200">
+                  JE deja OK : {healLinkResult.totals?.je_lines_already_ok || 0}
+                </Badge>
+              </div>
+              <div className="max-h-48 overflow-y-auto border border-slate-200 rounded">
+                <table className="w-full text-[11px]">
+                  <thead className="bg-slate-50 sticky top-0">
+                    <tr>
+                      <th className="px-2 py-1 text-left">Fournisseur</th>
+                      <th className="px-2 py-1 text-left">Compte</th>
+                      <th className="px-2 py-1 text-left">Action</th>
+                      <th className="px-2 py-1 text-right">JE reparees</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(healLinkResult.results || []).map((row, i) => (
+                      <tr key={i} className="border-t border-slate-100">
+                        <td className="px-2 py-1">{row.name}</td>
+                        <td className="px-2 py-1 font-mono">{row.account_canonical}</td>
+                        <td className="px-2 py-1">
+                          {row.action === 'supplier_not_found' ? (
+                            <span className="text-amber-700">Non trouve</span>
+                          ) : row.action === 'already_linked' ? (
+                            <span className="text-slate-500">Deja lie</span>
+                          ) : (
+                            <span className="text-emerald-700">{row.action || 'OK'}</span>
+                          )}
+                        </td>
+                        <td className="px-2 py-1 text-right font-mono">{row.je_lines_repaired}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
       {/* iter90i1 : Panneau migration GridFS - resistance au redeploiement */}
       <Card className="border-blue-200" data-testid="gridfs-migration-panel">
         <CardHeader className="pb-2">
@@ -576,8 +764,7 @@ export default function AdminQualityAuditPage() {
             <HardDrive size={16} className="text-[#022D52]" />
             Migration des uploads vers MongoDB GridFS
           </CardTitle>
-        </CardHeader>
-        <CardContent>
+        </CardHeader>        <CardContent>
           <div className="text-xs text-slate-600 mb-3 leading-relaxed">
             Copie les fichiers du filesystem <code className="bg-slate-100 px-1 rounded">/app/uploads/</code>
             vers MongoDB GridFS. Idempotent (skip les fichiers deja migres). A executer une fois apres chaque

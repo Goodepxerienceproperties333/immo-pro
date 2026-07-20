@@ -2900,4 +2900,209 @@ def create_admin_router(db):
             "orphan_suppliers_sample": orphan_suppliers[:50],
         }
 
+    # ------------------------------------------------------------------
+    # iter90ir : Reparation ciblee - lier des fournisseurs a une ACP
+    # via un mapping explicite {name -> account_number}.
+    #
+    # Cas d'usage : suite a un import legacy Optipro, des lignes de
+    # journal entries d'une ACP (ex: Maria Auto 2) utilisent des comptes
+    # tier 44000XXX qui ne sont rattaches a AUCUNE fiche fournisseur de
+    # cette ACP -> ils apparaissent orphelins dans Quality Audit. Les
+    # fiches existent bien mais dans D'AUTRES ACPs (ex: SRL Finlead sur
+    # ACP Acacia). Cette route etend le rattachement de ces fiches vers
+    # l'ACP cible via `tier_accounts` + repare les lignes JE sans tpid.
+    # ------------------------------------------------------------------
+    @router.post("/heal-link-suppliers-to-acp")
+    async def heal_link_suppliers_to_acp(request: Request):
+        """Body attendu :
+            {
+              "copropriete_id": "<acp_id>",
+              "mapping": [
+                {"name": "Engie", "account": "44000110"},
+                {"name": "SRL Finlead", "account": "44000004"},
+                ...
+              ],
+              "dry_run": true|false  (defaut true)
+            }
+
+        Idempotent : peut etre relance sans risque. Utilise
+        `_norm_name_candidates` pour un matching robuste sur le nom.
+        """
+        await _get_superadmin_only(request)
+        body = await request.json()
+        copropriete_id = (body.get("copropriete_id") or "").strip()
+        mapping = body.get("mapping") or []
+        dry_run = bool(body.get("dry_run", True))
+        if not copropriete_id:
+            raise HTTPException(400, "copropriete_id requis")
+        if not mapping:
+            raise HTTPException(400, "mapping (liste de {name, account}) requis")
+
+        # Verifie que l'ACP existe.
+        copro = await db.coproprietes.find_one({"id": copropriete_id}, {"_id": 0, "name": 1})
+        if not copro:
+            raise HTTPException(404, f"ACP {copropriete_id} introuvable")
+
+        from routes.suppliers import _norm_name_candidates
+        from tier_accounts import canonize_supplier_tier_account
+
+        report = {
+            "mode": "dry_run" if dry_run else "live",
+            "copropriete_id": copropriete_id,
+            "copropriete_name": copro.get("name", ""),
+            "results": [],
+            "totals": {
+                "suppliers_matched": 0,
+                "suppliers_not_found": 0,
+                "tier_accounts_set": 0,
+                "pcmn_accounts_created": 0,
+                "je_lines_repaired": 0,
+                "je_lines_already_ok": 0,
+            },
+        }
+
+        for entry in mapping:
+            supplier_name = (entry.get("name") or "").strip()
+            account_raw = (entry.get("account") or "").strip()
+            account = canonize_supplier_tier_account(account_raw)
+            row = {
+                "name": supplier_name,
+                "account_source": account_raw,
+                "account_canonical": account,
+                "action": "",
+                "supplier_id": "",
+                "tier_updated": False,
+                "pcmn_created": False,
+                "je_lines_repaired": 0,
+                "je_lines_already_ok": 0,
+            }
+            if not supplier_name or not account:
+                row["action"] = "skipped_invalid_input"
+                report["results"].append(row)
+                continue
+
+            # 1. Cherche le supplier en GLOBAL par nom (candidats normalises).
+            name_cands = _norm_name_candidates(supplier_name)
+            if not name_cands:
+                row["action"] = "skipped_no_name_candidates"
+                report["results"].append(row)
+                continue
+            supplier_doc = None
+            async for s in db.suppliers.find({}, {"_id": 0}):
+                other_cands = _norm_name_candidates(s.get("name", ""))
+                if name_cands & other_cands:
+                    supplier_doc = s
+                    break
+            if not supplier_doc:
+                row["action"] = "supplier_not_found"
+                report["totals"]["suppliers_not_found"] += 1
+                report["results"].append(row)
+                continue
+
+            report["totals"]["suppliers_matched"] += 1
+            row["supplier_id"] = supplier_doc["id"]
+            row["supplier_name_actual"] = supplier_doc.get("name", "")
+
+            # 2. Set tier_accounts.<copro_id>.main (idempotent).
+            existing_ta = ((supplier_doc.get("tier_accounts") or {}).get(copropriete_id) or {})
+            existing_main = existing_ta.get("main", "")
+            if existing_main == account:
+                row["tier_updated"] = False
+                row["action"] = "already_linked"
+            else:
+                if not dry_run:
+                    await db.suppliers.update_one(
+                        {"id": supplier_doc["id"]},
+                        {"$set": {f"tier_accounts.{copropriete_id}.main": account}},
+                    )
+                row["tier_updated"] = True
+                report["totals"]["tier_accounts_set"] += 1
+                row["action"] = "linked" if not existing_main else f"remapped_from_{existing_main}"
+
+            # 3. Ensure PCMN account exists in this ACP.
+            pcmn_exists = await db.pcmn_accounts.count_documents({
+                "copropriete_id": copropriete_id,
+                "number": account,
+            }, limit=1)
+            if not pcmn_exists:
+                if not dry_run:
+                    try:
+                        await db.pcmn_accounts.insert_one({
+                            "copropriete_id": copropriete_id,
+                            "number": account,
+                            "name": (supplier_doc.get("name") or supplier_name)[:60],
+                            "class_num": 4,
+                            "type": "balance",
+                            "is_tier_account": True,
+                            "created_at": datetime.now(timezone.utc).isoformat(),
+                        })
+                    except Exception:
+                        pass  # index unique peut lever - deja cree en concurrent
+                row["pcmn_created"] = True
+                report["totals"]["pcmn_accounts_created"] += 1
+
+            # 4. Repare les lignes JE de cette ACP qui utilisent ce compte
+            #    mais sans third_party_id valide.
+            supplier_id = supplier_doc["id"]
+            # Compte les lignes deja OK (tpid deja = supplier_id).
+            already_ok = await db.journal_entries.count_documents({
+                "copropriete_id": copropriete_id,
+                "lines": {"$elemMatch": {
+                    "account_number": account,
+                    "third_party_id": supplier_id,
+                }},
+            })
+            row["je_lines_already_ok"] = already_ok
+            report["totals"]["je_lines_already_ok"] += already_ok
+
+            # Trouve les JE avec des lignes du bon compte MAIS sans le bon tpid.
+            candidates = await db.journal_entries.find({
+                "copropriete_id": copropriete_id,
+                "lines": {"$elemMatch": {
+                    "account_number": account,
+                    "$or": [
+                        {"third_party_id": {"$exists": False}},
+                        {"third_party_id": ""},
+                        {"third_party_id": None},
+                        {"third_party_id": {"$ne": supplier_id}},
+                    ],
+                }},
+            }, {"_id": 0, "id": 1, "lines": 1}).to_list(100000)
+            lines_repaired = 0
+            for je in candidates:
+                new_lines = []
+                changed = False
+                for ln in je.get("lines", []) or []:
+                    if ln.get("account_number") == account and ln.get("third_party_id") != supplier_id:
+                        # Ne repare que si tpid absent/vide/orphelin (pas ecraser un vrai tpid).
+                        current_tpid = ln.get("third_party_id") or ""
+                        if not current_tpid or current_tpid == supplier_id:
+                            new_ln = {**ln, "third_party_id": supplier_id, "third_party_type": "supplier"}
+                            new_lines.append(new_ln)
+                            lines_repaired += 1
+                            changed = True
+                        else:
+                            # tpid pointe vers un autre supplier : verifie s'il existe
+                            other = await db.suppliers.count_documents({"id": current_tpid}, limit=1)
+                            if not other:
+                                # tpid orphelin -> on remplace
+                                new_ln = {**ln, "third_party_id": supplier_id, "third_party_type": "supplier"}
+                                new_lines.append(new_ln)
+                                lines_repaired += 1
+                                changed = True
+                            else:
+                                new_lines.append(ln)  # tpid valide, on ne touche pas
+                    else:
+                        new_lines.append(ln)
+                if changed and not dry_run:
+                    await db.journal_entries.update_one(
+                        {"id": je["id"]},
+                        {"$set": {"lines": new_lines}},
+                    )
+            row["je_lines_repaired"] = lines_repaired
+            report["totals"]["je_lines_repaired"] += lines_repaired
+            report["results"].append(row)
+
+        return report
+
     return router
