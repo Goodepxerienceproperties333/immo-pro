@@ -2311,12 +2311,14 @@ def create_import_wizard_router(db):
                 account_number = (nat.get("account_number") or "").strip()
                 if not (code and libelle and account_number):
                     continue
-                # iter90ih : IDEMPOTENCE - une seule nature par (ACP, compte).
-                # Sans ce check, chaque relance du wizard duplique toutes les
-                # natures (jusqu'a 4x observees sur ACP Maria). On garde le
-                # premier import, on skip les suivants.
+                # iter90ih -> iter90ii : IDEMPOTENCE par NOM (pas par compte).
+                # Regle metier revisee : 2 natures peuvent partager le meme
+                # compte comptable (ex: "Assurance incendie parties communes"
+                # + "Assurance incendie parties privees" toutes 2 sur 6140),
+                # mais 2 natures ne peuvent PAS avoir le meme nom dans une
+                # meme ACP. On skip si `(copro_id, name)` existe deja.
                 existing = await db.expense_categories.find_one(
-                    {"copropriete_id": copro_id, "account_number": account_number},
+                    {"copropriete_id": copro_id, "name": libelle},
                     {"_id": 0, "id": 1},
                 )
                 if existing:

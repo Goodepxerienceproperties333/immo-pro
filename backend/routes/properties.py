@@ -345,19 +345,24 @@ def create_properties_router(db):
         email: str, phone: str, bce_number: str,
         address: str, postal_code: str, city: str,
         copro_id: str = "", exclude_id: Optional[str] = None,
+        auxiliary_code: str = "",
     ) -> Optional[dict]:
         """Detecte un doublon de proprietaire. iter90gk : distingue les
-        doublons STRICTS (email/telephone/BCE = bloquants) des HOMONYMES
-        (nom seul = confirmation par le syndic).
+        doublons STRICTS (email/telephone/BCE/auxiliary_code = bloquants)
+        des HOMONYMES (nom seul = confirmation par le syndic).
 
         Regle metier utilisateur : "si un homonyme apparait un check est fait
         sur les coordonnees du proprietaire (email + telephone). Si l'email
         existe ou le telephone existe -> reuse existant. Sinon -> syndic peut
         creer un nouveau proprietaire".
 
+        iter90ii : `auxiliary_code` est aussi un identifiant unique par ACP
+        (ex. Optipro C0959). Deux owners avec le meme aux_code dans une meme
+        ACP est un doublon STRICT bloquant.
+
         Retourne :
-          {"owner": doc, "field": "email|phone|bce_number", "value": ...,
-           "is_strict": True}  -> reuse OBLIGATOIRE (identifiant unique matche)
+          {"owner": doc, "field": "email|phone|bce_number|auxiliary_code",
+           "value": ..., "is_strict": True}  -> reuse OBLIGATOIRE
           {"owner": doc, "field": "name|address", "value": ...,
            "is_strict": False} -> homonyme, syndic peut choisir
           None -> pas de doublon
@@ -369,17 +374,22 @@ def create_properties_router(db):
         norm_phone = _norm_alphanum(phone)
         norm_bce = _norm_alphanum(bce_number)
         norm_addr = _norm_address(address, postal_code, city)
-        if not (norm_name or norm_email or norm_phone or norm_bce or norm_addr):
+        norm_aux = (auxiliary_code or "").strip().upper()
+        if not (norm_name or norm_email or norm_phone or norm_bce or norm_addr or norm_aux):
             return None
 
         base_query: dict = {}
         if copro_id:
-            base_query["copropriete_id"] = copro_id
+            # iter90ii : owners utilisent `copropriete_ids` (array). Match
+            # via egalite scalaire = MongoDB $in-like sur l'element de array.
+            base_query["copropriete_ids"] = copro_id
         if exclude_id:
             base_query["id"] = {"$ne": exclude_id}
         candidates = await db.owners.find(base_query, {"_id": 0}).to_list(5000)
-        # 1er passage : cherche un doublon STRICT (email/telephone/BCE)
+        # 1er passage : cherche un doublon STRICT (email/telephone/BCE/aux)
         for o in candidates:
+            if norm_aux and (o.get("auxiliary_code") or "").strip().upper() == norm_aux:
+                return {"owner": o, "field": "auxiliary_code", "value": auxiliary_code, "is_strict": True}
             if norm_email:
                 e1 = (o.get("email") or "").strip().lower()
                 e2 = (o.get("email2") or "").strip().lower()
@@ -562,6 +572,7 @@ def create_properties_router(db):
             address=data.address or "", postal_code=data.postal_code or "",
             city=data.city or "",
             copro_id=data.copropriete_id or "",
+            auxiliary_code=data.auxiliary_code or "",
         )
         if dup:
             existing = dup["owner"]
@@ -590,6 +601,7 @@ def create_properties_router(db):
                     "phone": "telephone",
                     "bce_number": "numero BCE",
                     "address": "adresse postale",
+                    "auxiliary_code": "code auxiliaire",
                 }.get(dup["field"], dup["field"])
                 existing_name = existing.get("name") or f"{existing.get('first_name','')} {existing.get('last_name','')}".strip()
                 if is_strict:

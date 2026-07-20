@@ -101,6 +101,51 @@ export default function AdminQualityAuditPage() {
   const [dedupPcmnBusy, setDedupPcmnBusy] = useState(false);
   const [dedupPcmnResult, setDedupPcmnResult] = useState(null);
   const [dedupCopro, setDedupCopro] = useState('all');
+  // iter90ii : Deduplication owners + suppliers
+  const [dedupOwnBusy, setDedupOwnBusy] = useState(false);
+  const [dedupOwnResult, setDedupOwnResult] = useState(null);
+  const [dedupSupBusy, setDedupSupBusy] = useState(false);
+  const [dedupSupResult, setDedupSupResult] = useState(null);
+  const runDedupOwners = async (dryRun) => {
+    if (!dryRun && !window.confirm(
+      "Fusionner les proprietaires dupliques ?\n\n" +
+      "* Regroupe par (ACP, code auxiliaire).\n" +
+      "* Le PLUS ANCIEN est garde, les autres sont supprimes.\n" +
+      "* Lots + tenants + journal_entries repointes vers le survivant.\n\n" +
+      "Confirmez pour lancer.",
+    )) return;
+    setDedupOwnBusy(true);
+    setDedupOwnResult(null);
+    try {
+      const q = dedupCopro !== 'all' ? `copropriete_id=${dedupCopro}&` : '';
+      const { data } = await api.post(`/admin/heal-duplicate-owners?${q}dry_run=${dryRun}`);
+      setDedupOwnResult(data);
+      if (dryRun) toast.info(`Dry-run : ${data.duplicate_groups} groupe(s) a fusionner`, { duration: 6000 });
+      else toast.success(`${data.deleted_owners} owner(s) supprimes, ${data.lots_repointed} lots repointes`, { duration: 8000 });
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur dedup owners');
+    } finally { setDedupOwnBusy(false); }
+  };
+  const runDedupSuppliers = async (dryRun) => {
+    if (!dryRun && !window.confirm(
+      "Fusionner les fournisseurs dupliques ?\n\n" +
+      "* Regroupe par (ACP, nom normalise).\n" +
+      "* Le PLUS ANCIEN est garde, les autres sont supprimes.\n" +
+      "* Factures + journal_entries repointees vers le survivant.\n\n" +
+      "Confirmez pour lancer.",
+    )) return;
+    setDedupSupBusy(true);
+    setDedupSupResult(null);
+    try {
+      const q = dedupCopro !== 'all' ? `copropriete_id=${dedupCopro}&` : '';
+      const { data } = await api.post(`/admin/heal-duplicate-suppliers?${q}dry_run=${dryRun}`);
+      setDedupSupResult(data);
+      if (dryRun) toast.info(`Dry-run : ${data.duplicate_groups} groupe(s) a fusionner`, { duration: 6000 });
+      else toast.success(`${data.deleted_suppliers} fournisseur(s) supprimes, ${data.invoices_repointed} factures repointees`, { duration: 8000 });
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur dedup suppliers');
+    } finally { setDedupSupBusy(false); }
+  };
   const runDedupNatures = async (dryRun) => {
     if (!dryRun && !window.confirm(
       "Fusionner les natures de depenses dupliquees ?\n\n" +
@@ -736,6 +781,41 @@ export default function AdminQualityAuditPage() {
               {dedupPcmnResult && (
                 <div className="text-xs text-slate-700">
                   <b>{dedupPcmnResult.duplicate_groups}</b> groupe(s) - {dedupPcmnResult.mode === 'live' && <>{dedupPcmnResult.deleted_pcmn} suppr.</>}
+                </div>
+              )}
+            </div>
+            {/* iter90ii : Owners + Suppliers */}
+            <div className="bg-white border border-cyan-200 rounded p-3 space-y-2">
+              <div className="font-semibold text-sm text-cyan-900">Proprietaires</div>
+              <p className="text-[10px] text-slate-500">Regroupement par (ACP, code auxiliaire).</p>
+              <div className="flex gap-2">
+                <Button variant="outline" size="sm" onClick={() => runDedupOwners(true)} disabled={dedupOwnBusy} data-testid="dedup-own-dry-btn">
+                  {dedupOwnBusy ? '...' : 'Dry-run'}
+                </Button>
+                <Button size="sm" onClick={() => runDedupOwners(false)} disabled={dedupOwnBusy} className="bg-cyan-600 hover:bg-cyan-700 text-white" data-testid="dedup-own-live-btn">
+                  {dedupOwnBusy ? '...' : 'Fusionner'}
+                </Button>
+              </div>
+              {dedupOwnResult && (
+                <div className="text-xs text-slate-700">
+                  <b>{dedupOwnResult.duplicate_groups}</b> groupe(s) - {dedupOwnResult.mode === 'live' && <>{dedupOwnResult.deleted_owners} suppr. / {dedupOwnResult.lots_repointed} lots repointes</>}
+                </div>
+              )}
+            </div>
+            <div className="bg-white border border-cyan-200 rounded p-3 space-y-2">
+              <div className="font-semibold text-sm text-cyan-900">Fournisseurs</div>
+              <p className="text-[10px] text-slate-500">Regroupement par (ACP, nom normalise).</p>
+              <div className="flex gap-2">
+                <Button variant="outline" size="sm" onClick={() => runDedupSuppliers(true)} disabled={dedupSupBusy} data-testid="dedup-sup-dry-btn">
+                  {dedupSupBusy ? '...' : 'Dry-run'}
+                </Button>
+                <Button size="sm" onClick={() => runDedupSuppliers(false)} disabled={dedupSupBusy} className="bg-cyan-600 hover:bg-cyan-700 text-white" data-testid="dedup-sup-live-btn">
+                  {dedupSupBusy ? '...' : 'Fusionner'}
+                </Button>
+              </div>
+              {dedupSupResult && (
+                <div className="text-xs text-slate-700">
+                  <b>{dedupSupResult.duplicate_groups}</b> groupe(s) - {dedupSupResult.mode === 'live' && <>{dedupSupResult.deleted_suppliers} suppr. / {dedupSupResult.invoices_repointed} factures repointees</>}
                 </div>
               )}
             </div>

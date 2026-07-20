@@ -1150,21 +1150,58 @@ async def startup():
         )
     except Exception as _e:
         print(f"[startup] pcmn_accounts unique index skipped: {_e}")
-    # iter90ih : UNICITE STRICTE des natures de depenses par (ACP, compte
-    # comptable). Complete le fix preventif dans commit_natures : la BASE DE
-    # DONNEES elle-meme refuse tout duplicata, meme en cas de bug futur d'un
-    # code path insertant sans check. Idempotent (skip si l'index existe).
-    # NOTE : les documents `account_number=""` sont exclus via partial filter
-    # pour ne pas bloquer d'eventuelles fiches legacy incompletes.
+    # iter90ih -> iter90ii : UNICITE STRICTE des natures de depenses par
+    # (ACP, NOM). Regle metier utilisateur revisee :
+    #   * Interdit : 2 natures avec le meme NOM dans une meme ACP
+    #   * Autorise : 2 natures avec le meme COMPTE COMPTABLE (ex: "Assurance
+    #     incendie parties communes" + "Assurance incendie parties privees"
+    #     peuvent toutes deux pointer sur 6140).
+    # NOTE : `account_number` n'est donc PAS unique. Seul `name` l'est.
+    # Idempotent : drop de l'ancien index (uq_expcat_copro_account) s'il
+    # existe encore, puis creation du nouveau.
     try:
+        # Drop l'ancien index base sur account_number (iter90ih initial)
+        try:
+            await db.expense_categories.drop_index("uq_expcat_copro_account")
+        except Exception:
+            pass
         await db.expense_categories.create_index(
-            [("copropriete_id", 1), ("account_number", 1)],
+            [("copropriete_id", 1), ("name", 1)],
             unique=True,
-            name="uq_expcat_copro_account",
-            partialFilterExpression={"account_number": {"$type": "string", "$gt": ""}},
+            name="uq_expcat_copro_name",
+            partialFilterExpression={"name": {"$type": "string", "$gt": ""}},
         )
     except Exception as _e:
         print(f"[startup] expense_categories unique index skipped: {_e}")
+
+    # iter90ii : UNICITE des FOURNISSEURS par (ACP, nom). Un meme nom de
+    # fournisseur ne peut apparaitre qu'une seule fois dans une ACP.
+    # NB : `bce_number` reste unique globalement (index deja en place).
+    try:
+        await db.suppliers.create_index(
+            [("copropriete_id", 1), ("name", 1)],
+            unique=True,
+            name="uq_supplier_copro_name",
+            partialFilterExpression={"name": {"$type": "string", "$gt": ""}},
+        )
+    except Exception as _e:
+        print(f"[startup] suppliers unique name index skipped: {_e}")
+
+    # iter90ii : UNICITE des PROPRIETAIRES par (ACP, auxiliary_code). Un
+    # meme code auxiliaire ne peut apparaitre qu'une seule fois dans une
+    # ACP. Comme `copropriete_ids` est un array, MongoDB cree un multikey
+    # index unique : chaque valeur du array combinee avec auxiliary_code
+    # doit etre unique. En clair : si 2 owners partagent le meme aux_code
+    # ET ont au moins une ACP en commun, l'insertion est refusee.
+    try:
+        await db.owners.create_index(
+            [("copropriete_ids", 1), ("auxiliary_code", 1)],
+            unique=True,
+            name="uq_owner_copro_aux",
+            partialFilterExpression={"auxiliary_code": {"$type": "string", "$gt": ""}},
+        )
+    except Exception as _e:
+        print(f"[startup] owners unique aux index skipped: {_e}")
     # iter90gk : UNICITE GLOBALE du BCE fournisseur. Empeche 2 fiches
     # fournisseur ayant le meme BCE (identifiant unique d'entreprise).
     # `partialFilterExpression` ignore les documents ayant bce_number="" (les

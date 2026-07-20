@@ -88,6 +88,26 @@ def create_expense_categories_router(db):
         prop = float(data.default_proprietaire_pct or 0)
         if abs((occ + prop) - 100) > 0.01:
             raise HTTPException(400, f"La somme % occupant ({occ}) + % proprietaire ({prop}) doit etre 100 (recu {occ + prop})")
+        # iter90ii : UNICITE du NOM par ACP. Regle metier utilisateur :
+        # "tu ne peux pas avoir deux fois le meme nom de nature de depense".
+        # Plusieurs natures peuvent partager le meme compte PCMN, mais pas le
+        # meme nom. Le check est case-insensitive + trim.
+        name_clean = (data.name or "").strip()
+        if name_clean:
+            existing_name = await db.expense_categories.find_one(
+                {
+                    "copropriete_id": data.copropriete_id or "",
+                    "name": {"$regex": f"^{__import__('re').escape(name_clean)}$", "$options": "i"},
+                },
+                {"_id": 0, "id": 1, "name": 1},
+            )
+            if existing_name:
+                raise HTTPException(
+                    409,
+                    f"Une nature de depense avec le nom '{name_clean}' existe deja "
+                    f"dans cette ACP (id {existing_name.get('id','')[:8]}). "
+                    "Choisissez un nom different ou modifiez la nature existante.",
+                )
         # iter90ex : suppression du blocage 1:1 (compte PCMN <-> nature).
         # Plusieurs natures de depense peuvent partager le meme compte
         # PCMN (ex: "RC copro" et "Assurance RC CoC & Comm.aux comptes"
@@ -140,6 +160,23 @@ def create_expense_categories_router(db):
         prop = float(data.default_proprietaire_pct or 0)
         if abs((occ + prop) - 100) > 0.01:
             raise HTTPException(400, f"La somme % occupant ({occ}) + % proprietaire ({prop}) doit etre 100 (recu {occ + prop})")
+        # iter90ii : UNICITE du NOM par ACP a l'UPDATE aussi.
+        new_name = (data.name or "").strip()
+        if new_name and new_name.lower() != (existing.get("name") or "").strip().lower():
+            existing_name = await db.expense_categories.find_one(
+                {
+                    "copropriete_id": existing.get("copropriete_id") or "",
+                    "name": {"$regex": f"^{__import__('re').escape(new_name)}$", "$options": "i"},
+                    "id": {"$ne": cat_id},
+                },
+                {"_id": 0, "id": 1, "name": 1},
+            )
+            if existing_name:
+                raise HTTPException(
+                    409,
+                    f"Une nature de depense avec le nom '{new_name}' existe deja "
+                    f"dans cette ACP (id {existing_name.get('id','')[:8]}).",
+                )
         # If account changed: valider que le compte existe et est de la
         # bonne classe. iter90ex : plus de blocage 1:1.
         if data.account_number != existing.get("account_number"):

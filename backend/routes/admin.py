@@ -1999,17 +1999,11 @@ def create_admin_router(db):
             "supplier_details": supplier_heals[:200],
         }
 
-    # iter90ih : Deduplication des natures de depenses (`expense_categories`).
-    # Bug historique : `commit_natures` faisait un `insert_one` sans check
-    # d'idempotence. Chaque relance du wizard sur la meme ACP creait 2, 3, 4
-    # copies de chaque nature. Le fix preventif est deja en place (skip si
-    # `copro_id + account_number` existe deja). Cet endpoint nettoie les
-    # ACP deja polluees.
-    #
-    # Strategie : pour chaque groupe `(copropriete_id, account_number)`
-    # contenant plusieurs docs, on garde le PLUS ANCIEN (par created_at)
-    # et on repointe toutes les factures qui referencaient un doublon
-    # vers l'id du survivant. Idempotent.
+    # iter90ih -> iter90ii : Deduplication des natures de depenses.
+    # Regroupement par (copropriete_id, NAME) (regle metier revisee : 2
+    # natures peuvent partager le meme compte comptable, mais pas le meme
+    # nom). Le PLUS ANCIEN gagne, les autres sont supprimes, les factures
+    # qui referencaient un doublon sont repointees vers le survivant.
     @router.post("/heal-duplicate-natures")
     async def heal_duplicate_natures(
         request: Request,
@@ -2023,11 +2017,11 @@ def create_admin_router(db):
         pipeline = [
             {"$match": match_stage},
             {"$group": {
-                "_id": {"copro": "$copropriete_id", "acc": "$account_number"},
+                "_id": {"copro": "$copropriete_id", "name": "$name"},
                 "count": {"$sum": 1},
                 "docs": {"$push": {
                     "id": "$id",
-                    "name": "$name",
+                    "account_number": "$account_number",
                     "created_at": "$created_at",
                 }},
             }},
@@ -2040,27 +2034,25 @@ def create_admin_router(db):
         invoices_repointed = 0
         for g in groups:
             copro = g["_id"]["copro"]
-            acc = g["_id"]["acc"]
+            name = g["_id"]["name"]
             docs = sorted(g["docs"], key=lambda d: (d.get("created_at") or ""))
             keeper = docs[0]
             trash = docs[1:]
             trash_ids = [t["id"] for t in trash]
             entry = {
                 "copro": copro,
-                "account": acc,
-                "keeper": {"id": keeper["id"], "name": keeper["name"]},
+                "name": name,
+                "keeper": {"id": keeper["id"], "account_number": keeper.get("account_number", "")},
                 "removed_ids": trash_ids,
                 "removed_count": len(trash_ids),
             }
             heals.append(entry)
             if not dry_run:
-                # Repoint invoices referencing a duplicate to the keeper
                 res = await db.invoices.update_many(
                     {"copropriete_id": copro, "expense_category_id": {"$in": trash_ids}},
                     {"$set": {"expense_category_id": keeper["id"]}},
                 )
                 invoices_repointed += res.modified_count
-                # Delete duplicates
                 r2 = await db.expense_categories.delete_many({"id": {"$in": trash_ids}})
                 deleted += r2.deleted_count
         return {
@@ -2123,6 +2115,201 @@ def create_admin_router(db):
             "copropriete_id": copropriete_id or "all",
             "duplicate_groups": len(heals),
             "deleted_pcmn": deleted,
+            "details": heals[:200],
+        }
+
+    # iter90ii : Deduplication des FOURNISSEURS par (ACP, nom normalise).
+    # Un fournisseur dupplique (meme nom, meme ACP) est fusionne : le PLUS
+    # ANCIEN est garde, les factures/OD referencant les doublons sont
+    # repointees vers le survivant. Superadmin only.
+    @router.post("/heal-duplicate-suppliers")
+    async def heal_duplicate_suppliers(
+        request: Request,
+        copropriete_id: str = "",
+        dry_run: bool = True,
+    ):
+        await _get_superadmin_only(request)
+        import re
+        def _norm(s: str) -> str:
+            return re.sub(r"\s+", " ", (s or "").strip().lower())
+
+        query = {"copropriete_id": copropriete_id} if copropriete_id else {}
+        all_sups = await db.suppliers.find(query, {"_id": 0}).to_list(50000)
+        groups: dict = {}
+        for s in all_sups:
+            name = _norm(s.get("name", ""))
+            if not name:
+                continue
+            key = (s.get("copropriete_id") or "", name)
+            groups.setdefault(key, []).append(s)
+        dup_groups = {k: v for k, v in groups.items() if len(v) > 1}
+        heals = []
+        deleted = 0
+        invoices_repointed = 0
+        for (copro, name), docs in dup_groups.items():
+            docs_sorted = sorted(docs, key=lambda d: (d.get("created_at") or ""))
+            keeper = docs_sorted[0]
+            trash = docs_sorted[1:]
+            trash_ids = [t["id"] for t in trash]
+            heals.append({
+                "copro": copro,
+                "name": name,
+                "keeper": {"id": keeper["id"], "created_at": keeper.get("created_at", "")},
+                "removed_ids": trash_ids,
+                "removed_count": len(trash_ids),
+            })
+            if not dry_run:
+                res = await db.invoices.update_many(
+                    {"copropriete_id": copro, "supplier_id": {"$in": trash_ids}},
+                    {"$set": {"supplier_id": keeper["id"]}},
+                )
+                invoices_repointed += res.modified_count
+                # Repoint aussi journal_entries.lines.third_party_id
+                async for je in db.journal_entries.find(
+                    {"copropriete_id": copro, "lines.third_party_id": {"$in": trash_ids}},
+                    {"_id": 0, "id": 1, "lines": 1},
+                ):
+                    new_lines = [
+                        ({**ln, "third_party_id": keeper["id"]}
+                         if ln.get("third_party_id") in trash_ids else ln)
+                        for ln in (je.get("lines") or [])
+                    ]
+                    await db.journal_entries.update_one(
+                        {"id": je["id"]}, {"$set": {"lines": new_lines}}
+                    )
+                r2 = await db.suppliers.delete_many({"id": {"$in": trash_ids}})
+                deleted += r2.deleted_count
+        return {
+            "mode": "dry_run" if dry_run else "live",
+            "copropriete_id": copropriete_id or "all",
+            "duplicate_groups": len(heals),
+            "deleted_suppliers": deleted,
+            "invoices_repointed": invoices_repointed,
+            "details": heals[:200],
+        }
+
+    # iter90ii : Deduplication des PROPRIETAIRES par (ACP, auxiliary_code).
+    # Un owner duplique (meme aux_code + partage au moins une ACP) est
+    # fusionne : le PLUS ANCIEN garde toutes les ACP, les lots + tenants +
+    # journal_entries des doublons sont repointes vers le survivant.
+    @router.post("/heal-duplicate-owners")
+    async def heal_duplicate_owners(
+        request: Request,
+        copropriete_id: str = "",
+        dry_run: bool = True,
+    ):
+        await _get_superadmin_only(request)
+        query = {}
+        if copropriete_id:
+            query["copropriete_ids"] = copropriete_id
+        all_owners = await db.owners.find(query, {"_id": 0}).to_list(50000)
+        groups: dict = {}
+        for o in all_owners:
+            aux = (o.get("auxiliary_code") or "").strip()
+            if not aux:
+                continue
+            for cid in (o.get("copropriete_ids") or []):
+                if copropriete_id and cid != copropriete_id:
+                    continue
+                key = (cid, aux)
+                groups.setdefault(key, []).append(o)
+        # Un groupe = doublon si >= 2 owners distincts partagent (aux, ACP)
+        dup_groups: dict = {}
+        for k, v in groups.items():
+            unique_ids = {x["id"] for x in v}
+            if len(unique_ids) > 1:
+                # Deduplique la liste avant traitement
+                seen = set()
+                uniques = []
+                for o in v:
+                    if o["id"] in seen:
+                        continue
+                    seen.add(o["id"])
+                    uniques.append(o)
+                dup_groups[k] = uniques
+        heals = []
+        deleted = 0
+        lots_repointed = 0
+        tenants_repointed = 0
+        je_lines_repointed = 0
+        for (cid, aux), docs in dup_groups.items():
+            docs_sorted = sorted(docs, key=lambda d: (d.get("created_at") or ""))
+            keeper = docs_sorted[0]
+            trash = docs_sorted[1:]
+            trash_ids = [t["id"] for t in trash]
+            heals.append({
+                "copro": cid,
+                "auxiliary_code": aux,
+                "keeper": {"id": keeper["id"], "name": keeper.get("name") or "", "created_at": keeper.get("created_at", "")},
+                "removed_ids": trash_ids,
+                "removed_names": [t.get("name") or "" for t in trash],
+                "removed_count": len(trash_ids),
+            })
+            if not dry_run:
+                # Repoint lots.owner_id
+                res = await db.lots.update_many(
+                    {"copropriete_id": cid, "owner_id": {"$in": trash_ids}},
+                    {"$set": {"owner_id": keeper["id"]}},
+                )
+                lots_repointed += res.modified_count
+                # Repoint tenants.owner_id if any
+                try:
+                    res2 = await db.tenants.update_many(
+                        {"copropriete_id": cid, "owner_id": {"$in": trash_ids}},
+                        {"$set": {"owner_id": keeper["id"]}},
+                    )
+                    tenants_repointed += res2.modified_count
+                except Exception:
+                    pass
+                # Repoint journal_entries.lines.third_party_id
+                async for je in db.journal_entries.find(
+                    {"copropriete_id": cid, "lines.third_party_id": {"$in": trash_ids}},
+                    {"_id": 0, "id": 1, "lines": 1},
+                ):
+                    new_lines = [
+                        ({**ln, "third_party_id": keeper["id"]}
+                         if ln.get("third_party_id") in trash_ids else ln)
+                        for ln in (je.get("lines") or [])
+                    ]
+                    je_lines_repointed += sum(1 for ln in je.get("lines") or [] if ln.get("third_party_id") in trash_ids)
+                    await db.journal_entries.update_one(
+                        {"id": je["id"]}, {"$set": {"lines": new_lines}}
+                    )
+                # Merge tier_accounts before delete (dont perde l'info)
+                merged_ta = {**(keeper.get("tier_accounts") or {})}
+                for t in trash:
+                    for c, v in (t.get("tier_accounts") or {}).items():
+                        if c not in merged_ta:
+                            merged_ta[c] = v
+                # Retire cid des `copropriete_ids` des doublons OU delete si
+                # copropriete_ids ne contenait que cid
+                for t in trash:
+                    other_cids = [x for x in (t.get("copropriete_ids") or []) if x != cid]
+                    if other_cids:
+                        # L'owner appartient a d'autres ACPs - retire juste cid
+                        await db.owners.update_one(
+                            {"id": t["id"]},
+                            {"$set": {"copropriete_ids": other_cids}},
+                        )
+                    else:
+                        # Delete l'owner (il n'appartenait qu'a cette ACP)
+                        r = await db.owners.delete_one({"id": t["id"]})
+                        if r.deleted_count:
+                            deleted += 1
+                # Mise a jour tier_accounts du survivant
+                if merged_ta != (keeper.get("tier_accounts") or {}):
+                    await db.owners.update_one(
+                        {"id": keeper["id"]},
+                        {"$set": {"tier_accounts": merged_ta}},
+                    )
+        return {
+            "mode": "dry_run" if dry_run else "live",
+            "copropriete_id": copropriete_id or "all",
+            "duplicate_groups": len(heals),
+            "deleted_owners": deleted,
+            "lots_repointed": lots_repointed,
+            "tenants_repointed": tenants_repointed,
+            "journal_lines_repointed": je_lines_repointed,
             "details": heals[:200],
         }
 
