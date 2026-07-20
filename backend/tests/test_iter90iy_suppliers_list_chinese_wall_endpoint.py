@@ -27,16 +27,16 @@ def _run(coro):
 # ---------------------------------------------------------------------------
 # Requiert copropriete_id sur l'endpoint list_suppliers
 # ---------------------------------------------------------------------------
-def test_list_suppliers_requires_copropriete_id():
-    """iter90iy-1 : appeler GET /suppliers sans copropriete_id -> HTTPException 400.
+def test_list_suppliers_returns_empty_without_copropriete_id():
+    """iter90iy-1 : appeler GET /suppliers sans copropriete_id -> [] silencieux.
 
     On simule un `Request` FastAPI minimal + un user superadmin. L'endpoint
-    doit refuser sans copropriete_id meme pour un superadmin (regle stricte).
+    doit retourner une liste vide (Chinese Wall silencieux) au lieu de crasher
+    les callers qui l'inclluent dans un Promise.all (BankingPage, etc.).
     """
     async def _go():
         from motor.motor_asyncio import AsyncIOMotorClient
         from routes.suppliers import create_suppliers_router
-        from fastapi import HTTPException
 
         client = AsyncIOMotorClient(os.environ["MONGO_URL"])
         db = client[os.environ["DB_NAME"]]
@@ -73,12 +73,9 @@ def test_list_suppliers_requires_copropriete_id():
         server.get_current_user = _fake_get_user
         try:
             req = _FakeRequest(user={"role": "superadmin"})
-            try:
-                await handler(request=req, search=None, copropriete_id=None)
-                raise AssertionError("Attendu HTTPException 400 mais aucun raise")
-            except HTTPException as exc:
-                assert exc.status_code == 400, f"code attendu 400, recu {exc.status_code}"
-                assert "copropriete_id" in (exc.detail or "").lower(), exc.detail
+            result = await handler(request=req, search=None, copropriete_id=None)
+            assert isinstance(result, list), f"Attendu liste vide, recu {type(result)}"
+            assert result == [], f"Attendu [], recu {result}"
         finally:
             server.get_current_user = original_gcu
 

@@ -276,9 +276,13 @@ def create_suppliers_router(db):
                     {"bce_number": {"$regex": search, "$options": "i"}},
                 ]
             return await db.suppliers.find(q_all, {"_id": 0}).sort("name", 1).to_list(2000)
-        # copropriete_id OBLIGATOIRE
+        # copropriete_id absent -> Chinese Wall SILENCIEUX (retourne [])
+        # iter90iy-v2 : plus de 400 - toute page qui inclut /suppliers dans un
+        # Promise.all sans avoir d'ACP courante (ex: BankingPage mode "all")
+        # recoit simplement une liste vide au lieu de casser tout le batch.
+        # Le Chinese Wall reste strict : aucune fuite de donnee cross-ACP.
         if not copropriete_id:
-            raise HTTPException(400, "copropriete_id obligatoire (Chinese Wall strict)")
+            return []
         # Verif scope pour non-superadmin
         if not is_super and copropriete_id not in (allowed_copros or []):
             raise HTTPException(403, "Copropriete hors scope")

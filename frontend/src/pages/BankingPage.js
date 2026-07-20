@@ -113,7 +113,10 @@ export default function BankingPage() {
       api.get('/distribution-keys').catch(() => ({ data: [] })),
       api.get('/accounting/pcmn').catch(() => ({ data: [] })),
     ];
-    if (selectedCopro) promises.push(api.get(`/coproprietes/${selectedCopro}`));
+    // iter90iy-v2 : tolerance sur /coproprietes/{id} - si l'ACP a ete supprimee
+    // ou n'existe pas dans le scope, on ne veut pas casser tout le Promise.all
+    // (sinon overlay "Uncaught runtime errors" sur la page Banque).
+    if (selectedCopro) promises.push(api.get(`/coproprietes/${selectedCopro}`).catch(() => ({ data: null })));
     const [s, t, o, inv, sup, cats, dks, pcmn, c] = await Promise.all(promises);
     setStatements(s.data); setTransactions(t.data); setOwners(o.data); setInvoices(inv.data); setSuppliers(sup.data);
     setExpenseCategories(cats.data || []);

@@ -1,4 +1,37 @@
 # CoproManager PRD
+### Iter90iy-v2 (20/07/2026) — Hotfix Banking page 400/404 (regression iter90iy)
+
+**Ticket utilisateur** : Overlay "Uncaught runtime errors" sur la page `/banking`
+avec 2 erreurs Axios (400 sur index 4 = `/suppliers`, puis 404 sur index 8 =
+`/coproprietes/{id}`) qui cassaient tout le `Promise.all` de `BankingPage.js::load()`.
+
+**Racine du bug** :
+- iter90iy avait rendu `list_suppliers` STRICT (400 sans copropriete_id) - trop
+  brutal : BankingPage et d'autres pages qui incluent `/suppliers` dans un
+  Promise.all crashent quand l'user est en mode "all" ou sans ACP.
+- `api.get('/coproprietes/{id}')` non protege par catch -> 404 si ACP supprimee.
+
+**Fixes**
+
+1. **`backend/routes/suppliers.py::list_suppliers`** : `copropriete_id` absent
+   retourne desormais `[]` (Chinese Wall SILENCIEUX) au lieu de 400. Le Chinese
+   Wall reste strict : aucune fuite cross-ACP. Seul le comportement `all`
+   (bypass superadmin) est preserve.
+2. **`frontend/src/pages/BankingPage.js`** : ajout d'un `.catch(() => ({ data: null }))`
+   sur `/coproprietes/{selectedCopro}` -> ne casse plus le Promise.all si l'ACP
+   n'existe pas.
+3. **`test_iter90iy_suppliers_list_chinese_wall_endpoint.py`** : test renomme
+   en `test_list_suppliers_returns_empty_without_copropriete_id`, verifie
+   `result == []` au lieu de `HTTPException(400)`.
+
+**Verifications**
+- Screenshot BankingPage : plus d'overlay rouge, affichage propre ("Interface
+  Bancaire", "Aucun extrait") avec ACP valide ET invalide ✅
+- Screenshot SuppliersPage : entete "Fournisseurs de l'ACP ACP Test PCMN
+  (isolation Chinese Wall)" - Chinese Wall visuellement respecte ✅
+- 27 tests iter90i* passent sans regression
+
+
 ### Iter90iz (20/07/2026) — Refactor Wizard "Zero Orphan on the Way Out"
 
 **Ticket utilisateur** :
