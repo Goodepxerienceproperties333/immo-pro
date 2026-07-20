@@ -1,4 +1,79 @@
 # CoproManager PRD
+### Iter90iw+iv (20/07/2026) — Colonne "Compte tier" + Matching par NOM d'abord
+
+**Tickets utilisateur** :
+> (iter90iw) "dans la liste des fournisseurs il faut mentionner le nr
+> de compte fournisseur dans une nouvelle colonne"
+>
+> (iter90iv) "Change de strategie : travaille sur les homonymes. Pour
+> les 6 orphelins actuels, ignore les numeros de comptes et cherche le
+> fournisseur par son Nom. Une fois le fournisseur trouve, reecris le
+> bon account_number (le numero canonique a 8 chiffres de sa fiche) sur
+> la ligne d'ecriture correspondante. Modifie le wizard d'importation
+> pour qu'il procede de la meme maniere : d'abord le matching par Nom,
+> puis l'attribution du compte comptable a la toute fin."
+
+**Livrables**
+
+**iter90iw** — Frontend `SuppliersPage.js` :
+- Nouvelle colonne "Compte tier" entre "Ville" et "IBAN".
+- Affiche `s.tier_account_number` (ou `-` si vide).
+- data-testid : `supplier-tier-account-{id}`.
+- Colspan de la ligne "Aucun fournisseur" passe de 6 a 7.
+- L'API GET /api/suppliers renvoie deja ce champ (projection `{_id: 0}`
+  charge TOUT depuis Mongo). Aucun changement backend requis.
+
+**iter90iv** — Backend :
+1. **`routes/admin.py::reconcile-orphan-suppliers-from-je`** :
+   - INVERSION de l'ordre : matching par NOM d'abord
+     (`_norm_name_candidates`), matching par compte tier en fallback.
+   - Ajout du champ `matched_by: 'name' | 'account'` dans le report par
+     ligne pour tracer.
+   - Le `$set` reecrit deja `lines.account_number` avec le canonique de
+     la fiche existante (heritage iter90iu).
+2. **`routes/import_wizard.py::commit_invoices`** :
+   - Matching par NOM d'abord (loop sur tous les suppliers de l'ACP
+     via `db.suppliers.find({"copropriete_id": copro_id})`).
+   - `sup_by_aux[supplier_aux]` en fallback.
+3. **`routes/import_wizard.py::_resolve_third_party`** (dans
+   `commit_opening_balance`) :
+   - Matching par NOM d'abord via `label` (intitule ligne AN).
+   - `suppliers_by_aux[aux]` en fallback.
+
+**Consequence metier** :
+- Un JE orphelin dont `account_name = 'Engie'` va d'abord chercher la
+  fiche Engie existante dans l'ACP (matching par nom).
+- Si trouvee, le compte `44000110` (source Optipro) est reecrit en
+  `44000005` (canonique de la fiche). PLUS DE DOUBLONS de comptes tier
+  dans le Bilan pour le meme fournisseur.
+
+**Tests iter90iw** (`test_iter90iw_..._matching.py`, 5/5 verts) :
+- API GET /api/suppliers renvoie `tier_account_number`.
+- Reconcile match par NOM d'abord (Maria Auto scenario) + reecrit
+  `account_number` avec canonique de la fiche + `matched_by='name'`.
+- Fallback compte quand aucun nom ne matche + `matched_by='account'`.
+- Verif inspection code commit_invoices + _resolve_third_party (ordre
+  NOM puis aux).
+
+**Testing agent (iteration_50)** :
+- **100% PASS backend (34/34)**, 0 critical, 0 minor.
+- Verifie aussi via HTTP live sur preview URL.
+
+**Marche a suivre PROD** :
+1. Save to Github + redeploy.
+2. Sur la liste des fournisseurs, la colonne "Compte tier" apparait
+   automatiquement.
+3. Sur Quality Audit -> "Reconciliation fournisseurs orphelins" ->
+   selectionner Maria Auto 2 -> Dry-run puis Executer.
+4. Les 6 orphelins (Engie, Finlead, Baloise, Euromex, AG Insurance,
+   Sneyers) seront maintenant matches par NOM avec les fiches
+   existantes (creees precedemment) et les lignes JE seront reecrites
+   avec les comptes canoniques des fiches.
+5. Health Audit -> 0 orphelin.
+
+---
+
+
 ### Iter90it (20/07/2026) — Bug fix : Import Optipro bloque sur BCE manquant + reconcile orphelins
 
 **Ticket utilisateur (bug report)** :
