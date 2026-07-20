@@ -67,6 +67,12 @@ export default function BankingPage() {
   const [categorizeDialog, setCategorizeDialog] = useState(false);
   const [categorizeTarget, setCategorizeTarget] = useState(null);
   const [categorizeSplits, setCategorizeSplits] = useState([]);
+  // iter90ja : filtres cascade + readiness summary
+  const [readiness, setReadiness] = useState({ total: 0, draft: 0, posted: 0, ready_to_post: 0, needs_review: 0, draft_ids_ready: [], draft_ids_needs_review: [] });
+  const [filterAccount, setFilterAccount] = useState('__all__'); // account_number (IBAN)
+  const [filterYear, setFilterYear] = useState('__all__'); // 'YYYY'
+  const [filterMonth, setFilterMonth] = useState('__all__'); // 'MM'
+  const [batchPosting, setBatchPosting] = useState(false);
 
   // iter90bg : mapping compte -> badge visuel distinctif
   //   Recherche le bank_account correspondant au statement (via
@@ -86,16 +92,22 @@ export default function BankingPage() {
   const getBankAccountBadge = (stmt) => {
     const accNum = (stmt.account_number || '').trim();
     if (!accNum) return null;
-    const ba = bankAccounts.find(b => b.iban === accNum || b.pcmn_number === accNum);
+    // iter90jb : matching par IBAN normalise (source of truth = sans separateur).
+    // Evite de louper une correspondance a cause d'un espace legacy dans l'un des deux.
+    const normAcc = accNum.toUpperCase().replace(/[\s.-]+/g, '');
+    const ba = bankAccounts.find(b => {
+      const nib = (b.iban || '').toUpperCase().replace(/[\s.-]+/g, '');
+      return nib === normAcc || b.pcmn_number === accNum;
+    });
     // Label : label defini ou "vue/epargne + IBAN 4 derniers" en fallback
     let label = ba?.label?.trim() || '';
     if (!label) {
       const type = ba?.account_type || '';
       const last4 = (ba?.iban || accNum).slice(-4);
-      label = (type ? `${type.charAt(0).toUpperCase()}${type.slice(1)}` : 'Compte') + ' •' + last4;
+      label = (type ? `${type.charAt(0).toUpperCase()}${type.slice(1)}` : 'Compte') + ' *' + last4;
     }
-    // Couleur deterministe : hash simple du pcmn_number ou iban
-    const key = ba?.pcmn_number || ba?.iban || accNum;
+    // Couleur deterministe : hash simple sur l'IBAN normalise
+    const key = ba?.pcmn_number || normAcc;
     let h = 0;
     for (let i = 0; i < key.length; i++) h = ((h << 5) - h + key.charCodeAt(i)) | 0;
     const c = _BA_COLORS[Math.abs(h) % _BA_COLORS.length];
@@ -138,6 +150,16 @@ export default function BankingPage() {
     } else {
       setTotalStatementsAllPeriods(s.data?.length || 0);
     }
+    // iter90ja : fetch readiness summary (compteur "A comptabiliser" + ids ready/review)
+    if (selectedCopro) {
+      try {
+        const params = { copropriete_id: selectedCopro, ...fyParams };
+        const rs = await api.get('/banking/statements/readiness-summary', { params });
+        setReadiness(rs.data);
+      } catch {
+        setReadiness({ total: 0, draft: 0, posted: 0, ready_to_post: 0, needs_review: 0, draft_ids_ready: [], draft_ids_needs_review: [] });
+      }
+    }
   }, [selectedCopro, fyParams.date_from, fyParams.date_to, selectedFiscalYearId]);
   useEffect(() => { load(); }, [load]);
 
@@ -169,6 +191,97 @@ export default function BankingPage() {
       : Promise.resolve();
     await Promise.all([invPromise, txnPromise, linksPromise]);
   }, [selectedStmt, lettrageTarget, fyParams]);
+
+  // iter90ja : options + filtrage cascade des extraits.
+  // Sources : statements charges depuis /banking/statements (deja filtres par
+  // fiscal year cote back). Les options se cascadent : choisir un compte
+  // reduit les annees ; choisir une annee reduit les mois.
+  // iter90jb : normalisation stricte des IBAN pour dedup les entrees affichees.
+  //   Ex : "BE04 0019 5208 9331" et "BE04001952089331" -> meme entree "Compte * 9331".
+  const _normIban = (s) => (s || '').toString().toUpperCase().replace(/[\s.-]+/g, '');
+  const filterCascade = (() => {
+    // Accounts distincts par IBAN normalise (source of truth = sans separateur)
+    const accSet = new Map(); // norm_iban -> label
+    for (const s of statements) {
+      const raw = (s.account_number || '').trim();
+      const norm = _normIban(raw);
+      if (!norm) continue;
+      const ba = bankAccounts.find(b => _normIban(b.iban) === norm || b.pcmn_number === raw);
+      const nice = ba?.label?.trim()
+        || `${ba?.account_type ? ba.account_type[0].toUpperCase() + ba.account_type.slice(1) : 'Compte'} * ${(ba?.iban || norm).slice(-4)}`;
+      if (!accSet.has(norm)) accSet.set(norm, `${nice} (${norm})`);
+    }
+    const accountOptions = Array.from(accSet.entries()).map(([v, label]) => ({ v, label }));
+    // Statements filtres par compte (comparaison normalisee)
+    const afterAcc = filterAccount === '__all__'
+      ? statements
+      : statements.filter(s => _normIban(s.account_number) === filterAccount);
+    const yearSet = new Set();
+    for (const s of afterAcc) {
+      const d = s.date || '';
+      if (d.length >= 4) yearSet.add(d.slice(0, 4));
+    }
+    const yearOptions = Array.from(yearSet).sort().reverse();
+    const afterYear = filterYear === '__all__' ? afterAcc : afterAcc.filter(s => (s.date || '').startsWith(filterYear));
+    const monthSet = new Set();
+    for (const s of afterYear) {
+      const d = s.date || '';
+      if (d.length >= 7) monthSet.add(d.slice(5, 7));
+    }
+    const monthOptions = Array.from(monthSet).sort().reverse();
+    const afterMonth = filterMonth === '__all__' ? afterYear : afterYear.filter(s => (s.date || '').slice(5, 7) === filterMonth);
+    // Tri final : plus recent en premier au sein du mois selectionne
+    const sorted = [...afterMonth].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+    return { accountOptions, yearOptions, monthOptions, filtered: sorted };
+  })();
+  const filteredStatements = filterCascade.filtered;
+
+  // iter90ja : Set des ids d'extraits necessitant review (transactions orphelines).
+  // Sert a afficher une pastille rouge + fond ambre alerte sur la card.
+  const needsReviewSet = new Set(readiness.draft_ids_needs_review || []);
+  const readyIdsSet = new Set(readiness.draft_ids_ready || []);
+
+  // iter90ja : "Tout comptabiliser" - batch-post les extraits prets (draft &
+  // sans orphelin) du filtre courant. Signale les extraits sautes.
+  const handleBatchPost = async () => {
+    // On ne passe que les IDs draft du scope filtre courant + qui sont "ready"
+    const draftInScope = filteredStatements.filter(s => s.status !== 'posted').map(s => s.id);
+    const readyInScope = draftInScope.filter(id => readyIdsSet.has(id));
+    const reviewInScope = draftInScope.filter(id => needsReviewSet.has(id));
+    if (readyInScope.length === 0) {
+      if (reviewInScope.length > 0) {
+        toast.warning(`${reviewInScope.length} extrait(s) a verifier`, {
+          description: 'Assignez une contrepartie ou lettrez leurs transactions orphelines avant de pouvoir les comptabiliser.',
+          duration: 8000,
+        });
+      } else {
+        toast.info('Aucun extrait pret a comptabiliser dans le filtre courant.');
+      }
+      return;
+    }
+    if (!window.confirm(`Comptabiliser ${readyInScope.length} extrait(s) ?${reviewInScope.length ? `\n${reviewInScope.length} extrait(s) avec orphelin(s) seront SAUTES.` : ''}`)) return;
+    setBatchPosting(true);
+    try {
+      const { data } = await api.post('/banking/statements/batch-post', { statement_ids: readyInScope });
+      const { counts, posted, skipped } = data;
+      toast.success(`${counts.posted} extrait(s) comptabilise(s)`, {
+        description: `${counts.skipped} sautes • ${counts.errors} erreurs`,
+        duration: 6000,
+      });
+      if (skipped?.length) {
+        // Ligne d'alerte pour chaque skipped
+        const msg = skipped.slice(0, 5).map(s => `#${s.reference || s.id?.slice(0, 6)} : ${s.message || s.reason}`).join(' • ');
+        toast.warning(`${skipped.length} extrait(s) sautes`, { description: msg, duration: 10000 });
+      }
+      // Log complet pour debug
+      console.log('[batch-post]', { posted, skipped, errors: data.errors });
+      await load();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur batch-post');
+    } finally {
+      setBatchPosting(false);
+    }
+  };
 
   const handleCodaImport = async (e) => {
     const file = e.target.files[0]; if (!file) return; setCodaUploading(true);
@@ -528,8 +641,27 @@ export default function BankingPage() {
   return (
     <div data-testid="banking-page">
       <div className="page-header flex items-center justify-between flex-wrap gap-3">
-        <div><h1 className="page-title">Interface Bancaire</h1><p className="page-subtitle">Extraits de compte, encodage et lettrage</p></div>
-        <div className="flex gap-2">
+        <div>
+          <h1 className="page-title">Interface Bancaire</h1>
+          <p className="page-subtitle">Extraits de compte, encodage et lettrage</p>
+        </div>
+        <div className="flex gap-2 flex-wrap items-center">
+          {/* iter90ja : Compteur "A comptabiliser" - visible en permanence dans le header */}
+          {readiness.draft > 0 && (
+            <div className="flex items-center gap-2" data-testid="banking-readiness-header">
+              <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-amber-50 border border-amber-300 text-amber-900" title="Extraits en brouillon prets a etre comptabilises">
+                <AlertTriangle size={14} className="text-amber-700" />
+                <span className="text-xs font-semibold" data-testid="readiness-count-todo">
+                  {readiness.draft} a comptabiliser
+                </span>
+                {readiness.needs_review > 0 && (
+                  <span className="text-[10px] font-medium bg-rose-100 text-rose-800 border border-rose-200 rounded-full px-1.5 py-0.5 ml-1" title="Extraits contenant des transactions orphelines">
+                    {readiness.needs_review} a verifier
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
           <Button
             onClick={() => navigate('/reports?tab=bilan')}
             variant="outline"
@@ -541,7 +673,6 @@ export default function BankingPage() {
           </Button>
           <input type="file" ref={codaRef} accept=".cod,.coda,.txt" onChange={handleCodaImport} className="hidden" />
           <Button onClick={() => codaRef.current?.click()} variant="outline" disabled={codaUploading} data-testid="coda-import-btn"><Upload size={16} className="mr-2" /> {codaUploading ? 'Import...' : 'Import CODA'}</Button>
-          {/* iter90l : Import PDF / CSV multi-fichiers (IA Vision + regex smart) */}
           <input type="file" ref={importRef} accept=".pdf,.csv" multiple onChange={handleImportFiles} className="hidden" data-testid="import-files-input" />
           <Button onClick={() => importRef.current?.click()}
             variant="outline"
@@ -559,15 +690,66 @@ export default function BankingPage() {
         </div>
       </div>
 
+      {/* iter90ja : Barre de filtres cascade + bouton "Tout comptabiliser" */}
+      <div className="my-3 flex items-center gap-3 flex-wrap p-3 rounded-lg bg-slate-50 border border-slate-200" data-testid="banking-filter-bar">
+        <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Filtrer</div>
+        <Select value={filterAccount} onValueChange={v => { setFilterAccount(v); setFilterYear('__all__'); setFilterMonth('__all__'); }}>
+          <SelectTrigger className="w-64 h-8 text-xs" data-testid="filter-account">
+            <SelectValue placeholder="Compte bancaire" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__all__">Tous les comptes</SelectItem>
+            {filterCascade.accountOptions.map(o => (
+              <SelectItem key={o.v} value={o.v}>{o.label}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select value={filterYear} onValueChange={v => { setFilterYear(v); setFilterMonth('__all__'); }}>
+          <SelectTrigger className="w-32 h-8 text-xs" data-testid="filter-year">
+            <SelectValue placeholder="Annee" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__all__">Toutes annees</SelectItem>
+            {filterCascade.yearOptions.map(y => (
+              <SelectItem key={y} value={y}>{y}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select value={filterMonth} onValueChange={v => setFilterMonth(v)} disabled={filterYear === '__all__'}>
+          <SelectTrigger className="w-32 h-8 text-xs" data-testid="filter-month">
+            <SelectValue placeholder="Mois" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__all__">Tous mois</SelectItem>
+            {filterCascade.monthOptions.map(m => {
+              const monthLabels = ['','Jan','Fev','Mar','Avr','Mai','Juin','Juil','Aou','Sep','Oct','Nov','Dec'];
+              return <SelectItem key={m} value={m}>{monthLabels[parseInt(m,10)] || m}</SelectItem>;
+            })}
+          </SelectContent>
+        </Select>
+        <span className="text-[11px] text-slate-500 italic ml-auto" data-testid="filter-count">
+          {filteredStatements.length} extrait{filteredStatements.length > 1 ? 's' : ''} affiche{filteredStatements.length > 1 ? 's' : ''}
+        </span>
+        <Button
+          size="sm"
+          onClick={handleBatchPost}
+          disabled={batchPosting || filteredStatements.filter(s => s.status !== 'posted' && readyIdsSet.has(s.id)).length === 0}
+          className="bg-emerald-600 hover:bg-emerald-700 text-white h-8 text-xs"
+          data-testid="batch-post-btn"
+          title="Comptabilise tous les extraits en brouillon prets (skipe ceux avec orphelins)"
+        >
+          <CheckCircle2 size={13} className="mr-1.5" />
+          {batchPosting ? 'Comptabilisation...' : `Tout comptabiliser (${filteredStatements.filter(s => s.status !== 'posted' && readyIdsSet.has(s.id)).length})`}
+        </Button>
+      </div>
+
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
         {/* Statements sidebar */}
         <div className="space-y-2 lg:col-span-1">
-          <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold px-1">Extraits</div>
-          {statements.length === 0 ? (
-            // iter90gr : message d'aide contextuel selon la situation.
-            // - S'il existe des extraits HORS du filtre FY courant : on l'indique
-            //   et on propose un bouton pour voir toutes les periodes.
-            // - Sinon : "Aucun extrait" simple (base reellement vide).
+          <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold px-1">
+            Extraits ({filteredStatements.length})
+          </div>
+          {filteredStatements.length === 0 ? (
             (selectedFiscalYearId && totalStatementsAllPeriods > 0) ? (
               <div className="text-xs text-slate-600 text-center py-6 px-3 bg-amber-50 border border-amber-200 rounded" data-testid="stmt-fy-filter-empty">
                 <div className="font-semibold text-amber-800 mb-1">Aucun extrait pour cet exercice</div>
@@ -583,14 +765,30 @@ export default function BankingPage() {
             ) : (
               <p className="text-sm text-slate-400 text-center py-4">Aucun extrait</p>
             )
-          ) : statements.map(s => {
+          ) : filteredStatements.map(s => {
             const baBadge = getBankAccountBadge(s);
+            // iter90ja : classification visuelle par etat de comptabilisation
+            const isPosted = s.status === 'posted';
+            const isDraft = s.status === 'draft';
+            const needsReview = needsReviewSet.has(s.id);
+            const isReady = readyIdsSet.has(s.id);
+            const isSelected = selectedStmt?.id === s.id;
+            // Card background : posted=neutre, draft-ready=ambre pale, draft-review=rose alerte
+            const cardBg = isPosted ? 'bg-white' : (needsReview ? 'bg-rose-50/60' : (isDraft ? 'bg-amber-50/50' : 'bg-white'));
+            const cardBorder = isSelected
+              ? 'border-[#022D52] shadow-md'
+              : (needsReview ? 'border-rose-300' : (isReady ? 'border-amber-300' : `${baBadge?.border || 'border-slate-200'}`));
             return (
-            <Card key={s.id} className={`cursor-pointer transition-all border-l-4 text-sm ${selectedStmt?.id === s.id ? 'border-[#022D52] shadow-md' : `${baBadge?.border || 'border-slate-200'} hover:border-slate-400`}`} onClick={() => loadStmtTxns(s)} data-testid={`stmt-card-${s.id}`}>
+            <Card key={s.id} className={`cursor-pointer transition-all border-l-4 text-sm ${cardBg} ${cardBorder} hover:border-slate-400`} onClick={() => loadStmtTxns(s)} data-testid={`stmt-card-${s.id}`}>
               <CardContent className="p-3">
                 {baBadge && (
                   <div className={`inline-block px-1.5 py-0.5 rounded text-[9px] font-semibold uppercase tracking-wide mb-1.5 ${baBadge.bg} ${baBadge.text}`} title={s.account_number} data-testid={`stmt-ba-badge-${s.id}`}>
                     {baBadge.label}
+                  </div>
+                )}
+                {needsReview && (
+                  <div className="inline-flex items-center gap-1 ml-1 px-1.5 py-0.5 rounded-full text-[9px] font-semibold bg-rose-100 text-rose-800 border border-rose-200 mb-1.5" title="Cet extrait contient des transactions orphelines - non comptabilisable en batch" data-testid={`stmt-needs-review-${s.id}`}>
+                    <AlertTriangle size={9} /> A verifier
                   </div>
                 )}
                 <div className="flex items-center justify-between gap-1">
@@ -607,8 +805,9 @@ export default function BankingPage() {
                 <div className="text-xs text-slate-500">{fmtDate(s.date)}</div>
                 <div className="flex justify-between mt-1 text-[10px] font-mono"><span>O:{s.opening_balance?.toFixed(2)}</span><span>F:{s.closing_balance?.toFixed(2)}</span></div>
                 <div className="flex gap-1 mt-1 flex-wrap">
-                  {s.status === 'posted' && <Badge className="text-[9px] bg-green-100 text-green-700 border-green-300">Comptabilise</Badge>}
-                  {s.status === 'draft' && <Badge className="text-[9px] bg-amber-50 text-amber-700 border-amber-300" variant="outline" data-testid={`stmt-badge-draft-${s.id}`}>Brouillon</Badge>}
+                  {isPosted && <Badge className="text-[9px] bg-green-100 text-green-700 border-green-300">Comptabilise</Badge>}
+                  {isDraft && !needsReview && <Badge className="text-[9px] bg-amber-100 text-amber-800 border-amber-300" variant="outline" data-testid={`stmt-badge-draft-${s.id}`}>Pret</Badge>}
+                  {isDraft && needsReview && <Badge className="text-[9px] bg-rose-100 text-rose-800 border-rose-300" variant="outline" data-testid={`stmt-badge-review-${s.id}`}>Verif requise</Badge>}
                   {s.source === 'CODA' && <Badge className="text-[9px]" variant="outline">CODA</Badge>}
                   {s.source === 'PDF' && <Badge className="text-[9px] bg-purple-50 text-purple-700 border-purple-200" variant="outline">PDF IA</Badge>}
                   {s.source === 'CSV' && <Badge className="text-[9px] bg-blue-50 text-[#01213e] border-blue-200" variant="outline">CSV</Badge>}

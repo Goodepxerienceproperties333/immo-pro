@@ -6,6 +6,8 @@ import hashlib
 import os
 import uuid
 from auto_entries import generate_bank_entry, _delete_auto_entries
+# iter90jb : normalisation stricte des IBAN (source of truth = sans separateur)
+from iban_utils import normalize_iban
 
 
 class StatementInput(BaseModel):
@@ -436,7 +438,7 @@ def create_banking_router(db):
         copro_id = (copropriete_id or "").strip() or (request.headers.get("X-Copropriete-Id") or "").strip()
         if not copro_id or copro_id == "all":
             raise HTTPException(400, "copropriete_id requis - chinese walls strict")
-        iban_q = (account_number or "").replace(" ", "").upper()
+        iban_q = normalize_iban(account_number)
         query = {"copropriete_id": copro_id}
         if iban_q:
             query["account_number"] = {"$regex": f"^{iban_q}$", "$options": "i"}
@@ -482,10 +484,11 @@ def create_banking_router(db):
         if not copro:
             raise HTTPException(404, "Copropriete non trouvee")
         # If an account_number (IBAN) is provided, it MUST belong to this ACP's bank_accounts
-        iban = (data.account_number or "").strip()
+        # iter90jb : normalise l'IBAN strictement AVANT stockage/comparaison.
+        iban = normalize_iban(data.account_number)
         if iban:
-            allowed_ibans = {(b.get("iban") or "").replace(" ", "") for b in (copro.get("bank_accounts") or [])}
-            if allowed_ibans and iban.replace(" ", "") not in allowed_ibans:
+            allowed_ibans = {normalize_iban(b.get("iban")) for b in (copro.get("bank_accounts") or [])}
+            if allowed_ibans and iban not in allowed_ibans:
                 raise HTTPException(
                     400,
                     f"L'IBAN {iban} n'est pas configure dans les comptes bancaires de cette ACP. "
@@ -496,7 +499,7 @@ def create_banking_router(db):
         opening_balance = float(data.opening_balance or 0)
         opening_source = "user"
         if abs(opening_balance) < 0.001 and iban:
-            iban_q = iban.replace(" ", "").upper()
+            iban_q = iban  # deja normalise (majuscules, sans espace)
             last_stmt = await db.bank_statements.find_one(
                 {"copropriete_id": copro_id, "account_number": {"$regex": f"^{iban_q}$", "$options": "i"}},
                 {"_id": 0}, sort=[("date", -1), ("created_at", -1)]
@@ -526,6 +529,74 @@ def create_banking_router(db):
         }
         await db.bank_statements.insert_one(doc)
         return {k: v for k, v in doc.items() if k != "_id"}
+
+    # iter90ja : Routes STATIQUES avant `/{stmt_id}` (sinon capturees par le path param).
+    @router.get("/statements/readiness-summary")
+    async def readiness_summary(
+        request: Request,
+        copropriete_id: Optional[str] = None,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+    ):
+        """iter90ja : synthese de la comptabilisation des extraits.
+
+        Retourne pour l'ACP donnee (dans la periode optionnelle) :
+        - total, draft, posted, ready_to_post, needs_review
+        - draft_ids_ready / draft_ids_needs_review : listes d'ids pour la UI.
+
+        Chinese Wall strict : filtre copropriete_id obligatoire (sinon [] silencieux).
+        """
+        if not copropriete_id:
+            copropriete_id = request.headers.get("X-Copropriete-Id") or None
+        if not copropriete_id or copropriete_id == "all":
+            return {
+                "total": 0, "draft": 0, "posted": 0,
+                "ready_to_post": 0, "needs_review": 0,
+                "draft_ids_ready": [], "draft_ids_needs_review": [],
+            }
+        q_stmt: dict = {"copropriete_id": copropriete_id}
+        if date_from or date_to:
+            q_stmt["date"] = {}
+            if date_from:
+                q_stmt["date"]["$gte"] = date_from
+            if date_to:
+                q_stmt["date"]["$lte"] = date_to
+        statements = await db.bank_statements.find(
+            q_stmt, {"_id": 0, "id": 1, "status": 1}
+        ).to_list(5000)
+        stmt_ids = [s["id"] for s in statements]
+        txns = await db.bank_transactions.find(
+            {"statement_id": {"$in": stmt_ids}},
+            {"_id": 0, "statement_id": 1, "matched": 1, "counterparty_id": 1, "counterparty_type": 1},
+        ).to_list(50000)
+        orphan_by_stmt: dict[str, int] = {}
+        for t in txns:
+            sid = t.get("statement_id", "")
+            if not sid:
+                continue
+            is_matched = bool(t.get("matched"))
+            has_cp = bool((t.get("counterparty_id") or "").strip()) and \
+                     (t.get("counterparty_type") or "") in ("owner", "supplier")
+            if not (is_matched or has_cp):
+                orphan_by_stmt[sid] = orphan_by_stmt.get(sid, 0) + 1
+        draft = [s for s in statements if s.get("status") != "posted"]
+        posted = [s for s in statements if s.get("status") == "posted"]
+        ready_ids: list[str] = []
+        review_ids: list[str] = []
+        for s in draft:
+            if orphan_by_stmt.get(s["id"], 0) == 0:
+                ready_ids.append(s["id"])
+            else:
+                review_ids.append(s["id"])
+        return {
+            "total": len(statements),
+            "draft": len(draft),
+            "posted": len(posted),
+            "ready_to_post": len(ready_ids),
+            "needs_review": len(review_ids),
+            "draft_ids_ready": ready_ids,
+            "draft_ids_needs_review": review_ids,
+        }
 
     @router.get("/statements/{stmt_id}")
     async def get_statement(stmt_id: str, request: Request):
@@ -614,6 +685,135 @@ def create_banking_router(db):
             "fi_errors": fi_errors,
         }
 
+    @router.post("/statements/batch-post")
+    async def batch_post_statements(payload: dict):
+        """iter90ja : comptabilise en batch les extraits fournis (ids).
+
+        Pour chaque extrait :
+          - Si `status='posted'` : skipe (deja fait).
+          - Si des transactions orphelines (ni matched ni counterparty explicite)
+            existent : skipe et retourne la raison (skipped[]).
+          - Si l'equilibre echoue : skipe avec raison.
+          - Sinon : appelle la meme logique que `POST /statements/{id}/post`.
+
+        Retour :
+          - posted : liste des extraits comptabilises (id + fi_entries_created)
+          - skipped : liste { id, reason, orphan_count?, imbalance? }
+          - errors : liste { id, error }
+        """
+        stmt_ids = payload.get("statement_ids") or []
+        if not isinstance(stmt_ids, list) or not stmt_ids:
+            raise HTTPException(400, "statement_ids (liste) requis")
+        from auto_entries import generate_bank_entry
+
+        posted: list[dict] = []
+        skipped: list[dict] = []
+        errors: list[dict] = []
+
+        for stmt_id in stmt_ids:
+            stmt = await db.bank_statements.find_one({"id": stmt_id}, {"_id": 0})
+            if not stmt:
+                skipped.append({"id": stmt_id, "reason": "not_found"})
+                continue
+            if stmt.get("status") == "posted":
+                skipped.append({"id": stmt_id, "reason": "already_posted"})
+                continue
+            txns = await db.bank_transactions.find(
+                {"statement_id": stmt_id}, {"_id": 0},
+            ).to_list(10000)
+            # Detection des orphelines
+            orphan_txns = [
+                t for t in txns
+                if not t.get("matched")
+                and not ((t.get("counterparty_id") or "").strip()
+                         and (t.get("counterparty_type") or "") in ("owner", "supplier"))
+            ]
+            if orphan_txns:
+                skipped.append({
+                    "id": stmt_id,
+                    "reference": stmt.get("number", ""),
+                    "date": stmt.get("date", ""),
+                    "reason": "orphan_transactions",
+                    "orphan_count": len(orphan_txns),
+                    "message": (
+                        f"{len(orphan_txns)} transaction(s) sans lettrage ni contrepartie. "
+                        "Assignez une contrepartie ou lettrez-les manuellement d'abord."
+                    ),
+                })
+                continue
+            # Verif equilibre (meme logique que /post)
+            mvts_sum = sum(
+                (1 if t.get("transaction_type") == "credit" else -1) * abs(float(t.get("amount", 0) or 0))
+                for t in txns
+            )
+            opening = round(float(stmt.get("opening_balance", 0) or 0), 2)
+            closing = round(float(stmt.get("closing_balance", 0) or 0), 2)
+            computed = round(opening + mvts_sum, 2)
+            diff = round(computed - closing, 2)
+            if abs(diff) >= 0.01:
+                skipped.append({
+                    "id": stmt_id,
+                    "reference": stmt.get("number", ""),
+                    "date": stmt.get("date", ""),
+                    "reason": "imbalance",
+                    "message": (
+                        f"Ouverture {opening:.2f} + mouvements {mvts_sum:.2f} = {computed:.2f} "
+                        f"mais cloture saisie {closing:.2f} (diff {diff:.2f})."
+                    ),
+                })
+                continue
+            # OK : match explicit + generation FI (meme logique que /post)
+            try:
+                for t in txns:
+                    if not t.get("matched"):
+                        try:
+                            await _try_explicit_match_then_vcs(t)
+                        except Exception as e:
+                            print(f"[batch-post] match failed for txn {t.get('id')}: {e}")
+                txns_fresh = await db.bank_transactions.find(
+                    {"statement_id": stmt_id}, {"_id": 0},
+                ).to_list(10000)
+                fi_created = 0
+                fi_errors = []
+                for t in txns_fresh:
+                    try:
+                        existing_fi = await db.journal_entries.count_documents({
+                            "source_type": "bank_txn", "source_id": t["id"], "auto_generated": True
+                        })
+                        if existing_fi > 0:
+                            fi_created += 1
+                            continue
+                        result = await generate_bank_entry(db, t)
+                        if result:
+                            fi_created += 1
+                    except Exception as e:
+                        fi_errors.append({"txn_id": t.get("id"), "error": str(e)})
+                await db.bank_statements.update_one(
+                    {"id": stmt_id},
+                    {"$set": {"status": "posted", "posted_at": datetime.now(timezone.utc).isoformat()}}
+                )
+                posted.append({
+                    "id": stmt_id,
+                    "reference": stmt.get("number", ""),
+                    "date": stmt.get("date", ""),
+                    "fi_entries_created": fi_created,
+                    "fi_errors": fi_errors,
+                })
+            except Exception as e:
+                errors.append({"id": stmt_id, "error": str(e)})
+
+        return {
+            "posted": posted,
+            "skipped": skipped,
+            "errors": errors,
+            "counts": {
+                "posted": len(posted),
+                "skipped": len(skipped),
+                "errors": len(errors),
+                "total": len(stmt_ids),
+            },
+        }
+
     @router.post("/statements/{stmt_id}/unpost")
     async def unpost_statement(stmt_id: str):
         """Repasse l'extrait en draft (permet correction).
@@ -662,7 +862,7 @@ def create_banking_router(db):
         update = {
             "number": data.number,
             "date": data.date,
-            "account_number": data.account_number,
+            "account_number": normalize_iban(data.account_number),
             "opening_balance": data.opening_balance,
             "closing_balance": data.closing_balance,
         }

@@ -5,6 +5,9 @@ from datetime import datetime, timezone
 from bson import ObjectId
 import uuid
 
+# iter90jb : normalisation stricte des IBAN (canonique 8859-1 / ISO 13616).
+from iban_utils import normalize_iban
+
 
 class BankAccountInput(BaseModel):
     iban: str
@@ -176,6 +179,19 @@ def create_coproprietes_router(db):
         user = await _get_manager(request)
         reference = await _generate_reference(db)
         bank_accounts = [ba.model_dump() for ba in (data.bank_accounts or [])]
+        # iter90jb : normalise l'IBAN a l'entree (source of truth = sans separateur)
+        for ba in bank_accounts:
+            ba["iban"] = normalize_iban(ba.get("iban"))
+        # Dedup apres normalisation (evite doublons "BE04 xxxx" vs "BE04xxxx")
+        seen: set[str] = set()
+        deduped = []
+        for ba in bank_accounts:
+            key = ba.get("iban", "")
+            if key and key in seen:
+                continue
+            seen.add(key)
+            deduped.append(ba)
+        bank_accounts = deduped
         # Ensure one default
         if bank_accounts and not any(ba.get("is_default") for ba in bank_accounts):
             for ba in bank_accounts:
@@ -288,6 +304,18 @@ def create_coproprietes_router(db):
     async def update_copropriete(copro_id: str, data: CoproprieteInput, request: Request):
         await _get_manager(request)
         bank_accounts = [ba.model_dump() for ba in (data.bank_accounts or [])]
+        # iter90jb : normalise + dedup les IBAN a l'entree
+        for ba in bank_accounts:
+            ba["iban"] = normalize_iban(ba.get("iban"))
+        seen: set[str] = set()
+        deduped = []
+        for ba in bank_accounts:
+            key = ba.get("iban", "")
+            if key and key in seen:
+                continue
+            seen.add(key)
+            deduped.append(ba)
+        bank_accounts = deduped
         for ba in bank_accounts:
             ba["pcmn_number"] = _generate_pcmn_number(ba["iban"], ba["account_type"])
         update = {

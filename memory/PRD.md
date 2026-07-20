@@ -1,4 +1,99 @@
 # CoproManager PRD
+### Iter90ja + iter90jb (20/07/2026) — Refonte Banque + Normalisation IBAN
+
+**Tickets utilisateur** :
+
+**iter90ja - Refonte Banque** :
+> "Refonte de l'onglet Banque pour une meilleure lisibilite :
+> - Filtres en cascade : Compte Bancaire (Nom + Nr) > Annee > Mois
+> - Identite visuelle : couleur distincte par compte bancaire
+> - Alertes de comptabilisation : fond ambre / pastille rouge non-comptabilises
+> - Compteur 'A comptabiliser' en haut de page
+> - Tri automatique : plus recent au plus ancien
+> - Uniformisation CODA/PDF/manuel
+> - Bouton 'Tout comptabiliser' avec securite (skip orphelins/ambigus)"
+
+**iter90jb - Normalisation IBAN** :
+> "Les deux comptes bancaires affiches sont identiques (BE04 0019 5208 9331 et
+> BE04001952089331). Applique une normalisation stricte des IBAN. Utilise l'IBAN
+> sans espace comme identifiant unique dans tout le code."
+
+**Livrables iter90ja - Refonte Banque**
+
+1. **`backend/routes/banking.py`** - 2 nouveaux endpoints :
+   - `GET /api/banking/statements/readiness-summary` : stats
+     `{total, draft, posted, ready_to_post, needs_review, draft_ids_ready,
+     draft_ids_needs_review}`. Chinese Wall strict + filtre periode optionnel.
+   - `POST /api/banking/statements/batch-post` : comptabilise en batch les
+     extraits fournis. Skip les extraits avec transactions orphelines
+     (`orphan_transactions`) ou desequilibres (`imbalance`). Retourne
+     `{posted[], skipped[], errors[], counts}`. IMPORTANT : deplace en tete de
+     `/{stmt_id}` pour eviter capture par path param.
+
+2. **`frontend/src/pages/BankingPage.js`** - refonte complete :
+   - **Etat `readiness`** rechargee via `/readiness-summary` a chaque `load()`.
+   - **Barre filtres cascade** (`data-testid=banking-filter-bar`) : 3 Selects
+     Compte / Annee / Mois qui se cascadent (choisir un compte reduit annees, etc).
+     Compteur "X extraits affiches" a droite.
+   - **Badge header "A comptabiliser"** (`data-testid=readiness-count-todo`) :
+     ambre + sous-badge rose "N a verifier" si orphelins.
+   - **Bouton "Tout comptabiliser (N)"** (`data-testid=batch-post-btn`) :
+     appelle `/batch-post` avec les ids draft du filtre courant qui sont
+     `ready_to_post`. Confirm avant, toast post pour succes / warning skipped.
+   - **Cards enrichies** : fond ambre pale si draft-ready, fond rose pale si
+     draft avec orphelins, fond blanc si posted. Nouveaux badges "Pret" /
+     "Verif requise". Pastille "A verifier" au-dessus quand orphelin.
+   - **Filtrage cote client** : `filteredStatements` remplace `statements.map`.
+     Tri final desc par date.
+
+**Livrables iter90jb - Normalisation IBAN**
+
+1. **`backend/iban_utils.py`** (NOUVEAU) — `normalize_iban(value)` :
+   - Uppercase + suppression `space`, `-`, `.`
+   - `"BE04 0019 5208 9331"` -> `"BE04001952089331"`
+   - `None`/`""` -> `""`
+
+2. **`backend/routes/coproprietes.py`** - POST create + PUT update :
+   - Normalise chaque `bank_accounts[].iban` a l'entree
+   - **Dedup** apres normalisation (variantes du meme IBAN -> une seule fiche)
+
+3. **`backend/routes/banking.py`** - POST/PUT statement + previous-closing :
+   - `account_number` stocke normalise (majuscules, sans separateur)
+   - Comparaison a `bank_accounts[].iban` via normalisation des DEUX cotes
+
+4. **`frontend/src/pages/BankingPage.js`** :
+   - Helper `_normIban(s)` local
+   - `filterCascade.accountOptions` : dedup par IBAN normalise
+   - `filterAccount` compare via normalisation stricte
+   - `getBankAccountBadge` : match IBAN normalise (evite doublon visuel)
+
+5. **`backend/scripts/normalize_ibans.py`** (NOUVEAU) :
+   - Migration des IBAN existants : `coproprietes.bank_accounts[].iban`,
+     `bank_statements.account_number`, `owners.iban`, `suppliers.iban`
+   - Dedup automatique des `bank_accounts` variantes
+   - Modes : dry-run (defaut), `--execute`, `--copropriete-id CID`
+   - Rapport JSON : `/tmp/normalize_ibans_report.json`
+
+6. **Tests pytest** (`test_iter90jb_iban_normalization.py`) - 3 tests :
+   - `test_normalize_iban_variants_map_to_same_canonical` : 5 variantes -> meme sortie
+   - `test_coproprietes_dedup_bank_accounts_after_normalization` : 3 variantes -> 1 fiche
+   - `test_statement_stores_normalized_iban` : POST statement stocke le format canonique
+
+**Validation preview** :
+- Script `normalize_ibans --execute` : 14 statements + 10 IBAN d'ACPs normalises
+- Idempotent : relance -> 0 modification
+- Screenshot dropdown "Compte bancaire" apres fix : **1 seule entree**
+  "Vue * 9331 (BE04001952089331)" au lieu de 2 variantes affichees ✅
+- 30 tests iter90i* + iter90jb passent, aucune regression
+- UI Banque : cards colorees, badges, filtres cascade fonctionnels ✅
+
+**⚠️ Rappel PRODUCTION** — Save to GitHub + redeployement + relance script :
+```
+cd /app/backend && python -m scripts.normalize_ibans --execute
+```
+pour nettoyer les IBAN existants sur `immo-pcmn.emergent.host`.
+
+
 ### Iter90iy-v2 (20/07/2026) — Hotfix Banking page 400/404 (regression iter90iy)
 
 **Ticket utilisateur** : Overlay "Uncaught runtime errors" sur la page `/banking`
