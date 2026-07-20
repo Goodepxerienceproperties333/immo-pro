@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, UploadFile, File
 from pydantic import BaseModel
 from typing import Optional, List
 from bson import ObjectId
@@ -1286,6 +1286,49 @@ def create_admin_router(db):
     def _audit_cache_set(key: str, data):
         import time as _t
         _audit_cache[key] = (_t.time(), data)
+
+    # ---- iter90iq : BCE Open Data (dataset officiel local) ------------
+    @router.get("/bce-opendata/status")
+    async def bce_opendata_status(request: Request):
+        """Retourne le statut du dataset local BCE Open Data.
+        Superadmin only.
+        """
+        from server import get_current_user, is_superadmin_only
+        user = await get_current_user(request)
+        if not is_superadmin_only(user.get("role", "")):
+            raise HTTPException(403, "Reserve au superadmin")
+        from bce_opendata import opendata_status
+        return await opendata_status(db)
+
+    @router.post("/bce-opendata/upload")
+    async def bce_opendata_upload(request: Request, file: UploadFile = File(...)):
+        """iter90iq : Ingere un ZIP officiel BCE Open Data (enterprise.csv,
+        denomination.csv, address.csv). Superadmin only.
+
+        L'utilisateur telecharge le ZIP mensuel gratuit depuis
+        https://kbopub.economie.fgov.be/kbo-open-data/signup (inscription
+        gratuite requise) puis l'upload ici. L'ingestion est idempotente
+        (upsert par bce_raw) et cree les indexes MongoDB necessaires.
+
+        Retourne un rapport {parsed, inserted, updated, took_ms, snapshot_at}.
+        """
+        from server import get_current_user, is_superadmin_only
+        user = await get_current_user(request)
+        if not is_superadmin_only(user.get("role", "")):
+            raise HTTPException(403, "Reserve au superadmin (operation lourde)")
+        if not file.filename or not file.filename.lower().endswith(".zip"):
+            raise HTTPException(400, "Un fichier ZIP est attendu (format officiel BCE Open Data)")
+        content = await file.read()
+        if len(content) < 1000:
+            raise HTTPException(400, "Fichier trop petit ou corrompu")
+        from bce_opendata import ingest_bce_opendata_zip
+        try:
+            report = await ingest_bce_opendata_zip(db, content)
+        except Exception as e:
+            raise HTTPException(500, f"Erreur ingestion : {e}")
+        return {"ok": True, "filename": file.filename, "size_bytes": len(content), **report}
+
+
 
     @router.get("/duplicates-audit")
     async def duplicates_audit(request: Request, format: str = "json", copro_id: Optional[str] = None, force_refresh: bool = False):

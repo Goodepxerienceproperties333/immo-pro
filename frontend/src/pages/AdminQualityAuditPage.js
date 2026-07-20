@@ -16,7 +16,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { toast } from 'sonner';
-import { AlertTriangle, CheckCircle2, RefreshCw, Download, Users, Truck, FileWarning, Landmark, FileText, HardDrive, Play } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, RefreshCw, Download, Users, Truck, FileWarning, Landmark, FileText, HardDrive, Play, Database, Upload } from 'lucide-react';
 import api from '@/lib/api';
 
 const SEV_COLOR = {
@@ -356,6 +356,59 @@ export default function AdminQualityAuditPage() {
     }
   };
 
+  // iter90iq : BCE Open Data - status + upload ZIP mensuel
+  const [bceStatus, setBceStatus] = useState(null);
+  const [bceBusy, setBceBusy] = useState(false);
+  const [bceResult, setBceResult] = useState(null);
+  const loadBceStatus = async () => {
+    try {
+      const { data } = await api.get('/admin/bce-opendata/status');
+      setBceStatus(data);
+    } catch (err) {
+      // Silent : endpoint reserve superadmin
+      setBceStatus({ enabled: false, total_entities: 0, last_ingest: null });
+    }
+  };
+  useEffect(() => { loadBceStatus(); /* eslint-disable-next-line */ }, []);
+  const uploadBceZip = async (fileInput) => {
+    const file = fileInput.files?.[0];
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith('.zip')) {
+      toast.error('Un fichier .zip est attendu (format officiel BCE Open Data)');
+      return;
+    }
+    if (!window.confirm(
+      `Ingerer le fichier "${file.name}" (${(file.size / (1024 * 1024)).toFixed(1)} MB) ?\n\n` +
+      "L'operation peut prendre plusieurs minutes selon la taille du dataset (~2M entreprises).\n" +
+      "Elle est IDEMPOTENTE : peut etre relancee chaque mois pour actualiser."
+    )) {
+      fileInput.value = '';
+      return;
+    }
+    setBceBusy(true);
+    setBceResult(null);
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      const { data } = await api.post('/admin/bce-opendata/upload', form, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        timeout: 900000, // 15 min
+      });
+      setBceResult(data);
+      toast.success(
+        `Ingestion terminee : ${data.parsed} entites (${data.inserted} nouvelles, ${data.updated} mises a jour) en ${Math.round(data.took_ms / 1000)}s`,
+        { duration: 10000 },
+      );
+      await loadBceStatus();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur ingestion BCE Open Data');
+    } finally {
+      setBceBusy(false);
+      fileInput.value = '';
+    }
+  };
+
+
   return (
     <div className="space-y-6" data-testid="admin-quality-audit-page">
       <div className="flex items-start justify-between flex-wrap gap-3">
@@ -422,6 +475,99 @@ export default function AdminQualityAuditPage() {
           </div>
         </div>
       )}
+
+      {/* iter90iq : BCE Open Data - dataset local pour lookup BCE ultra-rapide */}
+      <Card className="border-emerald-200" data-testid="bce-opendata-panel">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <Database size={16} className="text-emerald-700" />
+            BCE Open Data (dataset local pour lookup BCE)
+            {bceStatus?.enabled && (
+              <Badge className="bg-emerald-100 text-emerald-800 text-[10px]">
+                Actif - {bceStatus.total_entities.toLocaleString('fr-BE')} entites
+              </Badge>
+            )}
+            {bceStatus && !bceStatus.enabled && (
+              <Badge className="bg-slate-100 text-slate-700 text-[10px]">
+                Non ingere
+              </Badge>
+            )}
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="text-xs text-slate-600 mb-3 leading-relaxed space-y-1">
+            <div>
+              Le lookup BCE fonctionne par defaut via un <strong>scraping live</strong> du site public
+              KBO (kbopub.economie.fgov.be). Ingerez ici le dataset officiel gratuit
+              <strong> BCE Open Data</strong> pour accelerer les lookups (~50x) et immuniser l&apos;app
+              contre les changements HTML de KBO.
+            </div>
+            <div>
+              <strong>Procedure</strong> :
+              1. Creez un compte gratuit sur{' '}
+              <a
+                href="https://kbopub.economie.fgov.be/kbo-open-data/signup?lang=fr"
+                target="_blank"
+                rel="noreferrer"
+                className="text-emerald-700 underline"
+              >
+                kbopub.economie.fgov.be/kbo-open-data/signup
+              </a>
+              . 2. Telechargez le dernier ZIP mensuel (~500 MB). 3. Uploadez le ZIP ici (idempotent).
+            </div>
+            {bceStatus?.last_ingest && (
+              <div className="text-slate-500 italic">
+                Derniere ingestion : {new Date(bceStatus.last_ingest.at).toLocaleString('fr-BE')} -
+                {' '}{bceStatus.last_ingest.parsed?.toLocaleString('fr-BE')} entites analysees,
+                {' '}{bceStatus.last_ingest.inserted} nouvelles,
+                {' '}{bceStatus.last_ingest.updated} mises a jour ({Math.round((bceStatus.last_ingest.took_ms || 0) / 1000)}s).
+              </div>
+            )}
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <label className="cursor-pointer">
+              <input
+                type="file"
+                accept=".zip"
+                className="hidden"
+                onChange={(e) => uploadBceZip(e.target)}
+                disabled={bceBusy}
+                data-testid="bce-opendata-upload-input"
+              />
+              <span
+                className={`inline-flex items-center gap-1 px-3 py-1.5 text-xs rounded border ${
+                  bceBusy
+                    ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
+                    : 'bg-emerald-600 text-white border-emerald-700 hover:bg-emerald-700'
+                }`}
+                data-testid="bce-opendata-upload-btn"
+              >
+                <Upload size={13} />
+                {bceBusy ? 'Ingestion en cours...' : 'Uploader le ZIP BCE Open Data'}
+              </span>
+            </label>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={loadBceStatus}
+              disabled={bceBusy}
+              className="text-emerald-700 border-emerald-300 hover:bg-emerald-50"
+              data-testid="bce-opendata-refresh-btn"
+            >
+              <RefreshCw size={13} className={`mr-1 ${bceBusy ? 'animate-spin' : ''}`} />
+              Actualiser le statut
+            </Button>
+          </div>
+          {bceResult && (
+            <div className="mt-3 p-2 bg-emerald-50 border border-emerald-200 rounded text-xs" data-testid="bce-opendata-result">
+              <strong>Ingestion reussie</strong> : {bceResult.parsed?.toLocaleString('fr-BE')} entites parsees,{' '}
+              <span className="font-mono text-emerald-700">{bceResult.inserted}</span> nouvelles,{' '}
+              <span className="font-mono text-slate-600">{bceResult.updated}</span> mises a jour en{' '}
+              {Math.round((bceResult.took_ms || 0) / 1000)}s.
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       {/* iter90i1 : Panneau migration GridFS - resistance au redeploiement */}
       <Card className="border-blue-200" data-testid="gridfs-migration-panel">

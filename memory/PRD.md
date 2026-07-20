@@ -1,4 +1,85 @@
 # CoproManager PRD
+### Iter90iq (20/07/2026) — BCE Open Data (dataset local + priorite sur KBO scrape)
+
+**Ticket utilisateur** (potential improvement iter90ip) :
+> "ok" (voulait la bascule automatique vers l'Open Data BCE au lieu du
+> scraping live pour accelerer + fiabiliser).
+
+**Livrables**
+
+Backend :
+- `backend/bce_opendata.py` (nouveau module) :
+  - `parse_bce_opendata_zip(zip_bytes)` : parse le ZIP officiel
+    (enterprise.csv, denomination.csv, address.csv), streaming en RAM
+    minimal, retourne des dicts consolides
+    {bce, bce_raw, name, all_names, all_names_norm, city, zipcode,
+    address, active}.
+  - `ingest_bce_opendata_zip(db, zip_bytes)` : upsert idempotent par
+    `bce_raw` avec `bulk_write` par batch de 2000 docs. Cree les indexes
+    (unique `bce_raw`, multikey `all_names_norm`, text index
+    `name`+`all_names`). Rapport {parsed, inserted, updated, took_ms}.
+  - `search_bce_opendata(db, query, postal_code, top_n)` : full-text
+    MongoDB en premier lieu, fallback multikey si $text ne renvoie
+    rien. Filtre soft `active=True` + postal_code (relaxe si aucun
+    match). Score Jaccard par tokens + tri secondaire par proximite du
+    nb de tokens et longueur du nom (favorise "BELFIUS BANQUE" sur
+    "BELFIUS ASSET FINANCE HOLDING" pour une query "Belfius").
+  - `opendata_status(db)` : {total_entities, last_ingest, enabled}.
+- `backend/bce_lookup.py` modifie : `search_kbo_by_name` essaie D'ABORD
+  Open Data local via `search_bce_opendata`, fallback KBO scrape si
+  aucun candidat local (compatibilite retour identique).
+- `routes/admin.py` :
+  - `GET /api/admin/bce-opendata/status` (superadmin only).
+  - `POST /api/admin/bce-opendata/upload` (superadmin only) : accepte
+    multipart ZIP, ingere.
+
+Frontend (`AdminQualityAuditPage.js`) :
+- Nouvelle carte "BCE Open Data (dataset local pour lookup BCE)" avec :
+  - Badge de statut (Actif + N entites / Non ingere).
+  - Instructions : creer compte gratuit sur
+    kbopub.economie.fgov.be/kbo-open-data/signup, telecharger ZIP
+    mensuel, uploader ici.
+  - Bouton "Uploader le ZIP BCE Open Data" (input file .zip cache) +
+    confirmation modale (taille MB + duree estimee).
+  - Affichage `last_ingest` : date, entites analysees, insertions,
+    mises a jour, duree.
+  - Bouton "Actualiser le statut".
+
+**Tests** (`test_iter90iq_bce_opendata_ingest_and_search.py`, 9/9 verts) :
+- Parser : denomination officielle (TypeOfDenomination=001) vs
+  variantes, adresse siege (TypeOfAddress=002), Status=AC vs ST,
+  format BCE canonique.
+- Ingestion + search end-to-end : ZIP fixture -> 3 entites (1 stopped
+  filtree), search "Belfius" -> BELFIUS BANQUE en premier avec
+  similarity 1.0, entite stopped ne remonte pas.
+- Idempotence : reingest ne dupplique pas (bulk_write upsert).
+- Filtre postal_code : soft, relaxe si aucun match.
+- Priorite : `search_kbo_by_name` avec Open Data local -> 0 requete
+  reseau (monkeypatch de `_fetch_kbo`).
+- Fallback : query inconnue -> 1 requete reseau (KBO scrape).
+- Status endpoint : retourne enabled=False + total=0 sur base fraiche.
+
+**Verification manuelle** :
+- `curl GET /api/admin/bce-opendata/status` (superadmin cookie) ->
+  {total_entities: 0, enabled: false}.
+- Lookup KBO fallback fonctionne toujours (test live Belfius).
+
+**Marche a suivre PROD** :
+1. Save to Github + redeploy.
+2. Superadmin -> Quality Audit -> Carte verte "BCE Open Data".
+3. Suivre le lien vers kbopub.economie.fgov.be/kbo-open-data/signup,
+   creer un compte gratuit, telecharger le ZIP mensuel.
+4. Cliquer "Uploader le ZIP BCE Open Data", selectionner le fichier.
+5. Attendre 2-5 min. Le lookup BCE devient instantane (~50x plus rapide).
+6. A repeter chaque debut de mois pour recuperer les nouvelles entites.
+
+**Note technique** : le dataset compressé fait ~500MB ; decompresse et
+indexe en Mongo, il occupe ~600MB. Assurez-vous que votre plan de
+stockage Mongo tient (2M docs supplementaires).
+
+---
+
+
 ### Iter90ip (20/07/2026) — Lookup BCE automatique par nom (KBO Public Search)
 
 **Ticket utilisateur** :

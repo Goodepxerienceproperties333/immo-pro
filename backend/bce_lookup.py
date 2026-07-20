@@ -210,7 +210,13 @@ async def search_kbo_by_name(
     db=None,
     use_cache: bool = True,
 ) -> list[dict]:
-    """Cherche un fournisseur belge par nom sur KBO Public Search.
+    """Cherche un fournisseur belge par nom.
+
+    Strategie (iter90iq) :
+      1. Essaie D'ABORD le dataset local BCE Open Data si dispo (rapide,
+         robuste, fiable) via `bce_opendata.search_bce_opendata`.
+      2. Fallback sur le scraping live KBO Public Search si aucun candidat
+         local (ou si Open Data pas ingere).
 
     Retourne les `top_n` meilleurs candidats tries par similarite de tokens
     decroissante. Chaque candidat contient :
@@ -222,6 +228,16 @@ async def search_kbo_by_name(
     query = (name or "").strip()
     if len(query) < 2:
         return []
+
+    # 1. iter90iq : tentative Open Data local (rapide, prioritaire)
+    if db is not None:
+        try:
+            from bce_opendata import search_bce_opendata
+            local_hits = await search_bce_opendata(db, query, postal_code=postal_code, top_n=top_n)
+            if local_hits:
+                return local_hits
+        except Exception:
+            pass  # fallback KBO en cas de probleme local
 
     cache_key = f"{_norm(query)}|{postal_code or ''}"
 
