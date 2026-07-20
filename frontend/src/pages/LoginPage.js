@@ -3,7 +3,7 @@ import axios from 'axios';
 import { useAuth } from '@/contexts/AuthContext';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { Building2, LogIn, UserPlus, Eye, EyeOff, KeyRound } from 'lucide-react';
+import { Building2, LogIn, UserPlus, Eye, EyeOff, KeyRound, ShieldCheck } from 'lucide-react';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
@@ -247,6 +247,31 @@ export default function LoginPage() {
               <a href="/legal/cookies" target="_blank" rel="noopener noreferrer" className="hover:text-[#022D52] hover:underline" data-testid="login-link-cookies">Cookies</a>
             </div>
           </div>
+        </div>
+
+        {/* Badge RGPD - donnees hebergees en Europe */}
+        <div
+          className="mt-4 flex items-center justify-center gap-2 py-2 px-3 rounded-full bg-white/70 backdrop-blur border border-slate-200 shadow-sm w-fit mx-auto"
+          data-testid="eu-hosting-badge"
+          title="Vos donnees sont stockees exclusivement sur des serveurs situes dans l'Union Europeenne, en conformite avec le RGPD."
+        >
+          {/* Drapeau UE stylise : cercle de 12 etoiles jaunes sur fond bleu */}
+          <svg width="18" height="18" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <circle cx="12" cy="12" r="11" fill="#003399" />
+            {Array.from({ length: 12 }).map((_, i) => {
+              const angle = (i * 30 - 90) * (Math.PI / 180);
+              const cx = 12 + Math.cos(angle) * 7;
+              const cy = 12 + Math.sin(angle) * 7;
+              return <circle key={i} cx={cx} cy={cy} r="0.9" fill="#FFCC00" />;
+            })}
+          </svg>
+          <span className="text-[11px] font-semibold text-slate-700 tracking-tight">
+            Donnees hebergees en Europe
+          </span>
+          <span className="inline-flex items-center gap-0.5 text-[10px] font-bold text-teal-700 bg-teal-50 border border-teal-200 rounded-full px-1.5 py-0.5">
+            <ShieldCheck size={10} strokeWidth={2.5} />
+            RGPD
+          </span>
         </div>
       </div>
     </div>
