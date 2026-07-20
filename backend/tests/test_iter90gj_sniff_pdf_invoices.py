@@ -1,6 +1,6 @@
-"""iter90gj Phase 4 : sniff-pdf accepte `kind=invoices` (PDF Optipro
+"""iter90gj Phase 4 : sniff-pdf accepte `kind=invoices` (PDF externe
 "Factures fournisseurs"). Renvoie 1 entree par ligne comptable, avec
-`internal_ref_optipro` partage entre lignes d'une meme facture pour que
+`internal_ref` partage entre lignes d'une meme facture pour que
 `commit-invoices` regroupe automatiquement (Phase 1).
 
 **Ticket utilisateur** : "pas de possibilite d'ajouter PDF" (etape 5/8 Factures)

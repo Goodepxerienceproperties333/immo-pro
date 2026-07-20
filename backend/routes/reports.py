@@ -3106,18 +3106,18 @@ def create_reports_router(db):
         # Properties creaient des doublons quand on autorisait le matching global).
         from routes.suppliers import _norm_name_candidates
         import re as _re_supp
-        _OPTIPRO_PREFIX_RE = _re_supp.compile(r"^F\d{3,5}\s*-\s*", _re_supp.IGNORECASE)
+        _EXT_PREFIX_RE = _re_supp.compile(r"^F\d{3,5}\s*-\s*", _re_supp.IGNORECASE)
 
-        def _strip_optipro_prefix(name: str) -> str:
-            """Retire le prefixe Optipro 'FXXXX - ' des noms importes pour
-            permettre le matching entre 'F0110 - Engie' (fiche) et 'Engie'
-            (account_name des ecritures AN d'ouverture)."""
-            return _OPTIPRO_PREFIX_RE.sub("", (name or "").strip())
+        def _strip_ref_prefix(name: str) -> str:
+            """Retire le prefixe 'FXXXX - ' des noms importes depuis un
+            systeme externe pour permettre le matching entre 'F0110 - Engie'
+            (fiche importee) et 'Engie' (account_name des ecritures AN d'ouverture)."""
+            return _EXT_PREFIX_RE.sub("", (name or "").strip())
 
         def _all_name_candidates(name: str) -> set:
-            """Candidats normaux + candidats sans prefixe Optipro."""
+            """Candidats normaux + candidats sans prefixe externe FXXXX."""
             cands = set(_norm_name_candidates(name))
-            stripped = _strip_optipro_prefix(name)
+            stripped = _strip_ref_prefix(name)
             if stripped and stripped != name:
                 cands |= _norm_name_candidates(stripped)
             return cands

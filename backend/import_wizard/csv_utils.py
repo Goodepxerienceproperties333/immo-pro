@@ -144,7 +144,7 @@ def parse_date(s: str) -> Optional[str]:
     return None
 
 
-def split_optipro_code(s: str) -> tuple[str, str]:
+def split_ref_code(s: str) -> tuple[str, str]:
     """Optipro uses 'CODE - LIBELLE' format (ex: 'F0471 - SRL ACE Garden').
 
     Returns (code, libelle). If no separator, returns (s, s).
@@ -174,7 +174,7 @@ def parse_invoices_csv(raw: bytes) -> dict:
       { invoices: [{
           copro_code, copro_name,
           date, due_date,
-          internal_ref_optipro, external_ref,
+          internal_ref, external_ref,
           libelle, ne_pas_payer,
           supplier_aux_code, supplier_name,
           account_number, account_label,
@@ -224,16 +224,16 @@ def parse_invoices_csv(raw: bytes) -> dict:
         ne_pas_payer = ne_pas_payer_raw in ("oui", "yes", "true", "1", "x")
 
         sup_raw = get(row, "fournisseur", "supplier")
-        sup_code, sup_name = split_optipro_code(sup_raw)
+        sup_code, sup_name = split_ref_code(sup_raw)
 
         acc_raw = get(row, "compte", "account")
-        acc_code, acc_label = split_optipro_code(acc_raw)
+        acc_code, acc_label = split_ref_code(acc_raw)
 
         key_raw = get(row, "cle", "cle de repartition", "key")
-        key_code, key_label = split_optipro_code(key_raw)
+        key_code, key_label = split_ref_code(key_raw)
 
         nat_raw = get(row, "nature", "nature depense")
-        nat_code, nat_label = split_optipro_code(nat_raw)
+        nat_code, nat_label = split_ref_code(nat_raw)
 
         vat_code = get(row, "code tva", "tva", "vat code")
         part_occ = parse_french_number(get(row, "part occupant", "occupant"))
@@ -252,7 +252,7 @@ def parse_invoices_csv(raw: bytes) -> dict:
             "copro_name": copro_name,
             "date": date_fact or "",
             "due_date": date_ech or "",
-            "internal_ref_optipro": ref_int,
+            "internal_ref": ref_int,
             "external_ref": ref_ext,
             "libelle": libelle,
             "ne_pas_payer": ne_pas_payer,

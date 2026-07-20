@@ -79,7 +79,7 @@ async def test_commit_rejects_invoices_without_account():
                 json={"invoices": [
                     {"date": "2026-06-14", "supplier_aux_code": "F0001",
                      "supplier_name": "Finlead", "external_ref": "V-260654",
-                     "internal_ref_optipro": "0005",
+                     "internal_ref": "0005",
                      "account_number": "",  # MANQUANT
                      "libelle": "2T2026", "montant_ht": 678.99, "montant_tvac": 678.99},
                 ]},
@@ -106,7 +106,7 @@ async def test_commit_accepts_invoices_with_valid_account():
                 json={"invoices": [
                     {"date": "2026-06-14", "supplier_aux_code": "F0001",
                      "supplier_name": "Finlead", "external_ref": "V-260654",
-                     "internal_ref_optipro": "0005",
+                     "internal_ref": "0005",
                      "account_number": "61000", "account_label": "Charges",
                      "libelle": "2T2026", "montant_ht": 678.99, "montant_tvac": 678.99},
                 ]},

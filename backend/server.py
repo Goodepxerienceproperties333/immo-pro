@@ -1291,6 +1291,16 @@ async def startup():
     except Exception as _e:
         print(f"[startup][iter90i7] duplicate AP/VE heal skipped: {_e}")
 
+    # iter90if : renommage des champs lies aux imports externes historiques
+    # (Optipro/Sogis) pour retirer les noms de logiciels tiers des donnees.
+    try:
+        from migrations.iter90if_rename_external_import_fields import run_migration_iter90if
+        _if_report = await run_migration_iter90if(db)
+        if not _if_report.get("skipped"):
+            print(f"[startup][iter90if] external import fields renamed: {_if_report}")
+    except Exception as _e:
+        print(f"[startup][iter90if] rename skipped: {_e}")
+
     # iter90as : ecriture test_credentials.md en dev/preview UNIQUEMENT.
     # En production K8s, /app/memory peut ne pas etre writable (filesystem
     # hardened, volume ephemere) -> le crash faisait timeout le readiness probe.

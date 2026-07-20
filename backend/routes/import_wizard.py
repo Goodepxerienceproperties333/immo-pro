@@ -9,7 +9,7 @@ from typing import Optional, List
 from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Form
 from pydantic import BaseModel
 
-from import_wizard.csv_utils import sniff_csv, parse_french_number, parse_date, split_optipro_code, normalize_header, parse_invoices_csv, parse_journals_csv
+from import_wizard.csv_utils import sniff_csv, parse_french_number, parse_date, split_ref_code, normalize_header, parse_invoices_csv, parse_journals_csv
 from import_wizard.pdf_utils import extract_pdf, parse_natures_pdf, parse_budget_pdf, parse_distribution_keys_pdf, parse_owners_pdf, parse_lots_pdf, parse_suppliers_pdf, parse_balance_pdf, parse_od_entries_pdf
 
 logger = logging.getLogger("import_wizard")
@@ -372,7 +372,7 @@ def create_import_wizard_router(db):
                 base = {
                     "date": head.get("date", ""),
                     "due_date": "",
-                    "internal_ref_optipro": (head.get("internal_ref") or "").strip(),
+                    "internal_ref": (head.get("internal_ref") or "").strip(),
                     "external_ref": (head.get("external_ref") or "").strip(),
                     "libelle": (head.get("description") or "").strip(),
                     "ne_pas_payer": False,
@@ -857,9 +857,9 @@ def create_import_wizard_router(db):
         # Optipro exporte 1 ligne CSV/PDF par ligne de detail comptable
         # (compte 61300 + compte 6160 sur la meme facture => 2 lignes).
         # Sans regroupement, on cree 2 factures avec le meme n° externe -> doublons.
-        # Strategie : regrouper par (internal_ref_optipro OU (external_ref + supplier + date)).
+        # Strategie : regrouper par internal_ref OU (external_ref + supplier + date).
         def _group_key(inv: dict) -> str:
-            ir = (inv.get("internal_ref_optipro") or inv.get("internal_ref") or "").strip()
+            ir = (inv.get("internal_ref") or "").strip()
             if ir:
                 return f"IR:{ir}"
             er = (inv.get("external_ref") or "").strip()
@@ -1986,14 +1986,14 @@ def create_import_wizard_router(db):
                 continue
 
             if is_journal_od:
-                ref_optipro = (e.get("reference") or "").strip()
+                ref_source = (e.get("reference") or "").strip()
                 libelle = (e.get("description") or "").strip() or f"OD {date}"
-                # Idempotence : skip if (date, libelle, Optipro reference) already exists
+                # Idempotence : skip si (date, libelle, source_reference) existe deja
                 existing = await db.journal_entries.find_one({
                     "copropriete_id": copro_id,
                     "journal_type": "OD",
                     "date": date,
-                    "optipro_reference": ref_optipro,
+                    "source_reference": ref_source,
                     "manually_created_from_od_wizard": True,
                 }, {"_id": 0, "id": 1})
                 if existing:
@@ -2040,7 +2040,7 @@ def create_import_wizard_router(db):
                     "journal_type": "OD",
                     "date": date,
                     "reference": f"OD-{year_for_ref}-{seq:04d}",
-                    "optipro_reference": ref_optipro,
+                    "source_reference": ref_source,
                     "description": libelle,
                     "lines": lines,
                     "total_debit": total_d,
