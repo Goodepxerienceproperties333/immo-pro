@@ -1,4 +1,72 @@
 # CoproManager PRD
+### Iter90iz (20/07/2026) — Refactor Wizard "Zero Orphan on the Way Out"
+
+**Ticket utilisateur** :
+> "Modifie l'ordre d'execution du Wizard d'Importation :
+> - Stockage temporaire pendant les etapes du wizard
+> - Attribution en fin de chaine : ne cree les documents qu'a la toute fin
+> - Synchronisation forcee : attribuer third_party_id + numero de compte a 8 chiffres
+> - Reparation : utilise heal_supplier_ids_by_name.py pour vider les orphelins actuels
+> avant de valider ce nouveau code."
+
+**Approche retenue** : Option 1 - Refactor CIBLE (helper unique `_finalize_line_before_insert`
+appele dans chaque endpoint commit-*, plus verrou final dans `finish_session`).
+
+**Livrables**
+
+1. **`backend/import_finalizer.py`** (NOUVEAU) — Verrou de finalisation :
+   - `canonize_owner_tier_account(number)` : pad des 4100XXXX/4101XXXX a 8 chars STRICT
+     (ex: "4100015" -> "41000015", "4101015" -> "41010015")
+   - `build_finalize_index(db, copro_id)` : construit un index par ACP
+     (Chinese Wall strict) - suppliers_by_name/id + owners_by_name/id
+   - `finalize_line(line, idx)` : applique le verrou 8 chars + resolution tp_id
+     * Compte 440xxx sans tp_id -> match par NOM canonise + ecrit tp_id + compte canonique 8 chars
+     * Compte 440xxx AVEC tp_id -> reprend le compte canonique de la fiche (source of truth)
+     * Compte 4100/4101 idem pour owners (avec discrimination provisions vs reserve)
+     * Autres comptes : passthrough
+   - `finalize_je_doc(db, je_doc, copro_id)` : applique sur toutes les lignes d'un JE
+
+2. **`backend/routes/import_wizard.py`** — 5 points d'insertion `journal_entries`
+   branches sur `await finalize_je_doc(...)` juste avant `insert_one` :
+   - `commit-invoices` (ligne 1298) - imports Optipro facturation
+   - `commit-journals` (ligne 1522) - imports Optipro banque
+   - `commit-opening-balance` (ligne 2048) - AN d'ouverture
+   - `commit-od-entries` x2 (lignes 2317 + 2401) - OD manuelles
+
+3. **`backend/routes/import_wizard.py::finish_session`** — VERROU FINAL :
+   - Avant de marquer la session `committed`, re-finalise TOUTES les JE de la
+     session avec l'index a jour (rattrape les cas edge : suppliers crees APRES
+     la ligne, apparition d'un homonyme, canonisation manquee).
+   - Retourne `final_heal: {lines, docs}` pour la UI (verification cote client).
+   - Trace persistee dans `import_sessions.final_heal`.
+
+4. **Tests pytest** (`test_iter90iz_wizard_zero_orphan_finalizer.py`) - 7 tests :
+   - `test_canonize_owner_tier_account_pads_to_8_chars` : verrou 8 chars owner
+   - `test_finalize_line_resolves_supplier_by_name_and_canonizes_to_8chars`
+   - `test_finalize_line_canonizes_even_without_supplier_match` : garde-fou 8 chars
+   - `test_finalize_line_resolves_owner_by_name_reserve_account` (4100)
+   - `test_finalize_line_resolves_owner_by_name_provisions_account` (4101)
+   - `test_build_finalize_index_respects_chinese_wall` : pas de leak cross-ACP
+   - `test_finalize_je_doc_end_to_end` : integration full
+
+**Validation E2E preview** :
+- Script maison : 3 JE avec 4 lignes bugees (7 chars sans tp_id) -> 4 lignes reecrites,
+  toutes en 8 chars avec tp_id resolu + tp_type correct
+- Heal script relance : idempotent (0 correction, 3 deja OK, 516 non-matches
+  car ACPs sans fiches suppliers en preview)
+- 27 tests iter90i* passent sans regression
+
+**Impact utilisateur** :
+- Aucun changement UI cote wizard (l'utilisateur continue de commit etape par etape)
+- La cerise finale de `finish_session` garantit "zero orphan" meme si des fiches
+  suppliers ont ete creees APRES leur premiere reference dans un JE (cas classique
+  d'Optipro qui importe les factures avant les fiches fournisseurs).
+
+**Rappel PRODUCTION** — Fix + refactor a redeployer sur `immo-pcmn.emergent.host`
+via "Save to GitHub". Puis executer `python -m scripts.heal_supplier_ids_by_name
+--execute` une derniere fois pour nettoyer les 6 orphelins actuels sur prod.
+
+
 ### Iter90iy (20/07/2026) — Chinese Wall STRICT dans l'onglet Fournisseurs (UI + API)
 
 **Ticket utilisateur** :

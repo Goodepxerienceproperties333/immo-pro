@@ -11,6 +11,8 @@ from pydantic import BaseModel
 
 from import_wizard.csv_utils import sniff_csv, parse_french_number, parse_date, split_ref_code, normalize_header, parse_invoices_csv, parse_journals_csv
 from import_wizard.pdf_utils import extract_pdf, parse_natures_pdf, parse_budget_pdf, parse_distribution_keys_pdf, parse_owners_pdf, parse_lots_pdf, parse_suppliers_pdf, parse_balance_pdf, parse_od_entries_pdf
+# iter90iz : verrou "zero orphan on the way out" - canonisation stricte + resolution tp_id.
+from import_finalizer import finalize_je_doc, build_finalize_index, finalize_line
 
 logger = logging.getLogger("import_wizard")
 
@@ -279,15 +281,52 @@ def create_import_wizard_router(db):
 
     @router.post("/sessions/{session_id}/finish")
     async def finish_session(session_id: str, request: Request):
-        """Mark session as committed (final lock). After this, rollback is no longer guaranteed."""
+        """Mark session as committed (final lock). After this, rollback is no longer guaranteed.
+
+        iter90iz : VERROU FINAL "zero orphan on the way out" - Avant de marquer
+        la session comme committee, on relance un pass de finalisation sur les
+        JE de la session (inline `heal_supplier_ids_by_name`) pour rattraper
+        les cas edge (ex: fiches supplier creees APRES la ligne, apparition
+        d'un homonyme, canonisation manquee).
+        """
         session = await db.import_sessions.find_one({"id": session_id})
         if not session:
             raise HTTPException(404, "Session introuvable")
-        await _require_acp_access(request, db, session["copropriete_id"])
+        copro_id = session["copropriete_id"]
+        await _require_acp_access(request, db, copro_id)
+
+        # Verrou final : re-finalise toutes les JE de cette session avec l'index
+        # a jour (suppliers/owners crees pendant la session inclus).
+        idx = await build_finalize_index(db, copro_id)
+        healed_lines = 0
+        healed_docs = 0
+        async for je in db.journal_entries.find(
+            {"import_session_id": session_id, "copropriete_id": copro_id},
+            {"_id": 0, "id": 1, "lines": 1},
+        ):
+            new_lines = []
+            changed = False
+            for ln in (je.get("lines") or []):
+                nl = finalize_line(ln, idx)
+                if nl != ln:
+                    changed = True
+                    healed_lines += 1
+                new_lines.append(nl)
+            if changed:
+                await db.journal_entries.update_one(
+                    {"id": je["id"]}, {"$set": {"lines": new_lines}},
+                )
+                healed_docs += 1
+
         await db.import_sessions.update_one(
-            {"id": session_id}, {"$set": {"status": "committed", "committed_at": _now_iso()}}
+            {"id": session_id},
+            {"$set": {
+                "status": "committed",
+                "committed_at": _now_iso(),
+                "final_heal": {"lines": healed_lines, "docs": healed_docs},
+            }},
         )
-        return {"status": "ok"}
+        return {"status": "ok", "final_heal": {"lines": healed_lines, "docs": healed_docs}}
 
     # ----- SNIFF (preview) -----
     @router.post("/sessions/{session_id}/sniff-csv")
@@ -1295,6 +1334,8 @@ def create_import_wizard_router(db):
                         "is_credit_note": is_credit_note,
                         "created_at": _now_iso(),
                     }
+                    # iter90iz : verrou strict 8 chars + resolution tp_id avant insert
+                    await finalize_je_doc(db, je_doc, copro_id)
                     await db.journal_entries.insert_one(je_doc)
                     je_inserted += 1
 
@@ -1519,7 +1560,7 @@ def create_import_wizard_router(db):
                             {"account_number": bank_pcmn, "account_name": bank_label, "debit": 0.0, "credit": amount,
                              "description": enriched_desc, "occupant_pct": None, "proprietaire_pct": None},
                         ]
-                    await db.journal_entries.insert_one({
+                    await db.journal_entries.insert_one(await finalize_je_doc(db, {
                         "id": je_id,
                         "journal_type": "FI",
                         "date": date_v,
@@ -1531,7 +1572,7 @@ def create_import_wizard_router(db):
                         "copropriete_id": copro_id,
                         "import_session_id": session_id,
                         "created_at": _now_iso(),
-                    })
+                    }, copro_id))
                     je_inserted += 1
 
                 # ---- Create bank_transaction inside its monthly statement ----
@@ -2045,7 +2086,7 @@ def create_import_wizard_router(db):
 
         period_end = (data.period_end_date or "").strip() or "n-1"
         je_id = str(uuid.uuid4())
-        await db.journal_entries.insert_one({
+        await db.journal_entries.insert_one(await finalize_je_doc(db, {
             "id": je_id,
             "journal_type": "AN",
             "date": entry_date,
@@ -2062,7 +2103,7 @@ def create_import_wizard_router(db):
             # cumulatifs de l'exercice N-1).
             "is_opening_balance": True,
             "created_at": _now_iso(),
-        })
+        }, copro_id))
 
         await _update_step(db, session_id, "opening_balance", {
             "count": len(lines),
@@ -2314,6 +2355,8 @@ def create_import_wizard_router(db):
                     "import_session_id": session_id,
                     "created_at": _now_iso(),
                 }
+                # iter90iz : verrou strict 8 chars + resolution tp_id avant insert
+                await finalize_je_doc(db, doc, copro_id)
                 await db.journal_entries.insert_one(doc)
                 inserted += 1
                 seq += 1
@@ -2398,6 +2441,8 @@ def create_import_wizard_router(db):
                 "import_session_id": session_id,
                 "created_at": _now_iso(),
             }
+            # iter90iz : verrou strict 8 chars + resolution tp_id avant insert
+            await finalize_je_doc(db, doc, copro_id)
             await db.journal_entries.insert_one(doc)
             inserted += 1
             seq += 1
