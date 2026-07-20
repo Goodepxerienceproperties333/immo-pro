@@ -146,18 +146,33 @@ async def _resolve_bank_counterpart(db, txn: dict, copro_id: str) -> tuple[str, 
         if inv:
             invoice_number = (inv.get("number") or "").strip()
             sname = (inv.get("supplier") or "").strip()
-            if sname:
-                import re
-                supplier = await db.suppliers.find_one(
-                    {"name": {"$regex": f"^{re.escape(sname)}$", "$options": "i"}}, {"_id": 0}
-                )
-                if supplier:
-                    supplier = await assign_supplier_account(db, supplier, copro_id)
-                    counterpart_acc = get_supplier_account(supplier, copro_id)
-                    counterpart_name = supplier.get("name", "") or sname
-                    third_party_id = supplier["id"]
-                else:
-                    counterpart_name = sname
+            supplier = None
+            # iter90jd - VERROU : priorite au supplier_id de la facture (source of truth)
+            inv_sup_id = (inv.get("supplier_id") or "").strip()
+            if inv_sup_id:
+                supplier = await db.suppliers.find_one({"id": inv_sup_id}, {"_id": 0})
+            # Sinon : fallback par nom NORMALISE + Chinese Wall strict (copropriete_id)
+            if not supplier and sname:
+                # Match par name candidates (particules juridiques filtrees) dans l'ACP
+                from routes.suppliers import _norm_name_candidates
+                inv_cands = set(_norm_name_candidates(sname))
+                if inv_cands:
+                    async for s in db.suppliers.find(
+                        {"copropriete_id": copro_id}, {"_id": 0},
+                    ):
+                        s_cands = set(_norm_name_candidates(s.get("name", "")))
+                        if inv_cands & s_cands:
+                            supplier = s
+                            break
+            if supplier:
+                # iter90jd : garanti que le supplier a un tier_account_number
+                # (auto-assign si absent - evite le fallback 499 sur fiches "nues")
+                supplier = await assign_supplier_account(db, supplier, copro_id)
+                counterpart_acc = get_supplier_account(supplier, copro_id)
+                counterpart_name = supplier.get("name", "") or sname
+                third_party_id = supplier["id"]
+            else:
+                counterpart_name = sname
     elif match_type == "supplier_payment":
         supplier = await db.suppliers.find_one({"id": txn.get("matched_to")}, {"_id": 0})
         if supplier:

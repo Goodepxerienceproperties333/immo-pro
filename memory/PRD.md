@@ -1,4 +1,69 @@
 # CoproManager PRD
+### Iter90jc + iter90jd (20/07/2026) — Verrou "Zero FI-499 sur txn lettree"
+
+**Ticket utilisateur** :
+> "verouille ce problème ne doit plus arriver" (a propos des paiements Baloise/
+> Euromex sur compte 499 "Decaissement non identifie" au lieu du compte tier).
+
+**Racine du bug identifiee**
+
+`auto_entries.py::_resolve_bank_counterpart` cherchait le supplier par regex
+strict sur le nom SANS filtre `copropriete_id` :
+
+```python
+supplier = await db.suppliers.find_one(
+    {"name": {"$regex": f"^{re.escape(sname)}$", "$options": "i"}}, {"_id": 0}
+)
+```
+
+Consequence : si le supplier local a un nom LEGEREMENT different (ex:
+"Baloise Insurance SA" vs facture "Baloise Insurance"), le match echoue ->
+`counterpart_acc=""` -> fallback compte d'attente 499 -> paiement passe sur
+499 au lieu du tier 440XXXXX -> **doublon dans la balance des tiers** (facture
+AC credit 440, paiement FI debit 499 = dette reste ouverte).
+
+**Livrable iter90jc - Script de heal**
+
+`backend/scripts/heal_499_bank_entries.py` (NOUVEAU) :
+- Scan des FI actives (non reversal) contenant une ligne sur `499000` avec
+  `source_type='bank_txn'`.
+- Si la txn source est desormais lettree (match/counterparty) : contre-passe
+  la FI 499 (`reverse_auto_entries`) puis regenere via `generate_bank_entry`.
+- Idempotent, dry-run par defaut, `--execute` pour appliquer.
+- Rapport JSON `/tmp/heal_499_bank_entries_report.json`.
+
+**Livrable iter90jd - Verrou permanent**
+
+`backend/auto_entries.py::_resolve_bank_counterpart` (branche `match_type=invoice`) :
+
+1. **Priorite au `invoice.supplier_id`** (source of truth) - lookup direct par ID.
+2. **Fallback matching normalise** via `_norm_name_candidates` (particules
+   juridiques filtrees + coquilles Levenshtein) DANS L'ACP (`copropriete_id`).
+3. **Auto-assign** du `tier_account_number` si le supplier n'en a pas
+   (via `assign_supplier_account`) -> plus jamais de fallback 499 sur fiches nues.
+
+**Tests pytest** (`test_iter90jd_zero_499_on_lettered_txn.py`) - 3 tests :
+- `test_resolve_counterpart_uses_invoice_supplier_id` : `invoice.supplier_id`
+  utilise en priorite.
+- `test_resolve_counterpart_fallback_by_name_with_chinese_wall` : le fallback
+  par nom ne fuit PAS vers une autre ACP (2 Baloise dans 2 ACPs -> seul le local).
+- `test_resolve_counterpart_matches_slight_name_variation` : "Baloise" (invoice)
+  matche "Baloise SA" (supplier).
+
+**Validation preview** :
+- Heal script execute : 4 JEs FI 499 contre-passes + regeneres avec le vrai
+  compte tier (44000004 Baloise, 44000005 Euromex, 44000006 Engie x2).
+  1 orphelin restant (txn jamais lettree - normal).
+- 33 tests iter90i* + iter90j* passent, aucune regression.
+
+**⚠️ Rappel PRODUCTION** — Save to GitHub + redeployement + relance :
+```
+cd /app/backend && python -m scripts.heal_499_bank_entries --execute
+```
+pour re-imputer tous les paiements Baloise/Euromex/etc. de la prod au bon
+compte tier fournisseur.
+
+
 ### Iter90ja + iter90jb (20/07/2026) — Refonte Banque + Normalisation IBAN
 
 **Tickets utilisateur** :
