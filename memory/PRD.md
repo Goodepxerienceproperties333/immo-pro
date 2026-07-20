@@ -1,4 +1,102 @@
 # CoproManager PRD
+### Iter90it (20/07/2026) — Bug fix : Import Optipro bloque sur BCE manquant + reconcile orphelins
+
+**Ticket utilisateur (bug report)** :
+> "L'importateur cree des orphelins car il bloque sur l'absence de
+> numeros BCE. Applique cette correction : Modifie le script d'import
+> Optipro pour qu'il cree les fiches fournisseurs uniquement sur base
+> du Nom et du Code Auxiliaire si le BCE est manquant. Le cloisonnement
+> par ACP evite tout risque de doublon global. Pour l'ACP actuelle,
+> cree les fiches manquantes pour Engie, Finlead, Baloise, etc., et
+> relie-les aux ecritures qui sont affichees comme orphelines. Relance
+> l'audit sante une fois que chaque facture est bien rattachee a son
+> fournisseur local."
+
+**Root cause** :
+- `POST /api/suppliers` (routes/suppliers.py:298-315) : BCE obligatoire
+  via `if not (bce or vat): raise HTTPException(400, ...)`.
+- `commit-suppliers-pdf` (import_wizard.py:842-862) : action=create
+  bloquait avec `"Creation refusee : le BCE est obligatoire..."`.
+- Consequence : les JE d'import Optipro (AN d'ouverture) contenaient
+  des lignes 440XXX sans third_party_id, visibles comme orphelines
+  dans le Health Audit.
+
+**Fix**
+
+Backend :
+1. **`routes/suppliers.py::create_supplier`** :
+   - Retrait de la contrainte BCE/TVA obligatoire.
+   - Chinese Wall (iter90is) suffit : unicite garantie via
+     `uq_supplier_copro_name` + `uq_supplier_copro_bce` (partial).
+   - Le BCE peut etre enrichi plus tard via le KBO lookup (iter90ip/iq).
+
+2. **`routes/import_wizard.py::commit-suppliers-pdf`** :
+   - `action=create` accepte desormais un BCE vide.
+   - Retrait du check anti-doublon global (obsolete depuis iter90is).
+   - Les fiches sont creees LOCALEMENT a l'ACP avec nom + auxiliary_code.
+
+3. **`routes/admin.py`** : nouveau endpoint superadmin
+   `POST /api/admin/reconcile-orphan-suppliers-from-je` :
+   - Body : `{copropriete_id, dry_run}`.
+   - Scanne les JE de l'ACP -> identifie les lignes 440XXX sans
+     third_party_id ou avec tpid pointant hors ACP (chinese wall).
+   - Pour chaque compte unique :
+     - Si une fiche existe deja avec ce `tier_account_number` -> reuse.
+     - Si une fiche existe avec un nom matchant (`_norm_name_candidates`)
+       mais sans tier_account_number -> enrichir avec le tier.
+     - Sinon -> creer une nouvelle fiche LOCALE :
+       - `copropriete_id = ACP`
+       - `tier_account_number = compte canonique 8 chars`
+       - `name = account_name le plus frequent`
+       - `bce_number = ""` (a enrichir plus tard)
+       - `auto_created = true`
+   - Ensure PCMN account existe (`is_tier_account=true`).
+   - Repointe toutes les lignes via `$set lines.{i}.third_party_id`.
+   - Report detaille : totals + results par ligne.
+   - Idempotent : 2eme appel -> orphan_accounts=0.
+
+Frontend (`AdminQualityAuditPage.js`) :
+- Nouvelle carte violette "Reconciliation fournisseurs orphelins
+  (Chinese Wall)" avec :
+  - Selecteur d'ACP cible.
+  - Boutons Dry-run / Executer.
+  - Tableau resultat : compte, nom candidat, action (Cree/Reutilise),
+    nb lignes repointees.
+  - Badges de synthese.
+
+**Tests** (`test_iter90it_optipro_import_without_bce_and_reconcile_orphans.py`, 7/7 verts) :
+- Create supplier sans BCE : accepte.
+- Commit-suppliers-pdf avec BCE vide : cree la fiche locale.
+- Reconcile dry_run : detecte orphelins sans muter.
+- Reconcile live : cree fiches + repointe lignes.
+- Idempotence : 2eme appel -> 0 orphelins.
+- Reuse par nom (matching robuste).
+- Ignore lignes deja liees.
+
+**Verification par testing_agent (iteration_48)** :
+- **backend 100% PASS**, 0 critical.
+- 5/6 HTTP regression tests pass + 1 skip non-bloquant (health-audit
+  sur ACP fraiche - non lie au fix).
+- Chinese Wall messages OK : 422 sans copropriete_id, 400 avec vide.
+- BCE lookup + opendata status : regression OK.
+- Superadmin auth : 401/403 pour unauth.
+
+**Marche a suivre PROD** :
+1. Save to Github + redeploy.
+2. Sur PROD, lancer un nouvel import Optipro pour Maria Auto 2 (BCE
+   plus obligatoire).
+3. Superadmin -> Quality Audit -> carte violette "Reconciliation
+   fournisseurs orphelins" -> selectionner "Maria Auto 2" -> Dry-run
+   pour verifier -> Executer.
+4. Cliquer "Actualiser" en haut de la page : les 6 fournisseurs
+   orphelins (Engie, Finlead, Baloise, Euromex, AG Insurance, Sneyers)
+   doivent avoir disparu.
+5. (Optionnel) Enrichir les BCE plus tard via le bouton "🔍 BCE" du
+   wizard suppliers ou une prochaine iteration.
+
+---
+
+
 ### Iter90is (20/07/2026) — Chinese Wall STRICT : 1 fournisseur = 1 ACP
 
 **Ticket utilisateur (execution PREVIEW)** :
