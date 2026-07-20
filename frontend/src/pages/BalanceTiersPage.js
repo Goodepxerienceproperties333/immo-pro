@@ -11,7 +11,7 @@ import { Users, Truck, Eye, ArrowUpRight, ArrowDownRight, Download, FileText, Li
 import FilterBar from '@/components/balance-tiers/FilterBar';
 import TiersDetailDialog from '@/components/balance-tiers/TiersDetailDialog';
 import LettrerDialog from '@/components/balance-tiers/LettrerDialog';
-import SupplierMergeDialog from '@/components/balance-tiers/SupplierMergeDialog';
+// iter90je : SupplierMergeDialog import retire (fusion UI obsolete post Chinese Wall strict).
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
@@ -30,11 +30,9 @@ export default function BalanceTiersPage() {
   const [lettrerSuppliers, setLettrerSuppliers] = useState([]);  // available suppliers for picker
   const [lettrerSearch, setLettrerSearch] = useState('');
   const [lettrerLoading, setLettrerLoading] = useState(false);
-  // ----- Multi-selection merge state -----
-  const [mergeMode, setMergeMode] = useState(false);
-  const [selectedSupplierIds, setSelectedSupplierIds] = useState(new Set());
-  const [mergeDialogOpen, setMergeDialogOpen] = useState(false);
-  const [mergeKeepId, setMergeKeepId] = useState('');
+  // iter90je : merge mode retire (Chinese Wall strict rend la fusion UI obsolete).
+  // Le composant SupplierMergeDialog reste disponible pour le superadmin via
+  // /admin/duplicates.
   const [filters, setFilters] = useState(() => {
     try {
       const saved = localStorage.getItem('balance-tiers-filters');
@@ -391,31 +389,11 @@ export default function BalanceTiersPage() {
                     <div className="text-xl font-black text-orange-700 font-mono" style={{fontFamily:'Chivo,sans-serif'}}>{suppliersData.total_a_payer.toFixed(2)} EUR</div>
                   </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  {!mergeMode ? (
-                    <Button size="sm" variant="outline" onClick={() => { setMergeMode(true); setSelectedSupplierIds(new Set()); }} className="border-orange-300 text-orange-700 hover:bg-orange-100" data-testid="enter-merge-mode-btn">
-                      <Link2 size={13} className="mr-1.5" /> Fusionner des fournisseurs
-                    </Button>
-                  ) : (
-                    <>
-                      <span className="text-xs text-orange-700 font-medium">{selectedSupplierIds.size} selectionne(s)</span>
-                      <Button
-                        size="sm"
-                        onClick={() => {
-                          if (selectedSupplierIds.size < 2) { toast.error('Selectionnez au moins 2 fournisseurs'); return; }
-                          const selected = suppliersData.suppliers.filter(s => selectedSupplierIds.has(s.supplier_id));
-                          const best = selected.find(s => s.vat_number) || selected[0];
-                          setMergeKeepId(best?.supplier_id || '');
-                          setMergeDialogOpen(true);
-                        }}
-                        disabled={selectedSupplierIds.size < 2}
-                        className="bg-orange-600 hover:bg-orange-700 text-white"
-                        data-testid="open-merge-dialog-btn"
-                      >Fusionner la selection</Button>
-                      <Button size="sm" variant="ghost" onClick={() => { setMergeMode(false); setSelectedSupplierIds(new Set()); }} data-testid="exit-merge-mode-btn">Annuler</Button>
-                    </>
-                  )}
-                </div>
+                {/* iter90je : bouton "Fusionner des fournisseurs" retire.
+                    Post Chinese Wall STRICT (iter90is), chaque fournisseur est LOCAL a UNE ACP
+                    et le matching par nom est verrouille (iter90jd) - la fusion cross-scope
+                    n'est plus necessaire cote UI. La fusion superadmin reste disponible via
+                    la page "Admin > Detecter les doublons" pour les cas edge historiques. */}
               </CardContent></Card>
               <div className="flex items-center justify-between mb-2 gap-2 flex-wrap">
                 <div className="text-[11px] text-slate-500">
@@ -442,7 +420,6 @@ export default function BalanceTiersPage() {
               <div className="bg-white rounded-md border border-slate-200 overflow-hidden">
                 <Table>
                   <TableHeader><TableRow>
-                    {mergeMode && <TableHead className="w-8 px-1"></TableHead>}
                     <TableHead>Fournisseur</TableHead><TableHead>Compte</TableHead><TableHead>N TVA</TableHead>
                     <TableHead className="text-right">Facture</TableHead><TableHead className="text-right">Paye</TableHead>
                     <TableHead className="text-right text-slate-500" title="Debit du compte tier dans le grand livre">D. compte</TableHead>
@@ -451,24 +428,7 @@ export default function BalanceTiersPage() {
                   </TableRow></TableHeader>
                   <TableBody>
                     {applyFilters(suppliersData.suppliers).map((s, i) => (
-                      <TableRow key={s.supplier_id || `orphan-${i}`} className={`hover:bg-slate-50/50 ${selectedSupplierIds.has(s.supplier_id) ? 'bg-orange-50/50' : ''}`}>
-                        {mergeMode && (
-                          <TableCell className="px-1">
-                            {s.supplier_id && (
-                              <input
-                                type="checkbox"
-                                checked={selectedSupplierIds.has(s.supplier_id)}
-                                onChange={() => {
-                                  const next = new Set(selectedSupplierIds);
-                                  if (next.has(s.supplier_id)) next.delete(s.supplier_id);
-                                  else next.add(s.supplier_id);
-                                  setSelectedSupplierIds(next);
-                                }}
-                                data-testid={`merge-select-${s.supplier_id}`}
-                              />
-                            )}
-                          </TableCell>
-                        )}
+                      <TableRow key={s.supplier_id || `orphan-${i}`} className="hover:bg-slate-50/50">
                         <TableCell className="font-medium">
                           {s.supplier_name}
                           {s.orphan && <Badge variant="outline" className="ml-2 text-[10px] bg-amber-50 text-amber-700 border-amber-200">Orphelin</Badge>}
@@ -524,21 +484,6 @@ export default function BalanceTiersPage() {
         lettrerLoading={lettrerLoading}
         commitLettrer={commitLettrer}
         lettrerCopro={localStorage.getItem('selectedCopro') || localStorage.getItem('copropriete_id') || ''}
-      />
-
-      <SupplierMergeDialog
-        open={mergeDialogOpen}
-        onOpenChange={setMergeDialogOpen}
-        suppliersData={suppliersData}
-        selectedSupplierIds={selectedSupplierIds}
-        mergeKeepId={mergeKeepId}
-        setMergeKeepId={setMergeKeepId}
-        onSuccess={() => {
-          setMergeDialogOpen(false);
-          setMergeMode(false);
-          setSelectedSupplierIds(new Set());
-          load();
-        }}
       />
     </div>
   );
