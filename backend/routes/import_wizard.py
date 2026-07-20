@@ -705,6 +705,8 @@ def create_import_wizard_router(db):
 
         # Precharge tous les fournisseurs accessibles pour le matching par nom
         all_suppliers = await db.suppliers.find({}, {"_id": 0}).to_list(20000)
+        # iter90ip : import pour la lookup BCE automatique
+        from bce_lookup import search_kbo_by_name
         rows = []
         for idx, s in enumerate(data.suppliers):
             name = (s.get("name") or "").strip()
@@ -729,6 +731,23 @@ def create_import_wizard_router(db):
                         "bce_number": other.get("bce_number", ""),
                         "copropriete_id": other.get("copropriete_id", ""),
                     })
+
+            # iter90ip : lookup BCE automatique SI aucun match strict/fuzzy avec
+            # BCE deja renseigne + aucun BCE dans les donnees d'import. On cherche
+            # sur le KBO Public Search. Silent : ne bloque jamais l'import
+            # (retour [] en cas d'erreur).
+            src_bce = (s.get("bce_number") or s.get("vat_number") or "").strip()
+            fuzzy_has_bce = any((fm.get("bce_number") or "").strip() for fm in fuzzy_matches)
+            strict_has_bce = bool(strict_dup and (strict_dup["supplier"].get("bce_number") or "").strip())
+            bce_candidates: list[dict] = []
+            if not src_bce and not strict_has_bce and not fuzzy_has_bce:
+                bce_candidates = await search_kbo_by_name(
+                    name,
+                    postal_code=(s.get("postal_code") or "").strip(),
+                    top_n=3,
+                    db=db,
+                )
+
             rows.append({
                 "index": idx,
                 "name": name,
@@ -747,6 +766,8 @@ def create_import_wizard_router(db):
                 } if strict_dup else None),
                 # Match par nom (cross-ACP) : le syndic peut choisir
                 "fuzzy_matches": fuzzy_matches,
+                # iter90ip : candidats BCE proposes par KBO (top 3, similarite decroissante)
+                "bce_candidates": bce_candidates,
                 # Suggestion par defaut :
                 # - strict_match trouve -> "reuse"
                 # - sinon -> "create" (necessite BCE)
@@ -754,6 +775,39 @@ def create_import_wizard_router(db):
                 "suggested_supplier_id": strict_dup["supplier"]["id"] if strict_dup else "",
             })
         return {"suppliers": rows, "count": len(rows)}
+
+    # ---- iter90ip : Lookup BCE automatique via KBO Public Search ----
+    class BceLookupInput(BaseModel):
+        name: str
+        postal_code: Optional[str] = ""
+        top_n: Optional[int] = 3
+
+    @router.post("/lookup-bce")
+    async def lookup_bce_endpoint(data: BceLookupInput, request: Request):
+        """iter90ip : recherche par nom sur le KBO Public Search
+        (kbopub.economie.fgov.be). Retourne les meilleurs candidats tries
+        par similarite de tokens. Utilise un cache Mongo TTL 30 jours pour
+        eviter les requetes redondantes.
+
+        Ne necessite aucune ACP scope (utilitaire syndic global). Le user
+        doit etre authentifie (protege par le middleware).
+        """
+        from bce_lookup import search_kbo_by_name
+        query = (data.name or "").strip()
+        if len(query) < 2:
+            return {"query": query, "candidates": [], "count": 0}
+        candidates = await search_kbo_by_name(
+            query,
+            postal_code=(data.postal_code or "").strip(),
+            top_n=max(1, min(10, data.top_n or 3)),
+            db=db,
+        )
+        return {
+            "query": query,
+            "postal_code": (data.postal_code or "").strip(),
+            "candidates": candidates,
+            "count": len(candidates),
+        }
 
     @router.post("/sessions/{session_id}/commit-suppliers-pdf")
     async def commit_suppliers_pdf(session_id: str, data: CommitSuppliersPdfInput, request: Request):

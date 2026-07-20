@@ -1735,6 +1735,8 @@ function JournalsPreview({ transactions, setTransactions }) {
 function SuppliersPdfPreview({ suppliers, setSuppliers, sessionId, decisions, setDecisions }) {
   const [previewData, setPreviewData] = useState(null);
   const [loading, setLoading] = useState(false);
+  // iter90ip : etat local des candidats BCE (index -> { candidates, loading, open })
+  const [bceState, setBceState] = useState({});
   if (!suppliers?.length) {
     return (
       <div className="text-center py-6 text-amber-600 text-sm">
@@ -1748,6 +1750,35 @@ function SuppliersPdfPreview({ suppliers, setSuppliers, sessionId, decisions, se
   };
   const updateDecision = (idx, patch) => {
     setDecisions({ ...decisions, [String(idx)]: { ...(decisions[String(idx)] || {}), ...patch } });
+  };
+  // iter90ip : lookup BCE manuel via KBO Public Search. Si le preview a deja
+  // pre-charge des `bce_candidates` (auto-lookup en preview), on les reutilise ;
+  // sinon on appelle l'endpoint `/import-wizard/lookup-bce`.
+  const openBceLookup = async (idx, name, postalCode) => {
+    setBceState((prev) => ({ ...prev, [idx]: { ...(prev[idx] || {}), open: true, loading: true } }));
+    // 1. Cas cache local : candidats deja dans previewData ?
+    const preview = previewData?.suppliers?.find((r) => r.index === idx);
+    if (preview?.bce_candidates?.length) {
+      setBceState((prev) => ({ ...prev, [idx]: { open: true, loading: false, candidates: preview.bce_candidates } }));
+      return;
+    }
+    // 2. Fetch live
+    try {
+      const { data } = await api.post('/import-wizard/lookup-bce', {
+        name: (name || '').trim(),
+        postal_code: (postalCode || '').trim(),
+        top_n: 3,
+      });
+      setBceState((prev) => ({ ...prev, [idx]: { open: true, loading: false, candidates: data.candidates || [] } }));
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur lookup BCE');
+      setBceState((prev) => ({ ...prev, [idx]: { open: false, loading: false, candidates: [] } }));
+    }
+  };
+  const applyBceCandidate = (idx, bce) => {
+    updateDecision(idx, { bce_number: bce });
+    setBceState((prev) => ({ ...prev, [idx]: { ...(prev[idx] || {}), open: false } }));
+    toast.success(`BCE ${bce} applique`);
   };
   // iter90gk : analyse des matches (fetch backend preview-suppliers-pdf).
   // Pre-remplit les decisions avec l'action suggeree (reuse si match strict trouve
@@ -1773,7 +1804,13 @@ function SuppliersPdfPreview({ suppliers, setSuppliers, sessionId, decisions, se
         }
       }
       setDecisions(nextDecisions);
-      toast.success(`${data.count} fournisseur(s) analyses`);
+      // iter90ip : notifie si des candidats BCE ont ete trouves automatiquement.
+      const withCandidates = (data.suppliers || []).filter((r) => r.bce_candidates?.length).length;
+      if (withCandidates > 0) {
+        toast.success(`${data.count} fournisseur(s) analyses. ${withCandidates} BCE trouve(s) automatiquement.`);
+      } else {
+        toast.success(`${data.count} fournisseur(s) analyses`);
+      }
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Erreur analyse');
     } finally {
@@ -1866,13 +1903,74 @@ function SuppliersPdfPreview({ suppliers, setSuppliers, sessionId, decisions, se
                 {analyzed && (
                   <td className="px-1 py-1">
                     {dec.action === 'create' || preview?.suggested_action === 'create' ? (
-                      <input
-                        value={dec.bce_number || ''}
-                        onChange={(e) => updateDecision(i, { bce_number: e.target.value })}
-                        placeholder="BE0123456789"
-                        className="w-32 text-[10px] border border-slate-300 rounded px-1 py-0.5 font-mono"
-                        data-testid={`sup-bce-${i}`}
-                      />
+                      <div className="flex flex-col gap-1">
+                        <div className="flex items-center gap-1">
+                          <input
+                            value={dec.bce_number || ''}
+                            onChange={(e) => updateDecision(i, { bce_number: e.target.value })}
+                            placeholder="BE0123456789"
+                            className="w-32 text-[10px] border border-slate-300 rounded px-1 py-0.5 font-mono"
+                            data-testid={`sup-bce-${i}`}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => openBceLookup(i, s.name, s.postal_code)}
+                            className="text-[10px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 hover:bg-blue-200 border border-blue-200"
+                            title="Chercher le BCE sur kbopub.economie.fgov.be"
+                            data-testid={`sup-bce-lookup-${i}`}
+                          >
+                            🔍 BCE
+                          </button>
+                          {preview?.bce_candidates?.length > 0 && !bceState[i]?.open && (
+                            <Badge className="bg-emerald-50 text-emerald-700 text-[9px] border border-emerald-200">
+                              {preview.bce_candidates.length} propositions
+                            </Badge>
+                          )}
+                        </div>
+                        {bceState[i]?.open && (
+                          <div className="mt-1 border border-blue-200 bg-blue-50 rounded p-2 space-y-1 max-w-md" data-testid={`sup-bce-panel-${i}`}>
+                            <div className="text-[10px] font-semibold text-blue-900 flex justify-between items-center">
+                              <span>Candidats KBO (Banque-Carrefour des Entreprises)</span>
+                              <button
+                                type="button"
+                                onClick={() => setBceState((prev) => ({ ...prev, [i]: { ...(prev[i] || {}), open: false } }))}
+                                className="text-slate-500 hover:text-slate-700"
+                              >
+                                <X size={10} />
+                              </button>
+                            </div>
+                            {bceState[i]?.loading ? (
+                              <div className="text-[10px] text-slate-500">Recherche en cours...</div>
+                            ) : (bceState[i]?.candidates || []).length === 0 ? (
+                              <div className="text-[10px] text-amber-700">
+                                Aucun candidat trouve pour &laquo;&nbsp;{s.name}&nbsp;&raquo;.
+                              </div>
+                            ) : (
+                              <ul className="space-y-0.5">
+                                {(bceState[i]?.candidates || []).map((cand, ci) => {
+                                  const simPct = Math.round((cand.similarity || 0) * 100);
+                                  const simColor = simPct >= 80 ? 'bg-emerald-100 text-emerald-800' : simPct >= 50 ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-700';
+                                  return (
+                                    <li key={ci} className="flex items-center gap-1 text-[10px] bg-white rounded border border-slate-200 px-1.5 py-1">
+                                      <span className={`px-1 rounded text-[9px] ${simColor}`}>{simPct}%</span>
+                                      <span className="font-mono text-slate-700">{cand.bce}</span>
+                                      <span className="flex-1 truncate" title={`${cand.name} - ${cand.address || ''}`}>{cand.name}</span>
+                                      <button
+                                        type="button"
+                                        onClick={() => applyBceCandidate(i, cand.bce)}
+                                        className="text-[10px] px-1.5 py-0.5 rounded bg-blue-600 text-white hover:bg-blue-700"
+                                        data-testid={`sup-bce-apply-${i}-${ci}`}
+                                      >
+                                        Utiliser
+                                      </button>
+                                    </li>
+                                  );
+                                })}
+                              </ul>
+                            )}
+                          </div>
+                        )}
+                      </div>
                     ) : (
                       <span className="text-slate-400 text-[10px]">-</span>
                     )}

@@ -1,4 +1,134 @@
 # CoproManager PRD
+### Iter90ip (20/07/2026) — Lookup BCE automatique par nom (KBO Public Search)
+
+**Ticket utilisateur** :
+> "lors de l'importation si un BCE manque tente de retrouver sur base
+> du nom de la societe le NR BCE sur la BCE et propose le automatiquement
+> en verifiant sur base du nom du fournisseur"
+
+**Choix utilisateur (Q1-Q4)** :
+- Q1-A : Scraping du site public `kbopub.economie.fgov.be` (gratuit,
+  pas d'API key).
+- Q2-B : Auto silent lookup dans `preview-suppliers-pdf` (pre-charge
+  les candidats dans la reponse).
+- Q3-a : Bouton "Chercher BCE" par ligne + panel top 3 candidats.
+- Q4-c : Similarite par tokens (Jaccard sur mots normalises, stopwords
+  SA/SPRL/etc. exclus).
+
+**Livrables**
+
+Backend :
+- `backend/bce_lookup.py` (nouveau module) :
+  - `search_kbo_by_name(name, postal_code, top_n, db, use_cache)` :
+    lookup async via GET sur `zoeknaamfonetischform.html` avec les bons
+    params. Parse le HTML avec regex (tr/td), extrait BCE format
+    "0XXX.XXX.XXX" + nom + adresse + type entite.
+  - `token_similarity(a, b)` : Jaccard sur tokens normalises (ASCII
+    minuscule, sans accents, sans ponctuation, sans stopwords). Score
+    calcule sur la couverture du plus court cote (le nom saisi par le
+    syndic est souvent plus court que le nom BCE officiel).
+  - Cache Mongo `bce_lookup_cache` TTL 30 jours (index `key`).
+  - Rate limit local via `asyncio.Semaphore(5)`.
+  - Timeout 6s + fallback gracieux (jamais d'exception : retour [] sur
+    erreur reseau, le silent lookup ne doit JAMAIS bloquer un import).
+  - Datetime naive Mongo -> re-tagged UTC pour comparaison TTL.
+- `routes/import_wizard.py` :
+  - Nouveau endpoint `POST /api/import-wizard/lookup-bce` (bouton manuel).
+    Payload : `{name, postal_code, top_n}` -> `{query, candidates, count}`.
+  - `preview-suppliers-pdf` enrichi : si un supplier n'a AUCUN BCE ni
+    match (strict + fuzzy avec BCE), lance automatiquement une lookup
+    KBO silencieuse et ajoute `bce_candidates: [...]` au row.
+
+Frontend (`ImportWizardPage.js::SuppliersPdfPreview`) :
+- Bouton "🔍 BCE" a cote de l'input BCE (visible en mode "Creer nouveau").
+- Panel bleu au-dessous de l'input avec :
+  - Badge similarite colore (>=80% vert / >=50% amber / autre gris).
+  - BCE au format 0XXX.XXX.XXX + nom canonique tronque + adresse en title.
+  - Bouton "Utiliser" par candidat -> auto-fill du champ BCE.
+- Badge "N propositions" (vert) affiche si l'auto-lookup preview a
+  deja rempli les `bce_candidates`.
+- Test-ids : `sup-bce-lookup-{i}`, `sup-bce-panel-{i}`, `sup-bce-apply-{i}-{ci}`.
+
+**Tests** (`test_iter90ip_bce_lookup_by_name.py`, 12/12 verts) :
+- Similarite : match exact, stopwords ignores (SA/SPRL), case & accents
+  insensibles, overlap partiel, no overlap, None-safe (6 tests).
+- Parser : extraction {bce, name, address} d'un HTML fixture (ne prend
+  PAS "1" comme nom), ignore les lignes sans lien BCE (2 tests).
+- Endpoint : lookup-bce retourne [] pour query < 2 chars (1 test).
+- Cache : 2 appels rapproches -> 1 seule requete reseau (monkeypatch
+  du `_fetch_kbo`) + verifie insertion dans `bce_lookup_cache` (1 test).
+- Fallback erreur : timeout / exception reseau -> retourne [] sans
+  exception (jamais d'echec silencieux dans l'UI) (1 test).
+- Live network (marque `@pytest.mark.network`) : requete reelle vers
+  KBO pour "Belfius Banque" -> doit contenir BCE 0403.201.185 (1 test).
+
+**Verification manuelle** :
+- `curl POST /api/import-wizard/lookup-bce` avec `{name: "Belfius Banque"}`
+  -> 200 OK, retourne BELFIUS BANQUE (0403.201.185) + FEDERATION DES
+  AGENTS DE BELFIUS BANQUE avec similarity 1.0.
+
+**Redeploiement PROD requis** (Save to Github -> Deploy). Note metier :
+KBO ne fournit pas d'API publique gratuite officielle ; le scraping du
+formulaire est techniquement autorise pour usage responsable (rate
+limit + User-Agent identifie + cache). Si la volumetrie de vos imports
+depasse ~500 lookups/jour, envisager de basculer vers l'Open Data BCE
+(CSV mensuel gratuit).
+
+---
+
+### Iter90io (20/07/2026) — Normalisation systematique des comptes tier fournisseurs (44000XXX)
+
+**Ticket utilisateur** :
+> "Dans le pipeline d'import des ecritures, normalise les numeros de
+> compte fournisseur en un seul format (toujours 8 chiffres par exemple)
+> avant de faire le matching. Cela evitera qu'un meme fournisseur soit
+> compte deux fois dans l'audit a cause d'une difference de longueur
+> de compte"
+
+**Root cause** :
+Deux chemins de creation de comptes tier fournisseurs coexistaient :
+- Le module courant (`assign_supplier_account`) creait des comptes
+  canoniques 8 chars `44000XXX` (5 chars prefixe + 3 chiffres).
+- Le wizard d'import Optipro (`commit_invoices`, `commit_opening_balance`)
+  produisait historiquement des comptes 7 chars `"4400" + zfill(3)`
+  (ex: "4400015"). Consequence : deux lignes distinctes dans le Bilan
+  / Balance des Tiers pour LE MEME fournisseur.
+
+**Fix** :
+- `tier_accounts.canonize_supplier_tier_account(number)` (nouveau helper) :
+  ```
+  "4400015"  (7) -> "44000015"  (insertion "0" apres "440")
+  "440015"   (6) -> "44000015"  (insertion "00" apres "440")
+  "44000015" (8) -> "44000015"  (idempotent)
+  "44001115" (8 non canonique) -> inchange (resolution deleguee au
+      matching par fiche via `_resolve_third_party`)
+  "551000"   (bancaire)         -> inchange
+  ```
+- Appele dans `import_wizard.py::commit_invoices` :
+  - Pre-allocation PCMN (accounts_needed) : `"4400" + sup_aux[1:].zfill(3)`
+    passe par le helper.
+  - Fallback (aucune fiche fournisseur) : idem.
+- Appele dans `import_wizard.py::commit_opening_balance` :
+  - Extraction des aux_codes des lignes AN (`aux_codes_sup_in_an`).
+  - Boucle de construction des lignes AN (juste apres `_canonize_bank_account`).
+
+**Tests** (`test_iter90io_canonize_supplier_tier_accounts.py`, 9/9 verts) :
+- 7 tests unitaires du helper (padding 7->8, 6->8, idempotence, non
+  canoniques inchanges, non-fournisseurs inchanges, whitespace strip,
+  None-safe).
+- 2 tests d'integration source : verifient que le code d'import a bien
+  ete refactorise (pattern `"4400" + xxx.zfill(3)` toujours precede par
+  `canonize_supplier_tier_account` ET helper importe dans
+  `commit_opening_balance`).
+
+**Redeploiement PROD requis**. Note : ce fix normalise a l'entree ; les
+comptes 7 chars historiques deja en DB restent inchanges. Une migration
+one-shot (via l'audit doublons `/api/admin/duplicates-audit`) peut
+detecter les doublons existants a purger.
+
+---
+
+
 ### Iter90in (20/07/2026) — Detection fournisseurs orphelins cross-ACP (Health Audit + Balance Tiers)
 
 **Ticket utilisateur** :
