@@ -109,19 +109,21 @@ export default function AdminQualityAuditPage() {
   const runDedupOwners = async (dryRun) => {
     if (!dryRun && !window.confirm(
       "Fusionner les proprietaires dupliques ?\n\n" +
-      "* Regroupe par (ACP, code auxiliaire).\n" +
-      "* Le PLUS ANCIEN est garde, les autres sont supprimes.\n" +
-      "* Lots + tenants + journal_entries repointes vers le survivant.\n\n" +
+      "* Regroupe par code auxiliaire GLOBAL (cross-ACP).\n" +
+      "* Le PLUS ANCIEN est garde et herite de TOUTES les ACPs des doublons.\n" +
+      "* Lots + tenants + journal_entries repointes vers le survivant.\n" +
+      "* Nettoie aussi les tier_accounts orphelins (ACP non presente dans copropriete_ids).\n\n" +
       "Confirmez pour lancer.",
     )) return;
     setDedupOwnBusy(true);
     setDedupOwnResult(null);
     try {
+      // iter90ij : mode cross_acp par defaut - fusionne un meme aux_code sur toutes les ACPs
       const q = dedupCopro !== 'all' ? `copropriete_id=${dedupCopro}&` : '';
-      const { data } = await api.post(`/admin/heal-duplicate-owners?${q}dry_run=${dryRun}`);
+      const { data } = await api.post(`/admin/heal-duplicate-owners?cross_acp=true&${q}dry_run=${dryRun}`);
       setDedupOwnResult(data);
       if (dryRun) toast.info(`Dry-run : ${data.duplicate_groups} groupe(s) a fusionner`, { duration: 6000 });
-      else toast.success(`${data.deleted_owners} owner(s) supprimes, ${data.lots_repointed} lots repointes`, { duration: 8000 });
+      else toast.success(`${data.deleted_owners} owner(s) supprimes, ${data.lots_repointed} lots repointes, ${data.orphan_tier_accounts_cleaned} tier_accounts orphelins nettoyes`, { duration: 8000 });
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Erreur dedup owners');
     } finally { setDedupOwnBusy(false); }
@@ -202,18 +204,27 @@ export default function AdminQualityAuditPage() {
     setOptiproBusy(true);
     setOptiproResult(null);
     try {
+      // iter90ij : LANCE AUSSI heal-orphan-tier-accounts dans la foulee car
+      // les 2 healings sont complementaires (7-char + hybrides 8-char).
       const { data } = await api.post(
         `/admin/heal-optipro-owner-accounts?copropriete_id=${optiproCopro}&dry_run=${dryRun}`,
       );
-      setOptiproResult(data);
+      let orphan = null;
+      try {
+        const { data: orphanData } = await api.post(
+          `/admin/heal-orphan-tier-accounts?copropriete_id=${optiproCopro}&dry_run=${dryRun}`,
+        );
+        orphan = orphanData;
+      } catch (e) { /* ignore */ }
+      setOptiproResult({ ...data, orphan });
       if (dryRun) {
         toast.info(
-          `Dry-run : ${data.owners_healed} owner(s) a nettoyer`,
+          `Dry-run : ${data.owners_healed} owner(s) + ${orphan?.orphan_accounts_found || 0} orphelin(s) a nettoyer`,
           { duration: 6000 },
         );
       } else {
         toast.success(
-          `${data.owners_healed} owner(s) nettoyes - ${data.lines_remapped} lignes reecrites - ${data.pcmn_accounts_deleted} compte(s) Optipro supprimes`,
+          `${data.owners_healed} owner(s) - ${data.lines_remapped + (orphan?.lines_remapped || 0)} lignes reecrites - ${data.pcmn_accounts_deleted + (orphan?.pcmn_accounts_deleted || 0)} comptes Optipro supprimes`,
           { duration: 8000 },
         );
       }

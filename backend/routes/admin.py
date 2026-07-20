@@ -2128,6 +2128,9 @@ def create_admin_router(db):
         copropriete_id: str = "",
         dry_run: bool = True,
     ):
+        """iter90ii/ij : Deduplication des SUPPLIERS par nom normalise.
+        Nettoie aussi les tier_accounts orphelins. Le survivant est le plus
+        ancien, factures + journal_entries.lines sont repointees."""
         await _get_superadmin_only(request)
         import re
         def _norm(s: str) -> str:
@@ -2146,11 +2149,19 @@ def create_admin_router(db):
         heals = []
         deleted = 0
         invoices_repointed = 0
+        orphan_ta_cleaned = 0
         for (copro, name), docs in dup_groups.items():
             docs_sorted = sorted(docs, key=lambda d: (d.get("created_at") or ""))
             keeper = docs_sorted[0]
             trash = docs_sorted[1:]
             trash_ids = [t["id"] for t in trash]
+            # Merge tier_accounts (union, garde uniquement pour ACP == copro
+            # car un supplier a un `copropriete_id` scalar, pas array)
+            merged_ta = dict(keeper.get("tier_accounts") or {})
+            for t in trash:
+                for c, v in (t.get("tier_accounts") or {}).items():
+                    if c not in merged_ta:
+                        merged_ta[c] = v
             heals.append({
                 "copro": copro,
                 "name": name,
@@ -2164,7 +2175,6 @@ def create_admin_router(db):
                     {"$set": {"supplier_id": keeper["id"]}},
                 )
                 invoices_repointed += res.modified_count
-                # Repoint aussi journal_entries.lines.third_party_id
                 async for je in db.journal_entries.find(
                     {"copropriete_id": copro, "lines.third_party_id": {"$in": trash_ids}},
                     {"_id": 0, "id": 1, "lines": 1},
@@ -2179,12 +2189,33 @@ def create_admin_router(db):
                     )
                 r2 = await db.suppliers.delete_many({"id": {"$in": trash_ids}})
                 deleted += r2.deleted_count
+                # Update keeper avec merged tier_accounts
+                if merged_ta != (keeper.get("tier_accounts") or {}):
+                    await db.suppliers.update_one(
+                        {"id": keeper["id"]},
+                        {"$set": {"tier_accounts": merged_ta}},
+                    )
+        # Second passage : nettoie les tier_accounts orphelins sur suppliers
+        if not dry_run:
+            async for s in db.suppliers.find({}, {"_id": 0}):
+                sup_copro = s.get("copropriete_id") or ""
+                ta = s.get("tier_accounts") or {}
+                # Un supplier appartient a une seule ACP. Ses tier_accounts
+                # ne devraient contenir que cette ACP.
+                cleaned = {c: v for c, v in ta.items() if c == sup_copro}
+                if len(cleaned) < len(ta):
+                    orphan_ta_cleaned += len(ta) - len(cleaned)
+                    await db.suppliers.update_one(
+                        {"id": s["id"]},
+                        {"$set": {"tier_accounts": cleaned}},
+                    )
         return {
             "mode": "dry_run" if dry_run else "live",
             "copropriete_id": copropriete_id or "all",
             "duplicate_groups": len(heals),
             "deleted_suppliers": deleted,
             "invoices_repointed": invoices_repointed,
+            "orphan_tier_accounts_cleaned": orphan_ta_cleaned,
             "details": heals[:200],
         }
 
@@ -2197,28 +2228,62 @@ def create_admin_router(db):
         request: Request,
         copropriete_id: str = "",
         dry_run: bool = True,
+        cross_acp: bool = True,
     ):
+        """iter90ii/ij : Deduplication des OWNERS par auxiliary_code.
+
+        Deux modes :
+          * `cross_acp=True` (default) : fusion GLOBALE par `auxiliary_code`.
+            Deux owners avec le meme aux_code sont consideres UNE SEULE
+            personne physique. Le survivant herite de TOUTES les ACPs des
+            doublons (union), et de tous les `tier_accounts`. C'est la
+            regle metier utilisateur : "aucun proprietaire ne peut etre
+            dedouble".
+          * `cross_acp=False` : ancien comportement, ne fusionne que si
+            les 2 owners ont au moins une ACP en commun.
+
+        Nettoie AUSSI les `tier_accounts` orphelins : entree qui pointe
+        vers une ACP non presente dans `copropriete_ids` du owner.
+
+        Actions par groupe (dry_run=False) :
+          1. Repoint lots.owner_id vers le survivant
+          2. Repoint tenants.owner_id
+          3. Repoint journal_entries.lines.third_party_id
+          4. Merge tier_accounts (union, garde les entrees pour ACP dans
+             copropriete_ids seulement)
+          5. Delete les owners doublons
+          6. Nettoie les tier_accounts orphelins du survivant
+        """
         await _get_superadmin_only(request)
         query = {}
-        if copropriete_id:
+        if copropriete_id and not cross_acp:
             query["copropriete_ids"] = copropriete_id
         all_owners = await db.owners.find(query, {"_id": 0}).to_list(50000)
+
         groups: dict = {}
-        for o in all_owners:
-            aux = (o.get("auxiliary_code") or "").strip()
-            if not aux:
-                continue
-            for cid in (o.get("copropriete_ids") or []):
-                if copropriete_id and cid != copropriete_id:
+        if cross_acp:
+            # Groupe global par aux_code seul
+            for o in all_owners:
+                aux = (o.get("auxiliary_code") or "").strip()
+                if not aux:
                     continue
-                key = (cid, aux)
-                groups.setdefault(key, []).append(o)
-        # Un groupe = doublon si >= 2 owners distincts partagent (aux, ACP)
+                groups.setdefault(aux, []).append(o)
+        else:
+            # Groupe par (ACP, aux_code) - ancien comportement
+            for o in all_owners:
+                aux = (o.get("auxiliary_code") or "").strip()
+                if not aux:
+                    continue
+                for cid in (o.get("copropriete_ids") or []):
+                    if copropriete_id and cid != copropriete_id:
+                        continue
+                    groups.setdefault((cid, aux), []).append(o)
+
+        # Un groupe = doublon si >= 2 owners distincts partagent la cle
         dup_groups: dict = {}
         for k, v in groups.items():
             unique_ids = {x["id"] for x in v}
             if len(unique_ids) > 1:
-                # Deduplique la liste avant traitement
                 seen = set()
                 uniques = []
                 for o in v:
@@ -2227,32 +2292,59 @@ def create_admin_router(db):
                     seen.add(o["id"])
                     uniques.append(o)
                 dup_groups[k] = uniques
+
         heals = []
         deleted = 0
         lots_repointed = 0
         tenants_repointed = 0
         je_lines_repointed = 0
-        for (cid, aux), docs in dup_groups.items():
+        orphan_ta_cleaned = 0
+
+        for gkey, docs in dup_groups.items():
             docs_sorted = sorted(docs, key=lambda d: (d.get("created_at") or ""))
             keeper = docs_sorted[0]
             trash = docs_sorted[1:]
             trash_ids = [t["id"] for t in trash]
+            # Union des ACPs
+            all_acps = set(keeper.get("copropriete_ids") or [])
+            for t in trash:
+                all_acps.update(t.get("copropriete_ids") or [])
+            all_acps = sorted(all_acps)
+            # Merge tier_accounts (garde uniquement pour ACPs valides)
+            merged_ta = dict(keeper.get("tier_accounts") or {})
+            for t in trash:
+                for c, v in (t.get("tier_accounts") or {}).items():
+                    if c not in merged_ta and c in all_acps:
+                        merged_ta[c] = v
+            # Nettoie les tier_accounts orphelins (ACP pas dans union)
+            cleaned_ta = {c: v for c, v in merged_ta.items() if c in all_acps}
+            orphan_ta_cleaned += len(merged_ta) - len(cleaned_ta)
+
+            aux_str = gkey if cross_acp else f"{gkey[0][:8]}/{gkey[1]}"
             heals.append({
-                "copro": cid,
-                "auxiliary_code": aux,
-                "keeper": {"id": keeper["id"], "name": keeper.get("name") or "", "created_at": keeper.get("created_at", "")},
+                "aux_code": aux_str,
+                "keeper": {
+                    "id": keeper["id"],
+                    "name": keeper.get("name") or "",
+                    "created_at": keeper.get("created_at", ""),
+                    "final_copropriete_ids": all_acps,
+                    "final_tier_accounts_count": len(cleaned_ta),
+                },
                 "removed_ids": trash_ids,
                 "removed_names": [t.get("name") or "" for t in trash],
                 "removed_count": len(trash_ids),
             })
-            if not dry_run:
-                # Repoint lots.owner_id
+            if dry_run:
+                continue
+
+            # Repoint lots.owner_id
+            for cid in all_acps:
                 res = await db.lots.update_many(
                     {"copropriete_id": cid, "owner_id": {"$in": trash_ids}},
                     {"$set": {"owner_id": keeper["id"]}},
                 )
                 lots_repointed += res.modified_count
-                # Repoint tenants.owner_id if any
+                # Repoint tenants
                 try:
                     res2 = await db.tenants.update_many(
                         {"copropriete_id": cid, "owner_id": {"$in": trash_ids}},
@@ -2261,56 +2353,214 @@ def create_admin_router(db):
                     tenants_repointed += res2.modified_count
                 except Exception:
                     pass
-                # Repoint journal_entries.lines.third_party_id
+                # Repoint journal_entries.lines
                 async for je in db.journal_entries.find(
                     {"copropriete_id": cid, "lines.third_party_id": {"$in": trash_ids}},
                     {"_id": 0, "id": 1, "lines": 1},
                 ):
-                    new_lines = [
-                        ({**ln, "third_party_id": keeper["id"]}
-                         if ln.get("third_party_id") in trash_ids else ln)
-                        for ln in (je.get("lines") or [])
-                    ]
-                    je_lines_repointed += sum(1 for ln in je.get("lines") or [] if ln.get("third_party_id") in trash_ids)
-                    await db.journal_entries.update_one(
-                        {"id": je["id"]}, {"$set": {"lines": new_lines}}
-                    )
-                # Merge tier_accounts before delete (dont perde l'info)
-                merged_ta = {**(keeper.get("tier_accounts") or {})}
-                for t in trash:
-                    for c, v in (t.get("tier_accounts") or {}).items():
-                        if c not in merged_ta:
-                            merged_ta[c] = v
-                # Retire cid des `copropriete_ids` des doublons OU delete si
-                # copropriete_ids ne contenait que cid
-                for t in trash:
-                    other_cids = [x for x in (t.get("copropriete_ids") or []) if x != cid]
-                    if other_cids:
-                        # L'owner appartient a d'autres ACPs - retire juste cid
-                        await db.owners.update_one(
-                            {"id": t["id"]},
-                            {"$set": {"copropriete_ids": other_cids}},
+                    new_lines = []
+                    touched_cnt = 0
+                    for ln in (je.get("lines") or []):
+                        if ln.get("third_party_id") in trash_ids:
+                            new_lines.append({**ln, "third_party_id": keeper["id"]})
+                            touched_cnt += 1
+                        else:
+                            new_lines.append(ln)
+                    je_lines_repointed += touched_cnt
+                    if touched_cnt:
+                        await db.journal_entries.update_one(
+                            {"id": je["id"]}, {"$set": {"lines": new_lines}}
                         )
-                    else:
-                        # Delete l'owner (il n'appartenait qu'a cette ACP)
-                        r = await db.owners.delete_one({"id": t["id"]})
-                        if r.deleted_count:
-                            deleted += 1
-                # Mise a jour tier_accounts du survivant
-                if merged_ta != (keeper.get("tier_accounts") or {}):
+            # Delete les doublons
+            for t in trash:
+                r = await db.owners.delete_one({"id": t["id"]})
+                if r.deleted_count:
+                    deleted += 1
+            # Update keeper : union des ACPs + tier_accounts nettoye
+            await db.owners.update_one(
+                {"id": keeper["id"]},
+                {"$set": {
+                    "copropriete_ids": all_acps,
+                    "tier_accounts": cleaned_ta,
+                }},
+            )
+
+        # Second passage : nettoie les tier_accounts orphelins sur les
+        # owners restants qui n'ont PAS ete traites par la fusion.
+        if not dry_run:
+            async for o in db.owners.find({}, {"_id": 0}):
+                acps = set(o.get("copropriete_ids") or [])
+                ta = o.get("tier_accounts") or {}
+                cleaned = {c: v for c, v in ta.items() if c in acps}
+                if len(cleaned) < len(ta):
+                    orphan_ta_cleaned += len(ta) - len(cleaned)
                     await db.owners.update_one(
-                        {"id": keeper["id"]},
-                        {"$set": {"tier_accounts": merged_ta}},
+                        {"id": o["id"]},
+                        {"$set": {"tier_accounts": cleaned}},
                     )
+
         return {
             "mode": "dry_run" if dry_run else "live",
-            "copropriete_id": copropriete_id or "all",
+            "scope": "cross_acp" if cross_acp else f"acp={copropriete_id or 'all'}",
             "duplicate_groups": len(heals),
             "deleted_owners": deleted,
             "lots_repointed": lots_repointed,
             "tenants_repointed": tenants_repointed,
             "journal_lines_repointed": je_lines_repointed,
+            "orphan_tier_accounts_cleaned": orphan_ta_cleaned,
             "details": heals[:200],
+        }
+
+    # iter90ij : Detection et fusion des COMPTES TIERS ORPHELINS (owners).
+    #
+    # Symptome : la balance des tiers d'une ACP affiche des lignes
+    # "Ex-prop." avec un compte 8-char inconnu (ex: 41010959, 41010956,
+    # 41010958) qui n'est ni le `provisions` ni le `reserve` d'aucun
+    # owner. Ces comptes sont des HYBRIDES entre prefixe canonique
+    # (`41010`) et suffixe Optipro (les 4 derniers chars de l'aux_code).
+    #
+    # Stratégie de matching (par priorite) :
+    #   1. Si la ligne journal a un `third_party_id` : utiliser le compte
+    #      canonique de ce owner (provisions ou reserve selon le prefixe).
+    #   2. Sinon : chercher un owner de l'ACP dont l'aux_code se termine
+    #      par les 4 derniers chars du compte orphelin.
+    #      Ex: `41010959` -> aux `C0959` -> owner Boxus Wivine
+    #   3. Si trouve : reecrire vers le compte canonique du owner.
+    #   4. Sinon : laisser tel quel (compte vraiment ex-proprietaire
+    #      supprime, geré comme orphelin dans la vue reports).
+    #
+    # Superadmin only. Idempotent.
+    @router.post("/heal-orphan-tier-accounts")
+    async def heal_orphan_tier_accounts(
+        request: Request,
+        copropriete_id: str,
+        dry_run: bool = True,
+    ):
+        await _get_superadmin_only(request)
+
+        # 1. Recense tous les comptes tiers "valides" (owner canoniques) de l'ACP
+        owners = await db.owners.find(
+            {"copropriete_ids": copropriete_id}, {"_id": 0},
+        ).to_list(10000)
+        valid_accounts = set()
+        aux_to_owner: dict = {}
+        for o in owners:
+            ta = (o.get("tier_accounts") or {}).get(copropriete_id, {}) or {}
+            if ta.get("provisions"):
+                valid_accounts.add(ta["provisions"])
+            if ta.get("reserve"):
+                valid_accounts.add(ta["reserve"])
+            aux = (o.get("auxiliary_code") or "").strip().upper()
+            if aux:
+                # Aux code = "C0959" -> 4 last digits = "0959"
+                digits = aux[1:] if aux.startswith("C") else aux
+                aux_to_owner[digits.zfill(4)] = o
+
+        # 2. Recense tous les comptes 41xxxx / 4001xxxx utilises dans les JE
+        used_accounts: dict = {}
+        async for je in db.journal_entries.find(
+            {"copropriete_id": copropriete_id}, {"_id": 0, "id": 1, "lines": 1}
+        ):
+            for ln in je.get("lines") or []:
+                acc = (ln.get("account_number") or "").strip()
+                if not (acc.startswith("41") or acc.startswith("4001") or acc.startswith("4100")):
+                    continue
+                if not acc or len(acc) < 5:
+                    continue
+                used_accounts.setdefault(acc, []).append({
+                    "je_id": je["id"],
+                    "tp_id": ln.get("third_party_id") or "",
+                    "acc": acc,
+                })
+
+        # 3. Detecte les orphelins (utilises mais pas dans valid_accounts)
+        orphans = {a: v for a, v in used_accounts.items() if a not in valid_accounts}
+
+        # 4. Determine le remap (orphan_acc -> canonical_acc)
+        remaps: dict = {}
+        for orphan_acc in orphans:
+            # a) Match via tp_id
+            tp_id_candidates = {r["tp_id"] for r in orphans[orphan_acc] if r["tp_id"]}
+            if len(tp_id_candidates) == 1:
+                tp_id = list(tp_id_candidates)[0]
+                target_owner = next((o for o in owners if o["id"] == tp_id), None)
+                if target_owner:
+                    ta = (target_owner.get("tier_accounts") or {}).get(copropriete_id, {}) or {}
+                    # prefixe reserve = 4100/40010, provisions = 4101/40000
+                    is_reserve = orphan_acc.startswith(("4100", "40010", "4001"))
+                    canonical = ta.get("reserve" if is_reserve else "provisions", "")
+                    if canonical and canonical != orphan_acc:
+                        remaps[orphan_acc] = canonical
+                        continue
+            # b) Match via 4 derniers chars (suffix aux_code)
+            suffix = orphan_acc[-4:]
+            target_owner = aux_to_owner.get(suffix)
+            if target_owner:
+                ta = (target_owner.get("tier_accounts") or {}).get(copropriete_id, {}) or {}
+                is_reserve = orphan_acc.startswith(("4100", "40010", "4001"))
+                canonical = ta.get("reserve" if is_reserve else "provisions", "")
+                if canonical and canonical != orphan_acc:
+                    remaps[orphan_acc] = canonical
+
+        # 5. Applique les remaps
+        entries_touched = 0
+        lines_remapped = 0
+        pcmn_deleted = 0
+        if not dry_run and remaps:
+            async for je in db.journal_entries.find(
+                {"copropriete_id": copropriete_id, "lines.account_number": {"$in": list(remaps.keys())}},
+                {"_id": 0, "id": 1, "lines": 1},
+            ):
+                new_lines = []
+                touched = False
+                for ln in je.get("lines") or []:
+                    acc = ln.get("account_number", "")
+                    if acc in remaps:
+                        # Aussi remplir third_party_id si absent
+                        new_line = {**ln, "account_number": remaps[acc]}
+                        if not new_line.get("third_party_id"):
+                            # Trouver le owner via canonical
+                            for o in owners:
+                                ta = (o.get("tier_accounts") or {}).get(copropriete_id, {}) or {}
+                                if ta.get("provisions") == remaps[acc] or ta.get("reserve") == remaps[acc]:
+                                    new_line["third_party_id"] = o["id"]
+                                    new_line["third_party_type"] = "owner"
+                                    break
+                        new_lines.append(new_line)
+                        lines_remapped += 1
+                        touched = True
+                    else:
+                        new_lines.append(ln)
+                if touched:
+                    entries_touched += 1
+                    await db.journal_entries.update_one(
+                        {"id": je["id"]}, {"$set": {"lines": new_lines}}
+                    )
+            # Supprime les comptes PCMN orphelins qui n'ont plus de lignes
+            for orphan in remaps:
+                still = await db.journal_entries.count_documents({
+                    "copropriete_id": copropriete_id,
+                    "lines.account_number": orphan,
+                })
+                if still == 0:
+                    r = await db.pcmn_accounts.delete_one(
+                        {"copropriete_id": copropriete_id, "number": orphan}
+                    )
+                    if r.deleted_count:
+                        pcmn_deleted += 1
+
+        # Orphelins non-remappables (owner introuvable)
+        unresolved = [a for a in orphans if a not in remaps]
+
+        return {
+            "mode": "dry_run" if dry_run else "live",
+            "copropriete_id": copropriete_id,
+            "orphan_accounts_found": len(orphans),
+            "remaps": remaps,
+            "unresolved_orphans": unresolved,
+            "journal_entries_touched": entries_touched,
+            "lines_remapped": lines_remapped,
+            "pcmn_accounts_deleted": pcmn_deleted,
         }
 
     return router
