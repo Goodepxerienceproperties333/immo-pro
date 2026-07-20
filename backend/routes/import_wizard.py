@@ -1728,15 +1728,19 @@ def create_import_wizard_router(db):
         # crees via PdfImportDialog (sans tier_accounts) recevraient le
         # compte Optipro comme "canonical", ce qui perpetuerait le bug.
         from tier_accounts import assign_owner_accounts as _assign_owner_accounts
+        from tier_accounts import assign_supplier_account as _assign_supplier_account
         # On charge les owners candidats (aux_code C0XXX matche par cet AN)
         # et on garantit qu'ils ont provisions + reserve pour cette ACP.
         aux_codes_in_an = set()
+        aux_codes_sup_in_an = set()
         for a in actif + passif:
             acc = (a.get("account") or "").strip()
             if acc.startswith("410") and len(acc) >= 7:
                 aux_codes_in_an.add("C" + acc[-4:])
             elif acc.startswith("4001") and len(acc) >= 8:
                 aux_codes_in_an.add("C" + acc[-4:])
+            elif acc.startswith("440") and len(acc) >= 5:
+                aux_codes_sup_in_an.add("F" + acc[-4:])
         for aux in aux_codes_in_an:
             o = owners_by_aux.get(aux)
             if not o:
@@ -1768,6 +1772,29 @@ def create_import_wizard_router(db):
             # Cree provisions + reserve manquants (idempotent)
             o = await _assign_owner_accounts(db, o, copro_id)
             owners_by_aux[aux] = o  # refresh cache
+
+        # iter90ih : meme logique pour les SUPPLIERS. Cas identique au bug
+        # owners : si un supplier n'a pas encore `tier_accounts.main` canonique
+        # (44000XXX) au moment de l'AN, l'ancien code lui assignait le compte
+        # Optipro 7-char (4400015, 44001115, etc.) comme main -> lettrage
+        # bancaire cassé + doublons dans la balance des tiers fournisseurs.
+        for aux in aux_codes_sup_in_an:
+            sup = suppliers_by_aux.get(aux)
+            if not sup:
+                continue
+            ta = (sup.get("tier_accounts") or {}).get(copro_id, {}) or {}
+            main = ta.get("main", "")
+            # Bad si 7-char (Optipro) ou ne commence pas par 44000
+            bad_main = main and (len(main) != 8 or not main.startswith("44000"))
+            if bad_main:
+                fresh = {k: v for k, v in ta.items() if k != "main"}
+                await db.suppliers.update_one(
+                    {"id": sup["id"]},
+                    {"$set": {f"tier_accounts.{copro_id}": fresh}},
+                )
+                sup["tier_accounts"] = {**(sup.get("tier_accounts") or {}), copro_id: fresh}
+            sup = await _assign_supplier_account(db, sup, copro_id)
+            suppliers_by_aux[aux] = sup  # refresh cache
 
         # Build the journal entry lines + collect tier_accounts updates
         lines = []
@@ -2275,6 +2302,7 @@ def create_import_wizard_router(db):
         copro_id = session["copropriete_id"]
         await _require_acp_access(request, db, copro_id)
         inserted = 0
+        skipped_duplicates = 0
         errors = []
         for idx, nat in enumerate(data.natures):
             try:
@@ -2282,6 +2310,17 @@ def create_import_wizard_router(db):
                 libelle = (nat.get("libelle") or "").strip()
                 account_number = (nat.get("account_number") or "").strip()
                 if not (code and libelle and account_number):
+                    continue
+                # iter90ih : IDEMPOTENCE - une seule nature par (ACP, compte).
+                # Sans ce check, chaque relance du wizard duplique toutes les
+                # natures (jusqu'a 4x observees sur ACP Maria). On garde le
+                # premier import, on skip les suivants.
+                existing = await db.expense_categories.find_one(
+                    {"copropriete_id": copro_id, "account_number": account_number},
+                    {"_id": 0, "id": 1},
+                )
+                if existing:
+                    skipped_duplicates += 1
                     continue
                 doc = {
                     "id": str(uuid.uuid4()),
@@ -2300,8 +2339,16 @@ def create_import_wizard_router(db):
                 inserted += 1
             except Exception as e:
                 errors.append({"row": idx, "error": str(e)})
-        await _update_step(db, session_id, "natures", {"count": inserted, "errors": errors})
-        return {"inserted": inserted, "errors": errors}
+        await _update_step(db, session_id, "natures", {
+            "count": inserted,
+            "skipped_duplicates": skipped_duplicates,
+            "errors": errors,
+        })
+        return {
+            "inserted": inserted,
+            "skipped_duplicates": skipped_duplicates,
+            "errors": errors,
+        }
 
     # ----- E: FISCAL YEAR -----
     @router.post("/sessions/{session_id}/commit-fiscal-year")

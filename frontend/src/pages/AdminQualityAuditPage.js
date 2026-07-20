@@ -95,6 +95,51 @@ export default function AdminQualityAuditPage() {
   const [optiproBusy, setOptiproBusy] = useState(false);
   const [optiproResult, setOptiproResult] = useState(null);
   const [optiproCopro, setOptiproCopro] = useState('');
+  // iter90ih : Deduplication natures + PCMN
+  const [dedupNatBusy, setDedupNatBusy] = useState(false);
+  const [dedupNatResult, setDedupNatResult] = useState(null);
+  const [dedupPcmnBusy, setDedupPcmnBusy] = useState(false);
+  const [dedupPcmnResult, setDedupPcmnResult] = useState(null);
+  const [dedupCopro, setDedupCopro] = useState('all');
+  const runDedupNatures = async (dryRun) => {
+    if (!dryRun && !window.confirm(
+      "Fusionner les natures de depenses dupliquees ?\n\n" +
+      "* Idempotent - regroupe par (ACP, compte comptable).\n" +
+      "* Le PLUS ANCIEN est garde, les autres sont supprimes.\n" +
+      "* Les factures pointant vers les doublons sont repointees vers le survivant.\n\n" +
+      "Confirmez pour lancer.",
+    )) return;
+    setDedupNatBusy(true);
+    setDedupNatResult(null);
+    try {
+      const q = dedupCopro !== 'all' ? `copropriete_id=${dedupCopro}&` : '';
+      const { data } = await api.post(`/admin/heal-duplicate-natures?${q}dry_run=${dryRun}`);
+      setDedupNatResult(data);
+      if (dryRun) toast.info(`Dry-run : ${data.duplicate_groups} groupe(s) a nettoyer`, { duration: 6000 });
+      else toast.success(`${data.deleted_natures} nature(s) supprimee(s), ${data.invoices_repointed} facture(s) repointee(s)`, { duration: 8000 });
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur dedup natures');
+    } finally { setDedupNatBusy(false); }
+  };
+  const runDedupPcmn = async (dryRun) => {
+    if (!dryRun && !window.confirm(
+      "Supprimer les comptes PCMN dupliques ?\n\n" +
+      "* Idempotent - regroupe par (ACP, numero de compte).\n" +
+      "* Un seul compte est garde par groupe.\n\n" +
+      "Confirmez pour lancer.",
+    )) return;
+    setDedupPcmnBusy(true);
+    setDedupPcmnResult(null);
+    try {
+      const q = dedupCopro !== 'all' ? `copropriete_id=${dedupCopro}&` : '';
+      const { data } = await api.post(`/admin/heal-duplicate-pcmn?${q}dry_run=${dryRun}`);
+      setDedupPcmnResult(data);
+      if (dryRun) toast.info(`Dry-run : ${data.duplicate_groups} groupe(s) a nettoyer`, { duration: 6000 });
+      else toast.success(`${data.deleted_pcmn} compte(s) PCMN supprime(s)`, { duration: 8000 });
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur dedup PCMN');
+    } finally { setDedupPcmnBusy(false); }
+  };
   const runHealOptipro = async (dryRun) => {
     if (!optiproCopro) {
       toast.error('Selectionnez une ACP a nettoyer.');
@@ -634,6 +679,67 @@ export default function AdminQualityAuditPage() {
               )}
             </div>
           )}
+        </CardContent>
+      </Card>
+
+      {/* iter90ih : Deduplication natures + PCMN */}
+      <Card className="border-cyan-200 bg-cyan-50/40">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-cyan-900 text-base">
+            Doublons natures de depenses / comptes PCMN
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-xs text-cyan-900 leading-relaxed">
+            Chaque relance du wizard d&apos;import creait auparavant de nouveaux doublons de natures (jusqu&apos;a 4x observees). Le fix preventif est actif (idempotence sur ACP+compte). Ce healing nettoie les ACP deja polluees. Les factures pointant vers un doublon sont repointees vers la nature la plus ancienne.
+          </p>
+          <div className="flex gap-2 items-center">
+            <Select value={dedupCopro} onValueChange={setDedupCopro}>
+              <SelectTrigger className="flex-1 max-w-md" data-testid="dedup-copro-select">
+                <SelectValue placeholder="Selectionner une ACP..." />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Toutes les ACP</SelectItem>
+                {copros.filter(c => c.status !== 'archived').map(c => (
+                  <SelectItem key={c.id} value={c.id}>{c.reference ? `${c.reference} - ` : ''}{c.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="bg-white border border-cyan-200 rounded p-3 space-y-2">
+              <div className="font-semibold text-sm text-cyan-900">Natures de depenses</div>
+              <div className="flex gap-2">
+                <Button variant="outline" size="sm" onClick={() => runDedupNatures(true)} disabled={dedupNatBusy} data-testid="dedup-nat-dry-btn">
+                  {dedupNatBusy ? '...' : 'Dry-run'}
+                </Button>
+                <Button size="sm" onClick={() => runDedupNatures(false)} disabled={dedupNatBusy} className="bg-cyan-600 hover:bg-cyan-700 text-white" data-testid="dedup-nat-live-btn">
+                  {dedupNatBusy ? '...' : 'Fusionner'}
+                </Button>
+              </div>
+              {dedupNatResult && (
+                <div className="text-xs text-slate-700">
+                  <b>{dedupNatResult.duplicate_groups}</b> groupe(s) - {dedupNatResult.mode === 'live' && <>{dedupNatResult.deleted_natures} suppr. / {dedupNatResult.invoices_repointed} factures repointees</>}
+                </div>
+              )}
+            </div>
+            <div className="bg-white border border-cyan-200 rounded p-3 space-y-2">
+              <div className="font-semibold text-sm text-cyan-900">Comptes PCMN</div>
+              <div className="flex gap-2">
+                <Button variant="outline" size="sm" onClick={() => runDedupPcmn(true)} disabled={dedupPcmnBusy} data-testid="dedup-pcmn-dry-btn">
+                  {dedupPcmnBusy ? '...' : 'Dry-run'}
+                </Button>
+                <Button size="sm" onClick={() => runDedupPcmn(false)} disabled={dedupPcmnBusy} className="bg-cyan-600 hover:bg-cyan-700 text-white" data-testid="dedup-pcmn-live-btn">
+                  {dedupPcmnBusy ? '...' : 'Fusionner'}
+                </Button>
+              </div>
+              {dedupPcmnResult && (
+                <div className="text-xs text-slate-700">
+                  <b>{dedupPcmnResult.duplicate_groups}</b> groupe(s) - {dedupPcmnResult.mode === 'live' && <>{dedupPcmnResult.deleted_pcmn} suppr.</>}
+                </div>
+              )}
+            </div>
+          </div>
         </CardContent>
       </Card>
 

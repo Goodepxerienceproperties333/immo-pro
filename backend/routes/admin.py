@@ -1827,6 +1827,7 @@ def create_admin_router(db):
         request: Request,
         copropriete_id: str,
         dry_run: bool = True,
+        include_suppliers: bool = True,
     ):
         """Fusionne les comptes Optipro pollues (4100XXX 7-char) vers les
         comptes canoniques (4101XXXX) crees automatiquement par notre
@@ -1837,6 +1838,7 @@ def create_admin_router(db):
             par 4101/40000 (nouveau/legacy schema).
           - `reserve` avec longueur 7 (ex: 4001959) OU ne commence pas
             par 4100/40010.
+          - `main` (supplier) avec longueur != 8 OU ne commence pas par 44000.
 
         NOTE : les comptes Optipro `4100XXX` sont ambigus car ils
         collident avec le NOUVEAU prefixe reserve `4100XXXX`. La
@@ -1844,6 +1846,7 @@ def create_admin_router(db):
         """
         await _get_superadmin_only(request)
         from tier_accounts import assign_owner_accounts as _assign_owner_accounts
+        from tier_accounts import assign_supplier_account as _assign_supplier_account
 
         def _is_bad_prov(acc: str) -> bool:
             if not acc:
@@ -1857,9 +1860,16 @@ def create_admin_router(db):
             # Optipro 7-char (4001XXX) ou 8-char sans prefixe correct
             return len(acc) == 7 or not acc.startswith(("4100", "40010"))
 
+        def _is_bad_supplier_main(acc: str) -> bool:
+            if not acc:
+                return False
+            # Canonique = 44000XXX (8 chars). Tout autre format (7-char
+            # Optipro 4400XXX, 44001XXX legacy) est considere corrompu.
+            return len(acc) != 8 or not acc.startswith("44000")
+
         heals = []
         remaps: dict = {}  # source_acc -> canonical_acc
-        owner_updates = []
+        supplier_heals = []
 
         async for o in db.owners.find(
             {"copropriete_ids": copropriete_id}, {"_id": 0},
@@ -1904,6 +1914,40 @@ def create_admin_router(db):
             if bad_res and reserve and not dry_run:
                 remaps[reserve] = new_ta.get("reserve", reserve)
 
+        # iter90ih : meme logique pour les SUPPLIERS pollues
+        if include_suppliers:
+            async for sup in db.suppliers.find(
+                {"copropriete_id": copropriete_id}, {"_id": 0},
+            ):
+                sid = sup["id"]
+                ta = (sup.get("tier_accounts") or {}).get(copropriete_id, {}) or {}
+                main = (ta.get("main") or "").strip()
+                if not _is_bad_supplier_main(main):
+                    continue
+                # Reset et re-assign
+                fresh_ta = {k: v for k, v in ta.items() if k != "main"}
+                if not dry_run:
+                    await db.suppliers.update_one(
+                        {"id": sid},
+                        {"$set": {f"tier_accounts.{copropriete_id}": fresh_ta}},
+                    )
+                    sup_after = await _assign_supplier_account(
+                        db,
+                        {**sup, "tier_accounts": {**(sup.get("tier_accounts") or {}), copropriete_id: fresh_ta}},
+                        copropriete_id,
+                    )
+                else:
+                    sup_after = sup
+                new_ta = (sup_after.get("tier_accounts") or {}).get(copropriete_id, {}) or {}
+                supplier_heals.append({
+                    "supplier_id": sid,
+                    "supplier_name": sup.get("name") or "?",
+                    "before": {"main": main},
+                    "after": new_ta if not dry_run else "canonique_a_creer",
+                })
+                if not dry_run and new_ta.get("main"):
+                    remaps[main] = new_ta["main"]
+
         # Reecriture des lignes journal_entries : source_acc -> canonical
         lines_remapped = 0
         entries_touched = 0
@@ -1946,10 +1990,139 @@ def create_admin_router(db):
             "mode": "dry_run" if dry_run else "live",
             "copropriete_id": copropriete_id,
             "owners_healed": len(heals),
+            "suppliers_healed": len(supplier_heals),
             "account_remaps": remaps,
             "journal_entries_touched": entries_touched,
             "lines_remapped": lines_remapped,
             "pcmn_accounts_deleted": pcmn_deleted,
+            "details": heals[:200],
+            "supplier_details": supplier_heals[:200],
+        }
+
+    # iter90ih : Deduplication des natures de depenses (`expense_categories`).
+    # Bug historique : `commit_natures` faisait un `insert_one` sans check
+    # d'idempotence. Chaque relance du wizard sur la meme ACP creait 2, 3, 4
+    # copies de chaque nature. Le fix preventif est deja en place (skip si
+    # `copro_id + account_number` existe deja). Cet endpoint nettoie les
+    # ACP deja polluees.
+    #
+    # Strategie : pour chaque groupe `(copropriete_id, account_number)`
+    # contenant plusieurs docs, on garde le PLUS ANCIEN (par created_at)
+    # et on repointe toutes les factures qui referencaient un doublon
+    # vers l'id du survivant. Idempotent.
+    @router.post("/heal-duplicate-natures")
+    async def heal_duplicate_natures(
+        request: Request,
+        copropriete_id: str = "",
+        dry_run: bool = True,
+    ):
+        await _get_superadmin_only(request)
+        match_stage: dict = {}
+        if copropriete_id:
+            match_stage["copropriete_id"] = copropriete_id
+        pipeline = [
+            {"$match": match_stage},
+            {"$group": {
+                "_id": {"copro": "$copropriete_id", "acc": "$account_number"},
+                "count": {"$sum": 1},
+                "docs": {"$push": {
+                    "id": "$id",
+                    "name": "$name",
+                    "created_at": "$created_at",
+                }},
+            }},
+            {"$match": {"count": {"$gt": 1}}},
+        ]
+        groups = await db.expense_categories.aggregate(pipeline).to_list(1000)
+
+        heals = []
+        deleted = 0
+        invoices_repointed = 0
+        for g in groups:
+            copro = g["_id"]["copro"]
+            acc = g["_id"]["acc"]
+            docs = sorted(g["docs"], key=lambda d: (d.get("created_at") or ""))
+            keeper = docs[0]
+            trash = docs[1:]
+            trash_ids = [t["id"] for t in trash]
+            entry = {
+                "copro": copro,
+                "account": acc,
+                "keeper": {"id": keeper["id"], "name": keeper["name"]},
+                "removed_ids": trash_ids,
+                "removed_count": len(trash_ids),
+            }
+            heals.append(entry)
+            if not dry_run:
+                # Repoint invoices referencing a duplicate to the keeper
+                res = await db.invoices.update_many(
+                    {"copropriete_id": copro, "expense_category_id": {"$in": trash_ids}},
+                    {"$set": {"expense_category_id": keeper["id"]}},
+                )
+                invoices_repointed += res.modified_count
+                # Delete duplicates
+                r2 = await db.expense_categories.delete_many({"id": {"$in": trash_ids}})
+                deleted += r2.deleted_count
+        return {
+            "mode": "dry_run" if dry_run else "live",
+            "copropriete_id": copropriete_id or "all",
+            "duplicate_groups": len(heals),
+            "deleted_natures": deleted,
+            "invoices_repointed": invoices_repointed,
+            "details": heals[:200],
+        }
+
+    # iter90ih : Deduplication des comptes PCMN par (ACP, number). En theorie,
+    # aucun doublon ne devrait exister (contrainte metier a la creation). Cet
+    # endpoint sert de filet de securite si un import brut a contourne les
+    # gardes-fous.
+    @router.post("/heal-duplicate-pcmn")
+    async def heal_duplicate_pcmn(
+        request: Request,
+        copropriete_id: str = "",
+        dry_run: bool = True,
+    ):
+        await _get_superadmin_only(request)
+        match_stage: dict = {}
+        if copropriete_id:
+            match_stage["copropriete_id"] = copropriete_id
+        pipeline = [
+            {"$match": match_stage},
+            {"$group": {
+                "_id": {"copro": "$copropriete_id", "num": "$number"},
+                "count": {"$sum": 1},
+                "ids": {"$push": {
+                    "id": "$_id",
+                    "name": "$name",
+                }},
+            }},
+            {"$match": {"count": {"$gt": 1}}},
+        ]
+        groups = await db.pcmn_accounts.aggregate(pipeline).to_list(1000)
+        heals = []
+        deleted = 0
+        for g in groups:
+            ids = g["ids"]
+            keeper = ids[0]
+            trash = ids[1:]
+            heals.append({
+                "copro": g["_id"]["copro"],
+                "number": g["_id"]["num"],
+                "kept": {"id": str(keeper["id"]), "name": keeper.get("name", "")},
+                "removed_count": len(trash),
+            })
+            if not dry_run:
+                # NOTE : PCMN docs use MongoDB _id (ObjectId) since no `id`
+                # field is set for them. We delete by _id.
+                for t in trash:
+                    r = await db.pcmn_accounts.delete_one({"_id": t["id"]})
+                    if r.deleted_count:
+                        deleted += 1
+        return {
+            "mode": "dry_run" if dry_run else "live",
+            "copropriete_id": copropriete_id or "all",
+            "duplicate_groups": len(heals),
+            "deleted_pcmn": deleted,
             "details": heals[:200],
         }
 
