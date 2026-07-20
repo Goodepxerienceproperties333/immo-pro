@@ -1187,6 +1187,20 @@ async def startup():
     except Exception as _e:
         print(f"[startup] suppliers unique name index skipped: {_e}")
 
+    # iter90im : UNICITE GLOBALE des `vat_number` des suppliers (regle
+    # metier user : "le numero de TVA est la cle unique"). Une meme TVA ne
+    # peut identifier qu'UNE seule entreprise dans le systeme, meme entre
+    # ACPs differentes. Partial pour ignorer les fournisseurs sans TVA.
+    try:
+        await db.suppliers.create_index(
+            [("vat_number", 1)],
+            unique=True,
+            name="uq_supplier_vat_global",
+            partialFilterExpression={"vat_number": {"$type": "string", "$gt": ""}},
+        )
+    except Exception as _e:
+        print(f"[startup] suppliers unique vat index skipped: {_e}")
+
     # iter90ii : UNICITE des PROPRIETAIRES par (ACP, auxiliary_code). Un
     # meme code auxiliaire ne peut apparaitre qu'une seule fois dans une
     # ACP. Comme `copropriete_ids` est un array, MongoDB cree un multikey

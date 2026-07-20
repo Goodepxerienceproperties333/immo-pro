@@ -148,6 +148,30 @@ export default function AdminQualityAuditPage() {
       toast.error(err.response?.data?.detail || 'Erreur dedup suppliers');
     } finally { setDedupSupBusy(false); }
   };
+  // iter90im : Suppression definitive des orphelins sans transactions
+  const [purgeBusy, setPurgeBusy] = useState(false);
+  const [purgeResult, setPurgeResult] = useState(null);
+  const runPurgeOrphans = async (dryRun) => {
+    if (!dryRun && !window.confirm(
+      "SUPPRESSION DEFINITIVE des fiches orphelines ?\n\n" +
+      "* Uniquement les fiches SANS transactions liees (JE + lots + factures + tenants).\n" +
+      "* Ces fiches sont des artefacts d'import defectueux sans impact business.\n" +
+      "* Idempotent - re-executable sans risque.\n\n" +
+      "Recommande : lancer d'abord un DRY-RUN pour verifier.\n\n" +
+      "Confirmez pour lancer la SUPPRESSION.",
+    )) return;
+    setPurgeBusy(true);
+    setPurgeResult(null);
+    try {
+      const q = dedupCopro !== 'all' ? `copropriete_id=${dedupCopro}&` : '';
+      const { data } = await api.post(`/admin/heal-remove-orphan-tiers-without-transactions?${q}dry_run=${dryRun}`);
+      setPurgeResult(data);
+      if (dryRun) toast.info(`Dry-run : ${data.orphan_owners_found} owners + ${data.orphan_suppliers_found} suppliers a supprimer`, { duration: 6000 });
+      else toast.success(`${data.deleted_owners} owners + ${data.deleted_suppliers} suppliers supprimes`, { duration: 8000 });
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur purge');
+    } finally { setPurgeBusy(false); }
+  };
   const runDedupNatures = async (dryRun) => {
     if (!dryRun && !window.confirm(
       "Fusionner les natures de depenses dupliquees ?\n\n" +
@@ -830,6 +854,41 @@ export default function AdminQualityAuditPage() {
                 </div>
               )}
             </div>
+          </div>
+
+          {/* iter90im : Purge definitive orphelins sans transactions */}
+          <div className="bg-red-50/50 border-2 border-red-300 rounded p-3 space-y-2 mt-3">
+            <div className="font-semibold text-sm text-red-900 flex items-center gap-2">
+              Purge des orphelins SANS transactions (owners + suppliers)
+            </div>
+            <p className="text-[11px] text-red-800 leading-relaxed">
+              Supprime DEFINITIVEMENT les fiches proprietaires + fournisseurs qui n&apos;ont AUCUNE transaction associee (aucune ligne de journal, aucun lot, aucune facture, aucun tenant). Ces fiches sont typiquement des artefacts d&apos;imports defectueux avant iter90im. Le nettoyage est sans risque business.
+            </p>
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" onClick={() => runPurgeOrphans(true)} disabled={purgeBusy} data-testid="purge-orphan-dry-btn">
+                {purgeBusy ? '...' : 'Dry-run'}
+              </Button>
+              <Button size="sm" onClick={() => runPurgeOrphans(false)} disabled={purgeBusy} className="bg-red-600 hover:bg-red-700 text-white" data-testid="purge-orphan-live-btn">
+                {purgeBusy ? '...' : 'Purger'}
+              </Button>
+            </div>
+            {purgeResult && (
+              <div className="text-xs text-slate-800 bg-white border border-red-200 rounded p-2 space-y-1">
+                <div>Mode : <b>{purgeResult.mode}</b> | Scope : <b>{purgeResult.copropriete_id}</b></div>
+                <div>Owners : <b>{purgeResult.orphan_owners_found}</b> orphelins detectes{purgeResult.mode === 'live' && ` / ${purgeResult.deleted_owners} supprimes`}</div>
+                <div>Suppliers : <b>{purgeResult.orphan_suppliers_found}</b> orphelins detectes{purgeResult.mode === 'live' && ` / ${purgeResult.deleted_suppliers} supprimes`}</div>
+                {(purgeResult.orphan_owners_sample || []).length > 0 && (
+                  <details>
+                    <summary className="cursor-pointer text-red-700">Voir les owners a supprimer</summary>
+                    <ul className="mt-1 text-[10px] max-h-32 overflow-auto">
+                      {purgeResult.orphan_owners_sample.map((o, i) => (
+                        <li key={i}>{o.name} {o.aux ? `(${o.aux})` : ''}</li>
+                      ))}
+                    </ul>
+                  </details>
+                )}
+              </div>
+            )}
           </div>
         </CardContent>
       </Card>

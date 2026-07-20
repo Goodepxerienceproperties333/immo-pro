@@ -167,6 +167,29 @@ export default function SupplierSearchSelect({
       setCreateError('Le nom est obligatoire.');
       return;
     }
+    // iter90ik : BCE OBLIGATOIRE. Regle utilisateur : "empecher la creation
+    // de fournisseurs sans BCE bloquant donc la validation sur BCE". Le
+    // BCE (ou TVA) est le seul identifiant unique fiable pour eviter les
+    // doublons entre imports Optipro / creation manuelle / lettrage
+    // bancaire. Format attendu : BE0123456789 (10 chiffres apres le
+    // prefixe pays), extension au VAT europeen (FR, NL, LU, DE...).
+    const bce = createForm.bce_number.trim().replace(/[.\s]/g, '');
+    const vat = createForm.vat_number.trim().replace(/[.\s]/g, '');
+    if (!bce && !vat) {
+      setCreateError(
+        'Le numero BCE (ou TVA equivalent) est obligatoire. '
+        + 'Format attendu : BE0123456789 - identifiant unique de l\'entreprise. '
+        + 'Verifiez sur https://kbopub.economie.fgov.be/'
+      );
+      return;
+    }
+    // Validation format leger : au moins 8 chars alphanumeriques
+    if (bce && !/^[A-Z]{2}[0-9]{8,12}$/i.test(bce)) {
+      setCreateError(
+        `Format BCE invalide : "${createForm.bce_number}". Format attendu : BE0123456789 (2 lettres pays + 8-12 chiffres).`
+      );
+      return;
+    }
     if (!onCreateSupplier) {
       setCreateError('Action non disponible.');
       return;
@@ -175,8 +198,8 @@ export default function SupplierSearchSelect({
     try {
       const created = await onCreateSupplier({
         name: createForm.name.trim(),
-        bce_number: createForm.bce_number.trim(),
-        vat_number: createForm.vat_number.trim(),
+        bce_number: bce,
+        vat_number: vat,
         iban: createForm.iban.trim().replace(/\s+/g, ''),
       });
       onChange?.(created.name, created);
@@ -392,17 +415,20 @@ export default function SupplierSearchSelect({
                 </div>
                 <div className="grid grid-cols-2 gap-2">
                   <div>
-                    <label className="text-[11px] text-slate-600">BCE</label>
+                    <label className="text-[11px] text-slate-600 flex items-center gap-1">
+                      BCE <span className="text-red-600 font-bold">*</span>
+                    </label>
                     <Input
                       value={createForm.bce_number}
                       onChange={(e) => setCreateForm({ ...createForm, bce_number: e.target.value })}
                       placeholder="BE0123456789"
-                      className="h-8 text-sm font-mono"
+                      className={`h-8 text-sm font-mono ${!createForm.bce_number.trim() && !createForm.vat_number.trim() ? 'border-red-300 bg-red-50/30' : ''}`}
                       data-testid={`${testId}-create-bce`}
+                      required
                     />
                   </div>
                   <div>
-                    <label className="text-[11px] text-slate-600">TVA</label>
+                    <label className="text-[11px] text-slate-600">TVA (si different)</label>
                     <Input
                       value={createForm.vat_number}
                       onChange={(e) => setCreateForm({ ...createForm, vat_number: e.target.value })}
@@ -412,6 +438,12 @@ export default function SupplierSearchSelect({
                     />
                   </div>
                 </div>
+                {!createForm.bce_number.trim() && !createForm.vat_number.trim() && (
+                  <div className="text-[10px] text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1" data-testid={`${testId}-bce-hint`}>
+                    <b>Le BCE (ou TVA equivalent) est obligatoire.</b> Verifiez le numero sur
+                    {' '}<a href="https://kbopub.economie.fgov.be/" target="_blank" rel="noreferrer" className="underline text-blue-700">kbopub.economie.fgov.be</a>.
+                  </div>
+                )}
                 <div>
                   <label className="text-[11px] text-slate-600">IBAN</label>
                   <Input
@@ -445,8 +477,9 @@ export default function SupplierSearchSelect({
                     size="sm"
                     className="bg-emerald-600 hover:bg-emerald-700 text-white"
                     onClick={handleSubmitCreate}
-                    disabled={creating}
+                    disabled={creating || !createForm.name.trim() || (!createForm.bce_number.trim() && !createForm.vat_number.trim())}
                     data-testid={`${testId}-create-submit`}
+                    title={(!createForm.bce_number.trim() && !createForm.vat_number.trim()) ? "BCE ou TVA obligatoire pour creer une fiche fournisseur" : ""}
                   >
                     {creating ? (
                       <><Loader2 size={12} className="mr-1 animate-spin" /> Creation...</>

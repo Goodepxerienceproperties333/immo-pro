@@ -415,6 +415,20 @@ def create_import_wizard_router(db):
     # ----- A: OWNERS -----
     @router.post("/sessions/{session_id}/commit-owners")
     async def commit_owners(session_id: str, data: CommitOwnersInput, request: Request):
+        """iter90im : Import owners avec strategie MATCH-OR-UPDATE (upsert).
+
+        Regle metier : "Verification systematique - Avant de creer une
+        entite, verifie si elle existe deja en base. Pour les proprietaires,
+        utilise l'identifiant Optipro (auxiliary_code) ou l'email. Si
+        l'entite existe, mets-la a jour (Update) au lieu de creer un
+        nouveau compte."
+
+        Ordre de matching (par priorite) :
+          1. `auxiliary_code` (Optipro C0959) - identifiant historique unique
+          2. `email` - identifiant unique moderne
+          3. `phone` - fallback
+          4. `norm_name` (last_name + first_name normalise) - fallback nom
+        """
         session = await db.import_sessions.find_one({"id": session_id})
         if not session:
             raise HTTPException(404, "Session introuvable")
@@ -426,38 +440,38 @@ def create_import_wizard_router(db):
             if k not in m or m[k] in ("", None):
                 raise HTTPException(400, f"Mapping requis pour '{k}'")
 
-        # Helpers de normalisation (alignes sur routes/properties.py)
         import re as _re
         def _norm_name(first, last):
             return " ".join(sorted(f"{first} {last}".lower().strip().split()))
         def _norm_an(v):
             return _re.sub(r"[^A-Za-z0-9]", "", v or "").upper()
-        def _norm_addr(a, p, c):
-            full = _re.sub(r"[^a-z0-9\s]", "", f"{a} {p} {c}".strip().lower())
-            return " ".join(full.split())
 
-        # Pre-load des owners existants pour cette ACP (perf import en lot)
-        existing_owners = await db.owners.find(
-            {"copropriete_id": copro_id}, {"_id": 0}
-        ).to_list(5000)
-        existing_by_name = {}
-        existing_by_email = {}
-        existing_by_phone = {}
+        # Pre-load des owners existants GLOBALEMENT (pour matching cross-ACP :
+        # un meme proprietaire peut deja avoir ete cree sur une autre ACP,
+        # dans ce cas on ADD l'ACP courante a `copropriete_ids`).
+        existing_owners = await db.owners.find({}, {"_id": 0}).to_list(50000)
+        by_aux = {}
+        by_email = {}
+        by_phone = {}
+        by_name = {}
         for o in existing_owners:
-            nn = _norm_name(o.get("first_name", ""), o.get("last_name", "") or o.get("name", ""))
-            if nn:
-                existing_by_name[nn] = o["id"]
+            aux = (o.get("auxiliary_code") or "").strip().upper()
+            if aux:
+                by_aux[aux] = o
             for e_field in ("email", "email2"):
                 e = (o.get(e_field) or "").strip().lower()
                 if e:
-                    existing_by_email[e] = o["id"]
+                    by_email[e] = o
             for p_field in ("phone", "phone2"):
                 p = _norm_an(o.get(p_field, ""))
                 if p:
-                    existing_by_phone[p] = o["id"]
+                    by_phone[p] = o
+            nn = _norm_name(o.get("first_name", ""), o.get("last_name", "") or o.get("name", ""))
+            if nn:
+                by_name.setdefault(nn, o)  # premier gagne (le plus ancien)
 
         inserted = 0
-        skipped_duplicates = 0
+        updated = 0
         errors = []
         for idx, row in enumerate(data.rows):
             try:
@@ -473,20 +487,32 @@ def create_import_wizard_router(db):
                 full = (f"{last_name} {first_name}".strip()) if first_name else last_name
                 email = col("email")
                 phone = col("phone")
-                # Skip silencieux si doublon detecte (sur nom OU email OU phone)
-                norm_name = _norm_name(first_name, last_name)
+                aux_code = col("auxiliary_code")
+                norm_aux = aux_code.upper()
                 norm_email = email.lower() if email else ""
                 norm_phone = _norm_an(phone) if phone else ""
-                is_dup = (
-                    (norm_name and norm_name in existing_by_name) or
-                    (norm_email and norm_email in existing_by_email) or
-                    (norm_phone and norm_phone in existing_by_phone)
-                )
-                if is_dup:
-                    skipped_duplicates += 1
-                    continue
-                doc = {
-                    "id": str(uuid.uuid4()),
+                norm_name = _norm_name(first_name, last_name)
+
+                # MATCH PRIORITAIRE
+                existing = None
+                match_reason = None
+                if norm_aux and norm_aux in by_aux:
+                    existing = by_aux[norm_aux]
+                    match_reason = "auxiliary_code"
+                elif norm_email and norm_email in by_email:
+                    existing = by_email[norm_email]
+                    match_reason = "email"
+                elif norm_phone and norm_phone in by_phone:
+                    existing = by_phone[norm_phone]
+                    match_reason = "phone"
+                elif norm_name and norm_name in by_name:
+                    existing = by_name[norm_name]
+                    match_reason = "name"
+
+                # Champs a merger (nouvelle valeur ne remplace que si le
+                # champ actuel est vide - on preserve les donnees enrichies
+                # manuellement par le syndic).
+                new_fields = {
                     "first_name": first_name,
                     "last_name": last_name,
                     "name": full,
@@ -497,29 +523,74 @@ def create_import_wizard_router(db):
                     "email": email,
                     "phone": phone,
                     "iban": col("iban"),
-                    "copropriete_id": copro_id,
-                    "import_session_id": session_id,
-                    "created_at": _now_iso(),
+                    "auxiliary_code": aux_code,
                 }
-                await db.owners.insert_one(doc)
-                inserted += 1
-                # Met a jour les indexes locaux pour les rows suivantes
-                if norm_name:
-                    existing_by_name[norm_name] = doc["id"]
-                if norm_email:
-                    existing_by_email[norm_email] = doc["id"]
-                if norm_phone:
-                    existing_by_phone[norm_phone] = doc["id"]
+
+                if existing:
+                    # UPDATE : merge des champs vides + ADD l'ACP a copropriete_ids
+                    merged = {**existing}
+                    for k, v in new_fields.items():
+                        if v and not merged.get(k):
+                            merged[k] = v
+                    # Ajoute copro_id a copropriete_ids si absent
+                    current_acps = set(existing.get("copropriete_ids") or [])
+                    if existing.get("copropriete_id") and not current_acps:
+                        current_acps.add(existing["copropriete_id"])
+                    current_acps.add(copro_id)
+                    merged["copropriete_ids"] = sorted(current_acps)
+                    # Retire copropriete_id scalaire (deprecie)
+                    merged.pop("copropriete_id", None)
+                    merged["last_updated_at"] = _now_iso()
+                    merged["last_updated_from_import"] = session_id
+                    await db.owners.update_one(
+                        {"id": existing["id"]},
+                        {"$set": {k: v for k, v in merged.items() if k != "id"},
+                         "$unset": {"copropriete_id": ""}},
+                    )
+                    # Refresh cache
+                    by_aux[norm_aux] = merged
+                    updated += 1
+                else:
+                    # CREATE : nouveau doc avec copropriete_ids (array)
+                    doc = {
+                        "id": str(uuid.uuid4()),
+                        **new_fields,
+                        "copropriete_ids": [copro_id],
+                        "import_session_id": session_id,
+                        "created_at": _now_iso(),
+                    }
+                    await db.owners.insert_one(doc)
+                    inserted += 1
+                    if norm_aux:
+                        by_aux[norm_aux] = doc
+                    if norm_email:
+                        by_email[norm_email] = doc
+                    if norm_phone:
+                        by_phone[norm_phone] = doc
+                    if norm_name:
+                        by_name.setdefault(norm_name, doc)
             except Exception as e:
                 errors.append({"row": idx, "error": str(e)})
         await _update_step(db, session_id, "owners", {
-            "count": inserted, "skipped_duplicates": skipped_duplicates, "errors": errors,
+            "count": inserted, "updated": updated, "errors": errors,
         })
-        return {"inserted": inserted, "skipped_duplicates": skipped_duplicates, "errors": errors}
+        return {"inserted": inserted, "updated": updated, "errors": errors}
 
     # ----- C: SUPPLIERS -----
     @router.post("/sessions/{session_id}/commit-suppliers")
     async def commit_suppliers(session_id: str, data: CommitSuppliersInput, request: Request):
+        """iter90im : Import suppliers avec strategie UPSERT.
+
+        Regle metier : "Pour les Fournisseurs, utilise le numero de TVA
+        comme cle unique. Si la TVA existe deja, mets a jour les infos
+        au lieu de creer un nouveau fournisseur."
+
+        Ordre de matching (par priorite) :
+          1. `bce_number` (VAT/BCE normalise) - identifiant unique GLOBAL
+          2. `vat_number` (idem)
+          3. `iban` normalise
+          4. `name` (normalise) dans le scope ACP
+        """
         from routes.suppliers import find_duplicate_supplier
         session = await db.import_sessions.find_one({"id": session_id})
         if not session:
@@ -530,7 +601,7 @@ def create_import_wizard_router(db):
         if "name" not in m or m["name"] in ("", None):
             raise HTTPException(400, "Mapping requis pour 'name'")
         inserted = 0
-        skipped_duplicates = 0
+        updated = 0
         errors = []
         for idx, row in enumerate(data.rows):
             try:
@@ -545,16 +616,14 @@ def create_import_wizard_router(db):
                 bce = col("bce_number")
                 vat = col("vat_number")
                 iban = col("iban")
-                # Check anti-doublon scope ACP : skip silencieux (pas une erreur lors d'un import)
+
+                # MATCHING PRIORITAIRE (BCE/VAT global, puis nom local)
                 dup = await find_duplicate_supplier(
                     db, name=name, bce_number=bce, vat_number=vat,
                     iban=iban, copro_id=copro_id,
                 )
-                if dup:
-                    skipped_duplicates += 1
-                    continue
-                doc = {
-                    "id": str(uuid.uuid4()),
+
+                new_fields = {
                     "name": name,
                     "vat_number": vat,
                     "bce_number": bce,
@@ -568,6 +637,42 @@ def create_import_wizard_router(db):
                     "bic": col("bic"),
                     "default_account": col("default_account"),
                     "notes": col("notes"),
+                }
+
+                if dup:
+                    existing = dup["supplier"]
+                    # UPDATE : merge des champs vides + rattache a l'ACP courante
+                    merged_fields = {}
+                    for k, v in new_fields.items():
+                        if v and not existing.get(k):
+                            merged_fields[k] = v
+                    # Si le supplier existant appartient a une autre ACP, on
+                    # le RATTACHE aussi a l'ACP courante en clonant (car
+                    # `copropriete_id` est scalaire pour supplier). Pour eviter
+                    # de casser la structure, on garde le premier scope mais
+                    # on ajoute un tier_accounts.{acp_courant} pour permettre
+                    # a l'ACP de voir cette fiche.
+                    if existing.get("copropriete_id") != copro_id:
+                        # Assign compte canonique 44000XXX sur cette ACP
+                        try:
+                            from tier_accounts import assign_supplier_account as _assign
+                            await _assign(db, existing, copro_id)
+                        except Exception:
+                            pass
+                    if merged_fields:
+                        merged_fields["last_updated_at"] = _now_iso()
+                        merged_fields["last_updated_from_import"] = session_id
+                        await db.suppliers.update_one(
+                            {"id": existing["id"]},
+                            {"$set": merged_fields},
+                        )
+                    updated += 1
+                    continue
+
+                # CREATE
+                doc = {
+                    "id": str(uuid.uuid4()),
+                    **new_fields,
                     "copropriete_id": copro_id,
                     "import_session_id": session_id,
                     "created_at": _now_iso(),
@@ -577,9 +682,9 @@ def create_import_wizard_router(db):
             except Exception as e:
                 errors.append({"row": idx, "error": str(e)})
         await _update_step(db, session_id, "suppliers", {
-            "count": inserted, "skipped_duplicates": skipped_duplicates, "errors": errors,
+            "count": inserted, "updated": updated, "errors": errors,
         })
-        return {"inserted": inserted, "skipped_duplicates": skipped_duplicates, "errors": errors}
+        return {"inserted": inserted, "updated": updated, "errors": errors}
 
     # ----- C-bis: SUPPLIERS via PDF (no mapping needed - already structured) -----
     @router.post("/sessions/{session_id}/preview-suppliers-pdf")

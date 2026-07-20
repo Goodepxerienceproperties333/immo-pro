@@ -2411,25 +2411,28 @@ def create_admin_router(db):
             "details": heals[:200],
         }
 
-    # iter90ij : Detection et fusion des COMPTES TIERS ORPHELINS (owners).
+    # iter90ij : Detection et fusion des COMPTES TIERS ORPHELINS (owners + suppliers).
     #
-    # Symptome : la balance des tiers d'une ACP affiche des lignes
-    # "Ex-prop." avec un compte 8-char inconnu (ex: 41010959, 41010956,
-    # 41010958) qui n'est ni le `provisions` ni le `reserve` d'aucun
-    # owner. Ces comptes sont des HYBRIDES entre prefixe canonique
-    # (`41010`) et suffixe Optipro (les 4 derniers chars de l'aux_code).
+    # Symptomes :
+    #   * Balance des tiers OWNERS : lignes "Ex-prop." avec comptes 8-char
+    #     inconnus (`41010959`, `41010956` = prefixe canonique + suffixe
+    #     Optipro aux_code).
+    #   * Balance FOURNISSEURS : lignes dupliquees (44000009 + 4400015 pour
+    #     AG Insurance) avec des comptes 7-char Optipro (`4400015`, `4400110`)
+    #     ET 8-char (`44000008`, `44000009`) sans supplier associe.
     #
-    # Stratégie de matching (par priorite) :
-    #   1. Si la ligne journal a un `third_party_id` : utiliser le compte
-    #      canonique de ce owner (provisions ou reserve selon le prefixe).
-    #   2. Sinon : chercher un owner de l'ACP dont l'aux_code se termine
-    #      par les 4 derniers chars du compte orphelin.
-    #      Ex: `41010959` -> aux `C0959` -> owner Boxus Wivine
-    #   3. Si trouve : reecrire vers le compte canonique du owner.
-    #   4. Sinon : laisser tel quel (compte vraiment ex-proprietaire
-    #      supprime, geré comme orphelin dans la vue reports).
-    #
-    # Superadmin only. Idempotent.
+    # Strategie unifiee (owners + suppliers) :
+    #   1. Recense les comptes tiers CANONIQUES (tier_accounts.provisions/
+    #      reserve pour owners, tier_accounts.main pour suppliers) pour l'ACP.
+    #   2. Liste les comptes 41xxx / 4001xxx / 44xxxx utilises dans les JE.
+    #   3. Pour chaque compte ORPHELIN (utilise mais pas dans les canoniques) :
+    #      a. Match via `third_party_id` de la ligne (canonical du party).
+    #      b. Sinon match owner via les 4 derniers chars = aux_code suffix.
+    #      c. Sinon match supplier via `account_name` de la ligne (nom du
+    #         fournisseur present dans les JE) vs nom des suppliers de l'ACP.
+    #   4. Reecrit les lignes JE vers le compte canonique et remplit
+    #      third_party_id.
+    #   5. Supprime les comptes PCMN orphelins non-utilises.
     @router.post("/heal-orphan-tier-accounts")
     async def heal_orphan_tier_accounts(
         request: Request,
@@ -2437,95 +2440,280 @@ def create_admin_router(db):
         dry_run: bool = True,
     ):
         await _get_superadmin_only(request)
+        import re
 
-        # 1. Recense tous les comptes tiers "valides" (owner canoniques) de l'ACP
+        def _norm(s: str) -> str:
+            return re.sub(r"\s+", " ", (s or "").strip().lower())
+
+        # 1. OWNERS de l'ACP
         owners = await db.owners.find(
             {"copropriete_ids": copropriete_id}, {"_id": 0},
         ).to_list(10000)
-        valid_accounts = set()
+        valid_owner_accounts = set()
         aux_to_owner: dict = {}
         for o in owners:
             ta = (o.get("tier_accounts") or {}).get(copropriete_id, {}) or {}
             if ta.get("provisions"):
-                valid_accounts.add(ta["provisions"])
+                valid_owner_accounts.add(ta["provisions"])
             if ta.get("reserve"):
-                valid_accounts.add(ta["reserve"])
+                valid_owner_accounts.add(ta["reserve"])
             aux = (o.get("auxiliary_code") or "").strip().upper()
             if aux:
-                # Aux code = "C0959" -> 4 last digits = "0959"
                 digits = aux[1:] if aux.startswith("C") else aux
                 aux_to_owner[digits.zfill(4)] = o
 
-        # 2. Recense tous les comptes 41xxxx / 4001xxxx utilises dans les JE
+        # 2. SUPPLIERS de l'ACP + global (autres ACPs pour matching cross-ACP)
+        suppliers_acp = await db.suppliers.find(
+            {"copropriete_id": copropriete_id}, {"_id": 0},
+        ).to_list(10000)
+        # iter90il : cherche AUSSI les suppliers d'autres ACPs (matching global
+        # par nom pour retrouver le supplier canonique meme s'il a ete cree
+        # dans une autre ACP - ex: Engie present sur ACP Maria mais pas sur
+        # ACP Acacia Auto). Le healing va CLONER le supplier vers l'ACP cible
+        # (avec BCE conserve) et rebasculer les tp_ids.
+        suppliers_global = await db.suppliers.find(
+            {"copropriete_id": {"$ne": copropriete_id}}, {"_id": 0},
+        ).to_list(50000)
+        valid_supplier_accounts = set()
+        name_to_supplier: dict = {}
+        name_to_supplier_global: dict = {}
+        for s in suppliers_acp:
+            ta = (s.get("tier_accounts") or {}).get(copropriete_id, {}) or {}
+            if ta.get("main"):
+                valid_supplier_accounts.add(ta["main"])
+            name_norm = _norm(s.get("name", ""))
+            if name_norm:
+                name_to_supplier[name_norm] = s
+        for s in suppliers_global:
+            name_norm = _norm(s.get("name", ""))
+            # Retire prefixe "F0110 - Engie" -> "Engie"
+            cleaned = re.sub(r"^F\d{3,4}\s*-\s*", "", s.get("name", ""), flags=re.IGNORECASE).strip()
+            cleaned_norm = _norm(cleaned)
+            if name_norm and name_norm not in name_to_supplier:
+                name_to_supplier_global[name_norm] = s
+            if cleaned_norm and cleaned_norm != name_norm and cleaned_norm not in name_to_supplier:
+                name_to_supplier_global.setdefault(cleaned_norm, s)
+
+        valid_accounts = valid_owner_accounts | valid_supplier_accounts
+
+        # 3. Comptes utilises dans les JE de l'ACP
         used_accounts: dict = {}
         async for je in db.journal_entries.find(
             {"copropriete_id": copropriete_id}, {"_id": 0, "id": 1, "lines": 1}
         ):
             for ln in je.get("lines") or []:
                 acc = (ln.get("account_number") or "").strip()
-                if not (acc.startswith("41") or acc.startswith("4001") or acc.startswith("4100")):
-                    continue
                 if not acc or len(acc) < 5:
+                    continue
+                # Owners (410x/4001x) et Suppliers (44xxx)
+                if not (acc.startswith("41") or acc.startswith("4001")
+                        or acc.startswith("4100") or acc.startswith("44")):
                     continue
                 used_accounts.setdefault(acc, []).append({
                     "je_id": je["id"],
                     "tp_id": ln.get("third_party_id") or "",
-                    "acc": acc,
+                    "name": ln.get("account_name") or "",
                 })
 
-        # 3. Detecte les orphelins (utilises mais pas dans valid_accounts)
+        # 4. Detecte les orphelins
         orphans = {a: v for a, v in used_accounts.items() if a not in valid_accounts}
 
-        # 4. Determine le remap (orphan_acc -> canonical_acc)
+        # 5. Determine le remap
         remaps: dict = {}
+        remap_kind: dict = {}  # source_acc -> "owner" | "supplier"
+        remap_tp: dict = {}    # source_acc -> tp_id (survivant)
+        remap_tp_type: dict = {}
+
+        # Suppliers a cloner (nom global -> supplier source a cloner vers ACP)
+        suppliers_to_clone: dict = {}  # name_norm -> {"source": supplier_doc}
+
+        def _try_match_supplier(orphan_acc, tp_id_candidates, name_candidates):
+            """Match un compte 44xxxx a un supplier existant de l'ACP.
+            Retourne (canonical_acc, supplier_id) ou (None, None).
+
+            iter90il : si aucun supplier local ne matche, cherche en GLOBAL
+            (autres ACPs) et MARQUE le supplier a cloner vers cette ACP.
+            """
+            # a) via tp_id sur suppliers locaux
+            for tp_id in tp_id_candidates:
+                target = next((s for s in suppliers_acp if s["id"] == tp_id), None)
+                if target:
+                    ta = (target.get("tier_accounts") or {}).get(copropriete_id, {}) or {}
+                    canonical = ta.get("main", "")
+                    if canonical and canonical != orphan_acc:
+                        return canonical, target["id"]
+            # b) via nom sur suppliers locaux
+            for nm in name_candidates:
+                cleaned = re.sub(r"^F\d{3,4}\s*-\s*", "", nm or "", flags=re.IGNORECASE).strip()
+                nm_norm = _norm(cleaned)
+                if not nm_norm:
+                    continue
+                target = name_to_supplier.get(nm_norm)
+                if not target:
+                    for supplier_nm, s in name_to_supplier.items():
+                        if nm_norm in supplier_nm or supplier_nm in nm_norm:
+                            target = s
+                            break
+                if target:
+                    ta = (target.get("tier_accounts") or {}).get(copropriete_id, {}) or {}
+                    canonical = ta.get("main", "")
+                    if canonical and canonical != orphan_acc:
+                        return canonical, target["id"]
+            # c) via nom sur suppliers GLOBAUX (autres ACPs) - marque pour clonage
+            for nm in name_candidates:
+                cleaned = re.sub(r"^F\d{3,4}\s*-\s*", "", nm or "", flags=re.IGNORECASE).strip()
+                nm_norm = _norm(cleaned)
+                if not nm_norm:
+                    continue
+                global_match = name_to_supplier_global.get(nm_norm)
+                if not global_match:
+                    for supplier_nm, s in name_to_supplier_global.items():
+                        if nm_norm in supplier_nm or supplier_nm in nm_norm:
+                            global_match = s
+                            break
+                if global_match:
+                    # Marque pour clonage vers l'ACP courante
+                    suppliers_to_clone[nm_norm] = {
+                        "source": global_match,
+                        "orphan_accs": suppliers_to_clone.get(nm_norm, {}).get("orphan_accs", []) + [orphan_acc],
+                    }
+                    # Le vrai remap sera fait apres le clonage (voir plus bas)
+                    return "__CLONE_PENDING__", global_match["id"]
+            return None, None
+
         for orphan_acc in orphans:
-            # a) Match via tp_id
-            tp_id_candidates = {r["tp_id"] for r in orphans[orphan_acc] if r["tp_id"]}
-            if len(tp_id_candidates) == 1:
-                tp_id = list(tp_id_candidates)[0]
-                target_owner = next((o for o in owners if o["id"] == tp_id), None)
-                if target_owner:
-                    ta = (target_owner.get("tier_accounts") or {}).get(copropriete_id, {}) or {}
-                    # prefixe reserve = 4100/40010, provisions = 4101/40000
+            tp_ids = {r["tp_id"] for r in orphans[orphan_acc] if r["tp_id"]}
+            names = {r["name"] for r in orphans[orphan_acc] if r["name"]}
+
+            # OWNER (prefixe 410/4001/4100 uniquement)
+            if orphan_acc.startswith(("410", "4001", "4100")) and not orphan_acc.startswith("44"):
+                # a) via tp_id
+                if len(tp_ids) == 1:
+                    tp_id = list(tp_ids)[0]
+                    target = next((o for o in owners if o["id"] == tp_id), None)
+                    if target:
+                        ta = (target.get("tier_accounts") or {}).get(copropriete_id, {}) or {}
+                        is_reserve = orphan_acc.startswith(("4100", "40010", "4001"))
+                        canonical = ta.get("reserve" if is_reserve else "provisions", "")
+                        if canonical and canonical != orphan_acc:
+                            remaps[orphan_acc] = canonical
+                            remap_kind[orphan_acc] = "owner"
+                            remap_tp[orphan_acc] = target["id"]
+                            remap_tp_type[orphan_acc] = "owner"
+                            continue
+                # b) via suffix (4 derniers chars = aux_code suffix)
+                suffix = orphan_acc[-4:]
+                target = aux_to_owner.get(suffix)
+                if target:
+                    ta = (target.get("tier_accounts") or {}).get(copropriete_id, {}) or {}
                     is_reserve = orphan_acc.startswith(("4100", "40010", "4001"))
                     canonical = ta.get("reserve" if is_reserve else "provisions", "")
                     if canonical and canonical != orphan_acc:
                         remaps[orphan_acc] = canonical
+                        remap_kind[orphan_acc] = "owner"
+                        remap_tp[orphan_acc] = target["id"]
+                        remap_tp_type[orphan_acc] = "owner"
                         continue
-            # b) Match via 4 derniers chars (suffix aux_code)
-            suffix = orphan_acc[-4:]
-            target_owner = aux_to_owner.get(suffix)
-            if target_owner:
-                ta = (target_owner.get("tier_accounts") or {}).get(copropriete_id, {}) or {}
-                is_reserve = orphan_acc.startswith(("4100", "40010", "4001"))
-                canonical = ta.get("reserve" if is_reserve else "provisions", "")
-                if canonical and canonical != orphan_acc:
-                    remaps[orphan_acc] = canonical
 
-        # 5. Applique les remaps
+            # SUPPLIER (prefixe 44)
+            elif orphan_acc.startswith("44"):
+                canonical, sup_id = _try_match_supplier(orphan_acc, tp_ids, names)
+                if canonical:
+                    remaps[orphan_acc] = canonical
+                    remap_kind[orphan_acc] = "supplier"
+                    remap_tp[orphan_acc] = sup_id
+                    remap_tp_type[orphan_acc] = "supplier"
+
+        # 6. iter90il : Clone les suppliers globaux vers l'ACP (creation
+        # locale + assign compte canonique). Effectue AVANT le remap.
+        cloned_suppliers = []
+        if not dry_run and suppliers_to_clone:
+            from tier_accounts import assign_supplier_account as _assign_supplier_account
+            import uuid
+            for name_norm, meta in suppliers_to_clone.items():
+                src = meta["source"]
+                # Verifie qu'un supplier avec ce nom n'a pas ete cree entretemps
+                clean_name = re.sub(r"^F\d{3,4}\s*-\s*", "", src.get("name",""), flags=re.IGNORECASE).strip()
+                existing = await db.suppliers.find_one(
+                    {"copropriete_id": copropriete_id, "name": clean_name},
+                    {"_id": 0},
+                )
+                if existing:
+                    target = existing
+                else:
+                    # Clone : nouveau doc avec meme BCE/VAT/IBAN, nouvel id, copro cible
+                    new_id = str(uuid.uuid4())
+                    doc = {
+                        "id": new_id,
+                        "name": clean_name,
+                        "bce_number": src.get("bce_number", ""),
+                        "vat_number": src.get("vat_number", ""),
+                        "iban": src.get("iban", ""),
+                        "address": src.get("address", ""),
+                        "postal_code": src.get("postal_code", ""),
+                        "city": src.get("city", ""),
+                        "phone": src.get("phone", ""),
+                        "email": src.get("email", ""),
+                        "copropriete_id": copropriete_id,
+                        "tier_accounts": {},
+                        "created_at": datetime.now(timezone.utc).isoformat(),
+                        "note": f"Clone automatique depuis ACP {src.get('copropriete_id','')[:8]} par heal-orphan-tier-accounts",
+                    }
+                    try:
+                        await db.suppliers.insert_one(doc)
+                    except Exception:
+                        # DuplicateKeyError sur uq_supplier_copro_name -> recupere existant
+                        existing2 = await db.suppliers.find_one(
+                            {"copropriete_id": copropriete_id, "name": clean_name},
+                            {"_id": 0},
+                        )
+                        if existing2:
+                            target = existing2
+                        else:
+                            continue
+                    else:
+                        target = doc
+                # Assign compte canonique via helper (44000XXX)
+                target = await _assign_supplier_account(db, target, copropriete_id)
+                canonical = ((target.get("tier_accounts") or {}).get(copropriete_id, {}) or {}).get("main", "")
+                cloned_suppliers.append({
+                    "name": clean_name,
+                    "new_id": target["id"],
+                    "canonical": canonical,
+                    "orphan_accs": meta["orphan_accs"],
+                })
+                # Mise a jour du remap : "__CLONE_PENDING__" -> canonique
+                for orphan in meta["orphan_accs"]:
+                    remaps[orphan] = canonical
+                    remap_tp[orphan] = target["id"]
+
+        # Purge du placeholder de dry_run
+        if dry_run:
+            for orphan_acc, canonical in list(remaps.items()):
+                if canonical == "__CLONE_PENDING__":
+                    # En dry_run, remplace par un tag descriptif
+                    remaps[orphan_acc] = "(sera cree)"
+
+        # 7. Applique les remaps sur les journal_entries
         entries_touched = 0
         lines_remapped = 0
         pcmn_deleted = 0
         if not dry_run and remaps:
+            # Filtre les remaps valides (exclus les placeholders)
+            remaps_live = {k: v for k, v in remaps.items() if v and v != "__CLONE_PENDING__" and v != "(sera cree)"}
             async for je in db.journal_entries.find(
-                {"copropriete_id": copropriete_id, "lines.account_number": {"$in": list(remaps.keys())}},
+                {"copropriete_id": copropriete_id, "lines.account_number": {"$in": list(remaps_live.keys())}},
                 {"_id": 0, "id": 1, "lines": 1},
             ):
                 new_lines = []
                 touched = False
                 for ln in je.get("lines") or []:
                     acc = ln.get("account_number", "")
-                    if acc in remaps:
-                        # Aussi remplir third_party_id si absent
-                        new_line = {**ln, "account_number": remaps[acc]}
-                        if not new_line.get("third_party_id"):
-                            # Trouver le owner via canonical
-                            for o in owners:
-                                ta = (o.get("tier_accounts") or {}).get(copropriete_id, {}) or {}
-                                if ta.get("provisions") == remaps[acc] or ta.get("reserve") == remaps[acc]:
-                                    new_line["third_party_id"] = o["id"]
-                                    new_line["third_party_type"] = "owner"
-                                    break
+                    if acc in remaps_live:
+                        new_line = {**ln, "account_number": remaps_live[acc]}
+                        if not new_line.get("third_party_id") and acc in remap_tp:
+                            new_line["third_party_id"] = remap_tp[acc]
+                            new_line["third_party_type"] = remap_tp_type.get(acc, "supplier")
                         new_lines.append(new_line)
                         lines_remapped += 1
                         touched = True
@@ -2536,8 +2724,8 @@ def create_admin_router(db):
                     await db.journal_entries.update_one(
                         {"id": je["id"]}, {"$set": {"lines": new_lines}}
                     )
-            # Supprime les comptes PCMN orphelins qui n'ont plus de lignes
-            for orphan in remaps:
+            # Supprime les comptes PCMN orphelins
+            for orphan in remaps_live:
                 still = await db.journal_entries.count_documents({
                     "copropriete_id": copropriete_id,
                     "lines.account_number": orphan,
@@ -2549,18 +2737,124 @@ def create_admin_router(db):
                     if r.deleted_count:
                         pcmn_deleted += 1
 
-        # Orphelins non-remappables (owner introuvable)
-        unresolved = [a for a in orphans if a not in remaps]
+        unresolved = [
+            {"account": a, "sample_names": list({r["name"] for r in orphans[a] if r["name"]})[:3]}
+            for a in orphans if a not in remaps
+        ]
 
         return {
             "mode": "dry_run" if dry_run else "live",
             "copropriete_id": copropriete_id,
             "orphan_accounts_found": len(orphans),
             "remaps": remaps,
+            "remap_kinds": remap_kind,
+            "cloned_suppliers": cloned_suppliers,
             "unresolved_orphans": unresolved,
             "journal_entries_touched": entries_touched,
             "lines_remapped": lines_remapped,
             "pcmn_accounts_deleted": pcmn_deleted,
+        }
+
+    # iter90im : Nettoyage des fiches ORPHELINES sans transactions.
+    # Regle metier user : "supprimer tous les orphelins actuels qui n'ont
+    # pas de transactions liees".
+    #
+    # Definition orphelin :
+    #  * Owner : aucun `journal_entries.lines.third_party_id == owner.id`,
+    #    AUCUN `lots.owner_id == owner.id`, AUCUN `tenants.owner_id`.
+    #  * Supplier : aucun `journal_entries.lines.third_party_id == supplier.id`,
+    #    AUCUNE `invoices.supplier_id == supplier.id`.
+    # Optionnel : `copropriete_id` pour scoper le nettoyage.
+    # Ces owners/suppliers ont ete crees par erreur (import defectueux
+    # avant iter90im) et n'ont aucun lien business - on peut les supprimer
+    # sans risque.
+    @router.post("/heal-remove-orphan-tiers-without-transactions")
+    async def heal_remove_orphan_tiers_without_transactions(
+        request: Request,
+        copropriete_id: str = "",
+        dry_run: bool = True,
+    ):
+        await _get_superadmin_only(request)
+
+        # Owners : criteres OWNER SCOPE
+        own_query = {}
+        if copropriete_id:
+            own_query["copropriete_ids"] = copropriete_id
+        candidate_owners = await db.owners.find(own_query, {"_id": 0}).to_list(50000)
+        orphan_owners = []
+        for o in candidate_owners:
+            oid = o["id"]
+            # Verifie si des transactions existent
+            has_je = await db.journal_entries.count_documents(
+                {"lines.third_party_id": oid}
+            )
+            if has_je:
+                continue
+            has_lots = await db.lots.count_documents({"owner_id": oid})
+            if has_lots:
+                continue
+            try:
+                has_tenants = await db.tenants.count_documents({"owner_id": oid})
+            except Exception:
+                has_tenants = 0
+            if has_tenants:
+                continue
+            orphan_owners.append({
+                "id": oid,
+                "name": o.get("name") or f"{o.get('last_name','')} {o.get('first_name','')}".strip(),
+                "aux": o.get("auxiliary_code", ""),
+                "copropriete_ids": o.get("copropriete_ids") or [],
+                "created_at": o.get("created_at", ""),
+            })
+
+        # Suppliers
+        sup_query = {}
+        if copropriete_id:
+            sup_query["copropriete_id"] = copropriete_id
+        candidate_suppliers = await db.suppliers.find(sup_query, {"_id": 0}).to_list(50000)
+        orphan_suppliers = []
+        for s in candidate_suppliers:
+            sid = s["id"]
+            has_je = await db.journal_entries.count_documents(
+                {"lines.third_party_id": sid}
+            )
+            if has_je:
+                continue
+            has_inv = await db.invoices.count_documents({"supplier_id": sid})
+            if has_inv:
+                continue
+            orphan_suppliers.append({
+                "id": sid,
+                "name": s.get("name", ""),
+                "bce": s.get("bce_number", ""),
+                "vat": s.get("vat_number", ""),
+                "copropriete_id": s.get("copropriete_id", ""),
+                "created_at": s.get("created_at", ""),
+            })
+
+        deleted_owners = 0
+        deleted_suppliers = 0
+        if not dry_run:
+            if orphan_owners:
+                r1 = await db.owners.delete_many(
+                    {"id": {"$in": [o["id"] for o in orphan_owners]}}
+                )
+                deleted_owners = r1.deleted_count
+            if orphan_suppliers:
+                r2 = await db.suppliers.delete_many(
+                    {"id": {"$in": [s["id"] for s in orphan_suppliers]}}
+                )
+                deleted_suppliers = r2.deleted_count
+
+        return {
+            "mode": "dry_run" if dry_run else "live",
+            "copropriete_id": copropriete_id or "all",
+            "orphan_owners_found": len(orphan_owners),
+            "orphan_suppliers_found": len(orphan_suppliers),
+            "deleted_owners": deleted_owners,
+            "deleted_suppliers": deleted_suppliers,
+            "orphan_owners_sample": orphan_owners[:50],
+            "orphan_suppliers_sample": orphan_suppliers[:50],
         }
 
     return router

@@ -82,6 +82,21 @@ export default function SuppliersPage() {
   };
 
   const handleSave = async () => {
+    // iter90ik : BCE OBLIGATOIRE (regle utilisateur). Bloque la creation
+    // OU la modification si le BCE (ou TVA equivalent) est absent.
+    const bce = (form.bce_number || '').trim().replace(/[.\s]/g, '');
+    const vat = (form.vat_number || '').trim().replace(/[.\s]/g, '');
+    if (!bce && !vat) {
+      toast.error(
+        "Le numero BCE (ou TVA equivalent) est obligatoire. Verifiez sur https://kbopub.economie.fgov.be/",
+        { duration: 8000 },
+      );
+      return;
+    }
+    if (bce && !/^[A-Z]{2}[0-9]{8,12}$/i.test(bce)) {
+      toast.error(`Format BCE invalide : "${form.bce_number}". Attendu : BE0123456789 (2 lettres pays + 8-12 chiffres).`);
+      return;
+    }
     try {
       if (editing) {
         await api.put(`/suppliers/${editing.id}`, form);
@@ -236,7 +251,13 @@ export default function SuppliersPage() {
             </div>
             <div className="flex gap-3 justify-end">
               <Button variant="outline" onClick={() => setDialogOpen(false)}>Annuler</Button>
-              <Button onClick={handleSave} className="bg-[#022D52] hover:bg-[#1D4ED8]" data-testid="supplier-save-btn">{editing ? 'Modifier' : 'Creer'}</Button>
+              <Button
+                onClick={handleSave}
+                disabled={!form.name?.trim() || (!form.bce_number?.trim() && !form.vat_number?.trim())}
+                className="bg-[#022D52] hover:bg-[#1D4ED8]"
+                data-testid="supplier-save-btn"
+                title={(!form.bce_number?.trim() && !form.vat_number?.trim()) ? "BCE ou TVA obligatoire" : ""}
+              >{editing ? 'Modifier' : 'Creer'}</Button>
             </div>
           </div>
         </DialogContent>
