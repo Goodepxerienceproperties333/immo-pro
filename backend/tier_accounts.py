@@ -187,3 +187,38 @@ def get_owner_accounts(owner: dict, copro_id: str) -> dict:
 def get_supplier_account(supplier: dict, copro_id: str) -> str:
     """Return supplier main account in given ACP, or '' if absent."""
     return ((supplier.get("tier_accounts") or {}).get(copro_id, {}) or {}).get("main", "")
+
+
+# --- iter90io : normalisation des comptes tier fournisseurs ---------------
+# Format canonique PCMN : "44000XXX" (5 chars prefixe + 3 chiffres = 8).
+# Le pipeline Optipro/CODA historique produisait parfois des comptes en
+# 7 chars ("4400" + zfill(3) = "4400015") qui creaient des DOUBLONS dans
+# le Bilan / Balance des Tiers avec le canonique 8 chars ("44000015").
+# On normalise a l'entree du pipeline pour ne jamais persister de compte
+# non-canonique.
+def canonize_supplier_tier_account(number: str) -> str:
+    """Normalise un compte tier fournisseur au format canonique 8 chars.
+
+    Exemples :
+      - "4400015"  (7 chars, legacy Optipro) -> "44000015"
+      - "440015"   (6 chars)                 -> "44000015"
+      - "44000015" (8 chars, deja canonique) -> "44000015"
+      - "44001115" (8 chars mais non canonique) -> "44001115"
+        (retourne tel quel, resolution deleguee au matching par fiche
+        via `_resolve_third_party` : la fiche fournisseur portera le
+        canonique reel et la ligne AN sera reecrite en aval)
+      - "551000"   (non 440, bancaire ou autre) -> "551000" (inchange)
+      - ""                                       -> ""
+    """
+    acc = (number or "").strip()
+    if not acc.startswith("440"):
+        return acc
+    if len(acc) >= 8:
+        return acc  # deja canonique OU non canonique (delegue au matching)
+    # Insere des zeros entre "440" et le suffix jusqu'a atteindre 8 chars.
+    # Cas typique : "4400015" (7) -> "44000015" (8).
+    suffix = acc[3:]
+    pad = 8 - 3 - len(suffix)
+    if pad > 0:
+        return "440" + ("0" * pad) + suffix
+    return acc

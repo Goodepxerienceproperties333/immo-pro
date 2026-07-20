@@ -1024,13 +1024,16 @@ def create_import_wizard_router(db):
             for sl in (inv.get("_split_lines") or []):
                 if sl.get("account_number"):
                     accounts_needed[sl["account_number"]] = sl.get("account_label") or ""
-            sup_aux = (inv.get("supplier_aux_code") or "").upper().strip()
-            if sup_aux.startswith("F") and len(sup_aux) >= 5:
-                # PCMN supplier sub-account: 4400 + last 3 digits of F-code
-                # F0471 -> 4400471
-                sup_pcmn = "4400" + sup_aux[1:].zfill(3)
-                sup_lbl = (inv.get("supplier_name") or "").strip() or sup_aux
-                accounts_needed[sup_pcmn] = sup_lbl
+                sup_aux = (inv.get("supplier_aux_code") or "").upper().strip()
+                if sup_aux.startswith("F") and len(sup_aux) >= 5:
+                    # iter90io : PCMN supplier sub-account normalise en 8 chars
+                    # (format canonique "44000XXX"). L'ancien format "4400XXX"
+                    # (7 chars) creait des doublons dans le Bilan avec le
+                    # canonique 8 chars deja utilise par assign_supplier_account.
+                    from tier_accounts import canonize_supplier_tier_account
+                    sup_pcmn = canonize_supplier_tier_account("4400" + sup_aux[1:].zfill(3))
+                    sup_lbl = (inv.get("supplier_name") or "").strip() or sup_aux
+                    accounts_needed[sup_pcmn] = sup_lbl
         pcmn_created = await _ensure_pcmn_accounts(copro_id, accounts_needed)
 
         year_counters: dict[str, int] = {}
@@ -1190,7 +1193,10 @@ def create_import_wizard_router(db):
                     # ne devrait plus etre atteinte grace au matching par nom
                     # ajoute plus haut, mais on la garde pour ne pas casser les
                     # imports historiques ou les CSV sans mapping fiche.
-                    sup_pcmn = "4400" + supplier_aux[1:].zfill(3)
+                    # iter90io : format canonique 8 chars ("44000XXX"). L'ancien
+                    # "4400" + zfill(3) (7 chars) creait des doublons Bilan.
+                    from tier_accounts import canonize_supplier_tier_account
+                    sup_pcmn = canonize_supplier_tier_account("4400" + supplier_aux[1:].zfill(3))
                 supplier_label = (inv.get("supplier_name") or supplier_aux).strip()
 
                 # ---- Create journal entry (Achats - AC) ----
@@ -1763,6 +1769,15 @@ def create_import_wizard_router(db):
                     return cand
             return acc
 
+        # iter90io : normalisation systematique des comptes tier fournisseurs
+        # au format canonique 8 chars ("44000XXX") AVANT le matching. Sans ce
+        # helper, un import Optipro pouvait produire des lignes AN avec un
+        # compte 7 chars ("4400015") qui coexistaient dans la DB avec le
+        # canonique 8 chars ("44000015") deja utilise par le module courant
+        # (assign_supplier_account). Consequence : deux lignes fournisseur
+        # distinctes dans le Bilan / Balance des Tiers pour LA MEME entite.
+        from tier_accounts import canonize_supplier_tier_account as _canonize_sup_acc
+
         # iter90gk : indexe TOUS les suppliers de l'ACP (pas seulement ceux
         # avec aux_code) pour permettre le matching par nom en fallback
         # quand le compte tier orphelin ne matche aucun aux_code.
@@ -1840,6 +1855,9 @@ def create_import_wizard_router(db):
         aux_codes_sup_in_an = set()
         for a in actif + passif:
             acc = (a.get("account") or "").strip()
+            # iter90io : normaliser en amont pour que l'extraction de l'aux
+            # code se fasse sur un format unique (44000XXX en 8 chars).
+            acc = _canonize_sup_acc(acc)
             if acc.startswith("410") and len(acc) >= 7:
                 aux_codes_in_an.add("C" + acc[-4:])
             elif acc.startswith("4001") and len(acc) >= 8:
@@ -1917,6 +1935,9 @@ def create_import_wizard_router(db):
             # un compte 8-char equivalent existe deja (evite les doublons dans
             # le Bilan entre comptes AN et comptes operations bancaires).
             acc_num = _canonize_bank_account(acc_num)
+            # iter90io : canonize les comptes tier fournisseurs (440XXX -> 44000XXX)
+            # pour uniformiser le format AVANT le matching et l'insertion en DB.
+            acc_num = _canonize_sup_acc(acc_num)
             label = (a.get("label") or "").strip()
             tp_id, tp_type, party, canonical_acc = _resolve_third_party(acc_num, label=label)
             # iter90gk / iter90ig : si un compte canonique existe pour ce
