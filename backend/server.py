@@ -1150,6 +1150,21 @@ async def startup():
         )
     except Exception as _e:
         print(f"[startup] pcmn_accounts unique index skipped: {_e}")
+    # iter90ih : UNICITE STRICTE des natures de depenses par (ACP, compte
+    # comptable). Complete le fix preventif dans commit_natures : la BASE DE
+    # DONNEES elle-meme refuse tout duplicata, meme en cas de bug futur d'un
+    # code path insertant sans check. Idempotent (skip si l'index existe).
+    # NOTE : les documents `account_number=""` sont exclus via partial filter
+    # pour ne pas bloquer d'eventuelles fiches legacy incompletes.
+    try:
+        await db.expense_categories.create_index(
+            [("copropriete_id", 1), ("account_number", 1)],
+            unique=True,
+            name="uq_expcat_copro_account",
+            partialFilterExpression={"account_number": {"$type": "string", "$gt": ""}},
+        )
+    except Exception as _e:
+        print(f"[startup] expense_categories unique index skipped: {_e}")
     # iter90gk : UNICITE GLOBALE du BCE fournisseur. Empeche 2 fiches
     # fournisseur ayant le meme BCE (identifiant unique d'entreprise).
     # `partialFilterExpression` ignore les documents ayant bce_number="" (les
