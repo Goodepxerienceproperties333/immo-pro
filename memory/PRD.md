@@ -1,4 +1,106 @@
 # CoproManager PRD
+### Iter90iy (20/07/2026) — Chinese Wall STRICT dans l'onglet Fournisseurs (UI + API)
+
+**Ticket utilisateur** :
+> "L'isolation (Chinese Wall) n'est pas respectee dans l'onglet Fournisseurs : je vois
+> les fournisseurs de toutes les ACP en meme temps. Modifie l'endpoint API qui liste
+> les fournisseurs pour qu'il filtre obligatoirement par copropriete_id. Mets a jour
+> le composant Frontend pour qu'il n'affiche que les fournisseurs locaux a l'ACP
+> selectionnee. Je ne veux voir qu'une seule ligne par fournisseur (ex: 1 seule ligne
+> AGESIM) quand je suis dans une ACP specifique."
+
+**Racine du bug** : `/suppliers` etait dans `GLOBAL_PATH_PREFIXES` du frontend
+interceptor (heritage pre-Chinese Wall) -> le frontend n'envoyait JAMAIS
+`copropriete_id`. Le backend acceptait ce cas et retournait tous les suppliers
+visibles par l'user (via son scope multi-ACP).
+
+**Livrables**
+
+1. **`frontend/src/lib/api.js`** — `/suppliers` RETIRE de `GLOBAL_PATH_PREFIXES`.
+   L'interceptor auto-injecte desormais :
+   - Header `X-Copropriete-Id`
+   - Query param `copropriete_id`
+   - Champ `copropriete_id` dans le body POST/PUT/PATCH (si absent)
+
+2. **`backend/routes/suppliers.py::list_suppliers`** — copropriete_id OBLIGATOIRE :
+   - 400 "copropriete_id obligatoire (Chinese Wall strict)" si absent
+   - 403 si l'ACP n'est pas dans le scope du user (sauf superadmin)
+   - Filtre applique EN DB (`{copropriete_id: cid}`) au lieu de post-load
+   - Bypass superadmin explicite : `copropriete_id=all`
+   - Fallback header `X-Copropriete-Id` si query param absent
+
+3. **`frontend/src/pages/SuppliersPage.js`** :
+   - Utilise `useAuth().selectedCopro` (plus fiable que localStorage direct)
+   - Charge le nom de l'ACP courante via `/coproprietes/{id}` pour l'entete
+   - Titre : "Fournisseurs de l'ACP **{name}** (isolation Chinese Wall)"
+   - Empty state clair quand `!selectedCopro` avec CTA vers "Gerer les ACPs"
+   - Bouton "Nouveau" desactive tant qu'aucune ACP n'est selectionnee
+   - Vue restreinte affichee : "fournisseurs de {name} uniquement"
+
+4. **Tests pytest** — `test_iter90iy_suppliers_list_chinese_wall_endpoint.py` :
+   - `test_list_suppliers_requires_copropriete_id` : 400 sans param
+   - `test_list_suppliers_filters_strictly_by_copropriete_id` : 2 Engie dans 2 ACPs,
+     verification qu'un scoping par ACP-A ne fuit AUCUN supplier de ACP-B
+   - `test_list_suppliers_forbids_non_super_out_of_scope` : syndic sans l'ACP -> 403,
+     syndic qui demande "all" -> 403 (reserve superadmin)
+
+5. **Correction test regression** — `test_iter90iw_supplier_list_column_and_name_first_matching.py`
+   passait `copropriete_id=None` ; corrige pour passer le `acp` du supplier cree.
+
+**Verifications preview (DB test_database)**
+- GET `/api/suppliers` sans param -> 400 "copropriete_id obligatoire" ✅
+- GET `/api/suppliers?copropriete_id=all` (superadmin) -> 53 suppliers ✅
+- GET `/api/suppliers?copropriete_id=<Maria Auto1>` -> **18 suppliers UNIQUES**,
+  aucun leak d'autres ACP, aucun doublon (AGESIM 1x seule) ✅
+- Screenshot UI : entete "Fournisseurs de l'ACP Maria Auto1 (isolation Chinese Wall)" ✅
+- Screenshot UI empty state : aucune ACP -> banner amber + CTA "Gerer les ACPs" ✅
+
+**Impact sur autres pages** — Toutes les autres callers `/suppliers` :
+- `BalanceTiersPage.js`, `BankingPage.js` : appellent `api.get('/suppliers')` sans
+  params -> desormais auto-scopees par l'interceptor (transparent)
+- `InvoicesPage.js` : envoie deja `copropriete_id` explicite -> aucun impact
+- `SuppliersPage.js` POST create : envoie deja via body -> aucun impact
+
+**Rappel PRODUCTION** — Save to GitHub + redeployement necessaire pour appliquer
+sur `immo-pcmn.emergent.host`.
+
+---
+
+### Iter90ix (20/07/2026) — Script `heal_supplier_ids_by_name.py` + verrou 8 chars
+
+**Ticket utilisateur** :
+> "Cree le nouveau script heal_supplier_ids_by_name.py avec la logique suivante :
+> pour chaque ligne du journal (JE) avec un compte 440xxx, cherche le fournisseur
+> par son Nom dans la meme ACP, puis reecris le third_party_id ET l'account_number
+> avec le numero canonique a 8 chiffres de la fiche fournisseur. Execute-le
+> immediatement en mode --execute. Donne-moi le rapport des lignes corrigees et
+> relance l'audit sante."
+
+**Livrable** — `/app/backend/scripts/heal_supplier_ids_by_name.py` :
+1. **Pre-pass** : auto-assign des `tier_account_number` manquants (via `assign_supplier_account`).
+2. **Healing** : pour chaque JE ligne 440xxx :
+   - Match par `_norm_name_candidates` (nom canonique + particules filtrees)
+   - Chinese Wall strict : uniquement dans la meme ACP
+   - Reecrit `third_party_id`, `third_party_type="supplier"`, `account_number`
+     canonique 8 chars via `canonize_supplier_tier_account`
+3. **Modes** : `--execute` (defaut dry-run), `--copropriete-id CID` (defaut : toutes)
+4. **Idempotent** : relance 2x -> 0 modification.
+5. **Rapport JSON** : `/tmp/heal_supplier_ids_by_name_report.json`
+
+**Resultat preview** :
+- 36 fiches suppliers ont recu un `tier_account_number` (pre-pass)
+- 570 lignes JE 440xxx scannees
+- **33 lignes reecrites** dans 32 JE
+- 19 lignes deja OK (idempotence)
+- 518 non-matchees (ACPs sans fiches suppliers ou libelles generiques)
+
+**Audit sante apres heal** :
+- Maria Auto1 : score 95, 0 orphelins 440 ✅
+- Maria : 95, 0 orphelins ✅
+- iter90dk Test : 100 ✅
+- Acacia (pas de fiches) : orphelins normaux
+
+
 ### Iter90iw+iv (20/07/2026) — Colonne "Compte tier" + Matching par NOM d'abord
 
 **Tickets utilisateur** :

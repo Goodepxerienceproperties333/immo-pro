@@ -249,31 +249,50 @@ def create_suppliers_router(db):
 
     @router.get("")
     async def list_suppliers(request: Request, search: Optional[str] = None, copropriete_id: Optional[str] = None):
-        """Liste des fournisseurs - chinese wall STRICT (RGPD).
-        - Superadmin : voit tout
-        - Syndic / gestionnaire : ne voit QUE les fournisseurs rattaches a une de ses ACPs
-          (via copropriete_id direct OU via tier_accounts.<copro_id>).
-        - Si copropriete_id fourni : restreint a cette ACP (verifie deja par middleware).
+        """Liste des fournisseurs - Chinese Wall STRICT (post iter90is + iter90iy).
+
+        - `copropriete_id` OBLIGATOIRE (400 si absent) - une seule ACP a la fois.
+        - Superadmin uniquement : peut passer `copropriete_id=all` pour voir
+          l'ensemble (usage admin only, ex : audits, duplicates).
+        - Syndic / gestionnaire : ne voit QUE les fournisseurs de l'ACP demandee
+          (verif que l'ACP est dans son scope, sinon 403).
+        - Filtre applique EN DB (pas post-load) pour minimiser la fuite RGPD
+          et garantir des performances stables sur les grosses bases.
         """
         is_super, allowed_copros = await _get_user_scope(request)
-        q = {}
+        # Fallback : header X-Copropriete-Id si le param n'est pas explicite
+        if not copropriete_id:
+            copropriete_id = request.headers.get("X-Copropriete-Id") or ""
+        copropriete_id = (copropriete_id or "").strip()
+        # Bypass super-admin explicite
+        if copropriete_id == "all":
+            if not is_super:
+                raise HTTPException(403, "Seul un superadmin peut lister toutes les ACPs")
+            q_all: dict = {}
+            if search:
+                q_all["$or"] = [
+                    {"name": {"$regex": search, "$options": "i"}},
+                    {"vat_number": {"$regex": search, "$options": "i"}},
+                    {"bce_number": {"$regex": search, "$options": "i"}},
+                ]
+            return await db.suppliers.find(q_all, {"_id": 0}).sort("name", 1).to_list(2000)
+        # copropriete_id OBLIGATOIRE
+        if not copropriete_id:
+            raise HTTPException(400, "copropriete_id obligatoire (Chinese Wall strict)")
+        # Verif scope pour non-superadmin
+        if not is_super and copropriete_id not in (allowed_copros or []):
+            raise HTTPException(403, "Copropriete hors scope")
+        # Query DB filtree par ACP (Chinese Wall strict : copropriete_id direct)
+        q: dict = {"copropriete_id": copropriete_id}
         if search:
-            q["$or"] = [
-                {"name": {"$regex": search, "$options": "i"}},
-                {"vat_number": {"$regex": search, "$options": "i"}},
-                {"bce_number": {"$regex": search, "$options": "i"}},
+            q["$and"] = [
+                {"$or": [
+                    {"name": {"$regex": search, "$options": "i"}},
+                    {"vat_number": {"$regex": search, "$options": "i"}},
+                    {"bce_number": {"$regex": search, "$options": "i"}},
+                ]},
             ]
-        all_suppliers = await db.suppliers.find(q, {"_id": 0}).sort("name", 1).to_list(2000)
-        # Cas ACP specifique demandee
-        if copropriete_id:
-            allowed_set = {copropriete_id}
-            return [s for s in all_suppliers if (
-                s.get("copropriete_id") in allowed_set
-                or any(cid in allowed_set for cid in (s.get("tier_accounts") or {}).keys())
-            )]
-        if is_super:
-            return all_suppliers
-        return [s for s in all_suppliers if _supplier_in_scope(s, allowed_copros)]
+        return await db.suppliers.find(q, {"_id": 0}).sort("name", 1).to_list(5000)
 
     @router.post("/check-duplicate")
     async def check_duplicate_supplier(request: Request, data: SupplierCheckDuplicateInput):

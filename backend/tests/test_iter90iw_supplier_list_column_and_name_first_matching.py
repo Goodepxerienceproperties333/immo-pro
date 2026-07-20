@@ -74,7 +74,7 @@ def test_list_suppliers_returns_tier_account_number():
                     class _S: pass
                     return _S()
 
-            result = await endpoint(_Req(), search=None, copropriete_id=None)
+            result = await endpoint(_Req(), search=None, copropriete_id=acp)
             fiche = next((s for s in result if s["id"] == sup_id), None)
             assert fiche is not None, "La fiche cree doit etre dans la liste"
             assert fiche.get("tier_account_number") == "44000123", (

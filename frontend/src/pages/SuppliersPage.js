@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import api from '@/lib/api';
+import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -8,7 +9,9 @@ import { toast } from 'sonner';
 import { Plus, Pencil, Trash2, Search, Truck, AlertTriangle } from 'lucide-react';
 
 export default function SuppliersPage() {
+  const { selectedCopro } = useAuth();
   const [suppliers, setSuppliers] = useState([]);
+  const [coproName, setCoproName] = useState('');
   const [search, setSearch] = useState('');
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState(null);
@@ -19,10 +22,27 @@ export default function SuppliersPage() {
   const [bceCandidates, setBceCandidates] = useState([]);
 
   const load = useCallback(async () => {
-    const { data } = await api.get('/suppliers', { params: search ? { search } : {} });
+    // iter90iy : Chinese Wall strict - copropriete_id obligatoire cote UI.
+    // Si aucune ACP selectionnee, on ne charge rien (empty state).
+    if (!selectedCopro) { setSuppliers([]); return; }
+    const params = { copropriete_id: selectedCopro };
+    if (search) params.search = search;
+    const { data } = await api.get('/suppliers', { params });
     setSuppliers(data);
-  }, [search]);
+  }, [search, selectedCopro]);
   useEffect(() => { load(); }, [load]);
+
+  // iter90iy : recupere le nom de l'ACP courante pour l'afficher dans l'entete
+  useEffect(() => {
+    if (!selectedCopro) { setCoproName(''); return; }
+    let cancelled = false;
+    api.get(`/coproprietes/${selectedCopro}`).then(({ data }) => {
+      if (!cancelled) setCoproName(data?.name || '');
+    }).catch(() => {
+      if (!cancelled) setCoproName('');
+    });
+    return () => { cancelled = true; };
+  }, [selectedCopro]);
 
   const filtered = suppliers;
   const openCreate = () => { setEditing(null); setForm({ name:'', vat_number:'', bce_number:'', address:'', postal_code:'', city:'', country:'Belgique', phone:'', email:'', iban:'', bic:'', default_account:'', notes:'' }); setBceCandidates([]); setDialogOpen(true); };
@@ -137,16 +157,52 @@ export default function SuppliersPage() {
   return (
     <div data-testid="suppliers-page">
       <div className="page-header flex items-center justify-between">
-        <div><h1 className="page-title"><Truck size={24} className="inline mr-2" />Fournisseurs</h1><p className="page-subtitle">Gestion des fournisseurs et prestataires</p></div>
-        <Button onClick={openCreate} className="bg-[#022D52] hover:bg-[#1D4ED8]" data-testid="create-supplier-btn"><Plus size={16} className="mr-2" /> Nouveau</Button>
+        <div>
+          <h1 className="page-title"><Truck size={24} className="inline mr-2" />Fournisseurs</h1>
+          <p className="page-subtitle">
+            {selectedCopro
+              ? <>Fournisseurs de l&apos;ACP <b className="text-slate-800">{coproName || '…'}</b> (isolation Chinese Wall)</>
+              : <span className="text-amber-700">Aucune copropriete selectionnee</span>}
+          </p>
+        </div>
+        <Button
+          onClick={openCreate}
+          disabled={!selectedCopro}
+          className="bg-[#022D52] hover:bg-[#1D4ED8]"
+          data-testid="create-supplier-btn"
+        >
+          <Plus size={16} className="mr-2" /> Nouveau
+        </Button>
       </div>
+
+      {/* iter90iy : empty state clair quand aucune ACP n'est selectionnee */}
+      {!selectedCopro && (
+        <div className="mt-8 p-6 rounded-lg border border-amber-200 bg-amber-50 text-center" data-testid="suppliers-empty-no-copro">
+          <div className="text-lg font-semibold text-amber-900 mb-1">Aucune copropriete selectionnee</div>
+          <p className="text-sm text-amber-800 max-w-2xl mx-auto">
+            Depuis le refactor <b>Chinese Wall</b> (RGPD), chaque fournisseur est LOCAL a UNE seule ACP.
+            Selectionnez d&apos;abord une copropriete depuis la page <b>&laquo; Gerer les ACPs &raquo;</b> pour afficher ses fournisseurs.
+          </p>
+          <Button
+            className="mt-3 bg-[#022D52] hover:bg-[#1D4ED8]"
+            size="sm"
+            onClick={() => window.location.href = '/coproprietes'}
+            data-testid="goto-coproprietes-btn"
+          >
+            Aller a Gerer les ACPs
+          </Button>
+        </div>
+      )}
+
+      {selectedCopro && (
+        <>
       <div className="mb-4 flex items-center gap-3 flex-wrap">
         <div className="relative max-w-sm flex-1">
           <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
           <Input placeholder="Rechercher..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9" data-testid="suppliers-search" />
         </div>
-        <span className="text-[11px] text-slate-500 italic hidden md:inline">
-          Vue globale : tous les fournisseurs de vos ACPs
+        <span className="text-[11px] text-slate-500 italic hidden md:inline" data-testid="suppliers-scope-hint">
+          Vue restreinte : fournisseurs de <b>{coproName || 'cette ACP'}</b> uniquement
         </span>
         <Button
           variant="outline"
@@ -188,6 +244,8 @@ export default function SuppliersPage() {
           </TableBody>
         </Table>
       </div>
+        </>
+      )}
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent className="max-w-2xl" data-testid="supplier-dialog">
           <DialogHeader><DialogTitle style={{fontFamily:'Chivo,sans-serif'}}>{editing ? 'Modifier fournisseur' : 'Nouveau fournisseur'}</DialogTitle></DialogHeader>
