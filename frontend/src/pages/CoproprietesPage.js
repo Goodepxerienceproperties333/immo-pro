@@ -11,9 +11,10 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { Plus, Pencil, Trash2, Home, Search, Archive, RotateCcw, Landmark, PlusCircle, X, Eraser, Wand2, Upload, UserPlus, FileText, Download, Image as ImageIcon, CheckCircle2 } from 'lucide-react';
+import { Plus, Pencil, Trash2, Home, Search, Archive, RotateCcw, Landmark, PlusCircle, X, Eraser, Wand2, Upload, UserPlus, FileText, Download, Image as ImageIcon, CheckCircle2, ClipboardCheck, AlertTriangle } from 'lucide-react';
 import BulkCsvImportDialog from '@/components/BulkCsvImportDialog';
 import PdfImportDialog from '@/components/PdfImportDialog';
+import ImportSummary from '@/components/ImportSummary';
 import { useDirtyGuard } from '@/hooks/useDirtyGuard';
 
 const emptyBank = { iban: '', bic: '', account_type: 'vue', is_default: false, label: '' };
@@ -50,11 +51,26 @@ export default function CoproprietesPage() {
   const [step, setStep] = useState(1);
   const [ownerSearchByLot, setOwnerSearchByLot] = useState({});  // {lotIdx: 'query'}
   const [ownerFocusLot, setOwnerFocusLot] = useState(null);  // lotIdx currently focused or null
+  // iter90if : recap des imports par ACP (id -> summary)
+  const [importSummaries, setImportSummaries] = useState({});
+  const [summaryDialog, setSummaryDialog] = useState(null);  // {acp, summary} or null
   const dirty = useDirtyGuard(form, dialogOpen);
 
   const load = useCallback(async () => {
     const { data } = await api.get('/coproprietes', { params: { show_archived: showArchived } });
     setCoproprietes(data);
+    // Fetch import summaries in parallel (best-effort, ignore failures)
+    Promise.all(
+      data.filter(c => c.status !== 'archived').map(c =>
+        api.get(`/import-wizard/coproprietes/${c.id}/import-summary`)
+          .then(r => [c.id, r.data])
+          .catch(() => [c.id, null])
+      )
+    ).then(entries => {
+      const map = {};
+      entries.forEach(([id, s]) => { if (s) map[id] = s; });
+      setImportSummaries(map);
+    });
   }, [showArchived]);
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
@@ -349,9 +365,34 @@ export default function CoproprietesPage() {
                 <TableCell className="font-mono text-sm">{c.bce || '-'}</TableCell>
                 <TableCell className="text-sm">{c.city}{c.postal_code ? ` (${c.postal_code})` : ''}</TableCell>
                 <TableCell className="font-mono text-xs">{getDefaultIban(c)}</TableCell>
-                <TableCell><Badge variant="outline" className={c.status === 'archived' ? 'bg-slate-100 text-slate-500' : 'bg-green-50 text-green-700 border-green-200'}>{c.status === 'archived' ? 'Archive' : 'Active'}</Badge></TableCell>
+                <TableCell><div className="flex flex-col gap-1">
+                  <Badge variant="outline" className={c.status === 'archived' ? 'bg-slate-100 text-slate-500' : 'bg-green-50 text-green-700 border-green-200'}>{c.status === 'archived' ? 'Archive' : 'Active'}</Badge>
+                  {c.status !== 'archived' && importSummaries[c.id] && (
+                    importSummaries[c.id].is_complete ? (
+                      <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 text-[10px] gap-1" data-testid={`import-status-${c.id}`}>
+                        <CheckCircle2 size={10} /> Import complet
+                      </Badge>
+                    ) : (
+                      <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200 text-[10px] gap-1" data-testid={`import-status-${c.id}`}>
+                        <AlertTriangle size={10} /> Import incomplet
+                      </Badge>
+                    )
+                  )}
+                </div></TableCell>
                 <TableCell><div className="flex gap-0">
                   {isManager && <Button variant="outline" size="sm" onClick={() => openEdit(c)} title="Modifier l'ACP (nom, adresse, banques, parametres)" data-testid={`edit-copro-${c.id}`} className="text-[#022D52] border-[#022D52]/30 hover:bg-[#022D52]/10 mr-1"><Pencil size={13} className="mr-1" /> Modifier</Button>}
+                  {isManager && importSummaries[c.id] && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setSummaryDialog({ acp: c, summary: importSummaries[c.id] })}
+                      title="Voir le recap de l'import et reprendre si besoin"
+                      data-testid={`import-recap-${c.id}`}
+                      className="text-slate-700 mr-1"
+                    >
+                      <ClipboardCheck size={13} className="mr-1" /> Recap
+                    </Button>
+                  )}
                   {isManager && (
                     <Button
                       variant="outline"
@@ -381,6 +422,36 @@ export default function CoproprietesPage() {
           </TableBody>
         </Table>
       </div>
+
+      {/* iter90if : Dialog recap import */}
+      <Dialog open={!!summaryDialog} onOpenChange={(open) => !open && setSummaryDialog(null)}>
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto" data-testid="import-summary-dialog">
+          <DialogHeader>
+            <DialogTitle style={{fontFamily:'Chivo,sans-serif'}}>
+              Recap d&apos;import - {summaryDialog?.acp?.name}
+            </DialogTitle>
+            <p className="text-xs text-slate-500 font-mono">{summaryDialog?.acp?.reference}</p>
+          </DialogHeader>
+          {summaryDialog && <ImportSummary summary={summaryDialog.summary} />}
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2 mt-4 pt-3 border-t border-slate-200">
+            <Button variant="outline" onClick={() => setSummaryDialog(null)} data-testid="close-summary-btn">
+              Fermer
+            </Button>
+            {summaryDialog && !summaryDialog.summary.is_complete && (
+              <Button
+                onClick={() => {
+                  localStorage.setItem('selectedCopro', summaryDialog.acp.id);
+                  navigate(`/import-wizard?copropriete_id=${summaryDialog.acp.id}`);
+                }}
+                className="bg-[#022D52] hover:bg-[#01213e] text-white"
+                data-testid="resume-import-btn"
+              >
+                <RotateCcw size={13} className="mr-1" /> Reprendre l&apos;import
+              </Button>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Dialog */}
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen} hasUnsavedChanges={dirty}>

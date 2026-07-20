@@ -20,6 +20,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import api from '@/lib/api';
 import { useAuth } from '@/contexts/AuthContext';
 import { PcmnAccountPicker } from '@/components/PcmnAccountPicker';
+import ImportSummary from '@/components/ImportSummary';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -105,6 +106,8 @@ export default function ImportWizardPage() {
     },
   });
   const [odEntriesParsed, setOdEntriesParsed] = useState({ format: '', entries: [], total_count: 0, total_amount: 0, period_start: '', period_end: '' });
+  // iter90if : ecran de recap final apres derniere etape du wizard.
+  const [finalSummary, setFinalSummary] = useState(null);
   // For 'csv_or_pdf' steps : tracks which mode the user picked for THIS step
   // (resets on every step change / file reset).
   const [uploadMode, setUploadMode] = useState(null);  // null | 'csv' | 'pdf'
@@ -452,19 +455,15 @@ export default function ImportWizardPage() {
         setOdEntriesParsed({ format: '', entries: [], total_count: 0, total_amount: 0, period_start: '', period_end: '' });
         setUploadMode(null);
       } else {
-        // Final step : finish
-        await api.post(`/import-wizard/sessions/${session.id}/finish`);
-        // iter90gi : si le syndic avait declare des ventes intra-exercice a la
-        // creation de l'ACP, on redirige vers la page Lots avec le banner de
-        // saisie des mutations. Sinon, retour au dashboard classique.
-        const pendingMutations = params.get('pending_mutations') === '1';
-        if (pendingMutations) {
-          toast.success('Import termine ! Place aux mutations intra-exercice.');
-          navigate(`/lots?post_import_mutations=1&copropriete_id=${effectiveCopro}`);
-        } else {
-          toast.success('Import termine ! Toutes les donnees sont integrees.');
-          navigate(`/?copropriete_id=${effectiveCopro}`);
+        // Final step : fetch summary, then show recap screen (iter90if).
+        try {
+          const sumRes = await api.get(`/import-wizard/coproprietes/${effectiveCopro}/import-summary`);
+          setFinalSummary(sumRes.data);
+        } catch {
+          setFinalSummary({ counts: {}, missing: [] });
         }
+        // Note : finish() est appele quand l'utilisateur clique sur "Terminer"
+        // depuis l'ecran de recap, plus automatiquement.
       }
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Erreur de validation');
@@ -500,7 +499,64 @@ export default function ImportWizardPage() {
 
   return (
     <div data-testid="import-wizard-page" className="max-w-[1600px] mx-auto px-4">
+      {/* iter90if : ecran de recap final apres derniere etape */}
+      {finalSummary && (
+        <div className="mt-6 mb-6 bg-white rounded-xl border-2 border-emerald-200 shadow-lg p-6" data-testid="import-final-recap">
+          <div className="flex items-center gap-3 mb-4 pb-3 border-b border-slate-200">
+            <div className="w-12 h-12 rounded-full bg-emerald-100 flex items-center justify-center flex-shrink-0">
+              <CheckCircle2 size={28} className="text-emerald-600" />
+            </div>
+            <div className="flex-1">
+              <h2 className="text-xl font-bold text-slate-900">Import termine</h2>
+              <p className="text-sm text-slate-600">Verifiez ci-dessous que tout a bien ete cree. Vous pouvez toujours revenir sur une etape avant de terminer.</p>
+            </div>
+          </div>
+          <ImportSummary summary={finalSummary} />
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 mt-6 pt-4 border-t border-slate-200">
+            <Button
+              variant="outline"
+              onClick={() => setFinalSummary(null)}
+              data-testid="recap-back-btn"
+            >
+              <ChevronLeft size={14} className="mr-1" /> Revenir aux etapes
+            </Button>
+            <div className="flex flex-col sm:flex-row gap-2">
+              <Button
+                variant="outline"
+                onClick={handleRollback}
+                className="text-red-700 border-red-300 hover:bg-red-50"
+                data-testid="recap-rollback-btn"
+              >
+                <RotateCcw size={14} className="mr-1" /> Annuler tout l&apos;import
+              </Button>
+              <Button
+                onClick={async () => {
+                  try {
+                    await api.post(`/import-wizard/sessions/${session.id}/finish`);
+                    const pendingMutations = params.get('pending_mutations') === '1';
+                    if (pendingMutations) {
+                      toast.success('Import finalise ! Place aux mutations intra-exercice.');
+                      navigate(`/lots?post_import_mutations=1&copropriete_id=${effectiveCopro}`);
+                    } else {
+                      toast.success('Import finalise ! Bienvenue sur votre ACP.');
+                      navigate(`/?copropriete_id=${effectiveCopro}`);
+                    }
+                  } catch (err) {
+                    toast.error(err.response?.data?.detail || 'Erreur finalisation');
+                  }
+                }}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white"
+                data-testid="recap-finish-btn"
+              >
+                <CheckCircle2 size={14} className="mr-1" /> Finaliser et ouvrir l&apos;ACP
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
+      {!finalSummary && (<>
       <div className="page-header flex items-center justify-between">
         <div>
           <h1 className="page-title">Wizard de reprise Optipro / Sogis</h1>
@@ -798,6 +854,7 @@ export default function ImportWizardPage() {
           })()}
         </div>
       </div>
+      </>)}
     </div>
   );
 }

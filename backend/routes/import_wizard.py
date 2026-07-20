@@ -2572,6 +2572,98 @@ def create_import_wizard_router(db):
         await _update_step(db, session_id, "distribution_keys", {"count": inserted})
         return {"inserted": inserted}
 
+    # ---- SUMMARY / RECAP D'IMPORT (iter90if) ----
+    # Renvoie un recapitulatif complet de ce qui a ete cree pour l'ACP,
+    # utilise :
+    #  - en fin de wizard (ecran de recap avant redirection)
+    #  - depuis la liste des ACP pour detecter les imports incomplets
+    #    (banner "Reprendre l'import").
+    # Ce endpoint fonctionne AVEC ou SANS session_id (recap ACP-wide).
+    @router.get("/coproprietes/{copropriete_id}/import-summary")
+    async def import_summary(copropriete_id: str, request: Request):
+        await _require_acp_access(request, db, copropriete_id)
+        # Fiscal years
+        fys = await db.fiscal_years.find(
+            {"copropriete_id": copropriete_id}, {"_id": 0}
+        ).to_list(50)
+        active_fy = next((f for f in fys if f.get("status") == "open"), None)
+        # Compteurs directs
+        counts = {
+            "fiscal_years": len(fys),
+            "lots": await db.lots.count_documents({"copropriete_id": copropriete_id}),
+            "owners": await db.owners.count_documents({"copropriete_id": copropriete_id}),
+            "suppliers": await db.suppliers.count_documents({"copropriete_id": copropriete_id}),
+            "distribution_keys": await db.distribution_keys.count_documents({"copropriete_id": copropriete_id}),
+            "natures": await db.expense_categories.count_documents({"copropriete_id": copropriete_id}),
+            "invoices": await db.invoices.count_documents({"copropriete_id": copropriete_id}),
+        }
+        # Budget de l'exercice actif
+        budget_doc = None
+        if active_fy:
+            budget_doc = await db.budgets.find_one(
+                {"copropriete_id": copropriete_id, "fiscal_year_id": active_fy["id"]},
+                {"_id": 0},
+            )
+        # OD d'ouverture
+        opening_od = await db.journal_entries.count_documents({
+            "copropriete_id": copropriete_id,
+            "journal_type": "OD",
+            "$or": [
+                {"description": {"$regex": "ouverture", "$options": "i"}},
+                {"reference": {"$regex": "^OD-OPEN", "$options": "i"}},
+            ],
+        })
+        # Session d'import la plus recente
+        sess = await db.import_sessions.find_one(
+            {"copropriete_id": copropriete_id},
+            {"_id": 0}, sort=[("created_at", -1)],
+        )
+        # Statut par etape (a partir de la session)
+        step_status = {}
+        for step_key in ["suppliers", "natures", "budget", "distribution_keys",
+                         "invoices", "journals", "opening_balance", "od_entries"]:
+            sdata = (sess or {}).get("steps", {}).get(step_key) or {}
+            step_status[step_key] = {
+                "done": bool(sdata),
+                "count": sdata.get("count") or sdata.get("inserted") or 0,
+                "detail": sdata,
+            }
+        # Manques prioritaires (utilises par le banner)
+        missing = []
+        if counts["lots"] == 0:
+            missing.append({"key": "lots", "label": "Lots", "critical": True})
+        if not budget_doc:
+            missing.append({"key": "budget", "label": "Budget previsionnel", "critical": False})
+        if counts["distribution_keys"] == 0:
+            missing.append({"key": "distribution_keys", "label": "Cles de repartition", "critical": True})
+        if counts["natures"] == 0:
+            missing.append({"key": "natures", "label": "Natures de depense", "critical": False})
+        if opening_od == 0:
+            missing.append({"key": "opening_balance", "label": "OD d'ouverture", "critical": False})
+
+        return {
+            "copropriete_id": copropriete_id,
+            "active_fiscal_year": active_fy,
+            "counts": counts,
+            "budget": ({
+                "id": budget_doc["id"],
+                "fiscal_year_id": budget_doc.get("fiscal_year_id"),
+                "lines_count": len(budget_doc.get("lines") or []),
+                "total_amount": budget_doc.get("total_amount") or budget_doc.get("total") or 0,
+                "status": budget_doc.get("status") or "draft",
+            } if budget_doc else None),
+            "opening_od_entries": opening_od,
+            "session": ({
+                "id": sess["id"],
+                "created_at": sess.get("created_at"),
+                "finished_at": sess.get("finished_at"),
+                "status": sess.get("status", "in_progress"),
+            } if sess else None),
+            "step_status": step_status,
+            "missing": missing,
+            "is_complete": len([m for m in missing if m["critical"]]) == 0 and budget_doc is not None,
+        }
+
     return router
 
 
