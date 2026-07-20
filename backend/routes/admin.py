@@ -3105,4 +3105,196 @@ def create_admin_router(db):
 
         return report
 
+    # ------------------------------------------------------------------
+    # iter90it : Reconciliation des fournisseurs orphelins depuis les JE.
+    #
+    # Cas d'usage (Chinese Wall strict + import Optipro sans BCE) :
+    # Apres un import Optipro d'AN, les journal_entries d'une ACP peuvent
+    # contenir des lignes 44000XXX SANS third_party_id, parce que la fiche
+    # fournisseur n'a jamais ete creee dans commit-suppliers-pdf (BCE
+    # manquant bloquait iter90gk). Ce endpoint :
+    # 1. Scanne les JE de l'ACP -> identifie les comptes 440XXX orphelins.
+    # 2. Pour chaque compte unique, cree une fiche fournisseur LOCALE a
+    #    l'ACP (nom = account_name, tier_account_number = account_number,
+    #    BCE vide - a enrichir via KBO lookup plus tard).
+    # 3. Repointe toutes les lignes JE de ce compte vers la nouvelle fiche.
+    # ------------------------------------------------------------------
+    @router.post("/reconcile-orphan-suppliers-from-je")
+    async def reconcile_orphan_suppliers_from_je(request: Request):
+        """Body : `{copropriete_id: "...", dry_run: bool}`.
+
+        Superadmin only. Idempotent (peut etre relance apres chaque import).
+        """
+        await _get_superadmin_only(request)
+        body = await request.json()
+        copropriete_id = (body.get("copropriete_id") or "").strip()
+        dry_run = bool(body.get("dry_run", True))
+        if not copropriete_id:
+            raise HTTPException(400, "copropriete_id requis")
+        copro = await db.coproprietes.find_one({"id": copropriete_id}, {"_id": 0, "name": 1})
+        if not copro:
+            raise HTTPException(404, f"ACP {copropriete_id} introuvable")
+
+        # 1. Charge tous les suppliers deja existants dans cette ACP,
+        #    indexes par tier_account_number et par nom normalise.
+        from routes.suppliers import _norm_name_candidates
+        from tier_accounts import canonize_supplier_tier_account
+
+        existing_suppliers = await db.suppliers.find(
+            {"copropriete_id": copropriete_id},
+            {"_id": 0},
+        ).to_list(5000)
+        sup_by_tier: dict[str, dict] = {}
+        sup_by_name_cand: dict[str, dict] = {}
+        for s in existing_suppliers:
+            num = (s.get("tier_account_number") or "").strip()
+            if num:
+                sup_by_tier[num] = s
+            for cand in _norm_name_candidates(s.get("name", "")):
+                sup_by_name_cand.setdefault(cand, s)
+
+        # 2. Scanne les journal_entries -> map account_number -> {names, ids}.
+        # On ne considere que les comptes 440XXX (fournisseurs) avec un solde
+        # non nul et sans third_party_id valide.
+        orphans: dict[str, dict] = {}  # tier_acc -> {names: set, line_refs: [(je_id, line_idx)]}
+        async for je in db.journal_entries.find(
+            {"copropriete_id": copropriete_id},
+            {"_id": 0, "id": 1, "lines": 1, "reversed": 1, "is_reversal": 1},
+        ):
+            if je.get("reversed") or je.get("is_reversal"):
+                continue
+            for lidx, ln in enumerate(je.get("lines", []) or []):
+                acc = (ln.get("account_number") or "").strip()
+                if not acc.startswith("440"):
+                    continue
+                # Skip si tpid deja pose et supplier valide dans cette ACP.
+                tpid = (ln.get("third_party_id") or "").strip()
+                if tpid:
+                    # Verifie que le tpid pointe vers une fiche de CETTE ACP.
+                    match = next((s for s in existing_suppliers if s["id"] == tpid), None)
+                    if match:
+                        continue
+                acc_canonical = canonize_supplier_tier_account(acc)
+                entry = orphans.setdefault(acc_canonical, {
+                    "raw_account": acc,
+                    "canonical": acc_canonical,
+                    "names": {},  # name -> count
+                    "line_refs": [],
+                })
+                nm = (ln.get("account_name") or ln.get("third_party_name") or "").strip()
+                if nm:
+                    entry["names"][nm] = entry["names"].get(nm, 0) + 1
+                entry["line_refs"].append((je["id"], lidx))
+
+        # 3. Pour chaque orphelin unique : cree la fiche (si absente) et
+        #    repointe les lignes.
+        report_items = []
+        totals = {
+            "orphan_accounts": len(orphans),
+            "suppliers_created": 0,
+            "suppliers_reused": 0,
+            "je_lines_repointed": 0,
+        }
+        for acc, meta in orphans.items():
+            # Nom le plus frequent parmi les lignes JE de ce compte.
+            names_sorted = sorted(meta["names"].items(), key=lambda x: -x[1])
+            best_name = names_sorted[0][0] if names_sorted else f"Fournisseur {acc}"
+            item = {
+                "tier_account": acc,
+                "candidate_name": best_name,
+                "occurrences": len(meta["line_refs"]),
+                "action": "",
+                "supplier_id": "",
+                "lines_repointed": 0,
+            }
+            # Cherche si une fiche existe deja avec ce tier_account ou ce nom.
+            sup = sup_by_tier.get(acc)
+            if not sup:
+                for cand in _norm_name_candidates(best_name):
+                    if cand in sup_by_name_cand:
+                        sup = sup_by_name_cand[cand]
+                        break
+            if sup:
+                # Fiche existante : verifie qu'elle a bien ce tier_account.
+                cur_num = (sup.get("tier_account_number") or "").strip()
+                if not cur_num:
+                    if not dry_run:
+                        await db.suppliers.update_one(
+                            {"id": sup["id"]},
+                            {"$set": {"tier_account_number": acc}},
+                        )
+                    sup["tier_account_number"] = acc
+                item["action"] = "reused"
+                item["supplier_id"] = sup["id"]
+                totals["suppliers_reused"] += 1
+            else:
+                # Creer une nouvelle fiche LOCALE a l'ACP.
+                new_sup = {
+                    "id": str(uuid.uuid4()),
+                    "name": best_name[:100],
+                    "copropriete_id": copropriete_id,
+                    "tier_account_number": acc,
+                    "bce_number": "",  # a enrichir via KBO plus tard
+                    "vat_number": "",
+                    "auto_created": True,
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "auxiliary_code": "",
+                    "notes": f"Auto-cree par reconcile-orphan-suppliers-from-je "
+                             f"(compte tier {acc}, {len(meta['line_refs'])} lignes JE).",
+                }
+                if not dry_run:
+                    try:
+                        await db.suppliers.insert_one(new_sup.copy())
+                    except Exception as e:
+                        item["action"] = f"error_insert: {e}"
+                        report_items.append(item)
+                        continue
+                    # Ensure PCMN account existe
+                    pcmn_exists = await db.pcmn_accounts.count_documents({
+                        "copropriete_id": copropriete_id, "number": acc,
+                    }, limit=1)
+                    if not pcmn_exists:
+                        await db.pcmn_accounts.insert_one({
+                            "copropriete_id": copropriete_id,
+                            "number": acc,
+                            "name": best_name[:60],
+                            "class_num": 4,
+                            "type": "balance",
+                            "is_tier_account": True,
+                            "created_at": datetime.now(timezone.utc).isoformat(),
+                        })
+                sup = new_sup
+                sup_by_tier[acc] = sup
+                item["action"] = "created"
+                item["supplier_id"] = sup["id"]
+                totals["suppliers_created"] += 1
+
+            # Repointer les lignes JE.
+            lines_repointed = 0
+            for je_id, lidx in meta["line_refs"]:
+                if dry_run:
+                    lines_repointed += 1
+                    continue
+                # $set precis sur l'index de la ligne.
+                res = await db.journal_entries.update_one(
+                    {"id": je_id},
+                    {"$set": {
+                        f"lines.{lidx}.third_party_id": sup["id"],
+                        f"lines.{lidx}.third_party_type": "supplier",
+                    }},
+                )
+                if res.modified_count:
+                    lines_repointed += 1
+            item["lines_repointed"] = lines_repointed
+            totals["je_lines_repointed"] += lines_repointed
+            report_items.append(item)
+
+        return {
+            "mode": "dry_run" if dry_run else "live",
+            "copropriete_id": copropriete_id,
+            "copropriete_name": copro.get("name", ""),
+            "totals": totals,
+            "results": report_items,
+        }
+
     return router

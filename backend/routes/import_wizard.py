@@ -840,29 +840,14 @@ def create_import_wizard_router(db):
                     continue
 
                 if action == "create":
-                    # BCE OBLIGATOIRE pour toute creation (regle metier)
-                    bce = (decision.get("bce_number") or "").strip()
-                    if not bce:
-                        errors.append({
-                            "row": idx,
-                            "error": f"Creation refusee : le BCE est obligatoire pour '{name}' (regle stricte anti-doublon)."
-                        })
-                        continue
-                    # Verifie l'unicite GLOBALE du BCE
-                    dup_bce = await find_duplicate_supplier(
-                        db, name="", bce_number=bce, vat_number="", iban="", copro_id="",
-                    )
-                    if dup_bce:
-                        errors.append({
-                            "row": idx,
-                            "error": (
-                                f"BCE {bce} deja utilise par '{dup_bce['supplier'].get('name','')}' "
-                                f"- utilisez action=reuse avec supplier_id={dup_bce['supplier']['id']}."
-                            ),
-                        })
-                        continue
-                    # Fall-through pour creer la fiche (voir bloc creation ci-dessous)
-                    supplier_bce = bce
+                    # iter90it : BCE plus obligatoire pour l'import Optipro.
+                    # Le Chinese Wall strict (iter90is) garantit qu'une fiche
+                    # est LOCALE a l'ACP - impossible de creer un doublon
+                    # global. Si BCE fourni, il sera valide par l'unicite
+                    # per-ACP (uq_supplier_copro_bce). Si BCE vide, la fiche
+                    # sera creee avec seulement Nom + Code Auxiliaire.
+                    # Le KBO lookup (iter90ip) peut enrichir le BCE plus tard.
+                    supplier_bce = (decision.get("bce_number") or "").strip()
                 else:
                     # Pas de decision : comportement legacy - check anti-doublon
                     dup = await find_duplicate_supplier(

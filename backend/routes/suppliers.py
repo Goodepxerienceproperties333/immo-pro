@@ -325,22 +325,12 @@ def create_suppliers_router(db):
         if not is_super:
             if copro_id not in (allowed_copros or []):
                 raise HTTPException(403, "Vous ne pouvez attribuer ce fournisseur qu'a une de vos ACPs")
-        # iter90gk : nom + BCE OBLIGATOIRES (regle utilisateur : verrouiller
-        # toute creation de fournisseur sans BCE pour eviter les doublons
-        # comme observes en production : Sneyers/Baloise/Euromex/Finlead
-        # sur 5 comptes tier orphelins differents pour les memes societes).
+        # iter90it : BCE plus obligatoire depuis le Chinese Wall strict (iter90is).
+        # Le cloisonnement per-ACP evite deja les doublons globaux. Le BCE peut
+        # etre enrichi plus tard via le KBO lookup (iter90ip/iq).
         name = (data.name or "").strip()
-        bce = _norm_id(data.bce_number or "")
-        vat = _norm_id(data.vat_number or "")
         if not name:
             raise HTTPException(400, "Le nom du fournisseur est obligatoire.")
-        if not (bce or vat):
-            raise HTTPException(
-                400,
-                "Le numero BCE (ou TVA equivalent) est obligatoire pour creer un fournisseur. "
-                "Format attendu : BE0123456789 - identifiant unique de l'entreprise sur "
-                "https://kbopub.economie.fgov.be/",
-            )
         # Check anti-doublon : BCE/TVA, nom et IBAN normalises (scope ACP)
         dup = await find_duplicate_supplier(
             db,

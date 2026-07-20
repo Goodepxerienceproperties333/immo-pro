@@ -409,6 +409,40 @@ export default function AdminQualityAuditPage() {
   };
 
   // iter90ir : Reparation ciblee - lier fournisseurs a une ACP
+  // iter90it : Reconciliation orphelins fournisseurs depuis JE
+  const [reconcileAcp, setReconcileAcp] = useState('');
+  const [reconcileBusy, setReconcileBusy] = useState(false);
+  const [reconcileResult, setReconcileResult] = useState(null);
+  const runReconcile = async (dryRun) => {
+    if (!reconcileAcp) { toast.error('Selectionnez une ACP cible'); return; }
+    if (!dryRun && !window.confirm(
+      'Executer la reconciliation LIVE ?\n\n' +
+      '* Les comptes 44000XXX orphelins seront analyses.\n' +
+      '* Une fiche fournisseur LOCALE sera creee par compte (nom depuis JE).\n' +
+      '* Les lignes JE seront repointees automatiquement.\n' +
+      '* Idempotent : peut etre relance sans risque.',
+    )) return;
+    setReconcileBusy(true);
+    setReconcileResult(null);
+    try {
+      const { data } = await api.post('/admin/reconcile-orphan-suppliers-from-je', {
+        copropriete_id: reconcileAcp,
+        dry_run: dryRun,
+      });
+      setReconcileResult(data);
+      const t = data.totals || {};
+      if (dryRun) {
+        toast.info(`Dry-run : ${t.orphan_accounts} compte(s) orphelin(s), ${t.suppliers_created} fiche(s) a creer, ${t.je_lines_repointed} ligne(s) JE a repointer`, { duration: 8000 });
+      } else {
+        toast.success(`Live : ${t.suppliers_created} fiche(s) cree(s), ${t.suppliers_reused} reutilisee(s), ${t.je_lines_repointed} ligne(s) JE repointee(s)`, { duration: 10000 });
+      }
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur reconciliation');
+    } finally {
+      setReconcileBusy(false);
+    }
+  };
+
   const [healLinkAcp, setHealLinkAcp] = useState('');
   const [healLinkMapping, setHealLinkMapping] = useState(
     '[\n  {"name": "Engie", "account": "44000110"},\n  {"name": "SRL Finlead", "account": "44000004"},\n  {"name": "Baloise Insurance", "account": ""},\n  {"name": "Euromex", "account": ""},\n  {"name": "AG Insurance", "account": ""},\n  {"name": "Sneyers Philippe SRL", "account": ""}\n]'
@@ -616,6 +650,114 @@ export default function AdminQualityAuditPage() {
               <span className="font-mono text-emerald-700">{bceResult.inserted}</span> nouvelles,{' '}
               <span className="font-mono text-slate-600">{bceResult.updated}</span> mises a jour en{' '}
               {Math.round((bceResult.took_ms || 0) / 1000)}s.
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* iter90it : Reconciliation orphelins fournisseurs -> fiches locales */}
+      <Card className="border-purple-200" data-testid="reconcile-orphans-panel">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <Truck size={16} className="text-purple-700" />
+            Reconciliation fournisseurs orphelins (Chinese Wall)
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="text-xs text-slate-600 mb-3 leading-relaxed">
+            Apres un import Optipro sans BCE, certaines lignes journal_entries
+            utilisent des comptes 44000XXX <strong>sans fiche fournisseur locale</strong>.
+            Ce panneau scanne l&apos;ACP selectionnee, cree une fiche locale par compte
+            orphelin (nom = intitule de la ligne, BCE vide - a enrichir via KBO plus
+            tard) et repointe les lignes. Idempotent.
+          </div>
+          <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              <label className="text-xs font-semibold text-slate-700 w-40">ACP cible :</label>
+              <select
+                value={reconcileAcp}
+                onChange={(e) => setReconcileAcp(e.target.value)}
+                className="text-xs border border-slate-300 rounded px-2 py-1 flex-1 max-w-md"
+                data-testid="reconcile-orphans-acp-select"
+              >
+                <option value="">-- Selectionnez une ACP --</option>
+                {copros.map((c) => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
+            </div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => runReconcile(true)}
+                disabled={reconcileBusy || !reconcileAcp}
+                className="text-purple-700 border-purple-300 hover:bg-purple-50"
+                data-testid="reconcile-orphans-dry-btn"
+              >
+                <RefreshCw size={13} className={`mr-1 ${reconcileBusy ? 'animate-spin' : ''}`} />
+                Dry-run
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => runReconcile(false)}
+                disabled={reconcileBusy || !reconcileAcp}
+                className="bg-purple-600 hover:bg-purple-700 text-white"
+                data-testid="reconcile-orphans-live-btn"
+              >
+                <Play size={13} className="mr-1" />
+                Executer
+              </Button>
+              {reconcileBusy && <span className="text-xs text-slate-500 italic">Analyse...</span>}
+            </div>
+          </div>
+          {reconcileResult && (
+            <div className="mt-3 border-t border-slate-200 pt-3" data-testid="reconcile-orphans-result">
+              <div className="text-xs font-semibold mb-2">
+                Resultat ({reconcileResult.mode}) - ACP : {reconcileResult.copropriete_name}
+              </div>
+              <div className="flex items-center gap-2 flex-wrap text-xs mb-2">
+                <Badge variant="outline" className="bg-slate-50 text-slate-700">
+                  Orphelins detectes : {reconcileResult.totals?.orphan_accounts || 0}
+                </Badge>
+                <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200">
+                  Fiches creees : {reconcileResult.totals?.suppliers_created || 0}
+                </Badge>
+                <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200">
+                  Fiches reutilisees : {reconcileResult.totals?.suppliers_reused || 0}
+                </Badge>
+                <Badge variant="outline" className="bg-purple-50 text-purple-700 border-purple-200">
+                  JE lines repointees : {reconcileResult.totals?.je_lines_repointed || 0}
+                </Badge>
+              </div>
+              {(reconcileResult.results || []).length > 0 && (
+                <div className="max-h-48 overflow-y-auto border border-slate-200 rounded">
+                  <table className="w-full text-[11px]">
+                    <thead className="bg-slate-50 sticky top-0">
+                      <tr>
+                        <th className="px-2 py-1 text-left">Compte</th>
+                        <th className="px-2 py-1 text-left">Nom candidat</th>
+                        <th className="px-2 py-1 text-left">Action</th>
+                        <th className="px-2 py-1 text-right">Lignes</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(reconcileResult.results || []).map((row, i) => (
+                        <tr key={i} className="border-t border-slate-100">
+                          <td className="px-2 py-1 font-mono">{row.tier_account}</td>
+                          <td className="px-2 py-1">{row.candidate_name}</td>
+                          <td className="px-2 py-1">
+                            {row.action === 'created' ? <span className="text-emerald-700">Cree</span>
+                              : row.action === 'reused' ? <span className="text-blue-700">Reutilise</span>
+                              : <span className="text-amber-700">{row.action}</span>}
+                          </td>
+                          <td className="px-2 py-1 text-right font-mono">{row.lines_repointed}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           )}
         </CardContent>
