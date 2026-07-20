@@ -1,0 +1,24 @@
+{
+  "summary": "iter90iu verified: 6/6 offline + 2/2 HTTP regression tests pass. All 4 bug fixes (commit_invoices priority read, commit_journals canonize, reconcile updates account_number, assign_supplier_account dual-write) confirmed via code inspection + live MongoDB + live HTTP.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter90iu_import_optipro_three_bugs_fix.py",
+    "/app/backend/tests/test_iter90iu_http_regression.py",
+    "/app/test_reports/pytest/iter90iu.xml",
+    "/app/test_reports/pytest/iter90iu_http.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "import_wizard.py file getting large; consider splitting commit_invoices/commit_journals into a helpers module.",
+    "server.py still uses deprecated @app.on_event startup/shutdown; migrate to lifespan."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter90iu_http_regression.py"],
+  "success_rate": {"backend": "100%", "frontend": "N/A (skipped as requested)"},
+  "test_credentials": "admin@copro.be / admin123 (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "Dynamic per-test fixtures with unique uuid suffixes; cleanup via delete_many in finally blocks. HTTP tests reuse existing ACP, cleanup created suppliers via DELETE.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "iter90iu bug fixes fully validated. tests/test_iter90iu_import_optipro_three_bugs_fix.py covers unit + E2E reconcile flow against local mongo. tests/test_iter90iu_http_regression.py covers preview URL supplier endpoint (BCE optional, copropriete required, dual-write tier_account_number + tier_accounts[acp].main).",
+  "rca of the issue": "N/A - all fixes verified working."
+}

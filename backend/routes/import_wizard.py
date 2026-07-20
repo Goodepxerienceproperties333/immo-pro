@@ -1205,7 +1205,15 @@ def create_import_wizard_router(db):
                 # Balance des Tiers -> Bilan desequilibre.
                 sup_pcmn = ""
                 if supplier_doc:
-                    sup_pcmn = ((supplier_doc.get("tier_accounts") or {}).get(copro_id, {}) or {}).get("main", "")
+                    # iter90iu (Chinese Wall strict) : PRIORITE au champ plat
+                    # `tier_account_number` (iter90is). Si absent, fallback
+                    # sur le dict legacy `tier_accounts[copro_id].main`. Ne
+                    # PAS recreer un numero via l'aux Optipro quand la fiche
+                    # a deja un tier_account_number - c'etait la cause des
+                    # doublons dans le Bilan (44001115 vs 44000006 pour Sneyers).
+                    sup_pcmn = (supplier_doc.get("tier_account_number") or "").strip()
+                    if not sup_pcmn:
+                        sup_pcmn = ((supplier_doc.get("tier_accounts") or {}).get(copro_id, {}) or {}).get("main", "")
                 if not sup_pcmn and supplier_aux.startswith("F") and len(supplier_aux) >= 5:
                     # Fallback historique (aucune fiche fournisseur trouvee) : on
                     # derive un compte tier depuis l'aux Optipro. Cette branche
@@ -1456,7 +1464,13 @@ def create_import_wizard_router(db):
                     continue
                 bank_pcmn = (t.get("bank_account") or "").strip()
                 bank_id = bank_lookup.get(bank_pcmn) if bank_pcmn else None
-                cp_pcmn = (t.get("counterparty_account") or "").strip()
+                # iter90iu (point n°2) : normalise le compte contrepartie au
+                # format canonique 8 chars (44000XXX) via canonize_supplier_tier_account.
+                # Sans cela, un cp_pcmn 7 chars ("4400015") persisterait dans
+                # les JE et creerait des doublons dans le Bilan avec le canonique
+                # 8 chars deja utilise par les fiches suppliers.
+                from tier_accounts import canonize_supplier_tier_account
+                cp_pcmn = canonize_supplier_tier_account((t.get("counterparty_account") or "").strip())
                 bank_label = (t.get("bank_account_label") or "").strip()
                 cp_label = (t.get("counterparty_account_label") or "").strip()
                 amount = float(t.get("amount") or 0)

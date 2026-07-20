@@ -3275,12 +3275,19 @@ def create_admin_router(db):
                 if dry_run:
                     lines_repointed += 1
                     continue
-                # $set precis sur l'index de la ligne.
+                # iter90iu (point n°3) : $set precis sur l'index de la ligne.
+                # ATTENTION : on met a jour AUSSI `account_number` avec le
+                # compte tier CANONIQUE (8 chars) pour corriger les JE legacy
+                # qui contenaient un compte 7 chars ("4400015"). Sans cette
+                # correction, le Bilan continuait d'afficher deux lignes
+                # (7 chars vs 8 chars) pour le meme fournisseur.
+                sup_canonical_acc = (sup.get("tier_account_number") or acc).strip()
                 res = await db.journal_entries.update_one(
                     {"id": je_id},
                     {"$set": {
                         f"lines.{lidx}.third_party_id": sup["id"],
                         f"lines.{lidx}.third_party_type": "supplier",
+                        f"lines.{lidx}.account_number": sup_canonical_acc,
                     }},
                 )
                 if res.modified_count:

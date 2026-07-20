@@ -165,6 +165,11 @@ async def assign_supplier_account(db, supplier: dict, copro_id: Optional[str] = 
     seule ACP. Le compte tier PCMN 44000XXX est stocke directement dans
     `supplier.tier_account_number` (plus de dict `tier_accounts`).
 
+    iter90iu (point n°4) : COMPATIBILITE - remplit AUSSI l'ancien dict
+    `tier_accounts[copro_id].main` pour que le code legacy (lecture via
+    l'ancien dict) continue de trouver le compte. Le nouveau code (post
+    iter90is) lit en priorite `tier_account_number`.
+
     Idempotent : si le supplier a deja un `tier_account_number`, on ne
     reassigne pas.
     """
@@ -179,17 +184,37 @@ async def assign_supplier_account(db, supplier: dict, copro_id: Optional[str] = 
     # Deja assigne ?
     existing_num = (supplier.get("tier_account_number") or "").strip()
     if existing_num:
+        # iter90iu : s'assure que le dict legacy est aussi rempli meme si
+        # le champ plat existe deja (auto-migration au premier passage).
+        legacy = (supplier.get("tier_accounts") or {})
+        if legacy.get(target_copro, {}).get("main") != existing_num:
+            legacy[target_copro] = {"main": existing_num}
+            await db.suppliers.update_one(
+                {"id": supplier["id"]},
+                {"$set": {"tier_accounts": legacy}},
+            )
+            supplier["tier_accounts"] = legacy
         return supplier
     seq = await _next_seq(db, target_copro, "44000")
     num = _format_seq("44000", seq, width=3)
     name = (supplier.get("name") or "Fournisseur")[:40]
     await _ensure_account(db, target_copro, num, name.strip(), 4)
+    # iter90iu : ecriture SIMULTANEE des deux champs (plat + dict legacy)
+    # pour retro-compatibilite. Le nouveau code lit `tier_account_number`
+    # en priorite ; le code legacy continue de fonctionner via le dict.
+    legacy_map = dict(supplier.get("tier_accounts") or {})
+    legacy_map[target_copro] = {"main": num}
     await db.suppliers.update_one(
         {"id": supplier["id"]},
-        {"$set": {"tier_account_number": num, "copropriete_id": target_copro}},
+        {"$set": {
+            "tier_account_number": num,
+            "copropriete_id": target_copro,
+            "tier_accounts": legacy_map,
+        }},
     )
     supplier["tier_account_number"] = num
     supplier["copropriete_id"] = target_copro
+    supplier["tier_accounts"] = legacy_map
     return supplier
 
 
