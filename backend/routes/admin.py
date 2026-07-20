@@ -1808,4 +1808,149 @@ def create_admin_router(db):
             "duplicates": dupes[:200],
         }
 
+    # iter90ig : "Guerit" les ACP dont les tier_accounts owners pointent vers
+    # des comptes Optipro 7-char (4100XXX au lieu du canonique 4101XXXX) ou
+    # dont la balance des tiers affiche des lignes "Ex-prop." dupliquees.
+    #
+    # Actions (par ACP) :
+    #   1. Pour chaque owner de l'ACP avec un compte "provisions" ou "reserve"
+    #      corrompu, on:
+    #      a. Determine son compte CANONIQUE via `assign_owner_accounts`
+    #         (cree si absent, garde si legacy 40000/40010).
+    #      b. Reecrit toutes les lignes journal_entries qui utilisent le
+    #         compte pollue vers le compte canonique.
+    #      c. Met a jour `tier_accounts.{copro_id}` sur le owner.
+    #      d. Optionnellement supprime le compte pcmn "orphelin" si plus
+    #         aucune ligne ne l'utilise dans cette ACP.
+    @router.post("/heal-optipro-owner-accounts")
+    async def heal_optipro_owner_accounts(
+        request: Request,
+        copropriete_id: str,
+        dry_run: bool = True,
+    ):
+        """Fusionne les comptes Optipro pollues (4100XXX 7-char) vers les
+        comptes canoniques (4101XXXX) crees automatiquement par notre
+        systeme. Superadmin only.
+
+        Un compte "corrompu" est :
+          - `provisions` avec longueur 7 (ex: 4100959) OU ne commence pas
+            par 4101/40000 (nouveau/legacy schema).
+          - `reserve` avec longueur 7 (ex: 4001959) OU ne commence pas
+            par 4100/40010.
+
+        NOTE : les comptes Optipro `4100XXX` sont ambigus car ils
+        collident avec le NOUVEAU prefixe reserve `4100XXXX`. La
+        detection utilise donc la LONGUEUR (7 = Optipro, 8 = canonique).
+        """
+        await _get_superadmin_only(request)
+        from tier_accounts import assign_owner_accounts as _assign_owner_accounts
+
+        def _is_bad_prov(acc: str) -> bool:
+            if not acc:
+                return False
+            # Optipro 7-char ou schema non-standard
+            return len(acc) == 7 or not acc.startswith(("4101", "40000"))
+
+        def _is_bad_res(acc: str) -> bool:
+            if not acc:
+                return False
+            # Optipro 7-char (4001XXX) ou 8-char sans prefixe correct
+            return len(acc) == 7 or not acc.startswith(("4100", "40010"))
+
+        heals = []
+        remaps: dict = {}  # source_acc -> canonical_acc
+        owner_updates = []
+
+        async for o in db.owners.find(
+            {"copropriete_ids": copropriete_id}, {"_id": 0},
+        ):
+            oid = o["id"]
+            ta = (o.get("tier_accounts") or {}).get(copropriete_id, {}) or {}
+            prov = (ta.get("provisions") or "").strip()
+            reserve = (ta.get("reserve") or "").strip()
+            bad_prov = _is_bad_prov(prov)
+            bad_res = _is_bad_res(reserve)
+            if not bad_prov and not bad_res:
+                continue
+            # Cree/recupere les comptes canoniques
+            fresh_ta = {**ta}
+            if bad_prov:
+                fresh_ta.pop("provisions", None)
+            if bad_res:
+                fresh_ta.pop("reserve", None)
+            o_with_reset = {**o, "tier_accounts": {**(o.get("tier_accounts") or {}), copropriete_id: fresh_ta}}
+            if not dry_run:
+                await db.owners.update_one(
+                    {"id": oid},
+                    {"$set": {f"tier_accounts.{copropriete_id}": fresh_ta}},
+                )
+                o_after = await _assign_owner_accounts(db, o_with_reset, copropriete_id)
+            else:
+                # En dry_run on simule : le canonique sera 4101XXXX/4100XXXX
+                # base sur la sequence existante (approximation).
+                o_after = o_with_reset
+            new_ta = (o_after.get("tier_accounts") or {}).get(copropriete_id, {}) or {}
+            entry = {
+                "owner_id": oid,
+                "owner_name": o.get("name") or f"{o.get('last_name','')} {o.get('first_name','')}",
+                "before": ta,
+                "after": new_ta if not dry_run else "canonique_a_creer",
+                "bad_provisions": bad_prov,
+                "bad_reserve": bad_res,
+            }
+            heals.append(entry)
+            if bad_prov and prov and not dry_run:
+                remaps[prov] = new_ta.get("provisions", prov)
+            if bad_res and reserve and not dry_run:
+                remaps[reserve] = new_ta.get("reserve", reserve)
+
+        # Reecriture des lignes journal_entries : source_acc -> canonical
+        lines_remapped = 0
+        entries_touched = 0
+        if not dry_run and remaps:
+            async for je in db.journal_entries.find(
+                {"copropriete_id": copropriete_id}, {"_id": 0, "id": 1, "lines": 1},
+            ):
+                new_lines = []
+                touched = False
+                for ln in je.get("lines") or []:
+                    acc = (ln.get("account_number") or "").strip()
+                    if acc in remaps:
+                        new_lines.append({**ln, "account_number": remaps[acc]})
+                        lines_remapped += 1
+                        touched = True
+                    else:
+                        new_lines.append(ln)
+                if touched:
+                    entries_touched += 1
+                    await db.journal_entries.update_one(
+                        {"id": je["id"]}, {"$set": {"lines": new_lines}},
+                    )
+
+        # Supprime les comptes pcmn orphelins (plus utilises)
+        pcmn_deleted = 0
+        if not dry_run:
+            for old_acc in remaps.keys():
+                still_used = await db.journal_entries.count_documents({
+                    "copropriete_id": copropriete_id,
+                    "lines.account_number": old_acc,
+                })
+                if still_used == 0:
+                    r = await db.pcmn_accounts.delete_one(
+                        {"copropriete_id": copropriete_id, "number": old_acc}
+                    )
+                    if r.deleted_count:
+                        pcmn_deleted += 1
+
+        return {
+            "mode": "dry_run" if dry_run else "live",
+            "copropriete_id": copropriete_id,
+            "owners_healed": len(heals),
+            "account_remaps": remaps,
+            "journal_entries_touched": entries_touched,
+            "lines_remapped": lines_remapped,
+            "pcmn_accounts_deleted": pcmn_deleted,
+            "details": heals[:200],
+        }
+
     return router

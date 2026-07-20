@@ -14,6 +14,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { toast } from 'sonner';
 import { AlertTriangle, CheckCircle2, RefreshCw, Download, Users, Truck, FileWarning, Landmark, FileText, HardDrive, Play } from 'lucide-react';
 import api from '@/lib/api';
@@ -90,6 +91,48 @@ export default function AdminQualityAuditPage() {
   // iter90i7 : Nettoyage doublons AP/VE (fonds de reserve/roulement)
   const [dupBusy, setDupBusy] = useState(false);
   const [dupResult, setDupResult] = useState(null);
+  // iter90ig : Guerison comptes Optipro pollues (owners avec 4100XXX au lieu de 4101XXXX)
+  const [optiproBusy, setOptiproBusy] = useState(false);
+  const [optiproResult, setOptiproResult] = useState(null);
+  const [optiproCopro, setOptiproCopro] = useState('');
+  const runHealOptipro = async (dryRun) => {
+    if (!optiproCopro) {
+      toast.error('Selectionnez une ACP a nettoyer.');
+      return;
+    }
+    if (!dryRun && !window.confirm(
+      "ATTENTION : fusionner les comptes Optipro 7-char des proprietaires vers les comptes canoniques 4101XXXX ?\n\n" +
+      "* Idempotent : re-executable sans risque.\n" +
+      "* Reecrit les lignes journal_entries : 4100XXX -> 4101XXXX (ou 4001XXX -> 4100XXXX pour reserve).\n" +
+      "* Met a jour tier_accounts des owners pour pointer vers le canonique.\n" +
+      "* Supprime les comptes pcmn Optipro devenus orphelins.\n\n" +
+      "Recommande : lancer d'abord un DRY-RUN pour verifier les changements.\n\n" +
+      "Confirmez pour lancer.",
+    )) return;
+    setOptiproBusy(true);
+    setOptiproResult(null);
+    try {
+      const { data } = await api.post(
+        `/admin/heal-optipro-owner-accounts?copropriete_id=${optiproCopro}&dry_run=${dryRun}`,
+      );
+      setOptiproResult(data);
+      if (dryRun) {
+        toast.info(
+          `Dry-run : ${data.owners_healed} owner(s) a nettoyer`,
+          { duration: 6000 },
+        );
+      } else {
+        toast.success(
+          `${data.owners_healed} owner(s) nettoyes - ${data.lines_remapped} lignes reecrites - ${data.pcmn_accounts_deleted} compte(s) Optipro supprimes`,
+          { duration: 8000 },
+        );
+      }
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur heal-optipro');
+    } finally {
+      setOptiproBusy(false);
+    }
+  };
   const runHealDuplicateFundCalls = async (dryRun) => {
     if (!dryRun && !window.confirm(
       "ATTENTION : supprimer les ecritures AP en doublon avec les VE deja auto-generees ?\n\n" +
@@ -514,6 +557,85 @@ export default function AdminQualityAuditPage() {
         </CardContent>
       </Card>
 
+      {/* iter90ig : Guerison comptes Optipro (7-char) -> canoniques (4101XXXX) */}
+      <Card className="border-fuchsia-200 bg-fuchsia-50/50">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-fuchsia-900 text-base">
+            Nettoyer les comptes Optipro pollues (owners &quot;Ex-prop.&quot;)
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-xs text-fuchsia-900 leading-relaxed">
+            Lors d&apos;un import Optipro, l&apos;OD d&apos;ouverture ecrivait par erreur le compte 7-char (ex. <code className="bg-white px-1">4100959</code>) comme compte du proprietaire au lieu du canonique <code className="bg-white px-1">4101XXXX</code>. La balance des tiers affiche alors 2 lignes par proprietaire (compte propre + &quot;Ex-prop.&quot;) et le lettrage bancaire ne sait plus lequel utiliser. Ce healing fusionne les 2 comptes.
+          </p>
+          <div className="flex flex-col sm:flex-row gap-2 items-stretch">
+            <Select value={optiproCopro} onValueChange={setOptiproCopro}>
+              <SelectTrigger className="flex-1" data-testid="optipro-copro-select">
+                <SelectValue placeholder="Selectionner une ACP a nettoyer..." />
+              </SelectTrigger>
+              <SelectContent>
+                {copros.filter(c => c.status !== 'archived').map(c => (
+                  <SelectItem key={c.id} value={c.id}>{c.reference ? `${c.reference} - ` : ''}{c.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                onClick={() => runHealOptipro(true)}
+                disabled={optiproBusy || !optiproCopro}
+                data-testid="optipro-dry-run-btn"
+              >
+                {optiproBusy ? '...' : 'Dry-run'}
+              </Button>
+              <Button
+                onClick={() => runHealOptipro(false)}
+                disabled={optiproBusy || !optiproCopro}
+                className="bg-fuchsia-600 hover:bg-fuchsia-700 text-white"
+                data-testid="optipro-live-btn"
+              >
+                {optiproBusy ? '...' : 'Nettoyer'}
+              </Button>
+            </div>
+          </div>
+          {optiproResult && (
+            <div className="bg-white border border-fuchsia-200 rounded-md p-3 space-y-2 text-xs">
+              <div>
+                <b className="text-fuchsia-800">Mode :</b> {optiproResult.mode} - <b>{optiproResult.owners_healed}</b> owner(s) a corriger
+                {optiproResult.mode === 'live' && (
+                  <span className="ml-2 text-emerald-700 font-semibold">
+                    - {optiproResult.lines_remapped} lignes reecrites - {optiproResult.pcmn_accounts_deleted} compte(s) supprimes
+                  </span>
+                )}
+              </div>
+              {Object.keys(optiproResult.account_remaps || {}).length > 0 && (
+                <div>
+                  <b>Fusion de comptes :</b>
+                  <ul className="list-disc list-inside ml-2 font-mono text-[11px]">
+                    {Object.entries(optiproResult.account_remaps).map(([src, dst]) => (
+                      <li key={src}>{src} <b>&rarr;</b> {dst}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {(optiproResult.details || []).length > 0 && (
+                <details>
+                  <summary className="cursor-pointer text-fuchsia-800">Details par owner ({optiproResult.details.length})</summary>
+                  <ul className="mt-1 ml-2 space-y-1">
+                    {optiproResult.details.slice(0, 50).map((d, i) => (
+                      <li key={i} className="text-slate-700">
+                        <b>{d.owner_name}</b> :
+                        {d.bad_provisions && <span className="ml-1 text-red-600">provisions {d.before?.provisions || '-'}</span>}
+                        {d.bad_reserve && <span className="ml-1 text-red-600">reserve {d.before?.reserve || '-'}</span>}
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       {report && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">

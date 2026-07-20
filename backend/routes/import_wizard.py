@@ -1673,21 +1673,34 @@ def create_import_wizard_router(db):
             canonique de la fiche fournisseur pour REECRIRE le numero de
             compte de la ligne AN (evite les orphelins 44001115 / 44000216
             qui doublonnent avec le tier canonique 44000005 dans le bilan).
+
+            iter90ig : meme logique appliquee aux OWNERS. Optipro utilise
+            des comptes 7-char (4100959, 4100956...) qui, si laisses tels
+            quels dans la ligne AN, generent des DOUBLONS avec les comptes
+            canoniques 4101XXXX/4100XXXX crees automatiquement par notre
+            systeme via `assign_owner_accounts`. La balance des tiers
+            affichait alors 2 lignes par proprietaire ("Bon compte" +
+            "Ex-prop.") et le lettrage bancaire ne savait plus quel
+            compte utiliser. On renvoie desormais le compte canonique du
+            owner pour l'ACP concernee et la ligne AN sera reecrite.
             """
             acc = (account_number or "").strip()
             if not acc:
                 return None, None, None, None
-            # 410xxxx or 4001xxxx -> owner (4 digits after prefix)
+            # 410xxxx -> owner (provisions / fonds de roulement Optipro)
             if acc.startswith("410") and len(acc) >= 7:
                 aux = "C" + acc[-4:]
                 o = owners_by_aux.get(aux)
                 if o:
-                    return o["id"], "owner", o, None
+                    canonical = ((o.get("tier_accounts") or {}).get(copro_id, {}) or {}).get("provisions", "")
+                    return o["id"], "owner", o, canonical or None
+            # 4001xxxx -> owner (fonds de reserve Optipro legacy)
             if acc.startswith("4001") and len(acc) >= 8:
                 aux = "C" + acc[-4:]
                 o = owners_by_aux.get(aux)
                 if o:
-                    return o["id"], "owner", o, None
+                    canonical = ((o.get("tier_accounts") or {}).get(copro_id, {}) or {}).get("reserve", "")
+                    return o["id"], "owner", o, canonical or None
             # 440xxxx -> supplier (aux match first, then name match)
             if acc.startswith("440") and len(acc) >= 5:
                 aux = "F" + acc[-4:]
@@ -1710,6 +1723,52 @@ def create_import_wizard_router(db):
                                 return cand["id"], "supplier", cand, canonical or None
             return None, None, None, None
 
+        # iter90ig : PRE-ASSIGN tier_accounts pour tous les owners de l'ACP
+        # AVANT de construire les lignes AN. Sinon, les nouveaux owners
+        # crees via PdfImportDialog (sans tier_accounts) recevraient le
+        # compte Optipro comme "canonical", ce qui perpetuerait le bug.
+        from tier_accounts import assign_owner_accounts as _assign_owner_accounts
+        # On charge les owners candidats (aux_code C0XXX matche par cet AN)
+        # et on garantit qu'ils ont provisions + reserve pour cette ACP.
+        aux_codes_in_an = set()
+        for a in actif + passif:
+            acc = (a.get("account") or "").strip()
+            if acc.startswith("410") and len(acc) >= 7:
+                aux_codes_in_an.add("C" + acc[-4:])
+            elif acc.startswith("4001") and len(acc) >= 8:
+                aux_codes_in_an.add("C" + acc[-4:])
+        for aux in aux_codes_in_an:
+            o = owners_by_aux.get(aux)
+            if not o:
+                continue
+            ta = (o.get("tier_accounts") or {}).get(copro_id, {}) or {}
+            if ta.get("provisions") and ta.get("reserve"):
+                # iter90ig : garde-fou anti-BUG legacy - si "provisions" est un
+                # compte Optipro 7-char (4100XXX au lieu de 4101XXXX), on
+                # remet a zero pour que assign_owner_accounts recree le bon.
+                bad_prov = ta.get("provisions") and (
+                    len(ta["provisions"]) == 7 or not ta["provisions"].startswith(("4101", "40000"))
+                )
+                bad_res = ta.get("reserve") and (
+                    len(ta["reserve"]) == 7 or not ta["reserve"].startswith(("4100", "40010"))
+                )
+                if not bad_prov and not bad_res:
+                    continue
+                # Reset les cles corrompues
+                fresh = {**ta}
+                if bad_prov:
+                    fresh.pop("provisions", None)
+                if bad_res:
+                    fresh.pop("reserve", None)
+                await db.owners.update_one(
+                    {"id": o["id"]},
+                    {"$set": {f"tier_accounts.{copro_id}": fresh}},
+                )
+                o["tier_accounts"] = {**(o.get("tier_accounts") or {}), copro_id: fresh}
+            # Cree provisions + reserve manquants (idempotent)
+            o = await _assign_owner_accounts(db, o, copro_id)
+            owners_by_aux[aux] = o  # refresh cache
+
         # Build the journal entry lines + collect tier_accounts updates
         lines = []
         owner_tier_updates: dict[str, dict] = {}  # owner_id -> {"provisions": "...", "reserve": "..."}
@@ -1728,13 +1787,12 @@ def create_import_wizard_router(db):
             acc_num = _canonize_bank_account(acc_num)
             label = (a.get("label") or "").strip()
             tp_id, tp_type, party, canonical_acc = _resolve_third_party(acc_num, label=label)
-            # iter90gk : si le matching par NOM a trouve une fiche fournisseur
-            # ET qu'elle a un compte tier canonique different, on reecrit le
-            # numero de compte pour eviter les orphelins (44001115 -> 44000006).
-            # La description conserve la trace du compte source Optipro pour
-            # audit.
+            # iter90gk / iter90ig : si un compte canonique existe pour ce
+            # tiers (owner OU supplier), on reecrit la ligne AN avec ce
+            # compte-la. La description conserve la trace du compte Optipro
+            # source pour audit.
             source_acc = acc_num
-            if canonical_acc and canonical_acc != acc_num and tp_type == "supplier":
+            if canonical_acc and canonical_acc != acc_num:
                 acc_num = canonical_acc
             line = {
                 "account_number": acc_num,
@@ -1754,9 +1812,15 @@ def create_import_wizard_router(db):
                 line["third_party_type"] = tp_type
                 if tp_type == "owner":
                     owners_linked += 1
-                    # Schedule tier_account update : provisions for 410xxx, reserve for 4001xxx
-                    key = "reserve" if acc_num.startswith("4001") else "provisions"
-                    owner_tier_updates.setdefault(tp_id, {})[key] = acc_num
+                    # iter90ig : NE PLUS ECRASER tier_accounts avec le compte
+                    # Optipro. Le compte canonique est deja assigne par
+                    # `assign_owner_accounts` (pre-assign ci-dessus). On ne
+                    # planifie une mise a jour QUE si le compte Optipro est
+                    # different du canonique (ex : legacy AN avec compte
+                    # exotique 4001XXX non-standard).
+                    if not canonical_acc:
+                        key = "reserve" if source_acc.startswith("4001") else "provisions"
+                        owner_tier_updates.setdefault(tp_id, {})[key] = acc_num
                 elif tp_type == "supplier":
                     suppliers_linked += 1
                     supplier_tier_updates[tp_id] = acc_num
