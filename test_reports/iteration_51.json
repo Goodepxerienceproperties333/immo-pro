@@ -1,0 +1,29 @@
+{
+  "summary": "Backend regression + new locks validated for iter90jj (ghost bank accounts), iter90ji (anti-duplicate FI), iter90jd, iter90jf, iter90iz. 20/20 pytest passed. Both cleanup scripts (cleanup_duplicate_auto_fi, merge_ghost_bank_accounts) executed successfully in dry-run.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter90jj_ghost_bank_accounts_lock.py",
+    "/app/backend/tests/test_iter90ji_anti_duplicate_fi_lock.py",
+    "/app/backend/tests/test_iter90jd_zero_499_on_lettered_txn.py",
+    "/app/backend/tests/test_iter90jf_optipro_group_by_external_ref.py",
+    "/app/backend/tests/test_iter90iz_wizard_zero_orphan_finalizer.py",
+    "/app/test_reports/pytest/iter90jj_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (20/20)", "frontend": "not tested (as requested)"},
+  "test_credentials": "N/A - tests bypass auth via monkey-patch on server.get_current_user",
+  "seed_data_creation": "Each test sets up/tears down its own MongoDB fixtures in test_database.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "All 5 test files ran together cleanly in 1.12s. Scripts cleanup_duplicate_auto_fi (dry-run: 113 JEs scanned, 0 duplicates in current DB) and merge_ghost_bank_accounts (dry-run against ACP ff695ccc-...: 0 lines to rewrite - expected since fusion already done or no ghost accounts in fresh DB) both exit 0. iter90jj-3 endpoint lock is exercised inside test_import_refuses_ghost_bank_account_creation which calls the real _ensure_pcmn_accounts handler and asserts HTTPException 400.",
+  "results_detail": {
+    "iter90jj (4 tests)": "PASS - _resolve_bank_account uses ACP default; IBAN priority; commit-journals refuses ghost 55XXXX; merge script rewrites JE lines and deletes ghost pcmn_accounts.",
+    "iter90ji (3 tests)": "PASS - generate_bank_entry skips creation when imported JE exists; creates JE when no imported pair (regression preserved); cleanup script reverses only auto duplicates.",
+    "iter90jd (3 tests)": "PASS regression - _resolve_bank_counterpart uses invoice.supplier_id priority.",
+    "iter90jf (3 tests)": "PASS regression - _group_key uses external_ref priority.",
+    "iter90iz (7 tests)": "PASS regression - finalizer canonization to 8 chars + tp_id resolution."
+  }
+}

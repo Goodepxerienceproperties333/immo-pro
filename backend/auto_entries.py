@@ -97,30 +97,38 @@ async def _resolve_or_create_supplier_account(db, supplier_name: str, copro_id: 
 
 
 async def _resolve_bank_account(db, txn: dict, copro_id: str) -> tuple[str, str]:
-    """iter90by : extrait de generate_bank_entry. Resout l'IBAN de la transaction
-    (ou du statement parent) vers le compte PCMN bancaire configure sur l'ACP.
-    Retourne (bank_acc, bank_label). Fallback "550000" / "Banque".
+    """iter90by + iter90jj : Resout l'IBAN de la transaction vers le compte PCMN
+    bancaire configure sur l'ACP.
+
+    Verrou iter90jj : ne cree JAMAIS de compte fantome (550000 / 551xxx court).
+    Le fallback est le compte par defaut de l'ACP - si aucun, on retourne "" pour
+    forcer un skip du generate_bank_entry cote appelant.
     """
-    iban = (txn.get("account_number") or "").replace(" ", "").upper()
+    from iban_utils import normalize_iban
+    iban = normalize_iban(txn.get("account_number"))
     if not iban and txn.get("statement_id"):
         stmt = await db.bank_statements.find_one(
             {"id": txn["statement_id"]},
             {"_id": 0, "account_number": 1, "iban": 1},
         )
         if stmt:
-            iban = (stmt.get("account_number") or stmt.get("iban") or "").replace(" ", "").upper()
-    bank_acc = "550000"
-    bank_label = "Banque"
+            iban = normalize_iban(stmt.get("account_number") or stmt.get("iban") or "")
+    # Cherche le pcmn officiel depuis la fiche ACP.bank_accounts
+    copro = await db.coproprietes.find_one({"id": copro_id}, {"_id": 0, "bank_accounts": 1})
+    accounts = (copro or {}).get("bank_accounts") or []
+    # 1) Match IBAN exact -> pcmn officiel
     if iban:
-        copro = await db.coproprietes.find_one({"id": copro_id}, {"_id": 0, "bank_accounts": 1})
-        if copro:
-            for ba in (copro.get("bank_accounts") or []):
-                ba_iban = (ba.get("iban") or "").replace(" ", "").upper()
-                if ba_iban == iban and ba.get("pcmn_number"):
-                    bank_acc = ba["pcmn_number"]
-                    bank_label = ba.get("label") or "Banque"
-                    break
-    return bank_acc, bank_label
+        for ba in accounts:
+            ba_iban = normalize_iban(ba.get("iban"))
+            if ba_iban == iban and ba.get("pcmn_number"):
+                return ba["pcmn_number"], (ba.get("label") or "Banque")
+    # 2) Fallback : compte par defaut de l'ACP (is_default=True) ou 1er
+    if accounts:
+        default_ba = next((b for b in accounts if b.get("is_default")), None) or accounts[0]
+        if default_ba.get("pcmn_number"):
+            return default_ba["pcmn_number"], (default_ba.get("label") or "Banque")
+    # 3) Ultime fallback : "" - le appelant DOIT gerer ce cas (skip ou raise)
+    return "", "Banque"
 
 
 async def _resolve_bank_counterpart(db, txn: dict, copro_id: str) -> tuple[str, str, str | None, str]:
@@ -797,6 +805,38 @@ async def generate_bank_entry(db, txn: dict) -> dict | None:
         full_desc = f"{txn.get('counterparty_name','') or counterpart_name} - {txn.get('communication','')}".strip(" -")
 
     await _delete_auto_entries(db, "bank_txn", txn["id"])
+    # iter90ji : VERROU anti-doublon. Si un JE FI importe/manuel existe DEJA pour
+    # cette meme signature (ACP + date + montant + compte tier), on ne cree PAS
+    # de nouveau JE (l'importe est source of truth) et on marque juste la txn
+    # comme lettree a ce JE existant.
+    tier_accounts_new = {ln["account_number"] for ln in lines if ln.get("account_number", "").startswith(("440", "4100", "4101", "400"))}
+    if tier_accounts_new:
+        existing = await db.journal_entries.find_one({
+            "copropriete_id": copro_id,
+            "journal_type": "FI",
+            "date": txn.get("date"),
+            "total_debit": amount,
+            "reversed": {"$ne": True},
+            "is_reversal": {"$ne": True},
+            # au moins un compte tier commun
+            "lines.account_number": {"$in": list(tier_accounts_new)},
+            # doit etre importe ou manuel, pas un autre auto
+            "$or": [
+                {"import_session_id": {"$exists": True, "$ne": None}},
+                {"auto_generated": {"$ne": True}},
+            ],
+        }, {"_id": 0, "id": 1, "reference": 1, "import_session_id": 1})
+        if existing:
+            # Lie la txn au JE existant (audit trail) et ne cree PAS de doublon.
+            await db.bank_transactions.update_one(
+                {"id": txn["id"]},
+                {"$set": {
+                    "matched_je_id": existing["id"],
+                    "matched_je_ref": existing.get("reference"),
+                    "matched_je_source": "imported" if existing.get("import_session_id") else "manual",
+                }},
+            )
+            return existing
     doc = {
         "id": str(uuid.uuid4()),
         "journal_type": "FI",
@@ -814,4 +854,9 @@ async def generate_bank_entry(db, txn: dict) -> dict | None:
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.journal_entries.insert_one(doc)
+    # iter90ji : lie la txn a ce JE nouvellement cree (piste d'audit)
+    await db.bank_transactions.update_one(
+        {"id": txn["id"]},
+        {"$set": {"matched_je_id": doc["id"], "matched_je_ref": doc["reference"], "matched_je_source": "auto"}},
+    )
     return {k: v for k, v in doc.items() if k != "_id"}

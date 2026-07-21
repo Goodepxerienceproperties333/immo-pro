@@ -947,6 +947,18 @@ def create_import_wizard_router(db):
         ):
             existing.add(p["number"])
         missing = {n: lbl for n, lbl in accounts_needed.items() if n not in existing}
+        # iter90jj : VERROU - interdit la creation de comptes bancaires 55XXXX
+        # depuis l'import. Ces comptes DOIVENT venir de acp.bank_accounts uniquement.
+        # Sinon un CSV / PDF mal formate cree des comptes fantomes qui polluent le bilan.
+        blocked_bank_accounts = [n for n in missing if n.startswith("55") and len(n) <= 6]
+        if blocked_bank_accounts:
+            raise HTTPException(
+                400,
+                f"Import bloque : comptes bancaires inconnus dans le CSV/PDF : "
+                f"{', '.join(blocked_bank_accounts)}. Ces comptes doivent etre "
+                f"configures sur la fiche ACP (Comptes bancaires) AVANT l'import. "
+                f"Ne creez pas de comptes 55XXXX depuis un import.",
+            )
         created = 0
         for num, lbl in missing.items():
             try:
