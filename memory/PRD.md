@@ -1,4 +1,50 @@
 # CoproManager PRD
+### Iter90jf (20/07/2026) — Fix regroupement Optipro multi-detail par facture
+
+**Ticket utilisateur** :
+> "Il y a un bug de logique dans ton Wizard d'importation Optipro : quand le
+> fichier CSV contient plusieurs lignes pour un meme numero de facture (ex :
+> facture 260081), tu ecrases les donnees au lieu de les cumuler. Regroupe
+> par numero de facture avant l'enregistrement final. Pour chaque facture,
+> cree une seule entree Invoice mais avec un tableau de distributions."
+
+**Racine du bug**
+
+`_group_key` (routes/import_wizard.py:1024) privilegiait `internal_ref` comme
+cle. Or Optipro remplit ce champ de facon INCOHERENTE :
+- soit sur la 1re ligne uniquement (les suivantes ont `internal_ref=""`),
+- soit avec une variation "260081.1"/"260081.2",
+- soit identique sur toutes les lignes.
+
+Consequence : les 3 lignes d'une meme facture avaient 3 cles differentes ->
+3 factures creees au lieu d'UNE avec 3 `distribution_lines`.
+
+**Fix iter90jf**
+
+Cle de groupe stable : `EX:external_ref|supplier|date` (identifiant Optipro
+fiable). Fallback `IR:internal_ref` uniquement si `external_ref` absent. Une
+facture unique se defnit par (numero, fournisseur, date), pas par le champ
+technique interne qui varie.
+
+Bonus : `distribution_lines` renseigne pour TOUTES les factures (meme
+mono-ligne) - simplifie les consommateurs downstream (`pdf_decompte.py`,
+`reports.py`) qui n'ont plus a distinguer "avec ou sans distribution_lines".
+
+**Tests pytest** (`test_iter90jf_optipro_group_by_external_ref.py`) - 3 tests :
+
+- `test_group_by_external_ref_when_internal_ref_missing_on_some_lines` :
+  reproduit le cas user (facture 260081, 3 lignes, `internal_ref` present sur
+  la 1re mais vide sur les 2 autres) -> **1 facture avec 3 distribution_lines**,
+  total 600 EUR (100+200+300).
+- `test_do_not_merge_different_invoices_same_supplier_same_date` : 260081 et
+  260082 meme fournisseur meme date -> 2 factures distinctes (pas de faux
+  regroupement).
+- `test_single_line_invoice_still_has_distribution_lines` : facture mono-ligne
+  a `distribution_lines=[{...}]` (uniformisation).
+
+**Verification** : les 3 tests passent en isolation.
+
+
 ### Iter90jc + iter90jd (20/07/2026) — Verrou "Zero FI-499 sur txn lettree"
 
 **Ticket utilisateur** :

@@ -1016,19 +1016,28 @@ def create_import_wizard_router(db):
             if a:
                 cats_by_account[a] = c["id"]
 
-        # ---- iter90gj : regroupement des lignes de detail multi-ligne ----
+        # ---- iter90gj + iter90jf : regroupement des lignes de detail multi-ligne ----
         # Optipro exporte 1 ligne CSV/PDF par ligne de detail comptable
         # (compte 61300 + compte 6160 sur la meme facture => 2 lignes).
         # Sans regroupement, on cree 2 factures avec le meme n° externe -> doublons.
-        # Strategie : regrouper par internal_ref OU (external_ref + supplier + date).
+        # BUG iter90jf : ancien _group_key privilegiait `internal_ref` mais Optipro
+        # ne le fournit pas TOUJOURS sur toutes les lignes d'une meme facture
+        # (parfois vide sur les lignes 2..N, ou variable "260081.1"/"260081.2").
+        # => scinde la meme facture en N doublons.
+        # Fix : clef basee sur `(external_ref, supplier, date)` (identifiant fiable
+        # d'une facture Optipro). Si `external_ref` est vide (rare), on retombe
+        # sur `internal_ref` pour ne pas crasher.
         def _group_key(inv: dict) -> str:
+            er = (inv.get("external_ref") or "").strip()
+            sup = (inv.get("supplier_aux_code") or (inv.get("supplier_name") or "")).strip()
+            dt = (inv.get("date") or "").strip()
+            if er:
+                return f"EX:{er}|{sup}|{dt}"
             ir = (inv.get("internal_ref") or "").strip()
             if ir:
-                return f"IR:{ir}"
-            er = (inv.get("external_ref") or "").strip()
-            sup = (inv.get("supplier_aux_code") or "").strip()
-            dt = (inv.get("date") or "").strip()
-            return f"EX:{er}|{sup}|{dt}"
+                return f"IR:{ir}|{sup}|{dt}"
+            # Aucun identifiant - clef fallback unique par index (pas de merge)
+            return f"NIL:{id(inv)}"
 
         groups: dict[str, list[dict]] = {}
         order: list[str] = []
@@ -1042,19 +1051,17 @@ def create_import_wizard_router(db):
         merged_invoices: list[dict] = []
         for k in order:
             lines = groups[k]
-            if len(lines) == 1:
-                merged_invoices.append(lines[0])
-                continue
+            # iter90jf : toujours renseigner _split_lines pour uniformiser la
+            # forme aval - une facture 1-ligne a un `_split_lines` de longueur 1.
+            # Simplifie les consommateurs (PDF decompte, reports.py) qui n'ont
+            # plus a distinguer "avec ou sans distribution_lines".
             head = dict(lines[0])
-            # Recalcule les totaux depuis les lignes (fiable si Optipro ne
-            # fournit le total qu'a la 1ere ligne ou 0 sur les suivantes).
-            total_ht = round(sum(float(l.get("montant_ht") or 0) for l in lines), 2)
-            total_tvac = round(sum(float(l.get("montant_tvac") or 0) for l in lines), 2)
-            head["montant_ht"] = total_ht
-            head["montant_tvac"] = total_tvac
-            head["montant_tva"] = round(total_tvac - total_ht, 2)
-            # Serialise les lignes de detail pour la persistance dans
-            # invoice.distribution_lines (voir commit_invoices ci-dessous).
+            if len(lines) > 1:
+                total_ht = round(sum(float(l.get("montant_ht") or 0) for l in lines), 2)
+                total_tvac = round(sum(float(l.get("montant_tvac") or 0) for l in lines), 2)
+                head["montant_ht"] = total_ht
+                head["montant_tvac"] = total_tvac
+                head["montant_tva"] = round(total_tvac - total_ht, 2)
             head["_split_lines"] = [
                 {
                     "account_number": (l.get("account_number") or "").strip(),
