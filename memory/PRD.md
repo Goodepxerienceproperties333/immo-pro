@@ -1,4 +1,81 @@
 # CoproManager PRD
+
+### Iter90jk (21/07/2026) — Wizard : remap automatique 6->8 chiffres pour comptes bancaires
+
+**Ticket user (bloqueur P0)** :
+> "Le Wizard d'importation bloque car il ne reconnait pas les comptes
+> bancaires 551331 et 550732. Modifie la logique de validation du Wizard :
+> il doit accepter la correspondance entre un code a 6 chiffres (ex: 551331)
+> et son equivalent a 8 chiffres (ex: 55133100). Assure-toi que lors de
+> l'import, les mouvements financiers sont bien imputes sur les comptes
+> officiels crees au premier ecran, sans creer de nouveaux comptes orphelins.
+> Force la validation pour que je puisse cliquer sur 'Valider et continuer'."
+
+**Racine du bug** :
+Le CSV/PDF Optipro utilise historiquement des codes bancaires 6 chiffres
+(`551331`, `550732`). Depuis iter90jj, `_ensure_pcmn_accounts` interdit la
+creation de comptes `55XXXX` <= 6 chars via `HTTPException 400`. Or,
+l'utilisateur avait deja configure les comptes officiels 8 chiffres
+(`55133100`, `55073200`) sur la fiche ACP (`coproprietes.bank_accounts`).
+Le wizard aurait du **remapper** transparement au lieu de bloquer.
+
+**Livrables iter90jk**
+
+1. **`routes/import_wizard.py::_load_canonical_bank_index(copro_id)`** — Nouveau
+   helper (dans la factory `create_import_wizard_router`) : construit un dict
+   `{short_code -> canonical_8char}` depuis :
+     - `coproprietes.bank_accounts[].pcmn_number` (source of truth)
+     - `pcmn_accounts` where `number LIKE '55[0-9]{6}'` (deja materialise)
+   Chaque canonique 8-char est indexe 3x : identite + 6-char prefix + 7-char
+   prefix. Ex: `55133100` -> `{55133100: 55133100, 551331: 55133100, 5513310: 55133100}`.
+
+2. **`routes/import_wizard.py::_remap_bank_account(acc, index)`** — Nouveau
+   helper synchrone : si `acc` est un 6/7 chars commencant par `55` et digit,
+   retourne le canonique 8-char si disponible dans l'index, sinon inchange.
+   Whitespace-strip + None-safe.
+
+3. **`_ensure_pcmn_accounts`** — Message d'erreur precise pour l'utilisateur
+   ("le mapping automatique 6->8 chiffres n'a rien trouve").
+
+4. **Application du remap** dans 4 endpoints AVANT `_ensure_pcmn_accounts` :
+     - `commit-invoices` : remap sur `inv.account_number` + `_split_lines[]`
+     - `commit-journals` : remap sur `t.bank_account` + `t.counterparty_account`
+       (correction bonus : `pcmn_to_iban` lit desormais depuis `coproprietes.bank_accounts`
+       au lieu de la collection vide `db.bank_accounts`, et le champ correct
+       est `pcmn_number` — non `pcmn_account`)
+     - `commit-opening-balance` : remap sur `actif[].account` + `passif[].account` +
+       elargissement de `existing_bank_accs` (lit aussi coproprietes.bank_accounts)
+     - `commit-od-entries` : remap sur `entries[].account_number` +
+       `entries[].counterpart_account` + `entries[].lines[].account_number`
+
+5. **`_canonize_bank_account` (interne a commit-opening-balance)** — Passe d'un
+   ajout literal `+ "00"` a un match par prefixe (7-char aussi supporte).
+
+**Tests pytest (`test_iter90jk_wizard_maps_6digit_to_8digit_bank_account.py`)** — 4 tests :
+  * `test_load_canonical_bank_index_maps_6char_and_7char_prefixes` : mapping 6/7/8.
+  * `test_remap_bank_account_maps_6char_and_keeps_8char_and_non_bank` : idempotence + non-55.
+  * `test_commit_journals_accepts_6digit_when_canonical_exists_in_acp` : le
+    cas critique user (551331 -> 55133100, JE + bank_statement corrects).
+  * `test_commit_journals_still_blocks_when_no_canonical_available` : verrou
+    iter90jj preserve quand aucun 8-char n'existe.
+
+**Ajustement test regression iter90jj-3** :
+`test_import_refuses_ghost_bank_account_creation` : pcmn_number change en
+`55999900` (au lieu de `55133100`) pour verifier que le blocage 400 reste
+actif SANS interference du nouveau remap iter90jk.
+
+**Validation testing_agent (iteration_52.json)** :
+- **4/4 iter90jk PASS + 20/20 iter90j* regressions PASS** (24/24 targeted)
+- Broader wizard sweep : 74 passed
+- 7 pre-existing failures (async plugin missing, unrelated fixtures) — INCHANGES
+- Aucun issue critique ou mineur signale
+- `retest_needed: false`, `should_main_agent_self_test: false`
+
+**⚠️ Rappel PRODUCTION** — Save to GitHub + redeployement necessaire.
+Une fois deploye, relancer l'import Optipro : "Valider et continuer" doit
+maintenant fonctionner sans creer de comptes bancaires orphelins.
+
+
 ### Iter90ji + iter90jj (21/07/2026) — Verrous anti-doublon FI + comptes fantomes
 
 **Tickets user** :
