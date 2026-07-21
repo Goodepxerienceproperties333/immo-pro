@@ -1,4 +1,35 @@
 # CoproManager PRD
+### Iter90jg (21/07/2026) — Preview visuel du regroupement Optipro dans le Wizard
+
+**Livrable** : bannière indigo dans `InvoicesPreview` (`ImportWizardPage.js`)
+qui affiche AVANT commit combien de lignes CSV seront regroupees en factures
+finales.
+
+**Emplacement** : juste sous le bandeau bleu "X facture(s) detectee(s)", avant
+la table d'edition.
+
+**Comportement** :
+- Compte les groupes multi-ligne via `_js_group_key` (miroir exact de
+  `_group_key` backend iter90jf) : `EX:external_ref|supplier|date` prioritaire,
+  fallback `IR:internal_ref` puis `NIL:idx`.
+- Affiche uniquement si au moins 1 groupe a >= 2 lignes (silence sinon).
+- Toggle "Voir les details ▼" / "Masquer les details ▲".
+- Details : une card par groupe multi-ligne avec :
+  - En-tete : code fournisseur (badge vert), nom, N ext, date, N lignes, total TVAC (bold indigo).
+  - Table interne : compte, cle repartition, nature, libelle, HT, TVAC.
+
+**Data-testids** : `grouping-preview-banner`, `grouping-preview-toggle`,
+`grouping-preview-details`, `group-detail-{i}`, `group-lines-{i}`.
+
+**Test pytest** (`test_iter90jg_wizard_grouping_preview_stats.py`) - 3 tests :
+verifie que la reimplementation Python 1:1 de la logique JS produit les bons
+compteurs sur 3 scenarios (regroupement 3->1, pas de regroupement, mono-ligne).
+
+Objectif business : redonner confiance au syndic dans le wizard - il voit
+exactement ce que le backend va faire avant de valider ("3 lignes CSV
+regroupees en 1 facture 600 EUR (voir details ▼)").
+
+
 ### Iter90jf (20/07/2026) — Fix regroupement Optipro multi-detail par facture
 
 **Ticket utilisateur** :

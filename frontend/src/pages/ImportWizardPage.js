@@ -1532,6 +1532,50 @@ function InvoicesPreview({ invoices, setInvoices }) {
     return () => { alive = false; };
   }, []);
   const [bulkAccount, setBulkAccount] = useState('');
+  // iter90jg : preview du regroupement Optipro multi-detail
+  // Miroir exact de `_group_key` cote backend (iter90jf) :
+  //   EX:external_ref|supplier|date  (si external_ref present)
+  //   IR:internal_ref|supplier|date  (fallback)
+  //   NIL:idx                        (aucun identifiant)
+  const [showGroupDetails, setShowGroupDetails] = useState(false);
+  const groupPreview = (() => {
+    const groups = new Map();
+    (invoices || []).forEach((inv, idx) => {
+      const er = (inv.external_ref || '').trim();
+      const sup = (inv.supplier_aux_code || inv.supplier_name || '').trim();
+      const dt = (inv.date || '').trim();
+      const ir = (inv.internal_ref || '').trim();
+      let key;
+      if (er) key = `EX:${er}|${sup}|${dt}`;
+      else if (ir) key = `IR:${ir}|${sup}|${dt}`;
+      else key = `NIL:${idx}`;
+      if (!groups.has(key)) {
+        groups.set(key, {
+          key,
+          external_ref: er,
+          internal_ref: ir,
+          supplier_name: inv.supplier_name || '',
+          supplier_aux_code: inv.supplier_aux_code || '',
+          date: dt,
+          lines: [],
+          total_ht: 0,
+          total_tvac: 0,
+        });
+      }
+      const g = groups.get(key);
+      g.lines.push({ idx, ...inv });
+      g.total_ht += parseFloat(inv.montant_ht) || 0;
+      g.total_tvac += parseFloat(inv.montant_tvac) || 0;
+    });
+    const list = Array.from(groups.values());
+    const multi = list.filter(g => g.lines.length > 1);
+    return {
+      list,
+      finalInvoiceCount: list.length,
+      multiCount: multi.length,
+      totalGroupedLines: multi.reduce((a, g) => a + g.lines.length, 0),
+    };
+  })();
 
   if (!invoices?.length) {
     return (
@@ -1564,6 +1608,80 @@ function InvoicesPreview({ invoices, setInvoices }) {
         <span><strong>{invoices.length} facture(s)</strong> detectee(s) - {uniqueSuppliers.length} fournisseur(s) distinct(s)</span>
         <span className="font-mono">HT : {totalHT.toFixed(2)} EUR | TVAC : <strong>{totalTVAC.toFixed(2)} EUR</strong></span>
       </div>
+      {/* iter90jg : preview du regroupement Optipro multi-detail.
+          Affiche AVANT commit combien de lignes CSV seront regroupees en factures
+          finales (identifiees par external_ref + supplier + date). */}
+      {groupPreview.multiCount > 0 && (
+        <div className="border border-indigo-200 bg-indigo-50 rounded p-3" data-testid="grouping-preview-banner">
+          <button
+            type="button"
+            onClick={() => setShowGroupDetails(v => !v)}
+            className="w-full flex items-center justify-between gap-2 text-xs text-indigo-900 group"
+            data-testid="grouping-preview-toggle"
+          >
+            <span className="flex items-center gap-2">
+              <FileText size={14} className="text-indigo-600" />
+              <span>
+                <strong className="text-indigo-800">{groupPreview.totalGroupedLines} lignes CSV</strong>
+                {' '}regroupees en <strong className="text-indigo-800">{groupPreview.multiCount} facture(s)</strong>
+                {' '}avec <span className="italic">distribution_lines</span> multiples.
+                {groupPreview.finalInvoiceCount !== invoices.length && (
+                  <> Total final : <strong className="text-indigo-800">{groupPreview.finalInvoiceCount} facture(s)</strong>.</>
+                )}
+              </span>
+            </span>
+            <span className="text-indigo-500 text-[10px] group-hover:underline">
+              {showGroupDetails ? 'Masquer les details' : 'Voir les details'} {showGroupDetails ? '▲' : '▼'}
+            </span>
+          </button>
+          {showGroupDetails && (
+            <div className="mt-3 space-y-2" data-testid="grouping-preview-details">
+              {groupPreview.list.filter(g => g.lines.length > 1).map((g, gi) => (
+                <div key={g.key} className="bg-white border border-indigo-100 rounded p-2" data-testid={`group-detail-${gi}`}>
+                  <div className="flex items-center justify-between text-[11px] mb-1.5">
+                    <div className="flex items-center gap-2 min-w-0">
+                      {g.supplier_aux_code && <span className="font-mono text-[9px] bg-emerald-100 text-emerald-700 px-1 rounded flex-shrink-0">{g.supplier_aux_code}</span>}
+                      <span className="font-semibold text-slate-800 truncate">{g.supplier_name || '(fournisseur inconnu)'}</span>
+                      <span className="text-slate-400">|</span>
+                      <span className="font-mono text-slate-600 text-[10px]">N {g.external_ref || g.internal_ref || '?'}</span>
+                      <span className="text-slate-400">|</span>
+                      <span className="text-slate-500 text-[10px]">{g.date || '(sans date)'}</span>
+                    </div>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <span className="text-[10px] text-slate-500">{g.lines.length} lignes</span>
+                      <span className="font-mono font-bold text-indigo-700">{g.total_tvac.toFixed(2)} EUR</span>
+                    </div>
+                  </div>
+                  <table className="w-full text-[10px]" data-testid={`group-lines-${gi}`}>
+                    <thead className="bg-slate-50">
+                      <tr>
+                        <th className="px-1 py-0.5 text-left w-28">Compte</th>
+                        <th className="px-1 py-0.5 text-left w-12">Cle</th>
+                        <th className="px-1 py-0.5 text-left w-12">Nat.</th>
+                        <th className="px-1 py-0.5 text-left">Libelle</th>
+                        <th className="px-1 py-0.5 text-right w-20">HT</th>
+                        <th className="px-1 py-0.5 text-right w-20">TVAC</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {g.lines.map(ln => (
+                        <tr key={ln.idx} className="border-t border-slate-100">
+                          <td className="px-1 py-0.5 font-mono">{ln.account_number || '?'} {ln.account_label ? <span className="text-slate-400">- {ln.account_label}</span> : ''}</td>
+                          <td className="px-1 py-0.5 font-mono">{ln.dist_key_code || '-'}</td>
+                          <td className="px-1 py-0.5 font-mono">{ln.nature_code || '-'}</td>
+                          <td className="px-1 py-0.5 truncate max-w-md">{ln.libelle || '-'}</td>
+                          <td className="px-1 py-0.5 text-right font-mono text-slate-500">{(parseFloat(ln.montant_ht) || 0).toFixed(2)}</td>
+                          <td className="px-1 py-0.5 text-right font-mono font-semibold">{(parseFloat(ln.montant_tvac) || 0).toFixed(2)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
       {/* iter90gj : bandeau bloquant si des factures n'ont pas de compte */}
       {missingAccounts > 0 && (
         <div className="border-2 border-red-400 bg-red-50 rounded p-3" data-testid="invoices-missing-account-banner">
