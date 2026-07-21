@@ -5,35 +5,34 @@ Application de gestion de copropriete basee sur le droit belge (PCMN).
 
 ## Completed Features (session 2026-07-21)
 
-### Fix Bilan + Compte de Resultat (doublonnage charges)
-- Filtre dedup AC via invoice.journal_entry_id dans bilan ET resultat
-- Exclusion reversed/is_reversal/EXT-*/OD-REG-* dans le Resultat
-- 499 = 1170.16 Boni (Passif), Charges = 5333.51, Equilibre = True
+### Fix Bilan + Compte de Resultat
+- Filtre dedup AC via invoice.journal_entry_id + exclusion reversed/EXT-*
+- 499 = 1170.16 Boni (Passif), Equilibre = True
 
-### Fix Doublonnage Ecritures sur Modification Facture
-- _hard_delete_auto_entries: suppression REELLE (pas contre-passation) des anciennes AC
-- Garantit qu'il n'y a JAMAIS plus d'1 ecriture AC par facture, meme apres N modifications
+### Fix Doublonnage Ecritures
+- _hard_delete_auto_entries: suppression reelle + $or pour les 2 schemas de marquage
+- Import wizard: ajout source_type/source_id/auto_generated sur JE
+- Ventilation multi-comptes dans les JE d'achat
 
-### Fix Import CSV Multi-Comptes
-- Ventilation multi-comptes: le JE a maintenant N lignes de debit distinctes (1 par compte)
-- Ex: 61300:558.99 + 6160:195.00 au lieu de 61300:753.99 lump sum
+### Wizard Import: Extraits de Compte UNIQUEMENT
+- commit-journals ne cree PLUS d'ecritures FI
+- Cree uniquement bank_statements + bank_transactions
+- Les ecritures FI sont generees a la comptabilisation par le syndic
+- bank_transactions.auto_je_id = '' (pas de JE liee)
 
-### Refonte Import Wizard Optipro
-- Endpoint preview-invoices: tableau de controle (Fournisseur|TVA|Compte) AVANT commit
-- Isolation stricte par ligne: chaque ligne resolve son fournisseur independamment
-- Auto-creation fournisseurs manquants (scoped ACP, Chinese Wall strict)
-- UI: tableau de controle dans le wizard
+### Refonte Fournisseurs Wizard
+- Preview endpoint, isolation par ligne, auto-creation scopee ACP
 
 ## Pending Issues
-- P1: TEUWEN Owner mapping & distribution lines logic
-- P2: 10EUR difference Optipro vs Liste depenses (BLOCKED)
+- P1: TEUWEN Owner mapping
+- P2: 10EUR diff Optipro vs Depenses (BLOCKED)
 
 ## Upcoming Tasks
-- P1: UI Modal for Statement Deletion warning
-- P2: UI "Merge Owners" admin page
+- P1: UI Modal suppression releve bancaire
+- P2: UI Merge Owners
 - P3: Export Journals CSV/PDF
 - P5: Certificat fiscal annuel
-- P6: Automated debt collection emails
+- P6: Emails relance auto
 
-## Refactoring Needed
-- reports.py (>3800 lines), import_wizard.py (>3200 lines), banking.py (>3000 lines)
+## Refactoring
+- reports.py, import_wizard.py, banking.py (>3000 lignes chacun)
