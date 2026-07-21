@@ -156,11 +156,20 @@ def create_import_wizard_router(db):
         if kind == "keys":
             return parse_distribution_keys_pdf(raw)
         if kind == "owners":
-            return parse_owners_pdf(raw)
+            try:
+                return parse_owners_pdf(raw)
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                raise HTTPException(400, f"Erreur lors de l'analyse du PDF proprietaires : {e}")
         if kind == "lots":
-            return parse_lots_pdf(raw)
-        if kind == "suppliers":
-            return parse_suppliers_pdf(raw)
+            try:
+                return parse_lots_pdf(raw)
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                raise HTTPException(400, f"Erreur lors de l'analyse du PDF lots : {e}")
+        if kind == "suppliers":            return parse_suppliers_pdf(raw)
         if kind == "balance":
             return parse_balance_pdf(raw)
         if kind == "od_entries":
@@ -377,11 +386,21 @@ def create_import_wizard_router(db):
             res["filename"] = file.filename
             return res
         if kind == "owners":
-            res = parse_owners_pdf(raw)
+            try:
+                res = parse_owners_pdf(raw)
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                raise HTTPException(400, f"Erreur analyse PDF proprietaires : {e}")
             res["filename"] = file.filename
             return res
         if kind == "lots":
-            res = parse_lots_pdf(raw)
+            try:
+                res = parse_lots_pdf(raw)
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                raise HTTPException(400, f"Erreur analyse PDF lots : {e}")
             res["filename"] = file.filename
             return res
         if kind == "suppliers":
