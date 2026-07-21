@@ -28,7 +28,7 @@ load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 BACKEND_URL = os.environ.get(
     "REACT_APP_BACKEND_URL",
-    "https://property-mgmt-be.preview.emergentagent.com",
+    "https://copro-belge-app.preview.emergentagent.com",
 ).rstrip("/")
 
 # Superadmin fixture credentials (idempotent seed)

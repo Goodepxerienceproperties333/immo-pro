@@ -944,14 +944,14 @@ async def compute_bilan_data(db, copropriete_id: str, date_to: Optional[str] = N
         solde = round(b["debit"] - b["credit"], 2)
         _classify_account(acc, solde, balances)
 
-    # iter90fh : le resultat de l'exercice se calcule DIRECTEMENT depuis
-    # les MEMES ecritures que celles utilisees pour le bilan (`entries`).
-    # Cela garantit mathematiquement l'equation "Actif - Passif = Resultat"
-    # par la loi de la double-entree (pour chaque ecriture, sum(debit) =
-    # sum(credit) implique sum_15(D) - sum_15(C) = sum_67(C) - sum_67(D)).
-    # Un `entries_res` separe pouvait diverger et casser l'equilibre.
+    # ---- Calcul du compte 499 (regle comptable belge stricte) ----
+    # Compte 499 = Provisions appelees (Classe 70) - Charges reelles nettes (Classe 6)
+    # Les autres produits hors provisions (ex: 750 interets crediteurs) sont
+    # affiches SEPAREMENT au bilan pour maintenir l'equilibre Actif = Passif
+    # sans polluer le calcul du compte de regularisation.
     total_charges = 0.0
-    total_produits = 0.0
+    provisions_appelees = 0.0       # Classe 70 uniquement
+    produits_hors_provisions = 0.0  # Classe 7x (hors 70) : interets, etc.
     for entry in entries:
         for line in entry.get("lines", []):
             acc = line.get("account_number", "")
@@ -959,10 +959,15 @@ async def compute_bilan_data(db, copropriete_id: str, date_to: Optional[str] = N
                 continue
             if acc.startswith("6"):
                 total_charges += line.get("debit", 0) - line.get("credit", 0)
+            elif acc.startswith("70"):
+                provisions_appelees += line.get("credit", 0) - line.get("debit", 0)
             elif acc.startswith("7"):
-                total_produits += line.get("credit", 0) - line.get("debit", 0)
-    # Resultat = produits - charges. Positif = benefice (boni). Negatif = perte (mali).
-    result_exercise = round(total_produits - total_charges, 2)
+                produits_hors_provisions += line.get("credit", 0) - line.get("debit", 0)
+    # Compte 499 = Provisions (cl.70) - Charges (cl.6)
+    # Positif = Boni a repartir (Passif). Negatif = Mali a repartir (Actif).
+    compte_499 = round(provisions_appelees - total_charges, 2)
+    # Resultat global (pour repartition owners) = TOUS produits - charges
+    result_exercise = round(provisions_appelees + produits_hors_provisions - total_charges, 2)
 
     # ---- Mode "apres repartition" : repartition du boni/mali sur owners ----
     # Formule garantissant l'equilibre du bilan :
@@ -979,7 +984,7 @@ async def compute_bilan_data(db, copropriete_id: str, date_to: Optional[str] = N
     # collection `owners`). Toute part "perdue" est renvoyee sur le
     # compte 499 en fin de traitement (safety net strict Actif = Passif).
     actual_boni_distributed = 0.0
-    if view_mode == "after_distribution" and abs(result_exercise) > 0.01:
+    if view_mode == "after_distribution" and abs(compte_499) > 0.01:
         lots_for_acp = await db.lots.find(
             {"copropriete_id": copropriete_id}, {"_id": 0}
         ).to_list(10000)
@@ -1055,16 +1060,16 @@ async def compute_bilan_data(db, copropriete_id: str, date_to: Optional[str] = N
         if total_quotities > 0:
             # Repartition proportionnelle a la quotite, avec correction
             # d'arrondi sur le dernier owner pour que la somme distribuee
-            # egale EXACTEMENT `result_exercise` (evite les ecarts de
+            # egale EXACTEMENT `compte_499` (evite les ecarts de
             # centimes qui casseraient l'equilibre Actif=Passif).
             owner_items = list(owner_quotities.items())
             running_sum = 0.0
             for idx, (oid, quo) in enumerate(owner_items):
                 is_last = (idx == len(owner_items) - 1)
                 if is_last:
-                    share = round(result_exercise - running_sum, 2)
+                    share = round(compte_499 - running_sum, 2)
                 else:
-                    share = round(result_exercise * (quo / total_quotities), 2)
+                    share = round(compte_499 * (quo / total_quotities), 2)
                     running_sum += share
                 distributed_per_owner[oid] = share
 
@@ -1198,15 +1203,9 @@ async def compute_bilan_data(db, copropriete_id: str, date_to: Optional[str] = N
             _classify_account(acc, solde, balances)
         # En mode "apres repartition", le 499 est neutralise (solde = 0), donc PAS d'ajout
 
-        # iter90fs : SAFETY NET STRICT Actif = Passif.
-        # Somme de tout ce qui n'a PAS ete distribue :
-        #   - part du boni/mali dont l'owner est introuvable
-        #   - cas total_quotities == 0 (aucun lot exploitable dans l'ACP)
-        # Peu importe la cause : on ne PEUT PAS supprimer silencieusement
-        # ce montant du bilan (ce serait exactement le bug rapporte par
-        # l'utilisateur en production, ecart = boni). On le REAFFICHE sur
-        # 499 avec un libelle explicite pour alerter le syndic.
-        missing_boni = round(result_exercise - actual_boni_distributed, 2)
+        # SAFETY NET STRICT Actif = Passif.
+        # Part du compte 499 (provisions - charges) non distribuee :
+        missing_boni = round(compte_499 - actual_boni_distributed, 2)
         if abs(missing_boni) > 0.01:
             reason = (
                 "quotites manquantes - completer les lots"
@@ -1226,22 +1225,56 @@ async def compute_bilan_data(db, copropriete_id: str, date_to: Optional[str] = N
                     "amount": abs(missing_boni),
                 })
 
-    elif abs(result_exercise) > 0.01:
+        # Produits hors provisions (interets crediteurs, etc.) - affiches
+        # separement pour maintenir l'equilibre du bilan.
+        produits_hp_round = round(produits_hors_provisions, 2)
+        if abs(produits_hp_round) > 0.01:
+            if produits_hp_round > 0:
+                passif_buckets["VII_regul_passif"].append({
+                    "account_number": "7xx",
+                    "account_name": "Autres produits hors provisions (interets, etc.)",
+                    "amount": abs(produits_hp_round),
+                })
+            else:
+                actif_buckets["VIII_regul_actif"].append({
+                    "account_number": "7xx",
+                    "account_name": "Autres charges hors provisions",
+                    "amount": abs(produits_hp_round),
+                })
+
+    elif abs(compte_499) > 0.01 or abs(round(produits_hors_provisions, 2)) > 0.01:
         # Mode AVANT REPARTITION : place le boni/mali sur compte 499
-        if result_exercise > 0:
-            # Benefice -> 499 CREDITEUR (au Passif)
-            passif_buckets["VII_regul_passif"].append({
-                "account_number": "499",
-                "account_name": "Compte de regularisation - Boni a repartir",
-                "amount": abs(result_exercise),
-            })
-        else:
-            # Perte -> 499 DEBITEUR (a l'Actif)
-            actif_buckets["VIII_regul_actif"].append({
-                "account_number": "499",
-                "account_name": "Compte de regularisation - Mali a repartir",
-                "amount": abs(result_exercise),
-            })
+        # Regle comptable belge : 499 = Provisions (cl.70) - Charges (cl.6)
+        if abs(compte_499) > 0.01:
+            if compte_499 > 0:
+                # Benefice -> 499 CREDITEUR (au Passif)
+                passif_buckets["VII_regul_passif"].append({
+                    "account_number": "499",
+                    "account_name": "Compte de regularisation - Boni a repartir",
+                    "amount": abs(compte_499),
+                })
+            else:
+                # Perte -> 499 DEBITEUR (a l'Actif)
+                actif_buckets["VIII_regul_actif"].append({
+                    "account_number": "499",
+                    "account_name": "Compte de regularisation - Mali a repartir",
+                    "amount": abs(compte_499),
+                })
+        # Produits hors provisions (interets crediteurs, etc.)
+        produits_hp_round = round(produits_hors_provisions, 2)
+        if abs(produits_hp_round) > 0.01:
+            if produits_hp_round > 0:
+                passif_buckets["VII_regul_passif"].append({
+                    "account_number": "7xx",
+                    "account_name": "Autres produits hors provisions (interets, etc.)",
+                    "amount": abs(produits_hp_round),
+                })
+            else:
+                actif_buckets["VIII_regul_actif"].append({
+                    "account_number": "7xx",
+                    "account_name": "Autres charges hors provisions",
+                    "amount": abs(produits_hp_round),
+                })
 
     rubr_actif = [
         ("I. Immobilisations incorporelles", "I_immo_incorporelles"),
@@ -1282,6 +1315,10 @@ async def compute_bilan_data(db, copropriete_id: str, date_to: Optional[str] = N
         "ecart": round(total_actif - total_passif, 2),
         "date": date_to or datetime.now(timezone.utc).strftime("%Y-%m-%d"),
         "fiscal_year": fy.get("name") if fy else None,
+        "provisions_appelees": round(provisions_appelees, 2),
+        "total_charges": round(total_charges, 2),
+        "compte_499": compte_499,
+        "produits_hors_provisions": round(produits_hors_provisions, 2),
     }
 
 

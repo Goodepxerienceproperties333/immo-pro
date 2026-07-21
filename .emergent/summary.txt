@@ -1,170 +1,19 @@
-<analysis><handoff_summary>
-**original_problem_statement**: 
-Créer une application de gestion de copropriété basée sur le droit belge (PCMN), incluant la gestion stricte des rôles, le cloisonnement des données (Chinese Wall), la gestion des imports CODA/Optipro, et les verrous fiscaux. 
-PRODUCT REQUIREMENTS: Génération d'un PDF Décompte de mutation clair, application stricte des règles comptables belges, persistance fiable, portail propriétaire, imports IA, Système légalement blindé.
-
-**User's preferred language**: French (INSTRUCT NEXT AGENT: You MUST automatically detect the user's primary language from their messages inside the <trajectory> tag and INSTRUCT next agent to respond in the user's preferred language ONLY. All UI elements, comments, and communications must be in French.)
-
-**what currently exists?** 
-A mature, production-ready Belgian property management application (FastAPI, React, MongoDB) named NextGe Copro. In this session, the agent implemented critical Belgian accounting logic for property sales (Prorata mutation - iter90g1), fixed Microsoft Graph email sender seeding (iter90g2), added a PDF download feature to the Owner Portal along with a defensive fix for a doubled-balance bug (iter90g3), and corrected the fiscal year closure logic to exclude reserve/roulement funds from the provisions calculation (iter90g4). 
-
-**Last working item**:
-    - Last item agent was working:  - Fixing the fiscal year closure ( endpoint). The user noticed that provisions for charges were overstated (~24k€ instead of 19k€). The agent identified that Fonds de roulement and Fonds de réserve were wrongly being included in the provisions total. The agent fixed the code in  to exclude them, provided a detailed accounting explanation to the user, and asked if they should write a pytest to lock in this behavior or move to another issue.
-    - Status: USER VERIFICATION PENDING / IN PROGRESS
-    - Agent Testing Done: N (Code written, but pytest for iter90g4 is pending user confirmation).
-    - Which testing method agent to use? backend testing agent / manual testing by pytest.
-    - User Testing Done: N
-
-**All Pending/In progress Issue list**:  
-  - Issue 1: P0 - Write Pytest for iter90g4 Fiscal Closure fix
-     - Attempted fixes: Code implemented in  to exclude reserve/roulement.
-     - Next debug checklist: Write  in  to ensure  strictly counts operational charges and ignores reserve/roulement funds.
-     - Why fix this issue and what will be achieved with the fix? Locks in critical Belgian accounting logic for the end-of-year closure.
-     - Status: IN PROGRESS
-     - Is recurring issue? N
-     - Should Test frontend/backend/both after fix? Backend
-     - Blocked on other issue: None
-
-  - Issue 2: P0 - TEUWEN Owner mapping & distribution lines logic (Sidelined from Message 80)
-     - Attempted fixes: None yet. User reported it, but agent was diverted to urgent MS Graph and balance bugs.
-     - Next debug checklist: In  and , when an invoice has , the logic must map the lot to its owner by combining  AND the lot-owner entries from the distribution keys, NOT just . Also, user noted 30 lots are assigned to MATEXI instead of TEUWEN and mutations need to be executed.
-     - Why fix this issue and what will be achieved with the fix? Fixes massive discrepancies in Décompte generation for legacy data where distribution keys contain the true historical ownership.
-     - Status: NOT STARTED
-     - Is recurring issue? Y (Accounting distribution accuracy)
-     - Should Test frontend/backend/both after fix? Backend (Pytest required)
-     - Blocked on other issue: None
-
-  - Issue 3: P1 - GridFS Persistent Document Storage
-     - Attempted fixes: Agent verified  exists and did a dry-run. 
-     - Next debug checklist: Provide the user with exact instructions on how to execute the migration on their Production environment so documents survive container redeployments.
-     - Why fix this issue and what will be achieved with the fix? Prevents data loss on production redeployments.
-     - Status: NOT STARTED
-     - Is recurring issue? N
-     - Should Test frontend/backend/both after fix? Backend
-     - Blocked on other issue: None
-
-  - Issue 4: P2 - 10€ difference between Optipro import and App's Liste des dépenses
-     - Attempted fixes: Waiting on user to generate a matching date range PDF.
-     - Next debug checklist: Compare once user provides the PDF.
-     - Status: BLOCKED (User verification pending)
-     - Is recurring issue? N
-     - Should Test frontend/backend/both after fix? Backend
-     - Blocked on other issue: None
-
-  - Issue 5: P3 - Missing  in legal backups
-     - Attempted fixes: None.
-     - Next debug checklist: Create  (Compte de résultat) and integrate into .
-     - Status: NOT STARTED
-     - Is recurring issue? N
-     - Should Test frontend/backend/both after fix? Backend
-     - Blocked on other issue: None
-
-**In progress Task List**: 
-  None actively coding, waiting on user reply for .
-
-**Upcoming and Future Tasks**
-  - P1: Gestion des compteurs (eau, chauffage, électricité) - Formulaires de relevés, historisation, et calcul de répartition basé sur les consommations.
-  - P2: Certificat fiscal annuel.
-  - P3: Admin tool to bulk reset legacy paid invoices back to unpaid status.
-  - P4: Automated debt collection emails (Job APScheduler quotidien).
-  - P5: Refactor massive components:  (>3100 lines), .
-
-**Completed work in this session**
-- : PDF Décompte - Implemented pure mathematical prorata () for mid-year property mutations. (DONE)
-- : Communication MS Graph - Added idempotent startup migration in  to auto-seed  into the syndic's authorized mailboxes. (DONE)
-- : Owner Portal - Implemented defensive deduplication for  to fix a doubled-balance bug, and added a PDF download endpoint/button for Appels de fonds. (DONE)
-- : Fiscal Close - Modified  to exclude Fonds de réserve/roulement from the  metric. (CODE DONE)
-
-**Earlier issues found/mentioned but not fixed**
-   Issue 1: TEUWEN lot mapping & distribution lines logic
-   - Debug checklist: Update  and  to use distribution keys alongside  when resolving .
-   - Why to solve this issue and what will be achieved with this? Prevents billing the wrong owner for legacy invoices.
-   - Should Test frontend/backend/both after fix: Backend
-   - Is recurring issue? Y
-
-**Known issue recurrence from previous fork**
-  - Issue recurrence in previous fork: Confusion between PREVIEW vs PRODUCTION environments.
-  - Recurrence count: Extremely High
-  - Status: ONGOING
-  - Note: The user actively deploys to a PRODUCTION environment (). Always remind the user that fixes must be redeployed to take effect on production.
-
-**Code Architecture**
-
-
-**Key Technical Concepts**
-- Backend: FastAPI, Async MongoDB (Motor), Pytest, PyMuPDF / reportlab.
-- Frontend: React, Tailwind CSS, Shadcn UI.
-- Business Logic: Strict Idempotency, Belgian PCMN accounting rules, Prorata (), Extourne de provisions, Chinese Walls for multi-ACP owners.
-
-**key DB schema**
-  - : Includes  and  booleans. Now defensively deduplicated in UI using .
-  - : Holds property sales data ().
-  - : Status must be  or xdg-open - opens a file or URL in the user's preferred application
-
-Synopsis
-
-xdg-open { file | URL }
-
-xdg-open { --help | --manual | --version }
-
-Use 'man xdg-open' or 'xdg-open --manual' for additional info..
-
-**changes in tech stack**
-  - None.
-
-**All files of reference** 
-  -  (Focus of current iter90g4 task)
-  -  &  (Focus of pending P0 TEUWEN issue)
-
-**Areas that need refactoring**: 
-  -  (>3100 lines)
-  -  (>1800 lines)
-
-**key api endpoints**
-  - 
-  - 
-
-**Critical Info for New Agent** 
-- **LANGUAGE**: Communicate entirely in **French**.
-- **PRODUCTION DEPLOYMENT**: The user is testing on their live production environment. You MUST remind them to redeploy to see your fixes. 
-- **LOST CONTEXT ALERT**: In Message 80, the user explicitly asked to fix a critical mapping bug in  and  (combining lot.owner_id + distribution keys). You got distracted by the MS Graph and Owner Balance bugs. This MUST be addressed soon.
-- **IMMEDIATE NEXT STEP**: Check the user's reply. They will likely answer whether you should write the pytest for , check other endpoints, or move to a new task.
-
-**documents and test reports created in this job** 
-  -  (Updated)
-  - 
-  - 
-  - 
-
-**Last 10 User Messages and any pending HUMAN messages** 
- 1. User: Clarifies prorata rules (calendar days, old owner pays owned period).
- 2. User: Chooses pure mathematical prorata (318/365 logic).
- 3. User: Uploads PDFs confirming the 1395€ Optipro discrepancy is fully explained by insurance invoices that are now correctly prorated by iter90g1.
- 4. User: Points out TEUWEN lot mapping bug (using distribution keys + owner_id).
- 5. User: Asks for persistent document storage across redeployments.
- 6. User: Uploads images of P0 Bug: Owner balance is doubled, asks for PDF download button.
- 7. User: Urgent request to add  to MS Graph. (Agent fixes this via iter90g2).
- 8. User: Instructs agent to proceed with fixing the doubled balance and adding the PDF button. (Agent fixes this via iter90g3).
- 9. User: Points out a bug in the Clôture (Closure) table: Provisions for charges should be 19k€, not 24k€.
- 10. User: Confirms that Fonds de roulement and Fonds de réserve must NOT be included in the provisions total. (Agent fixed code via iter90g4, awaiting next command).
-
-**Project Health Check:**
-- Broken: TEUWEN lot mapping logic in  and .
-- Mocked: None.
-
-**3rd Party Integrations** 
-  - Emergent LLM Key (Claude Sonnet 4.5 text-only) — uses Emergent LLM Key
-  - Microsoft Graph (Email) — requires User Azure AD Credentials (Fixed sender alias in this session).
-
-**Testing status**
-  - Testing agent used after significant changes: NO (Agent self-tested via Pytest and Screenshot tool).
-  - Troubleshoot agent used after agent stuck in loop: NO
-  - Test files created: 3 new Pytest files (, , ).
-  - Known regressions: Pre-existing tests failing due to missing fixtures, but all 13  tests pass perfectly.
-
-**Credentials to test flow:**
-Check 
-
-**What agent forgot to execute**
-The agent completely bypassed the TEUWEN lot mapping issue requested in Message 80 ( and ) because of incoming urgent bug reports. This is a P0 accounting issue that needs to be addressed. The agent also needs to write the pytest for  (Fiscal regularisation fix).
-</handoff_summary></analysis>
+<analysis>statement_line_iditer90jnreports.pypdf_decompte.pylot.owner_iddistribution_keysbackend/routes/reports.pyif abs(solde) < 0.01if abs(solde) < 2/admin/merge-ownersiter90jkimport_wizard.pyiter90jlmerge_owners.pyiter90jmstatement_line_iditer90jncleanup_orphaned_invoice_lettrage.pyreports.pypdf_decompte.py
+/app/
+├── backend/
+│   ├── routes/
+│   │   ├── import_wizard.py (Added canonical bank indexing)
+│   │   ├── banking.py (Extensive updates for Master/Slave sync & cascades)
+│   │   ├── reports.py (Major Bilan logic updates for Actif/Passif)
+│   │   ├── auto_entries.py (Added statement_line_id to generated FIs)
+│   ├── scripts/
+│   │   ├── merge_owners.py (NEW)
+│   │   ├── backfill_statement_line_id_on_fi.py (NEW)
+│   │   ├── cleanup_orphaned_fi.py (NEW)
+│   │   ├── cleanup_orphaned_invoice_lettrage.py (NEW)
+│   ├── tests/
+│   │   ├── test_iter90jk_wizard_maps_6digit_to_8digit_bank_account.py
+│   │   ├── test_iter90jl_bilan_dedup_and_merge_owners.py
+│   │   ├── test_iter90jm_master_slave_statement_fi_sync.py
+│   │   ├── test_iter90jn_delete_statement_cascades_lettrage.py
+journal_entriesstatement_line_idbank_statement_idbank_transactionsmatchedmatched_to_idsmatch_type/app/backend/routes/banking.py/app/backend/auto_entries.py/app/backend/routes/reports.pyroutes/reports.pyroutes/banking.pyDELETE /api/banking/statements/{stmt_id}PUT /api/banking/statements/{stmt_id}GET /api/reports/bilantest_iter90jm_live_http.pypytest.skipFIbank_transactionstatement_line_idbank_statement_id/app/memory/PRD.md/app/test_reports/iteration_52.json/app/test_reports/iteration_53.json/app/test_reports/iteration_54.json/app/test_reports/iteration_55.jsoniter90jkiter90jliter90jmiter90jniter90jkjljmjntest_iter90jm_live_http.py/app/memory/test_credentials.mdreports.pypdf_decompte.py/app/backend/routes/reports.py/app/backend/pdf_decompte.pylot.owner_iddistribution_keys</analysis>
