@@ -933,6 +933,55 @@ def create_import_wizard_router(db):
         }
 
     # ----- G: INVOICES (factures) - CSV Optipro -----
+    async def _load_canonical_bank_index(copro_id: str) -> dict[str, str]:
+        """iter90jk : construit un index {short_code -> canonical_8char} pour
+        les comptes bancaires 55XXXX / 55XXXXXX de cette ACP.
+
+        Sources (source of truth = coproprietes.bank_accounts) :
+          1) coproprietes.bank_accounts[].pcmn_number (comptes officiels)
+          2) pcmn_accounts (numeros 8 chars deja crees dans le PCMN)
+
+        Le short_code peut etre 6 ou 7 chars (prefixe du canonique). Le
+        canonical est TOUJOURS 8 chars. Un 6-char maps vers un 8-char si
+        le 8-char commence par le 6-char (ex: 551331 -> 55133100).
+
+        Include aussi les mappings identite (8-char -> 8-char) pour un
+        remap idempotent.
+        """
+        canonicals: set[str] = set()
+        # Source 1 : comptes bancaires officiels de la fiche ACP
+        acp_doc = await db.coproprietes.find_one(
+            {"id": copro_id}, {"_id": 0, "bank_accounts": 1},
+        )
+        if acp_doc:
+            for ba in (acp_doc.get("bank_accounts") or []):
+                v = (ba.get("pcmn_number") or "").strip()
+                if len(v) == 8 and v.startswith("55") and v.isdigit():
+                    canonicals.add(v)
+        # Source 2 : PCMN deja materialise
+        async for pa in db.pcmn_accounts.find(
+            {"copropriete_id": copro_id, "number": {"$regex": r"^55[0-9]{6}$"}},
+            {"_id": 0, "number": 1},
+        ):
+            canonicals.add(pa["number"])
+        mapping: dict[str, str] = {}
+        for c8 in canonicals:
+            mapping[c8] = c8            # identite
+            mapping[c8[:6]] = c8        # 55XXXX -> 55XXXX00 (6->8)
+            mapping[c8[:7]] = c8        # 55XXXXX -> 55XXXXX0 (7->8)
+        return mapping
+
+    def _remap_bank_account(acc: str, canonical_index: dict[str, str]) -> str:
+        """iter90jk : remappe un compte bancaire court (55XXXX / 55XXXXX)
+        vers son equivalent 8 chars officiel de la fiche ACP. Sinon retourne
+        acc inchange."""
+        if not acc:
+            return acc
+        a = acc.strip()
+        if len(a) in (6, 7) and a.startswith("55") and a.isdigit():
+            return canonical_index.get(a, a)
+        return a
+
     async def _ensure_pcmn_accounts(copro_id: str, accounts_needed: dict[str, str]) -> int:
         """Ensure each (account_number -> account_name) exists in this ACP's PCMN.
 
@@ -947,16 +996,20 @@ def create_import_wizard_router(db):
         ):
             existing.add(p["number"])
         missing = {n: lbl for n, lbl in accounts_needed.items() if n not in existing}
-        # iter90jj : VERROU - interdit la creation de comptes bancaires 55XXXX
-        # depuis l'import. Ces comptes DOIVENT venir de acp.bank_accounts uniquement.
-        # Sinon un CSV / PDF mal formate cree des comptes fantomes qui polluent le bilan.
+        # iter90jj + iter90jk : VERROU - interdit la creation de comptes
+        # bancaires 55XXXX depuis l'import. Les comptes DOIVENT venir de
+        # coproprietes.bank_accounts uniquement. Le remap 6->8 chars est
+        # applique en amont par les callers (voir _remap_bank_account). Si un
+        # short_code arrive ici, c'est qu'aucun canonique n'existe -> blocage
+        # pedagogique.
         blocked_bank_accounts = [n for n in missing if n.startswith("55") and len(n) <= 6]
         if blocked_bank_accounts:
             raise HTTPException(
                 400,
                 f"Import bloque : comptes bancaires inconnus dans le CSV/PDF : "
                 f"{', '.join(blocked_bank_accounts)}. Ces comptes doivent etre "
-                f"configures sur la fiche ACP (Comptes bancaires) AVANT l'import. "
+                f"configures sur la fiche ACP (Comptes bancaires) AVANT l'import "
+                f"(le mapping automatique 6->8 chiffres n'a rien trouve). "
                 f"Ne creez pas de comptes 55XXXX depuis un import.",
             )
         created = 0
@@ -1091,6 +1144,17 @@ def create_import_wizard_router(db):
             merged_invoices.append(head)
 
         # ---- Pre-pass : collect all PCMN accounts that will be needed ----
+        # iter90jk : remap 6-char bank codes -> 8-char canonical (from ACP)
+        # BEFORE building accounts_needed. Sans ce remap, le CSV Optipro qui
+        # contient "551331" bloque le wizard alors que "55133100" existe deja
+        # dans coproprietes.bank_accounts.
+        _bank_canon_idx = await _load_canonical_bank_index(copro_id)
+        for inv in merged_invoices:
+            acc_num_raw = (inv.get("account_number") or "").strip()
+            inv["account_number"] = _remap_bank_account(acc_num_raw, _bank_canon_idx)
+            for sl in (inv.get("_split_lines") or []):
+                sl_acc = (sl.get("account_number") or "").strip()
+                sl["account_number"] = _remap_bank_account(sl_acc, _bank_canon_idx)
         accounts_needed: dict[str, str] = {}
         for inv in merged_invoices:
             acc_num = (inv.get("account_number") or "").strip()
@@ -1449,15 +1513,36 @@ def create_import_wizard_router(db):
         bank_lookup: dict[str, str] = dict(data.bank_account_mapping or {})
         # Also build PCMN -> IBAN map (needed for the bank_statements.account_number)
         pcmn_to_iban: dict[str, str] = {}
-        async for ba in db.bank_accounts.find({"copropriete_id": copro_id}, {"_id": 0, "id": 1, "account_number": 1, "pcmn_account": 1, "iban": 1}):
-            for fld in ("account_number", "pcmn_account"):
-                v = (ba.get(fld) or "").strip()
-                if v and v not in bank_lookup:
-                    bank_lookup[v] = ba["id"]
-            pcmn_v = (ba.get("pcmn_account") or "").strip()
-            iban_v = (ba.get("iban") or ba.get("account_number") or "").strip()
-            if pcmn_v and iban_v:
-                pcmn_to_iban[pcmn_v] = iban_v
+        # iter90jk : SOURCE OF TRUTH = coproprietes.bank_accounts[]. La collection
+        # db.bank_accounts (legacy, vide sur PROD) n'est plus une source fiable.
+        acp_doc = await db.coproprietes.find_one(
+            {"id": copro_id}, {"_id": 0, "bank_accounts": 1},
+        )
+        if acp_doc:
+            for ba in (acp_doc.get("bank_accounts") or []):
+                pcmn_v = (ba.get("pcmn_number") or "").strip()
+                iban_v = (ba.get("iban") or "").strip()
+                ba_id = ba.get("id") or ""
+                if pcmn_v and ba_id and pcmn_v not in bank_lookup:
+                    bank_lookup[pcmn_v] = ba_id
+                if iban_v and ba_id and iban_v not in bank_lookup:
+                    bank_lookup[iban_v] = ba_id
+                if pcmn_v and iban_v:
+                    pcmn_to_iban[pcmn_v] = iban_v
+
+        # iter90jk : remap 6-char bank codes -> 8-char canonical AVANT tout le
+        # reste. Ainsi bank_statements + journal_entries + bank_transactions
+        # utilisent tous le compte officiel de la fiche ACP.
+        _bank_canon_idx = await _load_canonical_bank_index(copro_id)
+        for t in data.transactions:
+            bp_raw = (t.get("bank_account") or "").strip()
+            cp_raw = (t.get("counterparty_account") or "").strip()
+            bp_mapped = _remap_bank_account(bp_raw, _bank_canon_idx)
+            cp_mapped = _remap_bank_account(cp_raw, _bank_canon_idx)
+            if bp_mapped != bp_raw:
+                t["bank_account"] = bp_mapped
+            if cp_mapped != cp_raw:
+                t["counterparty_account"] = cp_mapped
 
         # Pre-pass: collect PCMN accounts needed
         accounts_needed: dict[str, str] = {}
@@ -1786,6 +1871,16 @@ def create_import_wizard_router(db):
             raise HTTPException(400, "Bilan vide (aucun montant a importer)")
 
         # Auto-create missing PCMN accounts (only for committed leaves)
+        # iter90jk : remap 6-char bank codes -> 8-char canonical AVANT la
+        # construction de accounts_needed. Le helper `_canonize_bank_account`
+        # (defini plus bas ligne ~1860) fait la meme chose sur les lignes JE ;
+        # ici on l'anticipe pour eviter le blocage 400 de _ensure_pcmn_accounts.
+        _bank_canon_idx = await _load_canonical_bank_index(copro_id)
+        for a in actif + passif:
+            raw = (a.get("account") or "").strip()
+            mapped = _remap_bank_account(raw, _bank_canon_idx)
+            if mapped != raw:
+                a["account"] = mapped
         accounts_needed: dict[str, str] = {}
         for a in actif + passif:
             num = (a.get("account") or "").strip()
@@ -1850,22 +1945,36 @@ def create_import_wizard_router(db):
         # pour re-utiliser le canonique 8-char si l'AN veut creer un 6-char
         # equivalent. Sans ce mapping, le Bilan affiche 2 lignes bancaires
         # dupliquees (une du wizard, une du module bank_txn).
+        # iter90jk : lit AUSSI coproprietes.bank_accounts[].pcmn_number (source
+        # of truth), pour couvrir les cas ou le PCMN 8-char n'a pas encore ete
+        # materialise dans pcmn_accounts.
         existing_bank_accs: set = set()
         async for pa in db.pcmn_accounts.find(
             {"copropriete_id": copro_id, "number": {"$regex": "^55[0-9]"}},
             {"_id": 0, "number": 1},
         ):
             existing_bank_accs.add(pa["number"])
+        _acp_doc = await db.coproprietes.find_one(
+            {"id": copro_id}, {"_id": 0, "bank_accounts": 1},
+        )
+        if _acp_doc:
+            for _ba in (_acp_doc.get("bank_accounts") or []):
+                _pn = (_ba.get("pcmn_number") or "").strip()
+                if _pn and _pn.startswith("55") and _pn.isdigit():
+                    existing_bank_accs.add(_pn)
 
         def _canonize_bank_account(acc: str) -> str:
-            """iter90gm : si acc est un 6-char bancaire (551331) et qu'un
-            canonique 8-char existe (55133100), retourne le canonique.
-            Sinon retourne acc inchange."""
-            if len(acc) == 6 and acc.startswith("55"):
-                cand = acc + "00"
-                if cand in existing_bank_accs:
-                    return cand
-            return acc
+            """iter90gm + iter90jk : si acc est un 6/7-char bancaire (551331)
+            et qu'un canonique 8-char existe dans la fiche ACP ou le PCMN
+            (55133100), retourne le canonique. Sinon retourne acc inchange."""
+            if not acc:
+                return acc
+            a = acc.strip()
+            if len(a) in (6, 7) and a.startswith("55") and a.isdigit():
+                for c8 in existing_bank_accs:
+                    if len(c8) == 8 and c8.startswith(a):
+                        return c8
+            return a
 
         # iter90io : normalisation systematique des comptes tier fournisseurs
         # au format canonique 8 chars ("44000XXX") AVANT le matching. Sans ce
@@ -2246,6 +2355,28 @@ def create_import_wizard_router(db):
                 )
 
         # ---- Auto-create missing PCMN accounts ----
+        # iter90jk : remap 6-char bank codes -> 8-char canonical AVANT le
+        # collect accounts_needed, pour eviter le blocage 400 quand une OD
+        # utilise "551331" au lieu du canonique "55133100" configure sur la
+        # fiche ACP.
+        _bank_canon_idx = await _load_canonical_bank_index(copro_id)
+        if is_journal_od:
+            for e in entries:
+                if not e.get("included", True):
+                    continue
+                for ln in (e.get("lines") or []):
+                    raw = (ln.get("account_number") or "").strip()
+                    mapped = _remap_bank_account(raw, _bank_canon_idx)
+                    if mapped != raw:
+                        ln["account_number"] = mapped
+        else:
+            for e in entries:
+                for k_acc in ("account_number", "counterpart_account"):
+                    raw = (e.get(k_acc) or "").strip()
+                    mapped = _remap_bank_account(raw, _bank_canon_idx)
+                    if mapped != raw:
+                        e[k_acc] = mapped
+
         accounts_needed: dict[str, str] = {}
         if is_journal_od:
             for e in entries:

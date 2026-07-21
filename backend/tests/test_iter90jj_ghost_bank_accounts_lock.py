@@ -120,7 +120,10 @@ def test_import_refuses_ghost_bank_account_creation():
         try:
             await db.coproprietes.insert_one({
                 "id": acp, "name": f"iter90jj3-{suffix}",
-                "bank_accounts": [{"iban": "BE04001952089331", "pcmn_number": "55133100", "is_default": True}],
+                # iter90jk : pcmn 55999900 volontairement DIFFERENT de 551331
+                # pour verifier que le blocage 400 est preserve quand AUCUN
+                # canonique n'existe pour remapper le 6-char.
+                "bank_accounts": [{"iban": "BE04001952089331", "pcmn_number": "55999900", "is_default": True}],
             })
             await db.fiscal_years.insert_one({
                 "id": f"fy-{suffix}", "copropriete_id": acp,

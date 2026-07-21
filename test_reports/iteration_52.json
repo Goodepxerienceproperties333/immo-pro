@@ -1,0 +1,30 @@
+{
+  "summary": "Backend validation of iter90jk fix (6-digit -> 8-digit bank account remap in import wizard). All 4 dedicated iter90jk tests PASS. All regression tests for iter90jj, iter90ji, iter90jf, iter90jd, iter90iz PASS. 24/24 targeted tests pass. Broader wizard/bank regression sweep: 74 passed, 7 pre-existing failures unrelated to iter90jk (async plugin missing, unrelated fixture 404).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "test_iter90gi_wizard_fy_autohydrate", "issue": "Pre-existing: async tests skipped due to missing pytest-asyncio plugin (not related to iter90jk)"},
+      {"endpoint": "test_iter30_superadmin_profile_revoke::test_edit_acp_preserves_pcmn_for_bank_accounts", "issue": "Pre-existing: returns 404 'Copropriete non trouvee' (fixture/data ordering issue, unrelated to iter90jk)"},
+      {"endpoint": "test_iter13_budget_wizard, test_iter20_balance_tiers_and_wizard", "issue": "Pre-existing failures unrelated to iter90jk fix"}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter90jk_wizard_maps_6digit_to_8digit_bank_account.py",
+    "/app/test_reports/pytest/iter90jk_results.xml",
+    "/app/test_reports/pytest/iter90jk_wizard_regression.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "iter90jk fix cleanly implemented via _load_canonical_bank_index + _remap_bank_account helpers applied uniformly across commit-journals, commit-invoices, commit-opening-balance, commit-od-entries endpoints.",
+    "Idempotence and non-55 pass-through validated by unit tests.",
+    "Ghost-account creation still blocked when no canonical 8-char exists (iter90jj lock intact)."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% on iter90jk + targeted regressions (24/24)", "frontend": "not tested (per request)"},
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "iter90jk fix verified. The 7 pre-existing failures in broader wizard sweep (iter13, iter20, iter30, iter90gi) are unrelated to bank account remapping - primarily due to missing pytest-asyncio plugin and older fixture data issues. They were failing before iter90jk.",
+  "rca of the issue": "N/A - fix already implemented and verified"
+}
