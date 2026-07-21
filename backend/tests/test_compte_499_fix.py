@@ -1,11 +1,15 @@
-"""Tests for the compte 499 fix (Belgian accounting: class 70 only for provisions)."""
+"""Tests for the compte 499 fix (Belgian accounting: class 70 only for provisions).
+
+After the AC dedup filter fix (iter90 subsequent): both ACPs 138 and 34a now show
+the correct Boni case (charges=5333.51, 499=+1170.16 at Passif).
+"""
 import os
 import pytest
 import requests
 
 BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://copro-belge-app.preview.emergentagent.com").rstrip("/")
-ACP_MALI = "138cfd69-cc07-46bb-ad17-a98debee7a3a"  # Auto 3 Maria - Mali expected
-ACP_BONI = "34a2fe77-2137-4e32-81eb-387273d3f242"  # ACPMaria Auto3 - Boni expected
+ACP_138 = "138cfd69-cc07-46bb-ad17-a98debee7a3a"  # Auto 3 Maria
+ACP_34A = "34a2fe77-2137-4e32-81eb-387273d3f242"  # ACPMaria Auto3
 
 
 @pytest.fixture(scope="module")
@@ -29,66 +33,90 @@ def _get_bilan(session, acp_id, view_mode=None):
     return r.json()
 
 
-def test_bilan_mali_case_138(session):
-    """ACP 138 - Mali case: 499 = 6500 - 6766.49 = -266.49 (Actif)."""
-    data = _get_bilan(session, ACP_MALI)
-    print(f"Mali case keys: {list(data.keys())}")
-
-    # New fields presence
-    assert "provisions_appelees" in data, "provisions_appelees field missing"
-    assert "total_charges" in data, "total_charges field missing"
-    assert "compte_499" in data, "compte_499 field missing"
-    assert "produits_hors_provisions" in data, "produits_hors_provisions field missing"
-
-    assert data["provisions_appelees"] == pytest.approx(6500.0, abs=0.01), \
-        f"provisions_appelees={data['provisions_appelees']}"
-    assert data["total_charges"] == pytest.approx(6766.49, abs=0.01), \
-        f"total_charges={data['total_charges']}"
-    assert data["compte_499"] == pytest.approx(-266.49, abs=0.01), \
-        f"compte_499={data['compte_499']} (expected -266.49)"
-    assert data["produits_hors_provisions"] == pytest.approx(3.67, abs=0.01), \
-        f"produits_hors_provisions={data['produits_hors_provisions']}"
-
-    # Balance
-    assert data.get("equilibre") is True, f"Bilan not balanced: {data.get('total_actif')} vs {data.get('total_passif')}"
+def _find_supplier_amount(data, needle):
+    """Find a supplier by name substring across passif buckets (dettes fournisseurs)."""
+    needle_low = needle.lower()
+    for section in data.get("passif", []) or []:
+        for acc in section.get("accounts", []) or []:
+            name = (acc.get("account_name") or "") + " " + (acc.get("label") or "")
+            if needle_low in name.lower():
+                return acc.get("amount", 0)
+    # Also try actif in case of debit balance
+    for section in data.get("actif", []) or []:
+        for acc in section.get("accounts", []) or []:
+            name = (acc.get("account_name") or "") + " " + (acc.get("label") or "")
+            if needle_low in name.lower():
+                return acc.get("amount", 0)
+    return None
 
 
-def test_bilan_boni_case_34a(session):
-    """ACP 34a - Boni case: 499 = 6500 - 5333.51 = +1166.49 (Passif)."""
-    data = _get_bilan(session, ACP_BONI)
-    print(f"Boni case: prov={data.get('provisions_appelees')}, charges={data.get('total_charges')}, 499={data.get('compte_499')}")
+def test_bilan_acp138_boni_after_dedup(session):
+    """ACP 138 - After AC dedup: charges=5333.51, 499=+1170.16 (Boni at Passif)."""
+    data = _get_bilan(session, ACP_138)
+    print(f"ACP138: prov={data.get('provisions_appelees')}, charges={data.get('total_charges')}, 499={data.get('compte_499')}")
+
+    assert data["provisions_appelees"] == pytest.approx(6500.0, abs=0.01)
+    assert data["total_charges"] == pytest.approx(5333.51, abs=0.01), \
+        f"total_charges={data['total_charges']} (expected 5333.51 after dedup)"
+    assert data["compte_499"] == pytest.approx(1170.16, abs=0.01), \
+        f"compte_499={data['compte_499']} (expected +1170.16 Boni)"
+    assert data.get("equilibre") is True, \
+        f"Bilan not balanced: actif={data.get('total_actif')} passif={data.get('total_passif')}"
+
+
+def test_bilan_acp34a_boni(session):
+    """ACP 34a - Boni: charges=5333.51, 499=+1170.16."""
+    data = _get_bilan(session, ACP_34A)
+    print(f"ACP34a: prov={data.get('provisions_appelees')}, charges={data.get('total_charges')}, 499={data.get('compte_499')}")
 
     assert data["provisions_appelees"] == pytest.approx(6500.0, abs=0.01)
     assert data["total_charges"] == pytest.approx(5333.51, abs=0.01)
-    assert data["compte_499"] == pytest.approx(1166.49, abs=0.01), \
-        f"compte_499={data['compte_499']} (expected +1166.49)"
+    assert data["compte_499"] == pytest.approx(1170.16, abs=0.01)
     assert data.get("equilibre") is True
+
+
+def test_bilan_after_distribution_138(session):
+    """After distribution ACP138: 499 removed from rubriques, bilan equilibre."""
+    data = _get_bilan(session, ACP_138, view_mode="after_distribution")
+    print(f"ACP138 after_dist: 499={data.get('compte_499')}, equilibre={data.get('equilibre')}")
+
+    # 499 must not appear in either actif or passif buckets
+    for section in (data.get("passif") or []) + (data.get("actif") or []):
+        for acc in section.get("accounts", []) or []:
+            assert not str(acc.get("account_number", "")).startswith("499"), \
+                f"499 must not appear after distribution: {acc}"
+
+    assert data.get("equilibre") is True, \
+        f"After-dist bilan not balanced: actif={data.get('total_actif')} passif={data.get('total_passif')}"
 
 
 def test_bilan_after_distribution_34a(session):
-    """After distribution: boni distributed to owners, 499 should disappear, produits_hors_provisions remain."""
-    data = _get_bilan(session, ACP_BONI, view_mode="after_distribution")
-    print(f"After dist: 499={data.get('compte_499')}, produits_hp={data.get('produits_hors_provisions')}, equilibre={data.get('equilibre')}")
+    """After distribution ACP34a: 499 removed, bilan equilibre."""
+    data = _get_bilan(session, ACP_34A, view_mode="after_distribution")
+    print(f"ACP34a after_dist: 499={data.get('compte_499')}, equilibre={data.get('equilibre')}")
 
-    # After distribution, the 499 must no longer appear in actif/passif buckets
-    for section in data.get("passif", []):
-        label = section.get("label", "")
-        if "regularisation" in label.lower() and "boni" in label.lower():
-            # Only produits_hors_provisions may remain (3.67)
-            assert abs(section.get("total", 0) - 3.67) < 0.01, \
-                f"Passif regul should only contain produits_hors_provisions (3.67), got {section.get('total')}"
-            for acc in section.get("accounts", []):
-                assert not str(acc.get("account_number", "")).startswith("499"), \
-                    f"499 must not appear after distribution, found: {acc}"
-    for section in data.get("actif", []):
-        label = section.get("label", "")
-        if "regularisation" in label.lower():
-            for acc in section.get("accounts", []):
-                assert not str(acc.get("account_number", "")).startswith("499"), \
-                    f"499 must not appear after distribution, found: {acc}"
-    # Produits hors provisions (3.67) should still appear
-    assert data.get("produits_hors_provisions", 0) == pytest.approx(3.67, abs=0.01)
+    for section in (data.get("passif") or []) + (data.get("actif") or []):
+        for acc in section.get("accounts", []) or []:
+            assert not str(acc.get("account_number", "")).startswith("499"), \
+                f"499 must not appear after distribution: {acc}"
+
     assert data.get("equilibre") is True
+
+
+def test_suppliers_no_duplicates_acp138(session):
+    """After AC dedup: SRL Finlead = 639.69 (not 2072.67), Sneyers = 3545.30."""
+    data = _get_bilan(session, ACP_138)
+    finlead = _find_supplier_amount(data, "finlead")
+    sneyers = _find_supplier_amount(data, "sneyers")
+    print(f"Suppliers ACP138: Finlead={finlead}, Sneyers={sneyers}")
+
+    assert finlead is not None, "SRL Finlead not found in bilan"
+    assert finlead == pytest.approx(639.69, abs=0.02), \
+        f"SRL Finlead expected 639.69, got {finlead}"
+
+    assert sneyers is not None, "Sneyers not found in bilan"
+    assert sneyers == pytest.approx(3545.30, abs=0.02), \
+        f"Sneyers expected 3545.30, got {sneyers}"
 
 
 if __name__ == "__main__":

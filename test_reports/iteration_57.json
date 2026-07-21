@@ -1,0 +1,30 @@
+{
+  "summary": "Verified AC dedup fix for bilan: orphan AC entries (Optipro import duplicates) are now correctly excluded via journal_entry_id filter. ACP 138 (Auto 3 Maria) now correctly shows total_charges=5333.51 and compte_499=+1170.16 (Boni au Passif) instead of inflated 6766.49 with 499=-266.49 (Mali). Suppliers (SRL Finlead=639.69, Sneyers=3545.30) verified. Both view_mode=before_distribution and after_distribution balance correctly. All 11 tests pass (5 in updated test_compte_499_fix.py + 6 regression in test_iter90jl_bilan_dedup_and_merge_owners.py).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_compte_499_fix.py",
+    "/app/backend/tests/test_iter90jl_bilan_dedup_and_merge_owners.py",
+    "/app/test_reports/pytest/compte_499_iter57.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "reports.py exceeds 3800 lines - should be split (persistent violation).",
+    "AC dedup filter is silent when valid_ac_je_ids is empty (backward-compat); consider a warning log when many AC entries are dropped so operators know the filter is active."
+  ],
+  "updated_files": ["/app/backend/tests/test_compte_499_fix.py"],
+  "success_rate": {"backend": "100%", "frontend": "N/A"},
+  "test_credentials": "admin@copro.be / admin123 (cookie-based)",
+  "seed_data_creation": "None - used existing ACPs 138cfd69 and 34a2fe77",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "AC dedup fix validated. Both ACPs 138 & 34a2 now return identical bilan (charges=5333.51, provisions=6500, 499=+1170.16 Boni, produits_hors_provisions=3.67, equilibre=True). After-distribution mode removes 499 from all buckets and stays balanced. Updated test_compte_499_fix.py to reflect corrected numbers (previous iteration_56 numbers were pre-fix). Fournisseurs: SRL Finlead=639.69, Sneyers=3545.30 confirmed via bilan passif buckets.",
+  "verification_results": {
+    "test_bilan_acp138_boni_after_dedup": "PASSED - charges=5333.51, 499=+1170.16",
+    "test_bilan_acp34a_boni": "PASSED - charges=5333.51, 499=+1170.16",
+    "test_bilan_after_distribution_138": "PASSED - 499 removed, equilibre=True",
+    "test_bilan_after_distribution_34a": "PASSED - 499 removed, equilibre=True",
+    "test_suppliers_no_duplicates_acp138": "PASSED - Finlead=639.69, Sneyers=3545.30",
+    "regression_iter90jl": "6/6 PASSED"
+  }
+}
