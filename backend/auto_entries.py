@@ -33,15 +33,16 @@ async def _delete_auto_entries(db, source_type: str, source_id: str, reason: str
 async def _hard_delete_auto_entries(db, source_type: str, source_id: str):
     """Suppression REELLE des ecritures auto-generees pour eviter les doublons.
 
-    Utilisee par generate_purchase_entry : quand une facture est modifiee,
-    l'ancienne ecriture AC est supprimee puis remplacee par une nouvelle.
-    Pas de contre-passation - suppression directe pour garantir qu'il n'y a
-    JAMAIS plus d'une ecriture AC par facture.
-
-    Supprime aussi les extournes eventuelles liees (EXT-*) pour nettoyer
-    toute paire orpheline.
+    Cherche par DEUX schemas de marquage :
+      1) auto_entries.py : source_type + source_id + auto_generated
+      2) import_wizard :   source_invoice_id (legacy, sans auto_generated)
+    Cela garantit qu'une facture n'a JAMAIS plus d'une ecriture AC,
+    qu'elle ait ete creee par l'import ou par auto_entries.
     """
-    q = {"source_type": source_type, "source_id": source_id, "auto_generated": True}
+    q = {"$or": [
+        {"source_type": source_type, "source_id": source_id, "auto_generated": True},
+        {"source_invoice_id": source_id},
+    ]}
     result = await db.journal_entries.delete_many(q)
     return result.deleted_count
 

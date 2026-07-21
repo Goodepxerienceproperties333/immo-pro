@@ -1527,6 +1527,9 @@ def create_import_wizard_router(db):
                         "copropriete_id": copro_id,
                         "import_session_id": session_id,
                         "source_invoice_id": invoice_id,
+                        "source_type": "invoice",
+                        "source_id": invoice_id,
+                        "auto_generated": True,
                         "is_credit_note": is_credit_note,
                         "created_at": _now_iso(),
                     }
