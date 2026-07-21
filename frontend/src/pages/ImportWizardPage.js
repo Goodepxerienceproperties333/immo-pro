@@ -88,6 +88,7 @@ export default function ImportWizardPage() {
   // Structure : {idx_str: {action: "reuse"|"create", supplier_id: "...", bce_number: "BE..."}}
   const [supplierDecisions, setSupplierDecisions] = useState({});
   const [invoicesParsed, setInvoicesParsed] = useState([]);
+  const [invoicePreview, setInvoicePreview] = useState(null); // tableau de controle avant commit
   const [journalsParsed, setJournalsParsed] = useState([]);
   const [balanceParsed, setBalanceParsed] = useState({ actif: [], passif: [], total_actif: 0, total_passif: 0, balanced: false, period_end_date: '' });
   // iter90gj : appels hors budget declares AVANT les mutations (fonds reserve
@@ -300,20 +301,26 @@ export default function ImportWizardPage() {
           m.errors.slice(0, 3).forEach(e => toast.error(`Ligne ${e.row}: ${e.error}`));
         }
       } else if (step.key === 'invoices') {
-        // iter90gp : DOIT etre traite avant la branche `effectiveKind === 'csv'`
-        // car pour un CSV Optipro `sniff-csv?kind=invoices` peuple `invoicesParsed`
-        // et le backend `/commit-invoices` attend `{invoices: [...]}`, PAS
-        // `{mapping, rows}`. Sans ce reorder, on obtenait "invoices: Field required".
-        // iter90gj : bloque le commit si des factures n'ont pas de compte
-        // comptable (verrou PCMN iter90g9). Le PDF tabulaire "Factures
-        // fournisseurs" ne fournit pas les comptes -> le syndic doit les
-        // saisir dans la preview.
         const missing = (invoicesParsed || []).filter(i => !(i.account_number || '').trim()).length;
         if (missing > 0) {
           toast.error(`${missing} facture(s) sans compte comptable. Saisissez-les dans la colonne "Cpte" avant de valider.`);
           setCommitting(false);
           return;
         }
+        // ETAPE 1 : Tableau de controle (preview) - si pas encore valide
+        if (!invoicePreview) {
+          try {
+            const prev = await api.post(`/import-wizard/sessions/${session.id}/preview-invoices`, { invoices: invoicesParsed });
+            setInvoicePreview(prev.data);
+            toast.info(`Tableau de controle : ${prev.data.count} lignes. Verifiez les fournisseurs puis re-cliquez "Valider".`);
+          } catch (err) {
+            toast.error(err.response?.data?.detail || 'Erreur preview');
+          }
+          setCommitting(false);
+          return;
+        }
+        // ETAPE 2 : Commit reel (apres validation du tableau)
+        setInvoicePreview(null);
         r = await api.post(`/import-wizard/sessions/${session.id}/commit-invoices`, { invoices: invoicesParsed });
         const m = r.data;
         const errs = m.errors || [];
@@ -723,6 +730,59 @@ export default function ImportWizardPage() {
 
           {sniffResult && step.key === 'invoices' && (
             <InvoicesPreview invoices={invoicesParsed} setInvoices={setInvoicesParsed} />
+          )}
+
+          {/* Tableau de controle fournisseurs AVANT commit */}
+          {invoicePreview && step.key === 'invoices' && (
+            <div className="mt-4 border-2 border-amber-400 rounded-lg p-4 bg-amber-50" data-testid="invoice-preview-control">
+              <h3 className="font-bold text-amber-800 mb-2">Tableau de controle - Verifiez les fournisseurs</h3>
+              <p className="text-sm text-amber-700 mb-3">
+                {invoicePreview.matched} fournisseur(s) existant(s), {invoicePreview.to_create} a creer.
+                Verifiez que chaque ligne correspond au bon fournisseur, puis cliquez "Valider" pour confirmer.
+              </p>
+              <div className="overflow-x-auto max-h-96 overflow-y-auto">
+                <table className="w-full text-sm border-collapse">
+                  <thead className="bg-amber-100 sticky top-0">
+                    <tr>
+                      <th className="border px-2 py-1 text-left">#</th>
+                      <th className="border px-2 py-1 text-left">Fournisseur</th>
+                      <th className="border px-2 py-1 text-left">Code Aux</th>
+                      <th className="border px-2 py-1 text-left">TVA/BCE</th>
+                      <th className="border px-2 py-1 text-left">Compte</th>
+                      <th className="border px-2 py-1 text-right">Montant</th>
+                      <th className="border px-2 py-1 text-left">Ref</th>
+                      <th className="border px-2 py-1 text-left">Statut</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {invoicePreview.preview.map((row, i) => (
+                      <tr key={i} className={row.status === 'to_create' ? 'bg-blue-50' : ''}>
+                        <td className="border px-2 py-1">{row.index + 1}</td>
+                        <td className="border px-2 py-1 font-medium">{row.supplier_name}</td>
+                        <td className="border px-2 py-1 font-mono text-xs">{row.supplier_aux_code}</td>
+                        <td className="border px-2 py-1 text-xs">{row.supplier_vat || '—'}</td>
+                        <td className="border px-2 py-1 font-mono text-xs">{row.account_number}</td>
+                        <td className="border px-2 py-1 text-right font-mono">{row.montant_tvac.toFixed(2)}</td>
+                        <td className="border px-2 py-1 text-xs">{row.external_ref}</td>
+                        <td className="border px-2 py-1">
+                          {row.status === 'matched'
+                            ? <span className="text-green-700 font-medium">Existant</span>
+                            : <span className="text-blue-700 font-medium">Nouveau</span>}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="mt-3 flex gap-2">
+                <button
+                  className="px-3 py-1 bg-red-100 text-red-700 rounded text-sm hover:bg-red-200"
+                  onClick={() => setInvoicePreview(null)}
+                  data-testid="cancel-preview"
+                >Annuler</button>
+                <span className="text-sm text-amber-700 mt-1">Cliquez "Valider" ci-dessous pour confirmer l'import</span>
+              </div>
+            </div>
           )}
 
           {sniffResult && step.key === 'journals' && (

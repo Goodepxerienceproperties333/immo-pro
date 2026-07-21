@@ -1032,6 +1032,73 @@ def create_import_wizard_router(db):
             created += 1
         return created
 
+    # ----- G-bis : PREVIEW avant commit (tableau de controle) -----
+    @router.post("/sessions/{session_id}/preview-invoices")
+    async def preview_invoices(session_id: str, data: CommitInvoicesInput, request: Request):
+        """Retourne un tableau de controle AVANT le commit final.
+
+        Pour chaque ligne parsee, affiche :
+          - index (numero de ligne CSV)
+          - supplier_aux_code (code auxiliaire Optipro)
+          - supplier_name (nom du fournisseur)
+          - supplier_vat (TVA du fournisseur resolu, si existant)
+          - account_number (compte comptable)
+          - account_label
+          - montant_tvac
+          - date
+          - external_ref
+          - status: 'matched' (fournisseur existant) / 'to_create' (nouveau)
+
+        Le syndic DOIT valider ce tableau avant de lancer le commit.
+        """
+        session = await db.import_sessions.find_one({"id": session_id})
+        if not session:
+            raise HTTPException(404, "Session introuvable")
+        copro_id = session["copropriete_id"]
+        await _require_acp_access(request, db, copro_id)
+
+        # Charger fournisseurs ACP (Chinese Wall strict)
+        existing_suppliers: dict[str, dict] = {}
+        async for s in db.suppliers.find(
+            {"copropriete_id": copro_id}, {"_id": 0}
+        ):
+            ax = (s.get("auxiliary_code") or "").upper().strip()
+            if ax:
+                existing_suppliers[ax] = s
+
+        preview_rows = []
+        for idx, inv in enumerate(data.invoices):
+            sup_aux = (inv.get("supplier_aux_code") or "").upper().strip()
+            sup_name = (inv.get("supplier_name") or "").strip()
+            acc_num = (inv.get("account_number") or "").strip()
+            acc_lbl = (inv.get("account_label") or "").strip()
+
+            # Resolution independante par ligne
+            matched_doc = existing_suppliers.get(sup_aux)
+            status = "matched" if matched_doc else "to_create"
+            resolved_vat = (matched_doc.get("vat_number") or matched_doc.get("bce_number") or "") if matched_doc else ""
+
+            preview_rows.append({
+                "index": idx,
+                "supplier_aux_code": sup_aux,
+                "supplier_name": sup_name,
+                "supplier_vat": resolved_vat,
+                "account_number": acc_num,
+                "account_label": acc_lbl,
+                "montant_tvac": float(inv.get("montant_tvac") or 0),
+                "date": (inv.get("date") or ""),
+                "external_ref": (inv.get("external_ref") or ""),
+                "status": status,
+            })
+
+        return {
+            "preview": preview_rows,
+            "count": len(preview_rows),
+            "matched": sum(1 for r in preview_rows if r["status"] == "matched"),
+            "to_create": sum(1 for r in preview_rows if r["status"] == "to_create"),
+        }
+
+
     @router.post("/sessions/{session_id}/commit-invoices")
     async def commit_invoices(session_id: str, data: CommitInvoicesInput, request: Request):
         """Commit pre-parsed invoices. Each invoice is auto-matched to:
@@ -1053,9 +1120,11 @@ def create_import_wizard_router(db):
         copro_id = session["copropriete_id"]
         await _require_acp_access(request, db, copro_id)
 
-        # Build matching lookups
+        # Build matching lookups - Chinese Wall STRICT : ACP courante uniquement
         sup_by_aux: dict[str, dict] = {}
-        async for s in db.suppliers.find({"copropriete_id": copro_id}, {"_id": 0, "id": 1, "auxiliary_code": 1, "name": 1}):
+        async for s in db.suppliers.find(
+            {"copropriete_id": copro_id}, {"_id": 0}
+        ):
             ax = (s.get("auxiliary_code") or "").upper().strip()
             if ax:
                 sup_by_aux[ax] = s
@@ -1209,41 +1278,55 @@ def create_import_wizard_router(db):
                     continue
 
                 supplier_aux = (inv.get("supplier_aux_code") or "").upper().strip()
-                # iter90iv (change de strategie) : matching par NOM d'ABORD,
-                # aux_code Optipro en fallback. Strategie utilisateur pour eviter
-                # les orphelins compta et privilegier la fiche fournisseur
-                # existante (memes homonymes = meme fournisseur, on repointe
-                # la ligne vers son tier_account_number canonique).
+                # ISOLATION STRICTE PAR LIGNE : chaque ligne du CSV resout
+                # son fournisseur independamment. Pas de reutilisation de
+                # l'objet fournisseur de la ligne precedente.
+                # Priorite : aux_code Optipro (identifiant unique) > nom.
+                # Chinese Wall : recherche UNIQUEMENT dans l'ACP courante.
                 supplier_doc = None
+
+                # 1) Match par aux_code Optipro (rapide, sans ambiguite)
+                if supplier_aux:
+                    supplier_doc = sup_by_aux.get(supplier_aux)
+
+                # 2) Fallback : match par nom EXACT dans l'ACP (pas de fuzzy)
                 inv_name = (inv.get("supplier_name") or "").strip()
-                if inv_name:
+                if not supplier_doc and inv_name:
                     from routes.suppliers import _norm_name_candidates
                     inv_cands = _norm_name_candidates(inv_name)
                     if inv_cands:
-                        # 1) parcours des fiches deja indexees par aux (rapide)
                         for _aux_key, s_doc in sup_by_aux.items():
                             other_cands = _norm_name_candidates(s_doc.get("name", ""))
                             if inv_cands & other_cands:
                                 supplier_doc = s_doc
                                 break
-                        # 2) parcours de TOUS les fournisseurs de l'ACP
-                        #    (fiches sans aux_code Optipro : creees manuellement,
-                        #    reconciliees, etc.)
-                        if not supplier_doc:
-                            async for cand in db.suppliers.find(
-                                {"copropriete_id": copro_id}, {"_id": 0}
-                            ):
-                                other_cands = _norm_name_candidates(cand.get("name", ""))
-                                if inv_cands & other_cands:
-                                    supplier_doc = cand
-                                    break
-                # Fallback : aux_code Optipro (cas ou nom absent/inutilisable)
-                if not supplier_doc and supplier_aux:
-                    supplier_doc = sup_by_aux.get(supplier_aux)
-                # iter90gk : s'assurer que la fiche fournisseur a un tier_account
-                # dans cette ACP AVANT de creer l'ecriture AC (evite la creation
-                # d'un compte tier oriente Optipro qui ne correspond pas au
-                # compte tier canonique de la fiche).
+
+                # 3) AUTO-CREATION si fournisseur introuvable (scoped ACP)
+                if not supplier_doc and (supplier_aux or inv_name):
+                    new_sup = {
+                        "id": str(uuid.uuid4()),
+                        "name": inv_name or supplier_aux,
+                        "auxiliary_code": supplier_aux,
+                        "vat_number": "",
+                        "bce_number": "",
+                        "address": "", "postal_code": "", "city": "",
+                        "country": "Belgique",
+                        "phone": "", "email": "", "iban": "", "bic": "",
+                        "default_account": "",
+                        "notes": f"Auto-cree par import factures (session {session_id})",
+                        "copropriete_id": copro_id,
+                        "import_session_id": session_id,
+                        "created_at": _now_iso(),
+                    }
+                    await db.suppliers.insert_one(new_sup)
+                    # Assigner le tier_account canonique
+                    from tier_accounts import assign_supplier_account
+                    new_sup = await assign_supplier_account(db, new_sup, copro_id)
+                    # Indexer pour les lignes suivantes du MEME fournisseur
+                    if supplier_aux:
+                        sup_by_aux[supplier_aux] = new_sup
+                    supplier_doc = new_sup
+
                 if supplier_doc:
                     from tier_accounts import assign_supplier_account
                     supplier_doc = await assign_supplier_account(db, supplier_doc, copro_id)

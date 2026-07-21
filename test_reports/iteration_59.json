@@ -1,0 +1,33 @@
+{
+  "summary": "Backend testing of iter90k import wizard rewrite: preview-invoices control table + supplier isolation (Chinese Wall strict) + bilan regression. 5/5 tests pass.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_import_wizard_preview.py",
+    "/app/test_reports/pytest/iter90k_preview.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "import_wizard.py is 3239 lines - should be split into focused modules (preview, commit, matching, pcmn) for maintainability.",
+    "Preview endpoint properly returns index/supplier_name/supplier_aux_code/supplier_vat/account_number/montant_tvac/status per spec.",
+    "Commit-invoices supplier resolution correctly independent per-line: aux_code -> normalized name -> auto-create (scoped copropriete_id).",
+    "Chinese Wall enforced: db.suppliers.find({copropriete_id: copro_id}) both in preview (line 1062) and commit (line 1125). Auto-created supplier gets copropriete_id=copro_id (line 1317)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_import_wizard_preview.py"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "not tested"},
+  "test_credentials": "admin@copro.be / admin123",
+  "seed_data_creation": "None. Preview endpoint does not mutate data. F9999 supplier used only in preview (not committed).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "iter90k verified: (1) preview-invoices returns proper control table with status matched/to_create per line, independent resolution; (2) unknown session -> 404; (3) all existing suppliers of ACP 138cfd69 are correctly scoped (copropriete_id matches); (4) bilan post-commit: equilibre=True, total_actif==total_passif==14355.15, compte_499=1170.16 EXACT. Session 1dc39652 already committed - not re-tested for commit auto-create as per spec, but code review confirms auto-create sets copropriete_id=copro_id (line 1317 import_wizard.py).",
+  "rca of the issue": "N/A - no bug found"
+}
