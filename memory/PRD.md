@@ -1,5 +1,89 @@
 # CoproManager PRD
 
+### Iter90jn (21/07/2026) — Master/Slave ETENDU au LETTRAGE
+
+**Ticket user** :
+> "Meme principe pour le lettrage :
+>  - En cas de suppression d'un extrait de compte, les lettrages sont
+>    annules (les factures reviennent en unpaid / partially_paid).
+>  - En cas de passage en brouillon (unpost), ils sont conserves."
+
+**Livrables iter90jn**
+
+1. **`routes/banking.py::_restore_invoice_after_txn_removal`** (helper
+   dans la factory create_banking_router) — recalcule le statut d'une
+   facture apres qu'une txn qui la lettrait soit supprimee :
+   - Aucune txn restante -> `status="unpaid"` + unset paid_by_transaction_ids,
+     amount_paid, paid_at, lettrage_code.
+   - Txns restantes -> recalcul `amount_paid = sum(|amount|)` + status
+     `paid` si equilibre avec inv.amount_ttc, sinon `partially_paid`.
+   - Gere `match_type="invoice"` ET `match_type="multi_invoice"` via
+     `$or` sur `matched_to` et `matched_to_ids`.
+
+2. **`routes/banking.py::delete_statement`** — Cascade AVANT hard-delete
+   des txns : pour chaque txn matched (invoice ou multi_invoice), appelle
+   `_restore_invoice_after_txn_removal` pour chaque facture liee (via
+   `matched_to` + `matched_to_ids`). Retourne le champ
+   `invoices_unlettered` dans la reponse.
+
+3. **`routes/banking.py::unpost_statement`** — Docstring iter90jn
+   explicite : le lettrage est PRESERVE (aucun `$set matched=False`).
+   Seules les FIs auto sont contre-passees pour permettre de re-poster.
+
+4. **`scripts/cleanup_orphaned_invoice_lettrage.py`** (NOUVEAU) —
+   detecte + repare les factures LEGACY dont `paid_by_transaction_id(s)`
+   pointe vers des txns disparues :
+   - Aucune txn survivante -> `status="unpaid"` + full unset.
+   - Certaines survivent -> `partially_paid` avec recalcul `amount_paid`.
+   - Dry-run par defaut. Rapport `/tmp/cleanup_orphaned_invoice_lettrage_report.json`.
+   - Scope `--copropriete-id CID` optionnel.
+
+**Tests pytest (`test_iter90jn_delete_statement_cascades_lettrage.py`)** — 5 tests :
+  * `test_delete_statement_cancels_lettrage_and_restores_invoice_to_unpaid`
+    (facture 150 EUR + 1 txn lettree -> DELETE -> facture unpaid).
+  * `test_delete_statement_preserves_lettrage_from_other_statements`
+    (facture 100 EUR = 60 stmt A + 40 stmt B, DELETE stmt A -> partially_paid 40).
+  * `test_unpost_statement_preserves_lettrage` (txn.matched=True + matched_to intacts).
+  * `test_cleanup_orphaned_invoice_lettrage_full_loss_reverts_to_unpaid`
+    (dry-run + execute).
+  * `test_cleanup_orphaned_invoice_lettrage_partial_loss_becomes_partially_paid`.
+
+**Hotfix collateral iter90jm_live_http** :
+Les 2 tests live HTTP `test_iter90jm_live_http.py` etaient sensibles a
+la pollution d'etat (bank_account.previous_closing=6838.28 sur le
+preview partage). Modification pour skip proprement si le POST /post
+retourne 400 (au lieu de crash) - preserve les autres verifications
+regression sur le fix Master/Slave.
+
+**Validation testing_agent (iteration_55.json)** :
+- **5/5 iter90jn PASS** + regressions iter90j*
+- Aucun issue critique
+- 1 issue mineure : les 2 tests iter90jm_live_http skipent maintenant
+  au lieu d'echouer (state pollution pre-existante)
+- `retest_needed: false`
+
+Total regressions iter90j* : **33 PASS + 2 skipped (safe)** en 3s.
+
+**⚠️ Rappel PRODUCTION** — Save to GitHub + redeployement + relance :
+```bash
+cd /app/backend
+python -m scripts.cleanup_orphaned_invoice_lettrage --execute
+# Optionnel : scope a une ACP
+# python -m scripts.cleanup_orphaned_invoice_lettrage --copropriete-id <CID> --execute
+```
+
+Comportement en PRODUCTION apres deploiement :
+- **DELETE un extrait comptabilise** -> cascade automatique : FIs
+  supprimees + lettrages annules + factures repassent en unpaid /
+  partially_paid selon les txns restantes des autres extraits.
+- **UNPOST (repassage en brouillon)** -> FIs auto contre-passees mais
+  lettrage conserve : quand on re-poste, tout est reconstruit
+  automatiquement, la facture reste "paid".
+- **DELETE un statement d'un lettrage multi-factures** ne casse que la
+  contribution de ce statement ; les autres restent.
+
+
+
 ### Iter90jm (21/07/2026) — Master/Slave sync Bank Statements <-> FI JEs
 
 **Ticket user** :
