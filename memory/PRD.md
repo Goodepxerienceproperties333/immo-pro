@@ -1,4 +1,76 @@
 # CoproManager PRD
+### Iter90ji + iter90jj (21/07/2026) — Verrous anti-doublon FI + comptes fantomes
+
+**Tickets user** :
+1. "Ton systeme de lettrage cree des doublons d'ecritures" (iter90ji)
+2. "Ton bilan est faux : tu as invente 5 comptes bancaires alors qu'il n'y en a
+   que 2 officiels. Interdis au systeme de creer de nouveaux comptes bancaires
+   lors des imports." (iter90jj)
+
+**Livrables iter90ji - Verrou anti-doublon FI**
+
+1. **`auto_entries.py::generate_bank_entry`** - avant l'insert, verifie si un
+   JE FI importe/manuel existe deja (meme signature : ACP+date+montant+compte
+   tier). Si oui, ne cree PAS de nouveau JE et lie la txn au JE existant via
+   `matched_je_id` + `matched_je_source='imported'`.
+
+2. **`scripts/cleanup_duplicate_auto_fi.py`** - detection & contre-passation
+   des JEs FI auto qui doublonnent un JE FI importe. Priorite : keeper =
+   importe > manuel > auto. Contre-passe uniquement les auto.
+
+3. **`scripts/fix_kash_goovaerts_link.py`** - lie les bank_transactions KASH
+   au proprietaire Goovaerts + regenere les JEs FI avec la vraie contrepartie.
+
+**Livrables iter90jj - Verrou comptes bancaires fantomes**
+
+1. **`auto_entries.py::_resolve_bank_account`** - remplacement du fallback
+   harcode `"550000"` par le compte par defaut de l'ACP
+   (`bank_accounts[is_default=True].pcmn_number`). Si aucun compte configure,
+   retourne `""` (le appelant gere).
+
+2. **`routes/import_wizard.py::_ensure_pcmn_accounts_exist`** - REFUSE
+   (HTTPException 400) la creation d'un compte 55XXXX de moins de 7 chars
+   depuis un import CSV/PDF. Message explicite : "Les comptes bancaires
+   doivent etre configures sur la fiche ACP (Comptes bancaires) AVANT
+   l'import."
+
+3. **`scripts/merge_ghost_bank_accounts.py`** - fusion des comptes fantomes
+   vers les comptes officiels : reecrit `journal_entries.lines[].account_number`
+   + supprime les entrees `pcmn_accounts` fantomes. Idempotent avec mapping
+   flexible (`--mapping '551331:55133100,550000:55133100,550732:55073200'`).
+
+**Tests pytest**
+
+- `test_iter90ji_anti_duplicate_fi_lock.py` : 3 tests
+  * `test_generate_bank_entry_skips_creation_if_imported_je_exists`
+  * `test_generate_bank_entry_creates_je_when_no_imported_pair` (regression)
+  * `test_cleanup_script_reverses_only_auto_duplicates`
+
+- `test_iter90jj_ghost_bank_accounts_lock.py` : 4 tests
+  * `test_resolve_bank_account_uses_acp_default_when_iban_absent`
+  * `test_resolve_bank_account_matches_iban_over_default`
+  * `test_import_refuses_ghost_bank_account_creation` (HTTPException 400)
+  * `test_merge_ghost_bank_accounts_rewrites_je_lines`
+
+**Validation testing_agent (iteration_51.json)** :
+- **20/20 pytest PASS** (4 iter90jj + 3 iter90ji + 3 iter90jd regression +
+  3 iter90jf regression + 7 iter90iz regression)
+- Scripts cleanup + merge en dry-run exit 0
+- Aucun issue critique ou mineur signale
+- `retest_needed: false`, `success_rate: 100%`
+
+**⚠️ Rappel PRODUCTION** — Save to GitHub + redeployement + exec ordonne :
+```bash
+cd /app/backend
+python -m scripts.merge_ghost_bank_accounts \
+    --copropriete-id <YOUR_ACP_ID> \
+    --mapping "551331:55133100,550000:55133100,550732:55073200" \
+    --execute
+python -m scripts.cleanup_duplicate_auto_fi --execute
+python -m scripts.fix_kash_goovaerts_link --pick-first --execute
+```
+
+
 ### Iter90jg (21/07/2026) — Preview visuel du regroupement Optipro dans le Wizard
 
 **Livrable** : bannière indigo dans `InvoicesPreview` (`ImportWizardPage.js`)
