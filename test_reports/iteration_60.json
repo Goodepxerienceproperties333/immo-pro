@@ -1,0 +1,34 @@
+{
+  "summary": "Backend testing of 2 bug fixes: (1) invoice update no longer creates duplicate AC entries (uses new _hard_delete_auto_entries), (2) CSV import multi-account invoices produce N debit lines ventilated per account. 25/25 tests pass including 22 regressions + 3 new.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter90k_invoice_update_and_multi_account.py",
+    "/app/test_reports/pytest/iter90k_regression.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "auto_entries.py _hard_delete_auto_entries filter uses auto_generated=True. Verified: this matches JEs created by generate_purchase_entry (which sets auto_generated=True at line 447). Import wizard JEs do NOT set auto_generated=True, so they are correctly untouched by _hard_delete_auto_entries - preserves imported audit trail.",
+    "import_wizard.py commit-invoices response returns 'journal_entries' (not 'je_inserted') - consumers should use that key.",
+    "import_wizard.py line 1444: has_multi_accounts detects >1 distinct account_number in _split_lines. Correctly ventilates: verified 558.99 on 61300 + 195.00 on 6160 + 753.99 credit to supplier 44xxxxxx.",
+    "Invoice update path (routes/invoices.py:2130): generate_purchase_entry -> _hard_delete_auto_entries -> insert new AC. Confirmed 1 AC entry retained after N updates (tested 2 sequential updates: 100 -> 150 -> 200, always 1 AC with the latest amount).",
+    "import_wizard.py is 3269 lines - split recommended for maintainability (existing recommendation from iter59)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter90k_invoice_update_and_multi_account.py"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "not tested"},
+  "test_credentials": "admin@copro.be / admin123 (cookie session)",
+  "seed_data_creation": "Each test creates its own TEST_ prefixed invoice/supplier/session and cleans up via direct MongoDB delete (import-wizard JEs lack auto_generated=True so /api/invoices DELETE alone insufficient). Cleanup verified: bilan compte_499=1170.16 preserved after tests.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Bug fixes verified: (1) _hard_delete_auto_entries used only by generate_purchase_entry (invoice create/update path), replaces old _delete_auto_entries reversal to prevent AC duplicates on invoice edit; (2) import_wizard commit-invoices ventilates multi-account invoices into N debit lines (verified 61300+6160 => 2 distinct debits + 1 supplier credit line). ACP 138cfd69 bilan regression stable: compte_499=1170.16, equilibre=True, total_actif==total_passif==14355.15. Test file /app/backend/tests/test_iter90k_invoice_update_and_multi_account.py handles its own cleanup via motor.",
+  "rca of the issue": "N/A - bug fixes work as designed"
+}

@@ -1437,66 +1437,96 @@ def create_import_wizard_router(db):
                 supplier_label = (inv.get("supplier_name") or supplier_aux).strip()
 
                 # ---- Create journal entry (Achats - AC) ----
-                # iter90gl : gere aussi les Notes de Credit (NC / avoir) qui
-                # ont un montant negatif. Pour une NC : inverse les signes
-                # debit/credit (DEBIT compte tier fournisseur, CREDIT compte
-                # de charge) pour reduire correctement les soldes.
+                # Ventilation multi-comptes : si la facture a des _split_lines
+                # avec des comptes differents, on cree une ligne de debit PAR
+                # compte au lieu d'un lump sum sur account_num.
                 je_id = ""
+                split_lines = inv.get("_split_lines") or []
+                has_multi_accounts = len(split_lines) > 1 and len({
+                    (sl.get("account_number") or "").strip()
+                    for sl in split_lines if (sl.get("account_number") or "").strip()
+                }) > 1
+
                 if account_num and sup_pcmn and total_amount_abs > 0:
                     je_id = str(uuid.uuid4())
                     if is_credit_note:
-                        # NC : DEBIT compte tier / CREDIT charge (inverse d'une facture)
-                        expense_debit = 0.0
-                        expense_credit = total_amount_abs
-                        supplier_debit = total_amount_abs
-                        supplier_credit = 0.0
                         desc_prefix = "NC"
                     else:
-                        # Facture normale : DEBIT charge / CREDIT compte tier
-                        expense_debit = total_amount_abs
-                        expense_credit = 0.0
-                        supplier_debit = 0.0
-                        supplier_credit = total_amount_abs
                         desc_prefix = "DA"
+
+                    # Build expense lines
+                    expense_je_lines = []
+                    if has_multi_accounts and not is_credit_note:
+                        # Multi-compte : une ligne de debit par compte distinct
+                        for sl in split_lines:
+                            sl_acc = (sl.get("account_number") or "").strip()
+                            sl_amt = abs(float(sl.get("montant_tvac") or sl.get("montant_ht") or 0))
+                            if not sl_acc or sl_amt < 0.01:
+                                continue
+                            sl_occ = float(sl.get("part_occupant") or occ_pct)
+                            sl_prop = round(100.0 - sl_occ, 2)
+                            expense_je_lines.append({
+                                "account_number": sl_acc,
+                                "account_name": (sl.get("account_label") or "").strip(),
+                                "debit": sl_amt,
+                                "credit": 0.0,
+                                "description": (sl.get("libelle") or inv.get("libelle") or "").strip(),
+                                "occupant_pct": sl_occ,
+                                "proprietaire_pct": sl_prop,
+                            })
+                    elif has_multi_accounts and is_credit_note:
+                        # NC multi-compte : une ligne de credit par compte
+                        for sl in split_lines:
+                            sl_acc = (sl.get("account_number") or "").strip()
+                            sl_amt = abs(float(sl.get("montant_tvac") or sl.get("montant_ht") or 0))
+                            if not sl_acc or sl_amt < 0.01:
+                                continue
+                            expense_je_lines.append({
+                                "account_number": sl_acc,
+                                "account_name": (sl.get("account_label") or "").strip(),
+                                "debit": 0.0,
+                                "credit": sl_amt,
+                                "description": (sl.get("libelle") or "").strip(),
+                                "occupant_pct": None,
+                                "proprietaire_pct": None,
+                            })
+                    else:
+                        # Single-account : une seule ligne
+                        expense_je_lines.append({
+                            "account_number": account_num,
+                            "account_name": (inv.get("account_label") or "").strip(),
+                            "debit": total_amount_abs if not is_credit_note else 0.0,
+                            "credit": total_amount_abs if is_credit_note else 0.0,
+                            "description": (inv.get("libelle") or "").strip(),
+                            "occupant_pct": occ_pct if not is_credit_note else None,
+                            "proprietaire_pct": prop_pct if not is_credit_note else None,
+                        })
+
+                    # Supplier counter-line
+                    supplier_je_line = {
+                        "account_number": sup_pcmn,
+                        "account_name": supplier_label,
+                        "third_party_id": supplier_id or None,
+                        "third_party_type": "supplier" if supplier_id else None,
+                        "debit": total_amount_abs if is_credit_note else 0.0,
+                        "credit": total_amount_abs if not is_credit_note else 0.0,
+                        "description": f"{desc_prefix} {internal_ref}",
+                        "occupant_pct": None,
+                        "proprietaire_pct": None,
+                    }
+
                     je_doc = {
                         "id": je_id,
                         "journal_type": "AC",
                         "date": date_str,
                         "reference": internal_ref,
                         "description": f"{supplier_label} - {(inv.get('libelle') or '').strip()}".strip(" -"),
-                        "lines": [
-                            {
-                                "account_number": account_num,
-                                "account_name": (inv.get("account_label") or "").strip(),
-                                "debit": expense_debit,
-                                "credit": expense_credit,
-                                "description": (inv.get("libelle") or "").strip(),
-                                "occupant_pct": occ_pct,
-                                "proprietaire_pct": prop_pct,
-                            },
-                            {
-                                "account_number": sup_pcmn,
-                                "account_name": supplier_label,
-                                # iter90gk : lie explicitement la ligne compte tier
-                                # a la fiche fournisseur pour que la Balance des
-                                # Tiers et le Bilan agregent correctement (evite
-                                # les lignes orphelines qui apparaissaient sur
-                                # les 2 cotes du bilan pour le meme fournisseur).
-                                "third_party_id": supplier_id or None,
-                                "third_party_type": "supplier" if supplier_id else None,
-                                "debit": supplier_debit,
-                                "credit": supplier_credit,
-                                "description": f"{desc_prefix} {internal_ref}",
-                                "occupant_pct": None,
-                                "proprietaire_pct": None,
-                            },
-                        ],
+                        "lines": expense_je_lines + [supplier_je_line],
                         "total_debit": total_amount_abs,
                         "total_credit": total_amount_abs,
                         "copropriete_id": copro_id,
                         "import_session_id": session_id,
                         "source_invoice_id": invoice_id,
-                        # iter90gl : trace explicite du type d'ecriture
                         "is_credit_note": is_credit_note,
                         "created_at": _now_iso(),
                     }

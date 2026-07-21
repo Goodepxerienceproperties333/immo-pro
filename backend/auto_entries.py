@@ -30,6 +30,23 @@ async def _delete_auto_entries(db, source_type: str, source_id: str, reason: str
     return await reverse_auto_entries(db, source_type, source_id, reason=reason)
 
 
+async def _hard_delete_auto_entries(db, source_type: str, source_id: str):
+    """Suppression REELLE des ecritures auto-generees pour eviter les doublons.
+
+    Utilisee par generate_purchase_entry : quand une facture est modifiee,
+    l'ancienne ecriture AC est supprimee puis remplacee par une nouvelle.
+    Pas de contre-passation - suppression directe pour garantir qu'il n'y a
+    JAMAIS plus d'une ecriture AC par facture.
+
+    Supprime aussi les extournes eventuelles liees (EXT-*) pour nettoyer
+    toute paire orpheline.
+    """
+    q = {"source_type": source_type, "source_id": source_id, "auto_generated": True}
+    result = await db.journal_entries.delete_many(q)
+    return result.deleted_count
+
+
+
 def _balanced(lines: list) -> bool:
     return abs(sum(ln.get("debit", 0) for ln in lines)
                - sum(ln.get("credit", 0) for ln in lines)) < 0.01
@@ -223,7 +240,7 @@ async def generate_purchase_entry(db, invoice: dict) -> dict | None:
     pcmns = await db.pcmn_accounts.find(pcmn_q, {"_id": 0}).to_list(10)
     pcmn_names = {p["number"]: p["name"] for p in pcmns}
 
-    await _delete_auto_entries(db, "invoice", invoice["id"])
+    await _hard_delete_auto_entries(db, "invoice", invoice["id"])
 
     # ---- FRAIS PRIVATIF : 2 ecritures separees ----
     # Ecriture 1 (AC - Achats) : Facture fournisseur
