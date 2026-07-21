@@ -1,5 +1,103 @@
 # CoproManager PRD
 
+### Iter90jm (21/07/2026) — Master/Slave sync Bank Statements <-> FI JEs
+
+**Ticket user** :
+> "Relation Master/Esclave : Les extraits de compte sont les maitres. Le
+> journal Financier (FI) doit toujours etre le reflet exact des extraits.
+> Sync temps reel :
+>  - Si je modifie un extrait (montant, date, libelle), l'ecriture FI
+>    correspondante doit etre mise a jour automatiquement.
+>  - Si je supprime un extrait ou si je le remets en 'Brouillon',
+>    l'ecriture FI correspondante doit etre supprimee ou annulee
+>    immediatement.
+> Identifiant de lien : Ajoute un champ statement_line_id dans chaque
+> ecriture FI pour qu'elle sache de quel extrait elle depend.
+> Nettoyage : Supprime les ecritures FI actuelles qui n'ont plus
+> d'extraits correspondants."
+
+**Choix user (ask_human)** :
+- Q1 : Option b — propager la date du header vers TOUTES les FIs enfants.
+- Q2 : Option b — HARD DELETE des orphelins (phase mise au point).
+- Q3 : oui — backfill one-shot des FIs existantes.
+
+**Racine du bug**
+La relation Master/Slave existait DEJA partiellement (via `source_type=bank_txn`
++ `source_id=txn.id` et les endpoints `unpost_statement`, `delete_statement`,
+`_refresh_fi_if_posted`) MAIS :
+- Le nom de champ n'etait pas explicite (source_id != statement_line_id).
+- `update_statement` (header) etait BLOQUE en 409 si posted -> user devait
+  Devalider avant de corriger une coquille.
+- `delete_statement` etait aussi bloque en 409.
+- Aucun script pour retrouver / nettoyer les FIs orphelines legacy.
+
+**Livrables iter90jm**
+
+1. **`auto_entries.py::generate_bank_entry`** (2 points d'insertion : main
+   ligne 843, categorisation ligne 725) — ecrit desormais sur chaque FI JE :
+   - `statement_line_id` = txn.id (lien explicite avec la "ligne d'extrait")
+   - `bank_statement_id` = stmt.id (lien direct vers l'extrait parent)
+   - `source_id` (= txn.id) conserve pour compat + downstream code.
+
+2. **`routes/banking.py::update_statement`** — Retire le blocage 409 sur
+   les extraits posted. Si `date` change ET statement `posted` :
+   - `$set date=new_date` sur toutes les FIs auto de ce statement
+     (via `source_id IN txn_ids` + filtres reversed/is_reversal).
+   - Sync aussi `bank_transactions.date` quand txn.date == old_stmt.date.
+   - Retourne `_iter90jm_fi_dates_propagated` (compteur pour observabilite).
+
+3. **`routes/banking.py::delete_statement`** — Retire le blocage 409.
+   Cascade HARD DELETE des FIs via `$or` sur les 3 liens possibles
+   (`bank_statement_id`, `source_id+source_type`, `statement_line_id`)
+   -> attrape aussi les FIs legacy sans statement_line_id.
+
+4. **`scripts/backfill_statement_line_id_on_fi.py`** (NOUVEAU) — one-shot :
+   - Scanne toutes les FIs auto (`auto_generated=True`, `source_type=bank_txn`).
+   - Copie `source_id` -> `statement_line_id` + lookup `bank_transactions`
+     pour peupler `bank_statement_id`.
+   - Dry-run par defaut. Idempotent : 2eme run -> 0 modification.
+   - Rapport `/tmp/backfill_statement_line_id_on_fi_report.json`.
+
+5. **`scripts/cleanup_orphaned_fi.py`** (NOUVEAU) — detecte + supprime :
+   - FI auto avec `source_id` (ou `statement_line_id`) qui ne matche
+     AUCUNE `bank_transactions` -> HARD DELETE (choix user Q2b).
+   - Filtre `--copropriete-id` pour scope.
+   - Rapport preserve avant delete (audit).
+   - Dry-run par defaut.
+
+**Tests pytest (`test_iter90jm_master_slave_statement_fi_sync.py`)** — 5 tests :
+  * `test_generate_bank_entry_writes_statement_line_id_and_statement_id`
+  * `test_update_statement_propagates_new_date_to_child_fi_entries`
+  * `test_delete_posted_statement_cascades_to_transactions_and_fi`
+  * `test_backfill_writes_statement_line_id_when_missing` (dry-run + execute + idempotence)
+  * `test_cleanup_orphaned_fi_hard_deletes_when_source_txn_missing`
+
+**Validation testing_agent (iteration_54.json)** :
+- **5/5 unit + 2/2 live HTTP = 7/7 PASS**
+- PUT/DELETE sur statement posted retournent 200 (plus 409)
+- Cascade FI verifiee end-to-end
+- Aucun issue critique ou mineur
+- Grep negatif : aucun test regression ne dependait des 409 supprimes
+- `retest_needed: false`
+
+**⚠️ Rappel PRODUCTION** — Save to GitHub + redeployement + relance :
+```bash
+cd /app/backend
+# 1. Backfill des champs Master/Slave sur les FIs existantes
+python -m scripts.backfill_statement_line_id_on_fi --execute
+# 2. Nettoyage des FIs orphelines (extraits deja supprimes)
+python -m scripts.cleanup_orphaned_fi --execute
+# Optionnel : scope a une ACP
+# python -m scripts.cleanup_orphaned_fi --copropriete-id <CID> --execute
+```
+
+Une fois deploye, tu peux modifier date/soldes/numero d'extrait meme
+sur les extraits POSTED, la synchronisation vers les FIs est automatique.
+Tu peux aussi supprimer un extrait comptabilise sans avoir a Devalider
+en amont : les FIs enfants disparaissent en cascade (hard delete).
+
+
+
 ### Iter90jl (21/07/2026) — Bilan : dedup FI + Actif/Passif single-side + fusion owners
 
 **Tickets user** :
