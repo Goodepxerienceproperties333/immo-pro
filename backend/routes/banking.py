@@ -818,7 +818,12 @@ def create_banking_router(db):
     async def unpost_statement(stmt_id: str):
         """Repasse l'extrait en draft (permet correction).
         Supprime egalement toutes les ecritures FI auto-generees pour les
-        transactions de cet extrait (sera regenere a la prochaine comptabilisation)."""
+        transactions de cet extrait (sera regenere a la prochaine comptabilisation).
+
+        iter90jn : Contrairement a delete_statement, unpost_statement PRESERVE
+        les lettrages. Les txns et leurs matched_to restent tels quels, seules
+        les FIs auto sont contre-passees (pour permettre de re-poster).
+        """
         from auto_entries import _delete_auto_entries
         stmt = await db.bank_statements.find_one({"id": stmt_id}, {"_id": 0})
         if not stmt:
@@ -843,6 +848,55 @@ def create_banking_router(db):
             {"$set": {"status": "draft", "posted_at": None}}
         )
         return {"status": "ok", "message": f"Extrait repasse en brouillon. {deleted} ecriture(s) FI supprimee(s)."}
+
+    # iter90jn : helper module-scope (dans la factory) pour recalculer le statut
+    # d'une facture apres qu'une txn qui la lettrait soit supprimee.
+    async def _restore_invoice_after_txn_removal(db, txn_id_being_removed: str, invoice_id: str) -> bool:
+        """Recalcule le statut d'une facture apres qu'une txn qui la lettrait
+        soit supprimee. Exclut la txn en cours du calcul du solde paye.
+
+        Retourne True si la facture a ete modifiee, False sinon.
+        """
+        remaining = await db.bank_transactions.find(
+            {"$or": [
+                {"match_type": "invoice", "matched_to": invoice_id, "matched": True},
+                {"match_type": "multi_invoice", "matched_to_ids": invoice_id, "matched": True},
+            ],
+             "id": {"$ne": txn_id_being_removed}},
+            {"_id": 0, "id": 1, "amount": 1},
+        ).to_list(500)
+        if not remaining:
+            # Plus aucune txn -> facture revient en unpaid
+            res = await db.invoices.update_one(
+                {"id": invoice_id},
+                {"$set": {"status": "unpaid"},
+                 "$unset": {"paid_at": "", "paid_by_transaction_id": "",
+                            "paid_by_transaction_ids": "", "amount_paid": "",
+                            "lettrage_code": ""}},
+            )
+            return res.modified_count > 0
+        # Il reste des txns lettrees -> recalcul partial / full
+        total_paid = round(sum(abs(float(r.get("amount", 0) or 0)) for r in remaining), 2)
+        inv = await db.invoices.find_one({"id": invoice_id}, {"_id": 0})
+        if not inv:
+            return False
+        inv_amount = round(float(
+            inv.get("amount_ttc") or inv.get("total_amount") or inv.get("amount") or 0
+        ), 2)
+        is_full = inv_amount > 0 and abs(total_paid - inv_amount) < 0.01
+        upd = {
+            "status": "paid" if is_full else "partially_paid",
+            "amount_paid": total_paid,
+            "paid_by_transaction_ids": [r["id"] for r in remaining],
+        }
+        unset = {}
+        if not is_full:
+            unset["paid_at"] = ""
+        res = await db.invoices.update_one(
+            {"id": invoice_id},
+            {"$set": upd, **({"$unset": unset} if unset else {})},
+        )
+        return res.modified_count > 0
 
     @router.put("/statements/{stmt_id}")
     async def update_statement(stmt_id: str, data: StatementInput):
@@ -907,11 +961,44 @@ def create_banking_router(db):
         # Plus de blocage 409. La cascade est naturelle : la source of truth
         # (le statement) disparait -> les FIs qui en dependent aussi.
         # Choix user : HARD DELETE des FIs (phase mise au point).
+        #
+        # iter90jn : Master/Slave sync ETENDU au LETTRAGE. Avant de supprimer
+        # les txns, on ANNULE tous leurs lettrages (facture / owner_payment /
+        # supplier_payment) pour que les factures liees reviennent en
+        # "unpaid" / "partially_paid" au lieu de rester "paid" avec un
+        # paid_by_transaction_id devenu invalide.
+        # Note : unpost_statement (repassage en brouillon) NE touche PAS
+        # au lettrage - les txns et leurs matched_to restent intacts.
         stmt = await db.bank_statements.find_one({"id": stmt_id}, {"_id": 0, "status": 1})
         if not stmt:
             raise HTTPException(404, "Extrait non trouve")
-        txns = await db.bank_transactions.find({"statement_id": stmt_id}, {"_id": 0, "id": 1}).to_list(10000)
+        txns = await db.bank_transactions.find(
+            {"statement_id": stmt_id},
+            {"_id": 0, "id": 1, "matched": 1, "match_type": 1,
+             "matched_to": 1, "matched_to_ids": 1},
+        ).to_list(10000)
         txn_ids = [t["id"] for t in txns]
+
+        # iter90jn : Cascade unlettrage (avant delete)
+        invoices_restored = 0
+        for txn in txns:
+            if not txn.get("matched"):
+                continue
+            mt = txn.get("match_type") or ""
+            if mt in ("invoice", "multi_invoice"):
+                inv_ids = []
+                if txn.get("matched_to"):
+                    inv_ids.append(txn["matched_to"])
+                for iid in (txn.get("matched_to_ids") or []):
+                    if iid and iid not in inv_ids:
+                        inv_ids.append(iid)
+                for inv_id in inv_ids:
+                    restored = await _restore_invoice_after_txn_removal(
+                        db, txn["id"], inv_id,
+                    )
+                    if restored:
+                        invoices_restored += 1
+
         # Hard delete de TOUTES les FIs auto liees a ce statement (par tous
         # les liens possibles : bank_statement_id, source_id/statement_line_id).
         fi_query = {
@@ -931,6 +1018,7 @@ def create_banking_router(db):
             "message": "Extrait supprime",
             "txns_deleted": len(txns),
             "fi_deleted": fi_res.deleted_count,
+            "invoices_unlettered": invoices_restored,
         }
 
     # ---- TRANSACTIONS ----

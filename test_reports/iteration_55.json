@@ -1,0 +1,31 @@
+{
+  "summary": "iter90jn backend testing: DELETE statement cascade->lettrage annule, UNPOST preserve, script cleanup_orphaned_invoice_lettrage. All 5 iter90jn tests PASS. Regression on iter90j* (39 tests) PASS. 2 pre-existing failures in iter90jm_live_http unrelated to iter90jn (bank_account opening_balance state pollution: seeded 6838.28 vs hardcoded 0.0).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "PUT/DELETE /api/banking/statements/{id} (iter90jm_live_http)", "issue": "Tests hardcode opening_balance=0.0 but bank account state has 6838.28 seeded; returns 400 'Extrait non equilibre'. Not caused by iter90jn - preexisting test-data pollution issue. Test should fetch current bank balance dynamically."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter90jn_delete_statement_cascades_lettrage.py",
+    "/app/test_reports/pytest/iter90jn_results.xml"
+  ],
+  "action_items": [
+    "Optional: make iter90jm_live_http tests robust by reading current bank_account balance instead of hardcoding opening_balance=0.0 (pre-existing, out of iter90jn scope)."
+  ],
+  "critical_code_review_comments": [
+    "_restore_invoice_after_txn_removal is correctly scoped as nested async helper inside create_banking_router factory (not exposed as route). Verified via grep.",
+    "delete_statement returns `invoices_unlettered` (count) in response payload as required.",
+    "unpost_statement correctly does NOT touch matched/matched_to/lettrage_code (verified by test_unpost_statement_preserves_lettrage).",
+    "cleanup_orphaned_invoice_lettrage.py CLI defaults to dry-run; --execute required to apply; --copropriete-id supported. Script is CLI-only (not imported/exposed as endpoint)."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (5/5 iter90jn, 39/41 iter90j* regression - 2 failures pre-existing)", "frontend": "N/A (backend only)"},
+  "test_credentials": "admin@copro.be / admin123 (from test_credentials.md)",
+  "seed_data_creation": "Tests self-seed via router handlers with real Mongo DB; TEST_ prefix used where applicable.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "iter90jn implementation is complete and validated. Master/Slave lettrage sync: DELETE cascades (unlettering), UNPOST preserves. The 2 failing iter90jm_live_http tests were already failing (not caused by iter90jn) - they need dynamic opening_balance from bank_account state to be fixed. Consider adding a live HTTP counterpart for iter90jn if desired.",
+  "rca of the issue": "iter90jm_live_http failures: bank_account persistent state (balance=6838.28) accumulates from other tests / imports; tests assume balance=0. Fix by GET bank_accounts and computing opening_balance dynamically."
+}
