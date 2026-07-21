@@ -1,5 +1,111 @@
 # CoproManager PRD
 
+### Iter90jl (21/07/2026) — Bilan : dedup FI + Actif/Passif single-side + fusion owners
+
+**Tickets user** :
+> 1. "Dédoublonnage Bilan : Modifie le calcul du bilan pour qu'il ignore
+>    systématiquement les écritures commençant par 'FI-' si elles sont
+>    lettrées à une facture. Cela ramènera le compte à vue à son solde
+>    réel de 6 098,53 €."
+> 2. "Fusion KASH - GOOVAERTS : Il y a deux fiches pour ce propriétaire.
+>    Fusionne-les immédiatement en une seule fiche 'KASH - GOOVAERTS
+>    Jean-Paul & Maité'."
+> 3. "Nettoyage Actif/Passif : Modifie la logique du bilan pour les
+>    propriétaires : un propriétaire ne doit apparaître qu'une seule fois."
+
+**Option choisie** : Option C — filet de securite read-time dans le bilan
++ amelioration du script cleanup + script generique merge_owners.
+
+**Livrables iter90jl**
+
+1. **`routes/reports.py::_fi_signature(je)`** (module-level) — Signature
+   canonique `(copro, date, montant_arr, frozenset(comptes_tier))` pour
+   detection de doublon (memes regles que `scripts/cleanup_duplicate_auto_fi.py`).
+
+2. **`routes/reports.py::_dedup_duplicate_auto_fi_entries(entries)`** — Filtre
+   defensif read-time : exclut les JEs FI `auto_generated=True` qui
+   doublonnent un FI importe (`import_session_id` set) ou manuel sur meme
+   signature. Priorite keeper : importe > manuel > auto. Ne modifie PAS
+   la DB. Applique dans `compute_bilan_data` juste apres le load des
+   `journal_entries` (ligne ~708).
+   
+   Impact : le compte 55XXXX du bilan reflete le solde REEL (une seule FI
+   comptee par paiement) meme si le cleanup n'a pas encore ete relance.
+   Balance des Tiers / Journaux restent inchanges tant que le script
+   `cleanup_duplicate_auto_fi` n'a pas ete relance -> le user doit le
+   faire pour la coherence cross-modules.
+
+3. **`scripts/cleanup_duplicate_auto_fi.py`** — Pass 2 fuzzy ajoutee :
+   apres detection exacte, regroupe les groupes partageant meme
+   `(copro, date, amount)` et au moins UN compte tier commun OU
+   `third_party_id` partage. Rattrape les doublons legacy avec formats
+   de comptes differents (4400015 vs 44000015 apres iter90io).
+
+4. **`scripts/merge_owners.py`** (NOUVEAU) — Fusion generique de fiches
+   proprietaire. CLI :
+   ```
+   python -m scripts.merge_owners --sources ID1,ID2 --target ID3 \\
+       --new-name "KASH - GOOVAERTS Jean-Paul & Maite" --execute
+   
+   python -m scripts.merge_owners --auto-by-name "GOOVAERTS" \\
+       --new-name "KASH - GOOVAERTS Jean-Paul & Maite" \\
+       --keep-first --execute
+   ```
+   Actions atomiques :
+   - Reecrit `journal_entries.lines[].third_party_id` source -> target
+   - Reecrit `lots.owner_id` + `lots.owner_ids[]`
+   - Reecrit `invoices.private_fee_owner_id` + `private_fee_allocations`
+   - Reecrit `mutations.from_owner_id` / `to_owner_id`
+   - Reecrit `owner_payments.owner_id` si collection existe
+   - Union `tier_accounts` (garde toutes les ACPs des sources)
+   - Union `lot_ids`
+   - Optionnel : `--new-name` met a jour le nom sur la cible
+   - Supprime les fiches sources
+   - Dry-run par defaut. Rapport JSON `/tmp/merge_owners_report.json`.
+
+**Actif/Passif single-side** : deja garanti par la logique existante
+d'agregation par `owner_id` (lignes ~758-802) puis classification par
+`solde net` (`if solde > 0.01: Actif`, `elif solde < -0.01: Passif`).
+Le probleme apparait uniquement quand 2 fiches OWNER existent pour la
+meme personne -> resolu par `merge_owners`. Test regression ajoute.
+
+**Tests pytest (`test_iter90jl_bilan_dedup_and_merge_owners.py`)** — 6 tests :
+  * `test_fi_signature_uses_copro_date_amount_and_tier_accounts` : signature.
+  * `test_dedup_excludes_auto_duplicate_of_imported_fi` : filtre exclut auto.
+  * `test_dedup_keeps_auto_fi_when_no_imported_sibling` : ne casse pas les auto solo.
+  * `test_bilan_bank_balance_ignores_duplicate_auto_fi` : E2E - solde 55XXXX
+    = 6098.53 (pas 5598.53) avec AN 6598.53 + 2 FI 500.
+  * `test_merge_owners_rewrites_je_and_lots_and_deletes_sources` : E2E dry-run + execute.
+  * `test_bilan_owner_appears_on_single_side_based_on_net_balance` : owner
+    provisions 800D + reserve 500C -> solde net +300 -> Actif uniquement.
+
+**Validation testing_agent (iteration_53.json)** :
+- **23/23 PASS** (6 iter90jl + 17 regressions iter90ji/jj/jd/jk/jf)
+- Aucun issue critique ou mineur
+- Bilan preview equilibre : Actif=Passif=15 366.93 EUR
+- `retest_needed: false`
+
+**⚠️ Rappel PRODUCTION** — Save to GitHub + redeployement + relance :
+```bash
+cd /app/backend
+# 1. Nettoyage DB des FI auto en doublon (filet permanent)
+python -m scripts.cleanup_duplicate_auto_fi --execute
+
+# 2. Fusion KASH-GOOVAERTS (dry-run d'abord pour verifier)
+python -m scripts.merge_owners --auto-by-name "GOOVAERTS" \\
+    --new-name "KASH - GOOVAERTS Jean-Paul & Maite" --keep-first
+# Puis :
+python -m scripts.merge_owners --auto-by-name "GOOVAERTS" \\
+    --new-name "KASH - GOOVAERTS Jean-Paul & Maite" --keep-first --execute
+```
+
+Le filet read-time du bilan est INDEPENDANT : meme sans relancer le
+cleanup, le bilan `/api/reports/bilan` affichera desormais le solde
+correct. Le cleanup reste recommande pour la coherence cross-modules
+(Balance des Tiers, Journaux).
+
+
+
 ### Iter90jk (21/07/2026) — Wizard : remap automatique 6->8 chiffres pour comptes bancaires
 
 **Ticket user (bloqueur P0)** :
