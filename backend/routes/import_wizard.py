@@ -1763,56 +1763,11 @@ def create_import_wizard_router(db):
                 libelle = (t.get("libelle") or "").strip()
                 num_doc = (t.get("num_doc") or "").strip()
 
-                # ---- Create journal entry (Financier - FI) ----
+                # ---- PAS d'ecriture FI a l'import ----
+                # Le wizard cree UNIQUEMENT les extraits de comptes (bank_statements
+                # + bank_transactions). Les ecritures FI sont generees APRES
+                # comptabilisation par le syndic dans l'interface Bancaire.
                 je_id = ""
-                cp_name_for_je = (t.get("counterparty_name") or "").strip()
-                cp_aux_for_je = (t.get("counterparty_aux") or "").strip()
-                # Enrichi : nom du fournisseur + lib bancaire si possible
-                enriched_label = cp_name_for_je or cp_label
-                enriched_desc = libelle
-                if cp_name_for_je and cp_name_for_je.lower() not in libelle.lower():
-                    enriched_desc = f"{cp_name_for_je} - {libelle}" if libelle else cp_name_for_je
-                if bank_pcmn and cp_pcmn and amount > 0 and direction in ("in", "out"):
-                    je_id = str(uuid.uuid4())
-                    # Try to resolve the third_party (supplier) for the counter-party line
-                    tp_id_je = ""
-                    if cp_aux_for_je:
-                        s_doc = await db.suppliers.find_one(
-                            {"copropriete_id": copro_id, "auxiliary_code": cp_aux_for_je},
-                            {"_id": 0, "id": 1},
-                        )
-                        if s_doc:
-                            tp_id_je = s_doc["id"]
-                    if direction == "in":
-                        lines = [
-                            {"account_number": bank_pcmn, "account_name": bank_label, "debit": amount, "credit": 0.0,
-                             "description": enriched_desc, "occupant_pct": None, "proprietaire_pct": None},
-                            {"account_number": cp_pcmn, "account_name": enriched_label, "debit": 0.0, "credit": amount,
-                             "description": enriched_desc, "occupant_pct": None, "proprietaire_pct": None,
-                             **({"third_party_id": tp_id_je, "third_party_type": "supplier"} if tp_id_je else {})},
-                        ]
-                    else:  # out
-                        lines = [
-                            {"account_number": cp_pcmn, "account_name": enriched_label, "debit": amount, "credit": 0.0,
-                             "description": enriched_desc, "occupant_pct": None, "proprietaire_pct": None,
-                             **({"third_party_id": tp_id_je, "third_party_type": "supplier"} if tp_id_je else {})},
-                            {"account_number": bank_pcmn, "account_name": bank_label, "debit": 0.0, "credit": amount,
-                             "description": enriched_desc, "occupant_pct": None, "proprietaire_pct": None},
-                        ]
-                    await db.journal_entries.insert_one(await finalize_je_doc(db, {
-                        "id": je_id,
-                        "journal_type": "FI",
-                        "date": date_v,
-                        "reference": num_doc,
-                        "description": enriched_desc,
-                        "lines": lines,
-                        "total_debit": amount,
-                        "total_credit": amount,
-                        "copropriete_id": copro_id,
-                        "import_session_id": session_id,
-                        "created_at": _now_iso(),
-                    }, copro_id))
-                    je_inserted += 1
 
                 # ---- Create bank_transaction inside its monthly statement ----
                 stmt_id = statement_by_key.get((bank_pcmn, date_v[:7])) if bank_pcmn else ""
@@ -1940,18 +1895,20 @@ def create_import_wizard_router(db):
         await _update_step(db, session_id, "journals", {
             "count": inserted,
             "statements_created": stmts_inserted,
-            "journal_entries": je_inserted,
+            "journal_entries": 0,
             "pcmn_created": pcmn_created,
             "auto_matched": auto_matched,
             "errors": errors,
+            "note": "Extraits de comptes crees. Les ecritures FI seront generees a la comptabilisation.",
         })
         return {
             "inserted": inserted,
             "statements_created": stmts_inserted,
-            "journal_entries": je_inserted,
+            "journal_entries": 0,
             "pcmn_created": pcmn_created,
             "auto_matched": auto_matched,
             "errors": errors,
+            "note": "Extraits de comptes crees. Les ecritures FI seront generees a la comptabilisation.",
         }
 
     # ----- I: OPENING BALANCE (OD d'ouverture - Bilan comptable) -----

@@ -226,18 +226,26 @@ def test_commit_journals_accepts_6digit_when_canonical_exists_in_acp():
                 # Doit reussir SANS 400
                 assert isinstance(result, dict), f"Retour attendu dict, got {type(result)}"
                 assert result.get("inserted", 0) >= 0
-                # Verifie que le JE cree utilise le compte canonique 55133100
+                # Post-fix (iter90jm_no_fi_at_import): plus de JE FI cree a
+                # l'import. Le wizard ne cree QUE des bank_statements + bank_transactions.
+                # On verifie qu'AUCUN JE n'est cree ici.
                 je = await db.journal_entries.find_one(
                     {"copropriete_id": acp, "journal_type": "FI"},
                     {"_id": 0, "lines": 1},
                 )
-                assert je is not None, "Un JE FI aurait du etre cree"
-                acc_nums = [ln.get("account_number") for ln in je.get("lines", [])]
-                assert "55133100" in acc_nums, (
-                    f"Le JE doit utiliser le compte canonique 55133100. Vu: {acc_nums}"
+                assert je is None, "Aucun JE FI ne doit etre cree au commit-journals"
+                # A la place, verifions le bank_transaction utilise le compte
+                # canonique 55133100 (via remap 6->8 chars).
+                txn = await db.bank_transactions.find_one(
+                    {"copropriete_id": acp, "import_session_id": session_id},
+                    {"_id": 0, "account_number": 1, "auto_je_id": 1},
                 )
-                assert "551331" not in acc_nums, (
-                    f"Le JE ne doit PAS contenir le 6-char raccourci 551331. Vu: {acc_nums}"
+                assert txn is not None, "Un bank_transaction aurait du etre cree"
+                assert txn.get("account_number") == "55133100", (
+                    f"Le bank_transaction doit utiliser le compte canonique 55133100. Vu: {txn.get('account_number')}"
+                )
+                assert txn.get("auto_je_id", "") == "", (
+                    f"auto_je_id doit etre vide (pas de JE liee). Vu: {txn.get('auto_je_id')}"
                 )
                 # Verifie le bank_statement stocke le canonique aussi
                 stmt = await db.bank_statements.find_one(

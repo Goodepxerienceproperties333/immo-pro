@@ -1,0 +1,36 @@
+{
+  "summary": "Verified iter90jo bug fix: import-wizard commit-journals no longer creates FI journal entries. Only bank_statements + bank_transactions (with auto_je_id='') are created. FI entries will be generated later at comptabilisation. New test iter90jo_no_fi_at_import validates the new contract (journal_entries=0, note in response, bank_txn.auto_je_id=''). Updated pre-existing iter90jk test #3 which had asserted JE creation - now asserts JE absence + bank_transaction canonical account 55133100. Bilan/resultat regression on ACP 138cfd69 confirmed intact (compte_499=1170.16, equilibre=True, total_actif=14355.15, total_charges=5333.51).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter90jo_no_fi_at_import.py",
+    "/app/backend/tests/test_iter90jk_wizard_maps_6digit_to_8digit_bank_account.py",
+    "/app/test_reports/pytest/iter90jo_regression.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "import_wizard.py:1766-1770 correctly replaces the FI JE creation block with je_id='' - matches PRD contract.",
+    "commit-journals response at line 1904-1912 returns journal_entries=0 with explanatory 'note' field - good for frontend consumers.",
+    "bank_transactions insert at line 1791-1811 sets auto_je_id=je_id (which is now '') - verified.",
+    "Pre-existing iter90jk test #3 asserted JE FI creation; had to update to reflect the new contract (test-file fix only).",
+    "Two unrelated tests (test_iter90i_private_fees_excluded_from_expenses.py, test_iter90i7_fund_call_duplicate_ap_ve.py) fail with pre-existing event-loop async issues; unrelated to this change. Documented for main agent."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter90jk_wizard_maps_6digit_to_8digit_bank_account.py",
+    "/app/backend/tests/test_iter90jo_no_fi_at_import.py"
+  ],
+  "success_rate": {"backend": "100% for iter90jo scope (21/21 wizard+bilan regression tests passed, iter90jo new test passed)", "frontend": "not tested"},
+  "test_credentials": "admin@copro.be / admin123",
+  "seed_data_creation": "Each test creates its own ACP + fiscal_year + import_session + pcmn_accounts with unique UUID suffix; teardown deletes all created data (coproprietes, fiscal_years, import_sessions, pcmn_accounts, journal_entries, bank_statements, bank_statement_lines, bank_transactions).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "iter90jo: commit-journals creates NO FI JE anymore. Response contract: {journal_entries:0, note:'...comptabilisation...'}. bank_transactions have auto_je_id=''. iter90jk test #3 was updated to reflect new behavior. Two pre-existing failing tests (test_iter90i_private_fees / test_iter90i7_fund_call_duplicate_ap_ve) have event-loop async errors unrelated to this change - main agent should investigate separately. Bilan regression on ACP 138cfd69: compte_499=1170.16, equilibre=True, total_actif=14355.15, resultat.total_charges=5333.51.",
+  "rca of the issue": "N/A - verification of implemented change"
+}
