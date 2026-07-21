@@ -639,6 +639,67 @@ async def _compute_balance_tiers_for_ui(db, copropriete_id):
     return {"owners": result, "total_debiteurs": total_debiteurs, "total_crediteurs": total_crediteurs}
 
 
+# ---- iter90jl : Helper module-level pour deduplication FI auto vs importe ----
+def _fi_signature(je: dict, tier_prefixes=("440", "4100", "4101", "400")) -> tuple:
+    """iter90jl : Signature canonique d'un JE FI pour detection de doublon
+    (memes regles que scripts/cleanup_duplicate_auto_fi.py).
+
+    (copropriete_id, date, montant_arrondi, frozenset_comptes_tier)
+    """
+    tier_accs = []
+    for ln in je.get("lines", []):
+        acc = (ln.get("account_number") or "").strip()
+        if any(acc.startswith(p) for p in tier_prefixes):
+            tier_accs.append(acc)
+    total = round(float(je.get("total_debit") or je.get("total_credit") or 0), 2)
+    return (
+        (je.get("copropriete_id") or "").strip(),
+        (je.get("date") or "").strip(),
+        total,
+        frozenset(tier_accs),
+    )
+
+
+def _dedup_duplicate_auto_fi_entries(entries: list) -> list:
+    """iter90jl : filtre defensif read-time des JEs FI auto qui doublonnent
+    un JE FI importe ou manuel (meme date, montant, comptes tier). Priorite :
+    importe > manuel > auto. Les FI auto en doublon sont EXCLUS du calcul.
+
+    Ne modifie PAS la DB. Purement read-only. Le script
+    `cleanup_duplicate_auto_fi.py` reste le fix DEFINITIF pour retirer les
+    doublons proprement (contre-passation + coherence cross-modules).
+
+    Retourne la liste filtree (meme ordre pour les entrees conservees).
+    """
+    from collections import defaultdict
+    fi_entries = [e for e in entries if e.get("journal_type") == "FI"]
+    non_fi = [e for e in entries if e.get("journal_type") != "FI"]
+    # Groupe les FI par signature
+    by_sig: dict = defaultdict(list)
+    for je in fi_entries:
+        sig = _fi_signature(je)
+        if not sig[3]:  # pas de compte tier -> hors scope
+            continue
+        by_sig[sig].append(je)
+    # Detecte les JE auto a exclure (doublons d'un importe/manuel)
+    to_exclude_ids: set = set()
+    for sig, group in by_sig.items():
+        if len(group) < 2:
+            continue
+        # Y a-t-il un keeper importe ou manuel ?
+        keepers = [j for j in group if j.get("import_session_id") or not j.get("auto_generated")]
+        if not keepers:
+            continue
+        # Exclut les auto en doublon
+        for j in group:
+            if j.get("auto_generated") and j.get("id") not in {k.get("id") for k in keepers}:
+                to_exclude_ids.add(j.get("id"))
+    if not to_exclude_ids:
+        return entries
+    # Preserve l'ordre original
+    return [e for e in entries if e.get("id") not in to_exclude_ids]
+
+
 async def compute_bilan_data(db, copropriete_id: str, date_to: Optional[str] = None,
                              fiscal_year_id: Optional[str] = None,
                              view_mode: str = "before_distribution") -> dict:
@@ -693,6 +754,19 @@ async def compute_bilan_data(db, copropriete_id: str, date_to: Optional[str] = N
         ]
 
     entries = await db.journal_entries.find(q, {"_id": 0}).to_list(100000)
+
+    # ---- iter90jl : DEDUP DEFENSIF read-time des JEs FI en doublon ----
+    # Le user peut avoir des FI auto-generees ET des FI importees pour un meme
+    # paiement (data legacy pre-iter90ji). Ces doublons gonflent le solde
+    # bancaire (compte 55XXXX) et faussent le Bilan. On applique ici le meme
+    # algorithme que `scripts/cleanup_duplicate_auto_fi.py` mais AU READ pour
+    # que le Bilan reflete la realite meme sans avoir relance le cleanup.
+    # Priorite du keeper : importe > manuel > auto.
+    # Note : ce filtre est purement defensif. Le script `cleanup_duplicate_auto_fi`
+    # reste le fix DEFINITIF (contre-passation propre + coherence avec Balance
+    # des Tiers et Journaux).
+    entries = _dedup_duplicate_auto_fi_entries(entries)
+
     # Compute net balance per account (classes 1-5 only)
     balances = {}
     for entry in entries:

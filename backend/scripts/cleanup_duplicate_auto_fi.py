@@ -100,9 +100,66 @@ async def _run(args) -> int:
             continue
         by_sig[sig].append(je)
 
+    # iter90jl : PASS 2 - detection fuzzy des doublons legacy dont les
+    # comptes tier ne sont PAS strictement identiques (differences dues aux
+    # migrations 4400XXX -> 44000XXX, ou 4001XXX -> 41010XXX). On regroupe
+    # par (copro, date, amount) et on merge les groupes qui partagent au
+    # moins UN compte tier ou UN meme third_party_id.
+    def _tp_ids_of(je):
+        return {ln.get("third_party_id") for ln in je.get("lines", []) if ln.get("third_party_id")}
+
+    by_key: dict[tuple, list[list[dict]]] = defaultdict(list)
+    for sig, group in by_sig.items():
+        key = (sig[0], sig[1], sig[2])  # copro + date + amount
+        by_key[key].append(group)
+    # Merge des groupes partageant un tier account OU un third_party_id
+    merged_groups: list[list[dict]] = []
+    for _, groups in by_key.items():
+        if len(groups) == 1:
+            merged_groups.append(groups[0])
+            continue
+        used = [False] * len(groups)
+        for i in range(len(groups)):
+            if used[i]:
+                continue
+            cluster = list(groups[i])
+            cluster_accs = set()
+            cluster_tps = set()
+            for je in cluster:
+                for ln in je.get("lines", []):
+                    acc = (ln.get("account_number") or "").strip()
+                    if any(acc.startswith(p) for p in TIER_PREFIXES):
+                        cluster_accs.add(acc)
+                    if ln.get("third_party_id"):
+                        cluster_tps.add(ln["third_party_id"])
+            used[i] = True
+            # Cherche a merger d'autres groupes du meme key
+            changed = True
+            while changed:
+                changed = False
+                for j in range(len(groups)):
+                    if used[j]:
+                        continue
+                    g_accs = set()
+                    g_tps = set()
+                    for je in groups[j]:
+                        for ln in je.get("lines", []):
+                            acc = (ln.get("account_number") or "").strip()
+                            if any(acc.startswith(p) for p in TIER_PREFIXES):
+                                g_accs.add(acc)
+                            if ln.get("third_party_id"):
+                                g_tps.add(ln["third_party_id"])
+                    if (cluster_accs & g_accs) or (cluster_tps & g_tps):
+                        cluster.extend(groups[j])
+                        cluster_accs |= g_accs
+                        cluster_tps |= g_tps
+                        used[j] = True
+                        changed = True
+            merged_groups.append(cluster)
+
     to_reverse: list[dict] = []
     kept: list[dict] = []
-    for sig, group in by_sig.items():
+    for group in merged_groups:
         if len(group) < 2:
             continue
         # Priorite du "keeper" (celui qu'on garde) :
@@ -121,8 +178,10 @@ async def _run(args) -> int:
         losers = [j for j in group_sorted[1:] if j.get("auto_generated")]
         if not losers:
             continue
+        # Signature representative du cluster (utilise la 1re du groupe)
+        sig_repr = _sig(keeper)
         kept.append({
-            "sig": {"date": sig[1], "total": sig[2], "acc": sorted(sig[3])},
+            "sig": {"date": sig_repr[1], "total": sig_repr[2], "acc": sorted(sig_repr[3])},
             "keeper_ref": keeper.get("reference"),
             "keeper_source": (
                 "imported" if keeper.get("import_session_id")
@@ -134,7 +193,7 @@ async def _run(args) -> int:
             to_reverse.append({
                 "je_id": loser["id"],
                 "je_ref": loser.get("reference"),
-                "sig": sig,
+                "sig": sig_repr,
                 "keeper_ref": keeper.get("reference"),
                 "keeper_source": (
                     "imported" if keeper.get("import_session_id") else "manual"
