@@ -1576,7 +1576,14 @@ def create_reports_router(db):
     async def compte_resultat(request: Request, date_from: Optional[str] = None, date_to: Optional[str] = None,
                               copropriete_id: Optional[str] = None,
                               fiscal_year_id: Optional[str] = None):
-        """Compte de Resultats PCMN belge structure (rubriques 60-67 / 70-76). Chinese walls strict."""
+        """Compte de Resultats PCMN belge structure (rubriques 60-67 / 70-76). Chinese walls strict.
+        Applique les MEMES filtres que le bilan pour garantir la coherence :
+        - exclusion des extournes (reversed / is_reversal / EXT-*)
+        - exclusion des AN de cloture (garde uniquement les AN d'ouverture)
+        - exclusion des OD de regularisation
+        - dedup AC orphelines (doublons Optipro)
+        - dedup FI auto-generees en doublon
+        """
         copropriete_id = _require_copro(copropriete_id, request)
         fy = None
         if fiscal_year_id:
@@ -1596,8 +1603,44 @@ def create_reports_router(db):
                 q["date"]["$gte"] = date_from
             if date_to:
                 q["date"]["$lte"] = date_to
+        # Memes filtres que compute_bilan_data pour coherence stricte
+        q["$or"] = [
+            {"journal_type": {"$ne": "AN"}},
+            {"journal_type": "AN", "is_opening_balance": True},
+        ]
+        _exclude_reversals(q)
+        q["$and"] = [
+            {"is_regularization": {"$ne": True}},
+            {"reference": {"$not": {"$regex": "^(OD-REG-|EXT-)"}}},
+        ]
 
         entries = await db.journal_entries.find(q, {"_id": 0}).to_list(100000)
+
+        # Dedup FI auto-generees (meme algo que le bilan)
+        entries = _dedup_duplicate_auto_fi_entries(entries)
+
+        # Dedup AC orphelines : ne garder que les AC liees a une facture
+        inv_q_res = {"copropriete_id": copropriete_id}
+        if date_from or date_to:
+            inv_q_res["date"] = {}
+            if date_from:
+                inv_q_res["date"]["$gte"] = date_from
+            if date_to:
+                inv_q_res["date"]["$lte"] = date_to
+        invoices_for_res = await db.invoices.find(
+            inv_q_res, {"_id": 0, "journal_entry_id": 1}
+        ).to_list(50000)
+        valid_ac_je_ids = {
+            inv["journal_entry_id"]
+            for inv in invoices_for_res
+            if inv.get("journal_entry_id")
+        }
+        if valid_ac_je_ids:
+            entries = [
+                e for e in entries
+                if e.get("journal_type") != "AC" or e.get("id") in valid_ac_je_ids
+            ]
+
         accounts = {}
         for entry in entries:
             for line in entry.get("lines", []):

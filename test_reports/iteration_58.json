@@ -1,0 +1,31 @@
+{
+  "summary": "Verified fix for double-counted charges in Compte de Résultat. GET /api/reports/resultat for ACP 138/FY 2026-27 now returns total_charges=5333.51, total_produits=6503.67, resultat=1170.16 (Benefice). Compte 61300=753.99 (was 1871.97 doubled), compte 6160=678.99 (was 993.99 doubled). Bilan compte_499=1170.16 (Boni au Passif), equilibre=True, SRL Finlead=639.69 confirmed in passif. Expenses total=5329.84 (coherent: Résultat 5333.51 = Dépenses 5329.84 + 3.67 interest crediteur shown as produit in Résultat). After-distribution bilan stays balanced with 499 absent from passif accounts. Regression test_iter90jl (6 tests) still passes. Total 12/12 tests pass.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter_compte_resultat_dedup.py",
+    "/app/backend/tests/test_iter90jl_bilan_dedup_and_merge_owners.py",
+    "/app/test_reports/pytest/compte_resultat_iter58.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "reports.py > 3800 lines - persistent violation; should be split into resultat/bilan/expenses submodules",
+    "The AC-orphan dedup logic is now duplicated between compute_bilan_data and compte_resultat; extract it into a shared helper (e.g., valid_ac_journal_entry_ids(fiscal_year_id)) to avoid divergence on future fixes."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter_compte_resultat_dedup.py"],
+  "success_rate": {"backend": "100%", "frontend": "N/A"},
+  "test_credentials": "admin@copro.be / admin123 (cookie-based)",
+  "seed_data_creation": "None - used existing ACP 138cfd69 (Auto 3 Maria) / FY 5acee0fc (2026-2027)",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Bug fix verified end-to-end: (1) orphan AC entries deleted from DB, (2) compte_resultat endpoint now applies same filters as bilan (reversed/is_reversal/EXT-*/OD-REG-*/AN closing exclusion + FI dedup + AC dedup via invoice.journal_entry_id). Coherence check: Résultat(1170.16)=Bilan499(1170.16); Dépenses total 5329.84 + net interest 3.67 = Résultat charges 5333.51. Consider extracting shared dedup helper.",
+  "verification_results": {
+    "test_compte_resultat_total_charges_and_produits": "PASSED - 5333.51 / 6503.67 / 1170.16",
+    "test_compte_resultat_accounts_no_duplication": "PASSED - 61300=753.99, 6160=678.99",
+    "test_bilan_compte_499_and_finlead": "PASSED - 499=1170.16, equilibre=True, Finlead 639.69 present",
+    "test_expenses_total": "PASSED - 5329.84",
+    "test_coherence_resultat_bilan_expenses": "PASSED - Résultat==Bilan499==1170.16",
+    "test_bilan_after_distribution_balanced": "PASSED - equilibre=True, no 499 account in passif",
+    "regression_iter90jl": "6/6 PASSED"
+  }
+}
