@@ -735,6 +735,9 @@ async def generate_bank_entry(db, txn: dict) -> dict | None:
                 "auto_generated": True,
                 "source_type": "bank_txn",
                 "source_id": txn["id"],
+                # iter90jm : lien Master/Slave explicite
+                "statement_line_id": txn["id"],
+                "bank_statement_id": txn.get("statement_id") or "",
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
             await db.journal_entries.insert_one(doc)
@@ -850,6 +853,10 @@ async def generate_bank_entry(db, txn: dict) -> dict | None:
         "auto_generated": True,
         "source_type": "bank_txn",
         "source_id": txn["id"],
+        # iter90jm : lien Master/Slave explicite - la FI depend de cette txn
+        # (statement_line_id) et de son extrait parent (bank_statement_id).
+        "statement_line_id": txn["id"],
+        "bank_statement_id": txn.get("statement_id") or "",
         "invoice_number": invoice_number or None,  # backref pour reporting
         "created_at": datetime.now(timezone.utc).isoformat(),
     }

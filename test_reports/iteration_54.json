@@ -1,0 +1,36 @@
+{
+  "summary": "iter90jm backend testing PASS: 5/5 unit tests (Master/Slave sync) + 2/2 live HTTP tests via public URL confirm PUT/DELETE on posted statements return 200 (no more 409) with proper cascade to child FI JEs. Backfill and cleanup_orphaned_fi scripts verified idempotent.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter90jm_master_slave_statement_fi_sync.py",
+    "/app/backend/tests/test_iter90jm_live_http.py",
+    "/app/test_reports/pytest/iter90jm.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "routes/banking.py:903-934 delete_statement uses a robust $or query across (bank_statement_id, source_id+source_type, statement_line_id) - catches legacy FIs too. Good.",
+    "routes/banking.py:872-896 update_statement propagates date only when is_posted AND date changed - guards against unnecessary writes. Good.",
+    "auto_entries.generate_bank_entry writes both new fields (statement_line_id, bank_statement_id) while keeping source_id for backward compat - correct migration path.",
+    "backfill_statement_line_id_on_fi.py is idempotent (matches only FIs missing the new fields) - safe to re-run.",
+    "cleanup_orphaned_fi.py is destructive (hard delete). Copropriete-scoped via --copropriete_id arg. Documented as 'phase mise au point' per user choice - acceptable.",
+    "Grep for '409' in tests confirms no other regression test depended on the previous update_statement/delete_statement 409 behaviour. Safe to remove."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter90jm_live_http.py (new - live HTTP tests via REACT_APP_BACKEND_URL)"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "not tested (per request)"},
+  "test_credentials": "admin@copro.be / admin123 (cookie-based auth via /api/auth/login)",
+  "seed_data_creation": "Live tests create + auto-cleanup transient TEST_ITER90JM_* statements",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "iter90jm fully green (5 unit + 2 live HTTP = 7/7 PASS in 2s). PUT/DELETE on posted statement return 200 with cascade. Older iter16/iter23/iter24 HTTP-live tests fail because of hardcoded COPRO_ID missing in DB - pre-existing, unrelated to iter90jm.",
+  "rca of the issue": "N/A - implementation matches spec (Q1=b date propagation, Q2=b hard-delete cascade, Q3=oui backfill)."
+}

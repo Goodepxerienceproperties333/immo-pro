@@ -846,19 +846,18 @@ def create_banking_router(db):
 
     @router.put("/statements/{stmt_id}")
     async def update_statement(stmt_id: str, data: StatementInput):
-        # iter90bh : impossible de modifier un extrait comptabilise. L'user
-        # doit d'abord "Devalider" (unpost) qui contrepasse toutes les
-        # ecritures FI generees. Enforce l'integrite comptable.
-        stmt = await db.bank_statements.find_one({"id": stmt_id}, {"_id": 0, "status": 1})
+        # iter90jm : Master/Slave sync. Le statement est le maitre. Modifier
+        # ses champs (numero, date, IBAN, soldes) est autorise en tout temps,
+        # y compris quand il est posted. Si la date change et que l'extrait
+        # est posted, on propage la nouvelle date a TOUTES les FIs enfants
+        # (source of truth = statement).
+        stmt = await db.bank_statements.find_one({"id": stmt_id}, {"_id": 0})
         if not stmt:
             raise HTTPException(404, "Extrait non trouve")
-        if stmt.get("status") == "posted":
-            raise HTTPException(
-                409,
-                "Extrait deja comptabilise. Devalidez-le d'abord "
-                "(bouton 'Repasser brouillon') pour contrepasser les ecritures, "
-                "puis modifiez-le.",
-            )
+        old_date = (stmt.get("date") or "").strip()
+        new_date = (data.date or "").strip()
+        is_posted = stmt.get("status") == "posted"
+
         update = {
             "number": data.number,
             "date": data.date,
@@ -869,35 +868,70 @@ def create_banking_router(db):
         result = await db.bank_statements.update_one({"id": stmt_id}, {"$set": update})
         if result.matched_count == 0:
             raise HTTPException(404, "Extrait non trouve")
-        return await db.bank_statements.find_one({"id": stmt_id}, {"_id": 0})
+
+        # iter90jm : propagation de la date du maitre vers les FIs enfants
+        date_changed = is_posted and new_date and new_date != old_date
+        propagated = 0
+        if date_changed:
+            txn_ids = [t["id"] async for t in db.bank_transactions.find(
+                {"statement_id": stmt_id}, {"_id": 0, "id": 1},
+            )]
+            if txn_ids:
+                res = await db.journal_entries.update_many(
+                    {
+                        "journal_type": "FI",
+                        "auto_generated": True,
+                        "source_type": "bank_txn",
+                        "source_id": {"$in": txn_ids},
+                        "reversed": {"$ne": True},
+                        "is_reversal": {"$ne": True},
+                    },
+                    {"$set": {"date": new_date}},
+                )
+                propagated = res.modified_count
+                # Synchronise aussi txn.date pour coherence future
+                await db.bank_transactions.update_many(
+                    {"statement_id": stmt_id, "date": old_date},
+                    {"$set": {"date": new_date}},
+                )
+
+        fresh = await db.bank_statements.find_one({"id": stmt_id}, {"_id": 0})
+        if fresh is not None:
+            fresh["_iter90jm_fi_dates_propagated"] = propagated
+        return fresh
 
     @router.delete("/statements/{stmt_id}")
     async def delete_statement(stmt_id: str):
-        # iter90bh : impossible de supprimer un extrait comptabilise. L'user
-        # doit d'abord "Devalider" pour contrepasser les ecritures FI. Sinon
-        # on laisserait des ecritures orphelines dans le journal financier.
+        # iter90jm : Master/Slave sync. Supprimer un extrait supprime
+        # AUTOMATIQUEMENT toutes les FIs enfants (auto) + les transactions.
+        # Plus de blocage 409. La cascade est naturelle : la source of truth
+        # (le statement) disparait -> les FIs qui en dependent aussi.
+        # Choix user : HARD DELETE des FIs (phase mise au point).
         stmt = await db.bank_statements.find_one({"id": stmt_id}, {"_id": 0, "status": 1})
         if not stmt:
             raise HTTPException(404, "Extrait non trouve")
-        if stmt.get("status") == "posted":
-            raise HTTPException(
-                409,
-                "Extrait deja comptabilise. Devalidez-le d'abord "
-                "(bouton 'Repasser brouillon') qui contrepasse toutes les "
-                "ecritures en une fois, puis vous pourrez le supprimer.",
-            )
-        # Recupere les txns du statement pour supprimer leurs ecritures auto
         txns = await db.bank_transactions.find({"statement_id": stmt_id}, {"_id": 0, "id": 1}).to_list(10000)
-        for t in txns:
-            try:
-                await _delete_auto_entries(db, "bank_txn", t["id"])
-            except Exception:
-                pass
+        txn_ids = [t["id"] for t in txns]
+        # Hard delete de TOUTES les FIs auto liees a ce statement (par tous
+        # les liens possibles : bank_statement_id, source_id/statement_line_id).
+        fi_query = {
+            "auto_generated": True,
+            "$or": [
+                {"bank_statement_id": stmt_id},
+                {"source_type": "bank_txn", "source_id": {"$in": txn_ids}},
+                {"statement_line_id": {"$in": txn_ids}},
+            ],
+        }
+        fi_res = await db.journal_entries.delete_many(fi_query)
         await db.bank_transactions.delete_many({"statement_id": stmt_id})
         result = await db.bank_statements.delete_one({"id": stmt_id})
         if result.deleted_count == 0:
             raise HTTPException(404, "Extrait non trouve")
-        return {"message": "Extrait supprime", "txns_deleted": len(txns)}
+        return {
+            "message": "Extrait supprime",
+            "txns_deleted": len(txns),
+            "fi_deleted": fi_res.deleted_count,
+        }
 
     # ---- TRANSACTIONS ----
     @router.get("/transactions")
