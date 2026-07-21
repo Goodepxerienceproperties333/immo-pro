@@ -28,7 +28,17 @@ export default function ExpenseCategoriesPage() {
       api.get('/accounting/pcmn', { params: { class_num: 5 } }).catch(() => ({ data: [] })),
       api.get('/distribution-keys'),
     ]);
-    setCats(c.data);
+    // iter90jh : tri par code (ordre chronologique de creation).
+    // Les codes 4-chiffres canoniques (0001, 0002, ...) se trient bien en
+    // localeCompare (comparaison lexicographique = ordre numerique pour meme longueur).
+    // Codes sans zeros a gauche ("1", "12") sont padded pour rester coherents.
+    const _padCode = (s) => {
+      const raw = (s || '').toString().trim();
+      if (!raw) return 'ZZZZ';  // sans code -> fin de liste
+      return raw.length < 4 ? raw.padStart(4, '0') : raw;
+    };
+    const sortedCats = [...(c.data || [])].sort((a, b) => _padCode(a.code).localeCompare(_padCode(b.code)));
+    setCats(sortedCats);
     // iter90m : classe 5 autorisee UNIQUEMENT pour les comptes 58* (Virements internes)
     const p58Filtered = (p58.data || []).filter(a => (a.number || '').startsWith('58'));
     setPcmnAccounts([...p6.data, ...p7.data, ...p58Filtered].sort((a, b) => a.number.localeCompare(b.number)));
@@ -38,7 +48,19 @@ export default function ExpenseCategoriesPage() {
 
   const openCreate = () => {
     setEditing(null);
-    setForm({ name: '', code: '', vat_code: '', account_number: '', description: '', default_occupant_pct: 0, default_proprietaire_pct: 100, default_distribution_key_id: '' });
+    // iter90jh : auto-increment du code sur base du dernier utilise.
+    // Cherche le plus grand code numerique de 4 chiffres et incremente de 1.
+    // Si aucun code existant, commence a 0001.
+    const numericCodes = (cats || [])
+      .map(c => parseInt((c.code || '').toString().replace(/\D/g, ''), 10))
+      .filter(n => Number.isFinite(n) && n > 0);
+    const nextInt = numericCodes.length ? Math.max(...numericCodes) + 1 : 1;
+    const nextCode = String(nextInt).padStart(4, '0');
+    setForm({
+      name: '', code: nextCode, vat_code: '', account_number: '',
+      description: '', default_occupant_pct: 0, default_proprietaire_pct: 100,
+      default_distribution_key_id: '',
+    });
     setDialogOpen(true);
   };
   const openEdit = (c) => {
