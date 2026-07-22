@@ -48,6 +48,7 @@ Application de gestion de copropriete basee sur le droit belge (PCMN), incluant 
 - Mobile responsive layout with sidebar drawer
 
 ## Recent Changes (2026-07-22)
+- REFONTE Balance de Tiers: Fusion "Solde Prov." + "Solde Reserve" en une seule colonne "Solde Net a Regler" (rouge debiteur, vert crediteur). PDF et frontend alignes.
 - LOCKED: All current features verified and working by user
 - FIXED: Layout responsive dynamique — supprime max-w contrainte, overflow-x-hidden + min-w-0 pour adaptation dynamique a toutes resolutions (1920x1080 + scaling Windows 125%/150%)
 - FIXED: Libelle compte dans categorisation bancaire — fallback PCMN quand compte direct selectionne

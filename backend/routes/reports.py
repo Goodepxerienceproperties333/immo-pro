@@ -1862,14 +1862,17 @@ def create_reports_router(db):
         # cloture (report technique du solde N-1). Sans ce filtre, le
         # tableau compact des decomptes diverge de la Situation PDF et de
         # la Balance des Tiers (bug user Boxus Wivine : 930 vs 638.75).
-        entries_for_balance = await db.journal_entries.find(
-            {
+        balance_q = {
                 "copropriete_id": copropriete_id,
                 "$or": [
                     {"journal_type": {"$ne": "AN"}},
                     {"journal_type": "AN", "is_opening_balance": True},
                 ],
-            },
+            }
+        if date_to:
+            balance_q["date"] = {"$lte": date_to}
+        entries_for_balance = await db.journal_entries.find(
+            balance_q,
             {"_id": 0, "id": 1, "lines": 1, "is_reversal": 1, "reversed": 1},
         ).to_list(100000)
         owner_acc_to_id = {}
