@@ -222,6 +222,7 @@ def create_coproprietes_router(db):
             "bank_accounts": bank_accounts,
             "quarterly_closing": data.quarterly_closing,
             "default_provisions": data.default_provisions,
+            "promoter_owner_id": data.promoter_owner_id or "",
             "status": "active",
             "created_by": user.get("_id", ""),
             "created_at": datetime.now(timezone.utc).isoformat(),

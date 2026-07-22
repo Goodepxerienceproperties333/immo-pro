@@ -59,6 +59,7 @@ class CommitSuppliersInput(BaseModel):
 class CommitLotsInput(BaseModel):
     mapping: dict
     rows: List[List[Optional[str]]]
+    promoter_owner_id: Optional[str] = ""
 
 
 class CommitNaturesInput(BaseModel):
@@ -2722,6 +2723,18 @@ def create_import_wizard_router(db):
         )
         default_start = fy["start_date"] if fy and fy.get("start_date") else _now_iso()[:10]
 
+        # iter90kz : mode promoteur - determine l'owner promoteur.
+        # Priorite : parametre explicite > champ stocke sur la copropriete.
+        promoter_id = (data.promoter_owner_id or "").strip()
+        if not promoter_id:
+            copro_doc = await db.coproprietes.find_one(
+                {"id": copro_id}, {"_id": 0, "promoter_owner_id": 1},
+            )
+            promoter_id = (copro_doc or {}).get("promoter_owner_id", "")
+        promoter_doc = None
+        if promoter_id:
+            promoter_doc = await db.owners.find_one({"id": promoter_id}, {"_id": 0})
+
         inserted = 0
         errors = []
         owners_in_session = await db.owners.find(
@@ -2749,6 +2762,18 @@ def create_import_wizard_router(db):
                 owner_name = ""
                 if owner_id and owner_id in all_owners:
                     owner_name = all_owners[owner_id].get("name", "")
+
+                # iter90kz : mode promoteur - override l'owner par le promoteur
+                effective_owner_id = owner_id
+                effective_owner_name = owner_name
+                mutation_type = "initial"
+                mutation_notes = "Import initial"
+                if promoter_doc:
+                    effective_owner_id = promoter_doc["id"]
+                    effective_owner_name = promoter_doc.get("name", "")
+                    mutation_type = "promoteur_initial"
+                    mutation_notes = "Affectation promoteur automatique"
+
                 doc = {
                     "id": str(uuid.uuid4()),
                     "number": number,
@@ -2757,18 +2782,18 @@ def create_import_wizard_router(db):
                     "floor": col("floor"),
                     "area": parse_french_number(col("area")),
                     "quotity": parse_french_number(col("quotity")),
-                    "owner_id": owner_id,
-                    "owner_ids": [owner_id] if owner_id else [],
-                    "owner_name": owner_name,
-                    "owner_start_date": default_start if owner_id else "",
+                    "owner_id": effective_owner_id,
+                    "owner_ids": [effective_owner_id] if effective_owner_id else [],
+                    "owner_name": effective_owner_name,
+                    "owner_start_date": default_start if effective_owner_id else "",
                     "ownership_history": [{
-                        "owner_id": owner_id,
-                        "owner_name": owner_name,
+                        "owner_id": effective_owner_id,
+                        "owner_name": effective_owner_name,
                         "start_date": default_start,
                         "end_date": None,
-                        "mutation_type": "initial",
-                        "notes": "Import initial",
-                    }] if owner_id else [],
+                        "mutation_type": mutation_type,
+                        "notes": mutation_notes,
+                    }] if effective_owner_id else [],
                     "copropriete_id": copro_id,
                     "import_session_id": session_id,
                     "created_at": _now_iso(),

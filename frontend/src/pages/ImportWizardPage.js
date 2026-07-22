@@ -29,7 +29,7 @@ import { Badge } from '@/components/ui/badge';
 import {
   Upload, Truck, Tag, CheckCircle2, X, AlertTriangle,
   ChevronRight, ChevronLeft, FileWarning, Loader2, RotateCcw,
-  Calendar, Wallet, PieChart, Plus, Trash2, FileText, Landmark, Scale, ClipboardList
+  Calendar, Wallet, PieChart, Plus, Trash2, FileText, Landmark, Scale, ClipboardList, Building2
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -114,6 +114,8 @@ export default function ImportWizardPage() {
   const [uploadMode, setUploadMode] = useState(null);  // null | 'csv' | 'pdf'
   const [fyForm, setFyForm] = useState({ name: '', start_date: '', end_date: '', status: 'open' });
   const [committing, setCommitting] = useState(false);
+  // iter90kz : promoteur configure sur l'ACP
+  const [promoterInfo, setPromoterInfo] = useState(null); // { id, name }
 
   const step = STEPS[stepIdx];
 
@@ -138,6 +140,21 @@ export default function ImportWizardPage() {
       } finally {
         setLoading(false);
       }
+    })();
+  }, [effectiveCopro]);
+
+  // iter90kz : charge les infos promoteur de l'ACP (si configure)
+  useEffect(() => {
+    if (!effectiveCopro) return;
+    (async () => {
+      try {
+        const r = await api.get(`/coproprietes/${effectiveCopro}`);
+        const pid = r.data?.promoter_owner_id;
+        if (pid) {
+          const oRes = await api.get(`/owners/${pid}`);
+          setPromoterInfo({ id: pid, name: oRes.data?.name || pid });
+        }
+      } catch { /* ignore */ }
     })();
   }, [effectiveCopro]);
 
@@ -583,6 +600,21 @@ export default function ImportWizardPage() {
               <div className="font-bold text-orange-900">Mutations intra-exercice en attente</div>
               <div className="text-orange-800">
                 Vous avez declare des ventes de lots pendant l&apos;exercice. Terminez d&apos;abord ce wizard d&apos;import (fournisseurs, natures, budget, factures, journaux, OD). A la <strong>fin</strong>, vous serez redirige vers la page Lots pour saisir les mutations.
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* iter90kz : banner promoteur configure */}
+      {promoterInfo && (
+        <div className="mb-4 rounded-lg border-2 border-blue-300 bg-gradient-to-r from-blue-50 to-indigo-50 p-3 shadow-sm" data-testid="promoter-info-banner">
+          <div className="flex items-start gap-3">
+            <Building2 size={20} className="text-blue-600 flex-shrink-0 mt-0.5" />
+            <div className="flex-1 text-sm">
+              <div className="font-bold text-blue-900">Mode promoteur actif</div>
+              <div className="text-blue-800">
+                Tous les lots de cette ACP sont affectes au promoteur <strong>{promoterInfo.name}</strong> au 1er jour de l&apos;exercice. Les mutations individuelles (ventes) se feront apres l&apos;import.
               </div>
             </div>
           </div>
