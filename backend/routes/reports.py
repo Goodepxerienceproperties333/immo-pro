@@ -997,14 +997,8 @@ async def compute_bilan_data(db, copropriete_id: str, date_to: Optional[str] = N
                 produits_hors_provisions += line.get("credit", 0) - line.get("debit", 0)
     # Equilibre comptable double-entree (pour Actif = Passif)
     result_exercise = round(provisions_appelees + produits_hors_provisions - total_charges, 2)
-    # Depenses nettes depuis expense_rows (= factures + FI cl.6 - FI cl.75)
-    from expense_rows import compute_expense_rows
-    _exp_rows, exp_totals = await compute_expense_rows(
-        db, copropriete_id, date_to=date_to,
-    )
-    depenses_nettes = round(exp_totals.get("total", 0), 2)
-    # Compte 499 = Appels (cl.70) - (Depenses nettes - Produits financiers)
-    compte_499 = round(provisions_appelees - depenses_nettes + produits_hors_provisions, 2)
+    # Compte 499 = result_exercise (equilibre Actif = Passif garanti)
+    compte_499 = result_exercise
 
     # ---- Mode "apres repartition" : repartition du boni/mali sur owners ----
     # Formule garantissant l'equilibre du bilan :
@@ -1275,17 +1269,6 @@ async def compute_bilan_data(db, copropriete_id: str, date_to: Optional[str] = N
                 "account_name": "Compte de regularisation - Mali a repartir",
                 "amount": abs(compte_499),
             })
-
-    # Equilibrage: si compte_499 differe de result_exercise (traitement
-    # des interets comme deduction de charges plutot que comme produits),
-    # on ajoute la difference comme "Produits financiers" a l'Actif.
-    ecart_interets = round(compte_499 - result_exercise, 2)
-    if abs(ecart_interets) > 0.01:
-        actif_buckets["VIII_regul_actif"].append({
-            "account_number": "750",
-            "account_name": "Produits financiers (interets crediteurs imputes)",
-            "amount": abs(ecart_interets),
-        })
 
     rubr_actif = [
         ("I. Immobilisations incorporelles", "I_immo_incorporelles"),
