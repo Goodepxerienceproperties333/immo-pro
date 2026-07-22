@@ -219,7 +219,13 @@ async def _build_situation_compte_pdf(db, owner_id, copropriete_id, start_date=N
     # (original + contre-passation + regeneration) avec des soldes incoherents.
     # Coherent avec le endpoint JSON situation_compte_owner qui utilise deja
     # _exclude_reversals.
-    entries_q = {"copropriete_id": copropriete_id}
+    entries_q = {
+        "copropriete_id": copropriete_id,
+        "$or": [
+            {"journal_type": {"$ne": "AN"}},
+            {"journal_type": "AN", "is_opening_balance": True},
+        ],
+    }
     _exclude_reversals(entries_q)
     entries = await db.journal_entries.find(entries_q, {"_id": 0}).to_list(100000)
 
