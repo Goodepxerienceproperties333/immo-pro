@@ -6,11 +6,10 @@ Application de gestion de copropriete basee sur le droit belge (PCMN).
 ## Completed Features
 
 ### Fix Bilan + Compte de Resultat
-- Filtre dedup AC via invoice.journal_entry_id + exclusion reversed/EXT-*
 - 499 = Provisions (cl.70) - (Charges (cl.6) - Produits financiers (cl.75))
 
 ### Fix Doublonnage Ecritures
-- _hard_delete_auto_entries: suppression reelle + $or pour les 2 schemas de marquage
+- _hard_delete_auto_entries: suppression reelle + $or
 
 ### Wizard Import: Extraits de Compte UNIQUEMENT
 - commit-journals ne cree PLUS d'ecritures FI
@@ -23,13 +22,21 @@ Application de gestion de copropriete basee sur le droit belge (PCMN).
 - import_finalizer.py: mode defensif via lots de l'ACP (fallback)
 - _allowed_owner_ids: 4eme source via import_session_id
 
-### Mode Promoteur (iter90kz - 2026-07-22)
+### Mode Promoteur (iter90kz)
 - CoproprieteInput.promoter_owner_id persiste sur le document copropriete
 - CoproprietesPage Step 2: UI "Promoteur immobilier?" avec select HTML natif dedup
-- create_copropriete: assigne tous les lots au promoteur + ownership_history type=promoteur_initial
-- commit_lots (import_wizard.py): support promoter_owner_id (param explicite OU fallback copropriete)
-- ImportWizardPage: banner "Mode promoteur actif" si configure sur l'ACP
-- Backfill: 10 orphelins Acacia rattaches + TEUWEN avec comptes tiers
+- create_copropriete: assigne tous lots au promoteur + ownership_history promoteur_initial
+- commit_lots: support promoter_owner_id (param explicite OU fallback copropriete)
+- ImportWizardPage: banner "Mode promoteur actif"
+
+### Fusion doublons owners (iter90kz - 2026-07-22)
+- Utilise scripts/merge_owners.py existant (_apply_merge)
+- 17 groupes fusionnes, 47 doublons supprimes (83 -> 36 owners)
+- MATEXI: 9+2 doublons -> 1 canonique (55655c92, 120 lots, 8 JE)
+- Vendeur: 12->1, Acheteur: 11->1, Buyer: 4->1, TEUWEN: 2->1
+- 8 paires homonymes test (Martin, Dubois, Lefevre, etc.) fusionnees
+- Verification: 0 doublon restant (case-insensitive)
+- owner_ids_to_link dans coproprietes.py L327-339: verifie OK
 
 ## Pending Issues
 - P1: TEUWEN Owner mapping dans PDF/Reports (reports.py, pdf_decompte.py)
