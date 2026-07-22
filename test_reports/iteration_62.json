@@ -1,0 +1,27 @@
+{
+  "summary": "Verified owner merge + VE regeneration for ACP 138cfd69 (Auto 3 Maria). All 4 targeted validations pass: (1) no duplicate owners per auxiliary_code (5 owners total: 4 merged survivors C0959/C0956/C0967/C0958 + 1 TEST_Owner_A2), (2) 5 VE entries exist (AF-Trimestriel 1..4/4 + AF-Fonds de reserve) each with 14 distribution lines pointing to survivor third_party_ids (e.g. bed91088 Boxus), (3) Bilan compte_499=1170.16 equilibre=True, (4) Resultat total_charges=5333.51 total_produits=6503.67 resultat=1170.16. Pre-existing test_compte_499_fix.py (5 tests) also passes confirming regression intact.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/coproprietes", "issue": "Archived ACPs excluded from default list; no include_archived filter observed. Not a bug but noteworthy - test had to fetch full uuid directly."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter90k_owner_merge_ve_regen.py",
+    "/app/backend/tests/test_compte_499_fix.py"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Distribution lines on VE entries use only `third_party_id` field; `owner_id` and `auxiliary_code` line-level fields remain null. If future consumers filter by owner_id per-line, they will miss data. Consider populating both.",
+    "Login rate-limit (10/min) causes cascading ERROR results when running the full pytest suite sequentially - many test files perform module-scoped logins. Consider raising the limit for test-user or share a session across files. This is a pre-existing environment issue observed in earlier iterations and is NOT related to owner merge."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter90k_owner_merge_ve_regen.py"],
+  "success_rate": {"backend": "100% for owner-merge + VE-regen scope (9/9 targeted tests passed)", "frontend": "not tested"},
+  "test_credentials": "admin@copro.be / admin123",
+  "seed_data_creation": "None - tests read-only against existing ACP 138cfd69-cc07-46bb-ad17-a98debee7a3a",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "ACP 138cfd69 full uuid = 138cfd69-cc07-46bb-ad17-a98debee7a3a (status=archived). Owners: 5 total, aux codes C0959/C0956/C0967/C0958 unique + one TEST_Owner_A2 with empty aux code. VE entries use third_party_id at line level. Endpoints: /api/reports/bilan and /api/reports/resultat (not /api/accounting/*). Login rate-limit 10/min - avoid running the full suite; run targeted test files.",
+  "rca of the issue": "N/A - verification only"
+}
