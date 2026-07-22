@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import api from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -8,7 +8,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { Plus, Pencil, Trash2, Search, X, ArrowRightLeft, UserPlus, Link2, Link2Off, FileDown, ClipboardCheck, AlertTriangle } from 'lucide-react';
+import { Plus, Pencil, Trash2, Search, X, ArrowRightLeft, UserPlus, Link2, Link2Off, FileDown, ClipboardCheck, AlertTriangle, Upload } from 'lucide-react';
 import { fmtDate } from '@/lib/dateFmt';
 
 const LOT_TYPES = [
@@ -988,6 +988,7 @@ function MutationDialog({ lot, owners, ownersRefresh, onClose, onDone }) {
 }
 
 export default function LotsPage() {
+  const navigate = useNavigate();
   // iter90gg BLOC C : detecte le retour du wizard de creation ACP avec
   // declaration de ventes intra-exercice. Affiche un banner d'invitation
   // a saisir les mutations.
@@ -1225,6 +1226,12 @@ export default function LotsPage() {
           <p className="page-subtitle">Gestion des lots de la copropriete</p>
         </div>
         <div className="flex gap-2">
+          <Button variant="outline" onClick={() => {
+            const cid = searchParams.get('copropriete_id') || localStorage.getItem('selectedCopro') || localStorage.getItem('copropriete_id') || '';
+            navigate(`/import-wizard${cid ? `?copropriete_id=${cid}` : ''}`);
+          }} data-testid="goto-wizard-btn" title="Lancer le wizard d'import Optipro">
+            <Upload size={16} className="mr-2" /> Wizard d&apos;import
+          </Button>
           <Button variant="outline" onClick={() => { setAuditOpen(true); setAuditResult(null); }} data-testid="audit-ownership-btn" title="Diagnostiquer l'ownership des lots a une date donnee">
             <ClipboardCheck size={16} className="mr-2" /> Audit ownership
           </Button>
