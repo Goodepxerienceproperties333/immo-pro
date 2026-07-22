@@ -2701,14 +2701,28 @@ def create_import_wizard_router(db):
         m = data.mapping
         if "number" not in m or m["number"] in ("", None):
             raise HTTPException(400, "Mapping requis pour 'number'")
+
+        # Regle de gestion : la date d'assignation initiale = start_date
+        # de l'exercice fiscal actif (ou ouvert) de l'ACP.
+        fy = await db.fiscal_years.find_one(
+            {"copropriete_id": copro_id, "status": {"$in": ["open", "active"]}},
+            {"_id": 0, "start_date": 1},
+            sort=[("start_date", 1)],
+        )
+        default_start = fy["start_date"] if fy and fy.get("start_date") else _now_iso()[:10]
+
         inserted = 0
         errors = []
-        # Build a lookup of existing owners by last_name (case-insensitive) for the current ACP/import session
         owners_in_session = await db.owners.find(
             {"import_session_id": session_id}, {"_id": 0, "id": 1, "name": 1, "last_name": 1}
         ).to_list(5000)
-        owners_by_name = {(o.get("name") or "").lower().strip(): o["id"] for o in owners_in_session}
-        owners_by_last = {(o.get("last_name") or "").lower().strip(): o["id"] for o in owners_in_session}
+        # Elargir la recherche : inclure TOUS les owners de l'ACP (pas seulement la session)
+        owners_in_acp = await db.owners.find(
+            {"copropriete_ids": copro_id}, {"_id": 0, "id": 1, "name": 1, "last_name": 1}
+        ).to_list(5000)
+        all_owners = {o["id"]: o for o in owners_in_session + owners_in_acp}
+        owners_by_name = {(o.get("name") or "").lower().strip(): o["id"] for o in all_owners.values()}
+        owners_by_last = {(o.get("last_name") or "").lower().strip(): o["id"] for o in all_owners.values()}
         for idx, row in enumerate(data.rows):
             try:
                 def col(key):
@@ -2721,6 +2735,9 @@ def create_import_wizard_router(db):
                     continue
                 owner_lookup = col("owner_name").lower().strip()
                 owner_id = owners_by_name.get(owner_lookup) or owners_by_last.get(owner_lookup) or ""
+                owner_name = ""
+                if owner_id and owner_id in all_owners:
+                    owner_name = all_owners[owner_id].get("name", "")
                 doc = {
                     "id": str(uuid.uuid4()),
                     "number": number,
@@ -2731,6 +2748,16 @@ def create_import_wizard_router(db):
                     "quotity": parse_french_number(col("quotity")),
                     "owner_id": owner_id,
                     "owner_ids": [owner_id] if owner_id else [],
+                    "owner_name": owner_name,
+                    "owner_start_date": default_start if owner_id else "",
+                    "ownership_history": [{
+                        "owner_id": owner_id,
+                        "owner_name": owner_name,
+                        "start_date": default_start,
+                        "end_date": None,
+                        "mutation_type": "initial",
+                        "notes": "Import initial",
+                    }] if owner_id else [],
                     "copropriete_id": copro_id,
                     "import_session_id": session_id,
                     "created_at": _now_iso(),
@@ -2739,8 +2766,11 @@ def create_import_wizard_router(db):
                 inserted += 1
             except Exception as e:
                 errors.append({"row": idx, "error": str(e)})
-        await _update_step(db, session_id, "lots", {"count": inserted, "errors": errors})
-        return {"inserted": inserted, "errors": errors}
+        await _update_step(db, session_id, "lots", {
+            "count": inserted, "errors": errors,
+            "default_start_date": default_start,
+        })
+        return {"inserted": inserted, "errors": errors, "default_start_date": default_start}
 
     # ----- K: EXPENSE CATEGORIES (natures de depense) -----
     @router.post("/sessions/{session_id}/commit-natures")
