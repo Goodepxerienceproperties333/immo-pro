@@ -2791,11 +2791,14 @@ def create_properties_router(db):
         if not old_owner_id:
             raise HTTPException(400, "Mutation sans old_owner_id - impossible de restaurer")
 
+        copro_id = lot.get("copropriete_id", "")
+
         async def _cancel_single(target_lot_id: str, mutation_record: dict):
             """Annule une mutation pour un lot : supprime TOUTES les ecritures OD
             (fonds de roulement + prorata) + pop l'historique.
             Compatible avec ancien format (journal_entry_id seul) et nouveau
             format (journal_entry_ids liste).
+            Supprime aussi les ecritures source_type='lot_mutation' liees au lot.
             """
             entry_ids = list(mutation_record.get("journal_entry_ids") or [])
             legacy_id = mutation_record.get("journal_entry_id")
@@ -2804,6 +2807,28 @@ def create_properties_router(db):
             for eid in entry_ids:
                 if eid:
                     await db.journal_entries.delete_one({"id": eid})
+
+            # Supprime aussi les ecritures prorata/fonds_roulement generees
+            # par la mutation mais non trackees dans journal_entry_ids
+            mut_je_q = {
+                "copropriete_id": copro_id,
+                "source_type": "lot_mutation",
+                "source_id": target_lot_id,
+                "source_subtype": {"$in": ["prorata_post_mutation", "fonds_roulement"]},
+            }
+            # Inclure les reversals de ces ecritures
+            orphan_jes = await db.journal_entries.find(mut_je_q, {"id": 1, "_id": 0}).to_list(100)
+            orphan_je_ids = [j["id"] for j in orphan_jes]
+            if orphan_je_ids:
+                # Supprimer les ecritures + leurs eventuels reversals
+                del_q = {"$or": [
+                    {"id": {"$in": orphan_je_ids}},
+                    {"reversal_of": {"$in": orphan_je_ids}},
+                    {"reversed_by": {"$in": orphan_je_ids}},
+                ]}
+                r = await db.journal_entries.delete_many(del_q)
+                print(f"[cancel_mutation] Cleaned {r.deleted_count} orphan lot_mutation JEs for lot {target_lot_id}")
+
             await db.lots.update_one(
                 {"id": target_lot_id},
                 {"$set": {"owner_id": mutation_record.get("old_owner_id"),
