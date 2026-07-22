@@ -1667,8 +1667,9 @@ export default function BankingPage() {
                 <div className="space-y-2 max-h-[50vh] overflow-y-auto pr-1">
                   {categorizeSplits.map((split, i) => {
                     const selectedCat = filteredCats.find(c => c.id === split.expense_category_id);
+                    const directPcmn = !selectedCat && split.account_number ? pcmnAccounts.find(a => a.number === split.account_number) : null;
                     const displayAcc = selectedCat?.account_number || split.account_number || '';
-                    const displayName = selectedCat?.account_name || selectedCat?.name || '';
+                    const displayName = selectedCat?.account_name || selectedCat?.name || directPcmn?.name || '';
                     return (
                     <div key={split._key || i} className="border border-slate-200 rounded p-3 space-y-2" data-testid={`cat-split-${i}`}>
                       {/* Row 1: Nature de depense */}
