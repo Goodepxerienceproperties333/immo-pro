@@ -58,8 +58,8 @@ def test_bilan_acp138_boni_after_dedup(session):
     assert data["provisions_appelees"] == pytest.approx(6500.0, abs=0.01)
     assert data["total_charges"] == pytest.approx(5333.51, abs=0.01), \
         f"total_charges={data['total_charges']} (expected 5333.51 after dedup)"
-    assert data["compte_499"] == pytest.approx(1170.16, abs=0.01), \
-        f"compte_499={data['compte_499']} (expected +1170.16 Boni)"
+    assert data["compte_499"] == pytest.approx(1173.83, abs=0.01), \
+        f"compte_499={data['compte_499']} (expected +1173.83 Boni)"
     assert data.get("equilibre") is True, \
         f"Bilan not balanced: actif={data.get('total_actif')} passif={data.get('total_passif')}"
 
@@ -71,7 +71,7 @@ def test_bilan_acp34a_boni(session):
 
     assert data["provisions_appelees"] == pytest.approx(6500.0, abs=0.01)
     assert data["total_charges"] == pytest.approx(5333.51, abs=0.01)
-    assert data["compte_499"] == pytest.approx(1170.16, abs=0.01)
+    assert data["compte_499"] == pytest.approx(1173.83, abs=0.01)
     assert data.get("equilibre") is True
 
 
