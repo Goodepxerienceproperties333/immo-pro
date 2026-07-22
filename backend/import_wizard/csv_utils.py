@@ -218,7 +218,7 @@ def parse_invoices_csv(raw: bytes) -> dict:
         date_fact = parse_date(get(row, "date facture", "date"))
         date_ech = parse_date(get(row, "date echeance"))
         ref_int = get(row, "reference interne", "ref interne")
-        ref_ext = get(row, "reference externe", "ref externe", "numero", "numero facture")
+        ref_ext = get(row, "reference externe", "ref externe", "numero", "numero facture", "numero de facture", "n facture", "no facture", "num facture")
         libelle = get(row, "libelle", "description")
         ne_pas_payer_raw = get(row, "ne pas payer").lower()
         ne_pas_payer = ne_pas_payer_raw in ("oui", "yes", "true", "1", "x")
