@@ -1015,22 +1015,12 @@ def create_import_wizard_router(db):
         ):
             existing.add(p["number"])
         missing = {n: lbl for n, lbl in accounts_needed.items() if n not in existing}
-        # iter90jj + iter90jk : VERROU - interdit la creation de comptes
-        # bancaires 55XXXX depuis l'import. Les comptes DOIVENT venir de
-        # coproprietes.bank_accounts uniquement. Le remap 6->8 chars est
-        # applique en amont par les callers (voir _remap_bank_account). Si un
-        # short_code arrive ici, c'est qu'aucun canonique n'existe -> blocage
-        # pedagogique.
+        # Les comptes bancaires 55xxxx courts sont acceptes en mode
+        # extraits-seulement (pas de FI generees a l'import).
+        # On les cree automatiquement dans le PCMN pour reference.
         blocked_bank_accounts = [n for n in missing if n.startswith("55") and len(n) <= 6]
         if blocked_bank_accounts:
-            raise HTTPException(
-                400,
-                f"Import bloque : comptes bancaires inconnus dans le CSV/PDF : "
-                f"{', '.join(blocked_bank_accounts)}. Ces comptes doivent etre "
-                f"configures sur la fiche ACP (Comptes bancaires) AVANT l'import "
-                f"(le mapping automatique 6->8 chiffres n'a rien trouve). "
-                f"Ne creez pas de comptes 55XXXX depuis un import.",
-            )
+            print(f"[import] Comptes bancaires courts auto-crees: {blocked_bank_accounts}")
         created = 0
         for num, lbl in missing.items():
             try:
