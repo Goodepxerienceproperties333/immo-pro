@@ -1488,6 +1488,33 @@ def create_properties_router(db):
             if copro_id not in (allowed_copros or []):
                 raise HTTPException(403, "Vous ne pouvez creer un lot que pour une de vos ACPs")
         ids = data.owner_ids if data.owner_ids else ([data.owner_id] if data.owner_id else [])
+        # iter90kz : mode promoteur — si le lot n'a pas de proprietaire
+        # et que l'ACP a un promoter_owner_id, assigne automatiquement
+        # le promoteur avec ownership_history type=promoteur_initial.
+        ownership_history = []
+        if not ids and copro_id:
+            copro_doc = await db.coproprietes.find_one(
+                {"id": copro_id}, {"_id": 0, "promoter_owner_id": 1},
+            )
+            promoter_id = (copro_doc or {}).get("promoter_owner_id", "")
+            if promoter_id:
+                ids = [promoter_id]
+                # Cherche la date de debut d'exercice
+                fy = await db.fiscal_years.find_one(
+                    {"copropriete_id": copro_id, "status": "open"},
+                    {"_id": 0, "start_date": 1},
+                    sort=[("start_date", -1)],
+                )
+                fy_start = (fy or {}).get("start_date", datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+                promoter_doc = await db.owners.find_one({"id": promoter_id}, {"_id": 0, "name": 1})
+                ownership_history = [{
+                    "owner_id": promoter_id,
+                    "owner_name": (promoter_doc or {}).get("name", ""),
+                    "start_date": fy_start,
+                    "end_date": None,
+                    "mutation_type": "promoteur_initial",
+                    "notes": "Affectation promoteur automatique",
+                }]
         doc = {
             "id": str(uuid.uuid4()),
             "number": data.number,
@@ -1498,6 +1525,7 @@ def create_properties_router(db):
             "quotity": data.quotity,
             "owner_id": ids[0] if ids else "",
             "owner_ids": ids,
+            "ownership_history": ownership_history,
             "copropriete_id": copro_id,
             "created_at": datetime.now(timezone.utc).isoformat()
         }
@@ -1550,6 +1578,38 @@ def create_properties_router(db):
         # proprietaire -> autorise sans mutation (assignation initiale).
         # Note : si owner_ids etait rempli et devient vide, autorise aussi
         # (retour a l'etat non-assigne, sans historique).
+
+        # iter90kz : mode promoteur — si le lot n'a pas de proprietaire
+        # (ni existant ni nouveau) et que l'ACP a un promoter_owner_id,
+        # assigne automatiquement le promoteur.
+        if not new_owner_id and not existing_owner:
+            copro_id = existing.get("copropriete_id", "")
+            if copro_id:
+                copro_doc = await db.coproprietes.find_one(
+                    {"id": copro_id}, {"_id": 0, "promoter_owner_id": 1},
+                )
+                promoter_id = (copro_doc or {}).get("promoter_owner_id", "")
+                if promoter_id:
+                    new_owner_id = promoter_id
+                    ids = [promoter_id]
+                    fy = await db.fiscal_years.find_one(
+                        {"copropriete_id": copro_id, "status": "open"},
+                        {"_id": 0, "start_date": 1},
+                        sort=[("start_date", -1)],
+                    )
+                    fy_start = (fy or {}).get("start_date", datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+                    promoter_doc = await db.owners.find_one({"id": promoter_id}, {"_id": 0, "name": 1})
+                    if not (existing.get("ownership_history") or []):
+                        await db.lots.update_one({"id": lot_id}, {"$set": {
+                            "ownership_history": [{
+                                "owner_id": promoter_id,
+                                "owner_name": (promoter_doc or {}).get("name", ""),
+                                "start_date": fy_start,
+                                "end_date": None,
+                                "mutation_type": "promoteur_initial",
+                                "notes": "Affectation promoteur automatique",
+                            }],
+                        }})
 
         update = {
             "number": data.number, "description": data.description,
