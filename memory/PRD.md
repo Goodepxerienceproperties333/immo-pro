@@ -48,6 +48,7 @@ Application de gestion de copropriete basee sur le droit belge (PCMN), incluant 
 - Mobile responsive layout with sidebar drawer
 
 ## Recent Changes (2026-07-22)
+- FIXED: Layout responsive dynamique — supprime max-w-[1600px]/max-w-[1400px] contrainte, contenu 100% largeur + scrollbar-gutter stable
 - Restructured FiscalYearPage.js: Tabs + action buttons on same line (flex justify-between), removed 70px gap
 - Restructured DocumentsPage.js: Same pattern applied, buttons contextual per active tab
 - Added "Terminer et aller a la Comptabilite" button on Wizard final recap screen
