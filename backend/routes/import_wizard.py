@@ -606,39 +606,83 @@ def create_import_wizard_router(db):
                         {"$set": {k: v for k, v in merged.items() if k != "id"},
                          "$unset": {"copropriete_id": ""}},
                     )
-                    # iter90kz : validation anticipee - creer comptes tiers
-                    # 4100/4101 immediatement (pas attendre commit_lots). Rend
-                    # l'owner visible pour mutations et journaux des l'etape 1.
                     from tier_accounts import assign_owner_accounts
                     await assign_owner_accounts(db, {**merged, "id": existing["id"]}, copro_id)
-                    # Refresh cache
-                    by_aux[norm_aux] = merged
+                    # Refresh caches
+                    if norm_aux:
+                        by_aux[norm_aux] = merged
                     updated += 1
                 else:
-                    # CREATE : nouveau doc avec copropriete_ids (array)
-                    doc = {
-                        "id": str(uuid.uuid4()),
-                        **new_fields,
-                        "copropriete_ids": [copro_id],
-                        "import_session_id": session_id,
-                        "created_at": _now_iso(),
-                    }
-                    await db.owners.insert_one(doc)
-                    # iter90kz : validation anticipee - creer comptes tiers
-                    # 4100/4101 immediatement des l'etape 1. L'owner est ainsi
-                    # rattache a l'ACP et visible pour le moteur de recherche
-                    # mutation/journal AVANT que commit_lots ne soit appele.
-                    from tier_accounts import assign_owner_accounts
-                    await assign_owner_accounts(db, doc, copro_id)
-                    inserted += 1
+                    # iter90kz : filet de securite DB avant insert.
+                    # Le cache by_aux/by_email ne stocke qu'UNE entree par cle,
+                    # mais la DB peut contenir un owner avec le meme auxiliary_code
+                    # sur cette ACP specifique (re-import, migration legacy, etc.).
+                    # On verifie directement en base pour eviter DuplicateKeyError
+                    # sur l'index uq_owner_copro_aux.
+                    db_existing = None
                     if norm_aux:
-                        by_aux[norm_aux] = doc
-                    if norm_email:
-                        by_email[norm_email] = doc
-                    if norm_phone:
-                        by_phone[norm_phone] = doc
-                    if norm_name:
-                        by_name.setdefault(norm_name, doc)
+                        db_existing = await db.owners.find_one(
+                            {"auxiliary_code": aux_code,
+                             "$or": [
+                                 {"copropriete_id": copro_id},
+                                 {"copropriete_ids": copro_id},
+                             ]},
+                            {"_id": 0},
+                        )
+                    if not db_existing and norm_email:
+                        db_existing = await db.owners.find_one(
+                            {"$and": [
+                                {"$or": [{"email": email}, {"email2": email}]},
+                                {"$or": [{"copropriete_id": copro_id},
+                                         {"copropriete_ids": copro_id}]},
+                            ]},
+                            {"_id": 0},
+                        )
+                    if db_existing:
+                        # Fusion defensive : meme logique que le path UPDATE
+                        merged = {**db_existing}
+                        for k, v in new_fields.items():
+                            if v and not merged.get(k):
+                                merged[k] = v
+                        current_acps = set(db_existing.get("copropriete_ids") or [])
+                        if db_existing.get("copropriete_id"):
+                            current_acps.add(db_existing["copropriete_id"])
+                        current_acps.add(copro_id)
+                        merged["copropriete_ids"] = sorted(current_acps)
+                        merged.pop("copropriete_id", None)
+                        merged["last_updated_at"] = _now_iso()
+                        merged["last_updated_from_import"] = session_id
+                        await db.owners.update_one(
+                            {"id": db_existing["id"]},
+                            {"$set": {k: v for k, v in merged.items() if k != "id"},
+                             "$unset": {"copropriete_id": ""}},
+                        )
+                        from tier_accounts import assign_owner_accounts
+                        await assign_owner_accounts(db, {**merged, "id": db_existing["id"]}, copro_id)
+                        if norm_aux:
+                            by_aux[norm_aux] = merged
+                        updated += 1
+                    else:
+                        # CREATE : nouveau doc avec copropriete_ids (array)
+                        doc = {
+                            "id": str(uuid.uuid4()),
+                            **new_fields,
+                            "copropriete_ids": [copro_id],
+                            "import_session_id": session_id,
+                            "created_at": _now_iso(),
+                        }
+                        await db.owners.insert_one(doc)
+                        from tier_accounts import assign_owner_accounts
+                        await assign_owner_accounts(db, doc, copro_id)
+                        inserted += 1
+                        if norm_aux:
+                            by_aux[norm_aux] = doc
+                        if norm_email:
+                            by_email[norm_email] = doc
+                        if norm_phone:
+                            by_phone[norm_phone] = doc
+                        if norm_name:
+                            by_name.setdefault(norm_name, doc)
             except Exception as e:
                 errors.append({"row": idx, "error": str(e)})
         await _update_step(db, session_id, "owners", {
