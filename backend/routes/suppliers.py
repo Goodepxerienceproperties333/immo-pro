@@ -166,6 +166,18 @@ async def find_duplicate_supplier(
             other_candidates = _norm_name_candidates(s.get("name", ""))
             if name_candidates & other_candidates:
                 return {"supplier": s, "field": "name", "value": s.get("name", "")}
+            # Subset match: if all words of one name appear in the other,
+            # treat as duplicate (e.g. "Good Experience" vs "Good Experience Properties")
+            for nc in name_candidates:
+                nc_words = set(nc.split())
+                if not nc_words:
+                    continue
+                for oc in other_candidates:
+                    oc_words = set(oc.split())
+                    if not oc_words:
+                        continue
+                    if nc_words <= oc_words or oc_words <= nc_words:
+                        return {"supplier": s, "field": "name", "value": s.get("name", "")}
     return None
 
 
