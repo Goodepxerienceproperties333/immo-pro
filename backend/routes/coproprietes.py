@@ -51,6 +51,13 @@ class CoproprieteInput(BaseModel):
     fy_start: Optional[str] = ""  # format YYYY-MM-DD
     fy_end: Optional[str] = ""
     fy_name: Optional[str] = ""   # ex: "2025-2026", "2026", ou auto-derive
+    # iter90kz : liste exhaustive des owner_ids a rattacher a cette ACP
+    # (pas seulement ceux affectes a un lot - inclut les orphelins importes
+    # pendant la creation). assign_owner_accounts cree copropriete_ids + tiers.
+    owner_ids_to_link: Optional[List[str]] = []
+    # iter90kz : mode promoteur - si renseigne, TOUS les lots sont affectes
+    # a ce proprietaire (promoteur) avec start_date = fy_start.
+    promoter_owner_id: Optional[str] = ""
 
 
 def create_coproprietes_router(db):
@@ -250,6 +257,7 @@ def create_coproprietes_router(db):
         await db.document_categories.insert_many(cat_docs)
         # Create lots on the fly (if provided during ACP creation)
         # iter90gg : 2-pass pour resoudre les parent_lot_number en parent_lot_id
+        seen_oids: set = set()
         if data.lots:
             now_iso = datetime.now(timezone.utc).isoformat()
             lot_docs = []
@@ -292,6 +300,42 @@ def create_coproprietes_router(db):
                     owner_doc = await db.owners.find_one({"id": oid}, {"_id": 0})
                     if owner_doc:
                         await assign_owner_accounts(db, owner_doc, doc["id"])
+
+                # iter90kz : mode promoteur - assigner TOUS les lots au promoteur
+                # avec start_date = fy_start (1er jour de l'exercice).
+                if data.promoter_owner_id:
+                    promoter = await db.owners.find_one({"id": data.promoter_owner_id}, {"_id": 0})
+                    if promoter:
+                        start = data.fy_start or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                        await db.lots.update_many(
+                            {"copropriete_id": doc["id"]},
+                            {"$set": {
+                                "owner_id": promoter["id"],
+                                "owner_ids": [promoter["id"]],
+                                "ownership_history": [{
+                                    "owner_id": promoter["id"],
+                                    "start_date": start,
+                                    "end_date": None,
+                                    "type": "promoteur_initial",
+                                }],
+                            }},
+                        )
+                        if promoter["id"] not in seen_oids:
+                            await assign_owner_accounts(db, promoter, doc["id"])
+                            seen_oids.add(promoter["id"])
+
+        # iter90kz : rattacher TOUS les owners transmis par le frontend
+        # (y compris ceux sans lot) a l'ACP + creer leurs comptes tiers.
+        if data.owner_ids_to_link:
+            from tier_accounts import assign_owner_accounts as _assign
+            already_linked = seen_oids if data.lots else set()
+            for oid in data.owner_ids_to_link:
+                if not oid or oid in already_linked:
+                    continue
+                already_linked.add(oid)
+                owner_doc = await db.owners.find_one({"id": oid}, {"_id": 0})
+                if owner_doc:
+                    await _assign(db, owner_doc, doc["id"])
 
         # iter90gg : cree un fiscal_year si la periode est fournie
         if data.fy_start and data.fy_end:

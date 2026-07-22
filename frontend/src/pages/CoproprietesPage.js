@@ -27,6 +27,9 @@ const emptyForm = {
   fy_start: '', fy_end: '', fy_name: '',
   // iter90gg : au Step 3, le syndic declare s'il y a eu des ventes intra-FY
   _has_intra_fy_sales: false,
+  // iter90kz : mode promoteur
+  _is_promoter: false,
+  _promoter_owner_id: '',
 };
 
 export default function CoproprietesPage() {
@@ -201,7 +204,15 @@ export default function CoproprietesPage() {
         // Nettoie les champs UI-only avant envoi
         const payload = { ...form };
         const hadIntraFySales = !!payload._has_intra_fy_sales;
+        const promoterOwnerId = payload._is_promoter ? (payload._promoter_owner_id || '') : '';
         delete payload._has_intra_fy_sales;
+        delete payload._is_promoter;
+        delete payload._promoter_owner_id;
+        // iter90kz : envoyer TOUS les owner_ids connus (pas seulement ceux des lots)
+        // pour que create_copropriete les rattache a l'ACP + cree leurs comptes tiers.
+        payload.owner_ids_to_link = owners.map(o => o.id);
+        // iter90kz : mode promoteur
+        payload.promoter_owner_id = promoterOwnerId;
         const r = await api.post('/coproprietes', payload);
         const newCopro = r.data;
         const nLots = (form.lots || []).filter(l => l.number && l.number.trim()).length;
@@ -790,9 +801,50 @@ export default function CoproprietesPage() {
                   </label>
                 </div>
                 {form._has_intra_fy_sales && (
-                  <p className="text-[11px] text-orange-900 mt-2 italic">
-                    A la creation de l&apos;ACP, vous serez automatiquement redirige vers la page Lots pour saisir les mutations (Debit acheteur / Credit vendeur, transferts fonds de roulement, prorata).
-                  </p>
+                  <div className="mt-3 space-y-2">
+                    <p className="text-[11px] text-orange-900 italic">
+                      A la creation de l&apos;ACP, vous serez automatiquement redirige vers la page Lots pour saisir les mutations.
+                    </p>
+                    {/* iter90kz : mode promoteur */}
+                    <div className="bg-white/80 border border-orange-200 rounded p-2 mt-2" data-testid="promoter-block">
+                      <p className="text-[11px] font-semibold text-orange-900 mb-1">S&apos;agit-il d&apos;un promoteur immobilier ?</p>
+                      <p className="text-[10px] text-orange-700 mb-2">Si oui, tous les lots seront affectes au promoteur au 1er jour de l&apos;exercice. Les mutations individuelles se feront ensuite normalement.</p>
+                      <div className="flex gap-4 mb-2">
+                        <label className="flex items-center gap-1.5 cursor-pointer text-xs">
+                          <input type="radio" name="is_promoter" checked={!form._is_promoter} onChange={() => setForm({...form, _is_promoter: false, _promoter_owner_id: ''})} data-testid="promoter-no" />
+                          <span>Non</span>
+                        </label>
+                        <label className="flex items-center gap-1.5 cursor-pointer text-xs">
+                          <input type="radio" name="is_promoter" checked={form._is_promoter} onChange={() => setForm({...form, _is_promoter: true})} data-testid="promoter-yes" />
+                          <span>Oui, c&apos;est un promoteur</span>
+                        </label>
+                      </div>
+                      {form._is_promoter && (
+                        <div data-testid="promoter-picker">
+                          <label className="text-[10px] font-medium text-slate-600 mb-1 block">Selectionnez le promoteur :</label>
+                          <Select value={form._promoter_owner_id} onValueChange={v => setForm({...form, _promoter_owner_id: v})}>
+                            <SelectTrigger className="h-8 text-xs" data-testid="promoter-select">
+                              <SelectValue placeholder="Choisir un proprietaire..." />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {owners.map(o => (
+                                <SelectItem key={o.id} value={o.id} className="text-xs">
+                                  {o.name || `${o.last_name || ''} ${o.first_name || ''}`.trim() || o.id.slice(0,8)}
+                                  {o.auxiliary_code ? ` (${o.auxiliary_code})` : ''}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          {form._promoter_owner_id && (
+                            <p className="text-[10px] text-green-700 mt-1 flex items-center gap-1">
+                              <CheckCircle2 className="w-3 h-3" />
+                              Tous les lots seront affectes a ce promoteur au {form.fy_start}
+                            </p>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 )}
               </div>
             )}
