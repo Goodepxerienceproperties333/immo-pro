@@ -118,7 +118,7 @@ export default function BankingPage() {
     const promises = [
       api.get('/banking/statements', { params: fyParams }),
       api.get('/banking/transactions', { params: fyParams }),
-      api.get('/owners'),
+      api.get('/owners', { params: { copropriete_id: selectedCopro || undefined } }),
       api.get('/invoices', { params: fyParams }),
       api.get('/suppliers'),
       api.get('/expense-categories').catch(() => ({ data: [] })),

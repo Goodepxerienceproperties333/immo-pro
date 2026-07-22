@@ -42,11 +42,8 @@ export default function AdminMutationsAuditPage() {
   const loadOwners = useCallback(async () => {
     if (!selectedCopro) { setOwners([]); return; }
     try {
-      const { data } = await api.get('/owners');
-      const filtered = (data || []).filter(o =>
-        (o.copropriete_ids || []).includes(selectedCopro)
-      );
-      setOwners(filtered);
+      const { data } = await api.get('/owners', { params: { copropriete_id: selectedCopro || undefined } });
+      setOwners(data || []);
     } catch (err) {
       /* silent */
     }
