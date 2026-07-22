@@ -41,8 +41,8 @@ const STEPS = [
   // ACP Creation Assistant (iter90gg), and auto-hydrated into the session on
   // creation. Users see one less step; downstream commits still find the FY
   // via `session.steps.fiscal_year.fiscal_year_id`.
-  { key: 'suppliers', label: 'Fournisseurs',      icon: Truck,    optional: false, kind: 'csv_or_pdf' },
-  { key: 'natures',   label: 'Natures depense',   icon: Tag,      optional: false, kind: 'pdf' },
+  { key: 'suppliers', label: 'Fournisseurs',      icon: Truck,    optional: true, kind: 'csv_or_pdf' },
+  { key: 'natures',   label: 'Natures depense',   icon: Tag,      optional: true, kind: 'pdf' },
   { key: 'budget',    label: 'Budget',            icon: Wallet,   optional: true,  kind: 'pdf' },
   { key: 'distribution_keys', label: 'Cles de repartition', icon: PieChart, optional: true, kind: 'pdf' },
   { key: 'invoices',  label: 'Factures',          icon: FileText, optional: true,  kind: 'csv_or_pdf' },
@@ -532,7 +532,7 @@ export default function ImportWizardPage() {
             </div>
             <div className="flex-1">
               <h2 className="text-xl font-bold text-slate-900">Import termine</h2>
-              <p className="text-sm text-slate-600">Verifiez ci-dessous que tout a bien ete cree. Vous pouvez toujours revenir sur une etape avant de terminer.</p>
+              <p className="text-sm text-slate-600">Toutes les etapes validees sont deja enregistrees. Vous pouvez revenir sur une etape ou terminer.</p>
             </div>
           </div>
           <ImportSummary summary={finalSummary} />
@@ -572,7 +572,7 @@ export default function ImportWizardPage() {
                 className="bg-emerald-600 hover:bg-emerald-700 text-white"
                 data-testid="recap-finish-btn"
               >
-                <CheckCircle2 size={14} className="mr-1" /> Finaliser et ouvrir l&apos;ACP
+                <CheckCircle2 size={14} className="mr-1" /> Tout est sauvegarde — Ouvrir l&apos;ACP
               </Button>
             </div>
           </div>
@@ -894,7 +894,7 @@ export default function ImportWizardPage() {
             if (step.optional && stepIdx < STEPS.length - 1 && !sniffResult) {
               return (
                 <Button variant="outline" size="sm" onClick={() => { setStepIdx(stepIdx + 1); setSniffResult(null); }} data-testid="skip-step">
-                  Passer cette etape
+                  Passer cette etape (rien ne sera perdu)
                 </Button>
               );
             }
@@ -927,7 +927,7 @@ export default function ImportWizardPage() {
                   className="border-emerald-300 text-emerald-700 hover:bg-emerald-50"
                   data-testid="skip-and-finish"
                 >
-                  {committing ? <><Loader2 size={14} className="animate-spin mr-1" /> ...</> : <>Passer et terminer le wizard <CheckCircle2 size={14} className="ml-1" /></>}
+                  {committing ? <><Loader2 size={14} className="animate-spin mr-1" /> ...</> : <>Terminer — tout est sauvegarde <CheckCircle2 size={14} className="ml-1" /></>}
                 </Button>
               );
             }
@@ -939,7 +939,7 @@ export default function ImportWizardPage() {
                 data-testid="commit-step"
               >
                 {committing ? <><Loader2 size={14} className="animate-spin mr-1" /> Import...</> : (
-                  stepIdx === STEPS.length - 1 ? <>Terminer le wizard <CheckCircle2 size={14} className="ml-1" /></> : <>Valider et continuer <ChevronRight size={14} className="ml-1" /></>
+                  stepIdx === STEPS.length - 1 ? <>Valider et terminer — tout est sauvegarde <CheckCircle2 size={14} className="ml-1" /></> : <>Valider et continuer <ChevronRight size={14} className="ml-1" /></>
                 )}
               </Button>
             );
