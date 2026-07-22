@@ -29,15 +29,19 @@ function OwnerPicker({ owners, selectedIds, onChange, multi = true, onOwnerCreat
   const filtered = useMemo(() => {
     const s = q.trim().toLowerCase();
     if (!s) return [];
+    // Normalize: strip accents for comparison
+    const norm = (str) => (str || '').normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+    const sNorm = norm(s);
     return owners.filter(o =>
       !selectedIds.includes(o.id) && (
-        (o.name || '').toLowerCase().includes(s) ||
-        (o.first_name || '').toLowerCase().includes(s) ||
-        (o.last_name || '').toLowerCase().includes(s) ||
+        norm(o.name).includes(sNorm) ||
+        norm(o.first_name).includes(sNorm) ||
+        norm(o.last_name).includes(sNorm) ||
         (o.email || '').toLowerCase().includes(s) ||
+        (o.auxiliary_code || '').toLowerCase().includes(s) ||
         (o.vcs_code || '').includes(s)
       )
-    ).slice(0, 8);
+    ).slice(0, 15);
   }, [q, owners, selectedIds]);
 
   // iter90c : rattache idempotemment l'owner a l'ACP courante. Ne lance jamais
@@ -134,7 +138,7 @@ function OwnerPicker({ owners, selectedIds, onChange, multi = true, onOwnerCreat
         <Input
           value={q}
           onChange={e => setQ(e.target.value)}
-          placeholder="Tapez un nom, email ou code VCS..."
+          placeholder="Tapez un nom, email, code VCS ou code auxiliaire..."
           className="pl-9"
           data-testid={`${dataTestPrefix}-search-input`}
         />
@@ -148,9 +152,13 @@ function OwnerPicker({ owners, selectedIds, onChange, multi = true, onOwnerCreat
                 className="w-full text-left px-3 py-2 hover:bg-[#022D52]/5 border-b last:border-b-0 border-slate-100 flex items-center justify-between text-sm"
                 data-testid={`${dataTestPrefix}-suggestion-${o.id}`}
               >
-                <div>
+                <div className="min-w-0">
                   <div className="font-medium text-slate-900">{o.name}</div>
-                  {o.email && <div className="text-[11px] text-slate-500">{o.email}</div>}
+                  <div className="text-[10px] text-slate-400 flex gap-2">
+                    {o.auxiliary_code && <span className="font-mono">{o.auxiliary_code}</span>}
+                    {o.email && <span>{o.email}</span>}
+                    {!(o.copropriete_ids || []).length && <span className="text-amber-500">non rattache</span>}
+                  </div>
                 </div>
                 {o.vcs_code && <span className="font-mono text-[10px] text-[#022D52] flex-shrink-0">{o.vcs_code}</span>}
               </button>
