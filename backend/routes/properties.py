@@ -280,7 +280,13 @@ def create_properties_router(db):
 
     async def _allowed_owner_ids(allowed_copros):
         """Retourne le set des owner_id presents dans les lots des ACPs du scope,
-        UNION les owners dont copropriete_ids contient une ACP du scope (iter90c)."""
+        UNION les owners dont copropriete_ids contient une ACP du scope (iter90c),
+        UNION les owners importes via une session d'import de ces ACPs (iter90kz).
+
+        iter90kz : les proprios importes a l'etape 1 du Wizard (commit_owners)
+        ne possedent pas encore de lot. Ils sont crees avec copropriete_ids[]
+        mais certains legacy n'ont PAS ce champ. Le filet de securite est
+        la decouverte via import_session_id -> import_sessions.copropriete_id."""
         if allowed_copros is None:
             return None  # superadmin = pas de filtre
         if not allowed_copros:
@@ -288,10 +294,20 @@ def create_properties_router(db):
         ids1 = await db.lots.distinct("owner_id", {"copropriete_id": {"$in": allowed_copros}})
         ids2 = await db.lots.distinct("owner_ids", {"copropriete_id": {"$in": allowed_copros}})
         ids3 = await db.owners.distinct("id", {"copropriete_ids": {"$in": allowed_copros}})
+        # iter90kz : decouverte via import_session_id (filet de securite)
+        session_ids = await db.import_sessions.distinct(
+            "id", {"copropriete_id": {"$in": allowed_copros}},
+        )
+        ids4 = []
+        if session_ids:
+            ids4 = await db.owners.distinct(
+                "id", {"import_session_id": {"$in": session_ids}},
+            )
         return (
             {x for x in (ids1 or []) if x}
             | {x for x in (ids2 or []) if x}
             | {x for x in (ids3 or []) if x}
+            | {x for x in (ids4 or []) if x}
         )
 
     # ---- OWNERS ----
@@ -502,13 +518,17 @@ def create_properties_router(db):
             # ACP via `copropriete_ids[]` (proprio cree/importe mais lot pas encore
             # assigne) -- iter90c : evite que la creation d'un nouveau proprio
             # cree un doublon parce que l'existant sans lot etait invisible.
+            # iter90kz : decouverte via import_session_id (filet de securite)
             owner_ids_single = await db.lots.distinct("owner_id", {"copropriete_id": copropriete_id})
             owner_ids_multi = await db.lots.distinct("owner_ids", {"copropriete_id": copropriete_id})
             owner_ids_linked = await db.owners.distinct("id", {"copropriete_ids": copropriete_id})
+            sess_ids = await db.import_sessions.distinct("id", {"copropriete_id": copropriete_id})
+            owner_ids_imported = await db.owners.distinct("id", {"import_session_id": {"$in": sess_ids}}) if sess_ids else []
             allowed = (
                 {oid for oid in (owner_ids_single or []) if oid}
                 | {oid for oid in (owner_ids_multi or []) if oid}
                 | {oid for oid in (owner_ids_linked or []) if oid}
+                | {oid for oid in (owner_ids_imported or []) if oid}
             )
             if limit is not None:
                 # `include_unassigned` non supporte en mode paginated (aurait besoin

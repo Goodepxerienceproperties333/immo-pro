@@ -25,7 +25,12 @@ Application de gestion de copropriete basee sur le droit belge (PCMN).
 ### Fix Owners importes invisibles (iter90kz - 2026-07-22)
 - commit_lots (import_wizard.py): appelle assign_owner_accounts pour chaque owner unique apres insertion des lots -> cree comptes tiers 4100/4101 + ajoute ACP a copropriete_ids
 - create_copropriete (coproprietes.py): meme logique pour les lots crees inline
-- import_finalizer.py: mode defensif — decouvre les owners via les lots de l'ACP (fallback) en plus du filtre copropriete_ids direct
+- import_finalizer.py: mode defensif — decouvre les owners via les lots de l'ACP (fallback)
+
+### Fix OwnerPicker mutation trop restrictif (iter90kz - 2026-07-22)
+- _allowed_owner_ids (properties.py): ajout 4eme source via import_session_id -> import_sessions.copropriete_id pour decouvrir les owners importes sans lots
+- Meme logique ajoutee pour le path copropriete_id specifique (owner_ids_imported)
+- TEUWEN Gael visible et selectionnable dans le dialog de mutation
 
 ## Pending Issues
 - P1: TEUWEN Owner mapping dans PDF/Reports (reports.py, pdf_decompte.py)
