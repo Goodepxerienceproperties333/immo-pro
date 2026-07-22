@@ -1182,19 +1182,35 @@ export default function LotsPage() {
                 Quand vous avez termine les mutations, cliquez sur <strong>Terminer</strong>.
               </div>
             </div>
-            <Button
-              size="sm"
-              onClick={() => {
-                setShowMutationBanner(false);
-                setSearchParams({});
-                toast.success('Mutations enregistrees ! Votre ACP est prete.');
-                navigate(`/?copropriete_id=${searchParams.get('copropriete_id') || localStorage.getItem('selectedCopro') || ''}`);
-              }}
-              className="bg-emerald-600 hover:bg-emerald-700 text-white flex-shrink-0"
-              data-testid="finish-mutations-btn"
-            >
-              <CheckCircle2 size={14} className="mr-1" /> Tout est termine — Ouvrir l&apos;ACP
-            </Button>
+            <div className="flex flex-col gap-2 flex-shrink-0">
+              <Button
+                size="sm"
+                onClick={() => {
+                  setShowMutationBanner(false);
+                  setSearchParams({});
+                  toast.success('Mutations enregistrees ! Direction la comptabilite.');
+                  navigate('/accounting');
+                }}
+                className="bg-[#022D52] hover:bg-[#022D52]/90 text-white"
+                data-testid="finish-mutations-accounting-btn"
+              >
+                <CheckCircle2 size={14} className="mr-1" /> Terminer et aller a la Comptabilite
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setShowMutationBanner(false);
+                  setSearchParams({});
+                  toast.success('Mutations enregistrees ! Votre ACP est prete.');
+                  navigate(`/?copropriete_id=${searchParams.get('copropriete_id') || localStorage.getItem('selectedCopro') || ''}`);
+                }}
+                className="border-emerald-300 text-emerald-700 hover:bg-emerald-50 flex-shrink-0"
+                data-testid="finish-mutations-btn"
+              >
+                Ouvrir l&apos;ACP
+              </Button>
+            </div>
             <Button
               variant="ghost"
               size="sm"

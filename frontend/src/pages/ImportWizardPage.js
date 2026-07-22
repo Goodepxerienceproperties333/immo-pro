@@ -569,10 +569,26 @@ export default function ImportWizardPage() {
                     toast.error(err.response?.data?.detail || 'Erreur finalisation');
                   }
                 }}
-                className="bg-emerald-600 hover:bg-emerald-700 text-white"
+                variant="outline"
+                className="border-slate-300"
                 data-testid="recap-finish-btn"
               >
-                <CheckCircle2 size={14} className="mr-1" /> Tout est sauvegarde — Ouvrir l&apos;ACP
+                <CheckCircle2 size={14} className="mr-1" /> Ouvrir l&apos;ACP
+              </Button>
+              <Button
+                onClick={async () => {
+                  try {
+                    await api.post(`/import-wizard/sessions/${session.id}/finish`);
+                    toast.success('Import finalise ! Direction la comptabilite.');
+                    navigate('/accounting');
+                  } catch (err) {
+                    toast.error(err.response?.data?.detail || 'Erreur finalisation');
+                  }
+                }}
+                className="bg-[#022D52] hover:bg-[#022D52]/90 text-white text-base px-6 py-2.5 h-auto"
+                data-testid="recap-finish-accounting-btn"
+              >
+                <CheckCircle2 size={16} className="mr-2" /> Terminer et aller a la Comptabilite
               </Button>
             </div>
           </div>

@@ -1,52 +1,67 @@
-# NextGe Copro - PRD
+# NextGe Copro - PRD (Product Requirements Document)
 
 ## Problem Statement
-Application de gestion de copropriete basee sur le droit belge (PCMN).
+Application de gestion de copropriete basee sur le droit belge (PCMN), incluant la gestion stricte des roles, le cloisonnement des donnees (Chinese Wall), la gestion des imports CODA/Optipro, et les verrous fiscaux.
+
+## Core Requirements
+- Generation d'un PDF "Decompte de mutation" clair
+- Application stricte des regles comptables belges
+- Persistance fiable
+- Portail proprietaire
+- Imports IA
+- Systeme legalement blinde
+
+## Architecture
+- Backend: FastAPI + MongoDB (Motor async)
+- Frontend: React + Tailwind CSS + Shadcn UI
+- Auth: JWT-based
+- 3rd Party: Emergent LLM Key (Claude Sonnet text gen), Microsoft Graph (Email)
+
+## Key DB Schema
+- `coproprietes`: includes `promoter_owner_id`
+- `properties`: `ownership_history` array (supports `promoteur_initial` type)
+- `owners`: unique index on `auxiliary_code` + `copropriete_id`
 
 ## Completed Features
+- Full accounting system (PCMN plan comptable, journals, grand livre)
+- Import Wizard (Optipro/Sogis migration: owners, lots, suppliers, natures, budgets, distribution keys, invoices, journals, opening balance, OD entries)
+- ACP Creation Assistant with Promoter Mode
+- Owner management with syndic-wide search and duplicate merge
+- Fiscal years management
+- Invoicing (suppliers, owners)
+- Banking (CODA import, lettrage)
+- Reports (Bilan, Resultats, Balance de Tiers, Decompte mutation PDF)
+- Distribution keys
+- Communication (emails, templates)
+- Admin platform (users, roles, audit log, RGPD, backups)
+- Owner portal
+- Fund calls
+- Meters
+- Reminders
+- Document management
+- Support chat bubble
+- Legal docs (CGU, Privacy, Mentions, Cookies, Disclaimer)
+- Cookie banner
+- Onboarding dialog
+- Release notes
+- TopNav horizontal navigation (desktop)
+- Mobile responsive layout with sidebar drawer
 
-### Fix Bilan + Compte de Resultat
-- 499 = Provisions (cl.70) - (Charges (cl.6) - Produits financiers (cl.75))
-
-### Fix Doublonnage Ecritures
-- _hard_delete_auto_entries: suppression reelle + $or
-
-### Wizard Import: Extraits de Compte UNIQUEMENT
-- commit-journals ne cree PLUS d'ecritures FI
-
-### Refonte Fournisseurs Wizard
-- Preview endpoint, isolation par ligne, auto-creation scopee ACP
-
-### Fix Owners importes invisibles (iter90kz)
-- commit_lots/commit_owners: appelle assign_owner_accounts immediatement
-- import_finalizer.py: mode defensif via lots de l'ACP (fallback)
-- _allowed_owner_ids: 4eme source via import_session_id
-
-### Mode Promoteur (iter90kz)
-- CoproprieteInput.promoter_owner_id persiste sur le document copropriete
-- CoproprietesPage Step 2: UI "Promoteur immobilier?" avec select HTML natif dedup
-- create_copropriete: assigne tous lots au promoteur + ownership_history promoteur_initial
-- commit_lots: support promoter_owner_id (param explicite OU fallback copropriete)
-- ImportWizardPage: banner "Mode promoteur actif"
-
-### Fusion doublons owners (iter90kz - 2026-07-22)
-- Utilise scripts/merge_owners.py existant (_apply_merge)
-- 17 groupes fusionnes, 47 doublons supprimes (83 -> 36 owners)
-- MATEXI: 9+2 doublons -> 1 canonique (55655c92, 120 lots, 8 JE)
-- Vendeur: 12->1, Acheteur: 11->1, Buyer: 4->1, TEUWEN: 2->1
-- 8 paires homonymes test (Martin, Dubois, Lefevre, etc.) fusionnees
-- Verification: 0 doublon restant (case-insensitive)
-- owner_ids_to_link dans coproprietes.py L327-339: verifie OK
+## Recent Changes (2026-07-22)
+- Added "Terminer et aller a la Comptabilite" button on Wizard final recap screen
+- Added "Terminer et aller a la Comptabilite" button on LotsPage mutation banner
+- Existing "Ouvrir l'ACP" buttons demoted to secondary/outline style
 
 ## Pending Issues
-- P1: TEUWEN Owner mapping dans PDF/Reports (reports.py, pdf_decompte.py)
+- P0: CSS/UI layout shift on ACP screen (mobile - content shifted right with whitespace on left)
+- P1: TEUWEN owner mapping & distribution lines logic in PDF/Reports (reports.py ~line 1558, pdf_decompte.py ~line 420)
 
-## Upcoming Tasks
-- P1: UI Modal suppression releve bancaire
-- P2: Export Journals CSV/PDF
-- P3: Admin bulk reset invoices
+## Backlog (Prioritized)
+- P1: UI Frontend Modal for Statement Deletion (warning before deleting bank statement showing cancelled lettrages count)
+- P2: Export Journals to CSV and PDF based on date selector
+- P3: Admin tool to bulk reset legacy paid invoices back to unpaid status
 - P4: Certificat fiscal annuel
-- P5: Emails relance auto (APScheduler)
+- P5: Automated debt collection emails (APScheduler daily job)
 
-## Refactoring
-- reports.py, import_wizard.py, banking.py (>3000 lignes chacun)
+## Refactoring Needs
+- `import_wizard.py` (>3300 lines) needs to be split for maintainability
