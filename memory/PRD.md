@@ -48,6 +48,8 @@ Application de gestion de copropriete basee sur le droit belge (PCMN), incluant 
 - Mobile responsive layout with sidebar drawer
 
 ## Recent Changes (2026-07-22)
+- Restructured FiscalYearPage.js: Tabs + action buttons on same line (flex justify-between), removed 70px gap
+- Restructured DocumentsPage.js: Same pattern applied, buttons contextual per active tab
 - Added "Terminer et aller a la Comptabilite" button on Wizard final recap screen
 - Added "Terminer et aller a la Comptabilite" button on LotsPage mutation banner
 - Existing "Ouvrir l'ACP" buttons demoted to secondary/outline style

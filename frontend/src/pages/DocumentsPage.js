@@ -112,13 +112,29 @@ export default function DocumentsPage() {
       <div className="page-header"><h1 className="page-title">Documents</h1><p className="page-subtitle">Gestion des documents de la copropriete</p></div>
 
       <Tabs value={tab} onValueChange={setTab}>
-        <TabsList className="mb-4" data-testid="documents-tabs">
-          <TabsTrigger value="documents"><FileText size={14} className="mr-2" /> Documents</TabsTrigger>
-          <TabsTrigger value="categories"><Tag size={14} className="mr-2" /> Categories</TabsTrigger>
-        </TabsList>
+        <div className="flex items-center justify-between mb-4">
+          <TabsList data-testid="documents-tabs">
+            <TabsTrigger value="documents"><FileText size={14} className="mr-2" /> Documents</TabsTrigger>
+            <TabsTrigger value="categories"><Tag size={14} className="mr-2" /> Categories</TabsTrigger>
+          </TabsList>
+          <div className="flex gap-2">
+            {tab === 'documents' && (
+              <>
+                <Button onClick={openCreateDoc} variant="outline" data-testid="create-doc-btn"><Plus size={16} className="mr-2" /> Note manuelle</Button>
+                <input type="file" ref={fileInputRef} onChange={handleFileChange} accept=".pdf,.png,.jpg,.jpeg,.webp,.heic,.heif" className="hidden" data-testid="doc-file-input" />
+                <Button onClick={() => fileInputRef.current?.click()} disabled={uploading} className="bg-[#022D52] hover:bg-[#1D4ED8]" data-testid="upload-doc-btn">
+                  {uploading ? <><Loader2 size={16} className="mr-2 animate-spin" /> Analyse IA en cours...</> : <><Upload size={16} className="mr-2" /> Importer fichier (auto-classement IA)</>}
+                </Button>
+              </>
+            )}
+            {tab === 'categories' && (
+              <Button onClick={openCreateCat} className="bg-[#022D52] hover:bg-[#1D4ED8]" data-testid="create-cat-btn"><Plus size={16} className="mr-2" /> Nouvelle categorie</Button>
+            )}
+          </div>
+        </div>
 
         <TabsContent value="documents" className="mt-0">
-          <div className="flex items-center justify-between mb-4 gap-4 flex-wrap">
+          <div className="flex items-center mb-4 gap-4 flex-wrap">
             <Select value={filterCategory} onValueChange={setFilterCategory}>
               <SelectTrigger className="w-[250px]" data-testid="filter-category"><SelectValue placeholder="Toutes les categories" /></SelectTrigger>
               <SelectContent>
@@ -126,13 +142,6 @@ export default function DocumentsPage() {
                 {categories.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
               </SelectContent>
             </Select>
-            <div className="flex gap-2">
-            <Button onClick={openCreateDoc} variant="outline" data-testid="create-doc-btn"><Plus size={16} className="mr-2" /> Note manuelle</Button>
-            <input type="file" ref={fileInputRef} onChange={handleFileChange} accept=".pdf,.png,.jpg,.jpeg,.webp,.heic,.heif" className="hidden" data-testid="doc-file-input" />
-            <Button onClick={() => fileInputRef.current?.click()} disabled={uploading} className="bg-[#022D52] hover:bg-[#1D4ED8]" data-testid="upload-doc-btn">
-              {uploading ? <><Loader2 size={16} className="mr-2 animate-spin" /> Analyse IA en cours...</> : <><Upload size={16} className="mr-2" /> Importer fichier (auto-classement IA)</>}
-            </Button>
-            </div>
           </div>
           {documents.length === 0 ? (
             <Card className="border-slate-200"><CardContent className="p-8 text-center text-slate-400">Aucun document - importez votre premier fichier (PDF ou image)</CardContent></Card>
@@ -186,9 +195,6 @@ export default function DocumentsPage() {
         </TabsContent>
 
         <TabsContent value="categories" className="mt-0">
-          <div className="flex justify-end mb-4">
-            <Button onClick={openCreateCat} className="bg-[#022D52] hover:bg-[#1D4ED8]" data-testid="create-cat-btn"><Plus size={16} className="mr-2" /> Nouvelle categorie</Button>
-          </div>
           <div className="bg-white rounded-md border border-slate-200 overflow-hidden">
             <Table>
               <TableHeader><TableRow>

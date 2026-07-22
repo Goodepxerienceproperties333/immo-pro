@@ -291,16 +291,23 @@ export default function FiscalYearPage() {
         <p className="page-subtitle">Exercices, budgets et cloture</p>
       </div>
       <Tabs value={tab} onValueChange={setTab}>
-        <TabsList className="mb-4">
-          <TabsTrigger value="years">Exercices</TabsTrigger>
-          <TabsTrigger value="budgets">Budgets</TabsTrigger>
-          <TabsTrigger value="comparison">Budget vs Reel</TabsTrigger>
-        </TabsList>
+        <div className="flex items-center justify-between mb-4">
+          <TabsList>
+            <TabsTrigger value="years">Exercices</TabsTrigger>
+            <TabsTrigger value="budgets">Budgets</TabsTrigger>
+            <TabsTrigger value="comparison">Budget vs Reel</TabsTrigger>
+          </TabsList>
+          <div>
+            {tab === 'years' && (
+              <Button onClick={openCreateYear} className="bg-[#022D52] hover:bg-[#1D4ED8]" data-testid="create-year-btn"><Plus size={16} className="mr-2" />Nouvel exercice</Button>
+            )}
+            {tab === 'budgets' && (
+              <Button onClick={openCreateBudget} className="bg-[#022D52] hover:bg-[#1D4ED8]" data-testid="create-budget-btn"><Plus size={16} className="mr-2" />Nouveau budget</Button>
+            )}
+          </div>
+        </div>
 
         <TabsContent value="years" className="mt-0">
-          <div className="flex justify-end mb-4">
-            <Button onClick={openCreateYear} className="bg-[#022D52] hover:bg-[#1D4ED8]" data-testid="create-year-btn"><Plus size={16} className="mr-2" />Nouvel exercice</Button>
-          </div>
           <div className="bg-white rounded-md border border-slate-200 overflow-hidden">
             <Table>
               <TableHeader><TableRow><TableHead>Nom</TableHead><TableHead>Debut</TableHead><TableHead>Fin</TableHead><TableHead>Statut</TableHead><TableHead>Resultat</TableHead><TableHead className="w-32">Actions</TableHead></TableRow></TableHeader>
@@ -329,9 +336,6 @@ export default function FiscalYearPage() {
         </TabsContent>
 
         <TabsContent value="budgets" className="mt-0">
-          <div className="flex justify-end mb-4">
-            <Button onClick={openCreateBudget} className="bg-[#022D52] hover:bg-[#1D4ED8]" data-testid="create-budget-btn"><Plus size={16} className="mr-2" />Nouveau budget</Button>
-          </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {budgets.length === 0 ? <p className="text-slate-400 col-span-2 text-center py-8">Aucun budget</p> : budgets.map(b => {
               const fy = years.find(y => y.id === b.fiscal_year_id);
