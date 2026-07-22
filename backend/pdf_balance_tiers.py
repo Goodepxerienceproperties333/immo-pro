@@ -397,7 +397,7 @@ def build_balance_tiers_pdf(
         elems.append(Paragraph("<i>Aucun proprietaire.</i>", body))
     else:
         rows = [[
-            "Proprietaire", "VCS", "Compte prov.", "Compte res.",
+            "Proprietaire", "VCS", "Comptes",
             "Appele", "Paye", "Solde Net a Regler", "Statut",
         ]]
         cell_style = ParagraphStyle(
@@ -409,11 +409,11 @@ def build_balance_tiers_pdf(
                 "Crediteur" if solde_net < -0.01 else "Solde")
             statut_color = RED if solde_net > 0.01 else (
                 GREEN if solde_net < -0.01 else SLATE_500)
+            comptes = (o.get("account_provisions", "") or "—") + " / " + (o.get("account_reserve", "") or "—")
             rows.append([
                 Paragraph(o.get("owner_name", "") or "", cell_style),
                 o.get("vcs_code", "") or "",
-                o.get("account_provisions", "") or "",
-                o.get("account_reserve", "") or "",
+                comptes,
                 _fmt_eur(o.get("total_called", 0)),
                 _fmt_eur(o.get("total_paid", 0)),
                 Paragraph(
@@ -429,23 +429,23 @@ def build_balance_tiers_pdf(
             for o in owners_list
         )
         rows.append([
-            "TOTAUX", "", "", "",
+            "TOTAUX", "", "",
             _fmt_eur(sum(float(o.get("total_called", 0) or 0) for o in owners_list)),
             _fmt_eur(sum(float(o.get("total_paid", 0) or 0) for o in owners_list)),
             _fmt_eur(total_solde_net),
             "",
         ])
-        col_widths = [55 * mm, 22 * mm, 24 * mm, 24 * mm, 28 * mm, 28 * mm,
-                      32 * mm, 22 * mm]
+        col_widths = [60 * mm, 24 * mm, 38 * mm, 30 * mm, 30 * mm,
+                      34 * mm, 24 * mm]
         tbl = Table(rows, colWidths=col_widths, repeatRows=1)
         tbl.setStyle(TableStyle([
             ("BACKGROUND", (0, 0), (-1, 0), BRAND),
             ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
             ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
             ("FONTSIZE", (0, 0), (-1, 0), 8.5),
-            ("ALIGN", (4, 0), (6, -1), "RIGHT"),
-            ("ALIGN", (1, 0), (3, -1), "CENTER"),
-            ("ALIGN", (7, 0), (7, -1), "CENTER"),
+            ("ALIGN", (3, 0), (5, -1), "RIGHT"),
+            ("ALIGN", (1, 0), (2, -1), "CENTER"),
+            ("ALIGN", (6, 0), (6, -1), "CENTER"),
             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
             ("FONTSIZE", (0, 1), (-1, -1), 8),
             ("ROWBACKGROUNDS", (0, 1), (-1, -2),
