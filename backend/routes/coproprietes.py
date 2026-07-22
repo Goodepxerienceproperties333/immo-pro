@@ -280,6 +280,18 @@ def create_coproprietes_router(db):
                     ld["parent_lot_id"] = number_to_id[pref]
             if lot_docs:
                 await db.lots.insert_many(lot_docs)
+                # iter90kz : rattacher chaque owner unique a l'ACP
+                # (copropriete_ids) et creer ses comptes tiers 4100/4101.
+                from tier_accounts import assign_owner_accounts
+                seen_oids: set = set()
+                for ld in lot_docs:
+                    oid = ld.get("owner_id", "")
+                    if not oid or oid in seen_oids:
+                        continue
+                    seen_oids.add(oid)
+                    owner_doc = await db.owners.find_one({"id": oid}, {"_id": 0})
+                    if owner_doc:
+                        await assign_owner_accounts(db, owner_doc, doc["id"])
 
         # iter90gg : cree un fiscal_year si la periode est fournie
         if data.fy_start and data.fy_end:

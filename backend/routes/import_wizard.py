@@ -2766,6 +2766,27 @@ def create_import_wizard_router(db):
                 inserted += 1
             except Exception as e:
                 errors.append({"row": idx, "error": str(e)})
+
+        # iter90kz : apres insertion de tous les lots, rattacher chaque
+        # owner unique a l'ACP (copropriete_ids) ET creer ses comptes
+        # tiers 4100/4101 immediatement. Sans cela les owners importes
+        # a l'etape 1 sont invisibles pour les mutations et journaux.
+        from tier_accounts import assign_owner_accounts
+        seen_owner_ids: set = set()
+        committed_lots = await db.lots.find(
+            {"copropriete_id": copro_id, "import_session_id": session_id,
+             "owner_id": {"$nin": [None, ""]}},
+            {"_id": 0, "owner_id": 1},
+        ).to_list(50000)
+        for lt in committed_lots:
+            oid = lt.get("owner_id", "")
+            if not oid or oid in seen_owner_ids:
+                continue
+            seen_owner_ids.add(oid)
+            owner_doc = await db.owners.find_one({"id": oid}, {"_id": 0})
+            if owner_doc:
+                await assign_owner_accounts(db, owner_doc, copro_id)
+
         await _update_step(db, session_id, "lots", {
             "count": inserted, "errors": errors,
             "default_start_date": default_start,

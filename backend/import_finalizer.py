@@ -89,14 +89,16 @@ async def build_finalize_index(db, copro_id: str) -> dict:
 
     owners_by_name: dict = {}
     owners_by_id: dict = {}
+    # Etape 1 : owners rattaches directement a l'ACP (copropriete_id / copropriete_ids)
+    direct_owner_ids: set = set()
     async for o in db.owners.find(
         {"$or": [{"copropriete_id": copro_id}, {"copropriete_ids": copro_id}]},
         {"_id": 0},
     ):
+        direct_owner_ids.add(o["id"])
         acc_map = ((o.get("tier_accounts") or {}).get(copro_id) or {})
         prov = canonize_owner_tier_account((acc_map.get("provisions") or "").strip())
         res = canonize_owner_tier_account((acc_map.get("reserve") or "").strip())
-        # On ne retient que les owners ayant AU MOINS un des deux comptes en 8 chars
         if not (prov and len(prov) == 8) and not (res and len(res) == 8):
             continue
         owners_by_id[o["id"]] = (prov, res)
@@ -108,6 +110,39 @@ async def build_finalize_index(db, copro_id: str) -> dict:
         cands = _norm_name_candidates(display)
         if cands:
             owners_by_name[frozenset(cands)] = (o["id"], prov, res, display)
+
+    # iter90kz : Mode defensif — decouvre les owners via les lots de l'ACP
+    # pour rattraper ceux qui n'ont pas encore copropriete_ids mis a jour
+    # (ex: import etape 1 sans assign_owner_accounts).
+    lot_owner_ids: set = set()
+    async for lt in db.lots.find(
+        {"copropriete_id": copro_id, "owner_id": {"$nin": [None, ""]}},
+        {"_id": 0, "owner_id": 1},
+    ):
+        oid = lt.get("owner_id", "")
+        if oid and oid not in direct_owner_ids:
+            lot_owner_ids.add(oid)
+    if lot_owner_ids:
+        async for o in db.owners.find(
+            {"id": {"$in": list(lot_owner_ids)}},
+            {"_id": 0},
+        ):
+            if o["id"] in owners_by_id:
+                continue
+            acc_map = ((o.get("tier_accounts") or {}).get(copro_id) or {})
+            prov = canonize_owner_tier_account((acc_map.get("provisions") or "").strip())
+            res = canonize_owner_tier_account((acc_map.get("reserve") or "").strip())
+            if not (prov and len(prov) == 8) and not (res and len(res) == 8):
+                continue
+            owners_by_id[o["id"]] = (prov, res)
+            display = (
+                o.get("name")
+                or f"{o.get('last_name', '')} {o.get('first_name', '')}".strip()
+                or o.get("last_name", "")
+            )
+            cands = _norm_name_candidates(display)
+            if cands:
+                owners_by_name[frozenset(cands)] = (o["id"], prov, res, display)
 
     return {
         "suppliers_by_name": suppliers_by_name,
