@@ -574,6 +574,11 @@ async def _compute_balance_tiers_for_ui(db, copropriete_id):
             {"journal_type": {"$ne": "AN"}},
             {"journal_type": "AN", "is_opening_balance": True},
         ],
+        # Alignement bilan : exclure regularisations et OD-REG/EXT
+        "$and": [
+            {"is_regularization": {"$ne": True}},
+            {"reference": {"$not": {"$regex": "^(OD-REG-|EXT-)"}}},
+        ],
     }
     _exclude_reversals(je_q)
     entries = await db.journal_entries.find(je_q, {"_id": 0}).to_list(200000)
@@ -2437,6 +2442,11 @@ def create_reports_router(db):
                 {"journal_type": {"$ne": "AN"}},
                 {"journal_type": "AN", "is_opening_balance": True},
             ],
+            # Alignement bilan : exclure regularisations et OD-REG/EXT
+            "$and": [
+                {"is_regularization": {"$ne": True}},
+                {"reference": {"$not": {"$regex": "^(OD-REG-|EXT-)"}}},
+            ],
         }
         if start_date or end_date:
             je_q["date"] = {}
@@ -2454,6 +2464,11 @@ def create_reports_router(db):
             "$or": [
                 {"journal_type": {"$ne": "AN"}},
                 {"journal_type": "AN", "is_opening_balance": True},
+            ],
+            # Alignement bilan : exclure regularisations et OD-REG/EXT
+            "$and": [
+                {"is_regularization": {"$ne": True}},
+                {"reference": {"$not": {"$regex": "^(OD-REG-|EXT-)"}}},
             ],
         }
         if end_date:
@@ -3217,7 +3232,13 @@ def create_reports_router(db):
         ).to_list(10000)
         # Charge journal entries de l'ACP + filtre periode
         # SECURISATION : exclure contre-passations + ecritures extournees
-        je_q = {"copropriete_id": copropriete_id}
+        je_q = {
+            "copropriete_id": copropriete_id,
+            "$and": [
+                {"is_regularization": {"$ne": True}},
+                {"reference": {"$not": {"$regex": "^(OD-REG-|EXT-)"}}},
+            ],
+        }
         if start_date or end_date:
             je_q["date"] = {}
             if start_date:
@@ -3229,7 +3250,13 @@ def create_reports_router(db):
 
         # Pour le SOLDE on charge TOUTES les ecritures jusqu'a end_date (sans start_date)
         # car le solde du compte tier est CUMULATIF (anterieurs inclus).
-        je_q_cumul = {"copropriete_id": copropriete_id}
+        je_q_cumul = {
+            "copropriete_id": copropriete_id,
+            "$and": [
+                {"is_regularization": {"$ne": True}},
+                {"reference": {"$not": {"$regex": "^(OD-REG-|EXT-)"}}},
+            ],
+        }
         if end_date:
             je_q_cumul["date"] = {"$lte": end_date}
         _exclude_reversals(je_q_cumul)
