@@ -602,21 +602,43 @@ export default function CoproprietesPage() {
                     {form._is_promoter && (
                       <div data-testid="promoter-picker">
                         <label className="text-[10px] font-medium text-slate-600 mb-1 block">Selectionnez le promoteur :</label>
-                        {owners.length > 0 ? (
-                          <Select value={form._promoter_owner_id} onValueChange={v => setForm({...form, _promoter_owner_id: v})}>
-                            <SelectTrigger className="h-8 text-xs" data-testid="promoter-select">
-                              <SelectValue placeholder="Choisir un proprietaire..." />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {owners.map(o => (
-                                <SelectItem key={o.id} value={o.id} className="text-xs">
-                                  {o.name || `${o.last_name || ''} ${o.first_name || ''}`.trim() || o.id.slice(0,8)}
+                        {owners.length > 0 ? (() => {
+                          // Dedup owners par nom normalise
+                          const _norm = s => (s || '').trim().toLowerCase().replace(/\s+/g, ' ');
+                          const _score = o => {
+                            let s = 0;
+                            if ((o.vcs_code || '').trim()) s += 4;
+                            if ((o.auxiliary_code || '').trim()) s += 2;
+                            if ((o.email || '').trim()) s += 1;
+                            return s;
+                          };
+                          const bestByName = new Map();
+                          for (const o of owners) {
+                            const key = _norm(o.name);
+                            if (!key) continue;
+                            const cur = bestByName.get(key);
+                            if (!cur || _score(o) > _score(cur)) bestByName.set(key, o);
+                          }
+                          const deduped = Array.from(bestByName.values()).sort((a, b) =>
+                            (a.name || '').localeCompare(b.name || '')
+                          );
+                          return (
+                            <select
+                              className="w-full h-8 text-xs border rounded-md px-2 bg-white"
+                              data-testid="promoter-select"
+                              value={form._promoter_owner_id}
+                              onChange={e => setForm({...form, _promoter_owner_id: e.target.value})}
+                            >
+                              <option value="">-- Choisir un proprietaire --</option>
+                              {deduped.map(o => (
+                                <option key={o.id} value={o.id}>
+                                  {o.name || `${o.last_name || ''} ${o.first_name || ''}`.trim()}
                                   {o.auxiliary_code ? ` (${o.auxiliary_code})` : ''}
-                                </SelectItem>
+                                </option>
                               ))}
-                            </SelectContent>
-                          </Select>
-                        ) : (
+                            </select>
+                          );
+                        })() : (
                           <p className="text-[10px] text-orange-700 italic">Importez d&apos;abord les proprietaires (CSV ou PDF) ci-dessous pour pouvoir selectionner le promoteur.</p>
                         )}
                         {form._promoter_owner_id && (
