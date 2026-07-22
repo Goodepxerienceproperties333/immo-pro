@@ -12,25 +12,25 @@ Application de gestion de copropriete basee sur le droit belge (PCMN).
 ### Fix Doublonnage Ecritures
 - _hard_delete_auto_entries: suppression reelle + $or pour les 2 schemas de marquage
 - Import wizard: ajout source_type/source_id/auto_generated sur JE
-- Ventilation multi-comptes dans les JE d'achat
 
 ### Wizard Import: Extraits de Compte UNIQUEMENT
 - commit-journals ne cree PLUS d'ecritures FI
 - Cree uniquement bank_statements + bank_transactions
-- Les ecritures FI sont generees a la comptabilisation par le syndic
 
 ### Refonte Fournisseurs Wizard
 - Preview endpoint, isolation par ligne, auto-creation scopee ACP
 
 ### Fix Owners importes invisibles (iter90kz - 2026-07-22)
-- commit_lots (import_wizard.py): appelle assign_owner_accounts pour chaque owner unique apres insertion des lots -> cree comptes tiers 4100/4101 + ajoute ACP a copropriete_ids
+- commit_lots (import_wizard.py): appelle assign_owner_accounts pour chaque owner unique
 - create_copropriete (coproprietes.py): meme logique pour les lots crees inline
-- import_finalizer.py: mode defensif — decouvre les owners via les lots de l'ACP (fallback)
+- import_finalizer.py: mode defensif via lots de l'ACP (fallback)
 
-### Fix OwnerPicker mutation trop restrictif (iter90kz - 2026-07-22)
-- _allowed_owner_ids (properties.py): ajout 4eme source via import_session_id -> import_sessions.copropriete_id pour decouvrir les owners importes sans lots
-- Meme logique ajoutee pour le path copropriete_id specifique (owner_ids_imported)
-- TEUWEN Gael visible et selectionnable dans le dialog de mutation
+### Validation anticipee owners Wizard (iter90kz - 2026-07-22)
+- commit_owners appelle assign_owner_accounts IMMEDIATEMENT a l'etape 1 (create + update)
+- Les owners sont rattaches a l'ACP + comptes tiers 4100/4101 crees DES l'import
+- Plus d'attente jusqu'a commit_lots: visible pour mutations et journaux immediatement
+- _allowed_owner_ids: 4eme source via import_session_id (filet de securite)
+- Backfill TEUWEN Gael: copropriete_ids + tier_accounts pour Acacia def + Test Complet
 
 ## Pending Issues
 - P1: TEUWEN Owner mapping dans PDF/Reports (reports.py, pdf_decompte.py)

@@ -605,6 +605,11 @@ def create_import_wizard_router(db):
                         {"$set": {k: v for k, v in merged.items() if k != "id"},
                          "$unset": {"copropriete_id": ""}},
                     )
+                    # iter90kz : validation anticipee - creer comptes tiers
+                    # 4100/4101 immediatement (pas attendre commit_lots). Rend
+                    # l'owner visible pour mutations et journaux des l'etape 1.
+                    from tier_accounts import assign_owner_accounts
+                    await assign_owner_accounts(db, {**merged, "id": existing["id"]}, copro_id)
                     # Refresh cache
                     by_aux[norm_aux] = merged
                     updated += 1
@@ -618,6 +623,12 @@ def create_import_wizard_router(db):
                         "created_at": _now_iso(),
                     }
                     await db.owners.insert_one(doc)
+                    # iter90kz : validation anticipee - creer comptes tiers
+                    # 4100/4101 immediatement des l'etape 1. L'owner est ainsi
+                    # rattache a l'ACP et visible pour le moteur de recherche
+                    # mutation/journal AVANT que commit_lots ne soit appele.
+                    from tier_accounts import assign_owner_accounts
+                    await assign_owner_accounts(db, doc, copro_id)
                     inserted += 1
                     if norm_aux:
                         by_aux[norm_aux] = doc
