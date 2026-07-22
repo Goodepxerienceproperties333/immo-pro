@@ -1665,68 +1665,114 @@ export default function BankingPage() {
                 </div>
 
                 <div className="space-y-2 max-h-[50vh] overflow-y-auto pr-1">
-                  {categorizeSplits.map((split, i) => (
-                    <div key={split._key || i} className="border border-slate-200 rounded p-2 grid grid-cols-12 gap-2 items-end" data-testid={`cat-split-${i}`}>
-                      <div className="col-span-5">
-                        <label className="text-[10px] text-slate-500 uppercase tracking-wide">Nature {isCredit ? '(produit/charge/virement)' : '(charge/produit/virement)'}</label>
-                        <Select value={split.expense_category_id} onValueChange={(v) => updateCatSplit(i, 'expense_category_id', v)}>
-                          <SelectTrigger className="h-8 text-xs" data-testid={`cat-split-nature-${i}`}><SelectValue placeholder="Choisir..." /></SelectTrigger>
-                          <SelectContent>
-                            {filteredCats.length === 0 && <div className="px-3 py-2 text-xs text-slate-400">Aucune nature configuree — creez-en dans Configuration (compte 6*, 7* ou 58 Virements internes)</div>}
-                            {filteredCats.map(c => {
-                              const acc = c.account_number || '';
-                              const isTransfer = c.kind === 'transfer' || acc.startsWith('58');
-                              const isProd = !isTransfer && (c.kind === 'produit' || acc.startsWith('7'));
-                              const badge = isTransfer ? ' • virement' : (isProd ? ' • produit' : '');
-                              const cls = isTransfer ? 'text-indigo-700' : (isProd ? 'text-emerald-700' : '');
-                              return (
-                                <SelectItem key={c.id} value={c.id}>
-                                  <span className={cls}>
-                                    {c.name} <span className="text-slate-400 text-[10px]">({acc}{badge})</span>
-                                  </span>
-                                </SelectItem>
-                              );
-                            })}
-                          </SelectContent>
-                        </Select>
+                  {categorizeSplits.map((split, i) => {
+                    const selectedCat = filteredCats.find(c => c.id === split.expense_category_id);
+                    const displayAcc = selectedCat?.account_number || split.account_number || '';
+                    const displayName = selectedCat?.account_name || selectedCat?.name || '';
+                    return (
+                    <div key={split._key || i} className="border border-slate-200 rounded p-3 space-y-2" data-testid={`cat-split-${i}`}>
+                      {/* Row 1: Nature de depense */}
+                      <div className="grid grid-cols-12 gap-2 items-end">
+                        <div className="col-span-11">
+                          <label className="text-[10px] text-slate-500 uppercase tracking-wide">Nature de depense</label>
+                          <Select value={split.expense_category_id} onValueChange={(v) => {
+                            const cat = filteredCats.find(c => c.id === v);
+                            setCategorizeSplits(prev => {
+                              const s = [...prev];
+                              s[i] = {
+                                ...s[i],
+                                expense_category_id: v,
+                                account_number: '',
+                                distribution_key_id: cat?.distribution_key_id || s[i].distribution_key_id || '',
+                              };
+                              return s;
+                            });
+                          }}>
+                            <SelectTrigger className="h-8 text-xs" data-testid={`cat-split-nature-${i}`}><SelectValue placeholder="Choisir une nature..." /></SelectTrigger>
+                            <SelectContent>
+                              {filteredCats.length === 0 && <div className="px-3 py-2 text-xs text-slate-400">Aucune nature configuree</div>}
+                              {filteredCats.map(c => {
+                                const acc = c.account_number || '';
+                                const isTransfer = c.kind === 'transfer' || acc.startsWith('58');
+                                const isProd = !isTransfer && (c.kind === 'produit' || acc.startsWith('7'));
+                                const badge = isTransfer ? 'virement' : (isProd ? 'produit' : 'charge');
+                                const cls = isTransfer ? 'text-indigo-700' : (isProd ? 'text-emerald-700' : '');
+                                return (
+                                  <SelectItem key={c.id} value={c.id}>
+                                    <span className={cls}>
+                                      <span className="font-mono font-semibold">{acc}</span> — {c.name} <span className="text-slate-400 text-[10px]">({badge})</span>
+                                    </span>
+                                  </SelectItem>
+                                );
+                              })}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div className="col-span-1 flex justify-end">
+                          {categorizeSplits.length > 1 && (
+                            <Button variant="ghost" size="sm" onClick={() => removeCatSplit(i)}
+                              className="h-8 w-8 p-0 text-red-400 hover:text-red-600"
+                              data-testid={`cat-split-remove-${i}`}
+                              title="Supprimer"><X size={13} /></Button>
+                          )}
+                        </div>
                       </div>
-                      <div className="col-span-3">
-                        <label className="text-[10px] text-slate-500 uppercase tracking-wide">Cle</label>
-                        <Select value={split.distribution_key_id} onValueChange={(v) => updateCatSplit(i, 'distribution_key_id', v)}>
-                          <SelectTrigger className="h-8 text-xs" data-testid={`cat-split-key-${i}`}><SelectValue placeholder="Cle..." /></SelectTrigger>
-                          <SelectContent>
-                            {distributionKeys.map(k => (
-                              <SelectItem key={k.id} value={k.id}>{k.name}</SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
+                      {/* Row 2: Compte + Nom (readonly from nature) + Cle + Montant */}
+                      <div className="grid grid-cols-12 gap-2 items-end">
+                        <div className="col-span-2">
+                          <label className="text-[10px] text-slate-500 uppercase tracking-wide">Compte</label>
+                          <div className="h-8 flex items-center px-2 bg-slate-50 border border-slate-200 rounded text-xs font-mono font-bold text-slate-800" data-testid={`cat-split-account-display-${i}`}>
+                            {displayAcc || '—'}
+                          </div>
+                        </div>
+                        <div className="col-span-4">
+                          <label className="text-[10px] text-slate-500 uppercase tracking-wide">Libelle compte</label>
+                          <div className="h-8 flex items-center px-2 bg-slate-50 border border-slate-200 rounded text-xs text-slate-700 truncate" data-testid={`cat-split-label-display-${i}`}>
+                            {displayName || '—'}
+                          </div>
+                        </div>
+                        <div className="col-span-3">
+                          <label className="text-[10px] text-slate-500 uppercase tracking-wide">Cle repartition</label>
+                          <Select value={split.distribution_key_id} onValueChange={(v) => updateCatSplit(i, 'distribution_key_id', v)}>
+                            <SelectTrigger className="h-8 text-xs" data-testid={`cat-split-key-${i}`}><SelectValue placeholder="Cle..." /></SelectTrigger>
+                            <SelectContent>
+                              {distributionKeys.map(k => (
+                                <SelectItem key={k.id} value={k.id}>{k.name}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div className="col-span-3">
+                          <label className="text-[10px] text-slate-500 uppercase tracking-wide">Montant</label>
+                          <Input type="number" step="0.01" className="h-8 text-xs font-mono" value={split.amount}
+                            onChange={(e) => updateCatSplit(i, 'amount', e.target.value)}
+                            data-testid={`cat-split-amount-${i}`} />
+                        </div>
                       </div>
-                      <div className="col-span-3">
-                        <label className="text-[10px] text-slate-500 uppercase tracking-wide">Montant</label>
-                        <Input type="number" step="0.01" className="h-8 text-xs font-mono" value={split.amount}
-                          onChange={(e) => updateCatSplit(i, 'amount', e.target.value)}
-                          data-testid={`cat-split-amount-${i}`} />
+                      {/* Row 3: Parts proprio/occupant (from nature config) + Description */}
+                      <div className="grid grid-cols-12 gap-2 items-end">
+                        <div className="col-span-2">
+                          <label className="text-[10px] text-slate-500 uppercase tracking-wide">Occupant %</label>
+                          <div className="h-7 flex items-center px-2 bg-amber-50 border border-amber-200 rounded text-xs font-mono text-amber-800">
+                            {selectedCat?.default_occupant_pct != null ? `${selectedCat.default_occupant_pct}%` : '—'}
+                          </div>
+                        </div>
+                        <div className="col-span-2">
+                          <label className="text-[10px] text-slate-500 uppercase tracking-wide">Proprio %</label>
+                          <div className="h-7 flex items-center px-2 bg-blue-50 border border-blue-200 rounded text-xs font-mono text-blue-800">
+                            {selectedCat?.default_proprietaire_pct != null ? `${selectedCat.default_proprietaire_pct}%` : '—'}
+                          </div>
+                        </div>
+                        <div className="col-span-8">
+                          <label className="text-[10px] text-slate-500 uppercase tracking-wide">Description</label>
+                          <Input placeholder="Facultatif" className="h-7 text-xs"
+                            value={split.description || ''}
+                            onChange={(e) => updateCatSplit(i, 'description', e.target.value)}
+                            data-testid={`cat-split-desc-${i}`} />
+                        </div>
                       </div>
-                      <div className="col-span-1 flex justify-end">
-                        {categorizeSplits.length > 1 && (
-                          <Button variant="ghost" size="sm" onClick={() => removeCatSplit(i)}
-                            className="h-8 w-8 p-0 text-red-400 hover:text-red-600"
-                            data-testid={`cat-split-remove-${i}`}
-                            title="Supprimer ce split"><X size={13} /></Button>
-                        )}
-                      </div>
-                      <div className="col-span-12">
-                        <Input placeholder="Description (facultatif)" className="h-7 text-xs"
-                          value={split.description || ''}
-                          onChange={(e) => updateCatSplit(i, 'description', e.target.value)}
-                          data-testid={`cat-split-desc-${i}`} />
-                      </div>
-                      {/* iter90q + iter90bd + iter90bf : selection PCMN via dropdown
-                          de recherche (plus de saisie libre non-conforme). Aucun
-                          classFilter -> le user voit TOUS les comptes de son plan
-                          comptable. La validation backend restera stricte (classes
-                          5/6/7 acceptees pour categoriser une transaction). */}
-                      <div className="col-span-12 flex items-center gap-2 pt-1 border-t border-slate-100">
+                      {/* Row 4: Compte PCMN direct (alternative to nature) */}
+                      <div className="flex items-center gap-2 pt-1 border-t border-slate-100">
                         <span className="text-[10px] text-slate-400 uppercase tracking-wide shrink-0">ou compte direct</span>
                         <div className="flex-1">
                           <AccountSearchSelect
@@ -1750,7 +1796,7 @@ export default function BankingPage() {
                         </div>
                       </div>
                     </div>
-                  ))}
+                  );})}
                 </div>
 
                 <Button variant="outline" size="sm" onClick={addCatSplit} className="h-7 text-xs" data-testid="cat-split-add">
