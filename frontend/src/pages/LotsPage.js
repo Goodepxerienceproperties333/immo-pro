@@ -8,7 +8,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { Plus, Pencil, Trash2, Search, X, ArrowRightLeft, UserPlus, Link2, Link2Off, FileDown, ClipboardCheck, AlertTriangle, Upload } from 'lucide-react';
+import { Plus, Pencil, Trash2, Search, X, ArrowRightLeft, UserPlus, Link2, Link2Off, FileDown, ClipboardCheck, AlertTriangle, Upload, CheckCircle2 } from 'lucide-react';
 import { fmtDate } from '@/lib/dateFmt';
 
 const LOT_TYPES = [
@@ -1177,12 +1177,24 @@ export default function LotsPage() {
             <div className="flex-1">
               <div className="text-sm font-bold text-orange-900">Mutations intra-exercice a saisir</div>
               <div className="text-xs text-orange-800 mt-1 leading-relaxed">
-                Vous avez declare des ventes depuis le debut de l&apos;exercice fiscal.
-                Pour chaque lot vendu, cliquez sur l&apos;icone <ArrowRightLeft size={12} className="inline mx-0.5" /> a droite du lot pour saisir la mutation
+                Toutes vos donnees sont deja sauvegardees. Pour chaque lot vendu, cliquez sur l&apos;icone <ArrowRightLeft size={12} className="inline mx-0.5" /> a droite du lot pour saisir la mutation
                 (date de vente, nouveau proprietaire, prorata jours, transfert fonds de roulement).
-                Les OD comptables seront generees automatiquement.
+                Quand vous avez termine les mutations, cliquez sur <strong>Terminer</strong>.
               </div>
             </div>
+            <Button
+              size="sm"
+              onClick={() => {
+                setShowMutationBanner(false);
+                setSearchParams({});
+                toast.success('Mutations enregistrees ! Votre ACP est prete.');
+                navigate(`/?copropriete_id=${searchParams.get('copropriete_id') || localStorage.getItem('selectedCopro') || ''}`);
+              }}
+              className="bg-emerald-600 hover:bg-emerald-700 text-white flex-shrink-0"
+              data-testid="finish-mutations-btn"
+            >
+              <CheckCircle2 size={14} className="mr-1" /> Tout est termine — Ouvrir l&apos;ACP
+            </Button>
             <Button
               variant="ghost"
               size="sm"
