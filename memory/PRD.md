@@ -13,10 +13,10 @@ Application de gestion de copropriete basee sur le droit belge (PCMN), incluant 
 ```
 /app/
 ├── backend/
-│   ├── routes/ (import_wizard, invoices, properties, reports, fiscal, etc.)
+│   ├── routes/ (import_wizard, invoices, properties, reports, fiscal, accounting, expense_categories)
 │   ├── import_wizard/ (pdf_invoices_bundle, pdf_supplier_invoice_list, pdf_utils)
-│   ├── scripts/ (reverse_degrande_q4_mut_f, merge_good_experience)
-│   ├── fiscal_lock.py (verrou fiscal centralise)
+│   ├── scripts/ (cleanup_pcmn, cleanup_expense_categories, audit_class6_entries, reverse_degrande_q4_mut_f, merge_good_experience)
+│   ├── fiscal_lock.py (verrou fiscal centralise avec fallback datetime)
 │   └── journal_reversals.py
 ├── frontend/
 │   ├── src/pages/ (InvoicesPage, BankingPage, CoproprietesPage, etc.)
@@ -25,15 +25,19 @@ Application de gestion de copropriete basee sur le droit belge (PCMN), incluant 
 
 ## Fonctionnalites implementees
 
-### Iteration courante (Juillet 2026)
+### Iteration courante (Juillet 2026 - Session 2)
+- **Nettoyage PCMN et natures de depenses**
+  - Garde-fou anti-doublons sur creation PCMN comptes 6/7xxx (noms similaires → 409)
+  - Garde-fou anti-doublons sur creation natures de depenses (noms similaires → 409)
+  - Script `cleanup_pcmn.py` : fusion doublons classe 6 + correction 6140/6141
+  - Script `cleanup_expense_categories.py` : fusion natures doublons
+  - Script `audit_class6_entries.py` : detection ecritures en doublon sur comptes differents
 - **Bundle Import Dialog** : Refonte complete du flux d'import de regroupement PDF
   - Nouveau formulaire complet de creation (formulaire a gauche, apercu PDF a droite)
   - Dropdown fournisseurs existants avec recherche
   - Endpoint preview bloc PDF (GET /api/invoices/bundle-preview-block)
   - Commit partiel (cleanup=false pour creation par bloc)
-- **Verrou fiscal ameliore** : Fallback datetime + diagnostics
-  - Fallback en comparaison datetime si la comparaison string echoue
-  - Message d'erreur enrichi avec la liste des exercices existants
+- **Verrou fiscal ameliore** : Fallback datetime + diagnostics enrichis
 - **Fix expense_categories** : KeyError 'name' sur les comptes PCMN sans nom
 
 ### Iterations precedentes
@@ -51,8 +55,12 @@ Application de gestion de copropriete basee sur le droit belge (PCMN), incluant 
 ## Backlog prioritise
 
 ### P0 (Bloquant)
-- ~~Bundle Import PDF : parser AI fallback~~ → Refonte complete du dialog faite
 - Scripts cleanup donnees : user verification pending (scripts dans /app/backend/scripts/)
+  - `cleanup_pcmn.py` (dry-run d'abord, puis --apply)
+  - `cleanup_expense_categories.py` (dry-run d'abord, puis --apply)
+  - `audit_class6_entries.py` (audit puis --delete)
+  - `reverse_degrande_q4_mut_f.py`
+  - `merge_good_experience.py`
 
 ### P1 (Important)
 - PCMN Consistency : aligner convention 8 chiffres comptes bancaires
@@ -68,4 +76,5 @@ Application de gestion de copropriete basee sur le droit belge (PCMN), incluant 
 
 ## Notes techniques
 - **Preview DB vide** : les scripts de correction doivent etre executes sur l'environnement production
-- **Route ordering** : Les endpoints statiques (bundle-preview-block, bundle-analyze) doivent etre definis AVANT /invoices/{invoice_id} dans FastAPI
+- **Route ordering** : Les endpoints statiques doivent etre definis AVANT /invoices/{invoice_id}
+- **Gardes-fous** : Normalisation unicode (accents), substring match, >70% word overlap
