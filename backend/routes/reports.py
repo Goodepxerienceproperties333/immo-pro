@@ -3960,4 +3960,147 @@ def create_reports_router(db):
             "journal_entries_created": je_created,
         }
 
+    # ---- DIAGNOSTIC: Debug balance owner ----
+    @router.get("/debug-owner-balance")
+    async def debug_owner_balance(
+        request: Request,
+        copropriete_id: Optional[str] = None,
+        search: Optional[str] = None,
+        account: Optional[str] = None,
+    ):
+        """Diagnostic complet pour un proprietaire manquant de la balance.
+
+        Usage :
+          /api/reports/debug-owner-balance?copropriete_id=XXX&search=matexi
+          /api/reports/debug-owner-balance?copropriete_id=XXX&account=41010986
+        """
+        copropriete_id = copropriete_id or request.headers.get("x-copropriete-id", "")
+        if not copropriete_id:
+            return {"error": "copropriete_id requis"}
+
+        result = {"copropriete_id": copropriete_id, "steps": []}
+
+        # 1. Trouver le proprietaire
+        owner = None
+        if search:
+            owner = await db.owners.find_one(
+                {"name": {"$regex": search, "$options": "i"}},
+                {"_id": 0},
+            )
+        if not owner and account:
+            # Chercher un owner dont tier_accounts contient ce compte
+            all_owners = await db.owners.find({}, {"_id": 0}).to_list(10000)
+            for o in all_owners:
+                tier = (o.get("tier_accounts") or {}).get(copropriete_id, {}) or {}
+                if tier.get("provisions") == account or tier.get("reserve") == account:
+                    owner = o
+                    break
+        if owner:
+            oid = owner["id"]
+            tier = (owner.get("tier_accounts") or {}).get(copropriete_id, {}) or {}
+            result["owner"] = {
+                "id": oid,
+                "name": owner.get("name"),
+                "tier_accounts_for_acp": tier,
+                "vcs_code": owner.get("vcs_code", ""),
+            }
+            result["steps"].append(f"Owner trouve: {owner.get('name')} (id={oid})")
+        else:
+            result["steps"].append(f"AUCUN owner trouve (search={search}, account={account})")
+            # Lister les owners dont le nom ressemble
+            if search:
+                similar = await db.owners.find(
+                    {"name": {"$regex": search[:3], "$options": "i"}},
+                    {"_id": 0, "id": 1, "name": 1},
+                ).to_list(50)
+                result["similar_owners"] = [{"id": o["id"], "name": o["name"]} for o in similar]
+            return result
+
+        # 2. Verifier lots
+        lots = await db.lots.find({"copropriete_id": copropriete_id}, {"_id": 0}).to_list(10000)
+        owner_lots = [lt for lt in lots if lt.get("owner_id") == oid or oid in (lt.get("owner_ids") or [])]
+        result["lots"] = [{"id": lt.get("id"), "ref": lt.get("reference", "")} for lt in owner_lots]
+        result["steps"].append(f"Lots dans cette ACP: {len(owner_lots)}")
+
+        # 3. Verifier journal entries avec third_party_id
+        je_with_tp = await db.journal_entries.find(
+            {"copropriete_id": copropriete_id, "lines.third_party_id": oid},
+            {"_id": 0, "id": 1, "journal_type": 1, "date": 1, "description": 1, "lines": 1},
+        ).to_list(1000)
+        tp_lines = []
+        for e in je_with_tp:
+            for ln in e.get("lines", []):
+                if ln.get("third_party_id") == oid:
+                    tp_lines.append({
+                        "entry_id": e["id"],
+                        "journal_type": e.get("journal_type"),
+                        "date": e.get("date"),
+                        "account": ln.get("account_number"),
+                        "debit": ln.get("debit", 0),
+                        "credit": ln.get("credit", 0),
+                    })
+        result["lines_with_third_party_id"] = tp_lines
+        result["steps"].append(f"Lignes avec third_party_id={oid}: {len(tp_lines)}")
+
+        # 4. Verifier journal entries avec le compte cible
+        target_acc = account or tier.get("provisions", "") or ""
+        if not target_acc and account:
+            target_acc = account
+        result["target_account"] = target_acc
+
+        if target_acc:
+            je_with_acc = await db.journal_entries.find(
+                {"copropriete_id": copropriete_id, "lines.account_number": target_acc},
+                {"_id": 0, "id": 1, "journal_type": 1, "date": 1, "description": 1, "lines": 1,
+                 "is_opening_balance": 1},
+            ).to_list(1000)
+            acc_lines = []
+            for e in je_with_acc:
+                for ln in e.get("lines", []):
+                    if ln.get("account_number") == target_acc:
+                        acc_lines.append({
+                            "entry_id": e["id"],
+                            "journal_type": e.get("journal_type"),
+                            "date": e.get("date"),
+                            "is_opening_balance": e.get("is_opening_balance", False),
+                            "account": ln.get("account_number"),
+                            "third_party_id": ln.get("third_party_id", ""),
+                            "debit": ln.get("debit", 0),
+                            "credit": ln.get("credit", 0),
+                        })
+            result["lines_on_account"] = acc_lines
+            result["steps"].append(f"Lignes sur compte {target_acc}: {len(acc_lines)}")
+
+            # Diagnostic: les lignes AN sans is_opening_balance
+            an_no_open = [l for l in acc_lines if l["journal_type"] == "AN" and not l.get("is_opening_balance")]
+            if an_no_open:
+                result["steps"].append(f"PROBLEME: {len(an_no_open)} ecriture(s) AN SANS is_opening_balance=True -> EXCLUES de la balance!")
+                result["an_entries_missing_opening_flag"] = an_no_open
+
+            # Diagnostic: lignes sans third_party_id
+            no_tp = [l for l in acc_lines if not l.get("third_party_id")]
+            if no_tp:
+                result["steps"].append(f"PROBLEME: {len(no_tp)} ligne(s) sur {target_acc} SANS third_party_id")
+                result["lines_missing_third_party_id"] = no_tp
+
+        # 5. Verifier mutations
+        muts = await db.mutations.find(
+            {"copropriete_id": copropriete_id,
+             "$or": [{"from_owner_id": oid}, {"to_owner_id": oid}]},
+            {"_id": 0},
+        ).to_list(100)
+        result["mutations"] = len(muts)
+
+        # 6. Calculer le solde attendu
+        total_d = sum(l.get("debit", 0) for l in tp_lines)
+        total_c = sum(l.get("credit", 0) for l in tp_lines)
+        result["balance_via_third_party_id"] = round(total_d - total_c, 2)
+        if target_acc:
+            acc_d = sum(l.get("debit", 0) for l in acc_lines)
+            acc_c = sum(l.get("credit", 0) for l in acc_lines)
+            result["balance_via_account_number"] = round(acc_d - acc_c, 2)
+
+        result["steps"].append("Diagnostic termine")
+        return result
+
     return router
