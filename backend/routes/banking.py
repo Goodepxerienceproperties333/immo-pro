@@ -148,17 +148,29 @@ def create_banking_router(db):
         await _try_auto_lettrage_vcs(txn_doc)
 
     async def _try_auto_lettrage_vcs(txn_doc):
-        """Try to auto-match a transaction by VCS communication.
-        Extrait le code VCS (12 chiffres) de la communication peu importe le suffixe
-        ('+++100/7407/40231+++ - Votre paiement au 19/06/2026' -> '100740740231').
+        """Analyse la transaction et stocke une SUGGESTION de lettrage
+        sans l'appliquer.  Le syndic valide ensuite via le bouton
+        'Valider les lettrages' (POST /banking/statements/{id}/validate-lettrage).
 
-        Si echec VCS, tente un fallback par NOM (counterparty_name -> owner.name
-        case-insensitive) puis par numero de facture (counterparty_name or
-        communication contient le numero d'une facture impayee).
+        Stocke dans la transaction :
+          suggested_match_to, suggested_match_type, suggested_match_label
+        mais NE TOUCHE PAS a matched/matched_to/match_type.
         """
         import re as _re
         comm = txn_doc.get("communication", "")
         cp_name = (txn_doc.get("counterparty_name") or "").strip()
+        copro_id = txn_doc.get("copropriete_id") or ""
+
+        async def _save_suggestion(match_id, match_type, label=""):
+            await db.bank_transactions.update_one(
+                {"id": txn_doc["id"]},
+                {"$set": {
+                    "suggested_match_to": match_id,
+                    "suggested_match_type": match_type,
+                    "suggested_match_label": label,
+                }}
+            )
+
         # 1) Tentative VCS sur communication
         vcs_clean = ""
         if comm and len(comm) >= 3:
@@ -186,7 +198,6 @@ def create_banking_router(db):
         if not owner and cp_name and " " in cp_name:
             parts = [p for p in cp_name.split() if p]
             if len(parts) >= 2:
-                # Tente toutes les permutations du nom
                 possible = [parts[0], parts[-1], " ".join(parts[:2]), " ".join(parts[-2:])]
                 for p in possible:
                     if len(p) < 3:
@@ -201,19 +212,9 @@ def create_banking_router(db):
                     if owner:
                         break
         if owner:
-            await db.bank_transactions.update_one(
-                {"id": txn_doc["id"]},
-                {"$set": {"matched": True, "matched_to": owner["id"], "match_type": "owner_payment",
-                          "counterparty_name": txn_doc.get("counterparty_name") or owner["name"]}}
-            )
-            try:
-                fresh = await db.bank_transactions.find_one({"id": txn_doc["id"]}, {"_id": 0})
-                if fresh:
-                    await generate_bank_entry(db, fresh)
-            except Exception as e:
-                print(f"[auto-entry] bank auto-vcs failed: {e}")
+            await _save_suggestion(owner["id"], "owner_payment", owner.get("name", ""))
             return
-        # 4) Fallback supplier : counterparty_name correspond a un fournisseur
+        # 4) Fallback supplier
         supplier = None
         if cp_name and len(cp_name) >= 3:
             esc = _re.escape(cp_name)
@@ -221,23 +222,10 @@ def create_banking_router(db):
                 {"name": {"$regex": f"^{esc}$", "$options": "i"}}, {"_id": 0}
             )
         if supplier:
-            # Pour les paiements sortants (debit) seulement -> payment to supplier
             if float(txn_doc.get("amount", 0) or 0) < 0 or txn_doc.get("transaction_type") == "debit":
-                await db.bank_transactions.update_one(
-                    {"id": txn_doc["id"]},
-                    {"$set": {"matched": True, "matched_to": supplier["id"], "match_type": "supplier_payment",
-                              "counterparty_name": txn_doc.get("counterparty_name") or supplier["name"]}}
-                )
-                try:
-                    fresh = await db.bank_transactions.find_one({"id": txn_doc["id"]}, {"_id": 0})
-                    if fresh:
-                        await generate_bank_entry(db, fresh)
-                except Exception as e:
-                    print(f"[auto-entry] supplier match failed: {e}")
+                await _save_suggestion(supplier["id"], "supplier_payment", supplier.get("name", ""))
                 return
-        # 5) Fallback ULTIME : numero de facture dans counterparty_name ou communication
-        #    Cherche une facture impayee de cette ACP dont le numero apparait dans le texte
-        copro_id = txn_doc.get("copropriete_id") or ""
+        # 5) Fallback facture impayee
         if copro_id:
             search_text = f"{cp_name} {comm}".strip()
             if search_text:
@@ -247,22 +235,8 @@ def create_banking_router(db):
                 for inv in unpaid:
                     inv_num = (inv.get("number") or "").strip()
                     if inv_num and len(inv_num) >= 3 and inv_num in search_text:
-                        await db.bank_transactions.update_one(
-                            {"id": txn_doc["id"]},
-                            {"$set": {"matched": True, "matched_to": inv["id"], "match_type": "invoice"}}
-                        )
-                        try:
-                            fresh = await db.bank_transactions.find_one({"id": txn_doc["id"]}, {"_id": 0})
-                            if fresh:
-                                await generate_bank_entry(db, fresh)
-                                # Mark invoice as paid
-                                await db.invoices.update_one(
-                                    {"id": inv["id"]},
-                                    {"$set": {"status": "paid", "paid_at": fresh.get("date"),
-                                              "paid_by_transaction_id": txn_doc["id"]}}
-                                )
-                        except Exception as e:
-                            print(f"[auto-entry] invoice match failed: {e}")
+                        label = f"{inv.get('supplier','')} - {inv_num}"
+                        await _save_suggestion(inv["id"], "invoice", label)
                         return
 
     async def _suggest_match_for_movement(mov: dict, copro_id: str) -> dict:
