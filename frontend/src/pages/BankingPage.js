@@ -126,7 +126,7 @@ export default function BankingPage() {
       api.get('/banking/statements', { params: fyParams }),
       api.get('/banking/transactions', { params: fyParams }),
       selectedCopro
-        ? api.get('/owners', { params: { copropriete_id: selectedCopro } })
+        ? api.get('/owners', { params: { copropriete_id: selectedCopro, lot_owners_only: true } })
         : Promise.resolve({ data: [] }),
       api.get('/invoices', { params: fyParams }),
       api.get('/suppliers'),

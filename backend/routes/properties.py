@@ -437,6 +437,7 @@ def create_properties_router(db):
 
     @router.get("/owners")
     async def list_owners(request: Request, copropriete_id: Optional[str] = None, include_unassigned: bool = False, syndic_wide: bool = False,
+                          lot_owners_only: bool = False,
                           skip: int = 0, limit: Optional[int] = None, search: Optional[str] = None):
         """Liste des proprietaires - chinese wall STRICT (RGPD).
 
@@ -526,15 +527,23 @@ def create_properties_router(db):
             # iter90kz : decouverte via import_session_id (filet de securite)
             owner_ids_single = await db.lots.distinct("owner_id", {"copropriete_id": copropriete_id})
             owner_ids_multi = await db.lots.distinct("owner_ids", {"copropriete_id": copropriete_id})
-            owner_ids_linked = await db.owners.distinct("id", {"copropriete_ids": copropriete_id})
-            sess_ids = await db.import_sessions.distinct("id", {"copropriete_id": copropriete_id})
-            owner_ids_imported = await db.owners.distinct("id", {"import_session_id": {"$in": sess_ids}}) if sess_ids else []
-            allowed = (
-                {oid for oid in (owner_ids_single or []) if oid}
-                | {oid for oid in (owner_ids_multi or []) if oid}
-                | {oid for oid in (owner_ids_linked or []) if oid}
-                | {oid for oid in (owner_ids_imported or []) if oid}
-            )
+            if lot_owners_only:
+                # Mode strict : uniquement les proprios ayant un lot effectif.
+                # Utilise par le dialog de lettrage bancaire (Chinese Wall strict).
+                allowed = (
+                    {oid for oid in (owner_ids_single or []) if oid}
+                    | {oid for oid in (owner_ids_multi or []) if oid}
+                )
+            else:
+                owner_ids_linked = await db.owners.distinct("id", {"copropriete_ids": copropriete_id})
+                sess_ids = await db.import_sessions.distinct("id", {"copropriete_id": copropriete_id})
+                owner_ids_imported = await db.owners.distinct("id", {"import_session_id": {"$in": sess_ids}}) if sess_ids else []
+                allowed = (
+                    {oid for oid in (owner_ids_single or []) if oid}
+                    | {oid for oid in (owner_ids_multi or []) if oid}
+                    | {oid for oid in (owner_ids_linked or []) if oid}
+                    | {oid for oid in (owner_ids_imported or []) if oid}
+                )
             if limit is not None:
                 # `include_unassigned` non supporte en mode paginated (aurait besoin
                 # d'un $or complexe cross-collections) - fallback legacy si demande.
