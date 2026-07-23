@@ -555,6 +555,30 @@ async def _compute_balance_tiers_for_ui(db, copropriete_id):
 
     lots = await db.lots.find({"copropriete_id": copropriete_id}, {"_id": 0}).to_list(10000)
     owner_ids = set(lt.get("owner_id") for lt in lots if lt.get("owner_id"))
+    # Inclure aussi les co-proprietaires (owner_ids pluriel sur les lots)
+    for lt in lots:
+        for oid in (lt.get("owner_ids") or []):
+            if oid:
+                owner_ids.add(oid)
+
+    # Proprietaires avec tier_accounts configures pour cette ACP
+    tier_candidates = await db.owners.find(
+        {f"tier_accounts.{copropriete_id}": {"$exists": True}},
+        {"_id": 0, "id": 1},
+    ).to_list(10000)
+    for c in tier_candidates:
+        owner_ids.add(c["id"])
+
+    # Anciens proprietaires via mutations
+    muts = await db.mutations.find(
+        {"copropriete_id": copropriete_id},
+        {"_id": 0, "from_owner_id": 1, "to_owner_id": 1},
+    ).to_list(10000)
+    for m in muts:
+        if m.get("from_owner_id"):
+            owner_ids.add(m["from_owner_id"])
+        if m.get("to_owner_id"):
+            owner_ids.add(m["to_owner_id"])
 
     third_party_ids_in_je = await db.journal_entries.distinct(
         "lines.third_party_id", {"copropriete_id": copropriete_id}
@@ -568,6 +592,10 @@ async def _compute_balance_tiers_for_ui(db, copropriete_id):
         if owner_ids else []
     )
     current_owner_ids = set(lt.get("owner_id") for lt in lots if lt.get("owner_id"))
+    for lt in lots:
+        for oid in (lt.get("owner_ids") or []):
+            if oid:
+                current_owner_ids.add(oid)
 
     # Cumul entries (toutes dates, hors extournes)
     # iter90ia : appliquer le MEME filtre AN que la Situation de compte et
@@ -2426,6 +2454,31 @@ def create_reports_router(db):
 
         lots = await db.lots.find({"copropriete_id": copropriete_id}, {"_id": 0}).to_list(10000)
         owner_ids = set(lt.get("owner_id") for lt in lots if lt.get("owner_id"))
+        # Inclure aussi les co-proprietaires (owner_ids pluriel sur les lots)
+        for lt in lots:
+            for oid in (lt.get("owner_ids") or []):
+                if oid:
+                    owner_ids.add(oid)
+
+        # Proprietaires avec tier_accounts configures pour cette ACP
+        # (ex: promoteurs comme Matexi qui n'ont pas de lots mais des comptes)
+        tier_candidates = await db.owners.find(
+            {f"tier_accounts.{copropriete_id}": {"$exists": True}},
+            {"_id": 0, "id": 1},
+        ).to_list(10000)
+        for c in tier_candidates:
+            owner_ids.add(c["id"])
+
+        # Anciens proprietaires via mutations
+        muts = await db.mutations.find(
+            {"copropriete_id": copropriete_id},
+            {"_id": 0, "from_owner_id": 1, "to_owner_id": 1},
+        ).to_list(10000)
+        for m in muts:
+            if m.get("from_owner_id"):
+                owner_ids.add(m["from_owner_id"])
+            if m.get("to_owner_id"):
+                owner_ids.add(m["to_owner_id"])
 
         # Aussi inclure les anciens proprietaires (vendus) qui ont encore un
         # mouvement / solde sur leurs comptes tiers dans cette ACP.
@@ -2442,6 +2495,10 @@ def create_reports_router(db):
         owners = await db.owners.find({"id": {"$in": owner_ids}}, {"_id": 0}).sort("name", 1).to_list(1000) if owner_ids else []
         # Set of owners that still hold at least one lot in this ACP
         current_owner_ids = set(lt.get("owner_id") for lt in lots if lt.get("owner_id"))
+        for lt in lots:
+            for oid in (lt.get("owner_ids") or []):
+                if oid:
+                    current_owner_ids.add(oid)
 
         # Charge journal entries ACP-scoped (un seul fetch) + filtre periode
         # SECURISATION : exclure les contre-passations et leurs ecritures
