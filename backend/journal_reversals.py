@@ -26,6 +26,53 @@ def _iso_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+async def _cascade_unlink_bank_txns(db, invoice_id: str, reason: str = "") -> int:
+    """Delie les transactions bancaires matchees a une facture quand son
+    ecriture AC est contre-passee. Reset le lettrage (matched=False) et
+    regenere une FI en suspens (499000) si l'extrait est comptabilise.
+
+    Retourne le nombre de transactions deliees.
+    """
+    cursor = db.bank_transactions.find(
+        {"$or": [
+            {"matched_to": invoice_id},
+            {"matched_to_ids": invoice_id},
+        ]},
+        {"_id": 0},
+    )
+    touched = 0
+    async for txn in cursor:
+        match_type = txn.get("match_type", "")
+        if match_type == "multi_invoice":
+            remaining = [i for i in (txn.get("matched_to_ids") or []) if i != invoice_id]
+            if not remaining:
+                update = {"matched": False, "matched_to": "", "matched_to_ids": [], "match_type": ""}
+            else:
+                update = {"matched_to_ids": remaining}
+                if txn.get("matched_to") == invoice_id:
+                    update["matched_to"] = remaining[0]
+                if len(remaining) == 1:
+                    update["match_type"] = "invoice"
+                    update["matched_to_ids"] = []
+                    update["matched_to"] = remaining[0]
+        else:
+            update = {"matched": False, "matched_to": "", "matched_to_ids": [], "match_type": ""}
+        await db.bank_transactions.update_one({"id": txn["id"]}, {"$set": update})
+        touched += 1
+        # Regenere FI si extrait comptabilise
+        fresh = await db.bank_transactions.find_one({"id": txn["id"]}, {"_id": 0})
+        if fresh and fresh.get("statement_id"):
+            stmt = await db.bank_statements.find_one(
+                {"id": fresh["statement_id"]}, {"_id": 0, "status": 1})
+            if stmt and stmt.get("status") == "posted":
+                try:
+                    from auto_entries import generate_bank_entry
+                    await generate_bank_entry(db, fresh)
+                except Exception as e:
+                    print(f"[cascade_unlink] regenerate FI failed for txn {txn['id']}: {e}")
+    return touched
+
+
 async def _resolve_reversal_date(db, orig_entry: dict) -> str:
     """Detecte si la date originale est dans un exercice cloture. Si oui,
     utilise la date d'aujourd'hui (dans un exercice ouvert). Sinon, garde la
@@ -104,6 +151,23 @@ async def reverse_journal_entry(
             "reversal_reason": reason or "",
         }},
     )
+
+    # CASCADE BANCAIRE : si l'ecriture reversee est liee a une facture,
+    # delier automatiquement les transactions bancaires matchees a cette
+    # facture. Sinon le lettrage bancaire pointe vers une ecriture annulee.
+    source_type = orig_entry.get("source_type") or ""
+    source_id = orig_entry.get("source_id") or ""
+    if source_type == "invoice" and source_id:
+        await _cascade_unlink_bank_txns(db, source_id, reason or "Ecriture contre-passee")
+    # Aussi verifier si une facture est liee via journal_entry_id
+    elif not source_id:
+        inv = await db.invoices.find_one(
+            {"journal_entry_id": orig_entry.get("id")},
+            {"_id": 0, "id": 1},
+        )
+        if inv:
+            await _cascade_unlink_bank_txns(db, inv["id"], reason or "Ecriture contre-passee")
+
     return rev_doc
 
 

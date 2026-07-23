@@ -2833,40 +2833,83 @@ def create_properties_router(db):
         copro_id = lot.get("copropriete_id", "")
 
         async def _cancel_single(target_lot_id: str, mutation_record: dict):
-            """Annule une mutation pour un lot : supprime TOUTES les ecritures OD
-            (fonds de roulement + prorata) + pop l'historique.
-            Compatible avec ancien format (journal_entry_id seul) et nouveau
-            format (journal_entry_ids liste).
-            Supprime aussi les ecritures source_type='lot_mutation' liees au lot.
+            """Annule une mutation pour un lot : contre-passe ou supprime TOUTES
+            les ecritures OD (MUT-*) liees au lot.
+
+            Strategie de nettoyage (3 passes) :
+              1) ecritures explicitement trackees dans journal_entry_ids
+              2) ecritures source_type='lot_mutation' liees au lot
+              3) ecritures dont la reference matche MUT-{lot_number}*
             """
+            from journal_reversals import reverse_journal_entry
+            lot_doc = await db.lots.find_one({"id": target_lot_id}, {"_id": 0, "number": 1})
+            lot_number = (lot_doc or {}).get("number", "") if lot_doc else ""
+
+            all_je_ids_to_remove: set[str] = set()
+
+            # Passe 1 : ecritures explicitement trackees
             entry_ids = list(mutation_record.get("journal_entry_ids") or [])
             legacy_id = mutation_record.get("journal_entry_id")
             if legacy_id and legacy_id not in entry_ids:
                 entry_ids.append(legacy_id)
-            for eid in entry_ids:
-                if eid:
-                    await db.journal_entries.delete_one({"id": eid})
+            all_je_ids_to_remove.update(eid for eid in entry_ids if eid)
 
-            # Supprime aussi les ecritures prorata/fonds_roulement generees
-            # par la mutation mais non trackees dans journal_entry_ids
+            # Passe 2 : ecritures source_type='lot_mutation' liees au lot
             mut_je_q = {
                 "copropriete_id": copro_id,
                 "source_type": "lot_mutation",
                 "source_id": target_lot_id,
-                "source_subtype": {"$in": ["prorata_post_mutation", "fonds_roulement"]},
             }
-            # Inclure les reversals de ces ecritures
-            orphan_jes = await db.journal_entries.find(mut_je_q, {"id": 1, "_id": 0}).to_list(100)
-            orphan_je_ids = [j["id"] for j in orphan_jes]
-            if orphan_je_ids:
-                # Supprimer les ecritures + leurs eventuels reversals
-                del_q = {"$or": [
-                    {"id": {"$in": orphan_je_ids}},
-                    {"reversal_of": {"$in": orphan_je_ids}},
-                    {"reversed_by": {"$in": orphan_je_ids}},
-                ]}
-                r = await db.journal_entries.delete_many(del_q)
-                print(f"[cancel_mutation] Cleaned {r.deleted_count} orphan lot_mutation JEs for lot {target_lot_id}")
+            async for je in db.journal_entries.find(mut_je_q, {"_id": 0, "id": 1}):
+                all_je_ids_to_remove.add(je["id"])
+
+            # Passe 3 : ecritures MUT-{lot_number}* par reference
+            if lot_number:
+                ref_pattern = f"^MUT-{lot_number}"
+                ref_q = {
+                    "copropriete_id": copro_id,
+                    "reference": {"$regex": ref_pattern},
+                    "reversed": {"$ne": True},
+                    "is_reversal": {"$ne": True},
+                }
+                async for je in db.journal_entries.find(ref_q, {"_id": 0, "id": 1}):
+                    all_je_ids_to_remove.add(je["id"])
+
+            # Supprimer (ou contre-passer si exercice cloture)
+            removed = 0
+            for eid in all_je_ids_to_remove:
+                je = await db.journal_entries.find_one({"id": eid}, {"_id": 0})
+                if not je:
+                    continue
+                if je.get("reversed") or je.get("is_reversal"):
+                    continue
+                # Verifier si dans un exercice cloture -> contre-passer
+                fy = None
+                je_date = je.get("date", "")
+                if je_date:
+                    fy = await db.fiscal_years.find_one({
+                        "copropriete_id": copro_id,
+                        "status": "closed",
+                        "start_date": {"$lte": je_date},
+                        "end_date": {"$gte": je_date},
+                    })
+                if fy:
+                    # Exercice cloture : contre-passer (audit trail)
+                    await reverse_journal_entry(
+                        db, je, reason=f"Annulation mutation lot {lot_number}")
+                else:
+                    # Exercice ouvert : suppression directe permise
+                    await db.journal_entries.delete_one({"id": eid})
+                removed += 1
+            # Supprimer aussi les reversals orphelins
+            if all_je_ids_to_remove:
+                await db.journal_entries.delete_many({
+                    "$or": [
+                        {"reversal_of": {"$in": list(all_je_ids_to_remove)}},
+                        {"reversed_by": {"$in": list(all_je_ids_to_remove)}},
+                    ],
+                })
+            print(f"[cancel_mutation] Cleaned {removed} MUT entries for lot {target_lot_id} ({lot_number})")
 
             await db.lots.update_one(
                 {"id": target_lot_id},

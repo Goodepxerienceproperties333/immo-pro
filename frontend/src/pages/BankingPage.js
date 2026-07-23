@@ -10,7 +10,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { toast } from 'sonner';
-import { Plus, Trash2, Upload, Link2, Unlink, Search, Landmark, PlusCircle, Save, Pencil, X, CheckCircle2, AlertTriangle, Eye, Tag } from 'lucide-react';
+import { Plus, Trash2, Upload, Link2, Unlink, Search, Landmark, PlusCircle, Save, Pencil, X, CheckCircle2, AlertTriangle, Eye, Tag, Zap } from 'lucide-react';
 import { useFiscalYearParams } from '@/hooks/useFiscalYearParams';
 import { useAuth } from '@/contexts/AuthContext';
 import CounterpartySearchSelect from '@/components/CounterpartySearchSelect';
@@ -120,7 +120,9 @@ export default function BankingPage() {
     const promises = [
       api.get('/banking/statements', { params: fyParams }),
       api.get('/banking/transactions', { params: fyParams }),
-      api.get('/owners', { params: { copropriete_id: selectedCopro || undefined } }),
+      selectedCopro
+        ? api.get('/owners', { params: { copropriete_id: selectedCopro } })
+        : Promise.resolve({ data: [] }),
       api.get('/invoices', { params: fyParams }),
       api.get('/suppliers'),
       api.get('/expense-categories').catch(() => ({ data: [] })),
@@ -710,6 +712,28 @@ export default function BankingPage() {
             setStmtForm({ number: '', date: new Date().toISOString().split('T')[0], account_number: def?.iban || '', opening_balance: 0, closing_balance: 0 });
             setStmtDialog(true);
           }} className="bg-[#022D52] hover:bg-[#1D4ED8]" data-testid="create-stmt-btn"><Plus size={16} className="mr-2" /> Nouvel extrait</Button>
+          <Button
+            variant="outline"
+            className="border-teal-300 text-teal-700 hover:bg-teal-50"
+            data-testid="auto-lettrage-vcs-btn"
+            disabled={!selectedCopro}
+            title={selectedCopro ? "Lettrage automatique par communication structuree VCS" : "Selectionnez une copropriete"}
+            onClick={async () => {
+              try {
+                const { data } = await api.post('/banking/auto-lettrage-vcs', { copropriete_id: selectedCopro });
+                if (data.count > 0) {
+                  toast.success(`${data.count} transaction(s) lettree(s) automatiquement`);
+                  load();
+                } else {
+                  toast.info('Aucune correspondance VCS trouvee');
+                }
+              } catch (err) {
+                toast.error(err.response?.data?.detail || 'Erreur auto-lettrage VCS');
+              }
+            }}
+          >
+            <Zap size={16} className="mr-2" /> Auto-lettrage VCS
+          </Button>
         </div>
       </div>
 

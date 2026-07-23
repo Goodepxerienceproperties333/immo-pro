@@ -988,6 +988,7 @@ async def compute_bilan_data(db, copropriete_id: str, date_to: Optional[str] = N
     # Les "depenses nettes" proviennent du moteur expense_rows (meme base que
     # la page "Liste des depenses") pour garantir la coherence entre les rapports.
     total_charges = 0.0
+    private_charges_643 = 0.0
     provisions_appelees = 0.0
     produits_hors_provisions = 0.0
     for entry in entries:
@@ -996,13 +997,21 @@ async def compute_bilan_data(db, copropriete_id: str, date_to: Optional[str] = N
             if not acc:
                 continue
             if acc.startswith("6"):
-                total_charges += line.get("debit", 0) - line.get("credit", 0)
+                charge_net = line.get("debit", 0) - line.get("credit", 0)
+                total_charges += charge_net
+                # Frais privatifs (643) : factures individuellement aux
+                # proprietaires, ne doivent PAS impacter la regularisation
+                # des charges communes (boni/mali compte 499).
+                if acc.startswith("643"):
+                    private_charges_643 += charge_net
             elif acc.startswith("70"):
                 provisions_appelees += line.get("credit", 0) - line.get("debit", 0)
             elif acc.startswith("7"):
                 produits_hors_provisions += line.get("credit", 0) - line.get("debit", 0)
-    # Equilibre comptable double-entree (pour Actif = Passif)
-    result_exercise = round(provisions_appelees + produits_hors_provisions - total_charges, 2)
+    # Equilibre comptable : le compte 499 = budget - charges communes
+    # Les frais privatifs (643) sont exclus car factures individuellement.
+    common_charges = round(total_charges - private_charges_643, 2)
+    result_exercise = round(provisions_appelees + produits_hors_provisions - common_charges, 2)
     # Compte 499 = result_exercise (equilibre Actif = Passif garanti)
     compte_499 = result_exercise
 

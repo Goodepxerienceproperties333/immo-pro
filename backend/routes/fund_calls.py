@@ -1043,6 +1043,20 @@ def create_fund_calls_router(db):
         await reverse_post_mutation_ods_for_call(
             db, call_id, reason=f"Suppression appel {call_id}"
         )
+        # CASCADE MUT-F : supprime les ecritures MUT-*-F generees par les
+        # mutations qui referencent cet appel (fund_call_ids contient call_id).
+        copro_id = fc.get("copropriete_id", "")
+        mut_f_q = {
+            "copropriete_id": copro_id,
+            "journal_type": "OD",
+            "reference": {"$regex": "^MUT-.*-F"},
+            "reversed": {"$ne": True},
+            "is_reversal": {"$ne": True},
+        }
+        async for je in db.journal_entries.find(mut_f_q, {"_id": 0, "id": 1, "fund_call_ids": 1}):
+            fc_ids = je.get("fund_call_ids") or []
+            if call_id in fc_ids:
+                await db.journal_entries.delete_one({"id": je["id"]})
         result = await db.fund_calls.delete_one({"id": call_id})
         if result.deleted_count == 0:
             raise HTTPException(404, "Appel non trouve")
