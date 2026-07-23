@@ -67,31 +67,36 @@ async def regenerate_orphan_mutation_od(db, mutation_doc: dict) -> dict:
 
     # Genere l'OD MUT-R
     entry_id = str(uuid.uuid4())
+    lot_num = lot.get('number', '') or ''
+    buyer_name = new_owner.get('name', '') or ''
+    seller_name = old_owner.get('name', '') or ''
     entry_doc = {
         "id": entry_id,
         "journal_type": "OD",
         "date": sale_date,
-        "reference": f"MUT-{(lot.get('number','') or '')[:18]}-R",
+        "reference": f"MUT-{lot_num[:18]}-R",
         "description": (
-            f"Mutation lot {lot.get('number','')} - Fonds de roulement: "
-            f"{old_owner.get('name','')} -> {new_owner.get('name','')} "
+            f"Mutation lot {lot_num} - Fonds de roulement: "
+            f"{seller_name} -> {buyer_name} "
             f"({r_quota:.2f} EUR) [regenere iter90gc]"
         ),
         "lines": [
             {"account_number": new_acc,
-             "account_name": f"Mutation - {new_owner.get('last_name') or new_owner.get('name')}",
+             "account_name": f"Mutation - {new_owner.get('last_name') or buyer_name}",
              "debit": r_quota, "credit": 0.0,
              "third_party_id": to_owner_id,
-             "third_party_name": new_owner.get("name", ""),
+             "third_party_name": buyer_name,
+             "line_description": f"Mutation lot {lot_num} - Fonds de roulement: achat de {seller_name}",
              "lot_id": lot_id,
-             "lot_number": lot.get("number", "") or ""},
+             "lot_number": lot_num},
             {"account_number": old_acc,
-             "account_name": f"Mutation - {old_owner.get('last_name') or old_owner.get('name')}",
+             "account_name": f"Mutation - {old_owner.get('last_name') or seller_name}",
              "debit": 0.0, "credit": r_quota,
              "third_party_id": from_owner_id,
-             "third_party_name": old_owner.get("name", ""),
+             "third_party_name": seller_name,
+             "line_description": f"Mutation lot {lot_num} - Fonds de roulement: vente a {buyer_name}",
              "lot_id": lot_id,
-             "lot_number": lot.get("number", "") or ""},
+             "lot_number": lot_num},
         ],
         "total_debit": r_quota,
         "total_credit": r_quota,
@@ -2433,23 +2438,30 @@ def create_properties_router(db):
             entries_created: list = []
 
             def _build_entry(amount: float, entry_date: str, kind: str, label: str, ref_suffix: str) -> dict:
+                lot_num = lt.get('number', '') or ''
+                buyer_name = new_owner.get('name', '') or ''
+                seller_name = old_owner.get('name', '') or ''
                 lines = [
                     {"account_number": new_acc,
-                     "account_name": f"Mutation - {new_owner.get('last_name') or new_owner.get('name')}",
+                     "account_name": f"Mutation - {new_owner.get('last_name') or buyer_name}",
                      "debit": amount, "credit": 0.0,
                      "third_party_id": data.new_owner_id,
-                     "third_party_name": new_owner.get("name", ""),
-                     # iter90ea : persistance lot_number
+                     "third_party_name": buyer_name,
+                     # line_description visible dans la situation de compte de l'ACHETEUR :
+                     # mentionne le vendeur pour faciliter la reconciliation.
+                     "line_description": f"Mutation lot {lot_num} - {label}: achat de {seller_name}",
                      "lot_id": lt.get("id", "") or "",
-                     "lot_number": lt.get("number", "") or ""},
+                     "lot_number": lot_num},
                     {"account_number": old_acc,
-                     "account_name": f"Mutation - {old_owner.get('last_name') or old_owner.get('name')}",
+                     "account_name": f"Mutation - {old_owner.get('last_name') or seller_name}",
                      "debit": 0.0, "credit": amount,
                      "third_party_id": old_owner_id,
-                     "third_party_name": old_owner.get("name", ""),
-                     # iter90ea : persistance lot_number
+                     "third_party_name": seller_name,
+                     # line_description visible dans la situation de compte du VENDEUR :
+                     # mentionne l'acheteur pour faciliter la reconciliation.
+                     "line_description": f"Mutation lot {lot_num} - {label}: vente a {buyer_name}",
                      "lot_id": lt.get("id", "") or "",
-                     "lot_number": lt.get("number", "") or ""},
+                     "lot_number": lot_num},
                 ]
                 return {
                     "id": str(uuid.uuid4()),

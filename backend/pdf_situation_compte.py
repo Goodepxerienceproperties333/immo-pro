@@ -72,7 +72,11 @@ def _humanize_label(description, reference, journal_type, debit=0, credit=0):
             # Credit sur tier -> argent recu du proprio = paiement
             label_prefix = "Paiement recu : "
     elif journal_type == "OD":
-        label_prefix = "Operation : "
+        # Mutations : pas de prefixe "Operation" (le mot "Mutation" suffit)
+        if "mutation" in desc.lower() or "mut." in desc.lower():
+            label_prefix = ""
+        else:
+            label_prefix = "Operation : "
     elif journal_type == "AN":
         label_prefix = "Solde reporte : "
     # Si la description commence deja par "Appel " (provisions/reserve/roulement/...)
@@ -83,7 +87,7 @@ def _humanize_label(description, reference, journal_type, debit=0, credit=0):
         full = f"{label_prefix}{desc}" if desc else label_prefix.rstrip(": ")
     else:
         full = desc or label_prefix.rstrip(": ")
-    return full[:80]
+    return full[:120]
 
 
 def _addr_block(name, parts):
