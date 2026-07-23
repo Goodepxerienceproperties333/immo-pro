@@ -2546,13 +2546,36 @@ def create_properties_router(db):
                     continue
                 future_by_date[fd].append(f)
             for entry_date, details in future_by_date.items():
+                # Safeguard : ne creer le MUT-F que pour les appels dont la
+                # distribution a ENCORE l'ancien proprietaire sur ce lot.
+                # Si la distribution a deja ete mise a jour pour le nouvel
+                # acquereur, le MUT-F serait en double.
+                filtered_details: list[dict] = []
+                for d in details:
+                    fc_id = d.get("fund_call_id") or ""
+                    if fc_id:
+                        fc_doc = await db.fund_calls.find_one(
+                            {"id": fc_id},
+                            {"_id": 0, "distribution": 1},
+                        )
+                        dist = (fc_doc or {}).get("distribution") or []
+                        already_new_owner = any(
+                            (row.get("lot_id") == lt.get("id") or row.get("lot_number") == lt.get("number"))
+                            and row.get("owner_id") == data.new_owner_id
+                            for row in dist
+                        )
+                        if already_new_owner:
+                            continue  # skip : distribution deja mise a jour
+                    filtered_details.append(d)
+                if not filtered_details:
+                    continue
                 subtotal = round(
-                    sum(float(d.get("amount", d.get("lot_amount", d.get("owner_amount", 0))) or 0) for d in details),
+                    sum(float(d.get("amount", d.get("lot_amount", d.get("owner_amount", 0))) or 0) for d in filtered_details),
                     2,
                 )
                 if subtotal <= 0.001:
                     continue
-                call_names = ", ".join(d.get("fund_call_name", "?") for d in details)
+                call_names = ", ".join(d.get("fund_call_name", "?") for d in filtered_details)
                 entry = _build_entry(
                     amount=subtotal,
                     entry_date=entry_date,
@@ -2567,7 +2590,7 @@ def create_properties_router(db):
                     "id": entry["id"],
                     "date": entry_date,
                     "amount": subtotal,
-                    "fund_call_ids": [d.get("fund_call_id") for d in details],
+                    "fund_call_ids": [d.get("fund_call_id") for d in filtered_details],
                 })
 
             mut_rec = {
