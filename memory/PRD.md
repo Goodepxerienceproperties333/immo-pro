@@ -22,8 +22,10 @@ Application de gestion de copropriete basee sur le droit belge (PCMN), incluant 
 - Portail proprietaire
 - Modal confirmation suppression extrait bancaire avec apercu impacts
 - Mutation: line_description personnalisee (vendeur voit acheteur, acheteur voit vendeur)
+- Safeguard MUT-F : verifie distribution avant creation (evite doublons)
+- Script reversal Degrande Q4 MUT-F (3 ecritures)
 
-## Corrections appliquees (Juillet 2026 - Session actuelle)
+## Corrections appliquees (Juillet 2026)
 ### Corrections comptables
 - _resolve_bank_account: match direct pcmn_number == account_number (extraits sans IBAN)
 - Import CSV journaux: skip remap 55x/58 (CSV Optipro authoritatif)
@@ -32,28 +34,22 @@ Application de gestion de copropriete basee sur le droit belge (PCMN), incluant 
 - Grand Livre: exclusion reversals (deja en place)
 
 ### Balance de Tiers - Mutations
-- line_description sur chaque ligne de mutation OD:
-  - Ligne vendeur: "Mutation lot X - {label}: vente a {ACHETEUR}"
-  - Ligne acheteur: "Mutation lot X - {label}: achat de {VENDEUR}"
-- regenerate_orphan_mutation_od: meme format line_description
+- line_description sur chaque ligne de mutation OD (vendeur/acheteur)
 - PDF _humanize_label: skip prefixe "Operation:" pour mutations, limite 80->120 chars
-- situation_compte_owner: line_description prioritaire (deja en place)
+
+### Safeguard MUT-F
+- Bloc creation MUT-F (properties.py ~L2548) : avant creation, verifie si
+  la distribution du fund_call a deja owner_id == new_owner_id pour le lot.
+  Si oui, skip pour eviter les doublons.
+- Script reversal: /app/backend/scripts/reverse_degrande_q4_mut_f.py
+  Contre-passe 3 MUT-F Degrande Q4 via reverse_journal_entry (audit trail).
 
 ### UX
-- Modal confirmation suppression extrait bancaire (preview impacts: lettrages, factures, FI)
-- DELETE /api/banking/statements/{id}/delete-preview endpoint
-
-### Corrections precedentes (sessions anterieures)
-- Layout responsive fix 1920x1080
-- Tabs restructures (FiscalYearPage, DocumentsPage)
-- Balance Tiers: fusion colonnes Solde Reserve + Provision -> Solde Net a Regler (UI+PDF)
-- Bilan equilibre: compte_499 = result_exercise
-- Fournisseurs dupliques fusionnes (algorithme sous-ensemble)
-- Orphelins LAHAYE nettoyes + _cancel_single patche
+- Modal confirmation suppression extrait bancaire (preview impacts)
 
 ## Backlog
-- P1: PCMN Consistency - aligner convention 8 chiffres entre bank_accounts config, extraits et PCMN
-- P1: TEUWEN lot mapping - fix logique owner_id + distribution_keys pour decomptes mutations historiques
+- P1: PCMN Consistency - aligner convention 8 chiffres
+- P1: TEUWEN lot mapping - fix logique owner_id + distribution_keys
 - P2: Export Journaux CSV/PDF avec selecteur de dates
 - P3: Outil admin reset bulk factures payees -> impayees
 - P4: Certificat fiscal annuel
@@ -62,19 +58,21 @@ Application de gestion de copropriete basee sur le droit belge (PCMN), incluant 
 ## Architecture
 /app/
 ├── backend/
-│   ├── auto_entries.py (resolve bank account, generate_purchase_entry, generate_bank_entry)
-│   ├── import_finalizer.py (finalize_je_doc, canonicalize accounts)
-│   ├── pdf_situation_compte.py (_humanize_label - skip Operation prefix pour mutations)
+│   ├── auto_entries.py
+│   ├── journal_reversals.py (reverse_journal_entry, reverse_auto_entries)
+│   ├── pdf_situation_compte.py
+│   ├── scripts/
+│   │   └── reverse_degrande_q4_mut_f.py
 │   ├── routes/
-│   │   ├── reports.py (Bilan, Grand Livre, Balance Tiers, Decompte, Situation Compte)
-│   │   ├── banking.py (Extraits, transactions, lettrage, delete-preview)
-│   │   ├── invoices.py (CRUD factures, allocations frais privatifs + regenerate JE)
-│   │   ├── import_wizard.py (Import CSV/CODA, _build_gpe_lines, skip remap 55x/58)
-│   │   ├── properties.py (_build_entry avec line_description, mutations)
-│   │   └── suppliers.py (Fournisseurs, matching sous-ensemble)
+│   │   ├── reports.py
+│   │   ├── banking.py (delete-preview endpoint)
+│   │   ├── invoices.py (generate_purchase_entry on allocation update)
+│   │   ├── import_wizard.py (skip remap 55x/58, _build_gpe_lines)
+│   │   ├── properties.py (MUT-F safeguard, line_description)
+│   │   └── suppliers.py
 ├── frontend/
 │   ├── src/pages/
-│   │   ├── BankingPage.js (Extraits, modal suppression)
-│   │   ├── BalanceTiersPage.js (Solde Net a Regler)
+│   │   ├── BankingPage.js (modal suppression)
+│   │   ├── BalanceTiersPage.js
 │   ├── src/components/balance-tiers/
-│   │   ├── TiersDetailDialog.js (Affiche description mutations avec line_description)
+│   │   ├── TiersDetailDialog.js
