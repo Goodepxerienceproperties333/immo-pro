@@ -1,50 +1,71 @@
-# NextGe Copro - PRD
+# NextGe Copro - PRD (Product Requirements Document)
 
-## Enonce du probleme
-Application de gestion de copropriete basee sur le droit belge (PCMN).
+## Probleme
+Application de gestion de copropriete basee sur le droit belge (PCMN), incluant la gestion stricte des roles, le cloisonnement des donnees (Chinese Wall), la gestion des imports CODA/Optipro, et les verrous fiscaux.
 
-## Stack technique
-- Backend: FastAPI, Async MongoDB (Motor), APScheduler
-- Frontend: React, Tailwind CSS, Shadcn UI
-- Auth: Cookie httpOnly
-- 3rd Party: Emergent LLM Key (Claude Sonnet text), Microsoft Graph (Email)
+## Stack
+- **Backend**: FastAPI, Async MongoDB (Motor), Python
+- **Frontend**: React, Tailwind CSS, Shadcn UI
+- **DB**: MongoDB
+- **Integrations**: Emergent LLM Key (Claude Sonnet pour extraction IA), Microsoft Graph (Email)
 
-## Corrections session actuelle (Juillet 2026)
-### Comptabilite
-- _resolve_bank_account: match direct pcmn_number (extraits sans IBAN)
-- Import CSV journaux: skip remap 55x/58 (CSV Optipro authoritatif)
-- Import factures: champ `lines` pour generate_purchase_entry
-- set_private_fee_allocations: appel generate_purchase_entry
+## Architecture
+```
+/app/
+├── backend/
+│   ├── routes/ (import_wizard, invoices, properties, reports, fiscal, etc.)
+│   ├── import_wizard/ (pdf_invoices_bundle, pdf_supplier_invoice_list, pdf_utils)
+│   ├── scripts/ (reverse_degrande_q4_mut_f, merge_good_experience)
+│   ├── fiscal_lock.py (verrou fiscal centralise)
+│   └── journal_reversals.py
+├── frontend/
+│   ├── src/pages/ (InvoicesPage, BankingPage, CoproprietesPage, etc.)
+│   └── src/components/ (BundleImportDialog, SupplierSearchSelect, AccountSearchSelect)
+```
 
-### Mutations
-- line_description personnalisee (vendeur voit acheteur, acheteur voit vendeur)
-- PDF _humanize_label: skip prefixe "Operation:" pour mutations, limite 120 chars
-- Safeguard MUT-F: verifie distribution avant creation
-- Script reversal Degrande Q4 MUT-F
+## Fonctionnalites implementees
 
-### Fournisseurs
-- Fix doublon: import_wizard fallback find_duplicate_supplier sur DB
-- Script fusion: merge_good_experience.py
+### Iteration courante (Juillet 2026)
+- **Bundle Import Dialog** : Refonte complete du flux d'import de regroupement PDF
+  - Nouveau formulaire complet de creation (formulaire a gauche, apercu PDF a droite)
+  - Dropdown fournisseurs existants avec recherche
+  - Endpoint preview bloc PDF (GET /api/invoices/bundle-preview-block)
+  - Commit partiel (cleanup=false pour creation par bloc)
+- **Verrou fiscal ameliore** : Fallback datetime + diagnostics
+  - Fallback en comparaison datetime si la comparaison string echoue
+  - Message d'erreur enrichi avec la liste des exercices existants
+- **Fix expense_categories** : KeyError 'name' sur les comptes PCMN sans nom
 
-### Proprietaires / Lots (NEW)
-- Recherche dropdown: ajout auxiliary_code dans le filtre
-- Bouton "Creer les proprietaires manquants": auto-cree les owners depuis
-  les donnees "Non rattache" des lots (auxiliary_code + name) via POST /owners
-  avec reuse_on_duplicate=true
-- Fix root cause: les owners non importes n'apparaissaient pas dans le dropdown
-  meme si leur nom etait parse dans les donnees du lot
+### Iterations precedentes
+- Corrections journal_entry_id (generate_purchase_entry)
+- Warning modal suppression releves bancaires
+- Buyer/Seller names dans Balance Tiers UI et PDF
+- MUT-F safeguard (pas de doublon si owner_id == old_owner_id)
+- Fix doublons fournisseurs dans import_wizard (check DB, pas cache)
+- Auxiliary_code search + bouton "Creer les proprietaires manquants"
+- Fix import CSV quand periodes fermees
+- Cascade deletion MUT-* journal entries
+- Auto-unlink bank transactions lors d'un reverse_journal_entry
+- Bouton "Auto-lettrage VCS" dans BankingPage
 
-### UX
-- Modal confirmation suppression extrait bancaire (preview impacts)
+## Backlog prioritise
 
-## Backlog
-- P1: PCMN Consistency - aligner convention 8 chiffres
-- P1: TEUWEN lot mapping
-- P2: Export Journaux CSV/PDF avec selecteur de dates
-- P3: Reset bulk factures payees -> impayees
+### P0 (Bloquant)
+- ~~Bundle Import PDF : parser AI fallback~~ → Refonte complete du dialog faite
+- Scripts cleanup donnees : user verification pending (scripts dans /app/backend/scripts/)
+
+### P1 (Important)
+- PCMN Consistency : aligner convention 8 chiffres comptes bancaires
+- TEUWEN lot mapping : logique lot.owner_id + distribution_keys pour mutations historiques
+
+### P2 (Amelioration)
+- Export Journaux CSV/PDF avec selecteur de dates
+
+### P3-P5 (Futur)
+- P3: Reset bulk factures payees → impayees
 - P4: Certificat fiscal annuel
-- P5: Emails relance automatiques
+- P5: Emails relance automatiques (APScheduler)
 
-## Scripts
-- /app/backend/scripts/reverse_degrande_q4_mut_f.py
-- /app/backend/scripts/merge_good_experience.py (--apply)
+## Notes techniques
+- **Preview DB vide** : les scripts de correction doivent etre executes sur l'environnement production
+- **Route ordering** : Les endpoints statiques (bundle-preview-block, bundle-analyze) doivent etre definis AVANT /invoices/{invoice_id} dans FastAPI

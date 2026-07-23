@@ -51,7 +51,7 @@ def create_expense_categories_router(db):
             if copropriete_id:
                 pq["copropriete_id"] = copropriete_id
             accs = await db.pcmn_accounts.find(pq, {"_id": 0}).to_list(1000)
-            amap = {a["number"]: a["name"] for a in accs}
+            amap = {a["number"]: a.get("name", "") for a in accs}
             for c in cats:
                 c["account_name"] = amap.get(c.get("account_number", ""), "")
         # Resolve default_distribution_key NAME for display
@@ -60,7 +60,7 @@ def create_expense_categories_router(db):
             keys = await db.distribution_keys.find(
                 {"id": {"$in": key_ids}}, {"_id": 0, "id": 1, "name": 1}
             ).to_list(500)
-            kmap = {k["id"]: k["name"] for k in keys}
+            kmap = {k["id"]: k.get("name", "") for k in keys}
             for c in cats:
                 k = c.get("default_distribution_key_id", "")
                 c["default_distribution_key_name"] = kmap.get(k, "") if k else ""
