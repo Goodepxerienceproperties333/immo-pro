@@ -4122,4 +4122,152 @@ def create_reports_router(db):
         result["steps"].append("Diagnostic termine")
         return result
 
+    @router.get("/debug-bilan-exclusions")
+    async def debug_bilan_exclusions(
+        request: Request,
+        copropriete_id: Optional[str] = None,
+        target_amount: float = 4.0,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+    ):
+        """Diagnostic chirurgical : trouve toutes les ecritures d'un montant cible
+        et verifie si chacune est INCLUSE ou EXCLUE du calcul du bilan (compte 499).
+
+        Usage :
+          /api/reports/debug-bilan-exclusions?copropriete_id=XXX&target_amount=4.0&date_from=2026-01-01&date_to=2026-12-31
+        """
+        copropriete_id = _require_copro(copropriete_id, request)
+
+        # 1) Charger TOUTES les ecritures de l'ACP (sans aucun filtre)
+        raw_q = {"copropriete_id": copropriete_id}
+        if date_from:
+            raw_q.setdefault("date", {})["$gte"] = date_from
+        if date_to:
+            raw_q.setdefault("date", {})["$lte"] = _date_lte(date_to)
+        all_entries = await db.journal_entries.find(raw_q, {"_id": 0}).to_list(100000)
+
+        # 2) Filtrer les ecritures ayant une ligne avec le montant cible
+        tolerance = 0.01
+        matching_entries = []
+        for e in all_entries:
+            for ln in e.get("lines", []):
+                d = float(ln.get("debit", 0) or 0)
+                c = float(ln.get("credit", 0) or 0)
+                if abs(d - target_amount) < tolerance or abs(c - target_amount) < tolerance:
+                    matching_entries.append(e)
+                    break
+        # Aussi chercher 12.00 (3x4)
+        for e in all_entries:
+            if e in matching_entries:
+                continue
+            for ln in e.get("lines", []):
+                d = float(ln.get("debit", 0) or 0)
+                c = float(ln.get("credit", 0) or 0)
+                if abs(d - 12.0) < tolerance or abs(c - 12.0) < tolerance:
+                    matching_entries.append(e)
+                    break
+
+        # 3) Pour chaque ecriture, simuler les filtres du bilan
+        # Charger les valid_ac_je_ids (factures liees)
+        inv_q = {"copropriete_id": copropriete_id}
+        if date_to:
+            inv_q["date"] = {"$lte": _date_lte(date_to)}
+        invoices = await db.invoices.find(inv_q, {"_id": 0, "journal_entry_id": 1}).to_list(50000)
+        valid_ac_je_ids = {inv["journal_entry_id"] for inv in invoices if inv.get("journal_entry_id")}
+
+        # Dedup FI signature
+        fi_dedup_excluded = set()
+        try:
+            deduped = _dedup_duplicate_auto_fi_entries(all_entries)
+            deduped_ids = {e.get("id") for e in deduped}
+            fi_dedup_excluded = {e.get("id") for e in all_entries if e.get("id") not in deduped_ids}
+        except Exception:
+            pass
+
+        results = []
+        for e in matching_entries:
+            eid = e.get("id", "")
+            jtype = e.get("journal_type", "")
+            exclusion_reasons = []
+            included = True
+
+            # Filtre 1: AN sans is_opening_balance
+            if jtype == "AN" and not e.get("is_opening_balance"):
+                exclusion_reasons.append("AN sans is_opening_balance=True (exclue)")
+                included = False
+
+            # Filtre 2: reversed / is_reversal
+            if e.get("reversed"):
+                exclusion_reasons.append("reversed=True (extournee)")
+                included = False
+            if e.get("is_reversal"):
+                exclusion_reasons.append("is_reversal=True (contre-passation)")
+                included = False
+
+            # Filtre 3: is_regularization
+            if e.get("is_regularization"):
+                exclusion_reasons.append("is_regularization=True")
+                included = False
+
+            # Filtre 4: reference OD-REG- ou EXT-
+            ref = e.get("reference", "")
+            if ref.startswith("OD-REG-") or ref.startswith("EXT-"):
+                exclusion_reasons.append(f"reference={ref} (OD-REG-/EXT- prefix)")
+                included = False
+
+            # Filtre 5: dedup FI auto
+            if eid in fi_dedup_excluded:
+                exclusion_reasons.append("FI auto-generee en doublon (dedup FI)")
+                included = False
+
+            # Filtre 6: AC orpheline (pas de facture liee)
+            if jtype == "AC" and valid_ac_je_ids and eid not in valid_ac_je_ids:
+                exclusion_reasons.append("AC orpheline (aucune facture ne pointe vers cette ecriture)")
+                included = False
+
+            # Lister les lignes avec le montant cible
+            target_lines = []
+            for ln in e.get("lines", []):
+                d = float(ln.get("debit", 0) or 0)
+                c = float(ln.get("credit", 0) or 0)
+                if abs(d - target_amount) < tolerance or abs(c - target_amount) < tolerance or abs(d - 12.0) < tolerance or abs(c - 12.0) < tolerance:
+                    target_lines.append({
+                        "account_number": ln.get("account_number", ""),
+                        "account_name": ln.get("account_name", ""),
+                        "debit": d,
+                        "credit": c,
+                        "class": ln.get("account_number", "")[0] if ln.get("account_number") else "",
+                        "impacts_499": ln.get("account_number", "")[0] in ("6", "7") if ln.get("account_number") else False,
+                    })
+
+            results.append({
+                "entry_id": eid,
+                "date": e.get("date", ""),
+                "journal_type": jtype,
+                "reference": ref,
+                "description": e.get("description", ""),
+                "total_debit": e.get("total_debit", 0),
+                "total_credit": e.get("total_credit", 0),
+                "is_opening_balance": e.get("is_opening_balance", False),
+                "reversed": e.get("reversed", False),
+                "is_reversal": e.get("is_reversal", False),
+                "is_regularization": e.get("is_regularization", False),
+                "auto_generated": e.get("auto_generated", False),
+                "import_session_id": e.get("import_session_id", ""),
+                "source_type": e.get("source_type", ""),
+                "INCLUDED_IN_BILAN": included,
+                "EXCLUSION_REASONS": exclusion_reasons if exclusion_reasons else ["AUCUNE - incluse dans le calcul"],
+                "target_lines": target_lines,
+            })
+
+        return {
+            "copropriete_id": copropriete_id,
+            "target_amount": target_amount,
+            "total_entries_in_period": len(all_entries),
+            "matching_entries": len(results),
+            "included_count": sum(1 for r in results if r["INCLUDED_IN_BILAN"]),
+            "excluded_count": sum(1 for r in results if not r["INCLUDED_IN_BILAN"]),
+            "entries": sorted(results, key=lambda x: x["date"]),
+        }
+
     return router
