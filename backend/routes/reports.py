@@ -13,6 +13,19 @@ def _apply_copro(q: dict, copropriete_id: Optional[str]) -> dict:
     return q
 
 
+def _date_lte(date_str: str) -> str:
+    """Normalise une date pour un filtre Mongo $lte incluant toute la journee.
+
+    Les ecritures peuvent etre stockees avec un composant horaire
+    (ex: '2026-12-31T12:00:00'). La comparaison de chaines avec
+    '2026-12-31' exclut alors ces ecritures car 'T' > '' au 11e caractere.
+    En ajoutant T23:59:59 on garantit l'inclusion de toute la journee.
+    """
+    if date_str and len(date_str) == 10:
+        return date_str + "T23:59:59"
+    return date_str
+
+
 def _require_copro(copropriete_id: Optional[str], request) -> str:
     """Resolve & require copropriete_id from param OR header X-Copropriete-Id.
     Raise 400 if missing. Chinese walls strict - regle non-modifiable."""
@@ -400,7 +413,7 @@ async def _build_decompte_annuel_pdf(db, owner_id, copropriete_id, fiscal_year_i
     muts_for_owner_h = await db.mutations.find(
         {"copropriete_id": copropriete_id,
          "$or": [{"from_owner_id": owner_id}, {"to_owner_id": owner_id}],
-         "sale_date": {"$gte": fy["start_date"], "$lte": fy["end_date"]}},
+         "sale_date": {"$gte": fy["start_date"], "$lte": _date_lte(fy["end_date"])}},
         {"_id": 0, "lot_id": 1},
     ).to_list(1000)
     existing_lot_ids_h = {l["id"] for l in owner_lots}
@@ -419,7 +432,7 @@ async def _build_decompte_annuel_pdf(db, owner_id, copropriete_id, fiscal_year_i
 
     invoices = await db.invoices.find(
         {"copropriete_id": copropriete_id,
-         "date": {"$gte": fy["start_date"], "$lte": fy["end_date"]}},
+         "date": {"$gte": fy["start_date"], "$lte": _date_lte(fy["end_date"])}},
         {"_id": 0}
     ).sort("date", 1).to_list(10000)
 
@@ -436,7 +449,7 @@ async def _build_decompte_annuel_pdf(db, owner_id, copropriete_id, fiscal_year_i
     mutations_docs = await db.mutations.find(
         {"copropriete_id": copropriete_id,
          "lot_id": {"$in": owner_lot_ids_helper},
-         "sale_date": {"$gte": fy["start_date"], "$lte": fy["end_date"]}},
+         "sale_date": {"$gte": fy["start_date"], "$lte": _date_lte(fy["end_date"])}},
         {"_id": 0},
     ).to_list(1000) if owner_lot_ids_helper else []
 
@@ -447,7 +460,7 @@ async def _build_decompte_annuel_pdf(db, owner_id, copropriete_id, fiscal_year_i
     mutation_entries_docs = await db.journal_entries.find(
         {"copropriete_id": copropriete_id,
          "source_type": "lot_mutation",
-         "date": {"$gte": fy["start_date"], "$lte": fy["end_date"]},
+         "date": {"$gte": fy["start_date"], "$lte": _date_lte(fy["end_date"])},
          "reversed": {"$ne": True},
          "is_reversal": {"$ne": True},
          "lines.third_party_id": owner_id},
@@ -466,7 +479,7 @@ async def _build_decompte_annuel_pdf(db, owner_id, copropriete_id, fiscal_year_i
     ]
     owner_ledger_query = {
         "copropriete_id": copropriete_id,
-        "date": {"$gte": fy["start_date"], "$lte": fy["end_date"]},
+        "date": {"$gte": fy["start_date"], "$lte": _date_lte(fy["end_date"])},
         "reversed": {"$ne": True},
         "is_reversal": {"$ne": True},
     }
@@ -480,14 +493,14 @@ async def _build_decompte_annuel_pdf(db, owner_id, copropriete_id, fiscal_year_i
 
     fund_calls = await db.fund_calls.find(
         {"copropriete_id": copropriete_id,
-         "date": {"$gte": fy["start_date"], "$lte": fy["end_date"]}},
+         "date": {"$gte": fy["start_date"], "$lte": _date_lte(fy["end_date"])}},
         {"_id": 0}
     ).sort("date", 1).to_list(10000)
 
     owner_vcs_digits = owner.get("vcs_digits", "")
     all_txns = await db.bank_transactions.find(
         {"copropriete_id": copropriete_id,
-         "date": {"$gte": fy["start_date"], "$lte": fy["end_date"]}},
+         "date": {"$gte": fy["start_date"], "$lte": _date_lte(fy["end_date"])}},
         {"_id": 0}
     ).sort("date", 1).to_list(100000)
     payments = []
@@ -764,9 +777,15 @@ async def compute_bilan_data(db, copropriete_id: str, date_to: Optional[str] = N
         if fy and not date_to:
             date_to = fy["end_date"]
 
+    # Normaliser date_to pour inclure TOUTE la journee (23:59:59).
+    # Sans ce suffix, les ecritures stockees avec un composant horaire
+    # (ex: "2026-12-31T12:00:00") sont exclues car la comparaison de
+    # chaines "2026-12-31T..." > "2026-12-31" est True -> $lte echoue.
+    date_to_lte = _date_lte(date_to) if date_to else None
+
     q = _apply_copro({}, copropriete_id)
-    if date_to:
-        q["date"] = {"$lte": date_to}
+    if date_to_lte:
+        q["date"] = {"$lte": date_to_lte}
     # iter90gk : exclure les AN de CLOTURE (duplicats cumulatifs de N-1)
     # mais INCLURE les AN d'OUVERTURE (wizard) marquees `is_opening_balance=True`.
     # Sans cette inclusion, un ACP frais importe via le wizard perd ses
@@ -816,8 +835,8 @@ async def compute_bilan_data(db, copropriete_id: str, date_to: Optional[str] = N
     # existent, pour ne pas casser les scenarii de test ou les ACPs legacy
     # sans factures materialisees.
     inv_q_bilan = {"copropriete_id": copropriete_id}
-    if date_to:
-        inv_q_bilan["date"] = {"$lte": date_to}
+    if date_to_lte:
+        inv_q_bilan["date"] = {"$lte": date_to_lte}
     invoices_for_bilan = await db.invoices.find(
         inv_q_bilan, {"_id": 0, "journal_entry_id": 1}
     ).to_list(50000)
@@ -1414,7 +1433,7 @@ def create_reports_router(db):
             if date_from:
                 q["date"]["$gte"] = date_from
             if date_to:
-                q["date"]["$lte"] = date_to
+                q["date"]["$lte"] = _date_lte(date_to)
 
         entries = await db.journal_entries.find(q, {"_id": 0}).sort("date", 1).to_list(100000)
 
@@ -1463,7 +1482,7 @@ def create_reports_router(db):
             if date_from:
                 q["date"]["$gte"] = date_from
             if date_to:
-                q["date"]["$lte"] = date_to
+                q["date"]["$lte"] = _date_lte(date_to)
 
         entries = await db.journal_entries.find(q, {"_id": 0}).to_list(100000)
         balances = {}
@@ -1647,7 +1666,7 @@ def create_reports_router(db):
             if date_from:
                 q["date"]["$gte"] = date_from
             if date_to:
-                q["date"]["$lte"] = date_to
+                q["date"]["$lte"] = _date_lte(date_to)
         # Memes filtres que compute_bilan_data pour coherence stricte
         q["$or"] = [
             {"journal_type": {"$ne": "AN"}},
@@ -1671,7 +1690,7 @@ def create_reports_router(db):
             if date_from:
                 inv_q_res["date"]["$gte"] = date_from
             if date_to:
-                inv_q_res["date"]["$lte"] = date_to
+                inv_q_res["date"]["$lte"] = _date_lte(date_to)
         invoices_for_res = await db.invoices.find(
             inv_q_res, {"_id": 0, "journal_entry_id": 1}
         ).to_list(50000)
@@ -1854,7 +1873,7 @@ def create_reports_router(db):
         target_ids = list(all_owner_ids if owner_filter == "all" else current_owner_ids)
         owners = await db.owners.find({"id": {"$in": target_ids}}, {"_id": 0}).sort("name", 1).to_list(1000) if target_ids else []
 
-        inv_q = _apply_copro({"date": {"$gte": date_from or "2000-01-01", "$lte": date_to or "2099-12-31"}}, copropriete_id)
+        inv_q = _apply_copro({"date": {"$gte": date_from or "2000-01-01", "$lte": _date_lte(date_to or "2099-12-31")}}, copropriete_id)
         invoices = await db.invoices.find(inv_q, {"_id": 0}).to_list(10000)
 
         # iter90ej : fallback quotites via la default distribution_key quand
@@ -1899,7 +1918,7 @@ def create_reports_router(db):
                 ],
             }
         if date_to:
-            balance_q["date"] = {"$lte": date_to}
+            balance_q["date"] = {"$lte": _date_lte(date_to)}
         entries_for_balance = await db.journal_entries.find(
             balance_q,
             {"_id": 0, "id": 1, "lines": 1, "is_reversal": 1, "reversed": 1},
@@ -2102,7 +2121,7 @@ def create_reports_router(db):
             # Best-effort lookup of real fiscal year covering this period IN THIS ACP
             real_fy = await db.fiscal_years.find_one(
                 {"copropriete_id": copropriete_id,
-                 "start_date": {"$lte": fy["end_date"]},
+                 "start_date": {"$lte": _date_lte(fy["end_date"])},
                  "end_date": {"$gte": fy["start_date"]}},
                 {"_id": 0}
             )
@@ -2140,7 +2159,7 @@ def create_reports_router(db):
         muts_for_owner = await db.mutations.find(
             {"copropriete_id": copro_id_use,
              "$or": [{"from_owner_id": owner_id}, {"to_owner_id": owner_id}],
-             "sale_date": {"$gte": fy["start_date"], "$lte": fy["end_date"]}},
+             "sale_date": {"$gte": fy["start_date"], "$lte": _date_lte(fy["end_date"])}},
             {"_id": 0, "lot_id": 1},
         ).to_list(1000)
         existing_lot_ids = {l["id"] for l in owner_lots}
@@ -2160,7 +2179,7 @@ def create_reports_router(db):
         # Invoices in period
         invoices = await db.invoices.find(
             {"copropriete_id": copro_id_use,
-             "date": {"$gte": fy["start_date"], "$lte": fy["end_date"]}},
+             "date": {"$gte": fy["start_date"], "$lte": _date_lte(fy["end_date"])}},
             {"_id": 0}
         ).sort("date", 1).to_list(10000)
 
@@ -2174,7 +2193,7 @@ def create_reports_router(db):
         mutations_docs = await db.mutations.find(
             {"copropriete_id": copro_id_use,
              "lot_id": {"$in": owner_lot_ids_list},
-             "sale_date": {"$gte": fy["start_date"], "$lte": fy["end_date"]}},
+             "sale_date": {"$gte": fy["start_date"], "$lte": _date_lte(fy["end_date"])}},
             {"_id": 0},
         ).to_list(1000) if owner_lot_ids_list else []
 
@@ -2183,7 +2202,7 @@ def create_reports_router(db):
         mutation_entries_docs = await db.journal_entries.find(
             {"copropriete_id": copro_id_use,
              "source_type": "lot_mutation",
-             "date": {"$gte": fy["start_date"], "$lte": fy["end_date"]},
+             "date": {"$gte": fy["start_date"], "$lte": _date_lte(fy["end_date"])},
              "reversed": {"$ne": True},
              "is_reversal": {"$ne": True},
              "lines.third_party_id": owner_id},
@@ -2197,7 +2216,7 @@ def create_reports_router(db):
         ]
         _owner_ledger_q = {
             "copropriete_id": copro_id_use,
-            "date": {"$gte": fy["start_date"], "$lte": fy["end_date"]},
+            "date": {"$gte": fy["start_date"], "$lte": _date_lte(fy["end_date"])},
             "reversed": {"$ne": True},
             "is_reversal": {"$ne": True},
         }
@@ -2212,7 +2231,7 @@ def create_reports_router(db):
         # Fund calls in period
         fund_calls = await db.fund_calls.find(
             {"copropriete_id": copro_id_use,
-             "date": {"$gte": fy["start_date"], "$lte": fy["end_date"]}},
+             "date": {"$gte": fy["start_date"], "$lte": _date_lte(fy["end_date"])}},
             {"_id": 0}
         ).sort("date", 1).to_list(10000)
 
@@ -2220,7 +2239,7 @@ def create_reports_router(db):
         owner_vcs_digits = owner.get("vcs_digits", "")
         all_txns = await db.bank_transactions.find(
             {"copropriete_id": copro_id_use,
-             "date": {"$gte": fy["start_date"], "$lte": fy["end_date"]}},
+             "date": {"$gte": fy["start_date"], "$lte": _date_lte(fy["end_date"])}},
             {"_id": 0}
         ).sort("date", 1).to_list(100000)
         payments = []
@@ -2371,7 +2390,7 @@ def create_reports_router(db):
             raise HTTPException(404, "Copropriete non trouvee")
 
         q = {"copropriete_id": copropriete_id,
-             "date": {"$gte": date_from, "$lte": date_to}}
+             "date": {"$gte": date_from, "$lte": _date_lte(date_to)}}
         if journal_type:
             q["journal_type"] = journal_type.upper()
         entries = await db.journal_entries.find(q, {"_id": 0}).sort("date", 1).to_list(100000)
@@ -2410,7 +2429,7 @@ def create_reports_router(db):
             raise HTTPException(404, "Copropriete non trouvee")
 
         q = {"copropriete_id": copropriete_id,
-             "date": {"$gte": date_from, "$lte": date_to}}
+             "date": {"$gte": date_from, "$lte": _date_lte(date_to)}}
         if status:
             q["status"] = status
         invoices = await db.invoices.find(q, {"_id": 0}).sort("date", 1).to_list(100000)
@@ -2525,7 +2544,7 @@ def create_reports_router(db):
             if start_date:
                 je_q["date"]["$gte"] = start_date
             if end_date:
-                je_q["date"]["$lte"] = end_date
+                je_q["date"]["$lte"] = _date_lte(end_date)
         _exclude_reversals(je_q)
         entries = await db.journal_entries.find(je_q, {"_id": 0}).to_list(100000)
 
@@ -2544,7 +2563,7 @@ def create_reports_router(db):
             ],
         }
         if end_date:
-            je_q_cumul["date"] = {"$lte": end_date}
+            je_q_cumul["date"] = {"$lte": _date_lte(end_date)}
         _exclude_reversals(je_q_cumul)
         entries_cumul = await db.journal_entries.find(je_q_cumul, {"_id": 0}).to_list(100000)
         # Agregation cumulatif par owner_id x compte
@@ -2595,7 +2614,7 @@ def create_reports_router(db):
             if start_date:
                 bt_q["date"]["$gte"] = start_date
             if end_date:
-                bt_q["date"]["$lte"] = end_date
+                bt_q["date"]["$lte"] = _date_lte(end_date)
         all_bank_txns = await db.bank_transactions.find(bt_q, {"_id": 0}).to_list(100000)
 
         # VCS lookup
@@ -2944,7 +2963,7 @@ def create_reports_router(db):
             if start_date:
                 entry_q["date"]["$gte"] = start_date
             if end_date:
-                entry_q["date"]["$lte"] = end_date
+                entry_q["date"]["$lte"] = _date_lte(end_date)
         _exclude_reversals(entry_q)
         entries = await db.journal_entries.find(entry_q, {"_id": 0}).to_list(100000)
         seen_lines = set()
@@ -3330,7 +3349,7 @@ def create_reports_router(db):
             ],
         }
         if end_date:
-            je_q_cumul["date"] = {"$lte": end_date}
+            je_q_cumul["date"] = {"$lte": _date_lte(end_date)}
         _exclude_reversals(je_q_cumul)
         entries_cumul = await db.journal_entries.find(je_q_cumul, {"_id": 0}).to_list(100000)
         # Charge factures pour les fournisseurs orphelins

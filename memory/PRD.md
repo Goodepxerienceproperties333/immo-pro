@@ -14,46 +14,38 @@ Application de gestion de copropriete basee sur le droit belge (PCMN), incluant 
 ### Session courante (Juillet 2026)
 
 #### P0 - Workflow suggestion/validation auto-lettrage (DONE)
-- Backend: `_try_auto_lettrage_vcs` refactore pour stocker des SUGGESTIONS au lieu de lettrer directement
+- Backend: _try_auto_lettrage_vcs refactore pour SUGGESTIONS
 - 3 nouveaux endpoints: validate-suggestion, validate-all-suggestions, reject-suggestion
 - Frontend: Badges amber, boutons Valider/Rejeter, barre batch
 
 #### Simplification dialog categorisation bancaire (DONE)
-- Supprime le dropdown "Nature de depense" du dialog de categorisation
-- Le champ "Compte PCMN" (AccountSearchSelect) est maintenant le champ principal et unique
-- L'utilisateur tape directement le numero de compte (ex: 61 pour charges)
-- Garde: Cle de repartition, Montant, Description
-- Backend deja compatible (chemin account_number direct genere ecriture FI)
-- Teste avec 21 EUR: ecriture AC correctement generee
+- Supprime le dropdown "Nature de depense"
+- Champ PCMN AccountSearchSelect comme champ principal unique
+
+#### Fix filtre date $lte dans TOUS les rapports (DONE)
+- Fonction utilitaire _date_lte() ajoutee : ajoute T23:59:59 aux dates YYYY-MM-DD
+- Appliquee a TOUTES les requetes $lte dans reports.py (~30 occurrences)
+- Corrige l'ecart de 12 EUR sur le Boni (3 x 4 EUR frais bancaires Oct/Nov/Dec exclus)
+- Impacte: Bilan, Resultat d'exercice, Grand livre, Balance comptes, Balance tiers,
+  Decompte annuel, Liste depenses, Journaux PDF, Situation proprietaire
 
 #### Fix Balance de Tiers - Proprietaires manquants (DONE)
-- Corrige balance_tiers_owners et _compute_balance_tiers_for_ui
 - 3 sources de proprietaires ajoutees: lots.owner_ids, tier_accounts, mutations
 
 #### Endpoint diagnostic debug-owner-balance (DONE)
-- GET /api/reports/debug-owner-balance?copropriete_id=X&search=matexi&account=41010986
-- Diagnostic complet: tier_accounts, third_party_id, ecritures AN, solde recalcule
+- GET /api/reports/debug-owner-balance
 
 #### Script fix_matexi_balance.py (DONE)
-- Diagnostic + correction automatique du proprietaire Matexi dans l'ACP Gaura
-- Corrige tier_accounts et third_party_id sur les ecritures 41010986
-
-#### Nettoyage PCMN & Natures de depenses (sessions precedentes)
-- Garde-fou anti-doublons, scripts cleanup
 
 ### Sessions precedentes
-- Amelioration interface lettrage bancaire (montants identiques, tri, badge)
-- Bundle Import Dialog refonte
-- Verrou fiscal ameliore
-- Corrections journal_entry_id, Warning modal, Balance Tiers, MUT-F
-- Fix doublons fournisseurs, Cascade deletion, Auto-unlink bank txns
-- Isolation ACP, Fix chatbot, Layout grille, Spinner import
+- Nettoyage PCMN, Bundle Import Dialog, Verrou fiscal
+- Amelioration lettrage bancaire, Isolation ACP, Chatbot, Layout, Spinner
 
 ## Backlog prioritise
 
-### P0 - Scripts cleanup (user verification pending en production)
-- cleanup_pcmn.py, cleanup_expense_categories.py, audit_class6_entries.py
-- fix_matexi_balance.py (a executer en production)
+### P0 - Scripts production (user verification pending)
+- cleanup_pcmn.py, fix_matexi_balance.py
+- debug-owner-balance endpoint a tester
 
 ### P1 - Important
 - PCMN Consistency: aligner convention 8 chiffres comptes bancaires
