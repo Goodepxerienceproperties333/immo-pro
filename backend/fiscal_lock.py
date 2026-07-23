@@ -42,19 +42,17 @@ async def ensure_period_open(db, copropriete_id: str, date_iso: Optional[str],
         context: "ecriture", "facture", "appel de fonds", etc. (pour message)
     """
     if not copropriete_id:
-        # Pas de chinese-walls verifies ici, autre couche s'en occupe
         return
     if not date_iso:
         raise HTTPException(400, "Date manquante pour la verification de l'exercice fiscal")
 
-    # Normalise (YYYY-MM-DD)
     d10 = (date_iso or "")[:10]
     try:
-        datetime.strptime(d10, "%Y-%m-%d")
+        target_date = datetime.strptime(d10, "%Y-%m-%d")
     except Exception:
         raise HTTPException(400, f"Date invalide: {date_iso} (format attendu: YYYY-MM-DD)")
 
-    # Cherche un FY dont [start_date, end_date] englobe la date
+    # Fast path : comparaison de chaines ISO
     fy = await db.fiscal_years.find_one(
         {"copropriete_id": copropriete_id,
          "start_date": {"$lte": d10},
@@ -64,12 +62,46 @@ async def ensure_period_open(db, copropriete_id: str, date_iso: Optional[str],
     )
 
     if not fy:
-        # Aucun exercice ne couvre cette date
+        # Fallback : charge tous les FY de l'ACP et compare en datetime
+        # (gere les eventuels ecarts de format de date en base)
+        all_fys = await db.fiscal_years.find(
+            {"copropriete_id": copropriete_id},
+            {"_id": 0, "id": 1, "name": 1, "status": 1,
+             "start_date": 1, "end_date": 1}
+        ).to_list(50)
+        for candidate in all_fys:
+            try:
+                s = (candidate.get("start_date") or "")[:10]
+                e = (candidate.get("end_date") or "")[:10]
+                start_dt = datetime.strptime(s, "%Y-%m-%d")
+                end_dt = datetime.strptime(e, "%Y-%m-%d")
+                if start_dt <= target_date <= end_dt:
+                    fy = candidate
+                    break
+            except (ValueError, TypeError):
+                continue
+
+    if not fy:
+        # Diagnostic : liste les exercices existants pour aider l'utilisateur
+        diag_fys = await db.fiscal_years.find(
+            {"copropriete_id": copropriete_id},
+            {"_id": 0, "name": 1, "start_date": 1, "end_date": 1, "status": 1}
+        ).to_list(20)
+        diag = ""
+        if diag_fys:
+            parts = [
+                f"{f.get('name','')} ({_fmt(f.get('start_date',''))} au "
+                f"{_fmt(f.get('end_date',''))}, {f.get('status','?')})"
+                for f in diag_fys
+            ]
+            diag = " Exercices existants pour cette ACP : " + " ; ".join(parts) + "."
+        else:
+            diag = " Aucun exercice fiscal trouve pour cette ACP (copropriete_id=" + copropriete_id[:8] + "...)."
         raise HTTPException(
             400,
             f"Aucun exercice fiscal ouvert ne couvre la date du {_fmt(d10)}. "
             f"Pour saisir cette {context}, creez d'abord l'exercice correspondant "
-            "dans Comptabilite > Exercices fiscaux."
+            f"dans Comptabilite > Exercices fiscaux.{diag}"
         )
 
     if fy.get("status") == "closed":
@@ -83,7 +115,6 @@ async def ensure_period_open(db, copropriete_id: str, date_iso: Optional[str],
             "seront automatiquement contre-passees)."
         )
 
-    # FY ouvert -> OK
     return
 
 

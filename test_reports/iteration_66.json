@@ -1,0 +1,96 @@
+{
+  "summary": "Iteration 66 testing completed - Bundle Import Dialog refactoring and Fiscal Lock improvements verified. 20/20 backend tests passed. Fixed critical route ordering bug in invoices.py where /invoices/bundle-preview-block was shadowed by /invoices/{invoice_id}.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "/api/expense-categories",
+        "issue": "KeyError: 'name' when listing categories - unrelated to iter66 features",
+        "priority": "MEDIUM"
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {
+        "flow": "Invoices page load",
+        "issue": "500 error from /api/expense-categories endpoint (KeyError: 'name') - unrelated to iter66 features",
+        "affected_selectors": []
+      }
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter66_bundle_fiscal_lock.py",
+    "/app/test_reports/pytest/iter66_bundle_fiscal_lock.xml"
+  ],
+  "action_items": [
+    "FIXED: Route ordering bug in invoices.py - moved /invoices/bundle-preview-block BEFORE /invoices/{invoice_id} to prevent route shadowing",
+    "UNRELATED: Fix KeyError: 'name' in /app/backend/routes/expense_categories.py line 54 (some accounts missing 'name' field)"
+  ],
+  "critical_code_review_comments": [
+    "ROUTE ORDERING FIX (invoices.py):",
+    "1. /invoices/bundle-preview-block was defined AFTER /invoices/{invoice_id} causing route shadowing",
+    "2. FastAPI matches routes in order, so 'bundle-preview-block' was being treated as an invoice_id",
+    "3. Moved the endpoint before the parameterized route with a comment explaining the requirement",
+    "",
+    "FISCAL_LOCK.PY VERIFICATION:",
+    "1. ensure_period_open function exists with correct signature (db, copropriete_id, date_iso, context)",
+    "2. Fallback logic implemented: loads all fiscal years and compares using datetime.strptime when string comparison fails",
+    "3. Diagnostic message lists existing fiscal years when date is outside any fiscal year range",
+    "4. Handles 'closed' status with French error message about reopening",
+    "",
+    "BUNDLE ENDPOINTS VERIFICATION:",
+    "1. GET /api/invoices/bundle-preview-block returns 404 for invalid session_id with message 'Session bundle introuvable ou expiree'",
+    "2. POST /api/invoices/bundle-commit accepts 'cleanup' boolean parameter (line 2735: payload.get('cleanup', True))",
+    "",
+    "FRONTEND CODE REVIEW:",
+    "1. BundleImportDialog.js accepts suppliers prop with default empty array",
+    "2. Has full creation view (BlockCreationForm component) with PDF preview",
+    "3. Calls /api/invoices/bundle-preview-block for PDF preview",
+    "4. InvoicesPage.js passes suppliers={suppliers} to BundleImportDialog (line ~1965)"
+  ],
+  "updated_files": [
+    "/app/backend/routes/invoices.py",
+    "/app/backend/tests/test_iter66_bundle_fiscal_lock.py"
+  ],
+  "success_rate": {
+    "backend": "100% (20/20 passed)",
+    "frontend": "N/A - 500 error from unrelated expense_categories endpoint"
+  },
+  "seed_data_creation": "Tests create temporary copropriete and fiscal year for fiscal lock testing, cleaned up after tests",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Route ordering bug in invoices.py was fixed - /invoices/bundle-preview-block must be defined BEFORE /invoices/{invoice_id}. The expense_categories endpoint has a KeyError bug unrelated to iter66 features.",
+  "features_tested": {
+    "bundle_preview_block_endpoint": {
+      "status": "PASS",
+      "details": "GET /api/invoices/bundle-preview-block returns 404 for invalid session_id, 422 for missing required params"
+    },
+    "bundle_commit_cleanup_param": {
+      "status": "PASS",
+      "details": "POST /api/invoices/bundle-commit accepts cleanup boolean parameter without validation error"
+    },
+    "fiscal_lock_fallback": {
+      "status": "PASS",
+      "details": "ensure_period_open has fallback logic using datetime comparison when string comparison fails"
+    },
+    "fiscal_lock_diagnostic": {
+      "status": "PASS",
+      "details": "Error message lists existing fiscal years when date is outside any fiscal year range"
+    },
+    "bundle_import_dialog_suppliers_prop": {
+      "status": "PASS",
+      "details": "BundleImportDialog accepts suppliers prop with default empty array"
+    },
+    "invoices_page_passes_suppliers": {
+      "status": "PASS",
+      "details": "InvoicesPage passes suppliers={suppliers} to BundleImportDialog"
+    },
+    "route_ordering_fix": {
+      "status": "FIXED",
+      "details": "Moved /invoices/bundle-preview-block before /invoices/{invoice_id} to prevent route shadowing"
+    }
+  }
+}

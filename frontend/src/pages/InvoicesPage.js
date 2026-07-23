@@ -1962,6 +1962,8 @@ export default function InvoicesPage() {
         distKeys={distKeys}
         categories={categories}
         accounts={accounts}
+        suppliers={suppliers}
+        usedSupplierNames={[...new Set(invoices.map(i => (i.supplier || '').trim()).filter(Boolean))]}
         onSuccess={load}
       />
 

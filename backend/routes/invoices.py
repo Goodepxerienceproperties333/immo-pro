@@ -1872,6 +1872,37 @@ def create_invoices_router(db):
         }).sort("date", 1).to_list(500)
         return {"count": len(pending), "invoices": pending}
 
+    # NOTE: bundle-preview-block MUST be defined BEFORE /invoices/{invoice_id}
+    # to avoid route shadowing (FastAPI matches routes in order).
+    @router.get("/invoices/bundle-preview-block")
+    async def bundle_preview_block(
+        session_id: str = Query(...),
+        pages: str = Query(...),
+    ):
+        """Return PDF bytes for specific pages extracted from a bundle session.
+        Used by the frontend to show a PDF preview alongside the creation form.
+        pages: comma-separated 1-based page numbers (e.g. "3,4")."""
+        from import_wizard.pdf_invoices_bundle import extract_block_pdf
+
+        meta = await db.invoice_bundle_sessions.find_one(
+            {"session_id": session_id}, {"_id": 0}
+        )
+        if not meta:
+            raise HTTPException(404, "Session bundle introuvable ou expiree")
+        pdf_gid = meta.get("pdf_gridfs_id", "")
+        if not pdf_gid:
+            raise HTTPException(404, "Bundle PDF introuvable dans GridFS")
+        bundles_storage = get_invoice_bundles_storage(db)
+        try:
+            raw = await bundles_storage.download(pdf_gid)
+        except Exception:
+            raise HTTPException(404, "Bundle PDF introuvable ou expire")
+        page_list = [int(p.strip()) for p in pages.split(",") if p.strip().isdigit()]
+        if not page_list:
+            raise HTTPException(400, "Liste de pages invalide")
+        pdf_bytes = extract_block_pdf(raw, page_list)
+        return Response(content=pdf_bytes, media_type="application/pdf")
+
     @router.get("/invoices/{invoice_id}")
     async def get_invoice(invoice_id: str):
         inv = await db.invoices.find_one({"id": invoice_id}, {"_id": 0})
@@ -2701,16 +2732,17 @@ def create_invoices_router(db):
             except Exception as e:
                 errors.append({"block_id": block_id, "error": str(e)})
 
-        # iter87 : Cleanup the GridFS bundle PDF + the Mongo session doc
-        # (each block is committed atomically - no need to keep the bundle).
-        try:
-            await bundles_storage.delete(pdf_gid)
-        except Exception:
-            pass
-        try:
-            await db.invoice_bundle_sessions.delete_one({"session_id": session_id})
-        except Exception:
-            pass
+        # Cleanup : only delete session + GridFS if caller requests it
+        # (per-block creation from the full form sends cleanup=false).
+        if payload.get("cleanup", True):
+            try:
+                await bundles_storage.delete(pdf_gid)
+            except Exception:
+                pass
+            try:
+                await db.invoice_bundle_sessions.delete_one({"session_id": session_id})
+            except Exception:
+                pass
 
         return {
             "attached": attached,
