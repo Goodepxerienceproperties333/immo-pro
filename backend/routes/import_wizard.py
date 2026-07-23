@@ -1361,6 +1361,64 @@ def create_import_wizard_router(db):
         matched_key = 0
         matched_category = 0
         private_fees_detected = 0
+
+        # ---- PRE-PASS : creer tous les fournisseurs AVANT le commit ----
+        # Evite de perdre des fournisseurs quand toutes leurs factures
+        # tombent dans une periode fermee ou ont une date manquante.
+        for inv in merged_invoices:
+            supplier_aux = (inv.get("supplier_aux_code") or "").upper().strip()
+            inv_name = (inv.get("supplier_name") or "").strip()
+            if not supplier_aux and not inv_name:
+                continue
+            # Deja dans le cache ?
+            if supplier_aux and sup_by_aux.get(supplier_aux):
+                continue
+            # Match par nom dans le cache
+            found_in_cache = False
+            if inv_name:
+                from routes.suppliers import _norm_name_candidates
+                inv_cands = _norm_name_candidates(inv_name)
+                if inv_cands:
+                    for _aux_key, s_doc in sup_by_aux.items():
+                        other_cands = _norm_name_candidates(s_doc.get("name", ""))
+                        if inv_cands & other_cands:
+                            if supplier_aux:
+                                sup_by_aux[supplier_aux] = s_doc
+                            found_in_cache = True
+                            break
+            if found_in_cache:
+                continue
+            # Match DB
+            from routes.suppliers import find_duplicate_supplier
+            search_name = inv_name or supplier_aux
+            dup = await find_duplicate_supplier(db, name=search_name, copro_id=copro_id)
+            if dup:
+                sup_doc = dup["supplier"]
+                if supplier_aux:
+                    sup_by_aux[supplier_aux] = sup_doc
+                continue
+            # Auto-creation
+            new_sup = {
+                "id": str(uuid.uuid4()),
+                "name": inv_name or supplier_aux,
+                "auxiliary_code": supplier_aux,
+                "vat_number": "", "bce_number": "",
+                "address": "", "postal_code": "", "city": "",
+                "country": "Belgique",
+                "phone": "", "email": "", "iban": "", "bic": "",
+                "default_account": "",
+                "notes": f"Auto-cree par import factures (session {session_id})",
+                "copropriete_id": copro_id,
+                "import_session_id": session_id,
+                "created_at": _now_iso(),
+            }
+            await db.suppliers.insert_one(new_sup)
+            from tier_accounts import assign_supplier_account
+            new_sup = await assign_supplier_account(db, new_sup, copro_id)
+            if supplier_aux:
+                sup_by_aux[supplier_aux] = new_sup
+        # ---- FIN PRE-PASS ----
+
         for idx, inv in enumerate(merged_invoices):
             try:
                 date_str = (inv.get("date") or "").strip()
