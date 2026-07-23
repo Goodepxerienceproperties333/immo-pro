@@ -33,6 +33,7 @@ export default function BankingPage() {
   const [editingStmtId, setEditingStmtId] = useState(null);
   const [codaUploading, setCodaUploading] = useState(false);
   const [statementsLoading, setStatementsLoading] = useState(true);
+  const [txnLoading, setTxnLoading] = useState(false);
   const [lettrageDialog, setLettrageDialog] = useState(false);
   const [lettrageTarget, setLettrageTarget] = useState(null);
   const [editingTxn, setEditingTxn] = useState(null);
@@ -177,8 +178,15 @@ export default function BankingPage() {
 
   const loadStmtTxns = async (stmt) => {
     setSelectedStmt(stmt);
-    const { data } = await api.get(`/banking/statements/${stmt.id}`);
-    setTransactions(data.transactions || []);
+    setTxnLoading(true);
+    try {
+      const { data } = await api.get(`/banking/statements/${stmt.id}`);
+      setTransactions(data.transactions || []);
+    } catch {
+      setTransactions([]);
+    } finally {
+      setTxnLoading(false);
+    }
     setInlineLines([]); setEditingTxn(null);
   };
 
@@ -1073,6 +1081,15 @@ export default function BankingPage() {
                 )}
 
                 {/* Transaction table */}
+                {txnLoading ? (
+                  <div className="flex flex-col items-center justify-center py-16 gap-3" data-testid="txn-loading">
+                    <div className="relative">
+                      <div className="h-10 w-10 rounded-full border-[3px] border-slate-200" />
+                      <div className="absolute inset-0 h-10 w-10 rounded-full border-[3px] border-transparent border-t-[#022D52] animate-spin" />
+                    </div>
+                    <p className="text-xs text-slate-500 font-medium animate-pulse">Chargement des transactions...</p>
+                  </div>
+                ) : (
                 <Table>
                   <TableHeader><TableRow>
                     <TableHead className="w-8 px-1">
@@ -1177,6 +1194,7 @@ export default function BankingPage() {
                     ))}
                   </TableBody>
                 </Table>
+                )}
               </CardContent>
             </Card>
           ) : (
