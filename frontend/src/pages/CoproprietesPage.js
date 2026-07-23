@@ -166,6 +166,7 @@ export default function CoproprietesPage() {
     return deduped.filter(o =>
       (o.name || '').toLowerCase().includes(q) ||
       (o.email || '').toLowerCase().includes(q) ||
+      (o.auxiliary_code || '').toLowerCase().includes(q) ||
       (o.vcs_code || '').includes(q)
     ).slice(0, 12);
   };
@@ -693,41 +694,84 @@ export default function CoproprietesPage() {
                             {empty > 0 && <span className="text-slate-500"><strong>{empty}</strong> sans contrepartie</span>}
                           </div>
                           {orphans > 0 && (
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="h-6 px-2 text-[11px] border-amber-300 text-amber-700 hover:bg-amber-50"
-                              data-testid="lots-retry-match-btn"
-                              onClick={async () => {
-                                let nextOwners = owners;
-                                try {
-                                  const r = await api.get('/owners', { params: { include_unassigned: true, copropriete_id: 'all' } });
-                                  nextOwners = r.data || [];
-                                  setOwners(nextOwners);
-                                } catch (_e) { /* keep cache */ }
-                                let matched2 = 0;
-                                setForm(f => {
-                                  const lots = (f.lots || []).map(l => {
-                                    if ((l.owner_ids || []).length > 0) return l;
-                                    const aux = (l._imported_owner_aux || '').trim().toUpperCase();
-                                    const oname = (l._imported_owner_name || '').toLowerCase().trim();
-                                    let m = null;
-                                    if (aux) m = nextOwners.find(o => (o.auxiliary_code || '').toUpperCase() === aux);
-                                    if (!m && oname) m = nextOwners.find(o => {
-                                      const n = (o.name || '').toLowerCase().trim();
-                                      return n === oname || n.includes(oname) || oname.includes(n);
+                            <div className="flex items-center gap-2">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-6 px-2 text-[11px] border-emerald-400 text-emerald-700 hover:bg-emerald-50"
+                                data-testid="lots-create-missing-owners-btn"
+                                onClick={async () => {
+                                  const orphanLots = (form.lots || []).filter(l =>
+                                    (l.owner_ids || []).length === 0 && (l._imported_owner_name || l._imported_owner_aux)
+                                  );
+                                  if (!orphanLots.length) { toast.info('Aucun orphelin'); return; }
+                                  let created = 0;
+                                  const copro_id = editing?.id || '';
+                                  for (const l of orphanLots) {
+                                    const name = (l._imported_owner_name || l._imported_owner_aux || '').trim();
+                                    const aux = (l._imported_owner_aux || '').trim();
+                                    if (!name) continue;
+                                    try {
+                                      await api.post('/owners?reuse_on_duplicate=true', {
+                                        name, auxiliary_code: aux,
+                                        copropriete_id: copro_id,
+                                        first_name: '', last_name: '', address: '', postal_code: '', city: '',
+                                        country: 'Belgique', email: '', phone: '',
+                                      });
+                                      created++;
+                                    } catch (e) {
+                                      console.warn('Owner creation failed:', name, e);
+                                    }
+                                  }
+                                  if (created > 0) {
+                                    toast.success(`${created} proprietaire(s) cree(s). Relancez l'auto-affectation.`);
+                                    try {
+                                      const r = await api.get('/owners', { params: { include_unassigned: true, copropriete_id: 'all' } });
+                                      setOwners(r.data || []);
+                                    } catch { /* ignore */ }
+                                  } else {
+                                    toast.info('Aucun proprietaire cree (deja existants ou donnees insuffisantes)');
+                                  }
+                                }}
+                              >
+                                Creer les proprietaires manquants
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-6 px-2 text-[11px] border-amber-300 text-amber-700 hover:bg-amber-50"
+                                data-testid="lots-retry-match-btn"
+                                onClick={async () => {
+                                  let nextOwners = owners;
+                                  try {
+                                    const r = await api.get('/owners', { params: { include_unassigned: true, copropriete_id: 'all' } });
+                                    nextOwners = r.data || [];
+                                    setOwners(nextOwners);
+                                  } catch (_e) { /* keep cache */ }
+                                  let matched2 = 0;
+                                  setForm(f => {
+                                    const lots = (f.lots || []).map(l => {
+                                      if ((l.owner_ids || []).length > 0) return l;
+                                      const aux = (l._imported_owner_aux || '').trim().toUpperCase();
+                                      const oname = (l._imported_owner_name || '').toLowerCase().trim();
+                                      let m = null;
+                                      if (aux) m = nextOwners.find(o => (o.auxiliary_code || '').toUpperCase() === aux);
+                                      if (!m && oname) m = nextOwners.find(o => {
+                                        const n = (o.name || '').toLowerCase().trim();
+                                        return n === oname || n.includes(oname) || oname.includes(n);
+                                      });
+                                      if (m) { matched2++; return { ...l, owner_id: m.id, owner_ids: [m.id] }; }
+                                      return l;
                                     });
-                                    if (m) { matched2++; return { ...l, owner_id: m.id, owner_ids: [m.id] }; }
-                                    return l;
+                                    return { ...f, lots };
                                   });
-                                  return { ...f, lots };
-                                });
-                                if (matched2 > 0) toast.success(`${matched2} lot(s) nouvellement affecte(s)`);
-                                else toast.info('Aucun nouveau rattachement - importez d\'abord les proprietaires correspondants');
-                              }}
-                            >
-                              Reessayer l&apos;auto-affectation
-                            </Button>
+                                  if (matched2 > 0) toast.success(`${matched2} lot(s) nouvellement affecte(s)`);
+                                  else toast.info('Aucun nouveau rattachement - importez d\'abord les proprietaires correspondants');
+                                }}
+                              >
+                                Reessayer l&apos;auto-affectation
+                              </Button>
+                            </div>
                           )}
                         </div>
                       );
@@ -807,7 +851,7 @@ export default function CoproprietesPage() {
                               onChange={e => setOwnerSearchByLot({...ownerSearchByLot, [i]: e.target.value})}
                               onFocus={() => { setOwnerFocusLot(i); refreshOwnersIfStale(); }}
                               onBlur={() => { setTimeout(() => setOwnerFocusLot(prev => prev === i ? null : prev), 180); }}
-                              placeholder="Cliquez pour voir la liste, ou tapez nom / email / VCS..."
+                              placeholder="Tapez nom / email / code auxiliaire / VCS..."
                               className="pl-8 h-8 text-sm"
                               data-testid={`lot-${i}-owner-search`}
                             />
