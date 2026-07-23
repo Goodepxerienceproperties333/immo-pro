@@ -56,6 +56,8 @@ export default function BankingPage() {
   const [batchInvoiceSearch, setBatchInvoiceSearch] = useState('');
   // 1 txn -> N invoices (multi-selection des factures dans le dialog lettrage de transaction)
   const [selectedInvoiceIds, setSelectedInvoiceIds] = useState(new Set());
+  // Filtre "montants identiques" dans le dialog lettrage
+  const [amountMatchFilter, setAmountMatchFilter] = useState(false);
   // iter90eb : Liens deja lettres sur la transaction en cours d'ouverture
   //   { matched, match_type, lettrage_code, invoices[], owner, supplier, sibling_transactions[] }
   const [letteredLinks, setLetteredLinks] = useState(null);
@@ -494,6 +496,7 @@ export default function BankingPage() {
     setLettrageDialog(true);
     setLookupQuery('');
     setSelectedInvoiceIds(new Set());
+    setAmountMatchFilter(false);
     // iter90eb : charge les liens deja lettres sur cette txn
     setLetteredLinks(null);
     setLetteredLinksLoading(true);
@@ -1411,13 +1414,29 @@ export default function BankingPage() {
               </TabsContent>
 
               <TabsContent value="invoices" className="mt-0">
-                <Input
-                  placeholder="Filtrer par fournisseur, numero ou description..."
-                  value={lookupQuery}
-                  onChange={e => setLookupQuery(e.target.value)}
-                  className="mb-3"
-                  data-testid="lettrage-invoice-search"
-                />
+                <div className="flex items-center gap-2 mb-3">
+                  <Input
+                    placeholder="Filtrer par fournisseur, numero ou description..."
+                    value={lookupQuery}
+                    onChange={e => setLookupQuery(e.target.value)}
+                    className="flex-1"
+                    data-testid="lettrage-invoice-search"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setAmountMatchFilter(f => !f)}
+                    className={`shrink-0 flex items-center gap-1.5 px-3 py-2 rounded-md border text-xs font-medium transition-colors ${
+                      amountMatchFilter
+                        ? 'bg-[#022D52] text-white border-[#022D52]'
+                        : 'bg-white text-slate-700 border-slate-200 hover:border-[#022D52]/50 hover:bg-slate-50'
+                    }`}
+                    data-testid="lettrage-amount-match-filter"
+                    title="Afficher uniquement les factures dont le montant correspond a la transaction (tolerance +/- 0,01 EUR)"
+                  >
+                    <Tag size={12} />
+                    Montants identiques
+                  </button>
+                </div>
                 <div className="text-[11px] text-slate-500 mb-3 flex items-center gap-4">
                   <span className="flex items-center gap-1.5"><span className="inline-block w-2.5 h-2.5 rounded-full bg-red-400" /> A lettrer</span>
                   <span className="flex items-center gap-1.5"><span className="inline-block w-2.5 h-2.5 rounded-full bg-green-400" /> Deja lettree</span>
@@ -1449,7 +1468,13 @@ export default function BankingPage() {
                   {(() => {
                     const cpName = (lettrageTarget?.counterparty_name || '').toLowerCase().trim();
                     const q = (lookupQuery || '').toLowerCase().trim();
+                    const txnAmt = Math.abs(Number(lettrageTarget?.amount || 0));
                     const list = invoices.filter(inv => {
+                      // Filtre montant identique (tolerance 0.01 EUR)
+                      if (amountMatchFilter) {
+                        const invAmt = Math.abs(Number(inv.total_amount || 0));
+                        if (Math.abs(invAmt - txnAmt) > 0.01) return false;
+                      }
                       if (q) {
                         return (inv.supplier || '').toLowerCase().includes(q)
                             || (inv.number || '').toLowerCase().includes(q)
@@ -1461,6 +1486,11 @@ export default function BankingPage() {
                       }
                       return true;
                     }).sort((a, b) => {
+                      // Tri : montant identique en premier (toujours)
+                      const aMatch = Math.abs(Math.abs(Number(a.total_amount || 0)) - txnAmt) <= 0.01 ? 0 : 1;
+                      const bMatch = Math.abs(Math.abs(Number(b.total_amount || 0)) - txnAmt) <= 0.01 ? 0 : 1;
+                      if (aMatch !== bMatch) return aMatch - bMatch;
+                      // Puis : non-payes avant payes
                       const aPaid = a.status === 'paid' ? 1 : 0;
                       const bPaid = b.status === 'paid' ? 1 : 0;
                       if (aPaid !== bPaid) return aPaid - bPaid;
@@ -1470,7 +1500,8 @@ export default function BankingPage() {
                     return list.map(inv => {
                       const isPaid = inv.status === 'paid';
                       const isSelected = selectedInvoiceIds.has(inv.id);
-                      const borderClr = isPaid ? 'border-l-green-400 bg-green-50/40' : isSelected ? 'border-l-[#022D52] bg-blue-50/50' : 'border-l-red-400 bg-red-50/30';
+                      const isAmountMatch = Math.abs(Math.abs(Number(inv.total_amount || 0)) - txnAmt) <= 0.01;
+                      const borderClr = isPaid ? 'border-l-green-400 bg-green-50/40' : isSelected ? 'border-l-[#022D52] bg-blue-50/50' : isAmountMatch ? 'border-l-amber-400 bg-amber-50/30' : 'border-l-red-400 bg-red-50/30';
                       return (
                         <div
                           key={inv.id}
@@ -1495,6 +1526,9 @@ export default function BankingPage() {
                               {isPaid
                                 ? <span className="text-[10px] bg-green-100 text-green-800 px-2 py-0.5 rounded-full font-semibold border border-green-300">PAYE</span>
                                 : <span className="text-[10px] bg-red-100 text-red-800 px-2 py-0.5 rounded-full font-semibold border border-red-300">A PAYER</span>}
+                              {isAmountMatch && !isPaid && (
+                                <span className="text-[10px] bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full font-semibold border border-amber-300" data-testid={`amount-match-badge-${inv.id}`}>= MONTANT</span>
+                              )}
                             </div>
                             <div className="text-right shrink-0">
                               <div className="font-mono font-semibold text-slate-900 text-sm leading-tight">{Number(inv.total_amount || 0).toFixed(2)} <span className="text-[10px] text-slate-500">EUR</span></div>
