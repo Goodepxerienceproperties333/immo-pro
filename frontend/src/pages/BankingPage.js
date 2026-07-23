@@ -807,7 +807,26 @@ export default function BankingPage() {
         </Button>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-5 gap-4 relative">
+        {/* Overlay d'upload visible */}
+        {(codaUploading || importUploading) && (
+          <div className="absolute inset-0 z-30 bg-white/80 backdrop-blur-sm rounded-lg flex flex-col items-center justify-center gap-4" data-testid="upload-overlay">
+            <div className="relative">
+              <div className="h-14 w-14 rounded-full border-4 border-slate-200" />
+              <div className="absolute inset-0 h-14 w-14 rounded-full border-4 border-transparent border-t-[#022D52] animate-spin" />
+            </div>
+            <div className="text-center">
+              <p className="text-sm font-semibold text-[#022D52]">
+                {codaUploading ? 'Analyse du fichier CODA...' : 'Extraction IA en cours...'}
+              </p>
+              <p className="text-xs text-slate-500 mt-1">
+                {codaUploading
+                  ? 'Lecture et verification des mouvements bancaires'
+                  : 'Analyse des PDF/CSV par intelligence artificielle — cela peut prendre quelques instants'}
+              </p>
+            </div>
+          </div>
+        )}
         {/* Statements sidebar */}
         <div className="space-y-2 lg:col-span-1">
           <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold px-1">
