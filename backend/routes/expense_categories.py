@@ -8,7 +8,33 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime, timezone
-import uuid
+import uuid, re, unicodedata
+
+
+def _norm_cat_name(name: str) -> str:
+    """Normalize category name for similarity comparison."""
+    if not name:
+        return ""
+    s = name.lower().strip()
+    s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode("ascii")
+    s = re.sub(r"[^a-z0-9 ]", "", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
+def _cat_names_similar(a: str, b: str) -> bool:
+    """Return True if two normalised nature names are similar enough to flag."""
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    if a in b or b in a:
+        return True
+    wa, wb = set(a.split()), set(b.split())
+    if not wa or not wb:
+        return False
+    overlap = len(wa & wb)
+    return overlap / max(len(wa), len(wb)) >= 0.7
 
 
 class ExpenseCategoryInput(BaseModel):
@@ -108,6 +134,24 @@ def create_expense_categories_router(db):
                     f"dans cette ACP (id {existing_name.get('id','')[:8]}). "
                     "Choisissez un nom different ou modifiez la nature existante.",
                 )
+        # Garde-fou anti-doublons similaires : bloque la creation si un nom
+        # tres proche existe deja (ex: "Ascenseur" vs "Ascenseurs").
+        if name_clean:
+            norm_new = _norm_cat_name(name_clean)
+            if norm_new:
+                all_cats = await db.expense_categories.find(
+                    {"copropriete_id": data.copropriete_id or ""},
+                    {"_id": 0, "id": 1, "name": 1, "account_number": 1},
+                ).to_list(500)
+                for cat in all_cats:
+                    if _cat_names_similar(norm_new, _norm_cat_name(cat.get("name", ""))):
+                        raise HTTPException(
+                            409,
+                            f"Une nature similaire existe deja : '{cat.get('name','')}' "
+                            f"(compte {cat.get('account_number','')}). "
+                            f"Utilisez cette nature existante plutot que de creer "
+                            f"'{name_clean}' qui est un doublon potentiel."
+                        )
         # iter90ex : suppression du blocage 1:1 (compte PCMN <-> nature).
         # Plusieurs natures de depense peuvent partager le meme compte
         # PCMN (ex: "RC copro" et "Assurance RC CoC & Comm.aux comptes"

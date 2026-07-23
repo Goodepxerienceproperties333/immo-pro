@@ -4,8 +4,34 @@ from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime, timezone
 from pathlib import Path
-import uuid
+import uuid, re, unicodedata
 from gridfs_storage import get_journal_attachments_storage
+
+
+def _norm_pcmn_name(name: str) -> str:
+    """Normalize PCMN account name for similarity comparison."""
+    if not name:
+        return ""
+    s = name.lower().strip()
+    s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode("ascii")
+    s = re.sub(r"[^a-z0-9 ]", "", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
+def _pcmn_names_similar(a: str, b: str) -> bool:
+    """Return True if two normalised PCMN names are similar enough to be duplicates."""
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    if a in b or b in a:
+        return True
+    wa, wb = set(a.split()), set(b.split())
+    if not wa or not wb:
+        return False
+    overlap = len(wa & wb)
+    return overlap / max(len(wa), len(wb)) >= 0.7
 
 # Legacy path kept ONLY for backward-compat fallback reads (iter87 migration).
 ATTACHMENTS_DIR = Path("/app/uploads/journal_attachments")
@@ -100,6 +126,25 @@ def create_accounting_router(db):
         if existing:
             raise HTTPException(400, "Ce numero de compte existe deja dans cette ACP")
         class_num = data.class_num if data.class_num else int(data.number[0])
+        # Garde-fou anti-doublons : interdit la creation d'un compte 6/7xxx
+        # si un compte avec un nom similaire existe deja dans la meme ACP.
+        if class_num in (6, 7) and data.name:
+            norm_new = _norm_pcmn_name(data.name)
+            if norm_new:
+                sim_q = {"class_num": class_num}
+                if data.copropriete_id:
+                    sim_q["copropriete_id"] = data.copropriete_id
+                candidates = await db.pcmn_accounts.find(
+                    sim_q, {"_id": 0, "number": 1, "name": 1}
+                ).to_list(500)
+                for acc in candidates:
+                    if _pcmn_names_similar(norm_new, _norm_pcmn_name(acc.get("name", ""))):
+                        raise HTTPException(
+                            409,
+                            f"Un compte similaire existe deja : {acc['number']} - {acc.get('name','')}. "
+                            f"Utilisez ce compte existant plutot que d'en creer un nouveau "
+                            f"(numero demande : {data.number} - {data.name})."
+                        )
         typ = data.type or ("balance" if class_num <= 5 else "result")
         doc = {
             "number": data.number,

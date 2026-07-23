@@ -1,0 +1,102 @@
+{
+  "summary": "Iteration 67 testing completed - All 4 features verified: PCMN similarity guard (class 6/7), expense category similarity guard, bundle-preview-block endpoint, and fiscal lock fallback. 13/13 backend tests passed.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter67_pcmn_cleanup_guards.py",
+    "/app/test_reports/pytest/iter67_pcmn_cleanup.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "PCMN SIMILARITY GUARD (accounting.py lines 11-35, 118-155):",
+    "1. _norm_pcmn_name() normalizes names: lowercase, remove accents, remove special chars",
+    "2. _pcmn_names_similar() checks: exact match, substring match (a in b or b in a), >70% word overlap",
+    "3. Guard only applies to class 6/7 accounts (charges/produits)",
+    "4. Returns 409 with helpful message showing existing similar account",
+    "",
+    "EXPENSE CATEGORY SIMILARITY GUARD (expense_categories.py lines 14-37, 137-154):",
+    "1. _norm_cat_name() and _cat_names_similar() use same logic as PCMN",
+    "2. Checks all existing categories in the ACP before creation",
+    "3. Returns 409 with message showing existing similar category",
+    "",
+    "BUNDLE-PREVIEW-BLOCK ENDPOINT (invoices.py line 1877):",
+    "1. GET /api/invoices/bundle-preview-block requires session_id and pages params",
+    "2. Returns 404 for invalid/expired session_id with message 'Session bundle introuvable ou expiree'",
+    "3. Returns 422 for missing required params",
+    "4. Route correctly placed BEFORE /invoices/{invoice_id} to avoid shadowing",
+    "",
+    "FISCAL LOCK FALLBACK (fiscal_lock.py lines 56-83):",
+    "1. ensure_period_open() first tries fast string comparison for fiscal year lookup",
+    "2. If no match, falls back to loading all fiscal years and comparing with datetime.strptime",
+    "3. Handles edge cases where date format in DB might differ",
+    "4. Returns helpful diagnostic message listing existing fiscal years when date is outside any period"
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter67_pcmn_cleanup_guards.py"
+  ],
+  "success_rate": {
+    "backend": "100% (13/13 passed)",
+    "frontend": "N/A - backend only testing requested"
+  },
+  "seed_data_creation": "Tests create temporary PCMN accounts, expense categories, fiscal years, and invoices with unique timestamps to avoid conflicts",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "All 4 features from iter67 are working correctly. The similarity guards use normalized name comparison with substring and word overlap detection. The bundle-preview-block endpoint is correctly positioned before the parameterized route.",
+  "features_tested": {
+    "pcmn_similarity_guard_class6": {
+      "status": "PASS",
+      "details": "POST /api/accounting/pcmn blocks similar names for class 6 accounts with 409 error"
+    },
+    "pcmn_similarity_guard_class7": {
+      "status": "PASS",
+      "details": "Same logic applies to class 7 accounts (produits)"
+    },
+    "pcmn_different_names_allowed": {
+      "status": "PASS",
+      "details": "Completely different names are allowed for new accounts"
+    },
+    "expense_category_similarity_guard": {
+      "status": "PASS",
+      "details": "POST /api/expense-categories blocks similar names with 409 error"
+    },
+    "expense_category_different_names_allowed": {
+      "status": "PASS",
+      "details": "Completely different category names are allowed"
+    },
+    "bundle_preview_block_invalid_session": {
+      "status": "PASS",
+      "details": "GET /api/invoices/bundle-preview-block returns 404 for invalid session_id"
+    },
+    "bundle_preview_block_missing_params": {
+      "status": "PASS",
+      "details": "Returns 422 for missing required params (session_id, pages)"
+    },
+    "fiscal_lock_fallback": {
+      "status": "PASS",
+      "details": "Invoices within fiscal year period are allowed, fallback datetime comparison works"
+    },
+    "fiscal_lock_blocks_outside_period": {
+      "status": "PASS",
+      "details": "Invoices with dates outside any fiscal year are blocked with 400 error"
+    },
+    "similarity_substring_match": {
+      "status": "PASS",
+      "details": "Names where one is substring of other are detected as similar"
+    },
+    "similarity_accent_normalization": {
+      "status": "PASS",
+      "details": "Accents are normalized before comparison"
+    },
+    "similarity_word_overlap": {
+      "status": "PASS",
+      "details": ">70% word overlap is detected as similar"
+    }
+  }
+}
