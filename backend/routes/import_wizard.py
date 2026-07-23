@@ -1385,7 +1385,7 @@ def create_import_wizard_router(db):
                 if supplier_aux:
                     supplier_doc = sup_by_aux.get(supplier_aux)
 
-                # 2) Fallback : match par nom EXACT dans l'ACP (pas de fuzzy)
+                # 2) Fallback : match par nom dans l'ACP
                 inv_name = (inv.get("supplier_name") or "").strip()
                 if not supplier_doc and inv_name:
                     from routes.suppliers import _norm_name_candidates
@@ -1396,6 +1396,20 @@ def create_import_wizard_router(db):
                             if inv_cands & other_cands:
                                 supplier_doc = s_doc
                                 break
+
+                # 2bis) Fallback DB : find_duplicate_supplier verifie toute la
+                # base ACP (pas seulement le cache session). Evite les doublons
+                # quand un fournisseur existait AVANT cet import.
+                if not supplier_doc and (supplier_aux or inv_name):
+                    from routes.suppliers import find_duplicate_supplier
+                    search_name = inv_name or supplier_aux
+                    dup = await find_duplicate_supplier(
+                        db, name=search_name, copro_id=copro_id)
+                    if dup:
+                        supplier_doc = dup["supplier"]
+                        # Indexer pour les lignes suivantes du meme fournisseur
+                        if supplier_aux:
+                            sup_by_aux[supplier_aux] = supplier_doc
 
                 # 3) AUTO-CREATION si fournisseur introuvable (scoped ACP)
                 if not supplier_doc and (supplier_aux or inv_name):
