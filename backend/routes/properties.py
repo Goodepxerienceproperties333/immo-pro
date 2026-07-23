@@ -2548,8 +2548,8 @@ def create_properties_router(db):
             for entry_date, details in future_by_date.items():
                 # Safeguard : ne creer le MUT-F que pour les appels dont la
                 # distribution a ENCORE l'ancien proprietaire sur ce lot.
-                # Si la distribution a deja ete mise a jour pour le nouvel
-                # acquereur, le MUT-F serait en double.
+                # Si la distribution montre deja le nouvel acquereur (ou un tiers),
+                # le MUT-F serait en double ou errone.
                 filtered_details: list[dict] = []
                 for d in details:
                     fc_id = d.get("fund_call_id") or ""
@@ -2559,13 +2559,17 @@ def create_properties_router(db):
                             {"_id": 0, "distribution": 1},
                         )
                         dist = (fc_doc or {}).get("distribution") or []
-                        already_new_owner = any(
-                            (row.get("lot_id") == lt.get("id") or row.get("lot_number") == lt.get("number"))
-                            and row.get("owner_id") == data.new_owner_id
-                            for row in dist
+                        lot_row = next(
+                            (row for row in dist
+                             if row.get("lot_id") == lt.get("id")
+                             or row.get("lot_number") == lt.get("number")),
+                            None,
                         )
-                        if already_new_owner:
-                            continue  # skip : distribution deja mise a jour
+                        if lot_row:
+                            # Creer uniquement si l'ancien proprio est encore dans la distribution
+                            if lot_row.get("owner_id") != old_owner_id:
+                                continue  # skip : distribution deja transferee
+                        # Si pas de lot_row (distribution incomplete), on cree par prudence
                     filtered_details.append(d)
                 if not filtered_details:
                     continue
