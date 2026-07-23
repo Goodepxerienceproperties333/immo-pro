@@ -10,7 +10,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { toast } from 'sonner';
-import { Plus, Trash2, Upload, Link2, Unlink, Search, Landmark, PlusCircle, Save, Pencil, X, CheckCircle2, AlertTriangle, Eye, Tag, Zap } from 'lucide-react';
+import { Plus, Trash2, Upload, Link2, Unlink, Search, Landmark, PlusCircle, Save, Pencil, X, CheckCircle2, AlertTriangle, Eye, Tag, Zap, Check, XCircle } from 'lucide-react';
 import { useFiscalYearParams } from '@/hooks/useFiscalYearParams';
 import { useAuth } from '@/contexts/AuthContext';
 import CounterpartySearchSelect from '@/components/CounterpartySearchSelect';
@@ -614,6 +614,35 @@ export default function BankingPage() {
     } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); }
   };
 
+  // ---- SUGGESTION VALIDATION / REJECTION ----
+  const validateSuggestion = async (txnId) => {
+    try {
+      await api.post(`/banking/transactions/${txnId}/validate-suggestion`);
+      toast.success('Suggestion validee - transaction lettree');
+      refreshAfterLettrage();
+    } catch (err) { toast.error(err.response?.data?.detail || 'Erreur validation'); }
+  };
+  const rejectSuggestion = async (txnId) => {
+    try {
+      await api.delete(`/banking/transactions/${txnId}/suggestion`);
+      toast.success('Suggestion rejetee');
+      if (selectedStmt) loadStmtTxns(selectedStmt);
+    } catch (err) { toast.error(err.response?.data?.detail || 'Erreur rejet'); }
+  };
+  const validateAllSuggestions = async () => {
+    if (!selectedStmt) return;
+    try {
+      const { data } = await api.post(`/banking/statements/${selectedStmt}/validate-all-suggestions`);
+      if (data.validated > 0) {
+        toast.success(`${data.validated} suggestion(s) validee(s)`);
+        refreshAfterLettrage();
+      } else {
+        toast.info('Aucune suggestion a valider');
+      }
+    } catch (err) { toast.error(err.response?.data?.detail || 'Erreur validation batch'); }
+  };
+  const suggestionsCount = transactions.filter(t => !t.matched && t.suggested_match_to).length;
+
   // 1 txn -> N factures : multi-selection dans le dialog Lettrage
   const toggleInvoiceSelected = (id) => {
     setSelectedInvoiceIds(prev => {
@@ -734,12 +763,12 @@ export default function BankingPage() {
             className="border-teal-300 text-teal-700 hover:bg-teal-50"
             data-testid="auto-lettrage-vcs-btn"
             disabled={!selectedCopro}
-            title={selectedCopro ? "Lettrage automatique par communication structuree VCS" : "Selectionnez une copropriete"}
+            title={selectedCopro ? "Generer des suggestions de lettrage par communication structuree VCS" : "Selectionnez une copropriete"}
             onClick={async () => {
               try {
                 const { data } = await api.post('/banking/auto-lettrage-vcs', { copropriete_id: selectedCopro });
                 if (data.count > 0) {
-                  toast.success(`${data.count} transaction(s) lettree(s) automatiquement`);
+                  toast.success(`${data.count} suggestion(s) de lettrage generee(s) - validez-les individuellement ou en batch`);
                   load();
                 } else {
                   toast.info('Aucune correspondance VCS trouvee');
@@ -749,7 +778,7 @@ export default function BankingPage() {
               }
             }}
           >
-            <Zap size={16} className="mr-2" /> Auto-lettrage VCS
+            <Zap size={16} className="mr-2" /> Suggestions VCS
           </Button>
         </div>
       </div>
@@ -1083,6 +1112,19 @@ export default function BankingPage() {
                   </div>
                 )}
 
+                {/* Toolbar suggestions de lettrage */}
+                {suggestionsCount > 0 && (
+                  <div className="bg-amber-50 border border-amber-300 rounded-md px-3 py-2 mb-2 flex items-center justify-between text-sm" data-testid="suggestions-toolbar">
+                    <div className="flex items-center gap-2">
+                      <AlertTriangle size={14} className="text-amber-600" />
+                      <span className="text-amber-800 font-medium">{suggestionsCount} suggestion(s) de lettrage en attente</span>
+                    </div>
+                    <Button size="sm" onClick={validateAllSuggestions} className="bg-amber-600 hover:bg-amber-700 text-white" data-testid="validate-all-suggestions-btn">
+                      <Check size={13} className="mr-1.5" /> Valider toutes les suggestions
+                    </Button>
+                  </div>
+                )}
+
                 {/* Toolbar selection multi-lettrage */}
                 {selectedTxnIds.size > 0 && (
                   <div className="bg-[#022D52]/10 border border-[#022D52]/30 rounded-md px-3 py-2 mb-2 flex items-center justify-between text-sm" data-testid="batch-lettrage-toolbar">
@@ -1176,7 +1218,14 @@ export default function BankingPage() {
                           )}
                         </TableCell>
                         <TableCell className="font-mono text-xs">{fmtDate(txn.date)}</TableCell>
-                        <TableCell className="text-sm break-words" style={{wordBreak: 'break-word'}}>{txn.counterparty_name}</TableCell>
+                        <TableCell className="text-sm break-words" style={{wordBreak: 'break-word'}}>
+                          {txn.counterparty_name}
+                          {!txn.matched && txn.suggested_match_label && (
+                            <div className="text-[10px] text-amber-600 mt-0.5 truncate" title={`Suggestion: ${txn.suggested_match_label}`}>
+                              ↳ {txn.suggested_match_label}
+                            </div>
+                          )}
+                        </TableCell>
                         <TableCell className="text-sm break-words" style={{wordBreak: 'break-word'}}>{txn.communication}</TableCell>
                         <TableCell className={`text-right font-mono font-semibold ${txn.amount >= 0 ? 'text-green-700' : 'text-red-700'}`}>{txn.amount >= 0 ? '+' : ''}{txn.amount?.toFixed(2)}</TableCell>
                         <TableCell>{txn.matched ? <Badge className={
@@ -1192,7 +1241,13 @@ export default function BankingPage() {
                                 : 'Nature'
                             ) :
                             'Fact.'
-                          }</Badge> : <Badge variant="outline" className="text-slate-400 text-[10px]">-</Badge>}</TableCell>
+                          }</Badge> : txn.suggested_match_to ? (
+                            <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-300 text-[10px]" data-testid={`suggestion-badge-${txn.id}`} title={txn.suggested_match_label || 'Suggestion'}>
+                              {txn.suggested_match_type === 'owner_payment' ? 'Proprio?' :
+                               txn.suggested_match_type === 'supplier_payment' ? 'Fourn.?' :
+                               'Fact.?'}
+                            </Badge>
+                          ) : <Badge variant="outline" className="text-slate-400 text-[10px]">-</Badge>}</TableCell>
                         <TableCell>
                           <div className="flex gap-0">
                             <Button variant="ghost" size="sm" onClick={() => startEdit(txn)} className="h-6 w-6 p-0 text-slate-400" title="Editer" data-testid={`edit-txn-${txn.id}`}><Pencil size={11} /></Button>
@@ -1200,6 +1255,12 @@ export default function BankingPage() {
                               txn.match_type === 'expense_category'
                                 ? <Button variant="ghost" size="sm" onClick={() => uncategorize(txn.id)} className="text-purple-600 h-6 w-6 p-0" title="Retirer la nature" data-testid={`uncategorize-${txn.id}`}><Unlink size={11} /></Button>
                                 : <Button variant="ghost" size="sm" onClick={() => unlettrage(txn.id)} className="text-orange-500 h-6 w-6 p-0" title="Delettrer"><Unlink size={11} /></Button>
+                            ) : txn.suggested_match_to ? (
+                              <>
+                                <Button variant="ghost" size="sm" onClick={() => validateSuggestion(txn.id)} className="text-green-600 h-6 w-6 p-0" title={`Valider: ${txn.suggested_match_label || 'suggestion'}`} data-testid={`validate-suggestion-${txn.id}`}><Check size={12} /></Button>
+                                <Button variant="ghost" size="sm" onClick={() => rejectSuggestion(txn.id)} className="text-red-400 h-6 w-6 p-0" title="Rejeter la suggestion" data-testid={`reject-suggestion-${txn.id}`}><XCircle size={11} /></Button>
+                                <Button variant="ghost" size="sm" onClick={() => openLettrage(txn)} className="text-[#022D52] h-6 w-6 p-0" title="Lettrer manuellement" data-testid={`lettrage-${txn.id}`}><Link2 size={11} /></Button>
+                              </>
                             ) : (
                               <>
                                 <Button variant="ghost" size="sm" onClick={() => openLettrage(txn)} className="text-[#022D52] h-6 w-6 p-0" title="Lettrer" data-testid={`lettrage-${txn.id}`}><Link2 size={11} /></Button>

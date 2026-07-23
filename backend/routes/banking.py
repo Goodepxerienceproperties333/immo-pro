@@ -2866,13 +2866,13 @@ def create_banking_router(db):
                 print(f"[coda-confirmed] manual match entry failed: {e}")
             matched_manual += 1
 
-        # Auto-lettrage VCS pour les txns sans override
+        # Auto-lettrage VCS pour les txns sans override -> SUGGESTIONS uniquement
         for txn in transactions_to_insert:
             if txn["id"] in manual_ids:
                 continue
             await _try_auto_lettrage_vcs(txn)
             fresh = await db.bank_transactions.find_one({"id": txn["id"]}, {"_id": 0})
-            if fresh and fresh.get("matched"):
+            if fresh and fresh.get("suggested_match_to"):
                 matched_auto += 1
 
         return {
@@ -3021,10 +3021,161 @@ def create_banking_router(db):
         invoices_data = await db.invoices.find(inv_q, {"_id": 0}).to_list(10)
         return {"owners": owners, "suppliers": suppliers, "invoices": invoices_data}
 
+    # ---- SUGGESTION VALIDATION (iter-suggest) ----
+    @router.post("/transactions/{txn_id}/validate-suggestion")
+    async def validate_suggestion(txn_id: str, request: Request):
+        """Convertit une suggestion de lettrage en lettrage confirme.
+
+        Lit suggested_match_to / suggested_match_type de la transaction,
+        applique matched=True + matched_to + match_type, puis efface les
+        champs suggested_*. Genere l'ecriture FI si l'extrait est posted.
+        """
+        txn = await db.bank_transactions.find_one({"id": txn_id}, {"_id": 0})
+        if not txn:
+            raise HTTPException(404, "Transaction non trouvee")
+        _ensure_copro_access(request, txn.get("copropriete_id", ""))
+        sug_to = (txn.get("suggested_match_to") or "").strip()
+        sug_type = (txn.get("suggested_match_type") or "").strip()
+        if not sug_to or not sug_type:
+            raise HTTPException(400, "Aucune suggestion a valider sur cette transaction")
+        if txn.get("matched"):
+            raise HTTPException(400, "Transaction deja lettree - delettrez d'abord")
+        # Appliquer le lettrage
+        update_fields = {
+            "matched": True,
+            "matched_to": sug_to,
+            "match_type": sug_type,
+        }
+        unset_fields = {
+            "suggested_match_to": "",
+            "suggested_match_type": "",
+            "suggested_match_label": "",
+        }
+        # Si owner_payment, enrichir counterparty_name
+        if sug_type == "owner_payment":
+            owner = await db.owners.find_one({"id": sug_to}, {"_id": 0, "name": 1})
+            if owner:
+                update_fields["counterparty_name"] = txn.get("counterparty_name") or owner.get("name", "")
+        elif sug_type == "supplier_payment":
+            supplier = await db.suppliers.find_one({"id": sug_to}, {"_id": 0, "name": 1})
+            if supplier:
+                update_fields["counterparty_name"] = txn.get("counterparty_name") or supplier.get("name", "")
+        elif sug_type == "invoice":
+            inv = await db.invoices.find_one({"id": sug_to}, {"_id": 0})
+            if inv:
+                await db.invoices.update_one(
+                    {"id": sug_to},
+                    {"$set": {
+                        "status": "paid",
+                        "paid_at": txn.get("date"),
+                        "paid_by_transaction_id": txn_id,
+                    }},
+                )
+        await db.bank_transactions.update_one(
+            {"id": txn_id},
+            {"$set": update_fields, "$unset": unset_fields},
+        )
+        # Generer ecriture FI si extrait posted
+        try:
+            fresh = await db.bank_transactions.find_one({"id": txn_id}, {"_id": 0})
+            if fresh:
+                await generate_bank_entry(db, fresh)
+        except Exception as e:
+            print(f"[validate-suggestion] FI generation failed: {e}")
+        fresh = await db.bank_transactions.find_one({"id": txn_id}, {"_id": 0})
+        return {
+            "message": "Suggestion validee - transaction lettree",
+            "transaction": fresh,
+        }
+
+    @router.post("/statements/{stmt_id}/validate-all-suggestions")
+    async def validate_all_suggestions(stmt_id: str, request: Request):
+        """Valide EN BATCH toutes les suggestions de lettrage d'un extrait.
+
+        Pour chaque transaction ayant un suggested_match_to non vide et
+        matched=False, applique le meme traitement que validate-suggestion.
+        """
+        stmt = await db.bank_statements.find_one({"id": stmt_id}, {"_id": 0})
+        if not stmt:
+            raise HTTPException(404, "Extrait non trouve")
+        _ensure_copro_access(request, stmt.get("copropriete_id", ""))
+        txns = await db.bank_transactions.find(
+            {"statement_id": stmt_id, "matched": {"$ne": True},
+             "suggested_match_to": {"$exists": True, "$ne": ""}},
+            {"_id": 0},
+        ).to_list(10000)
+        validated = 0
+        errors = []
+        for txn in txns:
+            sug_to = (txn.get("suggested_match_to") or "").strip()
+            sug_type = (txn.get("suggested_match_type") or "").strip()
+            if not sug_to or not sug_type:
+                continue
+            try:
+                update_fields = {
+                    "matched": True,
+                    "matched_to": sug_to,
+                    "match_type": sug_type,
+                }
+                if sug_type == "owner_payment":
+                    owner = await db.owners.find_one({"id": sug_to}, {"_id": 0, "name": 1})
+                    if owner:
+                        update_fields["counterparty_name"] = txn.get("counterparty_name") or owner.get("name", "")
+                elif sug_type == "supplier_payment":
+                    supplier = await db.suppliers.find_one({"id": sug_to}, {"_id": 0, "name": 1})
+                    if supplier:
+                        update_fields["counterparty_name"] = txn.get("counterparty_name") or supplier.get("name", "")
+                elif sug_type == "invoice":
+                    inv = await db.invoices.find_one({"id": sug_to}, {"_id": 0})
+                    if inv:
+                        await db.invoices.update_one(
+                            {"id": sug_to},
+                            {"$set": {
+                                "status": "paid",
+                                "paid_at": txn.get("date"),
+                                "paid_by_transaction_id": txn["id"],
+                            }},
+                        )
+                await db.bank_transactions.update_one(
+                    {"id": txn["id"]},
+                    {"$set": update_fields,
+                     "$unset": {"suggested_match_to": "", "suggested_match_type": "", "suggested_match_label": ""}},
+                )
+                try:
+                    fresh = await db.bank_transactions.find_one({"id": txn["id"]}, {"_id": 0})
+                    if fresh:
+                        await generate_bank_entry(db, fresh)
+                except Exception as e:
+                    print(f"[validate-all] FI gen failed for {txn['id']}: {e}")
+                validated += 1
+            except Exception as e:
+                errors.append({"txn_id": txn.get("id"), "error": str(e)})
+        return {
+            "message": f"{validated} suggestion(s) validee(s)",
+            "validated": validated,
+            "errors": errors,
+        }
+
+    @router.delete("/transactions/{txn_id}/suggestion")
+    async def reject_suggestion(txn_id: str, request: Request):
+        """Rejette (efface) la suggestion de lettrage d'une transaction."""
+        txn = await db.bank_transactions.find_one({"id": txn_id}, {"_id": 0})
+        if not txn:
+            raise HTTPException(404, "Transaction non trouvee")
+        _ensure_copro_access(request, txn.get("copropriete_id", ""))
+        if not txn.get("suggested_match_to"):
+            raise HTTPException(400, "Aucune suggestion a rejeter")
+        await db.bank_transactions.update_one(
+            {"id": txn_id},
+            {"$unset": {"suggested_match_to": "", "suggested_match_type": "", "suggested_match_label": ""}},
+        )
+        return {"message": "Suggestion rejetee"}
+
     # ---- AUTO-LETTRAGE existing unmatched txns ----
     @router.post("/auto-lettrage-vcs")
     async def auto_lettrage_all_vcs(request: Request):
-        """Scan all unmatched transactions and try to auto-match by VCS (scoped by ACP)."""
+        """Scan all unmatched transactions and generate SUGGESTIONS by VCS (scoped by ACP).
+        Does NOT apply matches directly - only stores suggestions for user validation."""
         copropriete_id = request.query_params.get("copropriete_id") or request.headers.get("x-copropriete-id") or ""
         try:
             body = await request.json()
@@ -3036,15 +3187,16 @@ def create_banking_router(db):
         if copropriete_id:
             q["copropriete_id"] = copropriete_id
         unmatched = await db.bank_transactions.find(q, {"_id": 0}).to_list(10000)
-        matched_count = 0
+        suggested_count = 0
         for txn in unmatched:
             comm = txn.get("communication", "")
-            if comm and len(comm) >= 3:
+            cp_name = txn.get("counterparty_name", "")
+            if (comm and len(comm) >= 3) or (cp_name and len(cp_name) >= 3):
                 await _try_auto_lettrage_vcs(txn)
                 updated = await db.bank_transactions.find_one({"id": txn["id"]}, {"_id": 0})
-                if updated and updated.get("matched"):
-                    matched_count += 1
-        return {"message": f"{matched_count} transactions auto-lettrees", "count": matched_count}
+                if updated and updated.get("suggested_match_to"):
+                    suggested_count += 1
+        return {"message": f"{suggested_count} suggestion(s) de lettrage generee(s)", "count": suggested_count}
 
     # ---- VCS LOOKUP ----
     @router.get("/vcs-lookup")
