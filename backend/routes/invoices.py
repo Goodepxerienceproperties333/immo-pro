@@ -1932,6 +1932,19 @@ def create_invoices_router(db):
                 "private_fee_owner_id": primary_owner,
             }},
         )
+
+        # Regenere l'ecriture AC (et OD refacturation) pour refleter les
+        # nouvelles allocations. Evite les ecritures orphelines quand
+        # l'utilisateur modifie les allocations apres creation.
+        fresh_inv = await db.invoices.find_one({"id": invoice_id}, {"_id": 0})
+        if fresh_inv:
+            je = await generate_purchase_entry(db, fresh_inv)
+            if je:
+                await db.invoices.update_one(
+                    {"id": invoice_id},
+                    {"$set": {"journal_entry_id": je.get("id", "")}},
+                )
+
         return {"id": invoice_id, "allocations": clean_allocs, "total": total}
 
     @router.put("/invoices/{invoice_id}")

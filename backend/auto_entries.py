@@ -115,37 +115,89 @@ async def _resolve_or_create_supplier_account(db, supplier_name: str, copro_id: 
 
 
 async def _resolve_bank_account(db, txn: dict, copro_id: str) -> tuple[str, str]:
-    """iter90by + iter90jj : Resout l'IBAN de la transaction vers le compte PCMN
-    bancaire configure sur l'ACP.
+    """Resout le compte PCMN bancaire a partir de la transaction.
 
-    Verrou iter90jj : ne cree JAMAIS de compte fantome (550000 / 551xxx court).
-    Le fallback est le compte par defaut de l'ACP - si aucun, on retourne "" pour
-    forcer un skip du generate_bank_entry cote appelant.
+    Ordre de resolution :
+      1) IBAN exact (txn ou statement) -> pcmn officiel de l'ACP
+      2) account_number direct == pcmn_number configure (extraits sans IBAN,
+         ex. account_number = 551618 matche pcmn_number = 551618)
+      3) Suffixe IBAN ou correspondance croisee pcmn_number
+      4) Compte PCMN bancaire existant (classe 55) dans le plan comptable
+      5) Compte par defaut de l'ACP
+      6) "" (l'appelant DOIT gerer ce cas : skip ou raise)
+
+    Verrou iter90jj : ne cree JAMAIS de compte fantome.
     """
     from iban_utils import normalize_iban
-    iban = normalize_iban(txn.get("account_number"))
-    if not iban and txn.get("statement_id"):
+
+    # ---- Fetch raw_acc + IBAN en une seule passe (evite double query) ----
+    raw_acc = (txn.get("account_number") or "").strip()
+    iban = normalize_iban(raw_acc) if raw_acc else ""
+    if (not iban or not raw_acc) and txn.get("statement_id"):
         stmt = await db.bank_statements.find_one(
             {"id": txn["statement_id"]},
             {"_id": 0, "account_number": 1, "iban": 1},
         )
         if stmt:
-            iban = normalize_iban(stmt.get("account_number") or stmt.get("iban") or "")
-    # Cherche le pcmn officiel depuis la fiche ACP.bank_accounts
+            stmt_acc = (stmt.get("account_number") or stmt.get("iban") or "").strip()
+            if not raw_acc:
+                raw_acc = stmt_acc
+            if not iban:
+                iban = normalize_iban(stmt_acc)
+
+    # ---- Fetch ACP bank_accounts config ----
     copro = await db.coproprietes.find_one({"id": copro_id}, {"_id": 0, "bank_accounts": 1})
     accounts = (copro or {}).get("bank_accounts") or []
+
     # 1) Match IBAN exact -> pcmn officiel
     if iban:
         for ba in accounts:
             ba_iban = normalize_iban(ba.get("iban"))
-            if ba_iban == iban and ba.get("pcmn_number"):
+            if ba_iban and ba_iban == iban and ba.get("pcmn_number"):
                 return ba["pcmn_number"], (ba.get("label") or "Banque")
-    # 2) Fallback : compte par defaut de l'ACP (is_default=True) ou 1er
+
+    # 2) Match direct : account_number == pcmn_number configure
+    #    Couvre les extraits sans IBAN ou le account_number EST le pcmn (ex. 551618).
+    if raw_acc:
+        for ba in accounts:
+            ba_pcmn = (ba.get("pcmn_number") or "").strip()
+            if ba_pcmn and ba_pcmn == raw_acc:
+                return ba_pcmn, (ba.get("label") or "Banque")
+
+    # 3) Suffixe IBAN / correspondance croisee pcmn_number
+    if raw_acc:
+        digits = "".join(c for c in raw_acc if c.isdigit())
+        if digits and len(digits) >= 4:
+            for ba in accounts:
+                ba_iban_raw = (ba.get("iban") or "").replace(" ", "")
+                ba_pcmn = (ba.get("pcmn_number") or "").strip()
+                # suffixe de l'IBAN
+                if ba_iban_raw and ba_iban_raw.endswith(digits) and ba_pcmn:
+                    return ba_pcmn, (ba.get("label") or "Banque")
+                # correspondance croisee pcmn (suffixe ou prefixe)
+                if ba_pcmn and ba_pcmn != raw_acc and (
+                    ba_pcmn.endswith(digits) or digits.endswith(ba_pcmn)
+                ):
+                    return ba_pcmn, (ba.get("label") or "Banque")
+
+    # 4) Compte PCMN bancaire existant (classe 55) dans le plan comptable
+    if raw_acc:
+        digits = "".join(c for c in raw_acc if c.isdigit())
+        if digits and digits.startswith("55"):
+            pcmn = await db.pcmn_accounts.find_one(
+                {"copropriete_id": copro_id, "number": digits},
+                {"_id": 0, "number": 1, "name": 1},
+            )
+            if pcmn:
+                return pcmn["number"], (pcmn.get("name") or "Banque")
+
+    # 5) Fallback : compte par defaut de l'ACP (is_default=True) ou 1er
     if accounts:
         default_ba = next((b for b in accounts if b.get("is_default")), None) or accounts[0]
         if default_ba.get("pcmn_number"):
             return default_ba["pcmn_number"], (default_ba.get("label") or "Banque")
-    # 3) Ultime fallback : "" - le appelant DOIT gerer ce cas (skip ou raise)
+
+    # 6) Ultime fallback : "" - l'appelant DOIT gerer ce cas (skip ou raise)
     return "", "Banque"
 
 

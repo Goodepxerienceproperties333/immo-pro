@@ -1057,6 +1057,37 @@ def create_import_wizard_router(db):
             return canonical_index.get(a, a)
         return a
 
+    def _build_gpe_lines(
+        split_lines: list[dict],
+        has_multi_accounts: bool,
+        default_occ: float,
+        default_prop: float,
+    ) -> list[dict]:
+        """Convertit _split_lines Optipro en format `lines` attendu par
+        `generate_purchase_entry` (account_number, amount, description,
+        occupant_pct, proprietaire_pct). Retourne [] pour factures single-
+        account (generate_purchase_entry utilise alors account_number direct).
+        """
+        if not has_multi_accounts:
+            return []
+        out: list[dict] = []
+        for sl in split_lines:
+            acc = (sl.get("account_number") or "").strip()
+            amt = abs(float(sl.get("montant_tvac") or sl.get("montant_ht") or 0))
+            if not acc or amt < 0.01:
+                continue
+            occ = float(sl.get("part_occupant") or default_occ)
+            prop = round(100.0 - occ, 2)
+            out.append({
+                "account_number": acc,
+                "amount": round(amt, 2),
+                "description": (sl.get("libelle") or "").strip(),
+                "occupant_pct": occ,
+                "proprietaire_pct": prop,
+            })
+        return out
+
+
     async def _ensure_pcmn_accounts(copro_id: str, accounts_needed: dict[str, str]) -> int:
         """Ensure each (account_number -> account_name) exists in this ACP's PCMN.
 
@@ -1622,6 +1653,10 @@ def create_import_wizard_router(db):
                     "distribution_key_id": dist_key_id,
                     # iter90gj : lignes de detail multi-compte regroupees en une seule facture
                     "distribution_lines": inv.get("_split_lines") or [],
+                    # `lines` au format attendu par `generate_purchase_entry` :
+                    # garantit que set_private_fee_allocations et update_invoice
+                    # pourront regenerer correctement les ecritures multi-comptes.
+                    "lines": _build_gpe_lines(split_lines, has_multi_accounts, occ_pct, prop_pct),
                     "status": "do_not_pay" if inv.get("ne_pas_payer") else "unpaid",
                     "copropriete_id": copro_id,
                     # iter90gj : detection auto des frais privatifs par compte 643xxx.
@@ -1714,16 +1749,22 @@ def create_import_wizard_router(db):
         # iter90jk : remap 6-char bank codes -> 8-char canonical AVANT tout le
         # reste. Ainsi bank_statements + journal_entries + bank_transactions
         # utilisent tous le compte officiel de la fiche ACP.
+        # EXCEPTION : les comptes bancaires (55x) et virements internes (58)
+        # issus du CSV Optipro sont AUTHORITATIFS - pas de remap IBAN car le
+        # CSV ne porte jamais d'IBAN et donne directement le PCMN a mouvementer.
         _bank_canon_idx = await _load_canonical_bank_index(copro_id)
         for t in data.transactions:
             bp_raw = (t.get("bank_account") or "").strip()
             cp_raw = (t.get("counterparty_account") or "").strip()
-            bp_mapped = _remap_bank_account(bp_raw, _bank_canon_idx)
-            cp_mapped = _remap_bank_account(cp_raw, _bank_canon_idx)
-            if bp_mapped != bp_raw:
-                t["bank_account"] = bp_mapped
-            if cp_mapped != cp_raw:
-                t["counterparty_account"] = cp_mapped
+            # CSV authoritatif pour comptes bancaires (55x) et transferts (58)
+            if bp_raw and not bp_raw.startswith("55") and not bp_raw.startswith("58"):
+                bp_mapped = _remap_bank_account(bp_raw, _bank_canon_idx)
+                if bp_mapped != bp_raw:
+                    t["bank_account"] = bp_mapped
+            if cp_raw and not cp_raw.startswith("55") and not cp_raw.startswith("58"):
+                cp_mapped = _remap_bank_account(cp_raw, _bank_canon_idx)
+                if cp_mapped != cp_raw:
+                    t["counterparty_account"] = cp_mapped
 
         # Pre-pass: collect PCMN accounts needed
         accounts_needed: dict[str, str] = {}

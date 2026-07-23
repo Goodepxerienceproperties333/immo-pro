@@ -1366,9 +1366,12 @@ def create_reports_router(db):
         account_from: Optional[str] = None,
         account_to: Optional[str] = None,
         copropriete_id: Optional[str] = None,
+        include_reversals: bool = False,
     ):
         copropriete_id = _require_copro(copropriete_id, request)
         q = _apply_copro({}, copropriete_id)
+        if not include_reversals:
+            _exclude_reversals(q)
         if date_from or date_to:
             q["date"] = {}
             if date_from:

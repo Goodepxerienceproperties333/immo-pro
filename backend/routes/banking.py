@@ -1021,6 +1021,57 @@ def create_banking_router(db):
             "invoices_unlettered": invoices_restored,
         }
 
+    @router.get("/statements/{stmt_id}/delete-preview")
+    async def delete_statement_preview(stmt_id: str):
+        """Retourne un apercu des impacts avant suppression d'un extrait :
+        nombre de transactions, lettrages qui seront annules, ecritures FI
+        supprimees. Le frontend affiche ces infos dans un modal de confirmation.
+        """
+        stmt = await db.bank_statements.find_one(
+            {"id": stmt_id}, {"_id": 0, "id": 1, "status": 1, "number": 1})
+        if not stmt:
+            raise HTTPException(404, "Extrait non trouve")
+        txns = await db.bank_transactions.find(
+            {"statement_id": stmt_id},
+            {"_id": 0, "id": 1, "matched": 1, "match_type": 1,
+             "matched_to": 1, "matched_to_ids": 1},
+        ).to_list(10000)
+        txn_ids = [t["id"] for t in txns]
+        # Compter les lettrages actifs
+        lettrages = 0
+        invoice_ids_impacted: list[str] = []
+        for txn in txns:
+            if not txn.get("matched"):
+                continue
+            lettrages += 1
+            mt = txn.get("match_type") or ""
+            if mt in ("invoice", "multi_invoice"):
+                if txn.get("matched_to"):
+                    invoice_ids_impacted.append(txn["matched_to"])
+                for iid in (txn.get("matched_to_ids") or []):
+                    if iid and iid not in invoice_ids_impacted:
+                        invoice_ids_impacted.append(iid)
+        # Compter les FI auto liees
+        fi_query = {
+            "auto_generated": True,
+            "$or": [
+                {"bank_statement_id": stmt_id},
+                {"source_type": "bank_txn", "source_id": {"$in": txn_ids}},
+                {"statement_line_id": {"$in": txn_ids}},
+            ],
+        }
+        fi_count = await db.journal_entries.count_documents(fi_query) if txn_ids else 0
+        return {
+            "statement_id": stmt_id,
+            "status": stmt.get("status", ""),
+            "number": stmt.get("number", ""),
+            "total_transactions": len(txns),
+            "lettrages_to_cancel": lettrages,
+            "invoices_impacted": len(set(invoice_ids_impacted)),
+            "fi_entries_to_delete": fi_count,
+        }
+
+
     # ---- TRANSACTIONS ----
     @router.get("/transactions")
     async def list_transactions(

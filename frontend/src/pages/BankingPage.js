@@ -74,6 +74,8 @@ export default function BankingPage() {
   const [filterMonth, setFilterMonth] = useState('__all__'); // 'MM'
   const [batchPosting, setBatchPosting] = useState(false);
 
+  const [deletePreview, setDeletePreview] = useState(null);
+  const [deletePreviewLoading, setDeletePreviewLoading] = useState(false);
   // iter90bg : mapping compte -> badge visuel distinctif
   //   Recherche le bank_account correspondant au statement (via
   //   account_number matchant iban ou pcmn_number). Retourne { label, color }.
@@ -404,15 +406,36 @@ export default function BankingPage() {
       });
       return;
     }
-    if (!window.confirm('Supprimer cet extrait ?')) return;
+    setDeletePreviewLoading(true);
     try {
-      await api.delete(`/banking/statements/${id}`);
-      toast.success('Supprime');
+      const { data } = await api.get(`/banking/statements/${id}/delete-preview`);
+      setDeletePreview(data);
+    } catch {
+      if (window.confirm('Supprimer cet extrait ?')) {
+        try {
+          await api.delete(`/banking/statements/${id}`);
+          toast.success('Supprime');
+          load();
+          if (selectedStmt?.id === id) { setSelectedStmt(null); setTransactions([]); }
+        } catch (e) { toast.error(e.response?.data?.detail || 'Erreur'); }
+      }
+    } finally {
+      setDeletePreviewLoading(false);
+    }
+  };
+
+  const confirmDeleteStmt = async () => {
+    if (!deletePreview) return;
+    const stmtId = deletePreview.statement_id;
+    try {
+      await api.delete(`/banking/statements/${stmtId}`);
+      toast.success('Extrait supprime');
       load();
-      if (selectedStmt?.id === id) { setSelectedStmt(null); setTransactions([]); }
+      if (selectedStmt?.id === stmtId) { setSelectedStmt(null); setTransactions([]); }
     } catch (err) {
-      const detail = err.response?.data?.detail || 'Erreur lors de la suppression';
-      toast.error(detail, { duration: 6000 });
+      toast.error(err.response?.data?.detail || 'Erreur lors de la suppression', { duration: 6000 });
+    } finally {
+      setDeletePreview(null);
     }
   };
 
@@ -1841,6 +1864,60 @@ export default function BankingPage() {
               </div>
             );
           })()}
+        </DialogContent>
+      </Dialog>
+
+      {/* ---- Modal confirmation suppression extrait ---- */}
+      <Dialog open={!!deletePreview} onOpenChange={(o) => { if (!o) setDeletePreview(null); }}>
+        <DialogContent className="max-w-md" data-testid="delete-stmt-confirm-dialog">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-red-600" style={{fontFamily:'Chivo,sans-serif'}}>
+              <AlertTriangle className="w-5 h-5" /> Supprimer l&apos;extrait
+            </DialogTitle>
+          </DialogHeader>
+          {deletePreview && (
+            <div className="space-y-4 py-2">
+              <p className="text-sm text-gray-700">
+                Vous etes sur le point de supprimer l&apos;extrait <strong>{deletePreview.number || deletePreview.statement_id?.slice(0,8)}</strong>. Cette action est irreversible.
+              </p>
+              <div className="bg-gray-50 rounded-lg p-3 space-y-2 text-sm border">
+                <div className="flex justify-between">
+                  <span className="text-gray-600">Transactions</span>
+                  <span className="font-medium">{deletePreview.total_transactions}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-600">Ecritures FI supprimees</span>
+                  <span className="font-medium">{deletePreview.fi_entries_to_delete}</span>
+                </div>
+                {deletePreview.lettrages_to_cancel > 0 && (
+                  <div className="flex justify-between text-amber-700 font-medium">
+                    <span className="flex items-center gap-1"><AlertTriangle className="w-3.5 h-3.5" /> Lettrages annules</span>
+                    <span>{deletePreview.lettrages_to_cancel}</span>
+                  </div>
+                )}
+                {deletePreview.invoices_impacted > 0 && (
+                  <div className="flex justify-between text-amber-700">
+                    <span className="text-gray-600 ml-5">Factures repassees en impayees</span>
+                    <span className="font-medium">{deletePreview.invoices_impacted}</span>
+                  </div>
+                )}
+              </div>
+              {deletePreview.lettrages_to_cancel > 0 && (
+                <p className="text-xs text-amber-600 flex items-start gap-1">
+                  <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                  Les factures liees seront remises en statut &ldquo;impayee&rdquo;. Vous devrez les re-lettrer manuellement.
+                </p>
+              )}
+              <div className="flex justify-end gap-2 pt-2">
+                <Button variant="outline" onClick={() => setDeletePreview(null)} data-testid="delete-stmt-cancel-btn">
+                  Annuler
+                </Button>
+                <Button variant="destructive" onClick={confirmDeleteStmt} data-testid="delete-stmt-confirm-btn">
+                  Supprimer definitivement
+                </Button>
+              </div>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
     </div>
