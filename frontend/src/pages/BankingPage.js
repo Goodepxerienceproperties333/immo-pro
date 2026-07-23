@@ -1822,9 +1822,9 @@ export default function BankingPage() {
         onSuccess={() => { setCodaPreview(null); load(); }}
       />
 
-      {/* iter90k : Categorize dialog (nature de depense / revenu) */}
+      {/* iter90k : Categorize dialog — Saisie directe par compte PCMN */}
       <Dialog open={categorizeDialog} onOpenChange={setCategorizeDialog}>
-        <DialogContent className="max-w-4xl" data-testid="categorize-dialog">
+        <DialogContent className="max-w-3xl" data-testid="categorize-dialog">
           <DialogHeader>
             <DialogTitle className="text-base font-semibold m-0">Categoriser la transaction</DialogTitle>
           </DialogHeader>
@@ -1833,16 +1833,6 @@ export default function BankingPage() {
             const isCredit = Number(categorizeTarget.amount) > 0;
             const sumSplits = categorizeSplits.reduce((a, s) => a + Number(s.amount || 0), 0);
             const diff = Math.round((sumSplits - txnAmt) * 100) / 100;
-            const filteredCats = expenseCategories.filter(c => {
-              // Si credit -> proposer produits (classe 7) en priorite; sinon charges (6).
-              // On laisse tout visible pour flexibilite mais on tri.
-              return true;
-            }).sort((a, b) => {
-              const isProdA = (a.kind === 'produit') || (a.account_number || '').startsWith('7');
-              const isProdB = (b.kind === 'produit') || (b.account_number || '').startsWith('7');
-              if (isCredit) return (isProdB ? 1 : 0) - (isProdA ? 1 : 0);
-              return (isProdA ? 1 : 0) - (isProdB ? 1 : 0);
-            });
             return (
               <div className="space-y-3">
                 <div className="text-xs text-slate-600 bg-slate-50 border border-slate-200 rounded px-3 py-2">
@@ -1859,117 +1849,16 @@ export default function BankingPage() {
 
                 <div className="space-y-3 max-h-[55vh] overflow-y-auto pr-1">
                   {categorizeSplits.map((split, i) => {
-                    const selectedCat = filteredCats.find(c => c.id === split.expense_category_id);
-                    const directPcmn = !selectedCat && split.account_number ? pcmnAccounts.find(a => a.number === split.account_number) : null;
-                    const displayAcc = selectedCat?.account_number || split.account_number || '';
-                    const displayName = selectedCat?.account_name || selectedCat?.name || directPcmn?.name || '';
+                    const directPcmn = split.account_number ? pcmnAccounts.find(a => a.number === split.account_number) : null;
+                    const displayAcc = split.account_number || '';
+                    const displayName = directPcmn?.name || '';
+                    const isTransfer = displayAcc.startsWith('58');
                     return (
                     <div key={split._key || i} className="border border-slate-200 rounded-lg p-4 space-y-3 bg-white" data-testid={`cat-split-${i}`}>
-                      {/* Row 1: Nature de depense (full width) + delete */}
+                      {/* Row 1: Compte PCMN (champ principal) + delete */}
                       <div className="flex gap-3 items-end">
                         <div className="flex-1 min-w-0">
-                          <label className="text-[10px] text-slate-500 font-medium uppercase tracking-wide mb-1 block">Nature de depense</label>
-                          <Select value={split.expense_category_id} onValueChange={(v) => {
-                            const cat = filteredCats.find(c => c.id === v);
-                            setCategorizeSplits(prev => {
-                              const s = [...prev];
-                              s[i] = {
-                                ...s[i],
-                                expense_category_id: v,
-                                account_number: '',
-                                distribution_key_id: cat?.distribution_key_id || s[i].distribution_key_id || '',
-                              };
-                              return s;
-                            });
-                          }}>
-                            <SelectTrigger className="h-9 text-xs" data-testid={`cat-split-nature-${i}`}><SelectValue placeholder="Choisir une nature..." /></SelectTrigger>
-                            <SelectContent>
-                              {filteredCats.length === 0 && <div className="px-3 py-2 text-xs text-slate-400">Aucune nature configuree</div>}
-                              {filteredCats.map(c => {
-                                const acc = c.account_number || '';
-                                const isTransfer = c.kind === 'transfer' || acc.startsWith('58');
-                                const isProd = !isTransfer && (c.kind === 'produit' || acc.startsWith('7'));
-                                const badge = isTransfer ? 'virement' : (isProd ? 'produit' : 'charge');
-                                const cls = isTransfer ? 'text-indigo-700' : (isProd ? 'text-emerald-700' : '');
-                                return (
-                                  <SelectItem key={c.id} value={c.id}>
-                                    <span className={cls}>
-                                      <span className="font-mono font-semibold">{acc}</span> — {c.name} <span className="text-slate-400 text-[10px]">({badge})</span>
-                                    </span>
-                                  </SelectItem>
-                                );
-                              })}
-                            </SelectContent>
-                          </Select>
-                        </div>
-                        {categorizeSplits.length > 1 && (
-                          <Button variant="ghost" size="sm" onClick={() => removeCatSplit(i)}
-                            className="h-9 w-9 p-0 text-red-400 hover:text-red-600 shrink-0"
-                            data-testid={`cat-split-remove-${i}`}
-                            title="Supprimer cette ligne"><X size={14} /></Button>
-                        )}
-                      </div>
-
-                      {/* Row 2: Compte | Libelle | Cle | Montant — grid propre */}
-                      <div className="grid grid-cols-12 gap-3">
-                        <div className="col-span-2">
-                          <label className="text-[10px] text-slate-500 font-medium uppercase tracking-wide mb-1 block">Compte</label>
-                          <div className="h-9 flex items-center px-2.5 bg-slate-50 border border-slate-200 rounded-md text-xs font-mono font-bold text-slate-800" data-testid={`cat-split-account-display-${i}`}>
-                            {displayAcc || '—'}
-                          </div>
-                        </div>
-                        <div className="col-span-3">
-                          <label className="text-[10px] text-slate-500 font-medium uppercase tracking-wide mb-1 block">Libelle compte</label>
-                          <div className="h-9 flex items-center px-2.5 bg-slate-50 border border-slate-200 rounded-md text-xs text-slate-700 truncate" data-testid={`cat-split-label-display-${i}`}>
-                            {displayName || '—'}
-                          </div>
-                        </div>
-                        <div className="col-span-4">
-                          <label className="text-[10px] text-slate-500 font-medium uppercase tracking-wide mb-1 block">Cle de repartition</label>
-                          <Select value={split.distribution_key_id} onValueChange={(v) => updateCatSplit(i, 'distribution_key_id', v)}>
-                            <SelectTrigger className="h-9 text-xs" data-testid={`cat-split-key-${i}`}><SelectValue placeholder="Cle..." /></SelectTrigger>
-                            <SelectContent>
-                              {distributionKeys.map(k => (
-                                <SelectItem key={k.id} value={k.id}>{k.name}</SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        </div>
-                        <div className="col-span-3">
-                          <label className="text-[10px] text-slate-500 font-medium uppercase tracking-wide mb-1 block">Montant EUR</label>
-                          <Input type="number" step="0.01" className="h-9 text-xs font-mono" value={split.amount}
-                            onChange={(e) => updateCatSplit(i, 'amount', e.target.value)}
-                            data-testid={`cat-split-amount-${i}`} />
-                        </div>
-                      </div>
-
-                      {/* Row 3: Occupant % | Proprio % | Description */}
-                      <div className="grid grid-cols-12 gap-3">
-                        <div className="col-span-2">
-                          <label className="text-[10px] text-slate-500 font-medium uppercase tracking-wide mb-1 block">Occupant %</label>
-                          <div className="h-9 flex items-center px-2.5 bg-amber-50 border border-amber-200 rounded-md text-xs font-mono text-amber-800">
-                            {selectedCat?.default_occupant_pct != null ? `${selectedCat.default_occupant_pct}%` : '—'}
-                          </div>
-                        </div>
-                        <div className="col-span-2">
-                          <label className="text-[10px] text-slate-500 font-medium uppercase tracking-wide mb-1 block">Proprio %</label>
-                          <div className="h-9 flex items-center px-2.5 bg-blue-50 border border-blue-200 rounded-md text-xs font-mono text-blue-800">
-                            {selectedCat?.default_proprietaire_pct != null ? `${selectedCat.default_proprietaire_pct}%` : '—'}
-                          </div>
-                        </div>
-                        <div className="col-span-8">
-                          <label className="text-[10px] text-slate-500 font-medium uppercase tracking-wide mb-1 block">Description</label>
-                          <Input placeholder="Facultatif" className="h-9 text-xs"
-                            value={split.description || ''}
-                            onChange={(e) => updateCatSplit(i, 'description', e.target.value)}
-                            data-testid={`cat-split-desc-${i}`} />
-                        </div>
-                      </div>
-
-                      {/* Row 4: Compte PCMN direct (alternative) */}
-                      <div className="flex items-center gap-3 pt-2 border-t border-dashed border-slate-200">
-                        <span className="text-[10px] text-slate-400 font-medium uppercase tracking-wide shrink-0">ou compte direct</span>
-                        <div className="flex-1">
+                          <label className="text-[10px] text-slate-500 font-medium uppercase tracking-wide mb-1 block">Compte PCMN</label>
                           <AccountSearchSelect
                             accounts={pcmnAccounts}
                             value={split.account_number || ''}
@@ -1979,23 +1868,65 @@ export default function BankingPage() {
                                 s[i] = {
                                   ...s[i],
                                   account_number: num || '',
-                                  expense_category_id: num ? '' : s[i].expense_category_id,
+                                  expense_category_id: '',
                                 };
                                 return s;
                               });
                             }}
-                            placeholder="Chercher un compte PCMN (numero ou nom)"
+                            placeholder="Chercher un compte PCMN (ex: 61, 6140, charges...)"
                             allowClear
                             testId={`cat-split-account-${i}`}
                           />
                         </div>
+                        {categorizeSplits.length > 1 && (
+                          <Button variant="ghost" size="sm" onClick={() => removeCatSplit(i)}
+                            className="h-9 w-9 p-0 text-red-400 hover:text-red-600 shrink-0"
+                            data-testid={`cat-split-remove-${i}`}
+                            title="Supprimer cette ligne"><X size={14} /></Button>
+                        )}
+                      </div>
+
+                      {/* Row 2: Compte affiche | Cle | Montant */}
+                      <div className="grid grid-cols-12 gap-3">
+                        <div className="col-span-3">
+                          <label className="text-[10px] text-slate-500 font-medium uppercase tracking-wide mb-1 block">Compte selectionne</label>
+                          <div className="h-9 flex items-center px-2.5 bg-slate-50 border border-slate-200 rounded-md text-xs font-mono font-bold text-slate-800" data-testid={`cat-split-account-display-${i}`}>
+                            {displayAcc ? <><span>{displayAcc}</span><span className="ml-1.5 font-normal text-slate-500 truncate">— {displayName}</span></> : '—'}
+                          </div>
+                        </div>
+                        <div className="col-span-5">
+                          <label className="text-[10px] text-slate-500 font-medium uppercase tracking-wide mb-1 block">Cle de repartition {isTransfer && <span className="text-slate-400">(optionnel)</span>}</label>
+                          <Select value={split.distribution_key_id} onValueChange={(v) => updateCatSplit(i, 'distribution_key_id', v)}>
+                            <SelectTrigger className="h-9 text-xs" data-testid={`cat-split-key-${i}`}><SelectValue placeholder="Cle..." /></SelectTrigger>
+                            <SelectContent>
+                              {distributionKeys.map(k => (
+                                <SelectItem key={k.id} value={k.id}>{k.name}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div className="col-span-4">
+                          <label className="text-[10px] text-slate-500 font-medium uppercase tracking-wide mb-1 block">Montant EUR</label>
+                          <Input type="number" step="0.01" className="h-9 text-xs font-mono" value={split.amount}
+                            onChange={(e) => updateCatSplit(i, 'amount', e.target.value)}
+                            data-testid={`cat-split-amount-${i}`} />
+                        </div>
+                      </div>
+
+                      {/* Row 3: Description */}
+                      <div>
+                        <label className="text-[10px] text-slate-500 font-medium uppercase tracking-wide mb-1 block">Description</label>
+                        <Input placeholder="Facultatif" className="h-9 text-xs"
+                          value={split.description || ''}
+                          onChange={(e) => updateCatSplit(i, 'description', e.target.value)}
+                          data-testid={`cat-split-desc-${i}`} />
                       </div>
                     </div>
                   );})}
                 </div>
 
                 <Button variant="outline" size="sm" onClick={addCatSplit} className="h-7 text-xs" data-testid="cat-split-add">
-                  <PlusCircle size={13} className="mr-1" /> Ajouter un split (multi-natures)
+                  <PlusCircle size={13} className="mr-1" /> Ajouter un split (multi-comptes)
                 </Button>
 
                 <div className="flex justify-between items-center border-t border-slate-200 pt-2 text-xs">
@@ -2015,15 +1946,10 @@ export default function BankingPage() {
                   <Button variant="outline" size="sm" onClick={() => setCategorizeDialog(false)} className="h-8 text-xs">Annuler</Button>
                   <Button size="sm" onClick={doCategorize}
                     disabled={Math.abs(diff) >= 0.01 || categorizeSplits.some(s => {
-                      const missingNat = !s.expense_category_id && !(s.account_number || '').trim();
-                      if (missingNat) return true;
-                      if (Number(s.amount) <= 0) return true;
-                      // Cle facultative si compte 58 (virement interne) : ni account
-                      // direct 58, ni nature dont le compte commence par 58.
                       const acc = (s.account_number || '').trim();
-                      const cat = expenseCategories.find(c => c.id === s.expense_category_id);
-                      const catAcc = (cat?.account_number || '');
-                      const isTransfer = acc.startsWith('58') || catAcc.startsWith('58') || cat?.kind === 'transfer';
+                      if (!acc) return true;
+                      if (Number(s.amount) <= 0) return true;
+                      const isTransfer = acc.startsWith('58');
                       if (isTransfer) return false;
                       return !s.distribution_key_id;
                     })}
