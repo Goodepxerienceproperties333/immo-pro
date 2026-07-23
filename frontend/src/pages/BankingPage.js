@@ -32,6 +32,7 @@ export default function BankingPage() {
   const [stmtDialog, setStmtDialog] = useState(false);
   const [editingStmtId, setEditingStmtId] = useState(null);
   const [codaUploading, setCodaUploading] = useState(false);
+  const [statementsLoading, setStatementsLoading] = useState(true);
   const [lettrageDialog, setLettrageDialog] = useState(false);
   const [lettrageTarget, setLettrageTarget] = useState(null);
   const [editingTxn, setEditingTxn] = useState(null);
@@ -119,6 +120,8 @@ export default function BankingPage() {
   };
 
   const load = useCallback(async () => {
+    setStatementsLoading(true);
+    try {
     const promises = [
       api.get('/banking/statements', { params: fyParams }),
       api.get('/banking/transactions', { params: fyParams }),
@@ -165,6 +168,9 @@ export default function BankingPage() {
       } catch {
         setReadiness({ total: 0, draft: 0, posted: 0, ready_to_post: 0, needs_review: 0, draft_ids_ready: [], draft_ids_needs_review: [] });
       }
+    }
+    } finally {
+      setStatementsLoading(false);
     }
   }, [selectedCopro, fyParams.date_from, fyParams.date_to, selectedFiscalYearId]);
   useEffect(() => { load(); }, [load]);
@@ -799,7 +805,15 @@ export default function BankingPage() {
           <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold px-1">
             Extraits ({filteredStatements.length})
           </div>
-          {filteredStatements.length === 0 ? (
+          {statementsLoading ? (
+            <div className="flex flex-col items-center justify-center py-10 gap-3" data-testid="statements-loading">
+              <div className="relative">
+                <div className="h-10 w-10 rounded-full border-[3px] border-slate-200" />
+                <div className="absolute inset-0 h-10 w-10 rounded-full border-[3px] border-transparent border-t-[#022D52] animate-spin" />
+              </div>
+              <p className="text-xs text-slate-500 font-medium animate-pulse">Chargement des extraits...</p>
+            </div>
+          ) : filteredStatements.length === 0 ? (
             (selectedFiscalYearId && totalStatementsAllPeriods > 0) ? (
               <div className="text-xs text-slate-600 text-center py-6 px-3 bg-amber-50 border border-amber-200 rounded" data-testid="stmt-fy-filter-empty">
                 <div className="font-semibold text-amber-800 mb-1">Aucun extrait pour cet exercice</div>
