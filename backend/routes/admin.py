@@ -3358,30 +3358,64 @@ def create_admin_router(db):
         if not copro_ids:
             return {"message": "Ce syndic n'a aucune ACP. Rien a purger.", "deleted": {}}
 
-        # Collections a purger (cle mongo = copropriete_id)
+        deleted_counts = {}
+
+        # --- 1. Collecter TOUS les owner_ids lies aux ACPs (via lots) ---
+        owner_ids_from_lots = set()
+        for cid in copro_ids:
+            ids1 = await db.lots.distinct("owner_id", {"copropriete_id": cid})
+            ids2 = await db.lots.distinct("owner_ids", {"copropriete_id": cid})
+            owner_ids_from_lots.update(i for i in ids1 if i)
+            owner_ids_from_lots.update(i for i in ids2 if i)
+
+        # Owner IDs lies via copropriete_ids (array) sur la fiche owner
+        owner_ids_from_field = set(await db.owners.distinct(
+            "id", {"copropriete_ids": {"$in": copro_ids}}
+        ))
+        # Owner IDs lies via copropriete_id (singulier) sur la fiche owner
+        owner_ids_from_singular = set(await db.owners.distinct(
+            "id", {"copropriete_id": {"$in": copro_ids}}
+        ))
+        all_owner_ids = owner_ids_from_lots | owner_ids_from_field | owner_ids_from_singular
+
+        # --- 2. Supprimer les owners (union de tous les criteres) ---
+        if all_owner_ids:
+            r = await db.owners.delete_many({"id": {"$in": list(all_owner_ids)}})
+            deleted_counts["owners"] = r.deleted_count
+            # Supprimer les comptes bancaires des owners
+            r2 = await db.owner_bank_accounts.delete_many(
+                {"owner_id": {"$in": list(all_owner_ids)}}
+            )
+            deleted_counts["owner_bank_accounts"] = r2.deleted_count
+        else:
+            deleted_counts["owners"] = 0
+            deleted_counts["owner_bank_accounts"] = 0
+
+        # --- 3. Collections standard avec copropriete_id ---
         COPRO_COLLECTIONS = [
-            "lots", "owners", "suppliers", "invoices", "fund_calls",
+            "lots", "suppliers", "invoices", "fund_calls",
             "mutations", "journal_entries", "bank_statements",
             "bank_transactions", "pcmn_accounts", "expense_categories",
-            "distribution_keys", "fiscal_years",
+            "distribution_keys", "fiscal_years", "tier_accounts",
+            "deleted_entries", "import_sessions", "documents",
+            "document_categories",
         ]
-        deleted_counts = {}
         for coll_name in COPRO_COLLECTIONS:
             coll = db[coll_name]
             result = await coll.delete_many({"copropriete_id": {"$in": copro_ids}})
             deleted_counts[coll_name] = result.deleted_count
 
-        # Supprimer les coproprietes elles-memes
+        # --- 4. Supprimer les coproprietes elles-memes ---
         result = await db.coproprietes.delete_many({"id": {"$in": copro_ids}})
         deleted_counts["coproprietes"] = result.deleted_count
 
-        # Vider la liste copropriete_ids du syndic
+        # --- 5. Vider la liste copropriete_ids du syndic ---
         await db.users.update_one(
             {"_id": ObjectId(user_id)},
             {"$set": {"copropriete_ids": []}},
         )
 
-        # Aussi purger les gestionnaires (team) rattaches a ce syndic
+        # --- 6. Purger les gestionnaires/owners (team) rattaches a ce syndic ---
         team_result = await db.users.delete_many({
             "syndic_user_id": user_id,
             "role": {"$in": ["gestionnaire", "owner"]},
@@ -3395,5 +3429,81 @@ def create_admin_router(db):
             "copropriete_ids_purged": copro_ids,
             "deleted": deleted_counts,
         }
+
+    @router.post("/migrate/normalize-bank-pcmn")
+    async def migrate_normalize_bank_pcmn(request: Request):
+        """Normalise TOUS les numeros PCMN bancaires (classe 55) a 8 chiffres.
+
+        3 cibles :
+          1. coproprietes.bank_accounts[].pcmn_number
+          2. pcmn_accounts.number (comptes 55xxxx -> 55xxxx00)
+          3. journal_entries.lines[].account_number (55xxxx -> 55xxxx00)
+
+        Idempotent : les numeros deja a 8 chiffres sont ignores.
+        """
+        await _get_superadmin_only(request)
+        from pcmn_utils import normalize_bank_pcmn
+
+        stats = {"copros_updated": 0, "pcmn_updated": 0, "je_lines_updated": 0}
+
+        # 1. coproprietes.bank_accounts[].pcmn_number
+        copros = await db.coproprietes.find(
+            {"bank_accounts": {"$exists": True, "$ne": []}},
+            {"_id": 0, "id": 1, "bank_accounts": 1},
+        ).to_list(1000)
+        for copro in copros:
+            changed = False
+            for ba in (copro.get("bank_accounts") or []):
+                old = (ba.get("pcmn_number") or "").strip()
+                if old and old.startswith("55"):
+                    new = normalize_bank_pcmn(old)
+                    if new != old:
+                        ba["pcmn_number"] = new
+                        changed = True
+            if changed:
+                await db.coproprietes.update_one(
+                    {"id": copro["id"]},
+                    {"$set": {"bank_accounts": copro["bank_accounts"]}},
+                )
+                stats["copros_updated"] += 1
+
+        # 2. pcmn_accounts.number (classe 55, 6-7 chiffres -> 8)
+        pcmn_55 = await db.pcmn_accounts.find(
+            {"number": {"$regex": "^55\\d{3,4}$"}},
+            {"_id": 1, "number": 1, "copropriete_id": 1},
+        ).to_list(10000)
+        for p in pcmn_55:
+            old = p["number"]
+            new = normalize_bank_pcmn(old)
+            if new != old:
+                existing = await db.pcmn_accounts.find_one({
+                    "number": new, "copropriete_id": p.get("copropriete_id"),
+                })
+                if not existing:
+                    await db.pcmn_accounts.update_one(
+                        {"_id": p["_id"]}, {"$set": {"number": new}}
+                    )
+                    stats["pcmn_updated"] += 1
+
+        # 3. journal_entries.lines[].account_number (55xxxx -> 55xxxx00)
+        je_cursor = db.journal_entries.find(
+            {"lines.account_number": {"$regex": "^55\\d{3,4}$"}},
+            {"_id": 1, "lines": 1},
+        )
+        async for je in je_cursor:
+            changed = False
+            for ln in (je.get("lines") or []):
+                old_acc = (ln.get("account_number") or "").strip()
+                if old_acc and old_acc.startswith("55") and 6 <= len(old_acc) <= 7:
+                    ln["account_number"] = normalize_bank_pcmn(old_acc)
+                    changed = True
+                    stats["je_lines_updated"] += 1
+            if changed:
+                await db.journal_entries.update_one(
+                    {"_id": je["_id"]}, {"$set": {"lines": je["lines"]}}
+                )
+
+        return {"status": "ok", **stats}
+
 
     return router

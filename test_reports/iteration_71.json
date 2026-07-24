@@ -1,0 +1,119 @@
+{
+  "summary": "Iteration 71 testing completed - P0 Purge Syndic fix and P1 PCMN Normalization verified. 26/26 tests passed (20 new + 6 existing). All features working correctly.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter71_purge_and_pcmn_normalization.py",
+    "/app/backend/tests/test_iter70_purge_syndic.py",
+    "/app/test_reports/pytest/iter71_purge_pcmn.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "P0 - PURGE SYNDIC FIX (admin.py lines 3325-3431):",
+    "1. Owner collection via lots.owner_id: VERIFIED - line 3366 uses db.lots.distinct('owner_id')",
+    "2. Owner collection via lots.owner_ids (array): VERIFIED - line 3367 uses db.lots.distinct('owner_ids')",
+    "3. Owner collection via owners.copropriete_ids (array): VERIFIED - line 3372-3374",
+    "4. Owner collection via owners.copropriete_id (singular): VERIFIED - line 3376-3378",
+    "5. Union of all owner_ids: VERIFIED - line 3379 uses set union operator",
+    "6. Additional collections in COPRO_COLLECTIONS (lines 3395-3402):",
+    "   - owner_bank_accounts: VERIFIED (deleted via owner_id at line 3386-3388)",
+    "   - tier_accounts: VERIFIED (in COPRO_COLLECTIONS)",
+    "   - deleted_entries: VERIFIED (in COPRO_COLLECTIONS)",
+    "   - import_sessions: VERIFIED (in COPRO_COLLECTIONS)",
+    "   - documents: VERIFIED (in COPRO_COLLECTIONS)",
+    "   - document_categories: VERIFIED (in COPRO_COLLECTIONS)",
+    "",
+    "P1 - PCMN NORMALIZATION (pcmn_utils.py + admin.py lines 3433-3506):",
+    "1. normalize_bank_pcmn function: VERIFIED - correctly pads 6-digit to 8-digit",
+    "2. pcmn_bank_match function: VERIFIED - correctly compares after normalization",
+    "3. Migration endpoint POST /api/admin/migrate/normalize-bank-pcmn: VERIFIED",
+    "   - Normalizes coproprietes.bank_accounts[].pcmn_number",
+    "   - Normalizes pcmn_accounts.number (class 55)",
+    "   - Normalizes journal_entries.lines[].account_number (class 55)",
+    "4. _generate_pcmn_number in coproprietes.py: VERIFIED - generates 8-digit format",
+    "5. _resolve_bank_account in auto_entries.py: VERIFIED - uses pcmn_bank_match for 6-to-8 digit matching"
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter71_purge_and_pcmn_normalization.py"
+  ],
+  "success_rate": {
+    "backend": "100% (26/26 passed - 20 new + 6 existing)"
+  },
+  "seed_data_creation": "Tests create temporary syndic users and coproprietes for testing, then clean up after each test",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Iteration 71 verified P0 (Purge Syndic fix) and P1 (PCMN Normalization). The purge endpoint now correctly collects owner_ids via all 4 linking methods (lots.owner_id, lots.owner_ids, owners.copropriete_ids, owners.copropriete_id) and deletes from 6 additional collections. PCMN normalization correctly converts 6-digit bank accounts to 8-digit format.",
+  "features_tested": {
+    "pcmn_normalize_6_to_8_digit": {
+      "status": "PASS",
+      "details": "normalize_bank_pcmn('551618') returns '55161800'"
+    },
+    "pcmn_normalize_7_to_8_digit": {
+      "status": "PASS",
+      "details": "normalize_bank_pcmn('5500591') returns '55005910'"
+    },
+    "pcmn_8_digit_unchanged": {
+      "status": "PASS",
+      "details": "normalize_bank_pcmn('55161800') returns '55161800'"
+    },
+    "pcmn_parent_accounts_unchanged": {
+      "status": "PASS",
+      "details": "Parent accounts (550, 551, 5500, 5510, 55000) remain unchanged"
+    },
+    "pcmn_non_55_unchanged": {
+      "status": "PASS",
+      "details": "Non-55 accounts (600000, 440001, 700000) remain unchanged"
+    },
+    "pcmn_bank_match_6_vs_8": {
+      "status": "PASS",
+      "details": "pcmn_bank_match('551618', '55161800') returns True"
+    },
+    "migration_endpoint_requires_auth": {
+      "status": "PASS",
+      "details": "POST /api/admin/migrate/normalize-bank-pcmn returns 401/403 without auth"
+    },
+    "migration_endpoint_returns_stats": {
+      "status": "PASS",
+      "details": "Returns {status: 'ok', copros_updated, pcmn_updated, je_lines_updated}"
+    },
+    "migration_is_idempotent": {
+      "status": "PASS",
+      "details": "Running migration twice is safe - second run updates 0"
+    },
+    "purge_deletes_additional_collections": {
+      "status": "PASS",
+      "details": "Purge includes owner_bank_accounts, tier_accounts, deleted_entries, import_sessions, documents, document_categories"
+    },
+    "purge_requires_superadmin": {
+      "status": "PASS",
+      "details": "Syndic user gets 403 when trying to purge"
+    },
+    "purge_requires_email_confirmation": {
+      "status": "PASS",
+      "details": "Wrong email returns 400 with 'confirmation' message"
+    },
+    "purge_nonexistent_user_404": {
+      "status": "PASS",
+      "details": "Non-existent user_id returns 404"
+    },
+    "purge_no_acps_message": {
+      "status": "PASS",
+      "details": "Syndic without ACPs returns 'aucune ACP' message"
+    },
+    "generate_pcmn_vue_8_digits": {
+      "status": "PASS",
+      "details": "_generate_pcmn_number produces 551xxx00 format (8 digits) for vue accounts"
+    },
+    "generate_pcmn_epargne_8_digits": {
+      "status": "PASS",
+      "details": "_generate_pcmn_number produces 550xxx00 format (8 digits) for epargne accounts"
+    }
+  }
+}

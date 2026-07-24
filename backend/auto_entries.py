@@ -149,20 +149,23 @@ async def _resolve_bank_account(db, txn: dict, copro_id: str) -> tuple[str, str]
     copro = await db.coproprietes.find_one({"id": copro_id}, {"_id": 0, "bank_accounts": 1})
     accounts = (copro or {}).get("bank_accounts") or []
 
-    # 1) Match IBAN exact -> pcmn officiel
+    from pcmn_utils import normalize_bank_pcmn, pcmn_bank_match
+
+    # 1) Match IBAN exact -> pcmn officiel (normalise a 8 chiffres)
     if iban:
         for ba in accounts:
             ba_iban = normalize_iban(ba.get("iban"))
             if ba_iban and ba_iban == iban and ba.get("pcmn_number"):
-                return ba["pcmn_number"], (ba.get("label") or "Banque")
+                return normalize_bank_pcmn(ba["pcmn_number"]), (ba.get("label") or "Banque")
 
     # 2) Match direct : account_number == pcmn_number configure
     #    Couvre les extraits sans IBAN ou le account_number EST le pcmn (ex. 551618).
+    #    Normalisation 8 chiffres (551618 == 55161800).
     if raw_acc:
         for ba in accounts:
             ba_pcmn = (ba.get("pcmn_number") or "").strip()
-            if ba_pcmn and ba_pcmn == raw_acc:
-                return ba_pcmn, (ba.get("label") or "Banque")
+            if ba_pcmn and pcmn_bank_match(ba_pcmn, raw_acc):
+                return normalize_bank_pcmn(ba_pcmn), (ba.get("label") or "Banque")
 
     # 3) Suffixe IBAN / correspondance croisee pcmn_number
     if raw_acc:
@@ -173,29 +176,34 @@ async def _resolve_bank_account(db, txn: dict, copro_id: str) -> tuple[str, str]
                 ba_pcmn = (ba.get("pcmn_number") or "").strip()
                 # suffixe de l'IBAN
                 if ba_iban_raw and ba_iban_raw.endswith(digits) and ba_pcmn:
-                    return ba_pcmn, (ba.get("label") or "Banque")
+                    return normalize_bank_pcmn(ba_pcmn), (ba.get("label") or "Banque")
                 # correspondance croisee pcmn (suffixe ou prefixe)
-                if ba_pcmn and ba_pcmn != raw_acc and (
-                    ba_pcmn.endswith(digits) or digits.endswith(ba_pcmn)
+                norm_pcmn = normalize_bank_pcmn(ba_pcmn) if ba_pcmn else ""
+                if norm_pcmn and not pcmn_bank_match(norm_pcmn, raw_acc) and (
+                    norm_pcmn.endswith(digits) or digits.endswith(norm_pcmn)
                 ):
-                    return ba_pcmn, (ba.get("label") or "Banque")
+                    return norm_pcmn, (ba.get("label") or "Banque")
 
     # 4) Compte PCMN bancaire existant (classe 55) dans le plan comptable
+    #    Essaie d'abord tel quel, puis normalise a 8 chiffres
     if raw_acc:
         digits = "".join(c for c in raw_acc if c.isdigit())
         if digits and digits.startswith("55"):
-            pcmn = await db.pcmn_accounts.find_one(
-                {"copropriete_id": copro_id, "number": digits},
-                {"_id": 0, "number": 1, "name": 1},
-            )
-            if pcmn:
-                return pcmn["number"], (pcmn.get("name") or "Banque")
+            norm_digits = normalize_bank_pcmn(digits)
+            # Cherche d'abord le numero normalise, puis l'original
+            for try_num in dict.fromkeys([norm_digits, digits]):
+                pcmn = await db.pcmn_accounts.find_one(
+                    {"copropriete_id": copro_id, "number": try_num},
+                    {"_id": 0, "number": 1, "name": 1},
+                )
+                if pcmn:
+                    return pcmn["number"], (pcmn.get("name") or "Banque")
 
     # 5) Fallback : compte par defaut de l'ACP (is_default=True) ou 1er
     if accounts:
         default_ba = next((b for b in accounts if b.get("is_default")), None) or accounts[0]
         if default_ba.get("pcmn_number"):
-            return default_ba["pcmn_number"], (default_ba.get("label") or "Banque")
+            return normalize_bank_pcmn(default_ba["pcmn_number"]), (default_ba.get("label") or "Banque")
 
     # 6) Ultime fallback : "" - l'appelant DOIT gerer ce cas (skip ou raise)
     return "", "Banque"

@@ -71,11 +71,14 @@ def create_coproprietes_router(db):
         return user
 
     def _generate_pcmn_number(iban: str, account_type: str) -> str:
-        """Generate PCMN account number: 551xxx for vue, 550xxx for epargne."""
+        """Generate PCMN account number: 551xxx00 for vue, 550xxx00 for epargne.
+        Convention : toujours 8 chiffres."""
+        from pcmn_utils import normalize_bank_pcmn
         clean = iban.replace(" ", "").replace("-", "")
         last3 = clean[-3:] if len(clean) >= 3 else clean.zfill(3)
         prefix = "550" if account_type == "epargne" else "551"
-        return f"{prefix}{last3}00"
+        raw = f"{prefix}{last3}00"
+        return normalize_bank_pcmn(raw)
 
     # Accounts that are pre-activated (visible in default selection lists)
     DEFAULT_ACTIVE_ACCOUNTS = {"614000", "615000"}  # Honoraires syndic + Frais de gestion (admin)
