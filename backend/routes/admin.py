@@ -3544,5 +3544,48 @@ def create_admin_router(db):
         stats = await run_migration(db)
         return {"status": "ok", **stats}
 
+    @router.post("/migrate-stamp-syndic")
+    async def migrate_stamp_syndic(request: Request):
+        """Migration one-shot : ajoute syndic_id a TOUS les documents operationnels
+        qui en manquent, en se basant sur copropriete_id -> copropriete.syndic_id."""
+        await _get_superadmin_only(request)
+        from syndic_scope import get_syndic_id_for_copro
+        collections = [
+            "journal_entries", "fund_calls", "invoices", "bank_statements",
+            "bank_transactions", "lots", "owners", "suppliers",
+            "distribution_keys", "budgets", "fiscal_years", "meters",
+            "documents", "document_categories", "expense_categories",
+            "mutations", "regularizations", "tenants",
+        ]
+        stats = {}
+        # Cache copro_id -> syndic_id
+        copro_cache = {}
+        for col_name in collections:
+            col = db[col_name]
+            missing = await col.count_documents({"syndic_id": {"$exists": False}})
+            if missing == 0:
+                stats[col_name] = 0
+                continue
+            cursor = col.find({"syndic_id": {"$exists": False}}, {"_id": 1, "copropriete_id": 1, "copropriete_ids": 1})
+            fixed = 0
+            async for doc in cursor:
+                # Determine copro_id from document
+                copro_id = doc.get("copropriete_id", "")
+                if not copro_id:
+                    # Owners may have copropriete_ids array
+                    ids = doc.get("copropriete_ids") or []
+                    copro_id = ids[0] if ids else ""
+                if not copro_id:
+                    continue
+                # Lookup syndic_id (cached)
+                if copro_id not in copro_cache:
+                    copro_cache[copro_id] = await get_syndic_id_for_copro(db, copro_id)
+                sid = copro_cache[copro_id]
+                if sid:
+                    await col.update_one({"_id": doc["_id"]}, {"$set": {"syndic_id": sid}})
+                    fixed += 1
+            stats[col_name] = fixed
+        return {"status": "ok", "fixed": stats}
+
 
     return router

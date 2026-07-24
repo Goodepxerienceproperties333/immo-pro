@@ -423,8 +423,8 @@ async def generate_purchase_entry(db, invoice: dict) -> dict | None:
                 "source_id": invoice["id"],
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
-            await db.journal_entries.insert_one(od_doc)
             await _stamp_syndic(db, od_doc, copro_id)
+            await db.journal_entries.insert_one(od_doc)
             return {k: v for k, v in ac_doc.items() if k != "_id"}
 
     # ---- ECRITURE STANDARD ----
@@ -522,8 +522,8 @@ async def generate_purchase_entry(db, invoice: dict) -> dict | None:
         "source_id": invoice["id"],
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
-    await db.journal_entries.insert_one(doc)
     await _stamp_syndic(db, doc, copro_id)
+    await db.journal_entries.insert_one(doc)
     return {k: v for k, v in doc.items() if k != "_id"}
 
 
@@ -719,8 +719,8 @@ async def generate_sale_entry(db, fund_call: dict) -> dict | None:
         "source_id": fund_call["id"],
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
-    await db.journal_entries.insert_one(doc)
     await _stamp_syndic(db, doc, copro_id)
+    await db.journal_entries.insert_one(doc)
     return {k: v for k, v in doc.items() if k != "_id"}
 
 
@@ -832,8 +832,8 @@ async def generate_bank_entry(db, txn: dict) -> dict | None:
                 "bank_statement_id": txn.get("statement_id") or "",
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
-            await db.journal_entries.insert_one(doc)
             await _stamp_syndic(db, doc, copro_id)
+            await db.journal_entries.insert_one(doc)
             return doc
 
     # Fallback : transaction non lettree -> compte d'attente 499000
@@ -955,9 +955,9 @@ async def generate_bank_entry(db, txn: dict) -> dict | None:
         "invoice_number": invoice_number or None,  # backref pour reporting
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
+    await _stamp_syndic(db, doc, copro_id)
     await db.journal_entries.insert_one(doc)
     # iter90ji : lie la txn a ce JE nouvellement cree (piste d'audit)
-    await _stamp_syndic(db, doc, copro_id)
     await db.bank_transactions.update_one(
         {"id": txn["id"]},
         {"$set": {"matched_je_id": doc["id"], "matched_je_ref": doc["reference"], "matched_je_source": "auto"}},

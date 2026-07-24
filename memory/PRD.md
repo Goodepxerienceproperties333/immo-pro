@@ -19,13 +19,11 @@ Application de gestion de copropriete basee sur le droit belge (PCMN), incluant 
 
 ### Session courante (Juillet 2026 - Fork actuel)
 
-#### Bug Fix: Import Wizard + Fund Calls + AUDIT GLOBAL inject_syndic (DONE - 24/07/2026)
-- Cause racine: le refactoring sed massif pour syndic_id a ajoute `inject_syndic(doc, request)` dans des fonctions qui n'ont pas `request` comme parametre
-- Scan AST complet de tous les fichiers routes/ pour detecter systematiquement les fonctions cassees
-- **24 fonctions corrigees** dans 10 fichiers: banking.py (5), fiscal.py (5), fund_calls.py (5), invoices.py (2), expense_categories.py (1), meters.py (2), invoice_templates.py (1), import_wizard.py (1), properties.py (2 fixes precedents), coproprietes.py (1 fix precedent)
-- Imports `Request` manquants ajoutes dans meters.py et expense_categories.py
-- Lignes corrompues nettoyees dans invoice_templates.py
-- Validation: scan AST confirme 0 fonctions cassees restantes (4 closures valides)
+#### Bug Fix: Fund Calls VE entries invisibles + _stamp_syndic order (DONE - 24/07/2026)
+- Cause racine: `_stamp_syndic` etait appelée APRES `insert_one` dans 5 endroits de `auto_entries.py`, donc les documents etaient sauves sans `syndic_id` → invisibles via le middleware
+- Fix: inversion de l'ordre (stamp AVANT insert) dans les 5 call sites de auto_entries.py
+- Migration endpoint `POST /api/admin/migrate-stamp-syndic` creee et executee : 38 documents corriges (15 journal_entries + 23 expense_categories)
+- Les 5 appels de fonds sont maintenant visibles : 4x Trimestriel + 1x Fonds de reserve (2000€ : debit 41000XXX proprietaires / credit 160 reserve)
 
 #### Gestion Collaborateurs dans Mon Bureau (DONE - 24/07/2026)
 - Section "Mon equipe — Collaborateurs" integree dans la page Mon Bureau (/mon-bureau)
