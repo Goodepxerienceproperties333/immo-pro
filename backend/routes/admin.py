@@ -3321,4 +3321,79 @@ def create_admin_router(db):
             "results": report_items,
         }
 
+    # ---- PURGE COMPLETE DES DONNEES D'UN SYNDIC ----
+    @router.delete("/syndic/{user_id}/purge-data")
+    async def purge_syndic_data(user_id: str, request: Request):
+        """Supprime TOUTES les donnees de TOUTES les ACPs liees a un syndic.
+
+        Requiert :
+          - header/cookie superadmin
+          - body JSON : {"confirm_email": "<email du syndic>"}
+
+        Collections purgees par ACP : lots, owners, suppliers, invoices,
+        fund_calls, mutations, journal_entries, bank_statements,
+        bank_transactions, pcmn_accounts, expense_categories,
+        distribution_keys, fiscal_years, coproprietes.
+        """
+        await _get_superadmin_only(request)
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        confirm_email = (body.get("confirm_email") or "").strip().lower()
+
+        try:
+            target = await db.users.find_one({"_id": ObjectId(user_id)})
+        except Exception:
+            raise HTTPException(404, "Utilisateur non trouve")
+        if not target:
+            raise HTTPException(404, "Utilisateur non trouve")
+        if target.get("email", "").lower() != confirm_email:
+            raise HTTPException(
+                400,
+                f"Confirmation incorrecte. Retapez l'email du syndic ({target.get('email')}) pour confirmer la purge."
+            )
+
+        copro_ids = target.get("copropriete_ids") or []
+        if not copro_ids:
+            return {"message": "Ce syndic n'a aucune ACP. Rien a purger.", "deleted": {}}
+
+        # Collections a purger (cle mongo = copropriete_id)
+        COPRO_COLLECTIONS = [
+            "lots", "owners", "suppliers", "invoices", "fund_calls",
+            "mutations", "journal_entries", "bank_statements",
+            "bank_transactions", "pcmn_accounts", "expense_categories",
+            "distribution_keys", "fiscal_years",
+        ]
+        deleted_counts = {}
+        for coll_name in COPRO_COLLECTIONS:
+            coll = db[coll_name]
+            result = await coll.delete_many({"copropriete_id": {"$in": copro_ids}})
+            deleted_counts[coll_name] = result.deleted_count
+
+        # Supprimer les coproprietes elles-memes
+        result = await db.coproprietes.delete_many({"id": {"$in": copro_ids}})
+        deleted_counts["coproprietes"] = result.deleted_count
+
+        # Vider la liste copropriete_ids du syndic
+        await db.users.update_one(
+            {"_id": ObjectId(user_id)},
+            {"$set": {"copropriete_ids": []}},
+        )
+
+        # Aussi purger les gestionnaires (team) rattaches a ce syndic
+        team_result = await db.users.delete_many({
+            "syndic_user_id": user_id,
+            "role": {"$in": ["gestionnaire", "owner"]},
+        })
+        deleted_counts["team_users"] = team_result.deleted_count
+
+        total = sum(deleted_counts.values())
+        return {
+            "message": f"Purge terminee : {total} documents supprimes pour {len(copro_ids)} ACP(s) du syndic {target.get('name')}",
+            "syndic_email": target.get("email"),
+            "copropriete_ids_purged": copro_ids,
+            "deleted": deleted_counts,
+        }
+
     return router

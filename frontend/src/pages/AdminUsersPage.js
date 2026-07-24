@@ -9,7 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { toast } from 'sonner';
-import { Plus, Pencil, Trash2, Shield, Search, Building, Info, Mail, AlertTriangle } from 'lucide-react';
+import { Plus, Pencil, Trash2, Shield, Search, Building, Info, Mail, AlertTriangle, Flame } from 'lucide-react';
 import { fmtDate } from '@/lib/dateFmt';
 
 // iter90h0 : le superadmin peut creer des comptes 'syndic' OU 'superadmin'.
@@ -26,6 +26,9 @@ export default function AdminUsersPage() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState({ email: '', password: '', name: '', role: 'syndic', must_change_password: true });
+  const [purgeTarget, setPurgeTarget] = useState(null);
+  const [purgeConfirmEmail, setPurgeConfirmEmail] = useState('');
+  const [purging, setPurging] = useState(false);
 
   const load = useCallback(async () => {
     if (!isSuperadmin) return;
@@ -141,6 +144,24 @@ export default function AdminUsersPage() {
     }
   };
 
+  const handlePurge = async () => {
+    if (!purgeTarget) return;
+    setPurging(true);
+    try {
+      const { data } = await api.delete(`/admin/syndic/${purgeTarget.id}/purge-data`, {
+        data: { confirm_email: purgeConfirmEmail },
+      });
+      toast.success(data.message);
+      setPurgeTarget(null);
+      setPurgeConfirmEmail('');
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur lors de la purge');
+    } finally {
+      setPurging(false);
+    }
+  };
+
   const roleBadge = (role) => {
     if (role === 'superadmin') {
       return <Badge variant="outline" className="bg-purple-100 text-purple-800 border-purple-300">Super Administrateur</Badge>;
@@ -204,6 +225,9 @@ export default function AdminUsersPage() {
                     <Button variant="ghost" size="sm" onClick={() => openEdit(u)} data-testid={`edit-user-${u.id}`}><Pencil size={14} /></Button>
                     {isSuperadmin && u.id !== user?.id && (
                       <Button variant="ghost" size="sm" onClick={() => handleDelete(u.id)} className="text-red-500" data-testid={`delete-user-${u.id}`}><Trash2 size={14} /></Button>
+                    )}
+                    {isSuperadmin && u.role === 'syndic' && (u.copropriete_ids || []).length > 0 && (
+                      <Button variant="ghost" size="sm" onClick={() => { setPurgeTarget(u); setPurgeConfirmEmail(''); }} className="text-orange-600 hover:text-red-700" title="Purger toutes les donnees de ce syndic" data-testid={`purge-syndic-${u.id}`}><Flame size={14} /></Button>
                     )}
                   </div>
                 </TableCell>
@@ -292,6 +316,58 @@ export default function AdminUsersPage() {
               </Button>
             </div>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Dialog Purge syndic */}
+      <Dialog open={!!purgeTarget} onOpenChange={(v) => { if (!v) { setPurgeTarget(null); setPurgeConfirmEmail(''); } }}>
+        <DialogContent className="max-w-md" data-testid="purge-dialog">
+          <DialogHeader>
+            <DialogTitle className="text-red-700 flex items-center gap-2 text-base m-0">
+              <AlertTriangle size={18} /> Purge des donnees syndic
+            </DialogTitle>
+          </DialogHeader>
+          {purgeTarget && (
+            <div className="space-y-4">
+              <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-800">
+                <p className="font-semibold mb-1">Action irreversible</p>
+                <p>Toutes les donnees de <b>{purgeTarget.name}</b> ({purgeTarget.email}) seront supprimees :</p>
+                <ul className="mt-2 space-y-0.5 text-xs list-disc pl-4">
+                  <li>Coproprietes ({(purgeTarget.copropriete_ids || []).length} ACP)</li>
+                  <li>Lots, proprietaires, fournisseurs</li>
+                  <li>Factures, appels de fonds, mutations</li>
+                  <li>Ecritures comptables, exercices fiscaux</li>
+                  <li>Extraits et transactions bancaires</li>
+                  <li>Comptes PCMN, natures, cles de repartition</li>
+                  <li>Gestionnaires et portails proprietaires lies</li>
+                </ul>
+              </div>
+              <div>
+                <label className="text-xs text-slate-600 font-medium block mb-1">
+                  Pour confirmer, retapez l{"'"}email du syndic : <code className="text-red-600">{purgeTarget.email}</code>
+                </label>
+                <Input
+                  value={purgeConfirmEmail}
+                  onChange={(e) => setPurgeConfirmEmail(e.target.value)}
+                  placeholder={purgeTarget.email}
+                  className="text-sm"
+                  data-testid="purge-confirm-email"
+                />
+              </div>
+              <div className="flex justify-end gap-2 pt-1">
+                <Button variant="outline" size="sm" onClick={() => setPurgeTarget(null)} className="h-8 text-xs">Annuler</Button>
+                <Button
+                  size="sm"
+                  onClick={handlePurge}
+                  disabled={purgeConfirmEmail.trim().toLowerCase() !== purgeTarget.email.toLowerCase() || purging}
+                  className="bg-red-600 hover:bg-red-700 text-white h-8 text-xs"
+                  data-testid="purge-confirm-btn"
+                >
+                  {purging ? 'Purge en cours...' : 'Purger definitivement'}
+                </Button>
+              </div>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
     </div>
