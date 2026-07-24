@@ -1343,7 +1343,7 @@ def create_banking_router(db):
             print(f"[_refresh_fi_if_posted] failed for txn {txn_id}: {e}")
 
     @router.post("/transactions")
-    async def create_transaction(data: TransactionInput):
+    async def create_transaction(data: TransactionInput, request: Request):
         # Force amount sign based on transaction_type
         stored_amount = abs(float(data.amount))
         if data.transaction_type == "debit":
@@ -2533,7 +2533,7 @@ def create_banking_router(db):
         })
 
     # ---- CODA IMPORT (legacy) ----
-    async def import_coda(file: UploadFile = File(...), copropriete_id: Optional[str] = Form("")):
+    async def import_coda(request: Request, file: UploadFile = File(...), copropriete_id: Optional[str] = Form("")):
         from coda_parser import parse_coda_file
         import hashlib as _hl
 
@@ -2754,7 +2754,7 @@ def create_banking_router(db):
         movements: List[CodaMovementConfirm] = []
 
     @router.post("/coda/import-confirmed")
-    async def import_coda_confirmed(data: CodaConfirmInput):
+    async def import_coda_confirmed(data: CodaConfirmInput, request: Request):
         """Importe les mouvements CODA apres validation par l'utilisateur (UI mapping).
 
         - Verifie que `file_hash` n'a pas ete deja importe pour cette ACP (idempotence)
@@ -2899,7 +2899,7 @@ def create_banking_router(db):
 
     # ---- ADD LINES TO EXISTING STATEMENT ----
     @router.post("/statements/{stmt_id}/add-lines")
-    async def add_lines_to_statement(stmt_id: str, data: AddLinesInput):
+    async def add_lines_to_statement(stmt_id: str, data: AddLinesInput, request: Request):
         """Add multiple transaction lines to an existing statement at once."""
         stmt = await db.bank_statements.find_one({"id": stmt_id}, {"_id": 0})
         if not stmt:
@@ -3234,7 +3234,7 @@ def create_banking_router(db):
 
     # ---- BATCH TRANSACTIONS ----
     @router.post("/transactions/batch")
-    async def create_batch_transactions(data: BatchTransactionInput):
+    async def create_batch_transactions(data: BatchTransactionInput, request: Request):
         """Create multiple transactions at once for a statement."""
         stmt = await db.bank_statements.find_one({"id": data.statement_id}, {"_id": 0})
         if not stmt:

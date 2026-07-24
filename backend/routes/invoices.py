@@ -165,7 +165,7 @@ def create_invoices_router(db):
         await db.distribution_keys.update_many(q, {"$set": {"is_default": False}})
 
     @router.post("/distribution-keys")
-    async def create_dist_key(data: DistKeyInput):
+    async def create_dist_key(data: DistKeyInput, request: Request):
         code = (data.code or "").strip()
         copro_id = data.copropriete_id or ""
         await _validate_code_uniqueness(copro_id, code)
@@ -1307,7 +1307,7 @@ def create_invoices_router(db):
         return q
 
     @router.post("/invoices")
-    async def create_invoice(data: InvoiceInput, force: bool = Query(default=False)):
+    async def create_invoice(data: InvoiceInput, request: Request, force: bool = Query(default=False)):
         from fiscal_lock import ensure_period_open
         # iter90fa : snap-to-card - si un nom de fournisseur libre matche
         # une fiche existante (par nom normalise), on remplace par le nom

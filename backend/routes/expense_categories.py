@@ -4,7 +4,7 @@ Niveau metier intermediaire entre Cle de repartition et Compte PCMN.
 Relation 1:1 avec un compte PCMN classe 6.
 Scopee par ACP.
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime, timezone
@@ -106,7 +106,7 @@ def create_expense_categories_router(db):
         return cats
 
     @router.post("")
-    async def create_category(data: ExpenseCategoryInput):
+    async def create_category(data: ExpenseCategoryInput, request: Request):
         if not data.account_number:
             raise HTTPException(400, "Compte PCMN obligatoire")
         # Validation : occupant_pct + proprietaire_pct = 100

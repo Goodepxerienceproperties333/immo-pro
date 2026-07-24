@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime, timezone
@@ -47,7 +47,7 @@ def create_meters_router(db):
         return meters
 
     @router.post("")
-    async def create_meter(data: MeterInput):
+    async def create_meter(data: MeterInput, request: Request):
         if data.meter_type not in METER_TYPES_ALLOWED:
             raise HTTPException(
                 400,
@@ -96,7 +96,7 @@ def create_meters_router(db):
         return readings
 
     @router.post("/{meter_id}/readings")
-    async def add_reading(meter_id: str, data: ReadingInput):
+    async def add_reading(meter_id: str, data: ReadingInput, request: Request):
         meter = await db.meters.find_one({"id": meter_id}, {"_id": 0})
         if not meter:
             raise HTTPException(404, "Compteur non trouve")

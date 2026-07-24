@@ -56,7 +56,7 @@ def create_fiscal_router(db):
         return years
 
     @router.post("/years")
-    async def create_fiscal_year(data: FiscalYearInput):
+    async def create_fiscal_year(data: FiscalYearInput, request: Request):
         doc = {
             "id": str(uuid.uuid4()),
             "name": data.name,
@@ -90,7 +90,7 @@ def create_fiscal_router(db):
         return await db.fiscal_years.find_one({"id": year_id}, {"_id": 0})
 
     @router.post("/years/{year_id}/close")
-    async def close_fiscal_year(year_id: str):
+    async def close_fiscal_year(year_id: str, request: Request):
         """Cloture d'exercice: verrouille les ecritures et genere l'a-nouveau."""
         fy = await db.fiscal_years.find_one({"id": year_id}, {"_id": 0})
         if not fy:
@@ -346,7 +346,7 @@ def create_fiscal_router(db):
         }
 
     @router.post("/years/{year_id}/reopen")
-    async def reopen_fiscal_year(year_id: str):
+    async def reopen_fiscal_year(year_id: str, request: Request):
         """Reouvre un exercice CLOTURE.
         Contre-passe (extourne) :
           - les OD de regularisation (`is_regularization=True`)
@@ -428,7 +428,7 @@ def create_fiscal_router(db):
         }
 
     @router.post("/years/{year_id}/regularize")
-    async def regularize_fiscal_year(year_id: str, dry_run: Optional[bool] = False):
+    async def regularize_fiscal_year(year_id: str, request: Request, dry_run: Optional[bool] = False):
         """Cloture comptable avec regularisation par cle de repartition (belge).
         Workflow:
           1) Calculer Total frais reels (factures classe 6) vs Budget
@@ -930,7 +930,7 @@ def create_fiscal_router(db):
         return budgets
 
     @router.post("/budgets")
-    async def create_budget(data: BudgetInput):
+    async def create_budget(data: BudgetInput, request: Request):
         total = sum(l.amount for l in data.lines)
         doc = {
             "id": str(uuid.uuid4()),

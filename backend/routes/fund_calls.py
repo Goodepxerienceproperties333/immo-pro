@@ -250,7 +250,7 @@ async def reverse_post_mutation_ods_for_call(db, call_id: str, reason: str = "")
     return reversed_count
 
 
-async def generate_prorata_mut_ods_for_call(db, call_doc: dict) -> dict:
+async def generate_prorata_mut_ods_for_call(db, call_doc: dict, request=None) -> dict:
     """
     iter90cf + iter90ck : Genere retroactivement les OD 'Mutation - Prorata'
     (compte tier provisions) ET l'OD 'Mutation - Fonds de roulement' (compte
@@ -455,7 +455,8 @@ async def generate_prorata_mut_ods_for_call(db, call_doc: dict) -> dict:
                 "fund_call_id": call_id,
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
-            inject_syndic(od_entry, request)
+            if request:
+                inject_syndic(od_entry, request)
             await db.journal_entries.insert_one(od_entry)
             stats["created"] += 1
             stats["details"].append({
@@ -677,7 +678,8 @@ async def generate_prorata_mut_ods_for_call(db, call_doc: dict) -> dict:
                     "created_at": datetime.now(timezone.utc).isoformat(),
                 }
                 await db.journal_entries.insert_one(od_mutr)
-                inject_syndic(od_mutr, request)
+                if request:
+                    inject_syndic(od_mutr, request)
                 stats["mutr_created"] += 1
                 stats["details"].append({
                     "kind": "fonds_roulement",
@@ -752,7 +754,7 @@ def create_fund_calls_router(db):
         return calls
 
     @router.post("")
-    async def create_fund_call(data: FundCallInput):
+    async def create_fund_call(data: FundCallInput, request: Request):
         from fiscal_lock import ensure_period_open
         copro_id = data.copropriete_id or ""
         # Verrou fiscal : la date de l'appel doit etre dans une periode ouverte
@@ -917,7 +919,7 @@ def create_fund_calls_router(db):
         # iter90cf : genere retroactivement les OD MUT-P si periode straddle
         # une mutation existante (uniquement pour provisions).
         try:
-            _mut_stats = await generate_prorata_mut_ods_for_call(db, clean)
+            _mut_stats = await generate_prorata_mut_ods_for_call(db, clean, request)
             if _mut_stats.get("created"):
                 print(f"[iter90cf] {_mut_stats['created']} OD MUT-P retroactives creees pour {data.name}")
         except HTTPException:
@@ -960,7 +962,7 @@ def create_fund_calls_router(db):
         return {"message": "Paiement enregistre"}
 
     @router.post("/{call_id}/generate-entries")
-    async def generate_journal_entries(call_id: str):
+    async def generate_journal_entries(call_id: str, request: Request):
         """Generate accounting entries for a fund call.
 
         iter90i7 : DEPRECATED - cette route legacy creait un JE de type AP
@@ -1488,12 +1490,12 @@ def create_fund_calls_router(db):
         }
 
     @router.post("/generate-from-budget")
-    async def generate_from_budget_endpoint(data: GenerateFromBudgetInput):
+    async def generate_from_budget_endpoint(data: GenerateFromBudgetInput, request: Request):
         """Create N fund calls in DB from an approved budget. Calls are persisted
         with status='pending'. Reserve fund (if enabled) is added to call #1 only."""
-        return await _generate_from_budget(data, persist=True)
+        return await _generate_from_budget(data, persist=True, request=request)
 
-    async def _generate_from_budget(data: GenerateFromBudgetInput, persist: bool):
+    async def _generate_from_budget(data: GenerateFromBudgetInput, persist: bool, request=None):
         budget = await db.budgets.find_one({"id": data.budget_id}, {"_id": 0})
         if not budget:
             raise HTTPException(404, "Budget non trouve")
@@ -2163,7 +2165,8 @@ def create_fund_calls_router(db):
                 "copropriete_id": copro_id,
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
-            inject_syndic(doc, request)
+            if request:
+                inject_syndic(doc, request)
             await db.fund_calls.insert_one(doc)
             try:
                 await generate_sale_entry(db, doc)
@@ -2173,7 +2176,7 @@ def create_fund_calls_router(db):
             # cree apres une mutation dont la sale_date tombe dans la periode
             # couverte par cet appel.
             try:
-                _mut_stats = await generate_prorata_mut_ods_for_call(db, doc)
+                _mut_stats = await generate_prorata_mut_ods_for_call(db, doc, request)
                 if _mut_stats.get("created"):
                     print(f"[iter90cf] {_mut_stats['created']} OD MUT-P retroactives pour {doc.get('name','?')}")
             except HTTPException:
@@ -2186,7 +2189,7 @@ def create_fund_calls_router(db):
         return {"calls": results, "summary": summary, "persisted": True, "created_ids": created_ids}
 
     @router.post("/regenerate-from-budget")
-    async def regenerate_from_budget(data: GenerateFromBudgetInput):
+    async def regenerate_from_budget(data: GenerateFromBudgetInput, request: Request):
         """Delete future unpaid fund calls linked to this budget, then regenerate
         the schedule starting at data.start_date.
 
@@ -2222,7 +2225,7 @@ def create_fund_calls_router(db):
                 await reverse_post_mutation_ods_for_call(
                     db, did, reason=f"regenerate-from-budget {data.budget_id}"
                 )
-        result = await _generate_from_budget(data, persist=True)
+        result = await _generate_from_budget(data, persist=True, request=request)
         result["deleted_count"] = len(deletable_ids)
         result["preserved_count"] = preserved
         return result

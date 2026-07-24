@@ -19,10 +19,13 @@ Application de gestion de copropriete basee sur le droit belge (PCMN), incluant 
 
 ### Session courante (Juillet 2026 - Fork actuel)
 
-#### Bug Fix: Import Wizard commit-invoices crash (DONE - 24/07/2026)
-- Cause: `_ensure_pcmn_accounts` appelait `inject_syndic(_pcmn, request)` sans avoir `request` dans ses parametres (artefact du refactoring sed syndic_id)
-- Fix: ajout `request=None` comme parametre + mise a jour des 4 appelants (commit_invoices, commit_journals, commit_opening_balance, commit_od_entries)
-- Verification AST: aucune autre fonction helper avec `request` manquant
+#### Bug Fix: Import Wizard + Fund Calls + AUDIT GLOBAL inject_syndic (DONE - 24/07/2026)
+- Cause racine: le refactoring sed massif pour syndic_id a ajoute `inject_syndic(doc, request)` dans des fonctions qui n'ont pas `request` comme parametre
+- Scan AST complet de tous les fichiers routes/ pour detecter systematiquement les fonctions cassees
+- **24 fonctions corrigees** dans 10 fichiers: banking.py (5), fiscal.py (5), fund_calls.py (5), invoices.py (2), expense_categories.py (1), meters.py (2), invoice_templates.py (1), import_wizard.py (1), properties.py (2 fixes precedents), coproprietes.py (1 fix precedent)
+- Imports `Request` manquants ajoutes dans meters.py et expense_categories.py
+- Lignes corrompues nettoyees dans invoice_templates.py
+- Validation: scan AST confirme 0 fonctions cassees restantes (4 closures valides)
 
 #### Gestion Collaborateurs dans Mon Bureau (DONE - 24/07/2026)
 - Section "Mon equipe — Collaborateurs" integree dans la page Mon Bureau (/mon-bureau)

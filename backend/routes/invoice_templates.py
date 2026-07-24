@@ -157,6 +157,7 @@ async def learn_template(
     copropriete_id: str,
     raw_text: str,
     user_values: dict,
+    request=None,
 ) -> dict:
     """Apprend ou met a jour le template pour ce (supplier, ACP).
 
@@ -210,7 +211,9 @@ async def learn_template(
     else:
         doc["id"] = f"tpl-{uuid.uuid4()}"
         doc["created_at"] = now
-        from syndic_scope import inject_syndic; inject_syndic(doc, request)
+        from syndic_scope import inject_syndic
+        if request:
+            inject_syndic(doc, request)
         await db.invoice_templates.insert_one(doc)
 
     return {"learned": len(learned_fields), "fields": learned_fields}
@@ -381,6 +384,7 @@ def create_invoice_templates_router(db):
             copropriete_id=payload.copropriete_id,
             raw_text=payload.raw_text,
             user_values=payload.user_values,
+            request=request,
         )
         return {"success": True, **stats}
 
