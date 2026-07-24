@@ -6,10 +6,13 @@ import uuid
 import io
 
 
-def _apply_copro(q: dict, copropriete_id: Optional[str]) -> dict:
-    """Add copropriete_id filter to a Mongo query when provided (chinese wall)."""
+def _apply_copro(q: dict, copropriete_id: Optional[str], request=None) -> dict:
+    """Add copropriete_id + syndic_id filters to a Mongo query (chinese wall + multi-syndic)."""
     if copropriete_id:
         q["copropriete_id"] = copropriete_id
+    if request:
+        from syndic_scope import syndic_query
+        q.update(syndic_query(request))
     return q
 
 
@@ -1425,7 +1428,7 @@ def create_reports_router(db):
         include_reversals: bool = False,
     ):
         copropriete_id = _require_copro(copropriete_id, request)
-        q = _apply_copro({}, copropriete_id)
+        q = _apply_copro({}, copropriete_id, request)
         if not include_reversals:
             _exclude_reversals(q)
         if date_from or date_to:
@@ -1476,7 +1479,7 @@ def create_reports_router(db):
     @router.get("/balance")
     async def trial_balance(request: Request, date_from: Optional[str] = None, date_to: Optional[str] = None, copropriete_id: Optional[str] = None):
         copropriete_id = _require_copro(copropriete_id, request)
-        q = _apply_copro({}, copropriete_id)
+        q = _apply_copro({}, copropriete_id, request)
         if date_from or date_to:
             q["date"] = {}
             if date_from:
@@ -1660,7 +1663,7 @@ def create_reports_router(db):
                 if not date_to:
                     date_to = fy["end_date"]
 
-        q = _apply_copro({}, copropriete_id)
+        q = _apply_copro({}, copropriete_id, request)
         if date_from or date_to:
             q["date"] = {}
             if date_from:
@@ -1803,7 +1806,7 @@ def create_reports_router(db):
                 date_to = fy["end_date"]
 
         # Owners are global, but lots/invoices are ACP-scoped (chinese wall)
-        lots_q = _apply_copro({}, copropriete_id)
+        lots_q = _apply_copro({}, copropriete_id, request)
         lots = await db.lots.find(lots_q, {"_id": 0}).to_list(1000)
 
         # iter90fw : construction de l'ensemble de reference des owners
@@ -1873,7 +1876,7 @@ def create_reports_router(db):
         target_ids = list(all_owner_ids if owner_filter == "all" else current_owner_ids)
         owners = await db.owners.find({"id": {"$in": target_ids}}, {"_id": 0}).sort("name", 1).to_list(1000) if target_ids else []
 
-        inv_q = _apply_copro({"date": {"$gte": date_from or "2000-01-01", "$lte": _date_lte(date_to or "2099-12-31")}}, copropriete_id)
+        inv_q = _apply_copro({"date": {"$gte": date_from or "2000-01-01", "$lte": _date_lte(date_to or "2099-12-31")}}, copropriete_id, request)
         invoices = await db.invoices.find(inv_q, {"_id": 0}).to_list(10000)
 
         # iter90ej : fallback quotites via la default distribution_key quand

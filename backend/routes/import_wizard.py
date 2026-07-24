@@ -671,6 +671,7 @@ def create_import_wizard_router(db):
                             "import_session_id": session_id,
                             "created_at": _now_iso(),
                         }
+                        _tag_syndic(doc, getattr(request.state, "syndic_id", ""))
                         await db.owners.insert_one(doc)
                         from tier_accounts import assign_owner_accounts
                         await assign_owner_accounts(db, doc, copro_id)
@@ -791,6 +792,7 @@ def create_import_wizard_router(db):
                     "import_session_id": session_id,
                     "created_at": _now_iso(),
                 }
+                _tag_syndic(doc, getattr(request.state, "syndic_id", ""))
                 await db.suppliers.insert_one(doc)
                 inserted += 1
             except Exception as e:
@@ -994,6 +996,7 @@ def create_import_wizard_router(db):
                     "import_session_id": session_id,
                     "created_at": _now_iso(),
                 }
+                _tag_syndic(doc, getattr(request.state, "syndic_id", ""))
                 await db.suppliers.insert_one(doc)
                 inserted += 1
             except Exception as e:
@@ -1114,7 +1117,7 @@ def create_import_wizard_router(db):
                 class_num = int(num[0]) if num and num[0].isdigit() else 0
             except (ValueError, IndexError):
                 class_num = 0
-            await db.pcmn_accounts.insert_one({
+            _pcmn_doc = {
                 "id": str(uuid.uuid4()),
                 "number": num,
                 "name": lbl or num,
@@ -1124,8 +1127,10 @@ def create_import_wizard_router(db):
                 "is_imported": True,
                 "copropriete_id": copro_id,
                 "created_at": _now_iso(),
-            })
+            }
+            _tag_syndic(_pcmn_doc, getattr(request.state, "syndic_id", ""))
             created += 1
+            await db.pcmn_accounts.insert_one(_pcmn_doc)
         return created
 
     # ----- G-bis : PREVIEW avant commit (tableau de controle) -----
@@ -1412,6 +1417,7 @@ def create_import_wizard_router(db):
                 "import_session_id": session_id,
                 "created_at": _now_iso(),
             }
+            _tag_syndic(new_sup, getattr(request.state, "syndic_id", ""))
             await db.suppliers.insert_one(new_sup)
             from tier_accounts import assign_supplier_account
             new_sup = await assign_supplier_account(db, new_sup, copro_id)
@@ -1486,6 +1492,7 @@ def create_import_wizard_router(db):
                         "import_session_id": session_id,
                         "created_at": _now_iso(),
                     }
+                    _tag_syndic(new_sup, getattr(request.state, "syndic_id", ""))
                     await db.suppliers.insert_one(new_sup)
                     # Assigner le tier_account canonique
                     from tier_accounts import assign_supplier_account
@@ -1703,6 +1710,7 @@ def create_import_wizard_router(db):
                     }
                     # iter90iz : verrou strict 8 chars + resolution tp_id avant insert
                     await finalize_je_doc(db, je_doc, copro_id)
+                    _tag_syndic(je_doc, getattr(request.state, "syndic_id", ""))
                     await db.journal_entries.insert_one(je_doc)
                     je_inserted += 1
 
@@ -1749,6 +1757,7 @@ def create_import_wizard_router(db):
                 }
                 if doc["is_private_fee"]:
                     private_fees_detected += 1
+                _tag_syndic(doc, getattr(request.state, "syndic_id", ""))
                 await db.invoices.insert_one(doc)
                 inserted += 1
             except Exception as e:
@@ -1888,6 +1897,7 @@ def create_import_wizard_router(db):
                 "import_session_id": session_id,
                 "created_at": _now_iso(),
             }
+            _tag_syndic(stmt_doc, getattr(request.state, "syndic_id", ""))
             await db.bank_statements.insert_one(stmt_doc)
             statement_by_key[(bp, month_key)] = stmt_id
             stmts_inserted += 1
@@ -1967,6 +1977,7 @@ def create_import_wizard_router(db):
                         "import_session_id": session_id,
                         "created_at": _now_iso(),
                     }
+                    _tag_syndic(txn_doc, getattr(request.state, "syndic_id", ""))
                     await db.bank_transactions.insert_one(txn_doc)
 
                 # ---- Bank statement line (audit copy) ----
@@ -1991,6 +2002,7 @@ def create_import_wizard_router(db):
                     "import_session_id": session_id,
                     "created_at": _now_iso(),
                 }
+                _tag_syndic(doc, getattr(request.state, "syndic_id", ""))
                 await db.bank_statement_lines.insert_one(doc)
                 inserted += 1
             except Exception as e:
@@ -2465,7 +2477,7 @@ def create_import_wizard_router(db):
 
         period_end = (data.period_end_date or "").strip() or "n-1"
         je_id = str(uuid.uuid4())
-        await db.journal_entries.insert_one(await finalize_je_doc(db, {
+        _je_opening = await finalize_je_doc(db, {
             "id": je_id,
             "journal_type": "AN",
             "date": entry_date,
@@ -2476,13 +2488,11 @@ def create_import_wizard_router(db):
             "total_credit": total_passif,
             "copropriete_id": copro_id,
             "import_session_id": session_id,
-            # iter90gk : marque cette AN comme "ouverture wizard" (pas une AN
-            # de cloture d'exercice). Le Bilan doit INCLURE ces AN-la
-            # (contrairement aux AN de cloture qui sont des duplicats
-            # cumulatifs de l'exercice N-1).
             "is_opening_balance": True,
             "created_at": _now_iso(),
-        }, copro_id))
+        }, copro_id)
+        _tag_syndic(_je_opening, getattr(request.state, "syndic_id", ""))
+        await db.journal_entries.insert_one(_je_opening)
 
         await _update_step(db, session_id, "opening_balance", {
             "count": len(lines),
@@ -2758,6 +2768,7 @@ def create_import_wizard_router(db):
                 }
                 # iter90iz : verrou strict 8 chars + resolution tp_id avant insert
                 await finalize_je_doc(db, doc, copro_id)
+                _tag_syndic(doc, getattr(request.state, "syndic_id", ""))
                 await db.journal_entries.insert_one(doc)
                 inserted += 1
                 seq += 1
@@ -2844,6 +2855,7 @@ def create_import_wizard_router(db):
             }
             # iter90iz : verrou strict 8 chars + resolution tp_id avant insert
             await finalize_je_doc(db, doc, copro_id)
+            _tag_syndic(doc, getattr(request.state, "syndic_id", ""))
             await db.journal_entries.insert_one(doc)
             inserted += 1
             seq += 1
@@ -2955,6 +2967,7 @@ def create_import_wizard_router(db):
                     "import_session_id": session_id,
                     "created_at": _now_iso(),
                 }
+                _tag_syndic(doc, getattr(request.state, "syndic_id", ""))
                 await db.lots.insert_one(doc)
                 inserted += 1
             except Exception as e:
@@ -3030,6 +3043,7 @@ def create_import_wizard_router(db):
                     "import_session_id": session_id,
                     "created_at": _now_iso(),
                 }
+                _tag_syndic(doc, getattr(request.state, "syndic_id", ""))
                 await db.expense_categories.insert_one(doc)
                 inserted += 1
             except Exception as e:
@@ -3081,6 +3095,7 @@ def create_import_wizard_router(db):
             "import_session_id": session_id,
             "created_at": _now_iso(),
         }
+        _tag_syndic(doc, getattr(request.state, "syndic_id", ""))
         await db.fiscal_years.insert_one(doc)
         await _update_step(db, session_id, "fiscal_year", {"count": 1, "fiscal_year_id": doc["id"]})
         return {"id": doc["id"], "name": doc["name"]}
@@ -3154,7 +3169,7 @@ def create_import_wizard_router(db):
                     )
                 continue
             key_id = str(uuid.uuid4())
-            await db.distribution_keys.insert_one({
+            _dk_doc = {
                 "id": key_id,
                 "code": code,
                 "import_code": code,
@@ -3168,8 +3183,10 @@ def create_import_wizard_router(db):
                 "copropriete_id": copro_id,
                 "import_session_id": session_id,
                 "created_at": _now_iso(),
-            })
+            }
+            _tag_syndic(_dk_doc, getattr(request.state, "syndic_id", ""))
             existing_keys[code] = key_id
+            await db.distribution_keys.insert_one(_dk_doc)
             existing_keys[code.zfill(4)] = key_id
             keys_created += 1
             if info["is_special"]:
@@ -3208,7 +3225,7 @@ def create_import_wizard_router(db):
             budget_id = existing["id"]
         else:
             budget_id = str(uuid.uuid4())
-            await db.budgets.insert_one({
+            _budget_doc = {
                 "id": budget_id,
                 "fiscal_year_id": data.fiscal_year_id,
                 "copropriete_id": copro_id,
@@ -3216,7 +3233,9 @@ def create_import_wizard_router(db):
                 "total_amount": round(total_amount, 2),
                 "import_session_id": session_id,
                 "created_at": _now_iso(),
-            })
+            }
+            _tag_syndic(_budget_doc, getattr(request.state, "syndic_id", ""))
+            await db.budgets.insert_one(_budget_doc)
         await _update_step(db, session_id, "budget", {
             "count": len(lines),
             "total_amount": round(total_amount, 2),
@@ -3340,6 +3359,7 @@ def create_import_wizard_router(db):
                 "import_session_id": session_id,
                 "created_at": _now_iso(),
             }
+            _tag_syndic(doc, getattr(request.state, "syndic_id", ""))
             await db.distribution_keys.insert_one(doc)
             inserted += 1
         # iter90gj : garantir qu'au moins UNE cle de repartition est marquee
@@ -3479,3 +3499,16 @@ async def _update_step(db, session_id: str, step_key: str, payload: dict):
         {"id": session_id},
         {"$set": {f"steps.{step_key}": {**payload, "updated_at": _now_iso()}}}
     )
+
+
+async def _get_session_syndic_id(db, session_id: str) -> str:
+    """Recupere le syndic_id de la session d'import (stocke a la creation)."""
+    sess = await db.import_sessions.find_one({"id": session_id}, {"_id": 0, "syndic_id": 1})
+    return (sess or {}).get("syndic_id", "")
+
+
+def _tag_syndic(doc: dict, syndic_id: str) -> dict:
+    """Ajoute syndic_id a un document si non vide."""
+    if syndic_id:
+        doc["syndic_id"] = syndic_id
+    return doc

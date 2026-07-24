@@ -47,15 +47,17 @@ def create_fiscal_router(db):
 
     # ---- FISCAL YEARS ----
     @router.get("/years")
-    async def list_fiscal_years(copropriete_id: Optional[str] = None):
-        q = {}
+    async def list_fiscal_years(request: Request, copropriete_id: Optional[str] = None):
+        from syndic_scope import syndic_query
+        q = {**syndic_query(request)}
         if copropriete_id:
             q["copropriete_id"] = copropriete_id
         years = await db.fiscal_years.find(q, {"_id": 0}).sort("start_date", -1).to_list(100)
         return years
 
     @router.post("/years")
-    async def create_fiscal_year(data: FiscalYearInput):
+    async def create_fiscal_year(data: FiscalYearInput, request: Request):
+        from syndic_scope import inject_syndic
         doc = {
             "id": str(uuid.uuid4()),
             "name": data.name,
@@ -63,10 +65,10 @@ def create_fiscal_router(db):
             "end_date": data.end_date,
             "status": "open",
             "copropriete_id": data.copropriete_id or "",
-            # iter90dq : prefixe libre pour l'auto-numerotation des factures
             "invoice_number_prefix": (data.invoice_number_prefix or "").strip(),
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
+        inject_syndic(doc, request)
         await db.fiscal_years.insert_one(doc)
         return {k: v for k, v in doc.items() if k != "_id"}
 
@@ -910,8 +912,9 @@ def create_fiscal_router(db):
 
     # ---- BUDGETS ----
     @router.get("/budgets")
-    async def list_budgets(fiscal_year_id: Optional[str] = None, copropriete_id: Optional[str] = None):
-        q = {}
+    async def list_budgets(request: Request, fiscal_year_id: Optional[str] = None, copropriete_id: Optional[str] = None):
+        from syndic_scope import syndic_query
+        q = {**syndic_query(request)}
         if fiscal_year_id:
             q["fiscal_year_id"] = fiscal_year_id
         if copropriete_id:
@@ -920,7 +923,7 @@ def create_fiscal_router(db):
         return budgets
 
     @router.post("/budgets")
-    async def create_budget(data: BudgetInput):
+    async def create_budget(data: BudgetInput, request: Request):
         total = sum(l.amount for l in data.lines)
         doc = {
             "id": str(uuid.uuid4()),
@@ -941,6 +944,8 @@ def create_fiscal_router(db):
             "roulement_fund_amount": round(float(data.roulement_fund_amount or 0), 2),
             "roulement_fund_key_id": data.roulement_fund_key_id or "",
         }
+        from syndic_scope import inject_syndic
+        inject_syndic(doc, request)
         await db.budgets.insert_one(doc)
         return {k: v for k, v in doc.items() if k != "_id"}
 

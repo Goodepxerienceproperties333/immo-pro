@@ -18,6 +18,15 @@ from tier_accounts import (
 )
 
 
+async def _resolve_syndic_id_from_copro(db, copro_id: str) -> str:
+    """Resoud le syndic_id a partir du copropriete_id (pour les utilitaires sans request)."""
+    if not copro_id:
+        return ""
+    copro = await db.coproprietes.find_one({"id": copro_id}, {"_id": 0, "syndic_id": 1})
+    return (copro or {}).get("syndic_id", "")
+
+
+
 async def _delete_auto_entries(db, source_type: str, source_id: str, reason: str = ""):
     """iter90bx : NE SUPPRIME PLUS - genere une contre-passation pour chaque
     ecriture auto-generee non-editee. Preserve `manually_edited` et les
@@ -510,6 +519,9 @@ async def generate_purchase_entry(db, invoice: dict) -> dict | None:
         "source_id": invoice["id"],
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
+    _sid = await _resolve_syndic_id_from_copro(db, copro_id)
+    if _sid:
+        doc["syndic_id"] = _sid
     await db.journal_entries.insert_one(doc)
     return {k: v for k, v in doc.items() if k != "_id"}
 
@@ -706,6 +718,9 @@ async def generate_sale_entry(db, fund_call: dict) -> dict | None:
         "source_id": fund_call["id"],
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
+    _sid = await _resolve_syndic_id_from_copro(db, copro_id)
+    if _sid:
+        doc["syndic_id"] = _sid
     await db.journal_entries.insert_one(doc)
     return {k: v for k, v in doc.items() if k != "_id"}
 
@@ -818,6 +833,9 @@ async def generate_bank_entry(db, txn: dict) -> dict | None:
                 "bank_statement_id": txn.get("statement_id") or "",
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
+            _sid = await _resolve_syndic_id_from_copro(db, copro_id)
+            if _sid:
+                doc["syndic_id"] = _sid
             await db.journal_entries.insert_one(doc)
             return doc
 
@@ -938,9 +956,12 @@ async def generate_bank_entry(db, txn: dict) -> dict | None:
         "invoice_number": invoice_number or None,  # backref pour reporting
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
+    _sid = await _resolve_syndic_id_from_copro(db, copro_id)
+    if _sid:
+        doc["syndic_id"] = _sid
     await db.journal_entries.insert_one(doc)
-    # iter90ji : lie la txn a ce JE nouvellement cree (piste d'audit)
     await db.bank_transactions.update_one(
+    # iter90ji : lie la txn a ce JE nouvellement cree (piste d'audit)
         {"id": txn["id"]},
         {"$set": {"matched_je_id": doc["id"], "matched_je_ref": doc["reference"], "matched_je_source": "auto"}},
     )

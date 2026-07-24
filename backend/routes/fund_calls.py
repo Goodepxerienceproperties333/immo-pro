@@ -727,6 +727,7 @@ def create_fund_calls_router(db):
 
     @router.get("")
     async def list_fund_calls(
+        request: Request,
         fiscal_year_id: Optional[str] = None,
         copropriete_id: Optional[str] = None,
         date_from: Optional[str] = None,
@@ -734,7 +735,8 @@ def create_fund_calls_router(db):
     ):
         """Liste les appels de fonds. Filtres : `fiscal_year_id`, `copropriete_id`,
         `date_from`/`date_to` (filtre sur le champ `date` de l'appel)."""
-        q = {}
+        from syndic_scope import syndic_query
+        q = {**syndic_query(request)}
         if fiscal_year_id:
             q["fiscal_year_id"] = fiscal_year_id
         if copropriete_id:
@@ -749,8 +751,9 @@ def create_fund_calls_router(db):
         return calls
 
     @router.post("")
-    async def create_fund_call(data: FundCallInput):
+    async def create_fund_call(data: FundCallInput, request: Request):
         from fiscal_lock import ensure_period_open
+        from syndic_scope import inject_syndic
         copro_id = data.copropriete_id or ""
         # Verrou fiscal : la date de l'appel doit etre dans une periode ouverte
         await ensure_period_open(db, copro_id, data.date, context="appel de fonds")
@@ -2158,6 +2161,9 @@ def create_fund_calls_router(db):
                 "copropriete_id": copro_id,
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
+            _sid = getattr(request.state, "syndic_id", None) if request else None
+            if _sid:
+                doc["syndic_id"] = _sid
             await db.fund_calls.insert_one(doc)
             try:
                 await generate_sale_entry(db, doc)

@@ -4,7 +4,7 @@ Niveau metier intermediaire entre Cle de repartition et Compte PCMN.
 Relation 1:1 avec un compte PCMN classe 6.
 Scopee par ACP.
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime, timezone
@@ -63,8 +63,9 @@ def create_expense_categories_router(db):
     router = APIRouter(prefix="/api/expense-categories")
 
     @router.get("")
-    async def list_categories(copropriete_id: Optional[str] = None, search: Optional[str] = None):
-        q = {}
+    async def list_categories(request: Request, copropriete_id: Optional[str] = None, search: Optional[str] = None):
+        from syndic_scope import syndic_query
+        q = {**syndic_query(request)}
         if copropriete_id:
             q["copropriete_id"] = copropriete_id
         if search:
@@ -106,7 +107,7 @@ def create_expense_categories_router(db):
         return cats
 
     @router.post("")
-    async def create_category(data: ExpenseCategoryInput):
+    async def create_category(data: ExpenseCategoryInput, request: Request):
         if not data.account_number:
             raise HTTPException(400, "Compte PCMN obligatoire")
         # Validation : occupant_pct + proprietaire_pct = 100
@@ -184,6 +185,8 @@ def create_expense_categories_router(db):
             "account_name": pcmn.get("name", ""),
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
+        from syndic_scope import inject_syndic
+        inject_syndic(doc, request)
         await db.expense_categories.insert_one(doc)
         return {k: v for k, v in doc.items() if k != "_id"}
 

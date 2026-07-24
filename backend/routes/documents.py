@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Request
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 from typing import Optional
@@ -114,15 +114,17 @@ def create_documents_router(db):
 
     # ---- CATEGORIES ----
     @router.get("/categories")
-    async def list_categories(copropriete_id: Optional[str] = None):
-        q = {}
+    async def list_categories(request: Request, copropriete_id: Optional[str] = None):
+        from syndic_scope import syndic_query
+        q = {**syndic_query(request)}
         if copropriete_id:
             q["copropriete_id"] = copropriete_id
         cats = await db.document_categories.find(q, {"_id": 0}).sort("name", 1).to_list(100)
         return cats
 
     @router.post("/categories")
-    async def create_category(data: CategoryInput):
+    async def create_category(data: CategoryInput, request: Request):
+        from syndic_scope import inject_syndic
         doc = {
             "id": str(uuid.uuid4()),
             "name": data.name,
@@ -130,6 +132,7 @@ def create_documents_router(db):
             "copropriete_id": data.copropriete_id or "",
             "created_at": datetime.now(timezone.utc).isoformat()
         }
+        inject_syndic(doc, request)
         await db.document_categories.insert_one(doc)
         return {k: v for k, v in doc.items() if k != "_id"}
 
@@ -171,8 +174,9 @@ def create_documents_router(db):
 
     # ---- DOCUMENTS ----
     @router.get("")
-    async def list_documents(category_id: Optional[str] = None, copropriete_id: Optional[str] = None):
-        query = {}
+    async def list_documents(request: Request, category_id: Optional[str] = None, copropriete_id: Optional[str] = None):
+        from syndic_scope import syndic_query
+        query = {**syndic_query(request)}
         if category_id:
             query["category_id"] = category_id
         if copropriete_id:
@@ -181,7 +185,8 @@ def create_documents_router(db):
         return docs
 
     @router.post("")
-    async def create_document(data: DocumentInput):
+    async def create_document(data: DocumentInput, request: Request):
+        from syndic_scope import inject_syndic
         doc = {
             "id": str(uuid.uuid4()),
             "title": data.title,
@@ -191,6 +196,7 @@ def create_documents_router(db):
             "copropriete_id": data.copropriete_id or "",
             "created_at": datetime.now(timezone.utc).isoformat()
         }
+        inject_syndic(doc, request)
         await db.documents.insert_one(doc)
         return {k: v for k, v in doc.items() if k != "_id"}
 

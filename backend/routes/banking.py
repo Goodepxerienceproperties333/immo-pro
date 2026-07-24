@@ -387,6 +387,8 @@ def create_banking_router(db):
         if not copropriete_id or copropriete_id == "all":
             return []
         q = {"copropriete_id": copropriete_id}
+        from syndic_scope import syndic_query
+        q.update(syndic_query(request))
         if date_from or date_to:
             q["date"] = {}
             if date_from:
@@ -501,6 +503,8 @@ def create_banking_router(db):
             "status": "draft",  # draft | posted
             "created_at": datetime.now(timezone.utc).isoformat()
         }
+        from syndic_scope import inject_syndic
+        inject_syndic(doc, request)
         await db.bank_statements.insert_one(doc)
         return {k: v for k, v in doc.items() if k != "_id"}
 
@@ -1077,6 +1081,8 @@ def create_banking_router(db):
             query["matched"] = matched
         if copropriete_id and copropriete_id != "all":
             query["copropriete_id"] = copropriete_id
+        from syndic_scope import syndic_query as _sq
+        query.update(_sq(request))
         if date_from or date_to:
             query["date"] = {}
             if date_from:
@@ -1364,6 +1370,8 @@ def create_banking_router(db):
             "counterparty_type": data.counterparty_type or "",
             "created_at": datetime.now(timezone.utc).isoformat()
         }
+        from syndic_scope import inject_syndic
+        inject_syndic(doc, request)
         await db.bank_transactions.insert_one(doc)
         # PRIORITE 1: contrepartie explicite (via UI). PRIORITE 2: auto-VCS.
         await _try_explicit_match_then_vcs(doc)
@@ -2461,13 +2469,16 @@ def create_banking_router(db):
                 "copropriete_id": copropriete_id,
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
+            from syndic_scope import inject_syndic as _inj
+            _inj(stmt_doc, request)
             await db.bank_statements.insert_one(stmt_doc)
 
             # Creer transactions non lettrees
             txns_docs = []
+            _sid = getattr(request.state, "syndic_id", None)
             for t in txns_data:
                 amt = float(t.get("amount", 0) or 0)
-                txns_docs.append({
+                txn_doc = {
                     "id": str(uuid.uuid4()),
                     "statement_id": stmt_id,
                     "date": t.get("date", ""),
@@ -2481,7 +2492,10 @@ def create_banking_router(db):
                     "matched": False, "matched_to": "", "match_type": "",
                     "copropriete_id": copropriete_id,
                     "created_at": datetime.now(timezone.utc).isoformat(),
-                })
+                }
+                if _sid:
+                    txn_doc["syndic_id"] = _sid
+                txns_docs.append(txn_doc)
             if txns_docs:
                 await db.bank_transactions.insert_many(txns_docs)
 
@@ -3249,6 +3263,10 @@ def create_banking_router(db):
             }
             txns.append(txn)
         if txns:
+            _sid = getattr(request.state, "syndic_id", None)
+            if _sid:
+                for t in txns:
+                    t["syndic_id"] = _sid
             await db.bank_transactions.insert_many(txns)
         return {"message": f"{len(txns)} transactions creees", "count": len(txns)}
 
