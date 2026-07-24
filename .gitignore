@@ -200,9 +200,7 @@ frontend/node_modules/.cache/default-development/63.pack
 frontend/node_modules/.cache/default-development/64.pack
 frontend/node_modules/.cache/default-development/71.pack
 frontend/node_modules/.cache/default-development/24.pack
-.env
-.env.*
-*.env
+# .env files are NOT ignored - required for Emergent deployment
 frontend/node_modules/.cache/default-development/53.pack
 frontend/node_modules/.cache/default-development/61.pack
 frontend/node_modules/.cache/default-development/62.pack
