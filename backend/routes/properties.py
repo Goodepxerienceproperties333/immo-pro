@@ -108,6 +108,10 @@ async def regenerate_orphan_mutation_od(db, mutation_doc: dict) -> dict:
         "source_subtype": "fonds_roulement",
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
+    from syndic_scope import get_syndic_id_for_copro
+    _sid = await get_syndic_id_for_copro(db, copro_id)
+    if _sid:
+        entry_doc["syndic_id"] = _sid
     await db.journal_entries.insert_one(entry_doc)
 
     # Trace le journal_entry_id dans mutations (pour l'idempotence future)
@@ -1551,6 +1555,7 @@ def create_properties_router(db):
             "copropriete_id": copro_id,
             "created_at": datetime.now(timezone.utc).isoformat()
         }
+        from syndic_scope import inject_syndic; inject_syndic(doc, request)
         await db.lots.insert_one(doc)
 
         # iter90dy : SMART IMPORT - Auto-rebind des entrees phantom des cles
@@ -2511,6 +2516,7 @@ def create_properties_router(db):
                     ref_suffix="R",
                 )
                 await db.journal_entries.insert_one(entry)
+                from syndic_scope import inject_syndic; inject_syndic(entry, request)
                 journal_entry_ids.append(entry["id"])
                 entries_created.append({
                     "kind": "fonds_roulement",
@@ -2539,6 +2545,7 @@ def create_properties_router(db):
                     ref_suffix="P",
                 )
                 await db.journal_entries.insert_one(entry)
+                from syndic_scope import inject_syndic; inject_syndic(entry, request)
                 journal_entry_ids.append(entry["id"])
                 entries_created.append({
                     "kind": "prorata",
@@ -2606,6 +2613,7 @@ def create_properties_router(db):
                 )
                 await db.journal_entries.insert_one(entry)
                 journal_entry_ids.append(entry["id"])
+                from syndic_scope import inject_syndic; inject_syndic(entry, request)
                 entries_created.append({
                     "kind": "future_call",
                     "id": entry["id"],
@@ -3223,6 +3231,7 @@ def create_properties_router(db):
             "copropriete_id": copro_id,
             "created_at": datetime.now(timezone.utc).isoformat()
         }
+        from syndic_scope import inject_syndic; inject_syndic(doc, request)
         await db.tenants.insert_one(doc)
         return {k: v for k, v in doc.items() if k != "_id"}
 

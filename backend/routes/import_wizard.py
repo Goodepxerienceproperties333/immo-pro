@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Optional, List
 from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Form
 from pydantic import BaseModel
+from syndic_scope import inject_syndic
 
 from import_wizard.csv_utils import sniff_csv, parse_french_number, parse_date, split_ref_code, normalize_header, parse_invoices_csv, parse_journals_csv
 from import_wizard.pdf_utils import extract_pdf, parse_natures_pdf, parse_budget_pdf, parse_distribution_keys_pdf, parse_owners_pdf, parse_lots_pdf, parse_suppliers_pdf, parse_balance_pdf, parse_od_entries_pdf
@@ -230,6 +231,7 @@ def create_import_wizard_router(db):
             "steps": steps,
             "created_at": _now_iso(),
         }
+        inject_syndic(session, request)
         await db.import_sessions.insert_one(session)
         # Remove any ObjectId left by Mongo
         session.pop("_id", None)
@@ -672,6 +674,7 @@ def create_import_wizard_router(db):
                             "created_at": _now_iso(),
                         }
                         await db.owners.insert_one(doc)
+                        inject_syndic(doc, request)
                         from tier_accounts import assign_owner_accounts
                         await assign_owner_accounts(db, doc, copro_id)
                         inserted += 1
@@ -791,6 +794,7 @@ def create_import_wizard_router(db):
                     "import_session_id": session_id,
                     "created_at": _now_iso(),
                 }
+                inject_syndic(doc, request)
                 await db.suppliers.insert_one(doc)
                 inserted += 1
             except Exception as e:
@@ -994,6 +998,7 @@ def create_import_wizard_router(db):
                     "import_session_id": session_id,
                     "created_at": _now_iso(),
                 }
+                inject_syndic(doc, request)
                 await db.suppliers.insert_one(doc)
                 inserted += 1
             except Exception as e:
@@ -1114,7 +1119,7 @@ def create_import_wizard_router(db):
                 class_num = int(num[0]) if num and num[0].isdigit() else 0
             except (ValueError, IndexError):
                 class_num = 0
-            await db.pcmn_accounts.insert_one({
+            _pcmn = {
                 "id": str(uuid.uuid4()),
                 "number": num,
                 "name": lbl or num,
@@ -1124,7 +1129,9 @@ def create_import_wizard_router(db):
                 "is_imported": True,
                 "copropriete_id": copro_id,
                 "created_at": _now_iso(),
-            })
+            }
+            inject_syndic(_pcmn, request)
+            await db.pcmn_accounts.insert_one(_pcmn)
             created += 1
         return created
 
@@ -1412,6 +1419,7 @@ def create_import_wizard_router(db):
                 "import_session_id": session_id,
                 "created_at": _now_iso(),
             }
+            inject_syndic(new_sup, request)
             await db.suppliers.insert_one(new_sup)
             from tier_accounts import assign_supplier_account
             new_sup = await assign_supplier_account(db, new_sup, copro_id)
@@ -1486,6 +1494,7 @@ def create_import_wizard_router(db):
                         "import_session_id": session_id,
                         "created_at": _now_iso(),
                     }
+                    inject_syndic(new_sup, request)
                     await db.suppliers.insert_one(new_sup)
                     # Assigner le tier_account canonique
                     from tier_accounts import assign_supplier_account
@@ -1701,6 +1710,7 @@ def create_import_wizard_router(db):
                         "is_credit_note": is_credit_note,
                         "created_at": _now_iso(),
                     }
+                    inject_syndic(je_doc, request)
                     # iter90iz : verrou strict 8 chars + resolution tp_id avant insert
                     await finalize_je_doc(db, je_doc, copro_id)
                     await db.journal_entries.insert_one(je_doc)
@@ -1747,6 +1757,7 @@ def create_import_wizard_router(db):
                     "import_session_id": session_id,
                     "created_at": _now_iso(),
                 }
+                inject_syndic(doc, request)
                 if doc["is_private_fee"]:
                     private_fees_detected += 1
                 await db.invoices.insert_one(doc)
@@ -1888,6 +1899,7 @@ def create_import_wizard_router(db):
                 "import_session_id": session_id,
                 "created_at": _now_iso(),
             }
+            inject_syndic(stmt_doc, request)
             await db.bank_statements.insert_one(stmt_doc)
             statement_by_key[(bp, month_key)] = stmt_id
             stmts_inserted += 1
@@ -1967,6 +1979,7 @@ def create_import_wizard_router(db):
                         "import_session_id": session_id,
                         "created_at": _now_iso(),
                     }
+                    inject_syndic(txn_doc, request)
                     await db.bank_transactions.insert_one(txn_doc)
 
                 # ---- Bank statement line (audit copy) ----
@@ -1991,6 +2004,7 @@ def create_import_wizard_router(db):
                     "import_session_id": session_id,
                     "created_at": _now_iso(),
                 }
+                inject_syndic(doc, request)
                 await db.bank_statement_lines.insert_one(doc)
                 inserted += 1
             except Exception as e:
@@ -2465,7 +2479,7 @@ def create_import_wizard_router(db):
 
         period_end = (data.period_end_date or "").strip() or "n-1"
         je_id = str(uuid.uuid4())
-        await db.journal_entries.insert_one(await finalize_je_doc(db, {
+        _an_je = await finalize_je_doc(db, {
             "id": je_id,
             "journal_type": "AN",
             "date": entry_date,
@@ -2476,13 +2490,11 @@ def create_import_wizard_router(db):
             "total_credit": total_passif,
             "copropriete_id": copro_id,
             "import_session_id": session_id,
-            # iter90gk : marque cette AN comme "ouverture wizard" (pas une AN
-            # de cloture d'exercice). Le Bilan doit INCLURE ces AN-la
-            # (contrairement aux AN de cloture qui sont des duplicats
-            # cumulatifs de l'exercice N-1).
             "is_opening_balance": True,
             "created_at": _now_iso(),
-        }, copro_id))
+        }, copro_id)
+        inject_syndic(_an_je, request)
+        await db.journal_entries.insert_one(_an_je)
 
         await _update_step(db, session_id, "opening_balance", {
             "count": len(lines),
@@ -2759,6 +2771,7 @@ def create_import_wizard_router(db):
                 # iter90iz : verrou strict 8 chars + resolution tp_id avant insert
                 await finalize_je_doc(db, doc, copro_id)
                 await db.journal_entries.insert_one(doc)
+                inject_syndic(doc, request)
                 inserted += 1
                 seq += 1
                 continue
@@ -2845,6 +2858,7 @@ def create_import_wizard_router(db):
             # iter90iz : verrou strict 8 chars + resolution tp_id avant insert
             await finalize_je_doc(db, doc, copro_id)
             await db.journal_entries.insert_one(doc)
+            inject_syndic(doc, request)
             inserted += 1
             seq += 1
 
@@ -2955,6 +2969,7 @@ def create_import_wizard_router(db):
                     "import_session_id": session_id,
                     "created_at": _now_iso(),
                 }
+                inject_syndic(doc, request)
                 await db.lots.insert_one(doc)
                 inserted += 1
             except Exception as e:
@@ -3030,6 +3045,7 @@ def create_import_wizard_router(db):
                     "import_session_id": session_id,
                     "created_at": _now_iso(),
                 }
+                inject_syndic(doc, request)
                 await db.expense_categories.insert_one(doc)
                 inserted += 1
             except Exception as e:
@@ -3081,6 +3097,7 @@ def create_import_wizard_router(db):
             "import_session_id": session_id,
             "created_at": _now_iso(),
         }
+        inject_syndic(doc, request)
         await db.fiscal_years.insert_one(doc)
         await _update_step(db, session_id, "fiscal_year", {"count": 1, "fiscal_year_id": doc["id"]})
         return {"id": doc["id"], "name": doc["name"]}
@@ -3154,7 +3171,7 @@ def create_import_wizard_router(db):
                     )
                 continue
             key_id = str(uuid.uuid4())
-            await db.distribution_keys.insert_one({
+            _dk = {
                 "id": key_id,
                 "code": code,
                 "import_code": code,
@@ -3168,7 +3185,9 @@ def create_import_wizard_router(db):
                 "copropriete_id": copro_id,
                 "import_session_id": session_id,
                 "created_at": _now_iso(),
-            })
+            }
+            inject_syndic(_dk, request)
+            await db.distribution_keys.insert_one(_dk)
             existing_keys[code] = key_id
             existing_keys[code.zfill(4)] = key_id
             keys_created += 1
@@ -3208,7 +3227,7 @@ def create_import_wizard_router(db):
             budget_id = existing["id"]
         else:
             budget_id = str(uuid.uuid4())
-            await db.budgets.insert_one({
+            _bdg = {
                 "id": budget_id,
                 "fiscal_year_id": data.fiscal_year_id,
                 "copropriete_id": copro_id,
@@ -3216,7 +3235,9 @@ def create_import_wizard_router(db):
                 "total_amount": round(total_amount, 2),
                 "import_session_id": session_id,
                 "created_at": _now_iso(),
-            })
+            }
+            inject_syndic(_bdg, request)
+            await db.budgets.insert_one(_bdg)
         await _update_step(db, session_id, "budget", {
             "count": len(lines),
             "total_amount": round(total_amount, 2),
@@ -3340,6 +3361,7 @@ def create_import_wizard_router(db):
                 "import_session_id": session_id,
                 "created_at": _now_iso(),
             }
+            inject_syndic(doc, request)
             await db.distribution_keys.insert_one(doc)
             inserted += 1
         # iter90gj : garantir qu'au moins UNE cle de repartition est marquee

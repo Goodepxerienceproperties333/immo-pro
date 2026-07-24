@@ -183,6 +183,8 @@ def create_invoices_router(db):
             "fallback_key_id": data.fallback_key_id or "",
             "created_at": datetime.now(timezone.utc).isoformat()
         }
+        from syndic_scope import inject_syndic
+        inject_syndic(doc, request)
         await db.distribution_keys.insert_one(doc)
         if doc["is_default"]:
             await _unset_other_defaults(copro_id, exclude_id=doc["id"])
@@ -893,6 +895,8 @@ def create_invoices_router(db):
         if not copropriete_id or copropriete_id == "all":
             return []
         query = {"copropriete_id": copropriete_id}
+        from syndic_scope import syndic_query as _sq
+        query.update(_sq(request))
         if status:
             query["status"] = status
         if supplier:

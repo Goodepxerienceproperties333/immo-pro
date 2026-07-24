@@ -47,3 +47,17 @@ def inject_syndic(doc: dict, request: Request) -> dict:
     if sid:
         doc["syndic_id"] = sid
     return doc
+
+
+async def get_syndic_id_for_copro(db, copro_id: str) -> str:
+    """Resout le syndic_id a partir du copropriete_id.
+
+    Utilise dans les fichiers utilitaires (auto_entries, etc.)
+    qui n'ont pas acces au Request.
+    """
+    if not copro_id:
+        return ""
+    copro = await db.coproprietes.find_one(
+        {"id": copro_id}, {"_id": 0, "syndic_id": 1}
+    )
+    return (copro or {}).get("syndic_id", "")

@@ -205,6 +205,7 @@ def create_email_templates_router(db):
             "created_by": uid,
             **payload.model_dump(),
         }
+        from syndic_scope import inject_syndic; inject_syndic(doc, request)
         await db.email_templates.insert_one(doc)
         doc.pop("_id", None)
         return doc
@@ -245,6 +246,7 @@ def create_email_templates_router(db):
                 **payload.model_dump(),
             }
             await db.email_templates.insert_one(doc)
+            from syndic_scope import inject_syndic; inject_syndic(doc, request)
             doc.pop("_id", None)
             return doc
 

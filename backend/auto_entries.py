@@ -18,6 +18,15 @@ from tier_accounts import (
 )
 
 
+async def _stamp_syndic(db, doc: dict, copro_id: str) -> dict:
+    """Ajoute syndic_id au document a partir du copropriete_id."""
+    from syndic_scope import get_syndic_id_for_copro
+    sid = await get_syndic_id_for_copro(db, copro_id)
+    if sid:
+        doc["syndic_id"] = sid
+    return doc
+
+
 async def _delete_auto_entries(db, source_type: str, source_id: str, reason: str = ""):
     """iter90bx : NE SUPPRIME PLUS - genere une contre-passation pour chaque
     ecriture auto-generee non-editee. Preserve `manually_edited` et les
@@ -103,6 +112,7 @@ async def _resolve_or_create_supplier_account(db, supplier_name: str, copro_id: 
                 "auto_created": True,
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
+            await _stamp_syndic(db, supplier_doc, copro_id)
             await db.suppliers.insert_one(dict(supplier_doc))
         supplier_doc = await assign_supplier_account(db, supplier_doc, copro_id)
         supplier_acc = get_supplier_account(supplier_doc, copro_id)
@@ -374,6 +384,7 @@ async def generate_purchase_entry(db, invoice: dict) -> dict | None:
                 "source_id": invoice["id"],
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
+            await _stamp_syndic(db, ac_doc, copro_id)
             await db.journal_entries.insert_one(ac_doc)
 
             # --- Ecriture 2 : OD (Operations Diverses) - refacturation N owners ---
@@ -413,6 +424,7 @@ async def generate_purchase_entry(db, invoice: dict) -> dict | None:
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
             await db.journal_entries.insert_one(od_doc)
+            await _stamp_syndic(db, od_doc, copro_id)
             return {k: v for k, v in ac_doc.items() if k != "_id"}
 
     # ---- ECRITURE STANDARD ----
@@ -511,6 +523,7 @@ async def generate_purchase_entry(db, invoice: dict) -> dict | None:
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.journal_entries.insert_one(doc)
+    await _stamp_syndic(db, doc, copro_id)
     return {k: v for k, v in doc.items() if k != "_id"}
 
 
@@ -707,6 +720,7 @@ async def generate_sale_entry(db, fund_call: dict) -> dict | None:
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.journal_entries.insert_one(doc)
+    await _stamp_syndic(db, doc, copro_id)
     return {k: v for k, v in doc.items() if k != "_id"}
 
 
@@ -819,6 +833,7 @@ async def generate_bank_entry(db, txn: dict) -> dict | None:
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
             await db.journal_entries.insert_one(doc)
+            await _stamp_syndic(db, doc, copro_id)
             return doc
 
     # Fallback : transaction non lettree -> compte d'attente 499000
@@ -835,7 +850,7 @@ async def generate_bank_entry(db, txn: dict) -> dict | None:
             {"number": "499000", "copropriete_id": copro_id}, {"_id": 0}
         )
         if not existing:
-            await db.pcmn_accounts.insert_one({
+            _pcmn_doc = {
                 "number": "499000",
                 "name": "Encaissements / Decaissements non identifies",
                 "class_num": 4,
@@ -844,7 +859,9 @@ async def generate_bank_entry(db, txn: dict) -> dict | None:
                 "copropriete_id": copro_id,
                 "active": True,
                 "is_custom": True,
-            })
+            }
+            await _stamp_syndic(db, _pcmn_doc, copro_id)
+            await db.pcmn_accounts.insert_one(_pcmn_doc)
 
     pcmn_q = {"number": {"$in": [bank_acc, counterpart_acc]}, "copropriete_id": copro_id}
     pcmns = await db.pcmn_accounts.find(pcmn_q, {"_id": 0}).to_list(10)
@@ -940,6 +957,7 @@ async def generate_bank_entry(db, txn: dict) -> dict | None:
     }
     await db.journal_entries.insert_one(doc)
     # iter90ji : lie la txn a ce JE nouvellement cree (piste d'audit)
+    await _stamp_syndic(db, doc, copro_id)
     await db.bank_transactions.update_one(
         {"id": txn["id"]},
         {"$set": {"matched_je_id": doc["id"], "matched_je_ref": doc["reference"], "matched_je_source": "auto"}},

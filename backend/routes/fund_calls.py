@@ -4,6 +4,7 @@ from typing import Optional, List
 from datetime import datetime, timezone, timedelta
 import uuid
 from auto_entries import generate_sale_entry, _delete_auto_entries
+from syndic_scope import inject_syndic, syndic_query
 
 
 class FundCallInput(BaseModel):
@@ -454,6 +455,7 @@ async def generate_prorata_mut_ods_for_call(db, call_doc: dict) -> dict:
                 "fund_call_id": call_id,
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
+            inject_syndic(od_entry, request)
             await db.journal_entries.insert_one(od_entry)
             stats["created"] += 1
             stats["details"].append({
@@ -675,6 +677,7 @@ async def generate_prorata_mut_ods_for_call(db, call_doc: dict) -> dict:
                     "created_at": datetime.now(timezone.utc).isoformat(),
                 }
                 await db.journal_entries.insert_one(od_mutr)
+                inject_syndic(od_mutr, request)
                 stats["mutr_created"] += 1
                 stats["details"].append({
                     "kind": "fonds_roulement",
@@ -904,6 +907,7 @@ def create_fund_calls_router(db):
             "copropriete_id": copro_id,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
+        inject_syndic(doc, request)
         await db.fund_calls.insert_one(doc)
         clean = {k: v for k, v in doc.items() if k != "_id"}
         try:
@@ -1023,6 +1027,7 @@ def create_fund_calls_router(db):
             "copropriete_id": fc.get("copropriete_id", ""),
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
+        inject_syndic(entry, request)
         await db.journal_entries.insert_one(entry)
         return {"message": "Ecritures generees", "entry_id": entry["id"]}
 
@@ -2158,6 +2163,7 @@ def create_fund_calls_router(db):
                 "copropriete_id": copro_id,
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
+            inject_syndic(doc, request)
             await db.fund_calls.insert_one(doc)
             try:
                 await generate_sale_entry(db, doc)

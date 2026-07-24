@@ -3,6 +3,7 @@ from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime, timezone, timedelta
 import uuid
+from syndic_scope import inject_syndic, syndic_query
 
 
 class FiscalYearInput(BaseModel):
@@ -67,6 +68,7 @@ def create_fiscal_router(db):
             "invoice_number_prefix": (data.invoice_number_prefix or "").strip(),
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
+        inject_syndic(doc, request)
         await db.fiscal_years.insert_one(doc)
         return {k: v for k, v in doc.items() if k != "_id"}
 
@@ -194,7 +196,7 @@ def create_fiscal_router(db):
                 if abs(diff) >= 0.01 and ad_lines:
                     ad_lines[-1]["credit"] = round(ad_lines[-1]["credit"] + diff, 2)
                     tc = sum(l["credit"] for l in ad_lines)
-                await db.journal_entries.insert_one({
+                _je = {
                     "id": str(uuid.uuid4()),
                     "journal_type": "OD",
                     "date": end_dt_iso,
@@ -207,7 +209,9 @@ def create_fiscal_router(db):
                     "copropriete_id": copro_id,
                     "is_regularization": True,
                     "created_at": datetime.now(timezone.utc).isoformat(),
-                })
+                }
+                inject_syndic(_je, request)
+                await db.journal_entries.insert_one(_je)
 
         # OD-2 : Imputation des charges reelles aux owners
         if abs(total_charges) > 0.01 and total_quotities > 0:
@@ -240,7 +244,7 @@ def create_fiscal_router(db):
                 if abs(diff) >= 0.01 and ic_lines:
                     ic_lines[-1]["credit"] = round(ic_lines[-1]["credit"] + diff, 2)
                     tc = sum(l["credit"] for l in ic_lines)
-                await db.journal_entries.insert_one({
+                _je2 = {
                     "id": str(uuid.uuid4()),
                     "journal_type": "OD",
                     "date": end_dt_iso,
@@ -253,7 +257,9 @@ def create_fiscal_router(db):
                     "copropriete_id": copro_id,
                     "is_regularization": True,
                     "created_at": datetime.now(timezone.utc).isoformat(),
-                })
+                }
+                inject_syndic(_je2, request)
+                await db.journal_entries.insert_one(_je2)
 
         # Recharge balances apres les 2 OD de regularisation pour generer l'AN
         # (les comptes 6/7 sont maintenant a zero)
@@ -319,6 +325,7 @@ def create_fiscal_router(db):
                 "copropriete_id": copro_id,
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
+            inject_syndic(a_nouveau_entry, request)
             await db.journal_entries.insert_one(a_nouveau_entry)
 
         await db.fiscal_years.update_one(
@@ -396,6 +403,7 @@ def create_fiscal_router(db):
                 "is_regularization": bool(orig.get("is_regularization")),
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
+            inject_syndic(rev_doc, request)
             await db.journal_entries.insert_one(rev_doc)
             # Marque l'originale comme reversee
             await db.journal_entries.update_one(
@@ -681,6 +689,7 @@ def create_fiscal_router(db):
                 "is_reversal": True,
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
+            inject_syndic(extourne_entry, request)
             await db.journal_entries.insert_one(extourne_entry)
             # iter90em : marque TOUTES les VE originales comme reversed=True
             # avec reference a l'extourne. Sans cela, `_exclude_reversals`
@@ -732,6 +741,7 @@ def create_fiscal_router(db):
                 "source_id": year_id,
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
+            inject_syndic(affect_entry, request)
             await db.journal_entries.insert_one(affect_entry)
 
         # 8) Mark FY as regularized (not closed yet - user must do final close after)
@@ -941,6 +951,7 @@ def create_fiscal_router(db):
             "roulement_fund_amount": round(float(data.roulement_fund_amount or 0), 2),
             "roulement_fund_key_id": data.roulement_fund_key_id or "",
         }
+        inject_syndic(doc, request)
         await db.budgets.insert_one(doc)
         return {k: v for k, v in doc.items() if k != "_id"}
 

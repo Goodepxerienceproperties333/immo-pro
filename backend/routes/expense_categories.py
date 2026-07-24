@@ -184,6 +184,8 @@ def create_expense_categories_router(db):
             "account_name": pcmn.get("name", ""),
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
+        from syndic_scope import inject_syndic
+        inject_syndic(doc, request)
         await db.expense_categories.insert_one(doc)
         return {k: v for k, v in doc.items() if k != "_id"}
 

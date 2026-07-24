@@ -8,6 +8,7 @@ import uuid
 from auto_entries import generate_bank_entry, _delete_auto_entries
 # iter90jb : normalisation stricte des IBAN (source of truth = sans separateur)
 from iban_utils import normalize_iban
+from syndic_scope import syndic_query, inject_syndic
 
 
 class StatementInput(BaseModel):
@@ -386,7 +387,7 @@ def create_banking_router(db):
             copropriete_id = request.headers.get("X-Copropriete-Id") or None
         if not copropriete_id or copropriete_id == "all":
             return []
-        q = {"copropriete_id": copropriete_id}
+        q = {"copropriete_id": copropriete_id, **syndic_query(request)}
         if date_from or date_to:
             q["date"] = {}
             if date_from:
@@ -501,6 +502,7 @@ def create_banking_router(db):
             "status": "draft",  # draft | posted
             "created_at": datetime.now(timezone.utc).isoformat()
         }
+        inject_syndic(doc, request)
         await db.bank_statements.insert_one(doc)
         return {k: v for k, v in doc.items() if k != "_id"}
 
@@ -1364,6 +1366,7 @@ def create_banking_router(db):
             "counterparty_type": data.counterparty_type or "",
             "created_at": datetime.now(timezone.utc).isoformat()
         }
+        inject_syndic(doc, request)
         await db.bank_transactions.insert_one(doc)
         # PRIORITE 1: contrepartie explicite (via UI). PRIORITE 2: auto-VCS.
         await _try_explicit_match_then_vcs(doc)
@@ -2461,13 +2464,14 @@ def create_banking_router(db):
                 "copropriete_id": copropriete_id,
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
+            inject_syndic(stmt_doc, request)
             await db.bank_statements.insert_one(stmt_doc)
 
             # Creer transactions non lettrees
             txns_docs = []
             for t in txns_data:
                 amt = float(t.get("amount", 0) or 0)
-                txns_docs.append({
+                _txn = {
                     "id": str(uuid.uuid4()),
                     "statement_id": stmt_id,
                     "date": t.get("date", ""),
@@ -2481,7 +2485,9 @@ def create_banking_router(db):
                     "matched": False, "matched_to": "", "match_type": "",
                     "copropriete_id": copropriete_id,
                     "created_at": datetime.now(timezone.utc).isoformat(),
-                })
+                }
+                inject_syndic(_txn, request)
+                txns_docs.append(_txn)
             if txns_docs:
                 await db.bank_transactions.insert_many(txns_docs)
 
@@ -2591,6 +2597,7 @@ def create_banking_router(db):
             "copropriete_id": copropriete_id or "",
             "created_at": datetime.now(timezone.utc).isoformat()
         }
+        inject_syndic(statement, request)
         await db.bank_statements.insert_one(statement)
 
         # Create transactions
@@ -2612,6 +2619,7 @@ def create_banking_router(db):
                 "copropriete_id": copropriete_id or "",
                 "created_at": datetime.now(timezone.utc).isoformat()
             }
+            inject_syndic(txn, request)
             transactions.append(txn)
 
         if transactions:
@@ -2802,6 +2810,7 @@ def create_banking_router(db):
             "coda_hash": data.file_hash,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
+        inject_syndic(statement, request)
         await db.bank_statements.insert_one(statement)
 
         included = [m for m in data.movements if m.include]
@@ -2826,6 +2835,7 @@ def create_banking_router(db):
                 "copropriete_id": data.copropriete_id,
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
+            inject_syndic(txn, request)
             transactions_to_insert.append(txn)
             if mov.manual_match_type and mov.manual_match_id:
                 manual_decisions.append((txn_id, mov.manual_match_type, mov.manual_match_id))
@@ -2922,6 +2932,7 @@ def create_banking_router(db):
                 "counterparty_type": line.counterparty_type or "",
                 "created_at": datetime.now(timezone.utc).isoformat()
             }
+            inject_syndic(txn, request)
             txns.append(txn)
         if txns:
             await db.bank_transactions.insert_many(txns)
@@ -3247,6 +3258,7 @@ def create_banking_router(db):
                 "copropriete_id": copro_id,
                 "created_at": datetime.now(timezone.utc).isoformat()
             }
+            inject_syndic(txn, request)
             txns.append(txn)
         if txns:
             await db.bank_transactions.insert_many(txns)

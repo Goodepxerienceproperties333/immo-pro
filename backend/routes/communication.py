@@ -644,6 +644,7 @@ def create_communication_router(db):
             "status": status or "sent",
             "error_msg": error_msg or "",
         }
+        from syndic_scope import inject_syndic; inject_syndic(doc, request)
         await db.sent_communications.insert_one(doc)
 
     async def _ensure_mailbox_allowed(request: Request, mailbox: str):

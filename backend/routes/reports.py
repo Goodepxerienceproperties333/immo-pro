@@ -6,10 +6,14 @@ import uuid
 import io
 
 
-def _apply_copro(q: dict, copropriete_id: Optional[str]) -> dict:
-    """Add copropriete_id filter to a Mongo query when provided (chinese wall)."""
+def _apply_copro(q: dict, copropriete_id: Optional[str], request=None) -> dict:
+    """Add copropriete_id + syndic_id filters to a Mongo query (chinese wall)."""
     if copropriete_id:
         q["copropriete_id"] = copropriete_id
+    if request is not None:
+        sid = getattr(getattr(request, "state", None), "syndic_id", None)
+        if sid:
+            q["syndic_id"] = sid
     return q
 
 
@@ -754,7 +758,8 @@ def _dedup_duplicate_auto_fi_entries(entries: list) -> list:
 
 async def compute_bilan_data(db, copropriete_id: str, date_to: Optional[str] = None,
                              fiscal_year_id: Optional[str] = None,
-                             view_mode: str = "before_distribution") -> dict:
+                             view_mode: str = "before_distribution",
+                             request=None) -> dict:
     """Calcul du Bilan PCMN belge (Actif / Passif par rubriques). Chinese walls strict.
 
     iter90fq : extrait de l'endpoint `/reports/bilan` (module-level, importable)
@@ -783,7 +788,7 @@ async def compute_bilan_data(db, copropriete_id: str, date_to: Optional[str] = N
     # chaines "2026-12-31T..." > "2026-12-31" est True -> $lte echoue.
     date_to_lte = _date_lte(date_to) if date_to else None
 
-    q = _apply_copro({}, copropriete_id)
+    q = _apply_copro({}, copropriete_id, request)
     if date_to_lte:
         q["date"] = {"$lte": date_to_lte}
     # iter90gk : exclure les AN de CLOTURE (duplicats cumulatifs de N-1)
@@ -1425,7 +1430,7 @@ def create_reports_router(db):
         include_reversals: bool = False,
     ):
         copropriete_id = _require_copro(copropriete_id, request)
-        q = _apply_copro({}, copropriete_id)
+        q = _apply_copro({}, copropriete_id, request)
         if not include_reversals:
             _exclude_reversals(q)
         if date_from or date_to:
@@ -1476,7 +1481,7 @@ def create_reports_router(db):
     @router.get("/balance")
     async def trial_balance(request: Request, date_from: Optional[str] = None, date_to: Optional[str] = None, copropriete_id: Optional[str] = None):
         copropriete_id = _require_copro(copropriete_id, request)
-        q = _apply_copro({}, copropriete_id)
+        q = _apply_copro({}, copropriete_id, request)
         if date_from or date_to:
             q["date"] = {}
             if date_from:
@@ -1554,6 +1559,7 @@ def create_reports_router(db):
         data = await compute_bilan_data(
             db, copropriete_id, date_to=date_to,
             fiscal_year_id=fiscal_year_id, view_mode=view_mode,
+            request=request,
         )
         _bilan_cache_set(cache_key, data)
         return data
@@ -1660,7 +1666,7 @@ def create_reports_router(db):
                 if not date_to:
                     date_to = fy["end_date"]
 
-        q = _apply_copro({}, copropriete_id)
+        q = _apply_copro({}, copropriete_id, request)
         if date_from or date_to:
             q["date"] = {}
             if date_from:
@@ -1803,7 +1809,7 @@ def create_reports_router(db):
                 date_to = fy["end_date"]
 
         # Owners are global, but lots/invoices are ACP-scoped (chinese wall)
-        lots_q = _apply_copro({}, copropriete_id)
+        lots_q = _apply_copro({}, copropriete_id, request)
         lots = await db.lots.find(lots_q, {"_id": 0}).to_list(1000)
 
         # iter90fw : construction de l'ensemble de reference des owners
@@ -1873,7 +1879,7 @@ def create_reports_router(db):
         target_ids = list(all_owner_ids if owner_filter == "all" else current_owner_ids)
         owners = await db.owners.find({"id": {"$in": target_ids}}, {"_id": 0}).sort("name", 1).to_list(1000) if target_ids else []
 
-        inv_q = _apply_copro({"date": {"$gte": date_from or "2000-01-01", "$lte": _date_lte(date_to or "2099-12-31")}}, copropriete_id)
+        inv_q = _apply_copro({"date": {"$gte": date_from or "2000-01-01", "$lte": _date_lte(date_to or "2099-12-31")}}, copropriete_id, request)
         invoices = await db.invoices.find(inv_q, {"_id": 0}).to_list(10000)
 
         # iter90ej : fallback quotites via la default distribution_key quand

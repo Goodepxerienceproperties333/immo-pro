@@ -67,6 +67,7 @@ def create_meters_router(db):
             "copropriete_id": data.copropriete_id or "",
             "created_at": datetime.now(timezone.utc).isoformat()
         }
+        from syndic_scope import inject_syndic; inject_syndic(doc, request)
         await db.meters.insert_one(doc)
         return {k: v for k, v in doc.items() if k != "_id"}
 
@@ -113,6 +114,7 @@ def create_meters_router(db):
             "consumption": consumption,
             "created_at": datetime.now(timezone.utc).isoformat()
         }
+        from syndic_scope import inject_syndic; inject_syndic(doc, request)
         await db.meter_readings.insert_one(doc)
         return {k: v for k, v in doc.items() if k != "_id"}
 

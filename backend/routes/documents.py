@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Request
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 from typing import Optional
@@ -122,7 +122,8 @@ def create_documents_router(db):
         return cats
 
     @router.post("/categories")
-    async def create_category(data: CategoryInput):
+    async def create_category(data: CategoryInput, request: Request):
+        from syndic_scope import inject_syndic
         doc = {
             "id": str(uuid.uuid4()),
             "name": data.name,
@@ -130,6 +131,7 @@ def create_documents_router(db):
             "copropriete_id": data.copropriete_id or "",
             "created_at": datetime.now(timezone.utc).isoformat()
         }
+        inject_syndic(doc, request)
         await db.document_categories.insert_one(doc)
         return {k: v for k, v in doc.items() if k != "_id"}
 
@@ -181,7 +183,8 @@ def create_documents_router(db):
         return docs
 
     @router.post("")
-    async def create_document(data: DocumentInput):
+    async def create_document(data: DocumentInput, request: Request):
+        from syndic_scope import inject_syndic
         doc = {
             "id": str(uuid.uuid4()),
             "title": data.title,
@@ -191,11 +194,13 @@ def create_documents_router(db):
             "copropriete_id": data.copropriete_id or "",
             "created_at": datetime.now(timezone.utc).isoformat()
         }
+        inject_syndic(doc, request)
         await db.documents.insert_one(doc)
         return {k: v for k, v in doc.items() if k != "_id"}
 
     @router.post("/upload")
     async def upload_document(
+        request: Request,
         file: UploadFile = File(...),
         title: Optional[str] = Form(""),
         description: Optional[str] = Form(""),
@@ -275,6 +280,8 @@ def create_documents_router(db):
             "parties": ai_result.get("parties", []),
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
+        from syndic_scope import inject_syndic
+        inject_syndic(doc, request)
         await db.documents.insert_one(doc)
         return {k: v for k, v in doc.items() if k != "_id"}
 

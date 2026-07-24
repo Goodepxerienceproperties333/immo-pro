@@ -210,6 +210,7 @@ async def learn_template(
     else:
         doc["id"] = f"tpl-{uuid.uuid4()}"
         doc["created_at"] = now
+        from syndic_scope import inject_syndic; inject_syndic(doc, request)
         await db.invoice_templates.insert_one(doc)
 
     return {"learned": len(learned_fields), "fields": learned_fields}

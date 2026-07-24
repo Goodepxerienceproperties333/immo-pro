@@ -116,7 +116,8 @@ def create_accounting_router(db):
         return accounts
 
     @router.post("/pcmn")
-    async def create_pcmn_account(data: PCMNAccountInput):
+    async def create_pcmn_account(data: PCMNAccountInput, request: Request):
+        from syndic_scope import inject_syndic
         if not data.number or not data.number.isdigit():
             raise HTTPException(400, "Le numero de compte doit etre numerique")
         q = {"number": data.number}
@@ -157,6 +158,7 @@ def create_accounting_router(db):
             "is_custom": True,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
+        inject_syndic(doc, request)
         await db.pcmn_accounts.insert_one(doc)
         return {k: v for k, v in doc.items() if k != "_id"}
 

@@ -213,6 +213,7 @@ def create_ag_router(db):
             "created_by": uid,
             "legal_check": deadline_check,
         }
+        from syndic_scope import inject_syndic; inject_syndic(doc, request)
         await db.ag_meetings.insert_one(dict(doc))
         return doc
 
