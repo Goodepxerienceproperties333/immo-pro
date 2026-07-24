@@ -83,17 +83,20 @@ def create_coproprietes_router(db):
     # Accounts that are pre-activated (visible in default selection lists)
     DEFAULT_ACTIVE_ACCOUNTS = {"614000", "615000"}  # Honoraires syndic + Frais de gestion (admin)
 
-    async def _seed_pcmn_for_acp(copro_id: str):
+    async def _seed_pcmn_for_acp(copro_id: str, syndic_id: str = ""):
         """Seed le PCMN belge complet (327 comptes officiels + 10 comptes compat) pour une nouvelle ACP."""
         from pcmn_data import PCMN_ALL_ACCOUNTS
         docs = []
         for acc in PCMN_ALL_ACCOUNTS:
-            docs.append({
+            d = {
                 **acc,
                 "copropriete_id": copro_id,
                 "active": acc["number"] in DEFAULT_ACTIVE_ACCOUNTS,
                 "is_custom": False,
-            })
+            }
+            if syndic_id:
+                d["syndic_id"] = syndic_id
+            docs.append(d)
         if docs:
             await db.pcmn_accounts.insert_many(docs)
 
@@ -168,6 +171,7 @@ def create_coproprietes_router(db):
     @router.get("")
     async def list_coproprietes(request: Request, show_archived: Optional[bool] = False):
         from server import get_current_user
+        from syndic_scope import syndic_query
         user = await get_current_user(request)
         role = user.get("role", "")
         q = {} if show_archived else {"status": {"$ne": "archived"}}
@@ -176,11 +180,12 @@ def create_coproprietes_router(db):
             copros = await db.coproprietes.find(q, {"_id": 0}).sort("reference", -1).to_list(1000)
         else:
             # Syndic / gestionnaire / owner : ne voient QUE leurs ACPs (copropriete_ids)
+            # + filtre syndic_id pour isolation multi-syndic
             user_copro_ids = user.get("copropriete_ids", []) or []
             if not user_copro_ids:
-                # Pas d'ACPs assignees -> liste vide. Le syndic doit creer ses propres ACPs.
                 return []
             q["id"] = {"$in": user_copro_ids}
+            q.update(syndic_query(request))
             copros = await db.coproprietes.find(q, {"_id": 0}).sort("reference", -1).to_list(1000)
         return copros
 
@@ -230,6 +235,8 @@ def create_coproprietes_router(db):
             "created_by": user.get("_id", ""),
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
+        from syndic_scope import inject_syndic
+        inject_syndic(doc, request)
         await db.coproprietes.insert_one(doc)
         # Auto-rattacher l'ACP au syndic createur (sauf superadmin global qui n'a pas
         # besoin d'etre dans copropriete_ids pour voir tout).
@@ -247,16 +254,18 @@ def create_coproprietes_router(db):
                     import logging
                     logging.warning(f"Echec auto-rattachement ACP {doc['id']} au syndic {user_id_str}: {e}")
         # Seed full PCMN plan for this ACP + bank account PCMN entries
-        await _seed_pcmn_for_acp(doc["id"])
+        await _seed_pcmn_for_acp(doc["id"], doc.get("syndic_id", ""))
         await _create_pcmn_accounts(bank_accounts, doc["id"])
         # Seed default expense natures (23 standard categories - PCMN belge)
         await _seed_default_expense_natures(doc["id"])
         # Seed default document categories
         from routes.documents import DEFAULT_CATEGORIES
         now_iso = datetime.now(timezone.utc).isoformat()
+        _sid = doc.get("syndic_id", "")
         cat_docs = [{
             "id": str(uuid.uuid4()), "name": cn, "description": "",
             "copropriete_id": doc["id"], "created_at": now_iso,
+            **( {"syndic_id": _sid} if _sid else {} ),
         } for cn in DEFAULT_CATEGORIES]
         await db.document_categories.insert_many(cat_docs)
         # Create lots on the fly (if provided during ACP creation)
@@ -282,6 +291,7 @@ def create_coproprietes_router(db):
                     "owner_id": (lot.owner_ids or [""])[0],
                     "owner_ids": lot.owner_ids or [],
                     "copropriete_id": doc["id"],
+                    "syndic_id": doc.get("syndic_id", ""),
                     "created_at": now_iso,
                     "_parent_ref": (lot.parent_lot_number or "").strip(),
                 })
@@ -352,6 +362,7 @@ def create_coproprietes_router(db):
             await db.fiscal_years.insert_one({
                 "id": str(uuid.uuid4()),
                 "copropriete_id": doc["id"],
+                "syndic_id": doc.get("syndic_id", ""),
                 "name": fy_name,
                 "start_date": data.fy_start,
                 "end_date": data.fy_end,
@@ -362,7 +373,9 @@ def create_coproprietes_router(db):
 
     @router.put("/{copro_id}")
     async def update_copropriete(copro_id: str, data: CoproprieteInput, request: Request):
-        await _get_manager(request)
+        user = await _get_manager(request)
+        from syndic_scope import syndic_query
+        sq = syndic_query(request)
         bank_accounts = [ba.model_dump() for ba in (data.bank_accounts or [])]
         # iter90jb : normalise + dedup les IBAN a l'entree
         for ba in bank_accounts:
@@ -387,7 +400,7 @@ def create_coproprietes_router(db):
             "quarterly_closing": data.quarterly_closing,
             "default_provisions": data.default_provisions,
         }
-        result = await db.coproprietes.update_one({"id": copro_id}, {"$set": update})
+        result = await db.coproprietes.update_one({"id": copro_id, **sq}, {"$set": update})
         if result.matched_count == 0:
             raise HTTPException(404, "Copropriete non trouvee")
         await _create_pcmn_accounts(bank_accounts, copro_id)
@@ -395,7 +408,8 @@ def create_coproprietes_router(db):
 
     @router.get("/{copro_id}")
     async def get_copropriete(copro_id: str, request: Request):
-        copro = await db.coproprietes.find_one({"id": copro_id}, {"_id": 0})
+        from syndic_scope import syndic_query
+        copro = await db.coproprietes.find_one({"id": copro_id, **syndic_query(request)}, {"_id": 0})
         if not copro:
             raise HTTPException(404, "Copropriete non trouvee")
         return copro

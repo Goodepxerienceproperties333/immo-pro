@@ -1505,6 +1505,8 @@ def create_invoices_router(db):
             "proprietaire_amount": round(data.total_amount * proprietaire_pct / 100, 2),
             "created_at": datetime.now(timezone.utc).isoformat()
         }
+        from syndic_scope import inject_syndic
+        inject_syndic(doc, request)
         await db.invoices.insert_one(doc)
         clean = {k: v for k, v in doc.items() if k != "_id"}
         # iter90ed : apprentissage automatique de la repartition

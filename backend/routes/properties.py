@@ -246,13 +246,15 @@ def create_properties_router(db):
     router = APIRouter(prefix="/api")
 
     async def _get_user_scope(request):
-        """Retourne (is_super_global, allowed_copro_ids).
+        """Retourne (is_super_global, allowed_copro_ids, syndic_id).
         - is_super_global=True pour superadmin/admin : acces total, allowed=None.
         - Sinon allowed_copro_ids = liste des ACPs de l'utilisateur (peut etre []).
+        - syndic_id = id du syndic proprietaire (None pour superadmin).
         """
         from server import get_current_user, is_superadmin_only
         user = await get_current_user(request)
         role = user.get("role", "")
+        sid = getattr(request.state, "syndic_id", None)
         if is_superadmin_only(role):
             return True, None
         return False, user.get("copropriete_ids", []) or []
@@ -406,6 +408,8 @@ def create_properties_router(db):
             base_query["copropriete_ids"] = copro_id
         if exclude_id:
             base_query["id"] = {"$ne": exclude_id}
+        from syndic_scope import syndic_query
+        base_query.update(syndic_query(request))
         candidates = await db.owners.find(base_query, {"_id": 0}).to_list(5000)
         # 1er passage : cherche un doublon STRICT (email/telephone/BCE/aux)
         for o in candidates:
@@ -491,7 +495,8 @@ def create_properties_router(db):
 
         async def _paginated_response(base_query: dict):
             """Renvoie `{items, total, skip, limit}` avec sort/skip/limit MongoDB."""
-            q = {**base_query, **_search_filter()}
+            from syndic_scope import syndic_query
+            q = {**base_query, **_search_filter(), **syndic_query(request)}
             total = await db.owners.count_documents(q)
             cursor = db.owners.find(q, {"_id": 0}).sort("last_name", 1).skip(max(0, int(skip)))
             if limit is not None and limit > 0:
@@ -501,10 +506,10 @@ def create_properties_router(db):
 
         # Helper to also fetch orphan owners (copropriete_id == "" or missing) when requested
         async def _fetch_orphans():
-            return await db.owners.find(
-                {"$or": [{"copropriete_id": ""}, {"copropriete_id": {"$exists": False}}, {"copropriete_id": None}]},
-                {"_id": 0},
-            ).sort("last_name", 1).to_list(2000)
+            from syndic_scope import syndic_query
+            oq = {"$or": [{"copropriete_id": ""}, {"copropriete_id": {"$exists": False}}, {"copropriete_id": None}]}
+            oq.update(syndic_query(request))
+            return await db.owners.find(oq, {"_id": 0}).sort("last_name", 1).to_list(2000)
         # iter89b : syndic_wide -> ignorer le scope ACP courant
         if syndic_wide:
             if is_super:
@@ -689,6 +694,8 @@ def create_properties_router(db):
             "copropriete_id": data.copropriete_id,
             "created_at": datetime.now(timezone.utc).isoformat()
         }
+        from syndic_scope import inject_syndic
+        inject_syndic(doc, request)
         await db.owners.insert_one(doc)
         if data.copropriete_id:
             await assign_owner_accounts(db, doc, data.copropriete_id)
@@ -775,7 +782,8 @@ def create_properties_router(db):
     @router.get("/owners/{owner_id}")
     async def get_owner(owner_id: str, request: Request):
         is_super, allowed_copros = await _get_user_scope(request)
-        owner = await db.owners.find_one({"id": owner_id}, {"_id": 0})
+        from syndic_scope import syndic_query
+        owner = await db.owners.find_one({"id": owner_id, **syndic_query(request)}, {"_id": 0})
         if not owner:
             raise HTTPException(404, "Proprietaire non trouve")
         if not is_super and not await _owner_in_scope(owner_id, allowed_copros):
@@ -824,7 +832,7 @@ def create_properties_router(db):
         new_email = ((data.email or "").lower().strip())
         email_changed = bool(new_email) and (old_email != new_email)
         result = await db.owners.update_one(
-            {"id": owner_id},
+            {"id": owner_id, **syndic_query(request)},
             {"$set": {
                 "first_name": data.first_name, "last_name": data.last_name, "name": full_name,
                 "address": data.address, "postal_code": data.postal_code, "city": data.city,

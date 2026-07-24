@@ -324,22 +324,25 @@ def create_communication_router(db):
         except Exception as e:
             raise HTTPException(500, f"Module email indisponible : {e}")
 
-        # iter90h7 : privilegier la config Graph par-syndic (stockee en DB)
-        # sur les env vars globales. Le syndic a soigneusement configure ses
-        # credentials Azure via /admin/syndic-config ou /mon-bureau. Si cette
-        # config est complete, on l'utilise directement (bypass MAIL_ENABLED
-        # global qui n'est utile qu'en preview sans config par-syndic).
+        # iter90h7 : privilegier la config par-syndic (stockee en DB)
+        # sur les env vars globales. Supporte Graph ET SMTP.
         graph_tid = _TENANT_ID
         graph_cid = _CLIENT_ID
         graph_cs = _CLIENT_SECRET
         graph_source = "env"
         use_per_syndic = False
+        use_smtp = False
+        smtp_cfg = {}
         if request is not None:
             try:
                 from routes.syndic_config import get_effective_email_config, _resolve_syndic_user_id
                 syndic_uid = await _resolve_syndic_user_id(db, request)
                 effective = await get_effective_email_config(db, syndic_uid)
-                if effective and effective.get("provider") == "graph":
+                if effective and effective.get("provider") == "smtp":
+                    use_smtp = True
+                    smtp_cfg = effective
+                    use_per_syndic = True
+                elif effective and effective.get("provider") == "graph":
                     eff_tid = effective.get("graph_tenant_id")
                     eff_cid = effective.get("graph_client_id")
                     eff_cs = effective.get("graph_client_secret")
@@ -351,13 +354,64 @@ def create_communication_router(db):
                 # Pas grave - on retombe sur env vars
                 logger.info("Config par-syndic indisponible, fallback env : %s", _e)
 
-        # Dry-run mode : compte les envois mais n'appelle pas Graph.
+        # Dry-run mode : compte les envois mais n'appelle pas Graph/SMTP.
         # Si on a une config par-syndic valide, on N'APPLIQUE PAS le dry-run
         # global (l'utilisateur a explicitement configure son compte).
         if not _MAIL_ENABLED and not use_per_syndic:
             logger.info("[DRY-RUN] Email suppressed (no per-syndic + MAIL_ENABLED=false). From=%s To=%s Subject=%s",
                         from_mailbox, to, subject)
             dry_run = True
+        elif use_smtp:
+            # ---- Envoi SMTP (One2Net, etc.) ----
+            import smtplib
+            from email.mime.multipart import MIMEMultipart
+            from email.mime.text import MIMEText
+            from email.mime.base import MIMEBase
+            from email import encoders
+
+            host = smtp_cfg.get("smtp_host", "")
+            port = int(smtp_cfg.get("smtp_port", 587))
+            user = smtp_cfg.get("smtp_username", "")
+            pwd = smtp_cfg.get("smtp_password", "")
+            use_tls = smtp_cfg.get("smtp_use_tls", True)
+
+            msg = MIMEMultipart("mixed")
+            msg["Subject"] = subject
+            msg["From"] = from_mailbox
+            if use_bcc:
+                msg["To"] = from_mailbox
+                msg["Bcc"] = ", ".join(to)
+            else:
+                msg["To"] = ", ".join(to)
+            html_part = MIMEText(html_body, "html")
+            msg.attach(html_part)
+            if attachment_pdf:
+                part = MIMEBase("application", "pdf")
+                part.set_payload(attachment_pdf)
+                encoders.encode_base64(part)
+                part.add_header("Content-Disposition", "attachment",
+                                filename=attachment_filename or "document.pdf")
+                msg.attach(part)
+            try:
+                if port == 465:
+                    with smtplib.SMTP_SSL(host, port, timeout=15) as s:
+                        s.login(user, pwd)
+                        s.send_message(msg)
+                else:
+                    with smtplib.SMTP(host, port, timeout=15) as s:
+                        if use_tls:
+                            s.starttls()
+                        s.login(user, pwd)
+                        s.send_message(msg)
+                logger.info("SMTP email sent from %s to %s (subject: %s)", from_mailbox, to, subject)
+            except Exception as smtp_err:
+                logger.error("SMTP send failed: %s", smtp_err)
+                status = "failed"
+                await _persist_sent_communication(
+                    from_mailbox, to, subject, html_body, kind, copropriete_id,
+                    owner_ids, request, "failed",
+                )
+                raise HTTPException(500, f"Envoi SMTP echoue : {smtp_err}") from smtp_err
         elif not (graph_tid and graph_cid and graph_cs):
             raise HTTPException(500,
                 "Microsoft Graph non configure : ni credentials globaux "
@@ -601,6 +655,16 @@ def create_communication_router(db):
         if not boxes and scope_user.get("email", "").lower() == addr_low:
             return
         allowed = {b.get("address", "").lower() for b in boxes if b.get("active", True)}
+        # SMTP : le smtp_username est l'identite authentifiee sur le serveur
+        # -> toujours autorise comme expediteur
+        try:
+            from routes.syndic_config import get_effective_email_config
+            eff = await get_effective_email_config(db, scope_id)
+            smtp_user = (eff.get("smtp_username") or "").strip().lower()
+            if smtp_user and eff.get("provider") == "smtp":
+                allowed.add(smtp_user)
+        except Exception:
+            pass
         if addr_low not in allowed:
             raise HTTPException(403, f"Boite '{mailbox}' non autorisee pour ce cabinet")
 

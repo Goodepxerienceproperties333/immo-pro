@@ -335,7 +335,7 @@ async def auth_middleware(request: Request, call_next):
     try:
         user_doc = await db.users.find_one(
             {"_id": ObjectId(request.state.user_id)},
-            {"_id": 0, "role": 1, "copropriete_ids": 1, "email": 1, "is_suspended": 1}
+            {"_id": 0, "role": 1, "copropriete_ids": 1, "email": 1, "is_suspended": 1, "parent_syndic_id": 1}
         )
     except Exception:
         user_doc = None
@@ -352,6 +352,15 @@ async def auth_middleware(request: Request, call_next):
     role = user_doc.get("role", "owner")
     request.state.user_role = role
     request.state.user_copropriete_ids = user_doc.get("copropriete_ids", [])
+
+    # ---- SYNDIC_ID : isolation multi-syndic ----
+    from syndic_scope import resolve_syndic_id
+    _user_for_scope = {
+        "_id": request.state.user_id,
+        "role": role,
+        "parent_syndic_id": user_doc.get("parent_syndic_id"),
+    }
+    request.state.syndic_id = resolve_syndic_id(_user_for_scope)
 
     # ---- CHINESE WALL GLOBAL : isolation stricte entre syndics ----
     # Si la requete porte un copropriete_id (param OU header X-Copropriete-Id),

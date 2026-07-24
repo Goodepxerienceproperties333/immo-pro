@@ -592,9 +592,14 @@ def create_syndic_config_router(db):
         boxes = user.get("authorized_mailboxes") or []
         addr_low = payload.from_mailbox.strip().lower()
         allowed = {b.get("address", "").lower() for b in boxes if b.get("active", True)}
+        # SMTP : le smtp_username est l'identite authentifiee sur le serveur
+        # -> toujours autorise comme expediteur
+        effective = await get_effective_email_config(db, syndic_uid)
+        smtp_user = (effective.get("smtp_username") or "").strip().lower()
+        if smtp_user and effective.get("provider") == "smtp":
+            allowed.add(smtp_user)
         if user.get("email", "").lower() != addr_low and addr_low not in allowed:
             raise HTTPException(403, f"Boite '{payload.from_mailbox}' non autorisee")
-        effective = await get_effective_email_config(db, syndic_uid)
         try:
             result = await _send_test_email_impl(effective, payload.from_mailbox, payload.to)
         except HTTPException:
@@ -820,6 +825,11 @@ def create_syndic_config_router(db):
         addr_low = payload.from_mailbox.strip().lower()
         allowed = {b.get("address", "").lower() for b in boxes if b.get("active", True)}
         target_email = (target.get("email") or "").lower()
+        # SMTP : le smtp_username est l'identite authentifiee sur le serveur
+        effective = await get_effective_email_config(db, syndic_user_id)
+        smtp_user = (effective.get("smtp_username") or "").strip().lower()
+        if smtp_user and effective.get("provider") == "smtp":
+            allowed.add(smtp_user)
         if target_email != addr_low and addr_low not in allowed:
             raise HTTPException(
                 403,
@@ -827,7 +837,6 @@ def create_syndic_config_router(db):
                 f"Boites disponibles : {target_email}"
                 + (f", " + ", ".join(sorted(allowed)) if allowed else "")
             )
-        effective = await get_effective_email_config(db, syndic_user_id)
         try:
             result = await _send_test_email_impl(effective, payload.from_mailbox, payload.to)
         except HTTPException:

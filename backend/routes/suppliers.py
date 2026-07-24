@@ -299,7 +299,9 @@ def create_suppliers_router(db):
         if not is_super and copropriete_id not in (allowed_copros or []):
             raise HTTPException(403, "Copropriete hors scope")
         # Query DB filtree par ACP (Chinese Wall strict : copropriete_id direct)
-        q: dict = {"copropriete_id": copropriete_id}
+        # + isolation multi-syndic via syndic_id
+        from syndic_scope import syndic_query
+        q: dict = {"copropriete_id": copropriete_id, **syndic_query(request)}
         if search:
             q["$and"] = [
                 {"$or": [
@@ -406,6 +408,8 @@ def create_suppliers_router(db):
             **data.model_dump(exclude={"force_create_despite_similar"}),
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
+        from syndic_scope import inject_syndic
+        inject_syndic(doc, request)
         await db.suppliers.insert_one(doc)
         if copro_id:
             await assign_supplier_account(db, doc, copro_id)
@@ -473,7 +477,8 @@ def create_suppliers_router(db):
     @router.get("/{supplier_id}")
     async def get_supplier(supplier_id: str, request: Request):
         is_super, allowed_copros = await _get_user_scope(request)
-        s = await db.suppliers.find_one({"id": supplier_id}, {"_id": 0})
+        from syndic_scope import syndic_query
+        s = await db.suppliers.find_one({"id": supplier_id, **syndic_query(request)}, {"_id": 0})
         if not s:
             raise HTTPException(404, "Fournisseur non trouve")
         if not is_super and not _supplier_in_scope(s, allowed_copros):
@@ -534,7 +539,7 @@ def create_suppliers_router(db):
                 f"({existing_dup.get('name', '')} - {dup['value']}).",
             )
         result = await db.suppliers.update_one(
-            {"id": supplier_id},
+            {"id": supplier_id, **syndic_query(request)},
             {"$set": data.model_dump(exclude={"force_create_despite_similar"})},
         )
         if result.matched_count == 0:
@@ -548,7 +553,8 @@ def create_suppliers_router(db):
     @router.delete("/{supplier_id}")
     async def delete_supplier(supplier_id: str, request: Request):
         is_super, allowed_copros = await _get_user_scope(request)
-        existing = await db.suppliers.find_one({"id": supplier_id}, {"_id": 0})
+        from syndic_scope import syndic_query
+        existing = await db.suppliers.find_one({"id": supplier_id, **syndic_query(request)}, {"_id": 0})
         if not existing:
             raise HTTPException(404, "Fournisseur non trouve")
         if not is_super and not _supplier_in_scope(existing, allowed_copros):

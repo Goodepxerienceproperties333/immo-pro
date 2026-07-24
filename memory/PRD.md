@@ -7,7 +7,7 @@ Application de gestion de copropriete basee sur le droit belge (PCMN), incluant 
 - **Backend**: FastAPI, Async MongoDB (Motor), Python
 - **Frontend**: React, Tailwind CSS, Shadcn UI
 - **DB**: MongoDB
-- **Integrations**: Emergent LLM Key (Claude Sonnet pour extraction IA), Microsoft Graph (Email)
+- **Integrations**: Emergent LLM Key (Claude Sonnet pour extraction IA), Microsoft Graph (Email), SMTP (One2Net)
 
 ## Fonctionnalites implementees
 
@@ -28,17 +28,35 @@ Application de gestion de copropriete basee sur le droit belge (PCMN), incluant 
 - _resolve_bank_account utilise pcmn_bank_match pour matching fuzzy
 - Tests: 26/26 iteration 71
 
-#### P0 - Workflow suggestion/validation auto-lettrage (DONE)
-#### Simplification dialog categorisation bancaire (DONE)
-#### Fix filtre date $lte dans TOUS les rapports (DONE)
-#### Fix Balance de Tiers - Proprietaires manquants (DONE)
-#### Endpoints diagnostic (DONE)
+#### P0 - Fix Email SMTP "Boite non autorisee" (DONE)
+- Cause: validation authorized_mailboxes ne reconnaissait pas smtp_username comme expediteur legitime
+- Fix: quand provider=smtp, smtp_username est automatiquement ajoute a la liste des boites autorisees
+- 3 fichiers corriges: syndic_config.py (test-email self + admin), communication.py (envoi reel)
+- communication.py supporte maintenant l'envoi SMTP complet (avec PJ, BCC)
+
+#### Purge DB Preview (DONE)
+- Collections videes: coproprietes, owners, suppliers, lots, journal_entries, invoices, bank_statements, bank_transactions, budgets, etc.
+- Preserves: users, pcmn_accounts
+
+#### Securite Multi-Syndic syndic_id (EN COURS)
+- Infrastructure: syndic_scope.py avec resolve_syndic_id(), syndic_query(), inject_syndic()
+- Middleware: request.state.syndic_id calcule automatiquement dans server.py
+- Verrouillage coproprietes.py: list, create, update, get filtres par syndic_id
+- Verrouillage properties.py: list_owners, get_owner, update_owner, check-duplicate, _fetch_orphans
+- Verrouillage suppliers.py: list, create, get, update, delete
+- Verrouillage invoices.py: creation avec syndic_id
+- Verrouillage accounting.py: creation journal entries avec syndic_id
+- RESTANT: banking.py, fund_calls.py, import_wizard.py, reports.py, documents.py, fiscal.py, expense_categories.py
 
 ### Sessions precedentes
+- Auto-lettrage, Balance de Tiers fix, Categorisation simplifiee, Filtre date $lte fix
 - Nettoyage PCMN, Bundle Import Dialog, Verrou fiscal
 - Amelioration lettrage bancaire, Isolation ACP, Chatbot, Layout, Spinner
 
 ## Backlog prioritise
+
+### P0 - En cours
+- Securite syndic_id: finir les routes restantes (banking, fund_calls, import_wizard, reports, etc.)
 
 ### P1 - Important
 - TEUWEN lot mapping: logique lot.owner_id + distribution_keys dans reports.py et pdf_decompte.py (RECURRENT)

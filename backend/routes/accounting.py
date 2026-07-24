@@ -449,6 +449,8 @@ def create_accounting_router(db):
             "copropriete_id": copro_id,
             "created_at": datetime.now(timezone.utc).isoformat()
         }
+        from syndic_scope import inject_syndic
+        inject_syndic(doc, request)
         await db.journal_entries.insert_one(doc)
         return {k: v for k, v in doc.items() if k != "_id"}
 
