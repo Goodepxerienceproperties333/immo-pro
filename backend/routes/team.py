@@ -54,9 +54,9 @@ def create_team_router(db):
         if role in ("superadmin", "admin"):
             # Le superadmin agit comme syndic de SA propre agence par defaut.
             # Il peut aussi consulter la vue globale via le parametre `scope=all`.
-            return user, user.get("id"), True
+            return user, user.get("_id") or user.get("id"), True
         if role == "syndic":
-            return user, user.get("id"), False
+            return user, user.get("_id") or user.get("id"), False
         if role == "gestionnaire":
             parent = user.get("parent_syndic_id")
             if not parent:
@@ -159,7 +159,7 @@ def create_team_router(db):
             "permissions": perms,
             "must_change_password": data.must_change_password if data.password else True,
             "created_at": datetime.now(timezone.utc).isoformat(),
-            "created_by": user.get("id"),
+            "created_by": user.get("_id") or user.get("id"),
         }
         result = await db.users.insert_one(doc)
         # Envoi de l'invitation par email via MSGRAPH (non bloquant)
