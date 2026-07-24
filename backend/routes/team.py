@@ -160,7 +160,7 @@ def create_team_router(db):
             "permissions": perms,
             "must_change_password": data.must_change_password if data.password else True,
             "created_at": datetime.now(timezone.utc).isoformat(),
-            "created_by": user.get("id"),
+            "created_by": user.get("_id"),
         }
         result = await db.users.insert_one(doc)
         # Envoi de l'invitation par email via MSGRAPH (non bloquant)

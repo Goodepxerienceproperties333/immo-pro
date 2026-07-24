@@ -9,54 +9,63 @@ Application de gestion de copropriete basee sur le droit belge (PCMN), incluant 
 - **DB**: MongoDB
 - **Integrations**: Emergent LLM Key (Claude Sonnet pour extraction IA), Microsoft Graph (Email), SMTP (One2Net)
 
+## Architecture Multi-Tenant
+- **Isolation**: `syndic_id` sur toutes les collections operationnelles
+- **Middleware**: `request.state.syndic_id` calcule dans server.py
+- **Helpers**: `syndic_scope.py` (resolve_syndic_id, syndic_query, inject_syndic)
+- **Deduplication**: Owners et Suppliers scopes au niveau syndic (canonical_email, canonical_phone, BCE)
+
 ## Fonctionnalites implementees
 
-### Session courante (Juillet 2026)
+### Session courante (Juillet 2026 - Fork actuel)
 
-#### P0 - Fix Purge Syndic - Suppression owners complete (DONE)
-- 5 sources de collecte owner_ids: lots.owner_id, lots.owner_ids, owners.copropriete_ids (array), owners.copropriete_id (singulier), owners.import_session_id
-- Suppression des comptes utilisateur role=owner lies aux ACPs (sans syndic_user_id)
-- Suppression owner_access_audit pour les owners purges
-- Collections additionnelles: owner_bank_accounts, tier_accounts, deleted_entries, import_sessions, documents, document_categories
-- Tests: 18/18 iteration 72 + 26/26 iteration 71
+#### Gestion Collaborateurs dans Mon Bureau (DONE - 24/07/2026)
+- Section "Mon equipe — Collaborateurs" integree dans la page Mon Bureau (/mon-bureau)
+- Composant TeamSection.js reutilisant /api/team/members (GET/POST/PUT/DELETE)
+- Creation collaborateur avec nom, email, mot de passe, profil/role template, ACPs assignees, permissions
+- Table collapsible avec statut (Actif/En attente), actions (editer, supprimer, renvoyer invitation)
+- Bug fix: team.py user.get('id') -> user.get('_id') pour parent_syndic_id
+- Tests: 100% (10/10 backend + frontend complet, iteration_74)
 
-#### P1 - PCMN Consistency - Normalisation 8 chiffres (DONE)
-- Nouvelle lib pcmn_utils.py: normalize_bank_pcmn() et pcmn_bank_match()
-- Normalisation 6 chiffres (551618) -> 8 chiffres (55161800)
-- Endpoint migration: POST /api/admin/migrate/normalize-bank-pcmn (idempotent)
-- 3 cibles: coproprietes.bank_accounts, pcmn_accounts.number, journal_entries.lines
-- _resolve_bank_account utilise pcmn_bank_match pour matching fuzzy
-- Tests: 26/26 iteration 71
+#### Step E - UX Deduplication Fournisseurs BCE (DONE - 24/07/2026)
+- SuppliersPage.js: check BCE debounced (300ms) via POST /api/suppliers/check-duplicate
+- Carte inline jaune d'alerte si doublon BCE detecte avec bouton "Utiliser ce fournisseur"
 
-#### P0 - Fix Email SMTP "Boite non autorisee" (DONE)
-- Cause: validation authorized_mailboxes ne reconnaissait pas smtp_username comme expediteur legitime
-- Fix: quand provider=smtp, smtp_username est automatiquement ajoute a la liste des boites autorisees
-- 3 fichiers corriges: syndic_config.py (test-email self + admin), communication.py (envoi reel)
-- communication.py supporte maintenant l'envoi SMTP complet (avec PJ, BCC)
+#### Step F - Cascade Deletion Coproprietes (DONE - 24/07/2026)
+- coproprietes.py delete_copropriete: $pull copro_id de owners.copropriete_ids
+- $unset tier_accounts.{copro_id} des owners
+- Suppression fournisseurs ACP-scoped (copropriete_id == copro_id)
+- Marquage orphelins (copropriete_ids vide -> is_orphan: true)
+- Collections additionnelles supprimees: expense_categories, mutations, regularizations
 
-#### Purge DB Preview (DONE)
-- Collections videes: coproprietes, owners, suppliers, lots, journal_entries, invoices, bank_statements, bank_transactions, budgets, etc.
-- Preserves: users, pcmn_accounts
+#### Bug Fixes Critiques (DONE - 24/07/2026)
+- properties.py create_owner: ajout parametre `request: Request` manquant (crash 100% des creations)
+- properties.py find_duplicate_owner: remplacement syndic_query(request) par syndic_id_filter param
+- properties.py mutate_lot: ajout parametre `request: Request` manquant
+- suppliers.py: imports syndic_query manquants dans plusieurs fonctions (fixes par testing agent iter_73)
 
-#### Securite Multi-Syndic syndic_id (EN COURS)
-- Infrastructure: syndic_scope.py avec resolve_syndic_id(), syndic_query(), inject_syndic()
-- Middleware: request.state.syndic_id calcule automatiquement dans server.py
-- Verrouillage coproprietes.py: list, create, update, get filtres par syndic_id
-- Verrouillage properties.py: list_owners, get_owner, update_owner, check-duplicate, _fetch_orphans
-- Verrouillage suppliers.py: list, create, get, update, delete
-- Verrouillage invoices.py: creation avec syndic_id
-- Verrouillage accounting.py: creation journal entries avec syndic_id
-- RESTANT: banking.py, fund_calls.py, import_wizard.py, reports.py, documents.py, fiscal.py, expense_categories.py
+### Session precedente (Juillet 2026)
 
-### Sessions precedentes
+#### P0 - Fix Purge Syndic (DONE)
+- 5 sources de collecte owner_ids, suppression users role=owner, owner_access_audit, collections additionnelles
+
+#### P1 - PCMN Consistency 8 chiffres (DONE)
+- pcmn_utils.py, migration endpoint, normalisation 6->8 digits
+
+#### P0 - Fix Email SMTP (DONE)
+- smtp_username ajoute dynamiquement aux boites autorisees
+
+#### Securite Multi-Syndic syndic_id (DONE - Massive refactoring)
+- Infrastructure syndic_scope.py + middleware server.py
+- Verrouillage de TOUTES les routes operationnelles
+- Purge DB preview pour appliquer le lock
+
+### Sessions precedentes historiques
 - Auto-lettrage, Balance de Tiers fix, Categorisation simplifiee, Filtre date $lte fix
 - Nettoyage PCMN, Bundle Import Dialog, Verrou fiscal
 - Amelioration lettrage bancaire, Isolation ACP, Chatbot, Layout, Spinner
 
 ## Backlog prioritise
-
-### P0 - En cours
-- Securite syndic_id: finir les routes restantes (banking, fund_calls, import_wizard, reports, etc.)
 
 ### P1 - Important
 - TEUWEN lot mapping: logique lot.owner_id + distribution_keys dans reports.py et pdf_decompte.py (RECURRENT)
