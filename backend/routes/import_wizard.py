@@ -1093,7 +1093,7 @@ def create_import_wizard_router(db):
         return out
 
 
-    async def _ensure_pcmn_accounts(copro_id: str, accounts_needed: dict[str, str]) -> int:
+    async def _ensure_pcmn_accounts(copro_id: str, accounts_needed: dict[str, str], request=None) -> int:
         """Ensure each (account_number -> account_name) exists in this ACP's PCMN.
 
         Returns the count of newly-created accounts.
@@ -1130,7 +1130,8 @@ def create_import_wizard_router(db):
                 "copropriete_id": copro_id,
                 "created_at": _now_iso(),
             }
-            inject_syndic(_pcmn, request)
+            if request:
+                inject_syndic(_pcmn, request)
             await db.pcmn_accounts.insert_one(_pcmn)
             created += 1
         return created
@@ -1347,7 +1348,7 @@ def create_import_wizard_router(db):
                     sup_pcmn = canonize_supplier_tier_account("4400" + sup_aux[1:].zfill(3))
                     sup_lbl = (inv.get("supplier_name") or "").strip() or sup_aux
                     accounts_needed[sup_pcmn] = sup_lbl
-        pcmn_created = await _ensure_pcmn_accounts(copro_id, accounts_needed)
+        pcmn_created = await _ensure_pcmn_accounts(copro_id, accounts_needed, request)
 
         year_counters: dict[str, int] = {}
 
@@ -1860,7 +1861,7 @@ def create_import_wizard_router(db):
             cl = (t.get("counterparty_account_label") or "").strip()
             if cp:
                 accounts_needed[cp] = cl
-        pcmn_created = await _ensure_pcmn_accounts(copro_id, accounts_needed)
+        pcmn_created = await _ensure_pcmn_accounts(copro_id, accounts_needed, request)
 
         # ---- Group transactions by (bank_pcmn, year-month) to build statements ----
         # bank_pcmn -> month_key (YYYY-MM) -> {first_date, last_date, txns: [...]}
@@ -2152,7 +2153,7 @@ def create_import_wizard_router(db):
             lbl = (a.get("label") or "").strip()
             if num:
                 accounts_needed[num] = lbl
-        pcmn_created = await _ensure_pcmn_accounts(copro_id, accounts_needed)
+        pcmn_created = await _ensure_pcmn_accounts(copro_id, accounts_needed, request)
 
         # Determine entry date : 1st day of the FY containing the year+1 of period_end_date
         # OR the FY's start_date if available
@@ -2659,7 +2660,7 @@ def create_import_wizard_router(db):
                     lbl = (e.get(k_name) or "").strip()
                     if num:
                         accounts_needed[num] = lbl
-        pcmn_created = await _ensure_pcmn_accounts(copro_id, accounts_needed)
+        pcmn_created = await _ensure_pcmn_accounts(copro_id, accounts_needed, request)
 
         # ---- Pre-load owner/supplier lookup by auxiliary_code ----
         # For Journal OD : lines like "Coproprietaires | C1996 M. brumagne"

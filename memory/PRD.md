@@ -19,6 +19,11 @@ Application de gestion de copropriete basee sur le droit belge (PCMN), incluant 
 
 ### Session courante (Juillet 2026 - Fork actuel)
 
+#### Bug Fix: Import Wizard commit-invoices crash (DONE - 24/07/2026)
+- Cause: `_ensure_pcmn_accounts` appelait `inject_syndic(_pcmn, request)` sans avoir `request` dans ses parametres (artefact du refactoring sed syndic_id)
+- Fix: ajout `request=None` comme parametre + mise a jour des 4 appelants (commit_invoices, commit_journals, commit_opening_balance, commit_od_entries)
+- Verification AST: aucune autre fonction helper avec `request` manquant
+
 #### Gestion Collaborateurs dans Mon Bureau (DONE - 24/07/2026)
 - Section "Mon equipe — Collaborateurs" integree dans la page Mon Bureau (/mon-bureau)
 - Composant TeamSection.js reutilisant /api/team/members (GET/POST/PUT/DELETE)
@@ -36,13 +41,13 @@ Application de gestion de copropriete basee sur le droit belge (PCMN), incluant 
 - $unset tier_accounts.{copro_id} des owners
 - Suppression fournisseurs ACP-scoped (copropriete_id == copro_id)
 - Marquage orphelins (copropriete_ids vide -> is_orphan: true)
-- Collections additionnelles supprimees: expense_categories, mutations, regularizations
 
 #### Bug Fixes Critiques (DONE - 24/07/2026)
-- properties.py create_owner: ajout parametre `request: Request` manquant (crash 100% des creations)
+- properties.py create_owner: ajout parametre `request: Request` manquant
 - properties.py find_duplicate_owner: remplacement syndic_query(request) par syndic_id_filter param
 - properties.py mutate_lot: ajout parametre `request: Request` manquant
-- suppliers.py: imports syndic_query manquants dans plusieurs fonctions (fixes par testing agent iter_73)
+- suppliers.py: imports syndic_query manquants dans plusieurs fonctions
+- import_wizard.py _ensure_pcmn_accounts: ajout request param (4 appelants)
 
 ### Session precedente (Juillet 2026)
 
@@ -69,6 +74,7 @@ Application de gestion de copropriete basee sur le droit belge (PCMN), incluant 
 
 ### P1 - Important
 - TEUWEN lot mapping: logique lot.owner_id + distribution_keys dans reports.py et pdf_decompte.py (RECURRENT)
+- Import Wizard: audit complet des inject_syndic dans toutes les fonctions commit_* (risque residuel du refactoring sed)
 
 ### P2-P5 - Futur
 - P2: Export Journaux CSV/PDF avec selecteur de dates
