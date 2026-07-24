@@ -362,13 +362,31 @@ def create_suppliers_router(db):
         if not is_super:
             if copro_id not in (allowed_copros or []):
                 raise HTTPException(403, "Vous ne pouvez attribuer ce fournisseur qu'a une de vos ACPs")
-        # iter90it : BCE plus obligatoire depuis le Chinese Wall strict (iter90is).
-        # Le cloisonnement per-ACP evite deja les doublons globaux. Le BCE peut
-        # etre enrichi plus tard via le KBO lookup (iter90ip/iq).
+        # ---- Dedup syndic-wide par BCE ----
         name = (data.name or "").strip()
         if not name:
             raise HTTPException(400, "Le nom du fournisseur est obligatoire.")
-        # Check anti-doublon : BCE/TVA, nom et IBAN normalises (scope ACP)
+        from syndic_scope import inject_syndic
+        sid = getattr(request.state, "syndic_id", None)
+        if not sid and copro_id:
+            from syndic_scope import get_syndic_id_for_copro
+            sid = await get_syndic_id_for_copro(db, copro_id)
+
+        bce = (data.bce_number or "").strip()
+        if sid and bce:
+            existing_sup = await db.suppliers.find_one(
+                {"syndic_id": sid, "bce_number": bce}, {"_id": 0}
+            )
+            if existing_sup:
+                # Rattacher a la nouvelle ACP en creant le tier_account
+                # Note: assign_supplier_account is imported at module level
+                await assign_supplier_account(db, existing_sup, copro_id)
+                refreshed = await db.suppliers.find_one(
+                    {"id": existing_sup["id"]}, {"_id": 0}
+                )
+                return {**refreshed, "_reused": True}
+
+        # Check anti-doublon ACP (BCE/TVA, nom, IBAN)
         dup = await find_duplicate_supplier(
             db,
             name=data.name,
@@ -391,8 +409,6 @@ def create_suppliers_router(db):
                 f"({existing.get('name', '')} - {dup['value']}). "
                 f"Utilisez l'existant ou modifiez les criteres uniques.",
             )
-        # iter85g : detection homonymes (Levenshtein >= 0.80) - bloquant sauf
-        # si l'utilisateur a confirme via force_create_despite_similar=True
         if not data.force_create_despite_similar:
             similar = await find_similar_suppliers(db, name=data.name, copro_id=copro_id)
             if similar:
@@ -406,9 +422,9 @@ def create_suppliers_router(db):
         doc = {
             "id": str(uuid.uuid4()),
             **data.model_dump(exclude={"force_create_despite_similar"}),
+            "syndic_id": sid or "",
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
-        from syndic_scope import inject_syndic
         inject_syndic(doc, request)
         await db.suppliers.insert_one(doc)
         if copro_id:
@@ -430,8 +446,9 @@ def create_suppliers_router(db):
             ]
           }
         """
+        from syndic_scope import syndic_query
         is_super, allowed_copros = await _get_user_scope(request)
-        s = await db.suppliers.find_one({"id": supplier_id}, {"_id": 0})
+        s = await db.suppliers.find_one({"id": supplier_id, **syndic_query(request)}, {"_id": 0})
         if not s:
             raise HTTPException(404, "Fournisseur introuvable")
         if not is_super and not _supplier_in_scope(s, allowed_copros):
@@ -488,6 +505,7 @@ def create_suppliers_router(db):
 
     @router.put("/{supplier_id}")
     async def update_supplier(supplier_id: str, data: SupplierInput, request: Request):
+        from syndic_scope import syndic_query
         is_super, allowed_copros = await _get_user_scope(request)
         existing = await db.suppliers.find_one({"id": supplier_id}, {"_id": 0})
         if not existing:
@@ -552,13 +570,29 @@ def create_suppliers_router(db):
 
     @router.delete("/{supplier_id}")
     async def delete_supplier(supplier_id: str, request: Request):
-        is_super, allowed_copros = await _get_user_scope(request)
         from syndic_scope import syndic_query
+        is_super, allowed_copros = await _get_user_scope(request)
         existing = await db.suppliers.find_one({"id": supplier_id, **syndic_query(request)}, {"_id": 0})
         if not existing:
             raise HTTPException(404, "Fournisseur non trouve")
         if not is_super and not _supplier_in_scope(existing, allowed_copros):
             raise HTTPException(404, "Fournisseur non trouve")
+        # Garde-fous cascade : bloquer si le fournisseur est reference
+        refs = {
+            "invoices": await db.invoices.count_documents({"supplier_id": supplier_id}),
+            "bank_txs": await db.bank_transactions.count_documents({
+                "matched_to.type": "supplier", "matched_to.id": supplier_id,
+            }),
+            "journal_entries": await db.journal_entries.count_documents({
+                "lines.third_party_id": supplier_id,
+            }),
+        }
+        if any(refs.values()):
+            raise HTTPException(
+                409,
+                f"Suppression bloquee : fournisseur reference dans {refs}. "
+                f"Fusionnez avec un autre fournisseur ou supprimez les references d'abord.",
+            )
         result = await db.suppliers.delete_one({"id": supplier_id})
         if result.deleted_count == 0:
             raise HTTPException(404, "Fournisseur non trouve")
@@ -652,12 +686,11 @@ def create_suppliers_router(db):
 
         Apres absorption, les remove_ids sont supprimes.
         """
+        from syndic_scope import syndic_query
         is_super, allowed_copros = await _get_user_scope(request)
-        keep = await db.suppliers.find_one({"id": data.keep_id}, {"_id": 0})
+        keep = await db.suppliers.find_one({"id": data.keep_id, **syndic_query(request)}, {"_id": 0})
         if not keep:
             raise HTTPException(404, f"Fournisseur a conserver introuvable : {data.keep_id}")
-        if not is_super and not _supplier_in_scope(keep, allowed_copros):
-            raise HTTPException(403, "Acces refuse au fournisseur a conserver")
 
         if data.keep_id in data.remove_ids:
             raise HTTPException(400, "keep_id ne peut pas etre dans remove_ids")
@@ -665,7 +698,7 @@ def create_suppliers_router(db):
             raise HTTPException(400, "Aucun fournisseur a fusionner")
 
         removes = await db.suppliers.find(
-            {"id": {"$in": data.remove_ids}}, {"_id": 0}
+            {"id": {"$in": data.remove_ids}, **syndic_query(request)}, {"_id": 0}
         ).to_list(50)
         found_ids = {r["id"] for r in removes}
         missing = set(data.remove_ids) - found_ids

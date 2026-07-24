@@ -373,6 +373,7 @@ def create_properties_router(db):
         address: str, postal_code: str, city: str,
         copro_id: str = "", exclude_id: Optional[str] = None,
         auxiliary_code: str = "",
+        syndic_id_filter: str = "",
     ) -> Optional[dict]:
         """Detecte un doublon de proprietaire. iter90gk : distingue les
         doublons STRICTS (email/telephone/BCE/auxiliary_code = bloquants)
@@ -412,8 +413,8 @@ def create_properties_router(db):
             base_query["copropriete_ids"] = copro_id
         if exclude_id:
             base_query["id"] = {"$ne": exclude_id}
-        from syndic_scope import syndic_query
-        base_query.update(syndic_query(request))
+        if syndic_id_filter:
+            base_query["syndic_id"] = syndic_id_filter
         candidates = await db.owners.find(base_query, {"_id": 0}).to_list(5000)
         # 1er passage : cherche un doublon STRICT (email/telephone/BCE/aux)
         for o in candidates:
@@ -590,7 +591,7 @@ def create_properties_router(db):
         return owners
 
     @router.post("/owners")
-    async def create_owner(data: OwnerInput, reuse_on_duplicate: bool = False, force_create_despite_homonym: bool = False):
+    async def create_owner(data: OwnerInput, request: Request, reuse_on_duplicate: bool = False, force_create_despite_homonym: bool = False):
         """Cree un proprietaire.
 
         iter90gi : `reuse_on_duplicate=true` -> si l'anti-doublon detecte un
@@ -616,6 +617,7 @@ def create_properties_router(db):
             city=data.city or "",
             copro_id=data.copropriete_id or "",
             auxiliary_code=data.auxiliary_code or "",
+            syndic_id_filter=getattr(request.state, "syndic_id", "") or "",
         )
         if dup:
             existing = dup["owner"]
@@ -666,8 +668,40 @@ def create_properties_router(db):
                         f"personne -> repassez avec force_create_despite_homonym=true. Sinon, "
                         f"utilisez le proprietaire existant.",
                     )
+        # ---- Dedup syndic-wide par email/phone ----
+        import re as _re
+        from syndic_scope import inject_syndic, syndic_query
+        c_email = (data.email or "").strip().lower()
+        c_phone = _re.sub(r"[^0-9+]", "", (data.phone or ""))
+        sid = getattr(request.state, "syndic_id", None)
+        # Fallback superadmin : resoudre depuis la copropriete
+        if not sid and data.copropriete_id:
+            from syndic_scope import get_syndic_id_for_copro
+            sid = await get_syndic_id_for_copro(db, data.copropriete_id)
+
+        existing = None
+        if sid and c_email:
+            existing = await db.owners.find_one(
+                {"syndic_id": sid, "canonical_email": c_email}, {"_id": 0}
+            )
+        if not existing and sid and c_phone:
+            existing = await db.owners.find_one(
+                {"syndic_id": sid, "canonical_phone": c_phone}, {"_id": 0}
+            )
+
+        if existing:
+            # Rattacher a la nouvelle ACP sans creer de doublon
+            upd_sets = {}
+            if data.copropriete_id:
+                await db.owners.update_one(
+                    {"id": existing["id"]},
+                    {"$addToSet": {"copropriete_ids": data.copropriete_id}},
+                )
+                await assign_owner_accounts(db, existing, data.copropriete_id)
+            refreshed = await db.owners.find_one({"id": existing["id"]}, {"_id": 0})
+            return {**refreshed, "_reused": True}
+
         # If a VCS code is provided (e.g. from an Optipro import), reuse it
-        # to preserve the legacy reference. Otherwise auto-generate one.
         vcs_code = (data.vcs_code or "").strip()
         if not vcs_code:
             vcs_code = await generate_vcs(db)
@@ -696,9 +730,11 @@ def create_properties_router(db):
             "iban": (data.iban or "").strip(),
             "bce_number": (data.bce_number or "").strip(),
             "copropriete_id": data.copropriete_id,
+            "canonical_email": c_email,
+            "canonical_phone": c_phone,
+            "syndic_id": sid or "",
             "created_at": datetime.now(timezone.utc).isoformat()
         }
-        from syndic_scope import inject_syndic
         inject_syndic(doc, request)
         await db.owners.insert_one(doc)
         if data.copropriete_id:
@@ -766,17 +802,17 @@ def create_properties_router(db):
         if not vcs:
             return []
         is_super, allowed_copros = await _get_user_scope(request)
+        from syndic_scope import syndic_query
         clean = vcs.replace("+", "").replace("/", "").replace(" ", "").strip()
-        results = await db.owners.find(
-            {"$or": [
-                {"vcs_code": {"$regex": vcs.replace("+", "\\+"), "$options": "i"}},
-                {"vcs_digits": clean},
-                {"name": {"$regex": vcs, "$options": "i"}},
-                {"last_name": {"$regex": vcs, "$options": "i"}},
-                {"first_name": {"$regex": vcs, "$options": "i"}},
-            ]},
-            {"_id": 0}
-        ).to_list(50)
+        vcs_q = {"$or": [
+            {"vcs_code": {"$regex": vcs.replace("+", "\\+"), "$options": "i"}},
+            {"vcs_digits": clean},
+            {"name": {"$regex": vcs, "$options": "i"}},
+            {"last_name": {"$regex": vcs, "$options": "i"}},
+            {"first_name": {"$regex": vcs, "$options": "i"}},
+        ]}
+        vcs_q.update(syndic_query(request))
+        results = await db.owners.find(vcs_q, {"_id": 0}).to_list(50)
         if is_super:
             return results[:20]
         allowed_owner_ids = await _allowed_owner_ids(allowed_copros)
@@ -814,6 +850,7 @@ def create_properties_router(db):
             city=data.city or "",
             copro_id=copro_id_check,
             exclude_id=owner_id,
+            syndic_id_filter=getattr(request.state, "syndic_id", "") or "",
         )
         if dup:
             field_label = {
@@ -835,6 +872,7 @@ def create_properties_router(db):
         old_email = ((existing_doc or {}).get("email") or "").lower().strip()
         new_email = ((data.email or "").lower().strip())
         email_changed = bool(new_email) and (old_email != new_email)
+        from syndic_scope import syndic_query
         result = await db.owners.update_one(
             {"id": owner_id, **syndic_query(request)},
             {"$set": {
@@ -843,6 +881,8 @@ def create_properties_router(db):
                 "country": data.country, "email": data.email, "email2": data.email2,
                 "phone": data.phone, "phone2": data.phone2,
                 "bce_number": (data.bce_number or "").strip(),
+                "canonical_email": (data.email or "").strip().lower(),
+                "canonical_phone": __import__("re").sub(r"[^0-9+]", "", (data.phone or "")),
             }}
         )
         if result.matched_count == 0:
@@ -877,8 +917,15 @@ def create_properties_router(db):
     @router.delete("/owners/{owner_id}")
     async def delete_owner(owner_id: str, request: Request):
         is_super, allowed_copros = await _get_user_scope(request)
+        from syndic_scope import syndic_query
         if not is_super and not await _owner_in_scope(owner_id, allowed_copros):
             raise HTTPException(404, "Proprietaire non trouve")
+        # Verifier que l'owner appartient au syndic
+        sq = syndic_query(request)
+        if sq:
+            owner_check = await db.owners.find_one({"id": owner_id, **sq})
+            if not owner_check:
+                raise HTTPException(404, "Proprietaire non trouve")
 
         # === Garde-fou : refuser la suppression si des ecritures comptables ===
         # === ou des donnees liees existent (securite comptable / anti-orphelins).
@@ -938,6 +985,7 @@ def create_properties_router(db):
         """
         from server import get_current_user, is_superadmin_only
         from tier_accounts import assign_owner_accounts
+        from syndic_scope import syndic_query
         user = await get_current_user(request)
         role = user.get("role", "")
         is_super = is_superadmin_only(role)
@@ -947,7 +995,7 @@ def create_properties_router(db):
             raise HTTPException(400, "copropriete_id requis")
         if not is_super and target_copro not in allowed:
             raise HTTPException(403, "Acces refuse a cette ACP (chinese wall)")
-        owner = await db.owners.find_one({"id": owner_id}, {"_id": 0})
+        owner = await db.owners.find_one({"id": owner_id, **syndic_query(request)}, {"_id": 0})
         if not owner:
             raise HTTPException(404, "Proprietaire non trouve")
         # Idempotent : assign_owner_accounts gere le $addToSet sur copropriete_ids
@@ -2215,7 +2263,7 @@ def create_properties_router(db):
         }
 
     @router.post("/lots/{lot_id}/mutate")
-    async def mutate_lot(lot_id: str, data: LotMutationInput):
+    async def mutate_lot(lot_id: str, data: LotMutationInput, request: Request):
         """Mutation d'un lot (vente entre proprietaires). Calcule et passe l'OD
         comptable de transfert.
 

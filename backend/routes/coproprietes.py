@@ -490,9 +490,36 @@ def create_coproprietes_router(db):
         for col in ["lots", "tenants", "distribution_keys", "invoices",
                     "journal_entries", "bank_statements", "bank_transactions",
                     "fund_calls", "meters", "documents", "document_categories",
-                    "fiscal_years", "budgets", "pcmn_accounts"]:
+                    "fiscal_years", "budgets", "pcmn_accounts",
+                    "expense_categories", "mutations", "regularizations"]:
             await db[col].delete_many({"copropriete_id": copro_id})
-        return {"message": "Copropriete supprimee (cascade)"}
+        # Step F : cascade deduplication — delier les proprietaires de cette ACP
+        # 1) $pull copro_id de owners.copropriete_ids
+        await db.owners.update_many(
+            {"copropriete_ids": copro_id},
+            {"$pull": {"copropriete_ids": copro_id}},
+        )
+        # 2) $unset tier_accounts pour cette ACP (cle dynamique)
+        await db.owners.update_many(
+            {f"tier_accounts.{copro_id}": {"$exists": True}},
+            {"$unset": {f"tier_accounts.{copro_id}": ""}},
+        )
+        # 3) Supprimer les fournisseurs ACP-scoped (chaque fournisseur est LOCAL a une ACP)
+        await db.suppliers.delete_many({"copropriete_id": copro_id})
+        # 4) Marquer les proprietaires orphelins (copropriete_ids vide apres $pull)
+        await db.owners.update_many(
+            {"copropriete_ids": {"$size": 0}},
+            {"$set": {"is_orphan": True}},
+        )
+        # Aussi marquer les owners qui n'ont plus du tout copropriete_ids
+        await db.owners.update_many(
+            {"$or": [
+                {"copropriete_ids": {"$exists": False}},
+                {"copropriete_ids": None},
+            ]},
+            {"$set": {"is_orphan": True, "copropriete_ids": []}},
+        )
+        return {"message": "Copropriete supprimee (cascade + deduplication owners/suppliers)"}
 
     @router.post("/{copro_id}/archive")
     async def archive_copropriete(copro_id: str, request: Request):

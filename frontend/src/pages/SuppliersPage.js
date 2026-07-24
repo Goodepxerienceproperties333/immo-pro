@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import api from '@/lib/api';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
@@ -20,6 +20,9 @@ export default function SuppliersPage() {
   const [similarDialog, setSimilarDialog] = useState(null); // {similar: [...], pendingForm}
   // iter90gk : candidats BCE cousins pour rattachement (fiche sans BCE)
   const [bceCandidates, setBceCandidates] = useState([]);
+  // Step E : BCE inline duplicate check
+  const [bceDuplicate, setBceDuplicate] = useState(null);
+  const bceCheckTimer = useRef(null);
 
   const load = useCallback(async () => {
     // iter90iy : Chinese Wall strict - copropriete_id obligatoire cote UI.
@@ -44,8 +47,50 @@ export default function SuppliersPage() {
     return () => { cancelled = true; };
   }, [selectedCopro]);
 
+  // Step E : debounced BCE inline duplicate check (300ms)
+  const checkBceDuplicate = useCallback((bceValue) => {
+    if (bceCheckTimer.current) clearTimeout(bceCheckTimer.current);
+    const cleaned = (bceValue || '').trim().replace(/[.\s]/g, '');
+    if (!cleaned || cleaned.length < 6 || editing) {
+      setBceDuplicate(null);
+      return;
+    }
+    bceCheckTimer.current = setTimeout(async () => {
+      try {
+        const copro = selectedCopro || '';
+        const { data } = await api.post('/suppliers/check-duplicate', {
+          name: form.name || '',
+          bce_number: cleaned,
+          vat_number: '',
+          iban: '',
+          copropriete_id: copro,
+        });
+        if (data.exact && data.exact.field === 'bce_number') {
+          setBceDuplicate(data.exact.supplier);
+        } else {
+          setBceDuplicate(null);
+        }
+      } catch {
+        setBceDuplicate(null);
+      }
+    }, 300);
+  }, [editing, selectedCopro, form.name]);
+
+  const handleBceChange = (e) => {
+    const val = e.target.value;
+    setForm({ ...form, bce_number: val });
+    checkBceDuplicate(val);
+  };
+
+  const handleUseBceDuplicate = (dup) => {
+    // Ouvre la fiche du fournisseur existant en mode edition
+    openEdit(dup);
+    setBceDuplicate(null);
+    toast.success(`Fournisseur existant "${dup.name}" selectionne`);
+  };
+
   const filtered = suppliers;
-  const openCreate = () => { setEditing(null); setForm({ name:'', vat_number:'', bce_number:'', address:'', postal_code:'', city:'', country:'Belgique', phone:'', email:'', iban:'', bic:'', default_account:'', notes:'' }); setBceCandidates([]); setDialogOpen(true); };
+  const openCreate = () => { setEditing(null); setForm({ name:'', vat_number:'', bce_number:'', address:'', postal_code:'', city:'', country:'Belgique', phone:'', email:'', iban:'', bic:'', default_account:'', notes:'' }); setBceCandidates([]); setBceDuplicate(null); setDialogOpen(true); };
   const openEdit = async (s) => {
     setEditing(s);
     setForm({ name:s.name, vat_number:s.vat_number||'', bce_number:s.bce_number||'', address:s.address||'', postal_code:s.postal_code||'', city:s.city||'', country:s.country||'Belgique', phone:s.phone||'', email:s.email||'', iban:s.iban||'', bic:s.bic||'', default_account:s.default_account||'', notes:s.notes||'' });
@@ -290,8 +335,41 @@ export default function SuppliersPage() {
             )}
             <div className="grid grid-cols-2 gap-4">
               <div><label className="form-label">Nom *</label><Input value={form.name} onChange={e => setForm({...form, name: e.target.value})} data-testid="supplier-name" /></div>
-              <div><label className="form-label">N BCE *</label><Input value={form.bce_number} onChange={e => setForm({...form, bce_number: e.target.value})} placeholder="BE0123456789" data-testid="supplier-bce" required /></div>
+              <div><label className="form-label">N BCE *</label><Input value={form.bce_number} onChange={handleBceChange} placeholder="BE0123456789" data-testid="supplier-bce" required /></div>
             </div>
+            {/* Step E : Inline BCE duplicate warning */}
+            {bceDuplicate && !editing && (
+              <div className="bg-yellow-50 border border-yellow-300 rounded-md p-3" data-testid="bce-duplicate-warning">
+                <div className="flex items-start gap-2 mb-2">
+                  <AlertTriangle size={16} className="text-yellow-600 flex-shrink-0 mt-0.5" />
+                  <div className="font-semibold text-yellow-800 text-sm">Doublon BCE detecte !</div>
+                </div>
+                <div className="bg-white rounded border border-yellow-200 p-3">
+                  <div className="flex items-start justify-between gap-3 flex-wrap">
+                    <div className="flex-1 min-w-0">
+                      <div className="text-yellow-800 font-semibold text-sm">{bceDuplicate.name}</div>
+                      <div className="text-xs text-slate-600 mt-1 space-y-0.5">
+                        {bceDuplicate.bce_number && <div>BCE : <span className="font-mono">{bceDuplicate.bce_number}</span></div>}
+                        {bceDuplicate.vat_number && <div>TVA : <span className="font-mono">{bceDuplicate.vat_number}</span></div>}
+                        {bceDuplicate.city && <div>Ville : {bceDuplicate.city}</div>}
+                        {bceDuplicate.iban && <div>IBAN : <span className="font-mono">{bceDuplicate.iban}</span></div>}
+                      </div>
+                    </div>
+                    <Button
+                      size="sm"
+                      onClick={() => handleUseBceDuplicate(bceDuplicate)}
+                      className="bg-yellow-600 hover:bg-yellow-700 text-white whitespace-nowrap"
+                      data-testid="use-bce-duplicate-btn"
+                    >
+                      Utiliser ce fournisseur
+                    </Button>
+                  </div>
+                </div>
+                <div className="text-[11px] text-yellow-700 italic mt-2 pl-1">
+                  Un fournisseur avec le meme BCE existe deja. Cliquez sur &laquo;&nbsp;Utiliser ce fournisseur&nbsp;&raquo; pour ouvrir sa fiche, ou modifiez le BCE.
+                </div>
+              </div>
+            )}
             <div className="grid grid-cols-2 gap-4">
               <div><label className="form-label">N TVA (si different du BCE)</label><Input value={form.vat_number} onChange={e => setForm({...form, vat_number: e.target.value})} placeholder="BE0123.456.789" data-testid="supplier-vat" /></div>
               <div className="text-xs text-slate-500 pt-6">

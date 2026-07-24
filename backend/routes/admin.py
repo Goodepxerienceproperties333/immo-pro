@@ -3536,4 +3536,13 @@ def create_admin_router(db):
         return {"status": "ok", **stats}
 
 
+    @router.post("/migrate/dedup-syndic")
+    async def migrate_dedup_syndic(request: Request):
+        """Migration one-shot : backfill syndic_id, canonical fields, fusion doublons, index."""
+        await _get_superadmin_only(request)
+        from scripts.migrate_dedup_syndic import run_migration
+        stats = await run_migration(db)
+        return {"status": "ok", **stats}
+
+
     return router

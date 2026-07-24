@@ -27,6 +27,7 @@ import {
   Building2, Save, ImageIcon, FileText, Upload, CheckCircle2,
   Info, Mail, Send, Lock, Loader2, AlertTriangle,
 } from 'lucide-react';
+import { TeamSection } from '@/components/TeamSection';
 
 export default function MonBureauPage() {
   const [cfg, setCfg] = useState({});
@@ -584,6 +585,9 @@ export default function MonBureauPage() {
               )}
             </CardContent>
           </Card>
+
+          {/* Section equipe / collaborateurs */}
+          <TeamSection />
 
           {/* Mentions legales */}
           <Card>

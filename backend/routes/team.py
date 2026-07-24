@@ -54,9 +54,10 @@ def create_team_router(db):
         if role in ("superadmin", "admin"):
             # Le superadmin agit comme syndic de SA propre agence par defaut.
             # Il peut aussi consulter la vue globale via le parametre `scope=all`.
-            return user, user.get("id"), True
+            # Note: get_current_user returns _id (string), not id
+            return user, user.get("_id"), True
         if role == "syndic":
-            return user, user.get("id"), False
+            return user, user.get("_id"), False
         if role == "gestionnaire":
             parent = user.get("parent_syndic_id")
             if not parent:
