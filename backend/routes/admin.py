@@ -3360,7 +3360,9 @@ def create_admin_router(db):
 
         deleted_counts = {}
 
-        # --- 1. Collecter TOUS les owner_ids lies aux ACPs (via lots) ---
+        # --- 1. Collecter TOUS les owner_ids lies aux ACPs ---
+
+        # 1a. Via lots.owner_id et lots.owner_ids
         owner_ids_from_lots = set()
         for cid in copro_ids:
             ids1 = await db.lots.distinct("owner_id", {"copropriete_id": cid})
@@ -3368,15 +3370,28 @@ def create_admin_router(db):
             owner_ids_from_lots.update(i for i in ids1 if i)
             owner_ids_from_lots.update(i for i in ids2 if i)
 
-        # Owner IDs lies via copropriete_ids (array) sur la fiche owner
+        # 1b. Via copropriete_ids (array) sur la fiche owner
         owner_ids_from_field = set(await db.owners.distinct(
             "id", {"copropriete_ids": {"$in": copro_ids}}
         ))
-        # Owner IDs lies via copropriete_id (singulier) sur la fiche owner
+        # 1c. Via copropriete_id (singulier) sur la fiche owner
         owner_ids_from_singular = set(await db.owners.distinct(
             "id", {"copropriete_id": {"$in": copro_ids}}
         ))
-        all_owner_ids = owner_ids_from_lots | owner_ids_from_field | owner_ids_from_singular
+        # 1d. Via import_session_id (owners importes sans copropriete_id direct)
+        session_ids = await db.import_sessions.distinct(
+            "id", {"copropriete_id": {"$in": copro_ids}}
+        )
+        owner_ids_from_sessions = set()
+        if session_ids:
+            owner_ids_from_sessions = set(await db.owners.distinct(
+                "id", {"import_session_id": {"$in": session_ids}}
+            ))
+
+        all_owner_ids = (
+            owner_ids_from_lots | owner_ids_from_field
+            | owner_ids_from_singular | owner_ids_from_sessions
+        )
 
         # --- 2. Supprimer les owners (union de tous les criteres) ---
         if all_owner_ids:
@@ -3387,9 +3402,15 @@ def create_admin_router(db):
                 {"owner_id": {"$in": list(all_owner_ids)}}
             )
             deleted_counts["owner_bank_accounts"] = r2.deleted_count
+            # Supprimer les audits d'acces proprietaire
+            r3 = await db.owner_access_audit.delete_many(
+                {"owner_id": {"$in": list(all_owner_ids)}}
+            )
+            deleted_counts["owner_access_audit"] = r3.deleted_count
         else:
             deleted_counts["owners"] = 0
             deleted_counts["owner_bank_accounts"] = 0
+            deleted_counts["owner_access_audit"] = 0
 
         # --- 3. Collections standard avec copropriete_id ---
         COPRO_COLLECTIONS = [
@@ -3415,12 +3436,21 @@ def create_admin_router(db):
             {"$set": {"copropriete_ids": []}},
         )
 
-        # --- 6. Purger les gestionnaires/owners (team) rattaches a ce syndic ---
+        # --- 6. Purger les comptes utilisateur lies ---
+        # 6a. Gestionnaires rattaches via syndic_user_id
         team_result = await db.users.delete_many({
             "syndic_user_id": user_id,
             "role": {"$in": ["gestionnaire", "owner"]},
         })
         deleted_counts["team_users"] = team_result.deleted_count
+
+        # 6b. Comptes owner (role=owner) lies aux ACPs purgees
+        #     Ces users n'ont PAS de syndic_user_id mais ont copropriete_ids
+        owner_users_result = await db.users.delete_many({
+            "role": "owner",
+            "copropriete_ids": {"$in": copro_ids},
+        })
+        deleted_counts["owner_user_accounts"] = owner_users_result.deleted_count
 
         total = sum(deleted_counts.values())
         return {

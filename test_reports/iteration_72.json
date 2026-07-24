@@ -1,0 +1,105 @@
+{
+  "summary": "Iteration 72 testing completed - Purge Syndic 5th source (import_session_id) and owner user account cleanup verified. All 18 purge-specific tests passed. Features working correctly.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter72_purge_5th_source.py",
+    "/app/backend/tests/test_iter72_purge_e2e.py",
+    "/app/backend/tests/test_iter72_purge_deep_integration.py",
+    "/app/test_reports/pytest/iter72_purge_5th_source.xml",
+    "/app/test_reports/pytest/iter72_purge_e2e.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "PURGE SYNDIC 5th SOURCE (admin.py lines 3325-3461):",
+    "1. Owner collection via lots.owner_id: VERIFIED - line 3368",
+    "2. Owner collection via lots.owner_ids (array): VERIFIED - line 3369",
+    "3. Owner collection via owners.copropriete_ids (array): VERIFIED - lines 3374-3376",
+    "4. Owner collection via owners.copropriete_id (singular): VERIFIED - lines 3378-3380",
+    "5. Owner collection via owners.import_session_id (NEW 5th source): VERIFIED - lines 3382-3389",
+    "   - Fetches import_sessions.id where copropriete_id matches purged ACPs",
+    "   - Then fetches owners.id where import_session_id matches those sessions",
+    "",
+    "OWNER ACCESS AUDIT DELETION:",
+    "- owner_access_audit.delete_many({'owner_id': {'$in': all_owner_ids}}): VERIFIED - lines 3406-3409",
+    "- Included in deleted_counts response: VERIFIED - line 3409",
+    "",
+    "OWNER USER ACCOUNTS DELETION:",
+    "- users.delete_many({'role': 'owner', 'copropriete_ids': {'$in': copro_ids}}): VERIFIED - lines 3447-3453",
+    "- These are users created via grant-access (no syndic_user_id, with copropriete_ids)",
+    "- Included in deleted_counts response as 'owner_user_accounts': VERIFIED - line 3453",
+    "",
+    "LIST OWNERS WITH IMPORT_SESSION_ID (properties.py):",
+    "- _allowed_owner_ids helper fetches owners via import_session_id: VERIFIED - lines 302-316",
+    "- list_owners endpoint includes import-session-linked owners: VERIFIED - lines 527-546"
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter72_purge_5th_source.py",
+    "/app/backend/tests/test_iter72_purge_e2e.py",
+    "/app/backend/tests/test_iter72_purge_deep_integration.py"
+  ],
+  "success_rate": {
+    "backend": "100% (18/18 purge-specific tests passed)"
+  },
+  "seed_data_creation": "Tests create temporary syndic users, coproprietes, owners, and lots for testing, then clean up after each test",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Iteration 72 verified the purge syndic fix with 5th source (import_session_id). The purge endpoint now correctly: (1) collects owner_ids from 5 sources including import_session_id, (2) deletes owner_access_audit entries, (3) deletes users with role=owner linked to purged ACPs, (4) includes owner_user_accounts and owner_access_audit in response counts. The list_owners endpoint also correctly fetches owners via import_session_id.",
+  "features_tested": {
+    "purge_5_sources_owner_collection": {
+      "status": "PASS",
+      "details": "Owner IDs collected from: lots.owner_id, lots.owner_ids, owners.copropriete_ids, owners.copropriete_id, owners.import_session_id"
+    },
+    "purge_owner_access_audit_deletion": {
+      "status": "PASS",
+      "details": "owner_access_audit entries deleted for purged owners"
+    },
+    "purge_owner_user_accounts_deletion": {
+      "status": "PASS",
+      "details": "Users with role=owner and copropriete_ids matching purged ACPs are deleted"
+    },
+    "purge_response_includes_new_counts": {
+      "status": "PASS",
+      "details": "Response includes owner_user_accounts and owner_access_audit in deleted counts"
+    },
+    "list_owners_includes_import_session_linked": {
+      "status": "PASS",
+      "details": "GET /api/owners correctly fetches owners linked via import_session_id"
+    },
+    "purge_requires_superadmin": {
+      "status": "PASS",
+      "details": "Non-superadmin gets 401/403"
+    },
+    "purge_requires_email_confirmation": {
+      "status": "PASS",
+      "details": "Wrong email returns 400"
+    },
+    "purge_nonexistent_user_404": {
+      "status": "PASS",
+      "details": "Non-existent user_id returns 404"
+    },
+    "purge_syndic_without_acps": {
+      "status": "PASS",
+      "details": "Syndic without ACPs returns appropriate message"
+    },
+    "e2e_full_purge_with_syndic_login": {
+      "status": "PASS",
+      "details": "Full E2E test: create syndic, login as syndic, create ACP (auto-assigned), create owner, grant access, purge, verify all deleted"
+    },
+    "e2e_purge_with_lot_and_owner": {
+      "status": "PASS",
+      "details": "Purge correctly deletes owners linked via lots.owner_id"
+    },
+    "e2e_owners_zero_after_purge": {
+      "status": "PASS",
+      "details": "After purge, owners for the purged ACP are deleted"
+    }
+  }
+}
