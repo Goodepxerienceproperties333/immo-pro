@@ -221,13 +221,13 @@ export default function DashboardPage() {
                 }`} style={{fontFamily:'Chivo,sans-serif'}} data-testid="health-score">{health.score}<span className="text-base text-slate-400">/100</span></div>
               </div>
             </div>
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 mb-3">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
               {[
                 { label: 'Fact > 60j', val: health.stats.invoices_overdue, color: 'text-red-600 bg-red-50 border-red-200' },
                 { label: 'Doublons', val: health.stats.duplicates, color: 'text-orange-600 bg-orange-50 border-orange-200' },
                 { label: 'Orphelins', val: health.stats.orphans, color: 'text-amber-600 bg-amber-50 border-amber-200' },
                 { label: 'Desequilibres', val: health.stats.unbalanced, color: 'text-red-600 bg-red-50 border-red-200' },
-                { label: 'Owners retard', val: health.stats.owners_late, color: 'text-red-600 bg-red-50 border-red-200' },
+                // iter90i2 : KPI "Owners retard" retire (donnees imprecises).
               ].map((s, i) => (
                 <div key={i} className={`text-center border rounded-md py-1.5 ${s.val > 0 ? s.color : 'text-slate-400 bg-slate-50 border-slate-200'}`}>
                   <div className="text-lg font-bold leading-none">{s.val}</div>
@@ -235,14 +235,19 @@ export default function DashboardPage() {
                 </div>
               ))}
             </div>
-            {health.anomalies.length > 0 && (
+            {(() => {
+              // iter90i2 : filtre les anomalies owners_late/pending (donnees imprecises).
+              const filteredAnomalies = (health.anomalies || []).filter(
+                a => a.category !== 'owners_late' && a.category !== 'owners_pending'
+              );
+              return filteredAnomalies.length > 0 && (
               <details className="mt-3" open>
                 <summary className="text-xs font-semibold text-slate-700 cursor-pointer hover:text-slate-900 select-none flex items-center gap-1.5" data-testid="health-anomalies-toggle">
                   <span className="inline-block w-1.5 h-1.5 rounded-full bg-orange-500 animate-pulse" />
-                  Voir les {health.anomalies.length} anomalie(s) detectee(s)
+                  Voir les {filteredAnomalies.length} anomalie(s) detectee(s)
                 </summary>
                 <div className="mt-3 space-y-3">
-                  {health.anomalies.map((a, i) => {
+                  {filteredAnomalies.map((a, i) => {
                     // Configuration visuelle par categorie
                     const catCfg = {
                       invoices_overdue: { icon: '📄', color: 'red', label: 'Factures impayees' },
@@ -290,39 +295,11 @@ export default function DashboardPage() {
                                 </table>
                               </div>
                             )}
-                            {/* Proprietaires en retard */}
-                            {(a.category === 'owners_late' || a.category === 'owners_pending') && (
-                              <div className="overflow-x-auto">
-                                <table className="w-full text-[11px]">
-                                  <thead className="text-slate-500">
-                                    <tr><th className="text-left pb-1">Proprietaire</th><th className="text-right pb-1">Total du</th><th className="text-right pb-1">Nb appels</th><th className="text-right pb-1">Retard max</th></tr>
-                                  </thead>
-                                  <tbody>
-                                    {a.items.map((it, j) => (
-                                      <tr key={j} className="border-t border-slate-100">
-                                        <td className="py-1 truncate max-w-[220px] font-semibold" title={it.owner_name}>{it.owner_name || '(sans nom)'}</td>
-                                        <td className="py-1 text-right font-mono text-red-700">{Number(it.total_due || 0).toFixed(2)} EUR</td>
-                                        <td className="py-1 text-right text-slate-600">{it.calls?.length || 0}</td>
-                                        <td className="py-1 text-right font-semibold text-red-700">{it.max_age}j</td>
-                                      </tr>
-                                    ))}
-                                  </tbody>
-                                </table>
-                                {a.category === 'owners_pending' && (
-                                  <div className="text-[10px] text-orange-700 mt-1.5 italic px-1">
-                                    Ces proprietaires ont un appel non paye MAIS leur solde tier n&apos;est pas debiteur.
-                                    Cause probable : (a) l&apos;ecriture VE de l&apos;appel n&apos;a pas encore ete generee, ou
-                                    (b) un paiement a ete recu mais l&apos;extrait bancaire n&apos;est pas encore lettre.
-                                    Une fois les extraits comptabilises, ils basculeront soit en {'"regles"'} soit en {'"retard confirme"'}.
-                                  </div>
-                                )}
-                                {a.category === 'owners_late' && (
-                                  <div className="text-[10px] text-slate-500 mt-1.5 italic px-1">
-                                    Retard confirme : appel non paye ET compte tier debiteur. Ces montants sont dus.
-                                  </div>
-                                )}
-                              </div>
-                            )}
+                            {/* iter90i2 : tableau "Proprietaires en retard" supprime.
+                                Les donnees sont fausses (comptage brut sans logique
+                                FIFO ni tenir compte du solde tier). L'user prefere
+                                consulter Espace Proprietaire ou Balance des tiers
+                                pour une info fiable. */}
                             {/* Doublons */}
                             {a.category === 'duplicates' && (
                               <ul className="space-y-1">
@@ -380,7 +357,8 @@ export default function DashboardPage() {
                   })}
                 </div>
               </details>
-            )}
+              );
+            })()}
           </>)}
         </CardContent>
       </Card>

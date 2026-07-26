@@ -66,6 +66,22 @@ function ProtectedRoute({ children }) {
   return children;
 }
 
+// iter90i3 : GUARD RBAC - protection stricte des routes reservees aux
+// super-administrateurs. Un syndic, un gestionnaire ou un proprietaire ne
+// doit JAMAIS pouvoir acceder aux pages `/admin/*` (faille de securite).
+// Redirige vers `/` (dashboard syndic) ou `/portal` (proprio) selon le role.
+function RequireSuperadmin({ children }) {
+  const { user, loading } = useAuth();
+  if (loading) return null;
+  if (!user) return <Navigate to="/login" replace />;
+  const isSuper = user.role === 'superadmin' || user.role === 'admin';
+  if (!isSuper) {
+    const fallback = user.role === 'owner' ? '/portal' : '/';
+    return <Navigate to={fallback} replace />;
+  }
+  return children;
+}
+
 function AppRoutes() {
   const { user, loading } = useAuth();
   if (loading) return <div className="flex h-screen items-center justify-center"><div className="h-1 w-48 bg-slate-200 rounded overflow-hidden"><div className="h-full bg-[#022D52] animate-pulse w-1/2" /></div></div>;
@@ -106,27 +122,27 @@ function AppRoutes() {
         <Route path="expense-categories" element={<ExpenseCategoriesPage />} />
         <Route path="distribution-keys" element={<DistributionKeysPage />} />
         <Route path="documents" element={<DocumentsPage />} />
-        <Route path="admin/users" element={<AdminUsersPage />} />
-        <Route path="admin" element={<AdminDashboardPage />} />
-        <Route path="admin/unlock" element={<AdminUnlockEntryPage />} />
-        <Route path="admin/audit" element={<AdminAuditLogPage />} />
-        <Route path="admin/release-notes" element={<AdminReleaseNotesPage />} />
-        <Route path="admin/legal" element={<AdminLegalDocsPage />} />
-        <Route path="admin/rgpd-register" element={<AdminRgpdRegisterPage />} />
-        <Route path="admin/login-history" element={<AdminLoginHistoryPage />} />
+        <Route path="admin/users" element={<RequireSuperadmin><AdminUsersPage /></RequireSuperadmin>} />
+        <Route path="admin" element={<RequireSuperadmin><AdminDashboardPage /></RequireSuperadmin>} />
+        <Route path="admin/unlock" element={<RequireSuperadmin><AdminUnlockEntryPage /></RequireSuperadmin>} />
+        <Route path="admin/audit" element={<RequireSuperadmin><AdminAuditLogPage /></RequireSuperadmin>} />
+        <Route path="admin/release-notes" element={<RequireSuperadmin><AdminReleaseNotesPage /></RequireSuperadmin>} />
+        <Route path="admin/legal" element={<RequireSuperadmin><AdminLegalDocsPage /></RequireSuperadmin>} />
+        <Route path="admin/rgpd-register" element={<RequireSuperadmin><AdminRgpdRegisterPage /></RequireSuperadmin>} />
+        <Route path="admin/login-history" element={<RequireSuperadmin><AdminLoginHistoryPage /></RequireSuperadmin>} />
         <Route path="import-wizard" element={<ImportWizardPage />} />
-        <Route path="admin/role-templates" element={<AdminRoleTemplatesPage />} />
-        <Route path="admin/duplicates" element={<AdminDuplicatesPage />} />
-        <Route path="admin/quality-audit" element={<AdminQualityAuditPage />} />
-        <Route path="admin/mutations-audit" element={<AdminMutationsAuditPage />} />
+        <Route path="admin/role-templates" element={<RequireSuperadmin><AdminRoleTemplatesPage /></RequireSuperadmin>} />
+        <Route path="admin/duplicates" element={<RequireSuperadmin><AdminDuplicatesPage /></RequireSuperadmin>} />
+        <Route path="admin/quality-audit" element={<RequireSuperadmin><AdminQualityAuditPage /></RequireSuperadmin>} />
+        <Route path="admin/mutations-audit" element={<RequireSuperadmin><AdminMutationsAuditPage /></RequireSuperadmin>} />
         <Route path="team" element={<TeamMembersPage />} />
         <Route path="communication" element={<CommunicationPage />} />
         <Route path="communication/history" element={<CommunicationHistoryPage />} />
         <Route path="email-templates" element={<EmailTemplatesPage />} />
-        <Route path="admin/syndic-config" element={<AdminSyndicConfigPage />} />
+        <Route path="admin/syndic-config" element={<RequireSuperadmin><AdminSyndicConfigPage /></RequireSuperadmin>} />
         <Route path="mon-bureau" element={<MonBureauPage />} />
-        <Route path="admin/backups" element={<AdminBackupsPage />} />
-        <Route path="admin/tickets" element={<AdminTicketsPage />} />
+        <Route path="admin/backups" element={<RequireSuperadmin><AdminBackupsPage /></RequireSuperadmin>} />
+        <Route path="admin/tickets" element={<RequireSuperadmin><AdminTicketsPage /></RequireSuperadmin>} />
         <Route path="support/tickets" element={<SyndicTicketsPage />} />
         <Route path="profile" element={<ProfilePage />} />
       </Route>
