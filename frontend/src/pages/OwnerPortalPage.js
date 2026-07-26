@@ -2312,8 +2312,8 @@ function CommunicationDetailDialog({ commId, onClose }) {
                 <span className="text-blue-800 flex-1">
                   Piece jointe : <b>{data.attachment_filename || 'document.pdf'}</b>
                 </span>
-                {/* iter90hs : PJ archivee en GridFS -> consultable et disponible en onglet Documents */}
-                {data.attachment_gridfs_id ? (
+                {/* iter90hs / iter90i1 : PJ archivee en GridFS OU dans documents (fallback) */}
+                {(data.has_attachment_downloadable || data.attachment_gridfs_id) ? (
                   <a
                     href={`${process.env.REACT_APP_BACKEND_URL}/api/owner/communications/${data.id}/attachment/download`}
                     target="_blank" rel="noreferrer"
@@ -2325,7 +2325,7 @@ function CommunicationDetailDialog({ commId, onClose }) {
                   </a>
                 ) : (
                   <span className="text-[10px] text-slate-500 italic">
-                    (retrouvez la aussi dans l&apos;onglet Documents)
+                    (non archivee)
                   </span>
                 )}
               </div>

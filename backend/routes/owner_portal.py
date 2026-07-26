@@ -1303,8 +1303,27 @@ def create_owner_portal_router(db):
                 {"_id": 0, "id": 1, "name": 1},
             ).to_list(100)
             copros_map = {c["id"]: c["name"] for c in copros}
+        # iter90i1 : enrichir has_attachment_downloadable pour fiabiliser
+        # l'affichage du bouton "Consulter" cote proprio (fallback documents
+        # collection si attachment_gridfs_id vide).
+        comm_ids = [c["id"] for c in comms if c.get("id")]
+        docs_by_comm: dict = {}
+        if comm_ids:
+            related_docs = await db.documents.find({
+                "communication_id": {"$in": comm_ids},
+                "owner_id": {"$in": owner_ids},
+                "gridfs_id": {"$exists": True, "$ne": ""},
+            }, {"_id": 0, "communication_id": 1, "id": 1, "filename": 1}).to_list(2000)
+            for d in related_docs:
+                docs_by_comm[d["communication_id"]] = d
         for c in comms:
             c["copropriete_name"] = copros_map.get(c.get("copropriete_id", ""), "")
+            has_gridfs = bool(c.get("attachment_gridfs_id"))
+            has_doc_fallback = c.get("id") in docs_by_comm
+            c["has_attachment_downloadable"] = bool(c.get("has_attachment")) and (has_gridfs or has_doc_fallback)
+            # Expose l'id du document pour lien direct vers /documents
+            if has_doc_fallback:
+                c["archived_document_id"] = docs_by_comm[c["id"]].get("id", "")
         return comms
 
     @router.get("/communications/{comm_id}")
@@ -1347,6 +1366,19 @@ def create_owner_portal_router(db):
             if not has_lot:
                 raise HTTPException(403, "Acces refuse a cette communication")
 
+        # iter90i1 : ajouter has_attachment_downloadable pour la vue detail
+        has_gridfs = bool(comm.get("attachment_gridfs_id"))
+        has_doc_fallback = False
+        if not has_gridfs and comm.get("has_attachment"):
+            doc = await db.documents.find_one({
+                "communication_id": comm_id,
+                "owner_id": {"$in": owner_ids},
+                "gridfs_id": {"$exists": True, "$ne": ""},
+            }, {"_id": 0, "id": 1})
+            if doc:
+                has_doc_fallback = True
+                comm["archived_document_id"] = doc.get("id", "")
+        comm["has_attachment_downloadable"] = bool(comm.get("has_attachment")) and (has_gridfs or has_doc_fallback)
         return comm
 
     # iter90hs : download de la piece jointe d'une communication (archivee en GridFS)
@@ -1388,6 +1420,20 @@ def create_owner_portal_router(db):
             if not has_lot:
                 raise HTTPException(403, "Acces refuse a cette communication")
         gid = comm.get("attachment_gridfs_id", "")
+        filename_dl = comm.get("attachment_filename") or "document.pdf"
+        # iter90i1 : fallback vers documents collection si gridfs_id absent
+        # (communications historiques envoyees avant iter90hs, ou archivage
+        # rate a l'envoi). On cherche un document.communication_id = comm_id
+        # avec owner_id du proprio courant.
+        if not gid:
+            doc = await db.documents.find_one({
+                "communication_id": comm_id,
+                "owner_id": {"$in": owner_ids},
+                "gridfs_id": {"$exists": True, "$ne": ""},
+            }, {"_id": 0, "gridfs_id": 1, "filename": 1})
+            if doc:
+                gid = doc.get("gridfs_id", "")
+                filename_dl = doc.get("filename") or filename_dl
         if not gid:
             raise HTTPException(404, "Cette communication n'a pas de piece jointe archivee")
         from storage.documents_storage import get_documents_storage
@@ -1397,8 +1443,7 @@ def create_owner_portal_router(db):
             data = await storage.download(gid)
         except Exception:
             raise HTTPException(404, "Fichier introuvable dans le stockage")
-        filename = comm.get("attachment_filename") or "document.pdf"
-        safe_name = filename.replace('"', "")
+        safe_name = (filename_dl or "document.pdf").replace('"', "")
         return Response(
             content=data,
             media_type="application/pdf",
