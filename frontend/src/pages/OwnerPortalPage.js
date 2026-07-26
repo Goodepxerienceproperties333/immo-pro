@@ -306,31 +306,78 @@ export default function OwnerPortalPage() {
     [dashboard, selectedAcp],
   );
 
-  // iter90i8 : selecteur de trimestre pour lecture apaisante. Par defaut,
-  // le proprio voit UNIQUEMENT son trimestre courant (pas l'annee complete
-  // qui peut faire peur en debut d'exercice). Peut basculer sur T1..T4 ou
-  // 'year' pour la vue annuelle complete.
-  const currentQuarter = useMemo(() => {
-    const m = new Date().getMonth(); // 0-indexed
-    if (m < 3) return 'T1';
-    if (m < 6) return 'T2';
-    if (m < 9) return 'T3';
-    return 'T4';
-  }, []);
-  const [selectedQuarter, setSelectedQuarter] = useState(currentQuarter);
-  const currentYear = useMemo(() => new Date().getFullYear(), []);
+  // iter90h5 : les trimestres sont calcules a partir du DEBUT DE L'EXERCICE
+  // FISCAL selectionne, pas de l'annee civile. Exemple pour un exercice
+  // 01/03/2026 -> 28/02/2027 : T1=Mar-Mai, T2=Jun-Aout, T3=Sep-Nov, T4=Dec-Fev.
+  const selectedFyMeta = useMemo(() => {
+    return fiscalYears.find(y => y.id === selectedFyId) || null;
+  }, [fiscalYears, selectedFyId]);
 
-  // Bornes du trimestre selectionne (ou de l'annee complete)
-  const quarterBounds = useMemo(() => {
-    if (selectedQuarter === 'year') {
-      return { start: new Date(currentYear, 0, 1), end: new Date(currentYear, 11, 31, 23, 59, 59) };
+  const fyStartDate = useMemo(() => {
+    if (selectedFyMeta?.start_date) {
+      const d = new Date(selectedFyMeta.start_date);
+      if (!isNaN(d.getTime())) return d;
     }
-    const qMap = { T1: 0, T2: 3, T3: 6, T4: 9 };
-    const startMonth = qMap[selectedQuarter] ?? 0;
-    const start = new Date(currentYear, startMonth, 1);
-    const end = new Date(currentYear, startMonth + 3, 0, 23, 59, 59);
-    return { start, end };
-  }, [selectedQuarter, currentYear]);
+    // Fallback : debut annee civile courante
+    return new Date(new Date().getFullYear(), 0, 1);
+  }, [selectedFyMeta]);
+
+  const fyEndDate = useMemo(() => {
+    if (selectedFyMeta?.end_date) {
+      const d = new Date(selectedFyMeta.end_date);
+      if (!isNaN(d.getTime())) return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59);
+    }
+    // Fallback : fin annee civile courante
+    return new Date(new Date().getFullYear(), 11, 31, 23, 59, 59);
+  }, [selectedFyMeta]);
+
+  // Bornes d'un trimestre a partir du debut d'exercice : ajoute (idx*3) mois.
+  const getQuarterBounds = useMemo(() => {
+    return (qId) => {
+      if (qId === 'year') {
+        return { start: fyStartDate, end: fyEndDate };
+      }
+      const qIdx = { T1: 0, T2: 1, T3: 2, T4: 3 }[qId] ?? 0;
+      const s = new Date(fyStartDate.getFullYear(), fyStartDate.getMonth() + qIdx * 3, 1);
+      const e = new Date(fyStartDate.getFullYear(), fyStartDate.getMonth() + qIdx * 3 + 3, 0, 23, 59, 59);
+      return { start: s, end: e };
+    };
+  }, [fyStartDate, fyEndDate]);
+
+  // Trimestre courant = celui contenant `now`, si dans l'exercice, sinon T1.
+  const currentQuarter = useMemo(() => {
+    const now = new Date();
+    for (const q of ['T1', 'T2', 'T3', 'T4']) {
+      const { start, end } = getQuarterBounds(q);
+      if (now >= start && now <= end) return q;
+    }
+    return 'T1';
+  }, [getQuarterBounds]);
+
+  const [selectedQuarter, setSelectedQuarter] = useState('T1');
+  // Recale selectedQuarter sur le trimestre courant quand l'exercice change
+  useEffect(() => {
+    setSelectedQuarter(currentQuarter);
+  }, [currentQuarter]);
+
+  // Labels de mois par trimestre (dynamique selon exercice)
+  const quarterLabels = useMemo(() => {
+    const MONTHS_FR = ['Jan', 'Fev', 'Mar', 'Avr', 'Mai', 'Jun', 'Jul', 'Aou', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return ['T1', 'T2', 'T3', 'T4'].map((q, i) => {
+      const s = new Date(fyStartDate.getFullYear(), fyStartDate.getMonth() + i * 3, 1);
+      const e = new Date(fyStartDate.getFullYear(), fyStartDate.getMonth() + i * 3 + 2, 1);
+      return { id: q, label: q, range: `${MONTHS_FR[s.getMonth()]} - ${MONTHS_FR[e.getMonth()]}` };
+    });
+  }, [fyStartDate]);
+
+  const fyLabel = useMemo(() => {
+    return selectedFyMeta?.name || `${fyStartDate.getFullYear()}`;
+  }, [selectedFyMeta, fyStartDate]);
+
+  // Bornes du trimestre selectionne (ou de l'exercice complet)
+  const quarterBounds = useMemo(() => {
+    return getQuarterBounds(selectedQuarter);
+  }, [selectedQuarter, getQuarterBounds]);
 
   const inQuarter = useMemo(() => {
     return (isoStr) => {
@@ -804,12 +851,13 @@ export default function OwnerPortalPage() {
           </div>
 
           <TabsContent value="situation" className="mt-0 space-y-5" data-testid="situation-tab-content">
-            {/* iter90i8 : selecteur de trimestre - vue apaisante par periode */}
+            {/* iter90h5 : selecteur de trimestre base sur l'exercice fiscal */}
             <QuarterSelector
               selected={selectedQuarter}
               onChange={setSelectedQuarter}
               currentQuarter={currentQuarter}
-              year={currentYear}
+              quarters={quarterLabels}
+              fyLabel={fyLabel}
             />
             <SituationHero
               status={stats.status}
@@ -821,11 +869,11 @@ export default function OwnerPortalPage() {
               totalCharges12m={totalCharges12m}
               pendingCount={quarterAgg.pendingCount}
               copyVcs={copyVcs}
-              periodLabel={selectedQuarter === 'year' ? `Annee ${currentYear}` : `${selectedQuarter} ${currentYear}`}
+              periodLabel={selectedQuarter === 'year' ? `Exercice ${fyLabel}` : `${selectedQuarter} ${fyLabel}`}
               isYearView={selectedQuarter === 'year'}
             />
             <div className="grid grid-cols-1 lg:grid-cols-5 gap-5">
-              <ChargesDonut data={chargesByCategory} total={totalCharges12m} periodLabel={selectedQuarter === 'year' ? `Annee ${currentYear}` : `${selectedQuarter} ${currentYear}`} />
+              <ChargesDonut data={chargesByCategory} total={totalCharges12m} periodLabel={selectedQuarter === 'year' ? `Exercice ${fyLabel}` : `${selectedQuarter} ${fyLabel}`} />
               <UpcomingTimeline items={upcomingWithCountdown} copyVcs={copyVcs} />
             </div>
           </TabsContent>
@@ -1350,17 +1398,10 @@ function StatCard({ icon, label, value, highlight, badge }) {
 // Palette pour donut charges (categoriel, contrastee)
 const CHARGE_COLORS = ['#022D52', '#8B5CF6', '#10B981', '#F59E0B', '#EF4444', '#EC4899', '#06B6D4', '#84CC16', '#F97316', '#6366F1', '#14B8A6', '#A855F7'];
 
-// iter90i8 : selecteur de trimestre - vue apaisante. Le proprio choisit une
-// periode (T1..T4 ou annee complete). Le trimestre courant est mis en avant
-// visuellement (badge "En cours"). Chaque bouton indique le range de dates
-// pour eviter toute ambiguite.
-function QuarterSelector({ selected, onChange, currentQuarter, year }) {
-  const quarters = [
-    { id: 'T1', label: 'T1', range: `Jan - Mar` },
-    { id: 'T2', label: 'T2', range: `Avr - Jun` },
-    { id: 'T3', label: 'T3', range: `Jul - Sep` },
-    { id: 'T4', label: 'T4', range: `Oct - Dec` },
-  ];
+// iter90h5 : selecteur de trimestre - les trimestres suivent l'EXERCICE FISCAL,
+// pas l'annee civile. Les labels sont dynamiques (ex: Mar-Mai pour un FY
+// demarrant le 01/03). Le bouton "annee entiere" affiche le nom de l'exercice.
+function QuarterSelector({ selected, onChange, currentQuarter, quarters, fyLabel }) {
   return (
     <div className="rounded-lg border border-slate-200 bg-white p-3" data-testid="quarter-selector">
       <div className="flex items-center gap-3 flex-wrap">
@@ -1368,7 +1409,7 @@ function QuarterSelector({ selected, onChange, currentQuarter, year }) {
           <CalendarClock size={16} className="text-[#022D52] shrink-0" />
           <div className="flex flex-col">
             <span className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold">Periode</span>
-            <span className="text-[10px] text-slate-400">Cliquez pour changer de vue</span>
+            <span className="text-[10px] text-slate-400">Exercice {fyLabel}</span>
           </div>
         </div>
         <div className="flex items-center gap-1.5 flex-wrap ml-auto">
@@ -1405,9 +1446,9 @@ function QuarterSelector({ selected, onChange, currentQuarter, year }) {
               ? 'bg-[#022D52] text-white border-[#022D52] shadow-sm'
               : 'bg-white text-slate-700 border-slate-200 hover:border-[#022D52]/40 hover:bg-slate-50'}`}
             data-testid="quarter-btn-year"
-            title="Vue de l'annee complete"
+            title="Vue de l'exercice complet"
           >
-            {year} entier
+            {fyLabel} entier
           </button>
         </div>
       </div>
@@ -1606,7 +1647,7 @@ function SituationHero({ status, balance, totalCalled, totalPaid, nextCall, tota
             <div className="flex items-center gap-2">
               <TrendingUp size={20} className="text-[#022D52]" />
               <span className="text-[11px] uppercase tracking-wider font-semibold text-[#01213e]">
-                {isYearView ? 'Charges annee' : 'Charges trimestre'}
+                {isYearView ? 'Charges exercice' : 'Charges trimestre'}
               </span>
             </div>
             {periodLabel && (
@@ -1618,7 +1659,7 @@ function SituationHero({ status, balance, totalCalled, totalPaid, nextCall, tota
           <div className="text-3xl font-bold text-blue-800" style={{fontFamily:'Chivo,sans-serif'}}>{fmt(totalCharges12m)}</div>
           <div className="mt-2 text-xs text-slate-600">
             {isYearView
-              ? "Cumul de votre quote-part sur l'annee civile en cours"
+              ? "Cumul de votre quote-part sur l'exercice comptable"
               : "Cumul de votre quote-part sur le trimestre selectionne"}
           </div>
           <div className="mt-3 text-[11px] text-slate-500 pt-2 border-t border-white/60">
