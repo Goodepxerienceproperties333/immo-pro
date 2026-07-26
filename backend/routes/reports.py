@@ -828,31 +828,16 @@ async def compute_bilan_data(db, copropriete_id: str, date_to: Optional[str] = N
     # des Tiers et Journaux).
     entries = _dedup_duplicate_auto_fi_entries(entries)
 
-    # ---- DEDUP AC orphelines (doublons d'import Optipro) ----
-    # Chaque facture (`invoices`) pointe vers UNE ecriture AC via
-    # `journal_entry_id`.  Toute ecriture AC non referencee par une
-    # facture est un doublon orphelin (import Optipro + saisie manuelle
-    # pour la meme charge).  On l'exclut du bilan pour eviter le sur-
-    # comptage des charges (cl. 6) ET des dettes fournisseurs (cl. 440).
-    # NOTE : le filtre ne s'applique QUE si des factures avec journal_entry_id
-    # existent, pour ne pas casser les scenarii de test ou les ACPs legacy
-    # sans factures materialisees.
-    inv_q_bilan = {"copropriete_id": copropriete_id}
-    if date_to_lte:
-        inv_q_bilan["date"] = {"$lte": date_to_lte}
-    invoices_for_bilan = await db.invoices.find(
-        inv_q_bilan, {"_id": 0, "journal_entry_id": 1}
-    ).to_list(50000)
-    valid_ac_je_ids = {
-        inv["journal_entry_id"]
-        for inv in invoices_for_bilan
-        if inv.get("journal_entry_id")
-    }
-    if valid_ac_je_ids:
-        entries = [
-            e for e in entries
-            if e.get("journal_type") != "AC" or e.get("id") in valid_ac_je_ids
-        ]
+    # iter90g2 : Le Bilan lit DESORMAIS uniquement le Grand Livre (journal_entries).
+    # L'ancienne logique whitelistait les AC via `db.invoices.journal_entry_id`
+    # pour retirer les "orphelines" d'import Optipro. Ce whitelist etait fragile :
+    # quand des invoices etaient purgees ou re-importees sans journal_entry_id,
+    # il excluait par erreur des AC valides -> apparition d'un ecart de 1432,98 EUR
+    # sur les charges syndic dans le Bilan PDF. On supprime l'acces a la table
+    # `invoices` : le Grand Livre EST la source de verite comptable.
+    # Les vrais doublons AC doivent etre traites par le script de cleanup
+    # (scripts/cleanup_duplicate_ac_orphans.py) et non par un filtre au read-time
+    # qui masquait leur presence.
 
     # Compute net balance per account (classes 1-5 only)
     balances = {}

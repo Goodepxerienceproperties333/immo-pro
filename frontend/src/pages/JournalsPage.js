@@ -38,6 +38,8 @@ export default function JournalsPage() {
   const [entries, setEntries] = useState([]);
   const [accounts, setAccounts] = useState([]);
   const [categories, setCategories] = useState([]);
+  // iter90g1 : Distribution Keys de l'ACP - dispo dans le selecteur "Nature de depense" par ligne d'OD
+  const [distKeys, setDistKeys] = useState([]);
   const [journalType, setJournalType] = useState('OD');
   const [dialogOpen, setDialogOpen] = useState(false);
   const [viewEntry, setViewEntry] = useState(null);
@@ -65,14 +67,16 @@ export default function JournalsPage() {
     if (filters.amount_min) params.amount_min = filters.amount_min;
     if (filters.amount_max) params.amount_max = filters.amount_max;
     if (filters.third_party_name.trim()) params.third_party_name = filters.third_party_name.trim();
-    const [e, a, c] = await Promise.all([
+    const [e, a, c, dk] = await Promise.all([
       api.get('/accounting/entries', { params }),
       api.get('/accounting/pcmn'),
       api.get('/expense-categories').catch(() => ({ data: [] })),
+      api.get('/distribution-keys').catch(() => ({ data: [] })),
     ]);
     setEntries(e.data);
     setAccounts(a.data);
     setCategories(c.data);
+    setDistKeys(Array.isArray(dk.data) ? dk.data : (dk.data?.keys || []));
   }, [journalType, includeReversals, fyParams.date_from, fyParams.date_to,
       filters.date_from, filters.date_to, filters.search,
       filters.amount_min, filters.amount_max, filters.third_party_name]);
@@ -135,6 +139,7 @@ export default function JournalsPage() {
         credit: l.credit,
         occupant_pct: l.occupant_pct,
         proprietaire_pct: l.proprietaire_pct,
+        distribution_key_id: l.distribution_key_id || null,
       })),
     });
     setPendingAttachment(null);
@@ -164,6 +169,17 @@ export default function JournalsPage() {
         // Compte non-charge : pas de repartition
         lines[i].occupant_pct = null;
         lines[i].proprietaire_pct = null;
+      }
+      // iter90g1 : auto-suggerer la Distribution Key (nature de depense)
+      // - Si compte de charge 6xxx : pre-remplir avec la DK par defaut de l'ACP
+      // - Compte de bilan/produit : effacer
+      if (value && (value.startsWith('6') || value.startsWith('7'))) {
+        if (!lines[i].distribution_key_id) {
+          const dflt = (distKeys || []).find(k => k.is_default) || (distKeys || [])[0];
+          if (dflt) lines[i].distribution_key_id = dflt.id;
+        }
+      } else {
+        lines[i].distribution_key_id = null;
       }
     }
     if (field === 'occupant_pct') {
@@ -601,10 +617,11 @@ export default function JournalsPage() {
             <div>
               <label className="form-label mb-2">Lignes d'ecriture</label>
               <div className="border rounded-md overflow-x-auto">
-                <table className="w-full text-sm min-w-[900px]">
+                <table className="w-full text-sm min-w-[1080px]">
                   <thead><tr className="bg-slate-50 text-xs text-slate-600 uppercase">
                     <th className="p-2 text-left" style={{ minWidth: 260 }}>Compte</th>
                     <th className="p-2 text-left">Libelle</th>
+                    <th className="p-2 text-left" style={{ minWidth: 180 }} title="Cle de repartition utilisee pour projeter la quote-part sur les proprietaires">Nature de depense</th>
                     <th className="p-2 text-right" style={{ minWidth: 110 }}>Debit</th>
                     <th className="p-2 text-right" style={{ minWidth: 110 }}>Credit</th>
                     <th className="p-2 text-right" style={{ minWidth: 80 }} title="Pourcentage occupant (decompte locataire)">%Occ.</th>
@@ -626,6 +643,26 @@ export default function JournalsPage() {
                           />
                         </td>
                         <td className="p-1 text-xs text-slate-500">{line.account_name}</td>
+                        <td className="p-1" style={{ minWidth: 180 }}>
+                          {(line.account_number && (line.account_number.startsWith('6') || line.account_number.startsWith('7'))) ? (
+                            <Select
+                              value={line.distribution_key_id || 'none'}
+                              onValueChange={(v) => updateLine(i, 'distribution_key_id', v === 'none' ? null : v)}
+                            >
+                              <SelectTrigger className="h-8 text-xs" data-testid={`journal-line-${i}-distkey`}>
+                                <SelectValue placeholder="Cle par defaut" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="none">(aucune cle)</SelectItem>
+                                {(distKeys || []).map(k => (
+                                  <SelectItem key={k.id} value={k.id}>
+                                    {(k.code ? `[${k.code}] ` : '') + (k.name || '') + (k.is_default ? ' *' : '')}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          ) : <span className="text-slate-300 text-xs">—</span>}
+                        </td>
                         <td className="p-1"><Input type="number" step="0.01" className="text-right text-sm h-8 font-mono w-full" value={line.debit} onChange={e => updateLine(i, 'debit', e.target.value)} /></td>
                         <td className="p-1"><Input type="number" step="0.01" className="text-right text-sm h-8 font-mono w-full" value={line.credit} onChange={e => updateLine(i, 'credit', e.target.value)} /></td>
                         <td className="p-1">

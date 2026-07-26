@@ -52,6 +52,9 @@ class JournalEntryLine(BaseModel):
     # est une charge 6xxx avec une categorie associee). Somme attendue : 100.
     occupant_pct: Optional[float] = None
     proprietaire_pct: Optional[float] = None
+    # iter90g1 : nature de depense (Distribution Key) par ligne d'ecriture.
+    # Utilisee cote portail proprietaire pour projeter la quote-part des OD.
+    distribution_key_id: Optional[str] = None
 
 
 class JournalEntryInput(BaseModel):

@@ -1,0 +1,45 @@
+{
+  "summary": "iter90g1 + iter90g2 tests. Backend: JournalEntryLine now accepts distribution_key_id (POST/GET/PATCH verified). Bilan no longer whitelists AC entries via db.invoices (source-check and behavioral test both pass; 3 AC entries totalling 1432.98 EUR appear in the Bilan with NO corresponding invoices). Frontend: 'Nature de depense' column header IS present between Libelle and Debit in the OD 'Nouvelle ecriture' modal (verified via DOM). HOWEVER a critical regression was found: the tfoot's colSpans were NOT updated to account for the new column, so total_debit and total_credit render under the WRONG columns (0.00 shows under 'Nature de depense' and 'Debit' instead of 'Debit' and 'Credit'). This is exactly the regression the review request asked to check.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "JournalsPage - Nouvelle ecriture (OD) modal footer",
+        "issue": "REGRESSION iter90g1: the 'Nature de depense' <th> was added to the header (8 columns) but the tfoot was not updated - it still uses <td colSpan=2>Ajouter</td><td>debit</td><td>credit</td><td colSpan=3></td> (7 columns). Consequently the Debit total renders visually UNDER the 'Nature de depense' column and the Credit total UNDER the 'Debit' column. Verified via geometry: FTR '0.00' L=730 R=910 sits inside HDR 'Nature de depense' L=730 R=910, and FTR '0.00' L=910 R=1110 sits inside HDR 'Debit' L=910 R=1110.",
+        "selector": "table.min-w-[1080px] tfoot",
+        "priority": "HIGH",
+        "suggested_fix": "In /app/frontend/src/pages/JournalsPage.js around line 691-696, change the first tfoot td from colSpan={2} to colSpan={3} (so it covers Compte + Libelle + Nature de depense) - the Debit and Credit total cells will then align correctly. Keep the trailing colSpan={3} unchanged."
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {
+        "screen": "OD modal (Nouvelle ecriture)",
+        "issues": [
+          "React key warning spam in console: 'Encountered two children with the same key' (~40+ warnings on modal open). Likely an AccountSearchSelect list rendering duplicate keys. Not blocking but pollutes logs."
+        ]
+      }
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter90g1_g2_od_distkey_and_bilan.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Fix JournalsPage.js tfoot colSpan mismatch (change first tfoot td colSpan from 2 to 3) so Debit/Credit totals align with their headers.",
+    "Investigate duplicate React key warning in the OD modal - likely in AccountSearchSelect options or distKeys select items when data has duplicates."
+  ],
+  "critical_code_review_comments": [
+    "reports.py compute_bilan_data no longer queries db.invoices between _dedup_duplicate_auto_fi_entries and the balances loop - iter90g2 fix confirmed by source scan and behavioral test.",
+    "accounting.py JournalEntryLine.distribution_key_id: Optional[str] = None - iter90g1 fix confirmed working.",
+    "JournalsPage.js: header has 8 columns, tfoot has 7 columns - column count mismatch was introduced by the iter90g1 patch."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter90g1_g2_od_distkey_and_bilan.py"],
+  "success_rate": {"backend": "100%", "frontend": "80%"},
+  "test_credentials": "admin@copro.be/admin123, syndic_alpha@copro.be/Syndic123!",
+  "seed_data_creation": "Test seed docs (coproprietes/fiscal_years/pcmn_accounts/distribution_keys/journal_entries with id prefix 'TEST-') are created and cleaned up by the test_zzz_cleanup step. Existing Maria/Alpha ACPs untouched.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Backend tests are green (7/7). Frontend OD modal header contains 'Nature de depense' column with data-testid='journal-line-<i>-distkey'. Only footer colSpan needs fixing (one-line React change). After fix, re-verify the DK auto-suggest on account 6xxx/7xxx via UI (was not fully exercised due to AccountSearchSelect complexity in test), and re-run the pytest suite.",
+  "rca_of_the_issue": "The iter90g1 patch added a <th>Nature de depense</th> to the thead but did not update the tfoot colSpans. Header cell count (8) no longer matches footer cell span sum (2+1+1+3=7). Browsers align tfoot cells by cumulative colSpan, so Debit total shifts left by one column into the Nature de depense column. Repro: login as syndic_alpha -> Journaux -> OD tab -> Nouvelle ecriture -> observe totals row under wrong columns. Mitigation: change first tfoot td colSpan from 2 to 3 in JournalsPage.js."
+}
