@@ -654,6 +654,12 @@ export default function OwnerPortalPage() {
   const acpLotsCount = coproprietes.find(c => c.id === selectedAcp)?.my_lots?.length || 0;
 
   const stats = {
+    // ⚠️ VERROU iter90h3 : NE PAS MODIFIER sans mettre a jour
+    // /app/backend/tests/test_iter90h3_owner_movements_consistency.py
+    // Regle metier : "Ma situation" DOIT afficher le meme solde que l'onglet
+    // "Appels de fonds" (source : /owner/movements, scope FY selectionne).
+    // acpStats (source /dashboard) somme SANS filtre FY -> a garder en
+    // fallback uniquement quand movements pas encore charge.
     coproprietes_count: 1,
     lots_count: acpLotsCount,
     total_called: movementStats ? movementStats.total_called : (acpStats ? acpStats.total_called : 0),
