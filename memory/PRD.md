@@ -18,7 +18,15 @@ Application de gestion de copropriete basee sur le droit belge (PCMN), incluant 
 
 ## Fonctionnalites implementees
 
-### Session courante (Juillet 2026)
+### Session courante (Fevrier 2026)
+
+#### P0 - Chinese Wall attach-to-copro (DONE - Tests 5/5 iter 75)
+- Fix verifie sur /api/owners/{id}/attach-to-copro (properties.py L953-978)
+- Owner doit deja appartenir au meme syndic (via copropriete_ids OR lots OR owner.syndic_id)
+- Sinon 403 "Acces refuse a ce proprietaire (chinese wall)"
+- Cas legitime same-syndic reste 200 (idempotent)
+- Superadmin conserve son bypass
+- Test file: /app/backend/tests/test_attach_owner_chinese_wall.py
 
 #### P0 - Securite Multi-Syndic syndic_id (DONE - Tests 11/11)
 - Infrastructure: syndic_scope.py, middleware server.py (lines 356-363)
