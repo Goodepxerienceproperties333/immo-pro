@@ -1574,42 +1574,34 @@ function SituationHero({ status, balance, totalCalled, totalPaid, nextCall, tota
             </div>
             {pendingCount > 0 && <Badge variant="outline" className={`text-[10px] ${nextTextColor} border-current`}>{pendingCount} en attente</Badge>}
           </div>
-          {nextCall ? (
+          {balance > 0.01 ? (
+            // iter90h7 : SOURCE UNIQUE = balance (solde net grand livre).
+            // Le montant affiche DOIT correspondre a la Situation de compte PDF
+            // (total des impayes cumules, incluant tous les appels non regles).
+            // Le detail du prochain appel (nom, echeance) reste informatif.
             <>
-              {/* iter90h4 : ajustement dynamique selon le solde courant.
-                  amountToPay = nextCall.amount + balance (creditor reduit, debtor augmente). */}
-              {(() => {
-                const adjusted = Math.max(0, (Number(nextCall.amount) || 0) + (Number(balance) || 0));
-                const hasAdjustment = Math.abs(Number(balance) || 0) > 0.01;
-                const isReduced = (Number(balance) || 0) < -0.01;
-                return (
-                  <>
-                    <div className={`text-3xl font-bold ${nextTextColor}`} style={{fontFamily:'Chivo,sans-serif'}} data-testid="next-payment-amount">
-                      {fmt(adjusted)}
-                    </div>
-                    <div className="mt-1 text-[13px] font-medium text-slate-700 truncate" title={nextCall.fund_call_name}>{nextCall.fund_call_name}</div>
-                    {hasAdjustment && (
-                      <div className={`mt-1.5 text-[11px] ${isReduced ? 'text-emerald-700' : 'text-red-700'} bg-white/50 rounded px-2 py-1 border ${isReduced ? 'border-emerald-200' : 'border-red-200'}`} data-testid="next-payment-adjustment">
-                        <div className="flex justify-between font-mono">
-                          <span>Appel :</span><span>{fmt(nextCall.amount)}</span>
-                        </div>
-                        <div className="flex justify-between font-mono">
-                          <span>{isReduced ? 'Votre credit :' : 'Solde du :'}</span>
-                          <span>{isReduced ? `- ${fmt(Math.abs(balance))}` : `+ ${fmt(balance)}`}</span>
-                        </div>
-                        <div className="flex justify-between font-mono font-bold border-t border-current mt-1 pt-1">
-                          <span>A payer :</span><span>{fmt(adjusted)}</span>
-                        </div>
-                      </div>
-                    )}
-                    <div className={`mt-2 text-xs font-semibold flex items-center gap-1.5 ${nextTextColor}`}>
-                      <Clock size={12} />
-                      {nextLabel} {nextCall.due_date && <span className="text-slate-500 font-normal">({fmtDate(nextCall.due_date)})</span>}
-                    </div>
-                  </>
-                );
-              })()}
-              {nextCall.vcs_code && (
+              <div className="text-3xl font-bold text-red-700" style={{fontFamily:'Chivo,sans-serif'}} data-testid="next-payment-amount">
+                {fmt(balance)}
+              </div>
+              <div className="mt-1 text-[13px] font-medium text-slate-700">
+                Solde a regler au total
+              </div>
+              {nextCall && (
+                <div className="mt-2 text-[11px] bg-white/60 rounded px-2 py-1.5 border border-red-200" data-testid="next-payment-detail">
+                  <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-0.5">
+                    Prochaine echeance
+                  </div>
+                  <div className="text-slate-800 font-medium truncate" title={nextCall.fund_call_name}>
+                    {nextCall.fund_call_name}
+                  </div>
+                  <div className="flex items-center gap-1.5 mt-1 text-red-700 font-semibold">
+                    <Clock size={11} />
+                    {nextLabel}
+                    {nextCall.due_date && <span className="text-slate-500 font-normal">({fmtDate(nextCall.due_date)})</span>}
+                  </div>
+                </div>
+              )}
+              {(nextCall?.vcs_code || copyVcs) && nextCall?.vcs_code && (
                 <button
                   onClick={() => copyVcs(nextCall.vcs_code)}
                   className="mt-3 font-mono text-[10px] text-[#022D52] bg-white/60 hover:bg-white px-2 py-1 rounded inline-flex items-center gap-1"
@@ -1618,28 +1610,41 @@ function SituationHero({ status, balance, totalCalled, totalPaid, nextCall, tota
                   {nextCall.vcs_code}<Copy size={9} />
                 </button>
               )}
-              {pendingCount > 1 && (
-                <div className="mt-3 text-[11px] text-slate-600 pt-2 border-t border-white/60">
-                  Total en attente : <span className="font-mono font-semibold">{fmt(totalPending)}</span>
+              <div className="mt-3 text-[10px] text-slate-500 pt-2 border-t border-white/60 italic">
+                Reference identique a votre Situation de compte PDF
+              </div>
+            </>
+          ) : balance < -0.01 ? (
+            // Crediteur : rien a payer, avoir en votre faveur
+            <>
+              <div className="text-3xl font-bold text-emerald-700" style={{fontFamily:'Chivo,sans-serif'}} data-testid="next-payment-amount">
+                {fmt(Math.abs(balance))}
+              </div>
+              <div className="mt-1 text-[13px] font-medium text-emerald-700">
+                En votre faveur
+              </div>
+              <div className="mt-2 text-xs text-slate-600">
+                Aucun paiement requis pour l&apos;instant. Ce credit sera deduit de votre prochain appel.
+              </div>
+              {nextCall && (
+                <div className="mt-2 text-[11px] bg-white/60 rounded px-2 py-1.5 border border-emerald-200">
+                  <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-0.5">
+                    Prochain appel prevu
+                  </div>
+                  <div className="text-slate-800 font-medium truncate" title={nextCall.fund_call_name}>
+                    {nextCall.fund_call_name}
+                  </div>
+                  {nextCall.due_date && (
+                    <div className="text-[10px] text-slate-500 mt-0.5">
+                      Echeance : {fmtDate(nextCall.due_date)}
+                    </div>
+                  )}
                 </div>
               )}
             </>
-          ) : balance > 0.01 ? (
-            // Iter90dd : fallback quand balance debiteur sans pending detaille
-            <>
-              <div className="text-3xl font-bold text-red-700" style={{fontFamily:'Chivo,sans-serif'}}>{fmt(balance)}</div>
-              <div className="mt-1 text-[13px] font-medium text-slate-700">Solde a payer</div>
-              <div className="mt-2 text-xs font-semibold flex items-center gap-1.5 text-red-700">
-                <Clock size={12} />
-                Voir onglet &quot;Appels de fonds&quot; pour le detail
-              </div>
-              <div className="mt-3 text-[11px] text-slate-600 italic">
-                Utilisez votre communication structuree pour tout virement
-              </div>
-            </>
           ) : (
             <>
-              <div className={`text-3xl font-bold ${nextTextColor}`} style={{fontFamily:'Chivo,sans-serif'}}>—</div>
+              <div className={`text-3xl font-bold ${nextTextColor}`} style={{fontFamily:'Chivo,sans-serif'}} data-testid="next-payment-amount">—</div>
               <div className="mt-2 text-xs text-slate-600">Tout est a jour. Merci !</div>
             </>
           )}
