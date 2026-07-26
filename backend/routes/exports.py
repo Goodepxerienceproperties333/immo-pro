@@ -1,9 +1,10 @@
 """Export Excel + rappels de paiement automatises."""
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from typing import Optional
 from datetime import datetime, timezone, timedelta
 import io
+import csv
 
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -256,6 +257,328 @@ def create_exports_router(db):
         buf.seek(0)
         return StreamingResponse(buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                  headers={"Content-Disposition": f'attachment; filename="grand_livre_{datetime.now().strftime("%Y%m%d")}.xlsx"'})
+
+    # ---------------------------------------------------------------------
+    # iter90fr : Export Journaux CSV & PDF avec selecteur de dates (P1)
+    # ---------------------------------------------------------------------
+
+    JOURNAL_LABELS = {
+        "OD": "Operations Diverses",
+        "AC": "Achats",
+        "VE": "Ventes",
+        "FI": "Financier",
+        "AN": "A-Nouveau",
+    }
+
+    async def _build_journal_query(
+        request: Request,
+        journal_type: Optional[str],
+        date_from: Optional[str],
+        date_to: Optional[str],
+        copropriete_id: Optional[str],
+        include_reversals: bool,
+    ) -> dict:
+        """Construit la query MongoDB scopee au syndic + ACPs autorisees.
+
+        - Superadmin : pas de restriction syndic. Si copropriete_id est fourni
+          on filtre, sinon on prend tout.
+        - Syndic / gestionnaire : `syndic_id` obligatoire dans la query,
+          `copropriete_id` doit etre dans allowed_copros ou on restreint
+          a l'ensemble des ACPs du syndic.
+        """
+        from server import get_current_user, is_superadmin_only
+        user = await get_current_user(request)
+        role = user.get("role", "")
+        is_super = is_superadmin_only(role)
+        allowed = user.get("copropriete_ids", []) or []
+        sid = getattr(request.state, "syndic_id", None)
+
+        q: dict = {}
+        if not is_super:
+            if sid:
+                q["syndic_id"] = sid
+            if copropriete_id:
+                if copropriete_id not in allowed:
+                    raise HTTPException(403, "Acces refuse a cette ACP (chinese wall)")
+                q["copropriete_id"] = copropriete_id
+            else:
+                if not allowed:
+                    q["copropriete_id"] = "__no_scope__"
+                else:
+                    q["copropriete_id"] = {"$in": allowed}
+        else:
+            if copropriete_id:
+                q["copropriete_id"] = copropriete_id
+
+        if journal_type:
+            q["journal_type"] = journal_type
+        if date_from:
+            q.setdefault("date", {})["$gte"] = date_from
+        if date_to:
+            q.setdefault("date", {})["$lte"] = date_to
+        if not include_reversals:
+            q["reversed"] = {"$ne": True}
+            q["is_reversal"] = {"$ne": True}
+        return q
+
+    async def _resolve_copro_name(copropriete_id: Optional[str]) -> str:
+        if not copropriete_id:
+            return "Toutes les ACPs autorisees"
+        c = await db.coproprietes.find_one(
+            {"id": copropriete_id}, {"_id": 0, "name": 1, "reference": 1}
+        )
+        if not c:
+            return copropriete_id
+        ref = c.get("reference") or ""
+        return f"{c.get('name','')} ({ref})" if ref else c.get("name", copropriete_id)
+
+    @router.get("/journals.csv")
+    async def export_journals_csv(
+        request: Request,
+        journal_type: Optional[str] = None,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+        copropriete_id: Optional[str] = None,
+        include_reversals: bool = True,
+    ):
+        """Export CSV des ecritures de journal, filtrees par periode / type / ACP.
+
+        - Chinese Wall applique via `syndic_id` + `copropriete_id`.
+        - Une ligne CSV par LIGNE d'ecriture (pas par ecriture) pour permettre
+          l'audit comptable ligne-a-ligne.
+        - Encodage UTF-8 avec BOM pour compat Excel FR.
+        """
+        q = await _build_journal_query(
+            request, journal_type, date_from, date_to, copropriete_id, include_reversals
+        )
+        entries = await db.journal_entries.find(q, {"_id": 0}).sort("date", 1).to_list(200000)
+
+        buf = io.StringIO()
+        # BOM pour Excel FR
+        buf.write("\ufeff")
+        writer = csv.writer(buf, delimiter=";", quoting=csv.QUOTE_MINIMAL)
+        writer.writerow([
+            "Date", "Journal", "Reference", "Description",
+            "Compte", "Libelle compte", "Tiers", "Debit", "Credit",
+            "Contre-passation", "Extournee",
+        ])
+
+        total_debit = total_credit = 0.0
+        for e in entries:
+            jt = e.get("journal_type", "") or ""
+            ref = e.get("reference", "") or ""
+            desc = e.get("description", "") or ""
+            date_e = e.get("date", "") or ""
+            is_rev = "OUI" if e.get("is_reversal") else ""
+            is_reversed = "OUI" if e.get("reversed") else ""
+            for line in e.get("lines", []) or []:
+                debit = float(line.get("debit", 0) or 0)
+                credit = float(line.get("credit", 0) or 0)
+                total_debit += debit
+                total_credit += credit
+                writer.writerow([
+                    date_e, jt, ref, desc,
+                    line.get("account_number", "") or "",
+                    line.get("account_name", "") or "",
+                    line.get("third_party_name", "") or "",
+                    f"{debit:.2f}".replace(".", ","),
+                    f"{credit:.2f}".replace(".", ","),
+                    is_rev, is_reversed,
+                ])
+        # Ligne de total
+        writer.writerow([])
+        writer.writerow([
+            "TOTAL", "", "", "", "", "", "",
+            f"{round(total_debit, 2):.2f}".replace(".", ","),
+            f"{round(total_credit, 2):.2f}".replace(".", ","),
+            "", "",
+        ])
+
+        buf.seek(0)
+        content = buf.getvalue().encode("utf-8")
+        stamp = datetime.now().strftime("%Y%m%d_%H%M")
+        parts = ["journaux"]
+        if journal_type:
+            parts.append(journal_type.lower())
+        if date_from:
+            parts.append(f"du_{date_from}")
+        if date_to:
+            parts.append(f"au_{date_to}")
+        parts.append(stamp)
+        filename = "_".join(parts) + ".csv"
+        return StreamingResponse(
+            io.BytesIO(content),
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    @router.get("/journals.pdf")
+    async def export_journals_pdf(
+        request: Request,
+        journal_type: Optional[str] = None,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+        copropriete_id: Optional[str] = None,
+        include_reversals: bool = True,
+    ):
+        """Export PDF paysage des ecritures de journal.
+
+        - Chinese Wall applique via `syndic_id` + `copropriete_id`.
+        - En-tete : ACP, periode, type de journal, date d'edition.
+        - Table paginee (reportlab) avec totaux debit/credit en pied.
+        """
+        from reportlab.lib.pagesizes import A4, landscape
+        from reportlab.lib.units import mm
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib import colors
+
+        q = await _build_journal_query(
+            request, journal_type, date_from, date_to, copropriete_id, include_reversals
+        )
+        entries = await db.journal_entries.find(q, {"_id": 0}).sort("date", 1).to_list(200000)
+        copro_label = await _resolve_copro_name(copropriete_id)
+
+        buf = io.BytesIO()
+        doc = SimpleDocTemplate(
+            buf,
+            pagesize=landscape(A4),
+            topMargin=12 * mm, bottomMargin=12 * mm,
+            leftMargin=10 * mm, rightMargin=10 * mm,
+            title="Journaux comptables",
+        )
+        styles = getSampleStyleSheet()
+        h1 = ParagraphStyle(
+            "h1", parent=styles["Title"], fontSize=13, leading=16,
+            textColor=colors.HexColor("#022D52"),
+        )
+        meta = ParagraphStyle(
+            "meta", parent=styles["Normal"], fontSize=9, leading=12,
+            textColor=colors.HexColor("#475569"),
+        )
+        cell = ParagraphStyle("cell", parent=styles["Normal"], fontSize=7, leading=9)
+        cell_r = ParagraphStyle("cell_r", parent=cell, alignment=2)
+        hdr = ParagraphStyle(
+            "hdr", parent=styles["Normal"], fontSize=7, leading=9,
+            fontName="Helvetica-Bold", textColor=colors.white,
+        )
+        hdr_r = ParagraphStyle("hdr_r", parent=hdr, alignment=2)
+
+        elements = []
+        j_label = JOURNAL_LABELS.get(journal_type, "Tous les journaux") if journal_type else "Tous les journaux"
+        elements.append(Paragraph("Journaux comptables", h1))
+        elements.append(Spacer(1, 2 * mm))
+        elements.append(Paragraph(f"<b>ACP :</b> {copro_label}", meta))
+        elements.append(Paragraph(f"<b>Journal :</b> {j_label}", meta))
+        period = "Toutes periodes"
+        if date_from and date_to:
+            period = f"du {date_from} au {date_to}"
+        elif date_from:
+            period = f"a partir du {date_from}"
+        elif date_to:
+            period = f"jusqu'au {date_to}"
+        elements.append(Paragraph(f"<b>Periode :</b> {period}", meta))
+        elements.append(Paragraph(
+            f"<b>Contre-passations incluses :</b> {'oui' if include_reversals else 'non'}",
+            meta,
+        ))
+        elements.append(Paragraph(
+            f"<b>Edite le :</b> {datetime.now().strftime('%d/%m/%Y %H:%M')}", meta,
+        ))
+        elements.append(Spacer(1, 4 * mm))
+
+        rows = [[
+            Paragraph("Date", hdr),
+            Paragraph("Jnl", hdr),
+            Paragraph("Reference", hdr),
+            Paragraph("Description", hdr),
+            Paragraph("Compte", hdr),
+            Paragraph("Libelle compte", hdr),
+            Paragraph("Tiers", hdr),
+            Paragraph("Debit", hdr_r),
+            Paragraph("Credit", hdr_r),
+            Paragraph("Flags", hdr),
+        ]]
+        total_debit = total_credit = 0.0
+        for e in entries:
+            jt = e.get("journal_type", "") or ""
+            ref = e.get("reference", "") or ""
+            desc = (e.get("description", "") or "")[:80]
+            date_e = e.get("date", "") or ""
+            flags = []
+            if e.get("is_reversal"):
+                flags.append("CP")
+            if e.get("reversed"):
+                flags.append("X")
+            flag_str = " ".join(flags)
+            for line in e.get("lines", []) or []:
+                debit = float(line.get("debit", 0) or 0)
+                credit = float(line.get("credit", 0) or 0)
+                total_debit += debit
+                total_credit += credit
+                rows.append([
+                    Paragraph(date_e, cell),
+                    Paragraph(jt, cell),
+                    Paragraph(ref, cell),
+                    Paragraph(desc, cell),
+                    Paragraph(line.get("account_number", "") or "", cell),
+                    Paragraph((line.get("account_name", "") or "")[:35], cell),
+                    Paragraph((line.get("third_party_name", "") or "")[:30], cell),
+                    Paragraph(f"{debit:.2f}" if debit else "", cell_r),
+                    Paragraph(f"{credit:.2f}" if credit else "", cell_r),
+                    Paragraph(flag_str, cell),
+                ])
+        rows.append([
+            "", "", "", "", "", "",
+            Paragraph("<b>TOTAUX</b>", cell_r),
+            Paragraph(f"<b>{round(total_debit, 2):.2f}</b>", cell_r),
+            Paragraph(f"<b>{round(total_credit, 2):.2f}</b>", cell_r),
+            "",
+        ])
+
+        col_widths = [
+            18 * mm, 10 * mm, 26 * mm, 55 * mm, 18 * mm,
+            48 * mm, 40 * mm, 22 * mm, 22 * mm, 15 * mm,
+        ]
+        t = Table(rows, colWidths=col_widths, repeatRows=1)
+        t.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#022D52")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTSIZE", (0, 0), (-1, -1), 7),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 3),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+            ("TOPPADDING", (0, 0), (-1, -1), 2),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+            ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#CBD5E1")),
+            ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#F1F5F9")),
+        ]))
+        elements.append(t)
+
+        if not entries:
+            elements.append(Spacer(1, 6 * mm))
+            elements.append(Paragraph(
+                "<i>Aucune ecriture ne correspond aux filtres selectionnes.</i>",
+                meta,
+            ))
+
+        doc.build(elements)
+        buf.seek(0)
+        stamp = datetime.now().strftime("%Y%m%d_%H%M")
+        parts = ["journaux"]
+        if journal_type:
+            parts.append(journal_type.lower())
+        if date_from:
+            parts.append(f"du_{date_from}")
+        if date_to:
+            parts.append(f"au_{date_to}")
+        parts.append(stamp)
+        filename = "_".join(parts) + ".pdf"
+        return StreamingResponse(
+            buf,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
 
     return router
 

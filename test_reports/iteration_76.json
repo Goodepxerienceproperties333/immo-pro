@@ -1,0 +1,35 @@
+{
+  "summary": "Focused verification of P1 feature: Export Journaux (CSV + PDF) with date selector. 7/7 backend pytest tests pass. Frontend E2E via Playwright downloaded both CSV (with BOM, French decimals, TOTAL row) and PDF (%PDF magic) as syndic_beta on /journals, and narrow date range 1999 correctly returned only TOTAL row with 0,00.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/journals filters bar", "issues": ["Date inputs use browser-default picker (placeholder 'mm/dd/yyyy') instead of a French-formatted shadcn Calendar component. On a French app, dd/mm/yyyy or a shadcn date picker would be more consistent."]},
+      {"screen": "Post-login flow", "issues": ["Multiple sequential modals block the user: T&C (legal-acceptance-modal) → 'Nouveautes NextGe Copro' release notes → 'Bienvenue! Configurez votre cabinet syndic' onboarding wizard → cookie banner. This is not a blocker but automation had to dismiss 3+ modals to reach /journals. Consider consolidating."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_exports_journals.py",
+    "/app/test_reports/pytest/journals_exports.xml"
+  ],
+  "action_items": [
+    "(Optional) Replace native date inputs on JournalsPage with a French-locale shadcn Calendar/DatePicker for consistency."
+  ],
+  "critical_code_review_comments": [
+    "exports.py _build_journal_query: correctly enforces syndic_id + copropriete_id scope. When syndic has empty allowed list it falls back to '__no_scope__' sentinel — good defensive default.",
+    "CSV writer: BOM + ';' delimiter + French decimal comma via .replace('.', ',') is correct for Excel FR. TOTAL row added; header labels match spec.",
+    "Chinese-wall middleware in server.py returns 403 before route logic — verified with alpha attempting Beta's ACP.",
+    "Frontend downloadJournalsExport uses responseType:'blob' + explicit MIME creation — matches expected behavior. Filename is built client-side; the backend-generated Content-Disposition filename is ignored (minor: could be reused for consistency)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_exports_journals.py (new)"
+  ],
+  "success_rate": {"backend": "100% (7/7)", "frontend": "100% (E2E flow: CSV download, PDF download, narrow date filter empty result)"},
+  "test_credentials": "syndic_beta@copro.be / Syndic123! ; syndic_alpha@copro.be / Syndic123! ; admin@copro.be / admin123",
+  "seed_data_creation": "None — used existing seeded ACP 778391ef (Beta) AC entries.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Frontend automation must dismiss 3 modals in sequence after login: (1) [data-testid=legal-accept-cgu] + [data-testid=legal-accept-privacy] + [data-testid=legal-accept-submit-btn], (2) release-notes button 'OK, j'ai compris' (curly apostrophe — use text-is selector or partial match), (3) syndic onboarding wizard 'Bienvenue!' — close via [role=dialog] button with lucide-x icon. Cookie banner is non-blocking. Then navigate to /journals (route is /journals, NOT /journaux). Export buttons are data-testid='export-journals-csv-btn' and 'export-journals-pdf-btn'. Date-filter inputs: filter-date-from / filter-date-to.",
+  "rca_of_the_issue": "N/A — feature works as designed. Only minor UX observation: French app uses browser-default date picker."
+}

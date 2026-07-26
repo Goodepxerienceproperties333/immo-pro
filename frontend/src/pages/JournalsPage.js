@@ -85,6 +85,35 @@ export default function JournalsPage() {
   });
   const hasActiveFilters = Object.values(filters).some(v => v && String(v).trim());
 
+  // iter90fr : export CSV / PDF des ecritures (respecte les filtres periode + journal_type)
+  const [exporting, setExporting] = useState(null); // 'csv' | 'pdf' | null
+  const downloadJournalsExport = async (format) => {
+    setExporting(format);
+    try {
+      const params = { journal_type: journalType, include_reversals: includeReversals };
+      if (filters.date_from) params.date_from = filters.date_from;
+      if (filters.date_to) params.date_to = filters.date_to;
+      const path = format === 'csv' ? '/exports/journals.csv' : '/exports/journals.pdf';
+      const r = await api.get(path, { params, responseType: 'blob' });
+      const mime = format === 'csv' ? 'text/csv' : 'application/pdf';
+      const url = URL.createObjectURL(new Blob([r.data], { type: mime }));
+      const a = document.createElement('a');
+      a.href = url;
+      const stamp = new Date().toISOString().slice(0, 10);
+      const range = [filters.date_from, filters.date_to].filter(Boolean).join('_') || 'toutes';
+      a.download = `journaux_${journalType.toLowerCase()}_${range}_${stamp}.${format}`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      toast.success(`Export ${format.toUpperCase()} genere`);
+    } catch (err) {
+      toast.error(err.response?.data?.detail || `Erreur export ${format.toUpperCase()}`);
+    } finally {
+      setExporting(null);
+    }
+  };
+
   const [editingEntry, setEditingEntry] = useState(null);
 
   const openCreate = () => {
@@ -383,6 +412,32 @@ export default function JournalsPage() {
                 Reinitialiser
               </Button>
             )}
+            <div className="flex items-end gap-2 ml-auto">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => downloadJournalsExport('csv')}
+                disabled={exporting !== null}
+                className="h-9 text-xs"
+                data-testid="export-journals-csv-btn"
+                title="Exporter les ecritures du journal courant en CSV (respecte les filtres de date)"
+              >
+                <Download size={13} className="mr-1" />
+                {exporting === 'csv' ? 'Export...' : 'Export CSV'}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => downloadJournalsExport('pdf')}
+                disabled={exporting !== null}
+                className="h-9 text-xs"
+                data-testid="export-journals-pdf-btn"
+                title="Exporter les ecritures du journal courant en PDF (respecte les filtres de date)"
+              >
+                <Download size={13} className="mr-1" />
+                {exporting === 'pdf' ? 'Export...' : 'Export PDF'}
+              </Button>
+            </div>
           </div>
 
           <div className="bg-white rounded-md border border-slate-200 overflow-hidden">
