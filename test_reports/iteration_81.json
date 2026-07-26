@@ -1,0 +1,23 @@
+{
+  "summary": "iter90fu two-bug fix verified. BUG1 (backend total/total_amount alignment) validated with 3 pytest cases (all PASS). BUG2 (BudgetWizard default Date du 1er appel = FY.start_date) validated end-to-end via Playwright: input showed 01/01/2025 (FY 2025 start), calendrier prevu correctly generated 4 quarterly appels in 2025. Fallback branch reviewed in code.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter90fu_budget_total.py",
+    "/app/test_reports/pytest/iter90fu_budget_total.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "BudgetWizard.js: fiscalYear default is null, guarded correctly (fiscalYear && fiscalYear.start_date). Retro-compat fallback to first-of-current-month is safe.",
+    "fiscal.py list_budgets self-heals but silently swallows update errors (except: pass). OK for backfill idempotence, but consider logging under debug to trace legacy budget drift.",
+    "commit_budget post-write verification only re-writes total/total_amount if missing (safety-net). Considered defensive but adds an extra find_one on every commit — negligible cost, acceptable."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter90fu_budget_total.py"],
+  "success_rate": {"backend": "100% (3/3)", "frontend": "100% (BUG2 flow verified)"},
+  "test_credentials": "syndic_alpha@copro.be / Syndic123! (ALPHA_SYNDIC_ID=6a65b6396daad720f9dcbfa6, ACP=b6fe4e32-555a-435b-84cd-1f080cdd47c6, FY=TEST_FY_938b7658-... start_date=2025-01-01)",
+  "seed_data_creation": "Ephemeral: seeded 1 approved budget (id=b3aba2f5-...) for the FY 2025 to enable BUG2 E2E, then deleted at end. Backend tests each create/delete their own budget docs and distribution keys with TESTFU prefix.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend tests are pure-sync via requests+pymongo (no pytest-asyncio available). Alpha ACP FY2025 has start_date=2025-01-01, end_date=2025-12-31 — ideal to test date-default fixes. Route to Budgets tab is /fiscal (not /fiscal-years). Syndic setup wizard modal auto-opens on first login of syndic_alpha; dismiss via Escape/X before Playwright interactions.",
+  "rca of the issue": "BUG1 root cause = field-name divergence between wizard writer (total_amount) and list-card reader (total). Fix writes both fields and self-heals legacy docs on read. BUG2 root cause = BudgetWizard defaulted startDate to first-of-current-month; fix threads fiscalYear prop from FiscalYearPage and uses fiscalYear.start_date."
+}

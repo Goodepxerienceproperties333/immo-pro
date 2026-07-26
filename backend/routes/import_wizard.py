@@ -3435,13 +3435,17 @@ def create_import_wizard_router(db):
                 })
                 total_amount += amt
         # Cree (ou remplace) le budget de l'exercice
+        # iter90fu : on persiste `total` ET `total_amount` (le UI FiscalYearPage
+        # affiche b.total sur la liste - bug: EUR restait vide apres import).
+        rounded_total = round(total_amount, 2)
         existing = await db.budgets.find_one({"fiscal_year_id": data.fiscal_year_id, "copropriete_id": copro_id})
         if existing:
             await db.budgets.update_one(
                 {"id": existing["id"]},
                 {"$set": {
                     "lines": lines,
-                    "total_amount": round(total_amount, 2),
+                    "total": rounded_total,
+                    "total_amount": rounded_total,
                     "updated_at": _now_iso(),
                     "import_session_id": session_id,
                 }}
@@ -3454,15 +3458,27 @@ def create_import_wizard_router(db):
                 "fiscal_year_id": data.fiscal_year_id,
                 "copropriete_id": copro_id,
                 "lines": lines,
-                "total_amount": round(total_amount, 2),
+                "total": rounded_total,
+                "total_amount": rounded_total,
+                "status": "draft",
                 "import_session_id": session_id,
                 "created_at": _now_iso(),
             }
             _tag_syndic(_budget_doc, getattr(request.state, "syndic_id", ""))
             await db.budgets.insert_one(_budget_doc)
+        # iter90fu : verification finale - recharge le doc et confirme que
+        # `total`/`total_amount` sont bien peuples avant de retourner. Aucun
+        # risque de course DB puisque find_one est apres l'update/insert.
+        persisted = await db.budgets.find_one({"id": budget_id}, {"_id": 0, "total": 1, "total_amount": 1})
+        if (persisted or {}).get("total") is None or (persisted or {}).get("total_amount") is None:
+            # Force le recalcul si un update tiers a effac le champ.
+            await db.budgets.update_one(
+                {"id": budget_id},
+                {"$set": {"total": rounded_total, "total_amount": rounded_total}},
+            )
         await _update_step(db, session_id, "budget", {
             "count": len(lines),
-            "total_amount": round(total_amount, 2),
+            "total_amount": rounded_total,
             "budget_id": budget_id,
             "keys_created": keys_created,
             "keys_special_created": keys_special_created,

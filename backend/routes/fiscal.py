@@ -920,6 +920,31 @@ def create_fiscal_router(db):
         if copropriete_id:
             q["copropriete_id"] = copropriete_id
         budgets = await db.budgets.find(q, {"_id": 0}).sort("created_at", -1).to_list(100)
+        # iter90fu : backfill total<->total_amount pour les budgets historiques
+        # importes via wizard qui n'avaient pas `total` (le UI FiscalYearPage
+        # affichait EUR vide jusqu'a Modifier+Sauvegarder). On repare a la
+        # lecture ET on persiste dans la foulee pour eviter de faire ce travail
+        # a chaque requete.
+        for b in budgets:
+            has_total = b.get("total") is not None
+            has_total_amount = b.get("total_amount") is not None
+            if has_total and has_total_amount:
+                continue
+            recomputed = round(
+                sum(float(ln.get("amount") or 0) for ln in (b.get("lines") or [])), 2
+            )
+            canonical = (
+                b.get("total") if has_total else (b.get("total_amount") if has_total_amount else recomputed)
+            )
+            b["total"] = canonical
+            b["total_amount"] = canonical
+            try:
+                await db.budgets.update_one(
+                    {"id": b["id"]},
+                    {"$set": {"total": canonical, "total_amount": canonical}},
+                )
+            except Exception:
+                pass
         return budgets
 
     @router.post("/budgets")

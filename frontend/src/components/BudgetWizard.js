@@ -21,7 +21,7 @@ const FREQ_OPTIONS = [
   { v: 12, l: 'Mensuel (12 appels)', interval: 1 },
 ];
 
-export default function BudgetWizard({ budget, distKeys = [], onClose, onDone, mode = 'create' }) {
+export default function BudgetWizard({ budget, distKeys = [], onClose, onDone, mode = 'create', fiscalYear = null }) {
   // Cle de repartition par defaut (marquee is_default=true, sinon premiere cle)
   const defaultKeyId = useMemo(() => {
     if (!distKeys.length) return '';
@@ -30,7 +30,12 @@ export default function BudgetWizard({ budget, distKeys = [], onClose, onDone, m
 
   const [step, setStep] = useState(1);
   const [frequency, setFrequency] = useState(4);
+  // iter90fu : par defaut le 1er appel est au debut de l'exercice comptable
+  // (fiscalYear.start_date). Fallback : 1er du mois courant si le FY n'est
+  // pas fourni ou n'a pas de start_date (retro-compatibilite).
   const [startDate, setStartDate] = useState(() => {
+    const fyStart = (fiscalYear && fiscalYear.start_date) ? String(fiscalYear.start_date).slice(0, 10) : '';
+    if (fyStart) return fyStart;
     const now = new Date();
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
   });

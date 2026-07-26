@@ -617,6 +617,7 @@ export default function FiscalYearPage() {
       {wizardBudget && (
         <BudgetWizard
           budget={wizardBudget}
+          fiscalYear={years.find(y => y.id === wizardBudget.fiscal_year_id) || null}
           distKeys={distKeys}
           mode={wizardMode}
           onClose={() => setWizardBudget(null)}
