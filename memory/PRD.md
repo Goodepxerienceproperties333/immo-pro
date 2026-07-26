@@ -85,6 +85,14 @@ Application de gestion de copropriete basee sur le droit belge (PCMN), incluant 
 
 ### Session courante (Fevrier 2026)
 
+#### iter90fv - SMTP One2Net (DONE - 9/9 tests + 1 envoi reel confirme iter 82)
+- Backend graph_email.py : nouveau chemin SMTP (aiosmtplib) en fallback si SMTP_HOST configure
+- Port 465 -> SSL implicite, port 587 -> STARTTLS
+- .env : MAIL_ENABLED=true, SMTP_HOST=mail01.one2net.net:465, SMTP_USER=info@nextgecopro.be
+- Test file : /app/backend/tests/test_iter90fv_smtp.py (9/9 PASS)
+- Envoi reel valide : email delivered to info@nextgecopro.be
+- Prod ready : le renvoi d'invitation a Mme Boxus fonctionne desormais
+
 #### FEATURE - Systeme de tickets support (bug escalation) (DONE - 19/19 backend + 100% frontend iter 77)
 - Chatbot avec onglets Assistant IA / Mes tickets + mode picker (operationnel vs bug)
 - Formulaire BugReportForm (titre, description, etapes, attendu/observe, pieces jointes max 5x10MB tout type, email)
