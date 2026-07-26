@@ -73,6 +73,10 @@ export default function OwnerPortalPage() {
   const [closingBalance, setClosingBalance] = useState(0);
   const [periodStart, setPeriodStart] = useState('');
   const [periodEnd, setPeriodEnd] = useState('');
+  // iter90h9 : movements sur toute la FY (independant du filtre user).
+  // Utilise pour les stats "Ma situation" (deduction FIFO des paiements).
+  const [annualMovements, setAnnualMovements] = useState([]);
+  const [annualOpeningBalance, setAnnualOpeningBalance] = useState(0);
   // iter90hz : comptes bancaires de l'ACP (transparence + affichage IBAN)
   const [bankAccounts, setBankAccounts] = useState([]);
   const [bankAccountsLoading, setBankAccountsLoading] = useState(false);
@@ -251,6 +255,39 @@ export default function OwnerPortalPage() {
       .catch(() => { setMovements([]); setOpeningBalance(0); setClosingBalance(0); })
       .finally(() => setMovementsLoading(false));
   }, [selectedAcp, periodStart, periodEnd, dashboard]);
+
+  // iter90h9 : movements sur toute la FY selectionnee (independant des
+  // filtres periodStart/periodEnd user). Utilise pour les stats "Ma
+  // situation" - garantit qu'on prend en compte TOUS les paiements de
+  // l'exercice, meme si l'user a modifie sa plage de consultation.
+  useEffect(() => {
+    if (!dashboard || !selectedAcp || !selectedFyId) {
+      setAnnualMovements([]);
+      setAnnualOpeningBalance(0);
+      return;
+    }
+    const fy = fiscalYears.find(y => y.id === selectedFyId);
+    if (!fy || !fy.start_date || !fy.end_date) {
+      setAnnualMovements([]);
+      setAnnualOpeningBalance(0);
+      return;
+    }
+    api.get('/owner/movements', {
+      params: {
+        copropriete_id: selectedAcp,
+        start_date: fy.start_date,
+        end_date: fy.end_date,
+      },
+    })
+      .then((r) => {
+        setAnnualMovements(r.data?.movements || []);
+        setAnnualOpeningBalance(r.data?.opening_balance || 0);
+      })
+      .catch(() => {
+        setAnnualMovements([]);
+        setAnnualOpeningBalance(0);
+      });
+  }, [selectedAcp, selectedFyId, dashboard, fiscalYears]);
 
   // iter90hz : charge les comptes bancaires de l'ACP (transparence pour le
   // proprio + affichage de l'IBAN de virement dans le panneau paiement rapide).
@@ -441,81 +478,94 @@ export default function OwnerPortalPage() {
     };
   }, [fundCalls, inQuarter]);
 
-  // iter90h8 : prochain appel ANNUEL (peu importe le trimestre selectionne).
-  // Ne cache PAS les appels futurs. Retourne le prochain appel non paye
-  // trie par due_date croissante.
+  // iter90h9 : prochain appel selon FIFO (Premier Entre Premier Sorti).
+  // Les paiements lettrent d'abord les appels les plus ANCIENS. Le prochain
+  // appel "en cours" est celui ou le cumul_appels depasse le total_paye.
+  // Ne pas afficher "en retard" un appel deja couvert par les paiements.
   const nextAnnualCall = useMemo(() => {
-    if (!fundCalls || fundCalls.length === 0) return null;
+    if (!annualStats) return null;
     const now = new Date();
     now.setHours(0, 0, 0, 0);
-    const candidates = fundCalls
-      .filter(fc => {
-        if (selectedAcp && fc.copropriete_id !== selectedAcp) return false;
-        if (fc.paid) return false;
-        if (!fc.date) return false;
-        const d = new Date(fc.date);
-        return d >= fyStartDate && d <= fyEndDate;
-      })
-      .map(fc => {
-        const dueIso = fc.due_date || fc.date;
-        const due = dueIso ? new Date(dueIso) : null;
-        if (due) due.setHours(0, 0, 0, 0);
-        const daysDelta = due ? Math.round((due - now) / (1000 * 60 * 60 * 24)) : null;
-        let urgency = 'upcoming';
-        if (daysDelta !== null) {
-          if (daysDelta < 0) urgency = 'overdue';
-          else if (daysDelta <= 7) urgency = 'urgent';
-          else if (daysDelta <= 30) urgency = 'soon';
-          else urgency = 'upcoming';
-        }
-        return {
-          fund_call_name: fc.name,
-          amount: Number(fc.my_amount || 0),
-          due_date: dueIso,
-          vcs_code: fc.vcs_code,
-          daysDelta, urgency,
-          is_future: daysDelta !== null && daysDelta > 0,
-        };
-      })
+    const sortedCalls = [...(annualStats.pending_calls_annual || [])]
+      .filter(fc => Number(fc.my_amount || 0) > 0.005)
       .sort((a, b) => {
-        // Impayes retard/urgent d'abord, puis chronologique
-        const aOver = a.daysDelta !== null && a.daysDelta < 0;
-        const bOver = b.daysDelta !== null && b.daysDelta < 0;
-        if (aOver && !bOver) return -1;
-        if (!aOver && bOver) return 1;
-        return (a.daysDelta ?? 999999) - (b.daysDelta ?? 999999);
+        // Tri par due_date (ou date si due_date absent)
+        const da = new Date(a.due_date || a.date);
+        const db = new Date(b.due_date || b.date);
+        return da - db;
       });
-    return candidates[0] || null;
-  }, [fundCalls, selectedAcp, fyStartDate, fyEndDate]);
+    let cumul = 0;
+    const totalPaid = annualStats.total_paid;
+    let currentCall = null;
+    let remainingOnCurrent = 0;
+    for (const fc of sortedCalls) {
+      const amt = Number(fc.my_amount || 0);
+      if (cumul + amt <= totalPaid + 0.005) {
+        // Appel totalement couvert par les paiements FIFO -> considere comme paye
+        cumul += amt;
+        continue;
+      }
+      // Appel partiellement/pas couvert -> c'est le prochain
+      currentCall = fc;
+      remainingOnCurrent = +(amt - Math.max(0, totalPaid - cumul)).toFixed(2);
+      break;
+    }
+    if (!currentCall) return null;
+    const dueIso = currentCall.due_date || currentCall.date;
+    const due = dueIso ? new Date(dueIso) : null;
+    if (due) due.setHours(0, 0, 0, 0);
+    const daysDelta = due ? Math.round((due - now) / (1000 * 60 * 60 * 24)) : null;
+    let urgency = 'upcoming';
+    if (daysDelta !== null) {
+      if (daysDelta < 0) urgency = 'overdue';
+      else if (daysDelta <= 7) urgency = 'urgent';
+      else if (daysDelta <= 30) urgency = 'soon';
+      else urgency = 'upcoming';
+    }
+    return {
+      fund_call_name: currentCall.name,
+      // Montant TOTAL de l'appel (comme demande par l'user : ne pas deduire
+      // avant validation. La note en bas de tuile mentionne le credit ou
+      // le solde total impaye pour transparence).
+      amount: Number(currentCall.my_amount || 0),
+      remaining: remainingOnCurrent,
+      due_date: dueIso,
+      vcs_code: currentCall.vcs_code,
+      daysDelta,
+      urgency,
+      is_future: daysDelta !== null && daysDelta > 0,
+      is_partial_covered: remainingOnCurrent < Number(currentCall.my_amount || 0) - 0.01,
+    };
+  }, [annualStats]);
 
-  // iter90h8 : Vision ANNUELLE - "Ma situation" doit prendre en compte TOUS
-  // les appels de l'exercice (T1..T4 + fonds reserve), meme les FUTURS.
-  // Ne PAS cacher un appel sous pretexte que sa date d'echeance n'est pas
-  // atteinte. Source de verite = fundCalls[] (contient tous les appels).
+  // iter90h8/h9 : Vision ANNUELLE - "Ma situation" prend en compte TOUS les
+  // appels de l'exercice + DEDUIT tous les paiements enregistres (peu importe
+  // la periode consultee par l'user).
+  // Source :
+  //   - Total appele = somme fund_calls[].my_amount de la FY (T1..T4 + reserve)
+  //   - Total paye   = somme des CREDITS du tier sur toute la FY (annualMovements)
+  //   - Balance      = Total appele - Total paye = solde reel = solde PDF
   const annualStats = useMemo(() => {
     if (!fundCalls || fundCalls.length === 0) {
       return null;
     }
-    // Filtre : ne garde que les fund_calls de l'ACP + de l'exercice fiscal courant
     const inFy = fundCalls.filter((fc) => {
       if (selectedAcp && fc.copropriete_id !== selectedAcp) return false;
       if (!fc.date) return false;
       const d = new Date(fc.date);
       return d >= fyStartDate && d <= fyEndDate;
     });
-    // Total appele annuel = somme des my_amount de TOUS les appels (passes + futurs)
     let total_called = 0;
     for (const fc of inFy) {
       total_called += Number(fc.my_amount || 0);
     }
-    // Total paye = credits reels (payements recus) depuis les movements
-    // + soustraction du solde d'ouverture crediteur (avoir historique)
+    // Total paye = credits sur le tier durant la FY complete (annualMovements)
+    // - annualOpeningBalance negatif = credit d'ouverture (proprio crediteur au 01/03)
     let sumCreditPaid = 0;
-    for (const m of movements || []) {
-      // Credits sur le tier = paiements/reductions
+    for (const m of annualMovements || []) {
       sumCreditPaid += Number(m.credit || 0);
     }
-    const openCreditor = openingBalance < 0 ? -openingBalance : 0;
+    const openCreditor = annualOpeningBalance < 0 ? -annualOpeningBalance : 0;
     const total_paid = +(openCreditor + sumCreditPaid).toFixed(2);
     total_called = +total_called.toFixed(2);
     const balance = +(total_called - total_paid).toFixed(2);
@@ -524,9 +574,9 @@ export default function OwnerPortalPage() {
       total_paid,
       balance,
       status: balance > 0.01 ? 'debiteur' : balance < -0.01 ? 'crediteur' : 'solde',
-      pending_calls_annual: inFy.filter(fc => !fc.paid),
+      pending_calls_annual: inFy,  // tous les appels FY (FIFO fait plus bas)
     };
-  }, [fundCalls, movements, openingBalance, selectedAcp, fyStartDate, fyEndDate]);
+  }, [fundCalls, annualMovements, annualOpeningBalance, selectedAcp, fyStartDate, fyEndDate]);
 
   // iter90h3 : conserve pour fallback si annualStats indisponible (aucun fund_call).
   const movementStats = useMemo(() => {
@@ -1672,19 +1722,34 @@ function SituationHero({ status, balance, totalCalled, totalPaid, nextCall, tota
                 <Clock size={12} />
                 {nextCall.is_future ? (
                   <>A venir dans {nextCall.daysDelta} jour(s)</>
+                ) : nextCall.is_partial_covered ? (
+                  <>Partiellement couvert par vos paiements</>
                 ) : (
                   <>{nextLabel}</>
                 )}
                 {nextCall.due_date && <span className="text-slate-500 font-normal">({fmtDate(nextCall.due_date)})</span>}
               </div>
-              {balance < -0.01 && (
+              {nextCall.is_partial_covered && nextCall.remaining > 0.01 && (
+                <div className="mt-2 text-[11px] bg-amber-50 rounded px-2 py-1 border border-amber-200 text-amber-700" data-testid="next-payment-fifo-note">
+                  <div className="flex justify-between font-mono">
+                    <span>Montant appel :</span><span>{fmt(nextCall.amount)}</span>
+                  </div>
+                  <div className="flex justify-between font-mono">
+                    <span>Deja couvert (FIFO) :</span><span>- {fmt(nextCall.amount - nextCall.remaining)}</span>
+                  </div>
+                  <div className="flex justify-between font-mono font-bold border-t border-current mt-1 pt-1">
+                    <span>Reste a payer :</span><span>{fmt(nextCall.remaining)}</span>
+                  </div>
+                </div>
+              )}
+              {balance < -0.01 && !nextCall.is_partial_covered && (
                 <div className="mt-2 text-[11px] bg-emerald-50 rounded px-2 py-1 border border-emerald-200 text-emerald-700" data-testid="next-payment-credit-note">
                   Votre credit actuel de {fmt(Math.abs(balance))} sera automatiquement deduit lors de l&apos;encaissement de cet appel.
                 </div>
               )}
               {balance > 0.01 && (
                 <div className="mt-2 text-[11px] bg-red-50 rounded px-2 py-1 border border-red-200 text-red-700" data-testid="next-payment-overdue-note">
-                  Solde total du au jour : <span className="font-bold font-mono">{fmt(balance)}</span> (impayes cumules - voir Situation de compte)
+                  Solde total du au jour : <span className="font-bold font-mono">{fmt(balance)}</span> (voir Situation de compte)
                 </div>
               )}
               {nextCall.vcs_code && (
