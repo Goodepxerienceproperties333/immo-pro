@@ -1027,11 +1027,20 @@ async def compute_bilan_data(db, copropriete_id: str, date_to: Optional[str] = N
     provisions_appelees = 0.0
     produits_hors_provisions = 0.0
     for entry in entries:
+        # iter90g3 : les mouvements de classe 6 issus d'OD (financement par
+        # fonds de reserve, regularisations) sont des TRANSFERTS de tresorerie
+        # entre poches (reserve <-> charge) et ne doivent PAS reduire
+        # `total_charges` (sinon le boni du compte 499 est fausse a la hausse
+        # d'un montant equivalent au financement). Seules les AC (achats
+        # fournisseurs) et VE (ventes) impactent le resultat de l'exercice.
+        jtype = entry.get("journal_type", "")
         for line in entry.get("lines", []):
             acc = line.get("account_number", "")
             if not acc:
                 continue
             if acc.startswith("6"):
+                if jtype == "OD":
+                    continue  # skip OD transfers
                 charge_net = line.get("debit", 0) - line.get("credit", 0)
                 total_charges += charge_net
                 # Frais privatifs (643) : factures individuellement aux

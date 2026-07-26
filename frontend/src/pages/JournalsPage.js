@@ -688,7 +688,7 @@ export default function JournalsPage() {
                     );})}
                   </tbody>
                   <tfoot><tr className="border-t-2 border-slate-200 bg-slate-50 font-semibold text-sm">
-                    <td colSpan={2} className="p-2">
+                    <td colSpan={3} className="p-2">
                       <Button variant="ghost" size="sm" onClick={addLine} className="text-xs"><Plus size={12} className="mr-1" /> Ajouter ligne</Button>
                     </td>
                     <td className="p-2 text-right font-mono">{totalDebit.toFixed(2)}</td>
