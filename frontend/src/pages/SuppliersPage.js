@@ -204,15 +204,9 @@ export default function SuppliersPage() {
         <span className="text-[11px] text-slate-500 italic hidden md:inline" data-testid="suppliers-scope-hint">
           Vue restreinte : fournisseurs de <b>{coproName || 'cette ACP'}</b> uniquement
         </span>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => window.location.assign('/admin/duplicates?tab=suppliers')}
-          className="text-xs border-orange-300 text-orange-700 hover:bg-orange-50"
-          data-testid="suppliers-detect-duplicates-btn"
-        >
-          <AlertTriangle size={13} className="mr-1.5" /> Detecter les doublons
-        </Button>
+        {/* iter90i4 : bouton "Detecter les doublons" retire cote syndic.
+            La detection des doublons fournisseurs est reservee au superadmin
+            (page /admin/duplicates - protegee par RequireSuperadmin). */}
       </div>
       <div className="bg-white rounded-md border border-slate-200 overflow-hidden">
         <Table>
