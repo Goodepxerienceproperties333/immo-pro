@@ -85,6 +85,15 @@ Application de gestion de copropriete basee sur le droit belge (PCMN), incluant 
 
 ### Session courante (Fevrier 2026)
 
+#### iter90gz - Bilan equilibre avec OD de financement par reserve (DONE - 4/4 tests)
+- Bug : le bilan etait desequilibre de 3545.30 EUR apres OD Sneyers (financement par fonds de reserve)
+- RCA : `compute_bilan_data` excluait les lignes classe 6 des OD (iter90g3b) -> reserve (Passif) baissait sans compensation par 499 (Passif)
+- Fix : integrer TOUTES les lignes classe 6 dans total_charges (AC + OD + VE), independamment du journal_type
+- Impact : reserve -X EUR (Passif) <-> 499 boni +X EUR (Passif) -> equilibre Actif = Passif preserve
+- Fichier : /app/backend/routes/reports.py L1029-1050
+- Tests : /app/backend/tests/test_iter90gz_bilan_od_included_in_charges.py (4/4 PASS)
+- Ancien test iter90g3b (logique inverse obsolete) supprime
+
 #### iter90g0 - Owner Portal Charges : OD (Op. Diverses) integrees (DONE - 6/6 backend + FE iter 85)
 - Endpoint /api/owner/invoices : merge factures + OD (class-6) avec sign inversion
 - Fallback DK par defaut de l'ACP si aucune DK sur la ligne/entree OD

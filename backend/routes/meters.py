@@ -89,6 +89,85 @@ def create_meters_router(db):
         return {"message": "Compteur supprime"}
 
     # ---- READINGS ----
+    class BatchReadingEntry(BaseModel):
+        lot_id: str
+        value: float
+
+    class BatchReadingInput(BaseModel):
+        date: str
+        meter_type: str
+        copropriete_id: str
+        entries: List[BatchReadingEntry]
+
+    @router.post("/batch-readings")
+    async def add_batch_readings(data: BatchReadingInput):
+        """iter90g5 : Cree un releve pour plusieurs lots en 1 appel.
+
+        Pour chaque `entries[].lot_id`, on cherche le compteur de type
+        `meter_type` rattache a ce lot dans l'ACP donnee. Si aucun compteur
+        n'existe, on en cree un automatiquement (nom "Releve <type> - <lot>",
+        serial vide). On enregistre ensuite la valeur comme un `reading`
+        classique (avec calcul de la consommation).
+        Retour : {created_readings: [...], created_meters: [...], errors: [...]}.
+        """
+        if data.meter_type not in METER_TYPES_ALLOWED:
+            raise HTTPException(400, f"Type invalide '{data.meter_type}'")
+        unit = METER_TYPE_DEFAULT_UNIT.get(data.meter_type, "")
+        created_readings = []
+        created_meters = []
+        errors = []
+        for entry in data.entries:
+            # Trouve le lot
+            lot = await db.lots.find_one({"id": entry.lot_id, "copropriete_id": data.copropriete_id}, {"_id": 0, "id": 1, "number": 1})
+            if not lot:
+                errors.append({"lot_id": entry.lot_id, "error": "Lot introuvable dans l'ACP"})
+                continue
+            # Trouve le compteur (ou cree)
+            meter = await db.meters.find_one({
+                "lot_id": entry.lot_id,
+                "meter_type": data.meter_type,
+                "copropriete_id": data.copropriete_id,
+            }, {"_id": 0})
+            if not meter:
+                meter = {
+                    "id": str(uuid.uuid4()),
+                    "name": f"Releve {data.meter_type} - {lot.get('number','')}",
+                    "meter_type": data.meter_type,
+                    "unit": unit,
+                    "lot_id": entry.lot_id,
+                    "serial_number": "",
+                    "copropriete_id": data.copropriete_id,
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                }
+                await db.meters.insert_one(meter)
+                created_meters.append({"id": meter["id"], "lot_id": entry.lot_id, "lot_number": lot.get("number", "")})
+            # Ajoute le reading (avec calcul consommation)
+            prev = await db.meter_readings.find({"meter_id": meter["id"]}, {"_id": 0}).sort("date", -1).to_list(1)
+            consumption = round(entry.value - prev[0]["value"], 2) if prev else 0.0
+            doc = {
+                "id": str(uuid.uuid4()),
+                "meter_id": meter["id"],
+                "date": data.date,
+                "value": float(entry.value),
+                "consumption": consumption,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            await db.meter_readings.insert_one(doc)
+            created_readings.append({
+                "id": doc["id"],
+                "meter_id": meter["id"],
+                "lot_id": entry.lot_id,
+                "lot_number": lot.get("number", ""),
+                "value": doc["value"],
+                "consumption": consumption,
+            })
+        return {
+            "created_readings": created_readings,
+            "created_meters": created_meters,
+            "errors": errors,
+            "count": len(created_readings),
+        }
+
     @router.get("/{meter_id}/readings")
     async def list_readings(meter_id: str):
         readings = await db.meter_readings.find({"meter_id": meter_id}, {"_id": 0}).sort("date", -1).to_list(1000)

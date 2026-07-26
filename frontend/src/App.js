@@ -43,6 +43,7 @@ import AdminSyndicConfigPage from "@/pages/AdminSyndicConfigPage";
 import MonBureauPage from "@/pages/MonBureauPage";
 import AdminBackupsPage from "@/pages/AdminBackupsPage";
 import AdminTicketsPage from "@/pages/AdminTicketsPage";
+import SyndicTicketsPage from "@/pages/SyndicTicketsPage";
 import SyndicOnboardingWizard from "@/pages/SyndicOnboardingWizard";
 import CoproprietesPage from "@/pages/CoproprietesPage";
 import OwnerPortalPage from "@/pages/OwnerPortalPage";
@@ -126,6 +127,7 @@ function AppRoutes() {
         <Route path="mon-bureau" element={<MonBureauPage />} />
         <Route path="admin/backups" element={<AdminBackupsPage />} />
         <Route path="admin/tickets" element={<AdminTicketsPage />} />
+        <Route path="support/tickets" element={<SyndicTicketsPage />} />
         <Route path="profile" element={<ProfilePage />} />
       </Route>
     </Routes>

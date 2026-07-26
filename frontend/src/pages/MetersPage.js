@@ -81,11 +81,58 @@ export default function MetersPage() {
 
   const getTypeInfo = (type) => METER_TYPES.find(t => t.value === type) || METER_TYPES[0];
 
+  // iter90g5 : Releve multi-lots (1 releve -> N lots)
+  const [batchDialog, setBatchDialog] = useState(false);
+  const [batchDate, setBatchDate] = useState(new Date().toISOString().slice(0, 10));
+  const [batchType, setBatchType] = useState('water');
+  const [batchRows, setBatchRows] = useState({}); // {lot_id: value}
+  const [batchLotIds, setBatchLotIds] = useState(new Set());
+  const [batchSubmitting, setBatchSubmitting] = useState(false);
+
+  const openBatch = () => {
+    setBatchDate(new Date().toISOString().slice(0, 10));
+    setBatchType('water');
+    setBatchLotIds(new Set());
+    setBatchRows({});
+    setBatchDialog(true);
+  };
+
+  const submitBatch = async () => {
+    const entries = Array.from(batchLotIds)
+      .map(lot_id => ({ lot_id, value: Number(batchRows[lot_id] || 0) }))
+      .filter(e => !Number.isNaN(e.value));
+    if (entries.length === 0) {
+      toast.error('Selectionnez au moins un lot');
+      return;
+    }
+    const coproId = lots[0]?.copropriete_id;
+    if (!coproId) { toast.error('ACP inconnue'); return; }
+    setBatchSubmitting(true);
+    try {
+      const r = await api.post('/meters/batch-readings', {
+        date: batchDate,
+        meter_type: batchType,
+        copropriete_id: coproId,
+        entries,
+      });
+      toast.success(`${r.data.count} releve(s) cree(s)`);
+      setBatchDialog(false);
+      await load();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur releve multi-lots');
+    } finally {
+      setBatchSubmitting(false);
+    }
+  };
+
   return (
     <div data-testid="meters-page">
       <div className="page-header flex items-center justify-between">
         <div><h1 className="page-title">Compteurs</h1><p className="page-subtitle">Gestion des compteurs et releves</p></div>
-        <Button onClick={openCreateMeter} className="bg-[#022D52] hover:bg-[#1D4ED8]" data-testid="create-meter-btn"><Plus size={16} className="mr-2" /> Nouveau compteur</Button>
+        <div className="flex gap-2">
+          <Button onClick={openBatch} variant="outline" data-testid="batch-reading-btn"><Plus size={16} className="mr-2" /> Releve multi-lots</Button>
+          <Button onClick={openCreateMeter} className="bg-[#022D52] hover:bg-[#1D4ED8]" data-testid="create-meter-btn"><Plus size={16} className="mr-2" /> Nouveau compteur</Button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -211,6 +258,78 @@ export default function MetersPage() {
             <div className="flex gap-3 justify-end">
               <Button variant="outline" onClick={() => setReadingDialog(false)}>Annuler</Button>
               <Button onClick={saveReading} className="bg-[#022D52] hover:bg-[#1D4ED8]" data-testid="reading-save-btn">Enregistrer</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* iter90g5 : Dialog releve multi-lots */}
+      <Dialog open={batchDialog} onOpenChange={setBatchDialog}>
+        <DialogContent className="max-w-2xl" data-testid="batch-reading-dialog">
+          <DialogHeader><DialogTitle>Releve multi-lots</DialogTitle></DialogHeader>
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs uppercase tracking-wider text-slate-500 font-semibold block mb-1">Date du releve</label>
+                <Input type="date" value={batchDate} onChange={e => setBatchDate(e.target.value)} className="h-9" data-testid="batch-date" />
+              </div>
+              <div>
+                <label className="text-xs uppercase tracking-wider text-slate-500 font-semibold block mb-1">Type de compteur</label>
+                <select value={batchType} onChange={e => setBatchType(e.target.value)} className="h-9 w-full border border-slate-200 rounded px-2 text-sm" data-testid="batch-type">
+                  <option value="water">Eau (m3)</option>
+                  <option value="heating">Chauffage (kWh)</option>
+                  <option value="electricity">Electricite (kWh)</option>
+                  <option value="gas">Gaz (m3)</option>
+                  <option value="boiler_maintenance">Entretien chaudiere (part)</option>
+                </select>
+              </div>
+            </div>
+            <div>
+              <label className="text-xs uppercase tracking-wider text-slate-500 font-semibold block mb-1">Lots concernes ({batchLotIds.size} selectionnes)</label>
+              <div className="border border-slate-200 rounded max-h-80 overflow-y-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-50 sticky top-0">
+                    <tr className="text-xs text-slate-600 uppercase">
+                      <th className="p-2 text-left w-10">
+                        <input type="checkbox" onChange={(e) => {
+                          if (e.target.checked) setBatchLotIds(new Set(lots.map(l => l.id)));
+                          else setBatchLotIds(new Set());
+                        }} data-testid="batch-toggle-all" />
+                      </th>
+                      <th className="p-2 text-left">Lot</th>
+                      <th className="p-2 text-left">Description</th>
+                      <th className="p-2 text-right">Valeur / Index</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {lots.map(l => {
+                      const checked = batchLotIds.has(l.id);
+                      return (
+                        <tr key={l.id} className={checked ? 'bg-blue-50/50' : ''} data-testid={`batch-lot-row-${l.id}`}>
+                          <td className="p-2">
+                            <input type="checkbox" checked={checked} onChange={(e) => {
+                              const s = new Set(batchLotIds);
+                              if (e.target.checked) s.add(l.id); else s.delete(l.id);
+                              setBatchLotIds(s);
+                            }} data-testid={`batch-lot-check-${l.id}`} />
+                          </td>
+                          <td className="p-2 font-mono text-xs">{l.number}</td>
+                          <td className="p-2 text-xs text-slate-500">{l.description || '-'}</td>
+                          <td className="p-2 text-right">
+                            <Input type="number" step="0.01" disabled={!checked} value={batchRows[l.id] || ''} onChange={e => setBatchRows({ ...batchRows, [l.id]: e.target.value })} className="h-8 text-right font-mono text-xs w-32 ml-auto" data-testid={`batch-lot-value-${l.id}`} />
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="outline" onClick={() => setBatchDialog(false)} data-testid="batch-cancel-btn">Annuler</Button>
+              <Button onClick={submitBatch} disabled={batchSubmitting || batchLotIds.size === 0} className="bg-[#022D52] hover:bg-[#1D4ED8]" data-testid="batch-save-btn">
+                {batchSubmitting ? 'Envoi...' : `Enregistrer ${batchLotIds.size} releve(s)`}
+              </Button>
             </div>
           </div>
         </DialogContent>

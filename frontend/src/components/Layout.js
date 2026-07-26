@@ -48,6 +48,10 @@ const sections = [
     { to: '/email-templates', icon: FileText, label: 'Modeles emails' },
     { to: '/documents', icon: FolderOpen, label: 'Documents' },
   ]},
+  // iter90g4 : onglet "Support" pour permettre au syndic de suivre ses tickets bug.
+  { title: 'Support', accent: 'blue', items: [
+    { to: '/support/tickets', icon: Ticket, label: 'Mes tickets' },
+  ]},
 ];
 
 export default function Layout() {
