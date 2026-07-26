@@ -394,6 +394,34 @@ export default function OwnerPortalPage() {
     };
   }, [fundCalls, inQuarter]);
 
+  // iter90h3 : stats calcules a partir des `movements` deja charges (source
+  // /owner/movements, filtree par exercice fiscal). Aligne "Ma situation" sur
+  // l'onglet "Appels de fonds" (meme source, meme resultat).
+  // Fallback : si movements pas encore charge, on retombe sur acpStats
+  // (cumule sans filtre FY) pour ne pas afficher un ecran vide.
+  const movementStats = useMemo(() => {
+    if (!movements || movements.length === 0) {
+      return null;
+    }
+    let sumDebit = 0;
+    let sumCredit = 0;
+    for (const m of movements) {
+      sumDebit += Number(m.debit || 0);
+      sumCredit += Number(m.credit || 0);
+    }
+    const openDebtor = openingBalance > 0 ? openingBalance : 0;
+    const openCreditor = openingBalance < 0 ? -openingBalance : 0;
+    const total_called = +(openDebtor + sumDebit).toFixed(2);
+    const total_paid = +(openCreditor + sumCredit).toFixed(2);
+    const balance = +Number(closingBalance || 0).toFixed(2);
+    return {
+      total_called,
+      total_paid,
+      balance,
+      status: balance > 0.01 ? 'debiteur' : balance < -0.01 ? 'crediteur' : 'solde',
+    };
+  }, [movements, openingBalance, closingBalance]);
+
   const chargesByCategory = useMemo(() => {
     // iter90i8 : filtre les charges par trimestre selectionne (au lieu des
     // 12 derniers mois). Rend le donut coherent avec la vue trimestrielle.
@@ -624,13 +652,14 @@ export default function OwnerPortalPage() {
   // Plus de mode "all" : selectedAcp est toujours defini quand on affiche
   // le dashboard financier.
   const acpLotsCount = coproprietes.find(c => c.id === selectedAcp)?.my_lots?.length || 0;
+
   const stats = {
     coproprietes_count: 1,
     lots_count: acpLotsCount,
-    total_called: acpStats ? acpStats.total_called : 0,
-    total_paid: acpStats ? acpStats.total_paid : 0,
-    balance: acpStats ? acpStats.balance : 0,
-    status: acpStats ? acpStats.status : 'solde',
+    total_called: movementStats ? movementStats.total_called : (acpStats ? acpStats.total_called : 0),
+    total_paid: movementStats ? movementStats.total_paid : (acpStats ? acpStats.total_paid : 0),
+    balance: movementStats ? movementStats.balance : (acpStats ? acpStats.balance : 0),
+    status: movementStats ? movementStats.status : (acpStats ? acpStats.status : 'solde'),
     pending_calls_count: (dashboard?.pending_calls || []).filter(p => p.copropriete_id === selectedAcp).length,
   };
   const filteredFundCalls = fundCalls;
