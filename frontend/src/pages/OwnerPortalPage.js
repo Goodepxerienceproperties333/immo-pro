@@ -441,11 +441,94 @@ export default function OwnerPortalPage() {
     };
   }, [fundCalls, inQuarter]);
 
-  // iter90h3 : stats calcules a partir des `movements` deja charges (source
-  // /owner/movements, filtree par exercice fiscal). Aligne "Ma situation" sur
-  // l'onglet "Appels de fonds" (meme source, meme resultat).
-  // Fallback : si movements pas encore charge, on retombe sur acpStats
-  // (cumule sans filtre FY) pour ne pas afficher un ecran vide.
+  // iter90h8 : prochain appel ANNUEL (peu importe le trimestre selectionne).
+  // Ne cache PAS les appels futurs. Retourne le prochain appel non paye
+  // trie par due_date croissante.
+  const nextAnnualCall = useMemo(() => {
+    if (!fundCalls || fundCalls.length === 0) return null;
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+    const candidates = fundCalls
+      .filter(fc => {
+        if (selectedAcp && fc.copropriete_id !== selectedAcp) return false;
+        if (fc.paid) return false;
+        if (!fc.date) return false;
+        const d = new Date(fc.date);
+        return d >= fyStartDate && d <= fyEndDate;
+      })
+      .map(fc => {
+        const dueIso = fc.due_date || fc.date;
+        const due = dueIso ? new Date(dueIso) : null;
+        if (due) due.setHours(0, 0, 0, 0);
+        const daysDelta = due ? Math.round((due - now) / (1000 * 60 * 60 * 24)) : null;
+        let urgency = 'upcoming';
+        if (daysDelta !== null) {
+          if (daysDelta < 0) urgency = 'overdue';
+          else if (daysDelta <= 7) urgency = 'urgent';
+          else if (daysDelta <= 30) urgency = 'soon';
+          else urgency = 'upcoming';
+        }
+        return {
+          fund_call_name: fc.name,
+          amount: Number(fc.my_amount || 0),
+          due_date: dueIso,
+          vcs_code: fc.vcs_code,
+          daysDelta, urgency,
+          is_future: daysDelta !== null && daysDelta > 0,
+        };
+      })
+      .sort((a, b) => {
+        // Impayes retard/urgent d'abord, puis chronologique
+        const aOver = a.daysDelta !== null && a.daysDelta < 0;
+        const bOver = b.daysDelta !== null && b.daysDelta < 0;
+        if (aOver && !bOver) return -1;
+        if (!aOver && bOver) return 1;
+        return (a.daysDelta ?? 999999) - (b.daysDelta ?? 999999);
+      });
+    return candidates[0] || null;
+  }, [fundCalls, selectedAcp, fyStartDate, fyEndDate]);
+
+  // iter90h8 : Vision ANNUELLE - "Ma situation" doit prendre en compte TOUS
+  // les appels de l'exercice (T1..T4 + fonds reserve), meme les FUTURS.
+  // Ne PAS cacher un appel sous pretexte que sa date d'echeance n'est pas
+  // atteinte. Source de verite = fundCalls[] (contient tous les appels).
+  const annualStats = useMemo(() => {
+    if (!fundCalls || fundCalls.length === 0) {
+      return null;
+    }
+    // Filtre : ne garde que les fund_calls de l'ACP + de l'exercice fiscal courant
+    const inFy = fundCalls.filter((fc) => {
+      if (selectedAcp && fc.copropriete_id !== selectedAcp) return false;
+      if (!fc.date) return false;
+      const d = new Date(fc.date);
+      return d >= fyStartDate && d <= fyEndDate;
+    });
+    // Total appele annuel = somme des my_amount de TOUS les appels (passes + futurs)
+    let total_called = 0;
+    for (const fc of inFy) {
+      total_called += Number(fc.my_amount || 0);
+    }
+    // Total paye = credits reels (payements recus) depuis les movements
+    // + soustraction du solde d'ouverture crediteur (avoir historique)
+    let sumCreditPaid = 0;
+    for (const m of movements || []) {
+      // Credits sur le tier = paiements/reductions
+      sumCreditPaid += Number(m.credit || 0);
+    }
+    const openCreditor = openingBalance < 0 ? -openingBalance : 0;
+    const total_paid = +(openCreditor + sumCreditPaid).toFixed(2);
+    total_called = +total_called.toFixed(2);
+    const balance = +(total_called - total_paid).toFixed(2);
+    return {
+      total_called,
+      total_paid,
+      balance,
+      status: balance > 0.01 ? 'debiteur' : balance < -0.01 ? 'crediteur' : 'solde',
+      pending_calls_annual: inFy.filter(fc => !fc.paid),
+    };
+  }, [fundCalls, movements, openingBalance, selectedAcp, fyStartDate, fyEndDate]);
+
+  // iter90h3 : conserve pour fallback si annualStats indisponible (aucun fund_call).
   const movementStats = useMemo(() => {
     if (!movements || movements.length === 0) {
       return null;
@@ -709,17 +792,18 @@ export default function OwnerPortalPage() {
   const stats = {
     // ⚠️ VERROU iter90h3 : NE PAS MODIFIER sans mettre a jour
     // /app/backend/tests/test_iter90h3_owner_movements_consistency.py
-    // Regle metier : "Ma situation" DOIT afficher le meme solde que l'onglet
-    // "Appels de fonds" (source : /owner/movements, scope FY selectionne).
-    // acpStats (source /dashboard) somme SANS filtre FY -> a garder en
-    // fallback uniquement quand movements pas encore charge.
+    // iter90h8 : Vision ANNUELLE prioritaire.
+    // Ordre de priorite :
+    //   1. annualStats (fundCalls annuel + paiements movements) - inclut FUTURS
+    //   2. movementStats (movements FY, exclut futurs) - fallback
+    //   3. acpStats (dashboard sans filtre) - fallback ultime
     coproprietes_count: 1,
     lots_count: acpLotsCount,
-    total_called: movementStats ? movementStats.total_called : (acpStats ? acpStats.total_called : 0),
-    total_paid: movementStats ? movementStats.total_paid : (acpStats ? acpStats.total_paid : 0),
-    balance: movementStats ? movementStats.balance : (acpStats ? acpStats.balance : 0),
-    status: movementStats ? movementStats.status : (acpStats ? acpStats.status : 'solde'),
-    pending_calls_count: (dashboard?.pending_calls || []).filter(p => p.copropriete_id === selectedAcp).length,
+    total_called: annualStats ? annualStats.total_called : (movementStats ? movementStats.total_called : (acpStats ? acpStats.total_called : 0)),
+    total_paid: annualStats ? annualStats.total_paid : (movementStats ? movementStats.total_paid : (acpStats ? acpStats.total_paid : 0)),
+    balance: annualStats ? annualStats.balance : (movementStats ? movementStats.balance : (acpStats ? acpStats.balance : 0)),
+    status: annualStats ? annualStats.status : (movementStats ? movementStats.status : (acpStats ? acpStats.status : 'solde')),
+    pending_calls_count: annualStats ? annualStats.pending_calls_annual.length : (dashboard?.pending_calls || []).filter(p => p.copropriete_id === selectedAcp).length,
   };
   const filteredFundCalls = fundCalls;
   const filteredCharges = chargesMemo;
@@ -870,10 +954,10 @@ export default function OwnerPortalPage() {
               balance={stats.balance}
               totalCalled={stats.total_called}
               totalPaid={stats.total_paid}
-              nextCall={quarterAgg.nextCall}
+              nextCall={nextAnnualCall}
               totalPending={stats.balance > 0.01 ? stats.balance : 0}
               totalCharges12m={totalCharges12m}
-              pendingCount={quarterAgg.pendingCount}
+              pendingCount={stats.pending_calls_count}
               copyVcs={copyVcs}
               periodLabel={selectedQuarter === 'year' ? `Exercice ${fyLabel}` : `${selectedQuarter} ${fyLabel}`}
               isYearView={selectedQuarter === 'year'}
@@ -1564,7 +1648,9 @@ function SituationHero({ status, balance, totalCalled, totalPaid, nextCall, tota
         </CardContent>
       </Card>
 
-      {/* Carte 2 : Prochain paiement */}
+      {/* Carte 2 : Prochain paiement - iter90h8 : affiche l'APPEL entier
+          avec son montant TOTAL (pas de deduction du credit avant validation).
+          Ne cache jamais un appel meme s'il est futur. */}
       <Card className={`${nextBg} border-2`} data-testid="situation-next-card">
         <CardContent className="p-5">
           <div className="flex items-start justify-between mb-3">
@@ -1574,34 +1660,34 @@ function SituationHero({ status, balance, totalCalled, totalPaid, nextCall, tota
             </div>
             {pendingCount > 0 && <Badge variant="outline" className={`text-[10px] ${nextTextColor} border-current`}>{pendingCount} en attente</Badge>}
           </div>
-          {balance > 0.01 ? (
-            // iter90h7 : SOURCE UNIQUE = balance (solde net grand livre).
-            // Le montant affiche DOIT correspondre a la Situation de compte PDF
-            // (total des impayes cumules, incluant tous les appels non regles).
-            // Le detail du prochain appel (nom, echeance) reste informatif.
+          {nextCall ? (
             <>
-              <div className="text-3xl font-bold text-red-700" style={{fontFamily:'Chivo,sans-serif'}} data-testid="next-payment-amount">
-                {fmt(balance)}
+              <div className={`text-3xl font-bold ${nextTextColor}`} style={{fontFamily:'Chivo,sans-serif'}} data-testid="next-payment-amount">
+                {fmt(nextCall.amount)}
               </div>
-              <div className="mt-1 text-[13px] font-medium text-slate-700">
-                Solde a regler au total
+              <div className="mt-1 text-[13px] font-medium text-slate-700 truncate" title={nextCall.fund_call_name}>
+                {nextCall.fund_call_name}
               </div>
-              {nextCall && (
-                <div className="mt-2 text-[11px] bg-white/60 rounded px-2 py-1.5 border border-red-200" data-testid="next-payment-detail">
-                  <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-0.5">
-                    Prochaine echeance
-                  </div>
-                  <div className="text-slate-800 font-medium truncate" title={nextCall.fund_call_name}>
-                    {nextCall.fund_call_name}
-                  </div>
-                  <div className="flex items-center gap-1.5 mt-1 text-red-700 font-semibold">
-                    <Clock size={11} />
-                    {nextLabel}
-                    {nextCall.due_date && <span className="text-slate-500 font-normal">({fmtDate(nextCall.due_date)})</span>}
-                  </div>
+              <div className={`mt-2 text-xs font-semibold flex items-center gap-1.5 ${nextTextColor}`}>
+                <Clock size={12} />
+                {nextCall.is_future ? (
+                  <>A venir dans {nextCall.daysDelta} jour(s)</>
+                ) : (
+                  <>{nextLabel}</>
+                )}
+                {nextCall.due_date && <span className="text-slate-500 font-normal">({fmtDate(nextCall.due_date)})</span>}
+              </div>
+              {balance < -0.01 && (
+                <div className="mt-2 text-[11px] bg-emerald-50 rounded px-2 py-1 border border-emerald-200 text-emerald-700" data-testid="next-payment-credit-note">
+                  Votre credit actuel de {fmt(Math.abs(balance))} sera automatiquement deduit lors de l&apos;encaissement de cet appel.
                 </div>
               )}
-              {(nextCall?.vcs_code || copyVcs) && nextCall?.vcs_code && (
+              {balance > 0.01 && (
+                <div className="mt-2 text-[11px] bg-red-50 rounded px-2 py-1 border border-red-200 text-red-700" data-testid="next-payment-overdue-note">
+                  Solde total du au jour : <span className="font-bold font-mono">{fmt(balance)}</span> (impayes cumules - voir Situation de compte)
+                </div>
+              )}
+              {nextCall.vcs_code && (
                 <button
                   onClick={() => copyVcs(nextCall.vcs_code)}
                   className="mt-3 font-mono text-[10px] text-[#022D52] bg-white/60 hover:bg-white px-2 py-1 rounded inline-flex items-center gap-1"
@@ -1610,37 +1696,16 @@ function SituationHero({ status, balance, totalCalled, totalPaid, nextCall, tota
                   {nextCall.vcs_code}<Copy size={9} />
                 </button>
               )}
-              <div className="mt-3 text-[10px] text-slate-500 pt-2 border-t border-white/60 italic">
+            </>
+          ) : balance > 0.01 ? (
+            <>
+              <div className="text-3xl font-bold text-red-700" style={{fontFamily:'Chivo,sans-serif'}} data-testid="next-payment-amount">
+                {fmt(balance)}
+              </div>
+              <div className="mt-1 text-[13px] font-medium text-slate-700">Solde a regler</div>
+              <div className="mt-3 text-[10px] text-slate-500 italic">
                 Reference identique a votre Situation de compte PDF
               </div>
-            </>
-          ) : balance < -0.01 ? (
-            // Crediteur : rien a payer, avoir en votre faveur
-            <>
-              <div className="text-3xl font-bold text-emerald-700" style={{fontFamily:'Chivo,sans-serif'}} data-testid="next-payment-amount">
-                {fmt(Math.abs(balance))}
-              </div>
-              <div className="mt-1 text-[13px] font-medium text-emerald-700">
-                En votre faveur
-              </div>
-              <div className="mt-2 text-xs text-slate-600">
-                Aucun paiement requis pour l&apos;instant. Ce credit sera deduit de votre prochain appel.
-              </div>
-              {nextCall && (
-                <div className="mt-2 text-[11px] bg-white/60 rounded px-2 py-1.5 border border-emerald-200">
-                  <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-0.5">
-                    Prochain appel prevu
-                  </div>
-                  <div className="text-slate-800 font-medium truncate" title={nextCall.fund_call_name}>
-                    {nextCall.fund_call_name}
-                  </div>
-                  {nextCall.due_date && (
-                    <div className="text-[10px] text-slate-500 mt-0.5">
-                      Echeance : {fmtDate(nextCall.due_date)}
-                    </div>
-                  )}
-                </div>
-              )}
             </>
           ) : (
             <>
