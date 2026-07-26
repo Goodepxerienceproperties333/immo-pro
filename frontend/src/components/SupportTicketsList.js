@@ -125,6 +125,16 @@ export default function SupportTicketsList({ superadmin = false, onBack = null, 
     }
   };
 
+  const resendSupportEmail = async () => {
+    if (!activeTicket || !superadmin) return;
+    try {
+      const { data } = await api.post(`/tickets/${activeTicket.id}/resend-support-email`);
+      toast.success(`Email renvoye a ${data.sent_to}`);
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur renvoi email support');
+    }
+  };
+
   const statusLabel = useMemo(() => {
     const m = {};
     statuses.forEach(s => { m[s.key] = s.label; });
@@ -151,6 +161,14 @@ export default function SupportTicketsList({ superadmin = false, onBack = null, 
           <Badge className={`${STATUS_COLORS[activeTicket.status] || 'bg-slate-100'} text-[10px]`} data-testid="ticket-status-badge">
             {statusLabel[activeTicket.status] || activeTicket.status}
           </Badge>
+          {superadmin && (
+            <button
+              onClick={resendSupportEmail}
+              className="ml-2 text-[10px] px-2 py-1 rounded border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"
+              title="Renvoyer la notification de creation vers support@nextgecopro.be"
+              data-testid="ticket-resend-support-btn"
+            >Renvoyer email support</button>
+          )}
         </div>
         <div className="flex-1 overflow-y-auto p-3 space-y-3 bg-slate-50/40">
           {/* Ticket infos */}

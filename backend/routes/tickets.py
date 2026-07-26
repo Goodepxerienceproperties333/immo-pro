@@ -177,6 +177,43 @@ async def _send_status_changed_email(
     )
 
 
+async def _send_comment_notification_email(
+    *, recipient_email: str, ticket: dict, comment: str, actor_name: str,
+    actor_role: str, reply_to: Optional[str] = None,
+) -> None:
+    """iter90h1 : notification email quand un commentaire est ajoute a un ticket.
+    - Si commentaire du syndic -> notifie support@ (avec reply-to = demandeur)
+    - Si commentaire du support -> notifie le demandeur
+    """
+    from graph_email import send_html_email
+    if not recipient_email:
+        return
+    number = ticket["number"]
+    subject = f"[NextGe Copro Support] Nouveau commentaire ticket {number}"
+    body = f"""
+<div style="font-family:system-ui,Segoe UI,Arial,sans-serif;max-width:640px;">
+  <h2 style="color:#022D52;margin-bottom:4px;">Nouveau commentaire</h2>
+  <div style="background:#FAFAFA;border:1px solid #EEE;border-radius:8px;padding:12px;margin:12px 0;">
+    <b>Ticket :</b> {number}<br/>
+    <b>Titre :</b> {ticket.get('title','')}<br/>
+    <b>Statut :</b> {STATUS_LABELS.get(ticket.get('status',''), ticket.get('status',''))}<br/>
+    <b>De :</b> {actor_name} ({actor_role})<br/>
+  </div>
+  <h3 style="color:#333;">Commentaire</h3>
+  <div style="white-space:pre-wrap;font-size:13px;background:#F1F5F9;padding:10px;border-radius:6px;">{comment}</div>
+  <p style="color:#555;font-size:12px;margin-top:16px;">
+    Repondez a ce ticket depuis NextGe Copro (menu Support).
+  </p>
+</div>
+""".strip()
+    await send_html_email(
+        recipients=[recipient_email],
+        subject=subject,
+        html_body=body,
+        reply_to=reply_to,
+    )
+
+
 def _is_superadmin(role: str) -> bool:
     return role in ("superadmin", "admin")
 
@@ -444,7 +481,7 @@ def create_tickets_router(db):
         return _mask_ticket(refreshed)
 
     @router.post("/{ticket_id}/comments")
-    async def add_comment(ticket_id: str, data: CommentInput, request: Request):
+    async def add_comment(ticket_id: str, data: CommentInput, request: Request, background: BackgroundTasks):
         t = await _load_ticket_scoped(db, ticket_id, request)
         comment = (data.comment or "").strip()
         if not comment:
@@ -469,7 +506,52 @@ def create_tickets_router(db):
             {"id": ticket_id}, {"$set": {"updated_at": now}}
         )
         event.pop("_id", None)
+
+        # iter90h1 : notification email du commentaire
+        # - Superadmin/admin commente -> notifier le demandeur
+        # - Syndic/owner commente -> notifier support@
+        support_email = os.environ.get("TICKETS_SUPPORT_EMAIL", "").strip() \
+            or os.environ.get("SUPPORT_EMAIL", "").strip() \
+            or "support@nextgecopro.be"
+        if _is_superadmin(ctx["role"]):
+            # Superadmin -> demandeur
+            background.add_task(
+                _send_comment_notification_email,
+                recipient_email=t.get("requester_email", ""),
+                ticket=t,
+                comment=comment,
+                actor_name=ctx["name"],
+                actor_role="Support",
+            )
+        else:
+            # Syndic/owner -> support (avec reply-to = demandeur)
+            background.add_task(
+                _send_comment_notification_email,
+                recipient_email=support_email,
+                ticket=t,
+                comment=comment,
+                actor_name=ctx["name"],
+                actor_role=ctx["role"],
+                reply_to=ctx["email"] or t.get("requester_email", "") or None,
+            )
         return event
+
+    @router.post("/{ticket_id}/resend-support-email")
+    async def resend_support_creation_email(ticket_id: str, request: Request, background: BackgroundTasks):
+        """iter90h1 : renvoie l'email de creation vers support@nextgecopro.be.
+        Utile quand la notif initiale a echoue (ex: MAIL_ENABLED=false au moment
+        de la creation). Reserve aux superadmins."""
+        role = getattr(request.state, "user_role", "") or ""
+        if not _is_superadmin(role):
+            raise HTTPException(403, "Reserve au superadmin")
+        t = await db.support_tickets.find_one({"id": ticket_id}, {"_id": 0})
+        if not t:
+            raise HTTPException(404, "Ticket introuvable")
+        support_email = os.environ.get("TICKETS_SUPPORT_EMAIL", "").strip() \
+            or os.environ.get("SUPPORT_EMAIL", "").strip() \
+            or "support@nextgecopro.be"
+        background.add_task(_send_ticket_created_email, support_email=support_email, ticket=t)
+        return {"ok": True, "sent_to": support_email, "ticket_number": t.get("number", "")}
 
     @router.post("/{ticket_id}/assign")
     async def assign_ticket(ticket_id: str, data: AssignInput, request: Request):
