@@ -85,13 +85,18 @@ Application de gestion de copropriete basee sur le droit belge (PCMN), incluant 
 
 ### Session courante (Fevrier 2026)
 
-#### iter90fv - SMTP One2Net (DONE - 9/9 tests + 1 envoi reel confirme iter 82)
-- Backend graph_email.py : nouveau chemin SMTP (aiosmtplib) en fallback si SMTP_HOST configure
-- Port 465 -> SSL implicite, port 587 -> STARTTLS
-- .env : MAIL_ENABLED=true, SMTP_HOST=mail01.one2net.net:465, SMTP_USER=info@nextgecopro.be
-- Test file : /app/backend/tests/test_iter90fv_smtp.py (9/9 PASS)
-- Envoi reel valide : email delivered to info@nextgecopro.be
-- Prod ready : le renvoi d'invitation a Mme Boxus fonctionne desormais
+#### iter90g0 - Owner Portal Charges : OD (Op. Diverses) integrees (DONE - 6/6 backend + FE iter 85)
+- Endpoint /api/owner/invoices : merge factures + OD (class-6) avec sign inversion
+- Fallback DK par defaut de l'ACP si aucune DK sur la ligne/entree OD
+- Reversed/is_reversal OD ignorees
+- UI OwnerPortalPage : badge 'OD' + statut 'Ecriture diverse' + row bg-indigo
+- Verifie : Boxus Maria = 7 factures 1630.72 + 1 OD Senyers -1091.95 = 538.77 EUR
+- Test file : /app/backend/tests/test_iter90g0_charges_od.py
+
+#### iter90fz - Owner Portal Charges : projection dynamique via DK (DONE - iter 84)
+#### iter90fx - Situation email dialog : Du = 1er jour FY (DONE - iter 83)
+#### iter90fw - Bank movements : match IBAN + PCMN prefix (DONE - iter 83)
+#### iter90fv - SMTP One2Net (DONE - 9/9 + envoi reel iter 82)
 
 #### FEATURE - Systeme de tickets support (bug escalation) (DONE - 19/19 backend + 100% frontend iter 77)
 - Chatbot avec onglets Assistant IA / Mes tickets + mode picker (operationnel vs bug)
