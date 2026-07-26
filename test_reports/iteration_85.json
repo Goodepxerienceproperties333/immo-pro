@@ -1,0 +1,24 @@
+{
+  "summary": "iter90g0 - Owner Portal Charges tab now includes OD (Operations Diverses) entries touching class-6 accounts. Backend: 6/6 pytest tests PASS. Frontend: verified 8 rows, OD badge, 'Ecriture diverse' status, -1 091,95 EUR quote-part (30.80%), and Total votre quote-part = 538,77 EUR - all matches spec exactly.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter90g0_charges_od.py",
+    "/app/test_reports/pytest/iter90g0_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "owner_portal.py lines 942-1015: correct OD inclusion. Filters journal_type=OD, excludes reversed/is_reversal, class-6 lines only. DK precedence line>entry>default-ACP is correct.",
+    "Sign convention: net_charge = debit - credit; credit-only line yields negative net_charge and thus negative my_amount that reduces the total - matches spec (-3545.30 -> -1091.95 for 30.80%).",
+    "Row id format 'od-<je_id>-<account>' is stable and used by the FE for the badge testid.",
+    "Chinese Wall verified: an OD seeded in ACP Alpha does NOT appear in Boxus's response when Boxus has no lot in Alpha (my_lot_ids empty for that scope -> my_q=0 -> skipped).",
+    "OwnerPortalPage.js: OD badge data-testid='charge-od-badge-<id>', bg-indigo-50/40 row background, and 'Ecriture diverse' label are all wired correctly."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter90g0_charges_od.py (new)"],
+  "success_rate": {"backend": "100% (6/6)", "frontend": "100% (all UI spec points)"},
+  "test_credentials": "Boxus (temporarily set): evrard.gerald@outlook.be / TestIter90g0!42 - password_hash was backed up to /tmp/boxus_old.txt and restored after tests. Verified restored (modified_count=1).",
+  "seed_data_creation": "Temporary journal_entries tagged test_tag='iter90g0_test' (no-charge OD, reversed OD, is_reversal OD, Alpha OD). Cleanup via autouse fixture: db.journal_entries.delete_many({test_tag='iter90g0_test'}). Post-run count: 0 leftover.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Boxus fixture pattern reused. OD JE id in Maria = 71a003a5-8f12-46c7-b457-4842d60c9ac4 (JE date 2026-07-26, account 61066 Travaux divers, credit 3545.30). Owner Portal is served at /portal (not /owner) - a welcome onboarding modal appears on first login and must be closed before interacting with tabs. The acp-selector button has data-testid='acp-selector'."
+}

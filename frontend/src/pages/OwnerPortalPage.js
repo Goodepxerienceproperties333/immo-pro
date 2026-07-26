@@ -895,17 +895,22 @@ export default function OwnerPortalPage() {
                   </TableRow></TableHeader>
                   <TableBody>
                     {filteredCharges.map(c => (
-                      <TableRow key={c.id} data-testid={`charge-row-${c.id}`}>
+                      <TableRow key={c.id} data-testid={`charge-row-${c.id}`} className={c.source === 'od' ? 'bg-indigo-50/40' : ''}>
                         <TableCell className="text-xs">{fmtDate(c.date)}</TableCell>
-                        <TableCell className="text-sm font-medium">{c.supplier}</TableCell>
+                        <TableCell className="text-sm font-medium">
+                          {c.supplier}
+                          {c.source === 'od' && (
+                            <Badge variant="outline" className="ml-1 text-[9px] bg-indigo-50 text-indigo-700 border-indigo-200" data-testid={`charge-od-badge-${c.id}`} title={`Operation Diverse ${c.account_number ? '(compte ' + c.account_number + ')' : ''}`}>OD</Badge>
+                          )}
+                        </TableCell>
                         <TableCell className="text-xs font-mono text-slate-600">{c.number || <span className="text-slate-300 italic">-</span>}</TableCell>
                         <TableCell className="text-xs text-slate-600 max-w-xs truncate" title={c.description}>{c.description}</TableCell>
                         <TableCell>
                           <Badge
                             variant="outline"
-                            className={`text-[10px] ${c.status === 'paid' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-700 border-amber-200'}`}
+                            className={`text-[10px] ${c.source === 'od' ? 'bg-indigo-50 text-indigo-700 border-indigo-200' : c.status === 'paid' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-700 border-amber-200'}`}
                           >
-                            {c.status === 'paid' ? 'Payee' : 'En attente'}
+                            {c.source === 'od' ? 'Ecriture diverse' : (c.status === 'paid' ? 'Payee' : 'En attente')}
                           </Badge>
                         </TableCell>
                         <TableCell className="text-right font-mono text-xs text-slate-400">{fmt(c.total_amount)}</TableCell>

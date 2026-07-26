@@ -936,7 +936,86 @@ def create_owner_portal_router(db):
                 "status": inv.get("status", "unpaid"),
                 "category": inv.get("category", ""),
                 "attachments": atts,
+                "source": "invoice",  # iter90g0
             })
+
+        # iter90g0 : inclure aussi les Operations Diverses (OD) qui touchent
+        # les comptes de classe 6 (Charges). Un credit sur un compte 6xxxxx
+        # reduit la charge -> quote-part negative.
+        copros_scope = [copropriete_id] if copropriete_id else list({lt["copropriete_id"] for lt in my_lots})
+        if copros_scope:
+            # Precharge la Distribution Key par defaut pour chaque ACP (fallback
+            # quand aucune DK n'est specifiee sur la ligne d'OD).
+            default_dk_by_copro: dict = {}
+            async for dk in db.distribution_keys.find(
+                {"copropriete_id": {"$in": copros_scope}, "is_default": True},
+                {"_id": 0, "id": 1, "name": 1, "total_quotities": 1, "lines": 1, "lots": 1, "copropriete_id": 1},
+            ):
+                default_dk_by_copro[dk["copropriete_id"]] = dk
+                dk_map.setdefault(dk["id"], dk)
+            od_q = {
+                "copropriete_id": {"$in": copros_scope},
+                "journal_type": "OD",
+                "reversed": {"$ne": True},
+                "is_reversal": {"$ne": True},
+            }
+            async for je in db.journal_entries.find(od_q, {"_id": 0}).sort("date", -1):
+                for ln in je.get("lines", []) or []:
+                    acc = str(ln.get("account_number", "") or "").strip()
+                    if not acc.startswith("6"):
+                        continue
+                    debit = float(ln.get("debit", 0) or 0)
+                    credit = float(ln.get("credit", 0) or 0)
+                    net_charge = debit - credit  # positif = charge, negatif = compensation
+                    if abs(net_charge) < 0.01:
+                        continue
+                    # DK cible : ligne-specifique > entry-specifique > default ACP
+                    line_dk_id = ln.get("distribution_key_id") or je.get("distribution_key_id")
+                    dk = dk_map.get(line_dk_id) if line_dk_id else None
+                    if not dk:
+                        dk = default_dk_by_copro.get(je.get("copropriete_id"))
+                    if not dk:
+                        continue
+                    tq = float(dk.get("total_quotities") or 0)
+                    if tq <= 0:
+                        continue
+                    my_q = 0.0
+                    for k_line in (dk.get("lines") or dk.get("lots") or []):
+                        lid = k_line.get("lot_id", "")
+                        lnum_up = _norm_num(k_line.get("lot_number", "")).upper()
+                        if lid in my_lot_ids or (lnum_up and lnum_up in my_lot_nums_upper):
+                            try:
+                                my_q += float(k_line.get("share", 0) or 0)
+                            except (TypeError, ValueError):
+                                pass
+                    if my_q <= 0:
+                        continue
+                    my_amt = round(net_charge * my_q / tq, 2)
+                    if abs(my_amt) < 0.01:
+                        continue
+                    pct = round(my_q / tq * 100, 4)
+                    result.append({
+                        "id": f"od-{je.get('id','')}-{acc}",
+                        "number": (je.get("reference") or "")[:60],
+                        "date": je.get("date", ""),
+                        "supplier": ln.get("account_name") or ln.get("label") or acc,
+                        "description": (ln.get("description") or je.get("description") or "")[:200],
+                        "total_amount": round(net_charge, 2),
+                        "my_amount": my_amt,
+                        "my_share_pct": pct,
+                        "computed_share": True,
+                        "distribution_key_name": dk.get("name", ""),
+                        "copropriete_id": je.get("copropriete_id", ""),
+                        "status": "od",
+                        "category": "od",
+                        "attachments": [],
+                        "source": "od",  # marqueur UI : OD manuelle
+                        "account_number": acc,
+                        "journal_type": "OD",
+                    })
+
+        # Tri final par date decroissante
+        result.sort(key=lambda x: x.get("date", ""), reverse=True)
         return result
 
     @router.get("/invoices/{invoice_id}/attachments/{attachment_id}/download")
