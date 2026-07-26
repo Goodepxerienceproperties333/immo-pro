@@ -478,66 +478,6 @@ export default function OwnerPortalPage() {
     };
   }, [fundCalls, inQuarter]);
 
-  // iter90h9 : prochain appel selon FIFO (Premier Entre Premier Sorti).
-  // Les paiements lettrent d'abord les appels les plus ANCIENS. Le prochain
-  // appel "en cours" est celui ou le cumul_appels depasse le total_paye.
-  // Ne pas afficher "en retard" un appel deja couvert par les paiements.
-  const nextAnnualCall = useMemo(() => {
-    if (!annualStats) return null;
-    const now = new Date();
-    now.setHours(0, 0, 0, 0);
-    const sortedCalls = [...(annualStats.pending_calls_annual || [])]
-      .filter(fc => Number(fc.my_amount || 0) > 0.005)
-      .sort((a, b) => {
-        // Tri par due_date (ou date si due_date absent)
-        const da = new Date(a.due_date || a.date);
-        const db = new Date(b.due_date || b.date);
-        return da - db;
-      });
-    let cumul = 0;
-    const totalPaid = annualStats.total_paid;
-    let currentCall = null;
-    let remainingOnCurrent = 0;
-    for (const fc of sortedCalls) {
-      const amt = Number(fc.my_amount || 0);
-      if (cumul + amt <= totalPaid + 0.005) {
-        // Appel totalement couvert par les paiements FIFO -> considere comme paye
-        cumul += amt;
-        continue;
-      }
-      // Appel partiellement/pas couvert -> c'est le prochain
-      currentCall = fc;
-      remainingOnCurrent = +(amt - Math.max(0, totalPaid - cumul)).toFixed(2);
-      break;
-    }
-    if (!currentCall) return null;
-    const dueIso = currentCall.due_date || currentCall.date;
-    const due = dueIso ? new Date(dueIso) : null;
-    if (due) due.setHours(0, 0, 0, 0);
-    const daysDelta = due ? Math.round((due - now) / (1000 * 60 * 60 * 24)) : null;
-    let urgency = 'upcoming';
-    if (daysDelta !== null) {
-      if (daysDelta < 0) urgency = 'overdue';
-      else if (daysDelta <= 7) urgency = 'urgent';
-      else if (daysDelta <= 30) urgency = 'soon';
-      else urgency = 'upcoming';
-    }
-    return {
-      fund_call_name: currentCall.name,
-      // Montant TOTAL de l'appel (comme demande par l'user : ne pas deduire
-      // avant validation. La note en bas de tuile mentionne le credit ou
-      // le solde total impaye pour transparence).
-      amount: Number(currentCall.my_amount || 0),
-      remaining: remainingOnCurrent,
-      due_date: dueIso,
-      vcs_code: currentCall.vcs_code,
-      daysDelta,
-      urgency,
-      is_future: daysDelta !== null && daysDelta > 0,
-      is_partial_covered: remainingOnCurrent < Number(currentCall.my_amount || 0) - 0.01,
-    };
-  }, [annualStats]);
-
   // iter90h8/h9 : Vision ANNUELLE - "Ma situation" prend en compte TOUS les
   // appels de l'exercice + DEDUIT tous les paiements enregistres (peu importe
   // la periode consultee par l'user).
@@ -577,6 +517,60 @@ export default function OwnerPortalPage() {
       pending_calls_annual: inFy,  // tous les appels FY (FIFO fait plus bas)
     };
   }, [fundCalls, annualMovements, annualOpeningBalance, selectedAcp, fyStartDate, fyEndDate]);
+
+  // iter90h9 : prochain appel selon FIFO (Premier Entre Premier Sorti).
+  // Les paiements lettrent d'abord les appels les plus ANCIENS. Le prochain
+  // appel "en cours" est celui ou le cumul_appels depasse le total_paye.
+  // Ne pas afficher "en retard" un appel deja couvert par les paiements.
+  const nextAnnualCall = useMemo(() => {
+    if (!annualStats) return null;
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+    const sortedCalls = [...(annualStats.pending_calls_annual || [])]
+      .filter(fc => Number(fc.my_amount || 0) > 0.005)
+      .sort((a, b) => {
+        const da = new Date(a.due_date || a.date);
+        const db = new Date(b.due_date || b.date);
+        return da - db;
+      });
+    let cumul = 0;
+    const totalPaid = annualStats.total_paid;
+    let currentCall = null;
+    let remainingOnCurrent = 0;
+    for (const fc of sortedCalls) {
+      const amt = Number(fc.my_amount || 0);
+      if (cumul + amt <= totalPaid + 0.005) {
+        cumul += amt;
+        continue;
+      }
+      currentCall = fc;
+      remainingOnCurrent = +(amt - Math.max(0, totalPaid - cumul)).toFixed(2);
+      break;
+    }
+    if (!currentCall) return null;
+    const dueIso = currentCall.due_date || currentCall.date;
+    const due = dueIso ? new Date(dueIso) : null;
+    if (due) due.setHours(0, 0, 0, 0);
+    const daysDelta = due ? Math.round((due - now) / (1000 * 60 * 60 * 24)) : null;
+    let urgency = 'upcoming';
+    if (daysDelta !== null) {
+      if (daysDelta < 0) urgency = 'overdue';
+      else if (daysDelta <= 7) urgency = 'urgent';
+      else if (daysDelta <= 30) urgency = 'soon';
+      else urgency = 'upcoming';
+    }
+    return {
+      fund_call_name: currentCall.name,
+      amount: Number(currentCall.my_amount || 0),
+      remaining: remainingOnCurrent,
+      due_date: dueIso,
+      vcs_code: currentCall.vcs_code,
+      daysDelta,
+      urgency,
+      is_future: daysDelta !== null && daysDelta > 0,
+      is_partial_covered: remainingOnCurrent < Number(currentCall.my_amount || 0) - 0.01,
+    };
+  }, [annualStats]);
 
   // iter90h3 : conserve pour fallback si annualStats indisponible (aucun fund_call).
   const movementStats = useMemo(() => {
