@@ -53,6 +53,33 @@ def create_fiscal_router(db):
         if copropriete_id:
             q["copropriete_id"] = copropriete_id
         years = await db.fiscal_years.find(q, {"_id": 0}).sort("start_date", -1).to_list(100)
+        # iter90h0 : si result_net est None (ex: exercice reouvert avant iter90h0
+        # ou jamais cloture), on le calcule a la volee = Sum(cl.7) - Sum(cl.6)
+        # sur la periode, en excluant les OD de regularisation/extourne et les AN
+        # pour eviter le double comptage.
+        for y in years:
+            if y.get("result_net") in (None, "", 0) and y.get("start_date") and y.get("end_date"):
+                je_q = {
+                    "copropriete_id": y.get("copropriete_id", ""),
+                    "date": {"$gte": y["start_date"], "$lte": (y["end_date"] + "T23:59:59") if len(y["end_date"]) == 10 else y["end_date"]},
+                    "journal_type": {"$ne": "AN"},
+                    "is_regularization": {"$ne": True},
+                    "reversed": {"$ne": True},
+                    "is_reversal": {"$ne": True},
+                }
+                entries = await db.journal_entries.find(je_q, {"_id": 0, "lines": 1}).to_list(100000)
+                total_c6 = 0.0
+                total_c7 = 0.0
+                for e in entries:
+                    for ln in e.get("lines", []):
+                        acc = ln.get("account_number", "")
+                        if not acc:
+                            continue
+                        if acc.startswith("6"):
+                            total_c6 += (ln.get("debit", 0) or 0) - (ln.get("credit", 0) or 0)
+                        elif acc.startswith("7"):
+                            total_c7 += (ln.get("credit", 0) or 0) - (ln.get("debit", 0) or 0)
+                y["result_net"] = round(total_c7 - total_c6, 2)
         return years
 
     @router.post("/years")
@@ -410,10 +437,13 @@ def create_fiscal_router(db):
             )
             reversal_count += 1
 
-        # Reouverture
+        # Reouverture : on conserve `result_net` (montant calcule a la cloture,
+        # utile pour l'affichage du tableau des exercices meme apres extourne
+        # des OD de cloture). Le resultat de l'exercice est independant des
+        # OD de regularisation (calcule = Sum(cl.7) - Sum(cl.6) sur la periode).
         await db.fiscal_years.update_one(
             {"id": year_id},
-            {"$set": {"status": "open", "closed_at": None, "result_net": None}}
+            {"$set": {"status": "open", "closed_at": None}}
         )
         return {
             "message": f"Exercice {fy.get('name','?')} reouvert. {reversal_count} ecriture(s) de cloture extournee(s).",

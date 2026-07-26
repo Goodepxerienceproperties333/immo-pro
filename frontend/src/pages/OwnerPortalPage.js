@@ -2655,7 +2655,7 @@ function BankAccountsTab({
                 </div>
                 <div className="rounded border border-emerald-200 bg-emerald-50 px-2 py-1.5">
                   <div className="text-[9px] uppercase tracking-wider text-emerald-700 flex items-center gap-1">
-                    <TrendingUp size={10} /> Credits
+                    <TrendingUp size={10} /> Paiements recus
                   </div>
                   <div className="text-sm font-bold text-emerald-700 font-mono" data-testid={`bank-account-credit-total-${idx}`}>
                     {fmt(summary.totalCredit)}
@@ -2663,7 +2663,7 @@ function BankAccountsTab({
                 </div>
                 <div className="rounded border border-red-200 bg-red-50 px-2 py-1.5">
                   <div className="text-[9px] uppercase tracking-wider text-red-700 flex items-center gap-1">
-                    <TrendingDown size={10} /> Debits
+                    <TrendingDown size={10} /> Paiements effectues
                   </div>
                   <div className="text-sm font-bold text-red-700 font-mono" data-testid={`bank-account-debit-total-${idx}`}>
                     {fmt(summary.totalDebit)}
@@ -2721,7 +2721,7 @@ function BankAccountsTab({
                                   ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                                   : 'bg-red-50 text-red-700 border-red-200'}`}
                               >
-                                {isCredit ? 'Credit' : 'Debit'}
+                                {isCredit ? 'Recu' : 'Paye'}
                               </Badge>
                             </TableCell>
                             <TableCell className="text-xs text-slate-800 max-w-[200px]">
