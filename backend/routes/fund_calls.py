@@ -1486,12 +1486,12 @@ def create_fund_calls_router(db):
         }
 
     @router.post("/generate-from-budget")
-    async def generate_from_budget_endpoint(data: GenerateFromBudgetInput):
+    async def generate_from_budget_endpoint(data: GenerateFromBudgetInput, request: Request):
         """Create N fund calls in DB from an approved budget. Calls are persisted
         with status='pending'. Reserve fund (if enabled) is added to call #1 only."""
-        return await _generate_from_budget(data, persist=True)
+        return await _generate_from_budget(data, persist=True, request=request)
 
-    async def _generate_from_budget(data: GenerateFromBudgetInput, persist: bool):
+    async def _generate_from_budget(data: GenerateFromBudgetInput, persist: bool, request: Optional[Request] = None):
         budget = await db.budgets.find_one({"id": data.budget_id}, {"_id": 0})
         if not budget:
             raise HTTPException(404, "Budget non trouve")
@@ -1848,8 +1848,14 @@ def create_fund_calls_router(db):
                 next_dt = datetime.strptime(call_dates[i + 1], "%Y-%m-%d")
                 period_end = (next_dt - timedelta(days=1)).strftime("%Y-%m-%d")
             else:
-                period_end = fy_end or (datetime.strptime(call_date, "%Y-%m-%d")
+                fallback_period_end = (datetime.strptime(call_date, "%Y-%m-%d")
                                         + timedelta(days=interval_months * 30 - 1)).strftime("%Y-%m-%d")
+                # Garde-fou : si le budget demarre tard dans l'annee et que le
+                # dernier appel trimestriel deborde apres la fin d'exercice,
+                # ne pas plafonner sur fy_end (period_end < period_start
+                # donnerait une periode inversee) - retomber sur le calcul
+                # base sur l'intervalle.
+                period_end = fy_end if (fy_end and fy_end >= call_date) else fallback_period_end
             # Aggregate distribution by LOT combining all budget lines (iter85b)
             # iter90ag : cle d'agregation = (lot_id, owner_id) pour permettre
             # le prorata mutation (plusieurs owners sur le meme lot dans une meme
@@ -2186,7 +2192,7 @@ def create_fund_calls_router(db):
         return {"calls": results, "summary": summary, "persisted": True, "created_ids": created_ids}
 
     @router.post("/regenerate-from-budget")
-    async def regenerate_from_budget(data: GenerateFromBudgetInput):
+    async def regenerate_from_budget(data: GenerateFromBudgetInput, request: Request):
         """Delete future unpaid fund calls linked to this budget, then regenerate
         the schedule starting at data.start_date.
 
@@ -2222,7 +2228,7 @@ def create_fund_calls_router(db):
                 await reverse_post_mutation_ods_for_call(
                     db, did, reason=f"regenerate-from-budget {data.budget_id}"
                 )
-        result = await _generate_from_budget(data, persist=True)
+        result = await _generate_from_budget(data, persist=True, request=request)
         result["deleted_count"] = len(deletable_ids)
         result["preserved_count"] = preserved
         return result

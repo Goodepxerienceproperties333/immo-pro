@@ -112,6 +112,9 @@ async def _resolve_or_create_supplier_account(db, supplier_name: str, copro_id: 
                 "auto_created": True,
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
+            sid = await _resolve_syndic_id_from_copro(db, copro_id)
+            if sid:
+                supplier_doc["syndic_id"] = sid
             await db.suppliers.insert_one(dict(supplier_doc))
         supplier_doc = await assign_supplier_account(db, supplier_doc, copro_id)
         supplier_acc = get_supplier_account(supplier_doc, copro_id)

@@ -492,6 +492,17 @@ def create_coproprietes_router(db):
                     "fund_calls", "meters", "documents", "document_categories",
                     "fiscal_years", "budgets", "pcmn_accounts"]:
             await db[col].delete_many({"copropriete_id": copro_id})
+        # Suppliers are single-ACP scoped (copropriete_id, not an array) and
+        # their invoices/journal_entries were just wiped above, so they'd
+        # otherwise be left as permanent orphans referencing a dead ACP.
+        await db.suppliers.delete_many({"copropriete_id": copro_id})
+        # Owners can span multiple ACPs (copropriete_ids[]) so they must not
+        # be deleted here (accounting entries in OTHER ACPs may still
+        # reference them) - just detach this ACP and drop its tier account.
+        await db.owners.update_many(
+            {"copropriete_ids": copro_id},
+            {"$pull": {"copropriete_ids": copro_id}, "$unset": {f"tier_accounts.{copro_id}": ""}},
+        )
         return {"message": "Copropriete supprimee (cascade)"}
 
     @router.post("/{copro_id}/archive")

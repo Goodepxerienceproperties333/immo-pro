@@ -8,7 +8,7 @@ import re
 import pytest
 import requests
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://copro-belge-app.preview.emergentagent.com").rstrip("/")
+BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://teuwen-reports.preview.emergentagent.com").rstrip("/")
 ADMIN_EMAIL = "admin@copro.be"
 ADMIN_PASSWORD = "admin123"
 ACP_ID = "252c2888-7c95-4a89-b19f-70de62f7bb4a"  # "Test" ACP (existing in DB)

@@ -1,19 +1,136 @@
-<analysis>statement_line_iditer90jnreports.pypdf_decompte.pylot.owner_iddistribution_keysbackend/routes/reports.pyif abs(solde) < 0.01if abs(solde) < 2/admin/merge-ownersiter90jkimport_wizard.pyiter90jlmerge_owners.pyiter90jmstatement_line_iditer90jncleanup_orphaned_invoice_lettrage.pyreports.pypdf_decompte.py
+<analysis>**original_problem_statement**: 
+Créer une application de gestion de copropriété basée sur le droit belge (PCMN), incluant la gestion stricte des rôles, le cloisonnement des données (Chinese Wall), la gestion des imports CODA/Optipro, et les verrous fiscaux. 
+**NOUVEAU REQUIS CRITIQUE** : Sécurité Multi-Syndic (Multi-tenancy). Ajout d'un champ obligatoire  sur CHAQUE document de la base de données. Verrouillage strict des API : .
+
+**User's preferred language**: **French** (INSTRUCT NEXT AGENT: You MUST respond in French ONLY. All UI elements, comments, code variables/logs, and communications must be strictly in French.)
+
+**what currently exists?** 
+A mature FastAPI/React/MongoDB application that enforces strict Multi-Syndic (Multi-tenancy) isolation via a mandatory  field. The Chinese Wall isolation has just been successfully debugged and verified. A Collaborateurs (Team management) UI is active. The database has been purged of all orphaned/legacy test records.
+
+**Last working item**:
+    - Last item agent was working: Stabilizing the  architectural shift. The agent fixed backend 500 errors () across multiple routes by adding the missing  parameters. Validated the Chinese Wall data isolation between different Syndic roles ensuring 403 blocks are properly triggered.
+    - Status: USER VERIFICATION PENDING
+    - Agent Testing Done: Y (via testing_agent_v3_fork)
+    - Which testing method agent to use? backend testing agent/ manual testing by curl (Avoid testing_agent for the entire app to prevent context overflow; isolate flows).
+    - User Testing Done: N
+
+**All Pending/In progress Issue list**:  
+  - Issue 1: P0 - TEUWEN lot mapping logic in  and .
+     - Attempted fixes: None in this session.
+     - Next debug checklist: Update logic to combine  AND  to ensure legacy mutations map correctly.
+     - Why fix this issue and what will be achieved with the fix? Critical for accurate PDF generation (Decompte) for legacy mutations.
+     - Status: NOT STARTED
+     - Is recurring issue? Y
+     - Should Test frontend/backend/both after fix? Backend
+     - Blocked on other issue: None
+
+**In progress Task List**: 
+  (None active, all shifted to upcoming)
+
+**Upcoming and Future Tasks**
+  Upcoming Tasks:
+  - P1: Export Journals to CSV and PDF based on date selector.
+  - P2: Admin tool to bulk reset legacy paid invoices back to unpaid status.
+  
+  Future Tasks:
+  - P3: Certificat fiscal annuel.
+  - P4: Automated debt collection emails (Job APScheduler quotidien).
+  - P5: Refactoring of  (>3400 lines) and .
+
+**Completed work in this session**
+- Fix  by adding  to  (),  (), and  () (DONE).
+- Tested and verified Chinese Wall strict multi-syndic isolation in backend (11/11 tests passed in Iteration 74) (DONE).
+- Mass purge of orphaned documents across all collections (lots, journal_entries, invoices, bank_statements, pcmn_accounts, etc.) (DONE).
+- Updated PRD and generated valid Syndic test credentials (DONE).
+
+**Earlier issues found/mentioned but not fixed**
+   - Issue 1: TEUWEN lot mapping logic (Mentioned above).
+
+**Known issue recurrence from previous fork**
+  - Issue recurrence in previous fork: TEUWEN PDF mapping bug.
+  - Recurrence count: High
+  - Status: NOT STARTED
+
+**Code Architecture**
 /app/
 ├── backend/
+│   ├── syndic_scope.py (Helpers to inject/query  - DO NOT REMOVE)
+│   ├── server.py (Middleware adds )
+│   ├── auto_entries.py (Resolves syndic_id from copro_id)
 │   ├── routes/
-│   │   ├── import_wizard.py (Added canonical bank indexing)
-│   │   ├── banking.py (Extensive updates for Master/Slave sync & cascades)
-│   │   ├── reports.py (Major Bilan logic updates for Actif/Passif)
-│   │   ├── auto_entries.py (Added statement_line_id to generated FIs)
-│   ├── scripts/
-│   │   ├── merge_owners.py (NEW)
-│   │   ├── backfill_statement_line_id_on_fi.py (NEW)
-│   │   ├── cleanup_orphaned_fi.py (NEW)
-│   │   ├── cleanup_orphaned_invoice_lettrage.py (NEW)
-│   ├── tests/
-│   │   ├── test_iter90jk_wizard_maps_6digit_to_8digit_bank_account.py
-│   │   ├── test_iter90jl_bilan_dedup_and_merge_owners.py
-│   │   ├── test_iter90jm_master_slave_statement_fi_sync.py
-│   │   ├── test_iter90jn_delete_statement_cascades_lettrage.py
-journal_entriesstatement_line_idbank_statement_idbank_transactionsmatchedmatched_to_idsmatch_type/app/backend/routes/banking.py/app/backend/auto_entries.py/app/backend/routes/reports.pyroutes/reports.pyroutes/banking.pyDELETE /api/banking/statements/{stmt_id}PUT /api/banking/statements/{stmt_id}GET /api/reports/bilantest_iter90jm_live_http.pypytest.skipFIbank_transactionstatement_line_idbank_statement_id/app/memory/PRD.md/app/test_reports/iteration_52.json/app/test_reports/iteration_53.json/app/test_reports/iteration_54.json/app/test_reports/iteration_55.jsoniter90jkiter90jliter90jmiter90jniter90jkjljmjntest_iter90jm_live_http.py/app/memory/test_credentials.mdreports.pypdf_decompte.py/app/backend/routes/reports.py/app/backend/pdf_decompte.pylot.owner_iddistribution_keys</analysis>
+│   │   ├── admin.py, reports.py, banking.py, invoices.py, properties.py, coproprietes.py, import_wizard.py
+│   │   ├── team.py 
+├── frontend/
+│   ├── src/pages/MonBureauPage.js
+│   ├── src/components/TeamSection.js
+
+**Key Technical Concepts**
+- Backend: FastAPI, Async MongoDB (Motor).
+- Frontend: React, Tailwind CSS, Shadcn UI.
+- Security: Multi-tenant strict isolation via .
+
+**key DB schema**
+  - Every operational collection (, , , , , , , ) must contain a  field corresponding to the authenticated Syndic.
+
+**changes in tech stack**
+  - Global scoping by  applied via middleware and helper functions (). Write operations without  are strictly blocked.
+
+**All files of reference** 
+  -  (Fixed missing request params)
+  -  (Fixed missing request params)
+  -  (Fixed missing request params)
+  - 
+  - 
+
+**Areas that need refactoring**: 
+  -  (Very large, >3500 lines).
+  -  (PCMN complex logic needs simplification).
+
+**key api endpoints**
+  - All endpoints under  now require and enforce  matching for read and write operations.
+
+**Critical Info for New Agent** 
+- **LANGUAGE**: Communicate entirely in **French**.
+- **CONTEXT LIMIT**:  previously crashed with Context length exceeded when sending too many backend files. Do not send all files at once. Test isolated flows or use  / .
+- **SYNDIC_ID**: Any new route creation MUST accept  and inject  when inserting to the DB. View  for helper methods.
+- The test DB is clean. Use the credentials below to test multi-tenancy flows.
+
+**documents and test reports created in this job** 
+  -  (Updated)
+  -  (Updated with new syndics)
+  - 
+
+**Last 10 User Messages and any pending HUMAN messages** 
+ 1. User: Provided previous handoff summary detailing the broken  API state.
+ 2. Agent: Proposed plan to stabilize the backend.
+ 3. User: Replied P0 (Approving the stabilization of the Chinese Wall).
+ *(Agent executed the fixes, successfully purged data, verified isolation via bash, ran testing subagent which passed, and closed the session).*
+
+**Project Health Check:**
+- Broken: None. Backend is stable.
+- Mocked: None.
+
+**3rd Party Integrations** 
+  - Emergent LLM Key (Claude Sonnet text generation)
+  - Microsoft Graph / SMTP (Email) - Uses User Keys/Config
+
+**Testing status**
+  - Testing agent used after significant changes: YES (Iteration 74 passed 11/11 tests)
+  - Troubleshoot agent used after agent stuck in loop: NO
+  - Test files created: None
+  - Known regressions: None currently.
+
+**Credentials to test flow:**
+- Superadmin:  / 
+- Syndic Alpha:  / 
+- Syndic Beta:  / 
+
+**What agent forgot to execute**
+- Nothing. The P0 stabilization of  and data purging was fully completed and successfully tested.
+
+**Debugging checklist for current issue**
+    Issue: TEUWEN lot mapping logic (Pending P0)
+    Backend files to check: 
+    - 
+    -  (if exists)
+    Database to check: , </analysis>

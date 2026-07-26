@@ -538,6 +538,7 @@ def create_suppliers_router(db):
                 f"Doublon detecte : un autre fournisseur avec le meme {field_label} existe deja "
                 f"({existing_dup.get('name', '')} - {dup['value']}).",
             )
+        from syndic_scope import syndic_query
         result = await db.suppliers.update_one(
             {"id": supplier_id, **syndic_query(request)},
             {"$set": data.model_dump(exclude={"force_create_despite_similar"})},

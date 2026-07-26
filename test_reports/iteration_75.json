@@ -1,0 +1,25 @@
+{
+  "summary": "Formal verification of Chinese-wall isolation fix in POST /api/owners/{owner_id}/attach-to-copro (properties.py lines 953-978). 5/5 pytest tests PASSED covering all 4 bug-fix scenarios: A) cross-syndic attach rejected 403 with 'chinese wall' detail AND owner document not mutated; B) legitimate same-syndic attach returns 200, owner.copropriete_ids contains both ACPs, second identical call also 200 (idempotent, no duplicates); C) target-ACP guard still fires when alpha tries to attach own owner to beta's ACP (403); D) superadmin bypass works cross-syndic (200).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_attach_owner_chinese_wall.py",
+    "/app/test_reports/pytest/attach_chinese_wall.xml"
+  ],
+  "action_items": [
+    "OPTIONAL: revert superadmin test mutation. After Bug-Fix D test, Beta's owner ca41e444-ef4a-4955-81b0-293d6742f648 (Boxus Wivine) now has copropriete_ids = ['73603546-6a7c-4145-b969-e990fc988d5e', 'a0eef7c0-1db2-45ae-9053-040fbee71be5', '778391ef-ff95-44d3-9b6c-2d33542d09f8', '7375e9ae-b6c1-40e8-b632-1901553af965']. The extra id '7375e9ae-b6c1-40e8-b632-1901553af965' (ALPHA_ACP) was added by the test and should be removed if the fixture must be restored to a clean beta-only state.",
+    "OPTIONAL: also owner 1b88801f-e6b4-405b-bf61-a16d79265d52 (Martin Pierre, alpha) was legitimately attached to ALPHA_ACP 7375e9ae-b6c1-40e8-b632-1901553af965 during Bug-Fix B. This is idempotent and within alpha's scope so likely fine to keep."
+  ],
+  "critical_code_review_comments": [
+    "Chinese-wall check at lines 953-978 is correctly layered: (1) intersects owner.copropriete_ids with syndic's ACP ids, (2) falls back to checking lots collection for owner_id/owner_ids under syndic ACPs, (3) final fallback compares owner.syndic_id == request.state.syndic_id. Robust for both legacy and new-style ownership records.",
+    "Target-ACP guard (line 948) runs BEFORE the fetch/same-syndic check, so if requester lacks access to the target ACP the endpoint short-circuits without leaking owner existence — good defense-in-depth."
+  ],
+  "updated_files": ["/app/backend/tests/test_attach_owner_chinese_wall.py"],
+  "success_rate": {"backend": "100%", "frontend": "N/A (skipped per request)"},
+  "test_credentials": "admin@copro.be/admin123, syndic_alpha@copro.be/Syndic123!, syndic_beta@copro.be/Syndic123!",
+  "seed_data_creation": "None; used pre-seeded fixtures.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Chinese-wall fix on attach-to-copro is verified (iter 75). Pytest file at /app/backend/tests/test_attach_owner_chinese_wall.py can be re-run standalone in ~1.4s. Beta owner Boxus Wivine has an extra ALPHA_ACP id post-test (see action_items); main agent may want to revert for clean fixtures.",
+  "rca of the issue": "N/A — verification only, fix already in place."
+}

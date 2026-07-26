@@ -834,6 +834,7 @@ def create_properties_router(db):
         old_email = ((existing_doc or {}).get("email") or "").lower().strip()
         new_email = ((data.email or "").lower().strip())
         email_changed = bool(new_email) and (old_email != new_email)
+        from syndic_scope import syndic_query
         result = await db.owners.update_one(
             {"id": owner_id, **syndic_query(request)},
             {"$set": {
@@ -949,6 +950,32 @@ def create_properties_router(db):
         owner = await db.owners.find_one({"id": owner_id}, {"_id": 0})
         if not owner:
             raise HTTPException(404, "Proprietaire non trouve")
+        if not is_super:
+            # Chinese wall : l'owner doit deja appartenir au meme syndic (via
+            # une autre ACP geree par ce syndic), sinon n'importe quel
+            # gestionnaire pourrait rattacher a son ACP un owner appartenant
+            # a un syndic tiers en devinant/recuperant son owner_id ailleurs.
+            sid = getattr(request.state, "syndic_id", None)
+            syndic_copro_ids = (
+                await db.coproprietes.distinct("id", {"syndic_id": sid})
+                if sid else []
+            )
+            same_syndic = False
+            if syndic_copro_ids:
+                same_syndic = bool(
+                    set(owner.get("copropriete_ids") or []) & set(syndic_copro_ids)
+                )
+                if not same_syndic:
+                    same_syndic = await db.lots.count_documents({
+                        "$or": [
+                            {"owner_id": owner_id, "copropriete_id": {"$in": syndic_copro_ids}},
+                            {"owner_ids": owner_id, "copropriete_id": {"$in": syndic_copro_ids}},
+                        ]
+                    }) > 0
+            if not same_syndic and owner.get("syndic_id") and sid:
+                same_syndic = owner.get("syndic_id") == sid
+            if not same_syndic:
+                raise HTTPException(403, "Acces refuse a ce proprietaire (chinese wall)")
         # Idempotent : assign_owner_accounts gere le $addToSet sur copropriete_ids
         await assign_owner_accounts(db, owner, target_copro)
         refreshed = await db.owners.find_one({"id": owner_id}, {"_id": 0})
