@@ -1529,12 +1529,39 @@ function SituationHero({ status, balance, totalCalled, totalPaid, nextCall, tota
           </div>
           {nextCall ? (
             <>
-              <div className={`text-3xl font-bold ${nextTextColor}`} style={{fontFamily:'Chivo,sans-serif'}}>{fmt(nextCall.amount)}</div>
-              <div className="mt-1 text-[13px] font-medium text-slate-700 truncate" title={nextCall.fund_call_name}>{nextCall.fund_call_name}</div>
-              <div className={`mt-2 text-xs font-semibold flex items-center gap-1.5 ${nextTextColor}`}>
-                <Clock size={12} />
-                {nextLabel} {nextCall.due_date && <span className="text-slate-500 font-normal">({fmtDate(nextCall.due_date)})</span>}
-              </div>
+              {/* iter90h4 : ajustement dynamique selon le solde courant.
+                  amountToPay = nextCall.amount + balance (creditor reduit, debtor augmente). */}
+              {(() => {
+                const adjusted = Math.max(0, (Number(nextCall.amount) || 0) + (Number(balance) || 0));
+                const hasAdjustment = Math.abs(Number(balance) || 0) > 0.01;
+                const isReduced = (Number(balance) || 0) < -0.01;
+                return (
+                  <>
+                    <div className={`text-3xl font-bold ${nextTextColor}`} style={{fontFamily:'Chivo,sans-serif'}} data-testid="next-payment-amount">
+                      {fmt(adjusted)}
+                    </div>
+                    <div className="mt-1 text-[13px] font-medium text-slate-700 truncate" title={nextCall.fund_call_name}>{nextCall.fund_call_name}</div>
+                    {hasAdjustment && (
+                      <div className={`mt-1.5 text-[11px] ${isReduced ? 'text-emerald-700' : 'text-red-700'} bg-white/50 rounded px-2 py-1 border ${isReduced ? 'border-emerald-200' : 'border-red-200'}`} data-testid="next-payment-adjustment">
+                        <div className="flex justify-between font-mono">
+                          <span>Appel :</span><span>{fmt(nextCall.amount)}</span>
+                        </div>
+                        <div className="flex justify-between font-mono">
+                          <span>{isReduced ? 'Votre credit :' : 'Solde du :'}</span>
+                          <span>{isReduced ? `- ${fmt(Math.abs(balance))}` : `+ ${fmt(balance)}`}</span>
+                        </div>
+                        <div className="flex justify-between font-mono font-bold border-t border-current mt-1 pt-1">
+                          <span>A payer :</span><span>{fmt(adjusted)}</span>
+                        </div>
+                      </div>
+                    )}
+                    <div className={`mt-2 text-xs font-semibold flex items-center gap-1.5 ${nextTextColor}`}>
+                      <Clock size={12} />
+                      {nextLabel} {nextCall.due_date && <span className="text-slate-500 font-normal">({fmtDate(nextCall.due_date)})</span>}
+                    </div>
+                  </>
+                );
+              })()}
               {nextCall.vcs_code && (
                 <button
                   onClick={() => copyVcs(nextCall.vcs_code)}
