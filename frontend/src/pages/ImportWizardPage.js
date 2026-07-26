@@ -21,6 +21,7 @@ import api from '@/lib/api';
 import { useAuth } from '@/contexts/AuthContext';
 import { PcmnAccountPicker } from '@/components/PcmnAccountPicker';
 import ImportSummary from '@/components/ImportSummary';
+import SupplierSearchSelect from '@/components/SupplierSearchSelect';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -89,6 +90,12 @@ export default function ImportWizardPage() {
   const [supplierDecisions, setSupplierDecisions] = useState({});
   const [invoicesParsed, setInvoicesParsed] = useState([]);
   const [invoicePreview, setInvoicePreview] = useState(null); // tableau de controle avant commit
+  // iter90fs : rapprochement manuel des fournisseurs "Nouveau" vers un
+  // fournisseur existant de la base ACP (evite les doublons Baloise vs Baloise Insurance).
+  // Format : { [origAuxCodeOrName]: { target_id, target_aux_code, target_name } }
+  const [manualMatches, setManualMatches] = useState({});
+  const [suppliersCatalog, setSuppliersCatalog] = useState([]);
+  const [matchDialog, setMatchDialog] = useState(null); // { row, search, catalog }
   const [journalsParsed, setJournalsParsed] = useState([]);
   const [balanceParsed, setBalanceParsed] = useState({ actif: [], passif: [], total_actif: 0, total_passif: 0, balanced: false, period_end_date: '' });
   // iter90gj : appels hors budget declares AVANT les mutations (fonds reserve
@@ -327,9 +334,25 @@ export default function ImportWizardPage() {
         // ETAPE 1 : Tableau de controle (preview) - si pas encore valide
         if (!invoicePreview) {
           try {
-            const prev = await api.post(`/import-wizard/sessions/${session.id}/preview-invoices`, { invoices: invoicesParsed });
+            // Format des rapprochements manuels pour l'API
+            const manualPayload = {};
+            for (const [k, v] of Object.entries(manualMatches)) {
+              if (v?.target_aux_code) manualPayload[k] = v.target_aux_code;
+            }
+            const prev = await api.post(`/import-wizard/sessions/${session.id}/preview-invoices`, {
+              invoices: invoicesParsed,
+              manual_matches: manualPayload,
+            });
             setInvoicePreview(prev.data);
-            toast.info(`Tableau de controle : ${prev.data.count} lignes. Verifiez les fournisseurs puis re-cliquez "Valider".`);
+            // iter90fs : Charge le catalogue fournisseurs pour le bouton "Rapprocher".
+            if (suppliersCatalog.length === 0) {
+              try {
+                const cat = await api.get(`/import-wizard/sessions/${session.id}/suppliers-catalog`);
+                setSuppliersCatalog(cat.data?.suppliers || []);
+              } catch (e) { /* silent */ }
+            }
+            const mm = prev.data.manual_match ? ` (${prev.data.manual_match} match(s) manuel(s))` : '';
+            toast.info(`Tableau de controle : ${prev.data.count} lignes${mm}. Verifiez les fournisseurs puis re-cliquez "Valider".`);
           } catch (err) {
             toast.error(err.response?.data?.detail || 'Erreur preview');
           }
@@ -338,7 +361,14 @@ export default function ImportWizardPage() {
         }
         // ETAPE 2 : Commit reel (apres validation du tableau)
         setInvoicePreview(null);
-        r = await api.post(`/import-wizard/sessions/${session.id}/commit-invoices`, { invoices: invoicesParsed });
+        const manualPayloadCommit = {};
+        for (const [k, v] of Object.entries(manualMatches)) {
+          if (v?.target_aux_code) manualPayloadCommit[k] = v.target_aux_code;
+        }
+        r = await api.post(`/import-wizard/sessions/${session.id}/commit-invoices`, {
+          invoices: invoicesParsed,
+          manual_matches: manualPayloadCommit,
+        });
         const m = r.data;
         const errs = m.errors || [];
         const summaryStr =
@@ -785,15 +815,55 @@ export default function ImportWizardPage() {
             <div className="mt-4 border-2 border-amber-400 rounded-lg p-4 bg-amber-50" data-testid="invoice-preview-control">
               <h3 className="font-bold text-amber-800 mb-2">Tableau de controle - Verifiez les fournisseurs</h3>
               <p className="text-sm text-amber-700 mb-3">
-                {invoicePreview.matched} fournisseur(s) existant(s), {invoicePreview.to_create} a creer.
-                Verifiez que chaque ligne correspond au bon fournisseur, puis cliquez "Valider" pour confirmer.
+                {invoicePreview.matched} fournisseur(s) existant(s), {invoicePreview.manual_match || 0} match(s) manuel(s), {invoicePreview.to_create} a creer.
+                Pour les lignes &quot;Nouveau&quot;, utilisez le selecteur pour rapprocher un fournisseur existant (evite les doublons Baloise/Baloise Insurance)
+                ou cliquez &quot;Creer nouveau&quot; si c&apos;est reellement un nouveau partenaire.
               </p>
+              {(invoicePreview.orphan_accounts || []).length > 0 && (
+                <div className="mb-3 border border-red-300 bg-red-50 rounded p-2 text-xs text-red-800" data-testid="orphan-accounts-warning">
+                  <b>{invoicePreview.orphan_accounts.length} compte(s) 440xxx orphelin(s) detecte(s)</b> :
+                  <ul className="mt-1 ml-4 list-disc">
+                    {invoicePreview.orphan_accounts.slice(0, 8).map((o) => (
+                      <li key={o.account_number} data-testid={`orphan-${o.account_number}`}>
+                        <span className="font-mono">{o.account_number}</span> — {o.supplier_names.join(', ') || '(sans nom)'}
+                        {o.suggestions?.length > 0 && (
+                          <button
+                            type="button"
+                            className="ml-2 text-blue-700 underline"
+                            onClick={() => {
+                              // Rapprocher par nom automatique : cible = 1re suggestion
+                              const sug = o.suggestions[0];
+                              const newMatches = { ...manualMatches };
+                              o.supplier_names.forEach((n) => {
+                                if (n) newMatches[n.toUpperCase()] = {
+                                  target_id: sug.id, target_aux_code: sug.auxiliary_code, target_name: sug.name,
+                                };
+                              });
+                              o.supplier_aux_codes.forEach((a) => {
+                                if (a) newMatches[a.toUpperCase()] = {
+                                  target_id: sug.id, target_aux_code: sug.auxiliary_code, target_name: sug.name,
+                                };
+                              });
+                              setManualMatches(newMatches);
+                              setInvoicePreview(null);
+                              toast.info(`Rapproche ${o.supplier_names[0] || o.account_number} -> ${sug.name}. Recliquez "Valider" pour rafraichir.`);
+                            }}
+                            data-testid={`orphan-link-${o.account_number}`}
+                          >
+                            Rapprocher a &laquo;{o.suggestions[0].name}&raquo;
+                          </button>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
               <div className="overflow-x-auto max-h-96 overflow-y-auto">
                 <table className="w-full text-sm border-collapse">
                   <thead className="bg-amber-100 sticky top-0">
                     <tr>
                       <th className="border px-2 py-1 text-left">#</th>
-                      <th className="border px-2 py-1 text-left">Fournisseur</th>
+                      <th className="border px-2 py-1 text-left">Fournisseur / Rapprochement</th>
                       <th className="border px-2 py-1 text-left">Code Aux</th>
                       <th className="border px-2 py-1 text-left">TVA/BCE</th>
                       <th className="border px-2 py-1 text-left">Compte</th>
@@ -803,32 +873,126 @@ export default function ImportWizardPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {invoicePreview.preview.map((row, i) => (
-                      <tr key={i} className={row.status === 'to_create' ? 'bg-blue-50' : ''}>
-                        <td className="border px-2 py-1">{row.index + 1}</td>
-                        <td className="border px-2 py-1 font-medium">{row.supplier_name}</td>
-                        <td className="border px-2 py-1 font-mono text-xs">{row.supplier_aux_code}</td>
-                        <td className="border px-2 py-1 text-xs">{row.supplier_vat || '—'}</td>
-                        <td className="border px-2 py-1 font-mono text-xs">{row.account_number}</td>
-                        <td className="border px-2 py-1 text-right font-mono">{row.montant_tvac.toFixed(2)}</td>
-                        <td className="border px-2 py-1 text-xs">{row.external_ref}</td>
-                        <td className="border px-2 py-1">
-                          {row.status === 'matched'
-                            ? <span className="text-green-700 font-medium">Existant</span>
-                            : <span className="text-blue-700 font-medium">Nouveau</span>}
-                        </td>
-                      </tr>
-                    ))}
+                    {invoicePreview.preview.map((row, i) => {
+                      const key = (row.supplier_aux_code || row.supplier_name || '').toUpperCase();
+                      const currentMatch = manualMatches[key];
+                      const isToCreate = row.status === 'to_create';
+                      const isManualMatch = row.status === 'manual_match';
+                      return (
+                        <tr key={i} className={isToCreate ? 'bg-blue-50' : (isManualMatch ? 'bg-emerald-50' : '')} data-testid={`preview-row-${i}`}>
+                          <td className="border px-2 py-1 align-top">{row.index + 1}</td>
+                          <td className="border px-2 py-1 align-top min-w-[280px]">
+                            <div className="font-medium text-slate-800">{row.supplier_name}</div>
+                            {isToCreate && (
+                              <div className="mt-1 flex flex-col gap-1">
+                                {row.name_suggestion && !currentMatch && (
+                                  <div className="text-[10px] text-amber-800 bg-amber-100 rounded px-1.5 py-0.5 border border-amber-200" data-testid={`suggestion-${i}`}>
+                                    Suggestion homonyme : <b>{row.name_suggestion.name}</b>
+                                    <button
+                                      type="button"
+                                      className="ml-1 underline text-blue-700"
+                                      onClick={() => {
+                                        const nm = { ...manualMatches };
+                                        nm[key] = {
+                                          target_id: row.name_suggestion.id,
+                                          target_aux_code: row.name_suggestion.auxiliary_code,
+                                          target_name: row.name_suggestion.name,
+                                        };
+                                        setManualMatches(nm);
+                                        setInvoicePreview(null);
+                                        toast.info(`Rapproche ${row.supplier_name} -> ${row.name_suggestion.name}. Recliquez "Valider" pour rafraichir.`);
+                                      }}
+                                      data-testid={`accept-suggestion-${i}`}
+                                    >
+                                      Accepter
+                                    </button>
+                                  </div>
+                                )}
+                                <SupplierSearchSelect
+                                  suppliers={suppliersCatalog}
+                                  usedNames={suppliersCatalog.map((s) => s.name)}
+                                  value={currentMatch?.target_name || ''}
+                                  onChange={(_name, sup) => {
+                                    const nm = { ...manualMatches };
+                                    if (sup && sup.auxiliary_code) {
+                                      nm[key] = {
+                                        target_id: sup.id,
+                                        target_aux_code: sup.auxiliary_code,
+                                        target_name: sup.name,
+                                      };
+                                    } else {
+                                      delete nm[key];
+                                    }
+                                    setManualMatches(nm);
+                                  }}
+                                  placeholder="Rapprocher a un fournisseur existant..."
+                                  testId={`match-select-${i}`}
+                                />
+                                <div className="flex items-center gap-1">
+                                  {currentMatch && (
+                                    <button
+                                      type="button"
+                                      className="text-[10px] text-red-600 hover:underline"
+                                      onClick={() => {
+                                        const nm = { ...manualMatches };
+                                        delete nm[key];
+                                        setManualMatches(nm);
+                                      }}
+                                      data-testid={`clear-match-${i}`}
+                                    >
+                                      Retirer le rapprochement
+                                    </button>
+                                  )}
+                                  {!currentMatch && (
+                                    <span className="text-[10px] text-slate-500" data-testid={`create-new-hint-${i}`}>
+                                      Sans rapprochement, ce fournisseur sera <b>cree</b> au commit.
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            )}
+                            {isManualMatch && currentMatch && (
+                              <div className="text-[10px] text-emerald-700 mt-0.5">
+                                <b>Rapproche</b> a <b>{currentMatch.target_name}</b> ({currentMatch.target_aux_code})
+                              </div>
+                            )}
+                          </td>
+                          <td className="border px-2 py-1 font-mono text-xs align-top">{row.supplier_aux_code}</td>
+                          <td className="border px-2 py-1 text-xs align-top">{row.supplier_vat || '—'}</td>
+                          <td className="border px-2 py-1 font-mono text-xs align-top">{row.account_number}</td>
+                          <td className="border px-2 py-1 text-right font-mono align-top">{row.montant_tvac.toFixed(2)}</td>
+                          <td className="border px-2 py-1 text-xs align-top">{row.external_ref}</td>
+                          <td className="border px-2 py-1 align-top">
+                            {row.status === 'matched' && <span className="text-green-700 font-medium">Existant</span>}
+                            {row.status === 'manual_match' && <span className="text-emerald-700 font-medium">Existant (Match manuel)</span>}
+                            {row.status === 'to_create' && <span className="text-blue-700 font-medium">Nouveau</span>}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
-              <div className="mt-3 flex gap-2">
+              <div className="mt-3 flex flex-wrap gap-2 items-center">
                 <button
                   className="px-3 py-1 bg-red-100 text-red-700 rounded text-sm hover:bg-red-200"
                   onClick={() => setInvoicePreview(null)}
                   data-testid="cancel-preview"
                 >Annuler</button>
-                <span className="text-sm text-amber-700 mt-1">Cliquez "Valider" ci-dessous pour confirmer l'import</span>
+                {Object.keys(manualMatches).length > 0 && (
+                  <>
+                    <button
+                      className="px-3 py-1 bg-blue-100 text-blue-800 rounded text-sm hover:bg-blue-200"
+                      onClick={() => setInvoicePreview(null)}
+                      data-testid="refresh-preview"
+                      title="Rafraichir le tableau avec les rapprochements manuels"
+                    >Rafraichir le tableau</button>
+                    <span className="text-xs text-emerald-700">
+                      {Object.keys(manualMatches).length} rapprochement(s) manuel(s) en attente.
+                    </span>
+                  </>
+                )}
+                <span className="text-sm text-amber-700 ml-auto">Cliquez &quot;Valider&quot; ci-dessous pour confirmer l&apos;import</span>
               </div>
             </div>
           )}

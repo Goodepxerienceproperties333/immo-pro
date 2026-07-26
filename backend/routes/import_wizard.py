@@ -92,6 +92,11 @@ class CommitSuppliersPdfInput(BaseModel):
 
 class CommitInvoicesInput(BaseModel):
     invoices: List[dict]  # parsed invoices confirmed by user
+    # iter90fs : rapprochement manuel des fournisseurs. Map
+    # {supplier_aux_code | supplier_name_upper: target_auxiliary_code}
+    # Quand une clef matche, le supplier_aux_code de la ligne est reecrit
+    # vers la target -> merge avec un fournisseur existant, evite le doublon.
+    manual_matches: Optional[dict] = {}
 
 
 class CommitJournalsInput(BaseModel):
@@ -1134,6 +1139,62 @@ def create_import_wizard_router(db):
         return created
 
     # ----- G-bis : PREVIEW avant commit (tableau de controle) -----
+    @router.get("/sessions/{session_id}/suppliers-catalog")
+    async def suppliers_catalog(session_id: str, request: Request):
+        """iter90fs : Retourne le catalogue des fournisseurs existants sur l'ACP.
+
+        Utilise par le tableau de controle du wizard pour permettre au syndic
+        de rapprocher manuellement un fournisseur 'Nouveau' avec un fournisseur
+        existant (evite les doublons "Baloise Insurance" vs "Baloise").
+        """
+        session = await db.import_sessions.find_one({"id": session_id})
+        if not session:
+            raise HTTPException(404, "Session introuvable")
+        copro_id = session["copropriete_id"]
+        await _require_acp_access(request, db, copro_id)
+        rows = []
+        async for s in db.suppliers.find(
+            {"copropriete_id": copro_id}, {"_id": 0, "id": 1, "name": 1, "auxiliary_code": 1, "vat_number": 1, "bce_number": 1},
+        ).sort("name", 1):
+            rows.append({
+                "id": s.get("id", ""),
+                "name": s.get("name", "") or "",
+                "auxiliary_code": (s.get("auxiliary_code") or "").upper(),
+                "vat_number": s.get("vat_number") or s.get("bce_number") or "",
+            })
+        return {"suppliers": rows, "count": len(rows)}
+
+    def _apply_manual_matches(invoices: list, manual_matches: dict) -> tuple[list, dict]:
+        """iter90fs : Reecrit `supplier_aux_code` selon la map manuelle.
+
+        Cle de match : `supplier_aux_code` (majuscule) ou `supplier_name`
+        (majuscule strippee). Retourne (invoices_reecrites, applied_map)
+        ou applied_map trace {row_index: target_aux_code} pour le UI.
+        """
+        if not manual_matches:
+            return invoices, {}
+        # Normalisation des clefs
+        norm_map = {}
+        for k, v in (manual_matches or {}).items():
+            if not v:
+                continue
+            norm_map[str(k or "").upper().strip()] = str(v).upper().strip()
+        if not norm_map:
+            return invoices, {}
+        applied = {}
+        out = []
+        for idx, inv in enumerate(invoices):
+            new_inv = dict(inv)
+            aux = (new_inv.get("supplier_aux_code") or "").upper().strip()
+            name = (new_inv.get("supplier_name") or "").upper().strip()
+            target = norm_map.get(aux) or norm_map.get(name)
+            if target:
+                new_inv["supplier_aux_code"] = target
+                new_inv["_manual_match"] = True
+                applied[idx] = target
+            out.append(new_inv)
+        return out, applied
+
     @router.post("/sessions/{session_id}/preview-invoices")
     async def preview_invoices(session_id: str, data: CommitInvoicesInput, request: Request):
         """Retourne un tableau de controle AVANT le commit final.
@@ -1167,8 +1228,36 @@ def create_import_wizard_router(db):
             if ax:
                 existing_suppliers[ax] = s
 
+        # iter90fs : appliquer les rapprochements manuels avant la resolution
+        invoices_input, applied_matches = _apply_manual_matches(data.invoices, data.manual_matches or {})
+
+        # iter90ft : cache des suggestions par nom pour eviter d'appeler
+        # find_duplicate_supplier N fois pour le meme nom.
+        from routes.suppliers import find_duplicate_supplier
+        name_suggestion_cache: dict[str, Optional[dict]] = {}
+
+        async def _suggest_by_name(sup_name: str) -> Optional[dict]:
+            k = (sup_name or "").upper().strip()
+            if not k:
+                return None
+            if k in name_suggestion_cache:
+                return name_suggestion_cache[k]
+            hit = await find_duplicate_supplier(db, name=sup_name, copro_id=copro_id)
+            if not hit or not hit.get("supplier"):
+                name_suggestion_cache[k] = None
+                return None
+            sup = hit["supplier"]
+            name_suggestion_cache[k] = {
+                "id": sup.get("id", ""),
+                "name": sup.get("name", ""),
+                "auxiliary_code": (sup.get("auxiliary_code") or "").upper(),
+                "vat_number": sup.get("vat_number") or sup.get("bce_number") or "",
+                "matched_field": hit.get("field", "name"),
+            }
+            return name_suggestion_cache[k]
+
         preview_rows = []
-        for idx, inv in enumerate(data.invoices):
+        for idx, inv in enumerate(invoices_input):
             sup_aux = (inv.get("supplier_aux_code") or "").upper().strip()
             sup_name = (inv.get("supplier_name") or "").strip()
             acc_num = (inv.get("account_number") or "").strip()
@@ -1176,8 +1265,21 @@ def create_import_wizard_router(db):
 
             # Resolution independante par ligne
             matched_doc = existing_suppliers.get(sup_aux)
-            status = "matched" if matched_doc else "to_create"
+            manual = idx in applied_matches
+            if matched_doc and manual:
+                status = "manual_match"
+            elif matched_doc:
+                status = "matched"
+            else:
+                status = "to_create"
             resolved_vat = (matched_doc.get("vat_number") or matched_doc.get("bce_number") or "") if matched_doc else ""
+
+            # iter90ft : si le lookup par code auxiliaire echoue, on tente
+            # une correspondance par NOM (homonyme) via find_duplicate_supplier.
+            # Le front proposera cette suggestion dans le SupplierSearchSelect.
+            name_suggestion = None
+            if status == "to_create":
+                name_suggestion = await _suggest_by_name(sup_name)
 
             preview_rows.append({
                 "index": idx,
@@ -1190,13 +1292,83 @@ def create_import_wizard_router(db):
                 "date": (inv.get("date") or ""),
                 "external_ref": (inv.get("external_ref") or ""),
                 "status": status,
+                "name_suggestion": name_suggestion,
+            })
+
+        # iter90fs : detection des comptes 440xxx orphelins.
+        # Un compte 440xxx est "orphelin" quand il apparait dans une ligne
+        # d'invoice mais ne correspond a aucun fournisseur existant (via son
+        # PCMN canonique). Le UI proposera de rapprocher par nom.
+        existing_pcmn_by_supplier: dict[str, dict] = {}
+        for s in existing_suppliers.values():
+            spc = (s.get("pcmn_account_number") or "").strip()
+            if spc:
+                existing_pcmn_by_supplier[spc] = s
+        # Collecte tous les 440xxx presents dans les factures (invoice.account_number + _split_lines)
+        orphans_by_acc: dict[str, list] = {}
+        for idx, inv in enumerate(invoices_input):
+            candidates = []
+            an = (inv.get("account_number") or "").strip()
+            if an:
+                candidates.append(an)
+            for sl in (inv.get("_split_lines") or []):
+                sa = (sl.get("account_number") or "").strip()
+                if sa:
+                    candidates.append(sa)
+            for acc in candidates:
+                if not acc.startswith("440"):
+                    continue
+                if acc in existing_pcmn_by_supplier:
+                    continue
+                # orphan
+                if acc not in orphans_by_acc:
+                    orphans_by_acc[acc] = []
+                orphans_by_acc[acc].append({
+                    "row_index": idx,
+                    "supplier_name": (inv.get("supplier_name") or "").strip(),
+                    "supplier_aux_code": (inv.get("supplier_aux_code") or "").upper().strip(),
+                })
+        # Suggestions par similarite de nom : pour chaque orphelin, retenir la
+        # 1ere occurrence -> le UI propose de rapprocher le supplier_name a un
+        # fournisseur existant.
+        orphan_accounts = []
+        for acc, rows in orphans_by_acc.items():
+            names = list({r["supplier_name"] for r in rows if r["supplier_name"]})
+            aux = list({r["supplier_aux_code"] for r in rows if r["supplier_aux_code"]})
+            # suggestion par nom : cherche un fournisseur existant dont le nom
+            # est un sur-ensemble ou sous-ensemble (case-insensitive)
+            suggestions = []
+            for s in existing_suppliers.values():
+                snm = (s.get("name") or "").strip().lower()
+                if not snm:
+                    continue
+                for n in names:
+                    nl = n.lower().strip()
+                    if not nl:
+                        continue
+                    if snm == nl or snm in nl or nl in snm:
+                        suggestions.append({
+                            "id": s.get("id", ""),
+                            "name": s.get("name", ""),
+                            "auxiliary_code": (s.get("auxiliary_code") or "").upper(),
+                        })
+                        break
+            orphan_accounts.append({
+                "account_number": acc,
+                "supplier_names": names,
+                "supplier_aux_codes": aux,
+                "invoice_rows_count": len(rows),
+                "suggestions": suggestions[:5],
             })
 
         return {
             "preview": preview_rows,
             "count": len(preview_rows),
             "matched": sum(1 for r in preview_rows if r["status"] == "matched"),
+            "manual_match": sum(1 for r in preview_rows if r["status"] == "manual_match"),
             "to_create": sum(1 for r in preview_rows if r["status"] == "to_create"),
+            "applied_matches_count": len(applied_matches),
+            "orphan_accounts": orphan_accounts,
         }
 
 
@@ -1220,6 +1392,14 @@ def create_import_wizard_router(db):
             raise HTTPException(404, "Session introuvable")
         copro_id = session["copropriete_id"]
         await _require_acp_access(request, db, copro_id)
+
+        # iter90fs : appliquer les rapprochements manuels du tableau de controle
+        # AVANT tout traitement. Les factures dont le supplier_aux_code / name
+        # matche sont reecrites vers le code cible -> le pipeline downstream
+        # traite ces lignes exactement comme un fournisseur deja existant.
+        if data.manual_matches:
+            remapped, _applied = _apply_manual_matches(data.invoices, data.manual_matches)
+            data = data.model_copy(update={"invoices": remapped})
 
         # Build matching lookups - Chinese Wall STRICT : ACP courante uniquement
         sup_by_aux: dict[str, dict] = {}

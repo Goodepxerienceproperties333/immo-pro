@@ -1,0 +1,49 @@
+{
+  "summary": "Backend testing of iter90fs/ft supplier manual-reconciliation feature. 7/8 pytest cases pass: catalog endpoint + Chinese-wall, homonym name_suggestion, no-suggestion for unknown, manual_match by aux_code, manual_match by NAME (upper), orphan 440xxx detection. Commit-invoices with manual_matches FAILS with HTTP 500 because _ensure_pcmn_accounts crashes on NameError('request') at line 1136 — this pre-existing F821 (flagged as 'unrelated' in the request) is actually TRIGGERED by the new feature scenario: after manual remap to F00099, the code computes supplier_pcmn '44000099' which does not exist (Baloise's actual tier account is 44000002) and therefore hits the buggy branch.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "POST /api/import-wizard/sessions/{id}/commit-invoices",
+        "issue": "500 NameError: name 'request' is not defined at routes/import_wizard.py:1136. Triggered whenever accounts_needed contains a MISSING PCMN account (e.g. the derived 44000<aux[1:]> after manual match). The 'unrelated pre-existing F821' NOTE in the request is misleading: this new feature *does* reach that branch on the tested happy path.",
+        "priority": "CRITICAL"
+      },
+      {
+        "endpoint": "POST /api/import-wizard/sessions/{id}/commit-invoices",
+        "issue": "Even ignoring the NameError, the manual-match remap uses supplier_aux_code (F00099) to derive supplier_pcmn '44000099', but the actual existing Baloise supplier PCMN is '44000002' (from tier_account_number). commit will therefore create a NEW/orphan 44000099 PCMN account instead of crediting Baloise's real tier account. AC journal double-entry credit will target the wrong PCMN.",
+        "priority": "HIGH"
+      }
+    ],
+    "minor": [
+      {
+        "endpoint": "POST /api/import-wizard/sessions/{id}/preview-invoices",
+        "issue": "Orphan 440xxx detection reads s.get('pcmn_account_number') but supplier docs store the field as 'tier_account_number'. `existing_pcmn_by_supplier` is therefore ALWAYS empty and every 440xxx seen in invoices is reported as orphan even when a matching supplier tier account exists in the ACP. Confirmed via mongo: 0 suppliers have pcmn_account_number, 11 have tier_account_number."
+      }
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter90fs_ft_supplier_manual_match.py",
+    "/app/test_reports/pytest/iter90fs_ft.xml"
+  ],
+  "action_items": [
+    "Fix routes/import_wizard.py:1136 — _ensure_pcmn_accounts must accept `request` (or a syndic_id) as a parameter; commit-invoices currently 500s whenever a supplier PCMN must be auto-created.",
+    "Rework the supplier PCMN resolution after manual_matches: instead of deriving '4400' + aux_code[1:], look up the target supplier by auxiliary_code in the ACP and use its actual tier_account_number. Otherwise the manual-match path silently creates a NEW 44000xxx account and credits it (defeating the purpose of merging Baloise Insurance -> Baloise).",
+    "Fix orphan-account detection at import_wizard.py:1304 to read 'tier_account_number' (or both) instead of 'pcmn_account_number', otherwise legitimate 440xxx of existing suppliers are flagged orphan."
+  ],
+  "critical_code_review_comments": [
+    "F821 NameError('request') at import_wizard.py:1136 is not merely a lint warning — it crashes commit-invoices whenever a PCMN sub-account needs auto-creation.",
+    "Coupling between aux_code and derived PCMN '4400'+aux[1:] is fragile and breaks Chinese-wall assumptions (supplier tier accounts are per-ACP sequential 44000XXX, not tied to F0XXX auxiliary_code).",
+    "orphan_accounts logic uses inexistent field pcmn_account_number, making the whole detection permanently false-positive.",
+    "commit_invoices does not return the counts of manual_match applied; consider echoing applied_matches_count for frontend feedback."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter90fs_ft_supplier_manual_match.py"
+  ],
+  "success_rate": {"backend": "87.5% (7/8)", "frontend": "not tested"},
+  "test_credentials": "syndic_alpha@copro.be / Syndic123!  ;  syndic_beta@copro.be / Syndic123!",
+  "seed_data_creation": "Seeded supplier {name:'Baloise', bce:'BE0403257506', auxiliary_code:'F00099'} in ACP b6fe4e32-...  (idempotent — reused if already present). Created invoices with external_ref TEST_ITER90FS_* are cleaned up in module teardown.",
+  "retest_needed": true,
+  "main_agent_can_self_test": false,
+  "context_for_next_testing_agent": "Test file at /app/backend/tests/test_iter90fs_ft_supplier_manual_match.py. Only TestCommitWithManualMatches::test_commit_merges_no_duplicate_created fails. The 500 error trail is in /var/log/supervisor/backend.err.log (NameError request at import_wizard.py:1136). Also verify that after fixing, the AC journal entry credits the ACTUAL Baloise tier_account_number (44000002) — not a fresh 44000099.",
+  "rca of the issue": "In commit_invoices, after `_apply_manual_matches` rewrites supplier_aux_code from F00500 -> F00099, the pre-pass builds accounts_needed and, for every invoice with an F0xxx aux code, appends the derived PCMN '4400' + aux[1:].zfill(3) = '44000099'. That account does not exist for this ACP (Baloise's real tier is 44000002). _ensure_pcmn_accounts then attempts to auto-create it and hits `_tag_syndic(_pcmn_doc, getattr(request.state, 'syndic_id', ''))` at line 1136 — where `request` is never a parameter of the inner function -> NameError -> 500. Fix: (a) pass `request` (or the syndic_id) into _ensure_pcmn_accounts, and (b) after manual_matches, resolve the supplier document by auxiliary_code and reuse supplier['tier_account_number'] instead of synthesizing 4400+aux[1:]."
+}
