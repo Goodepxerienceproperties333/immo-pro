@@ -24,6 +24,75 @@ _GRAPH_ENDPOINT = "https://graph.microsoft.com/v1.0"
 _AUTHORITY = f"https://login.microsoftonline.com/{_TENANT_ID}" if _TENANT_ID else ""
 _SCOPE = "https://graph.microsoft.com/.default"
 
+# iter90fv : Fallback SMTP (One2Net, Gmail, autres). Utilise si SMTP_HOST est
+# renseigne. Contourne totalement Microsoft Graph. TLS/SSL selon SMTP_PORT :
+#   - 465 -> SSL (implicit TLS)
+#   - 587 -> STARTTLS (upgrade explicite)
+#   - 25  -> plain (deconseille en prod)
+_SMTP_HOST = os.environ.get("SMTP_HOST", "").strip()
+_SMTP_PORT = int(os.environ.get("SMTP_PORT", "465") or "465")
+_SMTP_USER = os.environ.get("SMTP_USER", "").strip()
+_SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
+_SMTP_USE_TLS = os.environ.get("SMTP_USE_TLS", "true").lower() in ("true", "1", "yes")
+_SMTP_FROM = os.environ.get("SMTP_FROM", "").strip() or _SMTP_USER
+_SMTP_FROM_NAME = os.environ.get("SMTP_FROM_NAME", "NextGe Copro").strip()
+
+def _smtp_configured() -> bool:
+    return bool(_SMTP_HOST and _SMTP_USER and _SMTP_PASSWORD)
+
+
+async def _send_via_smtp(
+    *,
+    recipients: List[str],
+    subject: str,
+    html_body: str,
+    reply_to: Optional[str] = None,
+) -> None:
+    """iter90fv : Envoi HTML via SMTP (One2Net et compatibles).
+
+    - Port 465 -> SSL implicite (use_tls=True au niveau de la connexion).
+    - Port 587 -> STARTTLS explicite (start_tls=True apres connexion en clair).
+    - Autres  -> plain (deconseille).
+    Utilise `aiosmtplib` (async) pour ne pas bloquer l'event-loop FastAPI.
+    """
+    import aiosmtplib
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+    from email.utils import formataddr
+
+    to_addrs = [str(r).strip() for r in recipients if r and str(r).strip()]
+    if not to_addrs:
+        return
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = formataddr((_SMTP_FROM_NAME, _SMTP_FROM))
+    msg["To"] = ", ".join(to_addrs)
+    if reply_to:
+        msg["Reply-To"] = reply_to
+    msg.attach(MIMEText(html_body, "html", _charset="utf-8"))
+
+    use_ssl = _SMTP_PORT == 465
+    start_tls = (_SMTP_PORT == 587) and _SMTP_USE_TLS
+    try:
+        await aiosmtplib.send(
+            msg,
+            hostname=_SMTP_HOST,
+            port=_SMTP_PORT,
+            username=_SMTP_USER,
+            password=_SMTP_PASSWORD,
+            use_tls=use_ssl,
+            start_tls=start_tls,
+            timeout=30,
+        )
+        logger.info(
+            "SMTP sendMail OK via %s:%s -> %s (subject=%s)",
+            _SMTP_HOST, _SMTP_PORT, to_addrs, subject,
+        )
+    except Exception as e:
+        logger.exception("SMTP sendMail failed: %s", e)
+        raise RuntimeError(f"SMTP send failed: {e}") from e
+
+
 # Lazy-init MSAL client (avoid network at module import time)
 _msal_app: Optional[msal.ConfidentialClientApplication] = None
 
@@ -46,7 +115,10 @@ def _get_msal_app() -> msal.ConfidentialClientApplication:
 def is_configured() -> bool:
     """iter90h7 : True si les env vars globales sont pretes. Attention : ceci
     ne verifie PAS la config par-syndic en DB (utiliser is_configured_for_syndic
-    avec un handle DB pour cela)."""
+    avec un handle DB pour cela).
+    iter90fv : accepte aussi une config SMTP (One2Net et compatibles)."""
+    if _smtp_configured():
+        return True
     return bool(_TENANT_ID and _CLIENT_ID and _CLIENT_SECRET and _SENDER_UPN)
 
 
@@ -115,6 +187,18 @@ async def send_html_email(
         logger.info(
             "[DRY-RUN] Email suppressed (MAIL_ENABLED=false, pas de config par-syndic). To: %s, Subject: %s",
             list(recipients), subject,
+        )
+        return
+
+    # iter90fv : Chemin SMTP prioritaire quand SMTP_HOST est configure.
+    # Fait totalement bypass de Graph API. Le check MAIL_ENABLED a deja ete
+    # applique ci-dessus.
+    if not per_syndic and _smtp_configured():
+        await _send_via_smtp(
+            recipients=list(recipients),
+            subject=subject,
+            html_body=html_body,
+            reply_to=reply_to,
         )
         return
 
