@@ -1,0 +1,47 @@
+{
+  "summary": "iter90ft — Supplier keyword matching + syndic-wide catalog + noise-word normalization. Extended /app/backend/tests/test_iter90fs_ft_supplier_manual_match.py with 11 new tests (TestNoiseWordNormalization, TestKeywordMatchingSyndicWide, TestSuppliersCatalogSyndicWide, TestPreviewNameSuggestionsArray, TestFindDuplicateSupplierRegression, TestCommitInvoicesNoNameError). 19/19 tests pass. All spec assertions verified: (a) _norm_name strips 'insurance/belgium/assurance/group/services/...' so 'Baloise Insurance Belgium SA' -> 'baloise'. (b) find_supplier_candidates_by_keyword returns both Gerald Baloise Insurance fiches when syndic=Gerald, with the same-copro fiche ranked first (score bonus +0.15). (c) Chinese Wall STRICT: Alpha searching 'Baloise Insurance' NEVER surfaces Gerald's suppliers (all returned rows have syndic_id=ALPHA_SYNDIC_ID). (d) GET /suppliers-catalog now returns whole-syndic scope with same_copro flag; Alpha never sees Baloise Insurance. (e) POST preview-invoices returns both name_suggestion (backward-compat, subset match => 'Baloise') AND name_suggestions[] (array with 'Baloise' entry same_copro=true score>=1.0). (f) commit-invoices with unknown aux + manual_matches now returns HTTP 200, inserted>=1, no NameError('request') — iter79 blocker CONFIRMED FIXED. (g) find_duplicate_supplier still subset-matches 'Baloise Insurance' <-> 'Baloise'.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "GET /api/fiscal-years",
+        "issue": "Route returns 404 (not registered at top-level under /api). The test had to seed fiscal_years directly in Mongo to unblock commit-invoices for ACP Alpha (no FY existed). Not a regression of iter90ft — pre-existing observation."
+      },
+      {
+        "endpoint": "POST /api/import-wizard/sessions/{id}/commit-invoices",
+        "issue": "Invoice documents persisted do NOT retain the input `external_ref` field (only internal_reference is stored). This bit the iter79 test that relied on external_ref for lookup. Not blocking the feature; noted as a data-model observation."
+      },
+      {
+        "endpoint": "preview-invoices orphan_accounts (still open from iter79)",
+        "issue": "Orphan 440xxx detection still reads s.get('pcmn_account_number') instead of tier_account_number — flagged in iter79 as pending; NOT fixed in this iter (per request). Preview test still asserts orphan detection on OrphanCorp works, but real-supplier false-positives remain."
+      }
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter90fs_ft_supplier_manual_match.py",
+    "/app/test_reports/pytest/iter90ft.xml"
+  ],
+  "action_items": [
+    "iter79 bug #2 (real tier_account_number resolution after manual_match) — RE-VERIFIED still failing indirectly: commit-invoices with manual_matches={'F09876':'F00099'} inserts 1 invoice with supplier_aux_code=F00099 (good) but the derived PCMN sub-account for the AC credit is still built from 4400+aux[1:] rather than looked up via the target supplier's tier_account_number. If aux!=99 and the target supplier's actual tier_account differs, a fresh 440xxx PCMN may be auto-created. Pending fix.",
+    "iter79 bug #3 (orphan_accounts field mismatch pcmn_account_number vs tier_account_number) — NOT fixed. Pending.",
+    "Expose GET /api/fiscal-years?copropriete_id= route (currently 404), so tests and Ops can create/inspect FY via HTTP.",
+    "Persist original external_ref on invoice docs during import-wizard commit — useful for idempotency + audit."
+  ],
+  "critical_code_review_comments": [
+    "routes/suppliers.py::find_supplier_candidates_by_keyword is well-scoped and Chinese-Wall safe (syndic_id filter is authoritative). Fallback to copro_id when no syndic_id is present is acceptable.",
+    "_norm_name noise-word list now conflates brand identity with legal form — e.g. any two suppliers named 'Group X' & 'Group Y' remain distinct because non-noise word differs, but be aware that adding 'services' as noise may create false duplicates ('AB Services' <-> 'AB Cleaning' still stay distinct — safe). Consider unit-covering a few more edge cases (e.g. 'Corp' as sole token).",
+    "import_wizard.suppliers_catalog fallback: if request.state.syndic_id is missing, scope collapses to ACP — this is safe but silently hides syndic-wide behavior. Consider warning-log when this happens.",
+    "iter79 blocker: `_ensure_pcmn_accounts` now takes syndic_id explicitly (fix confirmed; commit no longer 500s)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter90fs_ft_supplier_manual_match.py"
+  ],
+  "success_rate": {"backend": "100% (19/19)", "frontend": "not tested (per request)"},
+  "test_credentials": "syndic_alpha@copro.be / Syndic123!  ;  syndic_beta@copro.be / Syndic123!  ;  Gerald info@nextgecopro.be — password unknown (not needed: Chinese-Wall assertions done via direct DB + Alpha login)",
+  "seed_data_creation": "1) Baloise supplier F00099 in ACP Alpha (idempotent). 2) fiscal_year 2025-01-01 -> 2025-12-31 for ACP Alpha (idempotent, torn down at module end). Test invoices/journal_entries cleaned up in teardown.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Feature iter90ft fully covered by pytest module tests/test_iter90fs_ft_supplier_manual_match.py (19 tests, 100%). Two carryover bugs from iter79 (tier_account_number resolution + orphan_accounts field mismatch) remain open but out-of-scope for iter90ft acceptance. Frontend E2E deferred per request; SupplierSearchSelect local filtering still expected to work now that backend returns name_suggestions[].",
+  "rca of the issue": "Original user complaint 'Le matching par mots échoue sur Baloise et la dropdown est vide' is RESOLVED at the backend contract level: (a) noise words including 'Insurance/Belgium/Assurance/SA/SRL' are now stripped in _norm_name so 'Baloise Insurance Belgium SA' normalises to 'baloise'; (b) find_supplier_candidates_by_keyword is the new soft-matcher that ranks candidates via keyword_ratio + same_copro bonus (+0.15) + perfect-match bonus (+0.10), scoped by syndic_id; (c) preview_invoices returns name_suggestions[] array so the frontend dropdown can populate ranked candidates. The 500 (NameError('request') in _ensure_pcmn_accounts) from iter79 is fixed by passing syndic_id explicitly. Verified end-to-end: Alpha searching 'Baloise Insurance' surfaces Alpha's 'Baloise' with same_copro=true score>=1.0; Gerald searching same term surfaces BOTH Baloise Insurance fiches, with same-ACP first. Chinese Wall preserved."
+}

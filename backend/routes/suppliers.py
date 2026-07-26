@@ -9,9 +9,17 @@ from tier_accounts import assign_supplier_account
 
 
 _LEGAL_PARTICLES = frozenset({
+    # iter90be : formes juridiques
     "sa", "sprl", "srl", "sarl", "sas", "scrl", "asbl", "scs", "snc",
     "nv", "bv", "bvba", "cvba", "vzw", "sc", "sca", "sepa",
     "sci", "gmbh", "ag", "ltd", "llc", "inc",
+    # iter90ft : mots-bruit de branding (assurance / geo / holding) supprimes
+    # avant matching. "Baloise Insurance Belgium SA" doit matcher "Baloise".
+    "insurance", "assurance", "assurances", "verzekering", "verzekeringen",
+    "belgium", "belgique", "belgie", "belg",
+    "nederland", "holland", "luxembourg", "france", "europe", "european",
+    "international", "worldwide", "group", "groupe", "groep", "holding",
+    "services", "service", "company", "corp", "corporation",
 })
 
 
@@ -179,6 +187,75 @@ async def find_duplicate_supplier(
                     if nc_words <= oc_words or oc_words <= nc_words:
                         return {"supplier": s, "field": "name", "value": s.get("name", "")}
     return None
+
+
+async def find_supplier_candidates_by_keyword(
+    db,
+    *,
+    name: str,
+    syndic_id: str = "",
+    copro_id: str = "",
+    exclude_id: Optional[str] = None,
+    limit: int = 10,
+) -> List[dict]:
+    """iter90ft : Retourne des candidats fournisseurs par MOTS-CLES.
+
+    Contrairement a `find_duplicate_supplier` qui exige un match EXACT (BCE / nom
+    normalise / IBAN), cette fonction fait un match SOUPLE :
+      - Normalisation du nom (suppression des particules juridiques + mots-bruit
+        de branding via `_norm_name` / `_LEGAL_PARTICLES`)
+      - Chaque mot restant devient un mot-cle
+      - Pour chaque fournisseur, on compte le nombre de mots-cles present dans
+        son propre nom normalise, et on classe par score decroissant
+      - "Baloise Insurance Belgium SA" -> mot-cle unique "baloise" -> match
+        toutes fiches contenant "baloise" (Baloise, Baloise Insurance, ...).
+
+    Scope :
+      - Si `copro_id` fourni : on privilegie les fiches de cette ACP (score bonus).
+      - Si `syndic_id` fourni : on elargit a TOUS les fournisseurs du syndic
+        (Chinese Wall preserve : jamais cross-syndic).
+      - Sinon, on retombe sur ACP seule (comportement historique).
+    """
+    keywords = [w for w in _norm_name(name).split() if len(w) >= 2]
+    if not keywords:
+        return []
+    q: dict = {}
+    if syndic_id:
+        q["syndic_id"] = syndic_id
+    elif copro_id:
+        q["copropriete_id"] = copro_id
+    if exclude_id:
+        q["id"] = {"$ne": exclude_id}
+    # Pre-filtre au niveau Mongo : au moins un mot-cle apparait dans le nom
+    # (case-insensitive). Enorme reduction sur les grosses bases.
+    or_conds = []
+    for kw in keywords:
+        or_conds.append({"name": {"$regex": re.escape(kw), "$options": "i"}})
+    if or_conds:
+        q["$or"] = or_conds
+    candidates = await db.suppliers.find(q, {"_id": 0}).to_list(5000)
+    scored: list = []
+    for s in candidates:
+        other_words = set(_norm_name(s.get("name", "")).split())
+        if not other_words:
+            continue
+        matched = sum(1 for kw in keywords if kw in other_words)
+        if matched == 0:
+            continue
+        # Score : ratio (matched / total keywords) + bonus si meme ACP + bonus
+        # si mot-cle unique et match exact
+        score = matched / len(keywords)
+        if copro_id and s.get("copropriete_id") == copro_id:
+            score += 0.15
+        if matched == len(keywords) == len(other_words):
+            score += 0.10  # match parfait
+        scored.append({
+            "supplier": s,
+            "matched_keywords": matched,
+            "score": round(score, 3),
+        })
+    scored.sort(key=lambda x: (x["score"], x["matched_keywords"]), reverse=True)
+    return scored[:limit]
 
 
 class SupplierInput(BaseModel):

@@ -1096,10 +1096,14 @@ def create_import_wizard_router(db):
         return out
 
 
-    async def _ensure_pcmn_accounts(copro_id: str, accounts_needed: dict[str, str]) -> int:
+    async def _ensure_pcmn_accounts(copro_id: str, accounts_needed: dict[str, str], syndic_id: str = "") -> int:
         """Ensure each (account_number -> account_name) exists in this ACP's PCMN.
 
         Returns the count of newly-created accounts.
+
+        iter90ft : `syndic_id` doit etre passe explicitement (fix bug historique
+        NameError('request') a la ligne 1136). Le tag Chinese Wall utilise ce
+        parametre au lieu de dependre d'une variable non definie.
         """
         if not accounts_needed:
             return 0
@@ -1133,7 +1137,7 @@ def create_import_wizard_router(db):
                 "copropriete_id": copro_id,
                 "created_at": _now_iso(),
             }
-            _tag_syndic(_pcmn_doc, getattr(request.state, "syndic_id", ""))
+            _tag_syndic(_pcmn_doc, syndic_id)
             created += 1
             await db.pcmn_accounts.insert_one(_pcmn_doc)
         return created
@@ -1141,26 +1145,36 @@ def create_import_wizard_router(db):
     # ----- G-bis : PREVIEW avant commit (tableau de controle) -----
     @router.get("/sessions/{session_id}/suppliers-catalog")
     async def suppliers_catalog(session_id: str, request: Request):
-        """iter90fs : Retourne le catalogue des fournisseurs existants sur l'ACP.
+        """iter90fs / iter90ft : Retourne le catalogue des fournisseurs.
 
-        Utilise par le tableau de controle du wizard pour permettre au syndic
-        de rapprocher manuellement un fournisseur 'Nouveau' avec un fournisseur
-        existant (evite les doublons "Baloise Insurance" vs "Baloise").
+        Portee elargie : TOUS les fournisseurs du syndic (pas juste l'ACP courante).
+        Chinese Wall preserve : filtre `syndic_id`. Le UI marque `same_copro=true`
+        pour differencier les fiches deja liees a l'ACP du wizard.
         """
         session = await db.import_sessions.find_one({"id": session_id})
         if not session:
             raise HTTPException(404, "Session introuvable")
         copro_id = session["copropriete_id"]
         await _require_acp_access(request, db, copro_id)
+        sid = getattr(request.state, "syndic_id", None)
+        q: dict = {}
+        if sid:
+            q["syndic_id"] = sid
+        else:
+            # Fallback : sans syndic_id, on scope a l'ACP (comportement historique).
+            q["copropriete_id"] = copro_id
         rows = []
         async for s in db.suppliers.find(
-            {"copropriete_id": copro_id}, {"_id": 0, "id": 1, "name": 1, "auxiliary_code": 1, "vat_number": 1, "bce_number": 1},
+            q, {"_id": 0, "id": 1, "name": 1, "auxiliary_code": 1, "vat_number": 1, "bce_number": 1, "copropriete_id": 1, "tier_account_number": 1},
         ).sort("name", 1):
             rows.append({
                 "id": s.get("id", ""),
                 "name": s.get("name", "") or "",
                 "auxiliary_code": (s.get("auxiliary_code") or "").upper(),
                 "vat_number": s.get("vat_number") or s.get("bce_number") or "",
+                "copropriete_id": s.get("copropriete_id") or "",
+                "tier_account_number": s.get("tier_account_number") or "",
+                "same_copro": s.get("copropriete_id") == copro_id,
             })
         return {"suppliers": rows, "count": len(rows)}
 
@@ -1231,10 +1245,24 @@ def create_import_wizard_router(db):
         # iter90fs : appliquer les rapprochements manuels avant la resolution
         invoices_input, applied_matches = _apply_manual_matches(data.invoices, data.manual_matches or {})
 
-        # iter90ft : cache des suggestions par nom pour eviter d'appeler
-        # find_duplicate_supplier N fois pour le meme nom.
-        from routes.suppliers import find_duplicate_supplier
+        # iter90ft : cache des suggestions par nom + par mots-cles (soft match)
+        # pour eviter d'appeler find_* N fois pour le meme nom.
+        from routes.suppliers import find_duplicate_supplier, find_supplier_candidates_by_keyword
+        sid = getattr(request.state, "syndic_id", None) or ""
         name_suggestion_cache: dict[str, Optional[dict]] = {}
+        keyword_candidates_cache: dict[str, list] = {}
+
+        def _pack_sup(sup: dict, matched_field: str = "name") -> dict:
+            return {
+                "id": sup.get("id", ""),
+                "name": sup.get("name", ""),
+                "auxiliary_code": (sup.get("auxiliary_code") or "").upper(),
+                "vat_number": sup.get("vat_number") or sup.get("bce_number") or "",
+                "copropriete_id": sup.get("copropriete_id") or "",
+                "tier_account_number": sup.get("tier_account_number") or "",
+                "matched_field": matched_field,
+                "same_copro": sup.get("copropriete_id") == copro_id,
+            }
 
         async def _suggest_by_name(sup_name: str) -> Optional[dict]:
             k = (sup_name or "").upper().strip()
@@ -1243,18 +1271,24 @@ def create_import_wizard_router(db):
             if k in name_suggestion_cache:
                 return name_suggestion_cache[k]
             hit = await find_duplicate_supplier(db, name=sup_name, copro_id=copro_id)
-            if not hit or not hit.get("supplier"):
+            if hit and hit.get("supplier"):
+                name_suggestion_cache[k] = _pack_sup(hit["supplier"], hit.get("field", "name"))
+            else:
                 name_suggestion_cache[k] = None
-                return None
-            sup = hit["supplier"]
-            name_suggestion_cache[k] = {
-                "id": sup.get("id", ""),
-                "name": sup.get("name", ""),
-                "auxiliary_code": (sup.get("auxiliary_code") or "").upper(),
-                "vat_number": sup.get("vat_number") or sup.get("bce_number") or "",
-                "matched_field": hit.get("field", "name"),
-            }
             return name_suggestion_cache[k]
+
+        async def _keyword_candidates(sup_name: str) -> list:
+            k = (sup_name or "").upper().strip()
+            if not k:
+                return []
+            if k in keyword_candidates_cache:
+                return keyword_candidates_cache[k]
+            hits = await find_supplier_candidates_by_keyword(
+                db, name=sup_name, syndic_id=sid, copro_id=copro_id, limit=8,
+            )
+            packed = [_pack_sup(h["supplier"], "keyword") | {"score": h.get("score", 0), "matched_keywords": h.get("matched_keywords", 0)} for h in hits]
+            keyword_candidates_cache[k] = packed
+            return packed
 
         preview_rows = []
         for idx, inv in enumerate(invoices_input):
@@ -1275,11 +1309,20 @@ def create_import_wizard_router(db):
             resolved_vat = (matched_doc.get("vat_number") or matched_doc.get("bce_number") or "") if matched_doc else ""
 
             # iter90ft : si le lookup par code auxiliaire echoue, on tente
-            # une correspondance par NOM (homonyme) via find_duplicate_supplier.
-            # Le front proposera cette suggestion dans le SupplierSearchSelect.
+            # (a) une correspondance stricte par NOM (homonyme) via find_duplicate_supplier
+            # (b) une correspondance SOUPLE par mots-cles (Baloise Insurance -> Baloise)
+            # Le front proposera la liste des candidats dans le SupplierSearchSelect.
             name_suggestion = None
+            name_suggestions: list = []
             if status == "to_create":
                 name_suggestion = await _suggest_by_name(sup_name)
+                name_suggestions = await _keyword_candidates(sup_name)
+                # Si le hit strict est deja dans les candidats, on le laisse
+                # apparaitre en tete. Sinon, on l'insere en premier.
+                if name_suggestion:
+                    ids_in_list = {c.get("id") for c in name_suggestions}
+                    if name_suggestion.get("id") not in ids_in_list:
+                        name_suggestions.insert(0, {**name_suggestion, "score": 1.0})
 
             preview_rows.append({
                 "index": idx,
@@ -1293,6 +1336,7 @@ def create_import_wizard_router(db):
                 "external_ref": (inv.get("external_ref") or ""),
                 "status": status,
                 "name_suggestion": name_suggestion,
+                "name_suggestions": name_suggestions,
             })
 
         # iter90fs : detection des comptes 440xxx orphelins.
@@ -1525,7 +1569,7 @@ def create_import_wizard_router(db):
                     sup_pcmn = canonize_supplier_tier_account("4400" + sup_aux[1:].zfill(3))
                     sup_lbl = (inv.get("supplier_name") or "").strip() or sup_aux
                     accounts_needed[sup_pcmn] = sup_lbl
-        pcmn_created = await _ensure_pcmn_accounts(copro_id, accounts_needed)
+        pcmn_created = await _ensure_pcmn_accounts(copro_id, accounts_needed, syndic_id=getattr(request.state, "syndic_id", ""))
 
         year_counters: dict[str, int] = {}
 
@@ -2038,7 +2082,7 @@ def create_import_wizard_router(db):
             cl = (t.get("counterparty_account_label") or "").strip()
             if cp:
                 accounts_needed[cp] = cl
-        pcmn_created = await _ensure_pcmn_accounts(copro_id, accounts_needed)
+        pcmn_created = await _ensure_pcmn_accounts(copro_id, accounts_needed, syndic_id=getattr(request.state, "syndic_id", ""))
 
         # ---- Group transactions by (bank_pcmn, year-month) to build statements ----
         # bank_pcmn -> month_key (YYYY-MM) -> {first_date, last_date, txns: [...]}
@@ -2330,7 +2374,7 @@ def create_import_wizard_router(db):
             lbl = (a.get("label") or "").strip()
             if num:
                 accounts_needed[num] = lbl
-        pcmn_created = await _ensure_pcmn_accounts(copro_id, accounts_needed)
+        pcmn_created = await _ensure_pcmn_accounts(copro_id, accounts_needed, syndic_id=getattr(request.state, "syndic_id", ""))
 
         # Determine entry date : 1st day of the FY containing the year+1 of period_end_date
         # OR the FY's start_date if available
@@ -2837,7 +2881,7 @@ def create_import_wizard_router(db):
                     lbl = (e.get(k_name) or "").strip()
                     if num:
                         accounts_needed[num] = lbl
-        pcmn_created = await _ensure_pcmn_accounts(copro_id, accounts_needed)
+        pcmn_created = await _ensure_pcmn_accounts(copro_id, accounts_needed, syndic_id=getattr(request.state, "syndic_id", ""))
 
         # ---- Pre-load owner/supplier lookup by auxiliary_code ----
         # For Journal OD : lines like "Coproprietaires | C1996 M. brumagne"
