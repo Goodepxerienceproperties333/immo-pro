@@ -83,6 +83,20 @@ Application de gestion de copropriete basee sur le droit belge (PCMN), incluant 
 - P4: Emails relance automatiques (APScheduler)
 - P5: (option UX) Remplacer les inputs date natifs de JournalsPage par un shadcn DatePicker FR
 
+### Session courante (Fevrier 2026)
+
+#### FEATURE - Systeme de tickets support (bug escalation) (DONE - 19/19 backend + 100% frontend iter 77)
+- Chatbot avec onglets Assistant IA / Mes tickets + mode picker (operationnel vs bug)
+- Formulaire BugReportForm (titre, description, etapes, attendu/observe, pieces jointes max 5x10MB tout type, email)
+- Backend /api/tickets (create, list, detail, events, status, comments, assign, attachments, delete, statuses)
+- Numerotation atomique TICK-YYYY-XXXX via db.counters
+- Stockage pieces jointes GridFS bucket 'ticket_attachments'
+- Statuts : Ouvert -> Affecte -> En cours -> Testing -> Deploiement -> Cloture (+ Refuse)
+- Chinese Wall : syndic voit ses tickets (via syndic_id ou requester_user_id), superadmin voit tout
+- Emails DRY-RUN (MAIL_ENABLED=false) : notification support a la creation, notification demandeur a chaque changement de statut
+- Page superadmin /admin/tickets + sidebar 'Support & Tickets'
+- Test file: /app/backend/tests/test_iter90fs_tickets.py
+
 ## Refactoring
 - import_wizard.py (>3500 lignes) a decouper
 - reports.py (logique PCMN complexe) a simplifier

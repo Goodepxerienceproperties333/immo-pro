@@ -267,7 +267,12 @@ export default function SupportTicketsList({ superadmin = false, onBack = null, 
                   </SelectTrigger>
                   <SelectContent>
                     {statuses.map(s => (
-                      <SelectItem key={s.key} value={s.key} disabled={s.key === activeTicket.status}>
+                      <SelectItem
+                        key={s.key}
+                        value={s.key}
+                        disabled={s.key === activeTicket.status}
+                        data-testid={`ticket-status-option-${s.key}`}
+                      >
                         {s.label}
                       </SelectItem>
                     ))}
