@@ -1707,7 +1707,7 @@ function SituationHero({ status, balance, totalCalled, totalPaid, nextCall, tota
           {nextCall ? (
             <>
               <div className={`text-3xl font-bold ${nextTextColor}`} style={{fontFamily:'Chivo,sans-serif'}} data-testid="next-payment-amount">
-                {fmt(nextCall.amount)}
+                {fmt(nextCall.is_partial_covered ? nextCall.remaining : nextCall.amount)}
               </div>
               <div className="mt-1 text-[13px] font-medium text-slate-700 truncate" title={nextCall.fund_call_name}>
                 {nextCall.fund_call_name}
@@ -1717,7 +1717,7 @@ function SituationHero({ status, balance, totalCalled, totalPaid, nextCall, tota
                 {nextCall.is_future ? (
                   <>A venir dans {nextCall.daysDelta} jour(s)</>
                 ) : nextCall.is_partial_covered ? (
-                  <>Partiellement couvert par vos paiements</>
+                  <>Solde partiel restant apres imputation FIFO</>
                 ) : (
                   <>{nextLabel}</>
                 )}
