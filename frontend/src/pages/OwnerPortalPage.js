@@ -1741,11 +1741,6 @@ function SituationHero({ status, balance, totalCalled, totalPaid, nextCall, tota
                   Votre credit actuel de {fmt(Math.abs(balance))} sera automatiquement deduit lors de l&apos;encaissement de cet appel.
                 </div>
               )}
-              {balance > 0.01 && (
-                <div className="mt-2 text-[11px] bg-red-50 rounded px-2 py-1 border border-red-200 text-red-700" data-testid="next-payment-overdue-note">
-                  Solde total du au jour : <span className="font-bold font-mono">{fmt(balance)}</span> (voir Situation de compte)
-                </div>
-              )}
               {nextCall.vcs_code && (
                 <button
                   onClick={() => copyVcs(nextCall.vcs_code)}
