@@ -341,28 +341,28 @@ export default function OwnerPortalPage() {
     };
   }, [quarterBounds]);
 
-  // iter90i8 : agregats du trimestre selectionne (defaut = trimestre courant).
-  // Calcules a partir de fundCalls (source fund_calls.distribution : la
-  // vraie repartition avec dates et statut de paiement par owner_share).
+  // iter90i8 : agregats du trimestre selectionne pour l'INFO (prochain paiement,
+  // nombre d'appels en attente sur la periode).
+  // iter90h2 : Le SOLDE et le STATUS proviennent desormais du grand livre
+  // (dashboard.stats_by_acp), pas de fund_calls.paid (flag statique obsolete
+  // apres lettrage bancaire). Fix : le proprio voit sa vraie situation
+  // comptable de l'ACP (coherente avec l'onglet "Appels de fonds").
   const quarterAgg = useMemo(() => {
-    let called = 0;
-    let paid = 0;
+    let calledQ = 0;
+    let paidQ = 0;
     let pendingCount = 0;
     let nextCall = null;
     const now = new Date();
     now.setHours(0, 0, 0, 0);
     for (const fc of fundCalls) {
-      // On considere qu'un appel appartient au trimestre selon sa `date`
-      // (date d'emission), qui reflete le moment ou il devient "du".
       const inQ = inQuarter(fc.date) || inQuarter(fc.due_date);
       if (!inQ) continue;
       const amt = Number(fc.my_amount || 0);
-      called += amt;
+      calledQ += amt;
       if (fc.paid) {
-        paid += amt;
+        paidQ += amt;
       } else {
         pendingCount += 1;
-        // Prochain paiement du trimestre : celui avec l'echeance la plus proche
         const dueIso = fc.due_date || fc.date;
         if (dueIso) {
           const due = new Date(dueIso);
@@ -386,10 +386,9 @@ export default function OwnerPortalPage() {
       }
     }
     return {
-      totalCalled: +called.toFixed(2),
-      totalPaid: +paid.toFixed(2),
-      balance: +(called - paid).toFixed(2),
-      status: called - paid > 0.01 ? 'debiteur' : called - paid < -0.01 ? 'crediteur' : 'solde',
+      // Trimestriels (informatif uniquement)
+      totalCalledQuarter: +calledQ.toFixed(2),
+      totalPaidQuarter: +paidQ.toFixed(2),
       pendingCount,
       nextCall,
     };
@@ -778,12 +777,12 @@ export default function OwnerPortalPage() {
               year={currentYear}
             />
             <SituationHero
-              status={quarterAgg.status}
-              balance={quarterAgg.balance}
-              totalCalled={quarterAgg.totalCalled}
-              totalPaid={quarterAgg.totalPaid}
+              status={stats.status}
+              balance={stats.balance}
+              totalCalled={stats.total_called}
+              totalPaid={stats.total_paid}
               nextCall={quarterAgg.nextCall}
-              totalPending={quarterAgg.balance > 0.01 ? quarterAgg.balance : 0}
+              totalPending={stats.balance > 0.01 ? stats.balance : 0}
               totalCharges12m={totalCharges12m}
               pendingCount={quarterAgg.pendingCount}
               copyVcs={copyVcs}
