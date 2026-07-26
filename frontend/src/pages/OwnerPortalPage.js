@@ -472,6 +472,9 @@ export default function OwnerPortalPage() {
   const chargesByCategory = useMemo(() => {
     // iter90i8 : filtre les charges par trimestre selectionne (au lieu des
     // 12 derniers mois). Rend le donut coherent avec la vue trimestrielle.
+    // iter90h6 : gestion des valeurs negatives (OD financement) - on ne
+    // retient QUE le NET POSITIF par categorie pour le donut (evite la
+    // superposition d'anneaux avec des angles negatifs).
     const totals = {};
     for (const c of chargesMemo) {
       if (!c.date) continue;
@@ -479,6 +482,9 @@ export default function OwnerPortalPage() {
       const cat = c.category || 'Autres';
       totals[cat] = (totals[cat] || 0) + (c.my_amount || 0);
     }
+    // On garde toutes les categories pour l'affichage tabulaire (avec signe)
+    // mais on n'affiche dans le DONUT que les valeurs > 0 (le reste va dans
+    // "Reductions" separement en legende).
     return Object.entries(totals)
       .map(([name, value]) => ({ name, value: Math.round(value * 100) / 100 }))
       .sort((a, b) => b.value - a.value);
@@ -1672,6 +1678,12 @@ function SituationHero({ status, balance, totalCalled, totalPaid, nextCall, tota
 }
 
 function ChargesDonut({ data, total, periodLabel }) {
+  // iter90h6 : le PieChart n'accepte que des valeurs positives (sinon
+  // superposition d'anneaux). On sepere positives (donut) et negatives
+  // (reductions - affichees en legende avec badge vert).
+  const positiveData = data.filter(d => d.value > 0.005);
+  const negativeData = data.filter(d => d.value < -0.005);
+  const positiveTotal = positiveData.reduce((s, d) => s + d.value, 0);
   return (
     <Card className="lg:col-span-3 border-slate-200" data-testid="situation-donut-card">
       <CardHeader className="pb-2">
@@ -1682,46 +1694,53 @@ function ChargesDonut({ data, total, periodLabel }) {
               Charges par categorie{periodLabel ? ` - ${periodLabel}` : ''}
             </CardTitle>
           </div>
-          <span className="text-[11px] text-slate-500 font-mono">Total : {fmt(total)}</span>
+          <span className="text-[11px] text-slate-500 font-mono">Total net : {fmt(total)}</span>
         </div>
       </CardHeader>
       <CardContent>
         {data.length === 0 ? (
           <div className="p-8 text-center text-slate-400 text-sm">
-            Aucune charge sur les 12 derniers mois
+            Aucune charge sur la periode
           </div>
         ) : (
           <div className="flex flex-col md:flex-row items-center gap-4">
             <div className="w-full md:w-1/2 h-64 relative">
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie
-                    data={data}
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={55}
-                    outerRadius={90}
-                    paddingAngle={2}
-                    dataKey="value"
-                  >
-                    {data.map((entry, index) => (
-                      <Cell key={entry.name} fill={CHARGE_COLORS[index % CHARGE_COLORS.length]} />
-                    ))}
-                  </Pie>
-                  <RechartsTooltip
-                    formatter={(value) => fmt(value)}
-                    contentStyle={{ fontSize: '12px', borderRadius: '6px' }}
-                  />
-                </PieChart>
-              </ResponsiveContainer>
+              {positiveData.length > 0 ? (
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={positiveData}
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={55}
+                      outerRadius={90}
+                      paddingAngle={2}
+                      dataKey="value"
+                      isAnimationActive={false}
+                    >
+                      {positiveData.map((entry, index) => (
+                        <Cell key={entry.name} fill={CHARGE_COLORS[index % CHARGE_COLORS.length]} />
+                      ))}
+                    </Pie>
+                    <RechartsTooltip
+                      formatter={(value) => fmt(value)}
+                      contentStyle={{ fontSize: '12px', borderRadius: '6px' }}
+                    />
+                  </PieChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="flex items-center justify-center h-full text-xs text-slate-400 italic">
+                  Aucune charge positive sur la periode
+                </div>
+              )}
               <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
                 <div className="text-[10px] uppercase tracking-wider text-slate-400">Total</div>
                 <div className="text-lg font-bold text-slate-900" style={{fontFamily:'Chivo,sans-serif'}}>{fmt(total)}</div>
               </div>
             </div>
             <div className="w-full md:w-1/2 space-y-2">
-              {data.map((entry, index) => {
-                const pct = total > 0 ? (entry.value / total) * 100 : 0;
+              {positiveData.map((entry, index) => {
+                const pct = positiveTotal > 0 ? (entry.value / positiveTotal) * 100 : 0;
                 return (
                   <div key={entry.name} className="flex items-center gap-2" data-testid={`donut-legend-${index}`}>
                     <span
@@ -1736,6 +1755,18 @@ function ChargesDonut({ data, total, periodLabel }) {
                   </div>
                 );
               })}
+              {negativeData.map((entry, index) => (
+                <div key={`neg-${entry.name}`} className="flex items-center gap-2 pt-2 border-t border-emerald-100" data-testid={`donut-reduction-${index}`}>
+                  <span className="w-3 h-3 rounded-sm flex-shrink-0 bg-emerald-500" />
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs font-medium text-emerald-700 truncate">
+                      Reduction - {entry.name}
+                    </div>
+                    <div className="text-[10px] text-emerald-600">Financement par fonds/reserve</div>
+                  </div>
+                  <div className="text-xs font-mono font-semibold text-emerald-700">{fmt(entry.value)}</div>
+                </div>
+              ))}
             </div>
           </div>
         )}
