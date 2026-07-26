@@ -1,0 +1,39 @@
+{
+  "summary": "Iter90fs Support Tickets (bug escalation) - complete E2E validation. Backend: 19/19 pytest pass (create/list isolation/detail RBAC/status change/comments/attachments GridFS/assign/statuses/validation). Frontend: admin /admin/tickets page renders with sidebar link, detail panel with events timeline and status-change-select; syndic bug flow works end-to-end (support panel -> mode picker -> BugReportForm -> validation toasts (3) -> attachment via setInputFiles -> submit -> toast 'Ticket TICK-2026-0003 cree' -> auto-switch to Mes tickets tab -> detail panel shows attachment/history -> syndic has no status-change dropdown -> comment posted and persisted). Emails DRY-RUN confirmed in backend logs: To=support@nextgecopro.be on ticket creation and To=syndic_alpha@copro.be on status change.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Post-login modal sequence (syndic_alpha)", "issues": ["3 sequential modals still block UI: legal T&C -> release notes ('Nouveautes NextGe Copro' with curly apostrophe in 'OK, j'ai compris') -> onboarding wizard 'Bienvenue! Configurez votre cabinet syndic'. Onboarding wizard has NO data-testid and its close 'X' button also has no test-id, making automation fragile. Onboarding wizard is z-index higher than SupportChatBubble panel (z-50), so support panel is unreachable if wizard is open. Consider adding [data-testid=onboarding-wizard-close-btn] and/or auto-dismissing all onboarding modals via Escape."]},
+      {"screen": "AdminTicketsPage status select", "issues": ["Shadcn Select popover option for 'En cours de developpement' was not clickable via simple .get_by_text; consider verifying option items expose data-testid keyed by status key (e.g. ticket-status-option-in_progress) for stable automation."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter90fs_tickets.py",
+    "/app/test_reports/pytest/iter90fs_tickets.xml"
+  ],
+  "action_items": [
+    "(Optional, UX) Add data-testid on onboarding wizard close X to help E2E automation dismiss it.",
+    "(Optional, UX) Add data-testid=ticket-status-option-{key} on each SelectItem in the status change dropdown so tests can click a specific status without relying on FR labels."
+  ],
+  "critical_code_review_comments": [
+    "tickets.py _next_ticket_number: uses db.counters.findOneAndUpdate with upsert=True + returnDocument=AFTER -> correctly atomic, no race on ticket number. Format TICK-YYYY-XXXX matches spec.",
+    "tickets.py _load_ticket_scoped: chinese-wall enforced by both requester_user_id OR syndic_id match; superadmin bypass; returns 403 'chinese wall' as expected.",
+    "tickets.py status change endpoint: correctly validates against STATUSES enum, records event, sends DRY-RUN email; closed_at is set/cleared appropriately.",
+    "tickets.py file uploads: streams via GridFSStorage bucket 'ticket_attachments'; size validated post-read (a large body could still consume memory before rejection - acceptable given 10MB cap and 5 files limit but could be enforced at UploadFile chunk-level for hardening).",
+    "SupportChatBubble.js: mode picker + tabs logic correct; picker button 'support-choose-bug-btn' and 'support-choose-operational-btn' both have testids.",
+    "BugReportForm.js: 3 client-side validations (title>=5, desc>=10, email required) all fire correctly BEFORE server call.",
+    "AdminTicketsPage.js: minimal wrapper reuses SupportTicketsList with superadmin=true - good DRY."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter90fs_tickets.py (new)"
+  ],
+  "success_rate": {"backend": "100% (19/19)", "frontend": "100% (admin + syndic full E2E incl. validations, attachment, comment)"},
+  "test_credentials": "admin@copro.be/admin123 ; syndic_alpha@copro.be/Syndic123! ; syndic_beta@copro.be/Syndic123!",
+  "seed_data_creation": "Created 2 test tickets TICK-2026-0002 (backend pytest, with hello.txt attachment) and TICK-2026-0003 (frontend Playwright, with tmp txt attachment). Both under syndic_alpha's syndic_id. Both include events (created, status_changed to assigned, comments, assigned). Data has 'TEST_' prefix in titles.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Ticket collection is db.support_tickets, events in db.support_ticket_events, attachments in GridFS bucket 'ticket_attachments'. To dismiss post-login modals for syndic_alpha, use: (1) [data-testid=legal-accept-cgu]+[data-testid=legal-accept-privacy]+[data-testid=legal-accept-submit-btn], (2) button:has-text('compris') for release notes (curly apostrophe), (3) button:has(svg.lucide-x) inside [role=dialog] for onboarding 'Bienvenue!' wizard. Wizard has higher z-index than SupportChatBubble; if support-panel count is 0 after clicking [data-testid=support-open-btn], first press Escape then dismiss dialogs again then retry. Backend test file: /app/backend/tests/test_iter90fs_tickets.py.",
+  "rca_of_the_issue": "N/A - feature works as designed. Only friction observed is the aggressive 3-modal post-login sequence blocking the support panel; not a functional bug but degrades automated testability."
+}

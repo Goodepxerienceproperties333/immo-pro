@@ -1467,6 +1467,7 @@ from routes.import_wizard import create_import_wizard_router
 from routes.duplicates import create_duplicates_router
 from routes.owner_access import create_owner_access_router
 from routes.support import create_support_router
+from routes.tickets import create_tickets_router
 from routes.legal import create_legal_router
 from routes.communication import create_communication_router
 from routes.syndic_config import create_syndic_config_router
@@ -1499,6 +1500,7 @@ app.include_router(create_expense_categories_router(db))
 app.include_router(create_duplicates_router(db))
 app.include_router(create_owner_access_router(db))
 app.include_router(create_support_router(db))
+app.include_router(create_tickets_router(db))
 app.include_router(create_legal_router(db))
 app.include_router(create_communication_router(db))
 app.include_router(create_syndic_config_router(db))

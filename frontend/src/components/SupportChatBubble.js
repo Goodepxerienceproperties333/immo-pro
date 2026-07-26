@@ -1,21 +1,25 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { HelpCircle, MessageSquare, X, Send, Plus, Trash2, ArrowLeft, Mail, Bot, User as UserIcon, Loader2, CheckCircle2, AlertCircle } from 'lucide-react';
+import { HelpCircle, MessageSquare, X, Send, Plus, Trash2, ArrowLeft, Mail, Bot, User as UserIcon, Loader2, CheckCircle2, AlertCircle, Bug, Ticket, MessageCircleQuestion } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { toast } from 'sonner';
 import api from '../lib/api';
+import BugReportForm from './BugReportForm';
+import SupportTicketsList from './SupportTicketsList';
+import { useAuth } from '../contexts/AuthContext';
 
 /**
- * Iter90r - Support chatbot pour syndics.
- * Bouton "?" dans le header + panneau lateral droit avec :
- *   - liste des conversations passees
- *   - fenetre de chat active (IA Claude Sonnet 4.5)
- *   - bouton "Envoyer au support" pour escalade manuelle
- *   - escalade automatique si l'IA marque [[NEEDS_ESCALATION]]
+ * Iter90r/90fs - Support chatbot pour syndics.
+ * - Onglet "Assistant IA" : conversations existantes + IA Claude Sonnet
+ * - Onglet "Mes tickets" : suivi des bugs remontes au support
+ * - A la nouvelle question : choix "Question operationnelle" vs "Remontee de bug"
  */
 export default function SupportChatBubble() {
+  const { user } = useAuth();
   const [open, setOpen] = useState(false);
+  const [tab, setTab] = useState('chat'); // 'chat' | 'tickets'
+  const [mode, setMode] = useState(null); // null | 'picker' | 'bug'
   const [convs, setConvs] = useState([]);
   const [activeConv, setActiveConv] = useState(null);
   const [msgs, setMsgs] = useState([]);
@@ -46,13 +50,30 @@ export default function SupportChatBubble() {
     } catch (err) { toast.error('Erreur chargement conversation'); }
   };
 
-  const startNew = async () => {
+  const startNew = () => {
+    // Iter90fs : affiche d'abord le mode picker
+    setMode('picker');
+    setActiveConv(null);
+    setMsgs([]);
+  };
+
+  const chooseModeOperational = async () => {
     try {
       const { data } = await api.post('/support/conversations', { title: '' });
       setConvs([data, ...convs]);
       setActiveConv(data);
       setMsgs([]);
+      setMode(null);
     } catch (err) { toast.error('Erreur creation conversation'); }
+  };
+
+  const chooseModeBug = () => {
+    setMode('bug');
+  };
+
+  const onBugCreated = (ticket) => {
+    setMode(null);
+    setTab('tickets');
   };
 
   const sendMessage = async () => {
@@ -153,57 +174,127 @@ export default function SupportChatBubble() {
 
             {!activeConv ? (
               <>
-                <div className="p-3 border-b border-slate-100">
-                  <Button
-                    onClick={startNew}
-                    className="w-full bg-[#022D52] hover:bg-[#1D4ED8] text-white h-9 text-xs"
-                    data-testid="support-new-conv-btn"
+                {/* Tabs Chat / Tickets */}
+                <div className="flex border-b border-slate-100 bg-slate-50">
+                  <button
+                    onClick={() => { setTab('chat'); setMode(null); }}
+                    className={`flex-1 py-2 text-xs font-medium flex items-center justify-center gap-1 transition-colors ${tab === 'chat' ? 'bg-white text-[#022D52] border-b-2 border-[#022D52]' : 'text-slate-500 hover:text-slate-700'}`}
+                    data-testid="support-tab-chat"
                   >
-                    <Plus size={14} className="mr-1" /> Poser une nouvelle question
-                  </Button>
-                  <p className="text-[11px] text-slate-500 mt-2 leading-relaxed">
-                    L&apos;assistant IA repond aux questions sur NextGe Copro.
-                    Les cas complexes sont transmis directement a notre equipe support.
-                  </p>
+                    <MessageCircleQuestion size={13} /> Assistant IA
+                  </button>
+                  <button
+                    onClick={() => { setTab('tickets'); setMode(null); }}
+                    className={`flex-1 py-2 text-xs font-medium flex items-center justify-center gap-1 transition-colors ${tab === 'tickets' ? 'bg-white text-[#022D52] border-b-2 border-[#022D52]' : 'text-slate-500 hover:text-slate-700'}`}
+                    data-testid="support-tab-tickets"
+                  >
+                    <Ticket size={13} /> Mes tickets
+                  </button>
                 </div>
-                <div className="flex-1 overflow-y-auto p-2 space-y-1">
-                  {convs.length === 0 ? (
-                    <div className="text-center text-xs text-slate-400 py-8">
-                      Aucune conversation. Cliquez sur &quot;Poser une nouvelle question&quot; pour demarrer.
-                    </div>
-                  ) : convs.map(c => (
-                    <div
-                      key={c.id}
-                      className="group flex items-start gap-2 p-2 rounded hover:bg-slate-50 cursor-pointer"
-                      onClick={() => openConv(c)}
-                      data-testid={`support-conv-item-${c.id}`}
+
+                {mode === 'picker' ? (
+                  <div className="p-4 flex-1 overflow-y-auto" data-testid="support-mode-picker">
+                    <button
+                      onClick={() => setMode(null)}
+                      className="text-[11px] text-slate-500 hover:text-slate-700 flex items-center gap-1 mb-3"
+                      data-testid="support-picker-back-btn"
                     >
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs font-medium text-slate-800 truncate">{c.title || 'Sans titre'}</span>
-                          {c.escalated && (
-                            <span className="text-[9px] bg-amber-100 text-amber-700 rounded px-1 py-0.5" title="Transmise au support">
-                              <Mail size={9} className="inline mr-0.5" />support
-                            </span>
-                          )}
-                        </div>
-                        {c.last_message_preview && (
-                          <div className="text-[11px] text-slate-500 truncate">{c.last_message_preview}</div>
-                        )}
-                        <div className="text-[10px] text-slate-400">
-                          {new Date(c.updated_at).toLocaleString('fr-BE', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
-                          {c.messages_count > 0 && ` — ${c.messages_count} msg`}
-                        </div>
+                      <ArrowLeft size={11} /> Retour
+                    </button>
+                    <div className="text-sm font-semibold text-slate-800 mb-1">De quoi s&apos;agit-il ?</div>
+                    <p className="text-[11px] text-slate-500 mb-4 leading-relaxed">
+                      Aidez-nous a router votre demande correctement.
+                    </p>
+                    <button
+                      onClick={chooseModeOperational}
+                      className="w-full text-left p-3 border-2 border-slate-200 hover:border-[#022D52] rounded-lg mb-2 transition-colors group"
+                      data-testid="support-choose-operational-btn"
+                    >
+                      <div className="flex items-center gap-2 mb-1">
+                        <MessageCircleQuestion size={16} className="text-[#022D52]" />
+                        <span className="text-sm font-semibold text-slate-800 group-hover:text-[#022D52]">Question operationnelle</span>
                       </div>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); deleteConv(c); }}
-                        className="opacity-0 group-hover:opacity-100 text-slate-300 hover:text-red-500 p-1 transition-opacity"
-                        title="Supprimer"
-                        data-testid={`support-conv-delete-${c.id}`}
-                      ><Trash2 size={12} /></button>
+                      <p className="text-[11px] text-slate-500 leading-relaxed">
+                        &laquo; Comment faire pour... ? &raquo; L&apos;assistant IA vous repond immediatement.
+                      </p>
+                    </button>
+                    <button
+                      onClick={chooseModeBug}
+                      className="w-full text-left p-3 border-2 border-slate-200 hover:border-amber-500 rounded-lg transition-colors group"
+                      data-testid="support-choose-bug-btn"
+                    >
+                      <div className="flex items-center gap-2 mb-1">
+                        <Bug size={16} className="text-amber-600" />
+                        <span className="text-sm font-semibold text-slate-800 group-hover:text-amber-700">Remontee de bug</span>
+                      </div>
+                      <p className="text-[11px] text-slate-500 leading-relaxed">
+                        Un dysfonctionnement, une erreur, un comportement inattendu. Cree un ticket suivi par le support.
+                      </p>
+                    </button>
+                  </div>
+                ) : mode === 'bug' ? (
+                  <BugReportForm
+                    userEmail={user?.email || ''}
+                    onCreated={onBugCreated}
+                    onCancel={() => setMode(null)}
+                  />
+                ) : tab === 'tickets' ? (
+                  <SupportTicketsList superadmin={false} dense />
+                ) : (
+                  <>
+                    <div className="p-3 border-b border-slate-100">
+                      <Button
+                        onClick={startNew}
+                        className="w-full bg-[#022D52] hover:bg-[#1D4ED8] text-white h-9 text-xs"
+                        data-testid="support-new-conv-btn"
+                      >
+                        <Plus size={14} className="mr-1" /> Poser une nouvelle question
+                      </Button>
+                      <p className="text-[11px] text-slate-500 mt-2 leading-relaxed">
+                        L&apos;assistant IA repond aux questions sur NextGe Copro.
+                        Les cas complexes sont transmis directement a notre equipe support.
+                      </p>
                     </div>
-                  ))}
-                </div>
+                    <div className="flex-1 overflow-y-auto p-2 space-y-1">
+                      {convs.length === 0 ? (
+                        <div className="text-center text-xs text-slate-400 py-8">
+                          Aucune conversation. Cliquez sur &quot;Poser une nouvelle question&quot; pour demarrer.
+                        </div>
+                      ) : convs.map(c => (
+                        <div
+                          key={c.id}
+                          className="group flex items-start gap-2 p-2 rounded hover:bg-slate-50 cursor-pointer"
+                          onClick={() => openConv(c)}
+                          data-testid={`support-conv-item-${c.id}`}
+                        >
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs font-medium text-slate-800 truncate">{c.title || 'Sans titre'}</span>
+                              {c.escalated && (
+                                <span className="text-[9px] bg-amber-100 text-amber-700 rounded px-1 py-0.5" title="Transmise au support">
+                                  <Mail size={9} className="inline mr-0.5" />support
+                                </span>
+                              )}
+                            </div>
+                            {c.last_message_preview && (
+                              <div className="text-[11px] text-slate-500 truncate">{c.last_message_preview}</div>
+                            )}
+                            <div className="text-[10px] text-slate-400">
+                              {new Date(c.updated_at).toLocaleString('fr-BE', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                              {c.messages_count > 0 && ` — ${c.messages_count} msg`}
+                            </div>
+                          </div>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); deleteConv(c); }}
+                            className="opacity-0 group-hover:opacity-100 text-slate-300 hover:text-red-500 p-1 transition-opacity"
+                            title="Supprimer"
+                            data-testid={`support-conv-delete-${c.id}`}
+                          ><Trash2 size={12} /></button>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
               </>
             ) : (
               <>
