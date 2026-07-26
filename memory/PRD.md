@@ -20,6 +20,14 @@ Application de gestion de copropriete basee sur le droit belge (PCMN), incluant 
 
 ### Session courante (Fevrier 2026)
 
+#### P1 - Export Journaux CSV / PDF avec selecteur de dates (DONE - 7/7 backend + E2E iter 76)
+- Backend: /api/exports/journals.csv et /api/exports/journals.pdf (routes/exports.py)
+- Filtres: copropriete_id, journal_type (OD/AC/VE/FI/AN/AP), date_from, date_to, include_reversals
+- Chinese Wall: syndic_id + copropriete_id enforced (middleware 403 + _build_journal_query)
+- CSV: UTF-8+BOM, delimiteur ';', decimales FR (virgule), ligne TOTAL
+- PDF: A4 paysage, ReportLab, en-tete (ACP, journal, periode, edition), totaux
+- Frontend: 2 boutons "Export CSV" / "Export PDF" dans JournalsPage (data-testid: export-journals-csv-btn, export-journals-pdf-btn)
+
 #### P0 - Chinese Wall attach-to-copro (DONE - Tests 5/5 iter 75)
 - Fix verifie sur /api/owners/{id}/attach-to-copro (properties.py L953-978)
 - Owner doit deja appartenir au meme syndic (via copropriete_ids OR lots OR owner.syndic_id)
@@ -70,10 +78,10 @@ Application de gestion de copropriete basee sur le droit belge (PCMN), incluant 
 - TEUWEN lot mapping: logique lot.owner_id + distribution_keys (RECURRENT)
 
 ### P2-P5 - Futur
-- P2: Export Journaux CSV/PDF avec selecteur de dates
-- P3: Outil admin reset bulk factures payees -> impayees
-- P4: Certificat fiscal annuel
-- P5: Emails relance automatiques (APScheduler)
+- P2: Outil admin reset bulk factures payees -> impayees
+- P3: Certificat fiscal annuel
+- P4: Emails relance automatiques (APScheduler)
+- P5: (option UX) Remplacer les inputs date natifs de JournalsPage par un shadcn DatePicker FR
 
 ## Refactoring
 - import_wizard.py (>3500 lignes) a decouper
