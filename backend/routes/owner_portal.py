@@ -1196,7 +1196,13 @@ def create_owner_portal_router(db):
 
     @router.get("/documents")
     async def my_documents(request: Request, copropriete_id: Optional[str] = None):
-        """Documents from ACPs where the owner has lots."""
+        """Documents from ACPs where the owner has lots.
+
+        iter90i0 : Chinese wall strict pour les documents source=communication.
+        Un document lie a une communication est PERSONNEL (owner_id != null)
+        et ne doit etre visible que par son destinataire. Les autres documents
+        (docs generaux, PV, statuts, budget) restent partages a l'ACP entiere.
+        """
         # Iter90df : accepte multi-fiches owner via email match
         owner_ids, _primary = await _resolve_owner_ids(db, request)
         lots = await db.lots.find(
@@ -1210,8 +1216,19 @@ def create_owner_portal_router(db):
             copro_ids = [copropriete_id]
         if not copro_ids:
             return []
+        # iter90i0 : filtre chinese wall
+        # - documents "generaux" (source != communication ou owner_id absent) : visibles a tous
+        # - documents personnels (source=communication) : visibles UNIQUEMENT si owner_id matche
         docs = await db.documents.find(
-            {"copropriete_id": {"$in": copro_ids}}, {"_id": 0}
+            {
+                "copropriete_id": {"$in": copro_ids},
+                "$or": [
+                    {"source": {"$ne": "communication"}},
+                    {"owner_id": {"$in": owner_ids}},
+                    {"owner_id": {"$in": [None, ""]}},  # docs communication sans owner (broadcast)
+                ],
+            },
+            {"_id": 0}
         ).sort("created_at", -1).to_list(1000)
         # Attach category names + ACP names
         cats = await db.document_categories.find(

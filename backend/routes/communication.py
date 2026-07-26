@@ -570,15 +570,10 @@ def create_communication_router(db):
                     },
                 )
                 attachment_size = len(attachment_pdf)
-                # iter90hs : creer une entree documents/ pour chaque proprio
-                # cible. Categorie par defaut derivee du kind (decompte / rappel
-                # / appel / generic).
-                cat_name = {
-                    "decompte": "Decomptes annuels",
-                    "reminder": "Rappels de paiement",
-                    "fund_call": "Appels de fonds",
-                    "situation": "Situations de compte",
-                }.get((kind or "").lower(), "Communications du syndic")
+                # iter90hs / iter90i0 : categorie UNIFIEE "Communication".
+                # (Auparavant : sous-categories par kind. Le user demande une
+                # categorie unique pour toutes les communications syndic.)
+                cat_name = "Communication"
                 # Cherche la category existante par nom pour l'ACP, sinon la cree
                 category_id = ""
                 if copropriete_id:
