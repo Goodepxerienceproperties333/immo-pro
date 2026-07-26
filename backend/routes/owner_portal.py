@@ -1436,7 +1436,7 @@ def create_owner_portal_router(db):
                 filename_dl = doc.get("filename") or filename_dl
         if not gid:
             raise HTTPException(404, "Cette communication n'a pas de piece jointe archivee")
-        from storage.documents_storage import get_documents_storage
+        from gridfs_storage import get_documents_storage
         from fastapi.responses import Response
         storage = get_documents_storage(db)
         try:

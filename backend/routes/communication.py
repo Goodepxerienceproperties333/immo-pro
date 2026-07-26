@@ -556,7 +556,7 @@ def create_communication_router(db):
         attachment_size = 0
         if attachment_pdf and has_attachment and status != "failed":
             try:
-                from storage.documents_storage import get_documents_storage
+                from gridfs_storage import get_documents_storage
                 storage = get_documents_storage(db)
                 attachment_gridfs_id = await storage.upload(
                     filename=attachment_filename or f"comm-{comm_id}.pdf",
