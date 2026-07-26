@@ -1,0 +1,39 @@
+{
+  "summary": "iter90fw (BACKEND FIX A) + iter90fx (FRONTEND FEATURE B) reviewed and tested. Backend: created /app/backend/tests/test_iter90fw_bank_accounts.py with 5 tests exercising the new IBAN/PCMN in-Python matching loop on the real seeded DB. All 5 PASS (Maria PCMN-prefix match returns >=5 movements, Tilleuls IBAN-space-normalization returns >=1 movement, Chinese-Wall 403 for cross-copro owner, date filter regression 2026-03-01..2026-03-31 all in-range, empty-copro returns movements=[] with 200 not 500). Frontend: iter90fx useEffect verified via live E2E — situation modal pre-fills 'Du (optionnel)' with '2025-01-01' (FY start_date of the open FY 'FY 2025 TEST'), user typing overrides successfully to 2024-06-15. DISCREPANCY vs spec: the decompte modal does NOT render a 'Du (optionnel)' input field at all (see CommunicationPage.js L405-418 — the Du/Au block is wrapped in `action === 'situation' && ...`). The useEffect at L234-247 DOES fire for the decompte modal (open state, fiscal_year_id selection triggers it) and DOES update the start_date state, but the input is not shown to the user and start_date is not sent in the /communication/send/decompte payload (L288). Per spec point 5 the Du field is expected in both modals; if that is desired behaviour, the situation-only conditional guard around the Du/Au grid must be relaxed for decompte too.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "SendActionDialog (CommunicationPage.js)", "issue": "The 'Du (optionnel)' input is only rendered when action==='situation' (L405). For action==='decompte' the field is invisible to the user, so the spec requirement 'choose a fiscal year in the dropdown -> the Du (optionnel) input must update to that FYs start_date' cannot be observed by the user in the decompte modal. The useEffect and setStart(prev || fyStart) run correctly, but there is no matching input rendered.", "selector": "[data-testid='input-start-date'] under [data-testid='dialog-send-decompte']", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter90fw_bank_accounts.py",
+    "/app/test_reports/pytest/iter90fw.xml"
+  ],
+  "action_items": [
+    "Decide whether the decompte modal should also render a 'Du (optionnel)' input. If yes: remove the `action === 'situation' &&` guard around the Du/Au grid at CommunicationPage.js L405-418 (or duplicate the input for action==='decompte' with the same testid) so the useEffect pre-fill is user-visible. If not: update the spec (the current behaviour is otherwise consistent — the useEffect is triggered on FY selection but has no visible effect for decompte).",
+    "Optional: keep the DialogContent aria-describedby warnings in mind for a11y polish (non-blocking)."
+  ],
+  "critical_code_review_comments": [
+    "owner_portal.py bank-accounts endpoint: the in-Python normalization loop is correct, but for very large ACPs it iterates every bank_statement of the copro in Python for each bank_account of the copro (O(N*M)). Currently the copros in scope have <=5 statements so this is fine; add an index on bank_statements.copropriete_id if not already present.",
+    "The PCMN prefix match uses startswith in both directions (stored startswith pcmn OR pcmn startswith stored). For a bank_account with pcmn '55103400' this accepts a stored '55' which would over-match. Realistically stored account_number is >=6 digits, but consider a minimum-length guard (e.g., min 5 digits and same first-4).",
+    "CommunicationPage.js SendActionDialog useEffect uses setStart(prev => prev || fyStart) — good, does not clobber user input. However pressing Escape on situation dialog and reopening reuses the previously overridden value (state persists across open/close). If the intent is 'always pre-fill on each open', the state should be reset when open transitions false->true (currently only kept-if-set). Minor UX call.",
+    "The dialog uses type='date' native input which is browser-locale-dependent (mm/dd/yyyy vs dd/mm/yyyy). Value is still ISO 'YYYY-MM-DD' at the DOM level, so the effect and payload are correct — no bug.",
+    "The onboarding-wizard modal auto-opens whenever syndic_configs.onboarding_completed is missing/false; testing that requires seeding this flag. This does not affect the feature-under-test but slowed initial exploration."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter90fw_bank_accounts.py"
+  ],
+  "success_rate": {"backend": "100% (5/5)", "frontend": "5/6 spec points verified; 1 point (Du field visible in decompte) UI-missing"},
+  "test_credentials": "syndic_alpha@copro.be / Syndic123! ; admin@copro.be / admin123. Temp owner/lot/user seed docs used tag='iter90fw_test' or 'iter90fx_test' and were removed in teardown.",
+  "seed_data_creation": "Backend: 4 temp owners + 4 users + 4 lots + 1 temp copro (tag=iter90fw_test) — auto-cleaned by pytest module fixture. Frontend: 1 temp owner + lot in b6fe4e32 (tag=iter90fx_test) + syndic_configs upsert with mailboxes=[syndic_alpha@copro.be] + onboarding_completed=true — all cleaned up post-test. bank_statements and bank_transactions were NOT touched.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "test_iter90fw_bank_accounts.py depends on 2 real DB rows: Maria copro (id a0eef7c0-...) with 18 bank_transactions and Tilleuls (id cb5bc07b-...) with 11 bank_transactions. If those get wiped, tests will fail with 'Expected >=5 movements, got 0'. The module fixture is scope=module so cleanup runs once at teardown. Frontend note: syndic_configs onboarding_completed was upserted for syndic_user_id 6a65b6396daad720f9dcbfa6 to unblock the wizard; document was then deleted at teardown.",
+  "rca of the issue": "iter90fw: earlier the endpoint used a strict Mongo regex ^{iban_norm}$ against bank_statements.account_number, which never matched legacy imports where account_number stores the PCMN prefix (e.g., '551331' truncated from '55133100') or the IBAN with spaces ('BE68 5390 0754 7034'). Fix replaces regex with an in-Python normalized comparison + PCMN prefix match, and preserves a retro-compat OR clause on the transaction-level 'iban' field. Verified with 5 tests including 403 chinese-wall regression and date-filter regression. iter90fx: the useEffect logic is correct and behaves as spec for the situation modal; for the decompte modal the effect fires and sets state but the UI does NOT expose a Du input (situation-only conditional at CommunicationPage.js L405). Either add the input to the decompte branch or relax the conditional."
+}

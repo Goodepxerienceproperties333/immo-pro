@@ -153,20 +153,32 @@ def create_owner_portal_router(db):
                             balance -= float(ln.get("credit", 0) or 0)
 
             # Mouvements bancaires : filtre par IBAN + plage de dates
-            # iter90i2 : les transactions sont liees au compte via
-            # `bank_statements.account_number` (IBAN normalise sans espace).
-            # Le champ `iban` sur bank_transactions n'existe pas dans les
-            # imports CODA/Optipro standards.
+            # iter90fw : `bank_statements.account_number` peut stocker
+            #   - l'IBAN avec espaces  ('BE68 5390 0754 7034')
+            #   - l'IBAN sans espaces  ('BE68539007547034')
+            #   - le PCMN account_number ('551331') pour les vieux imports
+            # On charge tous les statements de l'ACP puis on filtre en Python
+            # apres normalisation (strip + upper).
             iban_norm = iban.replace(" ", "").upper()
+            pcmn_norm = (pcmn or "").strip()
             statement_ids: list[str] = []
-            if iban_norm:
-                async for st in db.bank_statements.find(
-                    {"copropriete_id": copropriete_id,
-                     "account_number": {"$regex": f"^{iban_norm}$", "$options": "i"}},
-                    {"_id": 0, "id": 1},
-                ):
+            async for st in db.bank_statements.find(
+                {"copropriete_id": copropriete_id},
+                {"_id": 0, "id": 1, "account_number": 1},
+            ):
+                st_acc_raw = (st.get("account_number") or "")
+                st_acc_norm = st_acc_raw.replace(" ", "").upper()
+                # Match strict IBAN
+                if iban_norm and st_acc_norm == iban_norm:
                     if st.get("id"):
                         statement_ids.append(st["id"])
+                    continue
+                # Match PCMN : accepte prefix (les vieux imports stockent
+                # parfois "551331" au lieu de "55133100"). Numerique-only.
+                if pcmn_norm and st_acc_norm.isdigit():
+                    if st_acc_norm == pcmn_norm or st_acc_norm.startswith(pcmn_norm) or pcmn_norm.startswith(st_acc_norm):
+                        if st.get("id"):
+                            statement_ids.append(st["id"])
             # Base query : statement_id in liste ci-dessus OU champ iban legacy
             or_clauses: list[dict] = []
             if statement_ids:
@@ -174,8 +186,10 @@ def create_owner_portal_router(db):
             if iban:
                 # Compat retro : transactions avec un champ `iban` explicite
                 # (importe hors flow statement). Match tolerant aux espaces.
-                iban_regex = f"^{iban_norm}$"
-                or_clauses.append({"iban": {"$regex": iban_regex, "$options": "i"}})
+                # On accepte les 2 formats stockes (avec ou sans espaces).
+                or_clauses.append({"iban": iban_norm})
+                if iban_norm != iban:
+                    or_clauses.append({"iban": iban})
             txn_query: dict = {"copropriete_id": copropriete_id}
             if or_clauses:
                 txn_query["$or"] = or_clauses

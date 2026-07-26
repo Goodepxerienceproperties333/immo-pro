@@ -227,6 +227,25 @@ function SendActionDialog({
     api.get('/email-templates').then(r => setTemplates(r.data.templates || [])).catch(() => {});
   }, [open]);
 
+  // iter90fx : auto-remplit la date de debut avec le 1er jour de l'exercice
+  // comptable courant a chaque ouverture du modal (situation et decompte).
+  // L'utilisateur peut toujours modifier la valeur.
+  // Priorite : exercice deja selectionne (decompte) > FY "open" > FY le plus recent.
+  useEffect(() => {
+    if (!open || !fiscalYears || fiscalYears.length === 0) return;
+    let target = null;
+    if (fiscal_year_id) {
+      target = fiscalYears.find(y => y.id === fiscal_year_id);
+    }
+    if (!target) target = fiscalYears.find(y => y.status === 'open');
+    if (!target) target = [...fiscalYears].sort((a, b) => (b.start_date || '').localeCompare(a.start_date || ''))[0];
+    if (target && target.start_date) {
+      const fyStart = String(target.start_date).slice(0, 10);
+      // Ne pas ecraser si l'utilisateur a deja saisi une date
+      setStart(prev => prev || fyStart);
+    }
+  }, [open, fiscal_year_id, fiscalYears]);
+
   // Auto-remplit subject/body a la selection d'un template
   const applyTemplate = (tid) => {
     setTemplateId(tid);
