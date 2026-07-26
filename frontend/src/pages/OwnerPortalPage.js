@@ -496,8 +496,14 @@ export default function OwnerPortalPage() {
       return d >= fyStartDate && d <= fyEndDate;
     });
     let total_called = 0;
+    let total_upcoming = 0;
+    const todayIso = new Date().toISOString().slice(0, 10);
     for (const fc of inFy) {
-      total_called += Number(fc.my_amount || 0);
+      const amt = Number(fc.my_amount || 0);
+      total_called += amt;
+      if ((fc.date || '') > todayIso) {
+        total_upcoming += amt;
+      }
     }
     // Total paye = credits sur le tier durant la FY complete (annualMovements)
     // - annualOpeningBalance negatif = credit d'ouverture (proprio crediteur au 01/03)
@@ -511,6 +517,7 @@ export default function OwnerPortalPage() {
     const balance = +(total_called - total_paid).toFixed(2);
     return {
       total_called,
+      total_upcoming: +total_upcoming.toFixed(2),
       total_paid,
       balance,
       status: balance > 0.01 ? 'debiteur' : balance < -0.01 ? 'crediteur' : 'solde',
@@ -548,10 +555,14 @@ export default function OwnerPortalPage() {
       break;
     }
     if (!currentCall) return null;
+    // iter90ha : "date d'appel" = fc.date (moment ou l'appel est emis).
+    // fc.due_date = deadline de paiement (plus tardive). L'user veut voir
+    // la DATE D'APPEL en priorite (T3 est appele au 01/09, pas 01/10).
+    const callIso = currentCall.date || currentCall.due_date;
     const dueIso = currentCall.due_date || currentCall.date;
-    const due = dueIso ? new Date(dueIso) : null;
-    if (due) due.setHours(0, 0, 0, 0);
-    const daysDelta = due ? Math.round((due - now) / (1000 * 60 * 60 * 24)) : null;
+    const call = callIso ? new Date(callIso) : null;
+    if (call) call.setHours(0, 0, 0, 0);
+    const daysDelta = call ? Math.round((call - now) / (1000 * 60 * 60 * 24)) : null;
     let urgency = 'upcoming';
     if (daysDelta !== null) {
       if (daysDelta < 0) urgency = 'overdue';
@@ -563,6 +574,7 @@ export default function OwnerPortalPage() {
       fund_call_name: currentCall.name,
       amount: Number(currentCall.my_amount || 0),
       remaining: remainingOnCurrent,
+      call_date: callIso,
       due_date: dueIso,
       vcs_code: currentCall.vcs_code,
       daysDelta,
@@ -998,6 +1010,8 @@ export default function OwnerPortalPage() {
               balance={stats.balance}
               totalCalled={stats.total_called}
               totalPaid={stats.total_paid}
+              totalUpcoming={annualStats?.total_upcoming || 0}
+              fyEndDate={fyEndDate}
               nextCall={nextAnnualCall}
               totalPending={stats.balance > 0.01 ? stats.balance : 0}
               totalCharges12m={totalCharges12m}
@@ -1590,7 +1604,7 @@ function QuarterSelector({ selected, onChange, currentQuarter, quarters, fyLabel
   );
 }
 
-function SituationHero({ status, balance, totalCalled, totalPaid, nextCall, totalPending, totalCharges12m, pendingCount, copyVcs, periodLabel, isYearView }) {
+function SituationHero({ status, balance, totalCalled, totalPaid, totalUpcoming, fyEndDate, nextCall, totalPending, totalCharges12m, pendingCount, copyVcs, periodLabel, isYearView }) {
   // Bloc solde : couleur selon statut
   const isDebtor = status === 'debiteur';
   const isCreditor = status === 'crediteur';
@@ -1676,6 +1690,28 @@ function SituationHero({ status, balance, totalCalled, totalPaid, nextCall, tota
           <div className="mt-3 text-[11px] text-slate-600 space-y-0.5">
             <div className="flex justify-between"><span>Total appele :</span><span className="font-mono">{fmt(totalCalled)}</span></div>
             <div className="flex justify-between"><span>Total paye :</span><span className="font-mono">{fmt(totalPaid)}</span></div>
+            {totalUpcoming > 0.01 && (
+              <div className="flex justify-between text-[10px] text-slate-500 pt-0.5 border-t border-white/60 mt-1">
+                <span>Appels a venir cette annee :</span>
+                <span className="font-mono">{fmt(totalUpcoming)}</span>
+              </div>
+            )}
+            {fyEndDate && (() => {
+              const now = new Date();
+              now.setHours(0, 0, 0, 0);
+              const endD = new Date(fyEndDate);
+              endD.setHours(0, 0, 0, 0);
+              const daysLeft = Math.max(0, Math.round((endD - now) / (1000 * 60 * 60 * 24)));
+              const totalDays = 365; // approx exercice
+              const pctElapsed = Math.min(100, Math.max(0, 100 - (daysLeft / totalDays) * 100));
+              const endLabel = endD.toLocaleDateString('fr-BE', { day: '2-digit', month: '2-digit', year: 'numeric' });
+              return (
+                <div className="flex justify-between text-[10px] text-slate-500">
+                  <span>Fin exercice : {endLabel}</span>
+                  <span className="font-mono" data-testid="fy-days-remaining">{daysLeft} j restants ({pctElapsed.toFixed(0)}% ecoule)</span>
+                </div>
+              );
+            })()}
           </div>
           {/* Barre de progression */}
           <div className="mt-3">
@@ -1712,16 +1748,23 @@ function SituationHero({ status, balance, totalCalled, totalPaid, nextCall, tota
               <div className="mt-1 text-[13px] font-medium text-slate-700 truncate" title={nextCall.fund_call_name}>
                 {nextCall.fund_call_name}
               </div>
-              <div className={`mt-2 text-xs font-semibold flex items-center gap-1.5 ${nextTextColor}`}>
+              <div className={`mt-2 text-xs font-semibold flex items-center gap-1.5 flex-wrap ${nextTextColor}`}>
                 <Clock size={12} />
                 {nextCall.is_future ? (
-                  <>A venir dans {nextCall.daysDelta} jour(s)</>
+                  <>Appel prevu dans {nextCall.daysDelta} jour(s)</>
                 ) : nextCall.is_partial_covered ? (
                   <>Solde partiel restant apres imputation FIFO</>
                 ) : (
                   <>{nextLabel}</>
                 )}
-                {nextCall.due_date && <span className="text-slate-500 font-normal">({fmtDate(nextCall.due_date)})</span>}
+                {nextCall.call_date && (
+                  <span className="text-slate-600 font-normal">
+                    (appel : {fmtDate(nextCall.call_date)}
+                    {nextCall.due_date && nextCall.due_date !== nextCall.call_date && (
+                      <> · echeance : {fmtDate(nextCall.due_date)}</>
+                    )})
+                  </span>
+                )}
               </div>
               {nextCall.is_partial_covered && nextCall.remaining > 0.01 && (
                 <div className="mt-2 text-[11px] bg-amber-50 rounded px-2 py-1 border border-amber-200 text-amber-700" data-testid="next-payment-fifo-note">
