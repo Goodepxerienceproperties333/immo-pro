@@ -769,7 +769,15 @@ def create_owner_portal_router(db):
 
     @router.get("/fund-calls")
     async def my_fund_calls(request: Request, copropriete_id: Optional[str] = None):
-        """All fund calls where the owner has a distribution (source: fund_calls doc)."""
+        """All fund calls where the owner has a distribution.
+
+        iter90h9 : `my_amount` est calcule depuis les journal_entries VE
+        (grand livre) et NON depuis fund_calls.distribution[].amount qui
+        peut etre desynchronise (bug rapporte par user Boxus Wivine :
+        distribution.amount=299.10 vs VE=500.29 -> total FY faussement
+        affiche 1727.20 au lieu de 2617.16).
+        Source de verite : le VE dans le grand livre.
+        """
         # Iter90df : accepte multi-fiches owner via email match
         owner_ids, primary_owner = await _resolve_owner_ids(db, request)
         owner = primary_owner
@@ -778,6 +786,7 @@ def create_owner_portal_router(db):
         if copropriete_id:
             q["copropriete_id"] = copropriete_id
         all_calls = await db.fund_calls.find(q, {"_id": 0}).sort("date", -1).to_list(1000)
+
         # Batch fetch des coproprietes (fix N+1)
         copro_ids_needed = list({fc.get("copropriete_id", "") for fc in all_calls if fc.get("copropriete_id")})
         copro_map: dict = {}
@@ -787,14 +796,105 @@ def create_owner_portal_router(db):
                 {"_id": 0, "id": 1, "name": 1, "reference": 1},
             ).to_list(len(copro_ids_needed))
             copro_map = {c["id"]: c for c in copros}
+
+        # iter90h9 : batch fetch des VE lies aux fund_calls -> vrais montants owner
+        # Matching en 2 passes :
+        #  1) fund_call_id direct (VE recents)
+        #  2) reference / date + copropriete_id (VE legacy sans fund_call_id)
+        # Somme TOUTES les lignes du tier owner (une seule VE contient souvent
+        # plusieurs lignes par lot -> la somme = vraie quote-part totale).
+        ve_amount_by_fc: dict = {}
+        if all_calls:
+            # Recupere aussi les comptes tiers de l'owner (fallback multi-lot)
+            tier_accs_by_copro: dict = {}
+            all_owners_docs = await db.owners.find(
+                {"id": {"$in": owner_ids}}, {"_id": 0, "tier_accounts": 1},
+            ).to_list(len(owner_ids))
+            for o in all_owners_docs:
+                for cp, tacc in (o.get("tier_accounts") or {}).items():
+                    if cp not in tier_accs_by_copro:
+                        tier_accs_by_copro[cp] = set()
+                    for a in (tacc.get("provisions", ""), tacc.get("reserve", "")):
+                        if a:
+                            tier_accs_by_copro[cp].add(a)
+
+            # Charge tous les VE des copros concernees
+            copro_ids_all = list({fc.get("copropriete_id", "") for fc in all_calls if fc.get("copropriete_id")})
+            ve_entries = await db.journal_entries.find({
+                "journal_type": "VE",
+                "copropriete_id": {"$in": copro_ids_all},
+                "reversed": {"$ne": True},
+                "is_reversal": {"$ne": True},
+            }, {
+                "_id": 0, "fund_call_id": 1, "copropriete_id": 1,
+                "date": 1, "reference": 1, "description": 1, "lines": 1,
+            }).to_list(50000)
+
+            # Somme des debits tier par VE
+            def _sum_tier_lines(ve_doc: dict) -> float:
+                cp = ve_doc.get("copropriete_id", "")
+                valid_accs = tier_accs_by_copro.get(cp, set())
+                total = 0.0
+                for ln in ve_doc.get("lines", []) or []:
+                    tpid = ln.get("third_party_id")
+                    acc = ln.get("account_number", "")
+                    if tpid in owner_id_set or (not tpid and acc in valid_accs):
+                        total += float(ln.get("debit", 0) or 0)
+                return round(total, 2)
+
+            # Index VE par fund_call_id direct
+            ve_by_direct_id: dict = {}
+            ve_unmatched: list = []
+            for ve in ve_entries:
+                fcid = ve.get("fund_call_id")
+                if fcid:
+                    ve_by_direct_id.setdefault(fcid, []).append(ve)
+                else:
+                    ve_unmatched.append(ve)
+
+            # Pass 1 : match direct par fund_call_id
+            for fc in all_calls:
+                fcid = fc.get("id")
+                if fcid in ve_by_direct_id:
+                    total = 0.0
+                    for ve in ve_by_direct_id[fcid]:
+                        total += _sum_tier_lines(ve)
+                    ve_amount_by_fc[fcid] = round(total, 2)
+
+            # Pass 2 : match par (copropriete_id, date, reference contient nom)
+            for fc in all_calls:
+                fcid = fc.get("id")
+                if fcid in ve_amount_by_fc:
+                    continue
+                fc_date = fc.get("date", "")
+                fc_cid = fc.get("copropriete_id", "")
+                fc_name = fc.get("name", "")
+                total = 0.0
+                for ve in ve_unmatched:
+                    if ve.get("copropriete_id") != fc_cid:
+                        continue
+                    if ve.get("date") != fc_date:
+                        continue
+                    ref = ve.get("reference", "") or ""
+                    desc = ve.get("description", "") or ""
+                    if fc_name and (fc_name in ref or fc_name in desc):
+                        total += _sum_tier_lines(ve)
+                if total > 0.005:
+                    ve_amount_by_fc[fcid] = round(total, 2)
+
         result = []
         for fc in all_calls:
             my_share = next((d for d in fc.get("distribution", []) if d.get("owner_id") in owner_id_set), None)
-            if not my_share:
-                continue
+            fcid = fc.get("id")
+            # Vraie source : montant VE. Fallback : distribution.amount si pas de VE.
+            real_amount = ve_amount_by_fc.get(fcid, 0.0)
+            if real_amount < 0.005 and my_share:
+                real_amount = float(my_share.get("amount", 0) or 0)
+            if real_amount < 0.005 and not my_share:
+                continue  # Aucun lien avec ce proprio
             copro = copro_map.get(fc.get("copropriete_id", "")) or {}
             result.append({
-                "id": fc["id"],
+                "id": fcid,
                 "name": fc.get("name", ""),
                 "date": fc.get("date", ""),
                 "due_date": fc.get("due_date", ""),
@@ -802,11 +902,11 @@ def create_owner_portal_router(db):
                 "copropriete_id": fc.get("copropriete_id", ""),
                 "copropriete_name": copro.get("name", ""),
                 "copropriete_ref": copro.get("reference", ""),
-                "my_amount": my_share.get("amount", 0),
-                "my_share": my_share.get("share", 0),
-                "vcs_code": my_share.get("vcs_code", owner.get("vcs_code", "")),
-                "paid": my_share.get("paid", False),
-                "paid_date": my_share.get("paid_date", ""),
+                "my_amount": round(real_amount, 2),
+                "my_share": (my_share or {}).get("share", 0),
+                "vcs_code": (my_share or {}).get("vcs_code", owner.get("vcs_code", "")),
+                "paid": (my_share or {}).get("paid", False),
+                "paid_date": (my_share or {}).get("paid_date", ""),
             })
         return result
 
