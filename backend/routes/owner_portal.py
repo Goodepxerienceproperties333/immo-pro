@@ -812,14 +812,21 @@ def create_owner_portal_router(db):
 
     @router.get("/invoices")
     async def my_invoices_charges(request: Request, copropriete_id: Optional[str] = None):
-        """Invoices that affect this owner via distribution_lines (his share).
+        """Invoices affecting this owner. Retourne TOUTES les factures ou la
+        quote-part est > 0, meme si les `distribution_lines` du doc n'ont pas
+        ete generees pour cet owner (calcul dynamique via la Distribution Key).
 
-        iter90dz : fallback match par lot_number normalise si le lot_id
-        des distribution_lines ne correspond a aucun lot actuel du proprietaire
-        (cas Acacia : re-import Optipro -> nouveaux lot_ids, distribution_lines
-        pointent vers anciens lot_ids phantoms).
+        Ordre de priorite du calcul de `my_amount` pour chaque facture :
+          1. `distribution_lines` du doc (rapide, mais parfois obsolete)
+          2. Fallback `distribution_lines` par lot_number normalise (iter90dz)
+          3. iter90fz : Fallback DYNAMIQUE via la Distribution Key + les
+             quotites des lots de l'owner
+                my_amount = total_amount * sum(dk.lines[owner_lot].share)
+                                          / dk.total_quotities
+        Le UI marque les factures dont la quote-part est CALCULEE (pas encore
+        materialisee dans distribution_lines) pour la transparence "impact
+        futur decompte" demande par les proprietaires.
         """
-        # Iter90df : accepte multi-fiches owner via email match
         owner_ids, _primary = await _resolve_owner_ids(db, request)
         # Get owner's lots
         lots_q = {"$or": [{"owner_id": {"$in": owner_ids}}, {"owner_ids": {"$in": owner_ids}}]}
@@ -832,6 +839,7 @@ def create_owner_portal_router(db):
         def _norm_num(s: str) -> str:
             return (str(s or "")).strip().lstrip("0") or "0"
         my_lots_by_number = {_norm_num(lt.get("number", "")): lt for lt in my_lots}
+        my_lot_nums_upper = {(_norm_num(lt.get("number", "")).upper()) for lt in my_lots}
 
         inv_q = {}
         if copropriete_id:
@@ -841,27 +849,70 @@ def create_owner_portal_router(db):
             inv_q["copropriete_id"] = {"$in": copro_ids} if copro_ids else "__none__"
 
         invoices = await db.invoices.find(inv_q, {"_id": 0}).sort("date", -1).to_list(10000)
+
+        # iter90fz : cache des Distribution Keys pour eviter N+1
+        dk_ids_needed = list({inv.get("distribution_key_id") for inv in invoices if inv.get("distribution_key_id")})
+        dk_map: dict = {}
+        if dk_ids_needed:
+            async for dk in db.distribution_keys.find(
+                {"id": {"$in": dk_ids_needed}}, {"_id": 0, "id": 1, "name": 1, "total_quotities": 1, "lines": 1, "lots": 1},
+            ):
+                dk_map[dk["id"]] = dk
+
+        def _compute_share_from_dk(inv: dict) -> tuple[float, float]:
+            """Retourne (my_amount, my_share_pct) via la Distribution Key.
+
+            Utilise dk.lines[] (ou fallback dk.lots[]) qui contient les
+            {lot_id, lot_number, share} de tous les lots de l'ACP.
+            """
+            dk_id = inv.get("distribution_key_id") or ""
+            dk = dk_map.get(dk_id)
+            if not dk:
+                return 0.0, 0.0
+            total_q = float(dk.get("total_quotities") or 0)
+            lines = dk.get("lines") or dk.get("lots") or []
+            if not lines or total_q <= 0:
+                return 0.0, 0.0
+            my_q = 0.0
+            for ln in lines:
+                lid = ln.get("lot_id", "")
+                lnum = _norm_num(ln.get("lot_number", "")).upper()
+                if lid in my_lot_ids or (lnum and lnum in my_lot_nums_upper):
+                    try:
+                        my_q += float(ln.get("share", 0) or 0)
+                    except (TypeError, ValueError):
+                        pass
+            if my_q <= 0:
+                return 0.0, 0.0
+            total_amount = float(inv.get("total_amount") or 0)
+            return round(total_amount * my_q / total_q, 2), round(my_q / total_q * 100, 4)
+
         result = []
         for inv in invoices:
             my_amount = 0.0
-            for dl in inv.get("distribution_lines", []):
+            computed = False  # True si my_amount vient de la DK (pas encore
+                              # materialise dans distribution_lines)
+            # 1) via distribution_lines existants (lot_id direct + fallback lot_number)
+            for dl in inv.get("distribution_lines", []) or []:
                 dl_lot_id = dl.get("lot_id")
                 dl_amount = float(dl.get("amount", 0) or 0)
-                # iter90dz : essaie d'abord match direct par lot_id
                 if dl_lot_id and dl_lot_id in my_lot_ids:
                     my_amount += dl_amount
                     continue
-                # iter90dz : fallback match par lot_number (phantom)
                 dl_lot_num = _norm_num(dl.get("lot_number", ""))
                 if dl_lot_num and dl_lot_num != "0" and dl_lot_num in my_lots_by_number:
                     my_amount += dl_amount
+            # 2) fallback DYNAMIQUE via la Distribution Key si aucune part trouvee
+            my_share_pct = 0.0
             if abs(my_amount) < 0.01:
-                # iter90hv : garder les notes de credit (my_amount < 0) et
-                # exclure uniquement les factures dont la quote-part est nulle
-                # (le proprio n'est pas concerne du tout).
+                calc_amt, calc_pct = _compute_share_from_dk(inv)
+                if abs(calc_amt) >= 0.01:
+                    my_amount = calc_amt
+                    my_share_pct = calc_pct
+                    computed = True
+            # Skip si le proprio n'a vraiment aucune part (ni via DL, ni via DK)
+            if abs(my_amount) < 0.01:
                 continue
-            # iter90cz : expose attachments (id + filename + mime) pour lien
-            # "Voir la facture" cote portail proprietaire.
             atts = []
             for att in inv.get("attachments", []) or []:
                 atts.append({
@@ -869,6 +920,7 @@ def create_owner_portal_router(db):
                     "filename": att.get("filename", ""),
                     "mime_type": att.get("mime_type", "application/pdf"),
                 })
+            dk_doc = dk_map.get(inv.get("distribution_key_id") or "", {})
             result.append({
                 "id": inv["id"],
                 "number": inv.get("number", ""),
@@ -877,6 +929,9 @@ def create_owner_portal_router(db):
                 "description": inv.get("description", ""),
                 "total_amount": inv.get("total_amount", 0),
                 "my_amount": round(my_amount, 2),
+                "my_share_pct": my_share_pct,  # 0 si materialise via DL
+                "computed_share": computed,     # iter90fz : True = projete via DK
+                "distribution_key_name": dk_doc.get("name", ""),
                 "copropriete_id": inv.get("copropriete_id", ""),
                 "status": inv.get("status", "unpaid"),
                 "category": inv.get("category", ""),

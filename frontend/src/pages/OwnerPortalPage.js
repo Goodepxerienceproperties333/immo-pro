@@ -909,7 +909,18 @@ export default function OwnerPortalPage() {
                           </Badge>
                         </TableCell>
                         <TableCell className="text-right font-mono text-xs text-slate-400">{fmt(c.total_amount)}</TableCell>
-                        <TableCell className="text-right font-mono text-sm text-slate-900 font-semibold">{fmt(c.my_amount)}</TableCell>
+                        <TableCell className="text-right font-mono text-sm text-slate-900 font-semibold">
+                          {fmt(c.my_amount)}
+                          {c.computed_share && (
+                            <div
+                              className="text-[10px] font-normal text-blue-600 mt-0.5"
+                              title={`Quote-part projetee via la cle de repartition${c.distribution_key_name ? ` "${c.distribution_key_name}"` : ''}${c.my_share_pct ? ` (${c.my_share_pct.toFixed(2)} %)` : ''}. La ventilation definitive sera figee au decompte annuel.`}
+                              data-testid={`charge-projected-${c.id}`}
+                            >
+                              Projete {c.my_share_pct ? `(${c.my_share_pct.toFixed(2)} %)` : ''}
+                            </div>
+                          )}
+                        </TableCell>
                         <TableCell className="text-center">
                           {c.attachments && c.attachments.length > 0 ? (
                             <Button
