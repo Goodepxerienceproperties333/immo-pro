@@ -368,7 +368,7 @@ def create_properties_router(db):
         email: str, phone: str, bce_number: str,
         address: str, postal_code: str, city: str,
         copro_id: str = "", exclude_id: Optional[str] = None,
-        auxiliary_code: str = "",
+        auxiliary_code: str = "", request=None,
     ) -> Optional[dict]:
         """Detecte un doublon de proprietaire. iter90gk : distingue les
         doublons STRICTS (email/telephone/BCE/auxiliary_code = bloquants)
@@ -408,8 +408,9 @@ def create_properties_router(db):
             base_query["copropriete_ids"] = copro_id
         if exclude_id:
             base_query["id"] = {"$ne": exclude_id}
-        from syndic_scope import syndic_query
-        base_query.update(syndic_query(request))
+        if request:
+            from syndic_scope import syndic_query
+            base_query.update(syndic_query(request))
         candidates = await db.owners.find(base_query, {"_id": 0}).to_list(5000)
         # 1er passage : cherche un doublon STRICT (email/telephone/BCE/aux)
         for o in candidates:
@@ -586,7 +587,7 @@ def create_properties_router(db):
         return owners
 
     @router.post("/owners")
-    async def create_owner(data: OwnerInput, reuse_on_duplicate: bool = False, force_create_despite_homonym: bool = False):
+    async def create_owner(data: OwnerInput, request: Request, reuse_on_duplicate: bool = False, force_create_despite_homonym: bool = False):
         """Cree un proprietaire.
 
         iter90gi : `reuse_on_duplicate=true` -> si l'anti-doublon detecte un
@@ -612,6 +613,7 @@ def create_properties_router(db):
             city=data.city or "",
             copro_id=data.copropriete_id or "",
             auxiliary_code=data.auxiliary_code or "",
+            request=request,
         )
         if dup:
             existing = dup["owner"]
@@ -810,6 +812,7 @@ def create_properties_router(db):
             city=data.city or "",
             copro_id=copro_id_check,
             exclude_id=owner_id,
+            request=request,
         )
         if dup:
             field_label = {

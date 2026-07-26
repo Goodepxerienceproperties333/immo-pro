@@ -1347,7 +1347,7 @@ def create_banking_router(db):
             print(f"[_refresh_fi_if_posted] failed for txn {txn_id}: {e}")
 
     @router.post("/transactions")
-    async def create_transaction(data: TransactionInput):
+    async def create_transaction(data: TransactionInput, request: Request):
         # Force amount sign based on transaction_type
         stored_amount = abs(float(data.amount))
         if data.transaction_type == "debit":
