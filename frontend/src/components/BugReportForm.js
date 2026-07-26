@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { toast } from 'sonner';
-import api from '../lib/api';
+import api, { extractApiError } from '../lib/api';
 
 /**
  * Iter90fs - Formulaire de remontee de bug integre au chatbot support.
@@ -85,7 +85,9 @@ export default function BugReportForm({ userEmail = '', onCreated, onCancel, lin
       });
       onCreated && onCreated(data);
     } catch (err) {
-      toast.error(err.response?.data?.detail || 'Erreur creation ticket');
+      console.error('Bug report submit failed:', err, err?.response);
+      const detail = extractApiError(err, 'Erreur creation ticket');
+      toast.error(detail, { duration: 6000 });
     } finally {
       setSubmitting(false);
     }

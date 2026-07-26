@@ -1,0 +1,30 @@
+{
+  "summary": "Iter90fs bug-fix verification of BugReportForm error handling. All 3 scenarios PASS + admin regression PASS. (1) HAPPY: syndic_alpha submitted a bug with a 1x1 PNG attachment -> POST /api/tickets -> HTTP 200 -> ticket TICK-2026-0008 created (attachments_count=1) -> success toast 'Ticket TICK-2026-0008 cree' rendered. (2) SIMULATED 400 via page.route: server responded {\"detail\":\"Fake server error for test\"} -> toast text = 'Fake server error for test' (extractApiError correctly surfaced the backend detail, no generic fallback shown, console.error fired with AxiosError). (3) NETWORK ABORT via page.route abort('failed'): axios threw ERR_FAILED -> toast text = 'Network Error' (err.message surfaced, not empty, not the generic 'Erreur creation ticket', console.error fired). (4) REGRESSION admin@copro.be /admin/tickets: page renders with 8 tickets (TICK-2026-0001 -> 0008) including the freshly-created 0008; ticket list still functional. No regressions detected from the extractApiError refactor.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "SupportChatBubble bug form (syndic first-time login)", "issues": ["The 'Cookies techniques uniquement' cookie banner (fixed-bottom) can overlap the 'Envoyer le ticket' submit button on smaller viewports because the support panel is right-anchored and the submit button sits at the bottom of the form. Playwright needed scroll_into_view_if_needed()+force click to bypass. Real users may see the button visually clipped by the cookie banner until they dismiss it. Suggest raising submit-button z-index above the cookie banner or auto-hiding the cookie banner while the support panel is open."]}
+    ]
+  },
+  "test_report_links": [],
+  "action_items": [
+    "(Optional UX) Ensure cookie banner does not overlap the bug-form submit button (z-index or auto-dismiss while support panel is open).",
+    "(No functional action required) Fix verified working; extractApiError correctly surfaces string detail, network error message, and preserves fallback only as last resort."
+  ],
+  "critical_code_review_comments": [
+    "BugReportForm.js catch block now uses extractApiError(err, 'Erreur creation ticket') and console.error(err, err?.response) -> good: users see actionable messages, support has diagnostic logs. Toast duration bumped to 6s so users can read the detail.",
+    "lib/api.js extractApiError: handles string detail, Pydantic array detail (loc.msg join), object detail (message/msg), else err.message, else fallback. Correctly returns strings only -> no risk of 'Objects are not valid as a React child'.",
+    "lib/api.js response interceptor already normalizes error.response.data.detail into a string before it reaches extractApiError, so the Array/object branches in extractApiError are largely defensive duplicates -> acceptable belt-and-suspenders. One tiny redundancy is that the interceptor stringifies objects into JSON when there's no .code, which extractApiError never sees in practice; harmless.",
+    "No backend change in this session; POST /api/tickets returns 200 with number + attachments[].file_id as documented. Chinese-wall isolation on GET intact (admin sees all)."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (no backend change; happy-path POST /api/tickets returned 200)", "frontend": "100% (4/4: happy, simulated-400, network-abort, admin regression)"},
+  "test_credentials": "syndic_alpha@copro.be/Syndic123! ; admin@copro.be/admin123",
+  "seed_data_creation": "Created TICK-2026-0008 (Syndic Alpha, title 'Prorata pas applique (regression test iter78)', 1 PNG attachment via GridFS) as part of the happy-path verification. All other error simulations were purely client-side and did NOT hit backend.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "extractApiError is exported from /app/frontend/src/lib/api.js and correctly returns: (1) response.data.detail string, (2) formatted Pydantic array, (3) object.message/msg, (4) err.message (e.g. 'Network Error'), (5) fallback. Verified via page.route interception (400 with custom detail + abort). To reproduce: intercept POST **/api/tickets with route.fulfill/abort and check the resulting sonner toast text. Cookie banner ('J'ai compris' / 'Fermer') must be dismissed before clicking bug-submit-btn in E2E, OR use scroll_into_view_if_needed + force click. Post-login modal sequence unchanged (legal -> release-notes -> onboarding).",
+  "rca_of_the_issue": "The original 'Erreur creation ticket' user report was a transient failure (network or client-side). RCA confirmed by: (a) backend logs show no 500/400 for Gerald's session at the reported time, (b) direct curl repro returned 200, (c) Playwright E2E repro returned 200. The applied fix (swap inline `err.response?.data?.detail || fallback` for extractApiError + console.error) does NOT change backend behaviour, only improves the observability of the error for the end-user and support team. This iteration verified the improved error toast displays the actual backend detail on 400 and 'Network Error' on transport failure, so a future occurrence of the same issue would give the user a diagnosable message instead of the opaque fallback."
+}
