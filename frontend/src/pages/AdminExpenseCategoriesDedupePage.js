@@ -1,22 +1,50 @@
 // iter91e : Page admin pour dedupliquer les Natures de depense
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import api from '@/lib/api';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Badge } from '@/components/ui/badge';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { toast } from 'sonner';
-import { Search, Play, Merge, AlertTriangle, CheckCircle2, RefreshCw } from 'lucide-react';
+import { Search, Merge, AlertTriangle, CheckCircle2, RefreshCw } from 'lucide-react';
 
 export default function AdminExpenseCategoriesDedupePage() {
   const [copropriete, setCopropriete] = useState(
     localStorage.getItem('selectedCopro') || localStorage.getItem('copropriete_id') || ''
   );
+  // iter91e-polish : liste des ACPs accessibles au user (dropdown au lieu d'input libre)
+  const [copros, setCopros] = useState([]);
   const [strategy, setStrategy] = useState('name_normalized');
   const [report, setReport] = useState(null);
   const [loading, setLoading] = useState(false);
   // Selection des sources a fusionner par target: { target_id: Set<source_id> }
   const [selection, setSelection] = useState({});
+
+  // Charge la liste des ACPs accessibles au superadmin/syndic
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data } = await api.get('/coproprietes');
+        const list = Array.isArray(data) ? data : (data?.coproprietes || []);
+        if (!cancelled) {
+          setCopros(list);
+          // Si l'ACP courante n'est pas dans la liste, on la reset sur la
+          // premiere disponible pour eviter les 400.
+          if (list.length > 0) {
+            const ids = list.map((c) => c.id);
+            if (!copropriete || !ids.includes(copropriete)) {
+              setCopropriete(list[0].id);
+            }
+          }
+        }
+      } catch {
+        if (!cancelled) setCopros([]);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   const runDryRun = useCallback(async () => {
     if (!copropriete || copropriete === 'all') {
@@ -112,19 +140,32 @@ export default function AdminExpenseCategoriesDedupePage() {
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="flex flex-wrap gap-3 items-end">
-            <div className="flex-1 min-w-[200px]">
-              <label className="text-xs text-slate-500">ACP (copropriete_id)</label>
-              <input
-                className="w-full border rounded px-2 py-1 text-sm font-mono"
-                value={copropriete}
-                onChange={(e) => setCopropriete(e.target.value)}
-                data-testid="dedupe-copro-input"
-              />
+            <div className="flex-1 min-w-[260px]">
+              <label className="text-xs text-slate-500">Copropriete (ACP)</label>
+              <Select
+                value={copropriete || undefined}
+                onValueChange={(v) => { setCopropriete(v); localStorage.setItem('selectedCopro', v); }}
+                data-testid="dedupe-copro-select"
+              >
+                <SelectTrigger data-testid="dedupe-copro-trigger">
+                  <SelectValue placeholder="Selectionnez une ACP..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {copros.length === 0 && (
+                    <SelectItem value="__none__" disabled>Aucune ACP accessible</SelectItem>
+                  )}
+                  {copros.map((c) => (
+                    <SelectItem key={c.id} value={c.id}>
+                      {c.name}{c.address ? ` - ${c.address}` : ''}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
             <div>
               <label className="text-xs text-slate-500">Strategie</label>
               <select
-                className="border rounded px-2 py-1 text-sm"
+                className="border rounded px-2 py-1 text-sm h-10"
                 value={strategy}
                 onChange={(e) => setStrategy(e.target.value)}
                 data-testid="dedupe-strategy"
