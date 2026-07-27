@@ -161,12 +161,82 @@ def create_meters_router(db):
                 "value": doc["value"],
                 "consumption": consumption,
             })
+        # iter90i5 : cree/met a jour la cle de repartition consommation
+        dk_id, dk_name = "", ""
+        if created_readings:
+            dk_id, dk_name = await _upsert_meter_distribution_key(
+                db=db, copropriete_id=data.copropriete_id,
+                meter_type=data.meter_type, reading_date=data.date,
+                readings=created_readings,
+            )
         return {
             "created_readings": created_readings,
             "created_meters": created_meters,
             "errors": errors,
             "count": len(created_readings),
+            "distribution_key_id": dk_id,
+            "distribution_key_name": dk_name,
         }
+
+    async def _upsert_meter_distribution_key(*, db, copropriete_id: str, meter_type: str,
+                                             reading_date: str, readings: list) -> tuple:
+        """iter90i5 : Cree/met a jour une cle de repartition a partir des
+        consommations d'un releve multi-lots.
+
+        - Nom : "Consommation {type} - {date}" (ex: "Consommation water - 2026-07-26")
+        - key_type : "consumption"
+        - lots : [{lot_id, share = consommation}]
+
+        Retourne (dk_id, dk_name). Cette cle peut ensuite etre selectionnee
+        dans les formulaires OD pour repartir des frais proportionnellement
+        a la consommation reelle.
+        """
+        type_label_fr = {
+            "water": "eau", "heating": "chauffage",
+            "electricity": "electricite", "gas": "gaz",
+            "boiler_maintenance": "entretien chaudiere",
+        }.get(meter_type, meter_type)
+        dk_name = f"Consommation {type_label_fr} - {reading_date}"
+        # Construit la liste des lots avec leur consommation comme share
+        lots_shares = []
+        total_conso = 0.0
+        for r in readings:
+            conso = float(r.get("consumption") or 0)
+            # Meme si consommation = 0 ou negative, on garde le lot dans la cle
+            # (pour eviter les trous de repartition)
+            lots_shares.append({"lot_id": r["lot_id"], "share": max(0.0, conso)})
+            total_conso += max(0.0, conso)
+        # Si toutes les conso sont nulles, on n'a pas de sens de creer une cle
+        if total_conso < 0.005:
+            return ("", "")
+        # Upsert : si une cle avec le meme nom (meme type + date) existe deja
+        # pour cette ACP, on la remplace (permet re-execution d'un releve).
+        existing = await db.distribution_keys.find_one({
+            "copropriete_id": copropriete_id, "name": dk_name,
+        }, {"_id": 0, "id": 1})
+        if existing:
+            dk_id = existing["id"]
+            await db.distribution_keys.update_one(
+                {"id": dk_id},
+                {"$set": {"lots": lots_shares, "key_type": "consumption",
+                          "meter_type": meter_type, "reading_date": reading_date,
+                          "updated_at": datetime.now(timezone.utc).isoformat()}}
+            )
+        else:
+            dk_id = str(uuid.uuid4())
+            await db.distribution_keys.insert_one({
+                "id": dk_id,
+                "copropriete_id": copropriete_id,
+                "name": dk_name,
+                "key_type": "consumption",
+                "is_default": False,
+                "meter_type": meter_type,
+                "reading_date": reading_date,
+                "lots": lots_shares,
+                "source": "meter_readings",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            })
+        return (dk_id, dk_name)
 
     @router.get("/{meter_id}/readings")
     async def list_readings(meter_id: str):

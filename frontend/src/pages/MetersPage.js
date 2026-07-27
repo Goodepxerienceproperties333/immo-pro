@@ -116,6 +116,13 @@ export default function MetersPage() {
         entries,
       });
       toast.success(`${r.data.count} releve(s) cree(s)`);
+      // iter90i5 : notification cle de repartition creee/mise a jour
+      if (r.data.distribution_key_name) {
+        toast.success(
+          `Cle de repartition "${r.data.distribution_key_name}" disponible pour vos OD`,
+          { duration: 6000 }
+        );
+      }
       setBatchDialog(false);
       await load();
     } catch (err) {
