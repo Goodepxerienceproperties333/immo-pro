@@ -140,5 +140,29 @@ Application de gestion de copropriete basee sur le droit belge (PCMN), incluant 
 
 
 ## Refactoring
+
+### iter91d/e/f (27 juillet 2026 - suite)
+
+#### iter91d - Liste des depenses PDF (DONE - 8/8 pytest + frontend E2E)
+- Nouveau helper `_build_expenses_list_pdf(db, copropriete_id, fiscal_year_id) -> bytes` dans `reports.py`
+- Fusionne via pypdf : (1) synthese portrait (`pdf_synthese_depenses.py` - nouveau module) groupee par cle de repartition + nature, avec totaux immeuble ; (2) detail paysage existant `build_liste_depenses_pdf`.
+- Retire le try/ImportError silencieux dans `communication.py` (l'attachement decompte annuel fonctionne desormais nativement).
+
+#### iter91e - Nettoyage Natures de depense (DONE)
+- Endpoint `POST /api/admin/expense-categories/dedupe` avec mode `dry_run` (rapport JSON) et mode `execution` (avec `merges=[{target_id, source_ids}]`).
+- Detection : strategies `name_normalized` (accents/casse ignores, par defaut), `name_account`, `name`.
+- Detection libelles malformes : commencent par `<digit>)`, ou 100% numeriques, ou < 3 chars.
+- Fusion : reassigne `journal_entries.lines.expense_category_id`, supprime les sources. Idempotente (fusion 2x = no-op safe).
+- Frontend `/admin/expense-categories-dedupe` (`AdminExpenseCategoriesDedupePage.js`) : preview + checkboxes pour selection + confirmation window.confirm + re-analyse automatique.
+- Lien : card indigo "Nettoyage Natures de depense" dans le dashboard admin.
+- Test Gaura : 10 doublons (accents/casse) + 1 malforme "7362)" [61214] detectes.
+
+#### iter91f - Import Wizard : creation proprietaires manquants (DONE)
+- Endpoint `POST /api/import-wizard/sessions/{id}/preview-opening-balance-orphans` : detecte les comptes 410XXXX / 4001XXXX presents dans l'AN sans owner rattache. Ignore les comptes deja mappes via tier_accounts et les auxiliary_code existants.
+- `CommitOpeningBalanceInput` accepte `owner_confirmations: [{account_number, name, first_name?, last_name?}]`. Chaque confirmation cree une fiche complete AVANT resolution des lignes AN : VCS auto-genere (mod 97), tier_accounts[copro].main=account_number, auxiliary_code = C+4 derniers chars.
+- Reponse commit enrichie : `owners_created: [...]`.
+- Frontend `ImportWizardPage.js` : preview automatique avant commit sur l'etape `opening_balance`. Si orphelins detectes, un dialogue modal (`orphan-owners-dialog`) s'affiche avec Input editable par ligne. Bouton "Creer les fiches et valider l'OD" -> commit avec confirmations.
+- Corrige la racine du probleme Matexi retroactivement corrige par iter91c : desormais, l'import evite de creer des orphelins des le depart.
+
 - import_wizard.py (>3500 lignes) a decouper
 - reports.py (logique PCMN complexe) a simplifier
