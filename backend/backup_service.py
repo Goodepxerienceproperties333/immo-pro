@@ -610,6 +610,18 @@ async def build_acp_archive_zip(db, copropriete_id: str, include_pdfs: bool = Tr
                 await _append_original_documents(
                     db, z, year_prefix, copropriete_id, start, end
                 )
+            # iter92a : Decomptes annuels par proprietaire (post-repartition)
+            if include_pdfs:
+                await _append_owner_decomptes(
+                    db, z, year_prefix, copropriete_id, fy
+                )
+
+        # iter92a : Documents globaux (hors periode) + historique communications
+        # ranges dans <acp_name>/documents/all/ et communications/
+        # IMPORTANT: doit rester DANS le `with zipfile.ZipFile(...) as z:`
+        if include_pdfs:
+            await _append_all_acp_documents(db, z, acp_name, copropriete_id)
+            await _append_sent_communications(db, z, acp_name, copropriete_id, _csv_bytes)
 
     data = buf.getvalue()
     buf.close()
@@ -653,11 +665,22 @@ def _build_readme(copro: dict, fiscal_years: list, owners: list, lots: list, inc
     ]
     if include_pdfs:
         lines.extend([
-            "    bilan.pdf                 <- Bilan comptable de l'exercice",
+            "    bilan.pdf                 <- Bilan comptable de l'exercice (post-repartition)",
             "    compte_resultat.pdf       <- Compte de resultat de l'exercice",
             "    documents/",
             "        factures/*.pdf        <- Factures scannees originales",
             "        extraits/*.pdf        <- Extraits bancaires originaux",
+            "    decomptes/                <- iter92a : decomptes annuels par proprietaire",
+            "        DECOMPTE-<Nom>.pdf    <- Un PDF par proprietaire (repartition finale)",
+        ])
+        lines.extend([
+            "",
+            "  Global ACP (hors exercice) :",
+            "    documents/all/<categorie>/ <- iter92a : tous les documents de l'ACP",
+            "                                  (releves compteurs, uploads, PV AG...)",
+            "    communications/",
+            "        historique.csv         <- iter92a : journal des envois emails/postal",
+            "        attachments/*.pdf      <- Pieces jointes envoyees aux proprietaires",
         ])
     lines.extend([
         "",
@@ -827,3 +850,201 @@ async def _append_documents_index_and_originals(
             doc_rows,
         ),
     )
+
+
+
+# ---- iter92a : Post-repartition & documents ACP-wide ----
+
+async def _append_owner_decomptes(
+    db, zipf: "zipfile.ZipFile", year_prefix: str,
+    copropriete_id: str, fy: dict,
+) -> None:
+    """iter92a : ajoute les decomptes annuels PDF de tous les proprietaires
+    de l'ACP pour cet exercice (`<year>/decomptes/DECOMPTE-<Nom>.pdf`).
+
+    Reflete la repartition finale des charges (post-decompte annuel).
+    Silencieux en cas d'erreur : la sauvegarde CSV reste prioritaire.
+    """
+    try:
+        from routes.reports import _build_decompte_annuel_pdf
+    except Exception as e:  # noqa: BLE001
+        logger.warning("iter92a : _build_decompte_annuel_pdf indisponible : %s", e)
+        return
+
+    # Selectionne les proprietaires qui ont un lot dans l'ACP OU un tier_account
+    # OU sont impliques dans une mutation intra-FY (couvre les vendeurs sortis)
+    fy_id = fy.get("id")
+    owner_ids: set = set()
+    lots = await db.lots.find(
+        {"copropriete_id": copropriete_id},
+        {"_id": 0, "owner_id": 1, "owner_ids": 1},
+    ).to_list(10000)
+    for lt in lots:
+        if lt.get("owner_id"):
+            owner_ids.add(lt["owner_id"])
+        for oid in (lt.get("owner_ids") or []):
+            if oid:
+                owner_ids.add(oid)
+    tier_owners = await db.owners.find(
+        {f"tier_accounts.{copropriete_id}": {"$exists": True}},
+        {"_id": 0, "id": 1},
+    ).to_list(10000)
+    for o in tier_owners:
+        owner_ids.add(o["id"])
+    if fy.get("start_date") and fy.get("end_date"):
+        muts = await db.mutations.find(
+            {"copropriete_id": copropriete_id,
+             "sale_date": {"$gte": fy["start_date"], "$lte": fy["end_date"]}},
+            {"_id": 0, "from_owner_id": 1, "to_owner_id": 1},
+        ).to_list(10000)
+        for m in muts:
+            if m.get("from_owner_id"):
+                owner_ids.add(m["from_owner_id"])
+            if m.get("to_owner_id"):
+                owner_ids.add(m["to_owner_id"])
+
+    count = 0
+    for owner_id in owner_ids:
+        try:
+            owner = await db.owners.find_one(
+                {"id": owner_id}, {"_id": 0, "name": 1}
+            )
+            if not owner:
+                continue
+            pdf_bytes, _fname = await _build_decompte_annuel_pdf(
+                db, owner_id, copropriete_id, fiscal_year_id=fy_id, preview=False
+            )
+            safe_name = (owner.get("name") or owner_id)[:80]
+            safe_name = safe_name.replace("/", "_").replace(" ", "_").replace("\\", "_")
+            zipf.writestr(
+                f"{year_prefix}/decomptes/DECOMPTE-{safe_name}.pdf",
+                pdf_bytes,
+            )
+            count += 1
+        except Exception as e:  # noqa: BLE001
+            logger.warning("iter92a : decompte KO owner=%s : %s", owner_id, e)
+    logger.info("iter92a : %s decompte(s) inclus dans %s", count, year_prefix)
+
+
+async def _append_all_acp_documents(
+    db, zipf: "zipfile.ZipFile", acp_name: str, copropriete_id: str,
+) -> None:
+    """iter92a : ajoute TOUS les documents de la collection `db.documents`
+    de cette ACP (relaves de compteurs, communications, uploads, etc.),
+    ranges par categorie sous `<acp_name>/documents/all/<category>/`.
+
+    N'ecrase pas les factures/extraits deja copies dans `documents/factures`
+    et `documents/extraits` (categories differentes).
+    """
+    try:
+        from gridfs_storage import GridFSStorage
+        storage = GridFSStorage(db, bucket_name="documents")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("iter92a : GridFSStorage indisponible : %s", e)
+        return
+
+    docs = await db.documents.find(
+        {"copropriete_id": copropriete_id,
+         "gridfs_id": {"$exists": True, "$ne": None}},
+        {"_id": 0}
+    ).to_list(50000)
+    count = 0
+    for d in docs:
+        gid = d.get("gridfs_id")
+        if not gid:
+            continue
+        try:
+            data = await storage.download(gid)
+            cat_safe = (d.get("category") or "divers").replace("/", "_").replace(" ", "_")
+            title_safe = ((d.get("title") or d.get("filename") or d.get("id") or "doc")
+                          .replace("/", "_").replace(" ", "_"))[:120]
+            orig = d.get("filename") or "document.bin"
+            ext = orig.rsplit(".", 1)[-1].lower() if "." in orig else "bin"
+            # iter92a : suffixe unique pour eviter les collisions de noms
+            # (plusieurs documents peuvent partager le meme title)
+            uniq = (d.get("id") or "")[-6:] or "xxxxxx"
+            zipf.writestr(
+                f"{acp_name}/documents/all/{cat_safe}/{title_safe}__{uniq}.{ext}",
+                data,
+            )
+            count += 1
+        except Exception:
+            pass  # GridFS orphelin -> skip silencieux
+    logger.info("iter92a : %s document(s) generaux inclus", count)
+
+
+async def _append_sent_communications(
+    db, zipf: "zipfile.ZipFile", acp_name: str,
+    copropriete_id: str, _csv_bytes,
+) -> None:
+    """iter92a : exporte l'historique des envois (`db.sent_communications`)
+    en CSV + les PDF joints (via `attached_document_ids` -> `db.documents` +
+    GridFS bucket `documents`) sous `<acp_name>/communications/`.
+    """
+    comms = await db.sent_communications.find(
+        {"copropriete_id": copropriete_id}, {"_id": 0}
+    ).sort("sent_at", -1).to_list(20000)
+    if not comms:
+        return
+    # 1) CSV recap
+    rows = []
+    for c in comms:
+        rows.append([
+            c.get("id", ""),
+            c.get("sent_at", ""),
+            c.get("channel", ""),
+            c.get("type", ""),
+            c.get("subject", ""),
+            (c.get("recipient") or {}).get("name", "") if isinstance(c.get("recipient"), dict) else "",
+            (c.get("recipient") or {}).get("email", "") if isinstance(c.get("recipient"), dict) else "",
+            c.get("status", ""),
+            c.get("dry_run", False),
+            len(c.get("attached_document_ids") or []),
+        ])
+    zipf.writestr(
+        f"{acp_name}/communications/historique.csv",
+        _csv_bytes(
+            ["id", "sent_at", "channel", "type", "subject",
+             "recipient_name", "recipient_email", "status",
+             "dry_run", "nb_attachments"],
+            rows,
+        ),
+    )
+    # 2) PDFs joints (documents avec source in sent_communications)
+    try:
+        from gridfs_storage import GridFSStorage
+        storage = GridFSStorage(db, bucket_name="documents")
+    except Exception:
+        return
+    attached_ids: set = set()
+    for c in comms:
+        for did in (c.get("attached_document_ids") or []):
+            if did:
+                attached_ids.add(did)
+    if not attached_ids:
+        return
+    docs = await db.documents.find(
+        {"id": {"$in": list(attached_ids)}, "copropriete_id": copropriete_id},
+        {"_id": 0}
+    ).to_list(50000)
+    count = 0
+    for d in docs:
+        gid = d.get("gridfs_id")
+        if not gid:
+            continue
+        try:
+            data = await storage.download(gid)
+            title_safe = ((d.get("title") or d.get("filename") or d.get("id") or "envoi")
+                          .replace("/", "_").replace(" ", "_"))[:120]
+            orig = d.get("filename") or "attachment.pdf"
+            ext = orig.rsplit(".", 1)[-1].lower() if "." in orig else "pdf"
+            # iter92a : suffixe unique pour eviter les collisions de noms
+            uniq = (d.get("id") or "")[-6:] or "xxxxxx"
+            zipf.writestr(
+                f"{acp_name}/communications/attachments/{title_safe}__{uniq}.{ext}",
+                data,
+            )
+            count += 1
+        except Exception:
+            pass
+    logger.info("iter92a : %s attachment(s) communications inclus", count)
