@@ -54,14 +54,14 @@ DEMO_SUPPLIERS = [
     ("AXA Belgium", "0404.483.367", "BE0404483367", "Boulevard du Souverain 25", "1170", "Watermael-Boitsfort", "syndic@axa.be", "+32 2 678 66 11", "BE72 3100 0034 5678", "BBRUBEBB", "insurance"),
 ]
 
-# (account_number, name, amount_annual, key: 'gen'|'asc')
+# (account_number, name, amount_annual, key: 'gen'|'asc', vat_code, occupant_pct)
 DEMO_BUDGET_LINES = [
-    ("6120", "Electricite communes", 4800.0, "gen"),
-    ("61400", "Entretien ascenseur", 2400.0, "asc"),
-    ("61300", "Nettoyage communes", 6000.0, "gen"),
-    ("61000", "Assurance batiment", 3200.0, "gen"),
-    ("61100", "Reparations diverses", 1200.0, "gen"),
-    ("61500", "Honoraires syndic", 12000.0, "gen"),
+    ("6120", "Electricite communes", 4800.0, "gen", "A4", 100.0),
+    ("61400", "Entretien ascenseur", 2400.0, "asc", "A4", 100.0),
+    ("61300", "Nettoyage communes", 6000.0, "gen", "A4", 100.0),
+    ("61000", "Assurance batiment", 3200.0, "gen", "NA", 0.0),
+    ("61100", "Reparations diverses", 1200.0, "gen", "A4", 50.0),
+    ("61500", "Honoraires syndic", 12000.0, "gen", "A4", 0.0),
 ]
 
 # Factures fournisseurs (spread over 2025)
@@ -318,13 +318,40 @@ def create_admin_demo_router(db):
             })
             supplier_ids.append(sid)
 
+        # 8bis. iter93n : Natures de depense (expense_categories) - une par
+        # ligne de budget. Elles apparaissent dans la page "Natures de depense"
+        # et sont utilisees comme prefill dans les factures / OD.
+        expense_cat_by_acct: dict = {}
+        for i, (acct_num, name, _amount, key_tag, vat_code, occ_pct) in enumerate(DEMO_BUDGET_LINES):
+            ecid = str(uuid.uuid4())
+            code = f"{i+1:04d}"
+            await db.expense_categories.insert_one({
+                "id": ecid,
+                "code": code,
+                "name": name,
+                "label": name,
+                "account_number": acct_num,
+                "account_name": name,
+                "vat_code": vat_code,
+                "default_occupant_pct": occ_pct,
+                "default_proprietaire_pct": 100.0 - occ_pct,
+                "kind": "charge",
+                "is_default_seed": False,
+                "copropriete_id": copro_id,
+                "syndic_id": superadmin_id,
+                "default_distribution_key_id": key_asc_id if key_tag == "asc" else key_gen_id,
+                "created_at": _now_iso(),
+            })
+            expense_cat_by_acct[acct_num] = ecid
+
         # 9. Budget (approved)
         budget_lines = []
-        for (acct_num, name, amount, key_tag) in DEMO_BUDGET_LINES:
+        for (acct_num, name, amount, key_tag, _vat, _occ) in DEMO_BUDGET_LINES:
             budget_lines.append({
                 "account_number": acct_num,
                 "account_name": name,
                 "amount": amount,
+                "expense_category_id": expense_cat_by_acct.get(acct_num),
                 "distribution_key_id": key_asc_id if key_tag == "asc" else key_gen_id,
             })
         budget_total = sum(l["amount"] for l in budget_lines)
@@ -364,6 +391,7 @@ def create_admin_demo_router(db):
                 "total_amount": ttc,
                 "vat_amount": tva,
                 "account_number": acct_num,
+                "expense_category_id": expense_cat_by_acct.get(acct_num),
                 "distribution_key_id": key_asc_id if key_tag == "asc" else key_gen_id,
                 "distribution_lines": [],
                 "status": "paid",
