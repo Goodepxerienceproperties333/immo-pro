@@ -527,8 +527,8 @@ def create_coproprietes_router(db):
     @router.delete("/{copro_id}")
     async def delete_copropriete(copro_id: str, request: Request):
         """iter92g : Regle stricte - un syndic ne peut PLUS supprimer d'ACP,
-        seulement archiver via /archive. Seul le superadmin peut supprimer
-        (obligation de conservation legale 10 ans - art. III.86 CDE).
+        seulement archiver via /archive. Superadmin peut supprimer (non
+        recommande, obligation legale de conservation 10 ans art. III.86 CDE).
 
         Exception whitelist : `info@nextgecopro.be` (Evrard Gerald) peut
         toujours supprimer (utilisateur de reference plateforme).
@@ -538,12 +538,13 @@ def create_coproprietes_router(db):
         role = user.get("role", "")
         email = (user.get("email") or "").strip().lower()
         WHITELIST_EMAILS = {"info@nextgecopro.be"}
-        # superadmin platform-level = ok. Sinon email whitelist.
+        # superadmin plateforme = OK (non recommande). Sinon email whitelist.
         if role not in ("superadmin", "admin") and email not in WHITELIST_EMAILS:
             raise HTTPException(
                 403,
                 "Un syndic ne peut pas supprimer une copropriete (obligation "
-                "de conservation 10 ans). Utilisez 'Archiver' a la place.",
+                "de conservation 10 ans art. III.86 CDE). Utilisez 'Archiver' "
+                "a la place. Seul le superadmin peut supprimer.",
             )
         result = await db.coproprietes.delete_one({"id": copro_id})
         if result.deleted_count == 0:

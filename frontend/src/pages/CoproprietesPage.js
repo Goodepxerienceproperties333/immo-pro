@@ -262,7 +262,22 @@ export default function CoproprietesPage() {
       }
     } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); }
   };
-  const handleDelete = async (id) => { if (!window.confirm('Supprimer cette copropriete ?')) return; try { await api.delete(`/coproprietes/${id}`); toast.success('Supprimee'); load(); } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); } };
+  const handleDelete = async (id) => {
+    // iter92g : message d'avertissement explicite - la suppression cascade
+    // est autorisee (superadmin + whitelist) mais NON recommandee. L'archivage
+    // preserve les donnees pour l'obligation legale (10 ans art. III.86 CDE).
+    const acp = coproprietes.find(c => c.id === id);
+    const nom = acp?.name || 'cette ACP';
+    const msg = `⚠ Suppression NON RECOMMANDEE\n\nVous allez supprimer definitivement "${nom}" avec cascade complete :\n- Tous les lots, factures, ecritures comptables\n- L'historique bancaire et le grand livre\n- Les documents et communications\n\nCette action est IRREVERSIBLE et enfreint l'obligation legale de conservation 10 ans (art. III.86 CDE).\n\nPreferez l'archivage (bouton Archive) qui conserve tout en masquant l'ACP.\n\nContinuer la suppression malgre tout ?`;
+    if (!window.confirm(msg)) return;
+    try {
+      await api.delete(`/coproprietes/${id}`);
+      toast.success('ACP supprimee (cascade)');
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur');
+    }
+  };
   const handleArchive = async (id) => { try { await api.post(`/coproprietes/${id}/archive`); toast.success('Archivee'); load(); } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); } };
   const handleUnarchive = async (id) => { try { await api.post(`/coproprietes/${id}/unarchive`); toast.success('Reactivee'); load(); } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); } };
 
@@ -444,7 +459,7 @@ export default function CoproprietesPage() {
                   {isManager && <Button variant="ghost" size="sm" onClick={() => handleDownloadArchive(c)} className="text-[#022D52]" title="Telecharger archive ZIP complete par annee" data-testid={`archive-dl-${c.id}`}><Download size={13} /></Button>}
                   {/* iter92g : suppression uniquement pour superadmin OU email whitelist. Le syndic doit archiver. */}
                   {(isSuperadmin || (user?.email || '').toLowerCase() === 'info@nextgecopro.be') && (
-                    <Button variant="ghost" size="sm" onClick={() => handleDelete(c.id)} className="text-red-500" title="Supprimer (cascade) - reserve superadmin"><Trash2 size={13} /></Button>
+                    <Button variant="ghost" size="sm" onClick={() => handleDelete(c.id)} className="text-red-400 hover:text-red-600" title="Supprimer definitivement (NON RECOMMANDE - preferer Archiver)" data-testid={`delete-copro-${c.id}`}><Trash2 size={13} /></Button>
                   )}
                 </div></TableCell>
               </TableRow>
