@@ -668,8 +668,8 @@ export default function JournalsPage() {
                             </SelectTrigger>
                             <SelectContent>
                               <SelectItem value="none">(aucune)</SelectItem>
-                              {(categories || []).map(c => (
-                                <SelectItem key={c.id} value={c.id}>
+                              {(categories || []).map((c, idx) => (
+                                <SelectItem key={`${c.id}-${idx}`} value={c.id}>
                                   {c.name}{c.account_number ? ` [${c.account_number}]` : ''}
                                 </SelectItem>
                               ))}

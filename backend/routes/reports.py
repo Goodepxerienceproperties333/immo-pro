@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime, timezone
 import uuid
@@ -2743,12 +2744,13 @@ def create_reports_router(db):
         # Hide ex-proprietaires that have a zero balance and no movement
         result = [r for r in result if not (r.get("is_former_owner") and abs(r["balance"]) < 0.01 and r["movements_count"] == 0)]
 
-        # iter90ak : ajouter des lignes synthetiques pour les comptes tiers
+        # iter90ak / iter91c : ajouter des lignes synthetiques pour les comptes tiers
         # avec solde non nul mais qui ne sont rattaches a AUCUN proprietaire
         # (ex. ancien proprietaire supprime de la collection owners, ou
-        # tier_accounts jamais renseigne). Sans ce fallback, ces soldes sont
-        # invisibles ici alors que la Sante comptable les detecte comme
-        # "comptes tier orphelins".
+        # tier_accounts jamais renseigne, ou compte importe via AN sans owner
+        # cree - cas Matexi promoteur qui a un compte 41010986 sans owner).
+        # Sans ce fallback, ces soldes sont invisibles ici alors que le bilan
+        # les compte.
         acc_names = {}
         try:
             _pcmn = await db.pcmn_accounts.find(
@@ -2759,10 +2761,39 @@ def create_reports_router(db):
                 acc_names[_a.get("number", "")] = _a.get("name", "")
         except Exception:
             pass
+        # iter91c : recupere aussi les account_name depuis les journal_entries
+        # (utile quand un compte n'est pas dans pcmn_accounts).
+        try:
+            for e in entries_cumul:
+                for ln in (e.get("lines") or []):
+                    _n = ln.get("account_number") or ""
+                    _nm = ln.get("account_name") or ""
+                    if _n and _nm and not acc_names.get(_n):
+                        acc_names[_n] = _nm
+        except Exception:
+            pass
+        # iter91c : recupere les tier_accounts existants -> exclure les comptes
+        # deja mappes a un owner (pour ne pas creer un doublon).
+        mapped_accs = set()
+        for owner in owners:
+            _ta = (owner.get("tier_accounts") or {}).get(copropriete_id or "", {}) or {}
+            for _v in _ta.values():
+                if isinstance(_v, str) and _v:
+                    mapped_accs.add(_v)
         for _acc, _b in list(cumul_per_acc.items()):
             if not _acc:
                 continue
-            if not (_acc.startswith("4100") or _acc.startswith("4000") or _acc.startswith("4001")):
+            # iter91c : elargir aux comptes 410* (tous comptes tiers proprietaires
+            # PCMN classe 41) - avant on ratait 41010xxx (Matexi cas typique).
+            if not (
+                _acc.startswith("410")
+                or _acc.startswith("4000")
+                or _acc.startswith("4001")
+            ):
+                continue
+            # Ne pas creer d'orphelin pour un compte deja mappe a un owner
+            # (deja traite plus haut dans la boucle owners).
+            if _acc in mapped_accs:
                 continue
             _solde = round(float(_b.get("debit", 0)) - float(_b.get("credit", 0)), 2)
             if abs(_solde) < 0.01:
@@ -2795,11 +2826,180 @@ def create_reports_router(db):
                 "movements_count": len(_mvts_period),
                 "is_former_owner": True,
                 "is_orphan_account": True,
+                # iter91c : expose account_number pour permettre la creation
+                # d'un owner via le bouton "Creer proprietaire" cote UI.
+                "orphan_account_number": _acc,
             })
 
         total_debiteurs = round(sum(r["balance"] for r in result if r["balance"] > 0), 2)
         total_crediteurs = round(sum(abs(r["balance"]) for r in result if r["balance"] < 0), 2)
         return {"owners": result, "total_debiteurs": total_debiteurs, "total_crediteurs": total_crediteurs}
+
+    # ---- iter91c : creer un proprietaire depuis un compte orphelin ----
+    class CreateOwnerFromOrphanInput(BaseModel):
+        copropriete_id: str
+        account_number: str
+        # Nom confirme par le syndic (par defaut derive de l'account_name des JE)
+        confirmed_name: Optional[str] = ""
+        # Optionnel : first_name / last_name explicites (pour homonymes)
+        first_name: Optional[str] = ""
+        last_name: Optional[str] = ""
+
+    @router.post("/balance-tiers/create-owner-from-orphan")
+    async def create_owner_from_orphan_account(
+        data: CreateOwnerFromOrphanInput,
+        request: Request,
+    ):
+        """iter91c : cree un proprietaire pour un compte tiers orphelin (ex.
+        `41010986 Matexi S.A.`) present dans les journal_entries mais sans
+        propriétaire associe. Le syndic confirme le nom, on rattache le compte
+        au nouvel owner via `tier_accounts[copropriete_id]`.
+
+        Rattachement : main = provisions = account_number. VCS auto-genere.
+        Chinese wall : le copropriete_id doit etre dans les copros du syndic.
+        """
+        import uuid as _uuid
+        from datetime import datetime as _dt, timezone as _tz
+        _ensure_copro_access(request, data.copropriete_id) if False else None  # noqa
+        # ACL manuel
+        role = getattr(request.state, "user_role", "")
+        if role not in ("superadmin", "admin"):
+            user_copros = getattr(request.state, "user_copropriete_ids", []) or []
+            if data.copropriete_id not in user_copros:
+                raise HTTPException(403, "Acces refuse a cette copropriete (chinese wall)")
+
+        acc = (data.account_number or "").strip()
+        if not acc:
+            raise HTTPException(400, "account_number requis")
+
+        # Verifier que le compte est effectivement orphelin
+        exists_owner = await db.owners.find_one(
+            {f"tier_accounts.{data.copropriete_id}": {"$exists": True}},
+            {"_id": 0, "id": 1, "name": 1, "tier_accounts": 1}
+        )
+        # On scanne tous les owners de l'ACP pour verifier que ce compte n'est
+        # rattache a personne.
+        owners_acp = await db.owners.find(
+            {f"tier_accounts.{data.copropriete_id}": {"$exists": True}},
+            {"_id": 0, "id": 1, "name": 1, "tier_accounts": 1}
+        ).to_list(2000)
+        for o in owners_acp:
+            _ta = (o.get("tier_accounts") or {}).get(data.copropriete_id, {}) or {}
+            if acc in [v for v in _ta.values() if isinstance(v, str)]:
+                raise HTTPException(
+                    400,
+                    f"Le compte {acc} est deja rattache au proprietaire {o.get('name','?')}"
+                )
+
+        # Recuperer le nom depuis les journal_entries si non fourni
+        derived_name = (data.confirmed_name or "").strip()
+        if not derived_name:
+            je = await db.journal_entries.find_one(
+                {"copropriete_id": data.copropriete_id, "lines.account_number": acc},
+                {"_id": 0, "lines": 1}
+            )
+            if je:
+                for ln in (je.get("lines") or []):
+                    if ln.get("account_number") == acc and ln.get("account_name"):
+                        derived_name = ln["account_name"].strip()
+                        break
+        if not derived_name:
+            derived_name = f"Proprietaire {acc}"
+
+        # Generer VCS structure (12 chiffres, modulo 97)
+        seq_digits = _uuid.uuid4().int % 10_000_000_000  # 10 digits
+        seq10 = f"{seq_digits:010d}"
+        check = int(seq10) % 97
+        if check == 0:
+            check = 97
+        vcs_digits = f"{seq10}{check:02d}"
+        vcs_code = f"+++{vcs_digits[:3]}/{vcs_digits[3:7]}/{vcs_digits[7:]}+++"
+
+        # Assembler last_name / first_name : si non fournis, on tente une
+        # decoupe simple (dernier mot = first_name, reste = last_name).
+        first_name = (data.first_name or "").strip()
+        last_name = (data.last_name or "").strip()
+        if not (first_name or last_name):
+            parts = derived_name.split()
+            if len(parts) >= 2:
+                last_name = " ".join(parts[:-1])
+                first_name = parts[-1]
+            else:
+                last_name = derived_name
+
+        # Recuperer syndic_id du contexte
+        syndic_id = getattr(request.state, "syndic_id", None)
+
+        owner_id = str(_uuid.uuid4())
+        owner_doc = {
+            "id": owner_id,
+            "name": derived_name,
+            "first_name": first_name,
+            "last_name": last_name,
+            "civility": "",
+            "address": "",
+            "postal_code": "",
+            "city": "",
+            "country": "Belgique",
+            "email": "",
+            "phone": "",
+            "copropriete_id": data.copropriete_id,
+            "copropriete_ids": [data.copropriete_id],
+            "vcs_code": vcs_code,
+            "vcs_digits": vcs_digits,
+            "iban": "",
+            "tier_accounts": {
+                data.copropriete_id: {
+                    "main": acc,
+                    "provisions": acc,
+                    # reserve : reste vide (le compte orphelin est classe 410
+                    # = provisions par defaut). Sera cree separement si besoin.
+                }
+            },
+            "created_at": _dt.now(_tz.utc).isoformat(),
+            "created_from_orphan_account": acc,  # audit trail
+        }
+        if syndic_id:
+            owner_doc["syndic_id"] = syndic_id
+        await db.owners.insert_one(owner_doc)
+
+        # Retro-marquer les journal_entries lignes qui referencent ce compte
+        # avec third_party_id pour eviter de retomber dans la liste orphelins.
+        await db.journal_entries.update_many(
+            {
+                "copropriete_id": data.copropriete_id,
+                "lines.account_number": acc,
+            },
+            {"$set": {"lines.$[elt].third_party_id": owner_id}},
+            array_filters=[{"elt.account_number": acc}],
+        )
+
+        # Enregistrer aussi dans pcmn_accounts si pas deja present
+        try:
+            existing = await db.pcmn_accounts.find_one(
+                {"copropriete_id": data.copropriete_id, "number": acc}, {"_id": 0, "id": 1}
+            )
+            if not existing:
+                await db.pcmn_accounts.insert_one({
+                    "id": str(_uuid.uuid4()),
+                    "number": acc,
+                    "name": derived_name,
+                    "class_num": 4,
+                    "type": "balance",
+                    "copropriete_id": data.copropriete_id,
+                    "syndic_id": syndic_id,
+                    "created_at": _dt.now(_tz.utc).isoformat(),
+                })
+        except Exception:
+            pass
+
+        return {
+            "ok": True,
+            "owner_id": owner_id,
+            "owner_name": derived_name,
+            "account_number": acc,
+            "vcs_code": vcs_code,
+        }
 
     # ---- PDF SYNTHESE BALANCE DES TIERS (proprietaires + fournisseurs) ----
     @router.get("/balance-tiers/pdf")

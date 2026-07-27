@@ -119,6 +119,26 @@ Application de gestion de copropriete basee sur le droit belge (PCMN), incluant 
 - Page superadmin /admin/tickets + sidebar 'Support & Tickets'
 - Test file: /app/backend/tests/test_iter90fs_tickets.py
 
+### iter91 (27 juillet 2026)
+
+#### iter91a - Homonymes VCS Banking (DONE - 13/13 pytest)
+- Bug : quand 2 proprietaires partagent exactement le meme last_name (ex. Dupont Paul et Dupont Marie), une transaction bancaire etait auto-matchee aleatoirement.
+- Fix : `_disambiguate_owner_candidates` dans `banking.py` applique en cascade : (1) VCS unique, (2) discriminant `first_name` present dans `cp_name` (\b), (3) discriminant montant = solde debiteur ouvert unique, (4) sinon `ambiguous_owner_candidates` stockes sur la txn pour rapprochement manuel.
+- Frontend BankingPage : banner orange "Homonymes (N) - lettrage manuel" (data-testid=homonym-warning-<txn_id>).
+- Test : /app/backend/tests/test_iter91a_homonym_disambiguation.py (6/6) + regression iter90ib (7/7).
+
+#### iter91b - Refonte OD JournalsPage (DONE - E2E validated)
+- Reordre colonnes : Nature de depense | Compte | Libelle | Cle de repartition | Debit | Credit | %Occ | %Prop.
+- Selection d'une Nature de depense auto-remplit et VERROUILLE le compte comptable (bg gris, non editable), + %Occ/%Prop + Cle par defaut de la categorie.
+- Backend JournalEntryLine accepte `expense_category_id: Optional[str]` (audit trail + rapport OD par nature).
+
+#### iter91c - Balance des Tiers : proprietaires orphelins + creation fiche (DONE - E2E validated)
+- Bug : Matexi (promoteur avec compte 41010986 en AN, sans fiche owner) etait invisible dans la balance des tiers alors qu'il apparaissait dans le bilan.
+- Fix backend `balance_tiers_owners` : elargit la detection d'orphelins de `4100/4000/4001` a `410*` (tous comptes tiers proprietaires classe 41), enrichit `acc_names` depuis les `journal_entries.lines.account_name` et expose `orphan_account_number`.
+- Nouvel endpoint POST `/api/reports/balance-tiers/create-owner-from-orphan` : cree une fiche proprietaire complete (nom confirme par le syndic, VCS auto-genere, `tier_accounts[copro].main=<account_number>`, retro-marque les journal_entries lignes avec `third_party_id`, cree l'entree pcmn_accounts si absente).
+- Frontend BalanceTiersPage : le texte "Rattacher" est remplace par un bouton "Creer fiche" (data-testid=create-owner-from-orphan-*) qui ouvre un dialogue de confirmation avec nom pre-rempli + solde/mouvements du compte.
+
+
 ## Refactoring
 - import_wizard.py (>3500 lignes) a decouper
 - reports.py (logique PCMN complexe) a simplifier

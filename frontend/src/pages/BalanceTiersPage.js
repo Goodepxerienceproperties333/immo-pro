@@ -7,10 +7,13 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { Users, Truck, Eye, ArrowUpRight, ArrowDownRight, Download, FileText, Link2, EyeOff, ChevronDown } from 'lucide-react';
+import { Users, Truck, Eye, ArrowUpRight, ArrowDownRight, Download, FileText, Link2, EyeOff, ChevronDown, UserPlus } from 'lucide-react';
 import FilterBar from '@/components/balance-tiers/FilterBar';
 import TiersDetailDialog from '@/components/balance-tiers/TiersDetailDialog';
 import LettrerDialog from '@/components/balance-tiers/LettrerDialog';
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 // iter90je : SupplierMergeDialog import retire (fusion UI obsolete post Chinese Wall strict).
 
 const API = process.env.REACT_APP_BACKEND_URL;
@@ -30,6 +33,11 @@ export default function BalanceTiersPage() {
   const [lettrerSuppliers, setLettrerSuppliers] = useState([]);  // available suppliers for picker
   const [lettrerSearch, setLettrerSearch] = useState('');
   const [lettrerLoading, setLettrerLoading] = useState(false);
+  // iter91c : creation d'un proprietaire depuis un compte orphelin (ex. Matexi)
+  const [createOwnerOpen, setCreateOwnerOpen] = useState(false);
+  const [createOwnerRow, setCreateOwnerRow] = useState(null);  // orphan row
+  const [createOwnerName, setCreateOwnerName] = useState('');
+  const [createOwnerLoading, setCreateOwnerLoading] = useState(false);
   // iter90je : merge mode retire (Chinese Wall strict rend la fusion UI obsolete).
   // Le composant SupplierMergeDialog reste disponible pour le superadmin via
   // /admin/duplicates.
@@ -159,6 +167,48 @@ export default function BalanceTiersPage() {
       toast.error(typeof msg === 'string' ? msg : 'Erreur lettrage');
     } finally {
       setLettrerLoading(false);
+    }
+  };
+
+  // iter91c : ouvrir le dialogue de creation d'un proprietaire depuis
+  // un compte orphelin (ex. Matexi S.A. 41010986 present dans les AN mais
+  // sans fiche owner). Le nom est pre-rempli depuis owner_name (extrait
+  // des lignes de journal_entries) et editable par le syndic.
+  const openCreateOwnerFromOrphan = (orphanRow) => {
+    setCreateOwnerRow(orphanRow);
+    setCreateOwnerName(orphanRow?.owner_name || '');
+    setCreateOwnerOpen(true);
+  };
+
+  const commitCreateOwnerFromOrphan = async () => {
+    if (!createOwnerRow) return;
+    const coproId = localStorage.getItem('selectedCopro') || localStorage.getItem('copropriete_id') || '';
+    if (!coproId || coproId === 'all') {
+      toast.error("Selectionnez une ACP avant de creer le proprietaire"); return;
+    }
+    const acc = createOwnerRow.orphan_account_number
+      || createOwnerRow.account_provisions
+      || createOwnerRow.account_reserve
+      || '';
+    if (!acc) { toast.error("Aucun numero de compte orphelin identifie"); return; }
+    if (!createOwnerName.trim()) { toast.error("Le nom du proprietaire est obligatoire"); return; }
+    setCreateOwnerLoading(true);
+    try {
+      const { data } = await api.post('/reports/balance-tiers/create-owner-from-orphan', {
+        copropriete_id: coproId,
+        account_number: acc,
+        confirmed_name: createOwnerName.trim(),
+      });
+      toast.success(`Proprietaire cree : ${data.owner_name} (VCS ${data.vcs_code || '—'})`);
+      setCreateOwnerOpen(false);
+      setCreateOwnerRow(null);
+      setCreateOwnerName('');
+      await load();
+    } catch (e) {
+      const msg = e?.response?.data?.detail || 'Erreur lors de la creation';
+      toast.error(typeof msg === 'string' ? msg : 'Erreur creation proprietaire');
+    } finally {
+      setCreateOwnerLoading(false);
     }
   };
 
@@ -362,9 +412,17 @@ export default function BalanceTiersPage() {
                                 </Button>
                               </>
                             ) : (
-                              <span className="text-[10px] text-slate-400 italic" title="Compte orphelin : rattacher a un proprietaire ou nettoyer via la page Coproprietes (bouton baguette magique)">
-                                Rattacher
-                              </span>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-7 text-[10px] gap-1 text-[#022D52] border-[#022D52]/40 hover:bg-[#022D52]/5"
+                                onClick={() => openCreateOwnerFromOrphan(o)}
+                                data-testid={`create-owner-from-orphan-${o.account_provisions || o.account_reserve || 'x'}`}
+                                title={`Creer une fiche proprietaire rattachee au compte ${o.orphan_account_number || o.account_provisions || o.account_reserve}`}
+                              >
+                                <UserPlus size={12} />
+                                Creer fiche
+                              </Button>
                             )}
                           </div>
                         </TableCell>
@@ -483,6 +541,59 @@ export default function BalanceTiersPage() {
         commitLettrer={commitLettrer}
         lettrerCopro={localStorage.getItem('selectedCopro') || localStorage.getItem('copropriete_id') || ''}
       />
+
+      {/* iter91c : dialogue de creation d'un proprietaire depuis un compte orphelin */}
+      <Dialog open={createOwnerOpen} onOpenChange={setCreateOwnerOpen}>
+        <DialogContent className="sm:max-w-lg" data-testid="create-owner-from-orphan-dialog">
+          <DialogHeader>
+            <DialogTitle style={{fontFamily:'Chivo,sans-serif'}}>Creer une fiche proprietaire</DialogTitle>
+            <DialogDescription>
+              Le compte
+              {' '}
+              <span className="font-mono font-semibold">{createOwnerRow?.orphan_account_number || createOwnerRow?.account_provisions || createOwnerRow?.account_reserve || '—'}</span>
+              {' '}
+              est present dans la balance sans proprietaire rattache.
+              Confirmez le nom pour creer la fiche. Un code VCS sera genere
+              automatiquement et les ecritures existantes seront rattachees au
+              nouveau proprietaire.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div>
+              <Label htmlFor="orphan-owner-name">Nom du proprietaire *</Label>
+              <Input
+                id="orphan-owner-name"
+                value={createOwnerName}
+                onChange={(e) => setCreateOwnerName(e.target.value)}
+                placeholder="Ex : Matexi S.A."
+                data-testid="orphan-owner-name-input"
+              />
+              <p className="text-[11px] text-slate-500 mt-1">
+                Pre-rempli depuis les ecritures comptables ({createOwnerRow?.owner_name || '—'}). Modifiable si necessaire.
+              </p>
+            </div>
+            {createOwnerRow && (
+              <div className="text-[11px] bg-slate-50 border rounded p-2 space-y-0.5">
+                <div><span className="text-slate-500">Solde actuel : </span><span className="font-mono">{Number(createOwnerRow.balance || 0).toFixed(2)} EUR</span> ({createOwnerRow.status})</div>
+                <div><span className="text-slate-500">Mouvements : </span>{createOwnerRow.movements_count || 0}</div>
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCreateOwnerOpen(false)} disabled={createOwnerLoading}>
+              Annuler
+            </Button>
+            <Button
+              onClick={commitCreateOwnerFromOrphan}
+              disabled={createOwnerLoading || !createOwnerName.trim()}
+              className="bg-[#022D52] hover:bg-[#1D4ED8]"
+              data-testid="orphan-owner-confirm-btn"
+            >
+              {createOwnerLoading ? 'Creation…' : 'Creer le proprietaire'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
