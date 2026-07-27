@@ -156,6 +156,12 @@ class SendDecompteAnnuel(BaseModel):
     body_html: str = ""
     include_signature: bool = True
     template_id: str = ""
+    # iter90i8 : PJ additionnelles a joindre (au choix du syndic).
+    # - include_expenses_list : joint la liste des depenses de l'exercice (PDF)
+    # - extra_document_ids : ids de documents/documents a joindre
+    #   (typiquement PJ relevés compteur de l'exercice)
+    include_expenses_list: bool = False
+    extra_document_ids: List[str] = []
 
 
 class SendDecompteMutation(BaseModel):
@@ -305,9 +311,14 @@ def create_communication_router(db):
                          copropriete_id: str = "",
                          owner_ids: Optional[List[str]] = None,
                          request: Optional[Request] = None,
-                         use_bcc: bool = False) -> dict:
+                         use_bcc: bool = False,
+                         extra_attachments: Optional[List[dict]] = None) -> dict:
         """Wrapper Graph : envoie a plusieurs destinataires. Si attachment_pdf est
         fourni, l'ajoute en PJ (base64 dans le message Graph).
+
+        iter90i8 : extra_attachments = [{filename, bytes, mime_type}] pour
+        joindre plusieurs PJ additionnelles (ex: liste depenses + PJ compteurs
+        lors de l'envoi du decompte annuel).
 
         Iter90db : persiste chaque envoi dans `db.sent_communications` (dry_run inclus)
         pour affichage dans le portail proprietaire (tab Communications).
@@ -392,6 +403,19 @@ def create_communication_router(db):
                 part.add_header("Content-Disposition", "attachment",
                                 filename=attachment_filename or "document.pdf")
                 msg.attach(part)
+            # iter90i8 : PJ additionnelles
+            for extra in (extra_attachments or []):
+                ex_bytes = extra.get("bytes")
+                ex_name = extra.get("filename") or "extra.pdf"
+                ex_mime = extra.get("mime_type") or "application/pdf"
+                if not ex_bytes:
+                    continue
+                main_type, _, sub_type = ex_mime.partition("/")
+                part = MIMEBase(main_type or "application", sub_type or "octet-stream")
+                part.set_payload(ex_bytes)
+                encoders.encode_base64(part)
+                part.add_header("Content-Disposition", "attachment", filename=ex_name)
+                msg.attach(part)
             try:
                 if port == 465:
                     with smtplib.SMTP_SSL(host, port, timeout=15) as s:
@@ -458,6 +482,21 @@ def create_communication_router(db):
                         "contentType": "application/pdf",
                         "contentBytes": base64.b64encode(attachment_pdf).decode("ascii"),
                     }]
+                # iter90i8 : PJ additionnelles (mode Graph)
+                for extra in (extra_attachments or []):
+                    ex_bytes = extra.get("bytes")
+                    ex_name = extra.get("filename") or "extra.pdf"
+                    ex_mime = extra.get("mime_type") or "application/pdf"
+                    if not ex_bytes:
+                        continue
+                    if "attachments" not in message["message"]:
+                        message["message"]["attachments"] = []
+                    message["message"]["attachments"].append({
+                        "@odata.type": "#microsoft.graph.fileAttachment",
+                        "name": ex_name,
+                        "contentType": ex_mime,
+                        "contentBytes": base64.b64encode(ex_bytes).decode("ascii"),
+                    })
 
                 r = await client.post(
                     f"https://graph.microsoft.com/v1.0/users/{from_mailbox}/sendMail",
@@ -897,6 +936,46 @@ def create_communication_router(db):
                 raise HTTPException(404, f"Template '{payload.template_id}' non trouve")
         current_user = await db.users.find_one({"_id": _oid(request.state.user_id)})
 
+        # iter90i8 : precharge les PJ additionnelles selectionnees par le syndic
+        # (partagees a tous les proprios cibles - meme PJ pour tous).
+        common_extra_attachments: List[dict] = []
+        if payload.extra_document_ids:
+            from gridfs_storage import get_documents_storage
+            storage = get_documents_storage(db)
+            docs = await db.documents.find(
+                {"id": {"$in": payload.extra_document_ids},
+                 "copropriete_id": payload.copropriete_id,
+                 "gridfs_id": {"$exists": True, "$ne": ""}},
+                {"_id": 0, "id": 1, "filename": 1, "gridfs_id": 1, "mime_type": 1}
+            ).to_list(len(payload.extra_document_ids))
+            for d in docs:
+                data = await storage.download(d["gridfs_id"])
+                if not data:
+                    continue
+                common_extra_attachments.append({
+                    "bytes": data,
+                    "filename": d.get("filename") or "document.pdf",
+                    "mime_type": d.get("mime_type") or "application/pdf",
+                })
+        # iter90i8 : liste des depenses de l'exercice (PDF genere on-the-fly)
+        expenses_pdf_bytes = None
+        if payload.include_expenses_list:
+            try:
+                from routes.reports import _build_expenses_list_pdf
+                expenses_pdf_bytes = await _build_expenses_list_pdf(
+                    db, payload.copropriete_id, payload.fiscal_year_id,
+                )
+                if expenses_pdf_bytes:
+                    common_extra_attachments.append({
+                        "bytes": expenses_pdf_bytes,
+                        "filename": f"liste_depenses_{payload.fiscal_year_id}.pdf",
+                        "mime_type": "application/pdf",
+                    })
+            except ImportError:
+                logger.warning("iter90i8 : _build_expenses_list_pdf indisponible - liste depenses skipped")
+            except Exception as e:
+                logger.warning("iter90i8 : erreur generation liste depenses : %s", e)
+
         sent = 0
         failed: List[dict] = []
         subj_default = "Decompte annuel de charges - Copropriete"
@@ -919,8 +998,6 @@ def create_communication_router(db):
                     subj = payload.subject.strip() or subj_default
                     body_rendered = payload.body_html.strip() or body_default
                 html = await _build_html_with_signature(request, body_rendered, payload.include_signature)
-                # iter90fv fix : idem preview_situation - tuple unpacking
-                # (cf. commentaire dans send_situation).
                 pdf_bytes, _ = await _build_decompte_annuel_pdf(
                     db, oid, payload.copropriete_id, payload.fiscal_year_id,
                 )
@@ -928,7 +1005,8 @@ def create_communication_router(db):
                 await _send_email(payload.from_mailbox, [owner["email"]], subj, html,
                                   attachment_pdf=pdf_bytes, attachment_filename=filename,
                                   kind="decompte", copropriete_id=payload.copropriete_id,
-                                  owner_ids=[oid], request=request)
+                                  owner_ids=[oid], request=request,
+                                  extra_attachments=common_extra_attachments)
                 sent += 1
             except Exception as e:
                 logger.warning("Send decompte failed for %s : %s", oid, e)
@@ -1111,6 +1189,64 @@ def create_communication_router(db):
             "body_html": html,
             "attachment_filename": filename,
             "attachment_pdf_base64": base64.b64encode(pdf_bytes).decode("ascii"),
+        }
+
+    # iter90i8 : Liste des documents joignables au decompte annuel
+    # (PJ de releves compteur de l'exercice + docs manuels partages).
+    @router.get("/attachable-documents")
+    async def list_attachable_documents(
+        request: Request,
+        copropriete_id: str,
+        fiscal_year_id: str,
+    ):
+        fy = await db.fiscal_years.find_one(
+            {"id": fiscal_year_id, "copropriete_id": copropriete_id},
+            {"_id": 0, "start_date": 1, "end_date": 1, "name": 1},
+        )
+        if not fy:
+            raise HTTPException(404, "Exercice introuvable")
+        # PJ compteurs de l'exercice (deduplique par batch)
+        readings = await db.meter_readings.find({
+            "copropriete_id": copropriete_id,
+            "date": {"$gte": fy["start_date"], "$lte": fy["end_date"]},
+            "attachment_gridfs_id": {"$exists": True, "$ne": ""},
+        }, {"_id": 0, "id": 1, "meter_type": 1, "date": 1, "batch_id": 1,
+            "attachment_gridfs_id": 1, "attachment_filename": 1,
+            "attachment_size": 1}).to_list(1000)
+        meter_attachments = []
+        seen_batches = set()
+        # Retrouve un document.id pour chaque batch via matching sur gridfs_id
+        gridfs_ids = [r["attachment_gridfs_id"] for r in readings]
+        docs = await db.documents.find(
+            {"copropriete_id": copropriete_id, "source": "meter_reading",
+             "gridfs_id": {"$in": gridfs_ids}},
+            {"_id": 0, "id": 1, "gridfs_id": 1, "batch_id": 1, "title": 1}
+        ).to_list(2000)
+        # Un doc.id representatif par batch (le premier trouve)
+        doc_by_gridfs = {}
+        for d in docs:
+            if d["gridfs_id"] not in doc_by_gridfs:
+                doc_by_gridfs[d["gridfs_id"]] = d
+        for r in readings:
+            key = r.get("batch_id") or r["id"]
+            if key in seen_batches:
+                continue
+            seen_batches.add(key)
+            d = doc_by_gridfs.get(r["attachment_gridfs_id"])
+            if not d:
+                continue
+            meter_attachments.append({
+                "id": d["id"],
+                "kind": "meter_reading",
+                "meter_type": r.get("meter_type", ""),
+                "date": r.get("date", ""),
+                "filename": r.get("attachment_filename", ""),
+                "size": r.get("attachment_size", 0),
+                "title": d.get("title") or r.get("attachment_filename", ""),
+            })
+        return {
+            "fiscal_year": fy,
+            "meter_attachments": meter_attachments,
         }
 
     return router
