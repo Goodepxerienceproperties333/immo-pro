@@ -77,11 +77,19 @@ export default function CoproprietesPage() {
   }, [showArchived]);
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
-    // include_unassigned=true : also returns orphan owners (no lot yet), needed
-    // for the lot-assignment dropdown to show freshly-imported owners that
-    // aren't tied to any ACP/lot yet.
-    api.get('/owners', { params: { include_unassigned: true, copropriete_id: 'all' } }).then(r => setOwners(r.data)).catch(() => {});
-  }, [dialogOpen]);
+    if (!dialogOpen) return;
+    // iter93d : sur la CREATION d'une nouvelle ACP, on ne veut PAS montrer
+    // les proprios d'autres ACPs (confusion : le syndic voit "MATEXI, BOXUS,
+    // TEUWEN" avant meme d'avoir importe son PDF). On charge uniquement les
+    // orphelins (owners sans copropriete_id/lot), qui correspondent aux
+    // proprios fraichement importes via CSV/PDF de la session courante.
+    // En MODE EDITION, on garde le comportement historique (voir tous les
+    // owners du syndic + orphelins) pour permettre les reassignations.
+    const params = editing
+      ? { include_unassigned: true, copropriete_id: 'all' }
+      : { unassigned_only: true };
+    api.get('/owners', { params }).then(r => setOwners(r.data)).catch(() => {});
+  }, [dialogOpen, editing]);
 
   const filtered = coproprietes.filter(c => c.name.toLowerCase().includes(search.toLowerCase()) || (c.reference || '').toLowerCase().includes(search.toLowerCase()) || (c.bce || '').includes(search));
 
@@ -172,10 +180,14 @@ export default function CoproprietesPage() {
   };
 
   // Refetch owners on focus to ensure freshly-imported owners are visible.
-  // include_unassigned=true to also see owners not yet linked to any lot/ACP.
+  // iter93d : sur la creation, on ne re-fetch QUE les orphelins (nouveaux
+  // imports); sur l'edition, on garde tous les owners du syndic + orphelins.
   const refreshOwnersIfStale = async () => {
     try {
-      const r = await api.get('/owners', { params: { include_unassigned: true, copropriete_id: 'all' } });
+      const params = editing
+        ? { include_unassigned: true, copropriete_id: 'all' }
+        : { unassigned_only: true };
+      const r = await api.get('/owners', { params });
       setOwners(r.data);
     } catch { /* ignore */ }
   };
@@ -786,7 +798,7 @@ export default function CoproprietesPage() {
                                   if (created > 0) {
                                     toast.success(`${created} proprietaire(s) cree(s). Relancez l'auto-affectation.`);
                                     try {
-                                      const r = await api.get('/owners', { params: { include_unassigned: true, copropriete_id: 'all' } });
+                                      const r = await api.get('/owners', { params: editing ? { include_unassigned: true, copropriete_id: 'all' } : { unassigned_only: true } });
                                       setOwners(r.data || []);
                                     } catch { /* ignore */ }
                                   } else {
@@ -804,7 +816,7 @@ export default function CoproprietesPage() {
                                 onClick={async () => {
                                   let nextOwners = owners;
                                   try {
-                                    const r = await api.get('/owners', { params: { include_unassigned: true, copropriete_id: 'all' } });
+                                    const r = await api.get('/owners', { params: editing ? { include_unassigned: true, copropriete_id: 'all' } : { unassigned_only: true } });
                                     nextOwners = r.data || [];
                                     setOwners(nextOwners);
                                   } catch (_e) { /* keep cache */ }
@@ -1151,7 +1163,7 @@ export default function CoproprietesPage() {
           // Reload owners so the lot autocomplete sees them
           let nextOwners = owners;
           try {
-            const r = await api.get('/owners', { params: { include_unassigned: true, copropriete_id: 'all' } });
+            const r = await api.get('/owners', { params: editing ? { include_unassigned: true, copropriete_id: 'all' } : { unassigned_only: true } });
             nextOwners = r.data || [];
             setOwners(nextOwners);
           } catch (_e) {
@@ -1252,7 +1264,7 @@ export default function CoproprietesPage() {
           // Re-fetch the full list so the local state is consistent
           let nextOwners = owners;
           try {
-            const rr = await api.get('/owners', { params: { include_unassigned: true, copropriete_id: 'all' } });
+            const rr = await api.get('/owners', { params: editing ? { include_unassigned: true, copropriete_id: 'all' } : { unassigned_only: true } });
             nextOwners = rr.data || [];
             setOwners(nextOwners);
           } catch (_e) {
@@ -1318,7 +1330,7 @@ export default function CoproprietesPage() {
           // owners (from a prior PDF/CSV import) are visible.
           let availableOwners = owners;
           try {
-            const rr = await api.get('/owners', { params: { include_unassigned: true, copropriete_id: 'all' } });
+            const rr = await api.get('/owners', { params: editing ? { include_unassigned: true, copropriete_id: 'all' } : { unassigned_only: true } });
             availableOwners = rr.data || [];
             setOwners(availableOwners);
           } catch (_e) {
@@ -1442,7 +1454,7 @@ export default function CoproprietesPage() {
                   setOwnerHomonymsDialog(null);
                   // Refetch owners
                   try {
-                    const rr = await api.get('/owners', { params: { include_unassigned: true, copropriete_id: 'all' } });
+                    const rr = await api.get('/owners', { params: editing ? { include_unassigned: true, copropriete_id: 'all' } : { unassigned_only: true } });
                     setOwners(rr.data || []);
                   } catch { /* silent */ }
                 }}

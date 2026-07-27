@@ -443,6 +443,7 @@ def create_properties_router(db):
     @router.get("/owners")
     async def list_owners(request: Request, copropriete_id: Optional[str] = None, include_unassigned: bool = False, syndic_wide: bool = False,
                           lot_owners_only: bool = False,
+                          unassigned_only: bool = False,
                           skip: int = 0, limit: Optional[int] = None, search: Optional[str] = None):
         """Liste des proprietaires - chinese wall STRICT (RGPD).
 
@@ -477,6 +478,32 @@ def create_properties_router(db):
         if copropriete_id == "all":
             copropriete_id = None
         is_super, allowed_copros = await _get_user_scope(request)
+
+        # iter93d : `unassigned_only=true` -> retourne UNIQUEMENT les orphelins
+        # (owners sans lot ET sans copropriete_ids matchant les ACPs du syndic).
+        # Utilise par le wizard de creation d'ACP pour ne PAS afficher les
+        # proprios d'autres ACPs (ex : MATEXI/TEUWEN) avant tout import PDF.
+        if unassigned_only:
+            from syndic_scope import syndic_query
+            oq = {
+                "$or": [
+                    {"copropriete_id": ""},
+                    {"copropriete_id": {"$exists": False}},
+                    {"copropriete_id": None},
+                ],
+                # Doit aussi ne pas etre dans copropriete_ids[] d'une ACP du syndic
+                # (sinon on retomberait sur les orphelins deja rattaches). Le
+                # filtre suivant exclut ceux dont copropriete_ids est non-vide.
+                "$and": [
+                    {"$or": [
+                        {"copropriete_ids": {"$exists": False}},
+                        {"copropriete_ids": []},
+                        {"copropriete_ids": None},
+                    ]}
+                ],
+                **syndic_query(request),
+            }
+            return await db.owners.find(oq, {"_id": 0}).sort("last_name", 1).to_list(2000)
 
         # iter90go : helper pagination / search side-serveur, sans casser l'API legacy.
         # On construit UN filtre Mongo global, puis on applique sort/skip/limit/search
@@ -601,22 +628,33 @@ def create_properties_router(db):
             (2) `owners.copropriete_ids[]` contient cette ACP (proprio rattache
                 sans lot, ex : promoteur).
         - Le superadmin voit tout.
+
+        iter93c : robustesse - si un `copropriete_id` reference une ACP
+        supprimee du referentiel, on garde quand meme le proprio dans la liste
+        avec un placeholder "(ACP supprimee)" pour eviter les "listes vides"
+        apparentes quand la base a ete purgee.
         """
         is_super, allowed_copros = await _get_user_scope(request)
-        # Determiner l'ensemble des ACPs cibles
+        # Determiner l'ensemble des ACPs "cibles" (scope brut du user)
         if is_super:
-            copros = await db.coproprietes.find(
+            copros_docs = await db.coproprietes.find(
                 {}, {"_id": 0, "id": 1, "name": 1, "reference": 1},
             ).to_list(2000)
+            copro_by_id = {c["id"]: c for c in copros_docs}
+            target_copros = list(copro_by_id.keys())
         else:
             if not allowed_copros:
                 return []
-            copros = await db.coproprietes.find(
+            copros_docs = await db.coproprietes.find(
                 {"id": {"$in": list(allowed_copros)}},
                 {"_id": 0, "id": 1, "name": 1, "reference": 1},
             ).to_list(2000)
-        copro_by_id = {c["id"]: c for c in copros}
-        target_copros = list(copro_by_id.keys())
+            copro_by_id = {c["id"]: c for c in copros_docs}
+            # iter93c : garder tous les copropriete_ids du user, meme ceux qui
+            # ne matchent plus une ACP existante (base purgee, ACP archivee/
+            # supprimee). Sinon les proprios lies via `owners.copropriete_ids`
+            # a ces ACPs disparues sont invisibles.
+            target_copros = list(allowed_copros)
         if not target_copros:
             return []
         # Union des owner_ids visibles (lots + copropriete_ids + sessions d'import)
@@ -633,14 +671,13 @@ def create_properties_router(db):
         # Construire un mapping owner_id -> set(copropriete_ids) via lots
         # ET via owners.copropriete_ids[]
         acp_map: dict = {}  # owner_id -> set of copro_id
-        # Depuis les lots
         lots_cursor = db.lots.find(
             {"copropriete_id": {"$in": target_copros}},
             {"_id": 0, "owner_id": 1, "owner_ids": 1, "copropriete_id": 1},
         )
         async for lot in lots_cursor:
             cid = lot.get("copropriete_id")
-            if not cid or cid not in copro_by_id:
+            if not cid:
                 continue
             single = lot.get("owner_id")
             if single:
@@ -648,22 +685,22 @@ def create_properties_router(db):
             for oid in (lot.get("owner_ids") or []):
                 if oid:
                     acp_map.setdefault(oid, set()).add(cid)
-        # Enrichir chaque owner
+        target_set = set(target_copros)
         enriched = []
         for o in all_owners:
             acps_from_lots = acp_map.get(o.get("id"), set())
-            acps_from_field = set([c for c in (o.get("copropriete_ids") or []) if c in copro_by_id])
+            acps_from_field = set([c for c in (o.get("copropriete_ids") or []) if c in target_set])
             combined = acps_from_lots | acps_from_field
             if not combined:
-                # Owner sans lot ET sans copropriete_ids : ignore (Chinese Wall)
+                # Owner sans lot ET sans copropriete_ids matchant : ignore
                 continue
             acp_ids_sorted = sorted(combined)
             o["acp_ids"] = acp_ids_sorted
             o["acp_names"] = [
                 {
                     "id": cid,
-                    "name": copro_by_id[cid].get("name") or "",
-                    "reference": copro_by_id[cid].get("reference") or "",
+                    "name": (copro_by_id.get(cid) or {}).get("name") or "(ACP indisponible)",
+                    "reference": (copro_by_id.get(cid) or {}).get("reference") or "",
                 }
                 for cid in acp_ids_sorted
             ]
