@@ -52,6 +52,11 @@ export default function CoproprietesPage() {
   // (PDF Optipro). Structure : {rows: [{row, message}], resolved: {rowIdx: 'force'|'skip'}}
   const [ownerHomonymsDialog, setOwnerHomonymsDialog] = useState(null);
   const [step, setStep] = useState(1);
+  // iter93e : sous-etapes sequentielles pour la CREATION d'ACP (Step 2).
+  // Ordre : fy (periode) -> owners (import proprios) -> promoter (oui/non) ->
+  // lots (import lots) -> assign (revue + validation en un clic).
+  // L'edition d'ACP existante ne l'utilise PAS (garde l'ancien flow libre).
+  const [substep, setSubstep] = useState('fy');
   const [ownerSearchByLot, setOwnerSearchByLot] = useState({});  // {lotIdx: 'query'}
   const [ownerFocusLot, setOwnerFocusLot] = useState(null);  // lotIdx currently focused or null
   // iter90if : recap des imports par ACP (id -> summary)
@@ -93,7 +98,7 @@ export default function CoproprietesPage() {
 
   const filtered = coproprietes.filter(c => c.name.toLowerCase().includes(search.toLowerCase()) || (c.reference || '').toLowerCase().includes(search.toLowerCase()) || (c.bce || '').includes(search));
 
-  const openCreate = () => { setEditing(null); setForm({...emptyForm, bank_accounts: [], lots: []}); setStep(1); setDialogOpen(true); };
+  const openCreate = () => { setEditing(null); setForm({...emptyForm, bank_accounts: [], lots: []}); setStep(1); setSubstep('fy'); setDialogOpen(true); };
   const openEdit = (c) => {
     setEditing(c);
     setForm({
@@ -620,53 +625,133 @@ export default function CoproprietesPage() {
             </div>
             </>}
 
-            {/* STEP 2: Lots with owner autocomplete */}
+            {/* STEP 2: sequential sub-wizard (iter93e)
+                fy -> owners -> promoter -> lots -> assign
+                Le formulaire libre historique reste dispo en mode EDITION.
+            */}
             {!editing && step === 2 && (
               <div>
-                {/* iter90gg BLOC A : Confirmation periode de l'exercice fiscal */}
-                <div className="bg-amber-50 border-2 border-amber-300 rounded-lg p-3 mb-4" data-testid="fy-period-block">
-                  <div className="text-xs font-bold text-amber-900 uppercase tracking-wide mb-1">Etape prealable : periode de l&apos;exercice en cours</div>
-                  <p className="text-[11px] text-amber-800 mb-2">
-                    Les proprietaires que vous allez importer doivent correspondre a ceux qui possedaient les lots <strong>a la date du debut de l&apos;exercice</strong>. Les ventes survenues APRES seront saisies a l&apos;etape suivante (mutations).
-                  </p>
-                  <div className="grid grid-cols-3 gap-3">
-                    <div>
-                      <label className="form-label text-amber-900">Debut d&apos;exercice *</label>
-                      <Input type="date" value={form.fy_start} onChange={e => setForm({...form, fy_start: e.target.value})} data-testid="fy-start-input" className="h-9" />
-                    </div>
-                    <div>
-                      <label className="form-label text-amber-900">Fin d&apos;exercice *</label>
-                      <Input type="date" value={form.fy_end} onChange={e => setForm({...form, fy_end: e.target.value})} data-testid="fy-end-input" className="h-9" />
-                    </div>
-                    <div>
-                      <label className="form-label text-amber-900">Nom exercice</label>
-                      <Input value={form.fy_name} onChange={e => setForm({...form, fy_name: e.target.value})} placeholder="auto (2025-2026)" data-testid="fy-name-input" className="h-9" />
-                    </div>
-                  </div>
+                {/* Sub-step breadcrumb */}
+                <div className="flex items-center justify-center gap-2 mb-4 text-[10px] font-semibold uppercase tracking-wide" data-testid="substep-breadcrumb">
+                  {[
+                    { k: 'fy', label: '1. Periode' },
+                    { k: 'owners', label: '2. Proprietaires' },
+                    { k: 'promoter', label: '3. Promoteur' },
+                    { k: 'lots', label: '4. Lots' },
+                    { k: 'assign', label: '5. Affectation' },
+                  ].map((s, i, arr) => {
+                    const order = ['fy','owners','promoter','lots','assign'];
+                    const currentIdx = order.indexOf(substep);
+                    const thisIdx = order.indexOf(s.k);
+                    const active = thisIdx === currentIdx;
+                    const done = thisIdx < currentIdx;
+                    return (
+                      <div key={s.k} className="flex items-center gap-1">
+                        <span className={`px-2 py-0.5 rounded-full ${active ? 'bg-[#022D52] text-white' : done ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-400'}`} data-testid={`substep-crumb-${s.k}`}>
+                          {done ? '✓ ' : ''}{s.label}
+                        </span>
+                        {i < arr.length - 1 && <span className={done ? 'text-emerald-400' : 'text-slate-300'}>→</span>}
+                      </div>
+                    );
+                  })}
                 </div>
 
-                {/* iter90kz : Mode promoteur - apparait des que les dates FY sont renseignees */}
-                {form.fy_start && form.fy_end && (
-                  <div className="bg-orange-50 border-2 border-orange-300 rounded-lg p-3 mb-4" data-testid="promoter-block">
-                    <div className="text-xs font-bold text-orange-900 uppercase tracking-wide mb-1">Promoteur immobilier ?</div>
-                    <p className="text-[10px] text-orange-800 mb-2">
-                      Si tous les lots appartiennent initialement a un promoteur (ex: MATEXI), selectionnez-le. Tous les lots seront affectes a ce proprietaire au 1er jour de l&apos;exercice (<strong>{form.fy_start}</strong>). Les mutations individuelles (ventes) se feront ensuite normalement.
+                {/* SUB-STEP 1: Periode comptable */}
+                {substep === 'fy' && (
+                  <div className="bg-amber-50 border-2 border-amber-300 rounded-lg p-4" data-testid="fy-period-block">
+                    <div className="text-sm font-bold text-amber-900 uppercase tracking-wide mb-1">Etape 1/5 : Periode de l&apos;exercice comptable</div>
+                    <p className="text-xs text-amber-800 mb-3">
+                      Les proprietaires et les lots que vous allez importer correspondront a l&apos;etat de l&apos;ACP <strong>au 1er jour de cet exercice</strong>. Les ventes survenues APRES seront saisies via le module Mutations.
                     </p>
-                    <div className="flex gap-4 mb-2">
-                      <label className="flex items-center gap-1.5 cursor-pointer text-xs">
+                    <div className="grid grid-cols-3 gap-3">
+                      <div>
+                        <label className="form-label text-amber-900">Debut d&apos;exercice *</label>
+                        <Input type="date" value={form.fy_start} onChange={e => setForm({...form, fy_start: e.target.value})} data-testid="fy-start-input" className="h-9" />
+                      </div>
+                      <div>
+                        <label className="form-label text-amber-900">Fin d&apos;exercice *</label>
+                        <Input type="date" value={form.fy_end} onChange={e => setForm({...form, fy_end: e.target.value})} data-testid="fy-end-input" className="h-9" />
+                      </div>
+                      <div>
+                        <label className="form-label text-amber-900">Nom exercice</label>
+                        <Input value={form.fy_name} onChange={e => setForm({...form, fy_name: e.target.value})} placeholder="auto (2025-2026)" data-testid="fy-name-input" className="h-9" />
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* SUB-STEP 2: Import des proprietaires */}
+                {substep === 'owners' && (
+                  <div className="bg-emerald-50 border-2 border-emerald-300 rounded-lg p-4" data-testid="owners-import-block">
+                    <div className="text-sm font-bold text-emerald-900 uppercase tracking-wide mb-1">Etape 2/5 : Importer la liste des proprietaires</div>
+                    <p className="text-xs text-emerald-800 mb-3">
+                      Importez la <em>Liste des coproprietaires</em> depuis un export PDF (Optipro/Sogis) ou CSV. Les proprietaires seront crees dans la base de donnees de votre syndic et lies a cette ACP.
+                    </p>
+                    <div className="flex flex-wrap gap-2 mb-3">
+                      <Button variant="outline" size="sm" onClick={() => setPdfOwnersOpen(true)} className="border-emerald-400 text-emerald-800 hover:bg-emerald-100" data-testid="import-owners-pdf-btn">
+                        <FileText size={14} className="mr-1" /> Import PDF (recommande)
+                      </Button>
+                      <Button variant="outline" size="sm" onClick={() => setBulkOwnersOpen(true)} className="border-emerald-400 text-emerald-800 hover:bg-emerald-100" data-testid="import-owners-csv-btn">
+                        <UserPlus size={14} className="mr-1" /> Import CSV
+                      </Button>
+                    </div>
+                    <div className="bg-white rounded-md border border-emerald-200 p-3" data-testid="owners-list-recap">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs font-semibold text-slate-700">{owners.length} proprietaire(s) charge(s)</span>
+                        {owners.length === 0 && (
+                          <span className="text-[11px] text-amber-700 italic">Aucun - importez un PDF/CSV pour continuer</span>
+                        )}
+                      </div>
+                      {owners.length > 0 && (
+                        <div className="max-h-64 overflow-y-auto text-xs">
+                          <table className="w-full">
+                            <thead className="text-[10px] uppercase text-slate-500 border-b">
+                              <tr>
+                                <th className="text-left py-1">Nom</th>
+                                <th className="text-left py-1">Code aux.</th>
+                                <th className="text-left py-1">Email</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {owners.slice(0, 100).map(o => (
+                                <tr key={o.id} className="border-b border-slate-100" data-testid={`owner-recap-${o.id}`}>
+                                  <td className="py-1 font-medium">{o.name || `${o.last_name || ''} ${o.first_name || ''}`.trim()}</td>
+                                  <td className="py-1 font-mono text-[10px] text-slate-500">{o.auxiliary_code || '-'}</td>
+                                  <td className="py-1 text-slate-500">{o.email || '-'}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                          {owners.length > 100 && (
+                            <div className="text-[10px] text-slate-400 italic mt-2 text-center">... et {owners.length - 100} autres</div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* SUB-STEP 3: Promoteur */}
+                {substep === 'promoter' && (
+                  <div className="bg-orange-50 border-2 border-orange-300 rounded-lg p-4" data-testid="promoter-block">
+                    <div className="text-sm font-bold text-orange-900 uppercase tracking-wide mb-1">Etape 3/5 : Promoteur immobilier ?</div>
+                    <p className="text-xs text-orange-800 mb-3">
+                      Si tous les lots appartiennent initialement a un promoteur (ex: MATEXI), selectionnez-le. Tous les lots lui seront affectes au <strong>{form.fy_start}</strong>. Les ventes individuelles se feront ensuite via Mutations.
+                    </p>
+                    <div className="flex gap-4 mb-3">
+                      <label className="flex items-center gap-2 cursor-pointer text-sm">
                         <input type="radio" name="is_promoter" checked={!form._is_promoter} onChange={() => setForm({...form, _is_promoter: false, _promoter_owner_id: ''})} data-testid="promoter-no" />
                         <span>Non, pas de promoteur</span>
                       </label>
-                      <label className="flex items-center gap-1.5 cursor-pointer text-xs">
+                      <label className="flex items-center gap-2 cursor-pointer text-sm">
                         <input type="radio" name="is_promoter" checked={form._is_promoter} onChange={() => setForm({...form, _is_promoter: true})} data-testid="promoter-yes" />
                         <span>Oui, c&apos;est un promoteur</span>
                       </label>
                     </div>
                     {form._is_promoter && (
-                      <div data-testid="promoter-picker">
-                        <label className="text-[10px] font-medium text-slate-600 mb-1 block">Selectionnez le promoteur :</label>
+                      <div data-testid="promoter-picker" className="space-y-2">
+                        <label className="text-xs font-medium text-slate-700 block">Selectionnez le promoteur parmi les proprietaires importes :</label>
                         {owners.length > 0 ? (() => {
-                          // Dedup owners par nom normalise
                           const _norm = s => (s || '').trim().toLowerCase().replace(/\s+/g, ' ');
                           const _score = o => {
                             let s = 0;
@@ -687,7 +772,7 @@ export default function CoproprietesPage() {
                           );
                           return (
                             <select
-                              className="w-full h-8 text-xs border rounded-md px-2 bg-white"
+                              className="w-full h-9 text-sm border rounded-md px-2 bg-white"
                               data-testid="promoter-select"
                               value={form._promoter_owner_id}
                               onChange={e => setForm({...form, _promoter_owner_id: e.target.value})}
@@ -702,10 +787,37 @@ export default function CoproprietesPage() {
                             </select>
                           );
                         })() : (
-                          <p className="text-[10px] text-orange-700 italic">Importez d&apos;abord les proprietaires (CSV ou PDF) ci-dessous pour pouvoir selectionner le promoteur.</p>
+                          <p className="text-xs text-orange-700 italic">Aucun proprietaire disponible - revenez a l&apos;etape precedente pour en importer.</p>
                         )}
+                        <div className="flex items-center gap-2 mt-2">
+                          <span className="text-[10px] text-slate-500">Le promoteur n&apos;est pas dans la liste ?</span>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-7 text-[11px] border-orange-400 text-orange-700 hover:bg-orange-100"
+                            data-testid="create-promoter-inline-btn"
+                            onClick={async () => {
+                              const name = window.prompt('Nom du promoteur (societe) :');
+                              if (!name || !name.trim()) return;
+                              try {
+                                const { data } = await api.post('/owners?reuse_on_duplicate=true', {
+                                  name: name.trim(), first_name: '', last_name: '',
+                                  address: '', postal_code: '', city: '', country: 'Belgique',
+                                  email: '', phone: '', auxiliary_code: '',
+                                });
+                                toast.success(`Promoteur "${data.name}" cree`);
+                                await refreshOwnersIfStale();
+                                setForm(f => ({...f, _promoter_owner_id: data.id}));
+                              } catch (err) {
+                                toast.error(err.response?.data?.detail || 'Erreur creation promoteur');
+                              }
+                            }}
+                          >
+                            <Plus size={11} className="mr-1" /> Creer un nouveau promoteur
+                          </Button>
+                        </div>
                         {form._promoter_owner_id && (
-                          <p className="text-[10px] text-green-700 mt-1 flex items-center gap-1">
+                          <p className="text-xs text-green-700 mt-2 flex items-center gap-1">
                             <CheckCircle2 className="w-3 h-3" />
                             Tous les lots seront affectes a ce promoteur au {form.fy_start}
                           </p>
@@ -715,265 +827,189 @@ export default function CoproprietesPage() {
                   </div>
                 )}
 
-                <div className="flex items-center justify-between mb-2">
-                  <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Lots et proprietaires</div>
-                  <div className="flex gap-2 flex-wrap">
-                    <Button variant="outline" size="sm" onClick={() => setBulkOwnersOpen(true)} className="border-emerald-300 text-emerald-700 hover:bg-emerald-50" data-testid="import-owners-csv-btn">
-                      <UserPlus size={14} className="mr-1" /> Proprietaires (CSV)
-                    </Button>
-                    <Button variant="outline" size="sm" onClick={() => setPdfOwnersOpen(true)} className="border-emerald-300 text-emerald-700 hover:bg-emerald-50" data-testid="import-owners-pdf-btn">
-                      <FileText size={14} className="mr-1" /> Proprietaires (PDF)
-                    </Button>
-                    <Button variant="outline" size="sm" onClick={() => setBulkLotsOpen(true)} className="border-blue-300 text-[#01213e] hover:bg-blue-50" data-testid="import-lots-csv-btn">
-                      <Upload size={14} className="mr-1" /> Lots (CSV)
-                    </Button>
-                    <Button variant="outline" size="sm" onClick={() => setPdfLotsOpen(true)} className="border-blue-300 text-[#01213e] hover:bg-blue-50" data-testid="import-lots-pdf-btn">
-                      <FileText size={14} className="mr-1" /> Lots (PDF)
-                    </Button>
-                    <Button variant="outline" size="sm" onClick={addLot} data-testid="add-lot-btn"><PlusCircle size={14} className="mr-1" /> Ajouter manuellement</Button>
+                {/* SUB-STEP 4: Import des lots */}
+                {substep === 'lots' && (
+                  <div className="bg-blue-50 border-2 border-blue-300 rounded-lg p-4" data-testid="lots-import-block">
+                    <div className="text-sm font-bold text-[#01213e] uppercase tracking-wide mb-1">Etape 4/5 : Importer les lots</div>
+                    <p className="text-xs text-[#01213e] mb-3">
+                      Importez la <em>Liste des lots</em> depuis un export PDF Optipro (recommande), CSV, ou ajoutez-les manuellement. Les lots seront ensuite automatiquement pre-affectes a leurs proprietaires importes a l&apos;etape 2.
+                    </p>
+                    <div className="flex flex-wrap gap-2 mb-3">
+                      <Button variant="outline" size="sm" onClick={() => setPdfLotsOpen(true)} className="border-blue-400 text-[#01213e] hover:bg-blue-100" data-testid="import-lots-pdf-btn">
+                        <FileText size={14} className="mr-1" /> Import PDF (recommande)
+                      </Button>
+                      <Button variant="outline" size="sm" onClick={() => setBulkLotsOpen(true)} className="border-blue-400 text-[#01213e] hover:bg-blue-100" data-testid="import-lots-csv-btn">
+                        <Upload size={14} className="mr-1" /> Import CSV
+                      </Button>
+                      <Button variant="outline" size="sm" onClick={addLot} data-testid="add-lot-btn">
+                        <PlusCircle size={14} className="mr-1" /> Ajouter manuellement
+                      </Button>
+                    </div>
+                    <div className="bg-white rounded-md border border-blue-200 p-3" data-testid="lots-list-recap">
+                      <span className="text-xs font-semibold text-slate-700">
+                        {(form.lots || []).length} lot(s) charge(s)
+                      </span>
+                      {(form.lots || []).length === 0 && (
+                        <span className="ml-2 text-[11px] text-amber-700 italic">Aucun - importez un PDF/CSV ou ajoutez manuellement</span>
+                      )}
+                    </div>
                   </div>
-                </div>
-                <div className="bg-blue-50/40 border border-blue-100 text-xs text-[#01213e] p-2 rounded mb-3">
-                  <strong>Reprise Optipro/Sogis ?</strong> Importez les <em>Listes des coproprietaires</em> et <em>Liste des lots</em> directement en PDF (export Optipro), ou en CSV. Les proprietaires importes seront automatiquement suggeres lors du matching avec les lots.
-                </div>
-                {(form.lots || []).length === 0 ? (
-                  <p className="text-sm text-slate-400 text-center py-3 border rounded-md">Aucun lot - vous pourrez en ajouter plus tard via le menu Lots</p>
-                ) : (
-                  <>
-                    {/* Summary banner : counts of lots / matched / orphan */}
+                )}
+
+                {/* SUB-STEP 5: Revue + validation des affectations */}
+                {substep === 'assign' && (
+                  <div className="bg-purple-50 border-2 border-purple-300 rounded-lg p-4" data-testid="assign-review-block">
+                    <div className="text-sm font-bold text-purple-900 uppercase tracking-wide mb-1">Etape 5/5 : Revue des affectations</div>
+                    <p className="text-xs text-purple-800 mb-3">
+                      Verifiez les affectations proprietaire &harr; lot ci-dessous, puis cliquez sur <strong>&quot;Valider toutes les affectations&quot;</strong>. Vous pouvez ajuster individuellement chaque lot avant de valider.
+                    </p>
                     {(() => {
-                      const total = form.lots.length;
-                      const matched = form.lots.filter(l => (l.owner_ids || []).length > 0).length;
-                      const orphans = form.lots.filter(l => (l.owner_ids || []).length === 0 && (l._imported_owner_name || l._imported_owner_aux)).length;
+                      const total = (form.lots || []).length;
+                      const matched = (form.lots || []).filter(l => (l.owner_ids || []).length > 0).length;
+                      const orphans = (form.lots || []).filter(l => (l.owner_ids || []).length === 0 && (l._imported_owner_name || l._imported_owner_aux)).length;
                       const empty = total - matched - orphans;
-                      if (total === 0) return null;
                       return (
-                        <div className="mb-3 flex items-center justify-between bg-slate-50/60 border border-slate-200 rounded-md px-3 py-2 text-[11px]" data-testid="lots-summary">
-                          <div className="flex items-center gap-3">
-                            <span><strong>{total}</strong> lot(s) au total</span>
-                            {/* iter92d : en mode promoteur, tous les lots sont
-                                reassignes au promoteur au 1er jour de l'exercice */}
-                            {form._is_promoter && form._promoter_owner_id ? (
-                              <span className="text-orange-700 font-medium">
-                                <strong>{total}</strong> affectes au promoteur au {form.fy_start}
-                              </span>
-                            ) : (
-                              <>
-                                {matched > 0 && <span className="text-emerald-700"><strong>{matched}</strong> auto-affectes</span>}
-                                {orphans > 0 && <span className="text-amber-700"><strong>{orphans}</strong> orphelins (proprietaire manquant)</span>}
-                                {empty > 0 && <span className="text-slate-500"><strong>{empty}</strong> sans contrepartie</span>}
-                              </>
-                            )}
-                          </div>
-                          {orphans > 0 && (
-                            <div className="flex items-center gap-2">
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                className="h-6 px-2 text-[11px] border-emerald-400 text-emerald-700 hover:bg-emerald-50"
-                                data-testid="lots-create-missing-owners-btn"
-                                onClick={async () => {
-                                  const orphanLots = (form.lots || []).filter(l =>
-                                    (l.owner_ids || []).length === 0 && (l._imported_owner_name || l._imported_owner_aux)
-                                  );
-                                  if (!orphanLots.length) { toast.info('Aucun orphelin'); return; }
-                                  let created = 0;
-                                  const copro_id = editing?.id || '';
-                                  for (const l of orphanLots) {
-                                    const name = (l._imported_owner_name || l._imported_owner_aux || '').trim();
-                                    const aux = (l._imported_owner_aux || '').trim();
-                                    if (!name) continue;
-                                    try {
-                                      await api.post('/owners?reuse_on_duplicate=true', {
-                                        name, auxiliary_code: aux,
-                                        copropriete_id: copro_id,
-                                        first_name: '', last_name: '', address: '', postal_code: '', city: '',
-                                        country: 'Belgique', email: '', phone: '',
-                                      });
-                                      created++;
-                                    } catch (e) {
-                                      console.warn('Owner creation failed:', name, e);
-                                    }
-                                  }
-                                  if (created > 0) {
-                                    toast.success(`${created} proprietaire(s) cree(s). Relancez l'auto-affectation.`);
-                                    try {
-                                      const r = await api.get('/owners', { params: editing ? { include_unassigned: true, copropriete_id: 'all' } : { unassigned_only: true } });
-                                      setOwners(r.data || []);
-                                    } catch { /* ignore */ }
-                                  } else {
-                                    toast.info('Aucun proprietaire cree (deja existants ou donnees insuffisantes)');
-                                  }
-                                }}
-                              >
-                                Creer les proprietaires manquants
-                              </Button>
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                className="h-6 px-2 text-[11px] border-amber-300 text-amber-700 hover:bg-amber-50"
-                                data-testid="lots-retry-match-btn"
-                                onClick={async () => {
-                                  let nextOwners = owners;
-                                  try {
-                                    const r = await api.get('/owners', { params: editing ? { include_unassigned: true, copropriete_id: 'all' } : { unassigned_only: true } });
-                                    nextOwners = r.data || [];
-                                    setOwners(nextOwners);
-                                  } catch (_e) { /* keep cache */ }
-                                  let matched2 = 0;
-                                  setForm(f => {
-                                    const lots = (f.lots || []).map(l => {
-                                      if ((l.owner_ids || []).length > 0) return l;
-                                      const aux = (l._imported_owner_aux || '').trim().toUpperCase();
-                                      const oname = (l._imported_owner_name || '').toLowerCase().trim();
-                                      let m = null;
-                                      if (aux) m = nextOwners.find(o => (o.auxiliary_code || '').toUpperCase() === aux);
-                                      if (!m && oname) m = nextOwners.find(o => {
-                                        const n = (o.name || '').toLowerCase().trim();
-                                        return n === oname || n.includes(oname) || oname.includes(n);
-                                      });
-                                      if (m) { matched2++; return { ...l, owner_id: m.id, owner_ids: [m.id] }; }
-                                      return l;
+                        <div className="mb-3 flex items-center gap-3 bg-white/70 border border-purple-200 rounded-md px-3 py-2 text-[11px]" data-testid="lots-summary">
+                          <span><strong>{total}</strong> lot(s)</span>
+                          {form._is_promoter && form._promoter_owner_id ? (
+                            <span className="text-orange-700 font-medium">
+                              <strong>{total}</strong> affectes au promoteur au {form.fy_start}
+                            </span>
+                          ) : (
+                            <>
+                              {matched > 0 && <span className="text-emerald-700"><strong>{matched}</strong> auto-affectes</span>}
+                              {orphans > 0 && <span className="text-amber-700"><strong>{orphans}</strong> orphelins</span>}
+                              {empty > 0 && <span className="text-slate-500"><strong>{empty}</strong> sans contrepartie</span>}
+                            </>
+                          )}
+                          {orphans > 0 && !form._is_promoter && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-6 px-2 text-[11px] border-amber-400 text-amber-700 hover:bg-amber-50 ml-auto"
+                              data-testid="lots-retry-match-btn"
+                              onClick={async () => {
+                                let nextOwners = owners;
+                                try {
+                                  const r = await api.get('/owners', { params: editing ? { include_unassigned: true, copropriete_id: 'all' } : { unassigned_only: true } });
+                                  nextOwners = r.data || [];
+                                  setOwners(nextOwners);
+                                } catch (_e) { /* keep cache */ }
+                                let matched2 = 0;
+                                setForm(f => {
+                                  const lots = (f.lots || []).map(l => {
+                                    if ((l.owner_ids || []).length > 0) return l;
+                                    const aux = (l._imported_owner_aux || '').trim().toUpperCase();
+                                    const oname = (l._imported_owner_name || '').toLowerCase().trim();
+                                    let m = null;
+                                    if (aux) m = nextOwners.find(o => (o.auxiliary_code || '').toUpperCase() === aux);
+                                    if (!m && oname) m = nextOwners.find(o => {
+                                      const n = (o.name || '').toLowerCase().trim();
+                                      return n === oname || n.includes(oname) || oname.includes(n);
                                     });
-                                    return { ...f, lots };
+                                    if (m) { matched2++; return { ...l, owner_id: m.id, owner_ids: [m.id] }; }
+                                    return l;
                                   });
-                                  if (matched2 > 0) toast.success(`${matched2} lot(s) nouvellement affecte(s)`);
-                                  else toast.info('Aucun nouveau rattachement - importez d\'abord les proprietaires correspondants');
-                                }}
-                              >
-                                Reessayer l&apos;auto-affectation
-                              </Button>
-                            </div>
+                                  return { ...f, lots };
+                                });
+                                if (matched2 > 0) toast.success(`${matched2} lot(s) nouvellement affecte(s)`);
+                                else toast.info('Aucun nouveau rattachement');
+                              }}
+                            >
+                              Reessayer auto-affectation
+                            </Button>
                           )}
                         </div>
                       );
                     })()}
-                  <div className="space-y-3">
-                    {form.lots.map((lot, i) => (
-                      <div key={i} className="border rounded-md p-3 bg-slate-50/50 relative" data-testid={`lot-row-${i}`}>
-                        <button onClick={() => removeLot(i)} className="absolute top-2 right-2 text-red-400 hover:text-red-600"><X size={14} /></button>
-                        <div className="grid grid-cols-5 gap-3">
-                          <div><label className="form-label">N* *</label><Input value={lot.number} onChange={e => updateLot(i, 'number', e.target.value)} placeholder="A1" data-testid={`lot-number-${i}`} /></div>
-                          <div className="col-span-2"><label className="form-label">Description</label><Input value={lot.description} onChange={e => updateLot(i, 'description', e.target.value)} placeholder="Appartement 2 ch" /></div>
-                          <div><label className="form-label">Type</label>
-                            <Select value={lot.lot_type} onValueChange={v => updateLot(i, 'lot_type', v)}>
-                              <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="apartment">Appartement</SelectItem>
-                                <SelectItem value="parking">Parking</SelectItem>
-                                <SelectItem value="cave">Cave</SelectItem>
-                                <SelectItem value="commerce">Commerce</SelectItem>
-                                <SelectItem value="bureau">Bureau</SelectItem>
-                                <SelectItem value="autre">Autre</SelectItem>
-                              </SelectContent>
-                            </Select>
+                    <div className="space-y-2 max-h-[380px] overflow-y-auto pr-1">
+                      {(form.lots || []).map((lot, i) => (
+                        <div key={i} className="border rounded-md p-2 bg-white relative" data-testid={`lot-row-${i}`}>
+                          <button onClick={() => removeLot(i)} className="absolute top-1 right-1 text-red-400 hover:text-red-600"><X size={12} /></button>
+                          <div className="flex items-center gap-2 text-xs">
+                            <span className="font-mono font-semibold text-[#022D52]">Lot {lot.number}</span>
+                            <span className="text-slate-600">{lot.description || lot.lot_type}</span>
                           </div>
-                          <div><label className="form-label">Etage</label><Input type="number" value={lot.floor} onChange={e => updateLot(i, 'floor', parseInt(e.target.value || '0'))} /></div>
-                        </div>
-
-                        {/* iter90gg BLOC B : Lot parent (facultatif) - pour cave/garage lie a un appartement */}
-                        {['parking', 'cave', 'autre'].includes(lot.lot_type) && (
-                          <div className="mt-2 pt-2 border-t border-slate-200/70">
-                            <label className="form-label">
-                              Lot parent <span className="text-slate-400 font-normal">(lie ce {lot.lot_type} a un appartement principal ; facultatif)</span>
-                            </label>
-                            <Select value={lot.parent_lot_number || '_none'} onValueChange={v => updateLot(i, 'parent_lot_number', v === '_none' ? '' : v)}>
-                              <SelectTrigger className="h-8 text-sm" data-testid={`lot-${i}-parent`}>
-                                <SelectValue placeholder="Aucun (lot independant)" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="_none">Aucun (lot independant)</SelectItem>
-                                {(form.lots || []).filter((l2, i2) => i2 !== i && l2.lot_type === 'apartment' && l2.number).map((l2, i2) => (
-                                  <SelectItem key={i2} value={l2.number}>Lot {l2.number} {l2.description ? `- ${l2.description}` : ''}</SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                          </div>
-                        )}
-
-                        {/* Owner autocomplete per lot */}
-                        <div className="mt-2 pt-2 border-t border-slate-200/70">
-                          <label className="form-label">Proprietaires <span className="text-slate-400 font-normal">(cliquez pour voir la liste ou tapez pour filtrer)</span></label>
-                          {/* iter92d : mode promoteur - override affichage : tous les
-                              lots seront reassignes au promoteur cote backend (au 1er
-                              jour de l'exercice), on le reflete visuellement ici. */}
                           {form._is_promoter && form._promoter_owner_id ? (() => {
                             const promoter = owners.find(x => x.id === form._promoter_owner_id);
                             return (
-                              <div className="flex flex-wrap gap-1.5 mb-2" data-testid={`lot-${i}-promoter-override`}>
-                                <Badge variant="outline" className="bg-orange-50 border-orange-400 text-orange-900 gap-1 pl-2 pr-2 py-0.5 font-medium">
-                                  <span className="text-[10px] uppercase tracking-wide bg-orange-200 rounded px-1 py-0.5">Promoteur</span>
-                                  <span className="text-[11px]">{promoter?.name || '(inconnu)'}</span>
+                              <div className="mt-1" data-testid={`lot-${i}-promoter-override`}>
+                                <Badge variant="outline" className="bg-orange-50 border-orange-400 text-orange-900 gap-1 pl-1.5 pr-1.5 py-0 text-[10px]">
+                                  Promoteur : {promoter?.name || '(inconnu)'}
                                 </Badge>
-                                {(lot.owner_ids || []).length > 0 && (
-                                  <span className="text-[10px] text-slate-400 italic self-center">
-                                    ({(lot.owner_ids || []).length} affectation(s) initiale(s) sera(ont) remplacee(s) au {form.fy_start})
-                                  </span>
-                                )}
                               </div>
                             );
                           })() : (
-                            <>
-                              {(lot.owner_ids || []).length > 0 && (
-                                <div className="flex flex-wrap gap-1.5 mb-2">
-                                  {lot.owner_ids.map(oid => {
-                                    const o = owners.find(x => x.id === oid);
-                                    return (
-                                      <Badge key={oid} variant="outline" className="bg-emerald-50 border-emerald-300 text-emerald-800 gap-1 pl-2 pr-1 py-0.5" data-testid={`lot-${i}-owner-${oid}`}>
-                                        <span className="text-[11px]">{o?.name || '(inconnu)'}</span>
-                                        <button onClick={() => removeOwnerFromLot(i, oid)} className="text-emerald-500 hover:text-red-500"><X size={10} /></button>
-                                      </Badge>
-                                    );
-                                  })}
-                                </div>
+                            <div className="mt-1 flex flex-wrap items-center gap-1">
+                              {(lot.owner_ids || []).length > 0 ? (
+                                lot.owner_ids.map(oid => {
+                                  const o = owners.find(x => x.id === oid);
+                                  return (
+                                    <Badge key={oid} variant="outline" className="bg-emerald-50 border-emerald-300 text-emerald-800 gap-1 pl-1.5 pr-1 py-0 text-[10px]" data-testid={`lot-${i}-owner-${oid}`}>
+                                      {o?.name || '(inconnu)'}
+                                      <button onClick={() => removeOwnerFromLot(i, oid)} className="text-emerald-500 hover:text-red-500"><X size={9} /></button>
+                                    </Badge>
+                                  );
+                                })
+                              ) : (lot._imported_owner_name || lot._imported_owner_aux) ? (
+                                <Badge variant="outline" className="bg-amber-50 border-amber-300 text-amber-800 py-0 text-[10px]" data-testid={`lot-${i}-orphan`}>
+                                  Orphelin : {lot._imported_owner_aux ? <span className="font-mono">{lot._imported_owner_aux} </span> : null}{lot._imported_owner_name}
+                                </Badge>
+                              ) : (
+                                <span className="text-[10px] text-slate-400 italic">Aucun proprietaire</span>
                               )}
-                            </>
-                          )}
-                          {/* Orphan badge : lot imported but owner not matched */}
-                          {(lot.owner_ids || []).length === 0 && (lot._imported_owner_name || lot._imported_owner_aux) && (
-                            <div className="mb-2 flex items-center gap-2 text-[11px]">
-                              <Badge variant="outline" className="bg-amber-50 border-amber-300 text-amber-800 py-0.5" data-testid={`lot-${i}-orphan`}>
-                                Non rattache: {lot._imported_owner_aux ? <span className="font-mono">{lot._imported_owner_aux}</span> : null} {lot._imported_owner_name}
-                              </Badge>
-                              <span className="text-slate-400">- importez les proprietaires pour auto-affecter</span>
-                            </div>
-                          )}
-                          <div className="relative">
-                            <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
-                            <Input
-                              value={ownerSearchByLot[i] || ''}
-                              onChange={e => setOwnerSearchByLot({...ownerSearchByLot, [i]: e.target.value})}
-                              onFocus={() => { setOwnerFocusLot(i); refreshOwnersIfStale(); }}
-                              onBlur={() => { setTimeout(() => setOwnerFocusLot(prev => prev === i ? null : prev), 180); }}
-                              placeholder="Tapez nom / email / code auxiliaire / VCS..."
-                              className="pl-8 h-8 text-sm"
-                              data-testid={`lot-${i}-owner-search`}
-                            />
-                            {getOwnerSuggestions(i).length > 0 && (
-                              <div className="absolute z-50 left-0 right-0 mt-1 bg-white border border-slate-200 rounded-md shadow-lg max-h-60 overflow-y-auto" data-testid={`lot-${i}-suggestions`}>
-                                {!(ownerSearchByLot[i] || '').trim() && (
-                                  <div className="px-2 py-1 bg-slate-50 border-b border-slate-100 text-[10px] text-slate-500 uppercase tracking-wide">
-                                    {getOwnerSuggestions(i).length} proprietaire(s) disponible(s) - tapez pour filtrer
+                              <div className="relative ml-auto min-w-[180px]">
+                                <Search size={10} className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400" />
+                                <Input
+                                  value={ownerSearchByLot[i] || ''}
+                                  onChange={e => setOwnerSearchByLot({...ownerSearchByLot, [i]: e.target.value})}
+                                  onFocus={() => { setOwnerFocusLot(i); refreshOwnersIfStale(); }}
+                                  onBlur={() => { setTimeout(() => setOwnerFocusLot(prev => prev === i ? null : prev), 180); }}
+                                  placeholder="Rechercher proprio..."
+                                  className="pl-6 h-6 text-[11px]"
+                                  data-testid={`lot-${i}-owner-search`}
+                                />
+                                {getOwnerSuggestions(i).length > 0 && (
+                                  <div className="absolute z-50 left-0 right-0 mt-1 bg-white border border-slate-200 rounded-md shadow-lg max-h-40 overflow-y-auto" data-testid={`lot-${i}-suggestions`}>
+                                    {getOwnerSuggestions(i).map(o => (
+                                      <button key={o.id} type="button" onMouseDown={e => e.preventDefault()} onClick={() => { addOwnerToLot(i, o.id); setOwnerSearchByLot({...ownerSearchByLot, [i]: ''}); }} className="w-full text-left px-2 py-1 hover:bg-[#022D52]/5 border-b last:border-b-0 border-slate-100 text-[11px]" data-testid={`lot-${i}-suggestion-${o.id}`}>
+                                        {o.name} {o.auxiliary_code && <span className="font-mono text-[9px] text-slate-500">({o.auxiliary_code})</span>}
+                                      </button>
+                                    ))}
                                   </div>
                                 )}
-                                {getOwnerSuggestions(i).map(o => (
-                                  <button key={o.id} type="button" onMouseDown={e => e.preventDefault()} onClick={() => { addOwnerToLot(i, o.id); setOwnerSearchByLot({...ownerSearchByLot, [i]: ''}); }} className="w-full text-left px-2 py-1.5 hover:bg-[#022D52]/5 border-b last:border-b-0 border-slate-100 text-xs flex items-center justify-between" data-testid={`lot-${i}-suggestion-${o.id}`}>
-                                    <span className="font-medium">{o.name}</span>
-                                    <span className="flex items-center gap-2">
-                                      {o.auxiliary_code && <span className="font-mono text-[9px] bg-slate-100 px-1 rounded text-slate-600">{o.auxiliary_code}</span>}
-                                      {o.vcs_code && <span className="font-mono text-[9px] text-[#022D52]">{o.vcs_code}</span>}
-                                    </span>
-                                  </button>
-                                ))}
                               </div>
-                            )}
-                          </div>
+                            </div>
+                          )}
                         </div>
-                      </div>
-                    ))}
+                      ))}
+                    </div>
                   </div>
-                  </>
                 )}
+              </div>
+            )}
+
+            {/* MODE EDITION : ancien flow libre (Step 2 sans sous-etapes) */}
+            {editing && step === 2 && (
+              <div>
+                <div className="bg-amber-50 border-2 border-amber-300 rounded-lg p-3 mb-4" data-testid="fy-period-block-edit">
+                  <div className="text-xs font-bold text-amber-900 uppercase tracking-wide mb-1">Periode de l&apos;exercice en cours</div>
+                  <div className="grid grid-cols-3 gap-3">
+                    <div>
+                      <label className="form-label text-amber-900">Debut *</label>
+                      <Input type="date" value={form.fy_start} onChange={e => setForm({...form, fy_start: e.target.value})} className="h-9" />
+                    </div>
+                    <div>
+                      <label className="form-label text-amber-900">Fin *</label>
+                      <Input type="date" value={form.fy_end} onChange={e => setForm({...form, fy_end: e.target.value})} className="h-9" />
+                    </div>
+                    <div>
+                      <label className="form-label text-amber-900">Nom</label>
+                      <Input value={form.fy_name} onChange={e => setForm({...form, fy_name: e.target.value})} placeholder="auto" className="h-9" />
+                    </div>
+                  </div>
+                </div>
+                <p className="text-xs text-slate-500 italic">Les proprietaires, lots et affectations existants sont geres depuis leurs menus dedies (Lots, Proprietaires). Cet ecran modifie uniquement l&apos;identite et la periode.</p>
               </div>
             )}
 
@@ -1050,27 +1086,85 @@ export default function CoproprietesPage() {
 
             {/* Navigation buttons */}
             <div className="flex gap-3 justify-between pt-2 border-t">
-              {!editing && step > 1 ? (
-                <Button variant="outline" onClick={() => setStep(step - 1)} data-testid="wizard-prev-btn">Precedent</Button>
-              ) : <Button variant="outline" onClick={() => setDialogOpen(false)}>Annuler</Button>}
-              <div className="flex gap-2">
-                {!editing && step < 3 ? (
+              {(() => {
+                // iter93e : navigation sub-step aware en mode CREATION Step 2
+                const subOrder = ['fy','owners','promoter','lots','assign'];
+                const subIdx = subOrder.indexOf(substep);
+                const inCreateStep2 = !editing && step === 2;
+                const canGoBack = !editing && (step > 1 || (inCreateStep2 && subIdx > 0));
+                return canGoBack ? (
                   <Button
-                    onClick={() => setStep(step + 1)}
-                    className="bg-[#022D52] hover:bg-[#1D4ED8]"
-                    data-testid="wizard-next-btn"
-                    disabled={
-                      (step === 1 && !form.name.trim())
-                      // iter90gg : blocage passage Step 2 -> 3 si periode FY vide
-                      || (step === 2 && (!form.fy_start || !form.fy_end))
-                    }
-                    title={step === 2 && (!form.fy_start || !form.fy_end) ? 'Renseignez la periode de l\'exercice fiscal' : ''}
+                    variant="outline"
+                    data-testid="wizard-prev-btn"
+                    onClick={() => {
+                      if (inCreateStep2 && subIdx > 0) setSubstep(subOrder[subIdx - 1]);
+                      else setStep(step - 1);
+                    }}
                   >
-                    Suivant
+                    Precedent
                   </Button>
-                ) : (
-                  <Button onClick={handleSave} className="bg-[#022D52] hover:bg-[#1D4ED8]" data-testid="copro-save-btn">{editing ? 'Modifier' : 'Creer l\'ACP'}</Button>
-                )}
+                ) : <Button variant="outline" onClick={() => setDialogOpen(false)}>Annuler</Button>;
+              })()}
+              <div className="flex gap-2">
+                {(() => {
+                  const subOrder = ['fy','owners','promoter','lots','assign'];
+                  const subIdx = subOrder.indexOf(substep);
+                  const inCreateStep2 = !editing && step === 2;
+                  const isLastSub = inCreateStep2 && substep === 'assign';
+
+                  // Gating logique par sous-etape
+                  let disabled = false;
+                  let title = '';
+                  let btnLabel = 'Suivant';
+                  if (step === 1 && !form.name.trim()) { disabled = true; title = 'Renseignez le nom'; }
+                  if (inCreateStep2) {
+                    if (substep === 'fy' && (!form.fy_start || !form.fy_end)) { disabled = true; title = 'Renseignez la periode de l\'exercice fiscal'; }
+                    if (substep === 'owners' && owners.length === 0) { disabled = true; title = 'Importez au moins 1 proprietaire (PDF, CSV ou manuel)'; }
+                    if (substep === 'promoter' && form._is_promoter && !form._promoter_owner_id) { disabled = true; title = 'Selectionnez ou creez un promoteur'; }
+                    if (substep === 'lots' && (form.lots || []).length === 0) { disabled = true; title = 'Importez ou ajoutez au moins 1 lot'; }
+                    if (isLastSub) btnLabel = 'Valider les affectations';
+                  }
+
+                  const onClickNext = () => {
+                    if (inCreateStep2 && !isLastSub) {
+                      setSubstep(subOrder[subIdx + 1]);
+                    } else if (inCreateStep2 && isLastSub) {
+                      // Valider les affectations : passe a Step 3
+                      const total = (form.lots || []).length;
+                      const orphans = (form.lots || []).filter(l => (l.owner_ids || []).length === 0 && !form._is_promoter).length;
+                      if (orphans > 0) {
+                        const ok = window.confirm(
+                          `${orphans} lot(s) sur ${total} n'ont pas de proprietaire assigne. ` +
+                          `Continuer et les creer comme orphelins (a completer plus tard) ?`
+                        );
+                        if (!ok) return;
+                      }
+                      toast.success(`Affectations validees : ${total - orphans}/${total} lot(s) rattaches`);
+                      setStep(3);
+                    } else {
+                      setStep(step + 1);
+                    }
+                  };
+
+                  if (!editing && step < 3) {
+                    return (
+                      <Button
+                        onClick={onClickNext}
+                        className="bg-[#022D52] hover:bg-[#1D4ED8]"
+                        data-testid="wizard-next-btn"
+                        disabled={disabled}
+                        title={title}
+                      >
+                        {btnLabel}
+                      </Button>
+                    );
+                  }
+                  return (
+                    <Button onClick={handleSave} className="bg-[#022D52] hover:bg-[#1D4ED8]" data-testid="copro-save-btn">
+                      {editing ? 'Modifier' : 'Creer l\'ACP'}
+                    </Button>
+                  );
+                })()}
               </div>
             </div>
           </div>
