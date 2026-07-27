@@ -4,10 +4,13 @@ import api from '@/lib/api';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { toast } from 'sonner';
-import { Users, Building2, UserCheck, Receipt, AlertCircle, TrendingUp, Home, ArrowLeft, Landmark, FileText, Megaphone, Sparkles, Loader2, Scale, ArrowLeftRight, FileBarChart } from 'lucide-react';
+import { Users, Building2, UserCheck, Receipt, AlertCircle, TrendingUp, Home, ArrowLeft, Landmark, FileText, Megaphone, Sparkles, Loader2, Scale, ArrowLeftRight, FileBarChart, Truck } from 'lucide-react';
 import { fmtDate } from '@/lib/dateFmt';
 import AdaptiveQuickActions from '@/components/AdaptiveQuickActions';
+import SyndicOwnersGlobalTab from '@/components/SyndicOwnersGlobalTab';
+import SyndicSuppliersGlobalTab from '@/components/SyndicSuppliersGlobalTab';
 
 export default function DashboardPage() {
   const { selectedCopro, setSelectedCopro, isSuperadmin, user } = useAuth();
@@ -107,38 +110,56 @@ export default function DashboardPage() {
           </div>
         )}
 
-        {/* ACP Tiles */}
-        <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Vos coproprietes</div>
-        {coproprietes.length === 0 ? (
-          <Card className="border-slate-200"><CardContent className="p-8 text-center text-slate-400">Aucune copropriete creee. Allez dans Coproprietes pour en creer une.</CardContent></Card>
-        ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {coproprietes.filter(c => c.status !== 'archived').map(c => (
-              <Card
-                key={c.id}
-                className="border-slate-200 hover:border-[#022D52] hover:shadow-lg cursor-pointer transition-all group"
-                onClick={() => setSelectedCopro(c.id)}
-                data-testid={`copro-tile-${c.id}`}
-              >
-                <CardContent className="p-5">
-                  <div className="flex items-start justify-between mb-3">
-                    <div className="w-10 h-10 rounded-md bg-[#022D52]/10 flex items-center justify-center group-hover:bg-[#022D52] transition-colors">
-                      <Home size={20} className="text-[#022D52] group-hover:text-white transition-colors" />
-                    </div>
-                    {c.reference && <Badge variant="outline" className="font-mono text-[10px]">{c.reference}</Badge>}
-                  </div>
-                  <h3 className="font-bold text-slate-900 mb-1" style={{fontFamily:'Chivo,sans-serif'}}>{c.name}</h3>
-                  {c.city && <p className="text-xs text-slate-500">{c.address ? `${c.address}, ` : ''}{c.postal_code} {c.city}</p>}
-                  {c.bce && <p className="text-[10px] text-slate-400 font-mono mt-1">BCE: {c.bce}</p>}
-                  <div className="mt-3 pt-3 border-t border-slate-100 flex items-center justify-between">
-                    <span className="text-[10px] text-slate-400 font-mono">{getDefaultIban(c)}</span>
-                    <span className="text-xs text-[#022D52] font-medium opacity-0 group-hover:opacity-100 transition-opacity">Ouvrir</span>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-        )}
+        {/* iter93b : onglets centralises Syndic - ACPs / Proprietaires / Fournisseurs */}
+        <Tabs defaultValue="acps" className="w-full">
+          <TabsList className="mb-4" data-testid="syndic-dashboard-tabs">
+            <TabsTrigger value="acps" data-testid="tab-acps"><Home size={13} className="mr-1" /> Coproprietes</TabsTrigger>
+            <TabsTrigger value="owners" data-testid="tab-owners"><Users size={13} className="mr-1" /> Tous mes proprietaires</TabsTrigger>
+            <TabsTrigger value="suppliers" data-testid="tab-suppliers"><Truck size={13} className="mr-1" /> Tous mes fournisseurs</TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="acps" data-testid="tab-content-acps">
+            <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Vos coproprietes</div>
+            {coproprietes.length === 0 ? (
+              <Card className="border-slate-200"><CardContent className="p-8 text-center text-slate-400">Aucune copropriete creee. Allez dans Coproprietes pour en creer une.</CardContent></Card>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                {coproprietes.filter(c => c.status !== 'archived').map(c => (
+                  <Card
+                    key={c.id}
+                    className="border-slate-200 hover:border-[#022D52] hover:shadow-lg cursor-pointer transition-all group"
+                    onClick={() => setSelectedCopro(c.id)}
+                    data-testid={`copro-tile-${c.id}`}
+                  >
+                    <CardContent className="p-5">
+                      <div className="flex items-start justify-between mb-3">
+                        <div className="w-10 h-10 rounded-md bg-[#022D52]/10 flex items-center justify-center group-hover:bg-[#022D52] transition-colors">
+                          <Home size={20} className="text-[#022D52] group-hover:text-white transition-colors" />
+                        </div>
+                        {c.reference && <Badge variant="outline" className="font-mono text-[10px]">{c.reference}</Badge>}
+                      </div>
+                      <h3 className="font-bold text-slate-900 mb-1" style={{fontFamily:'Chivo,sans-serif'}}>{c.name}</h3>
+                      {c.city && <p className="text-xs text-slate-500">{c.address ? `${c.address}, ` : ''}{c.postal_code} {c.city}</p>}
+                      {c.bce && <p className="text-[10px] text-slate-400 font-mono mt-1">BCE: {c.bce}</p>}
+                      <div className="mt-3 pt-3 border-t border-slate-100 flex items-center justify-between">
+                        <span className="text-[10px] text-slate-400 font-mono">{getDefaultIban(c)}</span>
+                        <span className="text-xs text-[#022D52] font-medium opacity-0 group-hover:opacity-100 transition-opacity">Ouvrir</span>
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            )}
+          </TabsContent>
+
+          <TabsContent value="owners" data-testid="tab-content-owners">
+            <SyndicOwnersGlobalTab coproprietes={coproprietes} />
+          </TabsContent>
+
+          <TabsContent value="suppliers" data-testid="tab-content-suppliers">
+            <SyndicSuppliersGlobalTab coproprietes={coproprietes} />
+          </TabsContent>
+        </Tabs>
       </div>
     );
   }
