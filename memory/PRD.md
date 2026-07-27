@@ -166,3 +166,22 @@ Application de gestion de copropriete basee sur le droit belge (PCMN), incluant 
 
 - import_wizard.py (>3500 lignes) a decouper
 - reports.py (logique PCMN complexe) a simplifier
+
+#### iter93a - Tableau de bord Syndic global (Owners + Suppliers) (DONE - 2026-02)
+- Backend : deux nouveaux endpoints scopes syndic-wide et Chinese Wall strict :
+  - `GET /api/owners/syndic-global` -> pour chaque proprietaire accessible au syndic, enrichit `{acp_ids, acp_names:[{id,name,reference}], acp_count}`. Union depuis `lots.owner_id/owner_ids` + `owners.copropriete_ids[]`.
+  - `GET /api/suppliers/syndic-global` -> idem pour fournisseurs. Union depuis `supplier.copropriete_id` + `supplier.tier_accounts[cid]`.
+- Frontend `/coproprietes` : refactor en Tabs (`syndic-dashboard-tabs`). 3 onglets :
+  - `tab-acps` (comportement legacy conserve : liste + Modifier / Archiver / Vider / Supprimer)
+  - `tab-owners` (nouveau composant `SyndicOwnersGlobalTab`) : recherche libre, filtre par ACP, tri Nom<->Nb ACPs, badges cliquables (navigation vers `/lots?copropriete_id=...`), dialog CRUD Owner avec Select ACP obligatoire.
+  - `tab-suppliers` (nouveau composant `SyndicSuppliersGlobalTab`) : idem cote fournisseurs (navigation vers `/suppliers?copropriete_id=...`), dialog CRUD avec Select ACP obligatoire pour la creation.
+- Tests : 8/8 backend PASS (pytest `test_iter93a_syndic_global.py`), Chinese Wall verifie entre syndic_alpha et syndic_beta.
+- Data-testids : `tab-acps|owners|suppliers`, `syndic-owners-global-tab`, `syndic-suppliers-global-tab`, `create-owner-global-btn`, `edit-owner-global-{id}`, `owner-acp-select`, `owner-global-dialog`, `create-supplier-global-btn`, `edit-supplier-global-{id}`, `supplier-acp-select`, `owners-global-search|acp-filter|sort-btn`, etc.
+
+## Roadmap / Prioritized backlog
+- P1 : TEUWEN legacy mutations lot mapping (`reports.py` + `pdf_decompte.py`) - combiner `lot.owner_id` avec `distribution_keys` pour les mutations historiques.
+- P2 : Admin tool bulk reset legacy paid invoices -> unpaid.
+- P3 : Certificat fiscal annuel.
+- P4 : Automated debt collection emails (APScheduler quotidien).
+- P5 : Refactoring `import_wizard.py` (>3900 lignes) et `reports.py` (>4500 lignes).
+

@@ -26,6 +26,7 @@ export default function SyndicOwnersGlobalTab({ coproprietes }) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState(emptyOwnerForm);
+  const [selectedAcpForCreate, setSelectedAcpForCreate] = useState('');
   const [saving, setSaving] = useState(false);
 
   const load = useCallback(async () => {
@@ -70,6 +71,10 @@ export default function SyndicOwnersGlobalTab({ coproprietes }) {
   const openCreate = () => {
     setEditing(null);
     setForm(emptyOwnerForm);
+    // iter93a-fix : selectionne par defaut la 1ere ACP active. Le proprio
+    // sera cree avec copropriete_id defini -> visible immediatement dans la
+    // vue globale (sinon il devient orphelin et disparait de la liste).
+    setSelectedAcpForCreate(activeAcpsList[0]?.id || '');
     setDialogOpen(true);
   };
 
@@ -90,6 +95,7 @@ export default function SyndicOwnersGlobalTab({ coproprietes }) {
       phone2: o.phone2 || '',
       bce_number: o.bce_number || '',
     });
+    setSelectedAcpForCreate('');
     setDialogOpen(true);
   };
 
@@ -106,6 +112,14 @@ export default function SyndicOwnersGlobalTab({ coproprietes }) {
         await api.put(`/owners/${editing.id}`, payload);
         toast.success('Proprietaire modifie');
       } else {
+        if (!selectedAcpForCreate) {
+          toast.error('Selectionnez une ACP de rattachement initial');
+          setSaving(false);
+          return;
+        }
+        // iter93a-fix : envoie copropriete_id pour que le nouvel owner soit
+        // rattache immediatement a une ACP et apparaisse dans la vue globale.
+        payload.copropriete_id = selectedAcpForCreate;
         await api.post('/owners', payload);
         toast.success('Proprietaire cree');
       }
@@ -251,8 +265,28 @@ export default function SyndicOwnersGlobalTab({ coproprietes }) {
                 Les modifications s&apos;appliquent globalement.
               </p>
             )}
+            {!editing && (
+              <p className="text-xs text-amber-700">
+                Un proprietaire global doit etre rattache initialement a une ACP. Vous pourrez ensuite l&apos;affecter a des lots ou d&apos;autres ACPs.
+              </p>
+            )}
           </DialogHeader>
           <div className="space-y-3 mt-2">
+            {!editing && (
+              <div>
+                <label className="form-label">ACP de rattachement initial *</label>
+                <Select value={selectedAcpForCreate} onValueChange={setSelectedAcpForCreate}>
+                  <SelectTrigger data-testid="owner-acp-select">
+                    <SelectValue placeholder="Choisir une ACP..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {activeAcpsList.map(c => (
+                      <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="form-label">Prenom</label>
