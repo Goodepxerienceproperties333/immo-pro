@@ -5,8 +5,9 @@ import { useAuth } from '@/contexts/AuthContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Users, Unlock, ScrollText, ArrowRight, ShieldAlert, IdCard, Building2, ChevronDown, ChevronRight as ChevRight, Briefcase, Merge, ShieldCheck } from 'lucide-react';
+import { Users, Unlock, ScrollText, ArrowRight, ShieldAlert, IdCard, Building2, ChevronDown, ChevronRight as ChevRight, Briefcase, Merge, ShieldCheck, Sparkles, Trash2 } from 'lucide-react';
 import { fmtDate } from '@/lib/dateFmt';
+import { toast } from 'sonner';
 
 export default function AdminDashboardPage() {
   const { user } = useAuth();
@@ -15,19 +16,24 @@ export default function AdminDashboardPage() {
   const [syndics, setSyndics] = useState([]);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState({});
+  // iter93l : etat generation DEMO
+  const [demoStatus, setDemoStatus] = useState({ exists: false, acp: null });
+  const [demoBusy, setDemoBusy] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const [users, copros, audits, sov] = await Promise.all([
+        const [users, copros, audits, sov, demo] = await Promise.all([
           api.get('/admin/users').catch(() => ({ data: [] })),
           api.get('/coproprietes?include_archived=true').catch(() => ({ data: [] })),
           api.get('/admin/audit-log?limit=8').catch(() => ({ data: [] })),
           api.get('/admin/syndics-overview').catch(() => ({ data: [] })),
+          api.get('/admin/demo/status').catch(() => ({ data: { exists: false, acp: null } })),
         ]);
         if (cancelled) return;
         setSyndics(sov.data || []);
+        setDemoStatus(demo.data || { exists: false, acp: null });
         setStats({
           users: users.data.length,
           acps: copros.data.length,
@@ -45,6 +51,43 @@ export default function AdminDashboardPage() {
 
   const toggle = (id) => setExpanded(prev => ({ ...prev, [id]: !prev[id] }));
 
+  const generateDemo = async () => {
+    if (demoStatus.exists) {
+      const ok = window.confirm(
+        'Une copropriete DEMO existe deja. La regenerer va SUPPRIMER l\'existante et toutes ses donnees liees (proprios, lots, factures...). Continuer ?'
+      );
+      if (!ok) return;
+    }
+    setDemoBusy(true);
+    try {
+      const { data } = await api.post('/admin/demo/generate-acp');
+      toast.success(`DEMO generee : ${data.stats.owners} proprios, ${data.stats.lots} lots, ${data.stats.invoices} factures`);
+      setDemoStatus({ exists: true, acp: { id: data.copropriete_id, name: 'DEMO - Residence Les Cerisiers' } });
+      // Redirect to the ACP dashboard
+      localStorage.setItem('selectedCopro', data.copropriete_id);
+      setTimeout(() => window.location.href = '/', 800);
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur generation DEMO');
+    } finally {
+      setDemoBusy(false);
+    }
+  };
+
+  const deleteDemo = async () => {
+    const ok = window.confirm('Supprimer la copropriete DEMO et toutes ses donnees ?');
+    if (!ok) return;
+    setDemoBusy(true);
+    try {
+      await api.delete('/admin/demo/generate-acp');
+      toast.success('DEMO supprimee');
+      setDemoStatus({ exists: false, acp: null });
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur suppression');
+    } finally {
+      setDemoBusy(false);
+    }
+  };
+
   return (
     <div className="space-y-6" data-testid="admin-dashboard">
       <div className="page-header">
@@ -60,6 +103,52 @@ export default function AdminDashboardPage() {
           </div>
         </div>
       </div>
+
+      {/* iter93l : Bloc DEMO copropriete - superadmin only */}
+      <Card className="border-2 border-dashed border-purple-300 bg-gradient-to-br from-purple-50 to-fuchsia-50" data-testid="demo-acp-block">
+        <CardContent className="p-5">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-md bg-gradient-to-br from-purple-500 to-fuchsia-600 flex items-center justify-center text-white">
+                <Sparkles size={20} />
+              </div>
+              <div>
+                <div className="text-sm font-bold text-purple-900" style={{fontFamily:'Chivo,sans-serif'}}>Copropriete DEMO pour presentation</div>
+                <div className="text-xs text-purple-700 mt-0.5">
+                  Genere une ACP complete et coherente (10 lots, 10 proprios, 5 fournisseurs, budget, factures, extraits bancaires) pour vos demos aux prospects. Superadmin uniquement.
+                </div>
+                {demoStatus.exists && demoStatus.acp && (
+                  <div className="text-[11px] text-emerald-700 mt-1 flex items-center gap-1">
+                    <ShieldCheck size={12} /> Deja generee : <strong>{demoStatus.acp.name}</strong>
+                  </div>
+                )}
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <Button
+                onClick={generateDemo}
+                disabled={demoBusy}
+                className="bg-purple-700 hover:bg-purple-800"
+                data-testid="btn-generate-demo"
+              >
+                <Sparkles size={14} className="mr-1" />
+                {demoBusy ? 'Generation...' : (demoStatus.exists ? 'Regenerer la DEMO' : 'Generer la DEMO')}
+              </Button>
+              {demoStatus.exists && (
+                <Button
+                  variant="outline"
+                  onClick={deleteDemo}
+                  disabled={demoBusy}
+                  className="border-red-300 text-red-600 hover:bg-red-50"
+                  data-testid="btn-delete-demo"
+                >
+                  <Trash2 size={14} className="mr-1" /> Supprimer
+                </Button>
+              )}
+            </div>
+          </div>
+        </CardContent>
+      </Card>
 
       {/* KPI cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">

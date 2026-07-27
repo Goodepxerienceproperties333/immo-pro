@@ -1453,6 +1453,7 @@ from routes.documents import create_documents_router
 from routes.admin import create_admin_router
 from routes.coproprietes import create_coproprietes_router
 from routes.suppliers import create_suppliers_router
+from routes.admin_demo import create_admin_demo_router
 from routes.fiscal import create_fiscal_router
 from routes.reports import create_reports_router
 from routes.fund_calls import create_fund_calls_router
@@ -1487,6 +1488,7 @@ app.include_router(create_team_router(db))
 app.include_router(create_import_wizard_router(db))
 app.include_router(create_coproprietes_router(db))
 app.include_router(create_suppliers_router(db))
+app.include_router(create_admin_demo_router(db))
 app.include_router(create_fiscal_router(db))
 app.include_router(create_reports_router(db))
 app.include_router(create_fund_calls_router(db))

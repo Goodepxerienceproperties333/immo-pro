@@ -185,3 +185,28 @@ Application de gestion de copropriete basee sur le droit belge (PCMN), incluant 
 - P4 : Automated debt collection emails (APScheduler quotidien).
 - P5 : Refactoring `import_wizard.py` (>3900 lignes) et `reports.py` (>4500 lignes).
 
+
+---
+## 🔒 POINT DE RESTAURATION STABLE - 27/07/2026 17h00 (iter93m)
+
+L'application est declaree **STABLE - Aucun bug connu** a cette date.
+Toutes les fonctionnalites principales fonctionnent :
+- Wizard de creation d'ACP sequentiel (6 sous-etapes)
+- Import PDF/CSV proprietaires & lots avec detection quasi-doublons (SRL/BVBA/...)
+- OD avec picker Nature/Proprietaire/Fournisseur unifie recherchable
+- Tableau de bord Syndic centralise (ACPs / Owners / Suppliers)
+- Chinese Wall strict multi-syndic
+- PDFs Bilan / Balance tiers / Decompte / Resultat net / Liste depenses
+- ZIP archives comprehensive
+- Deduplication comptes / doublons proprios/fournisseurs
+- Backup APScheduler quotidien
+- Suppression ACP restreinte (Superadmin ou Evrard Gerald)
+
+En cas de regression future, utiliser le rollback Emergent vers ce commit.
+
+## Nouvelle feature (iter93l) - Generateur ACP DEMO
+- Endpoint superadmin `POST /api/admin/demo/generate-acp` : cree une ACP "DEMO - Residence Les Cerisiers" avec 10 lots, 10 proprios belges realistes, 5 fournisseurs, 2 cles de repartition (Generale + Ascenseur), budget 2025 (6 lignes ~29.6k EUR), 8 factures reelles avec TVA, 28 transactions bancaires (provisions + reglements). Chinese Wall respecte.
+- UI `AdminDashboardPage.js` : bloc violet "Copropriete DEMO pour presentation" avec boutons Generer / Regenerer / Supprimer.
+- Regenerer supprime en cascade la precedente DEMO (owners @demo.be + toutes les collections liees).
+- ACP rattachee automatiquement au superadmin genereur pour visualisation directe.
+
