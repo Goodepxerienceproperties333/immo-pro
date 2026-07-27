@@ -210,3 +210,19 @@ En cas de regression future, utiliser le rollback Emergent vers ce commit.
 - Regenerer supprime en cascade la precedente DEMO (owners @demo.be + toutes les collections liees).
 - ACP rattachee automatiquement au superadmin genereur pour visualisation directe.
 
+
+## iter93o - DEMO comptablement complete (AN/VE/AC/FI)
+- Refonte du generateur pour produire une comptabilite belge integre :
+  - 10 lots totalisant **10.000 milliemes** exactement (cle generale)
+  - 10 proprietaires avec **comptes tiers 4101xxxx (roulement)** et **4100xxxx (reserve)** par proprio, stockes dans `owner.tier_accounts[copro_id]`
+  - Budget annuel **12.000 EUR** (6 natures de depense)
+  - **Journal AN** : ouverture avec fonds de reserve 5.000 EUR (`is_opening_balance: True`)
+  - **Journal VE** : 4 appels trimestriels de 3.000 EUR (10 lignes proprio + 1 credit 730000 par trimestre)
+  - **Journal AC** : 5 factures fournisseurs (ELIA, Kone, NextGeCopro, Securitas, AXA) avec TVA
+  - **Journal FI** : 2 paiements bancaires recus (Van Damme + De Coninck Q1) pour tester le lettrage
+  - Debits = Credits = **24.995 EUR** parfaitement equilibres
+- La Balance des Tiers et le Bilan sont immediatement consultables :
+  - Balance tiers : 10 lignes proprios avec comptes prov/reserve reels, total appele/paye/solde correct
+  - Bilan : Actif = Passif = 17.945 EUR, `equilibre: True`
+- `third_party_id` (et non `tier_id`) utilise dans les lignes de journal pour rattachement proprio/fournisseur.
+
