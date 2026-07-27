@@ -215,6 +215,10 @@ function SendActionDialog({
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewData, setPreviewData] = useState(null); // { owner_id, subject, body_html, attachment_pdf_base64, ... }
   const [previewIdx, setPreviewIdx] = useState(0);
+  // iter90i8 : PJ additionnelles au decompte (choix syndic)
+  const [attachableDocs, setAttachableDocs] = useState([]);
+  const [selectedExtraDocIds, setSelectedExtraDocIds] = useState(new Set());
+  const [includeExpensesList, setIncludeExpensesList] = useState(false);
 
   useEffect(() => {
     if (mailboxes.length && !from_mailbox) {
@@ -245,6 +249,21 @@ function SendActionDialog({
       setStart(prev => prev || fyStart);
     }
   }, [open, fiscal_year_id, fiscalYears]);
+
+  // iter90i8 : charge la liste des documents joignables quand l'exercice change
+  useEffect(() => {
+    if (!open || action !== 'decompte' || !fiscal_year_id || !copropriete_id) {
+      setAttachableDocs([]);
+      setSelectedExtraDocIds(new Set());
+      setIncludeExpensesList(false);
+      return;
+    }
+    api.get('/communication/attachable-documents', {
+      params: { copropriete_id, fiscal_year_id }
+    })
+      .then(r => setAttachableDocs(r.data?.meter_attachments || []))
+      .catch(() => setAttachableDocs([]));
+  }, [open, action, fiscal_year_id, copropriete_id]);
 
   // Auto-remplit subject/body a la selection d'un template
   const applyTemplate = (tid) => {
@@ -285,7 +304,12 @@ function SendActionDialog({
         include_signature,
         template_id: template_id || '',
         ...(action === 'situation' ? { start_date, end_date } : {}),
-        ...(action === 'decompte' ? { fiscal_year_id } : {}),
+        ...(action === 'decompte' ? {
+          fiscal_year_id,
+          // iter90i8 : PJ selectionnees par le syndic
+          include_expenses_list: includeExpensesList,
+          extra_document_ids: Array.from(selectedExtraDocIds),
+        } : {}),
       };
       const r = await api.post(`/communication/send/${action}`, payload);
       const info = r.data.sent > 0
@@ -427,6 +451,52 @@ function SendActionDialog({
                   ))}
                 </SelectContent>
               </Select>
+            </div>
+          )}
+          {/* iter90i8 : selection des PJ additionnelles au decompte annuel */}
+          {action === 'decompte' && fiscal_year_id && (
+            <div className="border border-slate-200 rounded p-3 bg-slate-50" data-testid="decompte-extra-attachments">
+              <div className="text-xs font-semibold uppercase tracking-wider text-slate-600 mb-2">
+                Pieces jointes additionnelles (facultatif)
+              </div>
+              <label className="flex items-center gap-2 text-sm cursor-pointer hover:bg-white rounded px-2 py-1">
+                <input
+                  type="checkbox"
+                  checked={includeExpensesList}
+                  onChange={e => setIncludeExpensesList(e.target.checked)}
+                  data-testid="decompte-include-expenses"
+                />
+                <span>Liste des depenses de l&apos;exercice</span>
+              </label>
+              {attachableDocs.length === 0 ? (
+                <div className="text-[11px] text-slate-500 italic mt-2 px-2">
+                  Aucune piece jointe de releve de compteur disponible pour cet exercice.
+                </div>
+              ) : (
+                <div className="space-y-1 mt-2">
+                  <div className="text-[11px] text-slate-500 px-2">
+                    Releves de compteur ({attachableDocs.length}) :
+                  </div>
+                  {attachableDocs.map(d => (
+                    <label key={d.id} className="flex items-center gap-2 text-sm cursor-pointer hover:bg-white rounded px-2 py-1">
+                      <input
+                        type="checkbox"
+                        checked={selectedExtraDocIds.has(d.id)}
+                        onChange={e => {
+                          const s = new Set(selectedExtraDocIds);
+                          if (e.target.checked) s.add(d.id); else s.delete(d.id);
+                          setSelectedExtraDocIds(s);
+                        }}
+                        data-testid={`decompte-extra-doc-${d.id}`}
+                      />
+                      <span className="flex-1 truncate">{d.title}</span>
+                      <span className="text-[10px] text-slate-500 font-mono">
+                        {d.size ? `${(d.size / 1024).toFixed(1)} Ko` : ''}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              )}
             </div>
           )}
           <div>
