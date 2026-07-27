@@ -351,6 +351,33 @@ def create_properties_router(db):
         combined = (f"{first} {last}".strip() or name or "").lower()
         return " ".join(sorted(combined.split()))
 
+    # iter93h : formes juridiques et mots-suffixes courants a normaliser pour
+    # detecter les quasi-doublons "SRL Good Experience" vs "SRL Good Experience
+    # Properties" ou "MATEXI" vs "MATEXI Wallonie".
+    _LEGAL_FORMS = {
+        "srl", "sprl", "sprlu", "sa", "sas", "sasu", "sarl", "sca", "scs",
+        "bvba", "bv", "nv", "cvba", "cv", "vzw", "asbl", "acp", "acp/",
+        "gmbh", "ltd", "llc", "inc", "sci", "sci/", "eurl", "sarl/",
+    }
+    _GENERIC_SUFFIXES = {
+        "properties", "property", "invest", "invests", "investment", "investments",
+        "immo", "immobiliere", "immobilier", "real", "estate", "group", "groupe",
+        "holdings", "holding", "belgium", "belgique", "brussels", "bruxelles",
+        "wallonie", "flandre", "flanders", "international",
+    }
+
+    def _norm_owner_core(first: str, last: str, name: str) -> str:
+        """iter93h : retourne un noyau normalise du nom en retirant les formes
+        juridiques et suffixes generiques. Utilise pour detecter les quasi-
+        doublons de type "SRL Good Experience" vs "SRL Good Experience Properties".
+        Retourne "" si le noyau est vide (=> homonyme non detecte)."""
+        combined = (f"{first} {last}".strip() or name or "").lower()
+        # Retire ponctuation
+        combined = _re.sub(r"[^a-z0-9\s]", " ", combined)
+        words = [w for w in combined.split() if w]
+        core = [w for w in words if w not in _LEGAL_FORMS and w not in _GENERIC_SUFFIXES]
+        return " ".join(sorted(core))
+
     def _norm_alphanum(value: str) -> str:
         """Alphanumerique uppercase uniquement (BCE, IBAN, telephone)."""
         return _re.sub(r"[^A-Za-z0-9]", "", (value or "")).upper()
@@ -393,6 +420,7 @@ def create_properties_router(db):
         Scope : limite a copro_id si fourni (chinese wall), sinon global.
         """
         norm_name = _norm_owner_name(first_name, last_name, name)
+        norm_core = _norm_owner_core(first_name, last_name, name)
         norm_email = (email or "").strip().lower()
         norm_phone = _norm_alphanum(phone)
         norm_bce = _norm_alphanum(bce_number)
@@ -428,7 +456,7 @@ def create_properties_router(db):
                     return {"owner": o, "field": "phone", "value": phone, "is_strict": True}
             if norm_bce and _norm_alphanum(o.get("bce_number", "")) == norm_bce:
                 return {"owner": o, "field": "bce_number", "value": bce_number, "is_strict": True}
-        # 2e passage : cherche un homonyme (nom / adresse) - non bloquant
+        # 2e passage : cherche un homonyme (nom / adresse / noyau) - non bloquant
         for o in candidates:
             if norm_name:
                 o_name = _norm_owner_name(o.get("first_name", ""), o.get("last_name", ""), o.get("name", ""))
@@ -438,6 +466,19 @@ def create_properties_router(db):
                 o_addr = _norm_address(o.get("address", ""), o.get("postal_code", ""), o.get("city", ""))
                 if o_addr and o_addr == norm_addr:
                     return {"owner": o, "field": "address", "value": f"{address}, {postal_code} {city}".strip(), "is_strict": False}
+        # iter93h : 3e passage - quasi-doublons via noyau normalise (retire
+        # formes juridiques + suffixes generiques). Ex : "SRL Good Experience"
+        # vs "SRL Good Experience Properties" partagent le noyau "experience good".
+        if norm_core:
+            for o in candidates:
+                o_core = _norm_owner_core(o.get("first_name", ""), o.get("last_name", ""), o.get("name", ""))
+                if not o_core:
+                    continue
+                if o_core == norm_core:
+                    return {"owner": o, "field": "name_core", "value": f"{first_name} {last_name}".strip() or name, "is_strict": False}
+                # Test containment : un nom contient l'autre
+                if (norm_core in o_core or o_core in norm_core) and min(len(norm_core), len(o_core)) >= 4:
+                    return {"owner": o, "field": "name_core", "value": f"{first_name} {last_name}".strip() or name, "is_strict": False}
         return None
 
     @router.get("/owners")
@@ -760,6 +801,7 @@ def create_properties_router(db):
             else:
                 field_label = {
                     "name": "nom + prenom",
+                    "name_core": "nom (noyau : mots communs apres retrait des formes juridiques)",
                     "email": "email",
                     "phone": "telephone",
                     "bce_number": "numero BCE",
