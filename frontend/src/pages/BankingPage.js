@@ -127,7 +127,10 @@ export default function BankingPage() {
       api.get('/banking/statements', { params: fyParams }),
       api.get('/banking/transactions', { params: fyParams }),
       selectedCopro
-        ? api.get('/owners', { params: { copropriete_id: selectedCopro, lot_owners_only: true } })
+        // iter92f : inclure aussi les proprietaires SANS lot de l'ACP (ex.
+        // promoteur/ancien vendeur avec compte tier ouvert) pour permettre
+        // le lettrage des remboursements/paiements orphelins.
+        ? api.get('/owners', { params: { copropriete_id: selectedCopro } })
         : Promise.resolve({ data: [] }),
       api.get('/invoices', { params: fyParams }),
       api.get('/suppliers'),
