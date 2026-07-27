@@ -655,24 +655,77 @@ export default function JournalsPage() {
                   <tbody>
                     {form.lines.map((line, i) => {
                       const isCharge = line.account_number && (line.account_number.startsWith('6') || line.account_number.startsWith('7'));
-                      const hasCategory = !!line.expense_category_id;
+                      // iter93i : "hasCategory" verrouille aussi le compte
+                      // quand un tier (400/440) est selectionne via la Nature.
+                      const isTierAccount = line.account_number && (line.account_number.startsWith('400') || line.account_number.startsWith('440'));
+                      const hasCategory = !!line.expense_category_id || (!line.expense_category_id && isTierAccount);
                       return (
                       <tr key={`line-${i}`} className="border-t border-slate-100">
                         <td className="p-1" style={{ minWidth: 200 }}>
                           <Select
-                            value={line.expense_category_id || 'none'}
-                            onValueChange={(v) => updateLine(i, 'expense_category_id', v === 'none' ? '' : v)}
+                            value={line.expense_category_id ? `cat:${line.expense_category_id}` : (line.account_number && !line.expense_category_id && (line.account_number.startsWith('400') || line.account_number.startsWith('440')) ? `acct:${line.account_number}` : 'none')}
+                            onValueChange={(v) => {
+                              // iter93i : le dropdown accepte 3 types de valeurs :
+                              //  - "none" : efface la nature
+                              //  - "cat:{id}" : categorie de depense (comportement legacy)
+                              //  - "acct:{number}" : compte tiers direct (proprietaire 400x
+                              //    ou fournisseur 440x). L'expense_category_id est vide,
+                              //    account_number est defini directement.
+                              if (v === 'none') {
+                                updateLine(i, 'expense_category_id', '');
+                                updateLine(i, 'account_number', '');
+                                updateLine(i, 'account_name', '');
+                              } else if (v.startsWith('cat:')) {
+                                updateLine(i, 'expense_category_id', v.slice(4));
+                              } else if (v.startsWith('acct:')) {
+                                updateLine(i, 'expense_category_id', '');
+                                updateLine(i, 'account_number', v.slice(5));
+                              }
+                            }}
                           >
                             <SelectTrigger className="h-8 text-xs" data-testid={`journal-line-${i}-nature`}>
                               <SelectValue placeholder="(optionnel)" />
                             </SelectTrigger>
-                            <SelectContent>
+                            <SelectContent className="max-h-[400px]">
                               <SelectItem value="none">(aucune)</SelectItem>
+                              {(categories || []).length > 0 && (
+                                <div className="px-2 pt-2 pb-1 text-[10px] font-bold uppercase text-slate-400">Charges &amp; produits</div>
+                              )}
                               {(categories || []).map((c, idx) => (
-                                <SelectItem key={`${c.id}-${idx}`} value={c.id}>
+                                <SelectItem key={`cat-${c.id}-${idx}`} value={`cat:${c.id}`}>
                                   {c.name}{c.account_number ? ` [${c.account_number}]` : ''}
                                 </SelectItem>
                               ))}
+                              {/* iter93i : proprietaires (comptes 400x) */}
+                              {(() => {
+                                const ownerAccts = (accounts || []).filter(a => a.number && a.number.startsWith('400'));
+                                if (ownerAccts.length === 0) return null;
+                                return (
+                                  <>
+                                    <div className="px-2 pt-2 pb-1 text-[10px] font-bold uppercase text-emerald-600">Proprietaires (comptes 400)</div>
+                                    {ownerAccts.map((a, idx) => (
+                                      <SelectItem key={`own-${a.number}-${idx}`} value={`acct:${a.number}`}>
+                                        {a.name || '(sans nom)'} <span className="text-slate-400 font-mono text-[10px]">[{a.number}]</span>
+                                      </SelectItem>
+                                    ))}
+                                  </>
+                                );
+                              })()}
+                              {/* iter93i : fournisseurs (comptes 440x) */}
+                              {(() => {
+                                const supAccts = (accounts || []).filter(a => a.number && a.number.startsWith('440'));
+                                if (supAccts.length === 0) return null;
+                                return (
+                                  <>
+                                    <div className="px-2 pt-2 pb-1 text-[10px] font-bold uppercase text-blue-700">Fournisseurs (comptes 440)</div>
+                                    {supAccts.map((a, idx) => (
+                                      <SelectItem key={`sup-${a.number}-${idx}`} value={`acct:${a.number}`}>
+                                        {a.name || '(sans nom)'} <span className="text-slate-400 font-mono text-[10px]">[{a.number}]</span>
+                                      </SelectItem>
+                                    ))}
+                                  </>
+                                );
+                              })()}
                             </SelectContent>
                           </Select>
                         </td>
