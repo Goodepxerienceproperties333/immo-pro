@@ -1680,6 +1680,15 @@ export default function LotsPage() {
 // - La somme des allocations doit egaler le total de la facture.
 // ============================================================
 function PrivateFeesDialog({ invoices, owners, onClose, onDone }) {
+  // iter92e : filtre les proprietaires par ACP courante (les invoices de la
+  // modale sont toutes de la meme ACP - Chinese Wall). Empeche d'assigner
+  // par erreur un frais privatif a un proprietaire d'une autre ACP.
+  // Le toggle "Afficher tous" permet d'elargir en cas de besoin exceptionnel.
+  const [showAllOwners, setShowAllOwners] = useState(false);
+  const currentCoproId = invoices[0]?.copropriete_id || '';
+  const scopedOwners = (showAllOwners || !currentCoproId)
+    ? owners
+    : owners.filter(o => (o.copropriete_ids || []).includes(currentCoproId));
   // state : { [invoice_id]: [{owner_id, amount}] }
   const [alloc, setAlloc] = useState(() =>
     Object.fromEntries(invoices.map(i => [i.id, []]))
@@ -1780,6 +1789,22 @@ function PrivateFeesDialog({ invoices, owners, onClose, onDone }) {
           beneficiaire(s). Le total est reparti par defaut a parts egales : ajustez manuellement
           si necessaire. La somme des montants doit egaler le total de la facture.
         </div>
+        {/* iter92e : toggle scope owners (par defaut : ACP courante uniquement) */}
+        <label className="flex items-center gap-2 text-[11px] text-slate-600 cursor-pointer mb-2 pl-2">
+          <input
+            type="checkbox"
+            checked={showAllOwners}
+            onChange={(e) => setShowAllOwners(e.target.checked)}
+            data-testid="private-fees-show-all-owners"
+            className="rounded border-slate-300"
+          />
+          <span>
+            Afficher tous les proprietaires du syndic{' '}
+            <span className="text-slate-400 italic">
+              (par defaut : {scopedOwners.length} proprietaire(s) de cette ACP uniquement, sur {owners.length} au total)
+            </span>
+          </span>
+        </label>
         <div className="space-y-3">
           {invoices.map(inv => {
             const isOpen = openInvoiceId === inv.id;
@@ -1818,7 +1843,7 @@ function PrivateFeesDialog({ invoices, owners, onClose, onDone }) {
                           <SelectValue placeholder="Choisir..." />
                         </SelectTrigger>
                         <SelectContent>
-                          {owners
+                          {scopedOwners
                             .filter(o => !list.find(a => a.owner_id === o.id))
                             .slice(0, 200)
                             .map(o => (
@@ -1827,6 +1852,11 @@ function PrivateFeesDialog({ invoices, owners, onClose, onDone }) {
                               </SelectItem>
                             ))
                           }
+                          {scopedOwners.filter(o => !list.find(a => a.owner_id === o.id)).length === 0 && (
+                            <SelectItem value="__none__" disabled>
+                              Aucun proprietaire disponible dans cette ACP
+                            </SelectItem>
+                          )}
                         </SelectContent>
                       </Select>
                     </div>
