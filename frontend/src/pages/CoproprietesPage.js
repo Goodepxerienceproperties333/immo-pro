@@ -721,9 +721,19 @@ export default function CoproprietesPage() {
                         <div className="mb-3 flex items-center justify-between bg-slate-50/60 border border-slate-200 rounded-md px-3 py-2 text-[11px]" data-testid="lots-summary">
                           <div className="flex items-center gap-3">
                             <span><strong>{total}</strong> lot(s) au total</span>
-                            {matched > 0 && <span className="text-emerald-700"><strong>{matched}</strong> auto-affectes</span>}
-                            {orphans > 0 && <span className="text-amber-700"><strong>{orphans}</strong> orphelins (proprietaire manquant)</span>}
-                            {empty > 0 && <span className="text-slate-500"><strong>{empty}</strong> sans contrepartie</span>}
+                            {/* iter92d : en mode promoteur, tous les lots sont
+                                reassignes au promoteur au 1er jour de l'exercice */}
+                            {form._is_promoter && form._promoter_owner_id ? (
+                              <span className="text-orange-700 font-medium">
+                                <strong>{total}</strong> affectes au promoteur au {form.fy_start}
+                              </span>
+                            ) : (
+                              <>
+                                {matched > 0 && <span className="text-emerald-700"><strong>{matched}</strong> auto-affectes</span>}
+                                {orphans > 0 && <span className="text-amber-700"><strong>{orphans}</strong> orphelins (proprietaire manquant)</span>}
+                                {empty > 0 && <span className="text-slate-500"><strong>{empty}</strong> sans contrepartie</span>}
+                              </>
+                            )}
                           </div>
                           {orphans > 0 && (
                             <div className="flex items-center gap-2">
@@ -854,18 +864,40 @@ export default function CoproprietesPage() {
                         {/* Owner autocomplete per lot */}
                         <div className="mt-2 pt-2 border-t border-slate-200/70">
                           <label className="form-label">Proprietaires <span className="text-slate-400 font-normal">(cliquez pour voir la liste ou tapez pour filtrer)</span></label>
-                          {(lot.owner_ids || []).length > 0 && (
-                            <div className="flex flex-wrap gap-1.5 mb-2">
-                              {lot.owner_ids.map(oid => {
-                                const o = owners.find(x => x.id === oid);
-                                return (
-                                  <Badge key={oid} variant="outline" className="bg-emerald-50 border-emerald-300 text-emerald-800 gap-1 pl-2 pr-1 py-0.5" data-testid={`lot-${i}-owner-${oid}`}>
-                                    <span className="text-[11px]">{o?.name || '(inconnu)'}</span>
-                                    <button onClick={() => removeOwnerFromLot(i, oid)} className="text-emerald-500 hover:text-red-500"><X size={10} /></button>
-                                  </Badge>
-                                );
-                              })}
-                            </div>
+                          {/* iter92d : mode promoteur - override affichage : tous les
+                              lots seront reassignes au promoteur cote backend (au 1er
+                              jour de l'exercice), on le reflete visuellement ici. */}
+                          {form._is_promoter && form._promoter_owner_id ? (() => {
+                            const promoter = owners.find(x => x.id === form._promoter_owner_id);
+                            return (
+                              <div className="flex flex-wrap gap-1.5 mb-2" data-testid={`lot-${i}-promoter-override`}>
+                                <Badge variant="outline" className="bg-orange-50 border-orange-400 text-orange-900 gap-1 pl-2 pr-2 py-0.5 font-medium">
+                                  <span className="text-[10px] uppercase tracking-wide bg-orange-200 rounded px-1 py-0.5">Promoteur</span>
+                                  <span className="text-[11px]">{promoter?.name || '(inconnu)'}</span>
+                                </Badge>
+                                {(lot.owner_ids || []).length > 0 && (
+                                  <span className="text-[10px] text-slate-400 italic self-center">
+                                    ({(lot.owner_ids || []).length} affectation(s) initiale(s) sera(ont) remplacee(s) au {form.fy_start})
+                                  </span>
+                                )}
+                              </div>
+                            );
+                          })() : (
+                            <>
+                              {(lot.owner_ids || []).length > 0 && (
+                                <div className="flex flex-wrap gap-1.5 mb-2">
+                                  {lot.owner_ids.map(oid => {
+                                    const o = owners.find(x => x.id === oid);
+                                    return (
+                                      <Badge key={oid} variant="outline" className="bg-emerald-50 border-emerald-300 text-emerald-800 gap-1 pl-2 pr-1 py-0.5" data-testid={`lot-${i}-owner-${oid}`}>
+                                        <span className="text-[11px]">{o?.name || '(inconnu)'}</span>
+                                        <button onClick={() => removeOwnerFromLot(i, oid)} className="text-emerald-500 hover:text-red-500"><X size={10} /></button>
+                                      </Badge>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </>
                           )}
                           {/* Orphan badge : lot imported but owner not matched */}
                           {(lot.owner_ids || []).length === 0 && (lot._imported_owner_name || lot._imported_owner_aux) && (

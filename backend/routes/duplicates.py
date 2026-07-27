@@ -187,6 +187,11 @@ def create_duplicates_router(db):
 
         uf = UF()
         by_name, by_email, by_phone, by_bce, by_addr = {}, {}, {}, {}, {}
+        # iter92d : signaux additionnels pour detecter les doublons issus
+        # d'imports repetes (meme PDF Optipro/Sinerginfo) :
+        #  - auxiliary_code (ex: 2 owners "TEUWEN Gael" avec aux=C2612)
+        #  - tier account number par ACP (memes comptes 41xxxxxx sur meme ACP)
+        by_aux, by_tier = {}, {}
         for o in owners:
             oid = o["id"]
             uf.parent[oid] = oid
@@ -207,6 +212,19 @@ def create_duplicates_router(db):
             addr = _norm_address(o.get("address", ""), o.get("postal_code", ""), o.get("city", ""))
             if addr and len(addr) > 8:
                 by_addr.setdefault(addr, []).append(oid)
+            # iter92d : auxiliary_code (signal fort - unique par owner en theorie)
+            aux = (o.get("auxiliary_code") or "").strip().upper()
+            if aux and len(aux) >= 3:
+                by_aux.setdefault(aux, []).append(oid)
+            # iter92d : tier accounts par ACP (compte 41xxxxxx doit etre unique
+            # par ACP donc 2 owners avec le meme compte tier + meme ACP sont
+            # necessairement des doublons)
+            for cid, ta in (o.get("tier_accounts") or {}).items():
+                if not isinstance(ta, dict):
+                    continue
+                for acc in ta.values():
+                    if isinstance(acc, str) and acc.strip():
+                        by_tier.setdefault(f"{cid}|{acc.strip()}", []).append(oid)
 
         match_reasons = {}
         for idx, label in (
@@ -215,6 +233,8 @@ def create_duplicates_router(db):
             (by_phone, "telephone"),
             (by_bce, "BCE"),
             (by_addr, "adresse"),
+            (by_aux, "code auxiliaire"),  # iter92d
+            (by_tier, "compte tiers PCMN"),  # iter92d
         ):
             for val, ids in idx.items():
                 if len(ids) < 2:
