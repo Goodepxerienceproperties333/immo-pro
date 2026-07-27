@@ -197,15 +197,20 @@ def create_banking_router(db):
         # 3) Fallback : nom partiel "Last First" ou "First Last"
         if not owner and cp_name and " " in cp_name:
             parts = [p for p in cp_name.split() if p]
+            # iter90ib : exclure titres de politesse (Mme, M., etc.) et
+            # exiger >= 4 chars pour eviter faux positifs.
+            _TITLES = {"mme", "mr", "m.", "m", "mlle", "melle", "dr", "me",
+                       "mme.", "monsieur", "madame", "mademoiselle"}
+            parts = [p for p in parts if p.lower().rstrip(".").rstrip(",") not in _TITLES]
             if len(parts) >= 2:
                 possible = [parts[0], parts[-1], " ".join(parts[:2]), " ".join(parts[-2:])]
                 for p in possible:
-                    if len(p) < 3:
+                    if len(p) < 4:
                         continue
                     owner = await db.owners.find_one(
                         {"$or": [
                             {"last_name": {"$regex": f"^{_re.escape(p)}$", "$options": "i"}},
-                            {"name": {"$regex": _re.escape(p), "$options": "i"}},
+                            {"name": {"$regex": f"\\b{_re.escape(p)}\\b", "$options": "i"}},
                         ]},
                         {"_id": 0}
                     )
@@ -305,14 +310,25 @@ def create_banking_router(db):
             # Nom partiel
             if " " in cp_name:
                 parts = [p for p in cp_name.split() if p]
+                # iter90ib : exclure les titres de politesse (Mme, M., Mr, etc.)
+                # qui produisent des faux positifs en matchant tout owner du meme
+                # genre. Bug rapporte : 3 lignes "Puttemans/Degeest/Woillard"
+                # matchant toutes "Mme Degeest" via le token "Mme".
+                TITLES = {"mme", "mr", "m.", "m", "mlle", "melle", "dr",
+                          "me", "mme.", "monsieur", "madame", "mademoiselle"}
+                parts = [p for p in parts if p.lower().rstrip(".").rstrip(",") not in TITLES]
                 if len(parts) >= 2:
                     for p in [parts[0], parts[-1], " ".join(parts[:2]), " ".join(parts[-2:])]:
-                        if len(p) < 3:
+                        # iter90ib : minimum 4 chars pour eviter faux positifs
+                        # sur particules courantes (van, de, le, du, etc.).
+                        if len(p) < 4:
                             continue
                         owner = await db.owners.find_one(
                             {"$or": [
                                 {"last_name": {"$regex": f"^{_re.escape(p)}$", "$options": "i"}},
-                                {"name": {"$regex": _re.escape(p), "$options": "i"}},
+                                # iter90ib : match `name` ancre a un debut de mot
+                                # (\b) pour eviter les sous-chaines fortuites.
+                                {"name": {"$regex": f"\\b{_re.escape(p)}\\b", "$options": "i"}},
                             ]},
                             {"_id": 0}
                         )

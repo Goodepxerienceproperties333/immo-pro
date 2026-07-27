@@ -1,0 +1,31 @@
+{
+  "summary": "iter90ib backend fix validated. Le titre de politesse 'Mme' (et 'M.', 'Mr', etc.) n'est plus utilise comme token de matching partiel dans la logique de suggestion de match des transactions bancaires. Cree 7 tests pytest qui seedent 3 owners avec noms uniques (Puttemansxyz{TAG}, Degeestxyz{TAG}, Woillardxyz{TAG}) + un extrait + creent 6 transactions couvrant : (1) le bug rapporte - chaque owner matche son propre owner via name_exact et non un autre via 'Mme'; (2) regressions - name_exact et VCS priority preserves; (3) edge cases - 'Mme' seul et 'M. Xyz' ne matchent rien. Tous les 7 tests passent. Cleanup complet des donnees TEST_ apres.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter90ib_banking_title_exclusion.py",
+    "/app/test_reports/pytest/iter90ib_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Le fix iter90ib est present dans les DEUX fonctions concernees : _try_auto_lettrage_vcs (L200-216) ET _suggest_match_for_movement (L313-334). Coherent.",
+    "Les 2 sets TITLES sont dupliques - petite opportunite DRY : extraire _TITLES au niveau module.",
+    "La fonction interne mentionnee comme _analyze_movement dans le review request s'appelle en realite _suggest_match_for_movement. Nom OK, mais la reference dans le fix doc est desynchronisee.",
+    "banking.py fait 3346 lignes - depasse largement le seuil recommande de 700. Devrait etre splitte (statements/transactions/matching/coda) dans une itération future."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (7/7)", "frontend": "N/A"},
+  "test_credentials": "admin@copro.be / admin123 (cookie-based auth via /api/auth/login, cookie 'access_token').",
+  "seed_data_creation": "Seed direct via motor : 1 copropriete TEST_iter90ib_copro_*, 3 owners avec noms uniques a suffixe UUID pour eviter collision avec la vraie base seed, 1 bank_statement draft. Cleanup total apres tests (coproprietes, owners, bank_statements, bank_transactions par copropriete_id et statement_id).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Le bug iter90ib est fixe et couvert par le test. Pour les prochains bugs bancaires touchant le matching, reutiliser la meme approche : seed via motor async client sur MONGO_URL/DB_NAME, auth via session cookie (POST /api/auth/login avec admin@copro.be/admin123), utiliser des noms uniques (avec un TAG UUID) pour eviter collision avec la vraie donnee seed en base. banking.py:120-391 concentre toute la logique de matching (VCS -> name_exact -> name_partial -> supplier_iban -> supplier_name -> invoice_number).",
+  "rca of the issue": "AVANT le fix : lorsqu'un counterparty_name contenait un titre de politesse comme 'Mme', le split en tokens produisait ['Mme', 'Puttemans', 'Victoria']. Comme le seuil etait >=3 chars, 'Mme' etait un candidat legitime pour le regex `{name: {$regex: 'Mme', $options: 'i'}}` qui matchait TOUS les owners feminins et retournait le premier trouve par MongoDB (souvent Degeest). CORRECTIF : (1) exclusion du token via un set _TITLES = {mme, mr, m., m, mlle, melle, dr, me, monsieur, madame, mademoiselle} avec normalisation .rstrip('.,'); (2) seuil de longueur porte a >=4 chars; (3) regex ancre par word-boundary \\b<token>\\b au lieu de <token> nu (evite les sous-chaines fortuites). Applique dans _try_auto_lettrage_vcs (L200-216) ET _suggest_match_for_movement (L313-334). Tests couvrent : cas non-regression (VCS + name_exact) et cas fix (name_partial avec title, title seul, faux positifs)."
+}
