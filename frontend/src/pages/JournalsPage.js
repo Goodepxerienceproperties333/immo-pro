@@ -656,9 +656,10 @@ export default function JournalsPage() {
                   <tbody>
                     {form.lines.map((line, i) => {
                       const isCharge = line.account_number && (line.account_number.startsWith('6') || line.account_number.startsWith('7'));
-                      // iter93i : "hasCategory" verrouille aussi le compte
-                      // quand un tier (400/440) est selectionne via la Nature.
-                      const isTierAccount = line.account_number && (line.account_number.startsWith('400') || line.account_number.startsWith('440'));
+                      // iter93i/93k : "hasCategory" verrouille aussi le compte
+                      // quand un tier (41xxx proprio / 44xxx fournisseur) est
+                      // selectionne via la Nature.
+                      const isTierAccount = line.account_number && (line.account_number.startsWith('41') || line.account_number.startsWith('44'));
                       const hasCategory = !!line.expense_category_id || (!line.expense_category_id && isTierAccount);
                       return (
                       <tr key={`line-${i}`} className="border-t border-slate-100">
@@ -666,7 +667,7 @@ export default function JournalsPage() {
                           <NaturePickerSelect
                             categories={categories}
                             accounts={accounts}
-                            value={line.expense_category_id ? `cat:${line.expense_category_id}` : (line.account_number && !line.expense_category_id && (line.account_number.startsWith('400') || line.account_number.startsWith('440')) ? `acct:${line.account_number}` : '')}
+                            value={line.expense_category_id ? `cat:${line.expense_category_id}` : (line.account_number && !line.expense_category_id && (line.account_number.startsWith('41') || line.account_number.startsWith('44')) ? `acct:${line.account_number}` : '')}
                             onChange={(v) => {
                               // iter93i : 3 types de valeurs :
                               //  - "none" : efface la nature

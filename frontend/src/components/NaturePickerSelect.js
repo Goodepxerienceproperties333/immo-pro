@@ -44,23 +44,52 @@ export default function NaturePickerSelect({
         subtext: c.account_number ? `[${c.account_number}]` : '',
       });
     }
+    // iter93k : Proprietaires - dedupliqué par nom.
+    // Les comptes 41000xxx (fonds reserve) et 41010xxx (fonds roulement) ont
+    // le format "Acompte de fonds de X appele - {owner_name}". On extrait le
+    // nom du proprietaire, on regroupe et on choisit un compte defaut par
+    // owner : priorite au fonds de roulement (4101), sinon reserve (4100).
+    const ownerBuckets = new Map();  // ownerName -> { rollAcct, reserveAcct, otherAccts }
     for (const a of (accounts || [])) {
       if (!a?.number) continue;
-      if (a.number.startsWith('400')) {
-        list.push({
-          key: `acct:${a.number}`,
-          group: 'owners',
-          label: a.name || '(sans nom)',
-          subtext: `[${a.number}]`,
-        });
-      } else if (a.number.startsWith('440')) {
-        list.push({
-          key: `acct:${a.number}`,
-          group: 'suppliers',
-          label: a.name || '(sans nom)',
-          subtext: `[${a.number}]`,
-        });
-      }
+      const m = /^41(00|01)\d{2,}/.exec(a.number);
+      if (!m) continue;
+      const isMaster = a.number === '400000' || a.number === '400100' || a.number === '410' || a.number === '4100' || a.number === '4101';
+      if (isMaster) continue;
+      // Extraction du owner name : "Acompte de fonds de X appele - {name}"
+      let ownerName = (a.name || '').trim();
+      const nameMatch = /appel(?:e|é)\s*[-–]\s*(.+)$/i.exec(ownerName);
+      if (nameMatch) ownerName = nameMatch[1].trim();
+      if (!ownerName) continue;
+      if (!ownerBuckets.has(ownerName)) ownerBuckets.set(ownerName, {});
+      const b = ownerBuckets.get(ownerName);
+      if (m[1] === '01') b.roll = a.number;   // 4101 fonds de roulement
+      else if (m[1] === '00') b.reserve = a.number;  // 4100 fonds de reserve
+    }
+    for (const [ownerName, b] of ownerBuckets) {
+      // Priorite : fonds de roulement -> reserve
+      const defaultAcct = b.roll || b.reserve;
+      if (!defaultAcct) continue;
+      list.push({
+        key: `acct:${defaultAcct}`,
+        group: 'owners',
+        label: ownerName,
+        subtext: b.roll && b.reserve ? '(roulement + reserve)' : (b.roll ? '(roulement)' : '(reserve)'),
+      });
+    }
+    // iter93k : Fournisseurs (440xxxxx, exclu 440000 Master)
+    for (const a of (accounts || [])) {
+      if (!a?.number) continue;
+      if (!a.number.startsWith('440')) continue;
+      if (a.number === '440' || a.number === '4400' || a.number === '440000') continue;
+      const supplierName = (a.name || '').trim();
+      if (!supplierName || supplierName.toLowerCase().startsWith('fournisseurs - master')) continue;
+      list.push({
+        key: `acct:${a.number}`,
+        group: 'suppliers',
+        label: supplierName,
+        subtext: `[${a.number}]`,
+      });
     }
     return list;
   }, [categories, accounts]);
@@ -80,8 +109,8 @@ export default function NaturePickerSelect({
   const groupOrder = ['charges', 'owners', 'suppliers'];
   const groupLabels = {
     charges: 'Charges & produits',
-    owners: 'Proprietaires (400)',
-    suppliers: 'Fournisseurs (440)',
+    owners: 'Proprietaires',
+    suppliers: 'Fournisseurs',
   };
   const groupColors = {
     charges: 'text-slate-500',
