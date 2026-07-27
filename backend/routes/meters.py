@@ -321,6 +321,83 @@ def create_meters_router(db):
             await db.meter_readings.update_many({"batch_id": batch_id}, {"$set": upd})
         else:
             await db.meter_readings.update_one({"id": reading_id}, {"$set": upd})
+
+        # iter90i7 : creation d'une entree documents/ pour chaque proprio des
+        # lots concernes -> visible dans l'Espace Proprietaire sous la
+        # categorie "Releve de compteur".
+        copro_id = r.get("copropriete_id", "")
+        meter_type = r.get("meter_type", "")
+        if copro_id:
+            # Trouve tous les releves du batch pour identifier les lots
+            batch_readings = await db.meter_readings.find(
+                {"batch_id": batch_id, "copropriete_id": copro_id},
+                {"_id": 0, "meter_id": 1}
+            ).to_list(1000) if r.get("batch_id") else [r]
+            meter_ids = list({br.get("meter_id") for br in batch_readings if br.get("meter_id")})
+            lot_ids = set()
+            if meter_ids:
+                meters = await db.meters.find(
+                    {"id": {"$in": meter_ids}}, {"_id": 0, "lot_id": 1}
+                ).to_list(1000)
+                lot_ids = {m.get("lot_id") for m in meters if m.get("lot_id")}
+            owner_ids = set()
+            if lot_ids:
+                lots = await db.lots.find(
+                    {"id": {"$in": list(lot_ids)}},
+                    {"_id": 0, "owner_id": 1, "owner_ids": 1}
+                ).to_list(1000)
+                for l in lots:
+                    if l.get("owner_id"):
+                        owner_ids.add(l["owner_id"])
+                    for oid in (l.get("owner_ids") or []):
+                        if oid:
+                            owner_ids.add(oid)
+            # Categorie unique "Releve de compteur"
+            cat = await db.document_categories.find_one(
+                {"copropriete_id": copro_id, "name": "Releve de compteur"},
+                {"_id": 0, "id": 1}
+            )
+            if not cat:
+                cat_id = str(uuid.uuid4())
+                await db.document_categories.insert_one({
+                    "id": cat_id,
+                    "name": "Releve de compteur",
+                    "description": "Documents des releves de compteur (decomptes fournisseurs, PV releves d'index)",
+                    "copropriete_id": copro_id,
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                })
+            else:
+                cat_id = cat["id"]
+            # Supprime les documents deja crees pour ce batch (evite doublons
+            # si l'upload est refait, permet la mise a jour du fichier).
+            await db.documents.delete_many({
+                "source": "meter_reading", "batch_id": batch_id,
+                "copropriete_id": copro_id,
+            })
+            title_meter_type = {
+                "water": "Releve compteur eau", "heating": "Releve compteur chauffage",
+                "electricity": "Releve compteur electricite", "gas": "Releve compteur gaz",
+                "boiler_maintenance": "Entretien chaudiere",
+            }.get(meter_type, "Releve compteur")
+            doc_title = f"{title_meter_type} - {r.get('date', '')}"
+            for oid in owner_ids:
+                await db.documents.insert_one({
+                    "id": str(uuid.uuid4()),
+                    "title": doc_title,
+                    "description": f"Piece jointe releve compteur {meter_type} du {r.get('date','')}",
+                    "category_id": cat_id,
+                    "filename": upd["attachment_filename"],
+                    "gridfs_id": gid,
+                    "mime_type": upd["attachment_mime"],
+                    "size_bytes": len(content),
+                    "copropriete_id": copro_id,
+                    "owner_id": oid,
+                    "source": "meter_reading",
+                    "batch_id": batch_id,
+                    "meter_type": meter_type,
+                    "reading_date": r.get("date", ""),
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                })
         return {"ok": True, "gridfs_id": gid, "size": len(content), "filename": upd["attachment_filename"]}
 
     @router.get("/readings/{reading_id}/attachment/download")
@@ -352,6 +429,10 @@ def create_meters_router(db):
             await db.meter_readings.update_many({"batch_id": batch_id}, {"$set": upd})
         else:
             await db.meter_readings.update_one({"id": reading_id}, {"$set": upd})
+        # iter90i7 : supprime aussi les documents associes cote proprios
+        await db.documents.delete_many({
+            "source": "meter_reading", "batch_id": batch_id,
+        })
         return {"ok": True}
 
     @router.get("/attachments/for-fiscal-year")

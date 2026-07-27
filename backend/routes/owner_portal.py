@@ -1216,16 +1216,18 @@ def create_owner_portal_router(db):
             copro_ids = [copropriete_id]
         if not copro_ids:
             return []
-        # iter90i0 : filtre chinese wall
-        # - documents "generaux" (source != communication ou owner_id absent) : visibles a tous
-        # - documents personnels (source=communication) : visibles UNIQUEMENT si owner_id matche
+        # iter90i0 / iter90i7 : filtre chinese wall
+        # - documents "generaux" (docs manuels sans source) : visibles a tous
+        # - documents personnels source=communication OU source=meter_reading :
+        #   visibles UNIQUEMENT si owner_id matche (ou broadcast).
+        SCOPED_SOURCES = ["communication", "meter_reading"]
         docs = await db.documents.find(
             {
                 "copropriete_id": {"$in": copro_ids},
                 "$or": [
-                    {"source": {"$ne": "communication"}},
+                    {"source": {"$nin": SCOPED_SOURCES}},
                     {"owner_id": {"$in": owner_ids}},
-                    {"owner_id": {"$in": [None, ""]}},  # docs communication sans owner (broadcast)
+                    {"owner_id": {"$in": [None, ""]}},  # broadcast
                 ],
             },
             {"_id": 0}
