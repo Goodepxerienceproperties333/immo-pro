@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { Plus, Pencil, Trash2, Home, Search, Archive, RotateCcw, Landmark, PlusCircle, X, Eraser, Wand2, Upload, UserPlus, FileText, Download, Image as ImageIcon, CheckCircle2, ClipboardCheck, AlertTriangle } from 'lucide-react';
+import { Plus, Pencil, Trash2, Home, Search, Archive, RotateCcw, Landmark, PlusCircle, X, Eraser, Wand2, Upload, UserPlus, FileText, Download, Image as ImageIcon, CheckCircle2, ClipboardCheck, AlertTriangle, Users } from 'lucide-react';
 import BulkCsvImportDialog from '@/components/BulkCsvImportDialog';
 import PdfImportDialog from '@/components/PdfImportDialog';
 import ImportSummary from '@/components/ImportSummary';
@@ -214,10 +214,25 @@ export default function CoproprietesPage() {
         payload.owner_ids_to_link = owners.map(o => o.id);
         // iter90kz : mode promoteur
         payload.promoter_owner_id = promoterOwnerId;
+        // iter92b : persiste sur l'ACP le flag de ventes intra-exercice pour
+        // afficher un banner permanent sur /lots (survit aux refresh).
+        payload.has_intra_fy_sales = hadIntraFySales;
         const r = await api.post('/coproprietes', payload);
         const newCopro = r.data;
         const nLots = (form.lots || []).filter(l => l.number && l.number.trim()).length;
         toast.success(nLots > 0 ? `ACP creee avec ${nLots} lot(s)` : 'Copropriete creee');
+        // iter92c : afficher un message informatif discret si des owners
+        // n'ont pas ete rattaches (leur code auxiliaire est deja associe a
+        // un autre owner ayant deja cette combinaison en base - typiquement
+        // parce que l'import a ete rejoue). Les LOTS eux-memes sont crees
+        // correctement, seule l'association owner<->ACP est skippee.
+        if (Array.isArray(newCopro?._warning_skipped_owners) && newCopro._warning_skipped_owners.length > 0) {
+          const n = newCopro._warning_skipped_owners.length;
+          toast.info(
+            `Info : ${n} proprietaire(s) doublon(s) detecte(s) - deja rattache(s) via un import precedent. Aucune action requise, vos ${nLots} lot(s) sont crees.`,
+            { duration: 8000 }
+          );
+        }
         setDialogOpen(false); load();
 
         // iter90gi : ne PLUS skipper le wizard. Toujours proposer l'import
@@ -449,18 +464,35 @@ export default function CoproprietesPage() {
             <Button variant="outline" onClick={() => setSummaryDialog(null)} data-testid="close-summary-btn">
               Fermer
             </Button>
-            {summaryDialog && !summaryDialog.summary.is_complete && (
-              <Button
-                onClick={() => {
-                  localStorage.setItem('selectedCopro', summaryDialog.acp.id);
-                  navigate(`/import-wizard?copropriete_id=${summaryDialog.acp.id}`);
-                }}
-                className="bg-[#022D52] hover:bg-[#01213e] text-white"
-                data-testid="resume-import-btn"
-              >
-                <RotateCcw size={13} className="mr-1" /> Reprendre l&apos;import
-              </Button>
-            )}
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+              {/* iter92c : raccourci "Creer les lots" quand aucun lot */}
+              {summaryDialog && (summaryDialog.summary?.counts?.lots || 0) === 0 && (
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    localStorage.setItem('selectedCopro', summaryDialog.acp.id);
+                    setSummaryDialog(null);
+                    navigate(`/lots?copropriete_id=${summaryDialog.acp.id}`);
+                  }}
+                  className="border-orange-400 text-orange-700 hover:bg-orange-50"
+                  data-testid="goto-lots-from-recap-btn"
+                >
+                  <Users size={13} className="mr-1" /> Creer les lots
+                </Button>
+              )}
+              {summaryDialog && !summaryDialog.summary.is_complete && (
+                <Button
+                  onClick={() => {
+                    localStorage.setItem('selectedCopro', summaryDialog.acp.id);
+                    navigate(`/import-wizard?copropriete_id=${summaryDialog.acp.id}`);
+                  }}
+                  className="bg-[#022D52] hover:bg-[#01213e] text-white"
+                  data-testid="resume-import-btn"
+                >
+                  <RotateCcw size={13} className="mr-1" /> Reprendre l&apos;import
+                </Button>
+              )}
+            </div>
           </div>
         </DialogContent>
       </Dialog>

@@ -995,6 +995,9 @@ export default function LotsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const postImportMutations = searchParams.get('post_import_mutations') === '1';
   const [showMutationBanner, setShowMutationBanner] = useState(postImportMutations);
+  // iter92b : etat persistant du flag `pending_mutations_prompt` sur l'ACP
+  const [coproDoc, setCoproDoc] = useState(null);
+  const bannerVisible = showMutationBanner || !!(coproDoc && coproDoc.pending_mutations_prompt);
 
   const [lots, setLots] = useState([]);
   const [owners, setOwners] = useState([]);
@@ -1046,6 +1049,17 @@ export default function LotsPage() {
     ]);
     setLots(lotsRes.data);
     setOwners(ownersRes.data);
+    // iter92b : charge le doc copropriete pour lire `pending_mutations_prompt`
+    if (coproIdParam) {
+      try {
+        const cRes = await api.get(`/coproprietes/${coproIdParam}`);
+        setCoproDoc(cRes.data);
+      } catch {
+        setCoproDoc(null);
+      }
+    } else {
+      setCoproDoc(null);
+    }
     // iter90gj Phase 3 : charge les frais privatifs en attente d'allocation
     // pour l'ACP courante (header X-Copropriete-Id gere par api client).
     if (coproIdParam) {
@@ -1170,45 +1184,56 @@ export default function LotsPage() {
   return (
     <div data-testid="lots-page">
       {/* iter90gg BLOC C : banner d'invitation apres creation ACP avec ventes intra-FY */}
-      {showMutationBanner && (
+      {bannerVisible && (
         <div className="mb-4 rounded-lg border-2 border-orange-400 bg-gradient-to-r from-orange-50 to-amber-50 p-4 shadow-sm" data-testid="post-import-mutations-banner">
           <div className="flex items-start gap-3">
             <AlertTriangle className="text-orange-600 flex-shrink-0 mt-0.5" size={22} />
             <div className="flex-1">
               <div className="text-sm font-bold text-orange-900">Mutations intra-exercice a saisir</div>
               <div className="text-xs text-orange-800 mt-1 leading-relaxed">
-                Toutes vos donnees sont deja sauvegardees. Pour chaque lot vendu, cliquez sur l&apos;icone <ArrowRightLeft size={12} className="inline mx-0.5" /> a droite du lot pour saisir la mutation
-                (date de vente, nouveau proprietaire, prorata jours, transfert fonds de roulement).
-                Quand vous avez termine les mutations, cliquez sur <strong>Terminer</strong>.
+                {lots.length === 0 ? (
+                  <>
+                    Cette ACP n&apos;a <strong>aucun lot</strong>. Commencez par creer vos lots (bouton <strong>Nouveau lot</strong> en haut a droite) puis, pour chaque lot vendu, cliquez sur l&apos;icone <ArrowRightLeft size={12} className="inline mx-0.5" /> a droite pour saisir la mutation (date, acquereur, prorata).
+                  </>
+                ) : (
+                  <>
+                    Toutes vos donnees sont deja sauvegardees. Pour chaque lot vendu, cliquez sur l&apos;icone <ArrowRightLeft size={12} className="inline mx-0.5" /> a droite du lot pour saisir la mutation (date de vente, nouveau proprietaire, prorata jours, transfert fonds de roulement).
+                    Quand vous avez termine les mutations, cliquez sur <strong>Marquer termine</strong>.
+                  </>
+                )}
               </div>
             </div>
             <div className="flex flex-col gap-2 flex-shrink-0">
               <Button
                 size="sm"
-                onClick={() => {
+                onClick={async () => {
+                  // iter92b : persiste le clear cote DB (survit aux refresh)
+                  const coproId = searchParams.get('copropriete_id') || localStorage.getItem('selectedCopro') || (coproDoc && coproDoc.id) || '';
+                  if (coproId) {
+                    try {
+                      await api.post(`/coproprietes/${coproId}/pending-mutations-done`);
+                    } catch { /* silent : le clear local suffit */ }
+                  }
                   setShowMutationBanner(false);
                   setSearchParams({});
-                  toast.success('Mutations enregistrees ! Direction la comptabilite.');
-                  navigate('/accounting');
+                  setCoproDoc((prev) => prev ? { ...prev, pending_mutations_prompt: false } : prev);
+                  toast.success('Mutations marquees comme terminees.');
                 }}
-                className="bg-[#022D52] hover:bg-[#022D52]/90 text-white"
-                data-testid="finish-mutations-accounting-btn"
+                className="bg-emerald-600 hover:bg-emerald-700 text-white"
+                data-testid="finish-mutations-btn"
               >
-                <CheckCircle2 size={14} className="mr-1" /> Terminer et aller a la Comptabilite
+                <CheckCircle2 size={14} className="mr-1" /> Marquer termine
               </Button>
               <Button
                 variant="outline"
                 size="sm"
                 onClick={() => {
-                  setShowMutationBanner(false);
-                  setSearchParams({});
-                  toast.success('Mutations enregistrees ! Votre ACP est prete.');
-                  navigate(`/?copropriete_id=${searchParams.get('copropriete_id') || localStorage.getItem('selectedCopro') || ''}`);
+                  navigate('/accounting');
                 }}
-                className="border-emerald-300 text-emerald-700 hover:bg-emerald-50 flex-shrink-0"
-                data-testid="finish-mutations-btn"
+                className="border-slate-300"
+                data-testid="finish-mutations-accounting-btn"
               >
-                Ouvrir l&apos;ACP
+                Aller a la Comptabilite
               </Button>
             </div>
             <Button
@@ -1217,6 +1242,7 @@ export default function LotsPage() {
               onClick={() => { setShowMutationBanner(false); setSearchParams({}); }}
               className="text-orange-700 hover:bg-orange-100 flex-shrink-0"
               data-testid="dismiss-mutation-banner"
+              title="Masquer temporairement (le banner reviendra au prochain refresh tant que le flag n'est pas marque termine)"
             >
               <X size={16} />
             </Button>

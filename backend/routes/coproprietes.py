@@ -4,6 +4,9 @@ from typing import Optional, List
 from datetime import datetime, timezone
 from bson import ObjectId
 import uuid
+import logging
+
+logger = logging.getLogger(__name__)
 
 # iter90jb : normalisation stricte des IBAN (canonique 8859-1 / ISO 13616).
 from iban_utils import normalize_iban
@@ -58,6 +61,10 @@ class CoproprieteInput(BaseModel):
     # iter90kz : mode promoteur - si renseigne, TOUS les lots sont affectes
     # a ce proprietaire (promoteur) avec start_date = fy_start.
     promoter_owner_id: Optional[str] = ""
+    # iter92b : le syndic declare des ventes intra-exercice. Le flag est
+    # persiste sur la copropriete pour afficher un banner permanent sur
+    # /lots jusqu'a ce que le syndic clique sur "Marquer termine".
+    has_intra_fy_sales: Optional[bool] = False
 
 
 def create_coproprietes_router(db):
@@ -231,6 +238,11 @@ def create_coproprietes_router(db):
             "quarterly_closing": data.quarterly_closing,
             "default_provisions": data.default_provisions,
             "promoter_owner_id": data.promoter_owner_id or "",
+            # iter92b : declaration syndic - ventes intra-exercice a saisir
+            "pending_mutations_prompt": bool(data.has_intra_fy_sales),
+            "pending_mutations_prompt_at": (
+                datetime.now(timezone.utc).isoformat() if data.has_intra_fy_sales else ""
+            ),
             "status": "active",
             "created_by": user.get("_id", ""),
             "created_at": datetime.now(timezone.utc).isoformat(),
@@ -340,16 +352,47 @@ def create_coproprietes_router(db):
 
         # iter90kz : rattacher TOUS les owners transmis par le frontend
         # (y compris ceux sans lot) a l'ACP + creer leurs comptes tiers.
+        # iter92c : pre-filtrer les owners par aux_code pour eviter les
+        # DuplicateKeyError sur l'index unique `uq_owner_copro_aux`. Si 2
+        # owners partagent le meme aux_code, on garde le premier et on log
+        # les autres pour que le syndic puisse les corriger apres coup.
+        skipped_dup_aux: list = []
         if data.owner_ids_to_link:
             from tier_accounts import assign_owner_accounts as _assign
             already_linked = seen_oids if data.lots else set()
+            seen_aux: set = set()
             for oid in data.owner_ids_to_link:
                 if not oid or oid in already_linked:
                     continue
                 already_linked.add(oid)
                 owner_doc = await db.owners.find_one({"id": oid}, {"_id": 0})
-                if owner_doc:
+                if not owner_doc:
+                    continue
+                aux = (owner_doc.get("auxiliary_code") or "").upper().strip()
+                if aux:
+                    if aux in seen_aux:
+                        skipped_dup_aux.append({
+                            "owner_id": oid, "name": owner_doc.get("name", ""),
+                            "auxiliary_code": aux,
+                            "reason": "duplicate_aux_code_in_payload",
+                        })
+                        continue
+                    seen_aux.add(aux)
+                try:
                     await _assign(db, owner_doc, doc["id"])
+                except Exception as e:  # noqa: BLE001
+                    # iter92c : capture DuplicateKeyError et autres erreurs
+                    # d'assignation pour ne PAS faire planter la creation ACP.
+                    # Le syndic verra la liste des owners non rattaches et
+                    # pourra corriger leur aux_code apres coup.
+                    logger.warning(
+                        "iter92c : assign_owner_accounts KO owner=%s aux=%s : %s",
+                        oid, aux, e,
+                    )
+                    skipped_dup_aux.append({
+                        "owner_id": oid, "name": owner_doc.get("name", ""),
+                        "auxiliary_code": aux, "reason": "assign_error",
+                    })
 
         # iter90gg : cree un fiscal_year si la periode est fournie
         if data.fy_start and data.fy_end:
@@ -369,7 +412,11 @@ def create_coproprietes_router(db):
                 "status": "open",
                 "created_at": now_iso,
             })
-        return {k: v for k, v in doc.items() if k != "_id"}
+        result = {k: v for k, v in doc.items() if k != "_id"}
+        # iter92c : signaler au frontend les owners non rattaches (aux_code duplique)
+        if skipped_dup_aux:
+            result["_warning_skipped_owners"] = skipped_dup_aux
+        return result
 
     @router.put("/{copro_id}")
     async def update_copropriete(copro_id: str, data: CoproprieteInput, request: Request):
@@ -520,6 +567,40 @@ def create_coproprietes_router(db):
         if result.matched_count == 0:
             raise HTTPException(404, "Copropriete non trouvee")
         return {"message": "Copropriete reactivee"}
+
+    # ---- iter92b : Marquer les mutations intra-exercice comme terminees ----
+    @router.post("/{copro_id}/pending-mutations-done")
+    async def mark_pending_mutations_done(copro_id: str, request: Request):
+        """iter92b : le syndic clique sur 'Marquer termine' sur le banner
+        d'invitation aux mutations intra-exercice. Vide le flag
+        `pending_mutations_prompt` (le banner disparait definitivement)."""
+        await _get_manager(request)
+        result = await db.coproprietes.update_one(
+            {"id": copro_id},
+            {"$set": {
+                "pending_mutations_prompt": False,
+                "pending_mutations_prompt_cleared_at": datetime.now(timezone.utc).isoformat(),
+            }},
+        )
+        if result.matched_count == 0:
+            raise HTTPException(404, "Copropriete non trouvee")
+        return {"message": "Flag mutations mis a jour", "pending_mutations_prompt": False}
+
+    @router.post("/{copro_id}/pending-mutations-remind")
+    async def mark_pending_mutations_remind(copro_id: str, request: Request):
+        """iter92b : re-active manuellement le flag (utile si le syndic
+        realise apres coup qu'il a des ventes a saisir)."""
+        await _get_manager(request)
+        result = await db.coproprietes.update_one(
+            {"id": copro_id},
+            {"$set": {
+                "pending_mutations_prompt": True,
+                "pending_mutations_prompt_at": datetime.now(timezone.utc).isoformat(),
+            }},
+        )
+        if result.matched_count == 0:
+            raise HTTPException(404, "Copropriete non trouvee")
+        return {"message": "Rappel mutations active", "pending_mutations_prompt": True}
 
     @router.post("/{copro_id}/reset-financial-data")
     async def reset_financial_data(copro_id: str, request: Request):
