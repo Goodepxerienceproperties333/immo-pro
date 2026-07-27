@@ -11,6 +11,7 @@ import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
 import { Plus, Trash2, Eye, Paperclip, Download, Pencil, Unlink, ShieldAlert, X } from 'lucide-react';
 import AccountSearchSelect from '@/components/AccountSearchSelect';
+import NaturePickerSelect from '@/components/NaturePickerSelect';
 import UnlettrageDialog from '@/components/UnlettrageDialog';
 import { fmtDate } from '@/lib/dateFmt';
 import { useFiscalYearParams } from '@/hooks/useFiscalYearParams';
@@ -619,7 +620,7 @@ export default function JournalsPage() {
 
       {/* Create Dialog */}
       <Dialog open={dialogOpen} onOpenChange={(open) => { if (!open) setEditingEntry(null); setDialogOpen(open); }} hasUnsavedChanges={entryDirty}>
-        <DialogContent className="max-w-6xl w-[min(96vw,1400px)] max-h-[90vh] overflow-y-auto" data-testid="entry-dialog">
+        <DialogContent className="max-w-none w-[min(98vw,1600px)] max-h-[92vh] overflow-y-auto" data-testid="entry-dialog">
           <DialogHeader><DialogTitle style={{fontFamily:'Chivo,sans-serif'}}>
             {editingEntry ? `Modifier ecriture ${editingEntry.reference || ''}` : 'Nouvelle ecriture comptable'}
             {editingEntry?.auto_generated && <Badge variant="outline" className="ml-2 text-[10px] bg-orange-50 border-orange-200 text-orange-700">Auto -&gt; sera marquee comme modifiee</Badge>}
@@ -662,16 +663,16 @@ export default function JournalsPage() {
                       return (
                       <tr key={`line-${i}`} className="border-t border-slate-100">
                         <td className="p-1" style={{ minWidth: 200 }}>
-                          <Select
-                            value={line.expense_category_id ? `cat:${line.expense_category_id}` : (line.account_number && !line.expense_category_id && (line.account_number.startsWith('400') || line.account_number.startsWith('440')) ? `acct:${line.account_number}` : 'none')}
-                            onValueChange={(v) => {
-                              // iter93i : le dropdown accepte 3 types de valeurs :
+                          <NaturePickerSelect
+                            categories={categories}
+                            accounts={accounts}
+                            value={line.expense_category_id ? `cat:${line.expense_category_id}` : (line.account_number && !line.expense_category_id && (line.account_number.startsWith('400') || line.account_number.startsWith('440')) ? `acct:${line.account_number}` : '')}
+                            onChange={(v) => {
+                              // iter93i : 3 types de valeurs :
                               //  - "none" : efface la nature
                               //  - "cat:{id}" : categorie de depense (comportement legacy)
-                              //  - "acct:{number}" : compte tiers direct (proprietaire 400x
-                              //    ou fournisseur 440x). L'expense_category_id est vide,
-                              //    account_number est defini directement.
-                              if (v === 'none') {
+                              //  - "acct:{number}" : compte tiers direct (proprio 400x / fournisseur 440x)
+                              if (v === 'none' || !v) {
                                 updateLine(i, 'expense_category_id', '');
                                 updateLine(i, 'account_number', '');
                                 updateLine(i, 'account_name', '');
@@ -682,52 +683,8 @@ export default function JournalsPage() {
                                 updateLine(i, 'account_number', v.slice(5));
                               }
                             }}
-                          >
-                            <SelectTrigger className="h-8 text-xs" data-testid={`journal-line-${i}-nature`}>
-                              <SelectValue placeholder="(optionnel)" />
-                            </SelectTrigger>
-                            <SelectContent className="max-h-[400px]">
-                              <SelectItem value="none">(aucune)</SelectItem>
-                              {(categories || []).length > 0 && (
-                                <div className="px-2 pt-2 pb-1 text-[10px] font-bold uppercase text-slate-400">Charges &amp; produits</div>
-                              )}
-                              {(categories || []).map((c, idx) => (
-                                <SelectItem key={`cat-${c.id}-${idx}`} value={`cat:${c.id}`}>
-                                  {c.name}{c.account_number ? ` [${c.account_number}]` : ''}
-                                </SelectItem>
-                              ))}
-                              {/* iter93i : proprietaires (comptes 400x) */}
-                              {(() => {
-                                const ownerAccts = (accounts || []).filter(a => a.number && a.number.startsWith('400'));
-                                if (ownerAccts.length === 0) return null;
-                                return (
-                                  <>
-                                    <div className="px-2 pt-2 pb-1 text-[10px] font-bold uppercase text-emerald-600">Proprietaires (comptes 400)</div>
-                                    {ownerAccts.map((a, idx) => (
-                                      <SelectItem key={`own-${a.number}-${idx}`} value={`acct:${a.number}`}>
-                                        {a.name || '(sans nom)'} <span className="text-slate-400 font-mono text-[10px]">[{a.number}]</span>
-                                      </SelectItem>
-                                    ))}
-                                  </>
-                                );
-                              })()}
-                              {/* iter93i : fournisseurs (comptes 440x) */}
-                              {(() => {
-                                const supAccts = (accounts || []).filter(a => a.number && a.number.startsWith('440'));
-                                if (supAccts.length === 0) return null;
-                                return (
-                                  <>
-                                    <div className="px-2 pt-2 pb-1 text-[10px] font-bold uppercase text-blue-700">Fournisseurs (comptes 440)</div>
-                                    {supAccts.map((a, idx) => (
-                                      <SelectItem key={`sup-${a.number}-${idx}`} value={`acct:${a.number}`}>
-                                        {a.name || '(sans nom)'} <span className="text-slate-400 font-mono text-[10px]">[{a.number}]</span>
-                                      </SelectItem>
-                                    ))}
-                                  </>
-                                );
-                              })()}
-                            </SelectContent>
-                          </Select>
+                            testId={`journal-line-${i}-nature`}
+                          />
                         </td>
                         <td className="p-1" style={{ minWidth: 240 }}>
                           {hasCategory ? (
