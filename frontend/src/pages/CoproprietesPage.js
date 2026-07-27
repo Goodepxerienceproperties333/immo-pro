@@ -660,8 +660,9 @@ export default function CoproprietesPage() {
                     { k: 'promoter', label: '3. Promoteur' },
                     { k: 'lots', label: '4. Lots' },
                     { k: 'assign', label: '5. Affectation' },
+                    { k: 'mutations', label: '6. Mutations' },
                   ].map((s, i, arr) => {
-                    const order = ['fy','owners','promoter','lots','assign'];
+                    const order = ['fy','owners','promoter','lots','assign','mutations'];
                     const currentIdx = order.indexOf(substep);
                     const thisIdx = order.indexOf(s.k);
                     const active = thisIdx === currentIdx;
@@ -1012,6 +1013,43 @@ export default function CoproprietesPage() {
                     </div>
                   </div>
                 )}
+
+                {/* SUB-STEP 6 : Ventes intra-exercice */}
+                {substep === 'mutations' && (
+                  <div className="bg-orange-50 border-2 border-orange-300 rounded-lg p-4" data-testid="intra-fy-sales-block">
+                    <div className="text-sm font-bold text-orange-900 uppercase tracking-wide mb-1">Etape 6/6 : Ventes intra-exercice</div>
+                    <p className="text-xs text-orange-800 mb-3">
+                      Depuis le debut de l&apos;exercice (<strong>{form.fy_start}</strong>), y a-t-il eu des <strong>mutations</strong> (ventes de lot) sur cette ACP ? Si oui, elles seront saisies via le module Mutations juste apres la creation.
+                    </p>
+                    <div className="flex flex-col gap-2">
+                      <label className="flex items-center gap-2 cursor-pointer text-sm">
+                        <input
+                          type="radio"
+                          name="intra_fy_sales"
+                          checked={!form._has_intra_fy_sales}
+                          onChange={() => setForm({...form, _has_intra_fy_sales: false})}
+                          data-testid="intra-fy-no"
+                        />
+                        <span>Non, aucune vente intra-exercice</span>
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer text-sm">
+                        <input
+                          type="radio"
+                          name="intra_fy_sales"
+                          checked={form._has_intra_fy_sales}
+                          onChange={() => setForm({...form, _has_intra_fy_sales: true})}
+                          data-testid="intra-fy-yes"
+                        />
+                        <span>Oui, il y a eu au moins une vente</span>
+                      </label>
+                    </div>
+                    {form._has_intra_fy_sales && (
+                      <p className="text-xs text-orange-900 mt-3 italic bg-orange-100 rounded p-2">
+                        A la creation de l&apos;ACP, vous serez automatiquement redirige vers la page <strong>Lots</strong> (ou le wizard d&apos;import Optipro) pour saisir chaque mutation avec sa date, l&apos;ancien et le nouveau proprietaire.
+                      </p>
+                    )}
+                  </div>
+                )}
               </div>
             )}
 
@@ -1041,42 +1079,6 @@ export default function CoproprietesPage() {
 
             {/* STEP 3: Options + description + summary */}
             {(editing || step === 3) && <>
-            {/* iter90gg BLOC C : Ventes intra-exercice */}
-            {!editing && form.fy_start && (
-              <div className="bg-orange-50 border-2 border-orange-300 rounded-lg p-3" data-testid="intra-fy-sales-block">
-                <div className="text-xs font-bold text-orange-900 uppercase tracking-wide mb-2">Ventes intra-exercice</div>
-                <p className="text-[11px] text-orange-800 mb-2">
-                  Depuis le debut de l&apos;exercice (<strong>{form.fy_start}</strong>), y a-t-il eu des mutations (ventes) sur des lots de cette ACP ?
-                </p>
-                <div className="flex gap-4">
-                  <label className="flex items-center gap-2 cursor-pointer text-sm">
-                    <input
-                      type="radio"
-                      name="intra_fy_sales"
-                      checked={!form._has_intra_fy_sales}
-                      onChange={() => setForm({...form, _has_intra_fy_sales: false})}
-                      data-testid="intra-fy-no"
-                    />
-                    <span>Non, aucune vente intra-exercice</span>
-                  </label>
-                  <label className="flex items-center gap-2 cursor-pointer text-sm">
-                    <input
-                      type="radio"
-                      name="intra_fy_sales"
-                      checked={form._has_intra_fy_sales}
-                      onChange={() => setForm({...form, _has_intra_fy_sales: true})}
-                      data-testid="intra-fy-yes"
-                    />
-                    <span>Oui, il y a eu des ventes</span>
-                  </label>
-                </div>
-                {form._has_intra_fy_sales && (
-                  <p className="text-[11px] text-orange-900 mt-2 italic">
-                    A la creation de l&apos;ACP, vous serez automatiquement redirige vers la page Lots pour saisir les mutations.
-                  </p>
-                )}
-              </div>
-            )}
             <div>
               <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Options</div>
               <div className="flex gap-6">
@@ -1113,8 +1115,8 @@ export default function CoproprietesPage() {
             {/* Navigation buttons */}
             <div className="flex gap-3 justify-between pt-2 border-t">
               {(() => {
-                // iter93e : navigation sub-step aware en mode CREATION Step 2
-                const subOrder = ['fy','owners','promoter','lots','assign'];
+                // iter93e/93g : navigation sub-step aware en mode CREATION Step 2
+                const subOrder = ['fy','owners','promoter','lots','assign','mutations'];
                 const subIdx = subOrder.indexOf(substep);
                 const inCreateStep2 = !editing && step === 2;
                 const canGoBack = !editing && (step > 1 || (inCreateStep2 && subIdx > 0));
@@ -1133,10 +1135,10 @@ export default function CoproprietesPage() {
               })()}
               <div className="flex gap-2">
                 {(() => {
-                  const subOrder = ['fy','owners','promoter','lots','assign'];
+                  const subOrder = ['fy','owners','promoter','lots','assign','mutations'];
                   const subIdx = subOrder.indexOf(substep);
                   const inCreateStep2 = !editing && step === 2;
-                  const isLastSub = inCreateStep2 && substep === 'assign';
+                  const isLastSub = inCreateStep2 && substep === 'mutations';
 
                   // Gating logique par sous-etape
                   let disabled = false;
@@ -1148,24 +1150,27 @@ export default function CoproprietesPage() {
                     if (substep === 'owners' && owners.length === 0) { disabled = true; title = 'Importez au moins 1 proprietaire (PDF, CSV ou manuel)'; }
                     if (substep === 'promoter' && form._is_promoter && !form._promoter_owner_id) { disabled = true; title = 'Selectionnez ou creez un promoteur'; }
                     if (substep === 'lots' && (form.lots || []).length === 0) { disabled = true; title = 'Importez ou ajoutez au moins 1 lot'; }
-                    if (isLastSub) btnLabel = 'Valider les affectations';
+                    if (substep === 'assign') btnLabel = 'Valider les affectations';
+                    if (isLastSub) btnLabel = 'Etape suivante';
                   }
 
                   const onClickNext = () => {
                     if (inCreateStep2 && !isLastSub) {
+                      // Interception speciale pour l'etape 'assign' -> confirme les affectations
+                      if (substep === 'assign') {
+                        const total = (form.lots || []).length;
+                        const orphans = (form.lots || []).filter(l => (l.owner_ids || []).length === 0 && !form._is_promoter).length;
+                        if (orphans > 0) {
+                          const ok = window.confirm(
+                            `${orphans} lot(s) sur ${total} n'ont pas de proprietaire assigne. ` +
+                            `Continuer et les creer comme orphelins (a completer plus tard) ?`
+                          );
+                          if (!ok) return;
+                        }
+                        toast.success(`Affectations validees : ${total - orphans}/${total} lot(s) rattaches`);
+                      }
                       setSubstep(subOrder[subIdx + 1]);
                     } else if (inCreateStep2 && isLastSub) {
-                      // Valider les affectations : passe a Step 3
-                      const total = (form.lots || []).length;
-                      const orphans = (form.lots || []).filter(l => (l.owner_ids || []).length === 0 && !form._is_promoter).length;
-                      if (orphans > 0) {
-                        const ok = window.confirm(
-                          `${orphans} lot(s) sur ${total} n'ont pas de proprietaire assigne. ` +
-                          `Continuer et les creer comme orphelins (a completer plus tard) ?`
-                        );
-                        if (!ok) return;
-                      }
-                      toast.success(`Affectations validees : ${total - orphans}/${total} lot(s) rattaches`);
                       setStep(3);
                     } else {
                       setStep(step + 1);
