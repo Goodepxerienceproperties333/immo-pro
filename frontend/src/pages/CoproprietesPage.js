@@ -57,6 +57,10 @@ export default function CoproprietesPage() {
   // lots (import lots) -> assign (revue + validation en un clic).
   // L'edition d'ACP existante ne l'utilise PAS (garde l'ancien flow libre).
   const [substep, setSubstep] = useState('fy');
+  // iter93f : proprios crees/reutilises pendant la session de creation en cours.
+  // Ils DOIVENT rester visibles dans le recap meme s'ils sont deja lies a
+  // d'autres ACPs (donc filtres par `unassigned_only=true`).
+  const [sessionOwners, setSessionOwners] = useState([]);
   const [ownerSearchByLot, setOwnerSearchByLot] = useState({});  // {lotIdx: 'query'}
   const [ownerFocusLot, setOwnerFocusLot] = useState(null);  // lotIdx currently focused or null
   // iter90if : recap des imports par ACP (id -> summary)
@@ -83,22 +87,30 @@ export default function CoproprietesPage() {
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
     if (!dialogOpen) return;
-    // iter93d : sur la CREATION d'une nouvelle ACP, on ne veut PAS montrer
-    // les proprios d'autres ACPs (confusion : le syndic voit "MATEXI, BOXUS,
-    // TEUWEN" avant meme d'avoir importe son PDF). On charge uniquement les
-    // orphelins (owners sans copropriete_id/lot), qui correspondent aux
-    // proprios fraichement importes via CSV/PDF de la session courante.
-    // En MODE EDITION, on garde le comportement historique (voir tous les
-    // owners du syndic + orphelins) pour permettre les reassignations.
+    // iter93d/93f : sur la CREATION on affiche uniquement les orphelins
+    // (unassigned_only), MAIS on merge aussi les sessionOwners qui sont les
+    // proprios crees/reutilises pendant l'import en cours (ils peuvent
+    // etre deja rattaches a d'autres ACPs). En mode edition, on garde le
+    // comportement historique (tous les proprios du syndic + orphelins).
     const params = editing
       ? { include_unassigned: true, copropriete_id: 'all' }
       : { unassigned_only: true };
-    api.get('/owners', { params }).then(r => setOwners(r.data)).catch(() => {});
-  }, [dialogOpen, editing]);
+    api.get('/owners', { params }).then(r => {
+      const fetched = r.data || [];
+      if (editing) {
+        setOwners(fetched);
+      } else {
+        const byId = new Map();
+        for (const o of fetched) if (o?.id) byId.set(o.id, o);
+        for (const o of sessionOwners) if (o?.id && !byId.has(o.id)) byId.set(o.id, o);
+        setOwners(Array.from(byId.values()));
+      }
+    }).catch(() => {});
+  }, [dialogOpen, editing, sessionOwners]);
 
   const filtered = coproprietes.filter(c => c.name.toLowerCase().includes(search.toLowerCase()) || (c.reference || '').toLowerCase().includes(search.toLowerCase()) || (c.bce || '').includes(search));
 
-  const openCreate = () => { setEditing(null); setForm({...emptyForm, bank_accounts: [], lots: []}); setStep(1); setSubstep('fy'); setDialogOpen(true); };
+  const openCreate = () => { setEditing(null); setForm({...emptyForm, bank_accounts: [], lots: []}); setStep(1); setSubstep('fy'); setSessionOwners([]); setDialogOpen(true); };
   const openEdit = (c) => {
     setEditing(c);
     setForm({
@@ -185,15 +197,24 @@ export default function CoproprietesPage() {
   };
 
   // Refetch owners on focus to ensure freshly-imported owners are visible.
-  // iter93d : sur la creation, on ne re-fetch QUE les orphelins (nouveaux
-  // imports); sur l'edition, on garde tous les owners du syndic + orphelins.
+  // iter93d/93f : sur la creation, on merge fetch(orphelins) + sessionOwners
+  // (proprios importes lors de cette creation, potentiellement deja rattaches
+  // a d'autres ACPs); sur l'edition, on garde le comportement historique.
   const refreshOwnersIfStale = async () => {
     try {
       const params = editing
         ? { include_unassigned: true, copropriete_id: 'all' }
         : { unassigned_only: true };
       const r = await api.get('/owners', { params });
-      setOwners(r.data);
+      const fetched = r.data || [];
+      if (editing) {
+        setOwners(fetched);
+      } else {
+        const byId = new Map();
+        for (const o of fetched) if (o?.id) byId.set(o.id, o);
+        for (const o of sessionOwners) if (o?.id && !byId.has(o.id)) byId.set(o.id, o);
+        setOwners(Array.from(byId.values()));
+      }
     } catch { /* ignore */ }
   };
 
@@ -1229,6 +1250,7 @@ export default function CoproprietesPage() {
         onImport={async (rows) => {
           if (importingOwners) return;
           setImportingOwners(true);
+          const created = [];
           let ok = 0, reused = 0, ko = 0;
           // iter90gk : accumule les homonymes detectes pour un dialog de review
           const homonyms = [];
@@ -1243,6 +1265,7 @@ export default function CoproprietesPage() {
                 address: r.address || '', postal_code: r.postal_code || '', city: r.city || '',
                 country: 'Belgique', email: r.email || '', phone: r.phone || '', iban: r.iban || '',
               });
+              if (resp?.data) created.push(resp.data);
               if (resp?.data?._reused) reused++;
               else ok++;
             } catch (err) {
@@ -1254,11 +1277,29 @@ export default function CoproprietesPage() {
               }
             }
           }
-          // Reload owners so the lot autocomplete sees them
+          // iter93f : persist session owners (crees + reutilises) pour le recap
+          if (created.length > 0) {
+            setSessionOwners(prev => {
+              const byId = new Map();
+              for (const o of prev) if (o?.id) byId.set(o.id, o);
+              for (const o of created) if (o?.id) byId.set(o.id, o);
+              return Array.from(byId.values());
+            });
+          }
+          // Reload owners so the lot autocomplete sees them.
+          // iter93f : sur la CREATION, merge fetch(orphelins) + created.
           let nextOwners = owners;
           try {
             const r = await api.get('/owners', { params: editing ? { include_unassigned: true, copropriete_id: 'all' } : { unassigned_only: true } });
-            nextOwners = r.data || [];
+            const fetched = r.data || [];
+            if (!editing) {
+              const byId = new Map();
+              for (const o of fetched) if (o?.id) byId.set(o.id, o);
+              for (const o of created) if (o?.id && !byId.has(o.id)) byId.set(o.id, o);
+              nextOwners = Array.from(byId.values());
+            } else {
+              nextOwners = fetched;
+            }
             setOwners(nextOwners);
           } catch (_e) {
             // ignore reload failure
@@ -1355,11 +1396,34 @@ export default function CoproprietesPage() {
               }
             }
           }
-          // Re-fetch the full list so the local state is consistent
+          // iter93f : accumule les proprios de la session (crees + reutilises)
+          // pour qu'ils restent visibles dans le recap Etape 2, meme si deja
+          // rattaches a d'autres ACPs.
+          if (created.length > 0) {
+            setSessionOwners(prev => {
+              const byId = new Map();
+              for (const o of prev) if (o?.id) byId.set(o.id, o);
+              for (const o of created) if (o?.id) byId.set(o.id, o);
+              return Array.from(byId.values());
+            });
+          }
+          // Re-fetch the full list so the local state is consistent.
+          // iter93f : sur la CREATION, `unassigned_only=true` exclut les
+          // proprios reutilises (deja rattaches a d'autres ACPs). On merge
+          // manuellement les `created` (contenant les nouveaux + reutilises)
+          // avec le fetch pour ne pas les perdre du recap.
           let nextOwners = owners;
           try {
             const rr = await api.get('/owners', { params: editing ? { include_unassigned: true, copropriete_id: 'all' } : { unassigned_only: true } });
-            nextOwners = rr.data || [];
+            const fetched = rr.data || [];
+            if (!editing) {
+              const byId = new Map();
+              for (const o of fetched) if (o?.id) byId.set(o.id, o);
+              for (const o of created) if (o?.id && !byId.has(o.id)) byId.set(o.id, o);
+              nextOwners = Array.from(byId.values());
+            } else {
+              nextOwners = fetched;
+            }
             setOwners(nextOwners);
           } catch (_e) {
             // ignore
