@@ -952,7 +952,11 @@ export default function CoproprietesPage() {
                             <span className="text-slate-600">{lot.description || lot.lot_type}</span>
                           </div>
                           {form._is_promoter && form._promoter_owner_id ? (() => {
-                            const promoter = owners.find(x => x.id === form._promoter_owner_id);
+                            // iter93f : fallback sur sessionOwners si les owners
+                            // state ont ete rechargus sans le promoteur (cas
+                            // owner reutilise deja lie a une autre ACP).
+                            const promoter = owners.find(x => x.id === form._promoter_owner_id)
+                              || sessionOwners.find(x => x.id === form._promoter_owner_id);
                             return (
                               <div className="mt-1" data-testid={`lot-${i}-promoter-override`}>
                                 <Badge variant="outline" className="bg-orange-50 border-orange-400 text-orange-900 gap-1 pl-1.5 pr-1.5 py-0 text-[10px]">
@@ -964,7 +968,8 @@ export default function CoproprietesPage() {
                             <div className="mt-1 flex flex-wrap items-center gap-1">
                               {(lot.owner_ids || []).length > 0 ? (
                                 lot.owner_ids.map(oid => {
-                                  const o = owners.find(x => x.id === oid);
+                                  const o = owners.find(x => x.id === oid)
+                                    || sessionOwners.find(x => x.id === oid);
                                   return (
                                     <Badge key={oid} variant="outline" className="bg-emerald-50 border-emerald-300 text-emerald-800 gap-1 pl-1.5 pr-1 py-0 text-[10px]" data-testid={`lot-${i}-owner-${oid}`}>
                                       {o?.name || '(inconnu)'}
@@ -1486,10 +1491,20 @@ export default function CoproprietesPage() {
         onImport={async (rows) => {
           // Refetch owners JUST BEFORE matching to ensure freshly-imported
           // owners (from a prior PDF/CSV import) are visible.
+          // iter93f : merge sessionOwners pour ne pas perdre les proprios
+          // reutilises (deja lies a d'autres ACPs) - notamment le promoteur.
           let availableOwners = owners;
           try {
             const rr = await api.get('/owners', { params: editing ? { include_unassigned: true, copropriete_id: 'all' } : { unassigned_only: true } });
-            availableOwners = rr.data || [];
+            const fetched = rr.data || [];
+            if (!editing) {
+              const byId = new Map();
+              for (const o of fetched) if (o?.id) byId.set(o.id, o);
+              for (const o of sessionOwners) if (o?.id && !byId.has(o.id)) byId.set(o.id, o);
+              availableOwners = Array.from(byId.values());
+            } else {
+              availableOwners = fetched;
+            }
             setOwners(availableOwners);
           } catch (_e) {
             // use local cache
