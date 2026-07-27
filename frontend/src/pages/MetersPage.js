@@ -88,12 +88,15 @@ export default function MetersPage() {
   const [batchRows, setBatchRows] = useState({}); // {lot_id: value}
   const [batchLotIds, setBatchLotIds] = useState(new Set());
   const [batchSubmitting, setBatchSubmitting] = useState(false);
+  // iter90i6 : PJ (decompte fournisseur) attachee au batch
+  const [batchAttachment, setBatchAttachment] = useState(null);
 
   const openBatch = () => {
     setBatchDate(new Date().toISOString().slice(0, 10));
     setBatchType('water');
     setBatchLotIds(new Set());
     setBatchRows({});
+    setBatchAttachment(null);
     setBatchDialog(true);
   };
 
@@ -122,6 +125,21 @@ export default function MetersPage() {
           `Cle de repartition "${r.data.distribution_key_name}" disponible pour vos OD`,
           { duration: 6000 }
         );
+      }
+      // iter90i6 : upload de la PJ (si fournie) sur le 1er reading du batch,
+      // le backend propage automatiquement sur tous les releves du batch_id.
+      if (batchAttachment && r.data.created_readings?.length > 0) {
+        const firstReadingId = r.data.created_readings[0].id;
+        const fd = new FormData();
+        fd.append('file', batchAttachment);
+        try {
+          await api.post(`/meters/readings/${firstReadingId}/attachment`, fd, {
+            headers: { 'Content-Type': 'multipart/form-data' },
+          });
+          toast.success('Piece jointe attachee au releve');
+        } catch (e) {
+          toast.error("Erreur upload piece jointe : " + (e.response?.data?.detail || e.message));
+        }
       }
       setBatchDialog(false);
       await load();
@@ -330,6 +348,27 @@ export default function MetersPage() {
                     })}
                   </tbody>
                 </table>
+              </div>
+            </div>
+            {/* iter90i6 : PJ decompte fournisseur (facultatif) */}
+            <div className="border-t border-slate-200 pt-3">
+              <label className="text-xs uppercase tracking-wider text-slate-500 font-semibold block mb-1">
+                Piece jointe (decompte fournisseur, PV de releve...)
+              </label>
+              <input
+                type="file"
+                accept="application/pdf,image/*"
+                onChange={e => setBatchAttachment(e.target.files?.[0] || null)}
+                className="text-xs w-full border border-slate-200 rounded px-2 py-1.5 file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:bg-slate-100 file:text-slate-700 hover:file:bg-slate-200"
+                data-testid="batch-attachment-input"
+              />
+              {batchAttachment && (
+                <div className="text-[10px] text-emerald-700 mt-1">
+                  Fichier selectionne : <b>{batchAttachment.name}</b> ({(batchAttachment.size / 1024).toFixed(1)} Ko)
+                </div>
+              )}
+              <div className="text-[10px] text-slate-500 italic mt-1">
+                Sera joint automatiquement aux decomptes annuels envoyes aux proprietaires.
               </div>
             </div>
             <div className="flex justify-end gap-2 pt-2">

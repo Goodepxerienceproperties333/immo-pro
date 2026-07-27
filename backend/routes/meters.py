@@ -1,4 +1,5 @@
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, UploadFile, File, Form
+from fastapi.responses import Response
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime, timezone
@@ -113,6 +114,9 @@ def create_meters_router(db):
         if data.meter_type not in METER_TYPES_ALLOWED:
             raise HTTPException(400, f"Type invalide '{data.meter_type}'")
         unit = METER_TYPE_DEFAULT_UNIT.get(data.meter_type, "")
+        # iter90i6 : batch_id partage entre tous les releves du batch
+        # permet d'attacher une meme PJ (decompte fournisseur) a tous.
+        batch_id = str(uuid.uuid4())
         created_readings = []
         created_meters = []
         errors = []
@@ -150,6 +154,9 @@ def create_meters_router(db):
                 "date": data.date,
                 "value": float(entry.value),
                 "consumption": consumption,
+                "batch_id": batch_id,
+                "meter_type": data.meter_type,
+                "copropriete_id": data.copropriete_id,
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
             await db.meter_readings.insert_one(doc)
@@ -174,6 +181,7 @@ def create_meters_router(db):
             "created_meters": created_meters,
             "errors": errors,
             "count": len(created_readings),
+            "batch_id": batch_id,
             "distribution_key_id": dk_id,
             "distribution_key_name": dk_name,
         }
@@ -271,6 +279,105 @@ def create_meters_router(db):
         if result.deleted_count == 0:
             raise HTTPException(404, "Releve non trouve")
         return {"message": "Releve supprime"}
+
+    # ---- ATTACHMENTS PJ (iter90i6) ----
+    # Permet de joindre un document (decompte du fournisseur, PV de releve
+    # d'index, facture d'eau...) a un ou plusieurs releves. Le document est
+    # stocke dans GridFS et sera automatiquement joint au decompte annuel de
+    # charges envoye aux proprietaires en fin d'exercice.
+    @router.post("/readings/{reading_id}/attachment")
+    async def upload_reading_attachment(reading_id: str, file: UploadFile = File(...)):
+        r = await db.meter_readings.find_one({"id": reading_id}, {"_id": 0})
+        if not r:
+            raise HTTPException(404, "Releve introuvable")
+        content = await file.read()
+        if len(content) == 0:
+            raise HTTPException(400, "Fichier vide")
+        if len(content) > 15 * 1024 * 1024:
+            raise HTTPException(400, "Fichier trop volumineux (max 15 Mo)")
+        from gridfs_storage import get_documents_storage
+        storage = get_documents_storage(db)
+        gid = await storage.upload(
+            filename=file.filename or "attachment.pdf",
+            contents=content,
+            metadata={
+                "reading_id": reading_id,
+                "meter_id": r.get("meter_id", ""),
+                "copropriete_id": r.get("copropriete_id", ""),
+                "mime_type": file.content_type or "application/octet-stream",
+                "uploaded_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+        # Meme fichier applique a TOUS les releves du meme batch (batch_id
+        # partage) pour ne pas dupliquer le fichier N fois en GridFS.
+        batch_id = r.get("batch_id") or reading_id
+        upd = {
+            "attachment_gridfs_id": gid,
+            "attachment_filename": file.filename or "attachment.pdf",
+            "attachment_size": len(content),
+            "attachment_mime": file.content_type or "application/pdf",
+        }
+        if r.get("batch_id"):
+            await db.meter_readings.update_many({"batch_id": batch_id}, {"$set": upd})
+        else:
+            await db.meter_readings.update_one({"id": reading_id}, {"$set": upd})
+        return {"ok": True, "gridfs_id": gid, "size": len(content), "filename": upd["attachment_filename"]}
+
+    @router.get("/readings/{reading_id}/attachment/download")
+    async def download_reading_attachment(reading_id: str):
+        r = await db.meter_readings.find_one({"id": reading_id}, {"_id": 0})
+        if not r or not r.get("attachment_gridfs_id"):
+            raise HTTPException(404, "Aucune piece jointe pour ce releve")
+        from gridfs_storage import get_documents_storage
+        storage = get_documents_storage(db)
+        data = await storage.download(r["attachment_gridfs_id"])
+        if not data:
+            raise HTTPException(404, "Fichier introuvable en GridFS")
+        filename = (r.get("attachment_filename") or "attachment.pdf").replace('"', '')
+        return Response(
+            content=data,
+            media_type=r.get("attachment_mime") or "application/pdf",
+            headers={"Content-Disposition": f'inline; filename="{filename}"'},
+        )
+
+    @router.delete("/readings/{reading_id}/attachment")
+    async def delete_reading_attachment(reading_id: str):
+        r = await db.meter_readings.find_one({"id": reading_id}, {"_id": 0})
+        if not r:
+            raise HTTPException(404, "Releve introuvable")
+        batch_id = r.get("batch_id") or reading_id
+        upd = {"attachment_gridfs_id": "", "attachment_filename": "",
+               "attachment_size": 0, "attachment_mime": ""}
+        if r.get("batch_id"):
+            await db.meter_readings.update_many({"batch_id": batch_id}, {"$set": upd})
+        else:
+            await db.meter_readings.update_one({"id": reading_id}, {"$set": upd})
+        return {"ok": True}
+
+    @router.get("/attachments/for-fiscal-year")
+    async def list_fy_attachments(copropriete_id: str = Query(...),
+                                  start_date: str = Query(...),
+                                  end_date: str = Query(...)):
+        """iter90i6 : liste des PJ de releves pour l'exercice donne, utilisee
+        par la generation du decompte annuel (envoie automatiquement les
+        justificatifs de consommation aux proprietaires)."""
+        rows = await db.meter_readings.find({
+            "copropriete_id": copropriete_id,
+            "date": {"$gte": start_date, "$lte": end_date},
+            "attachment_gridfs_id": {"$exists": True, "$ne": ""},
+        }, {"_id": 0, "id": 1, "meter_type": 1, "date": 1, "batch_id": 1,
+            "attachment_gridfs_id": 1, "attachment_filename": 1,
+            "attachment_size": 1, "attachment_mime": 1}).to_list(1000)
+        # Dedup par batch (un seul fichier par batch)
+        seen = set()
+        deduped = []
+        for r in rows:
+            key = r.get("batch_id") or r.get("id")
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(r)
+        return deduped
 
     # ---- CONSUMPTION PER LOT (iter90ie) ----
     # Utilise par la page de configuration des cles "meter" et par la
