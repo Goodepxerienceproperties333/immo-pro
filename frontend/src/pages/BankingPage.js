@@ -1225,6 +1225,18 @@ export default function BankingPage() {
                               ↳ {txn.suggested_match_label}
                             </div>
                           )}
+                          {!txn.matched && !txn.suggested_match_to && Array.isArray(txn.ambiguous_owner_candidates) && txn.ambiguous_owner_candidates.length >= 2 && (
+                            <div
+                              className="text-[10px] text-orange-700 mt-0.5 flex items-center gap-1"
+                              title={`Homonymes detectes : ${txn.ambiguous_owner_candidates.map(c => c.name).join(', ')}. Rapprochement manuel requis.`}
+                              data-testid={`homonym-warning-${txn.id}`}
+                            >
+                              <AlertTriangle size={10} className="shrink-0" />
+                              <span className="truncate">
+                                Homonymes ({txn.ambiguous_owner_candidates.length}) - lettrage manuel
+                              </span>
+                            </div>
+                          )}
                         </TableCell>
                         <TableCell className="text-sm break-words" style={{wordBreak: 'break-word'}}>{txn.communication}</TableCell>
                         <TableCell className={`text-right font-mono font-semibold ${txn.amount >= 0 ? 'text-green-700' : 'text-red-700'}`}>{txn.amount >= 0 ? '+' : ''}{txn.amount?.toFixed(2)}</TableCell>

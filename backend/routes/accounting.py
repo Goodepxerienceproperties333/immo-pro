@@ -55,6 +55,10 @@ class JournalEntryLine(BaseModel):
     # iter90g1 : nature de depense (Distribution Key) par ligne d'ecriture.
     # Utilisee cote portail proprietaire pour projeter la quote-part des OD.
     distribution_key_id: Optional[str] = None
+    # iter91b : expense_category_id (Nature de depense) - source de la
+    # pre-remplissage automatique de account_number / %Occ / %Prop / distribution_key.
+    # Conserve pour audit trail et rapport OD par nature.
+    expense_category_id: Optional[str] = None
 
 
 class JournalEntryInput(BaseModel):

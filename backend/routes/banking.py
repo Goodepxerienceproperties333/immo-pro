@@ -117,6 +117,109 @@ def _ensure_copro_access(request: Request, copro_id: str) -> None:
 def create_banking_router(db):
     router = APIRouter(prefix="/api/banking")
 
+    # iter91a : Titres de politesse a ignorer lors du matching partiel de nom.
+    # Reference partagee par _try_auto_lettrage_vcs et _suggest_match_for_movement.
+    _NAME_TITLES = {
+        "mme", "mr", "m.", "m", "mlle", "melle", "dr", "me", "mme.",
+        "monsieur", "madame", "mademoiselle",
+    }
+
+    def _strip_titles(name_parts):
+        """Enleve titres de politesse (Mme, M., etc.) et retourne uniquement les
+        tokens significatifs (>= 2 chars)."""
+        out = []
+        for p in name_parts:
+            if not p:
+                continue
+            key = p.lower().rstrip(".").rstrip(",")
+            if key in _NAME_TITLES:
+                continue
+            out.append(p)
+        return out
+
+    async def _open_balance_for_owner(owner_id: str, copro_id: str) -> float:
+        """iter91a : solde debiteur ouvert d'un proprietaire, calcule via
+        `db.journal_entries` (source de verite comptable).
+
+        Somme sur toutes les lignes ou `third_party_id == owner_id` et
+        `copropriete_id == copro_id` :  debit - credit.
+        Positif = proprietaire debiteur (doit de l'argent).
+        Silencieux en cas d'erreur (retourne 0)."""
+        try:
+            entries = await db.journal_entries.find(
+                {"copropriete_id": copro_id, "lines.third_party_id": owner_id},
+                {"_id": 0, "lines": 1}
+            ).to_list(5000)
+            total = 0.0
+            for e in entries:
+                for ln in (e.get("lines") or []):
+                    if ln.get("third_party_id") == owner_id:
+                        total += float(ln.get("debit", 0) or 0) - float(ln.get("credit", 0) or 0)
+            return round(total, 2)
+        except Exception:
+            return 0.0
+
+    async def _disambiguate_owner_candidates(candidates, cp_name, amount, copro_id):
+        """iter91a - HOMONYMES : quand plusieurs proprietaires partagent le
+        meme nom de famille, applique successivement :
+          1) VCS deja teste en amont (unicite garantie)
+          2) Discriminant prenom : filtre les candidats dont `first_name`
+             apparait comme mot entier (\\b) dans `cp_name`.
+          3) Discriminant montant : parmi les candidats restants, si un seul
+             a un solde ouvert egal (a 0.01 pres) au montant de la
+             transaction, il est retenu.
+          4) Sinon : ambigu -> retourne None + reason 'ambiguous:N' + la liste
+             des candidats pour affichage frontend / rapprochement manuel.
+        Retourne un dict {owner, reason, ambiguous_candidates}.
+        """
+        import re as _re
+        if not candidates:
+            return {"owner": None, "reason": "", "ambiguous_candidates": []}
+        if len(candidates) == 1:
+            return {"owner": candidates[0], "reason": "unique", "ambiguous_candidates": []}
+
+        # 2) Discriminant prenom
+        pool = candidates
+        if cp_name:
+            cp_lower = cp_name.lower()
+            first_matches = []
+            for o in pool:
+                fn = (o.get("first_name") or "").strip().lower()
+                if fn and len(fn) >= 2 and _re.search(rf"\b{_re.escape(fn)}\b", cp_lower):
+                    first_matches.append(o)
+            if len(first_matches) == 1:
+                return {"owner": first_matches[0], "reason": "first_name",
+                        "ambiguous_candidates": []}
+            if len(first_matches) > 1:
+                pool = first_matches  # on restreint le pool pour le discriminant suivant
+
+        # 3) Discriminant montant
+        try:
+            amt = round(abs(float(amount or 0)), 2)
+        except Exception:
+            amt = 0.0
+        if amt > 0 and copro_id and len(pool) > 1:
+            amt_matches = []
+            for o in pool:
+                bal = await _open_balance_for_owner(o["id"], copro_id)
+                if bal > 0 and abs(bal - amt) < 0.01:
+                    amt_matches.append(o)
+            if len(amt_matches) == 1:
+                return {"owner": amt_matches[0], "reason": "amount",
+                        "ambiguous_candidates": []}
+
+        # 4) Ambigu -> pas de match automatique
+        return {
+            "owner": None,
+            "reason": f"ambiguous:{len(pool)}",
+            "ambiguous_candidates": [
+                {"id": o.get("id"), "name": o.get("name", ""),
+                 "first_name": o.get("first_name", ""),
+                 "last_name": o.get("last_name", "")}
+                for o in pool
+            ],
+        }
+
     async def _try_explicit_match_then_vcs(txn_doc):
         """Match d'une transaction :
         1) PRIORITE : si l'utilisateur a explicitement selectionne une contrepartie
@@ -189,33 +292,62 @@ def create_banking_router(db):
                     {"vcs_code": {"$regex": _re.escape(vcs_clean)}}, {"_id": 0}
                 )
         # 2) Fallback : match par counterparty_name exact (case-insensitive)
+        #    iter91a : utilise `find` + disambiguation homonymes
         if not owner and cp_name and len(cp_name) >= 3:
             esc = _re.escape(cp_name)
-            owner = await db.owners.find_one(
+            exact_matches = await db.owners.find(
                 {"name": {"$regex": f"^{esc}$", "$options": "i"}}, {"_id": 0}
-            )
-        # 3) Fallback : nom partiel "Last First" ou "First Last"
-        if not owner and cp_name and " " in cp_name:
+            ).to_list(20)
+            if exact_matches:
+                res = await _disambiguate_owner_candidates(
+                    exact_matches, cp_name, txn_doc.get("amount", 0), copro_id
+                )
+                owner = res["owner"]
+                if not owner and res.get("ambiguous_candidates"):
+                    # iter91a : trace pour affichage manuel (pas de match auto)
+                    await db.bank_transactions.update_one(
+                        {"id": txn_doc["id"]},
+                        {"$set": {"ambiguous_owner_candidates": res["ambiguous_candidates"]}}
+                    )
+        # 3) Fallback : nom partiel "Last First" ou "First Last" (iter91a :
+        #    active aussi si cp_name est un token unique, ex. "DUPONT" seul)
+        if not owner and cp_name:
             parts = [p for p in cp_name.split() if p]
-            # iter90ib : exclure titres de politesse (Mme, M., etc.) et
-            # exiger >= 4 chars pour eviter faux positifs.
-            _TITLES = {"mme", "mr", "m.", "m", "mlle", "melle", "dr", "me",
-                       "mme.", "monsieur", "madame", "mademoiselle"}
-            parts = [p for p in parts if p.lower().rstrip(".").rstrip(",") not in _TITLES]
-            if len(parts) >= 2:
-                possible = [parts[0], parts[-1], " ".join(parts[:2]), " ".join(parts[-2:])]
+            # iter90ib/iter91a : exclure titres et exiger >= 4 chars
+            parts = _strip_titles(parts)
+            if len(parts) >= 1:
+                # candidats : premier, dernier, et 2 premiers/2 derniers
+                possible = list(dict.fromkeys([
+                    parts[0], parts[-1],
+                    " ".join(parts[:2]), " ".join(parts[-2:]),
+                ]))
+                ambiguous_last = None
                 for p in possible:
                     if len(p) < 4:
                         continue
-                    owner = await db.owners.find_one(
+                    # iter91a : find (pas find_one) pour detecter homonymes
+                    candidates = await db.owners.find(
                         {"$or": [
                             {"last_name": {"$regex": f"^{_re.escape(p)}$", "$options": "i"}},
                             {"name": {"$regex": f"\\b{_re.escape(p)}\\b", "$options": "i"}},
                         ]},
                         {"_id": 0}
+                    ).to_list(20)
+                    if not candidates:
+                        continue
+                    res = await _disambiguate_owner_candidates(
+                        candidates, cp_name, txn_doc.get("amount", 0), copro_id
                     )
-                    if owner:
+                    if res["owner"]:
+                        owner = res["owner"]
                         break
+                    if res.get("ambiguous_candidates"):
+                        ambiguous_last = res["ambiguous_candidates"]
+                if not owner and ambiguous_last:
+                    await db.bank_transactions.update_one(
+                        {"id": txn_doc["id"]},
+                        {"$set": {"ambiguous_owner_candidates": ambiguous_last}}
+                    )
         if owner:
             await _save_suggestion(owner["id"], "owner_payment", owner.get("name", ""))
             return
@@ -293,53 +425,69 @@ def create_banking_router(db):
                     "confidence": "high",
                 }
 
-        # 2) Nom exact du counterparty -> owner
+        # 2) Nom exact du counterparty -> owner (iter91a : gere homonymes)
+        ambiguous_pool = []
         if cp_name and len(cp_name) >= 3:
             esc = _re.escape(cp_name)
-            owner = await db.owners.find_one(
+            exact_matches = await db.owners.find(
                 {"name": {"$regex": f"^{esc}$", "$options": "i"}}, {"_id": 0}
-            )
-            if owner:
-                return {
-                    "match_type": "owner_payment",
-                    "match_id": owner["id"],
-                    "match_label": owner.get("name", ""),
-                    "match_reason": "name_exact",
-                    "confidence": "medium",
-                }
-            # Nom partiel
-            if " " in cp_name:
+            ).to_list(20)
+            if exact_matches:
+                res = await _disambiguate_owner_candidates(
+                    exact_matches, cp_name, amount, copro_id
+                )
+                if res["owner"]:
+                    o = res["owner"]
+                    return {
+                        "match_type": "owner_payment",
+                        "match_id": o["id"],
+                        "match_label": o.get("name", ""),
+                        "match_reason": f"name_exact_{res['reason']}"
+                        if res["reason"] in ("first_name", "amount") else "name_exact",
+                        "confidence": "medium",
+                    }
+                if res.get("ambiguous_candidates"):
+                    ambiguous_pool = res["ambiguous_candidates"]
+            # Nom partiel (iter91a : active meme si cp_name est un token unique)
+            if True:
                 parts = [p for p in cp_name.split() if p]
-                # iter90ib : exclure les titres de politesse (Mme, M., Mr, etc.)
-                # qui produisent des faux positifs en matchant tout owner du meme
-                # genre. Bug rapporte : 3 lignes "Puttemans/Degeest/Woillard"
-                # matchant toutes "Mme Degeest" via le token "Mme".
-                TITLES = {"mme", "mr", "m.", "m", "mlle", "melle", "dr",
-                          "me", "mme.", "monsieur", "madame", "mademoiselle"}
-                parts = [p for p in parts if p.lower().rstrip(".").rstrip(",") not in TITLES]
-                if len(parts) >= 2:
-                    for p in [parts[0], parts[-1], " ".join(parts[:2]), " ".join(parts[-2:])]:
-                        # iter90ib : minimum 4 chars pour eviter faux positifs
-                        # sur particules courantes (van, de, le, du, etc.).
+                # iter90ib/iter91a : exclure titres, exiger >= 4 chars
+                parts = _strip_titles(parts)
+                if len(parts) >= 1:
+                    possible = list(dict.fromkeys([
+                        parts[0], parts[-1],
+                        " ".join(parts[:2]), " ".join(parts[-2:]),
+                    ]))
+                    for p in possible:
                         if len(p) < 4:
                             continue
-                        owner = await db.owners.find_one(
+                        # iter91a : find + _disambiguate_owner_candidates
+                        candidates = await db.owners.find(
                             {"$or": [
                                 {"last_name": {"$regex": f"^{_re.escape(p)}$", "$options": "i"}},
-                                # iter90ib : match `name` ancre a un debut de mot
-                                # (\b) pour eviter les sous-chaines fortuites.
                                 {"name": {"$regex": f"\\b{_re.escape(p)}\\b", "$options": "i"}},
                             ]},
                             {"_id": 0}
+                        ).to_list(20)
+                        if not candidates:
+                            continue
+                        res = await _disambiguate_owner_candidates(
+                            candidates, cp_name, amount, copro_id
                         )
-                        if owner:
+                        if res["owner"]:
+                            o = res["owner"]
+                            reason = "name_partial"
+                            if res["reason"] in ("first_name", "amount"):
+                                reason = f"name_partial_{res['reason']}"
                             return {
                                 "match_type": "owner_payment",
-                                "match_id": owner["id"],
-                                "match_label": owner.get("name", ""),
-                                "match_reason": "name_partial",
+                                "match_id": o["id"],
+                                "match_label": o.get("name", ""),
+                                "match_reason": reason,
                                 "confidence": "low",
                             }
+                        if res.get("ambiguous_candidates") and not ambiguous_pool:
+                            ambiguous_pool = res["ambiguous_candidates"]
 
         # 3) Fournisseur par IBAN
         if cp_account:
@@ -388,6 +536,14 @@ def create_banking_router(db):
                             "match_reason": "invoice_number",
                             "confidence": "medium",
                         }
+        # iter91a : Homonymes detectes mais impossible de discriminer -> retourne
+        # les candidats pour rapprochement manuel dans l'UI.
+        if ambiguous_pool:
+            return {
+                **empty,
+                "match_reason": "ambiguous_homonyms",
+                "ambiguous_candidates": ambiguous_pool,
+            }
         return empty
 
     # ---- BANK STATEMENTS ----

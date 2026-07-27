@@ -122,7 +122,7 @@ export default function JournalsPage() {
 
   const openCreate = () => {
     setEditingEntry(null);
-    setForm({ journal_type: journalType, date: new Date().toISOString().split('T')[0], reference: '', description: '', lines: [{ account_number: '', account_name: '', debit: 0, credit: 0 }, { account_number: '', account_name: '', debit: 0, credit: 0 }] });
+    setForm({ journal_type: journalType, date: new Date().toISOString().split('T')[0], reference: '', description: '', lines: [{ expense_category_id: '', account_number: '', account_name: '', debit: 0, credit: 0 }, { expense_category_id: '', account_number: '', account_name: '', debit: 0, credit: 0 }] });
     setPendingAttachment(null);
     setDialogOpen(true);
   };
@@ -133,6 +133,7 @@ export default function JournalsPage() {
       journal_type: entry.journal_type, date: entry.date, reference: entry.reference || '',
       description: entry.description || '',
       lines: (entry.lines || []).map(l => ({
+        expense_category_id: l.expense_category_id || '',
         account_number: l.account_number,
         account_name: l.account_name,
         debit: l.debit,
@@ -146,11 +147,33 @@ export default function JournalsPage() {
     setDialogOpen(true);
   };
 
-  const addLine = () => setForm({ ...form, lines: [...form.lines, { account_number: '', account_name: '', debit: 0, credit: 0 }] });
+  const addLine = () => setForm({ ...form, lines: [...form.lines, { expense_category_id: '', account_number: '', account_name: '', debit: 0, credit: 0 }] });
   const removeLine = (i) => setForm({ ...form, lines: form.lines.filter((_, idx) => idx !== i) });
   const updateLine = (i, field, value) => {
     const lines = [...form.lines];
     lines[i] = { ...lines[i], [field]: value };
+    // iter91b : selection d'une Nature de depense -> auto-remplit et verrouille
+    // le Compte Comptable + %Occ/%Prop + Cle de repartition par defaut.
+    if (field === 'expense_category_id') {
+      const cat = (categories || []).find(c => c.id === value);
+      if (cat) {
+        lines[i].account_number = cat.account_number || '';
+        lines[i].account_name = cat.account_name || '';
+        if (cat.default_occupant_pct != null) {
+          lines[i].occupant_pct = Number(cat.default_occupant_pct);
+          lines[i].proprietaire_pct = +(100 - Number(cat.default_occupant_pct)).toFixed(2);
+        }
+        if (cat.default_distribution_key_id) {
+          lines[i].distribution_key_id = cat.default_distribution_key_id;
+        } else if (!lines[i].distribution_key_id) {
+          const dflt = (distKeys || []).find(k => k.is_default) || (distKeys || [])[0];
+          if (dflt) lines[i].distribution_key_id = dflt.id;
+        }
+      } else {
+        // Nature deselectionnee -> deverrouiller le compte
+        lines[i].expense_category_id = '';
+      }
+    }
     if (field === 'account_number') {
       const acc = accounts.find(a => a.number === value);
       if (acc) lines[i].account_name = acc.name;
@@ -617,11 +640,12 @@ export default function JournalsPage() {
             <div>
               <label className="form-label mb-2">Lignes d'ecriture</label>
               <div className="border rounded-md overflow-x-auto">
-                <table className="w-full text-sm min-w-[1080px]">
+                <table className="w-full text-sm min-w-[1180px]">
                   <thead><tr className="bg-slate-50 text-xs text-slate-600 uppercase">
-                    <th className="p-2 text-left" style={{ minWidth: 260 }}>Compte</th>
+                    <th className="p-2 text-left" style={{ minWidth: 200 }} title="Nature de depense (categorie): auto-remplit le compte comptable, les %, et la cle de repartition">Nature de depense</th>
+                    <th className="p-2 text-left" style={{ minWidth: 240 }} title="Compte comptable PCMN (auto-rempli et verrouille quand une Nature de depense est selectionnee)">Compte</th>
                     <th className="p-2 text-left">Libelle</th>
-                    <th className="p-2 text-left" style={{ minWidth: 180 }} title="Cle de repartition utilisee pour projeter la quote-part sur les proprietaires">Nature de depense</th>
+                    <th className="p-2 text-left" style={{ minWidth: 180 }} title="Cle de repartition utilisee pour projeter la quote-part sur les proprietaires">Cle de repartition</th>
                     <th className="p-2 text-right" style={{ minWidth: 110 }}>Debit</th>
                     <th className="p-2 text-right" style={{ minWidth: 110 }}>Credit</th>
                     <th className="p-2 text-right" style={{ minWidth: 80 }} title="Pourcentage occupant (decompte locataire)">%Occ.</th>
@@ -631,16 +655,42 @@ export default function JournalsPage() {
                   <tbody>
                     {form.lines.map((line, i) => {
                       const isCharge = line.account_number && (line.account_number.startsWith('6') || line.account_number.startsWith('7'));
+                      const hasCategory = !!line.expense_category_id;
                       return (
-                      <tr key={i} className="border-t border-slate-100">
-                        <td className="p-1" style={{ minWidth: 260 }}>
-                          <AccountSearchSelect
-                            accounts={accounts}
-                            value={line.account_number}
-                            onChange={v => updateLine(i, 'account_number', v)}
-                            placeholder="Choisir un compte..."
-                            testId={`journal-line-${i}-account`}
-                          />
+                      <tr key={`line-${i}`} className="border-t border-slate-100">
+                        <td className="p-1" style={{ minWidth: 200 }}>
+                          <Select
+                            value={line.expense_category_id || 'none'}
+                            onValueChange={(v) => updateLine(i, 'expense_category_id', v === 'none' ? '' : v)}
+                          >
+                            <SelectTrigger className="h-8 text-xs" data-testid={`journal-line-${i}-nature`}>
+                              <SelectValue placeholder="(optionnel)" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="none">(aucune)</SelectItem>
+                              {(categories || []).map(c => (
+                                <SelectItem key={c.id} value={c.id}>
+                                  {c.name}{c.account_number ? ` [${c.account_number}]` : ''}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </td>
+                        <td className="p-1" style={{ minWidth: 240 }}>
+                          {hasCategory ? (
+                            <div className="h-8 px-2 flex items-center bg-slate-100 border border-slate-200 rounded text-xs font-mono text-slate-700" title="Auto-rempli via la Nature de depense" data-testid={`journal-line-${i}-account-locked`}>
+                              {line.account_number || '—'}
+                              {line.account_name && <span className="ml-2 text-slate-500 truncate">{line.account_name}</span>}
+                            </div>
+                          ) : (
+                            <AccountSearchSelect
+                              accounts={accounts}
+                              value={line.account_number}
+                              onChange={v => updateLine(i, 'account_number', v)}
+                              placeholder="Choisir un compte..."
+                              testId={`journal-line-${i}-account`}
+                            />
+                          )}
                         </td>
                         <td className="p-1 text-xs text-slate-500">{line.account_name}</td>
                         <td className="p-1" style={{ minWidth: 180 }}>
@@ -688,7 +738,7 @@ export default function JournalsPage() {
                     );})}
                   </tbody>
                   <tfoot><tr className="border-t-2 border-slate-200 bg-slate-50 font-semibold text-sm">
-                    <td colSpan={3} className="p-2">
+                    <td colSpan={4} className="p-2">
                       <Button variant="ghost" size="sm" onClick={addLine} className="text-xs"><Plus size={12} className="mr-1" /> Ajouter ligne</Button>
                     </td>
                     <td className="p-2 text-right font-mono">{totalDebit.toFixed(2)}</td>
