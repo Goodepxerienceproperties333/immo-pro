@@ -32,6 +32,7 @@ import AdminLoginHistoryPage from "@/pages/AdminLoginHistoryPage";
 import ImportWizardPage from "@/pages/ImportWizardPage";
 import AdminRoleTemplatesPage from "@/pages/AdminRoleTemplatesPage";
 import AdminDuplicatesPage from "@/pages/AdminDuplicatesPage";
+import AdminExpenseCategoriesDedupePage from "@/pages/AdminExpenseCategoriesDedupePage";
 import AdminQualityAuditPage from "@/pages/AdminQualityAuditPage";
 import AdminMutationsAuditPage from "@/pages/AdminMutationsAuditPage";
 import TeamMembersPage from "@/pages/TeamMembersPage";
@@ -133,6 +134,7 @@ function AppRoutes() {
         <Route path="import-wizard" element={<ImportWizardPage />} />
         <Route path="admin/role-templates" element={<RequireSuperadmin><AdminRoleTemplatesPage /></RequireSuperadmin>} />
         <Route path="admin/duplicates" element={<RequireSuperadmin><AdminDuplicatesPage /></RequireSuperadmin>} />
+        <Route path="admin/expense-categories-dedupe" element={<RequireSuperadmin><AdminExpenseCategoriesDedupePage /></RequireSuperadmin>} />
         <Route path="admin/quality-audit" element={<RequireSuperadmin><AdminQualityAuditPage /></RequireSuperadmin>} />
         <Route path="admin/mutations-audit" element={<RequireSuperadmin><AdminMutationsAuditPage /></RequireSuperadmin>} />
         <Route path="team" element={<TeamMembersPage />} />

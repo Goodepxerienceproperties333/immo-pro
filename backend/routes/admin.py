@@ -3535,5 +3535,192 @@ def create_admin_router(db):
 
         return {"status": "ok", **stats}
 
+    # ---- iter91e : Dedupe / Cleanup des Natures de depense (expense_categories) ----
+    class ExpenseCatDedupeInput(BaseModel):
+        copropriete_id: str
+        dry_run: bool = True
+        # Strategie de detection : "name" | "name_account" | "name_normalized"
+        strategy: str = "name_normalized"
+        # Nettoyage des libelles malformes (ex: "7362)", noms < 3 chars, tout-chiffres)
+        cleanup_malformed: bool = True
+        # Si dry_run=False, exiger la liste des IDs a fusionner explicitement
+        # (source_ids -> target_id) pour eviter les fusions accidentelles
+        merges: Optional[list] = None  # [{"target_id": "...", "source_ids": ["...", "..."]}]
+
+    def _normalize_cat_name(name: str) -> str:
+        """iter91e : normalise un nom de nature pour detection tolerante :
+        - lowercase
+        - retire accents
+        - retire ponctuation non alphanumerique
+        - reduit espaces multiples
+        """
+        import re as _re
+        import unicodedata as _ud
+        s = (name or "").strip().lower()
+        s = "".join(c for c in _ud.normalize("NFD", s) if _ud.category(c) != "Mn")
+        s = _re.sub(r"[^a-z0-9\s]", " ", s)
+        s = _re.sub(r"\s+", " ", s).strip()
+        return s
+
+    def _is_malformed_name(name: str) -> bool:
+        """Detecte les libelles malformes."""
+        import re as _re
+        n = (name or "").strip()
+        if not n or len(n) < 3:
+            return True
+        # Commence par chiffres + ')' (ex: "7362)")
+        if _re.match(r"^\d+\s*\)", n):
+            return True
+        # Uniquement chiffres/espaces/tirets/points (ex: "61010" ou "61-01")
+        if _re.match(r"^[\d\s\-\.]+$", n):
+            return True
+        return False
+
+    @router.post("/expense-categories/dedupe")
+    async def dedupe_expense_categories(data: ExpenseCatDedupeInput, request: Request):
+        """iter91e : outil admin pour detecter et fusionner les Natures de
+        depense dupliquees (ex. accents, casse, malformes) sur une ACP.
+
+        Mode `dry_run=True` (defaut) : retourne un rapport JSON sans modifier
+        la base. Mode `dry_run=False` avec `merges` explicites : execute les
+        fusions demandees (chaque source -> target, refs mises a jour dans
+        journal_entries.lines.expense_category_id).
+
+        Chinese wall : superadmin ou admin uniquement (endpoint sous /api/admin).
+        """
+        from collections import defaultdict
+        user = await _get_admin_user(request)
+        role = user.get("role", "")
+
+        cid = (data.copropriete_id or "").strip()
+        if not cid:
+            raise HTTPException(400, "copropriete_id requis")
+        # Chinese wall syndic : verifier l'acces a l'ACP
+        if role not in ("superadmin", "admin"):
+            user_copros = getattr(request.state, "user_copropriete_ids", []) or []
+            if cid not in user_copros:
+                raise HTTPException(403, "Acces refuse a cette copropriete")
+
+        cats = await db.expense_categories.find(
+            {"copropriete_id": cid}, {"_id": 0}
+        ).to_list(5000)
+
+        # ---- Detection doublons ----
+        groups = defaultdict(list)
+        for c in cats:
+            if data.strategy == "name_account":
+                key = ((c.get("name") or "").strip().lower(), c.get("account_number", ""))
+            elif data.strategy == "name_normalized":
+                key = _normalize_cat_name(c.get("name") or "")
+            else:  # "name"
+                key = (c.get("name") or "").strip().lower()
+            groups[key].append(c)
+
+        duplicate_groups = []
+        for key, grp in groups.items():
+            if len(grp) < 2:
+                continue
+            # Le "target" par defaut = le plus utilise (via journal_entries lines),
+            # sinon le plus ancien (created_at).
+            ids = [c["id"] for c in grp]
+            usages = {}
+            for cid_ in ids:
+                usages[cid_] = await db.journal_entries.count_documents(
+                    {"copropriete_id": cid, "lines.expense_category_id": cid_}
+                )
+            target = max(grp, key=lambda c: (usages.get(c["id"], 0), c.get("created_at", "")))
+            duplicate_groups.append({
+                "key": str(key),
+                "target": {
+                    "id": target["id"],
+                    "name": target.get("name"),
+                    "account_number": target.get("account_number"),
+                    "usages": usages.get(target["id"], 0),
+                },
+                "sources": [
+                    {
+                        "id": c["id"], "name": c.get("name"),
+                        "account_number": c.get("account_number"),
+                        "usages": usages.get(c["id"], 0),
+                        "malformed": _is_malformed_name(c.get("name") or ""),
+                    }
+                    for c in grp if c["id"] != target["id"]
+                ],
+            })
+
+        # ---- Detection malformes ----
+        malformed = []
+        if data.cleanup_malformed:
+            for c in cats:
+                if _is_malformed_name(c.get("name") or ""):
+                    usages = await db.journal_entries.count_documents(
+                        {"copropriete_id": cid, "lines.expense_category_id": c["id"]}
+                    )
+                    malformed.append({
+                        "id": c["id"], "name": c.get("name"),
+                        "account_number": c.get("account_number"),
+                        "usages": usages,
+                    })
+
+        report = {
+            "copropriete_id": cid,
+            "total_categories": len(cats),
+            "duplicate_groups": duplicate_groups,
+            "malformed": malformed,
+            "dry_run": data.dry_run,
+        }
+
+        # ---- Execution (si dry_run=False) ----
+        if data.dry_run:
+            return report
+
+        if not data.merges:
+            raise HTTPException(400, "Mode execution : `merges` requis (liste des fusions)")
+
+        merges_done = 0
+        entries_updated = 0
+        cats_deleted = 0
+        errors = []
+        for m in data.merges:
+            target_id = (m.get("target_id") or "").strip()
+            source_ids = m.get("source_ids") or []
+            if not target_id or not source_ids:
+                errors.append({"merge": m, "error": "target_id / source_ids requis"})
+                continue
+            # Verifier que target existe dans cette ACP
+            target = await db.expense_categories.find_one(
+                {"id": target_id, "copropriete_id": cid}, {"_id": 0}
+            )
+            if not target:
+                errors.append({"merge": m, "error": f"Target {target_id} introuvable dans l'ACP"})
+                continue
+            # Ne pas laisser fusionner target vers lui-meme
+            source_ids = [s for s in source_ids if s and s != target_id]
+            if not source_ids:
+                continue
+            # Reassigner les references dans journal_entries.lines.expense_category_id
+            for sid in source_ids:
+                res = await db.journal_entries.update_many(
+                    {"copropriete_id": cid, "lines.expense_category_id": sid},
+                    {"$set": {"lines.$[elt].expense_category_id": target_id}},
+                    array_filters=[{"elt.expense_category_id": sid}],
+                )
+                entries_updated += res.modified_count
+            # Supprimer les sources
+            res_del = await db.expense_categories.delete_many(
+                {"id": {"$in": source_ids}, "copropriete_id": cid}
+            )
+            cats_deleted += res_del.deleted_count
+            merges_done += 1
+
+        return {
+            **report,
+            "executed": True,
+            "merges_done": merges_done,
+            "entries_updated": entries_updated,
+            "categories_deleted": cats_deleted,
+            "errors": errors,
+        }
+
 
     return router

@@ -1,0 +1,33 @@
+{
+  "summary": "Tests iter91d/e/f (P1 PDF depenses + P2 dedupe categories + P2 wizard orphelins). Backend pytest: 8/8 PASSED (test_iter91def.py). Frontend E2E: page /admin/expense-categories-dedupe validee (login superadmin -> card indigo 'Nettoyage Natures de depense' -> dry run sur Gaura ACP -> 10 groupes doublons + 1 libelle malforme detectes, 10 checkboxes sources cochables, toast de succes visible). Backend confirme les 3 flows: (a) _build_expenses_list_pdf produit un PDF valide (%PDF- header, >1KB, 8 pages, synthese + detail fusionnes via pypdf) sur Gaura FY 2026; (b) /api/admin/expense-categories/dedupe dry_run et validation d'inputs (403 sans auth, 400 sans copro, 400 execute sans merges); (c) /api/import-wizard/sessions/{id}/preview-opening-balance-orphans detecte bien 41010999 (compte 410 non mappe) avec suggested_aux_code=C0999 et ignore 40000000 (pas 410*/4001*). Dialogue frontend orphelins (data-testid=orphan-owners-dialog) verifie visuellement dans le code (Input pre-rempli, bouton 'Creer les fiches et valider l'OD').",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter91def.py",
+    "/app/test_reports/pytest/iter91def.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "reports.py _build_expenses_list_pdf : bon fallback try/except pypdf -> renvoie le detail si la fusion echoue, robuste. Retour b'' quand pas de donnees (evite un PDF vide/corrompu).",
+    "admin.py dedupe_expense_categories : chinese wall correct (superadmin/admin auto, sinon verif user_copropriete_ids). Fusion utilise array_filters correct pour reassigner journal_entries.lines.expense_category_id. Fusion idempotente : source_ids filtree pour exclure target_id, delete_many avec {'$in': source_ids} donc appeler 2x avec les memes sources n'endommage pas la base (sources deja supprimees -> no-op).",
+    "import_wizard.py preview_opening_balance_orphans : bon design (detecte 410xxxx/4001xxxx uniquement, ignore mapped_accs via tier_accounts scan, ignore auxiliary_code deja present). commit_opening_balance owner_confirmations : cree fiches AVANT resolution des lignes AN, VCS auto-genere avec check mod 97, tier_accounts[copro].main=account_number, auxiliary_code=C+4derniers. Attention: le champ 'provisions' est aussi pre-rempli avec le meme account_number - pertinent si compte 410 mais discutable si compte 4001 (reserve). Point mineur.",
+    "AdminExpenseCategoriesDedupePage.js : bonne UX - dry run affiche groupes triable avec checkboxes, confirmation window.confirm avant fusion, re-analyse auto apres fusion. Note UX mineure : le champ ACP est un input libre (uuid a taper), aurait pu etre un select dropdown pour eviter les fautes de frappe."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter91def.py"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "admin@copro.be / admin123 (superadmin) - fonctionne",
+  "seed_data_creation": "Aucune donnee persistante creee. Le test iter91f preview envoie un compte 41010999 dans le payload mais l'endpoint est en dry-mode (NE COMMIT RIEN).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "iter91d/e/f 100% valides. Le test frontend E2E complet pour le dialogue orphelins ImportWizard n'a pas ete execute (necessite un import Bilan PDF complet avec compte 410 nouveau); a la place, le code du dialogue (data-testid=orphan-owners-dialog, orphan-owner-name-{account}, orphan-owners-confirm-btn) a ete verifie ligne 1205-1270 de ImportWizardPage.js et l'endpoint backend est valide par test_iter91f_preview_detects_orphan_and_ignores_mapped. Si le main agent souhaite un E2E complet, il faut creer une session d'import et joindre un fake Bilan PDF avec 41010999.",
+  "rca_of_the_issue": "N/A - aucun bug identifie sur iter91d/e/f."
+}

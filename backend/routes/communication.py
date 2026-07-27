@@ -957,7 +957,8 @@ def create_communication_router(db):
                     "filename": d.get("filename") or "document.pdf",
                     "mime_type": d.get("mime_type") or "application/pdf",
                 })
-        # iter90i8 : liste des depenses de l'exercice (PDF genere on-the-fly)
+        # iter90i8 / iter91d : liste des depenses de l'exercice (PDF genere on-the-fly)
+        # `_build_expenses_list_pdf` fusionne synthese portrait + detail paysage.
         expenses_pdf_bytes = None
         if payload.include_expenses_list:
             try:
@@ -971,10 +972,8 @@ def create_communication_router(db):
                         "filename": f"liste_depenses_{payload.fiscal_year_id}.pdf",
                         "mime_type": "application/pdf",
                     })
-            except ImportError:
-                logger.warning("iter90i8 : _build_expenses_list_pdf indisponible - liste depenses skipped")
             except Exception as e:
-                logger.warning("iter90i8 : erreur generation liste depenses : %s", e)
+                logger.warning("iter91d : erreur generation liste depenses : %s", e)
 
         sent = 0
         failed: List[dict] = []

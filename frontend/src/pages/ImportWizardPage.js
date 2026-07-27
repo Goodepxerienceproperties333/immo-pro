@@ -98,6 +98,10 @@ export default function ImportWizardPage() {
   const [matchDialog, setMatchDialog] = useState(null); // { row, search, catalog }
   const [journalsParsed, setJournalsParsed] = useState([]);
   const [balanceParsed, setBalanceParsed] = useState({ actif: [], passif: [], total_actif: 0, total_passif: 0, balanced: false, period_end_date: '' });
+  // iter91f : dialogue de confirmation des proprietaires manquants lors du
+  // commit de l'OD d'ouverture. Format: [{account_number, label, amount, name}]
+  const [orphanOwners, setOrphanOwners] = useState(null);
+  const [orphanCommitting, setOrphanCommitting] = useState(false);
   // iter90gj : appels hors budget declares AVANT les mutations (fonds reserve
   // + fonds roulement N-1 pour prorata mutation).
   const [fundsConfig, setFundsConfig] = useState({
@@ -298,6 +302,51 @@ export default function ImportWizardPage() {
     }
   };
 
+
+  // iter91f : commit final de l'OD d'ouverture avec les confirmations
+  // syndic sur les proprietaires orphelins. Cree les fiches manquantes
+  // via le champ `owner_confirmations` du backend.
+  const commitOpeningBalanceWithOrphans = async () => {
+    if (!session || !orphanOwners) return;
+    // Verifier que tous les noms sont saisis
+    const missing = orphanOwners.filter((o) => !(o.name || '').trim());
+    if (missing.length > 0) {
+      toast.error(`Nom manquant pour ${missing.length} compte(s) - completez avant de valider`);
+      return;
+    }
+    setOrphanCommitting(true);
+    try {
+      const r = await api.post(
+        `/import-wizard/sessions/${session.id}/commit-opening-balance`,
+        {
+          actif: balanceParsed.actif,
+          passif: balanceParsed.passif,
+          period_end_date: balanceParsed.period_end_date,
+          fiscal_year_id: session?.steps?.fiscal_year?.fiscal_year_id || '',
+          funds_config: fundsConfig,
+          owner_confirmations: orphanOwners.map((o) => ({
+            account_number: o.account_number,
+            name: (o.name || '').trim(),
+          })),
+        }
+      );
+      const m = r.data;
+      const created = (m.owners_created || []).length;
+      toast.success(
+        `OD d'ouverture creee : ${m.lines} ligne(s) au ${m.entry_date} - ${created} fiche(s) proprietaire cree(es)`
+      );
+      setOrphanOwners(null);
+      // reload session pour mettre a jour l'etape
+      const sr = await api.get(`/import-wizard/sessions/${session.id}`);
+      setSession(sr.data);
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Erreur lors du commit");
+    } finally {
+      setOrphanCommitting(false);
+    }
+  };
+
+
   // ----- commit -----
   const handleCommit = async () => {
     if (!session) return;
@@ -441,6 +490,31 @@ export default function ImportWizardPage() {
         r = await api.post(`/import-wizard/sessions/${session.id}/commit-distribution-keys`, { keys: keysParsed });
         toast.success(`${r.data.inserted} cle(s) de repartition creees`);
       } else if (step.key === 'opening_balance') {
+        // iter91f : preview des orphelins proprietaires AVANT le commit.
+        // Si des comptes 410*/4001* n'ont pas de fiche owner, on affiche un
+        // dialogue pour que le syndic confirme/renomme puis on commit avec
+        // owner_confirmations.
+        try {
+          const previewR = await api.post(
+            `/import-wizard/sessions/${session.id}/preview-opening-balance-orphans`,
+            {
+              actif: balanceParsed.actif,
+              passif: balanceParsed.passif,
+              period_end_date: balanceParsed.period_end_date,
+              fiscal_year_id: session?.steps?.fiscal_year?.fiscal_year_id || '',
+            }
+          );
+          if ((previewR.data.orphan_owner_accounts || []).length > 0) {
+            setOrphanOwners(
+              previewR.data.orphan_owner_accounts.map((o) => ({ ...o, name: o.label || '' }))
+            );
+            setCommitting(false);
+            return;  // Attend la confirmation via le dialogue
+          }
+        } catch (e) {
+          console.warn('preview-opening-balance-orphans failed', e);
+          // continue quand meme (fallback : commit direct)
+        }
         r = await api.post(`/import-wizard/sessions/${session.id}/commit-opening-balance`, {
           actif: balanceParsed.actif,
           passif: balanceParsed.passif,
@@ -1127,6 +1201,73 @@ export default function ImportWizardPage() {
         </div>
       </div>
       </>)}
+
+      {/* iter91f : dialogue de confirmation des proprietaires orphelins */}
+      {orphanOwners && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" data-testid="orphan-owners-dialog">
+          <div className="bg-white rounded-lg shadow-2xl max-w-3xl w-full max-h-[90vh] overflow-hidden flex flex-col">
+            <div className="p-5 border-b flex items-start gap-3">
+              <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center">
+                <AlertTriangle size={18} className="text-amber-600" />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-lg font-bold" style={{ fontFamily: 'Chivo, sans-serif' }}>
+                  {orphanOwners.length} compte(s) proprietaire(s) sans fiche
+                </h3>
+                <p className="text-sm text-slate-500 mt-1">
+                  Ces comptes tiers (410XXXX / 4001XXXX) sont presents dans le bilan mais aucun proprietaire ne leur correspond. Confirmez le nom pour creer automatiquement les fiches (avec VCS auto-genere) avant de valider l&apos;OD d&apos;ouverture.
+                </p>
+              </div>
+              <button className="text-slate-400 hover:text-slate-700" onClick={() => setOrphanOwners(null)}>
+                <X size={18} />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-5 space-y-2">
+              {orphanOwners.map((o, i) => (
+                <div key={o.account_number} className="border rounded p-3 bg-slate-50/50 space-y-2">
+                  <div className="flex items-center gap-3 text-xs text-slate-500">
+                    <Badge variant="outline" className="font-mono">{o.account_number}</Badge>
+                    <span>Montant : <span className="font-mono font-semibold">{Number(o.amount).toFixed(2)} EUR</span></span>
+                    <span>({o.side})</span>
+                    <span>Aux. suggere : <span className="font-mono">{o.suggested_aux_code}</span></span>
+                  </div>
+                  <Input
+                    value={o.name}
+                    onChange={(e) => {
+                      const arr = [...orphanOwners];
+                      arr[i] = { ...arr[i], name: e.target.value };
+                      setOrphanOwners(arr);
+                    }}
+                    placeholder="Nom du proprietaire (ex : Matexi S.A.)"
+                    data-testid={`orphan-owner-name-${o.account_number}`}
+                    className="text-sm"
+                  />
+                  <div className="text-[11px] text-slate-400 italic">
+                    Libelle bilan : {o.label || '—'}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="p-4 border-t bg-slate-50 flex items-center justify-end gap-2">
+              <Button variant="outline" onClick={() => setOrphanOwners(null)} disabled={orphanCommitting}>
+                Annuler
+              </Button>
+              <Button
+                onClick={commitOpeningBalanceWithOrphans}
+                disabled={orphanCommitting}
+                className="bg-[#022D52] hover:bg-[#1D4ED8]"
+                data-testid="orphan-owners-confirm-btn"
+              >
+                {orphanCommitting ? (
+                  <><Loader2 size={14} className="mr-2 animate-spin" />Creation en cours...</>
+                ) : (
+                  <>Creer les fiches et valider l&apos;OD</>
+                )}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

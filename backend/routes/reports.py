@@ -206,6 +206,107 @@ def _group_movements_by_owner(movements: list, self_owner_name: str = "") -> lis
     return result
 
 
+async def _build_expenses_list_pdf(db, copropriete_id: str, fiscal_year_id: str) -> bytes:
+    """iter91d : construit le PDF 'Liste des depenses' de l'exercice.
+
+    Ce PDF est joint automatiquement au decompte annuel envoye par email
+    quand `include_expenses_list=True` cote communication.
+
+    Retourne un PDF fusionne comportant :
+      1) Vue paysage detaillee (une ligne par facture/OD) - reuse
+         `build_liste_depenses_pdf` deja aligne sur /api/fiscal/expenses.
+      2) Vue portrait synthetique (totaux par nature de depense) -
+         `build_synthese_depenses_pdf`.
+
+    Args:
+        db: motor client.
+        copropriete_id: ACP scope (chinese wall).
+        fiscal_year_id: exercice comptable dont on veut la liste.
+    Returns:
+        bytes du PDF fusionne. Retourne b"" (bytes vides) si aucune donnee.
+    """
+    from pdf_liste_depenses import build_liste_depenses_pdf
+    from pdf_synthese_depenses import build_synthese_depenses_pdf
+    from pdf_layout import resolve_syndic_pdf_context
+    from expense_rows import compute_expense_rows
+
+    if not (copropriete_id and fiscal_year_id):
+        return b""
+
+    fy = await db.fiscal_years.find_one(
+        {"id": fiscal_year_id, "copropriete_id": copropriete_id}, {"_id": 0}
+    )
+    if not fy:
+        return b""
+    date_from = fy.get("start_date", "")
+    date_to = fy.get("end_date", "")
+    if not (date_from and date_to):
+        return b""
+
+    copro = await db.coproprietes.find_one({"id": copropriete_id}, {"_id": 0})
+    if not copro:
+        return b""
+
+    rows, _totals = await compute_expense_rows(
+        db, copropriete_id, date_from=date_from, date_to=date_to,
+    )
+    if not rows:
+        return b""
+
+    distribution_keys = await db.distribution_keys.find(
+        {"copropriete_id": copropriete_id}, {"_id": 0}
+    ).to_list(1000)
+    pcmn = await db.pcmn_accounts.find(
+        {"copropriete_id": copropriete_id}, {"_id": 0}
+    ).to_list(10000)
+    pcmn_map = {a["number"]: a.get("name", "") for a in pcmn}
+    cats = await db.expense_categories.find(
+        {"copropriete_id": copropriete_id}, {"_id": 0}
+    ).to_list(1000)
+
+    syndic_pdf_ctx = await resolve_syndic_pdf_context(db, copro)
+
+    # 1) Detail paysage
+    detail_pdf = build_liste_depenses_pdf(
+        copropriete=copro,
+        date_from=date_from, date_to=date_to,
+        invoices=rows,
+        distribution_keys=distribution_keys,
+        pcmn_map=pcmn_map,
+        expense_categories=cats,
+        syndic_pdf_ctx=syndic_pdf_ctx,
+    )
+
+    # 2) Synthese portrait
+    synth_pdf = build_synthese_depenses_pdf(
+        copropriete=copro,
+        date_from=date_from, date_to=date_to,
+        rows=rows,
+        distribution_keys=distribution_keys,
+        pcmn_map=pcmn_map,
+        syndic_pdf_ctx=syndic_pdf_ctx,
+    )
+
+    # Fusion des deux PDF via pypdf (synthese d'abord, puis detail)
+    try:
+        from pypdf import PdfReader, PdfWriter
+        writer = PdfWriter()
+        for pdf_bytes in (synth_pdf, detail_pdf):
+            if not pdf_bytes:
+                continue
+            reader = PdfReader(io.BytesIO(pdf_bytes))
+            for page in reader.pages:
+                writer.add_page(page)
+        out = io.BytesIO()
+        writer.write(out)
+        return out.getvalue()
+    except Exception:
+        # Fallback : renvoie uniquement le detail si pypdf indisponible
+        return detail_pdf
+
+
+
+
 async def _build_situation_compte_pdf(db, owner_id, copropriete_id, start_date=None, end_date=None, group_by_owner: bool = True):
     """iter90au : helper reutilisable qui construit les bytes PDF de la situation
     de compte + le nom de fichier. Utilise par le download endpoint et par le

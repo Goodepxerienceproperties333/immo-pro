@@ -123,6 +123,13 @@ export default function AdminDashboardPage() {
             <Button variant="link" className="px-0 mt-2 text-purple-600" data-testid="btn-go-duplicates">Ouvrir <ArrowRight size={14} className="ml-1" /></Button>
           </CardContent>
         </Card>
+        <Card className="hover:shadow-md transition cursor-pointer border-indigo-200" onClick={() => navigate('/admin/expense-categories-dedupe')} data-testid="card-dedupe-cats">
+          <CardHeader className="pb-2"><CardTitle className="text-base flex items-center gap-2 text-slate-900"><Merge size={18} className="text-indigo-600" />Nettoyage Natures de depense</CardTitle></CardHeader>
+          <CardContent className="text-sm text-slate-600 pt-1">
+            <p>Fusionner les Natures dupliquees (accents, casse) et nettoyer les libelles mal formes par ACP.</p>
+            <Button variant="link" className="px-0 mt-2 text-indigo-600" data-testid="btn-go-dedupe-cats">Ouvrir <ArrowRight size={14} className="ml-1" /></Button>
+          </CardContent>
+        </Card>
         <Card className="hover:shadow-md transition cursor-pointer" onClick={() => navigate('/admin/audit')} data-testid="card-audit">
           <CardHeader className="pb-2"><CardTitle className="text-base flex items-center gap-2 text-slate-900"><ScrollText size={18} className="text-slate-600" />Journal d&apos;audit</CardTitle></CardHeader>
           <CardContent className="text-sm text-slate-600 pt-1">

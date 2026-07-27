@@ -113,6 +113,12 @@ class CommitOpeningBalanceInput(BaseModel):
     # Stocke sur le fiscal_year pour utilisation par le mutation prorata et
     # les rapports "Etat des fonds".
     funds_config: Optional[dict] = None
+    # iter91f : confirmations du syndic pour creer les proprietaires
+    # manquants detectes lors du preview des orphelins.
+    # Format : [{account_number, name, first_name?, last_name?}]
+    # Ces owners sont crees AVANT le build des lignes AN, avec tier_accounts
+    # rattaches au bon compte pour resolution immediate.
+    owner_confirmations: Optional[List[dict]] = None
     # Structure attendue :
     # {
     #   "reserve_fund": {
@@ -2307,6 +2313,73 @@ def create_import_wizard_router(db):
         }
 
     # ----- I: OPENING BALANCE (OD d'ouverture - Bilan comptable) -----
+    @router.post("/sessions/{session_id}/preview-opening-balance-orphans")
+    async def preview_opening_balance_orphans(session_id: str, data: CommitOpeningBalanceInput, request: Request):
+        """iter91f : detecte les comptes proprietaires (410xxxx / 4001xxxx)
+        presents dans l'AN mais qui ne matchent aucune fiche owner existante.
+
+        Retourne la liste des orphelins avec leur libelle et le montant, pour
+        que le syndic puisse confirmer/renommer AVANT d'appeler
+        commit_opening_balance avec `owner_confirmations`.
+
+        NE COMMIT RIEN. Endpoint idempotent.
+        """
+        session = await db.import_sessions.find_one({"id": session_id})
+        if not session:
+            raise HTTPException(404, "Session introuvable")
+        copro_id = session["copropriete_id"]
+        await _require_acp_access(request, db, copro_id)
+
+        # Indexer les owners par auxiliary_code et par tier_accounts[copro_id]
+        owners_by_aux: dict[str, dict] = {}
+        mapped_accs: set = set()
+        async for o in db.owners.find(
+            {},
+            {"_id": 0, "id": 1, "name": 1, "auxiliary_code": 1, "tier_accounts": 1, "copropriete_id": 1}
+        ):
+            aux = (o.get("auxiliary_code") or "").upper().strip()
+            if aux:
+                owners_by_aux[aux] = o
+            # Comptes deja rattaches a un owner dans cette ACP
+            _ta = (o.get("tier_accounts") or {}).get(copro_id, {}) or {}
+            for _v in _ta.values():
+                if isinstance(_v, str) and _v:
+                    mapped_accs.add(_v)
+
+        orphans: list = []
+        seen: set = set()
+        for entry in (data.actif or []) + (data.passif or []):
+            acc = (entry.get("account") or "").strip()
+            if not acc or acc in seen:
+                continue
+            # Seuls 410xxxx (provisions/roulement) et 4001xxxx (reserve) sont des owners
+            is_owner_acc = (
+                (acc.startswith("410") and len(acc) >= 7)
+                or (acc.startswith("4001") and len(acc) >= 8)
+            )
+            if not is_owner_acc:
+                continue
+            # Deja mappe ?
+            if acc in mapped_accs:
+                continue
+            aux = "C" + acc[-4:]
+            if aux in owners_by_aux:
+                continue
+            seen.add(acc)
+            orphans.append({
+                "account_number": acc,
+                "label": (entry.get("label") or "").strip(),
+                "amount": float(entry.get("amount") or 0),
+                "side": "actif" if entry in data.actif else "passif",
+                "suggested_aux_code": aux,
+            })
+
+        return {
+            "copropriete_id": copro_id,
+            "orphan_owner_accounts": orphans,
+            "count": len(orphans),
+        }
+
     @router.post("/sessions/{session_id}/commit-opening-balance")
     async def commit_opening_balance(session_id: str, data: CommitOpeningBalanceInput, request: Request):
         """Commit an opening balance from a 'Bilan comptable' PDF.
@@ -2422,6 +2495,83 @@ def create_import_wizard_router(db):
             aux = (o.get("auxiliary_code") or "").upper().strip()
             if aux:
                 owners_by_aux[aux] = o
+
+        # iter91f : creation batch des proprietaires confirmes par le syndic
+        # (comptes 410xxxx/4001xxxx sans owner_by_aux trouve). Chaque
+        # confirmation cree une fiche complete avec tier_accounts rattaches
+        # au compte donne, afin que _resolve_third_party matche immediatement.
+        owner_confirmations_processed = []
+        if data.owner_confirmations:
+            import uuid as _u
+            from datetime import datetime as _dt, timezone as _tz
+            syndic_id_ctx = getattr(request.state, "syndic_id", None)
+            for conf in data.owner_confirmations:
+                acc_num = (conf.get("account_number") or "").strip()
+                nm = (conf.get("name") or "").strip()
+                if not (acc_num and nm):
+                    continue
+                # Ignorer si un owner mappe deja ce compte pour cette ACP
+                _skip = False
+                for _o in owners_by_aux.values():
+                    _ta = (_o.get("tier_accounts") or {}).get(copro_id, {}) or {}
+                    if acc_num in [v for v in _ta.values() if isinstance(v, str)]:
+                        _skip = True
+                        break
+                if _skip:
+                    continue
+                # Deriver first/last name si non fournis
+                fn = (conf.get("first_name") or "").strip()
+                ln = (conf.get("last_name") or "").strip()
+                if not (fn or ln):
+                    _parts = nm.split()
+                    if len(_parts) >= 2:
+                        ln = " ".join(_parts[:-1])
+                        fn = _parts[-1]
+                    else:
+                        ln = nm
+                # Generer VCS (12 digits + mod 97)
+                seq10 = f"{_u.uuid4().int % 10_000_000_000:010d}"
+                check = int(seq10) % 97 or 97
+                vcs_digits = f"{seq10}{check:02d}"
+                vcs_code = f"+++{vcs_digits[:3]}/{vcs_digits[3:7]}/{vcs_digits[7:]}+++"
+                # Aux code : deriver du compte (C+4 derniers chars pour 410xxxx / 4001xxxx)
+                aux = ""
+                if acc_num.startswith("410") and len(acc_num) >= 7:
+                    aux = "C" + acc_num[-4:]
+                elif acc_num.startswith("4001") and len(acc_num) >= 8:
+                    aux = "C" + acc_num[-4:]
+                owner_id_new = str(_u.uuid4())
+                new_owner = {
+                    "id": owner_id_new,
+                    "name": nm,
+                    "first_name": fn,
+                    "last_name": ln,
+                    "civility": "",
+                    "address": "", "postal_code": "", "city": "", "country": "Belgique",
+                    "email": "", "phone": "",
+                    "copropriete_id": copro_id,
+                    "copropriete_ids": [copro_id],
+                    "vcs_code": vcs_code,
+                    "vcs_digits": vcs_digits,
+                    "iban": "",
+                    "tier_accounts": {copro_id: {"main": acc_num, "provisions": acc_num}},
+                    "auxiliary_code": aux,
+                    "created_at": _dt.now(_tz.utc).isoformat(),
+                    "created_from_import_wizard": True,
+                    "created_from_orphan_account": acc_num,
+                }
+                if syndic_id_ctx:
+                    new_owner["syndic_id"] = syndic_id_ctx
+                await db.owners.insert_one(new_owner)
+                if aux:
+                    owners_by_aux[aux] = new_owner
+                owner_confirmations_processed.append({
+                    "account_number": acc_num,
+                    "owner_id": owner_id_new,
+                    "name": nm,
+                    "vcs_code": vcs_code,
+                })
+
         suppliers_by_aux: dict[str, dict] = {}
         async for sup in db.suppliers.find({"auxiliary_code": {"$exists": True, "$ne": ""}, "copropriete_id": copro_id}, {"_id": 0, "id": 1, "name": 1, "auxiliary_code": 1, "tier_accounts": 1}):
             aux = (sup.get("auxiliary_code") or "").upper().strip()
@@ -2767,6 +2917,8 @@ def create_import_wizard_router(db):
             "suppliers_linked": suppliers_linked,
             "entry_date": entry_date,
             "funds_saved": funds_saved,
+            # iter91f : owners crees depuis owner_confirmations (visibles cote UI)
+            "owners_created": owner_confirmations_processed,
         }
 
     # ----- C-BIS: OD YEAR-END ENTRIES -----
