@@ -526,10 +526,25 @@ def create_coproprietes_router(db):
 
     @router.delete("/{copro_id}")
     async def delete_copropriete(copro_id: str, request: Request):
-        from server import get_current_user, is_admin_role
+        """iter92g : Regle stricte - un syndic ne peut PLUS supprimer d'ACP,
+        seulement archiver via /archive. Seul le superadmin peut supprimer
+        (obligation de conservation legale 10 ans - art. III.86 CDE).
+
+        Exception whitelist : `info@nextgecopro.be` (Evrard Gerald) peut
+        toujours supprimer (utilisateur de reference plateforme).
+        """
+        from server import get_current_user
         user = await get_current_user(request)
-        if not is_admin_role(user.get("role", "")):
-            raise HTTPException(403, "Seul le syndic peut supprimer une copropriete")
+        role = user.get("role", "")
+        email = (user.get("email") or "").strip().lower()
+        WHITELIST_EMAILS = {"info@nextgecopro.be"}
+        # superadmin platform-level = ok. Sinon email whitelist.
+        if role not in ("superadmin", "admin") and email not in WHITELIST_EMAILS:
+            raise HTTPException(
+                403,
+                "Un syndic ne peut pas supprimer une copropriete (obligation "
+                "de conservation 10 ans). Utilisez 'Archiver' a la place.",
+            )
         result = await db.coproprietes.delete_one({"id": copro_id})
         if result.deleted_count == 0:
             raise HTTPException(404, "Copropriete non trouvee")

@@ -442,7 +442,10 @@ export default function CoproprietesPage() {
                   {isManager && c.status !== 'archived' && <Button variant="ghost" size="sm" onClick={() => handleArchive(c.id)} className="text-orange-500" title="Archiver"><Archive size={13} /></Button>}
                   {isManager && c.status === 'archived' && <Button variant="ghost" size="sm" onClick={() => handleUnarchive(c.id)} className="text-green-600" title="Reactiver"><RotateCcw size={13} /></Button>}
                   {isManager && <Button variant="ghost" size="sm" onClick={() => handleDownloadArchive(c)} className="text-[#022D52]" title="Telecharger archive ZIP complete par annee" data-testid={`archive-dl-${c.id}`}><Download size={13} /></Button>}
-                  {isAdmin && <Button variant="ghost" size="sm" onClick={() => handleDelete(c.id)} className="text-red-500" title="Supprimer (cascade)"><Trash2 size={13} /></Button>}
+                  {/* iter92g : suppression uniquement pour superadmin OU email whitelist. Le syndic doit archiver. */}
+                  {(isSuperadmin || (user?.email || '').toLowerCase() === 'info@nextgecopro.be') && (
+                    <Button variant="ghost" size="sm" onClick={() => handleDelete(c.id)} className="text-red-500" title="Supprimer (cascade) - reserve superadmin"><Trash2 size={13} /></Button>
+                  )}
                 </div></TableCell>
               </TableRow>
             ))}
