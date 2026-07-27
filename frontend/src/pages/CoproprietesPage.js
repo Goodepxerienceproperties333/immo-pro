@@ -10,11 +10,14 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { toast } from 'sonner';
-import { Plus, Pencil, Trash2, Home, Search, Archive, RotateCcw, Landmark, PlusCircle, X, Eraser, Wand2, Upload, UserPlus, FileText, Download, Image as ImageIcon, CheckCircle2, ClipboardCheck, AlertTriangle, Users } from 'lucide-react';
+import { Plus, Pencil, Trash2, Home, Search, Archive, RotateCcw, Landmark, PlusCircle, X, Eraser, Wand2, Upload, UserPlus, FileText, Download, Image as ImageIcon, CheckCircle2, ClipboardCheck, AlertTriangle, Users, Truck } from 'lucide-react';
 import BulkCsvImportDialog from '@/components/BulkCsvImportDialog';
 import PdfImportDialog from '@/components/PdfImportDialog';
 import ImportSummary from '@/components/ImportSummary';
+import SyndicOwnersGlobalTab from '@/components/SyndicOwnersGlobalTab';
+import SyndicSuppliersGlobalTab from '@/components/SyndicSuppliersGlobalTab';
 import { useDirtyGuard } from '@/hooks/useDirtyGuard';
 
 const emptyBank = { iban: '', bic: '', account_type: 'vue', is_default: false, label: '' };
@@ -387,12 +390,21 @@ export default function CoproprietesPage() {
   return (
     <div data-testid="coproprietes-page">
       <div className="page-header flex items-center justify-between">
-        <div><h1 className="page-title"><Home size={24} className="inline mr-2" />Coproprietes (ACP)</h1><p className="page-subtitle">Gestion des associations de coproprietaires</p></div>
+        <div><h1 className="page-title"><Home size={24} className="inline mr-2" />Tableau de bord Syndic</h1><p className="page-subtitle">Vue centralisee : ACPs, proprietaires et fournisseurs</p></div>
         <div className="flex gap-2">
           <Button variant={showArchived ? "default" : "outline"} size="sm" onClick={() => setShowArchived(!showArchived)} data-testid="toggle-archived"><Archive size={14} className="mr-1" /> {showArchived ? 'Masquer archives' : 'Voir archives'}</Button>
           {isManager && <Button onClick={openCreate} className="bg-[#022D52] hover:bg-[#1D4ED8]" data-testid="create-copro-btn"><Plus size={16} className="mr-2" /> Nouvelle ACP</Button>}
         </div>
       </div>
+
+      <Tabs defaultValue="acps" className="w-full">
+        <TabsList className="mb-3" data-testid="syndic-dashboard-tabs">
+          <TabsTrigger value="acps" data-testid="tab-acps"><Home size={13} className="mr-1" /> ACPs</TabsTrigger>
+          <TabsTrigger value="owners" data-testid="tab-owners"><Users size={13} className="mr-1" /> Tous mes proprietaires</TabsTrigger>
+          <TabsTrigger value="suppliers" data-testid="tab-suppliers"><Truck size={13} className="mr-1" /> Tous mes fournisseurs</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="acps" data-testid="tab-content-acps">
       <div className="mb-4 relative max-w-sm"><Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" /><Input placeholder="Rechercher ref, nom, BCE..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9" /></div>
       <div className="bg-white rounded-md border border-slate-200 overflow-hidden">
         <Table>
@@ -467,6 +479,16 @@ export default function CoproprietesPage() {
           </TableBody>
         </Table>
       </div>
+        </TabsContent>
+
+        <TabsContent value="owners" data-testid="tab-content-owners">
+          <SyndicOwnersGlobalTab coproprietes={coproprietes} />
+        </TabsContent>
+
+        <TabsContent value="suppliers" data-testid="tab-content-suppliers">
+          <SyndicSuppliersGlobalTab coproprietes={coproprietes} />
+        </TabsContent>
+      </Tabs>
 
       {/* iter90if : Dialog recap import */}
       <Dialog open={!!summaryDialog} onOpenChange={(open) => !open && setSummaryDialog(null)}>

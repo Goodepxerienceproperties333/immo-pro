@@ -586,6 +586,91 @@ def create_properties_router(db):
             owners.extend(await _fetch_orphans())
         return owners
 
+    @router.get("/owners/syndic-global")
+    async def list_owners_syndic_global(request: Request):
+        """iter93a : Tableau de bord Syndic global - liste TOUS les proprietaires
+        accessibles au syndic connecte (union de ses ACPs) et enrichit chaque
+        proprietaire de la liste des ACPs auxquelles il est rattache.
+
+        Sortie : `[{...owner, acp_ids: [str], acp_names: [{id, name, reference}]}]`
+
+        Regles metier :
+        - Chinese Wall strict : un syndic ne voit QUE ses proprios.
+        - Un proprio apparait dans une ACP si :
+            (1) il possede un lot dans cette ACP (owner_id / owner_ids), ou
+            (2) `owners.copropriete_ids[]` contient cette ACP (proprio rattache
+                sans lot, ex : promoteur).
+        - Le superadmin voit tout.
+        """
+        is_super, allowed_copros = await _get_user_scope(request)
+        # Determiner l'ensemble des ACPs cibles
+        if is_super:
+            copros = await db.coproprietes.find(
+                {}, {"_id": 0, "id": 1, "name": 1, "reference": 1},
+            ).to_list(2000)
+        else:
+            if not allowed_copros:
+                return []
+            copros = await db.coproprietes.find(
+                {"id": {"$in": list(allowed_copros)}},
+                {"_id": 0, "id": 1, "name": 1, "reference": 1},
+            ).to_list(2000)
+        copro_by_id = {c["id"]: c for c in copros}
+        target_copros = list(copro_by_id.keys())
+        if not target_copros:
+            return []
+        # Union des owner_ids visibles (lots + copropriete_ids + sessions d'import)
+        allowed_owner_ids = await _allowed_owner_ids(target_copros)
+        if allowed_owner_ids is None:
+            # superadmin -> pas de filtre
+            all_owners = await db.owners.find({}, {"_id": 0}).sort("last_name", 1).to_list(20000)
+        else:
+            if not allowed_owner_ids:
+                return []
+            all_owners = await db.owners.find(
+                {"id": {"$in": list(allowed_owner_ids)}}, {"_id": 0},
+            ).sort("last_name", 1).to_list(20000)
+        # Construire un mapping owner_id -> set(copropriete_ids) via lots
+        # ET via owners.copropriete_ids[]
+        acp_map: dict = {}  # owner_id -> set of copro_id
+        # Depuis les lots
+        lots_cursor = db.lots.find(
+            {"copropriete_id": {"$in": target_copros}},
+            {"_id": 0, "owner_id": 1, "owner_ids": 1, "copropriete_id": 1},
+        )
+        async for lot in lots_cursor:
+            cid = lot.get("copropriete_id")
+            if not cid or cid not in copro_by_id:
+                continue
+            single = lot.get("owner_id")
+            if single:
+                acp_map.setdefault(single, set()).add(cid)
+            for oid in (lot.get("owner_ids") or []):
+                if oid:
+                    acp_map.setdefault(oid, set()).add(cid)
+        # Enrichir chaque owner
+        enriched = []
+        for o in all_owners:
+            acps_from_lots = acp_map.get(o.get("id"), set())
+            acps_from_field = set([c for c in (o.get("copropriete_ids") or []) if c in copro_by_id])
+            combined = acps_from_lots | acps_from_field
+            if not combined:
+                # Owner sans lot ET sans copropriete_ids : ignore (Chinese Wall)
+                continue
+            acp_ids_sorted = sorted(combined)
+            o["acp_ids"] = acp_ids_sorted
+            o["acp_names"] = [
+                {
+                    "id": cid,
+                    "name": copro_by_id[cid].get("name") or "",
+                    "reference": copro_by_id[cid].get("reference") or "",
+                }
+                for cid in acp_ids_sorted
+            ]
+            o["acp_count"] = len(acp_ids_sorted)
+            enriched.append(o)
+        return enriched
+
     @router.post("/owners")
     async def create_owner(data: OwnerInput, request: Request, reuse_on_duplicate: bool = False, force_create_despite_homonym: bool = False):
         """Cree un proprietaire.

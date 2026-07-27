@@ -389,6 +389,70 @@ def create_suppliers_router(db):
             ]
         return await db.suppliers.find(q, {"_id": 0}).sort("name", 1).to_list(5000)
 
+    @router.get("/syndic-global")
+    async def list_suppliers_syndic_global(request: Request):
+        """iter93a : Tableau de bord Syndic global - liste TOUS les fournisseurs
+        accessibles au syndic connecte (union de ses ACPs) et enrichit chaque
+        fournisseur de la liste des ACPs auxquelles il est rattache.
+
+        Un fournisseur est rattache a une ACP si :
+        - `supplier.copropriete_id == acp.id` (rattachement direct legacy), ou
+        - `supplier.tier_accounts` contient une cle == acp.id (mode multi-ACP).
+
+        Sortie : `[{...supplier, acp_ids: [str], acp_names: [{id, name, reference}], acp_count: int}]`
+        """
+        is_super, allowed_copros = await _get_user_scope(request)
+        if is_super:
+            copros = await db.coproprietes.find(
+                {}, {"_id": 0, "id": 1, "name": 1, "reference": 1},
+            ).to_list(2000)
+            copro_by_id = {c["id"]: c for c in copros}
+            all_suppliers = await db.suppliers.find({}, {"_id": 0}).sort("name", 1).to_list(20000)
+        else:
+            if not allowed_copros:
+                return []
+            copros = await db.coproprietes.find(
+                {"id": {"$in": list(allowed_copros)}},
+                {"_id": 0, "id": 1, "name": 1, "reference": 1},
+            ).to_list(2000)
+            copro_by_id = {c["id"]: c for c in copros}
+            if not copro_by_id:
+                return []
+            from syndic_scope import syndic_query
+            q = {
+                "$or": [
+                    {"copropriete_id": {"$in": list(copro_by_id.keys())}},
+                    {"tier_accounts": {"$exists": True, "$ne": {}}},
+                ],
+                **syndic_query(request),
+            }
+            all_suppliers = await db.suppliers.find(q, {"_id": 0}).sort("name", 1).to_list(20000)
+        enriched = []
+        for s in all_suppliers:
+            acp_set: set = set()
+            direct = s.get("copropriete_id")
+            if direct and direct in copro_by_id:
+                acp_set.add(direct)
+            ta = s.get("tier_accounts") or {}
+            for cid in ta.keys():
+                if cid in copro_by_id:
+                    acp_set.add(cid)
+            if not acp_set:
+                continue
+            acp_ids_sorted = sorted(acp_set)
+            s["acp_ids"] = acp_ids_sorted
+            s["acp_names"] = [
+                {
+                    "id": cid,
+                    "name": copro_by_id[cid].get("name") or "",
+                    "reference": copro_by_id[cid].get("reference") or "",
+                }
+                for cid in acp_ids_sorted
+            ]
+            s["acp_count"] = len(acp_ids_sorted)
+            enriched.append(s)
+        return enriched
+
     @router.post("/check-duplicate")
     async def check_duplicate_supplier(request: Request, data: SupplierCheckDuplicateInput):
         """Pre-verifie la presence de doublons EXACTS et d'homonymes proches.
