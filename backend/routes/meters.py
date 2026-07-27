@@ -5,11 +5,10 @@ from typing import Optional, List
 from datetime import datetime, timezone
 import uuid
 
-# iter90ie : liste des types de compteurs autorises. `gas` et
-# `boiler_maintenance` ajoutes pour couvrir tous les cas d'usage syndics
-# beleges (entretien chaudiere = quotite-part de puissance thermique
-# sans releve d'index, donc unite libre / "part").
-METER_TYPES_ALLOWED = ("water", "heating", "electricity", "gas", "boiler_maintenance")
+# iter90ie / iter90i9 : liste des types de compteurs autorises.
+# `private_consumption` = valeur libre pour couvrir tout frais privatif de
+# consommation non classe (ex: sechoir collectif, cave a vin partagee...).
+METER_TYPES_ALLOWED = ("water", "heating", "electricity", "gas", "boiler_maintenance", "private_consumption")
 
 METER_TYPE_DEFAULT_UNIT = {
     "water": "m3",
@@ -17,6 +16,7 @@ METER_TYPE_DEFAULT_UNIT = {
     "electricity": "kWh",
     "gas": "m3",
     "boiler_maintenance": "part",
+    "private_consumption": "unite",
 }
 
 
@@ -203,6 +203,7 @@ def create_meters_router(db):
             "water": "eau", "heating": "chauffage",
             "electricity": "electricite", "gas": "gaz",
             "boiler_maintenance": "entretien chaudiere",
+            "private_consumption": "frais privatif consommation",
         }.get(meter_type, meter_type)
         dk_name = f"Consommation {type_label_fr} - {reading_date}"
         # Construit la liste des lots avec leur consommation comme share
@@ -308,48 +309,32 @@ def create_meters_router(db):
                 "uploaded_at": datetime.now(timezone.utc).isoformat(),
             },
         )
-        # Meme fichier applique a TOUS les releves du meme batch (batch_id
-        # partage) pour ne pas dupliquer le fichier N fois en GridFS.
-        batch_id = r.get("batch_id") or reading_id
+        # iter90ia : la PJ est PROPRE AU LOT (au reading precis, pas au batch).
+        # Chaque proprio ne recoit dans ses documents QUE la PJ de son lot.
         upd = {
             "attachment_gridfs_id": gid,
             "attachment_filename": file.filename or "attachment.pdf",
             "attachment_size": len(content),
             "attachment_mime": file.content_type or "application/pdf",
         }
-        if r.get("batch_id"):
-            await db.meter_readings.update_many({"batch_id": batch_id}, {"$set": upd})
-        else:
-            await db.meter_readings.update_one({"id": reading_id}, {"$set": upd})
+        await db.meter_readings.update_one({"id": reading_id}, {"$set": upd})
 
-        # iter90i7 : creation d'une entree documents/ pour chaque proprio des
-        # lots concernes -> visible dans l'Espace Proprietaire sous la
-        # categorie "Releve de compteur".
+        # iter90i7 / iter90ia : creation d'une entree documents/ pour le
+        # proprio du LOT concerne uniquement (pas broadcast a tout le batch).
+        # Cloisonnement strict : chaque proprio ne voit QUE la PJ de son lot.
         copro_id = r.get("copropriete_id", "")
         meter_type = r.get("meter_type", "")
-        if copro_id:
-            # Trouve tous les releves du batch pour identifier les lots
-            batch_readings = await db.meter_readings.find(
-                {"batch_id": batch_id, "copropriete_id": copro_id},
-                {"_id": 0, "meter_id": 1}
-            ).to_list(1000) if r.get("batch_id") else [r]
-            meter_ids = list({br.get("meter_id") for br in batch_readings if br.get("meter_id")})
-            lot_ids = set()
-            if meter_ids:
-                meters = await db.meters.find(
-                    {"id": {"$in": meter_ids}}, {"_id": 0, "lot_id": 1}
-                ).to_list(1000)
-                lot_ids = {m.get("lot_id") for m in meters if m.get("lot_id")}
+        meter_id = r.get("meter_id", "")
+        if copro_id and meter_id:
+            meter = await db.meters.find_one({"id": meter_id}, {"_id": 0, "lot_id": 1})
+            lot_id = (meter or {}).get("lot_id", "")
             owner_ids = set()
-            if lot_ids:
-                lots = await db.lots.find(
-                    {"id": {"$in": list(lot_ids)}},
-                    {"_id": 0, "owner_id": 1, "owner_ids": 1}
-                ).to_list(1000)
-                for l in lots:
-                    if l.get("owner_id"):
-                        owner_ids.add(l["owner_id"])
-                    for oid in (l.get("owner_ids") or []):
+            if lot_id:
+                lot = await db.lots.find_one({"id": lot_id}, {"_id": 0, "owner_id": 1, "owner_ids": 1})
+                if lot:
+                    if lot.get("owner_id"):
+                        owner_ids.add(lot["owner_id"])
+                    for oid in (lot.get("owner_ids") or []):
                         if oid:
                             owner_ids.add(oid)
             # Categorie unique "Releve de compteur"
@@ -368,23 +353,30 @@ def create_meters_router(db):
                 })
             else:
                 cat_id = cat["id"]
-            # Supprime les documents deja crees pour ce batch (evite doublons
-            # si l'upload est refait, permet la mise a jour du fichier).
+            # Supprime les documents crees pour CE reading precis (permet
+            # re-upload : ecrase les anciens sans doublon).
             await db.documents.delete_many({
-                "source": "meter_reading", "batch_id": batch_id,
+                "source": "meter_reading", "reading_id": reading_id,
                 "copropriete_id": copro_id,
             })
             title_meter_type = {
                 "water": "Releve compteur eau", "heating": "Releve compteur chauffage",
                 "electricity": "Releve compteur electricite", "gas": "Releve compteur gaz",
                 "boiler_maintenance": "Entretien chaudiere",
+                "private_consumption": "Frais privatif consommation",
             }.get(meter_type, "Releve compteur")
-            doc_title = f"{title_meter_type} - {r.get('date', '')}"
+            # Recupere le numero de lot pour le titre
+            lot_number = ""
+            if lot_id:
+                lot_doc = await db.lots.find_one({"id": lot_id}, {"_id": 0, "number": 1})
+                lot_number = (lot_doc or {}).get("number", "")
+            title_lot_suffix = f" (Lot {lot_number})" if lot_number else ""
+            doc_title = f"{title_meter_type}{title_lot_suffix} - {r.get('date', '')}"
             for oid in owner_ids:
                 await db.documents.insert_one({
                     "id": str(uuid.uuid4()),
                     "title": doc_title,
-                    "description": f"Piece jointe releve compteur {meter_type} du {r.get('date','')}",
+                    "description": f"Piece jointe releve compteur {meter_type} du {r.get('date','')} pour le lot {lot_number}",
                     "category_id": cat_id,
                     "filename": upd["attachment_filename"],
                     "gridfs_id": gid,
@@ -393,7 +385,9 @@ def create_meters_router(db):
                     "copropriete_id": copro_id,
                     "owner_id": oid,
                     "source": "meter_reading",
-                    "batch_id": batch_id,
+                    "reading_id": reading_id,
+                    "batch_id": r.get("batch_id", ""),
+                    "lot_id": lot_id,
                     "meter_type": meter_type,
                     "reading_date": r.get("date", ""),
                     "created_at": datetime.now(timezone.utc).isoformat(),
@@ -422,16 +416,12 @@ def create_meters_router(db):
         r = await db.meter_readings.find_one({"id": reading_id}, {"_id": 0})
         if not r:
             raise HTTPException(404, "Releve introuvable")
-        batch_id = r.get("batch_id") or reading_id
         upd = {"attachment_gridfs_id": "", "attachment_filename": "",
                "attachment_size": 0, "attachment_mime": ""}
-        if r.get("batch_id"):
-            await db.meter_readings.update_many({"batch_id": batch_id}, {"$set": upd})
-        else:
-            await db.meter_readings.update_one({"id": reading_id}, {"$set": upd})
-        # iter90i7 : supprime aussi les documents associes cote proprios
+        await db.meter_readings.update_one({"id": reading_id}, {"$set": upd})
+        # iter90ia : supprime les documents associes a CE reading precis
         await db.documents.delete_many({
-            "source": "meter_reading", "batch_id": batch_id,
+            "source": "meter_reading", "reading_id": reading_id,
         })
         return {"ok": True}
 

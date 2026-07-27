@@ -88,15 +88,15 @@ export default function MetersPage() {
   const [batchRows, setBatchRows] = useState({}); // {lot_id: value}
   const [batchLotIds, setBatchLotIds] = useState(new Set());
   const [batchSubmitting, setBatchSubmitting] = useState(false);
-  // iter90i6 : PJ (decompte fournisseur) attachee au batch
-  const [batchAttachment, setBatchAttachment] = useState(null);
+  // iter90i6 / iter90ia : PJ (decompte fournisseur) par LOT (map lot_id -> File)
+  const [batchAttachmentsByLot, setBatchAttachmentsByLot] = useState({});
 
   const openBatch = () => {
     setBatchDate(new Date().toISOString().slice(0, 10));
     setBatchType('water');
     setBatchLotIds(new Set());
     setBatchRows({});
-    setBatchAttachment(null);
+    setBatchAttachmentsByLot({});
     setBatchDialog(true);
   };
 
@@ -126,20 +126,26 @@ export default function MetersPage() {
           { duration: 6000 }
         );
       }
-      // iter90i6 : upload de la PJ (si fournie) sur le 1er reading du batch,
-      // le backend propage automatiquement sur tous les releves du batch_id.
-      if (batchAttachment && r.data.created_readings?.length > 0) {
-        const firstReadingId = r.data.created_readings[0].id;
+      // iter90ia : upload de la PJ par lot (chacune sur son reading).
+      // Le backend cree UN document par proprio pour CHAQUE PJ distincte.
+      const created = r.data.created_readings || [];
+      let attachedCount = 0;
+      for (const cr of created) {
+        const file = batchAttachmentsByLot[cr.lot_id];
+        if (!file) continue;
         const fd = new FormData();
-        fd.append('file', batchAttachment);
+        fd.append('file', file);
         try {
-          await api.post(`/meters/readings/${firstReadingId}/attachment`, fd, {
+          await api.post(`/meters/readings/${cr.id}/attachment`, fd, {
             headers: { 'Content-Type': 'multipart/form-data' },
           });
-          toast.success('Piece jointe attachee au releve');
+          attachedCount++;
         } catch (e) {
-          toast.error("Erreur upload piece jointe : " + (e.response?.data?.detail || e.message));
+          toast.error(`Erreur PJ lot ${cr.lot_number} : ${e.response?.data?.detail || e.message}`);
         }
+      }
+      if (attachedCount > 0) {
+        toast.success(`${attachedCount} piece(s) jointe(s) attachee(s) par lot`);
       }
       setBatchDialog(false);
       await load();
@@ -306,6 +312,7 @@ export default function MetersPage() {
                   <option value="electricity">Electricite (kWh)</option>
                   <option value="gas">Gaz (m3)</option>
                   <option value="boiler_maintenance">Entretien chaudiere (part)</option>
+                  <option value="private_consumption">Frais privatif consommation (unite)</option>
                 </select>
               </div>
             </div>
@@ -324,11 +331,13 @@ export default function MetersPage() {
                       <th className="p-2 text-left">Lot</th>
                       <th className="p-2 text-left">Description</th>
                       <th className="p-2 text-right">Valeur / Index</th>
+                      <th className="p-2 text-left" style={{minWidth: 150}}>Piece jointe</th>
                     </tr>
                   </thead>
                   <tbody>
                     {lots.map(l => {
                       const checked = batchLotIds.has(l.id);
+                      const attFile = batchAttachmentsByLot[l.id];
                       return (
                         <tr key={l.id} className={checked ? 'bg-blue-50/50' : ''} data-testid={`batch-lot-row-${l.id}`}>
                           <td className="p-2">
@@ -343,32 +352,38 @@ export default function MetersPage() {
                           <td className="p-2 text-right">
                             <Input type="number" step="0.01" disabled={!checked} value={batchRows[l.id] || ''} onChange={e => setBatchRows({ ...batchRows, [l.id]: e.target.value })} className="h-8 text-right font-mono text-xs w-32 ml-auto" data-testid={`batch-lot-value-${l.id}`} />
                           </td>
+                          <td className="p-2">
+                            {checked ? (
+                              <div className="flex flex-col gap-1">
+                                <input
+                                  type="file"
+                                  accept="application/pdf,image/*"
+                                  onChange={e => {
+                                    const f = e.target.files?.[0] || null;
+                                    setBatchAttachmentsByLot({ ...batchAttachmentsByLot, [l.id]: f });
+                                  }}
+                                  className="text-[10px] w-full file:mr-1 file:py-0.5 file:px-1 file:rounded file:border-0 file:bg-slate-100 file:text-slate-700 hover:file:bg-slate-200"
+                                  data-testid={`batch-lot-attachment-${l.id}`}
+                                />
+                                {attFile && (
+                                  <div className="text-[9px] text-emerald-700 truncate" title={attFile.name}>
+                                    {attFile.name} ({(attFile.size / 1024).toFixed(1)} Ko)
+                                  </div>
+                                )}
+                              </div>
+                            ) : (
+                              <span className="text-[10px] text-slate-400 italic">-</span>
+                            )}
+                          </td>
                         </tr>
                       );
                     })}
                   </tbody>
                 </table>
               </div>
-            </div>
-            {/* iter90i6 : PJ decompte fournisseur (facultatif) */}
-            <div className="border-t border-slate-200 pt-3">
-              <label className="text-xs uppercase tracking-wider text-slate-500 font-semibold block mb-1">
-                Piece jointe (decompte fournisseur, PV de releve...)
-              </label>
-              <input
-                type="file"
-                accept="application/pdf,image/*"
-                onChange={e => setBatchAttachment(e.target.files?.[0] || null)}
-                className="text-xs w-full border border-slate-200 rounded px-2 py-1.5 file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:bg-slate-100 file:text-slate-700 hover:file:bg-slate-200"
-                data-testid="batch-attachment-input"
-              />
-              {batchAttachment && (
-                <div className="text-[10px] text-emerald-700 mt-1">
-                  Fichier selectionne : <b>{batchAttachment.name}</b> ({(batchAttachment.size / 1024).toFixed(1)} Ko)
-                </div>
-              )}
-              <div className="text-[10px] text-slate-500 italic mt-1">
-                Sera joint automatiquement aux decomptes annuels envoyes aux proprietaires.
+              <div className="text-[10px] text-slate-500 italic mt-2">
+                Chaque piece jointe (decompte fournisseur, PV de releve) est propre au lot concerne
+                et sera envoyee uniquement au proprietaire de ce lot lors du decompte annuel.
               </div>
             </div>
             <div className="flex justify-end gap-2 pt-2">

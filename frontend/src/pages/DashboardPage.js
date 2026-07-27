@@ -5,7 +5,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
-import { Users, Building2, UserCheck, Receipt, AlertCircle, TrendingUp, Home, ArrowLeft, Landmark, FileText, Megaphone, Sparkles, Loader2, Scale, ArrowLeftRight, GitMerge, FileBarChart } from 'lucide-react';
+import { Users, Building2, UserCheck, Receipt, AlertCircle, TrendingUp, Home, ArrowLeft, Landmark, FileText, Megaphone, Sparkles, Loader2, Scale, ArrowLeftRight, FileBarChart } from 'lucide-react';
 import { fmtDate } from '@/lib/dateFmt';
 import AdaptiveQuickActions from '@/components/AdaptiveQuickActions';
 
@@ -397,7 +397,8 @@ export default function DashboardPage() {
                 { id: 'owners',    label: 'Proprietaires',  href: '/owners',        color: 'bg-indigo-50 text-indigo-700 border-indigo-200',  icon: Users },
                 { id: 'suppliers', label: 'Fournisseurs',   href: '/suppliers',     color: 'bg-cyan-50 text-cyan-700 border-cyan-200',        icon: Building2 },
                 { id: 'reports',   label: 'Rapports',       href: '/reports',       color: 'bg-slate-50 text-slate-700 border-slate-200',     icon: FileBarChart },
-                { id: 'duplicates',label: 'Doublons',       href: '/admin/duplicates', color: 'bg-amber-50 text-amber-700 border-amber-200', icon: GitMerge },
+                // iter90i4 : "Doublons" retire des actions rapides syndic
+                // (reserve superadmin -> /admin/duplicates)
               ]}
             />
           </CardContent>
