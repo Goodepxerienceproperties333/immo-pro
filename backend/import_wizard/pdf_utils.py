@@ -1207,7 +1207,13 @@ def parse_balance_pdf(raw: bytes) -> dict:
             return 0.0
 
     with pdfplumber.open(io.BytesIO(raw)) as pdf:
-        for page in pdf.pages:
+        # iter93s : cache la geometrie de la 1ere page (position des colonnes
+        # Actif / Passif) pour la reutiliser sur les pages suivantes qui
+        # n'ont pas les en-tetes "Actif" / "Passif" (bilan multi-pages).
+        cached_split_x = None
+        cached_actif_x = None
+        cached_passif_x = None
+        for page_idx, page in enumerate(pdf.pages):
             words = page.extract_words(keep_blank_chars=False, x_tolerance=2, y_tolerance=3) or []
             if not words:
                 continue
@@ -1227,8 +1233,17 @@ def parse_balance_pdf(raw: bytes) -> dict:
                 elif w["top"] < 180 and w["text"].lower() == "passif":
                     passif_x = (w["x0"] + w["x1"]) / 2
             if actif_x is None or passif_x is None:
-                continue
-            split_x = (actif_x + passif_x) / 2  # boundary between Actif and Passif zones
+                # iter93s : reprend la geometrie cachee si disponible
+                if cached_actif_x is not None and cached_passif_x is not None:
+                    actif_x = cached_actif_x
+                    passif_x = cached_passif_x
+                else:
+                    continue
+            else:
+                cached_actif_x = actif_x
+                cached_passif_x = passif_x
+            split_x = (actif_x + passif_x) / 2
+            cached_split_x = split_x
 
             # Detect Total actif / Total passif row to stop scanning
             total_y = None
@@ -1242,10 +1257,14 @@ def parse_balance_pdf(raw: bytes) -> dict:
                 return bool(account_re.match(w["text"]))
 
             anchors = []
+            # iter93s : sur les pages de continuation (page > 1) sans en-tete
+            # "Actif/Passif", les donnees commencent souvent haut sur la page
+            # (top ~= 30 ou 40). On abaisse le seuil de rejet du header.
+            top_reject = 180 if page_idx == 0 else 30
             for w in sorted(words, key=lambda w: (w["top"], w["x0"])):
                 if not _is_anchor(w):
                     continue
-                if w["top"] <= 180:
+                if w["top"] <= top_reject:
                     continue
                 if total_y is not None and w["top"] >= total_y - 1:
                     continue
@@ -1307,12 +1326,19 @@ def parse_balance_pdf(raw: bytes) -> dict:
                 info[side].append(entry)
 
             # Capture Total actif / Total passif
+            # iter93s : uniquement si detecte sur cette page ET valeur non nulle
+            # -> evite d'ecraser les totaux de la page precedente avec 0 sur les
+            # pages intermediaires d'un bilan multi-pages.
             if total_y is not None:
                 total_ws = [w for w in words if abs(w["top"] - total_y) < 4 and amount_word_re.match(w["text"])]
                 actif_amt_ws = [w for w in total_ws if (w["x0"] + w["x1"]) / 2 < split_x and w["x0"] >= 350]
                 passif_amt_ws = [w for w in total_ws if (w["x0"] + w["x1"]) / 2 >= split_x and w["x0"] >= 730]
-                info["total_actif"] = _join_amount(actif_amt_ws)
-                info["total_passif"] = _join_amount(passif_amt_ws)
+                _ta = _join_amount(actif_amt_ws)
+                _tp = _join_amount(passif_amt_ws)
+                if _ta > 0:
+                    info["total_actif"] = _ta
+                if _tp > 0:
+                    info["total_passif"] = _tp
 
     info["balanced"] = abs(info["total_actif"] - info["total_passif"]) < 0.01
     return info
