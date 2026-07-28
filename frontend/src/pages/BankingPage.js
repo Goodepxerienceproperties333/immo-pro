@@ -10,7 +10,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { toast } from 'sonner';
-import { Plus, Trash2, Upload, Link2, Unlink, Search, Landmark, PlusCircle, Save, Pencil, X, CheckCircle2, AlertTriangle, Eye, Tag, Zap, Check, XCircle } from 'lucide-react';
+import { Plus, Trash2, Upload, Link2, Unlink, Search, Landmark, PlusCircle, Save, Pencil, X, CheckCircle2, AlertTriangle, Eye, Tag, Zap, Check, XCircle, FileText, Loader2, Sparkles } from 'lucide-react';
 import { useFiscalYearParams } from '@/hooks/useFiscalYearParams';
 import { useAuth } from '@/contexts/AuthContext';
 import CounterpartySearchSelect from '@/components/CounterpartySearchSelect';
@@ -49,6 +49,10 @@ export default function BankingPage() {
   // iter90l : import PDF/CSV multi-fichiers d'extraits (IA + regex CSV)
   const importRef = useRef(null);
   const [importUploading, setImportUploading] = useState(false);
+  // iter93ad : progression detaillee de l'import (noms de fichiers + timer)
+  //   { files: [{ name, size, sizeHuman }], startedAt: number }
+  const [importProgress, setImportProgress] = useState(null);
+  const [importElapsed, setImportElapsed] = useState(0);
   const [stmtForm, setStmtForm] = useState({ number: '', date: '', account_number: '', opening_balance: 0, closing_balance: 0 });
   const [bankAccounts, setBankAccounts] = useState([]);
   const [inlineLines, setInlineLines] = useState([]);
@@ -179,6 +183,15 @@ export default function BankingPage() {
     }
   }, [selectedCopro, fyParams.date_from, fyParams.date_to, selectedFiscalYearId]);
   useEffect(() => { load(); }, [load]);
+
+  // iter93ad : timer d'elapsed pendant l'import (mise a jour chaque seconde)
+  useEffect(() => {
+    if (!importProgress?.startedAt) return;
+    const iv = setInterval(() => {
+      setImportElapsed(Math.floor((Date.now() - importProgress.startedAt) / 1000));
+    }, 1000);
+    return () => clearInterval(iv);
+  }, [importProgress?.startedAt]);
 
   const loadStmtTxns = async (stmt) => {
     setSelectedStmt(stmt);
@@ -336,6 +349,17 @@ export default function BankingPage() {
     const files = Array.from(e.target.files || []);
     if (!files.length) return;
     if (!selectedCopro) { toast.error('Selectionnez d\'abord une copropriete'); return; }
+    // iter93ad : demarre l'affichage detaille du chargement
+    const humanSize = (n) => {
+      if (n < 1024) return `${n} o`;
+      if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} Ko`;
+      return `${(n / (1024 * 1024)).toFixed(2)} Mo`;
+    };
+    setImportProgress({
+      files: files.map(f => ({ name: f.name, size: f.size, sizeHuman: humanSize(f.size) })),
+      startedAt: Date.now(),
+    });
+    setImportElapsed(0);
     setImportUploading(true);
     try {
       const fd = new FormData();
@@ -384,6 +408,7 @@ export default function BankingPage() {
       toast.error(err.response?.data?.detail || 'Erreur lors de l\'import');
     } finally {
       setImportUploading(false);
+      setImportProgress(null);
       if (importRef.current) importRef.current.value = '';
     }
   };
@@ -840,9 +865,101 @@ export default function BankingPage() {
         </Button>
       </div>
 
+      {/* iter93ad : overlay full-viewport pendant l'import de PDF/CSV (avec liste
+          de fichiers, taille, chronometre et cycle animation OCR/IA).
+          Le fixed positioning garantit la visibilite meme si l'user scroll.
+      */}
+      {importUploading && (
+        <div
+          className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4"
+          data-testid="import-overlay-modal"
+        >
+          <div className="bg-white rounded-xl shadow-2xl max-w-lg w-full p-6 animate-in fade-in zoom-in-95 duration-300">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="relative flex-shrink-0">
+                <div className="h-14 w-14 rounded-full bg-gradient-to-br from-[#022D52] to-[#03518D] flex items-center justify-center">
+                  <FileText size={26} className="text-white" strokeWidth={2} />
+                </div>
+                <div className="absolute -bottom-1 -right-1 h-6 w-6 rounded-full bg-emerald-500 flex items-center justify-center shadow-lg">
+                  <Sparkles size={12} className="text-white animate-pulse" />
+                </div>
+              </div>
+              <div className="flex-1">
+                <h3 className="text-base font-bold text-slate-900" style={{fontFamily:'Chivo,sans-serif'}}>
+                  Extraction en cours
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  L&apos;IA analyse vos extraits bancaires — quelques instants
+                </p>
+              </div>
+              <div className="text-right flex-shrink-0">
+                <div className="text-2xl font-mono font-bold text-[#022D52]" data-testid="import-elapsed">
+                  {String(Math.floor(importElapsed / 60)).padStart(2,'0')}:
+                  {String(importElapsed % 60).padStart(2,'0')}
+                </div>
+                <div className="text-[10px] uppercase tracking-wider text-slate-400">temps ecoule</div>
+              </div>
+            </div>
+
+            {/* Barre de progression animee indeterminee */}
+            <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden mb-4 relative">
+              <div className="absolute inset-y-0 w-1/3 bg-gradient-to-r from-transparent via-[#022D52] to-transparent animate-[shimmer_1.6s_infinite_ease-in-out]"
+                   style={{ animationName: 'shimmer', animationDuration: '1.6s', animationIterationCount: 'infinite', animationTimingFunction: 'ease-in-out' }} />
+            </div>
+
+            {/* Liste des fichiers en cours de traitement */}
+            <div className="border border-slate-200 rounded-lg overflow-hidden">
+              <div className="bg-slate-50 px-3 py-2 text-[11px] uppercase tracking-wider text-slate-600 font-semibold flex items-center justify-between">
+                <span>Fichiers en traitement</span>
+                <span className="text-slate-400" data-testid="import-file-count">
+                  {importProgress?.files?.length || 0} document(s)
+                </span>
+              </div>
+              <div className="max-h-64 overflow-y-auto divide-y divide-slate-100">
+                {(importProgress?.files || []).map((f, i) => (
+                  <div
+                    key={i}
+                    className="flex items-center gap-3 px-3 py-2.5 hover:bg-slate-50"
+                    data-testid={`import-file-row-${i}`}
+                  >
+                    <div className="flex-shrink-0">
+                      <Loader2 size={18} className="text-[#022D52] animate-spin" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-xs font-medium text-slate-800 truncate" title={f.name}>
+                        {f.name}
+                      </div>
+                      <div className="text-[10px] text-slate-500 mt-0.5">{f.sizeHuman}</div>
+                    </div>
+                    <div className="flex-shrink-0">
+                      <span className="text-[10px] font-mono uppercase tracking-wider text-[#022D52] bg-blue-50 border border-blue-200 rounded px-2 py-1">
+                        En cours
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Ligne de rassurance */}
+            <div className="flex items-center gap-2 mt-4 text-[11px] text-slate-500">
+              <div className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+              <span>Analyse en cours — merci de ne pas fermer cet onglet.</span>
+            </div>
+          </div>
+          <style>{`
+            @keyframes shimmer {
+              0% { transform: translateX(-100%); }
+              100% { transform: translateX(400%); }
+            }
+          `}</style>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-4 relative">
-        {/* Overlay d'upload visible */}
-        {(codaUploading || importUploading) && (
+        {/* Overlay d'upload visible (CODA uniquement — l'import PDF/CSV utilise
+            le modal full-viewport ci-dessus, plus riche) */}
+        {codaUploading && (
           <div className="absolute inset-0 z-30 bg-white/80 backdrop-blur-sm rounded-lg flex flex-col items-center justify-center gap-4" data-testid="upload-overlay">
             <div className="relative">
               <div className="h-14 w-14 rounded-full border-4 border-slate-200" />
@@ -850,12 +967,10 @@ export default function BankingPage() {
             </div>
             <div className="text-center">
               <p className="text-sm font-semibold text-[#022D52]">
-                {codaUploading ? 'Analyse du fichier CODA...' : 'Extraction IA en cours...'}
+                Analyse du fichier CODA...
               </p>
               <p className="text-xs text-slate-500 mt-1">
-                {codaUploading
-                  ? 'Lecture et verification des mouvements bancaires'
-                  : 'Analyse des PDF/CSV par intelligence artificielle — cela peut prendre quelques instants'}
+                Lecture et verification des mouvements bancaires
               </p>
             </div>
           </div>

@@ -351,3 +351,23 @@ En cas de regression future, utiliser le rollback Emergent vers ce commit.
 - Import de tous les modules migres : OK, backend redemarre sans erreur.
 - Backend endpoint `/api/fund-calls` : 200 OK.
 
+
+## iter93ad (2026-02-28) - Animation import PDF/CSV extraits bancaires
+### Nouvelle fonctionnalite
+- Modal full-viewport visible pendant l'import de PDF/CSV d'extraits bancaires (page `/banking`).
+- Elements affiches :
+  - Icone PDF + badge Sparkles anime (feedback visuel "IA au travail").
+  - Chronometre temps ecoule (MM:SS) mis a jour chaque seconde.
+  - Barre de progression shimmer animee (CSS keyframes).
+  - Liste des fichiers en cours avec nom, taille formatee (Ko/Mo), spinner Loader2 tournant, badge "EN COURS".
+  - Ligne de rassurance "Analyse en cours — merci de ne pas fermer cet onglet" avec point vert pulsant.
+### Fichier modifie
+- `/app/frontend/src/pages/BankingPage.js` :
+  - Nouveaux states `importProgress` (files + startedAt) et `importElapsed` (timer).
+  - `handleImportFiles` collecte les infos fichiers avant l'upload.
+  - `useEffect` timer 1s incremente `importElapsed`.
+  - Nouveau modal `import-overlay-modal` (fixed, z-50) remplace l'ancien overlay simple pour PDF/CSV.
+  - L'overlay CODA garde son affichage historique (moins riche mais suffisant).
+### Verification screenshot
+- Screenshot avec network delay 30s : modal visible pendant 4s, chronometre passe de 00:01 -> 00:05, 3 fichiers listes (195.3 Ko, 97.7 Ko, 48.8 Ko) avec spinners actifs et badges "EN COURS".
+
