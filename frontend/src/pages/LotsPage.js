@@ -1761,7 +1761,13 @@ function PrivateFeesDialog({ invoices, owners, onClose, onDone }) {
         });
         ok++;
       } catch (e) {
-        toast.error(`Facture ${inv.number} : ${e.response?.data?.detail || 'erreur'}`);
+        // iter93t : affiche un message d'erreur plus explicite (status HTTP +
+        // detail backend si dispo, sinon message reseau).
+        const detail = e?.response?.data?.detail || e?.response?.data?.message;
+        const status = e?.response?.status;
+        const netMsg = e?.message || 'erreur reseau';
+        const finalMsg = detail || (status ? `HTTP ${status} - ${netMsg}` : netMsg);
+        toast.error(`Facture ${inv.number} : ${finalMsg}`);
         ko++;
       }
     }
