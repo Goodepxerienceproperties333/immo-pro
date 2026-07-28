@@ -401,9 +401,12 @@ function MutationDialog({ lot, owners, ownersRefresh, onClose, onDone }) {
   }, [lot?.id]);
 
   // iter93u : precharge les cles de repartition de l'ACP
+  // iter93v : endpoint correct est /distribution-keys?copropriete_id=X
+  // (l'ancien /coproprietes/{id}/distribution-keys n'existe pas -> 404
+  // -> keys reste vide -> le selecteur ne s'affiche jamais)
   useEffect(() => {
     if (!lot?.copropriete_id) { setKeys([]); return; }
-    api.get(`/coproprietes/${lot.copropriete_id}/distribution-keys`)
+    api.get(`/distribution-keys`, { params: { copropriete_id: lot.copropriete_id } })
       .then(r => setKeys(r.data || []))
       .catch(() => setKeys([]));
   }, [lot?.copropriete_id]);

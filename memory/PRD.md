@@ -226,3 +226,14 @@ En cas de regression future, utiliser le rollback Emergent vers ce commit.
   - Bilan : Actif = Passif = 17.945 EUR, `equilibre: True`
 - `third_party_id` (et non `tier_id`) utilise dans les lignes de journal pour rattachement proprio/fournisseur.
 
+
+## iter93v (2026-02-28) - Correction MutationDialog: selecteur cle de repartition
+### Bug corrige
+- **P0** : Dans `MutationDialog` (LotsPage.js), le selecteur de cle de repartition (obligatoire quand le lot est absent de la cle par defaut) ne s'affichait jamais.
+- **Cause racine** : Le frontend appelait `GET /coproprietes/{copropriete_id}/distribution-keys` (endpoint inexistant -> 404), donc `keys` restait vide et la condition `keys.length > 0 && !lotInDefault` etait toujours fausse.
+- **Fix** : Utilise l'endpoint reel `GET /distribution-keys?copropriete_id=X` (defini dans `invoices.py:137`).
+### Verification
+- Test screenshot sur ACP 66dafcef... (Ph. Van der Aa) : le lot A 301 (absent de la cle "3/11 et 8/11") affiche desormais le bandeau ambre "CLE DE REPARTITION REQUISE" avec le dropdown listant "Batiment A (10000.000)".
+- Le backend `properties.py` acceptait deja `distribution_key_id` dans `LotMutationInput` et le propage via `_compute_mutation_breakdown(override_key_id=...)`.
+- Fichier modifie : `/app/frontend/src/pages/LotsPage.js` (ligne ~403-411, useEffect chargement keys).
+
