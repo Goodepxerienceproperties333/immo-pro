@@ -53,6 +53,18 @@ export default function BankingPage() {
   //   { files: [{ name, size, sizeHuman }], startedAt: number }
   const [importProgress, setImportProgress] = useState(null);
   const [importElapsed, setImportElapsed] = useState(0);
+  // iter93ae : mode d'affichage de la liste des extraits (localStorage-persisted)
+  //   'list'    : ligne dense (defaut, meilleur pour naviguer 50+ extraits)
+  //   'cards'   : cartes riches (ancien defaut)
+  //   'grouped' : groupe par mois (sections repliables)
+  const [stmtViewMode, setStmtViewMode] = useState(() => {
+    try { return localStorage.getItem('banking_stmt_view') || 'list'; } catch { return 'list'; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem('banking_stmt_view', stmtViewMode); } catch { /* noop */ }
+  }, [stmtViewMode]);
+  // Etat des groupes replies (mode grouped) : { 'YYYY-MM': true }
+  const [collapsedMonths, setCollapsedMonths] = useState({});
   const [stmtForm, setStmtForm] = useState({ number: '', date: '', account_number: '', opening_balance: 0, closing_balance: 0 });
   const [bankAccounts, setBankAccounts] = useState([]);
   const [inlineLines, setInlineLines] = useState([]);
@@ -272,6 +284,29 @@ export default function BankingPage() {
     return { accountOptions, yearOptions, monthOptions, filtered: sorted };
   })();
   const filteredStatements = filterCascade.filtered;
+
+  // iter93ae : regroupement par mois pour le mode 'grouped'
+  const groupedStatements = (() => {
+    if (stmtViewMode !== 'grouped') return null;
+    const groups = new Map();
+    for (const s of filteredStatements) {
+      const key = (s.date || '').substring(0, 7); // YYYY-MM
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(s);
+    }
+    return Array.from(groups.entries())
+      .sort((a, b) => (b[0] || '').localeCompare(a[0] || ''));
+  })();
+  const MONTH_LABELS = [
+    'Janvier', 'Fevrier', 'Mars', 'Avril', 'Mai', 'Juin',
+    'Juillet', 'Aout', 'Septembre', 'Octobre', 'Novembre', 'Decembre',
+  ];
+  const fmtMonthKey = (ym) => {
+    if (!ym || ym.length < 7) return 'Sans date';
+    const [y, m] = ym.split('-');
+    const mi = parseInt(m, 10) - 1;
+    return `${MONTH_LABELS[mi] || m} ${y}`;
+  };
 
   // iter90ja : Set des ids d'extraits necessitant review (transactions orphelines).
   // Sert a afficher une pastille rouge + fond ambre alerte sur la card.
@@ -738,6 +773,120 @@ export default function BankingPage() {
 
   // unpaidInv (legacy) supprime - l'onglet factures affiche maintenant toutes les factures avec coloration.
 
+  // iter93ae : helpers de rendu des extraits selon le mode d'affichage.
+  // renderStmtRow -> ligne dense (list & grouped modes)
+  // renderStmtCard -> carte riche (cards mode, comportement historique)
+  const renderStmtRow = (s) => {
+    const baBadge = getBankAccountBadge(s);
+    const isPosted = s.status === 'posted';
+    const isDraft = s.status === 'draft';
+    const needsReview = needsReviewSet.has(s.id);
+    const isSelected = selectedStmt?.id === s.id;
+    const rowBg = isSelected
+      ? 'bg-blue-50 border-l-4 border-[#022D52]'
+      : (needsReview ? 'bg-rose-50/40 border-l-4 border-rose-300' : (isDraft ? 'bg-amber-50/30 border-l-2 border-amber-300' : 'bg-white border-l-2 border-transparent'));
+    return (
+      <div
+        key={s.id}
+        onClick={() => loadStmtTxns(s)}
+        className={`cursor-pointer hover:bg-slate-50 transition ${rowBg} px-2 py-1.5`}
+        data-testid={`stmt-row-${s.id}`}
+      >
+        <div className="flex items-center gap-2">
+          {baBadge && (
+            <span
+              className={`shrink-0 px-1.5 py-0.5 rounded text-[9px] font-semibold uppercase ${baBadge.bg} ${baBadge.text}`}
+              title={s.account_number}
+              data-testid={`stmt-row-ba-${s.id}`}
+            >{baBadge.label}</span>
+          )}
+          <span className="flex-1 min-w-0 text-[11px] font-mono font-semibold truncate" title={s.number}>
+            N {s.number}
+          </span>
+          <span className="text-[10px] text-slate-500 shrink-0 tabular-nums">{fmtDate(s.date)}</span>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={e => { e.stopPropagation(); deleteStmt(s.id); }}
+            className={`h-5 w-5 p-0 shrink-0 ${isPosted ? 'text-slate-300 cursor-not-allowed' : 'text-red-400 hover:text-red-600'}`}
+            title={isPosted ? "Devalider d'abord pour supprimer" : 'Supprimer'}
+            data-testid={`stmt-row-del-${s.id}`}
+          ><Trash2 size={10} /></Button>
+        </div>
+        <div className="flex items-center gap-2 mt-0.5 text-[10px] font-mono text-slate-600">
+          <span title="Solde ouverture">O:{fmtEUR(s.opening_balance, false)}</span>
+          <span className="text-slate-300">|</span>
+          <span title="Solde fermeture">F:{fmtEUR(s.closing_balance, false)}</span>
+          <div className="flex-1" />
+          {isPosted && <span className="text-[9px] px-1.5 py-0.5 rounded bg-green-100 text-green-700 border border-green-200">Compta.</span>}
+          {isDraft && !needsReview && <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-200" data-testid={`stmt-row-badge-draft-${s.id}`}>Pret</span>}
+          {isDraft && needsReview && <span className="text-[9px] px-1.5 py-0.5 rounded bg-rose-100 text-rose-800 border border-rose-200" data-testid={`stmt-row-badge-review-${s.id}`}>Verif</span>}
+          {s.source === 'PDF' && <span className="text-[9px] px-1 py-0.5 rounded bg-purple-50 text-purple-700 border border-purple-200">PDF</span>}
+          {s.source === 'CSV' && <span className="text-[9px] px-1 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200">CSV</span>}
+          {s.source === 'CODA' && <span className="text-[9px] px-1 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-200">CODA</span>}
+        </div>
+      </div>
+    );
+  };
+  const renderStmtCard = (s) => {
+    const baBadge = getBankAccountBadge(s);
+    const isPosted = s.status === 'posted';
+    const isDraft = s.status === 'draft';
+    const needsReview = needsReviewSet.has(s.id);
+    const isReady = readyIdsSet.has(s.id);
+    const isSelected = selectedStmt?.id === s.id;
+    const cardBg = isPosted ? 'bg-white' : (needsReview ? 'bg-rose-50/60' : (isDraft ? 'bg-amber-50/50' : 'bg-white'));
+    const cardBorder = isSelected
+      ? 'border-[#022D52] shadow-md'
+      : (needsReview ? 'border-rose-300' : (isReady ? 'border-amber-300' : `${baBadge?.border || 'border-slate-200'}`));
+    return (
+      <Card key={s.id} className={`cursor-pointer transition-all border-l-4 text-sm ${cardBg} ${cardBorder} hover:border-slate-400`} onClick={() => loadStmtTxns(s)} data-testid={`stmt-card-${s.id}`}>
+        <CardContent className="p-3">
+          {baBadge && (
+            <div className={`inline-block px-1.5 py-0.5 rounded text-[9px] font-semibold uppercase tracking-wide mb-1.5 ${baBadge.bg} ${baBadge.text}`} title={s.account_number} data-testid={`stmt-ba-badge-${s.id}`}>
+              {baBadge.label}
+            </div>
+          )}
+          {needsReview && (
+            <div className="inline-flex items-center gap-1 ml-1 px-1.5 py-0.5 rounded-full text-[9px] font-semibold bg-rose-100 text-rose-800 border border-rose-200 mb-1.5" title="Cet extrait contient des transactions orphelines - non comptabilisable en batch" data-testid={`stmt-needs-review-${s.id}`}>
+              <AlertTriangle size={9} /> A verifier
+            </div>
+          )}
+          <div className="flex items-center justify-between gap-1">
+            <span className="font-mono font-semibold text-[11px] truncate min-w-0" title={s.number}>N {s.number}</span>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={e => { e.stopPropagation(); deleteStmt(s.id); }}
+              className={`h-5 w-5 p-0 shrink-0 ${isPosted ? 'text-slate-300 cursor-not-allowed' : 'text-red-400 hover:text-red-600'}`}
+              title={isPosted ? "Devalider d'abord (Repasser brouillon) pour pouvoir supprimer" : 'Supprimer'}
+              data-testid={`stmt-del-${s.id}`}
+            ><Trash2 size={10} /></Button>
+          </div>
+          <div className="text-xs text-slate-500">{fmtDate(s.date)}</div>
+          <div className="flex justify-between mt-1 text-[10px] font-mono"><span>O:{fmtEUR(s.opening_balance)}</span><span>F:{fmtEUR(s.closing_balance)}</span></div>
+          <div className="flex gap-1 mt-1 flex-wrap">
+            {isPosted && <Badge className="text-[9px] bg-green-100 text-green-700 border-green-300">Comptabilise</Badge>}
+            {isDraft && !needsReview && <Badge className="text-[9px] bg-amber-100 text-amber-800 border-amber-300" variant="outline" data-testid={`stmt-badge-draft-${s.id}`}>Pret</Badge>}
+            {isDraft && needsReview && <Badge className="text-[9px] bg-rose-100 text-rose-800 border-rose-300" variant="outline" data-testid={`stmt-badge-review-${s.id}`}>Verif requise</Badge>}
+            {s.source === 'CODA' && <Badge className="text-[9px]" variant="outline">CODA</Badge>}
+            {s.source === 'PDF' && <Badge className="text-[9px] bg-purple-50 text-purple-700 border-purple-200" variant="outline">PDF IA</Badge>}
+            {s.source === 'CSV' && <Badge className="text-[9px] bg-blue-50 text-[#01213e] border-blue-200" variant="outline">CSV</Badge>}
+          </div>
+          {s.source_file_id && (
+            <a
+              href={`${(process.env.REACT_APP_BACKEND_URL || '') || ''}/api/banking/statements/${s.id}/source-file`}
+              onClick={e => e.stopPropagation()}
+              target="_blank" rel="noreferrer"
+              className="mt-1 text-[10px] text-purple-600 hover:text-purple-800 hover:underline inline-block"
+              data-testid={`stmt-source-${s.id}`}
+            >Voir fichier source</a>
+          )}
+        </CardContent>
+      </Card>
+    );
+  };
+
   return (
     <div data-testid="banking-page">
       <div className="page-header flex items-center justify-between flex-wrap gap-3">
@@ -977,8 +1126,31 @@ export default function BankingPage() {
         )}
         {/* Statements sidebar */}
         <div className="space-y-2 lg:col-span-1">
-          <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold px-1">
-            Extraits ({filteredStatements.length})
+          {/* iter93ae : header avec compteur + toggle de vue (list / cards / grouped) */}
+          <div className="flex items-center justify-between gap-2 px-1">
+            <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">
+              Extraits ({filteredStatements.length})
+            </div>
+            <div className="flex items-center gap-0.5 bg-slate-100 rounded p-0.5" data-testid="stmt-view-toggle">
+              <button
+                onClick={() => setStmtViewMode('list')}
+                className={`px-2 py-1 rounded text-[10px] font-semibold transition ${stmtViewMode === 'list' ? 'bg-white text-[#022D52] shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                title="Vue liste (dense)"
+                data-testid="stmt-view-list"
+              >Liste</button>
+              <button
+                onClick={() => setStmtViewMode('grouped')}
+                className={`px-2 py-1 rounded text-[10px] font-semibold transition ${stmtViewMode === 'grouped' ? 'bg-white text-[#022D52] shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                title="Groupe par mois"
+                data-testid="stmt-view-grouped"
+              >Mois</button>
+              <button
+                onClick={() => setStmtViewMode('cards')}
+                className={`px-2 py-1 rounded text-[10px] font-semibold transition ${stmtViewMode === 'cards' ? 'bg-white text-[#022D52] shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                title="Vue cartes (detail)"
+                data-testid="stmt-view-cards"
+              >Cartes</button>
+            </div>
           </div>
           {statementsLoading ? (
             <div className="flex flex-col items-center justify-center py-10 gap-3" data-testid="statements-loading">
@@ -1004,65 +1176,45 @@ export default function BankingPage() {
             ) : (
               <p className="text-sm text-slate-400 text-center py-4">Aucun extrait</p>
             )
-          ) : filteredStatements.map(s => {
-            const baBadge = getBankAccountBadge(s);
-            // iter90ja : classification visuelle par etat de comptabilisation
-            const isPosted = s.status === 'posted';
-            const isDraft = s.status === 'draft';
-            const needsReview = needsReviewSet.has(s.id);
-            const isReady = readyIdsSet.has(s.id);
-            const isSelected = selectedStmt?.id === s.id;
-            // Card background : posted=neutre, draft-ready=ambre pale, draft-review=rose alerte
-            const cardBg = isPosted ? 'bg-white' : (needsReview ? 'bg-rose-50/60' : (isDraft ? 'bg-amber-50/50' : 'bg-white'));
-            const cardBorder = isSelected
-              ? 'border-[#022D52] shadow-md'
-              : (needsReview ? 'border-rose-300' : (isReady ? 'border-amber-300' : `${baBadge?.border || 'border-slate-200'}`));
-            return (
-            <Card key={s.id} className={`cursor-pointer transition-all border-l-4 text-sm ${cardBg} ${cardBorder} hover:border-slate-400`} onClick={() => loadStmtTxns(s)} data-testid={`stmt-card-${s.id}`}>
-              <CardContent className="p-3">
-                {baBadge && (
-                  <div className={`inline-block px-1.5 py-0.5 rounded text-[9px] font-semibold uppercase tracking-wide mb-1.5 ${baBadge.bg} ${baBadge.text}`} title={s.account_number} data-testid={`stmt-ba-badge-${s.id}`}>
-                    {baBadge.label}
-                  </div>
-                )}
-                {needsReview && (
-                  <div className="inline-flex items-center gap-1 ml-1 px-1.5 py-0.5 rounded-full text-[9px] font-semibold bg-rose-100 text-rose-800 border border-rose-200 mb-1.5" title="Cet extrait contient des transactions orphelines - non comptabilisable en batch" data-testid={`stmt-needs-review-${s.id}`}>
-                    <AlertTriangle size={9} /> A verifier
-                  </div>
-                )}
-                <div className="flex items-center justify-between gap-1">
-                  <span className="font-mono font-semibold text-[11px] truncate min-w-0" title={s.number}>N {s.number}</span>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={e => { e.stopPropagation(); deleteStmt(s.id); }}
-                    className={`h-5 w-5 p-0 shrink-0 ${s.status === 'posted' ? 'text-slate-300 cursor-not-allowed' : 'text-red-400 hover:text-red-600'}`}
-                    title={s.status === 'posted' ? "Devalider d'abord (Repasser brouillon) pour pouvoir supprimer" : 'Supprimer'}
-                    data-testid={`stmt-del-${s.id}`}
-                  ><Trash2 size={10} /></Button>
+          ) : (
+            <>
+              {stmtViewMode === 'grouped' ? (
+                (groupedStatements || []).map(([ymKey, stmts]) => {
+                  const isCollapsed = !!collapsedMonths[ymKey];
+                  const monthTotal = stmts.reduce((s, x) => s + (Number(x.closing_balance) || 0) - (Number(x.opening_balance) || 0), 0);
+                  return (
+                    <div key={ymKey} className="border border-slate-200 rounded-md overflow-hidden bg-white" data-testid={`stmt-group-${ymKey}`}>
+                      <button
+                        className="w-full flex items-center justify-between px-2 py-1.5 bg-slate-100 hover:bg-slate-200 transition text-left"
+                        onClick={() => setCollapsedMonths(prev => ({ ...prev, [ymKey]: !prev[ymKey] }))}
+                        data-testid={`stmt-group-toggle-${ymKey}`}
+                      >
+                        <div className="flex items-center gap-1.5">
+                          <span className={`text-[10px] font-mono transition-transform ${isCollapsed ? '' : 'rotate-90'}`}>&#9656;</span>
+                          <span className="text-[11px] font-bold text-slate-800 uppercase tracking-wide">{fmtMonthKey(ymKey)}</span>
+                          <span className="text-[10px] text-slate-500">({stmts.length})</span>
+                        </div>
+                        <span className={`text-[10px] font-mono ${monthTotal >= 0 ? 'text-emerald-700' : 'text-red-700'}`}>
+                          {monthTotal >= 0 ? '+' : ''}{fmtEUR(monthTotal, false)}
+                        </span>
+                      </button>
+                      {!isCollapsed && (
+                        <div className="divide-y divide-slate-100">
+                          {stmts.map(s => renderStmtRow(s))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
+              ) : stmtViewMode === 'list' ? (
+                <div className="border border-slate-200 rounded-md overflow-hidden bg-white divide-y divide-slate-100">
+                  {filteredStatements.map(s => renderStmtRow(s))}
                 </div>
-                <div className="text-xs text-slate-500">{fmtDate(s.date)}</div>
-                <div className="flex justify-between mt-1 text-[10px] font-mono"><span>O:{fmtEUR(s.opening_balance)}</span><span>F:{fmtEUR(s.closing_balance)}</span></div>
-                <div className="flex gap-1 mt-1 flex-wrap">
-                  {isPosted && <Badge className="text-[9px] bg-green-100 text-green-700 border-green-300">Comptabilise</Badge>}
-                  {isDraft && !needsReview && <Badge className="text-[9px] bg-amber-100 text-amber-800 border-amber-300" variant="outline" data-testid={`stmt-badge-draft-${s.id}`}>Pret</Badge>}
-                  {isDraft && needsReview && <Badge className="text-[9px] bg-rose-100 text-rose-800 border-rose-300" variant="outline" data-testid={`stmt-badge-review-${s.id}`}>Verif requise</Badge>}
-                  {s.source === 'CODA' && <Badge className="text-[9px]" variant="outline">CODA</Badge>}
-                  {s.source === 'PDF' && <Badge className="text-[9px] bg-purple-50 text-purple-700 border-purple-200" variant="outline">PDF IA</Badge>}
-                  {s.source === 'CSV' && <Badge className="text-[9px] bg-blue-50 text-[#01213e] border-blue-200" variant="outline">CSV</Badge>}
-                </div>
-                {s.source_file_id && (
-                  <a
-                    href={`${(process.env.REACT_APP_BACKEND_URL || '') || ''}/api/banking/statements/${s.id}/source-file`}
-                    onClick={e => e.stopPropagation()}
-                    target="_blank" rel="noreferrer"
-                    className="mt-1 text-[10px] text-purple-600 hover:text-purple-800 hover:underline inline-block"
-                    data-testid={`stmt-source-${s.id}`}
-                  >Voir fichier source</a>
-                )}
-              </CardContent>
-            </Card>
-          );})}
+              ) : (
+                filteredStatements.map(s => renderStmtCard(s))
+              )}
+            </>
+          )}
         </div>
 
         {/* Main panel - sticky whole panel so it stays in view while

@@ -371,3 +371,23 @@ En cas de regression future, utiliser le rollback Emergent vers ce commit.
 ### Verification screenshot
 - Screenshot avec network delay 30s : modal visible pendant 4s, chronometre passe de 00:01 -> 00:05, 3 fichiers listes (195.3 Ko, 97.7 Ko, 48.8 Ko) avec spinners actifs et badges "EN COURS".
 
+
+## iter93ae (2026-02-28) - Banking : 3 modes d'affichage des extraits (Liste / Mois / Cartes)
+### Nouvelle fonctionnalite
+- Toggle de vue (persist localStorage) en tete de la sidebar extraits :
+  - **Liste** (defaut, dense) : une ligne par extrait avec badge compte, numero, date, soldes O/F, badges statut et source. ~3x plus d'extraits visibles par ecran vs cartes.
+  - **Mois** (groupe) : sections repliables par mois (AVRIL 2026, MARS 2026...) avec :
+    - Triangle ► indiquant l'etat replie/deplie
+    - Compteur d'extraits par mois
+    - Somme des mouvements du mois (delta cloture-ouverture) en vert (positif) ou rouge
+    - Clic sur en-tete pour plier/deplier
+  - **Cartes** : ancien affichage riche conserve.
+### Fichier modifie
+- `/app/frontend/src/pages/BankingPage.js` :
+  - States `stmtViewMode` (persist localStorage `banking_stmt_view`), `collapsedMonths`.
+  - Helpers `renderStmtRow(s)` (ligne dense) et `renderStmtCard(s)` (carte historique).
+  - Regroupement `groupedStatements` par mois (`YYYY-MM`) + labels francais.
+### Verification screenshot
+- Vue Liste : 133 extraits en lignes denses, hover, selection surlignee.
+- Vue Mois : 18 groupes (mois), delta mensuel calcule, expansion/collapse fonctionnel.
+
