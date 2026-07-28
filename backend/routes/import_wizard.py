@@ -143,6 +143,16 @@ class CommitOdEntriesInput(BaseModel):
                          #   proprietaire_pct, occupant_pct}]
 
 
+# iter93w : assignation cle de fallback aux lots absents de la cle par defaut
+class LotFallbackAssignment(BaseModel):
+    lot_id: str
+    distribution_key_id: str
+
+
+class AssignFallbackKeysInput(BaseModel):
+    assignments: List[LotFallbackAssignment]
+
+
 # ============================================================
 # Router
 # ============================================================
@@ -309,12 +319,40 @@ def create_import_wizard_router(db):
         JE de la session (inline `heal_supplier_ids_by_name`) pour rattraper
         les cas edge (ex: fiches supplier creees APRES la ligne, apparition
         d'un homonyme, canonisation manquee).
+
+        iter93w : VERROU CLES DE REPARTITION - Refuse la finalisation si des
+        lots sont absents de la cle par defaut sans fallback assigne.
         """
         session = await db.import_sessions.find_one({"id": session_id})
         if not session:
             raise HTTPException(404, "Session introuvable")
         copro_id = session["copropriete_id"]
         await _require_acp_access(request, db, copro_id)
+
+        # iter93w : verrou cle fallback pour lots absents de la cle par defaut
+        fallback_check = await _compute_lots_fallback_check(copro_id)
+        if fallback_check.get("has_default_key"):
+            unassigned = [
+                p for p in fallback_check.get("lots_pending", [])
+                if not (p.get("current_fallback_key_id") or "").strip()
+            ]
+            if unassigned:
+                raise HTTPException(
+                    400,
+                    {
+                        "code": "LOTS_WITHOUT_FALLBACK_KEY",
+                        "message": (
+                            f"{len(unassigned)} lot(s) ne sont pas dans la cle par "
+                            f"defaut \u00ab {fallback_check.get('default_key_name', '?')} "
+                            f"\u00bb et n'ont pas de cle de fallback assignee. "
+                            "Assignez une cle a chaque lot avant de finaliser."
+                        ),
+                        "pending_lots": [
+                            {"lot_id": p["lot_id"], "lot_number": p["lot_number"]}
+                            for p in unassigned
+                        ],
+                    },
+                )
 
         # Verrou final : re-finalise toutes les JE de cette session avec l'index
         # a jour (suppliers/owners crees pendant la session inclus).
@@ -3789,6 +3827,123 @@ def create_import_wizard_router(db):
                 return {"inserted": inserted, "default_key_auto": candidate.get("name", "")}
         await _update_step(db, session_id, "distribution_keys", {"count": inserted})
         return {"inserted": inserted}
+
+    # iter93w : detection lots absents de la cle par defaut + assignation fallback
+    async def _compute_lots_fallback_check(copro_id: str) -> dict:
+        """Retourne la liste des lots absents de la cle par defaut de l'ACP,
+        avec les cles alternatives contenant chaque lot."""
+        default_key = await db.distribution_keys.find_one(
+            {"copropriete_id": copro_id, "is_default": True},
+            {"_id": 0},
+        )
+        if not default_key:
+            return {
+                "default_key_id": "",
+                "default_key_name": "",
+                "lots_pending": [],
+                "has_default_key": False,
+            }
+        default_lot_ids = set(
+            (l.get("lot_id") or "")
+            for l in (default_key.get("lots") or [])
+            if (l.get("share") or 0) > 0
+        )
+        all_keys = await db.distribution_keys.find(
+            {"copropriete_id": copro_id}, {"_id": 0}
+        ).to_list(500)
+        lots = await db.lots.find(
+            {"copropriete_id": copro_id},
+            {"_id": 0, "id": 1, "number": 1, "description": 1,
+             "fallback_distribution_key_id": 1},
+        ).to_list(50000)
+        pending = []
+        for lt in lots:
+            lot_id = lt.get("id", "")
+            if not lot_id or lot_id in default_lot_ids:
+                continue
+            available = []
+            for k in all_keys:
+                if k.get("is_default"):
+                    continue
+                for kl in (k.get("lots") or []):
+                    if kl.get("lot_id") == lot_id and (kl.get("share") or 0) > 0:
+                        available.append({
+                            "id": k["id"],
+                            "name": k.get("name", ""),
+                            "code": k.get("code", ""),
+                            "share": kl.get("share", 0),
+                        })
+                        break
+            pending.append({
+                "lot_id": lot_id,
+                "lot_number": lt.get("number", ""),
+                "description": lt.get("description", ""),
+                "current_fallback_key_id": lt.get("fallback_distribution_key_id", ""),
+                "available_keys": available,
+            })
+        pending.sort(key=lambda p: (p.get("lot_number") or ""))
+        return {
+            "default_key_id": default_key["id"],
+            "default_key_name": default_key.get("name", ""),
+            "lots_pending": pending,
+            "has_default_key": True,
+        }
+
+    @router.get("/coproprietes/{copropriete_id}/lots-fallback-check")
+    async def lots_fallback_check(copropriete_id: str, request: Request):
+        """iter93w : lots absents de la cle par defaut + cles fallback dispo."""
+        await _require_acp_access(request, db, copropriete_id)
+        return await _compute_lots_fallback_check(copropriete_id)
+
+    @router.post("/coproprietes/{copropriete_id}/assign-fallback-keys")
+    async def assign_fallback_keys(copropriete_id: str, data: AssignFallbackKeysInput, request: Request):
+        """iter93w : enregistre `fallback_distribution_key_id` sur chaque lot.
+        Verifie que la cle appartient a l'ACP et qu'elle contient le lot avec
+        un share > 0. Un `distribution_key_id` vide efface le fallback."""
+        await _require_acp_access(request, db, copropriete_id)
+        updated = 0
+        errors = []
+        keys_cache: dict = {}
+        for a in (data.assignments or []):
+            lot_id = (a.lot_id or "").strip()
+            key_id = (a.distribution_key_id or "").strip()
+            if not lot_id:
+                continue
+            lot_doc = await db.lots.find_one(
+                {"id": lot_id, "copropriete_id": copropriete_id},
+                {"_id": 0, "id": 1, "number": 1},
+            )
+            if not lot_doc:
+                errors.append({"lot_id": lot_id, "error": "Lot introuvable"})
+                continue
+            if key_id:
+                k = keys_cache.get(key_id)
+                if k is None:
+                    k = await db.distribution_keys.find_one(
+                        {"id": key_id, "copropriete_id": copropriete_id},
+                        {"_id": 0},
+                    )
+                    keys_cache[key_id] = k
+                if not k:
+                    errors.append({"lot_id": lot_id, "error": "Cle introuvable"})
+                    continue
+                found = next(
+                    (kl for kl in (k.get("lots") or [])
+                     if kl.get("lot_id") == lot_id and (kl.get("share") or 0) > 0),
+                    None,
+                )
+                if not found:
+                    errors.append({
+                        "lot_id": lot_id,
+                        "error": f"Le lot n'est pas dans la cle \u00ab {k.get('name', '?')} \u00bb.",
+                    })
+                    continue
+            await db.lots.update_one(
+                {"id": lot_id, "copropriete_id": copropriete_id},
+                {"$set": {"fallback_distribution_key_id": key_id}},
+            )
+            updated += 1
+        return {"updated": updated, "errors": errors}
 
     # ---- SUMMARY / RECAP D'IMPORT (iter90if) ----
     # Renvoie un recapitulatif complet de ce qui a ete cree pour l'ACP,

@@ -237,3 +237,22 @@ En cas de regression future, utiliser le rollback Emergent vers ce commit.
 - Le backend `properties.py` acceptait deja `distribution_key_id` dans `LotMutationInput` et le propage via `_compute_mutation_breakdown(override_key_id=...)`.
 - Fichier modifie : `/app/frontend/src/pages/LotsPage.js` (ligne ~403-411, useEffect chargement keys).
 
+
+
+## iter93w (2026-02-28) - Wizard Optipro : assignation cle de fallback pour lots hors cle par defaut
+### Nouvelle fonctionnalite
+- Detection automatique en fin de wizard des lots absents de la cle de repartition par defaut.
+- Ecran de recap final affiche un panneau ambre listant chaque lot pending avec un dropdown des cles alternatives contenant ce lot (share > 0 uniquement).
+- Boutons "Ouvrir l'ACP" et "Terminer et aller a la Comptabilite" desactives tant qu'il reste des lots sans cle assignee.
+- Bouton "Enregistrer les cles selectionnees" pour sauvegarder les assignations partielles.
+- Le champ `fallback_distribution_key_id` est stocke sur le document `lots`.
+### Backend
+- `GET /api/import-wizard/coproprietes/{copropriete_id}/lots-fallback-check` : retourne `{has_default_key, default_key_name, lots_pending: [...]}`.
+- `POST /api/import-wizard/coproprietes/{copropriete_id}/assign-fallback-keys` : accepte `{assignments: [{lot_id, distribution_key_id}]}`. Valide que la cle appartient a l'ACP et contient le lot avec share > 0.
+- `POST /api/import-wizard/sessions/{session_id}/finish` : refuse (HTTP 400 + code `LOTS_WITHOUT_FALLBACK_KEY`) si des lots pending sans fallback assigne.
+### Fichiers modifies
+- Backend : `/app/backend/routes/import_wizard.py` (~+170 lignes)
+- Frontend : `/app/frontend/src/pages/ImportWizardPage.js` (state fallbackCheck, panneau UI, gating des boutons finish)
+### Verification
+- Test API : POST assign avec cle invalide -> error "Cle introuvable" ; POST finish avec 30 lots pending -> HTTP 400 avec detail `{code, message, pending_lots}`.
+- Test UI screenshot : panneau ambre affiche 30 lots, dropdown pre-rempli si valeur precedente, toast succes apres save, compteur decremente, boutons "Terminer" desactives.

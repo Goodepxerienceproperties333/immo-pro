@@ -120,6 +120,12 @@ export default function ImportWizardPage() {
   const [odEntriesParsed, setOdEntriesParsed] = useState({ format: '', entries: [], total_count: 0, total_amount: 0, period_start: '', period_end: '' });
   // iter90if : ecran de recap final apres derniere etape du wizard.
   const [finalSummary, setFinalSummary] = useState(null);
+  // iter93w : verification des lots absents de la cle par defaut.
+  // Format : { has_default_key, default_key_name, lots_pending: [{lot_id,
+  // lot_number, description, current_fallback_key_id, available_keys}] }
+  const [fallbackCheck, setFallbackCheck] = useState(null);
+  const [fallbackAssignments, setFallbackAssignments] = useState({}); // {lot_id: key_id}
+  const [fallbackSaving, setFallbackSaving] = useState(false);
   // For 'csv_or_pdf' steps : tracks which mode the user picked for THIS step
   // (resets on every step change / file reset).
   const [uploadMode, setUploadMode] = useState(null);  // null | 'csv' | 'pdf'
@@ -129,6 +135,50 @@ export default function ImportWizardPage() {
   const [promoterInfo, setPromoterInfo] = useState(null); // { id, name }
 
   const step = STEPS[stepIdx];
+
+  // iter93w : helpers pour la gestion des cles de fallback
+  const fallbackPending = fallbackCheck?.lots_pending || [];
+  const fallbackUnassigned = fallbackPending.filter(
+    p => !(fallbackAssignments[p.lot_id] || '').trim()
+  );
+  const fallbackBlocking = fallbackCheck?.has_default_key && fallbackUnassigned.length > 0;
+
+  const saveFallbackKeys = async () => {
+    if (!effectiveCopro) return;
+    setFallbackSaving(true);
+    try {
+      const assignments = fallbackPending.map(p => ({
+        lot_id: p.lot_id,
+        distribution_key_id: fallbackAssignments[p.lot_id] || '',
+      })).filter(a => a.distribution_key_id);
+      if (assignments.length === 0) {
+        toast.error('Selectionnez au moins une cle de repartition');
+        setFallbackSaving(false);
+        return;
+      }
+      const r = await api.post(
+        `/import-wizard/coproprietes/${effectiveCopro}/assign-fallback-keys`,
+        { assignments }
+      );
+      if (r.data?.errors?.length) {
+        toast.error(`${r.data.errors.length} erreur(s) : ${r.data.errors[0].error}`);
+      } else {
+        toast.success(`${r.data.updated} cle(s) de fallback enregistree(s)`);
+      }
+      // Refresh check
+      const fbRes = await api.get(`/import-wizard/coproprietes/${effectiveCopro}/lots-fallback-check`);
+      setFallbackCheck(fbRes.data);
+      const refreshed = {};
+      (fbRes.data?.lots_pending || []).forEach(p => {
+        refreshed[p.lot_id] = p.current_fallback_key_id || '';
+      });
+      setFallbackAssignments(refreshed);
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur enregistrement');
+    } finally {
+      setFallbackSaving(false);
+    }
+  };
 
   // ----- session bootstrap -----
   useEffect(() => {
@@ -590,6 +640,20 @@ export default function ImportWizardPage() {
         } catch {
           setFinalSummary({ counts: {}, missing: [] });
         }
+        // iter93w : verifie s'il y a des lots absents de la cle par defaut
+        // qui necessitent une cle de fallback avant la finalisation.
+        try {
+          const fbRes = await api.get(`/import-wizard/coproprietes/${effectiveCopro}/lots-fallback-check`);
+          setFallbackCheck(fbRes.data);
+          // Pre-remplir les assignments avec les valeurs deja stockees
+          const initial = {};
+          (fbRes.data?.lots_pending || []).forEach(p => {
+            initial[p.lot_id] = p.current_fallback_key_id || '';
+          });
+          setFallbackAssignments(initial);
+        } catch {
+          setFallbackCheck(null);
+        }
         // Note : finish() est appele quand l'utilisateur clique sur "Terminer"
         // depuis l'ecran de recap, plus automatiquement.
       }
@@ -640,6 +704,96 @@ export default function ImportWizardPage() {
             </div>
           </div>
           <ImportSummary summary={finalSummary} />
+
+          {/* iter93w : Verrou cles de repartition - lots absents de la cle par defaut */}
+          {fallbackCheck && fallbackCheck.has_default_key && fallbackPending.length > 0 && (
+            <div
+              className={`mt-6 rounded-lg border-2 p-4 ${
+                fallbackBlocking ? 'border-amber-400 bg-amber-50' : 'border-emerald-300 bg-emerald-50'
+              }`}
+              data-testid="fallback-keys-panel"
+            >
+              <div className="flex items-start gap-3 mb-3">
+                <AlertTriangle
+                  size={22}
+                  className={`flex-shrink-0 mt-0.5 ${fallbackBlocking ? 'text-amber-600' : 'text-emerald-600'}`}
+                />
+                <div className="flex-1">
+                  <h3 className={`font-bold text-base ${fallbackBlocking ? 'text-amber-900' : 'text-emerald-900'}`}>
+                    Cles de repartition requises pour {fallbackPending.length} lot(s)
+                  </h3>
+                  <p className="text-xs text-slate-700 mt-1">
+                    Les lots suivants ne sont pas dans la cle par defaut
+                    {fallbackCheck.default_key_name ? ` (« ${fallbackCheck.default_key_name} »)` : ''}.
+                    Assignez une cle de repartition a chaque lot avant de finaliser l&apos;import.
+                    Cette cle sera utilisee automatiquement lors des mutations et calculs futurs.
+                  </p>
+                </div>
+              </div>
+              <div className="max-h-[400px] overflow-y-auto border border-slate-200 rounded-md bg-white">
+                <table className="w-full text-xs">
+                  <thead className="bg-slate-100 text-slate-700 sticky top-0">
+                    <tr>
+                      <th className="text-left px-3 py-2">Lot</th>
+                      <th className="text-left px-3 py-2">Description</th>
+                      <th className="text-left px-3 py-2">Cle de repartition (fallback)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {fallbackPending.map((p) => {
+                      const currentVal = fallbackAssignments[p.lot_id] || '';
+                      const noKeys = (p.available_keys || []).length === 0;
+                      return (
+                        <tr key={p.lot_id} className="border-t border-slate-100" data-testid={`fallback-row-${p.lot_number}`}>
+                          <td className="px-3 py-2 font-mono font-semibold">{p.lot_number}</td>
+                          <td className="px-3 py-2 text-slate-600 truncate max-w-[240px]">{p.description || '-'}</td>
+                          <td className="px-3 py-2">
+                            {noKeys ? (
+                              <span className="text-red-700 italic text-[11px]">
+                                Aucune cle ne contient ce lot. Ajoutez-le d&apos;abord dans Factures &gt; Cles de repartition.
+                              </span>
+                            ) : (
+                              <select
+                                className="h-8 text-xs border border-slate-300 rounded-md px-2 bg-white w-full max-w-[380px]"
+                                value={currentVal}
+                                onChange={(e) => setFallbackAssignments(prev => ({ ...prev, [p.lot_id]: e.target.value }))}
+                                data-testid={`fallback-select-${p.lot_number}`}
+                              >
+                                <option value="">-- Choisir une cle --</option>
+                                {p.available_keys.map(k => (
+                                  <option key={k.id} value={k.id}>
+                                    {k.name} ({k.share} quotites)
+                                  </option>
+                                ))}
+                              </select>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <div className="flex items-center justify-between mt-3">
+                <div className="text-xs text-slate-600">
+                  {fallbackBlocking
+                    ? <><b className="text-amber-800">{fallbackUnassigned.length}</b> lot(s) sans cle assignee.</>
+                    : <span className="text-emerald-800 font-semibold">Toutes les cles sont assignees.</span>}
+                </div>
+                <Button
+                  size="sm"
+                  onClick={saveFallbackKeys}
+                  disabled={fallbackSaving}
+                  className="bg-amber-600 hover:bg-amber-700 text-white"
+                  data-testid="save-fallback-keys-btn"
+                >
+                  {fallbackSaving ? <Loader2 size={14} className="mr-1 animate-spin" /> : <CheckCircle2 size={14} className="mr-1" />}
+                  Enregistrer les cles selectionnees
+                </Button>
+              </div>
+            </div>
+          )}
+
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 mt-6 pt-4 border-t border-slate-200">
             <Button
               variant="outline"
@@ -670,11 +824,17 @@ export default function ImportWizardPage() {
                       navigate(`/?copropriete_id=${effectiveCopro}`);
                     }
                   } catch (err) {
-                    toast.error(err.response?.data?.detail || 'Erreur finalisation');
+                    const d = err.response?.data?.detail;
+                    if (typeof d === 'object' && d?.code === 'LOTS_WITHOUT_FALLBACK_KEY') {
+                      toast.error(d.message || 'Assignez d\'abord une cle a chaque lot.');
+                    } else {
+                      toast.error(typeof d === 'string' ? d : 'Erreur finalisation');
+                    }
                   }
                 }}
                 variant="outline"
                 className="border-slate-300"
+                disabled={fallbackBlocking}
                 data-testid="recap-finish-btn"
               >
                 <CheckCircle2 size={14} className="mr-1" /> Ouvrir l&apos;ACP
@@ -686,10 +846,16 @@ export default function ImportWizardPage() {
                     toast.success('Import finalise ! Direction la comptabilite.');
                     navigate('/accounting');
                   } catch (err) {
-                    toast.error(err.response?.data?.detail || 'Erreur finalisation');
+                    const d = err.response?.data?.detail;
+                    if (typeof d === 'object' && d?.code === 'LOTS_WITHOUT_FALLBACK_KEY') {
+                      toast.error(d.message || 'Assignez d\'abord une cle a chaque lot.');
+                    } else {
+                      toast.error(typeof d === 'string' ? d : 'Erreur finalisation');
+                    }
                   }
                 }}
                 className="bg-[#022D52] hover:bg-[#022D52]/90 text-white text-base px-6 py-2.5 h-auto"
+                disabled={fallbackBlocking}
                 data-testid="recap-finish-accounting-btn"
               >
                 <CheckCircle2 size={16} className="mr-2" /> Terminer et aller a la Comptabilite
@@ -1172,7 +1338,24 @@ export default function ImportWizardPage() {
                         navigate(`/?copropriete_id=${effectiveCopro}`);
                       }
                     } catch (e) {
-                      toast.error(e.response?.data?.detail || 'Echec de finalisation');
+                      const d = e.response?.data?.detail;
+                      if (typeof d === 'object' && d?.code === 'LOTS_WITHOUT_FALLBACK_KEY') {
+                        toast.error(d.message || 'Assignez d\'abord une cle a chaque lot.');
+                        // Afficher l'ecran de recap avec le panneau fallback
+                        try {
+                          const sumRes = await api.get(`/import-wizard/coproprietes/${effectiveCopro}/import-summary`);
+                          setFinalSummary(sumRes.data);
+                          const fbRes = await api.get(`/import-wizard/coproprietes/${effectiveCopro}/lots-fallback-check`);
+                          setFallbackCheck(fbRes.data);
+                          const initial = {};
+                          (fbRes.data?.lots_pending || []).forEach(p => {
+                            initial[p.lot_id] = p.current_fallback_key_id || '';
+                          });
+                          setFallbackAssignments(initial);
+                        } catch { /* noop */ }
+                      } else {
+                        toast.error(typeof d === 'string' ? d : 'Echec de finalisation');
+                      }
                     } finally {
                       setCommitting(false);
                     }
