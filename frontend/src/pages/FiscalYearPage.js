@@ -34,13 +34,18 @@ export default function FiscalYearPage() {
   const [regulFy, setRegulFy] = useState(null);
 
   const load = useCallback(async () => {
-    const [y, b, a, dk] = await Promise.all([
+    // iter93y : autoriser les comptes classe 7 (produits venant diminuer les
+    // charges dans le budget). Chargement des classes 6 ET 7 en parallele.
+    const [y, b, a6, a7, dk] = await Promise.all([
       api.get('/fiscal/years'),
       api.get('/fiscal/budgets'),
       api.get('/accounting/pcmn', { params: { class_num: 6 } }),
+      api.get('/accounting/pcmn', { params: { class_num: 7 } }),
       api.get('/distribution-keys'),
     ]);
-    setYears(y.data); setBudgets(b.data); setAccounts(a.data); setDistKeys(dk.data);
+    setYears(y.data); setBudgets(b.data);
+    setAccounts([...(a6.data || []), ...(a7.data || [])]);
+    setDistKeys(dk.data);
   }, []);
   useEffect(() => { load(); }, [load]);
 
@@ -169,10 +174,18 @@ export default function FiscalYearPage() {
   const updateBudgetLine = (i, field, value) => {
     const lines = [...budgetForm.lines];
     lines[i] = { ...lines[i], [field]: field === 'amount' ? Number(value) : value };
-    if (field === 'account_number') {
-      const acc = accounts.find(a => a.number === value);
-      if (acc) lines[i].account_name = acc.name;
+    // iter93y : detection classe pour bascule automatique du signe.
+    const accNumber = lines[i].account_number || '';
+    const acc = accounts.find(a => a.number === accNumber);
+    const isClass7 = (acc?.class_num === 7) || String(accNumber).startsWith('7');
+    if (field === 'account_number' && acc) {
+      lines[i].account_name = acc.name;
     }
+    // iter93y : force le signe correct selon la classe (comptable de produits
+    // stocke en negatif pour venir diminuer les charges dans sum(amount)).
+    const cur = Number(lines[i].amount || 0);
+    if (isClass7 && cur > 0) lines[i].amount = -cur;
+    else if (!isClass7 && cur < 0) lines[i].amount = Math.abs(cur);
     setBudgetForm({ ...budgetForm, lines });
   };
 
@@ -283,6 +296,19 @@ export default function FiscalYearPage() {
   };
 
   const totalBudget = budgetForm.lines.reduce((s, l) => s + Number(l.amount || 0), 0);
+  // iter93y : ventilation charges (classe 6) vs produits (classe 7) par
+  // classe de compte (le signe stocke est deja negatif pour classe 7).
+  const totalCharges = budgetForm.lines.reduce((s, l) => {
+    const isCl7 = String(l.account_number || '').startsWith('7');
+    if (isCl7) return s;
+    return s + Math.abs(Number(l.amount || 0));
+  }, 0);
+  const totalProduits = budgetForm.lines.reduce((s, l) => {
+    const isCl7 = String(l.account_number || '').startsWith('7');
+    if (!isCl7) return s;
+    return s + Math.abs(Number(l.amount || 0));
+  }, 0);
+  const hasClass7 = budgetForm.lines.some(l => String(l.account_number || '').startsWith('7'));
 
   return (
     <div data-testid="fiscal-page">
@@ -478,7 +504,7 @@ export default function FiscalYearPage() {
 
             <div className="border border-slate-200 rounded-md bg-white">
               <div className="grid grid-cols-12 gap-3 bg-slate-50 px-3 py-2 text-[11px] uppercase tracking-wider text-slate-600 font-semibold border-b border-slate-200">
-                <div className="col-span-6">Compte / Nature de depense</div>
+                <div className="col-span-6">Compte (classe 6 charges / classe 7 produits)</div>
                 <div className="col-span-3">Cle de repartition</div>
                 <div className="col-span-2 text-right">Montant (EUR)</div>
                 <div className="col-span-1"></div>
@@ -487,16 +513,32 @@ export default function FiscalYearPage() {
                 <div className="p-6 text-center text-slate-400 text-sm">Aucune ligne. Ajoutez-en ou pre-remplissez depuis N-1.</div>
               )}
               <div className="divide-y divide-slate-100">
-                {budgetForm.lines.map((l, i) => (
-                  <div key={i} className="grid grid-cols-12 gap-3 px-3 py-2 items-center">
+                {budgetForm.lines.map((l, i) => {
+                  // iter93y : detection classe 7 pour affichage badge produit
+                  const isClass7 = String(l.account_number || '').startsWith('7');
+                  return (
+                  <div key={i} className={`grid grid-cols-12 gap-3 px-3 py-2 items-center ${isClass7 ? 'bg-emerald-50/40' : ''}`}>
                     <div className="col-span-6">
-                      <AccountSearchSelect
-                        accounts={accounts}
-                        value={l.account_number}
-                        onChange={(num) => updateBudgetLine(i, 'account_number', num)}
-                        placeholder="Rechercher par numero ou libelle..."
-                        testId={`budget-line-acc-${i}`}
-                      />
+                      <div className="flex items-center gap-2">
+                        <div className="flex-1">
+                          <AccountSearchSelect
+                            accounts={accounts}
+                            value={l.account_number}
+                            onChange={(num) => updateBudgetLine(i, 'account_number', num)}
+                            placeholder="Rechercher par numero ou libelle..."
+                            testId={`budget-line-acc-${i}`}
+                          />
+                        </div>
+                        {isClass7 && (
+                          <span
+                            className="shrink-0 text-[10px] font-semibold uppercase tracking-wider px-2 py-1 rounded bg-emerald-100 text-emerald-800 border border-emerald-300"
+                            title="Compte de produits - reduit le total des charges"
+                            data-testid={`budget-line-class7-badge-${i}`}
+                          >
+                            Produit
+                          </span>
+                        )}
+                      </div>
                     </div>
                     <div className="col-span-3">
                       <select
@@ -535,13 +577,23 @@ export default function FiscalYearPage() {
                       </button>
                     </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
               <div className="border-t-2 bg-slate-50 px-3 py-2 flex items-center justify-between">
                 <Button variant="ghost" size="sm" onClick={addBudgetLine} className="text-xs"><Plus size={12} className="mr-1" />Ajouter ligne</Button>
-                <div className="flex items-center gap-3">
-                  <span className="text-xs text-slate-500 uppercase tracking-wider">Total</span>
-                  <span className="font-mono font-bold text-base text-slate-900">{totalBudget.toFixed(2)} EUR</span>
+                <div className="flex items-center gap-4">
+                  {hasClass7 && (
+                    <div className="flex items-center gap-3 text-xs" data-testid="budget-breakdown">
+                      <span className="text-slate-600">Charges (cl. 6) : <span className="font-mono font-semibold text-slate-800">{totalCharges.toFixed(2)}</span></span>
+                      <span className="text-emerald-700">- Produits (cl. 7) : <span className="font-mono font-semibold">{totalProduits.toFixed(2)}</span></span>
+                      <span className="text-slate-400">=</span>
+                    </div>
+                  )}
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-slate-500 uppercase tracking-wider">Total net</span>
+                    <span className="font-mono font-bold text-base text-slate-900" data-testid="budget-total">{totalBudget.toFixed(2)} EUR</span>
+                  </div>
                 </div>
               </div>
             </div>

@@ -273,3 +273,20 @@ En cas de regression future, utiliser le rollback Emergent vers ce commit.
 - Test UI screenshot : 3 badges "Appel special" (orange) visibles sur l'ecran Appels de Fonds pour ACP Van der Aa.
 ### Fichier modifie
 - `/app/backend/routes/fund_calls.py` (ligne 909-913, injection syndic_id).
+
+## iter93y (2026-02-28) - Budget : support des comptes classe 7 (produits diminuant les charges)
+### Nouvelle fonctionnalite
+- Selection de comptes de classe 6 (charges) ET de classe 7 (produits) dans les lignes budget.
+- Bascule automatique du signe : montant stocke en negatif pour classe 7 (permet a sum(amount) de calculer le net).
+- Ventilation visuelle : "Charges (cl. 6) : X - Produits (cl. 7) : Y = TOTAL NET Z EUR".
+- Badge vert "PRODUIT" sur les lignes classe 7 pour clarte visuelle.
+- Fond legerement teinte sur les lignes classe 7.
+### Impact metier
+- Le total net du budget est utilise tel quel par le generateur d'appels de fonds (`build_from_budget` fund_calls.py) : la reduction par les produits est propagee automatiquement aux distributions par lot.
+- Le PDF Budget reflete correctement le total (deja base sur sum(amount)).
+### Fichiers modifies
+- `/app/frontend/src/pages/FiscalYearPage.js` : fetch classe 6+7, auto-flip du signe, breakdown UI.
+### Verification screenshot
+- Ajout ligne "61 - Services et biens divers" (cl. 6) 3000 EUR + ligne "742 - Recettes loyers" (cl. 7) 500 EUR (stocke -500).
+- Total net affiche : 2500 EUR = 3000 - 500. Correct.
+
