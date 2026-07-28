@@ -34,7 +34,7 @@ export default function DashboardPage() {
   const [seeding, setSeeding] = useState(false);
 
   const reload = useCallback(() => {
-    api.get('/coproprietes').then(r => setCoproprietes(r.data)).catch(() => {});
+    api.get('/coproprietes?include_archived=true').then(r => setCoproprietes(r.data)).catch(() => {});
   }, []);
 
   useEffect(() => { reload(); }, [reload]);
@@ -124,19 +124,24 @@ export default function DashboardPage() {
               <Card className="border-slate-200"><CardContent className="p-8 text-center text-slate-400">Aucune copropriete creee. Allez dans Coproprietes pour en creer une.</CardContent></Card>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                {coproprietes.filter(c => c.status !== 'archived').map(c => (
+                {coproprietes.map(c => {
+                  const isArchived = c.status === 'archived';
+                  return (
                   <Card
                     key={c.id}
-                    className="border-slate-200 hover:border-[#022D52] hover:shadow-lg cursor-pointer transition-all group"
+                    className={`border-slate-200 hover:border-[#022D52] hover:shadow-lg cursor-pointer transition-all group ${isArchived ? 'bg-slate-50 opacity-80' : ''}`}
                     onClick={() => setSelectedCopro(c.id)}
                     data-testid={`copro-tile-${c.id}`}
                   >
                     <CardContent className="p-5">
                       <div className="flex items-start justify-between mb-3">
-                        <div className="w-10 h-10 rounded-md bg-[#022D52]/10 flex items-center justify-center group-hover:bg-[#022D52] transition-colors">
-                          <Home size={20} className="text-[#022D52] group-hover:text-white transition-colors" />
+                        <div className={`w-10 h-10 rounded-md flex items-center justify-center transition-colors ${isArchived ? 'bg-slate-200' : 'bg-[#022D52]/10 group-hover:bg-[#022D52]'}`}>
+                          <Home size={20} className={isArchived ? 'text-slate-500' : 'text-[#022D52] group-hover:text-white transition-colors'} />
                         </div>
-                        {c.reference && <Badge variant="outline" className="font-mono text-[10px]">{c.reference}</Badge>}
+                        <div className="flex flex-col items-end gap-1">
+                          {c.reference && <Badge variant="outline" className="font-mono text-[10px]">{c.reference}</Badge>}
+                          {isArchived && <Badge variant="outline" className="text-[9px] bg-amber-50 border-amber-300 text-amber-800">ARCHIVEE</Badge>}
+                        </div>
                       </div>
                       <h3 className="font-bold text-slate-900 mb-1" style={{fontFamily:'Chivo,sans-serif'}}>{c.name}</h3>
                       {c.city && <p className="text-xs text-slate-500">{c.address ? `${c.address}, ` : ''}{c.postal_code} {c.city}</p>}
@@ -147,7 +152,8 @@ export default function DashboardPage() {
                       </div>
                     </CardContent>
                   </Card>
-                ))}
+                  );
+                })}
               </div>
             )}
           </TabsContent>
