@@ -290,3 +290,24 @@ En cas de regression future, utiliser le rollback Emergent vers ce commit.
 - Ajout ligne "61 - Services et biens divers" (cl. 6) 3000 EUR + ligne "742 - Recettes loyers" (cl. 7) 500 EUR (stocke -500).
 - Total net affiche : 2500 EUR = 3000 - 500. Correct.
 
+
+## iter93z (2026-02-28) - Bug fix: parser cle de repartition ne capturait pas tous les lots
+### Bug corrige
+- **P0** : Le parser texte-fallback des cles de repartition PDF (`parse_distribution_keys_pdf`) ne capturait que 28/58 lots pour la cle "0015 Clé spéciale 3/11" de l'ACP Van der Aa.
+- Lots ignores : tous les garages (A/B G01-G22), parkings exterieurs (A Pex1-7), lot A 301 (sans owner code).
+### Cause racine
+- Le regex text-fallback utilisait `[A-Z]\s*\d{3,4}` pour le libelle, ce qui exigeait des chiffres directement apres la lettre initiale. Rejette donc :
+  - `A G01`, `B G22` (garages : lettre + espace + G + chiffres)
+  - `A Pex1`, `A Pex7` (parkings : lettre + espace + mot + chiffres)
+- Le regex exigeait aussi un code owner `C\d{3,5}` obligatoire, ce qui excluait les lots sans proprietaire assigne (ex : `A 301 - APPARTEMENT - 218.180000`).
+### Fix
+- Regex mis a jour dans `/app/backend/import_wizard/pdf_utils.py` (fonction `parse_distribution_keys_pdf`) :
+  - Libelle : `[A-Z]\s+[A-Za-z0-9][A-Za-z0-9\-]*` (accepte prefix alphanumerique + tirets pour lots composites 009-010)
+  - Groupe owner : rendu **optionnel** via `(?:...)?`
+  - Type de lot : capture explicite (APPARTEMENT, GARAGE, PARKING EXT., etc.)
+- Backfill one-shot : cle "0015" (ACP Van der Aa) rechargee -> 58/58 lots, total 10000 exact.
+- Test regression : `/app/backend/tests/test_iter93z_distribution_key_parser_alphanumeric.py` (4 tests passent).
+### Verification
+- Parser sur PDF utilisateur : 58 lots detectes (avant : 28).
+- Endpoint `lots-fallback-check` retourne desormais 0 lot pending pour cette ACP (avant : 30).
+

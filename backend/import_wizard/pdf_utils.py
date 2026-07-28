@@ -1532,14 +1532,23 @@ def parse_distribution_keys_pdf(raw: bytes) -> dict:
         next_key_m = re.search(r"\n\s*\d{3,4}\s*[-–]\s*[A-ZÉÈÊÀÎÔÛa-zéèêàîôû]", full_text[pos + len(marker):])
         end_pos = pos + len(marker) + next_key_m.start() if next_key_m else len(full_text)
         block = full_text[pos:end_pos]
-        # Cherche les lignes de detail. Pattern attendu :
-        #   <libelle> C<code> - <owner name> <nb_lots_or_dash> <quotity>
-        # Ex : "A 001 - APPARTEMENT C0211 - Mme van den Abeele Jacqueline 58 267,270000"
-        # ou  : "A 002 - APPARTEMENT C0227 - M. BODEUX Jean-Claude - 267,27"
+        # Cherche les lignes de detail. Format attendu (avec variantes) :
+        #   <lot_label> - <TYPE> C<code> - <owner name> - <quotity>
+        # ou  <lot_label> - <TYPE> - <quotity>              (sans owner)
+        # ou  <lot_label> - <TYPE> C<code> - <owner> <nb_lots> <quotity>
+        # Ex : "A 001 - APPARTEMENT C0211 - Mme van den Abeele Jacqueline - 267.270000"
+        # Ex : "A 301 - APPARTEMENT - 218.180000"                     (sans owner)
+        # Ex : "A G01 - GARAGE C0233 - Mme DEFALQUE Tatienne - 24.550000"     (garage)
+        # Ex : "A Pex7 - PARKING EXT. - 21.820000"                    (parking sans owner)
+        # Ex : "B 009-010 - APPARTEMENT C0208 - M. FORSTER Sven - 400.000000" (composite)
+        #
+        # iter93z : le libelle peut etre alphanumerique (G01, Pex7) ou composite
+        # (009-010). L'owner et son code C\d{3,5} sont OPTIONNELS.
         detail_pat = re.compile(
-            r"^(?P<libelle>[A-Z]\s*\d{3,4}[^\n]*?)\s+"
-            r"(?P<owner>C\d{3,5}\s*[-–][^\n]*?)\s+"
-            r"(?:[-–]|\d+)\s+"
+            r"^(?P<libelle>[A-Z]\s+[A-Za-z0-9][A-Za-z0-9\-]*)\s+[-–]\s+"
+            r"(?P<type>[A-Z][A-ZÀ-Ÿ .]+?)"
+            r"(?:\s+(?P<owner>C\d{3,5}\s*[-–]\s*[^\n]+?))?"
+            r"\s+(?:[-–]|\d+)\s+"
             r"(?P<qt>\d+[.,]\d+)\s*$",
             re.MULTILINE,
         )
@@ -1548,10 +1557,11 @@ def parse_distribution_keys_pdf(raw: bytes) -> dict:
             qt = _to_float(m.group("qt"))
             if qt <= 0:
                 continue
+            owner_grp = m.group("owner")
             recovered.append({
                 "lot_label": m.group("libelle").strip(),
                 "lot_code": "",
-                "owner_label": m.group("owner").strip(),
+                "owner_label": (owner_grp or "").strip(),
                 "quotity": qt,
             })
         if recovered:
