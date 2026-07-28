@@ -39,10 +39,14 @@ JOURNAL_LABELS = {
 
 
 def _eur_be(n: float) -> str:
-    s = f"{n:,.2f}"
-    parts = s.split(".")
-    int_part = parts[0].replace(",", ".")
-    return f"{int_part},{parts[1]}"
+    # iter93ac : format unifie plateforme (espace millier + virgule decimale)
+    try:
+        f = float(n)
+    except (TypeError, ValueError):
+        return ""
+    sign = "-" if f < 0 else ""
+    f = abs(f)
+    return f"{sign}{f:,.2f}".replace(",", "\u202f").replace(".", ",")
 
 
 def _fmt_date(iso: str) -> str:

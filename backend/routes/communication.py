@@ -887,9 +887,12 @@ def create_communication_router(db):
                 # Compute subject + body per-owner (template rendering ou fallback)
                 if tpl:
                     ctx = await build_owner_email_context(db, oid, payload.copropriete_id, current_user)
-                    ctx["balance"] = f"{balances_map.get(oid, 0.0):.2f}"
-                    ctx["abs_balance"] = f"{abs(balances_map.get(oid, 0.0)):.2f}"
-                    ctx["balance_status"] = "debiteur" if balances_map.get(oid, 0) > 0 else ("crediteur" if balances_map.get(oid, 0) < 0 else "solde")
+                    # iter93ac : format unifie plateforme pour les emails
+                    from utils.format import fmt_eur as _fmt_eur
+                    _b = balances_map.get(oid, 0.0)
+                    ctx["balance"] = _fmt_eur(_b, with_suffix=False)
+                    ctx["abs_balance"] = _fmt_eur(abs(_b), with_suffix=False)
+                    ctx["balance_status"] = "debiteur" if _b > 0 else ("crediteur" if _b < 0 else "solde")
                     subj = render_template(tpl.get("subject", "") or subject_default, ctx)
                     body_rendered = render_template(tpl.get("body_html", "") or body_default, ctx)
                 else:
@@ -1095,8 +1098,10 @@ def create_communication_router(db):
             ctx = await build_owner_email_context(db, owner_id, copropriete_id, current_user)
             if balances_map is not None:
                 bal = balances_map.get(owner_id, 0.0)
-                ctx["balance"] = f"{bal:.2f}"
-                ctx["abs_balance"] = f"{abs(bal):.2f}"
+                # iter93ac : format unifie plateforme pour les emails
+                from utils.format import fmt_eur as _fmt_eur
+                ctx["balance"] = _fmt_eur(bal, with_suffix=False)
+                ctx["abs_balance"] = _fmt_eur(abs(bal), with_suffix=False)
                 ctx["balance_status"] = (
                     "debiteur" if bal > 0 else ("crediteur" if bal < 0 else "solde")
                 )

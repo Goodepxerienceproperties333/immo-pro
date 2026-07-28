@@ -6,6 +6,9 @@ from datetime import datetime, timezone, timedelta
 import io
 import csv
 
+# iter93ac : format unifie plateforme (espace millier + virgule decimale)
+from utils.format import fmt_eur
+
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
@@ -524,15 +527,15 @@ def create_exports_router(db):
                     Paragraph(line.get("account_number", "") or "", cell),
                     Paragraph((line.get("account_name", "") or "")[:35], cell),
                     Paragraph((line.get("third_party_name", "") or "")[:30], cell),
-                    Paragraph(f"{debit:.2f}" if debit else "", cell_r),
-                    Paragraph(f"{credit:.2f}" if credit else "", cell_r),
+                    Paragraph(fmt_eur(debit, with_suffix=False) if debit else "", cell_r),
+                    Paragraph(fmt_eur(credit, with_suffix=False) if credit else "", cell_r),
                     Paragraph(flag_str, cell),
                 ])
         rows.append([
             "", "", "", "", "", "",
             Paragraph("<b>TOTAUX</b>", cell_r),
-            Paragraph(f"<b>{round(total_debit, 2):.2f}</b>", cell_r),
-            Paragraph(f"<b>{round(total_credit, 2):.2f}</b>", cell_r),
+            Paragraph(f"<b>{fmt_eur(round(total_debit, 2), with_suffix=False)}</b>", cell_r),
+            Paragraph(f"<b>{fmt_eur(round(total_credit, 2), with_suffix=False)}</b>", cell_r),
             "",
         ])
 
@@ -1132,12 +1135,12 @@ def create_reminders_router(db):
                     Paragraph(u.get("period", ""), cell_style),
                     Paragraph(u["due"], cell_style),
                     Paragraph(f"{u['days_late']} j", cell_style),
-                    Paragraph(f"{u['amount']:.2f} EUR", cell_right),
+                    Paragraph(fmt_eur(u['amount']), cell_right),
                 ])
             rows.append([
                 "", "", "",
                 Paragraph("<b>TOTAL APPELS</b>", cell_style),
-                Paragraph(f"<b>{total_due:.2f} EUR</b>", cell_right),
+                Paragraph(f"<b>{fmt_eur(total_due)}</b>", cell_right),
             ])
             t = Table(
                 rows,
@@ -1172,12 +1175,12 @@ def create_reminders_router(db):
                 rows_pay.append([
                     Paragraph(p["date"], cell_style),
                     Paragraph(p["description"], cell_style),
-                    Paragraph(f"{p['amount']:.2f} EUR", cell_right),
+                    Paragraph(fmt_eur(p['amount']), cell_right),
                 ])
             rows_pay.append([
                 "",
                 Paragraph("<b>TOTAL PAIEMENTS</b>", cell_style),
-                Paragraph(f"<b>{total_paid_period:.2f} EUR</b>", cell_right),
+                Paragraph(f"<b>{fmt_eur(total_paid_period)}</b>", cell_right),
             ])
             tp = Table(
                 rows_pay,
@@ -1205,7 +1208,7 @@ def create_reminders_router(db):
             # si des paiements partiels ont deja reduit la dette).
             balance_line = (
                 f"<b>Solde restant du a ce jour : "
-                f"<font color='#DC2626'>{owner_balance:.2f} EUR</font></b>"
+                f"<font color='#DC2626'>{fmt_eur(owner_balance)}</font></b>"
             )
             elements.append(Paragraph(balance_line, body))
             elements.append(Spacer(1, 3 * mm))

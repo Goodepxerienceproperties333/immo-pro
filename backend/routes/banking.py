@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 import hashlib
 import os
 import uuid
+# iter93ac : format unifie plateforme (espace millier + virgule decimale)
+from utils.format import fmt_eur
 from auto_entries import generate_bank_entry, _delete_auto_entries
 # iter90jb : normalisation stricte des IBAN (source of truth = sans separateur)
 from iban_utils import normalize_iban
@@ -789,7 +791,7 @@ def create_banking_router(db):
         if abs(diff) >= 0.01:
             raise HTTPException(
                 400,
-                f"Extrait non equilibre. Solde ouverture ({opening:.2f}) + mouvements ({mvts_sum:.2f}) = {computed:.2f}, mais solde fermeture saisi = {closing:.2f}. Difference : {diff:.2f}"
+                f"Extrait non equilibre. Solde ouverture ({fmt_eur(opening)}) + mouvements ({fmt_eur(mvts_sum)}) = {fmt_eur(computed)}, mais solde fermeture saisi = {fmt_eur(closing)}. Difference : {fmt_eur(diff)}"
             )
         # GENERATION DES ECRITURES COMPTABLES (FI) : une ecriture par transaction.
         # - Si lettree -> Dr/Cr counterpart correspondant (owner/supplier/invoice)
@@ -907,8 +909,8 @@ def create_banking_router(db):
                     "date": stmt.get("date", ""),
                     "reason": "imbalance",
                     "message": (
-                        f"Ouverture {opening:.2f} + mouvements {mvts_sum:.2f} = {computed:.2f} "
-                        f"mais cloture saisie {closing:.2f} (diff {diff:.2f})."
+                        f"Ouverture {fmt_eur(opening)} + mouvements {fmt_eur(mvts_sum)} = {fmt_eur(computed)} "
+                        f"mais cloture saisie {fmt_eur(closing)} (diff {fmt_eur(diff)})."
                     ),
                 })
                 continue
@@ -2219,8 +2221,8 @@ def create_banking_router(db):
         total_split = round(sum(float(s.amount or 0) for s in data.splits), 2)
         if abs(total_split - txn_amt) > 0.01:
             raise HTTPException(400,
-                f"Somme des splits ({total_split:.2f}) doit egaler le montant "
-                f"de la transaction ({txn_amt:.2f})")
+                f"Somme des splits ({fmt_eur(total_split)}) doit egaler le montant "
+                f"de la transaction ({fmt_eur(txn_amt)})")
 
         resolved: List[dict] = []
         for i, s in enumerate(data.splits):
@@ -2614,7 +2616,7 @@ def create_banking_router(db):
                         "error": (
                             f"Extrait deja importe (meme IBAN, meme periode "
                             f"{period_from} -> {period_to}, meme solde final "
-                            f"{closing_balance:.2f} EUR) : extrait "
+                            f"{fmt_eur(closing_balance)}) : extrait "
                             f"'{dup.get('number','?')}' du {dup.get('date','?')}."
                         ),
                         "existing_statement_id": dup.get("id"),
@@ -2760,7 +2762,7 @@ def create_banking_router(db):
                 raise HTTPException(
                     409,
                     f"CODA deja importe (meme IBAN, meme date {stmt_date}, "
-                    f"meme solde final {closing_bal:.2f} EUR) : extrait "
+                    f"meme solde final {fmt_eur(closing_bal)}) : extrait "
                     f"'{dup2.get('number','?')}'.",
                 )
 
@@ -2970,7 +2972,7 @@ def create_banking_router(db):
                     409,
                     f"Extrait deja importe (meme IBAN, meme date "
                     f"{data.statement_date}, meme solde final "
-                    f"{float(data.closing_balance or 0):.2f} EUR) : extrait "
+                    f"{fmt_eur(float(data.closing_balance or 0))}) : extrait "
                     f"'{dup2.get('number','?')}'."
                 )
 

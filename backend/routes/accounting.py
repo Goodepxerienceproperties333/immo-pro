@@ -426,7 +426,8 @@ def create_accounting_router(db):
         total_debit = sum(l.debit for l in data.lines)
         total_credit = sum(l.credit for l in data.lines)
         if abs(total_debit - total_credit) > 0.01:
-            raise HTTPException(400, f"Ecriture non equilibree: Debit={total_debit:.2f}, Credit={total_credit:.2f}")
+            from utils.format import fmt_eur as _fmt_eur
+            raise HTTPException(400, f"Ecriture non equilibree: Debit={_fmt_eur(total_debit)}, Credit={_fmt_eur(total_credit)}")
         # Verify each account_number actually belongs to the ACP's PCMN (no leak)
         accs_used = {l.account_number for l in data.lines if l.account_number}
         if accs_used:

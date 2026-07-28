@@ -34,11 +34,18 @@ DARK_GREY = colors.HexColor("#475569")
 
 
 def _eur_be(n: float) -> str:
-    """Format belge : 1.234,56."""
-    s = f"{n:,.2f}"
-    parts = s.split(".")
-    int_part = parts[0].replace(",", ".")
-    return f"{int_part},{parts[1]}"
+    """Format belge/francais francophone : espace millier, virgule decimale.
+
+    iter93ac : aligne avec `/app/backend/utils/format.py::fmt_eur` et
+    `/app/frontend/src/lib/format.js::fmtEUR` pour coherence UI/PDF/emails.
+    """
+    try:
+        f = float(n)
+    except (TypeError, ValueError):
+        return ""
+    sign = "-" if f < 0 else ""
+    f = abs(f)
+    return f"{sign}{f:,.2f}".replace(",", "\u202f").replace(".", ",")
 
 
 def _add_page_number(canvas, doc):

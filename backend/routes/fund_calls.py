@@ -5,6 +5,9 @@ from datetime import datetime, timezone, timedelta
 import uuid
 from auto_entries import generate_sale_entry, _delete_auto_entries
 
+# iter93ac : format unifie plateforme (espace millier + virgule decimale)
+from utils.format import fmt_eur
+
 
 class FundCallInput(BaseModel):
     name: str
@@ -423,7 +426,7 @@ async def generate_prorata_mut_ods_for_call(db, call_doc: dict) -> dict:
                 "reference": ref,
                 "description": (
                     f"Mutation lot {entry.get('lot_number','')} - Prorata (appel post-mutation): "
-                    f"{from_own.get('name','')} -> {to_own.get('name','')} ({amount:.2f} EUR)"
+                    f"{from_own.get('name','')} -> {to_own.get('name','')} ({fmt_eur(amount)})"
                 ),
                 "lines": [
                     {"account_number": to_acc,
@@ -642,7 +645,7 @@ async def generate_prorata_mut_ods_for_call(db, call_doc: dict) -> dict:
                         f"Mutation lot {lot_number} - Fonds de roulement "
                         f"(backfill retroactif via appel {call_doc.get('name','')}): "
                         f"{from_own.get('name','')} -> {to_own.get('name','')} "
-                        f"({r_quota:.2f} EUR)"
+                        f"({fmt_eur(r_quota)})"
                     ),
                     "lines": [
                         {"account_number": to_acc,
@@ -2370,7 +2373,7 @@ def create_fund_calls_router(db):
             "recalculated_total": new_total,
             "stored_total": call.get("total_amount", 0),
             "delta": round(new_total - float(call.get("total_amount", 0) or 0), 2),
-            "message": f"{len(new_dist)} ligne(s) de distribution regeneree(s) pour un total de {new_total:.2f} EUR.",
+            "message": f"{len(new_dist)} ligne(s) de distribution regeneree(s) pour un total de {fmt_eur(new_total)}.",
         }
 
     @router.post("/regenerate-empty-distributions")

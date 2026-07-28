@@ -329,3 +329,25 @@ En cas de regression future, utiliser le rollback Emergent vers ce commit.
 - Le formatage est fait cote frontend uniquement. Les valeurs stockees en DB restent en decimal standard (float).
 - Le tab char dans certains noms d'appels ("60 000.00\t") est de la donnee utilisateur, pas du formatage.
 
+
+## iter93ac (2026-02-28) - Formatage backend unifie (PDF + emails + messages)
+### Nouvelle fonctionnalite
+- Coherence UI/PDF/emails garantie : tous les montants affiches suivent le format belge/francais francophone (espace insecable millier + virgule decimale).
+### Backend
+- **Nouveau helper** : `/app/backend/utils/format.py` avec `fmt_eur()`, `fmt_number()`, `fmt_pct()`, `fmt_quotity()` — miroir cote Python de `/app/frontend/src/lib/format.js`.
+- **PDF migres** : 3 fichiers utilisaient une variante `_eur_be()` avec point comme separateur (`10.800,50`) -> alignement sur espace insecable (`10 800,50`) :
+  - `/app/backend/pdf_synthese_depenses.py`
+  - `/app/backend/pdf_liste_depenses.py`
+  - `/app/backend/pdf_journals_and_invoices.py`
+- **PDF deja OK** : `pdf_decompte.py`, `pdf_bilan.py`, `pdf_budget.py`, `pdf_balance_tiers.py`, `pdf_situation_compte.py`, `pdf_mutation_decompte.py` avaient deja le bon format.
+- **Emails / templates** : `routes/email_templates.py`, `routes/communication.py` (build_owner_email_context + placeholder balance) migres vers `fmt_eur()`.
+- **Exports PDF** : `routes/exports.py` (PDF journaux + PDF releve situation compte) : montants dans les tables `Debit`, `Credit`, `TOTAL APPELS`, `TOTAL PAIEMENTS`, `Solde restant du` migres.
+- **Messages d'erreur** : `routes/accounting.py` (ecriture non equilibree), `routes/banking.py` (5 messages de duplication / equilibre extrait / splits), `routes/fund_calls.py` (descriptions journal mutations + message API distribution regeneree).
+### CSV
+- **Non modifie** : `routes/exports.py` CSV (lignes 384-393) garde le format `1234,56` sans espace millier (compatibilite Excel EN qui interpreterait "1 234,56" comme texte).
+### Tests
+- `/app/backend/tests/test_iter93ac_format_helper.py` : 8 tests unitaires (fmt_eur basic/negatif/gros montants/edge cases/sans suffixe, fmt_number, fmt_pct, fmt_quotity) — tous passent.
+### Verification
+- Import de tous les modules migres : OK, backend redemarre sans erreur.
+- Backend endpoint `/api/fund-calls` : 200 OK.
+

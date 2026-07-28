@@ -317,11 +317,13 @@ async def build_owner_email_context(db, owner_id: str, copropriete_id: str, curr
             break
     # Solde : simple approx a partir de tier_accounts
     balance = 0.0  # sera injecte par le caller si connu
+    # iter93ac : format espace millier + virgule decimale pour emails
+    from utils.format import fmt_eur as _fmt_eur
     return {
         "owner_name": owner.get("name", ""),
         "owner_email": owner.get("email", ""),
-        "balance": f"{balance:.2f}",
-        "abs_balance": f"{abs(balance):.2f}",
+        "balance": _fmt_eur(balance, with_suffix=False),
+        "abs_balance": _fmt_eur(abs(balance), with_suffix=False),
         "balance_status": "debiteur" if balance > 0 else ("crediteur" if balance < 0 else "solde"),
         "vcs_code": owner.get("vcs_code", ""),
         "copropriete_name": copro.get("name", ""),
