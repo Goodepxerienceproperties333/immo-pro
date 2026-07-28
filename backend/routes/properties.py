@@ -1889,12 +1889,11 @@ def create_properties_router(db):
         sale_date: str  # ISO YYYY-MM-DD
         sale_price: Optional[float] = 0.0
         note: Optional[str] = ""
-        # iter90dk : lots supplementaires appartenant au meme vendeur qui sont
-        # aussi cedes lors de cette mutation (checklist frontend). Le lot cible
-        # (lot_id du path) ET ses enfants parent-lot sont TOUJOURS inclus. Ce
-        # champ permet en plus d'inclure des lots INDEPENDANTS du meme vendeur
-        # (ex : parking non lie parent-enfant a l'appart).
         additional_lot_ids: List[str] = []
+        # iter93u : cle de repartition override. Si un lot n'est pas dans la
+        # cle par defaut (`is_default=True`), le frontend peut fournir explicit-
+        # ement l'id d'une autre cle contenant le lot pour la mutation.
+        distribution_key_id: Optional[str] = ""
 
     # ---- LIENS ENTRE LOTS (regroupements appartement + cave/parking) ----
     class LotLinkInput(BaseModel):
@@ -2081,7 +2080,7 @@ def create_properties_router(db):
             return 0.0
         return round(owner_amount * (lot_quot / owner_total_q), 2)
 
-    async def _compute_mutation_breakdown(lot: dict, old_owner_id: str, sale_dt) -> dict:
+    async def _compute_mutation_breakdown(lot: dict, old_owner_id: str, sale_dt, override_key_id: str = "") -> dict:
         """Compute the full mutation breakdown WITHOUT persisting anything.
         Returns a dict with three explicit sections:
         - Fonds de roulement (capital transfer between seller and buyer)
@@ -2145,15 +2144,27 @@ def create_properties_router(db):
 
         fonds_roul_total = round(max(fonds_roul_posted, budgeted_roulement), 2)
 
-        # iter90ab : fonds de roulement / reserve = cle de repartition GENERALE
-        # (celle marquee is_default=true), et non plus lot.quotity.
-        # Regle metier : provisions -> cle par ligne budgetaire (via
-        # _compute_lot_amount_in_call, INCHANGE). Roulement/reserve -> cle par
-        # defaut, avec possibilite d'exception future.
-        default_key = await db.distribution_keys.find_one(
-            {"copropriete_id": copro_id, "is_default": True},
-            {"_id": 0},
-        )
+        # iter90ab/93u : fonds de roulement / reserve = cle de repartition GENERALE
+        # par defaut (is_default=True), ou cle override fournie via
+        # `data.distribution_key_id` si le lot n'appartient pas a la cle par
+        # defaut. Le frontend selectionne l'override quand un warning s'affiche.
+        override_key_id = override_key_id or None
+        default_key = None
+        if override_key_id:
+            default_key = await db.distribution_keys.find_one(
+                {"id": override_key_id, "copropriete_id": copro_id},
+                {"_id": 0},
+            )
+            if not default_key:
+                raise HTTPException(
+                    400,
+                    f"Cle de repartition override introuvable ({override_key_id}).",
+                )
+        else:
+            default_key = await db.distribution_keys.find_one(
+                {"copropriete_id": copro_id, "is_default": True},
+                {"_id": 0},
+            )
         if not default_key or not default_key.get("lots"):
             raise HTTPException(
                 400,
@@ -2640,7 +2651,7 @@ def create_properties_router(db):
                 plusieurs lignes meme date), pour que les situations de compte
                 refletent le bon timing des budgets.
             """
-            bd = await _compute_mutation_breakdown(lt, old_owner_id, sale_dt)
+            bd = await _compute_mutation_breakdown(lt, old_owner_id, sale_dt, override_key_id=(data.distribution_key_id or ""))
             r_quota = bd["roulement_quota"]
             c_prorata = bd["current_period_prorata"]
             t_transfer = bd["total_transfer"]
@@ -3341,7 +3352,7 @@ def create_properties_router(db):
             "total_transfer": 0.0,
         }
         for lt in all_lots:
-            bd = await _compute_mutation_breakdown(lt, lt.get("owner_id", ""), sale_dt)
+            bd = await _compute_mutation_breakdown(lt, lt.get("owner_id", ""), sale_dt, override_key_id=(data.distribution_key_id or ""))
             per_lot.append({"lot_id": lt["id"], "lot_number": lt.get("number", ""), **bd})
             agg["fonds_roulement_total_acp"] = bd["fonds_roulement_total"]  # meme valeur sur tous (ACP)
             agg["roulement_quota"] += bd["roulement_quota"]

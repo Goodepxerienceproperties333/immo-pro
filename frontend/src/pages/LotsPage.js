@@ -383,19 +383,35 @@ function MutationDialog({ lot, owners, ownersRefresh, onClose, onDone }) {
   const [preview, setPreview] = useState(null);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
-  // iter90dk : checklist multi-lots
   const [candidates, setCandidates] = useState(null);
   const [additionalLotIds, setAdditionalLotIds] = useState([]);
+  // iter93u : override de cle de repartition si le lot n'est pas dans la
+  // cle par defaut. `keys` liste toutes les cles de l'ACP; `keyOverride`
+  // = id de la cle a utiliser pour cette mutation (vide = default).
+  const [keys, setKeys] = useState([]);
+  const [keyOverride, setKeyOverride] = useState('');
 
   const newOwnerId = newOwnerIds[0] || '';
 
-  // Fetch candidates once when dialog opens
   useEffect(() => {
     if (!lot?.id) { setCandidates(null); setAdditionalLotIds([]); return; }
     api.get(`/lots/${lot.id}/mutation-candidates`)
       .then(r => setCandidates(r.data))
       .catch(() => setCandidates(null));
   }, [lot?.id]);
+
+  // iter93u : precharge les cles de repartition de l'ACP
+  useEffect(() => {
+    if (!lot?.copropriete_id) { setKeys([]); return; }
+    api.get(`/coproprietes/${lot.copropriete_id}/distribution-keys`)
+      .then(r => setKeys(r.data || []))
+      .catch(() => setKeys([]));
+  }, [lot?.copropriete_id]);
+
+  // iter93u : detecte si le lot est absent de la cle par defaut
+  const defaultKey = keys.find(k => k.is_default);
+  const lotInDefault = !defaultKey || (defaultKey.lots || []).some(l => l.lot_id === lot?.id && (l.share || 0) > 0);
+  const keysContainingLot = keys.filter(k => (k.lots || []).some(l => l.lot_id === lot?.id && (l.share || 0) > 0));
 
   // Auto preview when newOwnerId and saleDate set
   // iter90ew : la preview a subi des race conditions sur saisie rapide
@@ -419,6 +435,7 @@ function MutationDialog({ lot, owners, ownersRefresh, onClose, onDone }) {
         sale_date: saleDate,
         sale_price: 0,
         additional_lot_ids: additionalLotIds,
+        distribution_key_id: keyOverride || '',
       }).then(r => {
         // Ignore reponses obsoletes (une frappe plus recente a suivi)
         if (mySeq !== previewSeqRef.current) return;
@@ -438,7 +455,7 @@ function MutationDialog({ lot, owners, ownersRefresh, onClose, onDone }) {
       // Sequence bump implicite : incremente en creant le prochain
       // effet ; les then/catch precedents seront rejetes.
     };
-  }, [lot?.id, newOwnerId, saleDate, additionalKey]);
+  }, [lot?.id, newOwnerId, saleDate, additionalKey, keyOverride]);
 
   const handleConfirm = async () => {
     if (!newOwnerId) { toast.error('Selectionnez un acquereur'); return; }
@@ -449,6 +466,7 @@ function MutationDialog({ lot, owners, ownersRefresh, onClose, onDone }) {
         sale_date: saleDate,
         note,
         additional_lot_ids: additionalLotIds,
+        distribution_key_id: keyOverride || '',
       });
       toast.success('Mutation enregistree');
       onDone();
@@ -561,6 +579,41 @@ function MutationDialog({ lot, owners, ownersRefresh, onClose, onDone }) {
             <label className="form-label">Date de la vente *</label>
             <Input type="date" value={saleDate} onChange={e => setSaleDate(e.target.value)} data-testid="mutation-sale-date" />
           </div>
+
+          {/* iter93u : Selection cle de repartition (uniquement si lot absent
+              de la cle par defaut) */}
+          {keys.length > 0 && !lotInDefault && (
+            <div className="rounded-md border-2 border-amber-300 bg-amber-50 p-3" data-testid="mutation-key-override">
+              <div className="text-xs font-bold text-amber-900 uppercase tracking-wider mb-2 flex items-center gap-1">
+                Cle de repartition requise
+              </div>
+              <p className="text-[11px] text-amber-800 mb-2">
+                Le lot <strong>{lot?.number}</strong> n&apos;est pas dans la cle par defaut
+                {defaultKey ? ` (« ${defaultKey.name} »)` : ''}. Selectionnez la cle dans laquelle ce lot est present pour le calcul des soldes.
+              </p>
+              <select
+                className="w-full h-8 text-xs border rounded-md px-2 bg-white"
+                value={keyOverride}
+                onChange={e => setKeyOverride(e.target.value)}
+                data-testid="mutation-key-override-select"
+              >
+                <option value="">-- Choisir une cle --</option>
+                {keysContainingLot.map(k => (
+                  <option key={k.id} value={k.id}>
+                    {k.name} ({(k.lots || []).find(l => l.lot_id === lot?.id)?.share || 0} quotites)
+                  </option>
+                ))}
+                {keysContainingLot.length === 0 && (
+                  <option value="" disabled>Aucune cle ne contient ce lot</option>
+                )}
+              </select>
+              {keysContainingLot.length === 0 && (
+                <p className="text-[10px] text-red-700 mt-2 italic">
+                  Aucune cle ne contient ce lot. Ajoutez-le d&apos;abord a une cle dans la page Factures &gt; Cles de repartition.
+                </p>
+              )}
+            </div>
+          )}
 
           {/* iter90dk : Checklist des lots du meme vendeur */}
           {candidates && (candidates.children?.length > 0 || candidates.other_owner_lots?.length > 0) && (
