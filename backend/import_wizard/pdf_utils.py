@@ -1483,6 +1483,54 @@ def parse_distribution_keys_pdf(raw: bytes) -> dict:
             sum(float(l.get("quotity") or 0) for l in (k.get("lines") or [])),
             6,
         )
+    # iter93r : fallback texte pour les cles au format special (ex: cle 0015
+    # "Cle speciale 3/11 (A) et 8/11 (B)" dont le titre est un heading de
+    # section separe et les colonnes different du format standard 5-col).
+    # Pour chaque cle detectee mais sans lignes, on cherche dans le texte brut
+    # les lignes de detail (format "<lot_label> C<code> - <owner_name> ...
+    # <quotity_number>").
+    full_text = info.get("full_text", "") or ""
+    for k in keys:
+        if k.get("lines"):
+            continue
+        code = k.get("code")
+        if not code:
+            continue
+        # Delimite le bloc texte de la cle : de "{code} - {name}" jusqu'a la
+        # prochaine cle "\d{3,4} -" ou fin de document.
+        marker = f"{code} - "
+        pos = full_text.find(marker)
+        if pos < 0:
+            continue
+        # Trouve la prochaine cle
+        next_key_m = re.search(r"\n\s*\d{3,4}\s*[-–]\s*[A-ZÉÈÊÀÎÔÛa-zéèêàîôû]", full_text[pos + len(marker):])
+        end_pos = pos + len(marker) + next_key_m.start() if next_key_m else len(full_text)
+        block = full_text[pos:end_pos]
+        # Cherche les lignes de detail. Pattern attendu :
+        #   <libelle> C<code> - <owner name> <nb_lots_or_dash> <quotity>
+        # Ex : "A 001 - APPARTEMENT C0211 - Mme van den Abeele Jacqueline 58 267,270000"
+        # ou  : "A 002 - APPARTEMENT C0227 - M. BODEUX Jean-Claude - 267,27"
+        detail_pat = re.compile(
+            r"^(?P<libelle>[A-Z]\s*\d{3,4}[^\n]*?)\s+"
+            r"(?P<owner>C\d{3,5}\s*[-–][^\n]*?)\s+"
+            r"(?:[-–]|\d+)\s+"
+            r"(?P<qt>\d+[.,]\d+)\s*$",
+            re.MULTILINE,
+        )
+        recovered = []
+        for m in detail_pat.finditer(block):
+            qt = _to_float(m.group("qt"))
+            if qt <= 0:
+                continue
+            recovered.append({
+                "lot_label": m.group("libelle").strip(),
+                "lot_code": "",
+                "owner_label": m.group("owner").strip(),
+                "quotity": qt,
+            })
+        if recovered:
+            k["lines"] = recovered
+            k["total_quotities"] = round(sum(float(l["quotity"]) for l in recovered), 6)
     # Fallback : if no key parsed from tables, attempt text-based extraction
     if not keys:
         text = info.get("full_text", "")
