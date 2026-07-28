@@ -907,6 +907,10 @@ def create_fund_calls_router(db):
             "copropriete_id": copro_id,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
+        # iter93x : injection du syndic_id (bug : appels speciaux crees
+        # manuellement etaient invisibles dans list_fund_calls car filtre
+        # syndic_query les excluait faute de champ syndic_id).
+        inject_syndic(doc, request)
         await db.fund_calls.insert_one(doc)
         clean = {k: v for k, v in doc.items() if k != "_id"}
         try:

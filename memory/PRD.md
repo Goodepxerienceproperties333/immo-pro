@@ -256,3 +256,20 @@ En cas de regression future, utiliser le rollback Emergent vers ce commit.
 ### Verification
 - Test API : POST assign avec cle invalide -> error "Cle introuvable" ; POST finish avec 30 lots pending -> HTTP 400 avec detail `{code, message, pending_lots}`.
 - Test UI screenshot : panneau ambre affiche 30 lots, dropdown pre-rempli si valeur precedente, toast succes apres save, compteur decremente, boutons "Terminer" desactives.
+
+
+## iter93x (2026-02-28) - Bug fix: appels speciaux invisibles dans l'ecran Appels de Fonds
+### Bug corrige
+- **P0** : Les appels de fonds crees via `POST /api/fund-calls` (creation manuelle, ex : "Appel special - Travaux coursives") n'apparaissaient pas dans l'ecran `/fund-calls` bien qu'ils genèrent correctement les ecritures VE.
+### Cause racine
+- L'endpoint `create_fund_call` (fund_calls.py:754) inserait le document sans champ `syndic_id`.
+- L'endpoint `list_fund_calls` (fund_calls.py:729) applique `syndic_query(request)` qui filtre par `syndic_id` -> les documents sans ce champ etaient invisibles pour l'utilisateur syndic.
+- Les appels auto issus du budget (bulk-from-budget line 2170-2172) ajoutaient correctement `syndic_id`, ce qui masquait le bug pour les creations en masse.
+### Fix
+- Ajout de `inject_syndic(doc, request)` juste avant `db.fund_calls.insert_one(doc)` dans le POST manuel.
+- Backfill script one-shot execute : 3 appels speciaux "Travaux coursives" restaures dans le DB preview.
+### Verification
+- Test API : GET /fund-calls retourne maintenant 9 appels (au lieu de 6) dont les 3 specials.
+- Test UI screenshot : 3 badges "Appel special" (orange) visibles sur l'ecran Appels de Fonds pour ACP Van der Aa.
+### Fichier modifie
+- `/app/backend/routes/fund_calls.py` (ligne 909-913, injection syndic_id).
