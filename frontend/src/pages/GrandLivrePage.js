@@ -9,6 +9,7 @@ import { toast } from 'sonner';
 import { Search, BookOpen } from 'lucide-react';
 import { fmtDate } from '@/lib/dateFmt';
 
+import { fmtEUR } from '@/lib/format';
 export default function GrandLivrePage() {
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
@@ -56,7 +57,7 @@ export default function GrandLivrePage() {
               <CardHeader className="pb-2 bg-slate-50 rounded-t-md">
                 <CardTitle className="text-base flex items-center justify-between" style={{fontFamily:'Chivo,sans-serif'}}>
                   <span><span className="font-mono text-[#022D52] mr-2">{account.account_number}</span>{account.account_name}</span>
-                  <Badge variant="outline" className={`font-mono ${account.balance >= 0 ? 'text-[#01213e]' : 'text-red-700'}`}>Solde: {account.balance.toFixed(2)} EUR</Badge>
+                  <Badge variant="outline" className={`font-mono ${account.balance >= 0 ? 'text-[#01213e]' : 'text-red-700'}`}>Solde: {fmtEUR(account.balance)} EUR</Badge>
                 </CardTitle>
               </CardHeader>
               <CardContent className="p-0">
@@ -72,16 +73,16 @@ export default function GrandLivrePage() {
                         <TableCell><Badge variant="outline" className="text-[10px]">{m.journal}</Badge></TableCell>
                         <TableCell className="text-xs">{m.reference}</TableCell>
                         <TableCell className="text-sm">{m.description}</TableCell>
-                        <TableCell className="text-right font-mono text-sm">{m.debit > 0 ? m.debit.toFixed(2) : ''}</TableCell>
-                        <TableCell className="text-right font-mono text-sm">{m.credit > 0 ? m.credit.toFixed(2) : ''}</TableCell>
-                        <TableCell className={`text-right font-mono text-sm font-semibold ${m.running_balance >= 0 ? 'text-slate-900' : 'text-red-700'}`}>{m.running_balance.toFixed(2)}</TableCell>
+                        <TableCell className="text-right font-mono text-sm">{m.debit > 0 ? fmtEUR(m.debit) : ''}</TableCell>
+                        <TableCell className="text-right font-mono text-sm">{m.credit > 0 ? fmtEUR(m.credit) : ''}</TableCell>
+                        <TableCell className={`text-right font-mono text-sm font-semibold ${m.running_balance >= 0 ? 'text-slate-900' : 'text-red-700'}`}>{fmtEUR(m.running_balance)}</TableCell>
                       </TableRow>
                     ))}
                     <TableRow className="bg-slate-50 font-bold">
                       <TableCell colSpan={4}>Totaux</TableCell>
-                      <TableCell className="text-right font-mono">{account.total_debit.toFixed(2)}</TableCell>
-                      <TableCell className="text-right font-mono">{account.total_credit.toFixed(2)}</TableCell>
-                      <TableCell className="text-right font-mono">{account.balance.toFixed(2)}</TableCell>
+                      <TableCell className="text-right font-mono">{fmtEUR(account.total_debit)}</TableCell>
+                      <TableCell className="text-right font-mono">{fmtEUR(account.total_credit)}</TableCell>
+                      <TableCell className="text-right font-mono">{fmtEUR(account.balance)}</TableCell>
                     </TableRow>
                   </TableBody>
                 </Table>

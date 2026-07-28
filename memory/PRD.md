@@ -311,3 +311,21 @@ En cas de regression future, utiliser le rollback Emergent vers ce commit.
 - Parser sur PDF utilisateur : 58 lots detectes (avant : 28).
 - Endpoint `lots-fallback-check` retourne desormais 0 lot pending pour cette ACP (avant : 30).
 
+
+## iter93ab (2026-02-28) - Formatage numerique unifie (espace millier + virgule decimale)
+### Nouvelle fonctionnalite
+- Formatage des montants EUR uniforme dans **toute la plateforme** : espace insecable comme separateur de milliers, virgule comme separateur decimal (standard belge/francais).
+- Exemple : `10800.50` -> **"10 800,50"** (au lieu de "10800.50").
+### Fichiers modifies
+- **Nouveau** : `/app/frontend/src/lib/format.js` avec `fmtEUR()`, `fmtNumber()`, `fmtQuotity()`, `fmtPct()` (utilisant `Intl.NumberFormat('fr-BE')`).
+- **27 fichiers migres** (306 remplacements de `.toFixed(2)` -> `fmtEUR(...)`):
+  - 8 composants : BundleImportDialog, ImportSummary, RegularizationDialog, BudgetWizard, UnlettrageDialog, CodaImportDialog, SupplierMergeDialog, TiersDetailDialog
+  - 19 pages : ImportWizardPage, OwnerPortalPage, DistributionKeysPage, AdminQualityAuditPage, BalanceTiersPage, FiscalYearPage, DashboardPage, ExpensesPage, LotsPage, ExpenseCategoriesPage, InvoicesPage, BankingPage, AdminUnlockEntryPage, FundCallsPage, GrandLivrePage, ReportsPage, RemindersPage, JournalsPage, TenantsPage
+### Verification
+- Screenshot FundCallsPage : 17 montants formates "4 750,00", "10 500,00", "49 000,00", "60 000,00" (espace millier + virgule decimale confirmes).
+- Aucun montant en format raw dot detecte (ex : "10500.00").
+- Lint : 0 erreur de parsing.
+### Note
+- Le formatage est fait cote frontend uniquement. Les valeurs stockees en DB restent en decimal standard (float).
+- Le tab char dans certains noms d'appels ("60 000.00\t") est de la donnee utilisateur, pas du formatage.
+

@@ -12,6 +12,7 @@ import AdaptiveQuickActions from '@/components/AdaptiveQuickActions';
 import SyndicOwnersGlobalTab from '@/components/SyndicOwnersGlobalTab';
 import SyndicSuppliersGlobalTab from '@/components/SyndicSuppliersGlobalTab';
 
+import { fmtEUR } from '@/lib/format';
 export default function DashboardPage() {
   const { selectedCopro, setSelectedCopro, isSuperadmin, user } = useAuth();
   const [coproprietes, setCoproprietes] = useState([]);
@@ -313,7 +314,7 @@ export default function DashboardPage() {
                                       <tr key={j} className="border-t border-slate-100">
                                         <td className="py-1 truncate max-w-[180px]" title={it.supplier}>{it.supplier}</td>
                                         <td className="py-1 font-mono text-slate-600">{it.number}</td>
-                                        <td className="py-1 text-right font-mono text-red-700">{Number(it.amount || 0).toFixed(2)}</td>
+                                        <td className="py-1 text-right font-mono text-red-700">{fmtEUR(Number(it.amount || 0))}</td>
                                         <td className="py-1 text-right font-mono text-slate-500">{fmtDate(it.due_date)}</td>
                                         <td className="py-1 text-right font-semibold text-red-700">{it.age_days}j</td>
                                       </tr>
@@ -334,7 +335,7 @@ export default function DashboardPage() {
                                   <li key={j} className="flex items-center gap-2">
                                     <span className="font-semibold">{it.supplier || 'Fournisseur'}</span>
                                     <span className="text-slate-500">·</span>
-                                    <span className="font-mono text-red-700">{Number(it.amount || 0).toFixed(2)} EUR</span>
+                                    <span className="font-mono text-red-700">{fmtEUR(Number(it.amount || 0))} EUR</span>
                                     {Array.isArray(it.invoices) && (
                                       <span className="text-slate-500">
                                         · {it.invoices.map(x => x.number).filter(Boolean).join(', ')}
@@ -352,7 +353,7 @@ export default function DashboardPage() {
                                     <span className="font-mono font-semibold text-slate-800">{it.account}</span>
                                     {it.name && <span className="text-slate-500">- {it.name}</span>}
                                     {typeof it.balance === 'number' && (
-                                      <span className="font-mono text-red-700 ml-auto">{it.balance.toFixed(2)} EUR</span>
+                                      <span className="font-mono text-red-700 ml-auto">{fmtEUR(it.balance)} EUR</span>
                                     )}
                                     <span className="text-[10px] text-slate-400 uppercase">{it.type === 'supplier' ? 'fourn.' : 'prop.'}</span>
                                   </li>
@@ -366,7 +367,7 @@ export default function DashboardPage() {
                                   <li key={j} className="flex items-center gap-2">
                                     <span className="font-mono text-slate-700">{it.reference || it.id}</span>
                                     {it.date && <span className="text-slate-500">- {fmtDate(it.date)}</span>}
-                                    <span className="ml-auto font-mono text-red-700">ecart {Number(it.ecart || 0).toFixed(2)} EUR</span>
+                                    <span className="ml-auto font-mono text-red-700">ecart {fmtEUR(Number(it.ecart || 0))} EUR</span>
                                   </li>
                                 ))}
                               </ul>
@@ -399,7 +400,7 @@ export default function DashboardPage() {
                 {stats.recent_entries.map((entry, i) => (
                   <div key={i} className="flex items-center justify-between py-2 border-b border-slate-100 last:border-0">
                     <div><span className="text-sm font-medium text-slate-700">{entry.description}</span><div className="text-xs text-slate-400">{fmtDate(entry.date)} - {entry.journal_type}</div></div>
-                    <span className="text-sm font-semibold text-slate-900">{entry.total_debit?.toFixed(2)} EUR</span>
+                    <span className="text-sm font-semibold text-slate-900">{fmtEUR(entry.total_debit)} EUR</span>
                   </div>
                 ))}
               </div>

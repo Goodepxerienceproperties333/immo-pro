@@ -13,6 +13,7 @@ import {
 import AccountSearchSelect from '@/components/AccountSearchSelect';
 import { fmtDate } from '@/lib/dateFmt';
 
+import { fmtEUR } from '@/lib/format';
 /**
  * Dialog d'import d'un PDF "Regroupement de documents" Optipro.
  *
@@ -339,7 +340,7 @@ export default function BundleImportDialog({
                             <div className="text-slate-500">
                               {b.date_iso && <>Date : {fmtDate(b.date_iso)} - </>}
                               {b.invoice_number && <>N : <span className="font-mono">{b.invoice_number}</span> - </>}
-                              <span className="font-mono text-slate-700">{Number(b.total_amount || 0).toFixed(2)} EUR</span>
+                              <span className="font-mono text-slate-700">{fmtEUR(Number(b.total_amount || 0))} EUR</span>
                             </div>
                             {b.supplier_tva && <div className="text-[10px] text-slate-400 font-mono">{b.supplier_tva}</div>}
                             {sm && !isDone && (
@@ -392,7 +393,7 @@ export default function BundleImportDialog({
                                 return cur ? (
                                   <div className="text-[11px] text-emerald-700 font-medium">
                                     {fmtDate(cur.date)} - {cur.number} - {cur.supplier}
-                                    {' '}<span className="text-slate-400">({Number(cur.total_amount || 0).toFixed(2)}E)</span>
+                                    {' '}<span className="text-slate-400">({fmtEUR(Number(cur.total_amount || 0))}E)</span>
                                   </div>
                                 ) : null;
                               })()}
@@ -404,7 +405,7 @@ export default function BundleImportDialog({
                                   {sortedInvoices.length === 0 && <div className="p-2 text-xs text-slate-400">Aucune facture en base</div>}
                                   {sortedInvoices.map(inv => (
                                     <SelectItem key={inv.id} value={inv.id}>
-                                      {fmtDate(inv.date)} - {inv.number} - {inv.supplier} ({Number(inv.total_amount || 0).toFixed(2)}E){(inv.attachments?.length || 0) > 0 ? ' [PJ]' : ''}
+                                      {fmtDate(inv.date)} - {inv.number} - {inv.supplier} ({fmtEUR(Number(inv.total_amount || 0))}E){(inv.attachments?.length || 0) > 0 ? ' [PJ]' : ''}
                                     </SelectItem>
                                   ))}
                                 </SelectContent>

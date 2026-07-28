@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
 import { Calculator, AlertTriangle, CheckCircle2 } from 'lucide-react';
 
+import { fmtEUR } from '@/lib/format';
 export default function RegularizationDialog({ fiscalYearId, open, onClose, onDone }) {
   const [loading, setLoading] = useState(false);
   const [preview, setPreview] = useState(null);
@@ -48,10 +49,10 @@ export default function RegularizationDialog({ fiscalYearId, open, onClose, onDo
         {preview && !loading && (
           <>
             <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mt-2">
-              <Card><CardContent className="p-3"><div className="text-[10px] uppercase text-slate-500">Budget vote</div><div className="font-mono font-bold text-sm mt-1">{preview.summary.budget_total?.toFixed(2)} EUR</div></CardContent></Card>
-              <Card><CardContent className="p-3"><div className="text-[10px] uppercase text-slate-500">Frais reels</div><div className="font-mono font-bold text-sm mt-1">{preview.summary.total_real_expenses?.toFixed(2)} EUR</div></CardContent></Card>
-              <Card><CardContent className="p-3"><div className="text-[10px] uppercase text-slate-500">Provisions appelees</div><div className="font-mono font-bold text-sm mt-1">{preview.summary.total_provisions_called?.toFixed(2)} EUR</div></CardContent></Card>
-              <Card><CardContent className="p-3"><div className="text-[10px] uppercase text-slate-500">Difference budget-reel</div><div className={`font-mono font-bold text-sm mt-1 ${preview.summary.difference_budget_vs_real >= 0 ? 'text-green-700' : 'text-red-700'}`}>{preview.summary.difference_budget_vs_real?.toFixed(2)} EUR</div></CardContent></Card>
+              <Card><CardContent className="p-3"><div className="text-[10px] uppercase text-slate-500">Budget vote</div><div className="font-mono font-bold text-sm mt-1">{fmtEUR(preview.summary.budget_total)} EUR</div></CardContent></Card>
+              <Card><CardContent className="p-3"><div className="text-[10px] uppercase text-slate-500">Frais reels</div><div className="font-mono font-bold text-sm mt-1">{fmtEUR(preview.summary.total_real_expenses)} EUR</div></CardContent></Card>
+              <Card><CardContent className="p-3"><div className="text-[10px] uppercase text-slate-500">Provisions appelees</div><div className="font-mono font-bold text-sm mt-1">{fmtEUR(preview.summary.total_provisions_called)} EUR</div></CardContent></Card>
+              <Card><CardContent className="p-3"><div className="text-[10px] uppercase text-slate-500">Difference budget-reel</div><div className={`font-mono font-bold text-sm mt-1 ${preview.summary.difference_budget_vs_real >= 0 ? 'text-green-700' : 'text-red-700'}`}>{fmtEUR(preview.summary.difference_budget_vs_real)} EUR</div></CardContent></Card>
               <Card className="border-[#022D52]"><CardContent className="p-3"><div className="text-[10px] uppercase text-[#01213e]">Repartition</div><div className="text-sm mt-1 font-semibold">{preview.summary.owners_debiteurs} D / {preview.summary.owners_crediteurs} C</div></CardContent></Card>
             </div>
 
@@ -62,7 +63,7 @@ export default function RegularizationDialog({ fiscalYearId, open, onClose, onDo
                   <TableHeader><TableRow><TableHead>Compte</TableHead><TableHead>Cle</TableHead><TableHead className="text-right">Montant</TableHead></TableRow></TableHeader>
                   <TableBody>
                     {preview.by_nature_key?.map((r, i) => (
-                      <TableRow key={i}><TableCell className="font-mono text-xs">{r.account}</TableCell><TableCell className="text-xs">{r.key_name}</TableCell><TableCell className="text-right font-mono">{r.amount.toFixed(2)}</TableCell></TableRow>
+                      <TableRow key={i}><TableCell className="font-mono text-xs">{r.account}</TableCell><TableCell className="text-xs">{r.key_name}</TableCell><TableCell className="text-right font-mono">{fmtEUR(r.amount)}</TableCell></TableRow>
                     ))}
                   </TableBody>
                 </Table>
@@ -86,9 +87,9 @@ export default function RegularizationDialog({ fiscalYearId, open, onClose, onDo
                         <TableCell className="font-medium">{p.owner_name}</TableCell>
                         <TableCell className="font-mono text-[#022D52] text-xs">{p.vcs_code}</TableCell>
                         <TableCell className="font-mono text-xs text-slate-500">{p.account_provisions}</TableCell>
-                        <TableCell className="text-right font-mono">{p.provisions_called.toFixed(2)}</TableCell>
-                        <TableCell className="text-right font-mono">{p.real_expenses.toFixed(2)}</TableCell>
-                        <TableCell className={`text-right font-mono font-bold ${p.regularization > 0 ? 'text-red-700' : p.regularization < 0 ? 'text-green-700' : ''}`}>{p.regularization.toFixed(2)}</TableCell>
+                        <TableCell className="text-right font-mono">{fmtEUR(p.provisions_called)}</TableCell>
+                        <TableCell className="text-right font-mono">{fmtEUR(p.real_expenses)}</TableCell>
+                        <TableCell className={`text-right font-mono font-bold ${p.regularization > 0 ? 'text-red-700' : p.regularization < 0 ? 'text-green-700' : ''}`}>{fmtEUR(p.regularization)}</TableCell>
                         <TableCell><Badge variant="outline" className={p.status === 'debiteur' ? 'bg-red-50 text-red-700 border-red-200' : p.status === 'crediteur' ? 'bg-green-50 text-green-700 border-green-200' : 'bg-slate-50'}>{p.status === 'debiteur' ? 'A facturer' : p.status === 'crediteur' ? 'A rembourser' : 'Solde'}</Badge></TableCell>
                       </TableRow>
                     ))}

@@ -34,6 +34,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 
+import { fmtEUR } from '@/lib/format';
 const STEPS = [
   // NOTE: 'owners' and 'lots' are now imported in the ACP Creation Assistant
   // (Step 2 - PDF/CSV from Optipro). They are NOT part of this post-creation
@@ -535,7 +536,7 @@ export default function ImportWizardPage() {
         r = await api.post(`/import-wizard/sessions/${session.id}/commit-budget`, {
           fiscal_year_id: fyId, sections: budgetSections
         });
-        toast.success(`Budget cree : ${r.data.inserted} lignes (total ${r.data.total_amount?.toFixed(2)} EUR)`);
+        toast.success(`Budget cree : ${r.data.inserted} lignes (total ${fmtEUR(r.data.total_amount)} EUR)`);
       } else if (step.key === 'distribution_keys') {
         r = await api.post(`/import-wizard/sessions/${session.id}/commit-distribution-keys`, { keys: keysParsed });
         toast.success(`${r.data.inserted} cle(s) de repartition creees`);
@@ -575,7 +576,7 @@ export default function ImportWizardPage() {
         const m = r.data;
         toast.success(
           `OD d'ouverture creee : ${m.lines} ligne(s) au ${m.entry_date} ` +
-          `(Debit/Credit ${m.total_debit.toFixed(2)} EUR)` +
+          `(Debit/Credit ${fmtEUR(m.total_debit)} EUR)` +
           (m.pcmn_created ? ` - ${m.pcmn_created} compte(s) PCMN auto-ajoutes` : '') +
           ((m.owners_linked || m.suppliers_linked) ? ` - ${m.owners_linked} owner(s) + ${m.suppliers_linked} fournisseur(s) lies via auxiliary_code` : '') +
           (m.funds_saved ? ' - Config fonds (reserve + roulement) sauvegardee sur l\'exercice' : '')
@@ -1200,7 +1201,7 @@ export default function ImportWizardPage() {
                           <td className="border px-2 py-1 font-mono text-xs align-top">{row.supplier_aux_code}</td>
                           <td className="border px-2 py-1 text-xs align-top">{row.supplier_vat || '—'}</td>
                           <td className="border px-2 py-1 font-mono text-xs align-top">{row.account_number}</td>
-                          <td className="border px-2 py-1 text-right font-mono align-top">{row.montant_tvac.toFixed(2)}</td>
+                          <td className="border px-2 py-1 text-right font-mono align-top">{fmtEUR(row.montant_tvac)}</td>
                           <td className="border px-2 py-1 text-xs align-top">{row.external_ref}</td>
                           <td className="border px-2 py-1 align-top">
                             {row.status === 'matched' && <span className="text-green-700 font-medium">Existant</span>}
@@ -1410,7 +1411,7 @@ export default function ImportWizardPage() {
                 <div key={o.account_number} className="border rounded p-3 bg-slate-50/50 space-y-2">
                   <div className="flex items-center gap-3 text-xs text-slate-500">
                     <Badge variant="outline" className="font-mono">{o.account_number}</Badge>
-                    <span>Montant : <span className="font-mono font-semibold">{Number(o.amount).toFixed(2)} EUR</span></span>
+                    <span>Montant : <span className="font-mono font-semibold">{fmtEUR(Number(o.amount))} EUR</span></span>
                     <span>({o.side})</span>
                     <span>Aux. suggere : <span className="font-mono">{o.suggested_aux_code}</span></span>
                   </div>
@@ -1633,10 +1634,10 @@ function OpeningBalancePreview({ balance, setBalance, fundsConfig, setFundsConfi
           </div>
         </div>
         <div className="font-mono text-right">
-          <div>Total Actif : <span className="font-semibold">{totalA.toFixed(2)}</span></div>
-          <div>Total Passif : <span className="font-semibold">{totalP.toFixed(2)}</span></div>
+          <div>Total Actif : <span className="font-semibold">{fmtEUR(totalA)}</span></div>
+          <div>Total Passif : <span className="font-semibold">{fmtEUR(totalP)}</span></div>
           <div className={`text-[10px] ${isBalanced ? 'text-emerald-700' : 'text-red-700'}`}>
-            Ecart : {(totalA - totalP).toFixed(2)} EUR
+            Ecart : {fmtEUR((totalA - totalP))} EUR
           </div>
         </div>
       </div>
@@ -1646,7 +1647,7 @@ function OpeningBalancePreview({ balance, setBalance, fundsConfig, setFundsConfi
         <div className="border border-slate-200 rounded">
           <div className="bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-800 flex justify-between">
             <span>ACTIF (Debit)</span>
-            <span className="font-mono">{totalA.toFixed(2)} EUR</span>
+            <span className="font-mono">{fmtEUR(totalA)} EUR</span>
           </div>
           <table className="w-full text-[11px]">
             <thead className="bg-slate-50">
@@ -1673,7 +1674,7 @@ function OpeningBalancePreview({ balance, setBalance, fundsConfig, setFundsConfi
         <div className="border border-slate-200 rounded">
           <div className="bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-800 flex justify-between">
             <span>PASSIF (Credit)</span>
-            <span className="font-mono">{totalP.toFixed(2)} EUR</span>
+            <span className="font-mono">{fmtEUR(totalP)} EUR</span>
           </div>
           <table className="w-full text-[11px]">
             <thead className="bg-slate-50">
@@ -1750,7 +1751,7 @@ function OdJournalPreview({ odData, setOdData }) {
           </div>
         </div>
         <div className="font-mono text-right text-[11px]">
-          <div>Total a importer : <span className="font-semibold">{totalIncluded.toFixed(2)} EUR</span></div>
+          <div>Total a importer : <span className="font-semibold">{fmtEUR(totalIncluded)} EUR</span></div>
         </div>
       </div>
 
@@ -1798,7 +1799,7 @@ function OdJournalPreview({ odData, setOdData }) {
                       )}
                     </td>
                     <td className="px-3 py-1.5 text-right font-mono font-semibold">
-                      {(Number(e.total_debit) || 0).toFixed(2)}
+                      {fmtEUR((Number(e.total_debit) || 0))}
                     </td>
                     <td className="px-3 py-1.5">
                       {balanced ? (
@@ -1818,8 +1819,8 @@ function OdJournalPreview({ odData, setOdData }) {
                         {ln.auxiliary_info && <span className="text-slate-400 ml-2">| {ln.auxiliary_info}</span>}
                       </td>
                       <td className="px-3 py-0.5 text-right font-mono">
-                        {ln.debit > 0 && <span className="text-slate-700">D {ln.debit.toFixed(2)}</span>}
-                        {ln.credit > 0 && <span className="text-slate-700">C {ln.credit.toFixed(2)}</span>}
+                        {ln.debit > 0 && <span className="text-slate-700">D {fmtEUR(ln.debit)}</span>}
+                        {ln.credit > 0 && <span className="text-slate-700">C {fmtEUR(ln.credit)}</span>}
                       </td>
                       <td></td>
                     </tr>
@@ -1903,9 +1904,9 @@ function OdExpenseListPreview({ odData, setOdData }) {
           </div>
         </div>
         <div className="font-mono text-right text-[11px]">
-          <div>Positifs : <span className="font-semibold text-slate-700">+{sumPositive.toFixed(2)}</span></div>
-          <div>Negatifs : <span className="font-semibold text-slate-700">{sumNegative.toFixed(2)}</span></div>
-          <div>Total net : <span className="font-semibold">{odData.total_amount.toFixed(2)} EUR</span></div>
+          <div>Positifs : <span className="font-semibold text-slate-700">+{fmtEUR(sumPositive)}</span></div>
+          <div>Negatifs : <span className="font-semibold text-slate-700">{fmtEUR(sumNegative)}</span></div>
+          <div>Total net : <span className="font-semibold">{fmtEUR(odData.total_amount)} EUR</span></div>
         </div>
       </div>
 
@@ -1940,7 +1941,7 @@ function OdExpenseListPreview({ odData, setOdData }) {
                     <div>{e.account_number}</div>
                     <div className="text-[9px] text-slate-500">{(e.account_name || '').slice(0, 18)}</div>
                   </td>
-                  <td className={`px-2 py-0.5 text-right font-mono ${e.amount < 0 ? 'text-red-700' : 'text-slate-800'}`}>{(Number(e.amount) || 0).toFixed(2)}</td>
+                  <td className={`px-2 py-0.5 text-right font-mono ${e.amount < 0 ? 'text-red-700' : 'text-slate-800'}`}>{fmtEUR((Number(e.amount) || 0))}</td>
                   <td className="px-2 py-0.5">
                     <PcmnAccountPicker
                       value={{ number: e.counterpart_account || '', name: e.counterpart_account_name || '' }}
@@ -2070,7 +2071,7 @@ function InvoicesPreview({ invoices, setInvoices }) {
     <div className="space-y-3">
       <div className="bg-blue-50 border border-blue-200 rounded p-3 text-xs text-blue-900 flex justify-between flex-wrap gap-2">
         <span><strong>{invoices.length} facture(s)</strong> detectee(s) - {uniqueSuppliers.length} fournisseur(s) distinct(s)</span>
-        <span className="font-mono">HT : {totalHT.toFixed(2)} EUR | TVAC : <strong>{totalTVAC.toFixed(2)} EUR</strong></span>
+        <span className="font-mono">HT : {fmtEUR(totalHT)} EUR | TVAC : <strong>{fmtEUR(totalTVAC)} EUR</strong></span>
       </div>
       {/* iter90jg : preview du regroupement Optipro multi-detail.
           Affiche AVANT commit combien de lignes CSV seront regroupees en factures
@@ -2113,7 +2114,7 @@ function InvoicesPreview({ invoices, setInvoices }) {
                     </div>
                     <div className="flex items-center gap-2 flex-shrink-0">
                       <span className="text-[10px] text-slate-500">{g.lines.length} lignes</span>
-                      <span className="font-mono font-bold text-indigo-700">{g.total_tvac.toFixed(2)} EUR</span>
+                      <span className="font-mono font-bold text-indigo-700">{fmtEUR(g.total_tvac)} EUR</span>
                     </div>
                   </div>
                   <table className="w-full text-[10px]" data-testid={`group-lines-${gi}`}>
@@ -2134,8 +2135,8 @@ function InvoicesPreview({ invoices, setInvoices }) {
                           <td className="px-1 py-0.5 font-mono">{ln.dist_key_code || '-'}</td>
                           <td className="px-1 py-0.5 font-mono">{ln.nature_code || '-'}</td>
                           <td className="px-1 py-0.5 truncate max-w-md">{ln.libelle || '-'}</td>
-                          <td className="px-1 py-0.5 text-right font-mono text-slate-500">{(parseFloat(ln.montant_ht) || 0).toFixed(2)}</td>
-                          <td className="px-1 py-0.5 text-right font-mono font-semibold">{(parseFloat(ln.montant_tvac) || 0).toFixed(2)}</td>
+                          <td className="px-1 py-0.5 text-right font-mono text-slate-500">{fmtEUR((parseFloat(ln.montant_ht) || 0))}</td>
+                          <td className="px-1 py-0.5 text-right font-mono font-semibold">{fmtEUR((parseFloat(ln.montant_tvac) || 0))}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -2265,12 +2266,12 @@ function JournalsPreview({ transactions, setTransactions }) {
         <div className="flex justify-between flex-wrap gap-2">
           <span><strong>{transactions.length} transaction(s)</strong> sur {banks.length} compte(s) bancaire(s) ({banks.join(', ') || 'aucun PCMN'})</span>
           <span className="font-mono">
-            <span className="text-emerald-700">+{totalIn.toFixed(2)}</span> /{' '}
-            <span className="text-red-700">-{totalOut.toFixed(2)}</span> EUR
+            <span className="text-emerald-700">+{fmtEUR(totalIn)}</span> /{' '}
+            <span className="text-red-700">-{fmtEUR(totalOut)}</span> EUR
           </span>
         </div>
         <div className="text-[10px] text-slate-600 mt-1 italic">
-          Solde net : {(totalIn - totalOut).toFixed(2)} EUR. Les transactions seront importees comme lignes d&apos;extrait bancaire pour rapprochement ulterieur.
+          Solde net : {fmtEUR((totalIn - totalOut))} EUR. Les transactions seront importees comme lignes d&apos;extrait bancaire pour rapprochement ulterieur.
         </div>
       </div>
       <div className="border border-slate-200 rounded overflow-x-auto max-h-[420px] overflow-y-auto">
@@ -2647,11 +2648,11 @@ function BudgetPreview({ sections, setSections }) {
       <div className="bg-blue-50 border border-blue-200 rounded p-3 text-xs text-blue-900">
         <div className="flex justify-between mb-1">
           <span><strong>Verifiez puis ajustez le budget</strong> : {sections.length} section(s) detectees.</span>
-          <span className="font-mono font-semibold">Budget N : {totalBudgetN.toFixed(2)} EUR</span>
+          <span className="font-mono font-semibold">Budget N : {fmtEUR(totalBudgetN)} EUR</span>
         </div>
         <div className="text-[10px] text-slate-600 flex gap-4 mt-1">
-          <span>Realise N-1 (reference) : <span className="font-mono">{totalRealiseN1.toFixed(2)}</span></span>
-          <span>En cours (info) : <span className="font-mono">{totalEnCours.toFixed(2)}</span></span>
+          <span>Realise N-1 (reference) : <span className="font-mono">{fmtEUR(totalRealiseN1)}</span></span>
+          <span>En cours (info) : <span className="font-mono">{fmtEUR(totalEnCours)}</span></span>
           <span className="ml-auto text-[10px] italic">Seule la colonne <strong>Budget N</strong> est importee comme budget previsionnel.</span>
         </div>
       </div>
@@ -2666,9 +2667,9 @@ function BudgetPreview({ sections, setSections }) {
                 )}
               </span>
               <div className="flex gap-3 text-[10px] font-normal text-slate-500">
-                <span>N-1: <span className="font-mono">{(parseFloat(s.realise_n1) || 0).toFixed(2)}</span></span>
-                <span>N: <span className="font-mono font-semibold text-slate-700">{(parseFloat(s.budget_n) || 0).toFixed(2)}</span></span>
-                <span>En cours: <span className="font-mono">{(parseFloat(s.en_cours) || 0).toFixed(2)}</span></span>
+                <span>N-1: <span className="font-mono">{fmtEUR((parseFloat(s.realise_n1) || 0))}</span></span>
+                <span>N: <span className="font-mono font-semibold text-slate-700">{fmtEUR((parseFloat(s.budget_n) || 0))}</span></span>
+                <span>En cours: <span className="font-mono">{fmtEUR((parseFloat(s.en_cours) || 0))}</span></span>
                 <span>({(s.lines || []).length} ligne(s))</span>
               </div>
             </div>
@@ -2783,7 +2784,7 @@ function KeysPreview({ keys, setKeys, onAddPdf }) {
                 {/* iter90gi : recalcul defensif du total a partir des lignes */}
                 {(() => {
                   const computed = (k.lines || []).reduce((acc, l) => acc + (parseFloat(l.quotity) || 0), 0);
-                  return <span className="text-slate-500">Total quotites : <strong>{computed.toFixed(2)}</strong></span>;
+                  return <span className="text-slate-500">Total quotites : <strong>{fmtEUR(computed)}</strong></span>;
                 })()}
                 <button onClick={() => addLine(ki)} className="text-emerald-600 hover:text-emerald-800" title="Ajouter une ligne"><Plus size={12} /></button>
                 <button onClick={() => delKey(ki)} className="text-red-500"><Trash2 size={12} /></button>

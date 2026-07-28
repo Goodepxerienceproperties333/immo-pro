@@ -14,6 +14,7 @@ import LettrerDialog from '@/components/balance-tiers/LettrerDialog';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { fmtEUR } from '@/lib/format';
 // iter90je : SupplierMergeDialog import retire (fusion UI obsolete post Chinese Wall strict).
 
 const API = process.env.REACT_APP_BACKEND_URL;
@@ -317,14 +318,14 @@ export default function BalanceTiersPage() {
                 <Card className="border-red-200 bg-red-50"><CardContent className="p-4 flex items-center gap-3">
                   <ArrowUpRight size={20} className="text-red-600" />
                   <div><div className="text-[10px] uppercase tracking-wider text-red-600 font-semibold">Total debiteurs</div>
-                    <div className="text-xl font-black text-red-700 font-mono" style={{fontFamily:'Chivo,sans-serif'}}>{ownersData.total_debiteurs.toFixed(2)} EUR</div>
+                    <div className="text-xl font-black text-red-700 font-mono" style={{fontFamily:'Chivo,sans-serif'}}>{fmtEUR(ownersData.total_debiteurs)} EUR</div>
                     <div className="text-[10px] text-red-500">Proprietaires qui doivent a la copropriete</div>
                   </div>
                 </CardContent></Card>
                 <Card className="border-green-200 bg-green-50"><CardContent className="p-4 flex items-center gap-3">
                   <ArrowDownRight size={20} className="text-green-600" />
                   <div><div className="text-[10px] uppercase tracking-wider text-green-600 font-semibold">Total crediteurs</div>
-                    <div className="text-xl font-black text-green-700 font-mono" style={{fontFamily:'Chivo,sans-serif'}}>{ownersData.total_crediteurs.toFixed(2)} EUR</div>
+                    <div className="text-xl font-black text-green-700 font-mono" style={{fontFamily:'Chivo,sans-serif'}}>{fmtEUR(ownersData.total_crediteurs)} EUR</div>
                     <div className="text-[10px] text-green-500">Copropriete doit rembourser</div>
                   </div>
                 </CardContent></Card>
@@ -378,10 +379,10 @@ export default function BalanceTiersPage() {
                         <TableCell className="font-mono text-[11px] text-slate-500">
                           {o.account_provisions || '—'} <span className="text-slate-300">/</span> {o.account_reserve || '—'}
                         </TableCell>
-                        <TableCell className="text-right font-mono">{o.total_called.toFixed(2)}</TableCell>
-                        <TableCell className="text-right font-mono">{o.total_paid.toFixed(2)}</TableCell>
+                        <TableCell className="text-right font-mono">{fmtEUR(o.total_called)}</TableCell>
+                        <TableCell className="text-right font-mono">{fmtEUR(o.total_paid)}</TableCell>
                         {(() => { const soldeNet = (o.provisions_balance || 0) + (o.reserve_balance || 0); return (
-                        <TableCell className={`text-right font-mono font-bold ${soldeNet > 0.01 ? 'text-red-700' : soldeNet < -0.01 ? 'text-green-700' : 'text-slate-500'}`} data-testid="solde-net-cell">{soldeNet.toFixed(2)}</TableCell>
+                        <TableCell className={`text-right font-mono font-bold ${soldeNet > 0.01 ? 'text-red-700' : soldeNet < -0.01 ? 'text-green-700' : 'text-slate-500'}`} data-testid="solde-net-cell">{fmtEUR(soldeNet)}</TableCell>
                         ); })()}
                         <TableCell>
                           <Badge variant="outline" className={o.status === 'debiteur' ? 'bg-red-50 text-red-700 border-red-200' : o.status === 'crediteur' ? 'bg-green-50 text-green-700 border-green-200' : 'bg-slate-50 text-slate-500'}>
@@ -442,7 +443,7 @@ export default function BalanceTiersPage() {
                 <div className="flex items-center gap-3">
                   <Truck size={20} className="text-orange-600" />
                   <div><div className="text-[10px] uppercase tracking-wider text-orange-600 font-semibold">Total a payer aux fournisseurs</div>
-                    <div className="text-xl font-black text-orange-700 font-mono" style={{fontFamily:'Chivo,sans-serif'}}>{suppliersData.total_a_payer.toFixed(2)} EUR</div>
+                    <div className="text-xl font-black text-orange-700 font-mono" style={{fontFamily:'Chivo,sans-serif'}}>{fmtEUR(suppliersData.total_a_payer)} EUR</div>
                   </div>
                 </div>
                 {/* iter90je : bouton "Fusionner des fournisseurs" retire.
@@ -491,11 +492,11 @@ export default function BalanceTiersPage() {
                         </TableCell>
                         <TableCell className="font-mono text-[11px] text-slate-500">{s.tier_account || '—'}</TableCell>
                         <TableCell className="font-mono text-xs">{s.vat_number || '-'}</TableCell>
-                        <TableCell className="text-right font-mono">{s.total_invoiced.toFixed(2)}</TableCell>
-                        <TableCell className="text-right font-mono">{s.total_paid.toFixed(2)}</TableCell>
-                        <TableCell className="text-right font-mono text-xs text-slate-500" data-testid={`sup-acc-debit-${s.supplier_id || i}`}>{(s.account_debit ?? s.total_paid ?? 0).toFixed(2)}</TableCell>
-                        <TableCell className="text-right font-mono text-xs text-slate-500" data-testid={`sup-acc-credit-${s.supplier_id || i}`}>{(s.account_credit ?? s.total_invoiced ?? 0).toFixed(2)}</TableCell>
-                        <TableCell className={`text-right font-mono font-bold ${s.balance > 0 ? 'text-orange-700' : s.balance < 0 ? 'text-green-700' : 'text-slate-500'}`}>{s.balance.toFixed(2)}</TableCell>
+                        <TableCell className="text-right font-mono">{fmtEUR(s.total_invoiced)}</TableCell>
+                        <TableCell className="text-right font-mono">{fmtEUR(s.total_paid)}</TableCell>
+                        <TableCell className="text-right font-mono text-xs text-slate-500" data-testid={`sup-acc-debit-${s.supplier_id || i}`}>{fmtEUR((s.account_debit ?? s.total_paid ?? 0))}</TableCell>
+                        <TableCell className="text-right font-mono text-xs text-slate-500" data-testid={`sup-acc-credit-${s.supplier_id || i}`}>{fmtEUR((s.account_credit ?? s.total_invoiced ?? 0))}</TableCell>
+                        <TableCell className={`text-right font-mono font-bold ${s.balance > 0 ? 'text-orange-700' : s.balance < 0 ? 'text-green-700' : 'text-slate-500'}`}>{fmtEUR(s.balance)}</TableCell>
                         <TableCell>
                           <Badge variant="outline" className={s.status === 'crediteur' ? 'bg-orange-50 text-orange-700 border-orange-200' : s.status === 'debiteur' ? 'bg-green-50 text-green-700 border-green-200' : 'bg-slate-50 text-slate-500'}>
                             {s.status === 'crediteur' ? 'A payer' : s.status === 'debiteur' ? 'Trop-paye' : 'Solde'}
@@ -574,7 +575,7 @@ export default function BalanceTiersPage() {
             </div>
             {createOwnerRow && (
               <div className="text-[11px] bg-slate-50 border rounded p-2 space-y-0.5">
-                <div><span className="text-slate-500">Solde actuel : </span><span className="font-mono">{Number(createOwnerRow.balance || 0).toFixed(2)} EUR</span> ({createOwnerRow.status})</div>
+                <div><span className="text-slate-500">Solde actuel : </span><span className="font-mono">{fmtEUR(Number(createOwnerRow.balance || 0))} EUR</span> ({createOwnerRow.status})</div>
                 <div><span className="text-slate-500">Mouvements : </span>{createOwnerRow.movements_count || 0}</div>
               </div>
             )}

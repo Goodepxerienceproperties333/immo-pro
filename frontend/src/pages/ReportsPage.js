@@ -13,6 +13,7 @@ import { BarChart3, Download, FileText, Eye, X } from 'lucide-react';
 import { fmtDate } from '@/lib/dateFmt';
 import { useAuth } from '@/contexts/AuthContext';
 
+import { fmtEUR } from '@/lib/format';
 const API = process.env.REACT_APP_BACKEND_URL;
 const VALID_TABS = ['balance', 'bilan', 'resultat', 'decomptes'];
 
@@ -226,8 +227,8 @@ export default function ReportsPage() {
             <div className="bg-white rounded-md border border-slate-200 overflow-hidden">
             <Table><TableHeader><TableRow><TableHead>Compte</TableHead><TableHead>Libelle</TableHead><TableHead className="text-right">Total Debit</TableHead><TableHead className="text-right">Total Credit</TableHead><TableHead className="text-right">Solde Debit</TableHead><TableHead className="text-right">Solde Credit</TableHead></TableRow></TableHeader>
               <TableBody>
-                {balance.accounts.map((a, i) => (<TableRow key={i} className="hover:bg-slate-50/50"><TableCell className="font-mono text-sm">{a.account_number}</TableCell><TableCell className="text-sm">{a.account_name}</TableCell><TableCell className="text-right font-mono">{a.total_debit.toFixed(2)}</TableCell><TableCell className="text-right font-mono">{a.total_credit.toFixed(2)}</TableCell><TableCell className="text-right font-mono">{a.solde_debit > 0 ? a.solde_debit.toFixed(2) : ''}</TableCell><TableCell className="text-right font-mono">{a.solde_credit > 0 ? a.solde_credit.toFixed(2) : ''}</TableCell></TableRow>))}
-                <TableRow className="bg-slate-50 font-bold"><TableCell colSpan={2}>TOTAUX</TableCell><TableCell className="text-right font-mono">{balance.totals.total_debit.toFixed(2)}</TableCell><TableCell className="text-right font-mono">{balance.totals.total_credit.toFixed(2)}</TableCell><TableCell className="text-right font-mono">{balance.totals.solde_debit.toFixed(2)}</TableCell><TableCell className="text-right font-mono">{balance.totals.solde_credit.toFixed(2)}</TableCell></TableRow>
+                {balance.accounts.map((a, i) => (<TableRow key={i} className="hover:bg-slate-50/50"><TableCell className="font-mono text-sm">{a.account_number}</TableCell><TableCell className="text-sm">{a.account_name}</TableCell><TableCell className="text-right font-mono">{fmtEUR(a.total_debit)}</TableCell><TableCell className="text-right font-mono">{fmtEUR(a.total_credit)}</TableCell><TableCell className="text-right font-mono">{a.solde_debit > 0 ? fmtEUR(a.solde_debit) : ''}</TableCell><TableCell className="text-right font-mono">{a.solde_credit > 0 ? fmtEUR(a.solde_credit) : ''}</TableCell></TableRow>))}
+                <TableRow className="bg-slate-50 font-bold"><TableCell colSpan={2}>TOTAUX</TableCell><TableCell className="text-right font-mono">{fmtEUR(balance.totals.total_debit)}</TableCell><TableCell className="text-right font-mono">{fmtEUR(balance.totals.total_credit)}</TableCell><TableCell className="text-right font-mono">{fmtEUR(balance.totals.solde_debit)}</TableCell><TableCell className="text-right font-mono">{fmtEUR(balance.totals.solde_credit)}</TableCell></TableRow>
               </TableBody>
             </Table>
           </div></>)}
@@ -309,7 +310,7 @@ export default function ReportsPage() {
           {bilan && (<>
             <div className="flex justify-between items-center mb-3">
               <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${bilan.equilibre ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                {bilan.equilibre ? '● Bilan equilibre' : `● Ecart : ${bilan.ecart?.toFixed(2)} EUR`}
+                {bilan.equilibre ? '● Bilan equilibre' : `● Ecart : ${fmtEUR(bilan.ecart)} EUR`}
               </span>
               <Button onClick={exportBilanXlsx} variant="ghost" size="sm" data-testid="export-bilan-xlsx" className="text-xs"><Download size={12} className="mr-1" /> Excel</Button>
             </div>
@@ -318,22 +319,22 @@ export default function ReportsPage() {
               <Table><TableBody>
                 {bilan.actif.filter(r => r.total > 0.01).map((r, i) => (
                   <Fragment key={`a-${i}`}>
-                    <TableRow className="bg-slate-50/60 border-b border-slate-100"><TableCell colSpan={2} className="font-semibold text-[11px] uppercase tracking-wide text-slate-600 py-1.5">{r.label}</TableCell><TableCell className="text-right font-mono text-sm font-semibold py-1.5 text-slate-900">{r.total.toFixed(2)}</TableCell></TableRow>
-                    {(r.accounts || []).map((a, j) => (<TableRow key={`a-${i}-${j}`} className="hover:bg-slate-50/40 border-b border-slate-50"><TableCell className="font-mono text-[11px] text-slate-400 pl-6 py-1 w-24">{a.account_number}</TableCell><TableCell className="text-sm py-1">{a.account_name}</TableCell><TableCell className="text-right font-mono text-sm py-1 text-slate-700">{a.amount.toFixed(2)}</TableCell></TableRow>))}
+                    <TableRow className="bg-slate-50/60 border-b border-slate-100"><TableCell colSpan={2} className="font-semibold text-[11px] uppercase tracking-wide text-slate-600 py-1.5">{r.label}</TableCell><TableCell className="text-right font-mono text-sm font-semibold py-1.5 text-slate-900">{fmtEUR(r.total)}</TableCell></TableRow>
+                    {(r.accounts || []).map((a, j) => (<TableRow key={`a-${i}-${j}`} className="hover:bg-slate-50/40 border-b border-slate-50"><TableCell className="font-mono text-[11px] text-slate-400 pl-6 py-1 w-24">{a.account_number}</TableCell><TableCell className="text-sm py-1">{a.account_name}</TableCell><TableCell className="text-right font-mono text-sm py-1 text-slate-700">{fmtEUR(a.amount)}</TableCell></TableRow>))}
                   </Fragment>
                 ))}
-                <TableRow className="bg-blue-100/70 font-bold border-t-2 border-blue-300"><TableCell colSpan={2} className="text-sm">TOTAL ACTIF</TableCell><TableCell className="text-right font-mono text-sm">{bilan.total_actif.toFixed(2)} EUR</TableCell></TableRow>
+                <TableRow className="bg-blue-100/70 font-bold border-t-2 border-blue-300"><TableCell colSpan={2} className="text-sm">TOTAL ACTIF</TableCell><TableCell className="text-right font-mono text-sm">{fmtEUR(bilan.total_actif)} EUR</TableCell></TableRow>
               </TableBody></Table>
             </CardContent></Card>
             <Card className="border-slate-200 shadow-sm"><CardHeader className="bg-green-50/70 rounded-t-md py-2 px-4"><CardTitle className="text-sm font-semibold text-green-900" style={{fontFamily:'Chivo,sans-serif'}}>PASSIF</CardTitle></CardHeader><CardContent className="p-0">
               <Table><TableBody>
                 {bilan.passif.filter(r => r.total > 0.01).map((r, i) => (
                   <Fragment key={`p-${i}`}>
-                    <TableRow className="bg-slate-50/60 border-b border-slate-100"><TableCell colSpan={2} className="font-semibold text-[11px] uppercase tracking-wide text-slate-600 py-1.5">{r.label}</TableCell><TableCell className="text-right font-mono text-sm font-semibold py-1.5 text-slate-900">{r.total.toFixed(2)}</TableCell></TableRow>
-                    {(r.accounts || []).map((a, j) => (<TableRow key={`p-${i}-${j}`} className="hover:bg-slate-50/40 border-b border-slate-50"><TableCell className="font-mono text-[11px] text-slate-400 pl-6 py-1 w-24">{a.account_number}</TableCell><TableCell className="text-sm py-1">{a.account_name}</TableCell><TableCell className="text-right font-mono text-sm py-1 text-slate-700">{a.amount.toFixed(2)}</TableCell></TableRow>))}
+                    <TableRow className="bg-slate-50/60 border-b border-slate-100"><TableCell colSpan={2} className="font-semibold text-[11px] uppercase tracking-wide text-slate-600 py-1.5">{r.label}</TableCell><TableCell className="text-right font-mono text-sm font-semibold py-1.5 text-slate-900">{fmtEUR(r.total)}</TableCell></TableRow>
+                    {(r.accounts || []).map((a, j) => (<TableRow key={`p-${i}-${j}`} className="hover:bg-slate-50/40 border-b border-slate-50"><TableCell className="font-mono text-[11px] text-slate-400 pl-6 py-1 w-24">{a.account_number}</TableCell><TableCell className="text-sm py-1">{a.account_name}</TableCell><TableCell className="text-right font-mono text-sm py-1 text-slate-700">{fmtEUR(a.amount)}</TableCell></TableRow>))}
                   </Fragment>
                 ))}
-                <TableRow className="bg-green-100/70 font-bold border-t-2 border-green-300"><TableCell colSpan={2} className="text-sm">TOTAL PASSIF</TableCell><TableCell className="text-right font-mono text-sm">{bilan.total_passif.toFixed(2)} EUR</TableCell></TableRow>
+                <TableRow className="bg-green-100/70 font-bold border-t-2 border-green-300"><TableCell colSpan={2} className="text-sm">TOTAL PASSIF</TableCell><TableCell className="text-right font-mono text-sm">{fmtEUR(bilan.total_passif)} EUR</TableCell></TableRow>
               </TableBody></Table>
             </CardContent></Card>
           </div></>)}
@@ -346,27 +347,27 @@ export default function ReportsPage() {
               <Table><TableBody>
                 {resultat.charges.map((r, i) => (
                   <Fragment key={`c-${i}`}>
-                    <TableRow className="bg-slate-50/70"><TableCell colSpan={2} className="font-semibold text-xs uppercase text-slate-700">{r.label}</TableCell><TableCell className="text-right font-mono font-semibold">{r.total.toFixed(2)}</TableCell></TableRow>
-                    {(r.accounts || []).map((a, j) => (<TableRow key={`c-${i}-${j}`}><TableCell className="font-mono text-sm pl-6">{a.account_number}</TableCell><TableCell className="text-sm">{a.account_name}</TableCell><TableCell className="text-right font-mono text-sm">{a.amount.toFixed(2)}</TableCell></TableRow>))}
+                    <TableRow className="bg-slate-50/70"><TableCell colSpan={2} className="font-semibold text-xs uppercase text-slate-700">{r.label}</TableCell><TableCell className="text-right font-mono font-semibold">{fmtEUR(r.total)}</TableCell></TableRow>
+                    {(r.accounts || []).map((a, j) => (<TableRow key={`c-${i}-${j}`}><TableCell className="font-mono text-sm pl-6">{a.account_number}</TableCell><TableCell className="text-sm">{a.account_name}</TableCell><TableCell className="text-right font-mono text-sm">{fmtEUR(a.amount)}</TableCell></TableRow>))}
                   </Fragment>
                 ))}
-                <TableRow className="bg-red-50 font-bold border-t-2 border-red-200"><TableCell colSpan={2}>TOTAL CHARGES</TableCell><TableCell className="text-right font-mono">{resultat.total_charges.toFixed(2)} EUR</TableCell></TableRow>
+                <TableRow className="bg-red-50 font-bold border-t-2 border-red-200"><TableCell colSpan={2}>TOTAL CHARGES</TableCell><TableCell className="text-right font-mono">{fmtEUR(resultat.total_charges)} EUR</TableCell></TableRow>
               </TableBody></Table>
             </CardContent></Card>
             <Card className="border-slate-200"><CardHeader className="bg-green-50 rounded-t-md"><CardTitle className="text-base" style={{fontFamily:'Chivo,sans-serif'}}>PRODUITS (Classe 7)</CardTitle></CardHeader><CardContent className="p-0">
               <Table><TableBody>
                 {resultat.produits.map((r, i) => (
                   <Fragment key={`pr-${i}`}>
-                    <TableRow className="bg-slate-50/70"><TableCell colSpan={2} className="font-semibold text-xs uppercase text-slate-700">{r.label}</TableCell><TableCell className="text-right font-mono font-semibold">{r.total.toFixed(2)}</TableCell></TableRow>
-                    {(r.accounts || []).map((a, j) => (<TableRow key={`pr-${i}-${j}`}><TableCell className="font-mono text-sm pl-6">{a.account_number}</TableCell><TableCell className="text-sm">{a.account_name}</TableCell><TableCell className="text-right font-mono text-sm">{a.amount.toFixed(2)}</TableCell></TableRow>))}
+                    <TableRow className="bg-slate-50/70"><TableCell colSpan={2} className="font-semibold text-xs uppercase text-slate-700">{r.label}</TableCell><TableCell className="text-right font-mono font-semibold">{fmtEUR(r.total)}</TableCell></TableRow>
+                    {(r.accounts || []).map((a, j) => (<TableRow key={`pr-${i}-${j}`}><TableCell className="font-mono text-sm pl-6">{a.account_number}</TableCell><TableCell className="text-sm">{a.account_name}</TableCell><TableCell className="text-right font-mono text-sm">{fmtEUR(a.amount)}</TableCell></TableRow>))}
                   </Fragment>
                 ))}
-                <TableRow className="bg-green-50 font-bold border-t-2 border-green-200"><TableCell colSpan={2}>TOTAL PRODUITS</TableCell><TableCell className="text-right font-mono">{resultat.total_produits.toFixed(2)} EUR</TableCell></TableRow>
+                <TableRow className="bg-green-50 font-bold border-t-2 border-green-200"><TableCell colSpan={2}>TOTAL PRODUITS</TableCell><TableCell className="text-right font-mono">{fmtEUR(resultat.total_produits)} EUR</TableCell></TableRow>
               </TableBody></Table>
             </CardContent></Card>
             <Card className={`border-2 col-span-full ${resultat.resultat >= 0 ? 'border-green-300 bg-green-50' : 'border-red-300 bg-red-50'}`}><CardContent className="p-6 text-center">
               <div className="text-sm text-slate-600 mb-1">Resultat de l'exercice ({resultat.resultat_label})</div>
-              <div className={`text-3xl font-black tracking-tight ${resultat.resultat >= 0 ? 'text-green-700' : 'text-red-700'}`} style={{fontFamily:'Chivo,sans-serif'}}>{resultat.resultat.toFixed(2)} EUR</div>
+              <div className={`text-3xl font-black tracking-tight ${resultat.resultat >= 0 ? 'text-green-700' : 'text-red-700'}`} style={{fontFamily:'Chivo,sans-serif'}}>{fmtEUR(resultat.resultat)} EUR</div>
             </CardContent></Card>
           </div>)}
         </TabsContent>
@@ -462,7 +463,7 @@ export default function ReportsPage() {
                         <TableCell className="text-xs text-slate-600">{d.lots.map(l => l.number).join(', ') || '-'}</TableCell>
                         <TableCell className="text-right font-mono text-sm">{d.share_pct}%</TableCell>
                         <TableCell className={`text-right font-mono font-semibold ${balColor}`} data-testid={`tier-balance-${d.owner_id}`}>
-                          {Math.abs(bal).toFixed(2)} EUR
+                          {fmtEUR(Math.abs(bal))} EUR
                           <div className="text-[10px] uppercase tracking-wider font-normal opacity-70">{balLabel}</div>
                         </TableCell>
                         <TableCell className="text-right">

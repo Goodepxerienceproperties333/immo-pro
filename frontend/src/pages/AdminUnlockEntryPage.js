@@ -12,6 +12,7 @@ import { toast } from 'sonner';
 import { ArrowLeft, Unlock, Trash2, RotateCcw, AlertTriangle, Search } from 'lucide-react';
 import { fmtDate } from '@/lib/dateFmt';
 
+import { fmtEUR } from '@/lib/format';
 /**
  * Outils de deblocage comptable reserves au superadmin.
  *  - Rechercher une ecriture (par ACP, date, ref, description)
@@ -242,7 +243,7 @@ export default function AdminUnlockEntryPage() {
                         {e.reversed && <Badge className="ml-1 bg-red-100 text-red-800 border-red-300 text-[10px]">EXTOURNE</Badge>}
                         {e.unlocked_by_admin && <Badge className="ml-1 bg-amber-100 text-amber-800 border-amber-300 text-[10px]">UNLOCK</Badge>}
                       </td>
-                      <td className="px-2 py-2 text-right font-mono">{(e.total_debit || 0).toFixed(2)}</td>
+                      <td className="px-2 py-2 text-right font-mono">{fmtEUR((e.total_debit || 0))}</td>
                       <td className="px-2 py-2 text-center text-xs">
                         {e.fy_name}{' '}
                         <Badge variant={e.fy_status === 'closed' ? 'destructive' : 'outline'} className="ml-1 text-[10px]">{e.fy_status}</Badge>
@@ -315,7 +316,7 @@ export default function AdminUnlockEntryPage() {
               <div><b>Ref:</b> {selected?.reference}</div>
               <div><b>Date:</b> {fmtDate(selected?.date)}</div>
               <div><b>Type:</b> {selected?.journal_type}</div>
-              <div><b>Montant:</b> {(selected?.total_debit || 0).toFixed(2)} EUR</div>
+              <div><b>Montant:</b> {fmtEUR((selected?.total_debit || 0))} EUR</div>
             </div>
             <div>
               <label className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold block mb-1">Justification detaillee *</label>

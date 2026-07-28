@@ -13,6 +13,7 @@ import { toast } from 'sonner';
 import { useAuth } from '@/contexts/AuthContext';
 import { fmtDate } from '@/lib/dateFmt';
 
+import { fmtEUR } from '@/lib/format';
 const ALL = '__all__';
 
 export default function ExpensesPage() {
@@ -179,11 +180,11 @@ export default function ExpensesPage() {
 
   const setOccupant = (val) => {
     const v = Math.max(0, Math.min(100, parseFloat(val) || 0));
-    setQuickEdit(q => ({ ...q, occupant_pct: v, proprietaire_pct: +(100 - v).toFixed(2) }));
+    setQuickEdit(q => ({ ...q, occupant_pct: v, proprietaire_pct: +fmtEUR((100 - v)) }));
   };
   const setProprio = (val) => {
     const v = Math.max(0, Math.min(100, parseFloat(val) || 0));
-    setQuickEdit(q => ({ ...q, proprietaire_pct: v, occupant_pct: +(100 - v).toFixed(2) }));
+    setQuickEdit(q => ({ ...q, proprietaire_pct: v, occupant_pct: +fmtEUR((100 - v)) }));
   };
 
   const saveQuickEdit = async () => {
@@ -469,7 +470,7 @@ export default function ExpensesPage() {
             <Card className="border-[#022D52] bg-blue-50/40">
               <CardContent className="p-4">
                 <div className="text-xs uppercase tracking-wider text-[#01213e]">Total filtre</div>
-                <div className="text-2xl font-black text-[#022D52] font-mono mt-1" style={{ fontFamily: 'Chivo,sans-serif' }} data-testid="expenses-total">{data.totals.total.toFixed(2)} EUR</div>
+                <div className="text-2xl font-black text-[#022D52] font-mono mt-1" style={{ fontFamily: 'Chivo,sans-serif' }} data-testid="expenses-total">{fmtEUR(data.totals.total)} EUR</div>
                 <div className="text-[11px] text-slate-500 mt-1">{data.totals.count} depenses</div>
               </CardContent>
             </Card>
@@ -479,18 +480,18 @@ export default function ExpensesPage() {
                 {byNature.top3.map(([k, v]) => (
                   <div key={k} className="flex justify-between text-xs" data-testid={`widget-nature-row-${k}`}>
                     <span className="truncate max-w-[170px]" title={k}>{k}</span>
-                    <span className="font-mono font-semibold">{v.toFixed(2)}</span>
+                    <span className="font-mono font-semibold">{fmtEUR(v)}</span>
                   </div>
                 ))}
                 {byNature.restSum > 0.005 && (
                   <div className="flex justify-between text-xs text-slate-500 italic" data-testid="widget-nature-others">
                     <span>Autres</span>
-                    <span className="font-mono">{byNature.restSum.toFixed(2)}</span>
+                    <span className="font-mono">{fmtEUR(byNature.restSum)}</span>
                   </div>
                 )}
                 <div className="flex justify-between text-xs pt-1 mt-1 border-t border-slate-200 font-semibold" data-testid="widget-nature-total">
                   <span className="uppercase text-[10px] tracking-wider">Total</span>
-                  <span className="font-mono">{byNature.widgetTotal.toFixed(2)}</span>
+                  <span className="font-mono">{fmtEUR(byNature.widgetTotal)}</span>
                 </div>
               </div>
             </CardContent></Card>
@@ -500,18 +501,18 @@ export default function ExpensesPage() {
                 {byKey.top3.map(([k, v]) => (
                   <div key={k} className="flex justify-between text-xs" data-testid={`widget-key-row-${k}`}>
                     <span className="truncate max-w-[170px]" title={k}>{k}</span>
-                    <span className="font-mono font-semibold">{v.toFixed(2)}</span>
+                    <span className="font-mono font-semibold">{fmtEUR(v)}</span>
                   </div>
                 ))}
                 {byKey.restSum > 0.005 && (
                   <div className="flex justify-between text-xs text-slate-500 italic" data-testid="widget-key-others">
                     <span>Autres</span>
-                    <span className="font-mono">{byKey.restSum.toFixed(2)}</span>
+                    <span className="font-mono">{fmtEUR(byKey.restSum)}</span>
                   </div>
                 )}
                 <div className="flex justify-between text-xs pt-1 mt-1 border-t border-slate-200 font-semibold" data-testid="widget-key-total">
                   <span className="uppercase text-[10px] tracking-wider">Total</span>
-                  <span className="font-mono">{byKey.widgetTotal.toFixed(2)}</span>
+                  <span className="font-mono">{fmtEUR(byKey.widgetTotal)}</span>
                 </div>
               </div>
             </CardContent></Card>
@@ -568,7 +569,7 @@ export default function ExpensesPage() {
                     {(r.occupant_pct ?? 0) > 0 && <span className="text-slate-300"> / </span>}
                     <span className="text-[#01213e] font-semibold">{(r.proprietaire_pct ?? 100).toFixed(0)}%</span>
                   </TableCell>
-                  <TableCell className="text-right font-mono font-semibold">{r.total_amount.toFixed(2)}</TableCell>
+                  <TableCell className="text-right font-mono font-semibold">{fmtEUR(r.total_amount)}</TableCell>
                   <TableCell>
                     {r.paid ? <Badge className="bg-green-50 text-green-700 border-green-200 text-[10px]" variant="outline">Paye {fmtDate(r.paid_info?.date)}</Badge> : <Badge variant="outline" className="text-slate-400 text-[10px]">Impaye</Badge>}
                   </TableCell>
@@ -584,7 +585,7 @@ export default function ExpensesPage() {
               {data && data.expenses.length > 0 && (
                 <TableRow className="bg-slate-50 font-bold">
                   <TableCell colSpan={7} className="text-right">TOTAL</TableCell>
-                  <TableCell className="text-right font-mono">{data.totals.total.toFixed(2)} EUR</TableCell>
+                  <TableCell className="text-right font-mono">{fmtEUR(data.totals.total)} EUR</TableCell>
                   <TableCell colSpan={3}></TableCell>
                 </TableRow>
               )}
@@ -608,7 +609,7 @@ export default function ExpensesPage() {
                   <span className="font-semibold text-sm text-slate-800">{g1.key_name}</span>
                   <span className="ml-auto flex items-center gap-3">
                     <span className="text-[11px] text-slate-500">{g1.count} depense(s)</span>
-                    <span className="font-mono font-bold text-base text-[#022D52]" data-testid={`group-key-${g1.key_id}-subtotal`}>{g1.subtotal.toFixed(2)} EUR</span>
+                    <span className="font-mono font-bold text-base text-[#022D52]" data-testid={`group-key-${g1.key_id}-subtotal`}>{fmtEUR(g1.subtotal)} EUR</span>
                   </span>
                 </button>
                 {!c1 && g1.natures.map((g2) => {
@@ -626,7 +627,7 @@ export default function ExpensesPage() {
                         </span>
                         <span className="ml-auto flex items-center gap-3">
                           <span className="text-[11px] text-slate-500">{g2.count} depense(s)</span>
-                          <span className="font-mono font-semibold text-sm text-amber-800">{g2.subtotal.toFixed(2)} EUR</span>
+                          <span className="font-mono font-semibold text-sm text-amber-800">{fmtEUR(g2.subtotal)} EUR</span>
                         </span>
                       </button>
                       {!c2 && g2.accounts.map((g3) => {
@@ -642,7 +643,7 @@ export default function ExpensesPage() {
                               <span className="text-xs text-slate-500 truncate max-w-[400px]">{g3.account_name}</span>
                               <span className="ml-auto flex items-center gap-3">
                                 <span className="text-[11px] text-slate-500">{g3.count}</span>
-                                <span className="font-mono font-semibold text-xs text-slate-700">{g3.subtotal.toFixed(2)} EUR</span>
+                                <span className="font-mono font-semibold text-xs text-slate-700">{fmtEUR(g3.subtotal)} EUR</span>
                               </span>
                             </button>
                             {!c3 && (
@@ -687,7 +688,7 @@ export default function ExpensesPage() {
                                           {(r.occupant_pct ?? 0) > 0 && <span className="text-slate-300"> / </span>}
                                           <span className="text-[#01213e] font-semibold">{(r.proprietaire_pct ?? 100).toFixed(0)}%</span>
                                         </TableCell>
-                                        <TableCell className="text-right font-mono font-semibold">{r.total_amount.toFixed(2)}</TableCell>
+                                        <TableCell className="text-right font-mono font-semibold">{fmtEUR(r.total_amount)}</TableCell>
                                         <TableCell>
                                           {r.paid ? <Badge className="bg-green-50 text-green-700 border-green-200 text-[9px]" variant="outline">Paye</Badge> : <Badge variant="outline" className="text-slate-400 text-[9px]">Impaye</Badge>}
                                         </TableCell>
@@ -716,7 +717,7 @@ export default function ExpensesPage() {
           {data && data.expenses.length > 0 && (
             <div className="flex items-center justify-end gap-6 px-4 py-3 bg-slate-100 border-t border-slate-300">
               <span className="text-xs uppercase tracking-wider font-bold text-slate-600">Total general</span>
-              <span className="font-mono font-black text-lg text-[#022D52]">{data.totals.total.toFixed(2)} EUR</span>
+              <span className="font-mono font-black text-lg text-[#022D52]">{fmtEUR(data.totals.total)} EUR</span>
               <span className="text-[11px] text-slate-500">({data.totals.count} depenses)</span>
             </div>
           )}
@@ -732,12 +733,12 @@ export default function ExpensesPage() {
             </DialogTitle>
             {quickEdit?.invoice && (
               <p className="text-xs text-slate-500 mt-1">
-                {quickEdit.invoice.number} - {quickEdit.invoice.supplier} - {Number(quickEdit.invoice.total_amount || 0).toFixed(2)} EUR
+                {quickEdit.invoice.number} - {quickEdit.invoice.supplier} - {fmtEUR(Number(quickEdit.invoice.total_amount || 0))} EUR
               </p>
             )}
             {quickEdit?.source === 'journal' && quickEdit?.row_snapshot && (
               <p className="text-xs text-slate-500 mt-1">
-                {quickEdit.row_snapshot.date} - {quickEdit.row_snapshot.supplier} - {Number(quickEdit.row_snapshot.total_amount || 0).toFixed(2)} EUR
+                {quickEdit.row_snapshot.date} - {quickEdit.row_snapshot.supplier} - {fmtEUR(Number(quickEdit.row_snapshot.total_amount || 0))} EUR
                 <span className="ml-2 px-1.5 py-0.5 rounded bg-purple-50 text-purple-700 text-[10px] font-mono">{quickEdit.row_snapshot.journal_type}</span>
               </p>
             )}
@@ -823,13 +824,13 @@ export default function ExpensesPage() {
                       <div>
                         <div className="text-[10px] uppercase text-slate-500">Part occupant</div>
                         <div className="font-mono font-semibold text-amber-700">
-                          {(baseAmount * (Number(quickEdit.occupant_pct) || 0) / 100).toFixed(2)} EUR
+                          {fmtEUR((baseAmount * (Number(quickEdit.occupant_pct) || 0) / 100))} EUR
                         </div>
                       </div>
                       <div>
                         <div className="text-[10px] uppercase text-slate-500">Part proprietaire</div>
                         <div className="font-mono font-semibold text-[#01213e]">
-                          {(baseAmount * (Number(quickEdit.proprietaire_pct) || 0) / 100).toFixed(2)} EUR
+                          {fmtEUR((baseAmount * (Number(quickEdit.proprietaire_pct) || 0) / 100))} EUR
                         </div>
                       </div>
                     </div>
@@ -888,7 +889,7 @@ export default function ExpensesPage() {
                       {diagData.total_uncategorized} facture(s) sans compte
                     </div>
                     <div className="text-xs text-amber-800 mt-0.5">
-                      Total : <span className="font-mono font-bold">{diagData.total_amount_uncategorized.toFixed(2)} EUR</span>
+                      Total : <span className="font-mono font-bold">{fmtEUR(diagData.total_amount_uncategorized)} EUR</span>
                     </div>
                   </div>
                   <Button size="sm" variant="outline" onClick={loadDiagnostic} data-testid="diag-refresh">
@@ -903,7 +904,7 @@ export default function ExpensesPage() {
                       <div className="font-semibold text-sm text-slate-900">{sup.supplier}</div>
                       <div className="text-xs text-slate-500">
                         {sup.invoice_count} facture(s) - Total{' '}
-                        <span className="font-mono font-bold">{sup.total_amount.toFixed(2)} EUR</span>
+                        <span className="font-mono font-bold">{fmtEUR(sup.total_amount)} EUR</span>
                       </div>
                       {sup.suggestion ? (
                         <div className="mt-2 rounded bg-emerald-50 border border-emerald-200 p-2 text-xs">
@@ -932,7 +933,7 @@ export default function ExpensesPage() {
                         <div className="mt-1 space-y-0.5">
                           {sup.sample_invoices.map((inv, j) => (
                             <div key={j} className="font-mono">
-                              {inv.date} - {inv.number || inv.reference || '(sans ref)'} - {inv.amount.toFixed(2)} EUR
+                              {inv.date} - {inv.number || inv.reference || '(sans ref)'} - {fmtEUR(inv.amount)} EUR
                             </div>
                           ))}
                         </div>

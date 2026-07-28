@@ -18,6 +18,7 @@ import AccountSearchSelect from '@/components/AccountSearchSelect';
 import CodaImportDialog from '@/components/CodaImportDialog';
 import { fmtDate } from '@/lib/dateFmt';
 
+import { fmtEUR } from '@/lib/format';
 export default function BankingPage() {
   const { selectedCopro, selectedFiscalYear, selectedFiscalYearId, setSelectedFiscalYearId } = useAuth();
   const navigate = useNavigate();
@@ -665,8 +666,8 @@ export default function BankingPage() {
       });
       const { transaction_amount, invoice_total, remaining, is_exact } = r.data;
       const msg = is_exact
-        ? `Lettrage OK : ${selectedInvoiceIds.size} factures = ${invoice_total.toFixed(2)} EUR (exact)`
-        : `Lettrage OK : ${selectedInvoiceIds.size} factures pour ${invoice_total.toFixed(2)} EUR / txn ${transaction_amount.toFixed(2)} EUR (ecart ${Math.abs(remaining).toFixed(2)} EUR sur compte tiers)`;
+        ? `Lettrage OK : ${selectedInvoiceIds.size} factures = ${fmtEUR(invoice_total)} EUR (exact)`
+        : `Lettrage OK : ${selectedInvoiceIds.size} factures pour ${fmtEUR(invoice_total)} EUR / txn ${fmtEUR(transaction_amount)} EUR (ecart ${fmtEUR(Math.abs(remaining))} EUR sur compte tiers)`;
       toast.success(msg);
       setLettrageDialog(false);
       setSelectedInvoiceIds(new Set());
@@ -698,8 +699,8 @@ export default function BankingPage() {
       });
       const { total_paid, invoice_amount, status, remaining } = r.data;
       const msg = status === 'paid'
-        ? `Lettrage OK : ${ids.length} transactions = ${total_paid.toFixed(2)} EUR / ${invoice_amount.toFixed(2)} EUR (solde)`
-        : `Lettrage partiel : ${total_paid.toFixed(2)} EUR / ${invoice_amount.toFixed(2)} EUR (reste ${remaining.toFixed(2)} EUR)`;
+        ? `Lettrage OK : ${ids.length} transactions = ${fmtEUR(total_paid)} EUR / ${fmtEUR(invoice_amount)} EUR (solde)`
+        : `Lettrage partiel : ${fmtEUR(total_paid)} EUR / ${fmtEUR(invoice_amount)} EUR (reste ${fmtEUR(remaining)} EUR)`;
       toast.success(msg);
       setBatchLettrageDialog(false);
       clearSelection();
@@ -926,7 +927,7 @@ export default function BankingPage() {
                   ><Trash2 size={10} /></Button>
                 </div>
                 <div className="text-xs text-slate-500">{fmtDate(s.date)}</div>
-                <div className="flex justify-between mt-1 text-[10px] font-mono"><span>O:{s.opening_balance?.toFixed(2)}</span><span>F:{s.closing_balance?.toFixed(2)}</span></div>
+                <div className="flex justify-between mt-1 text-[10px] font-mono"><span>O:{fmtEUR(s.opening_balance)}</span><span>F:{fmtEUR(s.closing_balance)}</span></div>
                 <div className="flex gap-1 mt-1 flex-wrap">
                   {isPosted && <Badge className="text-[9px] bg-green-100 text-green-700 border-green-300">Comptabilise</Badge>}
                   {isDraft && !needsReview && <Badge className="text-[9px] bg-amber-100 text-amber-800 border-amber-300" variant="outline" data-testid={`stmt-badge-draft-${s.id}`}>Pret</Badge>}
@@ -1020,7 +1021,7 @@ export default function BankingPage() {
                           disabled={!balanced || transactions.length === 0}
                           className={balanced && transactions.length > 0 ? "bg-green-600 hover:bg-green-700 text-white" : ""}
                           data-testid="post-stmt-btn"
-                          title={!balanced ? `Difference: ${diff.toFixed(2)} EUR. Ajustez les mouvements ou le solde de fermeture.` : "Comptabiliser l'extrait"}
+                          title={!balanced ? `Difference: ${fmtEUR(diff)} EUR. Ajustez les mouvements ou le solde de fermeture.` : "Comptabiliser l'extrait"}
                         >
                           <CheckCircle2 size={14} className="mr-1" />
                           Comptabiliser
@@ -1040,15 +1041,15 @@ export default function BankingPage() {
                   return (
                     <div className={`mt-3 p-2 rounded text-xs flex items-center justify-between gap-4 ${balanced ? 'bg-green-50 border border-green-200' : 'bg-amber-50 border border-amber-200'}`} data-testid="balance-check-banner">
                       <div className="flex gap-4">
-                        <span>Solde ouverture : <b className="font-mono">{opening.toFixed(2)}</b></span>
-                        <span>+ Mouvements : <b className={`font-mono ${mvts >= 0 ? 'text-green-700' : 'text-red-700'}`}>{mvts >= 0 ? '+' : ''}{mvts.toFixed(2)}</b></span>
-                        <span>= Solde calcule : <b className="font-mono">{computed.toFixed(2)}</b></span>
-                        <span>vs. saisi : <b className="font-mono">{closing.toFixed(2)}</b></span>
+                        <span>Solde ouverture : <b className="font-mono">{fmtEUR(opening)}</b></span>
+                        <span>+ Mouvements : <b className={`font-mono ${mvts >= 0 ? 'text-green-700' : 'text-red-700'}`}>{mvts >= 0 ? '+' : ''}{fmtEUR(mvts)}</b></span>
+                        <span>= Solde calcule : <b className="font-mono">{fmtEUR(computed)}</b></span>
+                        <span>vs. saisi : <b className="font-mono">{fmtEUR(closing)}</b></span>
                       </div>
                       {balanced ? (
                         <span className="text-green-700 flex items-center gap-1"><CheckCircle2 size={12} /> Equilibre</span>
                       ) : (
-                        <span className="text-amber-700 flex items-center gap-1"><AlertTriangle size={12} /> Difference : <b className="font-mono">{diff > 0 ? '+' : ''}{diff.toFixed(2)}</b></span>
+                        <span className="text-amber-700 flex items-center gap-1"><AlertTriangle size={12} /> Difference : <b className="font-mono">{diff > 0 ? '+' : ''}{fmtEUR(diff)}</b></span>
                       )}
                     </div>
                   );
@@ -1133,7 +1134,7 @@ export default function BankingPage() {
                   <div className="bg-[#022D52]/10 border border-[#022D52]/30 rounded-md px-3 py-2 mb-2 flex items-center justify-between text-sm" data-testid="batch-lettrage-toolbar">
                     <div className="flex items-center gap-4">
                       <strong className="text-[#022D52]">{selectedTxnIds.size} transaction(s) selectionnee(s)</strong>
-                      <span className="font-mono text-slate-700">Total : <strong>{selectedTotal.toFixed(2)} EUR</strong></span>
+                      <span className="font-mono text-slate-700">Total : <strong>{fmtEUR(selectedTotal)} EUR</strong></span>
                     </div>
                     <div className="flex gap-2">
                       <Button size="sm" onClick={() => { setBatchInvoiceSearch(''); setBatchLettrageDialog(true); }} className="bg-[#022D52] hover:bg-[#1D4ED8] text-white" data-testid="batch-lettrage-open-btn">
@@ -1242,7 +1243,7 @@ export default function BankingPage() {
                           )}
                         </TableCell>
                         <TableCell className="text-sm break-words" style={{wordBreak: 'break-word'}}>{txn.communication}</TableCell>
-                        <TableCell className={`text-right font-mono font-semibold ${txn.amount >= 0 ? 'text-green-700' : 'text-red-700'}`}>{txn.amount >= 0 ? '+' : ''}{txn.amount?.toFixed(2)}</TableCell>
+                        <TableCell className={`text-right font-mono font-semibold ${txn.amount >= 0 ? 'text-green-700' : 'text-red-700'}`}>{txn.amount >= 0 ? '+' : ''}{fmtEUR(txn.amount)}</TableCell>
                         <TableCell>{txn.matched ? <Badge className={
                             txn.match_type === 'expense_category'
                               ? "bg-purple-50 text-purple-700 border-purple-200 text-[10px]"
@@ -1396,7 +1397,7 @@ export default function BankingPage() {
             <DialogHeader className="space-y-1">
               <DialogTitle className="text-white text-base flex items-center justify-between gap-3" style={{fontFamily:'Chivo,sans-serif'}}>
                 <span>Lettrage de la transaction</span>
-                <span className="font-mono text-xl">{Number(lettrageTarget?.amount || 0).toFixed(2)} EUR</span>
+                <span className="font-mono text-xl">{fmtEUR(Number(lettrageTarget?.amount || 0))} EUR</span>
               </DialogTitle>
             </DialogHeader>
             {lettrageTarget && (
@@ -1450,7 +1451,7 @@ export default function BankingPage() {
                           <span className="truncate">{inv.supplier}</span>
                           <span className="text-[10px] bg-white/25 px-1.5 py-0.5 rounded shrink-0">{inv.status?.toUpperCase()}</span>
                         </div>
-                        <span className="font-mono text-[11px] shrink-0">{Number(inv.total_amount).toFixed(2)} EUR</span>
+                        <span className="font-mono text-[11px] shrink-0">{fmtEUR(Number(inv.total_amount))} EUR</span>
                       </div>
                     ))}
                   </div>
@@ -1478,7 +1479,7 @@ export default function BankingPage() {
                   <div className="mt-1.5 pl-4 text-white/80 text-[11px]" data-testid="lettered-siblings">
                     <span className="italic">+ {letteredLinks.sibling_transactions.length} autre{letteredLinks.sibling_transactions.length > 1 ? 's' : ''} transaction{letteredLinks.sibling_transactions.length > 1 ? 's' : ''} du meme lettrage</span>
                     <span className="ml-2 font-mono">
-                      (total {letteredLinks.sibling_transactions.reduce((s, t) => s + Math.abs(Number(t.amount || 0)), 0).toFixed(2)} EUR)
+                      (total {fmtEUR(letteredLinks.sibling_transactions.reduce((s, t) => s + Math.abs(Number(t.amount || 0)), 0))} EUR)
                     </span>
                   </div>
                 )}
@@ -1574,13 +1575,13 @@ export default function BankingPage() {
                   <div className="bg-[#022D52]/10 border border-[#022D52]/30 rounded px-3 py-2 mb-3 flex items-center justify-between text-xs" data-testid="multi-invoice-toolbar">
                     <div>
                       <strong className="text-[#022D52]">{selectedInvoiceIds.size} factures selectionnees</strong>
-                      <span className="ml-3 font-mono">Total : <strong>{selectedInvoicesTotal.toFixed(2)} EUR</strong></span>
+                      <span className="ml-3 font-mono">Total : <strong>{fmtEUR(selectedInvoicesTotal)} EUR</strong></span>
                       {(() => {
                         const txnAmt = Math.abs(Number(lettrageTarget?.amount || 0));
                         const diff = txnAmt - selectedInvoicesTotal;
                         if (Math.abs(diff) < 0.01) return <span className="ml-2 text-green-700 font-semibold">= SOLDE EXACT</span>;
-                        if (diff > 0) return <span className="ml-2 text-amber-700 font-semibold">- partiel (txn reste {diff.toFixed(2)} EUR)</span>;
-                        return <span className="ml-2 text-amber-700 font-semibold">- sur-paiement ({(-diff).toFixed(2)} EUR)</span>;
+                        if (diff > 0) return <span className="ml-2 text-amber-700 font-semibold">- partiel (txn reste {fmtEUR(diff)} EUR)</span>;
+                        return <span className="ml-2 text-amber-700 font-semibold">- sur-paiement ({fmtEUR((-diff))} EUR)</span>;
                       })()}
                     </div>
                     <div className="flex gap-2">
@@ -1658,7 +1659,7 @@ export default function BankingPage() {
                               )}
                             </div>
                             <div className="text-right shrink-0">
-                              <div className="font-mono font-semibold text-slate-900 text-sm leading-tight">{Number(inv.total_amount || 0).toFixed(2)} <span className="text-[10px] text-slate-500">EUR</span></div>
+                              <div className="font-mono font-semibold text-slate-900 text-sm leading-tight">{fmtEUR(Number(inv.total_amount || 0))} <span className="text-[10px] text-slate-500">EUR</span></div>
                               <div className="text-[10px] text-slate-500 mt-0.5">{fmtDate(inv.date)}</div>
                             </div>
                           </div>
@@ -1760,7 +1761,7 @@ export default function BankingPage() {
           <div className="bg-gradient-to-r from-[#022D52] to-[#1D4ED8] text-white px-5 py-4">
             <DialogTitle className="text-base font-semibold m-0">Lettrer {selectedTxnIds.size} transaction(s) vers une facture</DialogTitle>
             <div className="mt-1 text-xs opacity-90">
-              Total selectionne : <strong className="font-mono">{selectedTotal.toFixed(2)} EUR</strong>
+              Total selectionne : <strong className="font-mono">{fmtEUR(selectedTotal)} EUR</strong>
               {' '} - choisissez UNE facture a solder (totalement ou partiellement).
             </div>
           </div>
@@ -1795,13 +1796,13 @@ export default function BankingPage() {
                           <span className="font-mono text-xs font-semibold text-slate-700">{inv.number || '—'}</span>
                           <span className="text-sm font-medium text-slate-900 truncate">{inv.supplier || ''}</span>
                           {isExact && <span className="text-[10px] bg-green-600 text-white px-2 py-0.5 rounded-full font-semibold">SOLDE EXACT</span>}
-                          {isOver && <span className="text-[10px] bg-amber-500 text-white px-2 py-0.5 rounded-full font-semibold" title="L'excedent sera porte au compte tiers du proprietaire lors de la comptabilisation">SUR-PAIEMENT (+{(selectedTotal - amount).toFixed(2)} EUR)</span>}
+                          {isOver && <span className="text-[10px] bg-amber-500 text-white px-2 py-0.5 rounded-full font-semibold" title="L'excedent sera porte au compte tiers du proprietaire lors de la comptabilisation">SUR-PAIEMENT (+{fmtEUR((selectedTotal - amount))} EUR)</span>}
                           {!isExact && !isOver && diff > 0.01 && (
-                            <span className="text-[10px] bg-amber-500 text-white px-2 py-0.5 rounded-full font-semibold">PARTIEL ({(amount - selectedTotal).toFixed(2)} EUR)</span>
+                            <span className="text-[10px] bg-amber-500 text-white px-2 py-0.5 rounded-full font-semibold">PARTIEL ({fmtEUR((amount - selectedTotal))} EUR)</span>
                           )}
                         </div>
                         <div className="text-right shrink-0">
-                          <div className="font-mono font-semibold text-slate-900 text-sm leading-tight">{amount.toFixed(2)} <span className="text-[10px] text-slate-500">EUR</span></div>
+                          <div className="font-mono font-semibold text-slate-900 text-sm leading-tight">{fmtEUR(amount)} <span className="text-[10px] text-slate-500">EUR</span></div>
                           <div className="text-[10px] text-slate-500 mt-0.5">{fmtDate(inv.date)}</div>
                         </div>
                       </div>
@@ -1854,7 +1855,7 @@ export default function BankingPage() {
                   <div className="flex justify-between items-center">
                     <span><b>{fmtDate(categorizeTarget.date)}</b> — {categorizeTarget.counterparty_name || <em className="text-slate-400">Sans contrepartie</em>}</span>
                     <span className={`font-mono font-semibold ${isCredit ? 'text-green-700' : 'text-red-700'}`}>
-                      {isCredit ? '+' : '−'}{txnAmt.toFixed(2)} EUR
+                      {isCredit ? '+' : '−'}{fmtEUR(txnAmt)} EUR
                     </span>
                   </div>
                   {categorizeTarget.communication && (
@@ -1946,13 +1947,13 @@ export default function BankingPage() {
 
                 <div className="flex justify-between items-center border-t border-slate-200 pt-2 text-xs">
                   <div className="text-slate-600">
-                    Somme des splits : <span className="font-mono font-semibold">{sumSplits.toFixed(2)}</span> / <span className="font-mono">{txnAmt.toFixed(2)} EUR</span>
+                    Somme des splits : <span className="font-mono font-semibold">{fmtEUR(sumSplits)}</span> / <span className="font-mono">{fmtEUR(txnAmt)} EUR</span>
                   </div>
                   <div>
                     {Math.abs(diff) < 0.01 ? (
                       <Badge className="bg-green-50 text-green-700 border-green-200 text-[10px]" variant="outline"><CheckCircle2 size={11} className="mr-1" /> Equilibre</Badge>
                     ) : (
-                      <Badge className="bg-orange-50 text-orange-700 border-orange-200 text-[10px]" variant="outline"><AlertTriangle size={11} className="mr-1" /> Ecart {diff > 0 ? '+' : ''}{diff.toFixed(2)}</Badge>
+                      <Badge className="bg-orange-50 text-orange-700 border-orange-200 text-[10px]" variant="outline"><AlertTriangle size={11} className="mr-1" /> Ecart {diff > 0 ? '+' : ''}{fmtEUR(diff)}</Badge>
                     )}
                   </div>
                 </div>

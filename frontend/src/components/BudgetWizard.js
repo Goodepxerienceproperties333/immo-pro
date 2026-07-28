@@ -12,6 +12,7 @@ import { ChevronLeft, ChevronRight, Send, CheckCircle2, Calendar, Wallet, Shield
 import { fmtDate } from '@/lib/dateFmt';
 import { useDirtyGuard } from '@/hooks/useDirtyGuard';
 
+import { fmtEUR } from '@/lib/format';
 const FREQ_OPTIONS = [
   { v: 1, l: 'Unique (annuel)', interval: 12 },
   { v: 2, l: 'Semestriel (2 appels)', interval: 6 },
@@ -483,7 +484,7 @@ export default function BudgetWizard({ budget, distKeys = [], onClose, onDone, m
                     <div className="flex-1">
                       <div className="font-semibold text-amber-900 text-sm">
                         {preview.orphan_lots_warning.orphan_count} lot(s) orphelin(s) detecte(s)
-                        {' '}({preview.orphan_lots_warning.orphan_share_percentage.toFixed(2)}% des shares)
+                        {' '}({fmtEUR(preview.orphan_lots_warning.orphan_share_percentage)}% des shares)
                       </div>
                       <div className="text-xs text-amber-800 mt-1">
                         Ces lots ont des shares dans une cle de distribution mais aucun proprietaire assigne.
@@ -508,7 +509,7 @@ export default function BudgetWizard({ budget, distKeys = [], onClose, onDone, m
                             <div key={i} className="text-xs text-amber-800">
                               Cle <strong>{k.key_name}</strong> : {k.orphan_share.toFixed(4)} share orpheline
                               {' / '}total {k.total_share.toFixed(4)}
-                              {' '}(<strong>{k.orphan_percentage.toFixed(2)}%</strong>)
+                              {' '}(<strong>{fmtEUR(k.orphan_percentage)}%</strong>)
                             </div>
                           ))}
                         </div>
@@ -551,10 +552,10 @@ export default function BudgetWizard({ budget, distKeys = [], onClose, onDone, m
 
                 <div className="grid grid-cols-5 gap-3">
                   <Card><CardContent className="p-3"><div className="text-xs text-slate-500">Nombre d&apos;appels</div><div className="text-xl font-black mt-1" style={{ fontFamily: 'Chivo,sans-serif' }}>{preview.summary.n_calls}</div></CardContent></Card>
-                  <Card><CardContent className="p-3"><div className="text-xs text-slate-500">Budget annuel</div><div className="text-xl font-black mt-1 font-mono">{preview.summary.budget_total.toFixed(2)}</div></CardContent></Card>
-                  <Card><CardContent className="p-3"><div className="text-xs text-slate-500">Fonds reserve</div><div className="text-xl font-black mt-1 font-mono">{preview.summary.reserve_total.toFixed(2)}</div></CardContent></Card>
-                  <Card><CardContent className="p-3"><div className="text-xs text-slate-500">Fonds roulement</div><div className="text-xl font-black mt-1 font-mono">{(preview.summary.roulement_total || 0).toFixed(2)}</div></CardContent></Card>
-                  <Card className="border-[#022D52] bg-blue-50"><CardContent className="p-3"><div className="text-xs text-slate-500">Total appele</div><div className="text-xl font-black mt-1 font-mono text-[#022D52]">{preview.summary.grand_total.toFixed(2)}</div></CardContent></Card>
+                  <Card><CardContent className="p-3"><div className="text-xs text-slate-500">Budget annuel</div><div className="text-xl font-black mt-1 font-mono">{fmtEUR(preview.summary.budget_total)}</div></CardContent></Card>
+                  <Card><CardContent className="p-3"><div className="text-xs text-slate-500">Fonds reserve</div><div className="text-xl font-black mt-1 font-mono">{fmtEUR(preview.summary.reserve_total)}</div></CardContent></Card>
+                  <Card><CardContent className="p-3"><div className="text-xs text-slate-500">Fonds roulement</div><div className="text-xl font-black mt-1 font-mono">{fmtEUR((preview.summary.roulement_total || 0))}</div></CardContent></Card>
+                  <Card className="border-[#022D52] bg-blue-50"><CardContent className="p-3"><div className="text-xs text-slate-500">Total appele</div><div className="text-xl font-black mt-1 font-mono text-[#022D52]">{fmtEUR(preview.summary.grand_total)}</div></CardContent></Card>
                 </div>
 
                 <div className="border rounded-md overflow-hidden">
@@ -578,9 +579,9 @@ export default function BudgetWizard({ budget, distKeys = [], onClose, onDone, m
                             <td className="p-2 font-medium">{c.name}</td>
                             <td className="p-2 font-mono text-xs">{fmtDate(c.date)}</td>
                             <td className="p-2 font-mono text-xs">{fmtDate(c.due_date)}</td>
-                            <td className="p-2 text-right font-mono font-semibold">{c.total_amount.toFixed(2)}</td>
-                            <td className="p-2 text-right font-mono text-xs text-purple-700">{c.reserve_amount > 0 ? c.reserve_amount.toFixed(2) : '-'}</td>
-                            <td className="p-2 text-right font-mono text-xs text-amber-700">{(c.roulement_amount || 0) > 0 ? c.roulement_amount.toFixed(2) : '-'}</td>
+                            <td className="p-2 text-right font-mono font-semibold">{fmtEUR(c.total_amount)}</td>
+                            <td className="p-2 text-right font-mono text-xs text-purple-700">{c.reserve_amount > 0 ? fmtEUR(c.reserve_amount) : '-'}</td>
+                            <td className="p-2 text-right font-mono text-xs text-amber-700">{(c.roulement_amount || 0) > 0 ? fmtEUR(c.roulement_amount) : '-'}</td>
                             <td className="p-2 text-center">
                               <Badge variant="outline" title={`${c.distribution.length} lignes / ${uniqueOwners.size} proprietaire(s) unique(s)`}>
                                 {c.distribution.length} <span className="opacity-60">/ {uniqueOwners.size}p</span>
@@ -613,7 +614,7 @@ export default function BudgetWizard({ budget, distKeys = [], onClose, onDone, m
                             <td className="p-1 text-right font-mono text-slate-500">{d.share ? Number(d.share).toFixed(0) : '-'}</td>
                             <td className="p-1">{d.owner_name}</td>
                             <td className="p-1 font-mono text-[#022D52]">{d.vcs_code}</td>
-                            <td className="p-1 text-right font-mono">{d.amount.toFixed(2)}</td>
+                            <td className="p-1 text-right font-mono">{fmtEUR(d.amount)}</td>
                           </tr>
                         ))}
                       </tbody>

@@ -10,6 +10,7 @@ import { Badge } from '@/components/ui/badge';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Command, CommandInput, CommandList, CommandEmpty, CommandGroup, CommandItem } from '@/components/ui/command';
 
+import { fmtEUR } from '@/lib/format';
 export default function ExpenseCategoriesPage() {
   const [cats, setCats] = useState([]);
   const [pcmnAccounts, setPcmnAccounts] = useState([]);
@@ -80,11 +81,11 @@ export default function ExpenseCategoriesPage() {
   // Auto-complete entre occupant_pct et proprietaire_pct (somme = 100)
   const setOccupant = (val) => {
     const v = Math.max(0, Math.min(100, parseFloat(val) || 0));
-    setForm(f => ({ ...f, default_occupant_pct: v, default_proprietaire_pct: +(100 - v).toFixed(2) }));
+    setForm(f => ({ ...f, default_occupant_pct: v, default_proprietaire_pct: +fmtEUR((100 - v)) }));
   };
   const setProprietaire = (val) => {
     const v = Math.max(0, Math.min(100, parseFloat(val) || 0));
-    setForm(f => ({ ...f, default_proprietaire_pct: v, default_occupant_pct: +(100 - v).toFixed(2) }));
+    setForm(f => ({ ...f, default_proprietaire_pct: v, default_occupant_pct: +fmtEUR((100 - v)) }));
   };
   const save = async () => {
     if (!form.name || !form.account_number) { toast.error('Nom et compte obligatoires'); return; }
@@ -161,7 +162,7 @@ export default function ExpenseCategoriesPage() {
                   )}
                 </TableCell>
                 <TableCell className="text-right">{c.invoice_count > 0 ? <Badge variant="outline" className="bg-blue-50 text-[#01213e] border-blue-200">{c.invoice_count}</Badge> : <span className="text-slate-300">0</span>}</TableCell>
-                <TableCell className="text-right font-mono text-sm">{(c.invoice_total || 0).toFixed(2)} EUR</TableCell>
+                <TableCell className="text-right font-mono text-sm">{fmtEUR((c.invoice_total || 0))} EUR</TableCell>
                 <TableCell>
                   <div className="flex gap-1">
                     <Button variant="ghost" size="sm" onClick={() => openEdit(c)} data-testid={`edit-category-${c.id}`}><Pencil size={14} /></Button>

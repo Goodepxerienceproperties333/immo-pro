@@ -12,6 +12,7 @@ import { toast } from 'sonner';
 import { Bell, Download, AlertTriangle, Users, Truck, FileText } from 'lucide-react';
 import { fmtDate } from '@/lib/dateFmt';
 
+import { fmtEUR } from '@/lib/format';
 const API = process.env.REACT_APP_BACKEND_URL;
 
 const SEVERITY_STYLE = {
@@ -198,7 +199,7 @@ export default function RemindersPage() {
                   {tab === 'owners' ? 'Proprietaires en retard' : 'Factures en retard'}
                 </div>
                 <div className="text-2xl font-black mt-1" style={{ fontFamily: 'Chivo,sans-serif' }} data-testid="reminders-total-count">{currentData.summary.total_count}</div>
-                <div className="text-xs text-slate-500 mt-1 font-mono">{currentData.summary.total_amount.toFixed(2)} EUR</div>
+                <div className="text-xs text-slate-500 mt-1 font-mono">{fmtEUR(currentData.summary.total_amount)} EUR</div>
               </CardContent></Card>
               {['critique', 'urgent', 'rappel2', 'rappel1'].map(s => (
                 <Card key={s} className="border-slate-200"><CardContent className="p-4">
@@ -247,7 +248,7 @@ function OwnersTable({ data, onDownloadLetter }) {
               <TableCell>{r.fund_call_name}</TableCell>
               <TableCell className="font-mono">{fmtDate(r.due_date)}</TableCell>
               <TableCell className="text-right font-mono">{r.days_late} j</TableCell>
-              <TableCell className="text-right font-mono font-semibold">{r.amount.toFixed(2)} EUR</TableCell>
+              <TableCell className="text-right font-mono font-semibold">{fmtEUR(r.amount)} EUR</TableCell>
               <TableCell>
                 <Button variant="outline" size="sm" onClick={() => onDownloadLetter(r.owner_id, r.copropriete_id)} data-testid={`reminder-letter-${i}`}>
                   <Download size={14} className="mr-1" /> Lettre PDF
@@ -286,8 +287,8 @@ function SuppliersTable({ data, onOpenInvoice }) {
               <TableCell className="font-mono text-xs">{r.invoice_number || '-'}</TableCell>
               <TableCell className="font-mono">{fmtDate(r.due_date)}</TableCell>
               <TableCell className="text-right font-mono">{r.days_late} j</TableCell>
-              <TableCell className="text-right font-mono text-slate-500">{r.amount_paid.toFixed(2)} EUR</TableCell>
-              <TableCell className="text-right font-mono font-semibold text-red-700">{r.amount.toFixed(2)} EUR</TableCell>
+              <TableCell className="text-right font-mono text-slate-500">{fmtEUR(r.amount_paid)} EUR</TableCell>
+              <TableCell className="text-right font-mono font-semibold text-red-700">{fmtEUR(r.amount)} EUR</TableCell>
               <TableCell>
                 <Button variant="outline" size="sm" onClick={() => onOpenInvoice(r.invoice_id)} data-testid={`supplier-open-invoice-${i}`}>
                   <FileText size={14} className="mr-1" /> Ouvrir

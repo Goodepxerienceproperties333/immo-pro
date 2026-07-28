@@ -13,6 +13,7 @@ import { toast } from 'sonner';
 import { Plus, Trash2, Pencil, AlertTriangle, Star, Key, Wrench } from 'lucide-react';
 import { fmtDate } from '@/lib/dateFmt';
 
+import { fmtEUR } from '@/lib/format';
 export default function DistributionKeysPage() {
   const [distKeys, setDistKeys] = useState([]);
   const [lots, setLots] = useState([]);
@@ -278,7 +279,7 @@ export default function DistributionKeysPage() {
               const hasZero = activeLots.some(l => !Number(l.share));
               const isRound = [1, 100, 1000, 10000].some(t => Math.abs(total - t) < 0.005);
               let coherenceColor = 'bg-slate-50 text-slate-500 border-slate-200';
-              let coherenceLabel = `${total.toFixed(2)}`;
+              let coherenceLabel = `${fmtEUR(total)}`;
               if (hasZero) { coherenceColor = 'bg-amber-50 text-amber-700 border-amber-200'; coherenceLabel = 'Lots a 0'; }
               else if (isRound) { coherenceColor = 'bg-green-50 text-green-700 border-green-200'; coherenceLabel = 'OK'; }
               else if (total > 0) { coherenceColor = 'bg-blue-50 text-[#01213e] border-blue-200'; coherenceLabel = 'Custom'; }
@@ -301,7 +302,7 @@ export default function DistributionKeysPage() {
                       </span>
                     )}
                   </TableCell>
-                  <TableCell className="text-right font-mono text-sm" data-testid={`key-total-${k.id}`}>{total.toFixed(2)}</TableCell>
+                  <TableCell className="text-right font-mono text-sm" data-testid={`key-total-${k.id}`}>{fmtEUR(total)}</TableCell>
                   <TableCell>
                     <Badge variant="outline" className={coherenceColor}>{coherenceLabel}</Badge>
                   </TableCell>
@@ -538,10 +539,10 @@ export default function DistributionKeysPage() {
               const lotsAtZero = activeLots.filter(l => !Number(l.share)).length;
               const isRound = [1, 100, 1000, 10000].some(t => Math.abs(totalShare - t) < 0.005);
               let badgeColor = 'bg-slate-100 text-slate-700 border-slate-300';
-              let badgeLabel = `Total : ${totalShare.toFixed(2)}`;
-              if (lotsAtZero > 0) { badgeColor = 'bg-amber-50 text-amber-700 border-amber-300'; badgeLabel = `${lotsAtZero} lot(s) a 0 - Total ${totalShare.toFixed(2)}`; }
-              else if (isRound) { badgeColor = 'bg-green-50 text-green-700 border-green-300'; badgeLabel = `Total : ${totalShare.toFixed(2)} - coherent`; }
-              else if (totalShare > 0) { badgeColor = 'bg-blue-50 text-[#01213e] border-blue-300'; badgeLabel = `Total : ${totalShare.toFixed(2)}`; }
+              let badgeLabel = `Total : ${fmtEUR(totalShare)}`;
+              if (lotsAtZero > 0) { badgeColor = 'bg-amber-50 text-amber-700 border-amber-300'; badgeLabel = `${lotsAtZero} lot(s) a 0 - Total ${fmtEUR(totalShare)}`; }
+              else if (isRound) { badgeColor = 'bg-green-50 text-green-700 border-green-300'; badgeLabel = `Total : ${fmtEUR(totalShare)} - coherent`; }
+              else if (totalShare > 0) { badgeColor = 'bg-blue-50 text-[#01213e] border-blue-300'; badgeLabel = `Total : ${fmtEUR(totalShare)}`; }
 
               const fillEqual = () => {
                 const n = activeLots.length || 1;
@@ -608,7 +609,7 @@ export default function DistributionKeysPage() {
                                   data-testid={`key-lot-share-${i}`}
                                 />
                               </td>
-                              <td className="p-2 text-right font-mono text-xs text-slate-500">{l.excluded ? '—' : pct.toFixed(2) + '%'}</td>
+                              <td className="p-2 text-right font-mono text-xs text-slate-500">{l.excluded ? '—' : fmtEUR(pct) + '%'}</td>
                             </tr>
                           );
                         })}
@@ -616,7 +617,7 @@ export default function DistributionKeysPage() {
                       <tfoot>
                         <tr className="bg-slate-50 border-t-2 border-slate-300 text-xs font-semibold">
                           <td className="p-2" colSpan={2}>Total (hors exclus)</td>
-                          <td className="p-2 text-right font-mono" data-testid="key-form-total">{totalShare.toFixed(2)}</td>
+                          <td className="p-2 text-right font-mono" data-testid="key-form-total">{fmtEUR(totalShare)}</td>
                           <td className="p-2 text-right font-mono">{totalShare > 0 ? '100.00%' : '0%'}</td>
                         </tr>
                       </tfoot>
@@ -704,8 +705,8 @@ export default function DistributionKeysPage() {
                             <td className="p-2 text-center">{d.phantom_count}</td>
                             <td className="p-2 text-center text-green-700 font-mono">{d.stats.phantom_matched_by_number}</td>
                             <td className="p-2 text-center text-red-600 font-mono">{d.stats.phantom_removed}</td>
-                            <td className="p-2 text-right font-mono text-slate-500">{d.before_total_share.toFixed(2)}</td>
-                            <td className="p-2 text-right font-mono font-semibold">{d.after_total_share.toFixed(2)}</td>
+                            <td className="p-2 text-right font-mono text-slate-500">{fmtEUR(d.before_total_share)}</td>
+                            <td className="p-2 text-right font-mono font-semibold">{fmtEUR(d.after_total_share)}</td>
                           </tr>
                         ))}
                       </tbody>

@@ -18,6 +18,7 @@ import { useFiscalYearParams } from '@/hooks/useFiscalYearParams';
 import { useAuth } from '@/contexts/AuthContext';
 import { useDirtyGuard } from '@/hooks/useDirtyGuard';
 
+import { fmtEUR } from '@/lib/format';
 const API = process.env.REACT_APP_BACKEND_URL;
 
 const JOURNAL_TYPES = [
@@ -162,7 +163,7 @@ export default function JournalsPage() {
         lines[i].account_name = cat.account_name || '';
         if (cat.default_occupant_pct != null) {
           lines[i].occupant_pct = Number(cat.default_occupant_pct);
-          lines[i].proprietaire_pct = +(100 - Number(cat.default_occupant_pct)).toFixed(2);
+          lines[i].proprietaire_pct = +fmtEUR((100 - Number(cat.default_occupant_pct)));
         }
         if (cat.default_distribution_key_id) {
           lines[i].distribution_key_id = cat.default_distribution_key_id;
@@ -182,7 +183,7 @@ export default function JournalsPage() {
       const cat = (categories || []).find(c => c.account_number === value);
       if (cat && cat.default_occupant_pct != null) {
         lines[i].occupant_pct = Number(cat.default_occupant_pct);
-        lines[i].proprietaire_pct = +(100 - Number(cat.default_occupant_pct)).toFixed(2);
+        lines[i].proprietaire_pct = +fmtEUR((100 - Number(cat.default_occupant_pct)));
       } else if (value && (value.startsWith('6') || value.startsWith('7'))) {
         // Compte de charge sans categorie -> 0% occupant par defaut
         if (lines[i].occupant_pct == null) {
@@ -209,12 +210,12 @@ export default function JournalsPage() {
     if (field === 'occupant_pct') {
       const v = Math.max(0, Math.min(100, parseFloat(value) || 0));
       lines[i].occupant_pct = v;
-      lines[i].proprietaire_pct = +(100 - v).toFixed(2);
+      lines[i].proprietaire_pct = +fmtEUR((100 - v));
     }
     if (field === 'proprietaire_pct') {
       const v = Math.max(0, Math.min(100, parseFloat(value) || 0));
       lines[i].proprietaire_pct = v;
-      lines[i].occupant_pct = +(100 - v).toFixed(2);
+      lines[i].occupant_pct = +fmtEUR((100 - v));
     }
     setForm({ ...form, lines });
   };
@@ -579,13 +580,13 @@ export default function JournalsPage() {
                     <TableCell className="font-medium">
                       {e.description}
                       {e.linked_invoice && (
-                        <Badge variant="outline" className="ml-2 text-[10px] bg-emerald-50 border-emerald-300 text-emerald-800" data-testid={`linked-invoice-${e.id}`} title={`Facture liee : ${e.linked_invoice.invoice_number || ''} - ${e.linked_invoice.supplier_name || ''} (${(e.linked_invoice.amount_ttc || 0).toFixed(2)} EUR)`}>
+                        <Badge variant="outline" className="ml-2 text-[10px] bg-emerald-50 border-emerald-300 text-emerald-800" data-testid={`linked-invoice-${e.id}`} title={`Facture liee : ${e.linked_invoice.invoice_number || ''} - ${e.linked_invoice.supplier_name || ''} (${fmtEUR((e.linked_invoice.amount_ttc || 0))} EUR)`}>
                           Facture {e.linked_invoice.invoice_number || e.linked_invoice.supplier_name || ''}
                         </Badge>
                       )}
                     </TableCell>
-                    <TableCell className="text-right font-mono">{e.total_debit?.toFixed(2)}</TableCell>
-                    <TableCell className="text-right font-mono">{e.total_credit?.toFixed(2)}</TableCell>
+                    <TableCell className="text-right font-mono">{fmtEUR(e.total_debit)}</TableCell>
+                    <TableCell className="text-right font-mono">{fmtEUR(e.total_credit)}</TableCell>
                     <TableCell>
                       <div className="flex gap-1">
                         <Button variant="ghost" size="sm" onClick={() => setViewEntry(e)}><Eye size={14} /></Button>
@@ -752,13 +753,13 @@ export default function JournalsPage() {
                     <td colSpan={4} className="p-2">
                       <Button variant="ghost" size="sm" onClick={addLine} className="text-xs"><Plus size={12} className="mr-1" /> Ajouter ligne</Button>
                     </td>
-                    <td className="p-2 text-right font-mono">{totalDebit.toFixed(2)}</td>
-                    <td className="p-2 text-right font-mono">{totalCredit.toFixed(2)}</td>
+                    <td className="p-2 text-right font-mono">{fmtEUR(totalDebit)}</td>
+                    <td className="p-2 text-right font-mono">{fmtEUR(totalCredit)}</td>
                     <td colSpan={3}></td>
                   </tr></tfoot>
                 </table>
               </div>
-              {!isBalanced && <p className="text-red-500 text-xs mt-1">Ecart: {Math.abs(totalDebit - totalCredit).toFixed(2)} EUR</p>}
+              {!isBalanced && <p className="text-red-500 text-xs mt-1">Ecart: {fmtEUR(Math.abs(totalDebit - totalCredit))} EUR</p>}
             </div>
 
             <div className="border-t pt-3">
@@ -789,8 +790,8 @@ export default function JournalsPage() {
 
       {/* View Dialog */}
       <Dialog open={!!viewEntry} onOpenChange={() => setViewEntry(null)}>
-        <DialogContent className="max-w-2xl">
-          <DialogHeader><DialogTitle style={{fontFamily:'Chivo,sans-serif'}}>Detail de l'ecriture</DialogTitle></DialogHeader>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto" data-testid="entry-view-dialog">
+          <DialogHeader><DialogTitle style={{fontFamily:'Chivo,sans-serif'}}>Detail de l&apos;ecriture</DialogTitle></DialogHeader>
           {viewEntry && (
             <div className="space-y-4 mt-2">
               <div className="grid grid-cols-3 gap-4 text-sm">
@@ -799,20 +800,51 @@ export default function JournalsPage() {
                 <div><span className="text-slate-500">Journal:</span> <Badge variant="outline">{viewEntry.journal_type}</Badge></div>
               </div>
               <div className="text-sm"><span className="text-slate-500">Description:</span> {viewEntry.description}</div>
+              {/* iter93aa : scroll interne sur le tableau des lignes pour les ecritures
+                  volumineuses (ex : appels de fonds VE avec 30+ lignes proprios). */}
               <div className="border rounded-md overflow-hidden">
-                <table className="w-full text-sm">
-                  <thead><tr className="bg-slate-50"><th className="p-2 text-left text-xs text-slate-600">Compte</th><th className="p-2 text-left text-xs text-slate-600">Libelle</th><th className="p-2 text-right text-xs text-slate-600">Debit</th><th className="p-2 text-right text-xs text-slate-600">Credit</th></tr></thead>
-                  <tbody>
-                    {viewEntry.lines?.map((l, i) => (
-                      <tr key={i} className="border-t border-slate-100">
-                        <td className="p-2 font-mono">{l.account_number}</td>
-                        <td className="p-2">{l.account_name}</td>
-                        <td className="p-2 text-right font-mono">{l.debit > 0 ? l.debit.toFixed(2) : ''}</td>
-                        <td className="p-2 text-right font-mono">{l.credit > 0 ? l.credit.toFixed(2) : ''}</td>
+                <div className="max-h-[60vh] overflow-y-auto" data-testid="entry-lines-scroll">
+                  <table className="w-full text-sm">
+                    <thead className="sticky top-0 bg-slate-50 shadow-sm z-10">
+                      <tr>
+                        <th className="p-2 text-left text-xs text-slate-600">Compte</th>
+                        <th className="p-2 text-left text-xs text-slate-600">Libelle</th>
+                        <th className="p-2 text-right text-xs text-slate-600">Debit</th>
+                        <th className="p-2 text-right text-xs text-slate-600">Credit</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {viewEntry.lines?.map((l, i) => (
+                        <tr key={i} className="border-t border-slate-100">
+                          <td className="p-2 font-mono">{l.account_number}</td>
+                          <td className="p-2">{l.account_name}</td>
+                          <td className="p-2 text-right font-mono">{l.debit > 0 ? fmtEUR(l.debit) : ''}</td>
+                          <td className="p-2 text-right font-mono">{l.credit > 0 ? fmtEUR(l.credit) : ''}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {/* Total en pied de tableau (visible meme apres scroll) */}
+                {viewEntry.lines?.length > 5 && (
+                  <div className="border-t-2 bg-slate-50 px-3 py-2 text-xs flex items-center justify-between" data-testid="entry-lines-footer">
+                    <span className="text-slate-500">{viewEntry.lines.length} ligne(s)</span>
+                    <div className="flex gap-4">
+                      <span className="font-mono">
+                        <span className="text-slate-500">Total debit : </span>
+                        <span className="font-semibold text-slate-900">
+                          {fmtEUR(viewEntry.lines.reduce((s, l) => s + (Number(l.debit) || 0), 0))}
+                        </span>
+                      </span>
+                      <span className="font-mono">
+                        <span className="text-slate-500">Total credit : </span>
+                        <span className="font-semibold text-slate-900">
+                          {fmtEUR(viewEntry.lines.reduce((s, l) => s + (Number(l.credit) || 0), 0))}
+                        </span>
+                      </span>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           )}

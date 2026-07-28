@@ -11,6 +11,7 @@ import { toast } from 'sonner';
 import { Plus, Pencil, Trash2, Search, X, ArrowRightLeft, UserPlus, Link2, Link2Off, FileDown, ClipboardCheck, AlertTriangle, Upload, CheckCircle2 } from 'lucide-react';
 import { fmtDate } from '@/lib/dateFmt';
 
+import { fmtEUR } from '@/lib/format';
 const LOT_TYPES = [
   { value: 'apartment', label: 'Appartement' },
   { value: 'parking', label: 'Parking' },
@@ -548,15 +549,15 @@ function MutationDialog({ lot, owners, ownersRefresh, onClose, onDone }) {
                       <tr key={i} className="border-t border-slate-100">
                         <td className="px-2 py-1 font-mono">{b.lot_number}</td>
                         <td className="text-right px-2 py-1 font-mono">{b.lot_share_in_key}</td>
-                        <td className="text-right px-2 py-1 font-mono">{b.roulement_quota?.toFixed(2)}</td>
-                        <td className="text-right px-2 py-1 font-mono">{b.current_period_prorata?.toFixed(2)}</td>
-                        <td className="text-right px-2 py-1 font-mono font-semibold text-indigo-700">{b.total_transfer?.toFixed(2)}</td>
+                        <td className="text-right px-2 py-1 font-mono">{fmtEUR(b.roulement_quota)}</td>
+                        <td className="text-right px-2 py-1 font-mono">{fmtEUR(b.current_period_prorata)}</td>
+                        <td className="text-right px-2 py-1 font-mono font-semibold text-indigo-700">{fmtEUR(b.total_transfer)}</td>
                       </tr>
                     ))}
                     <tr className="border-t-2 border-indigo-300 bg-indigo-50">
                       <td colSpan="4" className="px-2 py-1 text-right font-semibold">Total groupe :</td>
                       <td className="text-right px-2 py-1 font-mono font-bold text-indigo-900" data-testid="grouped-total-transfer">
-                        {preview.grouped_total_transfer?.toFixed(2)} EUR
+                        {fmtEUR(preview.grouped_total_transfer)} EUR
                       </td>
                     </tr>
                   </tbody>
@@ -774,7 +775,7 @@ function MutationDialog({ lot, owners, ownersRefresh, onClose, onDone }) {
                 </div>
                 <div className="grid grid-cols-2 gap-2 text-sm">
                   <div className="text-slate-600">Solde fonds de roulement (cpt 100, ACP)</div>
-                  <div className="text-right font-mono">{preview.fonds_roulement_total?.toFixed(2)} EUR</div>
+                  <div className="text-right font-mono">{fmtEUR(preview.fonds_roulement_total)} EUR</div>
                   <div className="text-slate-600">
                     {isGrouped
                       ? `Part cumulee des ${bd.length} lots dans la cle par defaut (${preview.default_key_name || 'Generale'})`
@@ -785,7 +786,7 @@ function MutationDialog({ lot, owners, ownersRefresh, onClose, onDone }) {
                     {isGrouped ? 'Quote-part transferee (total groupe)' : 'Quote-part transferee'}
                   </div>
                   <div className="text-right font-mono font-bold border-t pt-2 text-emerald-700" data-testid="mutation-roulement-quota">
-                    {roulementSum.toFixed(2)} EUR
+                    {fmtEUR(roulementSum)} EUR
                   </div>
                 </div>
                 <div className="text-[11px] text-slate-500 italic">
@@ -824,9 +825,9 @@ function MutationDialog({ lot, owners, ownersRefresh, onClose, onDone }) {
                             <td className="py-1">{d.fund_call_name}</td>
                             <td className="text-right font-mono text-slate-500">{d.call_date || '-'}</td>
                             <td className="text-right">{d.period_start} -&gt; {d.period_end}</td>
-                            <td className="text-right font-mono">{Number(d.owner_amount).toFixed(2)}</td>
+                            <td className="text-right font-mono">{fmtEUR(Number(d.owner_amount))}</td>
                             <td className="text-right font-mono">{d.days_after}/{d.total_days}</td>
-                            <td className="text-right font-mono font-semibold">{Number(d.prorata).toFixed(2)}</td>
+                            <td className="text-right font-mono font-semibold">{fmtEUR(Number(d.prorata))}</td>
                           </tr>
                         ))}
                         <tr className="border-t-2 border-slate-300 bg-white">
@@ -834,7 +835,7 @@ function MutationDialog({ lot, owners, ownersRefresh, onClose, onDone }) {
                             Sous-total prorata appel courant{isGrouped ? ` (${bd.length} lots)` : ''}
                           </td>
                           <td className="text-right font-mono font-bold text-[#022D52]" data-testid="mutation-current-prorata">
-                            {currentProrataSum.toFixed(2)} EUR
+                            {fmtEUR(currentProrataSum)} EUR
                           </td>
                         </tr>
                       </tbody>
@@ -867,13 +868,13 @@ function MutationDialog({ lot, owners, ownersRefresh, onClose, onDone }) {
                             <td className="py-1">{fc.fund_call_name}</td>
                             <td className="text-right">{fc.period_start} -&gt; {fc.period_end}</td>
                             <td className="text-right">{fc.due_date || '-'}</td>
-                            <td className="text-right font-mono">{Number(fc.amount).toFixed(2)}</td>
+                            <td className="text-right font-mono">{fmtEUR(Number(fc.amount))}</td>
                           </tr>
                         ))}
                         <tr className="border-t-2 border-slate-300 bg-white">
                           <td colSpan="3" className="py-1 text-right font-semibold">Total appels futurs ({displayFutureCalls.length})</td>
                           <td className="text-right font-mono font-bold text-[#022D52]" data-testid="mutation-future-calls-total">
-                            {Number(futureCallsTotal || 0).toFixed(2)} EUR
+                            {fmtEUR(Number(futureCallsTotal || 0))} EUR
                           </td>
                         </tr>
                       </tbody>
@@ -892,18 +893,18 @@ function MutationDialog({ lot, owners, ownersRefresh, onClose, onDone }) {
                 </div>
                 <div className="grid grid-cols-2 gap-2 text-sm">
                   <div className="text-slate-700">Fonds de roulement (Bloc 1)</div>
-                  <div className="text-right font-mono">{roulementSum.toFixed(2)} EUR</div>
+                  <div className="text-right font-mono">{fmtEUR(roulementSum)} EUR</div>
                   <div className="text-slate-700">+ Prorata appel en cours (Bloc 2.a)</div>
-                  <div className="text-right font-mono">{currentProrataSum.toFixed(2)} EUR</div>
+                  <div className="text-right font-mono">{fmtEUR(currentProrataSum)} EUR</div>
                   <div className="text-slate-900 font-bold border-t border-slate-700 pt-2">= Total transfert OD</div>
                   <div className="text-right font-mono font-bold border-t border-slate-700 pt-2 text-slate-900 text-base" data-testid="mutation-total-transfer">
-                    {totalTransferSum.toFixed(2)} EUR
+                    {fmtEUR(totalTransferSum)} EUR
                   </div>
                 </div>
                 <div className="text-[11px] text-slate-500 italic mt-2">
                   {isGrouped
                     ? `${bd.length} ecritures OD seront generees (une par lot). Le fonds de reserve n'est PAS impacte.`
-                    : `Ecriture : Dr compte acquereur / Cr compte vendeur pour ${totalTransferSum.toFixed(2)} EUR. Le fonds de reserve n'est PAS impacte. Le lot sera reaffecte a l'acquereur.`}
+                    : `Ecriture : Dr compte acquereur / Cr compte vendeur pour ${fmtEUR(totalTransferSum)} EUR. Le fonds de reserve n'est PAS impacte. Le lot sera reaffecte a l'acquereur.`}
                 </div>
               </div>
             </div>
@@ -936,15 +937,15 @@ function MutationDialog({ lot, owners, ownersRefresh, onClose, onDone }) {
                           <div className="font-medium text-slate-900">{fmtDate(m.date)} : {m.old_owner_name} -&gt; {m.new_owner_name}</div>
                           <div className="text-[11px] grid grid-cols-2 gap-x-2">
                             <span className="text-slate-500">Fonds de roulement :</span>
-                            <span className="font-mono text-right">{m.roulement_quota?.toFixed(2)} EUR</span>
+                            <span className="font-mono text-right">{fmtEUR(m.roulement_quota)} EUR</span>
                             <span className="text-slate-500">Prorata appel courant :</span>
-                            <span className="font-mono text-right">{(m.current_period_prorata ?? m.prorata_provisions)?.toFixed(2)} EUR</span>
+                            <span className="font-mono text-right">{fmtEUR((m.current_period_prorata ?? m.prorata_provisions))} EUR</span>
                             <span className="font-semibold border-t pt-1">Total OD :</span>
-                            <span className="font-mono text-right font-bold border-t pt-1">{m.total_transfer?.toFixed(2)} EUR</span>
+                            <span className="font-mono text-right font-bold border-t pt-1">{fmtEUR(m.total_transfer)} EUR</span>
                             {m.future_calls_total > 0 && (
                               <>
                                 <span className="text-slate-500 italic">Appels futurs ({m.future_calls?.length || 0}) :</span>
-                                <span className="font-mono text-right italic text-slate-500">{m.future_calls_total?.toFixed(2)} EUR</span>
+                                <span className="font-mono text-right italic text-slate-500">{fmtEUR(m.future_calls_total)} EUR</span>
                               </>
                             )}
                           </div>
@@ -1807,7 +1808,7 @@ function PrivateFeesDialog({ invoices, owners, onClose, onDone }) {
       const total = parseFloat(inv.total_amount || 0);
       const sum = list.reduce((s, x) => s + (parseFloat(x.amount) || 0), 0);
       if (Math.abs(sum - total) > 0.01) {
-        toast.error(`Facture ${inv.number} : somme ${sum.toFixed(2)} ≠ total ${total.toFixed(2)}`);
+        toast.error(`Facture ${inv.number} : somme ${fmtEUR(sum)} ≠ total ${fmtEUR(total)}`);
         ko++;
         continue;
       }
@@ -1884,11 +1885,11 @@ function PrivateFeesDialog({ invoices, owners, onClose, onDone }) {
                   <div className="font-mono text-xs bg-slate-100 rounded px-1.5 py-0.5">{inv.account_number}</div>
                   <div className="font-semibold flex-1 truncate">{inv.supplier} - {inv.number}</div>
                   <div className="text-xs text-slate-500 font-mono">{fmtDate(inv.date)}</div>
-                  <div className="text-sm font-semibold">{total.toFixed(2)} EUR</div>
+                  <div className="text-sm font-semibold">{fmtEUR(total)} EUR</div>
                   {balanced && <span className="text-xs bg-emerald-600 text-white px-1.5 py-0.5 rounded">OK</span>}
                   {!balanced && list.length > 0 && (
-                    <span className="text-xs bg-amber-500 text-white px-1.5 py-0.5 rounded" title={`Ecart : ${delta.toFixed(2)}`}>
-                      ecart {delta > 0 ? '+' : ''}{delta.toFixed(2)}
+                    <span className="text-xs bg-amber-500 text-white px-1.5 py-0.5 rounded" title={`Ecart : ${fmtEUR(delta)}`}>
+                      ecart {delta > 0 ? '+' : ''}{fmtEUR(delta)}
                     </span>
                   )}
                 </div>
@@ -1959,7 +1960,7 @@ function PrivateFeesDialog({ invoices, owners, onClose, onDone }) {
                           ))}
                           <tr className="font-semibold border-t-2 bg-slate-50">
                             <td className="px-2 py-1 text-right">Somme :</td>
-                            <td className="px-2 py-1 text-right font-mono">{sum.toFixed(2)}</td>
+                            <td className="px-2 py-1 text-right font-mono">{fmtEUR(sum)}</td>
                             <td></td>
                           </tr>
                         </tbody>

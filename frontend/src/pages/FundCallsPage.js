@@ -13,6 +13,7 @@ import { fmtDate } from '@/lib/dateFmt';
 import { useFiscalYearParams } from '@/hooks/useFiscalYearParams';
 import { useAuth } from '@/contexts/AuthContext';
 
+import { fmtEUR } from '@/lib/format';
 // Configuration des 4 types d'appels de fonds (label + couleurs + icone + description)
 const CALL_TYPES = {
   provisions: {
@@ -310,7 +311,7 @@ export default function FundCallsPage() {
                 <ul className="mt-2 ml-4 list-disc">
                   {brokenCalls.slice(0, 10).map(c => (
                     <li key={c.id} data-testid={`broken-call-${c.id}`}>
-                      <span className="font-mono text-[11px]">{fmtDate(c.date)}</span> - {c.name} <span className="text-amber-700">({(c.total_amount || 0).toFixed(2)} EUR)</span>
+                      <span className="font-mono text-[11px]">{fmtDate(c.date)}</span> - {c.name} <span className="text-amber-700">({fmtEUR((c.total_amount || 0))} EUR)</span>
                     </li>
                   ))}
                   {brokenCalls.length > 10 && <li>... et {brokenCalls.length - 10} autre(s)</li>}
@@ -340,10 +341,10 @@ export default function FundCallsPage() {
                   </Badge>
                   <span className="text-[11px] text-slate-400">{fmtDate(c.date)}</span>
                 </div>
-                <div className="font-mono font-bold text-base text-slate-900">{c.total_amount?.toFixed(2)} EUR</div>
+                <div className="font-mono font-bold text-base text-slate-900">{fmtEUR(c.total_amount)} EUR</div>
                 {c.reserve_amount > 0 && c.call_type !== 'reserve' && (
                   <div className="text-[11px] text-purple-700 flex items-center gap-1 mt-1" data-testid={`call-reserve-${c.id}`}>
-                    <ShieldCheck size={10} /> dont reserve {c.reserve_amount.toFixed(2)} EUR
+                    <ShieldCheck size={10} /> dont reserve {fmtEUR(c.reserve_amount)} EUR
                   </div>
                 )}
                 {c.budget_id && (
@@ -413,12 +414,12 @@ export default function FundCallsPage() {
                             <td className="p-2 font-mono text-xs">{ln.is_reserve ? <Badge variant="outline" className="text-[10px] bg-purple-100 border-purple-300 text-purple-700"><ShieldCheck size={9} className="mr-1" />RESERVE</Badge> : ln.account_number}</td>
                             <td className="p-2 text-xs">{ln.account_name}</td>
                             <td className="p-2 text-xs text-slate-600">{ln.distribution_key_name || 'Tantiemes'}</td>
-                            <td className="p-2 text-right font-mono">{ln.amount.toFixed(2)} EUR</td>
+                            <td className="p-2 text-right font-mono">{fmtEUR(ln.amount)} EUR</td>
                           </tr>
                         ))}
                         <tr className="border-t-2 bg-slate-50 font-bold text-sm">
                           <td colSpan={3} className="p-2 text-right">TOTAL APPEL</td>
-                          <td className="p-2 text-right font-mono">{selectedCall.total_amount.toFixed(2)} EUR</td>
+                          <td className="p-2 text-right font-mono">{fmtEUR(selectedCall.total_amount)} EUR</td>
                         </tr>
                       </tbody>
                     </table>
@@ -491,7 +492,7 @@ export default function FundCallsPage() {
                     <div className="border rounded-md overflow-hidden" data-testid="call-distribution-grouped">
                       <div className="bg-slate-50 px-3 py-2 text-xs uppercase tracking-wide text-slate-600 font-semibold border-b flex items-center justify-between">
                         <span>Distribution par proprietaire ({groupsArr.length} proprietaires - {dist.length} lots)</span>
-                        <span className="font-mono normal-case text-slate-700">Total: <b>{grandTotal.toFixed(2)} EUR</b></span>
+                        <span className="font-mono normal-case text-slate-700">Total: <b>{fmtEUR(grandTotal)} EUR</b></span>
                       </div>
                       <div className="divide-y divide-slate-100">
                         {groupsArr.map(g => {
@@ -516,17 +517,17 @@ export default function FundCallsPage() {
                                   )}
                                   {isPartial && (
                                     <Badge className="bg-amber-50 text-amber-700 border-amber-200 text-[10px]" variant="outline">
-                                      Partiel {g.paid_amount.toFixed(2)} / {g.total_amount.toFixed(2)} EUR
+                                      Partiel {fmtEUR(g.paid_amount)} / {fmtEUR(g.total_amount)} EUR
                                     </Badge>
                                   )}
                                 </div>
                                 <div className="flex items-center gap-3 shrink-0">
                                   <div className="text-right">
                                     <div className="font-mono font-bold text-sm text-slate-900">
-                                      {g.total_amount.toFixed(2)} EUR
+                                      {fmtEUR(g.total_amount)} EUR
                                     </div>
                                     <div className="text-[10px] text-slate-500 font-mono">
-                                      quote-part {g.total_share.toFixed(2)}
+                                      quote-part {fmtEUR(g.total_share)}
                                     </div>
                                   </div>
                                   {!isPaidFully && g.owner_id && (
@@ -569,10 +570,10 @@ export default function FundCallsPage() {
                                             </span>
                                           </td>
                                           <td className="px-3 py-1.5 text-right font-mono text-[10px] text-slate-500 w-[80px]">
-                                            {Number(d.share || 0).toFixed(2)}
+                                            {fmtEUR(Number(d.share || 0))}
                                           </td>
                                           <td className="px-3 py-1.5 text-right font-mono text-[11px] text-slate-700 w-[120px]">
-                                            {Number(d.amount || 0).toFixed(2)} EUR
+                                            {fmtEUR(Number(d.amount || 0))} EUR
                                           </td>
                                           <td className="px-3 py-1.5 w-[140px]">
                                             {d.paid ? (
@@ -596,7 +597,7 @@ export default function FundCallsPage() {
                       {/* Total general */}
                       <div className="bg-slate-100 px-3 py-2 border-t-2 border-slate-300 flex items-center justify-between font-bold text-sm">
                         <span>TOTAL APPEL</span>
-                        <span className="font-mono">{grandTotal.toFixed(2)} EUR</span>
+                        <span className="font-mono">{fmtEUR(grandTotal)} EUR</span>
                       </div>
                     </div>
                   );

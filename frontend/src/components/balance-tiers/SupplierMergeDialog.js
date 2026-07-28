@@ -4,6 +4,7 @@ import { Badge } from '@/components/ui/badge';
 import api from '@/lib/api';
 import { toast } from 'sonner';
 
+import { fmtEUR } from '@/lib/format';
 /**
  * Dialog de fusion multi-fournisseurs.
  * Choix radio du fournisseur a conserver + confirmation.
@@ -70,7 +71,7 @@ export default function SupplierMergeDialog({
                         <Badge variant="outline" className="text-[10px] font-mono">{s.tier_account || '—'}</Badge>
                       </div>
                       <div className="text-[11px] text-slate-500 mt-0.5">
-                        Facture: {s.total_invoiced.toFixed(2)} EUR &middot; Paye: {s.total_paid.toFixed(2)} EUR &middot; Solde: {s.balance.toFixed(2)} EUR
+                        Facture: {fmtEUR(s.total_invoiced)} EUR &middot; Paye: {fmtEUR(s.total_paid)} EUR &middot; Solde: {fmtEUR(s.balance)} EUR
                       </div>
                     </div>
                     {isKept && <Badge className="bg-orange-600 text-white text-[10px]">A CONSERVER</Badge>}

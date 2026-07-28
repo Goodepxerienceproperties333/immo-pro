@@ -19,6 +19,7 @@ import { toast } from 'sonner';
 import { AlertTriangle, CheckCircle2, RefreshCw, Download, Users, Truck, FileWarning, Landmark, FileText, HardDrive, Play, Database, Upload } from 'lucide-react';
 import api from '@/lib/api';
 
+import { fmtEUR } from '@/lib/format';
 const SEV_COLOR = {
   ok: 'bg-emerald-50 border-emerald-200 text-emerald-900',
   warn: 'bg-yellow-50 border-yellow-200 text-yellow-900',
@@ -1056,7 +1057,7 @@ export default function AdminQualityAuditPage() {
                           <td className="px-2 py-1 font-mono text-slate-600">{h.number}</td>
                           <td className="px-2 py-1 font-mono text-slate-500">{h.date || '-'}</td>
                           <td className="px-2 py-1 text-right font-mono text-red-600">
-                            {h.amount?.toFixed(2)} EUR
+                            {fmtEUR(h.amount)} EUR
                           </td>
                           <td className="px-2 py-1 font-mono text-emerald-700 truncate max-w-[160px]" title={h.reference || h.je_id}>
                             {h.reference || (h.would_create_je ? '(a creer)' : '-')}
@@ -1144,7 +1145,7 @@ export default function AdminQualityAuditPage() {
                             {d.ve_reference}
                           </td>
                           <td className="px-2 py-1 text-right font-mono text-slate-700">
-                            {d.ap_amount?.toFixed(2)} EUR
+                            {fmtEUR(d.ap_amount)} EUR
                           </td>
                         </tr>
                       ))}

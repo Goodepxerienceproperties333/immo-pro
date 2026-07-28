@@ -15,6 +15,7 @@ import RegularizationDialog from '@/components/RegularizationDialog';
 import AccountSearchSelect from '@/components/AccountSearchSelect';
 import { fmtDate } from '@/lib/dateFmt';
 
+import { fmtEUR } from '@/lib/format';
 export default function FiscalYearPage() {
   const [tab, setTab] = useState('years');
   const [years, setYears] = useState([]);
@@ -376,7 +377,7 @@ export default function FiscalYearPage() {
                       </div>
                       <div className="text-right">
                         <Badge className={approved ? 'bg-green-600 text-white' : 'bg-slate-200 text-slate-700'}>{approved ? 'Approuve' : 'Brouillon'}</Badge>
-                        <div className="font-mono text-sm font-bold text-[#022D52] mt-1">{b.total?.toFixed(2)} EUR</div>
+                        <div className="font-mono text-sm font-bold text-[#022D52] mt-1">{fmtEUR(b.total)} EUR</div>
                       </div>
                     </div>
                     <div className="text-xs text-slate-500 mb-3">{b.lines?.length || 0} postes budgetaires{approved && b.approved_at ? ` - approuve le ${b.approved_at.slice(0, 10)}` : ''}</div>
@@ -412,16 +413,16 @@ export default function FiscalYearPage() {
                     <TableRow key={i}>
                       <TableCell className="font-mono text-sm">{c.account_number}</TableCell>
                       <TableCell>{c.account_name}</TableCell>
-                      <TableCell className="text-right font-mono">{c.budgeted.toFixed(2)}</TableCell>
-                      <TableCell className="text-right font-mono">{c.actual.toFixed(2)}</TableCell>
-                      <TableCell className={`text-right font-mono font-semibold ${c.difference >= 0 ? 'text-green-700' : 'text-red-700'}`}>{c.difference.toFixed(2)}</TableCell>
+                      <TableCell className="text-right font-mono">{fmtEUR(c.budgeted)}</TableCell>
+                      <TableCell className="text-right font-mono">{fmtEUR(c.actual)}</TableCell>
+                      <TableCell className={`text-right font-mono font-semibold ${c.difference >= 0 ? 'text-green-700' : 'text-red-700'}`}>{fmtEUR(c.difference)}</TableCell>
                     </TableRow>
                   ))}
                   <TableRow className="bg-slate-50 font-bold">
                     <TableCell colSpan={2}>TOTAL</TableCell>
-                    <TableCell className="text-right font-mono">{comparison.total_budgeted.toFixed(2)}</TableCell>
-                    <TableCell className="text-right font-mono">{comparison.total_actual.toFixed(2)}</TableCell>
-                    <TableCell className={`text-right font-mono ${(comparison.total_budgeted - comparison.total_actual) >= 0 ? 'text-green-700' : 'text-red-700'}`}>{(comparison.total_budgeted - comparison.total_actual).toFixed(2)}</TableCell>
+                    <TableCell className="text-right font-mono">{fmtEUR(comparison.total_budgeted)}</TableCell>
+                    <TableCell className="text-right font-mono">{fmtEUR(comparison.total_actual)}</TableCell>
+                    <TableCell className={`text-right font-mono ${(comparison.total_budgeted - comparison.total_actual) >= 0 ? 'text-green-700' : 'text-red-700'}`}>{fmtEUR((comparison.total_budgeted - comparison.total_actual))}</TableCell>
                   </TableRow>
                 </TableBody>
               </Table>
@@ -492,7 +493,7 @@ export default function FiscalYearPage() {
                   <div className="text-sm">
                     <span className="font-semibold">Realise N-1: </span>
                     <span className="text-slate-700">{prevExp.fiscal_year.name}</span> -
-                    <span className="font-mono ml-1">{prevExp.total.toFixed(2)} EUR</span>
+                    <span className="font-mono ml-1">{fmtEUR(prevExp.total)} EUR</span>
                     <span className="text-slate-500 ml-2">({prevExp.lines.length} postes)</span>
                   </div>
                   <Button size="sm" variant="outline" className="border-purple-300 text-purple-700 hover:bg-purple-100" onClick={prefillFromPrevious} data-testid="prefill-prev-year-btn">
@@ -585,14 +586,14 @@ export default function FiscalYearPage() {
                 <div className="flex items-center gap-4">
                   {hasClass7 && (
                     <div className="flex items-center gap-3 text-xs" data-testid="budget-breakdown">
-                      <span className="text-slate-600">Charges (cl. 6) : <span className="font-mono font-semibold text-slate-800">{totalCharges.toFixed(2)}</span></span>
-                      <span className="text-emerald-700">- Produits (cl. 7) : <span className="font-mono font-semibold">{totalProduits.toFixed(2)}</span></span>
+                      <span className="text-slate-600">Charges (cl. 6) : <span className="font-mono font-semibold text-slate-800">{fmtEUR(totalCharges)}</span></span>
+                      <span className="text-emerald-700">- Produits (cl. 7) : <span className="font-mono font-semibold">{fmtEUR(totalProduits)}</span></span>
                       <span className="text-slate-400">=</span>
                     </div>
                   )}
                   <div className="flex items-center gap-2">
                     <span className="text-xs text-slate-500 uppercase tracking-wider">Total net</span>
-                    <span className="font-mono font-bold text-base text-slate-900" data-testid="budget-total">{totalBudget.toFixed(2)} EUR</span>
+                    <span className="font-mono font-bold text-base text-slate-900" data-testid="budget-total">{fmtEUR(totalBudget)} EUR</span>
                   </div>
                 </div>
               </div>
@@ -694,7 +695,7 @@ export default function FiscalYearPage() {
               {deleteConfirm.callCount > 0 ? (
                 <>
                   <p><span className="font-mono">{deleteConfirm.callCount}</span> appel(s) de fonds seront supprimes</p>
-                  <p>Montant total : <span className="font-mono">{deleteConfirm.totalAmount.toFixed(2)} EUR</span></p>
+                  <p>Montant total : <span className="font-mono">{fmtEUR(deleteConfirm.totalAmount)} EUR</span></p>
                   <p><span className="font-mono">{deleteConfirm.ownerCount}</span> proprietaire(s) impacte(s)</p>
                   <p className="text-red-600 font-medium">Les ecritures comptables associees seront supprimees definitivement (balances de tiers recalculees).</p>
                 </>

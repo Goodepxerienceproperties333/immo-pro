@@ -10,6 +10,7 @@ import {
 import { toast } from 'sonner';
 import { fmtDate } from '@/lib/dateFmt';
 
+import { fmtEUR } from '@/lib/format';
 const MATCH_LABELS = {
   vcs: { label: 'VCS detecte', color: 'text-emerald-700 bg-emerald-50 border-emerald-200' },
   name_exact: { label: 'Nom exact', color: 'text-[#01213e] bg-blue-50 border-blue-200' },
@@ -78,7 +79,7 @@ export default function CodaImportDialog({
   const expectedDelta = useMemo(() => {
     const oo = Number(preview?.old_balance?.balance || 0);
     const nn = Number(preview?.new_balance?.balance || 0);
-    return Number((nn - oo).toFixed(2));
+    return Number(fmtEUR((nn - oo)));
   }, [preview]);
 
   const balanceOk = Math.abs(stats.sum - expectedDelta) < 0.01;
@@ -101,7 +102,7 @@ export default function CodaImportDialog({
   const matchOptions = useMemo(() => ({
     owners: owners.map(o => ({ value: o.id, label: `${o.name || `${o.first_name||''} ${o.last_name||''}`.trim()}${o.vcs_code ? ` (${o.vcs_code})` : ''}` })),
     suppliers: suppliers.map(s => ({ value: s.id, label: s.name || '(sans nom)' })),
-    invoices: invoices.filter(i => i.status === 'unpaid').map(i => ({ value: i.id, label: `${i.number} - ${i.supplier} (${(i.total_amount || 0).toFixed(2)} EUR)` })),
+    invoices: invoices.filter(i => i.status === 'unpaid').map(i => ({ value: i.id, label: `${i.number} - ${i.supplier} (${fmtEUR((i.total_amount || 0))} EUR)` })),
   }), [owners, suppliers, invoices]);
 
   const confirmImport = async () => {
@@ -176,13 +177,13 @@ export default function CodaImportDialog({
             </div>
             <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
               <div className="text-[10px] uppercase text-slate-500 font-semibold">Solde initial</div>
-              <div className="text-sm font-mono font-semibold">{Number(preview.old_balance?.balance || 0).toFixed(2)} EUR</div>
+              <div className="text-sm font-mono font-semibold">{fmtEUR(Number(preview.old_balance?.balance || 0))} EUR</div>
               <div className="text-[10px] text-slate-500 mt-1">{preview.old_balance?.date || '-'}</div>
             </div>
             <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
               <div className="text-[10px] uppercase text-slate-500 font-semibold">Solde final</div>
-              <div className="text-sm font-mono font-semibold">{Number(preview.new_balance?.balance || 0).toFixed(2)} EUR</div>
-              <div className="text-[10px] text-slate-500 mt-1">Delta {expectedDelta.toFixed(2)} EUR</div>
+              <div className="text-sm font-mono font-semibold">{fmtEUR(Number(preview.new_balance?.balance || 0))} EUR</div>
+              <div className="text-[10px] text-slate-500 mt-1">Delta {fmtEUR(expectedDelta)} EUR</div>
             </div>
           </div>
 
@@ -224,13 +225,13 @@ export default function CodaImportDialog({
             <div className="flex items-center gap-1 ml-auto">
               <span className="text-slate-500">Somme inclus :</span>
               <span className={`font-mono font-semibold ${balanceOk ? 'text-emerald-700' : 'text-red-700'}`}>
-                {stats.sum.toFixed(2)} EUR
+                {fmtEUR(stats.sum)} EUR
               </span>
               {balanceOk ? (
                 <Badge variant="outline" className="text-[10px] border-emerald-400 text-emerald-700">= delta</Badge>
               ) : (
                 <Badge variant="outline" className="text-[10px] border-red-400 text-red-700">
-                  ecart {(stats.sum - expectedDelta).toFixed(2)}
+                  ecart {fmtEUR((stats.sum - expectedDelta))}
                 </Badge>
               )}
             </div>
@@ -287,7 +288,7 @@ export default function CodaImportDialog({
                     <tr key={idx} className={`hover:bg-slate-50 ${!m.include ? 'opacity-40' : ''}`} data-testid={`coda-mov-row-${idx}`}>
                       <td className="px-2 py-2 font-mono text-[11px]">{fmtDate(m.value_date) || '-'}</td>
                       <td className={`px-2 py-2 font-mono font-semibold text-right ${isCredit ? 'text-emerald-700' : 'text-red-700'}`}>
-                        {isCredit ? '+' : ''}{Number(m.amount).toFixed(2)}
+                        {isCredit ? '+' : ''}{fmtEUR(Number(m.amount))}
                       </td>
                       <td className="px-2 py-2">
                         <div className="text-slate-800 truncate max-w-[200px]" title={m.counterparty_name}>{m.counterparty_name || '-'}</div>

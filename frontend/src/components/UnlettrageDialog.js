@@ -8,6 +8,7 @@ import { toast } from 'sonner';
 import { Unlink, Link2, Loader2, Search, CheckCircle2, AlertCircle, ArrowRight } from 'lucide-react';
 import { fmtDate } from '@/lib/dateFmt';
 
+import { fmtEUR } from '@/lib/format';
 /**
  * Dialog de delettrage / relettrage rapide depuis le Journal FI.
  * - Affiche la facture actuellement lettree (linked_invoice)
@@ -109,7 +110,7 @@ export default function UnlettrageDialog({ entry, open, onClose, onSuccess }) {
               <div className="text-[11px] text-slate-500 uppercase tracking-wide">Transaction</div>
               <div className="font-medium text-slate-800 truncate">{txn.description || entry?.description || '—'}</div>
               <div className="text-xs text-slate-500 mt-0.5">
-                {txn.date ? fmtDate(txn.date) : ''} · <span className="font-mono font-semibold text-slate-700">{Number(txn.amount_abs || 0).toFixed(2)} EUR</span>
+                {txn.date ? fmtDate(txn.date) : ''} · <span className="font-mono font-semibold text-slate-700">{fmtEUR(Number(txn.amount_abs || 0))} EUR</span>
               </div>
             </div>
             {linked && (
@@ -119,7 +120,7 @@ export default function UnlettrageDialog({ entry, open, onClose, onSuccess }) {
                   {linked.invoice_number || linked.supplier_name || '(sans numero)'}
                 </Badge>
                 <div className="text-xs text-slate-500 mt-0.5">{linked.supplier_name}</div>
-                <div className="text-xs font-mono text-slate-600">{Number(linked.amount_ttc || 0).toFixed(2)} EUR</div>
+                <div className="text-xs font-mono text-slate-600">{fmtEUR(Number(linked.amount_ttc || 0))} EUR</div>
               </div>
             )}
           </div>
@@ -239,10 +240,10 @@ export default function UnlettrageDialog({ entry, open, onClose, onSuccess }) {
                         <td className="p-2 text-xs truncate max-w-[180px]">{c.supplier}</td>
                         <td className="p-2 text-xs text-slate-500">{c.date ? fmtDate(c.date) : '—'}</td>
                         <td className="p-2 text-right font-mono text-xs">
-                          {Number(c.remaining).toFixed(2)}
+                          {fmtEUR(Number(c.remaining))}
                           {c.status === 'partially_paid' && (
                             <div className="text-[10px] text-amber-600">
-                              paye : {Number(c.amount_paid).toFixed(2)}
+                              paye : {fmtEUR(Number(c.amount_paid))}
                             </div>
                           )}
                         </td>

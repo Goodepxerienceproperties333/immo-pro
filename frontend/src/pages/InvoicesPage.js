@@ -19,6 +19,7 @@ import { fmtDate } from '@/lib/dateFmt';
 import { useFiscalYearParams } from '@/hooks/useFiscalYearParams';
 import { useDirtyGuard } from '@/hooks/useDirtyGuard';
 
+import { fmtEUR } from '@/lib/format';
 const API = process.env.REACT_APP_BACKEND_URL;
 
 export default function InvoicesPage() {
@@ -319,7 +320,7 @@ export default function InvoicesPage() {
               // la meme regle que la selection manuelle (non-destructif : ligne
               // sans pct explicite uniquement).
               occupant_pct: (first.occupant_pct == null && sug.occupant_pct != null) ? Number(sug.occupant_pct) : first.occupant_pct,
-              proprietaire_pct: (first.proprietaire_pct == null && sug.occupant_pct != null) ? +(100 - Number(sug.occupant_pct)).toFixed(2) : first.proprietaire_pct,
+              proprietaire_pct: (first.proprietaire_pct == null && sug.occupant_pct != null) ? +fmtEUR((100 - Number(sug.occupant_pct))) : first.proprietaire_pct,
             };
             toast.success(`Nature apprise : ${sug.expense_category_name} (${sug.usage_count} facture${sug.usage_count > 1 ? 's' : ''} de ${name})`);
             return { ...f, lines: newLines };
@@ -337,7 +338,7 @@ export default function InvoicesPage() {
             // iter90fj : repartition Occ/Prop apprise, au meme titre que la
             // selection manuelle de la nature (cf. onValueChange plus bas).
             occupant_pct: sug.occupant_pct != null ? Number(sug.occupant_pct) : f.occupant_pct,
-            proprietaire_pct: sug.occupant_pct != null ? +(100 - Number(sug.occupant_pct)).toFixed(2) : f.proprietaire_pct,
+            proprietaire_pct: sug.occupant_pct != null ? +fmtEUR((100 - Number(sug.occupant_pct))) : f.proprietaire_pct,
           };
         }
         return f;
@@ -463,7 +464,7 @@ export default function InvoicesPage() {
         }
         const sum = invForm.lines.reduce((s, l) => s + (Number(l.amount) || 0), 0);
         if (Math.abs(sum - Number(invForm.total_amount || 0)) > 0.01) {
-          toast.error(`Somme des lignes (${sum.toFixed(2)}) different du total facture (${Number(invForm.total_amount).toFixed(2)})`);
+          toast.error(`Somme des lignes (${fmtEUR(sum)}) different du total facture (${fmtEUR(Number(invForm.total_amount))})`);
           return;
         }
         // Verifie que chaque ligne a un compte + montant > 0
@@ -501,7 +502,7 @@ export default function InvoicesPage() {
         const totalCents = Math.round(Number(invForm.total_amount || 0) * 100);
         if (sumCents !== totalCents) {
           const diff = (totalCents - sumCents) / 100;
-          toast.error(`Somme des allocations (${(sumCents/100).toFixed(2)}) different du total facture (${(totalCents/100).toFixed(2)}). Ecart : ${diff.toFixed(2)} EUR`);
+          toast.error(`Somme des allocations (${fmtEUR((sumCents/100))}) different du total facture (${fmtEUR((totalCents/100))}). Ecart : ${fmtEUR(diff)} EUR`);
           return;
         }
         // Pas de doublons d'owner
@@ -587,7 +588,7 @@ export default function InvoicesPage() {
                         account_number: sug.account_number || payload.lines[0].account_number,
                         distribution_key_id: sug.distribution_key_id || payload.lines[0].distribution_key_id,
                         occupant_pct: occ,
-                        proprietaire_pct: occ != null ? +(100 - occ).toFixed(2) : payload.lines[0].proprietaire_pct,
+                        proprietaire_pct: occ != null ? +fmtEUR((100 - occ)) : payload.lines[0].proprietaire_pct,
                       };
                       setInvForm(f => {
                         if (!f.lines || f.lines.length === 0) return f;
@@ -599,14 +600,14 @@ export default function InvoicesPage() {
                       payload.expense_category_id = sug.expense_category_id;
                       payload.account_number = sug.account_number || payload.account_number;
                       payload.distribution_key_id = sug.distribution_key_id || payload.distribution_key_id;
-                      if (occ != null) { payload.occupant_pct = occ; payload.proprietaire_pct = +(100 - occ).toFixed(2); }
+                      if (occ != null) { payload.occupant_pct = occ; payload.proprietaire_pct = +fmtEUR((100 - occ)); }
                       setInvForm(f => ({
                         ...f,
                         expense_category_id: sug.expense_category_id,
                         account_number: sug.account_number || f.account_number,
                         distribution_key_id: sug.distribution_key_id || f.distribution_key_id,
                         occupant_pct: occ != null ? occ : f.occupant_pct,
-                        proprietaire_pct: occ != null ? +(100 - occ).toFixed(2) : f.proprietaire_pct,
+                        proprietaire_pct: occ != null ? +fmtEUR((100 - occ)) : f.proprietaire_pct,
                       }));
                     }
                     toast.success(`Nature apprise : ${sug.expense_category_name} (${sug.usage_count} facture${sug.usage_count > 1 ? 's' : ''} de ${decision.name})`);
@@ -1013,7 +1014,7 @@ export default function InvoicesPage() {
                     <TableCell>{fmtDate(inv.date)}</TableCell>
                     <TableCell className="font-medium">{inv.supplier}</TableCell>
                     <TableCell className="max-w-[200px] truncate">{inv.description}</TableCell>
-                    <TableCell className="text-right font-mono whitespace-nowrap">{inv.total_amount?.toFixed(2)} EUR</TableCell>
+                    <TableCell className="text-right font-mono whitespace-nowrap">{fmtEUR(inv.total_amount)} EUR</TableCell>
                     <TableCell className="text-xs">{(() => {
                       // iter85e : affichage cascade de la cle de repartition
                       //   1. invoice.distribution_key_id direct
@@ -1365,11 +1366,11 @@ export default function InvoicesPage() {
                     })}
                     {allocs.length > 0 && (
                       <div className={`flex justify-between items-center text-xs px-2 py-1.5 rounded border ${balanced ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-rose-50 border-rose-200 text-rose-700'}`}>
-                        <span>Somme allocations : <b>{sum.toFixed(2)} EUR</b> / Total facture : <b>{total.toFixed(2)} EUR</b></span>
+                        <span>Somme allocations : <b>{fmtEUR(sum)} EUR</b> / Total facture : <b>{fmtEUR(total)} EUR</b></span>
                         <span className="flex items-center gap-2" data-testid="alloc-balance-status">
                           {balanced ? <>OK - equilibre</> : (
                             <>
-                              <span>Ecart : <b>{diff.toFixed(2)} EUR</b></span>
+                              <span>Ecart : <b>{fmtEUR(diff)} EUR</b></span>
                               <button
                                 type="button"
                                 onClick={() => {
@@ -1423,7 +1424,7 @@ export default function InvoicesPage() {
                       expense_category_id: v,
                       account_number: cat?.account_number || f.account_number,
                       occupant_pct: occ != null ? Number(occ) : f.occupant_pct,
-                      proprietaire_pct: occ != null ? +(100 - Number(occ)).toFixed(2) : f.proprietaire_pct,
+                      proprietaire_pct: occ != null ? +fmtEUR((100 - Number(occ))) : f.proprietaire_pct,
                       distribution_key_id: defKey || f.distribution_key_id,
                     }));
                   }}
@@ -1500,7 +1501,7 @@ export default function InvoicesPage() {
             {!invForm.is_private_fee && invForm.lines && invForm.lines.length > 0 && (() => {
               const linesSum = invForm.lines.reduce((s, l) => s + (Number(l.amount) || 0), 0);
               const totalAmt = Number(invForm.total_amount) || 0;
-              const diff = +(linesSum - totalAmt).toFixed(2);
+              const diff = +fmtEUR((linesSum - totalAmt));
               const ok = Math.abs(diff) < 0.01;
               return (
                 <div className="rounded-md border-2 border-[#022D52]/30 bg-[#022D52]/5 p-3 space-y-2" data-testid="multi-lines-block">
@@ -1720,13 +1721,13 @@ export default function InvoicesPage() {
                     <div className="text-xs flex items-center gap-3">
                       <span className="text-slate-600">Somme :</span>
                       <span className={`font-mono font-bold ${ok ? 'text-emerald-700' : 'text-red-600'}`} data-testid="invoice-lines-sum">
-                        {linesSum.toFixed(2)} EUR
+                        {fmtEUR(linesSum)} EUR
                       </span>
                       <span className="text-slate-500">/ Total :</span>
-                      <span className="font-mono">{totalAmt.toFixed(2)} EUR</span>
+                      <span className="font-mono">{fmtEUR(totalAmt)} EUR</span>
                       {!ok && (
                         <span className="text-[10px] text-red-600 font-semibold">
-                          {diff > 0 ? `(+${diff.toFixed(2)})` : `(${diff.toFixed(2)})`}
+                          {diff > 0 ? `(+${fmtEUR(diff)})` : `(${fmtEUR(diff)})`}
                         </span>
                       )}
                       {ok && <span className="text-[10px] text-emerald-600">OK</span>}
@@ -1748,7 +1749,7 @@ export default function InvoicesPage() {
                     value={invForm.occupant_pct}
                     onChange={e => {
                       const v = Math.max(0, Math.min(100, parseFloat(e.target.value) || 0));
-                      setInvForm(f => ({ ...f, occupant_pct: v, proprietaire_pct: +(100 - v).toFixed(2) }));
+                      setInvForm(f => ({ ...f, occupant_pct: v, proprietaire_pct: +fmtEUR((100 - v)) }));
                     }}
                     data-testid="inv-occupant-pct"
                   />
@@ -1759,18 +1760,18 @@ export default function InvoicesPage() {
                     value={invForm.proprietaire_pct}
                     onChange={e => {
                       const v = Math.max(0, Math.min(100, parseFloat(e.target.value) || 0));
-                      setInvForm(f => ({ ...f, proprietaire_pct: v, occupant_pct: +(100 - v).toFixed(2) }));
+                      setInvForm(f => ({ ...f, proprietaire_pct: v, occupant_pct: +fmtEUR((100 - v)) }));
                     }}
                     data-testid="inv-proprietaire-pct"
                   />
                 </div>
                 <div className="text-xs">
                   <div className="text-slate-500 uppercase tracking-wide text-[10px]">Part occupant</div>
-                  <div className="font-mono font-semibold text-amber-700">{((Number(invForm.total_amount) || 0) * (Number(invForm.occupant_pct) || 0) / 100).toFixed(2)} EUR</div>
+                  <div className="font-mono font-semibold text-amber-700">{fmtEUR(((Number(invForm.total_amount) || 0) * (Number(invForm.occupant_pct) || 0) / 100))} EUR</div>
                 </div>
                 <div className="text-xs">
                   <div className="text-slate-500 uppercase tracking-wide text-[10px]">Part proprietaire</div>
-                  <div className="font-mono font-semibold text-[#01213e]">{((Number(invForm.total_amount) || 0) * (Number(invForm.proprietaire_pct) || 0) / 100).toFixed(2)} EUR</div>
+                  <div className="font-mono font-semibold text-[#01213e]">{fmtEUR(((Number(invForm.total_amount) || 0) * (Number(invForm.proprietaire_pct) || 0) / 100))} EUR</div>
                 </div>
               </div>
               <p className="text-[11px] text-slate-500">Total doit etre 100%. Pre-rempli depuis la nature de depense si selectionnee.</p>

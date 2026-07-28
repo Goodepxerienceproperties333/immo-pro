@@ -3,6 +3,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Badge } from '@/components/ui/badge';
 import { fmtDate } from '@/lib/dateFmt';
 
+import { fmtEUR } from '@/lib/format';
 /**
  * Dialog de detail proprietaire / fournisseur.
  * Affiche total debit/credit + solde + toggle vue resumee|detail par lot (iter90bv, owner only).
@@ -27,12 +28,12 @@ export default function TiersDetailDialog({
         </DialogHeader>
         <div className="mt-2">
           <div className="flex gap-4 mb-4 text-sm items-center flex-wrap">
-            <div><span className="text-slate-500">Total debit:</span> <span className="font-mono font-bold">{detail?.total_debit?.toFixed(2)} EUR</span></div>
-            <div><span className="text-slate-500">Total credit:</span> <span className="font-mono font-bold">{detail?.total_credit?.toFixed(2)} EUR</span></div>
+            <div><span className="text-slate-500">Total debit:</span> <span className="font-mono font-bold">{fmtEUR(detail?.total_debit)} EUR</span></div>
+            <div><span className="text-slate-500">Total credit:</span> <span className="font-mono font-bold">{fmtEUR(detail?.total_credit)} EUR</span></div>
             <div>
               <span className="text-slate-500">Solde:</span>
               <span className={`font-mono font-bold ml-1 ${detail?.status === 'debiteur' ? 'text-red-700' : detail?.status === 'crediteur' ? (isOwner ? 'text-green-700' : 'text-orange-700') : 'text-slate-600'}`}>
-                {detail?.balance?.toFixed(2)} EUR
+                {fmtEUR(detail?.balance)} EUR
               </span>
               <Badge variant="outline" className="ml-2 text-[10px]">{detail?.status === 'debiteur' ? (isOwner ? 'Doit payer' : 'Trop-paye') : detail?.status === 'crediteur' ? (isOwner ? 'A rembourser' : 'A payer') : 'Solde'}</Badge>
             </div>
@@ -82,9 +83,9 @@ export default function TiersDetailDialog({
                       {m.description}
                     </TableCell>
                     <TableCell className="text-xs text-slate-400">{m.reference}</TableCell>
-                    <TableCell className={`text-right font-mono text-sm ${m.is_reprise ? 'font-semibold' : ''}`}>{m.debit > 0 ? m.debit.toFixed(2) : ''}</TableCell>
-                    <TableCell className={`text-right font-mono text-sm ${m.is_reprise ? 'font-semibold' : ''}`}>{m.credit > 0 ? m.credit.toFixed(2) : ''}</TableCell>
-                    <TableCell className={`text-right font-mono text-sm font-semibold ${m.running_balance > 0 ? 'text-red-700' : m.running_balance < 0 ? 'text-green-700' : ''}`}>{m.running_balance?.toFixed(2)}</TableCell>
+                    <TableCell className={`text-right font-mono text-sm ${m.is_reprise ? 'font-semibold' : ''}`}>{m.debit > 0 ? fmtEUR(m.debit) : ''}</TableCell>
+                    <TableCell className={`text-right font-mono text-sm ${m.is_reprise ? 'font-semibold' : ''}`}>{m.credit > 0 ? fmtEUR(m.credit) : ''}</TableCell>
+                    <TableCell className={`text-right font-mono text-sm font-semibold ${m.running_balance > 0 ? 'text-red-700' : m.running_balance < 0 ? 'text-green-700' : ''}`}>{fmtEUR(m.running_balance)}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>

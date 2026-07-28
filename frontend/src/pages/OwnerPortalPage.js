@@ -15,6 +15,7 @@ import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RechartsTooltip } 
 import { sanitizeHtml } from '@/lib/sanitizeHtml';
 import OwnerOnboardingTour, { ownerTourStorageKey } from '@/components/OwnerOnboardingTour';
 
+import { fmtEUR } from '@/lib/format';
 // Iter90db : palette couleur deterministe par nom de categorie de document
 // (index -> style bordure/fond/texte). Le hash simple s'assure que la meme
 // categorie recoit toujours la meme couleur, meme entre sessions/machines.
@@ -471,8 +472,8 @@ export default function OwnerPortalPage() {
     }
     return {
       // Trimestriels (informatif uniquement)
-      totalCalledQuarter: +calledQ.toFixed(2),
-      totalPaidQuarter: +paidQ.toFixed(2),
+      totalCalledQuarter: +fmtEUR(calledQ),
+      totalPaidQuarter: +fmtEUR(paidQ),
       pendingCount,
       nextCall,
     };
@@ -512,12 +513,12 @@ export default function OwnerPortalPage() {
       sumCreditPaid += Number(m.credit || 0);
     }
     const openCreditor = annualOpeningBalance < 0 ? -annualOpeningBalance : 0;
-    const total_paid = +(openCreditor + sumCreditPaid).toFixed(2);
-    total_called = +total_called.toFixed(2);
-    const balance = +(total_called - total_paid).toFixed(2);
+    const total_paid = +fmtEUR((openCreditor + sumCreditPaid));
+    total_called = +fmtEUR(total_called);
+    const balance = +fmtEUR((total_called - total_paid));
     return {
       total_called,
-      total_upcoming: +total_upcoming.toFixed(2),
+      total_upcoming: +fmtEUR(total_upcoming),
       total_paid,
       balance,
       status: balance > 0.01 ? 'debiteur' : balance < -0.01 ? 'crediteur' : 'solde',
@@ -551,7 +552,7 @@ export default function OwnerPortalPage() {
         continue;
       }
       currentCall = fc;
-      remainingOnCurrent = +(amt - Math.max(0, totalPaid - cumul)).toFixed(2);
+      remainingOnCurrent = +fmtEUR((amt - Math.max(0, totalPaid - cumul)));
       break;
     }
     if (!currentCall) return null;
@@ -597,9 +598,9 @@ export default function OwnerPortalPage() {
     }
     const openDebtor = openingBalance > 0 ? openingBalance : 0;
     const openCreditor = openingBalance < 0 ? -openingBalance : 0;
-    const total_called = +(openDebtor + sumDebit).toFixed(2);
-    const total_paid = +(openCreditor + sumCredit).toFixed(2);
-    const balance = +Number(closingBalance || 0).toFixed(2);
+    const total_called = +fmtEUR((openDebtor + sumDebit));
+    const total_paid = +fmtEUR((openCreditor + sumCredit));
+    const balance = +fmtEUR(Number(closingBalance || 0));
     return {
       total_called,
       total_paid,
@@ -1149,10 +1150,10 @@ export default function OwnerPortalPage() {
                           {c.computed_share && (
                             <div
                               className="text-[10px] font-normal text-blue-600 mt-0.5"
-                              title={`Quote-part projetee via la cle de repartition${c.distribution_key_name ? ` "${c.distribution_key_name}"` : ''}${c.my_share_pct ? ` (${c.my_share_pct.toFixed(2)} %)` : ''}. La ventilation definitive sera figee au decompte annuel.`}
+                              title={`Quote-part projetee via la cle de repartition${c.distribution_key_name ? ` "${c.distribution_key_name}"` : ''}${c.my_share_pct ? ` (${fmtEUR(c.my_share_pct)} %)` : ''}. La ventilation definitive sera figee au decompte annuel.`}
                               data-testid={`charge-projected-${c.id}`}
                             >
-                              Projete {c.my_share_pct ? `(${c.my_share_pct.toFixed(2)} %)` : ''}
+                              Projete {c.my_share_pct ? `(${fmtEUR(c.my_share_pct)} %)` : ''}
                             </div>
                           )}
                         </TableCell>
@@ -2374,13 +2375,13 @@ function MovementsTab({
     }, 0);
     // Ajouter le solde d'ouverture (a nouveau)
     const opening = Number(openingBalance || 0);
-    return Math.max(0, +(sum + opening).toFixed(2));
+    return Math.max(0, +fmtEUR((sum + opening)));
   }, [movements, openingBalance]);
   // iter90hx : URL du QR code, rafraichie a chaque changement de periode
   const qrHref = useMemo(() => {
     if (!copropriete_id || !acpFiltered) return null;
     const p = new URLSearchParams();
-    if (amountToPay > 0) p.set('amount', amountToPay.toFixed(2));
+    if (amountToPay > 0) p.set('amount', fmtEUR(amountToPay));
     // Nonce sur le hash pour forcer le refresh de l'image cote navigateur
     const url = `${process.env.REACT_APP_BACKEND_URL}/api/owner/payment-qr/${copropriete_id}`;
     return `${url}?${p.toString()}&t=${Date.now()}`;
@@ -2738,9 +2739,9 @@ function BankAccountsTab({
         else totalDebit += Math.abs(amt);
       }
       return {
-        totalCredit: +totalCredit.toFixed(2),
-        totalDebit: +totalDebit.toFixed(2),
-        net: +(totalCredit - totalDebit).toFixed(2),
+        totalCredit: +fmtEUR(totalCredit),
+        totalDebit: +fmtEUR(totalDebit),
+        net: +fmtEUR((totalCredit - totalDebit)),
         count: mvs.length,
       };
     });

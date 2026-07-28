@@ -8,6 +8,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { toast } from 'sonner';
 import { Plus, Pencil, Trash2, Search } from 'lucide-react';
 
+import { fmtEUR } from '@/lib/format';
 export default function TenantsPage() {
   const [tenants, setTenants] = useState([]);
   const [lots, setLots] = useState([]);
@@ -70,7 +71,7 @@ export default function TenantsPage() {
                 <TableCell>{t.email}</TableCell><TableCell>{t.phone}</TableCell>
                 <TableCell>{getLotNumber(t.lot_id)}</TableCell>
                 <TableCell>{t.lease_start}</TableCell><TableCell>{t.lease_end}</TableCell>
-                <TableCell className="font-mono">{t.rent_amount?.toFixed(2)} EUR</TableCell>
+                <TableCell className="font-mono">{fmtEUR(t.rent_amount)} EUR</TableCell>
                 <TableCell>
                   <div className="flex gap-1">
                     <Button variant="ghost" size="sm" onClick={() => openEdit(t)}><Pencil size={14} /></Button>

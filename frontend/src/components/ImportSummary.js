@@ -1,5 +1,6 @@
 import { CheckCircle2, XCircle, AlertTriangle, Building2, Wallet, Users, Truck, PieChart, Tag, FileText, ScrollText, Scale } from 'lucide-react';
 
+import { fmtEUR } from '@/lib/format';
 /**
  * iter90if - Recapitulatif de l'import d'une ACP.
  *
@@ -22,7 +23,7 @@ export default function ImportSummary({ summary, compact = false }) {
     { icon: Users, label: 'Lots', value: counts.lots, ok: counts.lots > 0, critical: true },
     { icon: PieChart, label: 'Cles de repartition', value: counts.distribution_keys, ok: counts.distribution_keys > 0, critical: true },
     { icon: Tag, label: 'Natures de depense', value: counts.natures, ok: counts.natures > 0, critical: false },
-    { icon: Wallet, label: 'Budget previsionnel', value: budget ? `${budget.lines_count} lignes - ${Number(budget.total_amount).toFixed(2)} EUR` : null, ok: !!budget, critical: false },
+    { icon: Wallet, label: 'Budget previsionnel', value: budget ? `${budget.lines_count} lignes - ${fmtEUR(Number(budget.total_amount))} EUR` : null, ok: !!budget, critical: false },
     { icon: Truck, label: 'Fournisseurs', value: counts.suppliers, ok: counts.suppliers > 0, critical: false },
     { icon: FileText, label: 'Factures importees', value: counts.invoices, ok: counts.invoices > 0, critical: false },
     { icon: Scale, label: "OD d'ouverture", value: openingOD, ok: openingOD > 0, critical: false },
