@@ -63,6 +63,10 @@ export default function CoproprietesPage() {
   const [sessionOwners, setSessionOwners] = useState([]);
   const [ownerSearchByLot, setOwnerSearchByLot] = useState({});  // {lotIdx: 'query'}
   const [ownerFocusLot, setOwnerFocusLot] = useState(null);  // lotIdx currently focused or null
+  // iter93ag : dialogue de creation rapide d'un proprietaire manquant depuis
+  // l'etape 5 (Affectation). Pre-rempli avec le libelle importe du lot orphelin.
+  //   { lotIdx, aux, name, first, last, email, iban, saving }
+  const [quickCreateOwner, setQuickCreateOwner] = useState(null);
   // iter90if : recap des imports par ACP (id -> summary)
   const [importSummaries, setImportSummaries] = useState({});
   const [summaryDialog, setSummaryDialog] = useState(null);  // {acp, summary} or null
@@ -159,6 +163,102 @@ export default function CoproprietesPage() {
     const ls = [...form.lots];
     ls[i] = { ...ls[i], owner_ids: (ls[i].owner_ids || []).filter(x => x !== ownerId) };
     setForm({ ...form, lots: ls });
+  };
+
+  // iter93ag : ouvre le dialogue de creation rapide d'un proprietaire pour un
+  // lot orphelin. Pre-remplit avec le libelle importe (heuristique last/first).
+  const openQuickCreateOwner = (i) => {
+    const lot = form.lots[i] || {};
+    const rawName = (lot._imported_owner_name || '').trim();
+    // Heuristique : "Mme LOUETTE Romain" -> last="LOUETTE" first="Romain"
+    // "M. DUPONT Jean-Pierre" -> last="DUPONT" first="Jean-Pierre"
+    // "LOUETTE & BARBIEAUX Romain" -> on garde tel quel en name, last=""
+    let cleaned = rawName;
+    const civilities = ['Mme', 'M.', 'Mlle', 'Mr', 'Mr.', 'Madame', 'Monsieur'];
+    for (const c of civilities) {
+      if (cleaned.toLowerCase().startsWith(c.toLowerCase() + ' ')) {
+        cleaned = cleaned.substring(c.length + 1).trim();
+        break;
+      }
+    }
+    let first = '', last = '';
+    if (cleaned && !cleaned.includes('&')) {
+      const parts = cleaned.split(/\s+/);
+      if (parts.length >= 2) {
+        // Le prenom est generalement en dernier (format belge Optipro)
+        first = parts.slice(-1)[0];
+        last = parts.slice(0, -1).join(' ');
+      } else {
+        last = cleaned;
+      }
+    }
+    setQuickCreateOwner({
+      lotIdx: i,
+      aux: lot._imported_owner_aux || '',
+      name: rawName,
+      first_name: first,
+      last_name: last,
+      email: '',
+      iban: '',
+      saving: false,
+    });
+  };
+
+  const submitQuickCreateOwner = async () => {
+    if (!quickCreateOwner) return;
+    const q = quickCreateOwner;
+    const last = (q.last_name || '').trim();
+    const first = (q.first_name || '').trim();
+    const name = (q.name || (last + ' ' + first).trim()).trim();
+    if (!last && !name) {
+      toast.error('Le nom est obligatoire');
+      return;
+    }
+    setQuickCreateOwner({ ...q, saving: true });
+    try {
+      const { data } = await api.post('/owners?reuse_on_duplicate=true', {
+        first_name: first,
+        last_name: last || name,
+        name,
+        auxiliary_code: q.aux || '',
+        email: q.email || '',
+        iban: q.iban || '',
+        country: 'Belgique',
+      });
+      if (data?._reused) {
+        toast.success(`Fiche existante reutilisee : ${data.name}`);
+      } else {
+        toast.success(`Proprietaire cree : ${data.name}`);
+      }
+      // Merge dans sessionOwners pour visibility immediate
+      setSessionOwners(prev => {
+        const byId = new Map();
+        for (const o of prev) if (o?.id) byId.set(o.id, o);
+        if (data?.id) byId.set(data.id, data);
+        return Array.from(byId.values());
+      });
+      // Auto-link au lot
+      if (data?.id) {
+        const ls = [...form.lots];
+        const idx = q.lotIdx;
+        const current = ls[idx].owner_ids || [];
+        if (!current.includes(data.id)) {
+          ls[idx] = {
+            ...ls[idx],
+            owner_ids: [...current, data.id],
+            // Efface la mention orpheline maintenant que le lot est lie
+            _imported_owner_name: '',
+            _imported_owner_aux: '',
+          };
+          setForm({ ...form, lots: ls });
+        }
+      }
+      setQuickCreateOwner(null);
+    } catch (err) {
+      const msg = err.response?.data?.detail || 'Erreur creation proprietaire';
+      toast.error(msg);
+      setQuickCreateOwner({ ...q, saving: false });
+    }
   };
   const getOwnerSuggestions = (i) => {
     const q = (ownerSearchByLot[i] || '').trim().toLowerCase();
@@ -505,6 +605,104 @@ export default function CoproprietesPage() {
           </TableBody>
         </Table>
       </div>
+
+      {/* iter93ag : dialogue de creation rapide d'un proprietaire manquant */}
+      <Dialog open={!!quickCreateOwner} onOpenChange={(open) => !open && !quickCreateOwner?.saving && setQuickCreateOwner(null)}>
+        <DialogContent className="max-w-md" data-testid="quick-create-owner-dialog">
+          <DialogHeader>
+            <DialogTitle style={{fontFamily:'Chivo,sans-serif'}}>Creer le proprietaire manquant</DialogTitle>
+            <p className="text-xs text-slate-500 mt-1">
+              Ce proprietaire sera cree et affecte automatiquement au lot orphelin.
+            </p>
+          </DialogHeader>
+          {quickCreateOwner && (
+            <div className="space-y-3 mt-2">
+              {quickCreateOwner.aux && (
+                <div className="text-xs bg-amber-50 border border-amber-200 rounded px-2 py-1.5 font-mono">
+                  Code auxiliaire importe : <b>{quickCreateOwner.aux}</b>
+                </div>
+              )}
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-[11px] font-semibold text-slate-600 uppercase tracking-wider">Nom *</label>
+                  <Input
+                    value={quickCreateOwner.last_name}
+                    onChange={e => setQuickCreateOwner({ ...quickCreateOwner, last_name: e.target.value })}
+                    placeholder="LOUETTE"
+                    className="h-8 text-sm mt-0.5"
+                    data-testid="quick-owner-last"
+                    autoFocus
+                  />
+                </div>
+                <div>
+                  <label className="text-[11px] font-semibold text-slate-600 uppercase tracking-wider">Prenom</label>
+                  <Input
+                    value={quickCreateOwner.first_name}
+                    onChange={e => setQuickCreateOwner({ ...quickCreateOwner, first_name: e.target.value })}
+                    placeholder="Romain"
+                    className="h-8 text-sm mt-0.5"
+                    data-testid="quick-owner-first"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="text-[11px] font-semibold text-slate-600 uppercase tracking-wider">Nom complet (facultatif)</label>
+                <Input
+                  value={quickCreateOwner.name}
+                  onChange={e => setQuickCreateOwner({ ...quickCreateOwner, name: e.target.value })}
+                  placeholder="Ex : LOUETTE & BARBIEAUX Romain"
+                  className="h-8 text-sm mt-0.5"
+                  data-testid="quick-owner-name"
+                />
+                <p className="text-[10px] text-slate-500 mt-0.5">
+                  Laisser vide pour usiner &laquo; Nom + Prenom &raquo;. Utile pour les cas type &laquo; X &amp; Y &raquo;.
+                </p>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-[11px] font-semibold text-slate-600 uppercase tracking-wider">Email</label>
+                  <Input
+                    value={quickCreateOwner.email}
+                    onChange={e => setQuickCreateOwner({ ...quickCreateOwner, email: e.target.value })}
+                    placeholder="proprio@example.be"
+                    type="email"
+                    className="h-8 text-sm mt-0.5"
+                    data-testid="quick-owner-email"
+                  />
+                </div>
+                <div>
+                  <label className="text-[11px] font-semibold text-slate-600 uppercase tracking-wider">IBAN</label>
+                  <Input
+                    value={quickCreateOwner.iban}
+                    onChange={e => setQuickCreateOwner({ ...quickCreateOwner, iban: e.target.value })}
+                    placeholder="BE00 0000 0000 0000"
+                    className="h-8 text-sm mt-0.5 font-mono"
+                    data-testid="quick-owner-iban"
+                  />
+                </div>
+              </div>
+              <div className="flex justify-end gap-2 pt-2 border-t border-slate-200">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setQuickCreateOwner(null)}
+                  disabled={quickCreateOwner.saving}
+                  data-testid="quick-owner-cancel"
+                >Annuler</Button>
+                <Button
+                  size="sm"
+                  onClick={submitQuickCreateOwner}
+                  disabled={quickCreateOwner.saving}
+                  className="bg-[#022D52] hover:bg-[#022D52]/90 text-white"
+                  data-testid="quick-owner-save"
+                >
+                  {quickCreateOwner.saving ? 'Creation...' : 'Creer et affecter'}
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
 
       {/* iter90if : Dialog recap import */}
       <Dialog open={!!summaryDialog} onOpenChange={(open) => !open && setSummaryDialog(null)}>
@@ -979,9 +1177,21 @@ export default function CoproprietesPage() {
                                   );
                                 })
                               ) : (lot._imported_owner_name || lot._imported_owner_aux) ? (
-                                <Badge variant="outline" className="bg-amber-50 border-amber-300 text-amber-800 py-0 text-[10px]" data-testid={`lot-${i}-orphan`}>
-                                  Orphelin : {lot._imported_owner_aux ? <span className="font-mono">{lot._imported_owner_aux} </span> : null}{lot._imported_owner_name}
-                                </Badge>
+                                <>
+                                  <Badge variant="outline" className="bg-amber-50 border-amber-300 text-amber-800 py-0 text-[10px]" data-testid={`lot-${i}-orphan`}>
+                                    Orphelin : {lot._imported_owner_aux ? <span className="font-mono">{lot._imported_owner_aux} </span> : null}{lot._imported_owner_name}
+                                  </Badge>
+                                  {/* iter93ag : creation rapide d'un proprietaire manquant depuis l'etape 5 */}
+                                  <button
+                                    type="button"
+                                    onClick={() => openQuickCreateOwner(i)}
+                                    className="ml-1 inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded border border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100 text-[10px] font-semibold transition"
+                                    title="Creer ce proprietaire manquant et l'affecter au lot"
+                                    data-testid={`lot-${i}-create-owner`}
+                                  >
+                                    <Plus size={9} /> Creer
+                                  </button>
+                                </>
                               ) : (
                                 <span className="text-[10px] text-slate-400 italic">Aucun proprietaire</span>
                               )}

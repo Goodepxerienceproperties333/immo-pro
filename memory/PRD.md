@@ -433,3 +433,26 @@ En cas de regression future, utiliser le rollback Emergent vers ce commit.
 - P3 ReDoS : query `(a+)+$` -> **HTTP 200 en 0.14s** (regex escape).
 - P3 cookies : `Set-Cookie: ... Secure; HttpOnly; SameSite=None; Partitioned` sur login.
 
+
+## iter93ag (2026-02-28) - Wizard ACP etape 5 : creation rapide d'un proprietaire orphelin
+### Nouvelle fonctionnalite
+- Bouton **&laquo; + Creer &raquo;** vert emeraude a cote de chaque badge "Orphelin : C1988Mme LOUETTE & BARBIEAUX Romain" a l'etape 5 (Revue des affectations).
+- Ouverture d'un dialogue compact pre-rempli via heuristique :
+  - **Nom** et **Prenom** extraits automatiquement (civilite `Mme/M./Mlle` retiree, dernier mot = prenom).
+  - **Nom complet** libre (utile pour les cas type &laquo; X &amp; Y &raquo; qui ne se decoupent pas).
+  - **Code auxiliaire** importe (C1988) affiche en bandeau ambre + envoye au backend.
+  - Champs optionnels : Email, IBAN.
+- A la validation :
+  - `POST /api/owners?reuse_on_duplicate=true` (reutilise une fiche existante si homonyme detecte).
+  - Ajout dans `sessionOwners` pour visibility immediate dans les autocompletes des autres lots.
+  - **Auto-affectation au lot** ; efface les champs `_imported_owner_name` / `_imported_owner_aux` pour masquer le badge Orphelin.
+  - Toast "Proprietaire cree" ou "Fiche existante reutilisee".
+### Fichier modifie
+- `/app/frontend/src/pages/CoproprietesPage.js` :
+  - State `quickCreateOwner` + handlers `openQuickCreateOwner()` (parse heuristique) et `submitQuickCreateOwner()`.
+  - Nouveau dialogue avec 6 champs (Nom, Prenom, Nom complet, Email, IBAN + bandeau code auxiliaire).
+  - Bouton "+ Creer" ajoute a droite du badge Orphelin.
+### Verification
+- Lint : OK.
+- Page /coproprietes charge sans erreur.
+
