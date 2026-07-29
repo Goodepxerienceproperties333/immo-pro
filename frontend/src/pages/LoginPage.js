@@ -90,7 +90,7 @@ export default function LoginPage() {
 
   let titleText = 'Connexion';
   let subtitleText = 'Connectez-vous a votre espace';
-  if (isRegister) { titleText = 'Creer un compte'; subtitleText = 'Remplissez les informations ci-dessous'; }
+  if (isRegister) { titleText = 'Creer un compte syndic'; subtitleText = 'Reserve aux professionnels du syndic. Les proprietaires doivent utiliser le lien d\'invitation recu par email.'; }
   if (isFirstSet) { titleText = 'Definir mon mot de passe'; subtitleText = '1ere connexion : choisissez votre mot de passe'; }
 
   return (

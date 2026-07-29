@@ -4,6 +4,7 @@ from typing import Optional, List
 from datetime import datetime, timezone
 import hashlib
 import os
+import re as _re
 import uuid
 # iter93ac : format unifie plateforme (espace millier + virgule decimale)
 from utils.format import fmt_eur
@@ -771,10 +772,12 @@ def create_banking_router(db):
         return stmt
 
     @router.post("/statements/{stmt_id}/post")
-    async def post_statement(stmt_id: str):
+    async def post_statement(stmt_id: str, request: Request):
         """Comptabilise l'extrait : valide l'equilibre opening + mouvements = closing,
         passe le statut a 'posted'. Refuse 400 si non equilibre."""
-        stmt = await db.bank_statements.find_one({"id": stmt_id}, {"_id": 0})
+        # iter93af (SEC-002) : garantit l'appartenance de l'extrait au syndic
+        from syndic_scope import syndic_query
+        stmt = await db.bank_statements.find_one({"id": stmt_id, **syndic_query(request)}, {"_id": 0})
         if not stmt:
             raise HTTPException(404, "Extrait non trouve")
         if stmt.get("status") == "posted":
@@ -1051,13 +1054,15 @@ def create_banking_router(db):
         return res.modified_count > 0
 
     @router.put("/statements/{stmt_id}")
-    async def update_statement(stmt_id: str, data: StatementInput):
+    async def update_statement(stmt_id: str, data: StatementInput, request: Request):
         # iter90jm : Master/Slave sync. Le statement est le maitre. Modifier
         # ses champs (numero, date, IBAN, soldes) est autorise en tout temps,
         # y compris quand il est posted. Si la date change et que l'extrait
         # est posted, on propage la nouvelle date a TOUTES les FIs enfants
         # (source of truth = statement).
-        stmt = await db.bank_statements.find_one({"id": stmt_id}, {"_id": 0})
+        # iter93af (SEC-002) : garantit l'appartenance au syndic
+        from syndic_scope import syndic_query
+        stmt = await db.bank_statements.find_one({"id": stmt_id, **syndic_query(request)}, {"_id": 0})
         if not stmt:
             raise HTTPException(404, "Extrait non trouve")
         old_date = (stmt.get("date") or "").strip()
@@ -1107,7 +1112,7 @@ def create_banking_router(db):
         return fresh
 
     @router.delete("/statements/{stmt_id}")
-    async def delete_statement(stmt_id: str):
+    async def delete_statement(stmt_id: str, request: Request):
         # iter90jm : Master/Slave sync. Supprimer un extrait supprime
         # AUTOMATIQUEMENT toutes les FIs enfants (auto) + les transactions.
         # Plus de blocage 409. La cascade est naturelle : la source of truth
@@ -1121,7 +1126,9 @@ def create_banking_router(db):
         # paid_by_transaction_id devenu invalide.
         # Note : unpost_statement (repassage en brouillon) NE touche PAS
         # au lettrage - les txns et leurs matched_to restent intacts.
-        stmt = await db.bank_statements.find_one({"id": stmt_id}, {"_id": 0, "status": 1})
+        # iter93af (SEC-002) : garantit l'appartenance au syndic
+        from syndic_scope import syndic_query
+        stmt = await db.bank_statements.find_one({"id": stmt_id, **syndic_query(request)}, {"_id": 0, "status": 1})
         if not stmt:
             raise HTTPException(404, "Extrait non trouve")
         txns = await db.bank_transactions.find(
@@ -1602,10 +1609,26 @@ def create_banking_router(db):
 
     # ---- LETTRAGE ----
     @router.post("/lettrage")
-    async def lettrage(data: LettrageInput):
-        txn = await db.bank_transactions.find_one({"id": data.transaction_id}, {"_id": 0})
+    async def lettrage(data: LettrageInput, request: Request):
+        # iter93af (SEC-002) : verifier que la transaction ET le match cible
+        # (facture, owner_payment, supplier_payment) appartiennent au meme syndic
+        from syndic_scope import syndic_query
+        _scope = syndic_query(request)
+        txn = await db.bank_transactions.find_one({"id": data.transaction_id, **_scope}, {"_id": 0})
         if not txn:
             raise HTTPException(404, "Transaction non trouvee")
+        # Verifie que l'objet cible appartient bien au meme syndic
+        _target_col = None
+        if data.match_type == "invoice":
+            _target_col = db.invoices
+        elif data.match_type == "owner_payment":
+            _target_col = db.owner_payments
+        elif data.match_type == "supplier_payment":
+            _target_col = db.supplier_payments
+        if _target_col is not None:
+            _tgt = await _target_col.find_one({"id": data.match_to_id, **_scope}, {"_id": 0, "id": 1})
+            if not _tgt:
+                raise HTTPException(404, f"{data.match_type.capitalize()} cible non trouve")
         await db.bank_transactions.update_one(
             {"id": data.transaction_id},
             {"$set": {"matched": True, "matched_to": data.match_to_id, "match_type": data.match_type}}
@@ -3151,11 +3174,15 @@ def create_banking_router(db):
         is_super, allowed_copros, allowed_owner_ids = await _get_scope_for_filter(request)
         base_q = {}
         if q:
+            # iter93af (SEC-P3) : echappement du regex utilisateur pour prevenir
+            # tout ReDoS ou injection de meta-caracteres via Mongo $regex.
+            q_esc = _re.escape(q)
+            clean_esc = _re.escape(q.replace("+", "").replace("/", ""))
             base_q = {"$or": [
-                {"name": {"$regex": q, "$options": "i"}},
-                {"email": {"$regex": q, "$options": "i"}},
-                {"vcs_code": {"$regex": q.replace("+", "\\+"), "$options": "i"}},
-                {"vcs_digits": {"$regex": q.replace("+", "").replace("/", ""), "$options": "i"}},
+                {"name": {"$regex": q_esc, "$options": "i"}},
+                {"email": {"$regex": q_esc, "$options": "i"}},
+                {"vcs_code": {"$regex": q_esc, "$options": "i"}},
+                {"vcs_digits": {"$regex": clean_esc, "$options": "i"}},
             ]}
         if not is_super:
             if not allowed_owner_ids:
@@ -3174,12 +3201,14 @@ def create_banking_router(db):
         if not q or len(q) < 2:
             return {"owners": [], "suppliers": [], "invoices": []}
         is_super, allowed_copros, allowed_owner_ids = await _get_scope_for_filter(request)
-        clean = q.replace("+", "").replace("/", "").replace(" ", "")
+        # iter93af (SEC-P3) : echappement du regex utilisateur (ReDoS / injection)
+        q_esc = _re.escape(q)
+        clean_esc = _re.escape(q.replace("+", "").replace("/", "").replace(" ", ""))
         own_q = {"$or": [
-            {"name": {"$regex": q, "$options": "i"}},
-            {"vcs_digits": {"$regex": clean, "$options": "i"}},
-            {"vcs_code": {"$regex": q.replace("+", "\\+"), "$options": "i"}},
-            {"email": {"$regex": q, "$options": "i"}},
+            {"name": {"$regex": q_esc, "$options": "i"}},
+            {"vcs_digits": {"$regex": clean_esc, "$options": "i"}},
+            {"vcs_code": {"$regex": q_esc, "$options": "i"}},
+            {"email": {"$regex": q_esc, "$options": "i"}},
         ]}
         if not is_super:
             if not allowed_owner_ids:
@@ -3191,14 +3220,14 @@ def create_banking_router(db):
             owners = await db.owners.find(own_q, {"_id": 0}).to_list(10)
         suppliers_raw = await db.suppliers.find(
             {"$or": [
-                {"name": {"$regex": q, "$options": "i"}},
-                {"vat_number": {"$regex": q, "$options": "i"}},
+                {"name": {"$regex": q_esc, "$options": "i"}},
+                {"vat_number": {"$regex": q_esc, "$options": "i"}},
             ]}, {"_id": 0}
         ).to_list(50)
         suppliers = [s for s in suppliers_raw if _supplier_visible(s, allowed_copros)][:10]
         inv_q = {"$or": [
-            {"number": {"$regex": q, "$options": "i"}},
-            {"supplier": {"$regex": q, "$options": "i"}},
+            {"number": {"$regex": q_esc, "$options": "i"}},
+            {"supplier": {"$regex": q_esc, "$options": "i"}},
         ]}
         if copropriete_id:
             inv_q = {"$and": [inv_q, {"copropriete_id": copropriete_id}]}

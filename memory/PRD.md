@@ -391,3 +391,45 @@ En cas de regression future, utiliser le rollback Emergent vers ce commit.
 - Vue Liste : 133 extraits en lignes denses, hover, selection surlignee.
 - Vue Mois : 18 groupes (mois), delta mensuel calcule, expansion/collapse fonctionnel.
 
+
+## iter93af (2026-02-28) - Security Hardening (SEC-001 + SEC-002 + P3)
+### SEC-001 [HIGH] - Auto-inscription publique vulnerable (fix)
+- **Avant** : `POST /api/auth/register` creait un user `role="owner"` avec n'importe quel email. `/api/owner/*` linkait par email seul -> vol d'acces au portail d'un co-proprietaire non encore invite.
+- **Apres** :
+  - Register cree desormais `role="syndic"` (self-service = nouveau syndic, business intent).
+  - Register refuse (HTTP 403) tout email correspondant a une fiche `db.owners` existante -> obligatoire d'utiliser le lien d'invitation du syndic.
+  - Marquage `self_registered=True` sur les nouveaux comptes.
+  - Defense-in-depth : `_require_owner_role` dans `owner_portal.py` verifie `user.role in ("owner", "occupant")` avant tout acces. Un role syndic/admin/superadmin recoit HTTP 403 sur `/api/owner/*`.
+  - Frontend LoginPage : mode register libelle "Creer un compte syndic" + sous-titre expliquant que les proprietaires doivent utiliser leur invitation.
+
+### SEC-002 [MEDIUM] - IDOR sur endpoints by-ID (fix)
+- **Avant** : 4 endpoints banking + 1 invoices trouvaient les records par `id` sans verifier `syndic_id` -> un manager du syndic A pouvait lire/modifier/supprimer les extraits ou factures du syndic B en connaissant l'UUID.
+- **Apres** : `syndic_query(request)` applique sur :
+  - `GET /api/invoices/{invoice_id}` (line ~1908)
+  - `POST /api/banking/statements/{stmt_id}/post` (line ~773)
+  - `PUT /api/banking/statements/{stmt_id}` (line ~1055)
+  - `DELETE /api/banking/statements/{stmt_id}` (line ~1113)
+  - `POST /api/banking/lettrage` (line ~1610, + verif de l'objet cible facture/paiement)
+
+### P3 - Hardening applique
+- **COOKIE_SECURE auto** : detection prod via `FRONTEND_URL=https://...` OU `APP_ENV=production`. Force `Secure` flag sur cookies auth si prod, meme si `.env` ne definit pas explicitement `COOKIE_SECURE`.
+- **Regex utilisateur echappe** : `banking.py::/search-owners` et `/lookup` utilisent maintenant `re.escape(q)` pour eliminer meta-caracteres regex (ReDoS neutralise, verifie 0.14s sur `(a+)+$`).
+- **Admin seed fail-closed** : `seed_admin` refuse de creer le compte superadmin si `ADMIN_PASSWORD` non defini ou < 8 caracteres. Plus de default `admin123`.
+- **test_credentials.md** : n'est plus ecrit en prod (`APP_ENV=production` ou `FRONTEND_URL=https://...`) NI si `ADMIN_PASSWORD` non configure.
+
+### Fichiers modifies
+- `/app/backend/server.py` (register, seed_admin, cookie secure auto, test_credentials skip prod)
+- `/app/backend/routes/owner_portal.py` (`_require_owner_role` + integration dans `_resolve_owner` et `_resolve_owner_ids`)
+- `/app/backend/routes/invoices.py` (get_invoice syndic_query)
+- `/app/backend/routes/banking.py` (4 endpoints statements/lettrage + re.escape regex)
+- `/app/frontend/src/pages/LoginPage.js` (libelle register)
+
+### Tests
+- `/app/backend/tests/test_iter93af_security_hardening.py` : 7 tests unitaires, tous passent.
+### Verification curl
+- SEC-001 : POST register avec email owner -> **HTTP 403** ("Contactez votre syndic").
+- SEC-001 defense : GET /api/owner/dashboard en tant que syndic -> **HTTP 403**.
+- SEC-002 : GET /api/invoices/<id_syndic_A> par syndic B -> **HTTP 404**.
+- P3 ReDoS : query `(a+)+$` -> **HTTP 200 en 0.14s** (regex escape).
+- P3 cookies : `Set-Cookie: ... Secure; HttpOnly; SameSite=None; Partitioned` sur login.
+

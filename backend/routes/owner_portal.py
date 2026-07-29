@@ -22,6 +22,26 @@ OWNER_SELF_EDITABLE = {
 }
 
 
+async def _require_owner_role(db, request: Request) -> str:
+    """iter93af (SEC-001) : verifie que l'utilisateur authentifie a bien un
+    role qui autorise l'acces au portail proprietaire (owner ou occupant),
+    et retourne son email normalise. Rejette les comptes self-registered
+    (role=syndic/admin) qui pourraient tenter d'utiliser un email de
+    proprietaire pour acceder a ses donnees.
+    """
+    email = getattr(request.state, "user_email", "") or ""
+    if not email:
+        raise HTTPException(401, "Not authenticated")
+    role = getattr(request.state, "user_role", "") or ""
+    if role not in ("owner", "occupant"):
+        raise HTTPException(
+            403,
+            "Cet espace est reserve aux proprietaires invites par leur syndic. "
+            "Contactez votre syndic pour recevoir votre invitation d'acces.",
+        )
+    return email.lower().strip()
+
+
 async def _resolve_owner(db, request: Request) -> dict:
     """Find the owner record matching the current authenticated user (by email).
 
@@ -30,13 +50,11 @@ async def _resolve_owner(db, request: Request) -> dict:
     fiches distinctes dans plusieurs ACPs), utiliser `_resolve_owner_ids` a la
     place.
     """
-    email = getattr(request.state, "user_email", "") or ""
-    if not email:
-        raise HTTPException(401, "Not authenticated")
-    owner = await db.owners.find_one({"email": email.lower().strip()}, {"_id": 0})
+    email = await _require_owner_role(db, request)
+    owner = await db.owners.find_one({"email": email}, {"_id": 0})
     if not owner:
         # Fallback: try email2 too
-        owner = await db.owners.find_one({"email2": email.lower().strip()}, {"_id": 0})
+        owner = await db.owners.find_one({"email2": email}, {"_id": 0})
     if not owner:
         raise HTTPException(404, "Aucune fiche proprietaire ne correspond a votre compte. Contactez le syndic.")
     return owner
@@ -52,10 +70,8 @@ async def _resolve_owner_ids(db, request: Request) -> tuple:
     Le `primary_owner` (premier match, prefere celui qui a un tier_accounts non
     vide) est retourne pour les infos d'identite : nom, vcs_code, contact...
     """
-    email = getattr(request.state, "user_email", "") or ""
-    if not email:
-        raise HTTPException(401, "Not authenticated")
-    email_lower = email.lower().strip()
+    email = await _require_owner_role(db, request)
+    email_lower = email
     # Chercher tous les owners par email ou email2
     cur = db.owners.find(
         {"$or": [{"email": email_lower}, {"email2": email_lower}]},

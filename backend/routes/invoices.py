@@ -1906,8 +1906,11 @@ def create_invoices_router(db):
         return Response(content=pdf_bytes, media_type="application/pdf")
 
     @router.get("/invoices/{invoice_id}")
-    async def get_invoice(invoice_id: str):
-        inv = await db.invoices.find_one({"id": invoice_id}, {"_id": 0})
+    async def get_invoice(invoice_id: str, request: Request):
+        # iter93af (SEC-002) : verification syndic_id + copropriete_id du caller
+        from syndic_scope import syndic_query
+        q = {"id": invoice_id, **syndic_query(request)}
+        inv = await db.invoices.find_one(q, {"_id": 0})
         if not inv:
             raise HTTPException(404, "Facture non trouvee")
         return inv

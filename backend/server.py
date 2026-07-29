@@ -526,12 +526,29 @@ class MeUpdateInput(BaseModel):
 # Auth Router
 auth_router = APIRouter(prefix="/api/auth")
 
-# iter90at : Configuration cookies auth durcie.
+# iter90at + iter93af : Configuration cookies auth durcie.
 # En prod HTTPS : COOKIE_SECURE=true (le navigateur n'envoie le cookie que via HTTPS).
 # En preview/local (http://localhost) : COOKIE_SECURE=false pour compat dev.
 # SameSite=Lax protege contre les CSRF cross-site tout en laissant les redirects
 # normaux fonctionner.
-_COOKIE_SECURE = os.environ.get("COOKIE_SECURE", "false").lower() in ("true", "1", "yes")
+#
+# iter93af (SEC-P3) : detection automatique du mode prod pour forcer Secure a
+# true meme si l'env n'est pas explicitement configure. On considere prod si
+# FRONTEND_URL commence par https:// OU si APP_ENV=production.
+def _auto_secure_cookie_default() -> bool:
+    front = (os.environ.get("FRONTEND_URL") or "").strip().lower()
+    if front.startswith("https://"):
+        return True
+    if (os.environ.get("APP_ENV") or "").lower() == "production":
+        return True
+    return False
+
+
+_COOKIE_SECURE_ENV = os.environ.get("COOKIE_SECURE")
+if _COOKIE_SECURE_ENV is None:
+    _COOKIE_SECURE = _auto_secure_cookie_default()
+else:
+    _COOKIE_SECURE = _COOKIE_SECURE_ENV.lower() in ("true", "1", "yes")
 _COOKIE_SAMESITE = os.environ.get("COOKIE_SAMESITE", "lax").lower()
 
 
@@ -693,17 +710,43 @@ async def first_set_password(data: FirstSetPasswordInput, response: Response):
 @auth_router.post("/register")
 @limiter.limit("5/minute")
 async def register(data: RegisterInput, request: Request, response: Response):
+    """iter93af (SEC-001) : creation de compte publique. Le role par defaut est
+    `syndic` (self-service pour un nouveau syndic). Les proprietaires (`owner`)
+    NE PEUVENT PAS s'auto-inscrire ici : ils doivent etre invites explicitement
+    par un syndic via `/api/owners/{id}/grant-access` ou similaire, puis definir
+    leur mot de passe via `/api/auth/first-set-password`.
+
+    Cette regle empeche un tiers de s'inscrire avec l'email d'un proprietaire
+    non encore invite et d'acceder ainsi a son portail (fuite de donnees
+    financieres et documents personnels).
+    """
     email = data.email.lower().strip()
     existing = await db.users.find_one({"email": email})
     if existing:
         raise HTTPException(status_code=400, detail="Cet email existe deja")
+    # iter93af : si l'email correspond deja a une fiche proprietaire existante,
+    # on refuse la creation et on invite l'utilisateur a passer par le lien
+    # d'invitation envoye par son syndic (proteger contre le detournement de
+    # compte proprietaire).
+    owner_with_email = await db.owners.find_one({
+        "$or": [{"email": email}, {"email2": email}]
+    }, {"_id": 0, "id": 1})
+    if owner_with_email:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Cette adresse email est associee a une fiche proprietaire. "
+                "Contactez votre syndic pour recevoir votre invitation d'acces."
+            ),
+        )
     doc = {
         "email": email,
         "password_hash": hash_password(data.password),
         "name": data.name,
-        "role": "owner",
+        "role": "syndic",
         "copropriete_ids": [],
-        "created_at": datetime.now(timezone.utc).isoformat()
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "self_registered": True,
     }
     result = await db.users.insert_one(doc)
     user_id = str(result.inserted_id)
@@ -711,7 +754,7 @@ async def register(data: RegisterInput, request: Request, response: Response):
     refresh_token = create_refresh_token(user_id)
     _set_auth_cookie(response, "access_token", access_token, 7200)
     _set_auth_cookie(response, "refresh_token", refresh_token, 604800)
-    return {"id": user_id, "email": email, "name": data.name, "role": "owner", "copropriete_ids": []}
+    return {"id": user_id, "email": email, "name": data.name, "role": "syndic", "copropriete_ids": []}
 
 @auth_router.get("/me")
 async def get_me(request: Request):
@@ -1093,8 +1136,19 @@ async def dashboard_health_audit(request: Request, copropriete_id: Optional[str]
 
 # Admin seed
 async def seed_admin():
+    # iter93af (SEC-P3) : fail-closed si ADMIN_PASSWORD n'est pas explicitement
+    # configure en environnement. Plus de default "admin123" (mot de passe
+    # devinable qui compromettait le superadmin sur les deploiements ou l'env
+    # var n'etait pas rensignee).
     admin_email = os.environ.get("ADMIN_EMAIL", "admin@copro.be")
-    admin_password = os.environ.get("ADMIN_PASSWORD", "admin123")
+    admin_password = os.environ.get("ADMIN_PASSWORD")
+    if not admin_password or len(admin_password) < 8:
+        logger.warning(
+            "seed_admin: ADMIN_PASSWORD non defini ou trop court (<8 chars). "
+            "Aucun compte superadmin ne sera cree/mis a jour. Definissez "
+            "ADMIN_PASSWORD dans /app/backend/.env pour activer le seed."
+        )
+        return
     existing = await db.users.find_one({"email": admin_email})
     if not existing:
         await db.users.insert_one({
@@ -1390,15 +1444,29 @@ async def startup():
     # iter90as : ecriture test_credentials.md en dev/preview UNIQUEMENT.
     # En production K8s, /app/memory peut ne pas etre writable (filesystem
     # hardened, volume ephemere) -> le crash faisait timeout le readiness probe.
-    try:
-        os.makedirs("/app/memory", exist_ok=True)
-        with open("/app/memory/test_credentials.md", "w") as f:
-            f.write("# Test Credentials\n\n")
-            f.write(f"## Super Admin\n- Email: {os.environ.get('ADMIN_EMAIL', 'admin@copro.be')}\n- Password: {os.environ.get('ADMIN_PASSWORD', 'admin123')}\n- Role: superadmin\n\n")
-            f.write("## Roles: superadmin, syndic, owner\n\n")
-            f.write("## Auth Endpoints\n- POST /api/auth/login\n- POST /api/auth/register\n- GET /api/auth/me\n- POST /api/auth/logout\n")
-    except Exception as _e:
-        print(f"[startup] memory/test_credentials.md write skipped: {_e}")
+    #
+    # iter93af (SEC-P3) : ne JAMAIS ecrire ce fichier en production (fuite du
+    # mot de passe superadmin sur disque). On skip aussi si ADMIN_PASSWORD n'est
+    # pas defini (le seed ne se fait pas non plus dans ce cas).
+    _is_prod = (
+        (os.environ.get("APP_ENV") or "").lower() == "production"
+        or (os.environ.get("FRONTEND_URL") or "").lower().startswith("https://")
+    )
+    _admin_pw_configured = bool(os.environ.get("ADMIN_PASSWORD"))
+    if _is_prod:
+        print("[startup] test_credentials.md skipped (production environment)")
+    elif not _admin_pw_configured:
+        print("[startup] test_credentials.md skipped (ADMIN_PASSWORD non defini)")
+    else:
+        try:
+            os.makedirs("/app/memory", exist_ok=True)
+            with open("/app/memory/test_credentials.md", "w") as f:
+                f.write("# Test Credentials\n\n")
+                f.write(f"## Super Admin\n- Email: {os.environ.get('ADMIN_EMAIL', 'admin@copro.be')}\n- Password: {os.environ.get('ADMIN_PASSWORD')}\n- Role: superadmin\n\n")
+                f.write("## Roles: superadmin, syndic, owner\n\n")
+                f.write("## Auth Endpoints\n- POST /api/auth/login\n- POST /api/auth/register\n- GET /api/auth/me\n- POST /api/auth/logout\n")
+        except Exception as _e:
+            print(f"[startup] memory/test_credentials.md write skipped: {_e}")
 
     # iter90ax : Scheduler backup quotidien 00h00 Europe/Brussels
     try:
