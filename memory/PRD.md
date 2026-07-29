@@ -505,3 +505,26 @@ Le chatbot support ("Assistant NextGe Copro") peut desormais **analyser les resu
 - Test Q "Solde propriétaire bizarre" -> priorise cause n°1 (88 extraits non comptabilises), propose Auto-lettrage VCS, anticipe cas solde eleve vs negatif.
 - Test hallucination (bouton fictif) -> chatbot refuse et escalade.
 
+
+## iter93aj (2026-02-28) - Chatbot support : analyse des frais privatifs
+### Nouvelle fonctionnalite
+Le chatbot inclut desormais les **frais privatifs** (`is_private_fee=true`, compte 643 charges recuperables) dans son analyse diagnostique.
+### Backend (`support.py`)
+- `_compute_diagnostic_snapshot` calcule 3 nouvelles metriques :
+  - Total factures privatifs (`is_private_fee=true`)
+  - Nombre de privatifs impayes (statut `unpaid` / `partially_paid`)
+  - Montant total impaye (agregation `$sum` sur `total_amount`)
+- Nouvelle ligne dans le snapshot : "Frais privatifs : N au total, dont M impaye(s) pour X EUR"
+- Montant formate via `fmt_eur()` (espace millier + virgule).
+### System prompt
+- Section troubleshooting "Balance de tiers anormale" enrichie avec cas privatif impaye.
+- Nouvelle section "Frais privatifs (comptabilite specifique)" expliquant :
+  - Champ `is_private_fee` + compte 643 recuperable
+  - Structure `private_fee_allocations` multi-proprios
+  - Ecriture ACH generee (Debit 643 / Credit 440xxx)
+  - **Regle** : le 643 doit revenir a zero en fin d'exercice via refacturation aux proprios (appel special ou OD Debit 4xxx / Credit 643).
+### Trigger keywords elargis
+- Ajout de `privatif`, `privative`, `643`, `refacture`, `refacturation`, `analyse`, `verifier`, `controler`, `audit`, `comptabilite`, `compta` aux `_DIAGNOSTIC_KEYWORDS`.
+### Verification
+- Question "Analyse mes frais privatifs" -> Reponse cite **10 factures pour 1 590,00 EUR**, identifie le probleme (100% impaye), explique impact comptable (gonflement charges), propose 2 solutions concretes (Appel special OU OD Debit 4xxx / Credit 643) avec chemins d'onglets exacts.
+

@@ -250,6 +250,16 @@ Quand un syndic te demande "pourquoi mon bilan n'est pas equilibre" ou similaire
 1. Proprietaire avec solde > 0 (debiteur) sans appel de fonds correspondant -> Manque une ecriture VE.
 2. Fournisseur avec solde > 0 sans facture -> Manque une ecriture ACH.
 3. Appels de fonds lettres 2 fois -> Verifier les doublons dans "Journaux > VE".
+4. **Frais privatif impaye** : une facture marquee `is_private_fee=true` est imputee directement au proprietaire via le compte 643 (charges recuperables) au lieu de la cle de repartition standard. Si le proprietaire ne l'a pas paye, son solde 4xx est alourdi sans qu'aucun appel de fonds ne le facture. -> Aller dans "Facturation" et filtrer par frais privatif ; verifier que le proprietaire a bien recu un decompte ou un appel special pour ces montants.
+
+**Frais privatifs (comptabilite spécifique)** :
+Un frais privatif est une facture fournisseur imputee directement a un ou plusieurs proprietaires (sans passer par la cle de repartition), typiquement pour des travaux dans un lot specifique, une consommation individuelle, ou une prestation nominative.
+- Champ `is_private_fee=true` sur la facture
+- Compte comptable : **643** (charges recuperables) au lieu d'un 6xxx classique
+- Repartition : via `private_fee_allocations` (multi-proprios) ou `private_fee_owner_id` (legacy)
+- Ecriture ACH generee : Debit 643 (charge recuperable) / Credit 440xxx (fournisseur)
+- Recuperation : le montant doit ensuite etre facture au(x) proprietaire(s) via un appel special OU un OD de refacturation (Debit 4xxx proprio / Credit 643)
+Si un frais privatif reste NON refacture au proprietaire, il gonfle artificiellement les charges globales et le proprietaire n'a rien a payer. Le compte 643 doit toujours revenir a zero en fin d'exercice.
 
 **Methodologie de diagnostic** :
 Quand un syndic te demande "pourquoi X ne fonctionne pas", tu :
@@ -299,6 +309,10 @@ _DIAGNOSTIC_KEYWORDS = [
     "pourquoi", "erreur", "probleme", "anormal",
     "ne fonctionne", "manquant", "manque", "diagnostic",
     "extrait", "cloture", "cloturer", "report",
+    # iter93aj : mots-cles frais privatifs et analyse comptable generale
+    "privatif", "privative", "643", "refacture", "refacturation",
+    "analyse", "analyser", "verifier", "controler", "audit",
+    "comptabilite", "compta",
 ]
 
 
@@ -360,10 +374,33 @@ async def _compute_diagnostic_snapshot(db, copropriete_id: str) -> str:
              "status": {"$in": ["unpaid", "partially_paid", None, ""]}}
         )
 
+        # iter93aj : frais privatifs (factures imputees directement a des proprios via 643)
+        priv_total = await db.invoices.count_documents(
+            {"copropriete_id": copropriete_id, "is_private_fee": True}
+        )
+        priv_unpaid = await db.invoices.count_documents(
+            {"copropriete_id": copropriete_id,
+             "is_private_fee": True,
+             "status": {"$in": ["unpaid", "partially_paid", None, ""]}}
+        )
+        # Somme des montants privatifs impayes
+        priv_amount_pipeline = [
+            {"$match": {
+                "copropriete_id": copropriete_id,
+                "is_private_fee": True,
+                "status": {"$in": ["unpaid", "partially_paid", None, ""]},
+            }},
+            {"$group": {"_id": None, "s": {"$sum": {"$ifNull": ["$total_amount", 0]}}}},
+        ]
+        priv_amt_rs = await db.invoices.aggregate(priv_amount_pipeline).to_list(1)
+        priv_unpaid_amount = float((priv_amt_rs[0].get("s") if priv_amt_rs else 0) or 0)
+
         # Nom de l'ACP pour contextualiser
         acp = await db.coproprietes.find_one({"id": copropriete_id}, {"_id": 0, "name": 1})
         acp_name = (acp or {}).get("name", copropriete_id[:8])
 
+        # iter93aj : format espace millier + virgule decimale pour montants
+        from utils.format import fmt_eur as _fmt_eur
         lines = [
             f"=== CONTEXTE DIAGNOSTIC DE L'ACP \u00ab {acp_name} \u00bb ===",
             f"- Ecritures desequilibrees (Debit != Credit) : {deseq_count}",
@@ -371,6 +408,9 @@ async def _compute_diagnostic_snapshot(db, copropriete_id: str) -> str:
             f"- Appels de fonds crees : {fc_count}",
             f"- Extraits bancaires : {stmt_draft} en brouillon, {stmt_posted} comptabilises",
             f"- Factures non integralement payees : {inv_unpaid}",
+            f"- Frais privatifs (factures imputees a des proprios via cpt 643) : "
+            f"{priv_total} au total, dont {priv_unpaid} impaye(s) "
+            f"pour {_fmt_eur(priv_unpaid_amount)}",
             "Utilise ces chiffres reels pour personnaliser ta reponse.",
             "===",
         ]
