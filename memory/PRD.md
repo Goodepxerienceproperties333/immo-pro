@@ -456,3 +456,20 @@ En cas de regression future, utiliser le rollback Emergent vers ce commit.
 - Lint : OK.
 - Page /coproprietes charge sans erreur.
 
+
+## iter93ah (2026-02-28) - Bug fix regression SEC-002 : lettrage fournisseur/proprietaire
+### Bug corrige
+- **P0 (regression iter93af)** : Le lettrage vers un fournisseur ou proprietaire echouait avec `HTTP 404 "Supplier_payment cible non trouve"` / `Owner_payment cible non trouve`.
+### Cause racine
+- Dans le fix SEC-002 (iter93af), j'avais suppose que `match_to_id` etait un ID de record `supplier_payments` / `owner_payments`. En realite, pour `match_type='supplier_payment'` / `'owner_payment'`, `match_to_id` est l'ID du **supplier** / **owner** directement (le paiement virtuel est materialise par le champ `matched_to` sur la transaction elle-meme, pas par un document dedie).
+### Fix
+- `routes/banking.py::lettrage` : correction du mapping match_type -> collection :
+  - `invoice` -> `db.invoices` (verification syndic_query stricte)
+  - `supplier_payment` -> `db.suppliers` (verification existence, visibilite deja gerée par _get_scope_for_filter en amont)
+  - `owner_payment` -> `db.owners` (idem)
+- Message d'erreur clarifie : "Fournisseur cible non trouve" / "Proprietaire cible non trouve" au lieu du technique "Supplier_payment cible non trouve".
+### Verification
+- Test lettrage supplier valide : HTTP 200.
+- Test lettrage supplier inexistant : HTTP 404 "Fournisseur cible non trouve".
+- Unlettrage cleanup : OK.
+

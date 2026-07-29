@@ -1610,25 +1610,42 @@ def create_banking_router(db):
     # ---- LETTRAGE ----
     @router.post("/lettrage")
     async def lettrage(data: LettrageInput, request: Request):
-        # iter93af (SEC-002) : verifier que la transaction ET le match cible
-        # (facture, owner_payment, supplier_payment) appartiennent au meme syndic
+        # iter93af (SEC-002) : verifier que la transaction ET la cible du lettrage
+        # appartiennent au meme syndic (isolation multi-tenant).
+        # Note (iter93ah) : pour match_type='supplier_payment' / 'owner_payment',
+        # match_to_id est en realite l'ID du SUPPLIER / OWNER (pas d'un record
+        # de paiement) - le paiement virtuel est materialise par le champ
+        # `matched_to` sur la transaction elle-meme. On verifie donc contre les
+        # bonnes collections.
         from syndic_scope import syndic_query
         _scope = syndic_query(request)
         txn = await db.bank_transactions.find_one({"id": data.transaction_id, **_scope}, {"_id": 0})
         if not txn:
             raise HTTPException(404, "Transaction non trouvee")
-        # Verifie que l'objet cible appartient bien au meme syndic
         _target_col = None
+        _target_label = data.match_type
         if data.match_type == "invoice":
             _target_col = db.invoices
-        elif data.match_type == "owner_payment":
-            _target_col = db.owner_payments
+            _target_label = "Facture"
         elif data.match_type == "supplier_payment":
-            _target_col = db.supplier_payments
+            # match_to_id est un supplier_id (fournisseurs sont global-scoped
+            # par visibilite ACP, pas syndic_id - on skip la verif syndic ici)
+            _target_col = db.suppliers
+            _target_label = "Fournisseur"
+        elif data.match_type == "owner_payment":
+            # match_to_id est un owner_id
+            _target_col = db.owners
+            _target_label = "Proprietaire"
         if _target_col is not None:
-            _tgt = await _target_col.find_one({"id": data.match_to_id, **_scope}, {"_id": 0, "id": 1})
+            # Pour invoices : verif syndic stricte. Pour owners/suppliers :
+            # verif existence seulement (visibilite deja controlee par _get_scope_for_filter
+            # au niveau de la recherche/selection).
+            if data.match_type == "invoice":
+                _tgt = await _target_col.find_one({"id": data.match_to_id, **_scope}, {"_id": 0, "id": 1})
+            else:
+                _tgt = await _target_col.find_one({"id": data.match_to_id}, {"_id": 0, "id": 1})
             if not _tgt:
-                raise HTTPException(404, f"{data.match_type.capitalize()} cible non trouve")
+                raise HTTPException(404, f"{_target_label} cible non trouve")
         await db.bank_transactions.update_one(
             {"id": data.transaction_id},
             {"$set": {"matched": True, "matched_to": data.match_to_id, "match_type": data.match_type}}
