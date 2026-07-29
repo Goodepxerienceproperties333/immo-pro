@@ -491,9 +491,34 @@ export default function InvoicesPage() {
       }
       // iter85e : validation allocations frais privatif (centimes pour eviter
       // les erreurs d'arrondi flottants)
+      // iter93bg : validation stricte "au moins un proprietaire selectionne".
+      // On verifie d'abord AVANT le filter que chaque ligne a un owner_id.
+      // Cela permet un message d'erreur precis "proprietaire manquant sur
+      // ligne N" plutot que "au moins un proprietaire requis".
       let cleanedAllocs = null;
       if (invForm.is_private_fee) {
-        const allocs = (invForm.private_fee_allocations || []).filter(a => a.owner_id && Number(a.amount) > 0);
+        const rawAllocs = invForm.private_fee_allocations || [];
+        if (rawAllocs.length === 0) {
+          toast.error(
+            'Frais privatif : au moins un proprietaire doit etre selectionne. '
+            + 'Cliquez sur "+ Ajouter un proprietaire" pour repartir la facture.',
+            { duration: 6000 }
+          );
+          return;
+        }
+        // Verifie chaque ligne : owner_id obligatoire (message precis par ligne)
+        for (let i = 0; i < rawAllocs.length; i++) {
+          const a = rawAllocs[i];
+          if (!a.owner_id || String(a.owner_id).trim() === '') {
+            toast.error(
+              `Frais privatif : proprietaire manquant sur la ligne d'allocation ${i + 1}. `
+              + `Selectionnez un proprietaire ou supprimez la ligne.`,
+              { duration: 6000 }
+            );
+            return;
+          }
+        }
+        const allocs = rawAllocs.filter(a => a.owner_id && Number(a.amount) > 0);
         if (allocs.length === 0) {
           toast.error('Frais privatif : au moins un proprietaire avec un montant > 0 requis');
           return;
@@ -1313,8 +1338,23 @@ export default function InvoicesPage() {
                       <span className="text-slate-400 italic">(par defaut : seulement ceux de cette ACP)</span>
                     </label>
                     {allocs.length === 0 && (
-                      <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
-                        Aucun proprietaire selectionne. Cliquez sur &laquo;+ Ajouter un proprietaire&raquo; pour repartir la facture.
+                      <div
+                        className="text-xs text-rose-800 bg-rose-50 border border-rose-300 rounded p-2 font-medium"
+                        data-testid="private-fee-no-owner-error"
+                      >
+                        <b>Frais privatif obligatoirement lie a un proprietaire :</b> la sauvegarde est
+                        bloquee tant qu&apos;au moins un proprietaire n&apos;a pas ete ajoute.
+                        Cliquez sur &laquo;+ Ajouter un proprietaire&raquo; ci-dessus pour repartir la facture.
+                      </div>
+                    )}
+                    {allocs.length > 0 && allocs.some(a => !a.owner_id) && (
+                      <div
+                        className="text-xs text-rose-800 bg-rose-50 border border-rose-300 rounded p-2 font-medium"
+                        data-testid="private-fee-missing-owner-error"
+                      >
+                        <b>Proprietaire manquant :</b> une ou plusieurs lignes d&apos;allocation n&apos;ont
+                        pas de proprietaire selectionne. Selectionnez un proprietaire pour chaque
+                        ligne ou supprimez la ligne vide.
                       </div>
                     )}
                     {allocs.map((a, idx) => {
@@ -1827,9 +1867,26 @@ export default function InvoicesPage() {
               )}
               <Button
                 onClick={saveInvoice}
-                disabled={aiExtracting}
+                disabled={aiExtracting || (() => {
+                  // iter93bg : bloque le clic quand "frais privatif" est coche
+                  // sans proprietaire assigne (ou avec un proprietaire vide).
+                  // Le backend refuserait de toute facon (400) mais on empeche
+                  // meme la tentative pour un feedback UX immediat.
+                  if (!invForm.is_private_fee) return false;
+                  const allocs = invForm.private_fee_allocations || [];
+                  if (allocs.length === 0) return true;
+                  if (allocs.some(a => !a.owner_id || String(a.owner_id).trim() === '')) return true;
+                  return false;
+                })()}
                 className="bg-[#022D52] hover:bg-[#1D4ED8] disabled:opacity-50 disabled:cursor-not-allowed"
-                title={aiExtracting ? "Extraction IA en cours - patientez..." : ""}
+                title={
+                  aiExtracting
+                    ? "Extraction IA en cours - patientez..."
+                    : (invForm.is_private_fee && ((invForm.private_fee_allocations || []).length === 0
+                        || (invForm.private_fee_allocations || []).some(a => !a.owner_id || String(a.owner_id).trim() === '')))
+                      ? "Frais privatif : selectionnez au moins un proprietaire pour pouvoir enregistrer"
+                      : ""
+                }
                 data-testid="inv-save-btn"
               >
                 {aiExtracting ? (

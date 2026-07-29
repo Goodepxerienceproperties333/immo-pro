@@ -1379,14 +1379,23 @@ def create_invoices_router(db):
                         400,
                         f"Somme des allocations ({total_alloc_cents/100:.2f}) doit egaler le total de la facture ({total_invoice_cents/100:.2f}). Ecart : {(total_invoice_cents - total_alloc_cents)/100:.2f} EUR",
                     )
-            elif data.private_fee_owner_id:
-                # Legacy single-owner
-                owner = await db.owners.find_one({"id": data.private_fee_owner_id}, {"_id": 0})
+            elif data.private_fee_owner_id and str(data.private_fee_owner_id).strip():
+                # Legacy single-owner (uniquement si owner_id non-vide et non-whitespace)
+                owner = await db.owners.find_one({"id": str(data.private_fee_owner_id).strip()}, {"_id": 0})
                 if not owner:
                     raise HTTPException(404, "Proprietaire non trouve")
-                resolved_private_allocs = [{"owner_id": data.private_fee_owner_id, "amount": round(float(data.total_amount), 2)}]
+                resolved_private_allocs = [{"owner_id": str(data.private_fee_owner_id).strip(), "amount": round(float(data.total_amount), 2)}]
             else:
-                raise HTTPException(400, "Au moins un proprietaire doit etre selectionne pour un frais privatif")
+                # iter93bg : rejette explicitement si is_private_fee=True mais aucun
+                # proprietaire (ni via allocations, ni via legacy field). Message
+                # aligne avec la validation frontend.
+                raise HTTPException(
+                    400,
+                    "Frais privatif : au moins un proprietaire doit etre selectionne "
+                    "(champ 'private_fee_allocations' non vide, ou 'private_fee_owner_id' "
+                    "renseigne). Une facture marquee 'is_private_fee=true' ne peut pas "
+                    "etre enregistree sans proprietaire cible."
+                )
             account_number = "643"
         # iter90g9 : verrou PCMN - une facture DOIT toujours avoir un compte
         # comptable affecte. Impossible d'enregistrer une facture "orpheline"
@@ -2069,13 +2078,20 @@ def create_invoices_router(db):
                         400,
                         f"Somme des allocations ({total_alloc_cents/100:.2f}) doit egaler le total de la facture ({total_invoice_cents/100:.2f}). Ecart : {(total_invoice_cents - total_alloc_cents)/100:.2f} EUR",
                     )
-            elif data.private_fee_owner_id:
-                owner = await db.owners.find_one({"id": data.private_fee_owner_id}, {"_id": 0})
+            elif data.private_fee_owner_id and str(data.private_fee_owner_id).strip():
+                owner = await db.owners.find_one({"id": str(data.private_fee_owner_id).strip()}, {"_id": 0})
                 if not owner:
                     raise HTTPException(404, "Proprietaire non trouve")
-                resolved_private_allocs_upd = [{"owner_id": data.private_fee_owner_id, "amount": round(float(data.total_amount), 2)}]
+                resolved_private_allocs_upd = [{"owner_id": str(data.private_fee_owner_id).strip(), "amount": round(float(data.total_amount), 2)}]
             else:
-                raise HTTPException(400, "Au moins un proprietaire doit etre selectionne pour un frais privatif")
+                # iter93bg : identique au POST - rejet strict si aucun proprietaire.
+                raise HTTPException(
+                    400,
+                    "Frais privatif : au moins un proprietaire doit etre selectionne "
+                    "(champ 'private_fee_allocations' non vide, ou 'private_fee_owner_id' "
+                    "renseigne). Une facture marquee 'is_private_fee=true' ne peut pas "
+                    "etre enregistree sans proprietaire cible."
+                )
             account_number = "643"
         # iter90g9 : meme verrou que create_invoice - impossible d'enregistrer
         # une facture sans compte comptable (voir explication dans POST /invoices).
