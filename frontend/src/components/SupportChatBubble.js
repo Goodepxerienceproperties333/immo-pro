@@ -86,7 +86,13 @@ export default function SupportChatBubble() {
     const optimistic = { id: 'tmp-' + Date.now(), role: 'user', content: text, created_at: nowIso };
     setMsgs(m => [...m, optimistic]);
     try {
-      const { data } = await api.post(`/support/conversations/${activeConv.id}/chat`, { message: text });
+      // iter93ai : passe le copropriete_id courant pour permettre au chatbot
+      // d'analyser les donnees reelles (bilan, ecritures, extraits...).
+      const copro = (typeof window !== 'undefined')
+        ? (localStorage.getItem('selected_copro') || '')
+        : '';
+      const { data } = await api.post(`/support/conversations/${activeConv.id}/chat`,
+        { message: text, copropriete_id: copro || null });
       setMsgs(m => [...m.filter(x => x.id !== optimistic.id),
                     { ...optimistic, id: 'u-' + Date.now() },
                     data.assistant_message]);

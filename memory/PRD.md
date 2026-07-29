@@ -473,3 +473,35 @@ En cas de regression future, utiliser le rollback Emergent vers ce commit.
 - Test lettrage supplier inexistant : HTTP 404 "Fournisseur cible non trouve".
 - Unlettrage cleanup : OK.
 
+
+## iter93ai (2026-02-28) - Chatbot support : analyse comptable + diagnostic base sur donnees reelles
+### Nouvelle fonctionnalite
+Le chatbot support ("Assistant NextGe Copro") peut desormais **analyser les resultats comptables reels d'une ACP** et diagnostiquer les problemes courants (bilan non equilibre, balance tiers anormale, extraits non comptabilises, etc.).
+### Ameliorations du system prompt (support.py)
+- **Structure sidebar mise a jour** : 5 sections (GESTION, COMPTABILITE, FINANCE, RAPPORTS, SUPPORT) avec libelles exacts.
+- **Procedures exhaustives couvertes** : wizard 6 etapes, lettrage/delettrage, imports (CODA/PDF/CSV), auto-lettrage VCS, appels 4 types, budgets classe 6+7, mutations avec fallback key, OD, exercices, rapports.
+- **Section "DIAGNOSTIC & TROUBLESHOOTING COMPTABLE"** : liste des causes classiques et procedures pour :
+  - Bilan non equilibre (5 causes chiffrees)
+  - Compte de resultats anormal
+  - Extrait bancaire non equilibre
+  - Balance de tiers anormale
+- **Methodologie de diagnostic** : concept + 3-4 causes + chemins de verification + invitation escalade.
+- **Regles strictes** : cite noms exacts, base uniquement sur procedures documentees, escalade obligatoire pour bugs/facturation, `[[NEEDS_ESCALATION]]` marker.
+### Injection de contexte diagnostique reel
+- `ChatMessageInput` accepte desormais `copropriete_id` optionnel.
+- Detection auto (via mots-cles : `bilan`, `equilibre`, `deseq`, `balance`, `solde`, `pourquoi`, `probleme`, ...) : si la question porte sur du diagnostic ET qu'un copropriete_id est fourni, on execute `_compute_diagnostic_snapshot()`.
+- Le snapshot contient : ecritures deseq, exercices ouverts/clotures, appels de fonds, extraits brouillon vs comptabilises, factures non payees, nom de l'ACP.
+- Ces metriques sont injectees en debut de prompt LLM pour permettre des reponses personnalisees chiffrees.
+### Fichiers modifies
+- `/app/backend/routes/support.py` :
+  - System prompt reecrit (structure sidebar exacte + section troubleshooting comptable + regles strictes anti-hallucination).
+  - `ChatMessageInput.copropriete_id` optionnel.
+  - `_compute_diagnostic_snapshot(db, copropriete_id)` : agregation Mongo async des metriques cles.
+  - `_DIAGNOSTIC_KEYWORDS` : mots-cles trigger.
+  - Chat endpoint : injection du contexte diagnostic si applicable.
+- `/app/frontend/src/components/SupportChatBubble.js` : passe `localStorage.selected_copro` en payload chat.
+### Verification
+- Test Q "Pourquoi mon bilan n'est pas equilibre ?" -> reponse cite "88 extraits en brouillon", "72 factures non payees", "11 appels de fonds", "aucune ecriture desequilibree", ordre d'intervention priorise.
+- Test Q "Solde propriétaire bizarre" -> priorise cause n°1 (88 extraits non comptabilises), propose Auto-lettrage VCS, anticipe cas solde eleve vs negatif.
+- Test hallucination (bouton fictif) -> chatbot refuse et escalade.
+
