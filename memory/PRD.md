@@ -528,3 +528,27 @@ Le chatbot inclut desormais les **frais privatifs** (`is_private_fee=true`, comp
 ### Verification
 - Question "Analyse mes frais privatifs" -> Reponse cite **10 factures pour 1 590,00 EUR**, identifie le probleme (100% impaye), explique impact comptable (gonflement charges), propose 2 solutions concretes (Appel special OU OD Debit 4xxx / Credit 643) avec chemins d'onglets exacts.
 
+
+
+## iter93bg - Validation stricte "Frais privatif requires owner" (Feb 2026 - DONE)
+
+### Contexte
+Bug utilisateur : "on ne peut pas avoir coche la case 'frais privatif' et sauver la facture sans avoir de proprietaire selectionne". La validation existait deja mais l'UX n'etait pas assez claire (message amber trop faible, bouton Save actif sans blocage visuel).
+
+### Backend (`/app/backend/routes/invoices.py`)
+- POST `/api/invoices` : rejet 400 explicite si `is_private_fee=True` sans `private_fee_allocations` (valides) NI `private_fee_owner_id` non-vide.
+- PUT `/api/invoices/{id}` : meme regle.
+- `private_fee_owner_id` avec whitespace uniquement -> rejete (`.strip()` obligatoire).
+- Messages d'erreur explicites : "Frais privatif : au moins un proprietaire doit etre selectionne (champ 'private_fee_allocations' non vide, ou 'private_fee_owner_id' renseigne). Une facture marquee 'is_private_fee=true' ne peut pas etre enregistree sans proprietaire cible."
+
+### Frontend (`/app/frontend/src/pages/InvoicesPage.js`)
+- Fonction `saveInvoice` : nouvelle boucle qui valide chaque allocation individuellement AVANT le filter, avec message "proprietaire manquant sur la ligne d'allocation N".
+- Bouton "Enregistrer" (`data-testid="inv-save-btn"`) : prop `disabled` inline evalue en live -> desactive quand allocations vides OU allocations avec owner_id vide/whitespace.
+- Deux banners rouges/roses persistants :
+  - `data-testid="private-fee-no-owner-error"` (aucune allocation)
+  - `data-testid="private-fee-missing-owner-error"` (allocation sans owner)
+- Ancien banner amber remplace par bordure `border-rose-300` + fond `bg-rose-50` pour signaler l'erreur bloquante.
+
+### Tests
+- `/app/backend/tests/test_iter93bg_private_fee_owner_required.py` : 6 tests pytest (POST no-owner, empty list, empty owner_id, whitespace legacy owner, valid allocation, PUT flow) - **6/6 PASSENT**.
+- Testing agent `testing_agent_v3_fork` : backend 100%, frontend 100%.
