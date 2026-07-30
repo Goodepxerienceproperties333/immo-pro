@@ -498,11 +498,12 @@ export default function InvoicesPage() {
         return;
       }
       // Validation cote front : si mode multi-lignes, somme = total
-      const usesMultiLines = (invForm.lines || []).length > 0;
+      // iter93bs : quand is_private_fee=true, les lignes multiples sont
+      // ignorees (le backend les vide). Le flow hybride utilise
+      // private_fee_allocations + common_charge_* a la place. On saute
+      // donc la validation multi-lignes dans ce cas.
+      const usesMultiLines = !invForm.is_private_fee && (invForm.lines || []).length > 0;
       if (usesMultiLines) {
-        if (invForm.is_private_fee) {
-          toast.error('Frais privatif incompatible avec lignes multiples'); return;
-        }
         const sum = invForm.lines.reduce((s, l) => s + (Number(l.amount) || 0), 0);
         if (Math.abs(sum - Number(invForm.total_amount || 0)) > 0.01) {
           toast.error(`Somme des lignes (${fmtEUR(sum)}) different du total facture (${fmtEUR(Number(invForm.total_amount))})`);

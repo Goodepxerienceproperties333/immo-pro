@@ -1595,7 +1595,7 @@ def create_invoices_router(db):
             "expense_category_id": data.expense_category_id or "",
             "distribution_key_id": "" if data.is_private_fee else data.distribution_key_id,
             "distribution_lines": distribution_lines,
-            "lines": resolved_lines,  # [] = mode 1-ligne legacy
+            "lines": [] if data.is_private_fee else resolved_lines,  # [] = mode 1-ligne legacy ou private_fee
             "status": data.status,
             "copropriete_id": data.copropriete_id or "",
             "is_private_fee": bool(data.is_private_fee),
