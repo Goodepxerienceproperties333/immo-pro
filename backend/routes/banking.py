@@ -3457,7 +3457,7 @@ def create_banking_router(db):
 
     # ---- BATCH TRANSACTIONS ----
     @router.post("/transactions/batch")
-    async def create_batch_transactions(data: BatchTransactionInput):
+    async def create_batch_transactions(data: BatchTransactionInput, request: Request):
         """Create multiple transactions at once for a statement."""
         stmt = await db.bank_statements.find_one({"id": data.statement_id}, {"_id": 0})
         if not stmt:

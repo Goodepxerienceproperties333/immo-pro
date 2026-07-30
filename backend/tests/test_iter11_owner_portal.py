@@ -19,8 +19,8 @@ import requests
 
 BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://teuwen-reports.preview.emergentagent.com").rstrip("/")
 
-ADMIN_EMAIL = "admin@copro.be"
-ADMIN_PASSWORD = "admin123"
+ADMIN_EMAIL = os.environ.get("TEST_ADMIN_EMAIL", "admin@copro.be")
+ADMIN_PASSWORD = os.environ.get("TEST_ADMIN_PASSWORD", "admin123")
 
 SOPHIE_EMAIL = "sophie.martin@example.be"
 SOPHIE_PASSWORD = "sophie123"

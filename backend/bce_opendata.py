@@ -32,8 +32,9 @@ import zipfile
 from datetime import datetime, timezone
 from typing import AsyncIterator, Optional
 
-# Reutilise les stopwords + normalisation de bce_lookup pour la coherence.
-from bce_lookup import _norm, _tokens, token_similarity  # noqa: F401 (utilise par search)
+# Reutilise les stopwords + normalisation depuis le module partage
+# `bce_shared` (iter93bk) pour supprimer le cycle circulaire avec bce_lookup.
+from bce_shared import _norm, _tokens, token_similarity  # noqa: F401 (utilise par search)
 
 BATCH_SIZE = 2000  # taille des insert_many
 COLLECTION = "bce_opendata"

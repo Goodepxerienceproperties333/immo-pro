@@ -3,6 +3,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime, timezone
+import re
 import uuid
 import io
 
@@ -62,7 +63,7 @@ def _exclude_reversals(q: dict) -> dict:
     return exclude_reversals(q)
 
 
-_MUTATION_LOT_RE = __import__("re").compile(
+_MUTATION_LOT_RE = re.compile(
     r"^\s*(?:\[[A-Z]{2,3}\]\s*)?"        # optionnel "[OD] "
     r"(?:Operation\s*:\s*)?"              # optionnel "Operation : "
     r"Mutation\s+lot\s+\S+\s*-\s*"        # "Mutation lot XXX -"
@@ -2961,7 +2962,9 @@ def create_reports_router(db):
         """
         import uuid as _uuid
         from datetime import datetime as _dt, timezone as _tz
-        _ensure_copro_access(request, data.copropriete_id) if False else None  # noqa
+        # iter93bk : suppression de la ligne morte `_ensure_copro_access(...)
+        # if False else None` (F821 : symbole inexistant, code jamais execute).
+        # L'ACL est faite manuellement juste apres.
         # ACL manuel
         role = getattr(request.state, "user_role", "")
         if role not in ("superadmin", "admin"):

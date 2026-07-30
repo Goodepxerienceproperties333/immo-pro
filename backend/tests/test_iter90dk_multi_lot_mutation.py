@@ -24,7 +24,7 @@ sys.path.insert(0, "/app/backend")
 
 # On teste via httpx contre le serveur en local (supervisor)
 BASE_URL = "http://localhost:8001"
-ADMIN_EMAIL = "admin@copro.be"
+ADMIN_EMAIL = os.environ.get("TEST_ADMIN_EMAIL", "admin@copro.be")
 ADMIN_PWD = "admin123"
 
 

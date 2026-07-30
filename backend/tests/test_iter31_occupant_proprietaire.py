@@ -11,7 +11,7 @@ import pytest
 import requests
 
 BASE = os.environ.get("REACT_APP_BACKEND_URL").rstrip("/")
-SUPER_EMAIL = "admin@copro.be"
+SUPER_EMAIL = os.environ.get("TEST_ADMIN_EMAIL", "admin@copro.be")
 SUPER_PWD = "admin123"
 DEMO_COPRO_ID = "6748ca1a-216d-4002-8417-799287238736"
 

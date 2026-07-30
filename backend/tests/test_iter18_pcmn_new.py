@@ -7,7 +7,7 @@ import requests
 
 BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://teuwen-reports.preview.emergentagent.com").rstrip("/")
 DEMO_ACP = "6748ca1a-216d-4002-8417-799287238736"
-ADMIN_EMAIL = "admin@copro.be"
+ADMIN_EMAIL = os.environ.get("TEST_ADMIN_EMAIL", "admin@copro.be")
 ADMIN_PASS = "admin123"
 
 

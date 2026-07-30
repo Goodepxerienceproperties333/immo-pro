@@ -1,0 +1,26 @@
+{
+  "summary": "Backend regression testing after iter93bk cleanup lot (critical fixes: bce_shared extraction, banking Request param, dead code removal, static re imports, centralized test_credentials). All targeted checks PASSED.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter93bg_private_fee_owner_required.py",
+    "/app/backend/bce_shared.py",
+    "/app/backend/tests/test_credentials.py"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "pytest-asyncio was NOT installed in the venv. Installed pytest-asyncio 1.4.0 to run async regression tests. Consider adding pytest-asyncio to backend/requirements.txt (or a dev-requirements file) so future testing agents don't hit `async def functions are not natively supported` errors.",
+    "reports.py is 2964+ lines - still over the 700-line soft limit from code review guidelines. Split-up refactor is on the deferred Lot 5 backlog; keep it prioritized."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100%", "frontend": "not tested (as requested)"},
+  "test_credentials": "admin@copro.be / admin123 (superadmin) - validated via cookie-based /api/auth/login",
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "iter93bk cleanup lot verified: (1) ruff check --select F821 passes with 0 issues across /app/backend. (2) bce_shared.py exports _norm, _tokens, token_similarity, _STOPWORDS, _MULTISPACE_RE - imported cleanly by bce_lookup and bce_opendata (circular cycle broken; both modules import without error, `_norm('Engie SA')` = 'engie sa'). (3) routes/banking.py:3460 create_batch_transactions(data, request: Request) - Request param present. (4) routes/reports.py line 6 `import re`, line 66 `_MUTATION_LOT_RE = re.compile(...)`, no more `if False else None` dead code. (5) routes/expense_categories.py lines 127,216 use static `re.escape(...)` (no __import__). (6) tests/test_credentials.py exports ADMIN_EMAIL/ADMIN_PASSWORD/SYNDIC_ALPHA_*/SYNDIC_BETA_*/OWNER_*/GENERIC_TEST_PASSWORD + get_login_payload(role). (7) test_iter93bg_private_fee_owner_required.py: 6/6 PASSED (2.17s). (8) API smoke: POST /api/auth/login (cookie-based, no Bearer token in response body) -> 200; GET /api/coproprietes -> 200 with 4 items for admin; GET /api/invoices?copropriete_id=X -> 200; GET /api/expense-categories?copropriete_id=X -> 200; GET /api/auth/me -> 200; GET /api/health -> 200. NOTE for future testing: auth uses HttpOnly cookies, use curl -c/-b jar (not Bearer token from body). pytest-asyncio 1.4.0 was installed during this run - please add to requirements.",
+  "rca of the issue": "N/A - clean regression validation, no bugs found."
+}

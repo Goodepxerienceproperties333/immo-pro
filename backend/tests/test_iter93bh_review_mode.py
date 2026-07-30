@@ -10,7 +10,7 @@ import requests
 
 BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "").rstrip("/")
 
-ADMIN_EMAIL = "admin@copro.be"
+ADMIN_EMAIL = os.environ.get("TEST_ADMIN_EMAIL", "admin@copro.be")
 ADMIN_PW = "admin123"
 
 COPRO_ID = "56c54c9f-436e-4842-b511-a6913c23c6d2"

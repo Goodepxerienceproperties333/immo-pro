@@ -19,16 +19,15 @@ Test Cases:
 import pytest
 import requests
 import os
+import sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from test_credentials import (
+    ADMIN_EMAIL as SUPERADMIN_EMAIL, ADMIN_PASSWORD as SUPERADMIN_PASSWORD,
+    SYNDIC_ALPHA_EMAIL, SYNDIC_ALPHA_PASSWORD,
+    SYNDIC_BETA_EMAIL, SYNDIC_BETA_PASSWORD,
+)
 
 BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', '').rstrip('/')
-
-# Test credentials
-SUPERADMIN_EMAIL = "admin@copro.be"
-SUPERADMIN_PASSWORD = "admin123"
-SYNDIC_ALPHA_EMAIL = "syndic_alpha@copro.be"
-SYNDIC_ALPHA_PASSWORD = "Syndic123!"
-SYNDIC_BETA_EMAIL = "syndic_beta@copro.be"
-SYNDIC_BETA_PASSWORD = "Syndic123!"
 
 
 class TestSyndicIsolation:

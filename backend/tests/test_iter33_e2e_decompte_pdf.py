@@ -9,8 +9,8 @@ import pytest
 import requests
 
 BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://teuwen-reports.preview.emergentagent.com").rstrip("/")
-ADMIN_EMAIL = "admin@copro.be"
-ADMIN_PASSWORD = "admin123"
+ADMIN_EMAIL = os.environ.get("TEST_ADMIN_EMAIL", "admin@copro.be")
+ADMIN_PASSWORD = os.environ.get("TEST_ADMIN_PASSWORD", "admin123")
 ACP_ID = "252c2888-7c95-4a89-b19f-70de62f7bb4a"  # "Test" ACP (existing in DB)
 OWNER_ID = "f01f889d-1057-4b15-91a1-ca3a869ccabe"  # Dubois Jean (owns lot A4)
 FY_ID = "1f4a82e1-c1d4-487d-adea-4cc777c6f8d9"  # Exercice 2026 (status=closed)

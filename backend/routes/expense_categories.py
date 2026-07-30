@@ -124,7 +124,7 @@ def create_expense_categories_router(db):
             existing_name = await db.expense_categories.find_one(
                 {
                     "copropriete_id": data.copropriete_id or "",
-                    "name": {"$regex": f"^{__import__('re').escape(name_clean)}$", "$options": "i"},
+                    "name": {"$regex": f"^{re.escape(name_clean)}$", "$options": "i"},
                 },
                 {"_id": 0, "id": 1, "name": 1},
             )
@@ -213,7 +213,7 @@ def create_expense_categories_router(db):
             existing_name = await db.expense_categories.find_one(
                 {
                     "copropriete_id": existing.get("copropriete_id") or "",
-                    "name": {"$regex": f"^{__import__('re').escape(new_name)}$", "$options": "i"},
+                    "name": {"$regex": f"^{re.escape(new_name)}$", "$options": "i"},
                     "id": {"$ne": cat_id},
                 },
                 {"_id": 0, "id": 1, "name": 1},

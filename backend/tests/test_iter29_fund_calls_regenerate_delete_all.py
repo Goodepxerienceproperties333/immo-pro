@@ -21,8 +21,8 @@ if not _be:
         pass
 BASE_URL = (_be or "").rstrip("/")
 assert BASE_URL, "REACT_APP_BACKEND_URL must be set"
-ADMIN_EMAIL = "admin@copro.be"
-ADMIN_PASSWORD = "admin123"
+ADMIN_EMAIL = os.environ.get("TEST_ADMIN_EMAIL", "admin@copro.be")
+ADMIN_PASSWORD = os.environ.get("TEST_ADMIN_PASSWORD", "admin123")
 
 COPRO_DEMO = "6748ca1a-216d-4002-8417-799287238736"
 COPRO_TEST = "252c2888-7c95-4a89-b19f-70de62f7bb4a"
