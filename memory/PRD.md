@@ -607,3 +607,18 @@ Utilisateur : "lors de l'import optipro je n'ai pas eu a valider les factures un
 - `testing_agent_v3_fork` iteration_94 : backend 100% (4/4), frontend 100%.
 - Screenshot manuel valide : sur un orphelin cree temporairement, banner rouge "1/1", dialog auto-ouvert sur facture 0029, Save disable, banner d'erreur "private-fee-no-owner-error" visible.
 
+
+## iter93bj - Wizard : auto-reprise a la premiere etape non-terminee (Feb 2026 - DONE)
+
+### Contexte
+Utilisateur : "tu zappe les etapes apres la validation de la facture donc pas de bilan demande" (recap montrait "OD d'ouverture: -" manquant). Root cause : apres la revue des factures dans /invoices, l'utilisateur revenait au wizard qui repartait a stepIdx=0. Il cliquait "Etape deja validee - Continuer" en autopilote, puis "Passer cette etape" sans realiser qu'il sautait le bilan comptable (opening_balance).
+
+### Fix
+1. **Auto-jump (`ImportWizardPage.js` ligne 188+)** : au chargement de la session, on cherche l'index de la premiere etape dont `session.steps[key].count > 0 || inserted > 0 || fiscal_year_id` est faux (= non-terminee), et on `setStepIdx(firstUndoneIdx)`. Un toast INFO annonce "Reprise du wizard a l'etape 'XYZ' (N etape(s) deja validee(s) auparavant)".
+2. **Action toast "Retourner au wizard" (`InvoicesPage.js` ligne 780+)** : le toast SUCCESS de fin de revue inclut maintenant un bouton d'action (Sonner action label) qui navigue vers `/import-wizard`. `useNavigate` importe et instancie au haut du composant.
+3. **Sortie propre du mode revue** : les params `review_session`, `review_index`, `filter` sont TOUS supprimes de l'URL apres fin de revue.
+
+### Testing
+- `testing_agent_v3_fork` iteration_95 : frontend 100% (3/3 scenarios).
+- Screenshot manuel : sur ACP Gaura 3 avec 5 etapes deja faites, /import-wizard demarre bien sur "Etape 6/8 : Journaux financiers" avec le toast bleu.
+
