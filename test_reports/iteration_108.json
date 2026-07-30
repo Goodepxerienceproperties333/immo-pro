@@ -1,0 +1,26 @@
+{
+  "summary": "iter93ci (multi-document upload + LLM comparative table) VALIDATED end-to-end. Backend pytest 5/5 PASS (32.5s including a real LLM E2E call): (1) sequential upload of PDF (optipro fixture) + CSV (nextge-style) in the same conversation persists both as user_attachment messages; (2) bad extension still rejected inside a multi-doc conv (400); (3) E2E — with 2 docs attached and prompt 'Compare le solde Guerit', the LLM produces a MARKDOWN TABLE (pipes + '---' separator) referencing both docs (Optipro + NextGe or values 26,96 vs 26,95) AND cites metier rules (iter93cf/iter93cg/repartition/rounding 0,10) — confirms the iter93ci comparative hint in support.py:788-808 is effective; (4) regression: single-doc upload still returns a normal answer citing 26,96 (no forced table); (5) regression: /api/support/conversations list still 200. Frontend Playwright E2E: superadmin login OK, support bubble opens, new-conv routes to 'Question operationnelle', hidden input has multiple + accept='.pdf,.csv', attach button title='Joindre des documents (PDF ou CSV, max 3 fichiers)', selecting [PDF, CSV] together triggers 2 sequential uploads and produces 2 badges (PDF·2760 car., CSV·76 car.), selecting 4 files triggers toast 'Maximum 3 documents par upload', selecting a .txt triggers toast 'bad.txt : type non supporte (PDF ou CSV uniquement)'. All validation branches in uploadDocument() (SupportChatBubble.js:116-176) confirmed. No blocking issues.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter93ci_multi_upload.py",
+    "/app/test_reports/pytest/iter108.xml",
+    "/app/test_reports/iter108_multi_upload.png"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "support.py:798-808 — comparative hint is injected only when len(recent_attachments) >= 2 in the last 10 messages window: correct scoping, does not force a table on single-doc conversations (verified by regression test).",
+    "SupportChatBubble.js:119-134 — validation ordering is correct: count check first, then per-file extension+size loop with early return on first failure and no partial upload (good UX).",
+    "SupportChatBubble.js:139-159 — sequential await inside for-loop avoids concurrent CPU-heavy pdfplumber extraction on the server. Nice.",
+    "SupportChatBubble.js:161-169 — toast message correctly differentiates single vs multi upload cases with total char summary.",
+    "Minor obs (not blocking): the frontend does not surface a per-file progress indicator for the sequential loop; on 3 large PDFs the user only sees the spinner and no intermediate feedback until all badges appear. Acceptable given 10MB/3-file caps."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter93ci_multi_upload.py"],
+  "success_rate": {"backend": "100% (5/5 iter93ci tests PASS)", "frontend": "100% (multi-upload + validations PASS)"},
+  "test_credentials": "admin@copro.be / admin123 (cookie auth)",
+  "seed_data_creation": "2 TEST_ support conversations created during pytest (TEST_iter93ci_multi kept for scope=module, TEST_iter93ci_single deleted in finally). No prod pollution.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "iter93ci fully green. LLM E2E test test_e2e_multidoc_llm_produces_comparative_table hits real claude-sonnet-4-5 with 2 attachments; ~15-20s. Assertions are lenient (accepts markdown table + either doc names or both balance values + at least one iter93c* keyword) so should stay stable across minor LLM prompt drifts. If LLM stops producing a pipe table, first check that support.py:798-808 hint text is intact.",
+  "rca of the issue": "N/A — feature works as designed."
+}

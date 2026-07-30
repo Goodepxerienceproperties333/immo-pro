@@ -779,6 +779,7 @@ def create_support_router(db):
 
         # iter93ch : documents attaches recents (dans les 10 derniers messages)
         # sont injectes dans le contexte pour analyse par le LLM.
+        # iter93ci : detection multi-documents pour comparaison automatique.
         attachments_context = ""
         recent_attachments = [
             m for m in history[-10:]
@@ -786,14 +787,25 @@ def create_support_router(db):
         ]
         if recent_attachments:
             att_parts = []
-            for att in recent_attachments:
+            for idx, att in enumerate(recent_attachments, start=1):
                 att_parts.append(
-                    f"=== DOCUMENT JOINT: {att.get('filename', '?')} "
+                    f"=== DOCUMENT #{idx} JOINT: {att.get('filename', '?')} "
                     f"(type: {att.get('file_type', '?')}) ===\n"
                     f"{att['extracted_text']}\n"
-                    f"=== FIN DOCUMENT ==="
+                    f"=== FIN DOCUMENT #{idx} ==="
                 )
             attachments_context = "\n\n".join(att_parts)
+            # iter93ci : hint explicite pour la comparaison multi-docs
+            if len(recent_attachments) >= 2:
+                attachments_context = (
+                    f"[CONTEXTE : le syndic a joint {len(recent_attachments)} "
+                    f"documents ci-dessous. Si sa question porte sur une "
+                    f"comparaison ou un ecart, presente un TABLEAU comparatif "
+                    f"clair (Document | Compte | Valeur) et met en evidence "
+                    f"les differences chiffrees. Cite les regles metier "
+                    f"iter93cc a iter93cg pour expliquer les ecarts.]\n\n"
+                    + attachments_context
+                )
 
         full_prompt = user_msg
         if past_context.strip() or diag_context or attachments_context:

@@ -114,40 +114,59 @@ export default function SupportChatBubble() {
   };
 
   const uploadDocument = async (evt) => {
-    const file = evt.target.files?.[0];
-    if (!file || !activeConv) return;
-    const ext = (file.name.split('.').pop() || '').toLowerCase();
-    if (!['pdf', 'csv'].includes(ext)) {
-      toast.error('Types acceptes : PDF ou CSV uniquement');
+    const files = Array.from(evt.target.files || []);
+    if (!files.length || !activeConv) return;
+    if (files.length > 3) {
+      toast.error('Maximum 3 documents par upload');
       return;
     }
-    if (file.size > 10 * 1024 * 1024) {
-      toast.error('Fichier trop volumineux (max 10 MB)');
-      return;
+    // Validate all files first
+    for (const file of files) {
+      const ext = (file.name.split('.').pop() || '').toLowerCase();
+      if (!['pdf', 'csv'].includes(ext)) {
+        toast.error(`${file.name} : type non supporte (PDF ou CSV uniquement)`);
+        return;
+      }
+      if (file.size > 10 * 1024 * 1024) {
+        toast.error(`${file.name} : trop volumineux (max 10 MB)`);
+        return;
+      }
     }
     setUploading(true);
-    const fd = new FormData();
-    fd.append('file', file);
+    let uploadedCount = 0;
+    let totalChars = 0;
     try {
-      const { data } = await api.post(
-        `/support/conversations/${activeConv.id}/attach`,
-        fd,
-        { headers: { 'Content-Type': 'multipart/form-data' } },
-      );
-      // Add attachment message to UI
-      setMsgs(m => [...m, {
-        id: data.id,
-        role: 'user_attachment',
-        filename: data.filename,
-        file_type: data.file_type,
-        file_size: data.file_size,
-        content: `[Document joint : ${data.filename}]`,
-        extracted_length: data.extracted_length,
-        created_at: data.created_at,
-      }]);
-      toast.success(`Document ${data.filename} analyse (${data.extracted_length} car.)`, {
-        description: 'Posez votre question - je peux desormais l\'analyser',
-      });
+      // Upload sequentially (server-side extraction can be CPU heavy)
+      for (const file of files) {
+        const fd = new FormData();
+        fd.append('file', file);
+        const { data } = await api.post(
+          `/support/conversations/${activeConv.id}/attach`,
+          fd,
+          { headers: { 'Content-Type': 'multipart/form-data' } },
+        );
+        setMsgs(m => [...m, {
+          id: data.id,
+          role: 'user_attachment',
+          filename: data.filename,
+          file_type: data.file_type,
+          file_size: data.file_size,
+          content: `[Document joint : ${data.filename}]`,
+          extracted_length: data.extracted_length,
+          created_at: data.created_at,
+        }]);
+        uploadedCount += 1;
+        totalChars += data.extracted_length || 0;
+      }
+      if (uploadedCount === 1) {
+        toast.success(`Document analyse (${totalChars} car.)`, {
+          description: "Posez votre question - je peux desormais l'analyser",
+        });
+      } else {
+        toast.success(`${uploadedCount} documents analyses (${totalChars} car. au total)`, {
+          description: 'Vous pouvez maintenant demander une comparaison entre eux',
+        });
+      }
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Erreur upload');
     } finally {
@@ -426,6 +445,7 @@ export default function SupportChatBubble() {
                     ref={fileInputRef}
                     type="file"
                     accept=".pdf,.csv"
+                    multiple
                     onChange={uploadDocument}
                     className="hidden"
                     data-testid="support-file-input"
@@ -436,7 +456,7 @@ export default function SupportChatBubble() {
                       disabled={uploading || sending}
                       variant="ghost"
                       className="h-9 w-9 p-0 shrink-0 text-slate-500 hover:text-[#022D52]"
-                      title="Joindre un document (PDF ou CSV)"
+                      title="Joindre des documents (PDF ou CSV, max 3 fichiers)"
                       data-testid="support-attach-btn"
                     >
                       {uploading ? <Loader2 size={14} className="animate-spin" /> : <Paperclip size={14} />}
