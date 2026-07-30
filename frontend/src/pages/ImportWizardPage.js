@@ -127,6 +127,9 @@ export default function ImportWizardPage() {
   const [fallbackCheck, setFallbackCheck] = useState(null);
   const [fallbackAssignments, setFallbackAssignments] = useState({}); // {lot_id: key_id}
   const [fallbackSaving, setFallbackSaving] = useState(false);
+  // iter93bh : etat post-commit invoices - propose la revue une par une
+  // { count, private_fees_detected } pour afficher le CTA "Reviser les factures".
+  const [invoiceReviewCta, setInvoiceReviewCta] = useState(null);
   // For 'csv_or_pdf' steps : tracks which mode the user picked for THIS step
   // (resets on every step change / file reset).
   const [uploadMode, setUploadMode] = useState(null);  // null | 'csv' | 'pdf'
@@ -470,6 +473,15 @@ export default function ImportWizardPage() {
           manual_matches: manualPayloadCommit,
         });
         const m = r.data;
+        // iter93bh : proposer la revue une par une apres commit (utile
+        // surtout si des frais privatifs (compte 643) sont detectes).
+        if ((m.inserted || 0) > 0) {
+          setInvoiceReviewCta({
+            count: m.inserted,
+            private_fees_detected: m.private_fees_detected || 0,
+            session_id: session.id,
+          });
+        }
         const errs = m.errors || [];
         const summaryStr =
           `${m.inserted} facture(s) validee(s)${m.grouped ? ` (${m.grouped} lignes de detail regroupees)` : ''} + ${m.journal_entries || 0} ecriture(s) AC creee(s)` +
@@ -1049,6 +1061,72 @@ export default function ImportWizardPage() {
 
           {sniffResult && step.key === 'invoices' && (
             <InvoicesPreview invoices={invoicesParsed} setInvoices={setInvoicesParsed} />
+          )}
+
+          {/* iter93bh : CTA "revue une par une" apres commit-invoices reussi */}
+          {invoiceReviewCta && step.key === 'invoices' && (
+            <div
+              className="mt-4 border-2 border-blue-400 rounded-lg p-4 bg-gradient-to-r from-blue-50 to-indigo-50 shadow-sm"
+              data-testid="invoice-review-cta"
+            >
+              <div className="flex items-start gap-3">
+                <div className="shrink-0 h-10 w-10 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold">
+                  {invoiceReviewCta.count}
+                </div>
+                <div className="flex-1">
+                  <h3 className="font-bold text-blue-900 mb-1">
+                    {invoiceReviewCta.count} facture(s) importee(s) avec succes
+                  </h3>
+                  {invoiceReviewCta.private_fees_detected > 0 ? (
+                    <p className="text-sm text-blue-800 mb-3">
+                      <b className="text-amber-800">{invoiceReviewCta.private_fees_detected} facture(s) sur compte 643 detectee(s)</b> :
+                      elles sont marquees comme frais privatifs mais ne sont pas encore affectees a un proprietaire.
+                      Nous vous recommandons de <b>passer en revue chaque facture une par une</b> pour verifier
+                      la nature de depense, la cle de repartition, et surtout <b>assigner les proprietaires
+                      beneficiaires des frais privatifs</b>. La sauvegarde d&apos;un frais privatif sans proprietaire
+                      est strictement bloquee (iter93bg).
+                    </p>
+                  ) : (
+                    <p className="text-sm text-blue-800 mb-3">
+                      Toutes les factures ont ete importees. Vous pouvez optionnellement les passer en revue
+                      une par une pour verifier chaque champ (fournisseur, cle de repartition, montants),
+                      ou passer directement a l&apos;etape suivante du wizard.
+                    </p>
+                  )}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      onClick={() => {
+                        const copro = effectiveCopro || '';
+                        const url = `/invoices?review_session=${encodeURIComponent(invoiceReviewCta.session_id)}${copro ? `&copropriete_id=${encodeURIComponent(copro)}` : ''}`;
+                        // localStorage garantit que InvoicesPage recharge la bonne ACP
+                        if (copro) {
+                          localStorage.setItem('selectedCopro', copro);
+                        }
+                        navigate(url);
+                      }}
+                      className="bg-blue-600 hover:bg-blue-700 text-white"
+                      data-testid="start-invoice-review-btn"
+                    >
+                      Reviser les {invoiceReviewCta.count} facture(s) une par une
+                    </Button>
+                    <Button
+                      variant="outline"
+                      className="border-slate-300 text-slate-600"
+                      onClick={() => setInvoiceReviewCta(null)}
+                      data-testid="skip-invoice-review-btn"
+                    >
+                      Ignorer et continuer le wizard
+                    </Button>
+                    {invoiceReviewCta.private_fees_detected > 0 && (
+                      <span className="text-xs text-amber-700 italic ml-2">
+                        Astuce : le mode revue detecte automatiquement les comptes 643 et vous
+                        conduit directement a la selection du proprietaire.
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
           )}
 
           {/* Tableau de controle fournisseurs AVANT commit */}

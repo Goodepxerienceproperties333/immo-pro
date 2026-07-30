@@ -164,6 +164,13 @@ export default function InvoicesPage() {
   const load = useCallback(async () => {
     const copro = localStorage.getItem('selectedCopro') || localStorage.getItem('copropriete_id') || '';
     const supplierParams = copro ? { copropriete_id: copro } : {};
+    // iter93bh : mode revue post-import. Si ?review_session=<id> present, on charge
+    // UNIQUEMENT les factures de la session (sans filtre exercice fiscal) pour
+    // permettre au syndic de defiler et allouer les frais privatifs.
+    const reviewSid = searchParams.get('review_session');
+    const invParams = reviewSid
+      ? { import_session_id: reviewSid, copropriete_id: copro }
+      : fyParams;
     // iter90d : pour le combobox d'allocation des frais privatifs, on doit
     // voir TOUS les proprietaires du syndic (pas juste ceux ayant un lot dans
     // l'ACP courante), sinon l'utilisateur ne retrouve pas un proprio existant
@@ -173,14 +180,14 @@ export default function InvoicesPage() {
     // l'ACP cible quand le proprio est selectionne, donc aucun risque de fuite.
     const ownersConfig = { params: { syndic_wide: true } };
     const [inv, dk, acc, lt, cat, ow, sup] = await Promise.all([
-      api.get('/invoices', { params: fyParams }), api.get('/distribution-keys'),
+      api.get('/invoices', { params: invParams }), api.get('/distribution-keys'),
       api.get('/accounting/pcmn', { params: { class_num: 6 } }), api.get('/lots'),
       api.get('/expense-categories'), api.get('/owners', ownersConfig),
       api.get('/suppliers', { params: supplierParams }),
     ]);
     setInvoices(inv.data); setDistKeys(dk.data); setAccounts(acc.data); setLots(lt.data);
     setCategories(cat.data); setOwners(ow.data); setSuppliers(sup.data);
-  }, [fyParams.date_from, fyParams.date_to]);
+  }, [fyParams.date_from, fyParams.date_to, searchParams]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -202,6 +209,25 @@ export default function InvoicesPage() {
       }
     }
   }, [invoices, searchParams]);
+
+  // iter93bh : mode "revue une par une" post-import wizard.
+  // URL: /invoices?review_session=<sid>[&review_index=N]
+  // Auto-ouvre la facture courante dans le dialog d'edition.
+  const reviewSession = searchParams.get('review_session');
+  const reviewIndex = parseInt(searchParams.get('review_index') || '0', 10);
+  const reviewInvoices = useMemo(() => {
+    if (!reviewSession) return [];
+    return invoices.filter(i => i.import_session_id === reviewSession);
+  }, [invoices, reviewSession]);
+  useEffect(() => {
+    if (!reviewSession) return;
+    if (reviewInvoices.length === 0) return;
+    if (invoiceDialog) return; // deja ouvert
+    const target = reviewInvoices[Math.max(0, Math.min(reviewIndex, reviewInvoices.length - 1))];
+    if (target) {
+      openEditInvoice(target);
+    }
+  }, [reviewSession, reviewInvoices.length, reviewIndex]);
 
   const [editingInvoice, setEditingInvoice] = useState(null);
 
@@ -738,6 +764,26 @@ export default function InvoicesPage() {
         load();
         return;
       }
+      // iter93bh : mode revue post-import wizard - passe a la facture suivante
+      if (reviewSession && reviewInvoices.length > 0) {
+        const nextIndex = reviewIndex + 1;
+        setInvoiceDialog(false); setPendingPdf(null); setEditingInvoice(null);
+        if (nextIndex >= reviewInvoices.length) {
+          toast.success(`Revue terminee : ${reviewInvoices.length} facture(s) traitee(s)`, { duration: 5000 });
+          // Nettoie l'URL pour sortir du mode revue
+          const sp = new URLSearchParams(searchParams);
+          sp.delete('review_session');
+          sp.delete('review_index');
+          setSearchParams(sp, { replace: true });
+        } else {
+          toast.info(`Facture ${reviewIndex + 1}/${reviewInvoices.length} enregistree - passage a la suivante...`, { duration: 3000 });
+          const sp = new URLSearchParams(searchParams);
+          sp.set('review_index', String(nextIndex));
+          setSearchParams(sp, { replace: true });
+        }
+        load();
+        return;
+      }
       // Fin de queue : reset batch state
       if (aiBatchTotal > 1) {
         toast.success(`Batch termine : ${aiBatchTotal} factures traitees`, { duration: 5000 });
@@ -1091,6 +1137,82 @@ export default function InvoicesPage() {
       <Dialog open={invoiceDialog} onOpenChange={(open) => { if (!open) { setEditingInvoice(null); setPendingPdf(null); } setInvoiceDialog(open); }} hasUnsavedChanges={invDirty}>
         <DialogContent className="max-w-[1600px] w-[97vw] max-h-[92vh] overflow-hidden flex flex-col" data-testid="invoice-dialog">
           <DialogHeader><DialogTitle style={{fontFamily:'Chivo,sans-serif'}}>{editingInvoice ? 'Modifier la facture' : 'Nouvelle facture'}</DialogTitle></DialogHeader>
+          {/* iter93bh : bandeau "revue une par une" post-import wizard */}
+          {reviewSession && reviewInvoices.length > 0 && (
+            <div
+              className="rounded-md border border-blue-300 bg-gradient-to-r from-blue-50 to-indigo-50 px-3 py-2 mt-1 flex items-center justify-between text-sm"
+              data-testid="review-mode-banner"
+            >
+              <div className="flex items-center gap-2 text-blue-900 font-medium">
+                <span className="inline-flex items-center justify-center h-6 min-w-6 px-1.5 rounded-full bg-blue-600 text-white text-xs font-bold">
+                  {Math.min(reviewIndex + 1, reviewInvoices.length)}/{reviewInvoices.length}
+                </span>
+                <span>Revue post-import : validez chaque facture pour continuer</span>
+                {editingInvoice?.is_private_fee && (
+                  <span className="ml-2 px-2 py-0.5 rounded-full bg-amber-200 text-amber-900 text-xs font-semibold">
+                    Frais privatif (compte 643) - proprietaire requis
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-1">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={reviewIndex <= 0}
+                  onClick={() => {
+                    const sp = new URLSearchParams(searchParams);
+                    sp.set('review_index', String(Math.max(0, reviewIndex - 1)));
+                    setSearchParams(sp, { replace: true });
+                    setInvoiceDialog(false); setEditingInvoice(null);
+                  }}
+                  data-testid="review-prev-btn"
+                  title="Facture precedente"
+                >
+                  &lsaquo; Precedente
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="text-amber-700 hover:bg-amber-100"
+                  onClick={() => {
+                    const nextIndex = reviewIndex + 1;
+                    setInvoiceDialog(false); setEditingInvoice(null);
+                    if (nextIndex >= reviewInvoices.length) {
+                      toast.info('Revue terminee (des factures peuvent avoir ete ignorees)');
+                      const sp = new URLSearchParams(searchParams);
+                      sp.delete('review_session');
+                      sp.delete('review_index');
+                      setSearchParams(sp, { replace: true });
+                    } else {
+                      const sp = new URLSearchParams(searchParams);
+                      sp.set('review_index', String(nextIndex));
+                      setSearchParams(sp, { replace: true });
+                    }
+                  }}
+                  data-testid="review-skip-btn"
+                  title="Ignorer cette facture et passer a la suivante (aucune modification)"
+                >
+                  Ignorer &rsaquo;
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="text-slate-600"
+                  onClick={() => {
+                    const sp = new URLSearchParams(searchParams);
+                    sp.delete('review_session');
+                    sp.delete('review_index');
+                    setSearchParams(sp, { replace: true });
+                    setInvoiceDialog(false); setEditingInvoice(null);
+                  }}
+                  data-testid="review-quit-btn"
+                  title="Quitter le mode revue (les factures non revisees restent en l'etat)"
+                >
+                  Quitter
+                </Button>
+              </div>
+            </div>
+          )}
           <div className="flex gap-3 mt-2 flex-1 min-h-0">
             {/* LEFT COLUMN : form (scrollable) */}
             <div className={`space-y-4 min-w-0 overflow-y-auto pr-2 ${pdfPanelUrl && pdfPanelOpen ? 'flex-1 max-w-[62%]' : 'flex-1'}`}>

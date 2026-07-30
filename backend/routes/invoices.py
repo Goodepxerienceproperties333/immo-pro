@@ -879,11 +879,15 @@ def create_invoices_router(db):
         date_to: Optional[str] = None,
         min_amount: Optional[float] = None,
         max_amount: Optional[float] = None,
+        import_session_id: Optional[str] = None,
     ):
         """Chinese walls STRICT : `copropriete_id` requis (param ou header
         X-Copropriete-Id). Sans scope ACP -> liste vide.
         Filtres optionnels : status, supplier (regex insensible), reference
         (regex insensible), start_date/end_date (ISO YYYY-MM-DD), min/max amount.
+        iter93bh : `import_session_id` (optionnel) restreint aux factures
+        importees dans une session wizard donnee. Utilise par le "review mode"
+        pour defiler les factures une par une.
         Note: `date_from` et `date_to` sont des alias pour `start_date`/`end_date`."""
         # Alias compat
         start_date = start_date or date_from
@@ -913,7 +917,11 @@ def create_invoices_router(db):
                 query["total_amount"]["$gte"] = float(min_amount)
             if max_amount is not None:
                 query["total_amount"]["$lte"] = float(max_amount)
-        invoices = await db.invoices.find(query, {"_id": 0}).sort("date", -1).to_list(2000)
+        if import_session_id:
+            query["import_session_id"] = import_session_id
+        invoices = await db.invoices.find(query, {"_id": 0}).sort("date", 1).to_list(2000) \
+            if import_session_id else \
+            await db.invoices.find(query, {"_id": 0}).sort("date", -1).to_list(2000)
         return invoices
 
     async def _resolve_invoice_lines(data: InvoiceInput) -> tuple:
