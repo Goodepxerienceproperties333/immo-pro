@@ -1,0 +1,28 @@
+{
+  "summary": "iter93ch VALIDATED end-to-end. Backend (8/8 pytest PASS): (1) POST /api/support/conversations/{id}/attach accepts PDF & CSV, extracts text via pdfplumber/csv.reader, returns id/filename/file_type/extracted_length/preview; (2) validation rejects >10MB (400), non-pdf/csv extensions (400), empty file (400); (3) attachment persisted as message role='user_attachment' with extracted_text; (4) LLM chat integration works — after uploading the fixture PDF and asking 'Quel est le solde de Guerit... Compare aux regles iter93cf', the LLM responded with '26,96 EUR' EXACT and cited iter93cf/iter93cg/iter93cc rules and pointed to 'Bilan & Resultats > Apres repartition' path; (5) system prompt correctly recognises the iter93cf formula, iter93cg audit rule, 41010968/41000968 merge concept; (6) regression: list conversations + chat without doc still work. Frontend E2E (Playwright): superadmin login OK, support bubble opens, new conversation opens chat view, Paperclip button visible with data-testid=support-attach-btn, hidden input accept='.pdf,.csv' correct, PDF upload triggers backend extraction (2760 chars), badge displays 'optipro_bilan_31_03_2027.pdf PDF · 2760 car. extraits' via data-testid^='support-attachment-'. No blocking issues.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter93ch_support_attach.py",
+    "/app/test_reports/pytest/iter107.xml",
+    "/app/test_reports/iter107_chat_view.png",
+    "/app/test_reports/iter107_after_upload.png"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "attach endpoint correctly enforces size limit (10MB) and extension whitelist (.pdf,.csv) BEFORE parsing — good defensive ordering.",
+    "PDF text extraction uses pdfplumber page-by-page, safely truncated to 30000 chars — prevents LLM context blow-up.",
+    "CSV parser sniffs delimiter (,;\\t|) and caps at 500 rows — sensible defaults.",
+    "user_attachment messages are correctly excluded from the natural conversation history rendering (special badge) and are re-injected into LLM prompt only from the last 10 messages window — clean scoping.",
+    "The system prompt update covers the full iter93cc-iter93cg rule surface and pushed the LLM to cite exact iteration numbers and give a concrete UI path ('Bilan & Resultats > Apres repartition'). Excellent business alignment.",
+    "Regression tests confirm no breakage on existing /list, /messages, /chat (no doc), /escalate, /delete endpoints."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter93ch_support_attach.py"],
+  "success_rate": {"backend": "100% (8/8 iter93ch tests PASS)", "frontend": "100% (Playwright E2E PASS)"},
+  "test_credentials": "admin@copro.be / admin123 (cookie auth)",
+  "seed_data_creation": "Created 2 TEST_ support conversations during pytest — they will remain in DB (not cleaned by test scope=module for the primary conv, secondary conv is deleted in finally). No prod pollution — support_conversations collection is user-scoped and admin-only.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "iter93ch (attachments + LLM doc analysis) fully validated. The pytest file /app/backend/tests/test_iter93ch_support_attach.py includes an E2E test that hits the real LLM (claude-sonnet-4-5-20250929 via EMERGENT_LLM_KEY) and takes ~15s. It asserts the LLM answer contains 26,96 (Guerit) and iter93cf/repartition/bilan keywords. If LLM changes and stops citing the exact figure, only test_e2e_pdf_chat_about_guerit would need loosening — the other 7 tests are pure backend logic.",
+  "rca of the issue": "N/A — feature works as designed on first review."
+}

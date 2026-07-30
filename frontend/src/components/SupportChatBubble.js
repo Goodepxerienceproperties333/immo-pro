@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { HelpCircle, MessageSquare, X, Send, Plus, Trash2, ArrowLeft, Mail, Bot, User as UserIcon, Loader2, CheckCircle2, AlertCircle, Bug, Ticket, MessageCircleQuestion } from 'lucide-react';
+import { HelpCircle, MessageSquare, X, Send, Plus, Trash2, ArrowLeft, Mail, Bot, User as UserIcon, Loader2, CheckCircle2, AlertCircle, Bug, Ticket, MessageCircleQuestion, Paperclip, FileText } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -26,6 +26,8 @@ export default function SupportChatBubble() {
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
   const [escalating, setEscalating] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef(null);
   const scrollRef = useRef(null);
 
   const loadConvs = useCallback(async () => {
@@ -109,6 +111,49 @@ export default function SupportChatBubble() {
       setMsgs(m => m.filter(x => x.id !== optimistic.id));
       setInput(text);
     } finally { setSending(false); }
+  };
+
+  const uploadDocument = async (evt) => {
+    const file = evt.target.files?.[0];
+    if (!file || !activeConv) return;
+    const ext = (file.name.split('.').pop() || '').toLowerCase();
+    if (!['pdf', 'csv'].includes(ext)) {
+      toast.error('Types acceptes : PDF ou CSV uniquement');
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      toast.error('Fichier trop volumineux (max 10 MB)');
+      return;
+    }
+    setUploading(true);
+    const fd = new FormData();
+    fd.append('file', file);
+    try {
+      const { data } = await api.post(
+        `/support/conversations/${activeConv.id}/attach`,
+        fd,
+        { headers: { 'Content-Type': 'multipart/form-data' } },
+      );
+      // Add attachment message to UI
+      setMsgs(m => [...m, {
+        id: data.id,
+        role: 'user_attachment',
+        filename: data.filename,
+        file_type: data.file_type,
+        file_size: data.file_size,
+        content: `[Document joint : ${data.filename}]`,
+        extracted_length: data.extracted_length,
+        created_at: data.created_at,
+      }]);
+      toast.success(`Document ${data.filename} analyse (${data.extracted_length} car.)`, {
+        description: 'Posez votre question - je peux desormais l\'analyser',
+      });
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur upload');
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
   };
 
   const escalate = async () => {
@@ -311,21 +356,39 @@ export default function SupportChatBubble() {
                       Posez votre question ci-dessous. L&apos;assistant IA repondra en quelques secondes.
                     </div>
                   )}
-                  {msgs.map(m => (
-                    <div key={m.id} className={`flex gap-2 ${m.role === 'user' ? 'flex-row-reverse' : ''}`}>
-                      <div className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 ${m.role === 'user' ? 'bg-[#022D52] text-white' : 'bg-slate-200 text-slate-600'}`}>
-                        {m.role === 'user' ? <UserIcon size={12} /> : <Bot size={12} />}
-                      </div>
-                      <div className={`rounded-lg p-2 max-w-[85%] text-xs leading-relaxed whitespace-pre-wrap ${m.role === 'user' ? 'bg-[#022D52] text-white' : 'bg-white border border-slate-200 text-slate-800'}`}>
-                        {m.content}
-                        {m.needs_escalation && (
-                          <div className="mt-2 pt-2 border-t border-slate-200 flex items-center gap-1 text-[10px] text-amber-700">
-                            <AlertCircle size={11} /> Transmise au support
+                  {msgs.map(m => {
+                    if (m.role === 'user_attachment') {
+                      return (
+                        <div key={m.id} className="flex justify-end" data-testid={`support-attachment-${m.id}`}>
+                          <div className="flex items-center gap-2 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 max-w-[85%]">
+                            <FileText size={14} className="text-blue-600 shrink-0" />
+                            <div className="text-xs">
+                              <div className="font-medium text-slate-800 truncate">{m.filename || 'document'}</div>
+                              <div className="text-[10px] text-slate-500">
+                                {(m.file_type || '').toUpperCase()}
+                                {m.extracted_length && ` · ${m.extracted_length} car. extraits`}
+                              </div>
+                            </div>
                           </div>
-                        )}
+                        </div>
+                      );
+                    }
+                    return (
+                      <div key={m.id} className={`flex gap-2 ${m.role === 'user' ? 'flex-row-reverse' : ''}`}>
+                        <div className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 ${m.role === 'user' ? 'bg-[#022D52] text-white' : 'bg-slate-200 text-slate-600'}`}>
+                          {m.role === 'user' ? <UserIcon size={12} /> : <Bot size={12} />}
+                        </div>
+                        <div className={`rounded-lg p-2 max-w-[85%] text-xs leading-relaxed whitespace-pre-wrap ${m.role === 'user' ? 'bg-[#022D52] text-white' : 'bg-white border border-slate-200 text-slate-800'}`}>
+                          {m.content}
+                          {m.needs_escalation && (
+                            <div className="mt-2 pt-2 border-t border-slate-200 flex items-center gap-1 text-[10px] text-amber-700">
+                              <AlertCircle size={11} /> Transmise au support
+                            </div>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                   {sending && (
                     <div className="flex gap-2">
                       <div className="w-6 h-6 rounded-full bg-slate-200 text-slate-600 flex items-center justify-center">
@@ -359,7 +422,25 @@ export default function SupportChatBubble() {
 
                 {/* Input */}
                 <div className="p-3 border-t border-slate-100 bg-white">
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".pdf,.csv"
+                    onChange={uploadDocument}
+                    className="hidden"
+                    data-testid="support-file-input"
+                  />
                   <div className="flex items-end gap-2">
+                    <Button
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={uploading || sending}
+                      variant="ghost"
+                      className="h-9 w-9 p-0 shrink-0 text-slate-500 hover:text-[#022D52]"
+                      title="Joindre un document (PDF ou CSV)"
+                      data-testid="support-attach-btn"
+                    >
+                      {uploading ? <Loader2 size={14} className="animate-spin" /> : <Paperclip size={14} />}
+                    </Button>
                     <Textarea
                       value={input}
                       onChange={e => setInput(e.target.value)}

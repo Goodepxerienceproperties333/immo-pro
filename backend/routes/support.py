@@ -20,7 +20,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional, List
 
-from fastapi import APIRouter, HTTPException, Request, BackgroundTasks
+from fastapi import APIRouter, HTTPException, Request, BackgroundTasks, UploadFile, File
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -280,6 +280,72 @@ Tous les montants dans l'application utilisent le format belge : espace insecabl
 5. **Escalade obligatoire** avec `[[NEEDS_ESCALATION]]` pour : bugs, erreurs techniques, questions de facturation/contrat/remboursement, demandes de modification produit.
 6. **Hors-sujet** : "Je ne peux repondre qu'aux questions sur NextGe Copro."
 7. **N'evoque JAMAIS un bouton "Delier" sur Facturation** ou "Supprimer" sur un exercice cloture : ces boutons n'existent pas.
+
+=== REGLES METIER IMPLEMENTEES (iter93cc a iter93cg) ===
+
+**Bilan APRES REPARTITION - Formule officielle (iter93cf/iter93cg)** :
+Pour chaque proprietaire :
+   Solde = (Quotes-parts per-key charges) - (Total paiements effectues) + (Solde fonds de reserve)
+- Quotes-parts per-key : chaque facture est distribuee via sa `invoice.distribution_lines` (Optipro-format avec lot_id) SI disponible, sinon via `distribution_key.lots`, sinon via cle default. Cette hierarchie garantit la fidelite aux exports Optipro.
+- Total paiements : credits sur 41010XX + 41000XX (FI + AN opening credit).
+- Solde reserve : debit - credit sur 41000XX (obligations reserve non encore payees).
+- Le compte 499 (boni/mali de regularisation, ex: 40 485 EUR sur ACP Agathe) est integralement redistribue aux proprietaires via cette formule et DISPARAIT du bilan apres repartition.
+- Les 499XXX (sinistres, ex: 499603 Sinistre) restent isoles dans "VI.D Provisions et dettes sur sinistres", JAMAIS redistribues.
+- Le compte 490 "Charges a reporter" reste dans "VIII. Comptes de regularisation (mali)", JAMAIS redistribue aux proprietaires (iter93cc).
+
+**MOTEUR UNIQUE Bilan preview / Cloture (iter93cg)** :
+`compute_regularization_per_owner` (backend/routes/reports.py) est le SEUL point de verite pour le calcul des quotes-parts par proprietaire. Il est appele a la fois par :
+1. La previsualisation du Bilan (mode after_distribution)
+2. La cloture d'exercice (close_fiscal_year, generation des OD-REG-PROV / OD-REG-CHRG)
+Regle imperative : si la previsualisation du Bilan indique "Guerit doit payer 502,95 EUR", la cloture genere l'OD-REG-CHRG avec exactement 502,95 EUR pour Guerit. AUCUN drift arbitraire sur "le dernier proprietaire".
+
+**AUDIT AN post-cloture (iter93cg)** :
+Apres cloture, l'AN de l'exercice suivant (opening balance) doit correspondre au solde net "Apres repartition" de l'exercice cloture. Pour Guerit sur ACP Agathe FY 2026-2027 : Bilan preview = 26,95 EUR ⇒ AN merge (41010016 + 41000016) = 26,95 EUR EXACT.
+Le compte 140100 "Benefice reporte" N'EST PLUS poste dans l'AN (etait un double-count, car resultat_net est deja distribue aux comptes owners via OD-REG-*).
+
+**Normalisation per-owner (iter93cg-fix1)** :
+Lorsque sum(charges_per_owner) < total_charges (a cause de lots orphelins ou owners sans tier_accounts.provisions), un scale factor est applique pour normaliser sum == total. Chaque proprietaire prend sa juste part du drift.
+
+**Isolation sinistres 499XXX (iter93ca)** :
+Les sous-comptes 499603 (Sinistre) restent isoles dans leur rubrique passif VI.D. Ils NE FONT PAS PARTIE du boni de regularisation collectif. Regle : skip TOUT compte commencant par "499" dans la distribution.
+
+**Parser Optipro Multi-lignes (iter93bu/iter93ce)** :
+Le parser `backend/import_wizard/optipro_parser.py` capture correctement tous les sous-comptes du compte 410 y compris :
+- Labels multi-lignes (ex: "M. et Mme CANTERO DIAZ - VARGAS BAQUERO Miguel - Catalina")
+- Coordonnees x0 legerement decalees (strategie multi-passes : standard/widened_xtol/widened_full)
+- Sous-comptes 4101xxx et 4102xxx (souvent rates par les parsers naifs)
+Validation post-parsing : sum(sous-comptes) == main_account_total ± 0.01, sinon warning dans `diagnostic.warnings`.
+
+**Factures hybrides (iter93bs/bv)** :
+Une facture peut combiner une portion "charges communes" (distribuee via cle) et une portion "frais privatifs" (imputee au(x) proprietaire(s) directement). Champs : `is_private_fee`, `private_fee_allocations`, `common_charge_amount`, `common_charge_expense_category_id`. Dans les rapports de depenses, on affiche uniquement la portion charges communes.
+
+**Idempotence des soldes d'ouverture (iter93bw)** :
+L'endpoint `commit-opening-balance` est idempotent (pas de doublement des valeurs). Un endpoint `cleanup-duplicate-an` permet de nettoyer les doublons crees par des runs precedents.
+
+**PDF Bilan (iter93bx-bz)** :
+Landscape A4, multi-page, centre, fonts 11pt (headers) / 9pt (contenu). Adaptatif selon nombre de proprietaires.
+
+=== ANALYSE DE DOCUMENTS UPLOADES ===
+
+Le syndic peut te joindre des DOCUMENTS (PDF ou CSV) via l'icone trombone dans le chat. Ces documents seront prealablement extraits en texte brut et injectes dans le contexte de ta reponse. Types typiques :
+- Bilans Optipro (PDF) : reference pour comparaison avec le bilan generes par NextGe Copro
+- Balances tiers (PDF/CSV) : verification des soldes proprietaires
+- Extraits bancaires (PDF/CSV) : diagnostic paiements
+- Journaux comptables (PDF/CSV) : audit des ecritures
+
+Quand un document est fourni :
+1. Analyse-le avec attention (les formats belges utilisent virgule decimale : "26,95" = 26.95 EUR)
+2. Compare aux regles metier ci-dessus
+3. Identifie les anomalies (soldes discordants, ecarts au-dela du seuil de rounding 0.10 EUR)
+4. Explique la cause probable en citant l'iteration/regle concernee (ex: "Selon iter93cf, le compte 490 ne doit pas etre redistribue aux proprietaires")
+5. Propose des actions correctives concretes (chemin exact : onglet + bouton)
+
+Format des documents extraits :
+```
+=== DOCUMENT JOINT: nom_fichier.pdf (type: pdf) ===
+[contenu extrait...]
+=== FIN DOCUMENT ===
+```
 """
 
 
@@ -427,6 +493,67 @@ async def _get_user(request: Request):
     return user_id
 
 
+# iter93ch : Extraction de texte pour analyse par le chatbot
+# Supporte PDF (pdfplumber) et CSV (csv module).
+_MAX_ATTACHMENT_TEXT_LEN = 30000  # ~7500 tokens, evite depassement contexte LLM
+_ALLOWED_ATTACHMENT_EXTS = {".pdf", ".csv"}
+
+
+def _extract_text_from_pdf(content: bytes) -> str:
+    """Extrait le texte d'un PDF via pdfplumber.
+
+    Concatene les pages en preservant la structure ligne par ligne.
+    Tronque a `_MAX_ATTACHMENT_TEXT_LEN` caracteres pour eviter les prompts
+    trop longs (contexte LLM sature).
+    """
+    import io
+
+    import pdfplumber
+
+    lines_all: list[str] = []
+    with pdfplumber.open(io.BytesIO(content)) as pdf:
+        for page_idx, page in enumerate(pdf.pages, start=1):
+            lines_all.append(f"--- Page {page_idx} ---")
+            txt = page.extract_text() or ""
+            for ln in txt.splitlines():
+                s = ln.strip()
+                if s:
+                    lines_all.append(s)
+    out = "\n".join(lines_all)
+    if len(out) > _MAX_ATTACHMENT_TEXT_LEN:
+        out = out[:_MAX_ATTACHMENT_TEXT_LEN] + "\n[...tronque a 30 000 caracteres...]"
+    return out
+
+
+def _extract_text_from_csv(content: bytes) -> str:
+    """Extrait le contenu d'un CSV en tableau lisible.
+
+    Detecte automatiquement le delimiteur (`,`, `;`, `\\t`). Preserve
+    les 500 premieres lignes pour eviter les CSVs monstres.
+    """
+    import csv
+    import io
+
+    text = content.decode("utf-8", errors="replace")
+    # Detection du delimiteur : sniff sur les 4kb premiers
+    try:
+        dialect = csv.Sniffer().sniff(text[:4096], delimiters=",;\t|")
+    except csv.Error:
+        dialect = csv.excel
+
+    reader = csv.reader(io.StringIO(text), dialect)
+    rows: list[str] = []
+    for i, row in enumerate(reader):
+        if i >= 500:
+            rows.append(f"[...tronque a 500 lignes sur ce CSV...]")
+            break
+        rows.append(" | ".join(cell.strip() for cell in row))
+    out = "\n".join(rows)
+    if len(out) > _MAX_ATTACHMENT_TEXT_LEN:
+        out = out[:_MAX_ATTACHMENT_TEXT_LEN] + "\n[...tronque...]"
+    return out
+
+
 async def _load_conversation(db, conv_id: str, user_id: str) -> dict:
     conv = await db.support_conversations.find_one({"id": conv_id}, {"_id": 0})
     if not conv:
@@ -522,6 +649,84 @@ def create_support_router(db):
         ).sort("created_at", 1).to_list(500)
         return msgs
 
+    @router.post("/conversations/{conv_id}/attach")
+    async def attach_document(
+        conv_id: str,
+        request: Request,
+        file: UploadFile = File(...),
+    ):
+        """iter93ch : joindre un document PDF/CSV a la conversation.
+
+        Le texte est extrait cote serveur et stocke dans un message special
+        (role='user_attachment'). Le prochain message chat inclura ce texte
+        dans le prompt LLM pour analyse.
+        """
+        user_id = await _get_user(request)
+        await _load_conversation(db, conv_id, user_id)
+
+        filename = file.filename or "document"
+        ext = os.path.splitext(filename)[1].lower()
+        if ext not in _ALLOWED_ATTACHMENT_EXTS:
+            raise HTTPException(
+                400,
+                f"Type de fichier non supporte : {ext}. "
+                f"Types acceptes : PDF, CSV.",
+            )
+
+        content = await file.read()
+        if not content:
+            raise HTTPException(400, "Fichier vide")
+        if len(content) > 10 * 1024 * 1024:  # 10 MB
+            raise HTTPException(400, "Fichier trop volumineux (max 10 MB)")
+
+        try:
+            if ext == ".pdf":
+                extracted = _extract_text_from_pdf(content)
+                file_type = "pdf"
+            else:
+                extracted = _extract_text_from_csv(content)
+                file_type = "csv"
+        except Exception as e:
+            logger.exception("Extraction document echouee")
+            raise HTTPException(
+                422,
+                f"Impossible d'extraire le texte : {str(e)[:150]}",
+            )
+
+        preview = extracted[:300].replace("\n", " ")
+        msg = {
+            "id": str(uuid.uuid4()),
+            "conversation_id": conv_id,
+            "role": "user_attachment",
+            "filename": filename,
+            "file_type": file_type,
+            "file_size": len(content),
+            "extracted_text": extracted,
+            "content": f"[Document joint : {filename} ({len(extracted)} caracteres)]",
+            "created_at": _now(),
+        }
+        await db.support_messages.insert_one(msg)
+        msg.pop("_id", None)
+
+        # Update conversation meta
+        await db.support_conversations.update_one(
+            {"id": conv_id},
+            {"$set": {"updated_at": _now()},
+             "$inc": {"messages_count": 1}},
+        )
+
+        return {
+            "id": msg["id"],
+            "filename": filename,
+            "file_type": file_type,
+            "file_size": len(content),
+            "extracted_length": len(extracted),
+            "preview": preview,
+            "created_at": msg["created_at"],
+        }
+
+
+
     @router.post("/conversations/{conv_id}/chat")
     async def chat(conv_id: str, data: ChatMessageInput, request: Request,
                    background: BackgroundTasks):
@@ -572,11 +777,31 @@ def create_support_router(db):
         if data.copropriete_id and any(kw in msg_lower for kw in _DIAGNOSTIC_KEYWORDS):
             diag_context = await _compute_diagnostic_snapshot(db, data.copropriete_id)
 
+        # iter93ch : documents attaches recents (dans les 10 derniers messages)
+        # sont injectes dans le contexte pour analyse par le LLM.
+        attachments_context = ""
+        recent_attachments = [
+            m for m in history[-10:]
+            if m.get("role") == "user_attachment" and m.get("extracted_text")
+        ]
+        if recent_attachments:
+            att_parts = []
+            for att in recent_attachments:
+                att_parts.append(
+                    f"=== DOCUMENT JOINT: {att.get('filename', '?')} "
+                    f"(type: {att.get('file_type', '?')}) ===\n"
+                    f"{att['extracted_text']}\n"
+                    f"=== FIN DOCUMENT ==="
+                )
+            attachments_context = "\n\n".join(att_parts)
+
         full_prompt = user_msg
-        if past_context.strip() or diag_context:
+        if past_context.strip() or diag_context or attachments_context:
             parts = []
             if diag_context:
                 parts.append(diag_context)
+            if attachments_context:
+                parts.append(attachments_context)
             if past_context.strip():
                 parts.append("Historique de conversation :" + past_context)
             parts.append(f"Nouvelle question du syndic : {user_msg}")
