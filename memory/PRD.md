@@ -552,3 +552,40 @@ Bug utilisateur : "on ne peut pas avoir coche la case 'frais privatif' et sauver
 ### Tests
 - `/app/backend/tests/test_iter93bg_private_fee_owner_required.py` : 6 tests pytest (POST no-owner, empty list, empty owner_id, whitespace legacy owner, valid allocation, PUT flow) - **6/6 PASSENT**.
 - Testing agent `testing_agent_v3_fork` : backend 100%, frontend 100%.
+
+## iter93bh - Wizard : Revue des factures une par une + auto-643 (Feb 2026 - DONE)
+
+### Contexte
+Extension demandee par l'utilisateur : "plutot que d'avoir une liste de toutes les factures comptabilisees [...] qu'on puisse passer en revue chaque facture [...] ca permet d'eviter les erreurs et les oublis, et aux syndic de directement correctement affecter en fonction de son expertise". Le compte 643 doit etre pris en compte pendant le wizard.
+
+### Backend (`/app/backend/routes/invoices.py`)
+- `GET /api/invoices` accepte un nouveau parametre optionnel `import_session_id`.
+  - Restreint aux factures de la session wizard donnee.
+  - Tri ASC par date (chronologique) quand present (vs DESC habituel).
+
+### Frontend (`/app/frontend/src/pages/InvoicesPage.js`)
+- Support de l'URL `/invoices?review_session=<sid>[&review_index=N]`.
+- Charge automatiquement les factures de la session, ouvre le dialog d'edition sur la facture courante.
+- Bandeau bleu `data-testid="review-mode-banner"` avec compteur `N/TOTAL`, badge amber "Frais privatif (compte 643) - proprietaire requis" si is_private_fee, et 3 boutons :
+  - `review-prev-btn` (facture precedente)
+  - `review-skip-btn` (ignorer sans sauvegarder, passe a la suivante)
+  - `review-quit-btn` (quitter le mode revue)
+- Apres save reussi : navigation automatique vers la facture suivante (toast d'information). Apres la derniere : URL nettoyee + toast "Revue terminee".
+- Reutilise INTEGRALEMENT la validation iter93bg (bouton Save disable si allocation privatif vide).
+
+### Frontend (`/app/frontend/src/pages/ImportWizardPage.js`)
+- Nouveau state `invoiceReviewCta` populate apres `commit-invoices` reussi.
+- Panneau bleu `data-testid="invoice-review-cta"` affiche apres commit :
+  - Compteur "N facture(s) importee(s) avec succes"
+  - Alerte specifique si `private_fees_detected > 0` (recommande la revue)
+  - Bouton `start-invoice-review-btn` -> navigate vers `/invoices?review_session=<sid>`
+  - Bouton `skip-invoice-review-btn` -> ferme le CTA, continue le wizard
+
+### Detection 643 (deja en place, verifiee)
+- `commit-invoices` marque `is_private_fee=True` automatiquement quand `account_num.startswith("643")` (import_wizard.py ligne 2013).
+- Au moment de la revue, la case "Frais privatif" est donc pre-cochee, le compte 643 est verrouille, et la section "Repartition par proprietaire" est deja visible.
+
+### Testing
+- `testing_agent_v3_fork` iteration_93.json : backend 100%, frontend 100%, aucun bug identifie.
+- Tests manuels e2e verifies (banner 1/33 sur premiere facture, banner 5/33 sur facture 643 avec badge amber, auto-checkbox is_private_fee).
+
