@@ -7,10 +7,10 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { Plus, Pencil, Trash2, Search, AlertTriangle, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Plus, Pencil, Trash2, Search, AlertTriangle, ChevronLeft, ChevronRight, Sparkles } from 'lucide-react';
 import OwnerAccessSection from '@/components/OwnerAccessSection';
 
-const emptyForm = { first_name: '', last_name: '', address: '', postal_code: '', city: '', country: 'Belgique', email: '', email2: '', phone: '', phone2: '' };
+const emptyForm = { first_name: '', last_name: '', address: '', postal_code: '', city: '', country: 'Belgique', email: '', email2: '', phone: '', phone2: '', vcs_code: '', auxiliary_code: '', bce_number: '' };
 const PAGE_SIZE = 100;
 
 export default function OwnersPage() {
@@ -88,7 +88,24 @@ export default function OwnersPage() {
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   const openCreate = () => { setEditing(null); setForm(emptyForm); setDuplicates([]); setDialogOpen(true); };
-  const openEdit = (o) => { setEditing(o); setForm({ first_name: o.first_name || '', last_name: o.last_name || o.name || '', address: o.address || '', postal_code: o.postal_code || '', city: o.city || '', country: o.country || 'Belgique', email: o.email || '', email2: o.email2 || '', phone: o.phone || '', phone2: o.phone2 || '' }); setDuplicates([]); setDialogOpen(true); };
+
+  // iter93bm : genere un nouveau VCS unique (communication structuree belge)
+  // via l'endpoint backend POST /api/owners/preview-vcs. Le VCS retourne
+  // est deja unique (compteur DB), il suffit de le sauver avec le proprio.
+  const [vcsLoading, setVcsLoading] = useState(false);
+  const generateVcs = async () => {
+    setVcsLoading(true);
+    try {
+      const { data } = await api.post('/owners/preview-vcs');
+      setForm(f => ({ ...f, vcs_code: data.vcs_code || '' }));
+      toast.success('VCS genere : ' + (data.vcs_code || ''));
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Erreur generation VCS');
+    } finally {
+      setVcsLoading(false);
+    }
+  };
+  const openEdit = (o) => { setEditing(o); setForm({ first_name: o.first_name || '', last_name: o.last_name || o.name || '', address: o.address || '', postal_code: o.postal_code || '', city: o.city || '', country: o.country || 'Belgique', email: o.email || '', email2: o.email2 || '', phone: o.phone || '', phone2: o.phone2 || '', vcs_code: o.vcs_code || '', auxiliary_code: o.auxiliary_code || '', bce_number: o.bce_number || '' }); setDuplicates([]); setDialogOpen(true); };
 
   // Duplicate detection
   const checkDuplicate = async (field, value) => {
@@ -296,6 +313,52 @@ export default function OwnersPage() {
               <div><label className="form-label">GSM</label><Input value={form.phone} onChange={e => setForm({...form, phone: e.target.value})} onBlur={e => checkDuplicate('phone', e.target.value)} data-testid="owner-phone-input" /></div>
               <div><label className="form-label">GSM 2</label><Input value={form.phone2} onChange={e => setForm({...form, phone2: e.target.value})} data-testid="owner-phone2-input" /></div>
             </div>
+            {/* iter93bm : VCS (communication structuree belge) - unique par proprio.
+                Genere automatiquement a la creation, editable manuellement si
+                besoin (import Optipro legacy). Verification dedup sur onBlur. */}
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="form-label flex items-center justify-between">
+                  <span>Communication Structuree (VCS)</span>
+                  {!editing && (
+                    <button
+                      type="button"
+                      onClick={generateVcs}
+                      disabled={vcsLoading}
+                      className="text-xs text-[#022D52] hover:text-[#1D4ED8] font-semibold flex items-center gap-1 disabled:opacity-40"
+                      data-testid="owner-vcs-generate-btn"
+                    >
+                      <Sparkles size={12} />
+                      {vcsLoading ? 'Generation...' : (form.vcs_code ? 'Regenerer' : 'Generer')}
+                    </button>
+                  )}
+                </label>
+                <Input
+                  value={form.vcs_code}
+                  onChange={e => setForm({...form, vcs_code: e.target.value})}
+                  onBlur={e => checkDuplicate('vcs_code', e.target.value)}
+                  placeholder="+++XXX/XXXX/XXXXX+++ (auto-genere si vide)"
+                  className="font-mono text-sm"
+                  data-testid="owner-vcs-input"
+                />
+                <div className="text-[10px] text-slate-500 mt-1 italic">
+                  Utilise comme reference de paiement structuree - doit etre unique par proprietaire.
+                </div>
+              </div>
+              <div>
+                <label className="form-label">Code auxiliaire (Optipro)</label>
+                <Input
+                  value={form.auxiliary_code}
+                  onChange={e => setForm({...form, auxiliary_code: e.target.value})}
+                  placeholder="Ex: C1987"
+                  className="font-mono text-sm"
+                  data-testid="owner-aux-code-input"
+                />
+                <div className="text-[10px] text-slate-500 mt-1 italic">
+                  Code specifique a l&apos;ACP courante (venant d&apos;Optipro).
+                </div>
+              </div>
+            </div>
             {duplicates.length > 0 && (
               <div className="bg-yellow-50 border border-yellow-300 rounded-md p-3" data-testid="duplicate-warning">
                 <div className="flex items-start gap-2 mb-2">
@@ -309,7 +372,8 @@ export default function OwnersPage() {
                   duplicates.forEach(d => {
                     if (!d.owner_id) return;
                     if (!byId[d.owner_id]) byId[d.owner_id] = { ...d, matches: [] };
-                    byId[d.owner_id].matches.push(`${d.field === 'email' ? 'Email' : 'GSM'} "${d.value}"`);
+                    const label = d.field === 'email' ? 'Email' : d.field === 'phone' ? 'GSM' : d.field === 'vcs_code' ? 'VCS' : d.field;
+                    byId[d.owner_id].matches.push(`${label} "${d.value}"`);
                   });
                   const groups = Object.values(byId);
                   return groups.map((d, i) => (

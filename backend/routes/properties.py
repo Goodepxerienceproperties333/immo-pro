@@ -395,7 +395,7 @@ def create_properties_router(db):
         email: str, phone: str, bce_number: str,
         address: str, postal_code: str, city: str,
         copro_id: str = "", exclude_id: Optional[str] = None,
-        auxiliary_code: str = "", request=None,
+        auxiliary_code: str = "", vcs_code: str = "", request=None,
     ) -> Optional[dict]:
         """Detecte un doublon de proprietaire. iter90gk : distingue les
         doublons STRICTS (email/telephone/BCE/auxiliary_code = bloquants)
@@ -426,24 +426,46 @@ def create_properties_router(db):
         norm_bce = _norm_alphanum(bce_number)
         norm_addr = _norm_address(address, postal_code, city)
         norm_aux = (auxiliary_code or "").strip().upper()
-        if not (norm_name or norm_email or norm_phone or norm_bce or norm_addr or norm_aux):
+        # iter93bm : VCS = communication structuree belge unique par proprietaire.
+        # Doit rester unique cross-ACP dans le scope syndic.
+        norm_vcs = _norm_alphanum(vcs_code)
+        if not (norm_name or norm_email or norm_phone or norm_bce or norm_addr or norm_aux or norm_vcs):
             return None
 
         base_query: dict = {}
+        # iter93bm : SPLIT du scoping.
+        # - Les identifiants STRICTS (email/phone/BCE) identifient une personne
+        #   physique GLOBALE : un meme email = meme personne, quelle que soit
+        #   l'ACP. On check donc CROSS-ACP dans le scope syndic (Chinese Wall).
+        # - `auxiliary_code` en revanche est propre a chaque ACP (Optipro
+        #   C0959 dans l'ACP A = pas la meme personne que C0959 dans l'ACP B).
+        # -> On construit 2 queries : `base_query` (syndic-wide) pour email/
+        #    phone/BCE/homonymes, et `aux_query` (ACP-locale) pour aux_code.
+        aux_query: dict = {}
         if copro_id:
-            # iter90ii : owners utilisent `copropriete_ids` (array). Match
-            # via egalite scalaire = MongoDB $in-like sur l'element de array.
-            base_query["copropriete_ids"] = copro_id
+            aux_query["copropriete_ids"] = copro_id
         if exclude_id:
             base_query["id"] = {"$ne": exclude_id}
+            aux_query["id"] = {"$ne": exclude_id}
         if request:
             from syndic_scope import syndic_query
-            base_query.update(syndic_query(request))
+            sq = syndic_query(request)
+            base_query.update(sq)
+            aux_query.update(sq)
+        # Candidats cross-ACP (scope syndic) pour identifiants uniques
         candidates = await db.owners.find(base_query, {"_id": 0}).to_list(5000)
-        # 1er passage : cherche un doublon STRICT (email/telephone/BCE/aux)
+        # Candidats locaux ACP pour aux_code
+        aux_candidates = (
+            await db.owners.find(aux_query, {"_id": 0}).to_list(5000)
+            if copro_id else candidates
+        )
+        # 1er passage : cherche un doublon STRICT (aux_code local a l'ACP,
+        # email/telephone/BCE cross-ACP dans le syndic)
+        if norm_aux:
+            for o in aux_candidates:
+                if (o.get("auxiliary_code") or "").strip().upper() == norm_aux:
+                    return {"owner": o, "field": "auxiliary_code", "value": auxiliary_code, "is_strict": True}
         for o in candidates:
-            if norm_aux and (o.get("auxiliary_code") or "").strip().upper() == norm_aux:
-                return {"owner": o, "field": "auxiliary_code", "value": auxiliary_code, "is_strict": True}
             if norm_email:
                 e1 = (o.get("email") or "").strip().lower()
                 e2 = (o.get("email2") or "").strip().lower()
@@ -456,6 +478,9 @@ def create_properties_router(db):
                     return {"owner": o, "field": "phone", "value": phone, "is_strict": True}
             if norm_bce and _norm_alphanum(o.get("bce_number", "")) == norm_bce:
                 return {"owner": o, "field": "bce_number", "value": bce_number, "is_strict": True}
+            # iter93bm : VCS check cross-ACP
+            if norm_vcs and _norm_alphanum(o.get("vcs_code", "")) == norm_vcs:
+                return {"owner": o, "field": "vcs_code", "value": vcs_code, "is_strict": True}
         # 2e passage : cherche un homonyme (nom / adresse / noyau) - non bloquant
         for o in candidates:
             if norm_name:
@@ -776,6 +801,7 @@ def create_properties_router(db):
             city=data.city or "",
             copro_id=data.copropriete_id or "",
             auxiliary_code=data.auxiliary_code or "",
+            vcs_code=data.vcs_code or "",
             request=request,
         )
         if dup:
@@ -807,6 +833,7 @@ def create_properties_router(db):
                     "bce_number": "numero BCE",
                     "address": "adresse postale",
                     "auxiliary_code": "code auxiliaire",
+                    "vcs_code": "code VCS (communication structuree)",
                 }.get(dup["field"], dup["field"])
                 existing_name = existing.get("name") or f"{existing.get('first_name','')} {existing.get('last_name','')}".strip()
                 if is_strict:
@@ -869,8 +896,9 @@ def create_properties_router(db):
         return {k: v for k, v in doc.items() if k != "_id"}
 
     @router.get("/owners/check-duplicate")
-    async def check_duplicate_owner(request: Request, email: Optional[str] = None, phone: Optional[str] = None):
-        """Check if email or phone already exists.
+    async def check_duplicate_owner(request: Request, email: Optional[str] = None, phone: Optional[str] = None, vcs_code: Optional[str] = None):
+        """Check if email, phone or VCS already exists.
+        iter93bm : VCS ajoute comme critere de dedup (unique par proprietaire).
         Pour un syndic : cherche UNIQUEMENT dans les owners de ses ACPs (RGPD).
         Pour un superadmin : cherche dans tous les owners.
 
@@ -921,7 +949,33 @@ def create_properties_router(db):
                 if _allowed(oid) and oid not in seen_ids:
                     seen_ids.add(oid)
                     duplicates.append(_make_row("phone", phone, f))
+        # iter93bm : check VCS aussi (communication structuree = unique par proprio)
+        if vcs_code and vcs_code.strip():
+            vcs_clean = vcs_code.strip()
+            found = await db.owners.find(
+                {"vcs_code": vcs_clean}, proj
+            ).to_list(50)
+            for f in found:
+                oid = f.get("id", "")
+                if _allowed(oid) and oid not in seen_ids:
+                    seen_ids.add(oid)
+                    duplicates.append(_make_row("vcs_code", vcs_clean, f))
         return {"duplicates": duplicates, "has_duplicates": len(duplicates) > 0}
+
+    @router.post("/owners/preview-vcs")
+    async def preview_vcs(request: Request):
+        """iter93bm : genere un nouveau VCS unique (communication structuree
+        belge +++XXX/XXXX/XXXCC+++) pour pre-remplir le formulaire de creation
+        d'un proprietaire manuellement.
+
+        Note : chaque appel INCREMENTE le compteur `counters.vcs_counter` en
+        DB pour garantir l'unicite. Si l'utilisateur annule sans sauver, le
+        numero est simplement "brule" - c'est acceptable (aucune contrainte
+        de sequence continue en compta belge).
+        """
+        from server import generate_vcs
+        vcs = await generate_vcs(db)
+        return {"vcs_code": vcs, "vcs_digits": vcs.replace("+", "").replace("/", "")}
 
     @router.get("/owners/lookup-vcs")
     async def lookup_vcs(request: Request, vcs: str = ""):

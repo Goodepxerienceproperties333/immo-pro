@@ -1,0 +1,23 @@
+{
+  "summary": "iter93bm end-to-end validation (backend + frontend) : anti-doublon cross-ACP owners (email/phone/BCE/VCS strict, aux_code ACP-local) + new POST /api/owners/preview-vcs endpoint + OwnersPage.js UI (VCS field with Generate/Regenerate button, aux_code field, duplicate banner on VCS blur). 6/6 backend pytest PASS. Frontend: dialog opens, VCS field + Generer button visible, generation triggers unique VCS via preview-vcs (+++000/0000/78610+++ then 78711+++), toast 'VCS genere' appears, button relabels to 'Regenerer'. EDIT mode correctly hides Generate button (VCS frozen post-creation). Entering existing VCS +++423/8568/58837+++ in a new owner dialog triggers yellow 'Doublon detecte !' banner with existing Blavier Thierry details and 'Utiliser ce proprietaire' shortcut. All acceptance criteria met.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter93bm_owner_vcs_dedup.py",
+    "/app/test_reports/pytest/iter93bm_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "DialogContent in OwnersPage triggers React aria warning: 'Missing Description or aria-describedby={undefined} for {DialogContent}'. Consider adding a <DialogDescription> for a11y compliance (minor, non-blocking).",
+    "properties.py is now 3760 lines - well over the 700-line soft limit. The owner CRUD + dedup logic (~600 lines) is a natural split candidate into routes/owners.py. Not blocking iter93bm but worth prioritizing.",
+    "preview_vcs endpoint burns VCS counter on each click even if user cancels. Comment in code acknowledges this is acceptable per Belgian accounting rules - documented behavior, no action needed."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (6/6)", "frontend": "100% (dialog + VCS gen + edit-mode gating + dup banner all verified)"},
+  "test_credentials": "admin@copro.be / admin123 (superadmin) - cookie-based /api/auth/login",
+  "seed_data_creation": "Ephemeral ACPs + owners created and cleaned up inside each test via _cleanup fixture (uuid-prefixed IDs, no residue).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "iter93bm fully validated. New test file /app/backend/tests/test_iter93bm_owner_vcs_dedup.py (6 tests, 2.4s runtime) covers: preview-vcs uniqueness, cross-ACP email dedup 409 STRICT, cross-ACP VCS dedup 409 STRICT, check-duplicate?vcs_code=... returns matches, aux_code same-ACP 409 vs cross-ACP OK, and unique-data regression. Frontend flow tested via Playwright: 'Nouveau' dialog opens (data-testid owner-dialog), owner-vcs-input + owner-vcs-generate-btn + owner-aux-code-input all present. Generer btn produces unique +++XXX/XXXX/XXXXX+++, relabels to 'Regenerer', toast fires. EDIT mode via owner-edit-btn hides Generate btn (VCS frozen). Duplicate banner (yellow, 'Doublon detecte !') displays existing owner + 'Utiliser ce proprietaire' CTA when VCS conflict detected on blur. Blavier Thierry post-merge state: single owner id=ac2b7411-6397-4d61-ab0a-d6ebe4e5f816, VCS=+++423/8568/58837+++, email=Thierry_blavier@hotmail.com - dedup merge intact.",
+  "rca of the issue": "N/A - iter93bm patch validated as-is. Original doublon Blavier was created because previous find_duplicate_owner scoped by ACP (copropriete_ids=cid) so cross-ACP identical email/phone did not match. Fix splits queries: base_query (syndic-wide for strict identifiers) vs aux_query (ACP-scoped for auxiliary_code). VCS added as new strict cross-ACP criterion. Verified via test_create_owner_dedup_email_cross_acp + test_create_owner_dedup_vcs_cross_acp."
+}
