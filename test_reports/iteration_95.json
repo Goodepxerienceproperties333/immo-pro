@@ -1,0 +1,46 @@
+{
+  "summary": "Frontend-only verification of iter93bj: auto-resume of the import wizard on first-undone step + 'Retourner au wizard' action toast at end of invoice review. All 3 targeted scenarios pass end-to-end via Playwright against the public URL.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "scenarios_tested": [
+    {
+      "name": "A - ACP Gaura 3 (5/8 steps done)",
+      "acp_id": "50bf3c51-99b5-4e41-bba2-6f3b6d1239f5",
+      "expected": "Auto-jump to Etape 6/8 : Journaux financiers + toast 'Reprise du wizard...'",
+      "observed": "Card title = 'Etape 6 / 8 : Journaux financiers'; step-journals is active; steps suppliers/natures/budget/distribution_keys/invoices marked done (green); toast 'Reprise du wizard a l\\'etape \"Journaux financiers\" (5 etape(s) deja validee(s) auparavant).' displayed",
+      "result": "PASS"
+    },
+    {
+      "name": "B - Fresh ACP (Acacia, no active session)",
+      "acp_id": "3566614a-8e4a-473d-bcb1-f12ba4bfa6af",
+      "expected": "New session created, stepIdx=0 (Etape 1/8 Fournisseurs), NO 'Reprise' toast",
+      "observed": "Card title = 'Etape 1 / 8 : Fournisseurs'; toasts = [] (no reprise toast)",
+      "result": "PASS"
+    },
+    {
+      "name": "C - InvoicesPage end-of-review (last invoice saved)",
+      "flow": "Navigate to /invoices?review_session=<sid>&review_index=32, click 'Enregistrer' on last (33rd) invoice",
+      "expected": "Toast 'Revue terminee : 33 facture(s) traitee(s)...' with action button 'Retourner au wizard'; URL cleaned of review_session/review_index/filter",
+      "observed": "Toast text: \"Revue terminee : 33 facture(s) traitee(s). Retour au wizard pour finaliser l'import (bilan, OD).\" with action button 'Retourner au wizard'. Final URL = /invoices?copropriete_id=... (all 3 review params removed).",
+      "result": "PASS"
+    }
+  ],
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "InvoicesPage.js line 1218 ('Ignorer' skip button at last invoice) shows plain toast 'Revue terminee (des factures peuvent avoir ete ignorees)' WITHOUT the 'Retourner au wizard' action button, and does not delete the 'filter' URL param. Minor inconsistency vs the save-completion path (line 780-797). Consider unifying.",
+    "InvoicesPage.js line 1238 ('Quitter' button) also does not delete the 'filter' param when exiting review mode - same minor cleanup inconsistency.",
+    "ImportWizardPage.js iter93bj implementation (lines 199-218) is correct: findIndex on STEPS looking for count/inserted/fiscal_year_id > 0 works, silently falls back to stepIdx=0 on any error, toast duration 5s."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a (skipped per request)", "frontend": "100% (3/3 scenarios pass)"},
+  "test_credentials": "admin@copro.be / admin123",
+  "seed_data_creation": "None. Used pre-existing ACPs: Gaura 3 (partial session), Acacia (no session).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "iter93bj auto-resume feature and end-of-review 'Retourner au wizard' action toast are fully working. Two minor cosmetic inconsistencies in InvoicesPage.js (skip-completion and quit paths do not delete 'filter' param and skip-completion has no action button) - not blocking but could be tightened in a follow-up iter."
+}

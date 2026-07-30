@@ -196,6 +196,26 @@ export default function ImportWizardPage() {
         const r = await api.get('/import-wizard/sessions/active', { params: { copropriete_id: effectiveCopro } });
         if (r.data) {
           setSession(r.data);
+          // iter93bj : reprise auto sur la premiere etape non-terminee.
+          // Sans ca, apres avoir quitte le wizard (ex: revue de factures dans
+          // InvoicesPage), l'utilisateur revient a stepIdx=0 et clique
+          // "Continuer" en autopilote sur les etapes deja validees, en oubliant
+          // les etapes cles comme "OD d'ouverture" (bilan comptable initial).
+          try {
+            const sSteps = r.data?.steps || {};
+            const firstUndoneIdx = STEPS.findIndex(s => {
+              const sd = sSteps[s.key];
+              return !(sd?.count > 0 || sd?.inserted > 0 || sd?.fiscal_year_id);
+            });
+            if (firstUndoneIdx > 0) {
+              setStepIdx(firstUndoneIdx);
+              toast.info(
+                `Reprise du wizard a l'etape "${STEPS[firstUndoneIdx].label}" `
+                + `(${firstUndoneIdx} etape(s) deja validee(s) auparavant).`,
+                { duration: 5000 }
+              );
+            }
+          } catch { /* silencieux : fallback stepIdx=0 */ }
         } else {
           const c = await api.post('/import-wizard/sessions', { copropriete_id: effectiveCopro, source_system: 'Optipro' });
           setSession(c.data);

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import api from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -24,6 +24,7 @@ const API = process.env.REACT_APP_BACKEND_URL;
 
 export default function InvoicesPage() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const navigate = useNavigate();
   const [invoices, setInvoices] = useState([]);
   const [suppliers, setSuppliers] = useState([]);
   const [invFilters, setInvFilters] = useState({ startDate: '', endDate: '', supplier: '', reference: '', status: '' });
@@ -778,11 +779,21 @@ export default function InvoicesPage() {
         const nextIndex = reviewIndex + 1;
         setInvoiceDialog(false); setPendingPdf(null); setEditingInvoice(null);
         if (nextIndex >= reviewInvoices.length) {
-          toast.success(`Revue terminee : ${reviewInvoices.length} facture(s) traitee(s)`, { duration: 5000 });
-          // Nettoie l'URL pour sortir du mode revue
+          // iter93bj : revue terminee - propose explicitement le retour au wizard
+          toast.success(
+            `Revue terminee : ${reviewInvoices.length} facture(s) traitee(s). Retour au wizard pour finaliser l'import (bilan, OD).`,
+            {
+              duration: 10000,
+              action: {
+                label: 'Retourner au wizard',
+                onClick: () => navigate('/import-wizard'),
+              },
+            }
+          );
           const sp = new URLSearchParams(searchParams);
           sp.delete('review_session');
           sp.delete('review_index');
+          sp.delete('filter');
           setSearchParams(sp, { replace: true });
         } else {
           toast.info(`Facture ${reviewIndex + 1}/${reviewInvoices.length} enregistree - passage a la suivante...`, { duration: 3000 });
