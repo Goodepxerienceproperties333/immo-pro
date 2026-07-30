@@ -676,3 +676,28 @@ Dans `InvoicesPage.js` :
 - Screenshot manuel valide : "Retourner au wizard" button visible: True. Apres clic, URL = `/import-wizard?copropriete_id=2ef4fcd6...`, wizard sur "Etape 6/8 : Journaux financiers" avec toast "Reprise du wizard".
 - Lint OK, aucune regression.
 
+
+## iter93bm - Anti-doublon cross-ACP + VCS generation (Feb 2026 - DONE)
+
+### Contexte
+Utilisateur : "tu crees encore des doublons de proprietaires c'est innacceptable" (screenshot 2 Blavier Thierry avec meme email/telephone/VCS). Puis : "lors de la creation d'un nouveau proprietaire manuellement, permettre de generer un numero VCS pour les paiements, il doit etre lie au proprietaire ... unique."
+
+### Root cause du doublon
+`find_duplicate_owner` (properties.py:433-436) scopait la recherche par `copropriete_ids` du target. Si le proprio existait dans une AUTRE ACP, la query renvoyait vide -> pas de doublon detecte -> creation d'un doublon a chaque nouvelle ACP.
+
+### Fix
+1. **Split du scoping** dans `find_duplicate_owner` :
+   - `base_query` : cross-ACP dans le scope syndic pour les identifiants uniques (email, telephone, BCE, **VCS ajoute**).
+   - `aux_query` : local ACP pour `auxiliary_code` (car aux_code Optipro est propre a chaque ACP).
+2. **VCS ajoute** comme identifiant strict (norm_vcs). Detection cross-ACP.
+3. **check_duplicate_owner** endpoint accepte maintenant param `vcs_code`.
+4. **POST /api/owners/preview-vcs** : nouvel endpoint qui appelle `generate_vcs(db)` et retourne un VCS unique pre-genere pour le formulaire de creation.
+5. **UI OwnersPage.js** : champ VCS visible dans le dialog Create/Edit avec bouton **"Generer/Regenerer"** (Sparkles icon). Bouton uniquement en mode Create (VCS fige apres creation). Nouveau champ **"Code auxiliaire (Optipro)"** distinct. Anti-doublon `onBlur` sur le champ VCS.
+
+### Nettoyage donnees
+Script MongoDB : merge du doublon Blavier Thierry (cf0d3836 -> ac2b7411). 6 lots reassignes, 7 ACPs consolidees dans `copropriete_ids`, doublon supprime.
+
+### Testing
+- `testing_agent_v3_fork` iteration_97 : backend 100% (6/6 pytest), frontend 100%.
+- Manuel : preview-vcs retourne VCS uniques (+++000/0000/77701+++, ...78610+++, ...78711+++). POST /owners bloque avec 409 sur email existant. Banner jaune 'Doublon detecte' apparait au blur d'un VCS existant.
+
