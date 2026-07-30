@@ -779,14 +779,17 @@ export default function InvoicesPage() {
         const nextIndex = reviewIndex + 1;
         setInvoiceDialog(false); setPendingPdf(null); setEditingInvoice(null);
         if (nextIndex >= reviewInvoices.length) {
-          // iter93bj : revue terminee - propose explicitement le retour au wizard
+          // iter93bj + iter93bl : revue terminee - propose explicitement le
+          // retour au wizard EN PRESERVANT le copropriete_id (sinon le wizard
+          // perd son contexte ACP et repart de zero).
+          const copro = localStorage.getItem('selectedCopro') || '';
           toast.success(
             `Revue terminee : ${reviewInvoices.length} facture(s) traitee(s). Retour au wizard pour finaliser l'import (bilan, OD).`,
             {
               duration: 10000,
               action: {
                 label: 'Retourner au wizard',
-                onClick: () => navigate('/import-wizard'),
+                onClick: () => navigate(copro ? `/import-wizard?copropriete_id=${copro}` : '/import-wizard'),
               },
             }
           );
@@ -1215,10 +1218,20 @@ export default function InvoicesPage() {
                     const nextIndex = reviewIndex + 1;
                     setInvoiceDialog(false); setEditingInvoice(null);
                     if (nextIndex >= reviewInvoices.length) {
-                      toast.info('Revue terminee (des factures peuvent avoir ete ignorees)');
+                      // iter93bl : meme sortie de mode revue que via Save.
+                      // Supprime aussi 'filter' + propose "Retourner au wizard".
+                      const copro = localStorage.getItem('selectedCopro') || '';
+                      toast.info('Revue terminee (des factures peuvent avoir ete ignorees)', {
+                        duration: 10000,
+                        action: {
+                          label: 'Retourner au wizard',
+                          onClick: () => navigate(copro ? `/import-wizard?copropriete_id=${copro}` : '/import-wizard'),
+                        },
+                      });
                       const sp = new URLSearchParams(searchParams);
                       sp.delete('review_session');
                       sp.delete('review_index');
+                      sp.delete('filter');
                       setSearchParams(sp, { replace: true });
                     } else {
                       const sp = new URLSearchParams(searchParams);
@@ -1236,11 +1249,23 @@ export default function InvoicesPage() {
                   variant="ghost"
                   className="text-slate-600"
                   onClick={() => {
+                    // iter93bl : quitter -> propose aussi le retour au wizard
+                    // (avec preservation du copropriete_id pour eviter que le
+                    // wizard perde son contexte ACP).
+                    const copro = localStorage.getItem('selectedCopro') || '';
                     const sp = new URLSearchParams(searchParams);
                     sp.delete('review_session');
                     sp.delete('review_index');
+                    sp.delete('filter');
                     setSearchParams(sp, { replace: true });
                     setInvoiceDialog(false); setEditingInvoice(null);
+                    toast.info('Mode revue quitte', {
+                      duration: 8000,
+                      action: {
+                        label: 'Retourner au wizard',
+                        onClick: () => navigate(copro ? `/import-wizard?copropriete_id=${copro}` : '/import-wizard'),
+                      },
+                    });
                   }}
                   data-testid="review-quit-btn"
                   title="Quitter le mode revue (les factures non revisees restent en l'etat)"

@@ -657,3 +657,22 @@ L'utilisateur a fourni un rapport de code review avec 10 items (5 Critiques + 5 
 - `ruff check --select F821 .` : 0 issues restantes.
 - Login + list coproprietes + list invoices : tous 200.
 
+
+## iter93bl - Fix retour au wizard apres revue (Feb 2026 - DONE)
+
+### Contexte
+Utilisateur (video) : "suite a tes modifications mauvais lien dans le retour au wizard apres affectation de frais privatifs dans les factures". Plusieurs bugs identifies apres analyse video :
+1. Bouton "Retourner au wizard" **absent** sur les toasts de fin via **Ignorer** et **Quitter** (uniquement present sur le path Save).
+2. Le lien du wizard `/import-wizard` **ne preservait pas** le `copropriete_id`, faisant perdre le contexte ACP au wizard.
+3. Le param URL `filter=needs_owner` **restait dans l'URL** apres sortie du mode revue (fuite d'etat).
+
+### Fix
+Dans `InvoicesPage.js` :
+- **Save-complete** : le toast success contient maintenant `navigate('/import-wizard?copropriete_id=<copro>')` (avec copropriete_id preserve). `sp.delete('filter')` ajoute.
+- **review-skip-btn (Ignorer)** : ajout du meme toast avec bouton "Retourner au wizard" + preservation copropriete_id + `sp.delete('filter')`.
+- **review-quit-btn (Quitter)** : idem + nouveau toast INFO "Mode revue quitte" avec action de retour.
+
+### Testing
+- Screenshot manuel valide : "Retourner au wizard" button visible: True. Apres clic, URL = `/import-wizard?copropriete_id=2ef4fcd6...`, wizard sur "Etape 6/8 : Journaux financiers" avec toast "Reprise du wizard".
+- Lint OK, aucune regression.
+
