@@ -1,0 +1,24 @@
+{
+  "summary": "iter93bn backend validation : VCS = discriminateur PRINCIPAL de dedup owners. 5/5 pytest PASS en 2.98s. (1) parse_owners_pdf sur PDF Optipro 12 lignes -> 12 owners avec email placeholder partage 'info@nextgecopro.be' + 12 VCS uniques. (2) POST /api/owners?reuse_on_duplicate=true avec meme email + VCS differents -> 2 owners crees (pas de reuse sur weak signal email). (3) Meme VCS -> _reused=True + _dup_field='vcs_code'. (4) E2E idempotence : boucle POST /owners du PDF 2x -> 12 crees au run 1, 12 reused au run 2, DB=12 owners uniques (pas 24). (5) Multi-ACP consolidation : meme VCS sur ACP A puis ACP B -> single owner avec copropriete_ids=[cid_a, cid_b].",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter93bn_owner_vcs_priority.py",
+    "/app/test_reports/pytest/iter93bn_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "properties.py toujours a 3780 lignes (>700 soft limit). Extraction routes/owners.py reste recommandee (deja mentionne iter93bm).",
+    "find_duplicate_owner (iter93bn) : la logique 'skip email/phone si VCS fourni et unique' est intentionnelle et correctement documentee. Le loop pour aux_code reste local ACP, cross-ACP pour homonymes/adresse. Comportement conforme au brief."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter93bn_owner_vcs_priority.py (nouveau)"
+  ],
+  "success_rate": {"backend": "100% (5/5)", "frontend": "N/A (skipped per request)"},
+  "test_credentials": "admin@copro.be / admin123 (superadmin)",
+  "seed_data_creation": "ACPs ephemeres uuid-prefixes + owners crees et cleanup dans finally de chaque test. Zero residu DB.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "iter93bn valide : VCS prend priorite sur email/phone dans find_duplicate_owner. Test file : /app/backend/tests/test_iter93bn_owner_vcs_priority.py (5 tests). Le fix regle le bug 'PDF liste des coproprietaires : 11/12 marques comme doublons a cause de l'email placeholder partage'. Import boucle POST /owners via parse_owners_pdf donne desormais 12 owners uniques par VCS. Multi-ACP consolidation via VCS confirmee : re-import meme VCS sur ACP2 = reuse + copropriete_ids merge.",
+  "rca of the issue": "Avant iter93bn : dedup traitait email comme cle STRICT cross-ACP. PDF Optipro contient placeholder email 'info@nextgecopro.be' sur les 12 owners -> le 1er etait cree, les 11 suivants matches sur email et flagges comme _reused (11 doublons faux positifs). Fix iter93bn (routes/properties.py L470-483) : si `vcs_code` fourni ET aucun match VCS parmi les candidats existants -> SKIP checks email/phone/BCE (weak signals). VCS match = meme personne (bloc strict). VCS different = personnes differentes meme email identique. Reproduction : POST 2 owners meme email + VCS differents -> desormais 2 owners crees (confirme par test_same_email_diff_vcs_creates_two_owners)."
+}

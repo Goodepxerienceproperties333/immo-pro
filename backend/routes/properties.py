@@ -459,28 +459,48 @@ def create_properties_router(db):
             await db.owners.find(aux_query, {"_id": 0}).to_list(5000)
             if copro_id else candidates
         )
+        # iter93bn : SI le nouveau proprio a un VCS fourni, on l'utilise en
+        # PRIORITE comme discriminateur. Un VCS different -> personnes
+        # differentes, meme si l'email est identique (cas frequent avec un
+        # placeholder du type "info@syndic.be" partage sur tous les proprios).
+        # On evalue d'abord tous les candidats pour trouver un VCS EXACT match ;
+        # si aucun match VCS mais que le nouveau VCS est renseigne, on SKIP
+        # les checks email/phone (car ils identifient une entite = personne,
+        # pas seulement un canal de contact).
+        if norm_vcs:
+            for o in candidates:
+                if _norm_alphanum(o.get("vcs_code", "")) == norm_vcs:
+                    return {"owner": o, "field": "vcs_code", "value": vcs_code, "is_strict": True}
+            # VCS fourni mais aucun match cross-ACP -> le nouveau proprio est
+            # unique par VCS. On ne bloque plus sur email/phone (weak signals).
+            # On continue vers le check auxiliary_code (local ACP) + homonyme.
+
         # 1er passage : cherche un doublon STRICT (aux_code local a l'ACP,
         # email/telephone/BCE cross-ACP dans le syndic)
         if norm_aux:
             for o in aux_candidates:
                 if (o.get("auxiliary_code") or "").strip().upper() == norm_aux:
                     return {"owner": o, "field": "auxiliary_code", "value": auxiliary_code, "is_strict": True}
-        for o in candidates:
-            if norm_email:
-                e1 = (o.get("email") or "").strip().lower()
-                e2 = (o.get("email2") or "").strip().lower()
-                if e1 == norm_email or e2 == norm_email:
-                    return {"owner": o, "field": "email", "value": email, "is_strict": True}
-            if norm_phone:
-                p1 = _norm_alphanum(o.get("phone", ""))
-                p2 = _norm_alphanum(o.get("phone2", ""))
-                if p1 == norm_phone or p2 == norm_phone:
-                    return {"owner": o, "field": "phone", "value": phone, "is_strict": True}
-            if norm_bce and _norm_alphanum(o.get("bce_number", "")) == norm_bce:
-                return {"owner": o, "field": "bce_number", "value": bce_number, "is_strict": True}
-            # iter93bm : VCS check cross-ACP
-            if norm_vcs and _norm_alphanum(o.get("vcs_code", "")) == norm_vcs:
-                return {"owner": o, "field": "vcs_code", "value": vcs_code, "is_strict": True}
+        # Skip email/phone/BCE checks si VCS fourni ET unique (iter93bn).
+        if not norm_vcs:
+            for o in candidates:
+                if norm_email:
+                    e1 = (o.get("email") or "").strip().lower()
+                    e2 = (o.get("email2") or "").strip().lower()
+                    if e1 == norm_email or e2 == norm_email:
+                        return {"owner": o, "field": "email", "value": email, "is_strict": True}
+                if norm_phone:
+                    p1 = _norm_alphanum(o.get("phone", ""))
+                    p2 = _norm_alphanum(o.get("phone2", ""))
+                    if p1 == norm_phone or p2 == norm_phone:
+                        return {"owner": o, "field": "phone", "value": phone, "is_strict": True}
+                if norm_bce and _norm_alphanum(o.get("bce_number", "")) == norm_bce:
+                    return {"owner": o, "field": "bce_number", "value": bce_number, "is_strict": True}
+                # iter93bm : VCS check inclus dans le loop pour les proprios sans VCS
+                # cible mais dont un existant en a un (edge case).
+                if _norm_alphanum(o.get("vcs_code", "")):
+                    # candidat a un VCS et le nouveau non -> pas de match, skip
+                    pass
         # 2e passage : cherche un homonyme (nom / adresse / noyau) - non bloquant
         for o in candidates:
             if norm_name:
