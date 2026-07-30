@@ -20,6 +20,15 @@ Application de gestion de copropriete basee sur le droit belge (PCMN), incluant 
 
 ### Session courante (Fevrier 2026)
 
+#### P2 - Verrous de regression parser Optipro multi-lignes (DONE iter93ce - Feb 2026)
+- **Contexte** : Le handoff signalait ~24 sous-comptes 410 rates par le parser a cause de labels multi-lignes / coordonnees x0 decalees.
+- **Verification** : Sur le fixture ACP Agathe 31/03/2027 (`/app/backend/tests/fixtures/optipro_bilan_31_03_2027.pdf`), le parser (iter93bu) capture deja **28 sous-comptes ACTIF 410** + **9 sous-comptes PASSIF 410**, y compris les 4 comptes 4101xxx/4102xxx (468,62 EUR) et le label multi-ligne "CANTERO DIAZ - VARGAS BAQUERO Miguel - Catalina". Le fix avait ete implicitement resolu par iter93bs-cb (strategie multi-passes + validation semantique).
+- **Action** : Ajout de 7 tests de regression (`test_iter93ce_optipro_parser_multiline_410.py`) qui verrouillent l'etat correct : balanced=True, ecart=0, strategy='standard', 28+9 sous-comptes, label multi-ligne preserve.
+- **Validation** : Testing agent 100% (44 tests total + 21 tests iter93bu/cc/cd/ce).
+- Tests : `/app/backend/tests/test_iter93ce_optipro_parser_multiline_410.py`, fixture : `/app/backend/tests/fixtures/optipro_bilan_31_03_2027.pdf`
+
+
+
 #### P0 - Distribution per-key du boni apres repartition (DONE iter93cd - Feb 2026)
 - **Feature** : Le calcul du solde owner "apres repartition" utilise desormais les cles de repartition specifiques a chaque facture, remplacant la distribution uniforme par quotite globale.
 - **Formule** : delta[owner] = appels_provisions(41010XX, VE only) - (charges_imputees_per_key - produits_default_key). Chaque facture est distribuee via sa `distribution_key_id` (link JE.source_invoice_id -> invoice.dk_id, fiable a 23/23 sur legacy). Fallback vers distribution uniforme si aucune facture liee.
