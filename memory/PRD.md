@@ -701,3 +701,20 @@ Script MongoDB : merge du doublon Blavier Thierry (cf0d3836 -> ac2b7411). 6 lots
 - `testing_agent_v3_fork` iteration_97 : backend 100% (6/6 pytest), frontend 100%.
 - Manuel : preview-vcs retourne VCS uniques (+++000/0000/77701+++, ...78610+++, ...78711+++). POST /owners bloque avec 409 sur email existant. Banner jaune 'Doublon detecte' apparait au blur d'un VCS existant.
 
+
+## iter93bn - VCS priorise sur email/phone dans dedup owners (Feb 2026 - DONE)
+
+### Contexte
+Utilisateur : "cette liste de proprietaires n'est pas reconnue" (PDF Optipro 12 lignes). Root cause : les 12 proprietaires partagent le placeholder email `info@nextgecopro.be`. La dedup basee sur email marquait 11 sur 12 comme doublons du 1er, meme si leur VCS est different (donc personnes differentes).
+
+### Fix
+Dans `properties.py:find_duplicate_owner` :
+- Si `vcs_code` fourni : check d'abord tous les candidats pour un match VCS exact -> strict dup.
+- Si VCS fourni MAIS pas de match -> **SKIP les checks email/phone/BCE** (le VCS est un identifiant unique par personne, il prime sur les canaux de contact).
+- Si pas de VCS fourni : logique historique (email/phone/BCE).
+
+### Testing
+- `testing_agent_v3_fork` iteration_98 : backend 100% (5/5 pytest).
+- E2E idempotent : import du PDF 2x -> 12 crees run1, 12 reused run2, DB=12 owners uniques.
+- Multi-ACP consolidation : meme VCS sur ACP A + B -> single owner avec `copropriete_ids=[cid_a, cid_b]`.
+
