@@ -1193,7 +1193,7 @@ def parse_balance_pdf(raw: bytes) -> dict:
     import re
     info = {"actif": [], "passif": [], "total_actif": 0.0, "total_passif": 0.0,
             "balanced": False, "period_end_date": ""}
-    account_re = re.compile(r"^\d{2,7}$")
+    account_re = re.compile(r"^\d{2,10}$")
     amount_word_re = re.compile(r"^-?[\d.,]+$")
 
     def _join_amount(words: list[dict]) -> float:
@@ -1793,7 +1793,7 @@ def _parse_od_expense_list_pdf(raw: bytes) -> dict:
     }
     date_re = re.compile(r"^\d{2}/\d{2}/\d{4}$")
     amount_re = re.compile(r"^-?[\d.,\u00a0 ]+$")
-    compte_re = re.compile(r"^(\d{3,7})$")
+    compte_re = re.compile(r"^(\d{3,10})$")
     period_re = re.compile(r"^(\d{2}/\d{2}/\d{4})$")
 
     def _to_float(parts: list[str]) -> float:
