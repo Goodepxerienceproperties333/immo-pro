@@ -1344,6 +1344,46 @@ async def compute_bilan_data(db, copropriete_id: str, date_to: Optional[str] = N
                 if oids_lot:
                     lot_owners[lid] = oids_lot
 
+            # Charger les factures et pre-calculer pour chaque JE :
+            #   - invoice associee (via source_invoice_id)
+            #   - authoritative_lot_ratios : ratios per-lot bases sur les
+            #     `distribution_lines` Optipro-format (autoritatifs pour les
+            #     ACPs importees d'Optipro) ; fallback vers distribution_key
+            #     abstraite si distribution_lines ne contient pas de lot_id.
+            #
+            # RATIONNEL (iter93cf) : L'invoice.distribution_lines pre-calcule
+            # au moment de l'import Optipro reflete EXACTEMENT la repartition
+            # legacy (y compris cas ou lot X etait dans cle Y a l'epoque
+            # meme si la definition actuelle de la cle Y diverge - ex. G3
+            # elevator sur ACP Agathe : Guerit apparait dans distribution_lines
+            # avec share 8479, alors que la cle ef3a1767 ne le contient plus).
+            # Utiliser distribution_lines evite les divergences et matche
+            # Optipro au centime pres.
+            je_to_invoice = {}
+            for e in entries:
+                sid = e.get("source_invoice_id") or (
+                    e.get("source_id") if e.get("source_type") == "invoice" else None
+                )
+                if sid and sid in inv_by_id:
+                    je_to_invoice[e["id"]] = inv_by_id[sid]
+
+            def _authoritative_lot_ratios(inv_doc):
+                """Retourne {lot_id: ratio} depuis invoice.distribution_lines
+                (Optipro-format). Retourne None si pas de format Optipro.
+                """
+                dls = (inv_doc or {}).get("distribution_lines") or []
+                # Format Optipro : premiere ligne a un champ lot_id
+                if not dls or "lot_id" not in dls[0]:
+                    return None
+                total = sum(dl.get("amount", 0) or 0 for dl in dls)
+                if total <= 0:
+                    return None
+                return {
+                    dl["lot_id"]: (dl.get("amount", 0) or 0) / total
+                    for dl in dls
+                    if dl.get("lot_id")
+                }
+
             # Charger les tier_accounts par owner (pour identifier 41010XX =
             # compte "provisions" / fonds de roulement uniquement, pas la reserve)
             owner_fr_accounts = {}  # owner_id -> account_number (provisions)
@@ -1356,15 +1396,18 @@ async def compute_bilan_data(db, copropriete_id: str, date_to: Optional[str] = N
             charges_per_owner = {}
             products_per_owner = {}
 
-            def _distribute_amount_to_owners(amount, dk_id):
-                """Distribue un montant selon la cle dk_id.
+            def _distribute_amount_to_owners(amount, entry_id, dk_id):
+                """Distribue un montant sur les owners.
 
-                Retourne dict {owner_id: montant_owner}. Utilise la cle
-                default en fallback si dk_id est None ou n'a pas de ratios.
-                Si un lot n'a pas de proprietaire, sa quote-part est ignoree
-                (perdue). Le boni "orphelin" sera retenu dans la safety net.
+                Priorite (iter93cf) :
+                1. invoice.distribution_lines (Optipro-format, lot_id) - autoritatif
+                2. distribution_key.lots via dk_id - fallback abstrait
+                3. default_key - fallback ultime
                 """
-                ratios = lot_share_by_key.get(dk_id) if dk_id else None
+                inv_doc = je_to_invoice.get(entry_id) if entry_id else None
+                ratios = _authoritative_lot_ratios(inv_doc)
+                if not ratios:
+                    ratios = lot_share_by_key.get(dk_id) if dk_id else None
                 if not ratios:
                     ratios = default_lot_ratios
                 if not ratios:
@@ -1380,7 +1423,7 @@ async def compute_bilan_data(db, copropriete_id: str, date_to: Optional[str] = N
                         res[oid] = res.get(oid, 0.0) + per_owner
                 return res
 
-            per_key_available = bool(je_to_dk) or bool(default_lot_ratios)
+            per_key_available = bool(je_to_dk) or bool(default_lot_ratios) or bool(je_to_invoice)
 
             if per_key_available:
                 # Iterer sur les entries et distribuer charges/produits par cle
@@ -1396,14 +1439,14 @@ async def compute_bilan_data(db, copropriete_id: str, date_to: Optional[str] = N
                             if acc.startswith("643"):
                                 continue
                             # Charges cl.6 : positive => debit charge, distribue aux owners
-                            shares = _distribute_amount_to_owners(line_net, dk_id)
+                            shares = _distribute_amount_to_owners(line_net, entry["id"], dk_id)
                             for oid, amt in shares.items():
                                 charges_per_owner[oid] = charges_per_owner.get(oid, 0.0) + amt
                         elif acc.startswith("7") and not acc.startswith("70"):
                             # Produits hors provisions : distribue par default key
                             # (interets crediteurs, etc.). line_net < 0 = credit produit.
                             prod_amt = -line_net  # convertir en positif pour distribution
-                            shares = _distribute_amount_to_owners(prod_amt, dk_id)
+                            shares = _distribute_amount_to_owners(prod_amt, entry["id"], dk_id)
                             for oid, amt in shares.items():
                                 products_per_owner[oid] = products_per_owner.get(oid, 0.0) + amt
 
