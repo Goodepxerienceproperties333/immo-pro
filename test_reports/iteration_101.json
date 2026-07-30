@@ -1,0 +1,30 @@
+{
+  "summary": "iter93cc backend fix validated. Compte 490 (Charges a reporter) no longer redistributed to owners in after_distribution mode; it stays in VIII regul_actif with full 3743.74 EUR balance. Guerit Vandervelde balance reduced from 204.02 -> ~79 EUR (approaches Optipro 26.96). Bilan equilibre remains True for both modes across all 9 coproprietes in DB. 499XXX sinistres isolated in VI.D at 3577.18 EUR. PDF endpoint OK. All 3 unit tests (compute_bilan_data) + 5 API regression tests PASSED.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "tests/test_iter93ca_boni_isolated_from_sinistre.py", "issue": "Test file missing @pytest.mark.asyncio marker - unrelated to iter93cc scope, pre-existing"},
+      {"endpoint": "compute_bilan_data (after_distribution)", "issue": "Guerit balance is ~79 EUR vs Optipro 26.96 EUR (delta ~52 EUR). Known limitation documented in E1's note: global quotite distribution instead of per-charge-key distribution. Out of iter93cc scope."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter93cc_490_regul_no_redistribution.py",
+    "/app/backend/tests/test_iter93cc_api_regression.py",
+    "/app/test_reports/pytest/iter93cc_api.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Fix iter93cc is minimal and surgical: removal of 490-498 redistribution block. Correct per Belgian PCMN (Optipro reference).",
+    "Consider documenting the known ~52 EUR residual (per-charge-key distribution limitation) as a follow-up ticket.",
+    "backend/routes/reports.py is large; consider extracting bilan-related logic into a separate module for maintainability."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter93cc_api_regression.py"],
+  "success_rate": {"backend": "100%", "frontend": "N/A (skipped per request)"},
+  "test_credentials": "admin@copro.be / admin123 (cookie-based auth, HttpOnly)",
+  "seed_data_creation": "None - ACP Agathe (c9cfce94-96c6-4202-8a6d-0a5627b50856) already seeded with 117 journal_entries.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Auth is COOKIE-BASED (HttpOnly), NOT Bearer token. Use requests.Session() and .post to /api/auth/login then reuse the session. Response body has no token field. 9 coproprietes seeded in DB. iter93cc removed the redistribution of 490-498 accounts to owners - all bilans remain balanced. Pre-existing test failures in test_iter93ca and test_compte_499_fix are due to missing pytest-asyncio markers and orphan ACP data, not related to iter93cc.",
+  "rca of the issue": "ROOT CAUSE (fixed by E1): In routes/reports.py compute_bilan_data after_distribution mode, a block was redistributing accounts 490-498 (Comptes de regularisation) proportionally to owner quotites. The 490 'Charges a reporter' balance of 3743.74 EUR was thus added (~124 EUR per owner via quotite) to owner receivable balances, inflating Guerit from ~79 EUR to 204.02 EUR. FIX: block removed; 490 stays in rubric VIII regul_actif with its full balance, only 499 (boni/mali) remains distributed to owners. MITIGATION: fix validated - Guerit=79.32 EUR, 490=3743.74 EUR in VIII regul_actif, bilan equilibre=True on all ACPs."
+}

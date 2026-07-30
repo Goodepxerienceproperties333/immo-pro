@@ -202,7 +202,7 @@ async def cleanup(db):
 async def measure_operations(db, copro_ids):
     """Mesure les temps de reponse des operations critiques."""
     import httpx
-    BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://teuwen-reports.preview.emergentagent.com").rstrip("/")
+    BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://optipro-parser-fix.preview.emergentagent.com").rstrip("/")
 
     # Login as superadmin
     async with httpx.AsyncClient(base_url=BASE_URL, timeout=60) as client:

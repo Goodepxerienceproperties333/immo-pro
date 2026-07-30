@@ -7,7 +7,7 @@ import os
 import pytest
 import requests
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://teuwen-reports.preview.emergentagent.com").rstrip("/")
+BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://optipro-parser-fix.preview.emergentagent.com").rstrip("/")
 ACP_138 = "138cfd69-cc07-46bb-ad17-a98debee7a3a"  # Auto 3 Maria
 ACP_34A = "34a2fe77-2137-4e32-81eb-387273d3f242"  # ACPMaria Auto3
 

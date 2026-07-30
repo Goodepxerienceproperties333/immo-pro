@@ -11,7 +11,7 @@ import uuid
 import pytest
 import requests
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://teuwen-reports.preview.emergentagent.com").rstrip("/")
+BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://optipro-parser-fix.preview.emergentagent.com").rstrip("/")
 
 SUPERADMIN = {"email": "admin@copro.be", "password": "admin123"}
 SYNDIC = {"email": "syndic_alpha@copro.be", "password": "admin123"}

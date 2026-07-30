@@ -45,7 +45,7 @@ load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 BACKEND_URL = os.environ.get(
     "REACT_APP_BACKEND_URL",
-    "https://teuwen-reports.preview.emergentagent.com",
+    "https://optipro-parser-fix.preview.emergentagent.com",
 ).rstrip("/")
 
 SEED_EMAIL = "iter90h5_seed@example.com"

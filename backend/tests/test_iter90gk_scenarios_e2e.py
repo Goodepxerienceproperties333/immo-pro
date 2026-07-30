@@ -4,7 +4,7 @@ import pytest
 import requests
 import uuid
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://teuwen-reports.preview.emergentagent.com").rstrip("/")
+BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://optipro-parser-fix.preview.emergentagent.com").rstrip("/")
 MARIA_ID = "ed728e70-1d0d-4057-a37a-d450cc9ac812"
 
 

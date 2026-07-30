@@ -1305,111 +1305,34 @@ async def compute_bilan_data(db, copropriete_id: str, date_to: Optional[str] = N
                 }
                 actual_boni_distributed += delta
 
-        # ---- Repartition des comptes de regularisation 49X sur les proprietaires ----
-        # Regle metier (PCMN copro) : en consultation "Apres repartition", les comptes
-        # de regularisation 490-498 sont consideres comme appartenant collectivement
-        # aux proprietaires. On les repartit par quotite.
+        # ---- iter93cc : NE PAS redistribuer les comptes 490-498 aux proprietaires ----
+        # ROOT CAUSE 177 EUR delta vs Optipro (bug rapporte par l'utilisateur
+        # sur Bilan 31/03/2027 - Guerit Vandervelde attendu 26,96 EUR, affiche
+        # 204,02 EUR). La source Optipro conserve le 490 "Charges a reporter"
+        # comme UNE rubrique separee (VIII. Comptes de regularisation actif)
+        # avec son solde global (3.743,74 EUR), au meme titre que les fonds
+        # de reserve (160) ou les fournisseurs (440). Elle NE LE REDISTRIBUE
+        # PAS aux copropriétaires par quotite.
         #
-        # iter93ca : ISOLATION DES SINISTRES 499XXX. Le compte 499 (compte
-        # d'attente / boni de regularisation) est deja gere par `compte_499`
-        # ci-dessus (via result_exercise calcule des mouvements cl.6/cl.7).
-        # Les SOUS-COMPTES 499XXX (499603 Sinistre, 4996XX Provisions
-        # sinistres, etc.) sont des DETTES SPECIFIQUES envers des tiers
-        # (assureur, expert, entrepreneur) et ne doivent JAMAIS etre
-        # redistribues aux proprietaires collectivement. Ils restent
-        # isoles sur leur compte d'origine.
-        # Regle : skip TOUT compte commencant par "499" (au lieu de "== 499").
+        # L'ancienne logique (iter90fs) redistribuait 490-498 aux owners :
+        # cela ajoutait au debit de chaque proprietaire une part injustifiee
+        # (Guerit : +124,70 EUR sur 3.743,74 EUR reparti). Resultat : ecart
+        # systematique de X EUR pour chaque proprietaire vs son solde reel
+        # Optipro.
         #
-        # PRINCIPE D'EQUILIBRE : un compte 49X conserve sa NATURE (actif/passif) en
-        # passant sur les comptes proprietaires. C'est juste un changement de rubrique
-        # de presentation, pas une re-affectation comptable.
-        #   - Compte 49X ACTIF (solde debiteur, ex. 490 charges a reporter)
-        #       -> ajoute au DEBIT des proprietaires (reste cote ACTIF, rubrique V.A)
-        #   - Compte 49X PASSIF (solde crediteur, ex. 493 produits a reporter)
-        #       -> ajoute au CREDIT des proprietaires (reste cote PASSIF, rubrique VI.A)
-        # Cela preserve mathematiquement l'equilibre : on deplace simplement le
-        # montant d'une rubrique a l'autre du MEME cote du bilan.
-        regul_actif_by_account = {}  # acc -> solde positif (actif)
-        regul_passif_by_account = {}  # acc -> abs(solde negatif) (passif)
-        for acc, b in balances.items():
-            if not acc.startswith("49"):
-                continue
-            # iter93ca : exclut TOUS les 499XXX (499 boni deja traite via
-            # compte_499 + 499603 et autres sinistres qui restent isoles).
-            if acc.startswith("499"):
-                continue
-            solde = round(b["debit"] - b["credit"], 2)
-            if abs(solde) < 0.01:
-                continue
-            if solde > 0:
-                regul_actif_by_account[acc] = solde
-            else:
-                regul_passif_by_account[acc] = abs(solde)
-
-        # iter90fs : totaux reellement distribues pour les comptes 49X (regul
-        # actif/passif hors 499). Analogue a `actual_boni_distributed` : si
-        # un owner n'a pas pu recevoir sa part (owner_id oriente vers une
-        # fiche disparue), on ne peut PAS neutraliser aveuglement le 49X
-        # d'origine sans casser l'equilibre. On track les montants
-        # effectivement distribues et on n'invalidera que ceux-la.
-        actual_regul_actif_distributed = 0.0
-        actual_regul_passif_distributed = 0.0
-        if (regul_actif_by_account or regul_passif_by_account) and total_quotities > 0:
-            total_actif_regul = sum(regul_actif_by_account.values())
-            total_passif_regul = sum(regul_passif_by_account.values())
-            # Repartition par quotite avec gestion d'arrondi : on calcule la somme
-            # distribuee et on l'ajuste sur le dernier owner pour neutraliser les
-            # ecarts d'arrondi cumules.
-            actif_distributed = 0.0
-            passif_distributed = 0.0
-            owner_items = list(owner_quotities.items())
-            for idx, (oid, quo) in enumerate(owner_items):
-                ratio = quo / total_quotities
-                is_last = (idx == len(owner_items) - 1)
-                if is_last:
-                    actif_share = round(total_actif_regul - actif_distributed, 2)
-                    passif_share = round(total_passif_regul - passif_distributed, 2)
-                else:
-                    actif_share = round(total_actif_regul * ratio, 2)
-                    passif_share = round(total_passif_regul * ratio, 2)
-                    actif_distributed += actif_share
-                    passif_distributed += passif_share
-                if abs(actif_share) < 0.005 and abs(passif_share) < 0.005:
-                    continue
-                virt_acc = f"OWNER_{oid}"
-                if virt_acc not in balances:
-                    owner_doc = owners_by_id.get(oid)
-                    if not owner_doc:
-                        continue
-                    balances[virt_acc] = {
-                        "account_number": virt_acc,
-                        "account_name": owner_doc.get("name", ""),
-                        "debit": 0.0, "credit": 0.0,
-                        "is_owner_aggregated": True,
-                        # iter90fs : eviter d'afficher une ligne sans
-                        # numero de compte pour ce nouveau proprietaire.
-                        "display_account": owner_primary_acc.get(oid, ""),
-                    }
-                # Regul actif -> owner DEBIT (reste cote ACTIF, rubrique V.A)
-                balances[virt_acc]["debit"] += actif_share
-                actual_regul_actif_distributed += actif_share
-                # Regul passif -> owner CREDIT (reste cote PASSIF, rubrique VI.A)
-                balances[virt_acc]["credit"] += passif_share
-                actual_regul_passif_distributed += passif_share
-            # iter90fs : on ne neutralise chaque compte 49X d'origine QUE si
-            # sa part a effectivement ete redistribuee (au centime pres).
-            # Si un ou plusieurs owners ont echoue (owner_doc None), la
-            # portion perdue reste visible sur le compte 49X initial afin
-            # que le bilan reste equilibre. Cas rare mais indispensable
-            # pour garantir Actif = Passif dans TOUTES les configurations.
-            if abs(actual_regul_actif_distributed - total_actif_regul) < 0.01:
-                for acc in regul_actif_by_account:
-                    balances[acc]["debit"] = 0.0
-                    balances[acc]["credit"] = 0.0
-            if abs(actual_regul_passif_distributed - total_passif_regul) < 0.01:
-                for acc in regul_passif_by_account:
-                    balances[acc]["debit"] = 0.0
-                    balances[acc]["credit"] = 0.0
+        # Regle metier PCMN belge copropriete : SEUL le compte 499 (boni/mali
+        # de regularisation, deja gere par `compte_499` ci-dessus) est
+        # distribue aux proprietaires en mode "apres repartition". Les
+        # comptes 490-498 (charges a reporter, produits a reporter, comptes
+        # d'attente non-boni) restent visibles dans leur propre rubrique
+        # (VIII_regul_actif / VII_regul_passif), en mode avant ET apres
+        # repartition. Cela preserve l'equilibre Actif=Passif car ces
+        # comptes ont deja leur classification correcte via `_classify_account`
+        # appele a la boucle initiale, et ils ne sont NI zeroeoises NI
+        # deplaces vers OWNER_*.
+        #
+        # Note : les 499XXX (ex. 499603 Sinistre) restent isoles dans leur
+        # bucket VI.D "Provisions et dettes sur sinistres" (iter93ca).
 
         # Reset buckets et re-classer suite a modification balances
         actif_buckets = {k: [] for k in actif_buckets}

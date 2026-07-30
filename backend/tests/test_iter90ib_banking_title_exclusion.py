@@ -18,7 +18,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 
 BASE_URL = os.environ["REACT_APP_BACKEND_URL"].rstrip("/") \
     if os.environ.get("REACT_APP_BACKEND_URL") \
-    else "https://teuwen-reports.preview.emergentagent.com"
+    else "https://optipro-parser-fix.preview.emergentagent.com"
 # fallback: read from frontend/.env
 if "REACT_APP_BACKEND_URL" not in os.environ:
     try:

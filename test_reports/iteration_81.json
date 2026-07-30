@@ -14,7 +14,7 @@
   ],
   "updated_files": ["/app/backend/tests/test_iter90fu_budget_total.py"],
   "success_rate": {"backend": "100% (3/3)", "frontend": "100% (BUG2 flow verified)"},
-  "test_credentials": "syndic_alpha@copro.be / Syndic123! (ALPHA_SYNDIC_ID=6a65b6396daad720f9dcbfa6, ACP=b6fe4e32-555a-435b-84cd-1f080cdd47c6, FY=TEST_FY_938b7658-... start_date=2025-01-01)",
+  "test_credentials": "syndic_alpha@copro.be / Syndic123! (ALPHA_SYNDIC_ID=6a65b6396daad720f9dcbfa6, ACP=optipro-parser-fix, FY=TEST_FY_938b7658-... start_date=2025-01-01)",
   "seed_data_creation": "Ephemeral: seeded 1 approved budget (id=b3aba2f5-...) for the FY 2025 to enable BUG2 E2E, then deleted at end. Backend tests each create/delete their own budget docs and distribution keys with TESTFU prefix.",
   "retest_needed": false,
   "main_agent_can_self_test": true,
