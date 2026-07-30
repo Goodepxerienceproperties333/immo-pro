@@ -76,17 +76,22 @@ def test_audit_an_matches_bilan_preview_then_reopen(session):
             db = AsyncIOMotorClient(
                 os.environ.get("MONGO_URL", "mongodb://localhost:27017")
             )[os.environ.get("DB_NAME", "test_database")]
-            an = await db.journal_entries.find_one(
+            # Chercher la DERNIERE AN non-reversee (evite les ANs periemees
+            # laissees par les runs precedents)
+            cursor = db.journal_entries.find(
                 {
                     "copropriete_id": CID_AGATHE,
                     "fiscal_year_id": FY_ID,
                     "journal_type": "AN",
+                    "reversed": {"$ne": True},
+                    "is_reversal": {"$ne": True},
                 },
                 {"_id": 0},
-            )
-            return an
+            ).sort("created_at", -1).limit(1)
+            docs = await cursor.to_list(1)
+            return docs[0] if docs else None
 
-        an = asyncio.get_event_loop().run_until_complete(fetch_an())
+        an = asyncio.new_event_loop().run_until_complete(fetch_an())
         assert an is not None, "AN entry not generated"
         print(
             f"[AN] {len(an['lines'])} lignes, total_debit={an['total_debit']}, "
@@ -97,22 +102,27 @@ def test_audit_an_matches_bilan_preview_then_reopen(session):
             f"AN desequilibree: D={an['total_debit']} C={an['total_credit']}"
         )
 
-        # Find Guerit line in AN
-        guerit_line = next(
-            (l for l in an["lines"] if l["account_number"] == GUERIT_ACC), None
+        # Find Guerit lines in AN : les proprietaires sont ventiles sur
+        # 41010XX (fonds de roulement) ET 41000XX (fonds de reserve). Le
+        # bilan preview merge ces deux comptes en une seule ligne owner
+        # virtuelle. Pour l'audit, on somme les deux.
+        GUERIT_RESERVE_ACC = "41000016"
+        guerit_lines = [
+            l for l in an["lines"]
+            if l["account_number"] in (GUERIT_ACC, GUERIT_RESERVE_ACC)
+        ]
+        assert guerit_lines, (
+            f"Guerit ({GUERIT_ACC}/{GUERIT_RESERVE_ACC}) absent de l'AN"
         )
-        assert guerit_line is not None, (
-            f"Guerit {GUERIT_ACC} absent de l'AN"
-        )
-        an_amount = guerit_line["debit"] - guerit_line["credit"]
+        an_amount = sum(l["debit"] - l["credit"] for l in guerit_lines)
         print(
-            f"[AUDIT] Guerit AN = {an_amount} (D={guerit_line['debit']}, "
-            f"C={guerit_line['credit']})  |  Bilan preview = {guerit_bilan}"
+            f"[AUDIT] Guerit AN merge (FR+Reserve) = {an_amount:.2f}  "
+            f"|  Bilan preview = {guerit_bilan}"
         )
 
-        # AUDIT: AN must match bilan preview (both sides may have sign convention)
-        assert abs(abs(an_amount) - abs(guerit_bilan)) < 0.10, (
-            f"AN ({an_amount}) diverge du bilan preview ({guerit_bilan})"
+        # AUDIT: AN merge doit matcher le bilan preview au centime pres
+        assert abs(an_amount - guerit_bilan) < 0.10, (
+            f"AN merge ({an_amount:.2f}) diverge du bilan preview ({guerit_bilan})"
         )
     finally:
         # 4. ROLLBACK : reopen fiscal year (extourne les OD + AN)

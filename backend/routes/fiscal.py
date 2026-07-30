@@ -131,9 +131,20 @@ def create_fiscal_router(db):
         copro_id = fy.get("copropriete_id", "")
         # IMPORTANT : l'A-nouveau doit refleter le solde REEL au moment de la cloture,
         # donc on prend TOUTES les ecritures jusqu'a la fin de l'exercice (cumul),
-        # PAS uniquement celles de la periode. Et on exclut les AN precedentes
-        # pour eviter le double comptage.
-        je_q = {"date": {"$lte": fy["end_date"]}, "journal_type": {"$ne": "AN"}}
+        # et INCLURE l'AN d'ouverture (is_opening_balance=True) tout en excluant
+        # les AN de cloture (pour eviter le double comptage sur re-closures).
+        # iter93cg-fix4 : inclure AN opening pour que le solde AN refleter le
+        # bilan preview after_distribution (Guerit doit voir son opening -21 EUR).
+        je_q = {
+            "date": {"$lte": fy["end_date"]},
+            "$or": [
+                {"journal_type": {"$ne": "AN"}},
+                {"journal_type": "AN", "is_opening_balance": True},
+            ],
+            # Exclure les paires reversed/is_reversal des anciennes clotures
+            "reversed": {"$ne": True},
+            "is_reversal": {"$ne": True},
+        }
         if copro_id:
             je_q["copropriete_id"] = copro_id
         entries = await db.journal_entries.find(je_q, {"_id": 0}).to_list(100000)
@@ -193,6 +204,31 @@ def create_fiscal_router(db):
         total_produits = regul["provisions_appelees"] + regul["total_products"]
         result_net = total_produits - total_charges
 
+        # ==================== iter93cg-fix1 : NORMALISATION ====================
+        # Le compute_regularization_per_owner distribue les charges/appels sur
+        # les proprietaires via ratios per-lot. Des lots orphelins (sans
+        # owner_ids) ou owners sans tier_accounts.provisions peuvent faire
+        # que sum(charges_per_owner) < total_charges. Sans normalisation, la
+        # difference (`drift`) etait shifted sur le dernier owner en dict
+        # iteration order -> bug audit sur Guerit (AN=99.53 credit vs
+        # bilan=26.95 debit).
+        # Fix : normaliser sum(x_per_owner) == totals correspondants par
+        # scaling factor. Chaque proprietaire prend sa juste part du drift.
+        def _normalize(per_owner: dict, target_total: float) -> dict:
+            s = sum(per_owner.values())
+            if s <= 0.01 or abs(s - target_total) < 0.01:
+                return per_owner
+            scale = target_total / s
+            return {oid: round(v * scale, 2) for oid, v in per_owner.items()}
+
+        charges_per_owner = _normalize(charges_per_owner, total_charges)
+        products_per_owner = _normalize(
+            products_per_owner, regul["total_products"]
+        )
+        appels_fr_per_owner = _normalize(
+            appels_fr_per_owner, regul["provisions_appelees"]
+        )
+
         owners_acp = await db.owners.find({}, {"_id": 0}).to_list(10000)
         owner_by_id = {o["id"]: o for o in owners_acp}
 
@@ -234,13 +270,18 @@ def create_fiscal_router(db):
                 td = sum(l["debit"] for l in ad_lines)
                 tc = sum(l["credit"] for l in ad_lines)
                 diff = round(td - tc, 2)
-                if abs(diff) >= 0.01 and ad_lines:
-                    # Egaliser sur le dernier proprietaire pour matcher parfaitement
-                    for line in reversed(ad_lines):
-                        if line.get("third_party_id"):
-                            line["credit"] = round(line["credit"] + diff, 2)
+                if abs(diff) >= 0.01:
+                    # iter93cg-fix3 : plus de shift sur le "dernier" owner
+                    # (bug audit Guerit). Grace a la normalisation en amont
+                    # (sum(appels_fr_per_owner) == total_produits), cette
+                    # branche ne s'execute plus qu'en cas d'ecart cent-a-cent
+                    # residuel. On l'absorbe sur la ligne cl.7 (Dr) plutot que
+                    # sur un proprietaire arbitraire.
+                    for line in ad_lines:
+                        if not line.get("third_party_id"):
+                            line["debit"] = round(line["debit"] - diff, 2)
                             break
-                    tc = sum(l["credit"] for l in ad_lines)
+                    td = sum(l["debit"] for l in ad_lines)
                 await db.journal_entries.insert_one({
                     "id": str(uuid.uuid4()),
                     "journal_type": "OD",
@@ -285,13 +326,14 @@ def create_fiscal_router(db):
                 td = sum(l["debit"] for l in ic_lines)
                 tc = sum(l["credit"] for l in ic_lines)
                 diff = round(td - tc, 2)
-                if abs(diff) >= 0.01 and ic_lines:
-                    # Egaliser sur le dernier proprietaire (debit) plutot que le compte 6
-                    for line in reversed(ic_lines):
-                        if line.get("third_party_id"):
-                            line["debit"] = round(line["debit"] - diff, 2)
+                if abs(diff) >= 0.01:
+                    # iter93cg-fix3 : absorber le drift cent-a-cent sur la
+                    # ligne cl.6 (Cr) plutot que sur un proprietaire.
+                    for line in ic_lines:
+                        if not line.get("third_party_id"):
+                            line["credit"] = round(line["credit"] + diff, 2)
                             break
-                    td = sum(l["debit"] for l in ic_lines)
+                    tc = sum(l["credit"] for l in ic_lines)
                 await db.journal_entries.insert_one({
                     "id": str(uuid.uuid4()),
                     "journal_type": "OD",
@@ -332,22 +374,21 @@ def create_fiscal_router(db):
                         "credit": round(-solde, 2) if solde < 0 else 0,
                     })
 
-        # Add result to report account
-        if abs(result_net) > 0.01:
-            if result_net >= 0:
-                a_nouveau_lines.append({
-                    "account_number": "140100",
-                    "account_name": "Benefice reporte",
-                    "debit": 0,
-                    "credit": round(result_net, 2),
-                })
-            else:
-                a_nouveau_lines.append({
-                    "account_number": "140200",
-                    "account_name": "Perte reportee",
-                    "debit": round(-result_net, 2),
-                    "credit": 0,
-                })
+        # ==================== iter93cg-fix2 : PAS de 140100 en AN ====================
+        # Le compte 140100/140200 (benefice/perte reporte) N'EST PLUS poste
+        # dans l'AN car le resultat de l'exercice a deja ete DISTRIBUE aux
+        # proprietaires via les OD-REG-PROV / OD-REG-CHRG (chaque owner a
+        # absorbe sa quote-part per-key). Poster 140100=result_net creerait
+        # un DOUBLE-COUNT (deja compte dans les soldes owners) et deballancerait
+        # l'AN de exactement result_net EUR.
+        #
+        # Bug detecte par testing agent iter93cg : "AN entry is UNBALANCED
+        # by EXACTLY result_net (40485.01 EUR on Agathe FY 2026-2027)".
+        #
+        # Regle : le resultat de l'exercice appartient collectivement aux
+        # proprietaires (dette de l'ACP envers eux ou creance selon le signe).
+        # Il est donc redistribue en tant que solde net-a-nouveau sur leurs
+        # comptes individuels, PAS conserve dans un compte de report globale.
 
         if a_nouveau_lines:
             total_d = sum(l["debit"] for l in a_nouveau_lines)

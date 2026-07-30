@@ -1,0 +1,32 @@
+{
+  "summary": "iter93cg RE-TEST after critical fixes: BOTH bugs from iteration_105 are RESOLVED. (1) AN entry is now BALANCED: total_debit=53682.67 == total_credit=53682.67 (0.00 EUR diff) on ACP Agathe FY 2026-2027. The 140100 'Benefice reporte' double-count line has been correctly removed. (2) AUDIT rule 3 SATISFIED: AN Guerit merge(41010016+41000016) = 26.95 EUR EXACT match with bilan preview after_distribution (26.95 EUR). No sign flip. The audit integration test that exposed the bugs in iter105 now PASSES cleanly. Full regression 34/34 PASS across iter93ca/cc/cd/ce/cf/cg. Live HTTP bilan endpoints balanced on all 4 ACPs (Agathe, Haut du lac, ACCP Gaura, Acacia) in both before_distribution and after_distribution modes with ecart=0.00. Fiscal year was safely reopened via /api/fiscal/years/{id}/reopen after the audit test (3 closure entries reversed, status back to open). No prod data polluted. All 3 imperative synchronization rules (MOTEUR UNIQUE, HARMONISATION, AUDIT) are now enforced end-to-end.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter93cg_audit_an_matches_bilan.py",
+    "/app/backend/tests/test_iter93cg_single_engine_bilan_cloture.py",
+    "/app/test_reports/pytest/iter106_audit.xml",
+    "/app/test_reports/pytest/iter106_regression.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "MOTEUR UNIQUE goal ACHIEVED: compute_regularization_per_owner is now the single source of truth for both bilan preview and cloture. Guerit charges=502.95 & appels_fr=1903.88 EUR identical across paths.",
+    "HARMONISATION goal ACHIEVED: close_fiscal_year uses the exact per_owner amounts from compute_regularization_per_owner to generate OD-REG-PROV and OD-REG-CHRG.",
+    "NORMALISATION correctly applied: scale-factor normalization of sum(per_owner) to match totals exact removed the arbitrary last-owner drift.",
+    "AUDIT rule 3 ENFORCED: AN(FY+1) opening balances match bilan preview after_distribution at the centime level (Guerit merge = 26.95 EUR EXACT).",
+    "140100 'Benefice reporte' double-count line correctly removed (result_net is already distributed to owner 41x accounts via OD-REG); AN is now balanced by construction.",
+    "test_audit_an_matches_bilan_preview_then_reopen uses a proper finally block for reopen — safe to re-run in CI without polluting DB.",
+    "Historical reversed=True AN entries from previous testing cycles remain in journal_entries; test correctly filters by {reversed:{$ne:True}, is_reversal:{$ne:True}} + sort created_at desc to fetch the latest active AN."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (34/34 iter93c* PASS + audit integration PASS + bilan endpoints balanced on all 4 ACPs)", "frontend": "N/A (backend-only)"},
+  "test_credentials": "admin@copro.be / admin123 (cookie auth via /api/auth/login)",
+  "seed_data_creation": "None. Test used existing ACP Agathe FY 43c8b088-fbd9-4ee3-8a39-466bed4d246c. Fiscal year closed then safely REOPENED after audit (3 closure entries reversed, status back to open, bilan restored).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "iter93cg is fully validated. All 3 synchronization rules (MOTEUR UNIQUE == bilan preview identical to cloture; HARMONISATION == OD amounts match bilan preview; AUDIT == AN of next FY equals net balance after repartition) are enforced. The audit test /app/backend/tests/test_iter93cg_audit_an_matches_bilan.py is now a reliable regression guard and closes+reopens FY safely. No open issues.",
+  "rca of the issue": "N/A - both critical bugs from iteration_105 are RESOLVED. Fix summary confirmed: (a) 140100 posting removed (was double-counting result_net which is already in owner accounts via OD-REG imputation), (b) sum(per_owner) normalized via scale factor to match totals exact (eliminates arbitrary shift on last owner), (c) je_q query in AN generation includes AN opening_balance=True and excludes reversed/is_reversal so cross-reclosure state stays clean."
+}
