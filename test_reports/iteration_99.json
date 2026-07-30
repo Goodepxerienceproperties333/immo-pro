@@ -1,0 +1,24 @@
+{
+  "summary": "GDPR frontend fix (iter93bo) validated: in 'Nouvelle ACP' wizard create mode, no pre-emptive fetch/display of orphan owners. Recap shows '0 proprietaire(s) charge(s)' + 'Aucun - importez un PDF/CSV pour continuer'. Cross-checked with 56-68 orphan owners returned by /api/owners?include_unassigned=true — none of their email/name/aux_code appear anywhere in the HTML across all 5 substeps (PROPRIETAIRES, PROMOTEUR, LOTS, AFFECTATION, MUTATIONS). GDPR / Chinese-wall leak is fixed.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "CoproprietesPage.js is 1874 lines — should be split into smaller modules (wizard, import, lots, owners) for maintainability.",
+    "DialogContent warnings in console: 'Missing Description or aria-describedby' — add DialogDescription for accessibility.",
+    "Edit-mode fetch (line 108) uses copropriete_id='all' + include_unassigned=true. Confirm backend filters by syndic_id server-side to avoid cross-syndic leakage in edit mode too."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (skipped per request)", "frontend": "100%"},
+  "test_credentials": "admin@copro.be / admin123",
+  "seed_data_creation": "None (used existing 56-68 orphan owners in DB as the leak canary).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Test flow: login admin@copro.be, /coproprietes, click 'Nouvelle ACP', fill name -> Suivant, fill dates -> Suivant lands on '2. PROPRIETAIRES' substep. Verify no orphan owner PII in page HTML by cross-referencing /api/owners?include_unassigned=true&copropriete_id=all. Edit-mode 'Modifier' button was not automatically clickable in my script (likely inside a dropdown/menu); worth revisiting if edit-mode-specific behavior needs verification, but the create-mode fix (the reported bug) is confirmed.",
+  "rca of the issue": "Original bug: useEffect on dialogOpen unconditionally fetched /owners?include_unassigned=true and setOwners(...), causing 11+ orphan owners' name+email+aux_code to render in the wizard step 2 BEFORE any user upload -> GDPR breach. Fix at CoproprietesPage.js:107-115 branches on `editing`: create mode -> setOwners(sessionOwners) only; edit mode -> preserved fetch. Verified: 0 rows displayed pre-upload, 'Aucun - importez PDF/CSV' message shown, zero PII leak on any of the 5 substeps."
+}

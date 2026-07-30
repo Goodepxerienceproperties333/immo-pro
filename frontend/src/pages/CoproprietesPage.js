@@ -96,20 +96,23 @@ export default function CoproprietesPage() {
     // proprios crees/reutilises pendant l'import en cours (ils peuvent
     // etre deja rattaches a d'autres ACPs). En mode edition, on garde le
     // comportement historique (tous les proprios du syndic + orphelins).
-    const params = editing
-      ? { include_unassigned: true, copropriete_id: 'all' }
-      : { unassigned_only: true };
-    api.get('/owners', { params }).then(r => {
-      const fetched = r.data || [];
-      if (editing) {
-        setOwners(fetched);
-      } else {
-        const byId = new Map();
-        for (const o of fetched) if (o?.id) byId.set(o.id, o);
-        for (const o of sessionOwners) if (o?.id && !byId.has(o.id)) byId.set(o.id, o);
-        setOwners(Array.from(byId.values()));
-      }
-    }).catch(() => {});
+    // iter93bo : FIX GDPR CRITIQUE. En mode CREATION ACP, on ne pre-fetch
+    // PLUS les owners orphelins du syndic (fuite de PII : nom + email +
+    // code affiches AVANT tout upload). On affiche uniquement les proprios
+    // AJOUTES pendant la session d'import (sessionOwners). En mode EDITION
+    // on garde le comportement historique (tous les proprios lies au syndic
+    // + orphelins, pour permettre d'ajouter des orphelins existants a une
+    // ACP existante). Le bouton "+ Ajouter un proprietaire existant" dans
+    // l'onglet Lots utilise une API dediee qui reste, avec log d'audit.
+    if (editing) {
+      const params = { include_unassigned: true, copropriete_id: 'all' };
+      api.get('/owners', { params }).then(r => {
+        setOwners(r.data || []);
+      }).catch(() => {});
+    } else {
+      // Creation : ne montrer QUE les proprios de la session en cours.
+      setOwners(sessionOwners);
+    }
   }, [dialogOpen, editing, sessionOwners]);
 
   const filtered = coproprietes.filter(c => c.name.toLowerCase().includes(search.toLowerCase()) || (c.reference || '').toLowerCase().includes(search.toLowerCase()) || (c.bce || '').includes(search));
@@ -297,23 +300,15 @@ export default function CoproprietesPage() {
   };
 
   // Refetch owners on focus to ensure freshly-imported owners are visible.
-  // iter93d/93f : sur la creation, on merge fetch(orphelins) + sessionOwners
-  // (proprios importes lors de cette creation, potentiellement deja rattaches
-  // a d'autres ACPs); sur l'edition, on garde le comportement historique.
+  // iter93bo : GDPR - en creation, on n'affiche QUE les proprios de la
+  // session en cours (sessionOwners). En edition, comportement historique.
   const refreshOwnersIfStale = async () => {
     try {
-      const params = editing
-        ? { include_unassigned: true, copropriete_id: 'all' }
-        : { unassigned_only: true };
-      const r = await api.get('/owners', { params });
-      const fetched = r.data || [];
       if (editing) {
-        setOwners(fetched);
+        const r = await api.get('/owners', { params: { include_unassigned: true, copropriete_id: 'all' } });
+        setOwners(r.data || []);
       } else {
-        const byId = new Map();
-        for (const o of fetched) if (o?.id) byId.set(o.id, o);
-        for (const o of sessionOwners) if (o?.id && !byId.has(o.id)) byId.set(o.id, o);
-        setOwners(Array.from(byId.values()));
+        setOwners(sessionOwners);
       }
     } catch { /* ignore */ }
   };
@@ -1109,11 +1104,20 @@ export default function CoproprietesPage() {
                               className="h-6 px-2 text-[11px] border-amber-400 text-amber-700 hover:bg-amber-50 ml-auto"
                               data-testid="lots-retry-match-btn"
                               onClick={async () => {
+                                // iter93bo GDPR : fetch orphelins pour le
+                                // matching aux/nom mais NE PAS les afficher
+                                // dans le recap tant qu'ils ne sont pas
+                                // assignes a un lot de cette session.
                                 let nextOwners = owners;
                                 try {
                                   const r = await api.get('/owners', { params: editing ? { include_unassigned: true, copropriete_id: 'all' } : { unassigned_only: true } });
                                   nextOwners = r.data || [];
-                                  setOwners(nextOwners);
+                                  if (editing) {
+                                    setOwners(nextOwners);
+                                  }
+                                  // En creation : on n'affiche PAS les orphelins
+                                  // pre-emptivement (GDPR). Ils seront ajoutes
+                                  // au fur et a mesure des matches lot-owner.
                                 } catch (_e) { /* keep cache */ }
                                 let matched2 = 0;
                                 setForm(f => {
@@ -1513,14 +1517,17 @@ export default function CoproprietesPage() {
             const r = await api.get('/owners', { params: editing ? { include_unassigned: true, copropriete_id: 'all' } : { unassigned_only: true } });
             const fetched = r.data || [];
             if (!editing) {
+              // iter93bo GDPR : fetch pour matching, mais DISPLAY = seulement
+              // les proprios "created" (crees dans cette session).
               const byId = new Map();
               for (const o of fetched) if (o?.id) byId.set(o.id, o);
               for (const o of created) if (o?.id && !byId.has(o.id)) byId.set(o.id, o);
               nextOwners = Array.from(byId.values());
+              setOwners(created);  // GDPR : n'affiche QUE les crees de cette session
             } else {
               nextOwners = fetched;
+              setOwners(nextOwners);
             }
-            setOwners(nextOwners);
           } catch (_e) {
             // ignore reload failure
           }
@@ -1637,14 +1644,16 @@ export default function CoproprietesPage() {
             const rr = await api.get('/owners', { params: editing ? { include_unassigned: true, copropriete_id: 'all' } : { unassigned_only: true } });
             const fetched = rr.data || [];
             if (!editing) {
+              // iter93bo GDPR : fetch pour matching mais display=created only
               const byId = new Map();
               for (const o of fetched) if (o?.id) byId.set(o.id, o);
               for (const o of created) if (o?.id && !byId.has(o.id)) byId.set(o.id, o);
               nextOwners = Array.from(byId.values());
+              setOwners(created);
             } else {
               nextOwners = fetched;
+              setOwners(nextOwners);
             }
-            setOwners(nextOwners);
           } catch (_e) {
             // ignore
           }
@@ -1713,14 +1722,16 @@ export default function CoproprietesPage() {
             const rr = await api.get('/owners', { params: editing ? { include_unassigned: true, copropriete_id: 'all' } : { unassigned_only: true } });
             const fetched = rr.data || [];
             if (!editing) {
+              // iter93bo GDPR : fetch pour matching mais display=sessionOwners
               const byId = new Map();
               for (const o of fetched) if (o?.id) byId.set(o.id, o);
               for (const o of sessionOwners) if (o?.id && !byId.has(o.id)) byId.set(o.id, o);
               availableOwners = Array.from(byId.values());
+              setOwners(sessionOwners);
             } else {
               availableOwners = fetched;
+              setOwners(availableOwners);
             }
-            setOwners(availableOwners);
           } catch (_e) {
             // use local cache
           }
@@ -1840,10 +1851,14 @@ export default function CoproprietesPage() {
                   }
                   toast.success(`${ok} homonyme(s) confirme(s) et cree(s)${ko ? ` (${ko} echec(s))` : ''}`);
                   setOwnerHomonymsDialog(null);
-                  // Refetch owners
+                  // Refetch owners (creation : uniquement sessionOwners pour GDPR)
                   try {
-                    const rr = await api.get('/owners', { params: editing ? { include_unassigned: true, copropriete_id: 'all' } : { unassigned_only: true } });
-                    setOwners(rr.data || []);
+                    if (editing) {
+                      const rr = await api.get('/owners', { params: { include_unassigned: true, copropriete_id: 'all' } });
+                      setOwners(rr.data || []);
+                    } else {
+                      setOwners(sessionOwners);
+                    }
                   } catch { /* silent */ }
                 }}
               >
