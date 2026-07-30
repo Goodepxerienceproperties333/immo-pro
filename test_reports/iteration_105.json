@@ -1,0 +1,39 @@
+{
+  "summary": "iter93cg backend validation: 4 new iter93cg unit tests PASS (moteur unique bilan/cloture, Guerit charges_per_owner=502.95 EUR EXACT match between compute_bilan_data and compute_regularization_per_owner). Full regression 33/33 PASS across iter93ca/cc/cd/ce/cf/cg. Live HTTP bilan endpoint balanced (ecart=0.00, total=49383.56 EUR). CRITICAL BUG FOUND during real close_fiscal_year integration audit test on ACP Agathe FY 2026-2027: (a) AN entry generated is UNBALANCED by exactly result_net=40485.01 EUR (total_debit=15691.37 vs total_credit=56176.38). Root cause: fiscal.py lines 336-350 add a 140100 'Benefice reporte' credit=40485 line WITHOUT any offsetting debit — the profit was already distributed to owner 41x accounts via OD-REG-* imputation, so 140100 posting is a double-count with no counterpart. (b) Guerit AN line = 99.53 EUR CREDIT while Bilan preview after_distribution shows 26.95 EUR DEBIT — opposite sign, huge divergence. Audit rule 3 (AN == bilan preview) is VIOLATED. Fiscal year was safely reopened via /api/fiscal/years/{id}/reopen after test (status back to 'open', bilan back to 49383.56 equilibre=True). NO PROD DATA POLLUTED.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "POST /api/fiscal/years/{id}/close (backend/routes/fiscal.py lines 336-350)", "issue": "AN entry is UNBALANCED by EXACTLY result_net (40485.01 EUR on Agathe FY 2026-2027). The '140100 Benefice reporte' credit line is added without any offsetting debit. Since result_net has already been distributed to owner 41x accounts via OD-REG-PROV/CHRG imputation, posting 140100 credit=result_net is a double-count. Fix options: (1) remove the 140100 posting entirely (result already in owner accounts), OR (2) post an offsetting 128 'Result de l'exercice' debit line to keep AN balanced, OR (3) alter OD-REG imputation so owner accounts don't absorb the result.", "priority": "CRITICAL"},
+      {"endpoint": "POST /api/fiscal/years/{id}/close vs GET /api/reports/bilan?view_mode=after_distribution", "issue": "AUDIT VIOLATION: Guerit 41010016 in AN = 99.53 EUR CREDIT, but Bilan preview after_distribution shows Guerit = 26.95 EUR DEBIT (opposite sign). The AN does NOT reflect the after-repartition net balance. Root cause likely tied to bug #1: because 140100 absorbs 40485 outside of owner accounts, and equalization diff shifting on last owner (fiscal.py lines 237-243, 288-293), the owner balances in AN diverge from bilan preview. Requirement '(3) AUDIT : AN de l'annee suivante doit correspondre au solde net Apres repartition' is NOT met.", "priority": "CRITICAL"}
+    ],
+    "minor": [
+      {"endpoint": "fiscal.py OD-REG-PROV/CHRG equalization (lines 237-243, 288-293)", "issue": "When sum(appels_fr_per_owner) != net class 7 balance (rounding or scope diff), the diff is silently absorbed by the LAST owner in the dict iteration order. This introduces non-deterministic drift on one arbitrary owner. Suggest documenting or pro-rata redistribution."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter93cg_single_engine_bilan_cloture.py",
+    "/app/backend/tests/test_iter93cg_audit_an_matches_bilan.py",
+    "/app/test_reports/pytest/iter93cg_results.xml",
+    "/app/test_reports/pytest/iter93cg_regression.xml"
+  ],
+  "action_items": [
+    "CRITICAL: Fix close_fiscal_year AN unbalance. Option preferred: since result_net is fully distributed to owners via OD-REG-* (owner 41x accounts absorb the boni/mali), remove the 140100/140200 line entirely OR post an offsetting 128 counter-line. Currently AN violates double-entry (D != C) by 40485 EUR.",
+    "CRITICAL: Fix AN owner amounts to match Bilan preview after_distribution EXACTLY (Guerit AN should be ~26.95 EUR debit, currently 99.53 EUR credit). This requires reviewing the interaction between the equalization diff (fiscal.py lines 237-243, 288-293) and the 140100 result posting.",
+    "After fixing the two bugs above, re-run the audit test /app/backend/tests/test_iter93cg_audit_an_matches_bilan.py which will validate: (a) AN balanced, (b) Guerit AN == Bilan preview."
+  ],
+  "critical_code_review_comments": [
+    "Moteur unique (compute_regularization_per_owner) is correctly extracted and shared between compute_bilan_data and close_fiscal_year (iter93cg architectural goal ACHIEVED at unit-test level).",
+    "However close_fiscal_year still has post-processing steps (140100 result posting, equalization on last owner) that break the harmonization at the AN generation stage. The single-engine goal is achieved for the OD-REG-* amounts but the AN downstream logic diverges.",
+    "Consider replacing the 'equalize on last owner' hack (fiscal.py 237-243, 288-293) with a pro-rata redistribution using tantiemes/quotity, or ensure compute_regularization_per_owner's totals match sum(appels_fr_per_owner) precisely so no equalization is needed."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter93cg_audit_an_matches_bilan.py (new integration audit test that closes and reopens FY safely, exposes the AN bug)"
+  ],
+  "success_rate": {"backend": "94% unit tests (33/33 iter93c* PASS) but AUDIT integration test FAILS revealing 2 CRITICAL bugs in close_fiscal_year AN generation", "frontend": "N/A (backend-only)"},
+  "test_credentials": "admin@copro.be / admin123 (cookie auth via /api/auth/login)",
+  "seed_data_creation": "None. Test used ACP Agathe FY (43c8b088-fbd9-4ee3-8a39-466bed4d246c). The fiscal year was closed and safely REOPENED via /api/fiscal/years/{id}/reopen after audit (status verified back to 'open', bilan back to 49383.56 equilibre). No prod data left polluted. Historical evidence shows 2 previous close/reopen cycles remain marked reversed=True in journal_entries (from earlier tests).",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "iter93cg moteur unique WORKS at compute layer (charges_per_owner=502.95 EXACT match Bilan/Cloture). But close_fiscal_year has 2 CRITICAL bugs surfaced by the new audit test: (1) AN unbalanced by result_net (140100 Benefice reporte added without offsetting debit), (2) AN owner balances diverge from Bilan preview (Guerit AN=99.53 credit vs bilan 26.95 debit — even opposite sign!). Full RCA in report. Audit test at /app/backend/tests/test_iter93cg_audit_an_matches_bilan.py handles safe close+verify+reopen so main agent can iterate. After fix, expected: AN total_debit==total_credit AND Guerit 41010016 AN debit ~26.95 EUR.",
+  "rca of the issue": "close_fiscal_year fiscal.py flow: (1) Loads entries_periode, calls compute_regularization_per_owner → returns charges_per_owner[Guerit]=502.95, appels_fr_per_owner[Guerit]=1903.88. (2) Posts OD-REG-PROV: debit class 7 (net 55500), credit each owner 41x by their appels_fr. Diff between class 7 sum and appels_fr sum is EQUALIZED on last owner (silent shift). (3) Posts OD-REG-CHRG: debit each owner 41x by their charges_per_owner, credit class 6 (net 15015). Similar equalization. (4) Reloads all balances, generates AN for classes 1-5, adds 140100 Benefice reporte credit=result_net (40485). BUGS: (A) The 140100 credit has no debit counterpart → AN unbalanced by 40485. (B) After the two ODs, Guerit 41010016 net = (opening 199.86 as reserve on 41000016 not on 41010016) + provisions 1903.88 debit - payments 675.86 credit - OD-REG-PROV 1903.88 credit + OD-REG-CHRG 502.95 debit = actually should reflect the after-distribution balance BUT diverges due to equalization shift and/or scope mismatch. Bilan preview computes Guerit=26.95 while AN shows -99.53 (credit). The audit rule that AN == Bilan preview after_distribution is broken. FIX PATH: remove 140100 posting (or balance it with 128) AND ensure appels_fr_per_owner totals match class 7 net exactly to avoid equalization drift on last owner."
+}

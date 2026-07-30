@@ -4,6 +4,8 @@ from typing import Optional, List
 from datetime import datetime, timezone, timedelta
 import uuid
 
+from routes.reports import compute_regularization_per_owner  # iter93cg
+
 
 class FiscalYearInput(BaseModel):
     name: str
@@ -167,20 +169,31 @@ def create_fiscal_router(db):
         total_produits = sum(b["credit"] - b["debit"] for a, b in balances_periode.items() if a.startswith("7"))
         result_net = total_produits - total_charges
 
-        # ---- REGULARISATION : 2 OD permanentes (formule comptable belge stricte) ----
-        # OD-1 ANNULATION PROVISIONS : Dr 7400 (somme appels) / Cr 4000XX par owner (quotites)
-        # OD-2 IMPUTATION CHARGES    : Dr 4000XX par owner (quotites) / Cr 6XXX (sommes charges)
-        # Apres ces 2 OD : classes 6/7 a zero, resultat reparti sur comptes 4000XX.
-        lots_acp = await db.lots.find({"copropriete_id": copro_id}, {"_id": 0}).to_list(10000)
+        # ==================== iter93cg : MOTEUR UNIQUE ====================
+        # Utiliser le meme moteur que compute_bilan_data (mode after_distribution)
+        # pour garantir que les montants OD-REG generes = montants affiches
+        # dans la previsualisation du Bilan (regle utilisateur imperative).
+        # Filtre : exclure les extournes/regularisations existantes pour ne
+        # calculer les quotes-parts que sur les ecritures reelles de la periode.
+        entries_periode_filtered = [
+            e for e in entries_periode
+            if not e.get("reversed") and not e.get("is_reversal")
+            and not e.get("is_regularization")
+            and not (e.get("reference", "") or "").startswith(("OD-REG-", "EXT-"))
+        ]
+        regul = await compute_regularization_per_owner(
+            db, copro_id, entries_periode_filtered
+        )
+        charges_per_owner = regul["charges_per_owner"]
+        products_per_owner = regul["products_per_owner"]
+        appels_fr_per_owner = regul["appels_fr_per_owner"]
+        # Sur-ecrire les totaux calcules avec ceux du moteur (source unique
+        # de verite - evite les incoherences de rounding vs bilan preview)
+        total_charges = regul["total_charges"]
+        total_produits = regul["provisions_appelees"] + regul["total_products"]
+        result_net = total_produits - total_charges
+
         owners_acp = await db.owners.find({}, {"_id": 0}).to_list(10000)
-        owner_quotities = {}
-        total_quotities = 0.0
-        for lot in lots_acp:
-            quo = float(lot.get("quotity", 0) or 0)
-            oid = lot.get("owner_id")
-            if oid and quo > 0:
-                owner_quotities[oid] = owner_quotities.get(oid, 0.0) + quo
-                total_quotities += quo
         owner_by_id = {o["id"]: o for o in owners_acp}
 
         def _owner_account(oid: str) -> tuple:
@@ -191,10 +204,13 @@ def create_fiscal_router(db):
             return accs.get("provisions", ""), o.get("name", "")
 
         end_dt_iso = fy["end_date"]
-        # OD-1 : Annulation des provisions appelees
-        if abs(total_produits) > 0.01 and total_quotities > 0:
+
+        # OD-1 : Annulation des provisions appelees (per-owner via appels_fr reels)
+        # Chaque proprietaire est credite EXACTEMENT du montant qu'il a paye
+        # (debits VE sur son 41010XX), garantissant l'annulation parfaite au
+        # niveau de chaque compte owner.
+        if abs(total_produits) > 0.01 and appels_fr_per_owner:
             ad_lines = []
-            # Aggreger les comptes classe 7 (produits = appels)
             prod_accs = {a: b for a, b in balances_periode.items() if a.startswith("7")}
             for acc, b in prod_accs.items():
                 net = b["credit"] - b["debit"]
@@ -203,12 +219,11 @@ def create_fiscal_router(db):
                         "account_number": acc, "account_name": "Annulation produits",
                         "debit": round(net, 2), "credit": 0,
                     })
-            # Credit 4000XX par owner selon quotites
-            for oid, quo in owner_quotities.items():
+            for oid, appels_amt in appels_fr_per_owner.items():
                 acc_p, name = _owner_account(oid)
                 if not acc_p:
                     continue
-                amt = round(total_produits * (quo / total_quotities), 2)
+                amt = round(appels_amt, 2)
                 if amt > 0.01:
                     ad_lines.append({
                         "account_number": acc_p, "account_name": name,
@@ -218,10 +233,13 @@ def create_fiscal_router(db):
             if ad_lines:
                 td = sum(l["debit"] for l in ad_lines)
                 tc = sum(l["credit"] for l in ad_lines)
-                # Egalise s'il y a un cent d'arrondi
                 diff = round(td - tc, 2)
                 if abs(diff) >= 0.01 and ad_lines:
-                    ad_lines[-1]["credit"] = round(ad_lines[-1]["credit"] + diff, 2)
+                    # Egaliser sur le dernier proprietaire pour matcher parfaitement
+                    for line in reversed(ad_lines):
+                        if line.get("third_party_id"):
+                            line["credit"] = round(line["credit"] + diff, 2)
+                            break
                     tc = sum(l["credit"] for l in ad_lines)
                 await db.journal_entries.insert_one({
                     "id": str(uuid.uuid4()),
@@ -238,23 +256,24 @@ def create_fiscal_router(db):
                     "created_at": datetime.now(timezone.utc).isoformat(),
                 })
 
-        # OD-2 : Imputation des charges reelles aux owners
-        if abs(total_charges) > 0.01 and total_quotities > 0:
+        # OD-2 : Imputation charges reelles aux owners (per-key via distribution_lines)
+        # Chaque proprietaire est debite EXACTEMENT de sa quote-part per-key
+        # calculee par compute_regularization_per_owner (meme montant que
+        # dans la previsualisation Bilan apres repartition).
+        if abs(total_charges) > 0.01 and charges_per_owner:
             ic_lines = []
-            # Debit 4000XX par owner
-            for oid, quo in owner_quotities.items():
+            for oid, charge_amt in charges_per_owner.items():
                 acc_p, name = _owner_account(oid)
                 if not acc_p:
                     continue
-                amt = round(total_charges * (quo / total_quotities), 2)
+                amt = round(charge_amt, 2)
                 if amt > 0.01:
                     ic_lines.append({
                         "account_number": acc_p, "account_name": name,
                         "debit": amt, "credit": 0,
                         "third_party_id": oid, "third_party_name": name,
                     })
-            # Credit comptes 6XXX (annule les charges)
-            chrg_accs = {a: b for a, b in balances_periode.items() if a.startswith("6")}
+            chrg_accs = {a: b for a, b in balances_periode.items() if a.startswith("6") and not a.startswith("643")}
             for acc, b in chrg_accs.items():
                 net = b["debit"] - b["credit"]
                 if abs(net) > 0.01:
@@ -267,8 +286,12 @@ def create_fiscal_router(db):
                 tc = sum(l["credit"] for l in ic_lines)
                 diff = round(td - tc, 2)
                 if abs(diff) >= 0.01 and ic_lines:
-                    ic_lines[-1]["credit"] = round(ic_lines[-1]["credit"] + diff, 2)
-                    tc = sum(l["credit"] for l in ic_lines)
+                    # Egaliser sur le dernier proprietaire (debit) plutot que le compte 6
+                    for line in reversed(ic_lines):
+                        if line.get("third_party_id"):
+                            line["debit"] = round(line["debit"] - diff, 2)
+                            break
+                    td = sum(l["debit"] for l in ic_lines)
                 await db.journal_entries.insert_one({
                     "id": str(uuid.uuid4()),
                     "journal_type": "OD",

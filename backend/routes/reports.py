@@ -858,6 +858,211 @@ def _dedup_duplicate_auto_fi_entries(entries: list) -> list:
     return [e for e in entries if e.get("id") not in to_exclude_ids]
 
 
+# ==========================================================================
+# iter93cg : MOTEUR UNIQUE (per-owner regularization amounts)
+# ==========================================================================
+# Cette fonction est le SEUL point de verite pour le calcul des quotes-parts
+# proprietaires (charges/produits/appels) utilise a la fois par :
+#   1. compute_bilan_data() en mode 'after_distribution' (previsualisation Bilan)
+#   2. close_fiscal_year() dans fiscal.py (generation des OD de regularisation)
+#
+# Regle d'or : Si le Bilan previsualise indique "Guerit doit payer 502,93 EUR",
+# la cloture DOIT generer l'OD-REG-CHRG avec exactement 502,93 EUR pour Guerit.
+# Sinon, le solde d'ouverture (AN) de l'annee suivante ne correspondra pas
+# au solde 'apres repartition' de cette annee (audit rate).
+#
+# Source autoritative des ratios per-lot (iter93cf) :
+#   1. invoice.distribution_lines (Optipro-format avec lot_id) - PRIMAIRE
+#   2. distribution_key.lots via invoice.distribution_key_id - fallback
+#   3. default_key.lots - fallback ultime
+async def compute_regularization_per_owner(
+    db,
+    copropriete_id: str,
+    entries_periode: list[dict],
+) -> dict:
+    """Retourne les quotes-parts individuelles par proprietaire pour la
+    regularisation de fin d'exercice.
+
+    Args:
+        db: MongoDB async client (motor).
+        copropriete_id: ID de l'ACP.
+        entries_periode: journal_entries de la PERIODE (ex. exercice courant),
+            EXCLUANT les AN et les extournes. Deja filtres par le caller.
+
+    Returns:
+        {
+            "charges_per_owner": {owner_id: montant_debit_charges},
+            "products_per_owner": {owner_id: montant_credit_produits_hors_70},
+            "appels_fr_per_owner": {owner_id: montant_debit_appels_provisions_VE},
+            "total_charges": float,      # sum(charges cl.6, hors 643)
+            "total_products": float,     # sum(produits cl.7 hors 70)
+            "provisions_appelees": float, # sum(cl.70 credits)
+            "compte_499": float,         # provisions - charges + products
+        }
+    """
+    # Charger le referentiel de l'ACP
+    invoices_for_acp = await db.invoices.find(
+        {"copropriete_id": copropriete_id}, {"_id": 0}
+    ).to_list(10000)
+    inv_by_id = {i["id"]: i for i in invoices_for_acp if i.get("id")}
+
+    keys_all = await db.distribution_keys.find(
+        {"copropriete_id": copropriete_id}, {"_id": 0}
+    ).to_list(1000)
+    default_key = next((k for k in keys_all if k.get("is_default")), None)
+
+    lots_for_acp = await db.lots.find(
+        {"copropriete_id": copropriete_id}, {"_id": 0}
+    ).to_list(10000)
+
+    owners_for_acp = await db.owners.find({}, {"_id": 0}).to_list(10000)
+    owner_fr_accounts = {}
+    for o in owners_for_acp:
+        tas = ((o.get("tier_accounts") or {}).get(copropriete_id, {}) or {})
+        if tas.get("provisions"):
+            owner_fr_accounts[o["id"]] = tas["provisions"]
+
+    # Ratios per-lot par cle abstraite (fallback)
+    lot_share_by_key = {}
+    for k in keys_all:
+        k_lots = k.get("lots", []) or []
+        total_shares = sum(
+            float(kl.get("share", 0) or 0)
+            for kl in k_lots
+            if not kl.get("excluded")
+        )
+        if total_shares <= 0:
+            continue
+        lot_share_by_key[k["id"]] = {
+            kl.get("lot_id"): float(kl.get("share", 0) or 0) / total_shares
+            for kl in k_lots
+            if not kl.get("excluded") and kl.get("lot_id")
+        }
+    default_lot_ratios = (
+        lot_share_by_key.get(default_key["id"]) if default_key else {}
+    )
+
+    # lot_id -> owner_ids
+    lot_owners = {}
+    for lot in lots_for_acp:
+        lid = lot.get("id")
+        if not lid:
+            continue
+        oids_lot = [o for o in (lot.get("owner_ids") or []) if o]
+        if not oids_lot and lot.get("owner_id"):
+            oids_lot = [lot["owner_id"]]
+        if oids_lot:
+            lot_owners[lid] = oids_lot
+
+    # JE -> invoice
+    je_to_invoice = {}
+    for e in entries_periode:
+        sid = e.get("source_invoice_id") or (
+            e.get("source_id") if e.get("source_type") == "invoice" else None
+        )
+        if sid and sid in inv_by_id:
+            je_to_invoice[e["id"]] = inv_by_id[sid]
+
+    def _authoritative_lot_ratios(inv_doc):
+        dls = (inv_doc or {}).get("distribution_lines") or []
+        if not dls or "lot_id" not in dls[0]:
+            return None
+        total = sum(dl.get("amount", 0) or 0 for dl in dls)
+        if total <= 0:
+            return None
+        return {
+            dl["lot_id"]: (dl.get("amount", 0) or 0) / total
+            for dl in dls
+            if dl.get("lot_id")
+        }
+
+    def _distribute(amount, entry_id, dk_id):
+        inv_doc = je_to_invoice.get(entry_id) if entry_id else None
+        ratios = _authoritative_lot_ratios(inv_doc)
+        if not ratios:
+            ratios = lot_share_by_key.get(dk_id) if dk_id else None
+        if not ratios:
+            ratios = default_lot_ratios
+        if not ratios:
+            return {}
+        res = {}
+        for lot_id, ratio in ratios.items():
+            lot_amt = amount * ratio
+            oids_lot = lot_owners.get(lot_id) or []
+            if not oids_lot:
+                continue
+            per_owner = lot_amt / len(oids_lot)
+            for oid in oids_lot:
+                res[oid] = res.get(oid, 0.0) + per_owner
+        return res
+
+    # Compute charges (cl.6 hors 643), products (cl.7 hors 70), appels_fr
+    charges_per_owner = {}
+    products_per_owner = {}
+    appels_fr_per_owner = {}
+    total_charges = 0.0
+    total_products = 0.0
+    provisions_appelees = 0.0
+
+    for entry in entries_periode:
+        # Determiner la distribution_key associee (via invoice.dk_id)
+        inv_doc = je_to_invoice.get(entry["id"])
+        dk_id = inv_doc.get("distribution_key_id") if inv_doc else None
+        has_70_credit = any(
+            line.get("account_number", "").startswith("70")
+            and line.get("credit", 0) > 0
+            for line in entry.get("lines", [])
+        )
+        for line in entry.get("lines", []):
+            acc = line.get("account_number", "")
+            if not acc:
+                continue
+            line_net = line.get("debit", 0) - line.get("credit", 0)
+            if acc.startswith("6"):
+                if acc.startswith("643"):
+                    continue  # frais privatifs traites separement
+                total_charges += line_net
+                shares = _distribute(line_net, entry["id"], dk_id)
+                for oid, amt in shares.items():
+                    charges_per_owner[oid] = charges_per_owner.get(oid, 0.0) + amt
+            elif acc.startswith("70"):
+                provisions_appelees += line.get("credit", 0) - line.get("debit", 0)
+                # Appels_fr : debit sur 41010XX quand cette entry credite 70
+            elif acc.startswith("7"):
+                prod_amt = -line_net
+                total_products += prod_amt
+                shares = _distribute(prod_amt, entry["id"], dk_id)
+                for oid, amt in shares.items():
+                    products_per_owner[oid] = products_per_owner.get(oid, 0.0) + amt
+            elif acc.startswith("41010") and has_70_credit:
+                debit_amt = line.get("debit", 0)
+                if debit_amt > 0:
+                    for oid, fr_acc in owner_fr_accounts.items():
+                        if fr_acc == acc:
+                            appels_fr_per_owner[oid] = (
+                                appels_fr_per_owner.get(oid, 0.0) + debit_amt
+                            )
+                            break
+
+    total_charges = round(total_charges, 2)
+    total_products = round(total_products, 2)
+    provisions_appelees = round(provisions_appelees, 2)
+    compte_499 = round(provisions_appelees + total_products - total_charges, 2)
+
+    return {
+        "charges_per_owner": charges_per_owner,
+        "products_per_owner": products_per_owner,
+        "appels_fr_per_owner": appels_fr_per_owner,
+        "total_charges": total_charges,
+        "total_products": total_products,
+        "provisions_appelees": provisions_appelees,
+        "compte_499": compte_499,
+        "owner_fr_accounts": owner_fr_accounts,
+    }
+
+
+
+
 async def compute_bilan_data(db, copropriete_id: str, date_to: Optional[str] = None,
                              fiscal_year_id: Optional[str] = None,
                              view_mode: str = "before_distribution") -> dict:
