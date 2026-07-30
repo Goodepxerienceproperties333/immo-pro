@@ -589,3 +589,21 @@ Extension demandee par l'utilisateur : "plutot que d'avoir une liste de toutes l
 - `testing_agent_v3_fork` iteration_93.json : backend 100%, frontend 100%, aucun bug identifie.
 - Tests manuels e2e verifies (banner 1/33 sur premiere facture, banner 5/33 sur facture 643 avec badge amber, auto-checkbox is_private_fee).
 
+
+## iter93bi - Wizard : blocage etape invoices + revue orphans 643 (Feb 2026 - DONE)
+
+### Contexte
+Utilisateur : "lors de l'import optipro je n'ai pas eu a valider les factures une a 1 alors que c'est ma demande, des frais privatifs etaient present et non reconnu - resultat = pas bon". Le CTA iter93bh n'apparaissait PAS car le wizard auto-avancait d'etape apres commit-invoices.
+
+### Root cause
+`ImportWizardPage.js` ligne 635 : `setStepIdx(stepIdx + 1)` s'executait toujours apres commit-invoices reussi. Le CTA rendu conditionnellement sur `step.key === 'invoices'` disparaissait immediatement.
+
+### Fix
+1. **Hold-step logic** dans `ImportWizardPage.js` : si `r.data.private_fees_detected > 0` apres commit-invoices, on RESET les buffers de parse (`setSniffResult(null)`, `setInvoicesParsed([])`) mais on ne fait PAS `setStepIdx`. Toast warning "N facture(s) sur compte 643 detectee(s) - assignez les proprietaires avant de continuer".
+2. **CTA blocking style** : quand `blocking=true`, le panel devient rouge (`border-rose-500`), le titre "ACTION REQUISE : N frais privatif(s) 643 detecte(s)", bouton principal rouge "Reviser les N frais privatif(s) maintenant". Bouton secondaire "J'ai deja affecte -> reverifier" (`data-testid="check-invoice-review-btn"`) recompte les orphelins.
+3. **Filtre `?filter=needs_owner`** : nouveau parametre URL cote `InvoicesPage.js` qui restreint la liste aux `is_private_fee=True AND private_fee_allocations=[]`. Utilise par le wizard quand `blocking=true`. Le bandeau devient rouge (`border-rose-400`) avec texte "Frais privatif 643 : assignez le proprietaire pour chaque facture".
+
+### Testing
+- `testing_agent_v3_fork` iteration_94 : backend 100% (4/4), frontend 100%.
+- Screenshot manuel valide : sur un orphelin cree temporairement, banner rouge "1/1", dialog auto-ouvert sur facture 0029, Save disable, banner d'erreur "private-fee-no-owner-error" visible.
+
