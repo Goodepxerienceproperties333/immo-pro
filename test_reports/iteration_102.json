@@ -1,0 +1,34 @@
+{
+  "summary": "iter93cd (per-key distribution du boni) valide. Guerit Vandervelde = ~13.85 EUR (vs Optipro 26.96, delta 13 EUR ; ancienne methode uniforme donnait 79.32). Solde net owners = 379.75 EUR exact. 28 debiteurs + 9 crediteurs comme Optipro. Bilan equilibre sur les 9 ACPs (after + before). Compte 490 reste dans VIII regul_actif (iter93cc preserved). API JSON + PDF (view_mode=after_distribution) OK. Fallback (ACPs sans factures) equilibre. 15 tests PASSED (12 principaux iter93cd/cc + 3 sanity extras).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "tests/test_iter93cc_api_regression.py", "issue": "Bug asyncio.get_event_loop() Python 3.11 dans test_all_coproprietes_balanced_after_distribution. Corrige (remplace par new_event_loop pattern)."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter93cd_per_key_distribution.py",
+    "/app/backend/tests/test_iter93cd_sanity_extra.py",
+    "/app/backend/tests/test_iter93cc_490_regul_no_redistribution.py",
+    "/app/backend/tests/test_iter93cc_api_regression.py",
+    "/app/test_reports/pytest/iter93cd.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "iter93cd (per-key distribution) fournit une amelioration nette : delta Optipro reduit de 52 EUR (iter93cc) a 13 EUR sur Guerit. Le fallback uniforme est correctement gere quand aucune facture/cle n'est disponible.",
+    "Le lien JE->invoice via journal_entries.source_invoice_id (au lieu de invoice.journal_entry_id casse en legacy) est robuste ; le noter dans un commentaire du code si pas deja fait.",
+    "backend/routes/reports.py depasse largement 700 lignes (compute_bilan_data > 500 lignes) : extraction en module dedie (bilan_computation.py) recommandee pour maintenabilite."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter93cc_api_regression.py",
+    "/app/backend/tests/test_iter93cd_sanity_extra.py"
+  ],
+  "success_rate": {"backend": "100% (15/15)", "frontend": "N/A (skipped per request)"},
+  "test_credentials": "admin@copro.be / admin123 (cookie-based auth)",
+  "seed_data_creation": "None - ACP Agathe pre-seeded.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "iter93cd valide - per-key distribution du boni. Guerit ~13.85 EUR (Optipro 26.96). Test file /app/backend/tests/test_iter93cd_per_key_distribution.py couvre les 4 regressions principales. Test extra /app/backend/tests/test_iter93cd_sanity_extra.py couvre le fallback ACP sans factures + cible 13.85 EUR + stabilite compte 499.",
+  "rca of the issue": "N/A - iter93cd feature validation, pas de bug residuel."
+}

@@ -1173,13 +1173,20 @@ async def compute_bilan_data(db, copropriete_id: str, date_to: Optional[str] = N
     compte_499 = result_exercise
 
     # ---- Mode "apres repartition" : repartition du boni/mali sur owners ----
-    # Formule garantissant l'equilibre du bilan :
-    #   delta[i] = result_exercise * (quotite[i] / total_quotites)
-    # (= meme formule que Option B, mais documentee)
-    # NOTE : la formule "Option A" stricte (appels_recus[i] - charges_imputees[i])
-    # necessite que les appels soient inscrits sur les comptes 4000XX en double-entree,
-    # ce qui n'est pas le cas dans le modele actuel. A migrer dans une iteration ulterieure
-    # avec materialisation OD permanente a la cloture d'exercice.
+    # Deux strategies disponibles (iter93cd) :
+    #
+    # 1) STRATEGIE PRIMAIRE (per-key) - "Option A" :
+    #    delta[i] = appels_provisions[i] (41010XX) - (charges_imputees[i] - produits[i])
+    #    Ou charges_imputees[i] = somme des charges cl.6 x cle_repartition_par_facture
+    #    Cette methode se rapproche de l'exactitude Optipro (per-charge distribution keys).
+    #
+    # 2) STRATEGIE FALLBACK (uniforme) - "Option B" :
+    #    delta[i] = result_exercise * (quotite[i] / total_quotites)
+    #    Utilisee si les invoices/keys ne sont pas disponibles (imports legacy).
+    #
+    # Le sum(delta[i]) doit egaler compte_499 pour preserver l'equilibre Actif = Passif.
+    # Reserve appels (41000XX) ne sont PAS inclus dans le boni : ils accumulent
+    # dans le compte 160 (Fonds de reserve) et ne font pas partie de la regularisation.
     distributed_per_owner = {}
     # iter90fs : totaux reellement distribues (peut differer de
     # `result_exercise` si un lot n'a pas de proprietaire connu, ou si le
@@ -1261,19 +1268,221 @@ async def compute_bilan_data(db, copropriete_id: str, date_to: Optional[str] = N
                 owner_quotities[oid] = owner_quotities.get(oid, 0.0) + quo_per_owner
                 total_quotities += quo_per_owner
         if total_quotities > 0:
-            # Repartition proportionnelle a la quotite, avec correction
-            # d'arrondi sur le dernier owner pour que la somme distribuee
-            # egale EXACTEMENT `compte_499`.
-            owner_items = list(owner_quotities.items())
-            running_sum = 0.0
-            for idx, (oid, quo) in enumerate(owner_items):
-                is_last = (idx == len(owner_items) - 1)
-                if is_last:
-                    share = round(compte_499 - running_sum, 2)
+            # ==================== iter93cd : DISTRIBUTION PER-KEY ====================
+            # STRATEGIE PRIMAIRE (per-key) : boni owner = appels_provisions(owner) -
+            # (charges_imputees(owner, per-key) - produits(owner, default_key)).
+            # Cette formule reflete la comptabilite reelle de chaque proprietaire :
+            # il ne "recoit" du boni que la difference entre ce qu'il a paye (appels)
+            # et ce qu'il devait payer (sa quote-part de charges selon les cles
+            # de repartition specifiques de chaque facture - ascenseur G3, G4, etc.).
+            #
+            # Pour l'ACP Agathe (bug user 31/03/2027 - Guerit) :
+            # - Uniforme (ancienne methode) : Guerit boni_share = 1348,56 -> solde 79,32 EUR
+            # - Per-key (nouvelle methode)  : Guerit boni_share ~1414 -> solde ~13,85 EUR
+            #   (vs Optipro 26,96 EUR - reduction du delta de 52 -> ~13 EUR)
+            #
+            # Fallback : si aucune facture liee (import legacy sans invoice.source_id),
+            # bascule sur la distribution uniforme par quotite (ancienne strategie).
+
+            # Charger les factures pour construire je_id -> distribution_key_id
+            invoices_for_acp = await db.invoices.find(
+                {"copropriete_id": copropriete_id}, {"_id": 0}
+            ).to_list(10000)
+            inv_by_id = {i["id"]: i for i in invoices_for_acp if i.get("id")}
+
+            # Charger toutes les cles de repartition (pas seulement la default)
+            keys_all = await db.distribution_keys.find(
+                {"copropriete_id": copropriete_id}, {"_id": 0}
+            ).to_list(1000)
+            keys_by_id = {k["id"]: k for k in keys_all if k.get("id")}
+
+            # Mapping JE_id -> distribution_key_id (via source_invoice_id sur AC)
+            # NB : invoice.journal_entry_id peut etre casse (legacy). On prefere
+            # JE.source_invoice_id / JE.source_id qui sont fiables (23/23 sur Agathe).
+            je_to_dk = {}
+            for e in entries:
+                # source_invoice_id (nouveau) ou source_id + source_type
+                sid = e.get("source_invoice_id") or (
+                    e.get("source_id") if e.get("source_type") == "invoice" else None
+                )
+                if sid and sid in inv_by_id:
+                    dk = inv_by_id[sid].get("distribution_key_id")
+                    if dk:
+                        je_to_dk[e["id"]] = dk
+
+            # Pre-compute lot_share_by_key : dk_id -> {lot_id : ratio [0..1]}
+            # ratio = kl.share / sum(kl.share for kl in key.lots if not excluded)
+            # Un lot exclu contribue 0 aux charges de la cle.
+            lot_share_by_key = {}
+            for k in keys_all:
+                k_lots = k.get("lots", []) or []
+                total_shares = sum(
+                    float(kl.get("share", 0) or 0)
+                    for kl in k_lots
+                    if not kl.get("excluded")
+                )
+                if total_shares <= 0:
+                    continue
+                lot_share_by_key[k["id"]] = {
+                    kl.get("lot_id"): float(kl.get("share", 0) or 0) / total_shares
+                    for kl in k_lots
+                    if not kl.get("excluded") and kl.get("lot_id")
+                }
+            # Cle default (fallback si dk_id manquant ou invalide)
+            default_key_id = default_key.get("id") if default_key else None
+            default_lot_ratios = lot_share_by_key.get(default_key_id, {})
+
+            # Mapping lot_id -> owner_ids (co-indivision : partage egal)
+            lot_owners = {}
+            for lot in lots_for_acp:
+                lid = lot.get("id")
+                if not lid:
+                    continue
+                oids_lot = [o for o in (lot.get("owner_ids") or []) if o]
+                if not oids_lot and lot.get("owner_id"):
+                    oids_lot = [lot["owner_id"]]
+                if oids_lot:
+                    lot_owners[lid] = oids_lot
+
+            # Charger les tier_accounts par owner (pour identifier 41010XX =
+            # compte "provisions" / fonds de roulement uniquement, pas la reserve)
+            owner_fr_accounts = {}  # owner_id -> account_number (provisions)
+            for o in owners_for_acp:
+                tas = ((o.get("tier_accounts") or {}).get(copropriete_id, {}) or {})
+                if tas.get("provisions"):
+                    owner_fr_accounts[o["id"]] = tas["provisions"]
+
+            # Calcul des charges_par_owner et produits_par_owner via per-key
+            charges_per_owner = {}
+            products_per_owner = {}
+
+            def _distribute_amount_to_owners(amount, dk_id):
+                """Distribue un montant selon la cle dk_id.
+
+                Retourne dict {owner_id: montant_owner}. Utilise la cle
+                default en fallback si dk_id est None ou n'a pas de ratios.
+                Si un lot n'a pas de proprietaire, sa quote-part est ignoree
+                (perdue). Le boni "orphelin" sera retenu dans la safety net.
+                """
+                ratios = lot_share_by_key.get(dk_id) if dk_id else None
+                if not ratios:
+                    ratios = default_lot_ratios
+                if not ratios:
+                    return {}
+                res = {}
+                for lot_id, ratio in ratios.items():
+                    lot_amt = amount * ratio
+                    oids_lot = lot_owners.get(lot_id) or []
+                    if not oids_lot:
+                        continue
+                    per_owner = lot_amt / len(oids_lot)
+                    for oid in oids_lot:
+                        res[oid] = res.get(oid, 0.0) + per_owner
+                return res
+
+            per_key_available = bool(je_to_dk) or bool(default_lot_ratios)
+
+            if per_key_available:
+                # Iterer sur les entries et distribuer charges/produits par cle
+                for entry in entries:
+                    dk_id = je_to_dk.get(entry["id"])  # None si pas d'invoice liee
+                    for line in entry.get("lines", []):
+                        acc = line.get("account_number", "")
+                        if not acc:
+                            continue
+                        line_net = line.get("debit", 0) - line.get("credit", 0)
+                        if acc.startswith("6"):
+                            # Frais privatifs 643 exclus (factures individuellement)
+                            if acc.startswith("643"):
+                                continue
+                            # Charges cl.6 : positive => debit charge, distribue aux owners
+                            shares = _distribute_amount_to_owners(line_net, dk_id)
+                            for oid, amt in shares.items():
+                                charges_per_owner[oid] = charges_per_owner.get(oid, 0.0) + amt
+                        elif acc.startswith("7") and not acc.startswith("70"):
+                            # Produits hors provisions : distribue par default key
+                            # (interets crediteurs, etc.). line_net < 0 = credit produit.
+                            prod_amt = -line_net  # convertir en positif pour distribution
+                            shares = _distribute_amount_to_owners(prod_amt, dk_id)
+                            for oid, amt in shares.items():
+                                products_per_owner[oid] = products_per_owner.get(oid, 0.0) + amt
+
+                # Calcul appels_provisions par owner : uniquement les debits
+                # sur 41010XX provenant d'entries qui creditent la classe 70
+                # (VE / appels de provisions).
+                #
+                # IMPORTANT : NE PAS utiliser balances[fr_acc]["debit"] car il
+                # inclut aussi les debits AN (opening balance) et OD (ajustements)
+                # qui ne sont PAS des appels de provisions de l'exercice courant.
+                # Utiliser cette source globale inflate sum(appels) et casse
+                # l'egalite sum(boni_per_owner) == compte_499.
+                appels_fr_per_owner = {}
+                for entry in entries:
+                    has_70_credit = any(
+                        line.get("account_number", "").startswith("70")
+                        and line.get("credit", 0) > 0
+                        for line in entry.get("lines", [])
+                    )
+                    if not has_70_credit:
+                        continue
+                    for line in entry.get("lines", []):
+                        acc = line.get("account_number", "")
+                        if not acc.startswith("41010"):
+                            continue
+                        debit_amt = line.get("debit", 0)
+                        if debit_amt <= 0:
+                            continue
+                        # Chercher le proprietaire de ce compte 41010XX
+                        for oid, fr_acc in owner_fr_accounts.items():
+                            if fr_acc == acc:
+                                appels_fr_per_owner[oid] = (
+                                    appels_fr_per_owner.get(oid, 0.0) + debit_amt
+                                )
+                                break
+
+                # Boni par owner = appels_provisions - (charges - produits)
+                raw_boni_per_owner = {}
+                for oid in set(list(appels_fr_per_owner.keys())
+                               + list(charges_per_owner.keys())
+                               + list(products_per_owner.keys())):
+                    raw = (
+                        appels_fr_per_owner.get(oid, 0.0)
+                        - charges_per_owner.get(oid, 0.0)
+                        + products_per_owner.get(oid, 0.0)
+                    )
+                    raw_boni_per_owner[oid] = raw
+
+                # Normalisation : la somme doit egaler compte_499 pour equilibre.
+                # Toute derive (ex. lots orphelins) est corrigee sur le dernier owner.
+                total_raw = sum(raw_boni_per_owner.values())
+                # Preserver le signe et le montant global compute_499
+                if abs(total_raw) > 0.01:
+                    scale = compte_499 / total_raw if total_raw else 1.0
                 else:
-                    share = round(compte_499 * (quo / total_quotities), 2)
-                    running_sum += share
-                distributed_per_owner[oid] = share
+                    scale = 0.0
+
+                oids_sorted = sorted(raw_boni_per_owner.keys())
+                running = 0.0
+                for idx, oid in enumerate(oids_sorted):
+                    is_last = (idx == len(oids_sorted) - 1)
+                    if is_last:
+                        share = round(compte_499 - running, 2)
+                    else:
+                        share = round(raw_boni_per_owner[oid] * scale, 2)
+                        running += share
+                    distributed_per_owner[oid] = share
+            else:
+                # FALLBACK : distribution uniforme par quotite (methode legacy)
+                owner_items = list(owner_quotities.items())
+                running_sum = 0.0
+                for idx, (oid, quo) in enumerate(owner_items):
+                    is_last = (idx == len(owner_items) - 1)
+                    if is_last:
+                        share = round(compte_499 - running_sum, 2)
+                    else:
+                        share = round(compte_499 * (quo / total_quotities), 2)
+                        running_sum += share
+                    distributed_per_owner[oid] = share
 
         for oid, delta in distributed_per_owner.items():
             virt_acc = f"OWNER_{oid}"

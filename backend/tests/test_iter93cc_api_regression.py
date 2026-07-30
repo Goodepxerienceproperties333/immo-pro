@@ -128,12 +128,10 @@ def test_all_coproprietes_balanced_after_distribution(headers):
         cur = db.coproprietes.find({}, {"id": 1})
         return [c["id"] async for c in cur if c.get("id")]
 
-    ids = asyncio.get_event_loop().run_until_complete(get_ids()) \
-        if not asyncio.get_event_loop().is_running() else []
-    if not ids:
-        # Simpler sync-like: use new loop
-        loop = asyncio.new_event_loop()
+    loop = asyncio.new_event_loop()
+    try:
         ids = loop.run_until_complete(get_ids())
+    finally:
         loop.close()
     client.close()
 
