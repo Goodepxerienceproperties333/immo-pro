@@ -325,6 +325,10 @@ export default function ImportWizardPage() {
             total_passif: r.data.total_passif || 0,
             balanced: r.data.balanced || false,
             period_end_date: r.data.period_end_date || '',
+            // iter93bu : diagnostic du moteur dedie Optipro
+            diagnostic: r.data.diagnostic || { warnings: [], strategy_used: '', page_totals: [] },
+            ecart: r.data.ecart || 0,
+            pages_scanned: r.data.pages_scanned || 0,
           });
         }
         if (step.key === 'od_entries') {
@@ -1800,6 +1804,14 @@ function OpeningBalancePreview({ balance, setBalance, fundsConfig, setFundsConfi
         <div>
           <div className="font-semibold">
             Bilan au <span className="font-mono">{balance.period_end_date || '—'}</span>
+            {balance.diagnostic?.strategy_used && balance.diagnostic.strategy_used !== 'standard' && (
+              <span
+                className="ml-2 text-[10px] font-normal text-slate-600"
+                title="Le parser a utilise une strategie de repli pour lire ce PDF"
+              >
+                (strategie : {balance.diagnostic.strategy_used})
+              </span>
+            )}
           </div>
           <div className="text-[11px] mt-0.5">
             {isBalanced
@@ -1815,6 +1827,22 @@ function OpeningBalancePreview({ balance, setBalance, fundsConfig, setFundsConfi
           </div>
         </div>
       </div>
+      {/* iter93bu : diagnostic du moteur Optipro (avertissements par page) */}
+      {balance.diagnostic?.warnings?.length > 0 && (
+        <details
+          className="border border-amber-300 bg-amber-50 rounded p-2 text-[11px] text-amber-900"
+          data-testid="bilan-parser-diagnostic"
+        >
+          <summary className="cursor-pointer font-semibold">
+            Diagnostic parser ({balance.diagnostic.warnings.length} avertissement{balance.diagnostic.warnings.length > 1 ? 's' : ''})
+          </summary>
+          <ul className="mt-2 space-y-1 list-disc pl-5">
+            {balance.diagnostic.warnings.map((w, i) => (
+              <li key={i}>{w}</li>
+            ))}
+          </ul>
+        </details>
+      )}
 
       <div className="grid grid-cols-2 gap-3">
         {/* ACTIF (Debit) */}

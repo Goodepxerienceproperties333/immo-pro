@@ -11,6 +11,8 @@ from pydantic import BaseModel
 
 from import_wizard.csv_utils import sniff_csv, parse_french_number, parse_date, split_ref_code, normalize_header, parse_invoices_csv, parse_journals_csv
 from import_wizard.pdf_utils import extract_pdf, parse_natures_pdf, parse_budget_pdf, parse_distribution_keys_pdf, parse_owners_pdf, parse_lots_pdf, parse_suppliers_pdf, parse_balance_pdf, parse_od_entries_pdf
+# iter93bu : Moteur dedie Optipro (bilans) - keyword-based + validation loop
+from import_wizard.optipro_parser import parse_optipro_bilan
 # iter90iz : verrou "zero orphan on the way out" - canonisation stricte + resolution tp_id.
 from import_finalizer import finalize_je_doc, build_finalize_index, finalize_line
 
@@ -193,7 +195,8 @@ def create_import_wizard_router(db):
                 raise HTTPException(400, f"Erreur lors de l'analyse du PDF lots : {e}")
         if kind == "suppliers":            return parse_suppliers_pdf(raw)
         if kind == "balance":
-            return parse_balance_pdf(raw)
+            # iter93bu : moteur dedie Optipro (multi-strategy + validation loop)
+            return parse_optipro_bilan(raw)
         if kind == "od_entries":
             return parse_od_entries_pdf(raw)
         return extract_pdf(raw)
@@ -458,7 +461,8 @@ def create_import_wizard_router(db):
             res["filename"] = file.filename
             return res
         if kind == "balance":
-            res = parse_balance_pdf(raw)
+            # iter93bu : moteur dedie Optipro (multi-strategy + validation loop)
+            res = parse_optipro_bilan(raw)
             res["filename"] = file.filename
             return res
         if kind == "od_entries":
