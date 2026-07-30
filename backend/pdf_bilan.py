@@ -48,7 +48,7 @@ def _fmt_date(s):
         return s
 
 
-def _column_table(rubriques, side_label, total):
+def _column_table(rubriques, side_label, total, full_width: bool = False):
     """Construit le tableau ACTIF ou PASSIF detaille - layout aere."""
     # Filtre les rubriques vides (total = 0) pour alleger l'affichage
     rubriques = [r for r in rubriques if r.get("total", 0) > 0.005]
@@ -86,7 +86,11 @@ def _column_table(rubriques, side_label, total):
         Paragraph(f"<b>TOTAL {side_label.upper()}</b>", _tot_style()),
         Paragraph(f"<b>{_fmt_eur(total)}</b>", _tot_right()),
     ])
-    tbl = Table(rows, colWidths=[58 * mm, 32 * mm])
+    tbl = Table(
+        rows,
+        colWidths=[(58 * 2) * mm, (32 * 2) * mm] if full_width else [58 * mm, 32 * mm],
+        repeatRows=1,
+    )
     style = [
         # Header
         ("BACKGROUND", (0, 0), (-1, 0), HEADER_BG),
@@ -275,7 +279,12 @@ def build_bilan_pdf(
         elems.append(header_tbl)
         elems.append(Spacer(1, 6 * mm))
 
-    # ---- TABLES ACTIF + PASSIF (cote a cote) ----
+    # ---- TABLES ACTIF + PASSIF ----
+    # iter93bx : layout adaptatif. Mesure la hauteur necessaire des 2 tables
+    # (ACTIF + PASSIF). Si l'une d'elles depasse la hauteur de page utile
+    # (~700pt), on bascule sur un layout STACKED (ACTIF puis PASSIF en
+    # pleine largeur, chacun avec splitByRow pour se decouper sur plusieurs
+    # pages). Sinon on garde le layout SIDE-BY-SIDE historique.
     actif_tbl = _column_table(
         bilan_data.get("actif", []),
         "ACTIF",
@@ -286,16 +295,41 @@ def build_bilan_pdf(
         "PASSIF",
         bilan_data.get("total_passif", 0),
     )
-    side_by_side = Table(
-        [[actif_tbl, passif_tbl]],
-        colWidths=[93 * mm, 93 * mm],
-    )
-    side_by_side.setStyle(TableStyle([
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 0),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
-    ]))
-    elems.append(side_by_side)
+    _, actif_h = actif_tbl.wrap(93 * mm, 800)
+    _, passif_h = passif_tbl.wrap(93 * mm, 800)
+    MAX_SIDE_BY_SIDE_HEIGHT = 700  # pt (marge sous entete + eq_tbl + footer)
+    stacked = actif_h > MAX_SIDE_BY_SIDE_HEIGHT or passif_h > MAX_SIDE_BY_SIDE_HEIGHT
+    if stacked:
+        # ACTIF puis PASSIF sequentiels, pleine largeur, split sur plusieurs
+        # pages si necessaire (rows-par-rows).
+        actif_full = _column_table(
+            bilan_data.get("actif", []),
+            "ACTIF",
+            bilan_data.get("total_actif", 0),
+            full_width=True,
+        )
+        passif_full = _column_table(
+            bilan_data.get("passif", []),
+            "PASSIF",
+            bilan_data.get("total_passif", 0),
+            full_width=True,
+        )
+        actif_full.splitByRow = 1
+        passif_full.splitByRow = 1
+        elems.append(actif_full)
+        elems.append(Spacer(1, 4 * mm))
+        elems.append(passif_full)
+    else:
+        side_by_side = Table(
+            [[actif_tbl, passif_tbl]],
+            colWidths=[93 * mm, 93 * mm],
+        )
+        side_by_side.setStyle(TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 0),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+        ]))
+        elems.append(side_by_side)
 
     # ---- EQUILIBRE ----
     elems.append(Spacer(1, 4 * mm))
