@@ -1382,10 +1382,17 @@ def create_invoices_router(db):
                     total_alloc_cents += round(amt * 100)
                     resolved_private_allocs.append({"owner_id": alloc.owner_id, "amount": round(amt, 2)})
                 total_invoice_cents = round(float(data.total_amount) * 100)
-                if total_alloc_cents != total_invoice_cents:
+                # iter93br : allocations frais privatif <= total (le solde est
+                # charge commune via account_number + distribution_key_id).
+                if total_alloc_cents > total_invoice_cents:
                     raise HTTPException(
                         400,
-                        f"Somme des allocations ({total_alloc_cents/100:.2f}) doit egaler le total de la facture ({total_invoice_cents/100:.2f}). Ecart : {(total_invoice_cents - total_alloc_cents)/100:.2f} EUR",
+                        f"Somme des allocations ({total_alloc_cents/100:.2f}) ne peut pas depasser le total ({total_invoice_cents/100:.2f}). Excedent : {(total_alloc_cents - total_invoice_cents)/100:.2f} EUR",
+                    )
+                if total_alloc_cents < total_invoice_cents and not (data.account_number or "").strip():
+                    raise HTTPException(
+                        400,
+                        "La portion charges communes (Total - allocations frais privatif) requiert un compte PCMN + une cle de repartition.",
                     )
             elif data.private_fee_owner_id and str(data.private_fee_owner_id).strip():
                 # Legacy single-owner (uniquement si owner_id non-vide et non-whitespace)
@@ -2081,10 +2088,17 @@ def create_invoices_router(db):
                     total_alloc_cents += round(amt * 100)
                     resolved_private_allocs_upd.append({"owner_id": alloc.owner_id, "amount": round(amt, 2)})
                 total_invoice_cents = round(float(data.total_amount) * 100)
-                if total_alloc_cents != total_invoice_cents:
+                # iter93br : allocations frais privatif <= total (le solde est
+                # charge commune via account_number + distribution_key_id).
+                if total_alloc_cents > total_invoice_cents:
                     raise HTTPException(
                         400,
-                        f"Somme des allocations ({total_alloc_cents/100:.2f}) doit egaler le total de la facture ({total_invoice_cents/100:.2f}). Ecart : {(total_invoice_cents - total_alloc_cents)/100:.2f} EUR",
+                        f"Somme des allocations ({total_alloc_cents/100:.2f}) ne peut pas depasser le total ({total_invoice_cents/100:.2f}). Excedent : {(total_alloc_cents - total_invoice_cents)/100:.2f} EUR",
+                    )
+                if total_alloc_cents < total_invoice_cents and not (data.account_number or "").strip():
+                    raise HTTPException(
+                        400,
+                        "La portion charges communes (Total - allocations frais privatif) requiert un compte PCMN + une cle de repartition.",
                     )
             elif data.private_fee_owner_id and str(data.private_fee_owner_id).strip():
                 owner = await db.owners.find_one({"id": str(data.private_fee_owner_id).strip()}, {"_id": 0})

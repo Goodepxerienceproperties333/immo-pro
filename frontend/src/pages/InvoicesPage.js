@@ -561,10 +561,22 @@ export default function InvoicesPage() {
         }
         const sumCents = allocs.reduce((s, a) => s + Math.round(Number(a.amount) * 100), 0);
         const totalCents = Math.round(Number(invForm.total_amount || 0) * 100);
-        if (sumCents !== totalCents) {
-          const diff = (totalCents - sumCents) / 100;
-          toast.error(`Somme des allocations (${fmtEUR((sumCents/100))}) different du total facture (${fmtEUR((totalCents/100))}). Ecart : ${fmtEUR(diff)} EUR`);
+        // iter93br : la somme des allocations peut etre INFERIEURE au total.
+        // Le solde (Total - allocations) est traite comme portion charges
+        // communes via account_number + distribution_key_id renseignes plus bas.
+        // On refuse uniquement les allocations EXCEDANT le total.
+        if (sumCents > totalCents) {
+          const diff = (sumCents - totalCents) / 100;
+          toast.error(`Somme des allocations (${fmtEUR((sumCents/100))}) ne peut pas depasser le total facture (${fmtEUR((totalCents/100))}). Excedent : ${fmtEUR(diff)} EUR`);
           return;
+        }
+        // Si allocations < total, le compte PCMN + cle repartition sont requis
+        // (portion charges communes). Le backend rejette sinon.
+        if (sumCents < totalCents) {
+          if (!(invForm.account_number || '').trim()) {
+            toast.error(`Portion charges communes (${fmtEUR((totalCents-sumCents)/100)} EUR) : compte PCMN requis dans la section "NATURE DE DEPENSE" en bas.`);
+            return;
+          }
         }
         // Pas de doublons d'owner
         const ids = allocs.map(a => a.owner_id);
@@ -1588,17 +1600,38 @@ export default function InvoicesPage() {
                         </div>
                       );
                     })}
-                    {allocs.length > 0 && (
-                      <div className={`flex justify-between items-center text-xs px-2 py-1.5 rounded border ${balanced ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-rose-50 border-rose-200 text-rose-700'}`}>
+                    {allocs.length > 0 && (() => {
+                      // iter93br : 3 etats du bilan allocations
+                      // - balanced (sum === total) : vert, "OK - equilibre 100% privatif"
+                      // - partial  (sum < total)   : ambre, "N EUR privatif + M EUR charges communes"
+                      // - excess   (sum > total)   : rouge, "excedent M EUR"
+                      const excess = diffCents < 0;
+                      const partial = diffCents > 0 && sum > 0;
+                      let styleCls, statusEl;
+                      if (excess) {
+                        styleCls = 'bg-rose-50 border-rose-200 text-rose-700';
+                        statusEl = <span>Excedent : <b>{fmtEUR(-diff)} EUR</b> (allocations &gt; total)</span>;
+                      } else if (partial) {
+                        styleCls = 'bg-amber-50 border-amber-300 text-amber-800';
+                        statusEl = (
+                          <span data-testid="alloc-partial-status">
+                            Portion charges communes automatiques : <b>{fmtEUR(diff)} EUR</b>{' '}
+                            (renseigne le compte PCMN + cle plus bas)
+                          </span>
+                        );
+                      } else {
+                        styleCls = 'bg-emerald-50 border-emerald-200 text-emerald-700';
+                        statusEl = <span>OK - 100% en frais privatif</span>;
+                      }
+                      return (
+                      <div className={`flex justify-between items-center text-xs px-2 py-1.5 rounded border ${styleCls}`}>
                         <span>Somme allocations : <b>{fmtEUR(sum)} EUR</b> / Total facture : <b>{fmtEUR(total)} EUR</b></span>
                         <span className="flex items-center gap-2" data-testid="alloc-balance-status">
-                          {balanced ? <>OK - equilibre</> : (
-                            <>
-                              <span>Ecart : <b>{fmtEUR(diff)} EUR</b></span>
+                          {statusEl}
+                          {excess && (
                               <button
                                 type="button"
                                 onClick={() => {
-                                  // Ajoute / retire le cent manquant sur la DERNIERE ligne
                                   setInvForm(f => {
                                     const arr = [...(f.private_fee_allocations || [])];
                                     if (arr.length === 0) return f;
@@ -1610,24 +1643,43 @@ export default function InvoicesPage() {
                                 }}
                                 className="text-[11px] underline text-rose-700 hover:text-rose-900"
                                 data-testid="alloc-auto-balance"
-                                title="Ajuste le cent manquant sur la derniere ligne"
+                                title="Retire l'excedent sur la derniere ligne"
                               >
                                 Equilibrer
                               </button>
-                            </>
                           )}
                         </span>
                       </div>
-                    )}
+                      );
+                    })()}
                     <p className="text-[10px] text-amber-700">
-                      Chaque proprietaire sera debite de son montant via une OD (Dr 4100XXX owner / Cr 643).
-                      Le fournisseur est credite du total via une AC (Dr 643 / Cr 44000XXX).
+                      Portion privatif : chaque proprietaire alloue est debite via une OD (Dr 4100XXX owner / Cr 643).
+                      Portion charges communes (si allocations &lt; total) : imputee au compte PCMN + cle
+                      de repartition selectionnes ci-dessous (Dr &lt;compte&gt; / Cr 44000XXX fournisseur).
                     </p>
                   </div>
                 );
               })()}
             </div>
-            <div className={`grid grid-cols-3 gap-4 ${invForm.is_private_fee || (invForm.lines && invForm.lines.length > 0) ? 'opacity-50 pointer-events-none' : ''}`}>
+            {/* iter93br : la section "NATURE DE DEPENSE" reste ACTIVE en
+                mode frais privatif quand la somme des allocations est
+                INFERIEURE au total (portion charges communes obligatoire).
+                Elle est desactivee UNIQUEMENT si le total est 100% privatif
+                (sum == total). */}
+            <div className={(() => {
+              if (!invForm.is_private_fee && !(invForm.lines && invForm.lines.length > 0)) return 'grid grid-cols-3 gap-4';
+              const allocs = invForm.private_fee_allocations || [];
+              const sumCents = allocs.reduce((s, a) => s + Math.round((Number(a.amount) || 0) * 100), 0);
+              const totalCents = Math.round(Number(invForm.total_amount || 0) * 100);
+              const hasPartialCommonPart = invForm.is_private_fee && sumCents > 0 && sumCents < totalCents;
+              if (invForm.is_private_fee && !hasPartialCommonPart) {
+                return 'grid grid-cols-3 gap-4 opacity-50 pointer-events-none';
+              }
+              if (invForm.lines && invForm.lines.length > 0) {
+                return 'grid grid-cols-3 gap-4 opacity-50 pointer-events-none';
+              }
+              return 'grid grid-cols-3 gap-4';
+            })()}>
               <div><label className="form-label">
                 Nature de depense
                 {!invForm.is_private_fee && !(invForm.lines && invForm.lines.length > 0) && (

@@ -786,3 +786,24 @@ User a upload bilan PDF `Bilan comptable au 31_03_2026.pdf` (SRL Finlead) via wi
 ### Status
 **NON RESOLU dans cette session** - documenter comme P1 (priorite haute) pour la prochaine session. Le fix iter93bq (invoices merge 643) devrait CORRIGER l'origine du desequilibre pour les futurs imports. Pour les bilans PDF externes deja produits, un fix specifique du parser `parse_opening_balance_pdf` est requis.
 
+
+## iter93br - Facture hybride : frais privatifs + charges communes (Feb 2026 - DONE)
+
+### Contexte
+Utilisateur (screenshot Leblanc 1395 EUR) : "il doit etre possible de combiner des frais privatifs et des natures de depenses". Cas concret : facture 1395 EUR dont 1120,08 EUR alloues a 6 proprietaires (privatif) + 274,92 EUR restants a imputer en charges communes (compte 61060, cle 0001).
+
+### Fix
+**Backend** (`routes/invoices.py` POST + PUT) : validation stricte remplace le check `sum == total` par 2 checks :
+- `sum > total` -> 400 "excedent"
+- `sum < total AND account_number vide` -> 400 "portion charges communes requiert compte PCMN + cle"
+
+**Frontend** (`InvoicesPage.js`) :
+- `saveInvoice` : accepte `sum <= total`, exige `account_number` si `sum < total`.
+- Banner allocation devient tri-etat : vert (100% privatif), ambre (partiel : affiche "Portion charges communes automatiques : X EUR"), rouge (excedent).
+- Section "NATURE DE DEPENSE" reste ACTIVE en mode privatif si sum < total (portion commune obligatoire), desactivee si sum == total.
+- Texte OD mis a jour : "Portion privatif : Dr 4100XXX / Cr 643. Portion charges communes : Dr &lt;compte&gt; / Cr 44000XXX".
+
+### Testing
+- Nouveau `tests/test_iter93br_hybrid_private_fee_common_charge.py` : 3 tests OK (partial requiert PCMN, excedent rejete, full privatif OK).
+- Regression : `iter93bg` 6/6 OK, `iter93bp` OK, `iter93bq` OK.
+
