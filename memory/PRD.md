@@ -20,6 +20,17 @@ Application de gestion de copropriete basee sur le droit belge (PCMN), incluant 
 
 ### Session courante (Fevrier 2026)
 
+#### P1 - Chatbot analyse documents PDF/CSV + regles metier complet (DONE iter93ch - Feb 2026)
+- **Feature** : Le chatbot support peut desormais analyser des documents PDF/CSV uploades par le syndic (bilans Optipro, balances tiers, extraits bancaires, journaux comptables).
+- **Backend** : Nouvel endpoint `POST /api/support/conversations/{conv_id}/attach` (multipart PDF/CSV, max 10 MB). Extraction via `pdfplumber` pour PDF et `csv.reader` avec sniff auto-detect delimiteur pour CSV. Contenu extrait tronque a 30 000 caracteres. Documents recents (10 derniers messages) automatiquement injectes dans le prompt LLM.
+- **System Prompt** : Enrichi avec TOUTES les regles metier iter93cc a iter93cg : formule bilan apres repartition per-key, moteur unique bilan/cloture, audit AN, isolation 490 et 499XXX, parser Optipro multi-lignes, factures hybrides, idempotence commit-opening-balance.
+- **Frontend** : Bouton trombone (Paperclip) dans `SupportChatBubble` a cote du champ texte. Badge document (FileText + filename + type + longueur extraite) affiche dans le fil de conversation.
+- **Validation E2E** : Sur l'upload du Bilan Optipro 31/03/2027 + question sur Guerit, le LLM repond 26,96 EUR EXACT en citant iter93cf/iter93cg/iter93cc et proposant le chemin exact (Rapports > Bilan & Resultats > Apres repartition).
+- **Validation** : Testing agent 100% (8/8 backend pytest + Playwright E2E frontend PASS).
+- Tests : `/app/backend/tests/test_iter93ch_support_attach.py`.
+
+
+
 #### P0 - Refonte Bilan Apres Repartition : source autoritative distribution_lines (DONE iter93cf - Feb 2026)
 - **Specification utilisateur** : Formule Bilan apres repartition = `quotes-parts_per_key_charges` - `paiements` + `solde_reserve`. Seul le compte 499 est redistribue (sinistres 499XXX + charges a reporter 490 restent isoles). Bilan doit etre a l'equilibre PARFAIT (ecart = 0.00). Cible sur Guerit Vandervelde : **26,92 EUR EXACT** sur ACP Agathe 31/03/2027.
 - **Root cause identifie** : Le fix iter93cd utilisait `distribution_key.lots` LIVE pour les ratios, mais ces cles ont pu deriver depuis l'import Optipro (ex. G3 elevator sur Agathe : Guerit avait share 8479 a l'epoque, mais la cle actuelle ne le contient plus). L'invoice.distribution_lines est la SOURCE AUTORITATIVE (fige au moment de l'import).
