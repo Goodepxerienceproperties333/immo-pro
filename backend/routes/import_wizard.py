@@ -2439,39 +2439,89 @@ def create_import_wizard_router(db):
     @router.post("/coproprietes/{copropriete_id}/cleanup-duplicate-an")
     async def cleanup_duplicate_an(copropriete_id: str, request: Request):
         """iter93bw : Nettoyage retroactif des ANs en double (bug idempotence).
+        iter93cb : Etend le cleanup aux paires AN(reversed=True) + EXT-AN
+        (is_reversal=True) orphelines qui neutralisent l'OD d'ouverture.
 
-        Detecte plusieurs ecritures AN avec is_opening_balance=True pour une
-        meme ACP et supprime toutes SAUF la plus recente. Necessaire pour
-        rattraper les ACP dont l'import wizard avait ete execute plusieurs
-        fois AVANT le fix iter93bw.
+        Detection :
+        1. Plusieurs ecritures AN avec is_opening_balance=True -> garde la
+           plus recente NON-REVERSED (une AN reversed est cassee), supprime
+           les autres.
+        2. AN reversed=True SEULE (avec son EXT orphelin) : retire le flag
+           reversed + supprime le EXT correspondant pour restaurer l'AN.
+        3. EXT-AN orphelins (sans AN parente) : supprimes.
 
         Retourne :
           - kept_id : id de l'ecriture AN conservee
           - deleted_ids : liste des ecritures supprimees
           - deleted_count : nombre supprime
+          - unmarked_reversed : nombre d'AN "restaurees" (flag reversed retire)
         """
         await _require_acp_access(request, db, copropriete_id)
+
+        # 1. Recupere toutes les ANs is_opening_balance=True
         ans = await db.journal_entries.find(
             {
                 "copropriete_id": copropriete_id,
                 "journal_type": "AN",
                 "is_opening_balance": True,
             },
-            {"_id": 0, "id": 1, "created_at": 1, "date": 1, "total_debit": 1},
+            {"_id": 0, "id": 1, "reference": 1, "created_at": 1, "date": 1,
+             "total_debit": 1, "reversed": 1},
         ).sort("created_at", -1).to_list(100)
-        if len(ans) <= 1:
-            return {"kept_id": ans[0]["id"] if ans else None, "deleted_ids": [], "deleted_count": 0}
-        kept = ans[0]
-        to_delete = [a["id"] for a in ans[1:]]
-        await db.journal_entries.delete_many({
-            "copropriete_id": copropriete_id,
-            "id": {"$in": to_delete},
-        })
+
+        # 2. Recupere toutes les EXT-AN (contre-passations) pour l'ACP
+        exts = await db.journal_entries.find(
+            {
+                "copropriete_id": copropriete_id,
+                "journal_type": "AN",
+                "is_reversal": True,
+                "reference": {"$regex": "^EXT-AN-"},
+            },
+            {"_id": 0, "id": 1, "reference": 1},
+        ).to_list(100)
+
+        deleted_ids = []
+        unmarked_reversed = 0
+        kept = None
+
+        # Etape A : garde la plus recente AN NON-reversed
+        non_reversed = [a for a in ans if not a.get("reversed")]
+        if non_reversed:
+            kept = non_reversed[0]
+            # Supprime toutes les autres non-reversed
+            to_delete = [a["id"] for a in non_reversed[1:] if a.get("id")]
+            # Supprime aussi les reversed (obsoletes)
+            to_delete += [a["id"] for a in ans if a.get("reversed") and a.get("id")]
+        elif ans:
+            # Aucune non-reversed : garde la plus recente et unmark reversed
+            kept = ans[0]
+            await db.journal_entries.update_many(
+                {"copropriete_id": copropriete_id, "id": kept["id"]},
+                {"$unset": {"reversed": ""}},
+            )
+            unmarked_reversed = 1
+            # Supprime les autres reversed (obsoletes)
+            to_delete = [a["id"] for a in ans[1:] if a.get("id")]
+        else:
+            to_delete = []
+
+        # Etape B : supprime tous les EXT-AN (ils sont orphelins maintenant)
+        for ext in exts:
+            to_delete.append(ext["id"])
+
+        if to_delete:
+            await db.journal_entries.delete_many({
+                "copropriete_id": copropriete_id,
+                "id": {"$in": to_delete},
+            })
+            deleted_ids = to_delete
+
         return {
-            "kept_id": kept["id"],
-            "kept_total_debit": kept.get("total_debit", 0),
-            "deleted_ids": to_delete,
-            "deleted_count": len(to_delete),
+            "kept_id": kept["id"] if kept else None,
+            "kept_total_debit": kept.get("total_debit", 0) if kept else 0,
+            "deleted_ids": deleted_ids,
+            "deleted_count": len(deleted_ids),
+            "unmarked_reversed": unmarked_reversed,
         }
 
     @router.post("/sessions/{session_id}/commit-opening-balance")
