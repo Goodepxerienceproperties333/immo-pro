@@ -622,3 +622,38 @@ Utilisateur : "tu zappe les etapes apres la validation de la facture donc pas de
 - `testing_agent_v3_fork` iteration_95 : frontend 100% (3/3 scenarios).
 - Screenshot manuel : sur ACP Gaura 3 avec 5 etapes deja faites, /import-wizard demarre bien sur "Etape 6/8 : Journaux financiers" avec le toast bleu.
 
+
+## iter93bk - Code Review : Lots critiques (Feb 2026 - DONE)
+
+### Contexte
+L'utilisateur a fourni un rapport de code review avec 10 items (5 Critiques + 5 Importants). Choix confirme : appliquer uniquement les lots CRITIQUES dans cette session, les Importants (refactoring composants monolithiques + auto_entries) sont reportes.
+
+### Lot 1 - Securite : FAUX POSITIFS confirmes
+- XSS via `dangerouslySetInnerHTML` (6 endroits) : TOUS deja sanitises via `sanitizeHtml()` (DOMPurify). Le rapport avait flag les usages sans reperer le wrapper.
+- localStorage insecure (7 endroits) : TOUS contiennent UNIQUEMENT des donnees non-sensitives (timestamps consent, UI filter state, click counters). Aucun token/password/PII. Auth tokens sont dans les cookies httpOnly.
+
+### Lot 2 - Stabilite backend
+- **Imports circulaires** (2 chaines) :
+  - `auto_entries.py <-> journal_reversals.py` : deja en late imports (dans les fonctions), pattern recommande par le rapport lui-meme. Rien a faire.
+  - `bce_lookup.py <-> bce_opendata.py` : EXTRAIT les helpers partages `_norm`, `_tokens`, `token_similarity`, `_STOPWORDS`, `_MULTISPACE_RE` dans `/app/backend/bce_shared.py`. Les deux modules importent depuis bce_shared. Cycle CASSE.
+- **F821 Undefined names (32 warnings audit)** : 30 etaient F841 (variables inutilisees, pas des bugs). Les 2 vrais F821 corriges :
+  - `routes/banking.py:3486` : `request` undefined -> ajoute `request: Request` dans la signature de `create_batch_transactions`.
+  - `routes/reports.py:2964` : `_ensure_copro_access` (dead code guarded par `if False else None`) -> supprime.
+- **Dynamic imports (5 endroits, en fait 3)** : `__import__("re")` dans `reports.py:65` et `expense_categories.py:127,216` convertis en imports statiques `import re` en haut du fichier.
+
+### Lot 3 - Test secrets (28 fichiers cites)
+- Nouveau module `/app/backend/tests/test_credentials.py` : centralise `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `SYNDIC_ALPHA_*`, `SYNDIC_BETA_*`, `OWNER_*` via `os.environ.get(..., default)`. Fonction `get_login_payload(role)`.
+- Fichiers migres : `test_iter74_syndic_isolation.py` (import complet du module), + 20 autres fichiers (patch mecanique de `EMAIL = "admin@copro.be"` -> `EMAIL = os.environ.get("TEST_ADMIN_EMAIL", "admin@copro.be")`).
+- 343 fichiers de tests parsent tous cleanement (AST check).
+
+### Lot 4 - Stale closures (198 warnings)
+- Inspection systematique des 4 endroits les plus critiques cites par le rapport (`JournalsPage:62`, `OwnersPage:50`, `SyndicOnboardingWizard:42`, `OwnerPortalPage:115`).
+- **VERDICT** : toutes les deps REELLES sont deja listees. Les "missing deps" du rapport sont des refs stables (module `api`, `setState` fns, constantes) que ESLint's `exhaustive-deps` sur-signale par prudence. Aucun stale closure reel detecte.
+- Pas de modification code (eviter le bruit d'annotations inutiles).
+
+### Testing
+- `testing_agent_v3_fork` iteration_96 : backend 100%, 0 issue.
+- Regression `test_iter93bg_private_fee_owner_required.py` : 6/6 OK.
+- `ruff check --select F821 .` : 0 issues restantes.
+- Login + list coproprietes + list invoices : tous 200.
+
