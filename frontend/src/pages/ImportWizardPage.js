@@ -475,11 +475,15 @@ export default function ImportWizardPage() {
         const m = r.data;
         // iter93bh : proposer la revue une par une apres commit (utile
         // surtout si des frais privatifs (compte 643) sont detectes).
+        // iter93bi : quand des frais privatifs sont detectes, on BLOQUE
+        // l'avancement de l'etape pour forcer le syndic a passer par la revue.
+        const holdForReview = (m.private_fees_detected || 0) > 0;
         if ((m.inserted || 0) > 0) {
           setInvoiceReviewCta({
             count: m.inserted,
             private_fees_detected: m.private_fees_detected || 0,
             session_id: session.id,
+            blocking: holdForReview,
           });
         }
         const errs = m.errors || [];
@@ -631,6 +635,24 @@ export default function ImportWizardPage() {
       // Refresh session to update step counters
       const sRes = await api.get('/import-wizard/sessions/active', { params: { copropriete_id: effectiveCopro } });
       setSession(sRes.data);
+      // iter93bi : blocage etape invoices tant que les frais privatifs n'ont
+      // pas ete revises. On lit l'etat qui vient d'etre pose (via variable
+      // locale car setState est async).
+      const _pfDetected = (step.key === 'invoices' && r?.data && (r.data.private_fees_detected || 0) > 0);
+      if (_pfDetected) {
+        toast.warning(
+          `${r.data.private_fees_detected} facture(s) sur compte 643 detectee(s) - assignez `
+          + `les proprietaires avant de continuer (bouton bleu ci-dessous).`,
+          { duration: 8000 }
+        );
+        // Reset les buffers de parse (comme si on avait avance) mais on RESTE
+        // sur l'etape 'invoices' pour afficher le CTA de revue.
+        setSniffResult(null);
+        setMapping({});
+        setInvoicesParsed([]);
+        setUploadMode(null);
+        return;
+      }
       // advance
       if (stepIdx < STEPS.length - 1) {
         setStepIdx(stepIdx + 1);
@@ -1064,64 +1086,118 @@ export default function ImportWizardPage() {
           )}
 
           {/* iter93bh : CTA "revue une par une" apres commit-invoices reussi */}
+          {/* iter93bi : style rouge/warning en mode blocking (private fees detectes) */}
           {invoiceReviewCta && step.key === 'invoices' && (
             <div
-              className="mt-4 border-2 border-blue-400 rounded-lg p-4 bg-gradient-to-r from-blue-50 to-indigo-50 shadow-sm"
+              className={
+                invoiceReviewCta.blocking
+                  ? "mt-4 border-4 border-rose-500 rounded-lg p-4 bg-gradient-to-r from-rose-50 to-amber-50 shadow-lg animate-pulse-slow"
+                  : "mt-4 border-2 border-blue-400 rounded-lg p-4 bg-gradient-to-r from-blue-50 to-indigo-50 shadow-sm"
+              }
               data-testid="invoice-review-cta"
             >
               <div className="flex items-start gap-3">
-                <div className="shrink-0 h-10 w-10 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold">
-                  {invoiceReviewCta.count}
+                <div className={
+                  invoiceReviewCta.blocking
+                    ? "shrink-0 h-12 w-12 rounded-full bg-rose-600 text-white flex items-center justify-center font-bold text-xl"
+                    : "shrink-0 h-10 w-10 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold"
+                }>
+                  {invoiceReviewCta.blocking ? invoiceReviewCta.private_fees_detected : invoiceReviewCta.count}
                 </div>
                 <div className="flex-1">
-                  <h3 className="font-bold text-blue-900 mb-1">
-                    {invoiceReviewCta.count} facture(s) importee(s) avec succes
-                  </h3>
-                  {invoiceReviewCta.private_fees_detected > 0 ? (
-                    <p className="text-sm text-blue-800 mb-3">
-                      <b className="text-amber-800">{invoiceReviewCta.private_fees_detected} facture(s) sur compte 643 detectee(s)</b> :
-                      elles sont marquees comme frais privatifs mais ne sont pas encore affectees a un proprietaire.
-                      Nous vous recommandons de <b>passer en revue chaque facture une par une</b> pour verifier
-                      la nature de depense, la cle de repartition, et surtout <b>assigner les proprietaires
-                      beneficiaires des frais privatifs</b>. La sauvegarde d&apos;un frais privatif sans proprietaire
-                      est strictement bloquee (iter93bg).
-                    </p>
+                  {invoiceReviewCta.blocking ? (
+                    <>
+                      <h3 className="font-bold text-rose-900 mb-1 text-lg">
+                        ACTION REQUISE : {invoiceReviewCta.private_fees_detected} frais privatif(s) 643 detecte(s)
+                      </h3>
+                      <p className="text-sm text-rose-900 mb-3">
+                        <b>Ces factures ne sont pas encore affectees a un proprietaire.</b> Vous devez les
+                        passer en revue une par une pour <b>assigner le proprietaire beneficiaire</b> avant
+                        de continuer le wizard. C&apos;est indispensable pour la comptabilite privative
+                        (compte 4100XXX proprietaire debite, compte 643 credite via une OD).
+                      </p>
+                      <p className="text-xs text-rose-700 mb-3 italic">
+                        Vous ne pouvez pas passer a l&apos;etape suivante du wizard tant que ces
+                        {' '}{invoiceReviewCta.private_fees_detected}{' '}facture(s) ne sont pas revisees.
+                      </p>
+                    </>
                   ) : (
-                    <p className="text-sm text-blue-800 mb-3">
-                      Toutes les factures ont ete importees. Vous pouvez optionnellement les passer en revue
-                      une par une pour verifier chaque champ (fournisseur, cle de repartition, montants),
-                      ou passer directement a l&apos;etape suivante du wizard.
-                    </p>
+                    <>
+                      <h3 className="font-bold text-blue-900 mb-1">
+                        {invoiceReviewCta.count} facture(s) importee(s) avec succes
+                      </h3>
+                      <p className="text-sm text-blue-800 mb-3">
+                        Vous pouvez optionnellement passer les factures en revue une par une pour verifier
+                        chaque champ (fournisseur, cle de repartition, montants), ou passer directement a
+                        l&apos;etape suivante du wizard.
+                      </p>
+                    </>
                   )}
                   <div className="flex flex-wrap items-center gap-2">
                     <Button
                       onClick={() => {
                         const copro = effectiveCopro || '';
-                        const url = `/invoices?review_session=${encodeURIComponent(invoiceReviewCta.session_id)}${copro ? `&copropriete_id=${encodeURIComponent(copro)}` : ''}`;
-                        // localStorage garantit que InvoicesPage recharge la bonne ACP
+                        // iter93bi : quand mode blocking, on filtre sur les orphelins 643 uniquement
+                        const filterParam = invoiceReviewCta.blocking ? '&filter=needs_owner' : '';
+                        const url = `/invoices?review_session=${encodeURIComponent(invoiceReviewCta.session_id)}${filterParam}${copro ? `&copropriete_id=${encodeURIComponent(copro)}` : ''}`;
                         if (copro) {
                           localStorage.setItem('selectedCopro', copro);
                         }
                         navigate(url);
                       }}
-                      className="bg-blue-600 hover:bg-blue-700 text-white"
+                      className={
+                        invoiceReviewCta.blocking
+                          ? "bg-rose-600 hover:bg-rose-700 text-white font-semibold px-6 py-2 text-base shadow"
+                          : "bg-blue-600 hover:bg-blue-700 text-white"
+                      }
                       data-testid="start-invoice-review-btn"
                     >
-                      Reviser les {invoiceReviewCta.count} facture(s) une par une
+                      {invoiceReviewCta.blocking
+                        ? `Reviser les ${invoiceReviewCta.private_fees_detected} frais privatif(s) maintenant`
+                        : `Reviser les ${invoiceReviewCta.count} facture(s) une par une`}
                     </Button>
-                    <Button
-                      variant="outline"
-                      className="border-slate-300 text-slate-600"
-                      onClick={() => setInvoiceReviewCta(null)}
-                      data-testid="skip-invoice-review-btn"
-                    >
-                      Ignorer et continuer le wizard
-                    </Button>
-                    {invoiceReviewCta.private_fees_detected > 0 && (
-                      <span className="text-xs text-amber-700 italic ml-2">
-                        Astuce : le mode revue detecte automatiquement les comptes 643 et vous
-                        conduit directement a la selection du proprietaire.
-                      </span>
+                    {!invoiceReviewCta.blocking && (
+                      <Button
+                        variant="outline"
+                        className="border-slate-300 text-slate-600"
+                        onClick={() => setInvoiceReviewCta(null)}
+                        data-testid="skip-invoice-review-btn"
+                      >
+                        Ignorer et continuer le wizard
+                      </Button>
+                    )}
+                    {invoiceReviewCta.blocking && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="text-xs text-slate-500 hover:text-slate-700"
+                        onClick={async () => {
+                          // iter93bi : reforce le check en re-appelant l'API
+                          try {
+                            const chk = await api.get('/invoices', {
+                              params: {
+                                copropriete_id: effectiveCopro,
+                                import_session_id: invoiceReviewCta.session_id,
+                              },
+                            });
+                            const orphans = (chk.data || []).filter(i =>
+                              i.is_private_fee && (!i.private_fee_allocations || i.private_fee_allocations.length === 0)
+                            );
+                            if (orphans.length === 0) {
+                              toast.success('Tous les frais privatifs sont bien assignes -> vous pouvez continuer le wizard');
+                              setInvoiceReviewCta(null);
+                            } else {
+                              toast.warning(`${orphans.length} facture(s) 643 encore sans proprietaire`);
+                              setInvoiceReviewCta({ ...invoiceReviewCta, private_fees_detected: orphans.length });
+                            }
+                          } catch {
+                            toast.error('Erreur verification');
+                          }
+                        }}
+                        data-testid="check-invoice-review-btn"
+                      >
+                        J&apos;ai deja affecte -&gt; reverifier
+                      </Button>
                     )}
                   </div>
                 </div>

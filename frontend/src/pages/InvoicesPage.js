@@ -211,14 +211,23 @@ export default function InvoicesPage() {
   }, [invoices, searchParams]);
 
   // iter93bh : mode "revue une par une" post-import wizard.
-  // URL: /invoices?review_session=<sid>[&review_index=N]
+  // URL: /invoices?review_session=<sid>[&review_index=N][&filter=needs_owner]
   // Auto-ouvre la facture courante dans le dialog d'edition.
+  // iter93bi : filter=needs_owner ne cible QUE les frais privatifs (643) sans
+  // proprietaire assigne. Utilise depuis le wizard en mode "blocking".
   const reviewSession = searchParams.get('review_session');
+  const reviewFilter = searchParams.get('filter');
   const reviewIndex = parseInt(searchParams.get('review_index') || '0', 10);
   const reviewInvoices = useMemo(() => {
     if (!reviewSession) return [];
-    return invoices.filter(i => i.import_session_id === reviewSession);
-  }, [invoices, reviewSession]);
+    let list = invoices.filter(i => i.import_session_id === reviewSession);
+    if (reviewFilter === 'needs_owner') {
+      list = list.filter(i =>
+        i.is_private_fee && (!i.private_fee_allocations || i.private_fee_allocations.length === 0)
+      );
+    }
+    return list;
+  }, [invoices, reviewSession, reviewFilter]);
   useEffect(() => {
     if (!reviewSession) return;
     if (reviewInvoices.length === 0) return;
@@ -1138,17 +1147,34 @@ export default function InvoicesPage() {
         <DialogContent className="max-w-[1600px] w-[97vw] max-h-[92vh] overflow-hidden flex flex-col" data-testid="invoice-dialog">
           <DialogHeader><DialogTitle style={{fontFamily:'Chivo,sans-serif'}}>{editingInvoice ? 'Modifier la facture' : 'Nouvelle facture'}</DialogTitle></DialogHeader>
           {/* iter93bh : bandeau "revue une par une" post-import wizard */}
+          {/* iter93bi : mode filter=needs_owner - style rouge + libelle specifique */}
           {reviewSession && reviewInvoices.length > 0 && (
             <div
-              className="rounded-md border border-blue-300 bg-gradient-to-r from-blue-50 to-indigo-50 px-3 py-2 mt-1 flex items-center justify-between text-sm"
+              className={
+                reviewFilter === 'needs_owner'
+                  ? "rounded-md border-2 border-rose-400 bg-gradient-to-r from-rose-50 to-amber-50 px-3 py-2 mt-1 flex items-center justify-between text-sm"
+                  : "rounded-md border border-blue-300 bg-gradient-to-r from-blue-50 to-indigo-50 px-3 py-2 mt-1 flex items-center justify-between text-sm"
+              }
               data-testid="review-mode-banner"
             >
-              <div className="flex items-center gap-2 text-blue-900 font-medium">
-                <span className="inline-flex items-center justify-center h-6 min-w-6 px-1.5 rounded-full bg-blue-600 text-white text-xs font-bold">
+              <div className={
+                reviewFilter === 'needs_owner'
+                  ? "flex items-center gap-2 text-rose-900 font-medium"
+                  : "flex items-center gap-2 text-blue-900 font-medium"
+              }>
+                <span className={
+                  reviewFilter === 'needs_owner'
+                    ? "inline-flex items-center justify-center h-6 min-w-6 px-1.5 rounded-full bg-rose-600 text-white text-xs font-bold"
+                    : "inline-flex items-center justify-center h-6 min-w-6 px-1.5 rounded-full bg-blue-600 text-white text-xs font-bold"
+                }>
                   {Math.min(reviewIndex + 1, reviewInvoices.length)}/{reviewInvoices.length}
                 </span>
-                <span>Revue post-import : validez chaque facture pour continuer</span>
-                {editingInvoice?.is_private_fee && (
+                <span>
+                  {reviewFilter === 'needs_owner'
+                    ? 'Frais privatif 643 : assignez le proprietaire pour chaque facture'
+                    : 'Revue post-import : validez chaque facture pour continuer'}
+                </span>
+                {editingInvoice?.is_private_fee && reviewFilter !== 'needs_owner' && (
                   <span className="ml-2 px-2 py-0.5 rounded-full bg-amber-200 text-amber-900 text-xs font-semibold">
                     Frais privatif (compte 643) - proprietaire requis
                   </span>
