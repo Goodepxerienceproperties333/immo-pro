@@ -1035,6 +1035,7 @@ async def compute_bilan_data(db, copropriete_id: str, date_to: Optional[str] = N
         "VI_dettes_coproprietaires": [],
         "VI_dettes_fournisseurs": [],
         "VI_dettes_autres": [],
+        "VI_dettes_sinistres": [],  # iter93ca : 499XXX hors 499 boni (sinistres isoles)
         "VII_regul_passif": [],
     }
 
@@ -1111,7 +1112,15 @@ async def compute_bilan_data(db, copropriete_id: str, date_to: Optional[str] = N
             elif acc.startswith(("44", "45", "46", "48")):
                 passif_buckets["VI_dettes_autres"].append(item)
             elif acc.startswith("49"):
-                passif_buckets["VII_regul_passif"].append(item)
+                # iter93ca : ISOLATION des sinistres 499XXX (hors 499 boni).
+                # 499 (compte principal de regularisation, boni/mali) reste
+                # en VII pour la redistribution. Les sous-comptes 499XXX
+                # (ex 499603 Sinistre G.4.0.2 - Decharge de cuisine) sont
+                # des DETTES specifiques et vont dans VI_dettes_sinistres.
+                if acc.startswith("499") and acc != "499":
+                    passif_buckets["VI_dettes_sinistres"].append(item)
+                else:
+                    passif_buckets["VII_regul_passif"].append(item)
             else:
                 passif_buckets["VI_dettes_autres"].append(item)
 
@@ -1298,8 +1307,18 @@ async def compute_bilan_data(db, copropriete_id: str, date_to: Optional[str] = N
 
         # ---- Repartition des comptes de regularisation 49X sur les proprietaires ----
         # Regle metier (PCMN copro) : en consultation "Apres repartition", les comptes
-        # de regularisation (490-498, hors 499 synthetique) sont consideres comme
-        # appartenant collectivement aux proprietaires. On les repartit par quotite.
+        # de regularisation 490-498 sont consideres comme appartenant collectivement
+        # aux proprietaires. On les repartit par quotite.
+        #
+        # iter93ca : ISOLATION DES SINISTRES 499XXX. Le compte 499 (compte
+        # d'attente / boni de regularisation) est deja gere par `compte_499`
+        # ci-dessus (via result_exercise calcule des mouvements cl.6/cl.7).
+        # Les SOUS-COMPTES 499XXX (499603 Sinistre, 4996XX Provisions
+        # sinistres, etc.) sont des DETTES SPECIFIQUES envers des tiers
+        # (assureur, expert, entrepreneur) et ne doivent JAMAIS etre
+        # redistribues aux proprietaires collectivement. Ils restent
+        # isoles sur leur compte d'origine.
+        # Regle : skip TOUT compte commencant par "499" (au lieu de "== 499").
         #
         # PRINCIPE D'EQUILIBRE : un compte 49X conserve sa NATURE (actif/passif) en
         # passant sur les comptes proprietaires. C'est juste un changement de rubrique
@@ -1313,7 +1332,11 @@ async def compute_bilan_data(db, copropriete_id: str, date_to: Optional[str] = N
         regul_actif_by_account = {}  # acc -> solde positif (actif)
         regul_passif_by_account = {}  # acc -> abs(solde negatif) (passif)
         for acc, b in balances.items():
-            if not acc.startswith("49") or acc == "499":
+            if not acc.startswith("49"):
+                continue
+            # iter93ca : exclut TOUS les 499XXX (499 boni deja traite via
+            # compte_499 + 499603 et autres sinistres qui restent isoles).
+            if acc.startswith("499"):
                 continue
             solde = round(b["debit"] - b["credit"], 2)
             if abs(solde) < 0.01:
@@ -1454,6 +1477,8 @@ async def compute_bilan_data(db, copropriete_id: str, date_to: Optional[str] = N
         ("VI.A Coproprietaires crediteurs (cl. 400)", "VI_dettes_coproprietaires"),
         ("VI.B Fournisseurs (cl. 440)", "VI_dettes_fournisseurs"),
         ("VI.C Autres dettes court terme", "VI_dettes_autres"),
+        # iter93ca : rubrique dediee aux sinistres, isolee des charges communes
+        ("VI.D Provisions et dettes sur sinistres", "VI_dettes_sinistres"),
         ("VII. Comptes de regularisation (boni)", "VII_regul_passif"),
     ]
 
