@@ -2436,6 +2436,44 @@ def create_import_wizard_router(db):
             "count": len(orphans),
         }
 
+    @router.post("/coproprietes/{copropriete_id}/cleanup-duplicate-an")
+    async def cleanup_duplicate_an(copropriete_id: str, request: Request):
+        """iter93bw : Nettoyage retroactif des ANs en double (bug idempotence).
+
+        Detecte plusieurs ecritures AN avec is_opening_balance=True pour une
+        meme ACP et supprime toutes SAUF la plus recente. Necessaire pour
+        rattraper les ACP dont l'import wizard avait ete execute plusieurs
+        fois AVANT le fix iter93bw.
+
+        Retourne :
+          - kept_id : id de l'ecriture AN conservee
+          - deleted_ids : liste des ecritures supprimees
+          - deleted_count : nombre supprime
+        """
+        await _require_acp_access(request, db, copropriete_id)
+        ans = await db.journal_entries.find(
+            {
+                "copropriete_id": copropriete_id,
+                "journal_type": "AN",
+                "is_opening_balance": True,
+            },
+            {"_id": 0, "id": 1, "created_at": 1, "date": 1, "total_debit": 1},
+        ).sort("created_at", -1).to_list(100)
+        if len(ans) <= 1:
+            return {"kept_id": ans[0]["id"] if ans else None, "deleted_ids": [], "deleted_count": 0}
+        kept = ans[0]
+        to_delete = [a["id"] for a in ans[1:]]
+        await db.journal_entries.delete_many({
+            "copropriete_id": copropriete_id,
+            "id": {"$in": to_delete},
+        })
+        return {
+            "kept_id": kept["id"],
+            "kept_total_debit": kept.get("total_debit", 0),
+            "deleted_ids": to_delete,
+            "deleted_count": len(to_delete),
+        }
+
     @router.post("/sessions/{session_id}/commit-opening-balance")
     async def commit_opening_balance(session_id: str, data: CommitOpeningBalanceInput, request: Request):
         """Commit an opening balance from a 'Bilan comptable' PDF.
@@ -2907,6 +2945,30 @@ def create_import_wizard_router(db):
 
         period_end = (data.period_end_date or "").strip() or "n-1"
         je_id = str(uuid.uuid4())
+
+        # iter93bw : IDEMPOTENCE STRICTE de l'OD d'ouverture (AN).
+        # Un ACP ne peut avoir qu'UNE SEULE ecriture AN d'ouverture a la
+        # fois. Sans ce garde-fou, chaque re-execution du wizard creait
+        # une nouvelle ligne AN qui s'AJOUTAIT aux precedentes -> les
+        # soldes des proprietaires etaient DOUBLES (ou triples) dans les
+        # situations et bilans. Regle stricte : on remplace la precedente
+        # OD d'ouverture au lieu de l'accumuler. On loggue les IDs supprimes
+        # dans la reponse pour audit.
+        prev_an = await db.journal_entries.find(
+            {
+                "copropriete_id": copro_id,
+                "journal_type": "AN",
+                "is_opening_balance": True,
+            },
+            {"_id": 0, "id": 1, "reference": 1, "date": 1, "total_debit": 1},
+        ).to_list(100)
+        replaced_an_ids = [p["id"] for p in prev_an if p.get("id")]
+        if replaced_an_ids:
+            await db.journal_entries.delete_many({
+                "copropriete_id": copro_id,
+                "id": {"$in": replaced_an_ids},
+            })
+
         _je_opening = await finalize_je_doc(db, {
             "id": je_id,
             "journal_type": "AN",
@@ -2933,6 +2995,7 @@ def create_import_wizard_router(db):
             "owners_linked": owners_linked,
             "suppliers_linked": suppliers_linked,
             "entry_date": entry_date,
+            "replaced_an_ids": replaced_an_ids,  # iter93bw : audit
         })
 
         # iter90gj : sauvegarde des appels hors budget sur l'exercice fiscal.
@@ -2975,6 +3038,9 @@ def create_import_wizard_router(db):
             "funds_saved": funds_saved,
             # iter91f : owners crees depuis owner_confirmations (visibles cote UI)
             "owners_created": owner_confirmations_processed,
+            # iter93bw : audit du remplacement idempotent (0 si 1ere OD, >0 sinon)
+            "replaced_an_count": len(replaced_an_ids),
+            "replaced_an_ids": replaced_an_ids,
         }
 
     # ----- C-BIS: OD YEAR-END ENTRIES -----
