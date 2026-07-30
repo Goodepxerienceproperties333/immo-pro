@@ -29,31 +29,45 @@ async def compute_expense_rows(
         return [], {"total": 0.0, "count": 0, "by_account": {}, "by_key": {}, "by_bank": {}}
 
     # 1) Invoices
-    # iter90i : EXCLURE les factures privatives (is_private_fee=true) du
-    # total des charges communes. Elles sont refacturees au compte 643
-    # mais ne sont PAS une charge commune de la copropriete : elles sont
-    # ventilees directement aux proprietaires concernes via le decompte
-    # de mutation et/ou l'OD-PRIV. Les inclure ici cree un sur-comptage
-    # systematique du total "Dépenses de l'exercice".
+    # iter90i : EXCLURE les factures 100% privatives (is_private_fee=true ET
+    # sans portion charges communes) du total des charges communes. Elles sont
+    # refacturees au compte 643 mais ne sont PAS une charge commune de la
+    # copropriete : elles sont ventilees directement aux proprietaires
+    # concernes via le decompte de mutation et/ou l'OD-PRIV.
+    # iter93bv : INCLURE les factures HYBRIDES (is_private_fee=true AVEC
+    # common_charge_amount > 0). Seule la portion charges communes est
+    # comptabilisee dans les depenses de l'ACP (via common_charge_account_number
+    # + common_charge_distribution_key_id + common_charge_expense_category_id).
     inv_q: dict = {
         "copropriete_id": copropriete_id,
-        "is_private_fee": {"$ne": True},
     }
+    # iter93bv : le filtre "exclut 100% privatif MAIS inclut hybride" est
+    # stocke separement pour ne pas etre ecrase par les filtres user
+    # (account_number / distribution_key_id / expense_category_id) qui
+    # utilisent aussi la cle `$or` de MongoDB.
+    private_fee_or = [
+        {"is_private_fee": {"$ne": True}},
+        {"is_private_fee": True, "common_charge_amount": {"$gt": 0}},
+    ]
     if date_from or date_to:
         inv_q["date"] = {}
         if date_from:
             inv_q["date"]["$gte"] = date_from
         if date_to:
             inv_q["date"]["$lte"] = date_to
+    # iter93bv : `account_number` peut aussi matcher `common_charge_account_number`
+    # pour les factures hybrides (la portion commune y est portee).
     if account_number:
         inv_q["$or"] = [
             {"account_number": account_number},
             {"lines.account_number": account_number},
+            {"common_charge_account_number": account_number},
         ]
     if distribution_key_id:
         key_or = [
             {"distribution_key_id": distribution_key_id},
             {"lines.distribution_key_id": distribution_key_id},
+            {"common_charge_distribution_key_id": distribution_key_id},
         ]
         if "$or" in inv_q:
             inv_q = {"$and": [inv_q, {"$or": key_or}]}
@@ -63,6 +77,7 @@ async def compute_expense_rows(
         cat_or = [
             {"expense_category_id": expense_category_id},
             {"lines.expense_category_id": expense_category_id},
+            {"common_charge_expense_category_id": expense_category_id},
         ]
         if "$and" in inv_q:
             inv_q["$and"].append({"$or": cat_or})
@@ -70,6 +85,14 @@ async def compute_expense_rows(
             inv_q = {"$and": [inv_q, {"$or": cat_or}]}
         else:
             inv_q["$or"] = cat_or
+    # iter93bv : ajoute le filtre "exclut 100% privatif" en fin, en le
+    # combinant via $and si necessaire pour preserver les filtres user.
+    if "$and" in inv_q:
+        inv_q["$and"].append({"$or": private_fee_or})
+    elif "$or" in inv_q:
+        inv_q = {"$and": [inv_q, {"$or": private_fee_or}]}
+    else:
+        inv_q["$or"] = private_fee_or
     invoices = await db.invoices.find(inv_q, {"_id": 0}).sort("date", 1).to_list(50000)
 
     # 2) Filter by bank account if requested
@@ -147,6 +170,59 @@ async def compute_expense_rows(
         inv_lines = inv.get("lines") or []
         inv_total = float(inv.get("total_amount", 0) or 0)
         inv_vat = float(inv.get("vat_amount", 0) or 0)
+
+        # iter93bv : Facture HYBRIDE (private_fee + portion charges communes).
+        # On emet UNE seule ligne pour la portion charges communes uniquement,
+        # via common_charge_* (compte, cle, categorie). La portion privatif
+        # (sur 643) est deja refacturee aux proprietaires via l'OD dediee et
+        # ne doit PAS apparaitre dans les depenses de l'ACP.
+        cc_amount = float(inv.get("common_charge_amount", 0) or 0)
+        if inv.get("is_private_fee") and cc_amount > 0.005:
+            cc_acc = inv.get("common_charge_account_number", "") or ""
+            cc_key = inv.get("common_charge_distribution_key_id", "") or ""
+            cc_cat_id = inv.get("common_charge_expense_category_id", "") or ""
+            # Filtres user : sur la portion COMMUNE (pas la facture entiere)
+            if account_number and cc_acc != account_number:
+                continue
+            if distribution_key_id and cc_key != distribution_key_id:
+                continue
+            if expense_category_id and cc_cat_id != expense_category_id:
+                continue
+            cc_cat = cat_by_id.get(cc_cat_id) or cat_by_acc.get(cc_acc) or {}
+            occ_pct = float(inv.get("occupant_pct", 0) or 0)
+            prop_pct = round(100.0 - occ_pct, 2)
+            # TVA au pro-rata de la portion commune / total
+            cc_vat = round(inv_vat * cc_amount / inv_total, 2) if inv_total else 0.0
+            rows.append({
+                "id": inv["id"],
+                "date": inv.get("date", ""),
+                "number": inv.get("number", ""),
+                "supplier": inv.get("supplier", ""),
+                "description": (inv.get("description", "") + " [Portion charges communes]").strip(),
+                "account_number": cc_acc,
+                "account_name": acc_names.get(cc_acc, ""),
+                "expense_category_id": cc_cat.get("id", ""),
+                "expense_category_name": cc_cat.get("name", ""),
+                "expense_category_code": cc_cat.get("code", ""),
+                "distribution_key_id": cc_key,
+                "distribution_key_name": keys_map.get(cc_key, "Sans cle"),
+                "vat_amount": cc_vat,
+                "total_amount": round(cc_amount, 2),
+                "status": inv.get("status", "unpaid"),
+                "paid": inv["id"] in paid_map,
+                "paid_info": paid_map.get(inv["id"]),
+                "attachments_count": len(inv.get("attachments", []) or []),
+                "occupant_pct": occ_pct,
+                "proprietaire_pct": prop_pct,
+                "occupant_amount": round(cc_amount * occ_pct / 100, 2),
+                "proprietaire_amount": round(cc_amount * prop_pct / 100, 2),
+                "source": "invoice",
+                "journal_type": "AC",
+                "is_hybrid_common_portion": True,
+                "invoice_total_amount": inv_total,
+            })
+            continue
+
         if inv_lines:
             # Multi-line : split into N rows. TVA is kept at invoice level
             # but distributed pro-rata across lines for correct totals.
