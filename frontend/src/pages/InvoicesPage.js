@@ -39,7 +39,7 @@ export default function InvoicesPage() {
   // l'allocation des frais privatifs. Par defaut OFF -> filtre stricte
   // par ACP courante (evite d'allouer a un proprio d'une autre ACP).
   const [allocShowAllOwners, setAllocShowAllOwners] = useState(false);
-  const [invForm, setInvForm] = useState({ number: '', date: '', due_date: '', supplier: '', description: '', total_amount: 0, vat_amount: 0, account_number: '', expense_category_id: '', distribution_key_id: '', status: 'unpaid', is_private_fee: false, private_fee_owner_id: '', private_fee_allocations: [], occupant_pct: 0, proprietaire_pct: 100, lines: [] });
+  const [invForm, setInvForm] = useState({ number: '', date: '', due_date: '', supplier: '', description: '', total_amount: 0, vat_amount: 0, account_number: '', expense_category_id: '', distribution_key_id: '', status: 'unpaid', is_private_fee: false, private_fee_owner_id: '', private_fee_allocations: [], common_charge_expense_category_id: '', common_charge_account_number: '', common_charge_distribution_key_id: '', occupant_pct: 0, proprietaire_pct: 100, lines: [] });
   const [owners, setOwners] = useState([]);
   const [ownerSearch, setOwnerSearch] = useState('');
   const [suggestCreateSupplier, setSuggestCreateSupplier] = useState(null); // {name, vat, bce, iban}
@@ -260,7 +260,7 @@ export default function InvoicesPage() {
 
   const openCreateInvoice = () => {
     setEditingInvoice(null);
-    setInvForm({ number: `F-${Date.now().toString().slice(-6)}`, date: new Date().toISOString().split('T')[0], due_date: '', supplier: '', description: '', total_amount: 0, vat_amount: 0, account_number: '', expense_category_id: '', distribution_key_id: defaultKeyId, status: 'unpaid', is_private_fee: false, private_fee_owner_id: '', private_fee_allocations: [], occupant_pct: 0, proprietaire_pct: 100, lines: [] });
+    setInvForm({ number: `F-${Date.now().toString().slice(-6)}`, date: new Date().toISOString().split('T')[0], due_date: '', supplier: '', description: '', total_amount: 0, vat_amount: 0, account_number: '', expense_category_id: '', distribution_key_id: defaultKeyId, status: 'unpaid', is_private_fee: false, private_fee_owner_id: '', private_fee_allocations: [], common_charge_expense_category_id: '', common_charge_account_number: '', common_charge_distribution_key_id: '', occupant_pct: 0, proprietaire_pct: 100, lines: [] });
     setAiHint(''); setPendingPdf(null); setOwnerSearch('');
     setInvoiceDialog(true);
   };
@@ -293,6 +293,11 @@ export default function InvoicesPage() {
       status: inv.status || 'unpaid',
       is_private_fee: !!inv.is_private_fee,
       private_fee_owner_id: inv.private_fee_owner_id || '',
+      // iter93bs : recharge les metadonnees de la portion charges communes
+      // (facture hybride).
+      common_charge_expense_category_id: inv.common_charge_expense_category_id || '',
+      common_charge_account_number: inv.common_charge_account_number || '',
+      common_charge_distribution_key_id: inv.common_charge_distribution_key_id || '',
       // iter90bn : _key stable pour React (chaque ligne/allocation charge en
       // edition recoit un identifiant client, evite index-as-key collisions).
       private_fee_allocations: Array.isArray(inv.private_fee_allocations)
@@ -570,11 +575,24 @@ export default function InvoicesPage() {
           toast.error(`Somme des allocations (${fmtEUR((sumCents/100))}) ne peut pas depasser le total facture (${fmtEUR((totalCents/100))}). Excedent : ${fmtEUR(diff)} EUR`);
           return;
         }
-        // Si allocations < total, le compte PCMN + cle repartition sont requis
-        // (portion charges communes). Le backend rejette sinon.
+        // iter93bs : Si allocations < total (hybride), on impose
+        // common_charge_expense_category_id OU common_charge_account_number
+        // + common_charge_distribution_key_id. Verrou aligne avec le backend.
         if (sumCents < totalCents) {
-          if (!(invForm.account_number || '').trim()) {
-            toast.error(`Portion charges communes (${fmtEUR((totalCents-sumCents)/100)} EUR) : compte PCMN requis dans la section "NATURE DE DEPENSE" en bas.`);
+          const hasCommonAcc = (invForm.common_charge_account_number || '').trim();
+          const hasCommonCat = (invForm.common_charge_expense_category_id || '').trim();
+          if (!hasCommonAcc && !hasCommonCat) {
+            toast.error(
+              `Portion charges communes (${fmtEUR((totalCents-sumCents)/100)} EUR) : selectionne une nature de depense OU un compte PCMN dans l'encadre ambre "Portion charges communes".`,
+              { duration: 6000 }
+            );
+            return;
+          }
+          if (!(invForm.common_charge_distribution_key_id || '').trim()) {
+            toast.error(
+              `Portion charges communes (${fmtEUR((totalCents-sumCents)/100)} EUR) : cle de repartition requise dans l'encadre ambre "Portion charges communes".`,
+              { duration: 6000 }
+            );
             return;
           }
         }
@@ -1615,8 +1633,8 @@ export default function InvoicesPage() {
                         styleCls = 'bg-amber-50 border-amber-300 text-amber-800';
                         statusEl = (
                           <span data-testid="alloc-partial-status">
-                            Portion charges communes automatiques : <b>{fmtEUR(diff)} EUR</b>{' '}
-                            (renseigne le compte PCMN + cle plus bas)
+                            Portion charges communes : <b>{fmtEUR(diff)} EUR</b>{' '}
+                            (renseigne la nature/compte + cle dans l&apos;encadre ci-dessous)
                           </span>
                         );
                       } else {
@@ -1655,17 +1673,119 @@ export default function InvoicesPage() {
                     <p className="text-[10px] text-amber-700">
                       Portion privatif : chaque proprietaire alloue est debite via une OD (Dr 4100XXX owner / Cr 643).
                       Portion charges communes (si allocations &lt; total) : imputee au compte PCMN + cle
-                      de repartition selectionnes ci-dessous (Dr &lt;compte&gt; / Cr 44000XXX fournisseur).
+                      de repartition selectionnes dans l&apos;encadre ci-dessous (Dr &lt;compte&gt; / Cr 44000XXX fournisseur).
                     </p>
+                    {/* iter93bs : Encadre dedie "Portion charges communes"
+                        Visible uniquement en mode HYBRIDE (partial < total).
+                        Permet au syndic de choisir la NATURE DE DEPENSE, le
+                        compte PCMN et la cle de repartition pour la portion
+                        des charges communes (Total - somme des allocations
+                        privatif). */}
+                    {diffCents > 0 && sumCents > 0 && (
+                      <div
+                        className="mt-3 rounded-md border-2 border-amber-400 bg-amber-50 p-3 space-y-2"
+                        data-testid="common-charge-panel"
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="text-xs font-semibold text-amber-900 uppercase tracking-wide">
+                            Portion charges communes
+                          </div>
+                          <div className="text-xs text-amber-900">
+                            Montant a repartir : <b data-testid="common-charge-amount">{fmtEUR(diff)} EUR</b>
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-3 gap-3">
+                          <div>
+                            <label className="text-[11px] font-medium text-amber-900">
+                              Nature de depense <span className="text-rose-600" title="Nature OU compte PCMN requis">*</span>
+                            </label>
+                            <Select
+                              value={invForm.common_charge_expense_category_id || 'none'}
+                              onValueChange={v => {
+                                if (v === '__create__') { setNewCatDialog(true); return; }
+                                if (v === 'none') {
+                                  setInvForm(f => ({
+                                    ...f,
+                                    common_charge_expense_category_id: '',
+                                  }));
+                                  return;
+                                }
+                                const cat = categories.find(c => c.id === v);
+                                const defKey = cat?.default_distribution_key_id || '';
+                                setInvForm(f => ({
+                                  ...f,
+                                  common_charge_expense_category_id: v,
+                                  common_charge_account_number: cat?.account_number || f.common_charge_account_number,
+                                  common_charge_distribution_key_id: defKey || f.common_charge_distribution_key_id || defaultKeyId,
+                                }));
+                              }}
+                            >
+                              <SelectTrigger data-testid="common-charge-category-select" className="bg-white">
+                                <SelectValue placeholder="Selectionner une nature" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="none">— Aucune —</SelectItem>
+                                {categories.map(c => (
+                                  <SelectItem key={c.id} value={c.id}>
+                                    {c.name} <span className="text-slate-400 ml-2 font-mono text-xs">({c.account_number})</span>
+                                  </SelectItem>
+                                ))}
+                                <SelectItem value="__create__" className="text-[#022D52] font-semibold">
+                                  + Creer une nature de depense...
+                                </SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          <div>
+                            <label className="text-[11px] font-medium text-amber-900">
+                              Compte PCMN <span className="text-rose-600" title="Nature OU compte PCMN requis">*</span>
+                            </label>
+                            <AccountSearchSelect
+                              accounts={accounts}
+                              value={invForm.common_charge_account_number}
+                              onChange={v => setInvForm({...invForm, common_charge_account_number: v})}
+                              placeholder="Rechercher un compte..."
+                              classFilter={6}
+                              allowClear
+                              testId="common-charge-account-search"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-[11px] font-medium text-amber-900">
+                              Cle de repartition <span className="text-rose-600">*</span>
+                            </label>
+                            <Select
+                              value={invForm.common_charge_distribution_key_id || ''}
+                              onValueChange={v => setInvForm({...invForm, common_charge_distribution_key_id: v})}
+                            >
+                              <SelectTrigger data-testid="common-charge-dist-key" className="bg-white">
+                                <SelectValue placeholder={distKeys.length ? "Selectionner une cle" : "Aucune cle - creez-en une"} />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {distKeys.map(k => (
+                                  <SelectItem key={k.id} value={k.id}>
+                                    {k.name}{k.is_default ? ' (defaut)' : ''}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        </div>
+                        <p className="text-[10px] text-amber-700 italic">
+                          Ces champs s&apos;appliquent UNIQUEMENT a la portion charges communes ({fmtEUR(diff)} EUR).
+                          La portion privatif ({fmtEUR(sum)} EUR) est refacturee via 643 aux proprietaires listes ci-dessus.
+                        </p>
+                      </div>
+                    )}
                   </div>
                 );
               })()}
             </div>
-            {/* iter93br : la section "NATURE DE DEPENSE" reste ACTIVE en
-                mode frais privatif quand la somme des allocations est
-                INFERIEURE au total (portion charges communes obligatoire).
-                Elle est desactivee UNIQUEMENT si le total est 100% privatif
-                (sum == total). */}
+            {/* iter93bs : la section "NATURE DE DEPENSE" du bas n'est PLUS
+                utilisee en mode frais privatif. Le dedicated encart
+                "Portion charges communes" (ci-dessus, ambre) prend le relais
+                pour la portion charges communes des factures hybrides. */}
+            {!invForm.is_private_fee && (
             <div className={(() => {
               if (!invForm.is_private_fee && !(invForm.lines && invForm.lines.length > 0)) return 'grid grid-cols-3 gap-4';
               const allocs = invForm.private_fee_allocations || [];
@@ -1743,6 +1863,7 @@ export default function InvoicesPage() {
                 </Select>
               </div>
             </div>
+            )}
 
             {/* Bouton bascule vers le mode lignes multiples */}
             {!invForm.is_private_fee && (!invForm.lines || invForm.lines.length === 0) && (

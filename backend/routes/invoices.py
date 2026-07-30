@@ -101,6 +101,14 @@ class InvoiceInput(BaseModel):
     is_private_fee: Optional[bool] = False
     private_fee_owner_id: Optional[str] = ""
     private_fee_allocations: Optional[List[PrivateFeeAllocation]] = None
+    # iter93bs : Factures hybrides (frais privatif + charges communes).
+    # Quand sum(private_fee_allocations) < total_amount, le solde est traite
+    # comme une charge commune imputee sur un compte PCMN + cle repartition
+    # DEDIES a la portion commune. Ces champs sont ignores si la facture
+    # n'est pas hybride (pure private ou pure commune).
+    common_charge_expense_category_id: Optional[str] = ""
+    common_charge_account_number: Optional[str] = ""
+    common_charge_distribution_key_id: Optional[str] = ""
     # Repartition occupant/proprietaire (pour decompte locataire).
     # Defaut : herite de la catégorie de dépense si non fourni.
     # Somme doit etre 100.
@@ -132,6 +140,39 @@ class InvoiceInput(BaseModel):
 
 def create_invoices_router(db):
     router = APIRouter(prefix="/api")
+
+    async def _compute_hybrid_meta(data, resolved_private_allocs):
+        """iter93bs : Calcule les metadonnees de la portion charges communes.
+
+        Retourne un dict {cat_id, acc, dist_key_id, amount} :
+        - cat_id/acc/dist_key_id : proviennent des champs common_charge_*
+          (avec derivation acc via expense_category si acc vide).
+        - amount : total - sum(private_fee_allocations). 0 si non hybride.
+
+        Regle : les champs ne sont renseignes QUE pour les factures hybrides
+        (is_private_fee=True ET sum(allocations) < total). Pour les autres
+        cas (pure private, pure commune, multi-lignes) : tous vides / 0.
+        """
+        empty = {"cat_id": "", "acc": "", "dist_key_id": "", "amount": 0.0}
+        if not data.is_private_fee or not resolved_private_allocs:
+            return empty
+        total_cents = round(float(data.total_amount) * 100)
+        alloc_cents = sum(round(float(a["amount"]) * 100) for a in resolved_private_allocs)
+        if alloc_cents >= total_cents:
+            return empty
+        # Hybride : resout acc via expense_category si acc vide
+        cc_acc = (data.common_charge_account_number or "").strip()
+        cc_cat_id = (data.common_charge_expense_category_id or "").strip()
+        if not cc_acc and cc_cat_id:
+            cc_cat = await db.expense_categories.find_one({"id": cc_cat_id}, {"_id": 0})
+            if cc_cat and cc_cat.get("account_number"):
+                cc_acc = cc_cat["account_number"]
+        return {
+            "cat_id": cc_cat_id,
+            "acc": cc_acc,
+            "dist_key_id": (data.common_charge_distribution_key_id or "").strip(),
+            "amount": round((total_cents - alloc_cents) / 100, 2),
+        }
 
     # ---- DISTRIBUTION KEYS ----
     @router.get("/distribution-keys")
@@ -1389,11 +1430,27 @@ def create_invoices_router(db):
                         400,
                         f"Somme des allocations ({total_alloc_cents/100:.2f}) ne peut pas depasser le total ({total_invoice_cents/100:.2f}). Excedent : {(total_alloc_cents - total_invoice_cents)/100:.2f} EUR",
                     )
-                if total_alloc_cents < total_invoice_cents and not (data.account_number or "").strip():
-                    raise HTTPException(
-                        400,
-                        "La portion charges communes (Total - allocations frais privatif) requiert un compte PCMN + une cle de repartition.",
-                    )
+                if total_alloc_cents < total_invoice_cents:
+                    # iter93bs : facture hybride -> resolution du compte PCMN
+                    # via common_charge_account_number OU common_charge_expense_category_id.
+                    cc_acc = (data.common_charge_account_number or "").strip()
+                    cc_cat_id = (data.common_charge_expense_category_id or "").strip()
+                    if not cc_acc and cc_cat_id:
+                        cc_cat = await db.expense_categories.find_one({"id": cc_cat_id}, {"_id": 0})
+                        if cc_cat and cc_cat.get("account_number"):
+                            cc_acc = cc_cat["account_number"]
+                    if not cc_acc:
+                        raise HTTPException(
+                            400,
+                            "Portion charges communes : compte PCMN requis "
+                            "(via 'common_charge_account_number' OU 'common_charge_expense_category_id').",
+                        )
+                    if not (data.common_charge_distribution_key_id or "").strip():
+                        raise HTTPException(
+                            400,
+                            "Portion charges communes : cle de repartition requise "
+                            "('common_charge_distribution_key_id').",
+                        )
             elif data.private_fee_owner_id and str(data.private_fee_owner_id).strip():
                 # Legacy single-owner (uniquement si owner_id non-vide et non-whitespace)
                 owner = await db.owners.find_one({"id": str(data.private_fee_owner_id).strip()}, {"_id": 0})
@@ -1432,11 +1489,29 @@ def create_invoices_router(db):
             )
         # Compute distribution lines if key provided (skipped for private fees,
         # remplaced by merged_dist in multi-line mode)
+        # iter93bs : pour les factures hybrides, on utilise
+        # common_charge_distribution_key_id + common_charge_amount pour ventiler
+        # UNIQUEMENT la portion charges communes.
         distribution_lines = []
+        dist_key_for_lines = None
+        dist_amount_for_lines = 0.0
         if resolved_lines:
             distribution_lines = merged_dist or []
-        elif data.distribution_key_id and not data.is_private_fee:
-            key = await db.distribution_keys.find_one({"id": data.distribution_key_id}, {"_id": 0})
+        elif data.is_private_fee:
+            # Hybride : recupere le solde et la cle depuis common_charge_*
+            cc_dk = (data.common_charge_distribution_key_id or "").strip()
+            total_alloc = sum(round(float(a["amount"]) * 100) for a in resolved_private_allocs)
+            total_cents = round(float(data.total_amount) * 100)
+            common_cents = total_cents - total_alloc
+            if cc_dk and common_cents > 0:
+                dist_key_for_lines = cc_dk
+                dist_amount_for_lines = common_cents / 100
+        elif data.distribution_key_id:
+            dist_key_for_lines = data.distribution_key_id
+            dist_amount_for_lines = float(data.total_amount)
+
+        if dist_key_for_lines:
+            key = await db.distribution_keys.find_one({"id": dist_key_for_lines}, {"_id": 0})
             if key:
                 # iter90ac : exclut les lots marques excluded=True
                 active_kls = [l for l in key["lots"] if not l.get("excluded")]
@@ -1453,7 +1528,7 @@ def create_invoices_router(db):
                         "lot_number": lot_entry["lot_number"],
                         "owner_name": owner_name,
                         "share": lot_entry["share"],
-                        "amount": round(data.total_amount * share_ratio, 2)
+                        "amount": round(dist_amount_for_lines * share_ratio, 2)
                     })
 
         # iter90dq : prefixe interne configurable par exercice fiscal.
@@ -1502,6 +1577,10 @@ def create_invoices_router(db):
             max_seq += 1
             internal_reference = f"{prefix}{(max_seq + 1):04d}"
 
+        # iter93bs : calcule les metadonnees de la portion charges communes
+        # pour les factures hybrides (private_fee avec allocations < total).
+        hybrid_meta = await _compute_hybrid_meta(data, resolved_private_allocs)
+
         doc = {
             "id": str(uuid.uuid4()),
             "number": data.number,
@@ -1522,6 +1601,12 @@ def create_invoices_router(db):
             "is_private_fee": bool(data.is_private_fee),
             "private_fee_owner_id": data.private_fee_owner_id or "",
             "private_fee_allocations": resolved_private_allocs if data.is_private_fee else [],
+            # iter93bs : Facture hybride - fields de la portion charges communes.
+            # Renseignes uniquement si sum(private_fee_allocations) < total.
+            "common_charge_expense_category_id": hybrid_meta["cat_id"],
+            "common_charge_account_number": hybrid_meta["acc"],
+            "common_charge_distribution_key_id": hybrid_meta["dist_key_id"],
+            "common_charge_amount": hybrid_meta["amount"],
             # Repartition occupant/proprietaire pour decompte locataire
             "occupant_pct": occupant_pct,
             "proprietaire_pct": proprietaire_pct,
@@ -2095,11 +2180,26 @@ def create_invoices_router(db):
                         400,
                         f"Somme des allocations ({total_alloc_cents/100:.2f}) ne peut pas depasser le total ({total_invoice_cents/100:.2f}). Excedent : {(total_alloc_cents - total_invoice_cents)/100:.2f} EUR",
                     )
-                if total_alloc_cents < total_invoice_cents and not (data.account_number or "").strip():
-                    raise HTTPException(
-                        400,
-                        "La portion charges communes (Total - allocations frais privatif) requiert un compte PCMN + une cle de repartition.",
-                    )
+                if total_alloc_cents < total_invoice_cents:
+                    # iter93bs : facture hybride -> resolution du compte PCMN
+                    cc_acc = (data.common_charge_account_number or "").strip()
+                    cc_cat_id = (data.common_charge_expense_category_id or "").strip()
+                    if not cc_acc and cc_cat_id:
+                        cc_cat = await db.expense_categories.find_one({"id": cc_cat_id}, {"_id": 0})
+                        if cc_cat and cc_cat.get("account_number"):
+                            cc_acc = cc_cat["account_number"]
+                    if not cc_acc:
+                        raise HTTPException(
+                            400,
+                            "Portion charges communes : compte PCMN requis "
+                            "(via 'common_charge_account_number' OU 'common_charge_expense_category_id').",
+                        )
+                    if not (data.common_charge_distribution_key_id or "").strip():
+                        raise HTTPException(
+                            400,
+                            "Portion charges communes : cle de repartition requise "
+                            "('common_charge_distribution_key_id').",
+                        )
             elif data.private_fee_owner_id and str(data.private_fee_owner_id).strip():
                 owner = await db.owners.find_one({"id": str(data.private_fee_owner_id).strip()}, {"_id": 0})
                 if not owner:
@@ -2127,6 +2227,9 @@ def create_invoices_router(db):
                 "etre enregistree sans compte : la comptabilite PCMN belge "
                 "l'interdit."
             )
+        # iter93bs : calcule les metadonnees de la portion charges communes
+        hybrid_meta = await _compute_hybrid_meta(data, resolved_private_allocs_upd)
+
         update = {
             "number": data.number, "date": data.date, "due_date": data.due_date,
             "supplier": data.supplier, "description": data.description,
@@ -2138,6 +2241,11 @@ def create_invoices_router(db):
             "is_private_fee": bool(data.is_private_fee),
             "private_fee_owner_id": data.private_fee_owner_id or "",
             "private_fee_allocations": resolved_private_allocs_upd if data.is_private_fee else [],
+            # iter93bs : Facture hybride - fields de la portion charges communes
+            "common_charge_expense_category_id": hybrid_meta["cat_id"],
+            "common_charge_account_number": hybrid_meta["acc"],
+            "common_charge_distribution_key_id": hybrid_meta["dist_key_id"],
+            "common_charge_amount": hybrid_meta["amount"],
             "occupant_pct": occupant_pct,
             "proprietaire_pct": proprietaire_pct,
             "occupant_amount": round(data.total_amount * occupant_pct / 100, 2),
@@ -2173,10 +2281,35 @@ def create_invoices_router(db):
                 "occupant_pct": occupant_pct,
                 "proprietaire_pct": proprietaire_pct,
             }]
-        # If switching to private fee, clear distribution_lines (and lines)
+        # If switching to private fee, clear lines (and rebuild distribution_lines
+        # if hybrid via common_charge_distribution_key_id).
         if data.is_private_fee:
-            update["distribution_lines"] = []
             update["lines"] = []
+            # iter93bs : hybride -> distribue la portion charges communes
+            update["distribution_lines"] = []
+            cc_dk = (data.common_charge_distribution_key_id or "").strip()
+            common_amount = hybrid_meta["amount"]
+            if cc_dk and common_amount > 0:
+                key = await db.distribution_keys.find_one({"id": cc_dk}, {"_id": 0})
+                if key:
+                    active_kls = [l for l in key["lots"] if not l.get("excluded")]
+                    total_shares = sum(l["share"] for l in active_kls) if active_kls else 1
+                    dlines = []
+                    for lot_entry in active_kls:
+                        lot_doc = await db.lots.find_one({"id": lot_entry["lot_id"]}, {"_id": 0})
+                        owner_name = ""
+                        if lot_doc and lot_doc.get("owner_id"):
+                            owner_doc = await db.owners.find_one({"id": lot_doc["owner_id"]}, {"_id": 0})
+                            owner_name = owner_doc["name"] if owner_doc else ""
+                        share_ratio = lot_entry["share"] / total_shares if total_shares > 0 else 0
+                        dlines.append({
+                            "lot_id": lot_entry["lot_id"],
+                            "lot_number": lot_entry["lot_number"],
+                            "owner_name": owner_name,
+                            "share": lot_entry["share"],
+                            "amount": round(common_amount * share_ratio, 2),
+                        })
+                    update["distribution_lines"] = dlines
         elif resolved_lines:
             # Multi-line: replace distribution_lines with merged aggregation
             update["distribution_lines"] = merged_dist or []

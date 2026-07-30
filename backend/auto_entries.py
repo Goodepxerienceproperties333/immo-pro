@@ -351,32 +351,59 @@ async def generate_purchase_entry(db, invoice: dict) -> dict | None:
                 "amount": round(a_amount, 2),
             })
         if owner_rows:
+            # iter93bs : Detection facture hybride
+            # (frais privatif + charges communes)
+            private_amount = round(sum(r["amount"] for r in owner_rows), 2)
+            common_amount = round(amount - private_amount, 2)
+            cc_acc = (invoice.get("common_charge_account_number") or "").strip()
+            is_hybrid = common_amount > 0.005 and bool(cc_acc)
+
             # Re-fetch PCMN names including 643 + tous les owner_prov + supplier
+            # + (si hybride) le compte de la portion charges communes
             all_accs = ["643", supplier_acc] + list({r["owner_prov"] for r in owner_rows})
+            if is_hybrid:
+                all_accs.append(cc_acc)
             pcmn_q2 = {"number": {"$in": all_accs}, "copropriete_id": copro_id}
             pcmns2 = await db.pcmn_accounts.find(pcmn_q2, {"_id": 0}).to_list(50)
             pcmn_names2 = {p["number"]: p["name"] for p in pcmns2}
 
             owner_names_str = ", ".join(r["owner_name"] for r in owner_rows)
 
-            # --- Ecriture 1 : AC (Achats) : Dr 643 / Cr fournisseur ---
+            # --- Ecriture 1 : AC (Achats) : Facture fournisseur ---
+            # Cas pur privatif : Dr 643 (total) / Cr fournisseur (total)
+            # Cas hybride      : Dr 643 (private) + Dr common_acc (common) / Cr fournisseur (total)
             ac_lines = [
                 {"account_number": "643",
                  "account_name": pcmn_names2.get("643", "Frais privatifs"),
-                 "debit": amount, "credit": 0.0,
+                 "debit": private_amount if is_hybrid else amount, "credit": 0.0,
                  "third_party_id": None, "third_party_name": ""},
-                {"account_number": supplier_acc,
-                 "account_name": pcmn_names2.get(supplier_acc, supplier_name),
-                 "debit": 0.0, "credit": amount,
-                 "third_party_id": (supplier_doc or {}).get("id"),
-                 "third_party_name": supplier_name},
             ]
+            if is_hybrid:
+                ac_lines.append({
+                    "account_number": cc_acc,
+                    "account_name": pcmn_names2.get(cc_acc, "Charges communes"),
+                    "debit": common_amount, "credit": 0.0,
+                    "third_party_id": None, "third_party_name": "",
+                    "line_description": "Portion charges communes",
+                })
+            ac_lines.append({
+                "account_number": supplier_acc,
+                "account_name": pcmn_names2.get(supplier_acc, supplier_name),
+                "debit": 0.0, "credit": amount,
+                "third_party_id": (supplier_doc or {}).get("id"),
+                "third_party_name": supplier_name,
+            })
+            ac_desc = (
+                f"Frais privatif + charges communes {owner_names_str} - {invoice.get('supplier','')} - {invoice.get('description','')}"
+                if is_hybrid else
+                f"Frais privatif {owner_names_str} - {invoice.get('supplier','')} - {invoice.get('description','')}"
+            ).strip(" -")
             ac_doc = {
                 "id": str(uuid.uuid4()),
                 "journal_type": "AC",
                 "date": invoice.get("date") or datetime.now(timezone.utc).date().isoformat(),
                 "reference": f"FA-{invoice.get('number','')}",
-                "description": f"Frais privatif {owner_names_str} - {invoice.get('supplier','')} - {invoice.get('description','')}".strip(" -"),
+                "description": ac_desc,
                 "lines": ac_lines,
                 "total_debit": amount,
                 "total_credit": amount,

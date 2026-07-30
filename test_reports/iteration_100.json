@@ -1,0 +1,26 @@
+{
+  "summary": "iter93bs validated end-to-end: backend hybrid invoice (private_fee_allocations partielles + common_charge_expense_category_id) genere correctement common_charge_account_number auto-derive + common_charge_amount = total - sum(allocations), verrouille par 400 quand nature/compte ou dist_key manque, PUT met a jour split proprement, ecritures AC split-debit equilibrees (Dr 643 + Dr <common_acc> / Cr supplier). Regressions 100% private et facture classique OK. Frontend : encadre ambre 'Portion charges communes' (data-testid=common-charge-panel) apparait quand sum(allocations) < total, contient les 3 selecteurs attendus, auto-fill category->account+distkey OK, bloc bas invoice-category-select bien masque, toast d'erreur explicite mentionne 'Portion charges communes'. Facture hybride creee avec succes (toast 'Facture creee').",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter93bs_hybrid_common_charge_expense_category.py",
+    "/app/backend/tests/test_iter93bs_put_and_regression.py"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "InvoicesPage.js: 2678 lignes — devrait etre splitte (invoice-form, invoice-hybrid-panel, invoice-list, invoice-dialogs) pour maintenabilite.",
+    "Frontend AccountSearchSelect: quand la valeur est set via auto-fill (category selection) mais l'account n'est PAS dans props.accounts (ex. class_num absent ou copro-scoped desync), le composant affiche silencieusement le placeholder au lieu de la valeur brute -- risque de confusion utilisateur. Envisager d'afficher 'XXXX (compte inconnu)' comme fallback quand value existe mais aucun match dans accounts."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter93bs_put_and_regression.py"],
+  "success_rate": {"backend": "100% (7/7 tests iter93bs)", "frontend": "100% (panel apparait, auto-fill OK, masquage bloc bas OK, toast erreur OK, save OK)"},
+  "test_credentials": "admin@copro.be / admin123",
+  "seed_data_creation": "Copro 'ui-uitest' seede via mongo direct (owner + lot + dist_key + expense_category (6140) + pcmn_accounts + supplier), nettoye a la fin.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Test flow UI: 1) login admin, 2) 'Mode syndic' puis localStorage.setItem('selectedCopro',<cid>), 3) /invoices -> click 'Manuel', 4) remplir number/description/amount, cocher inv-private-fee, add-private-fee-allocation, selectionner owner + amount < total pour declencher panel ambre. Le panel a data-testid=common-charge-panel avec 3 champs common-charge-category-select / common-charge-account-search / common-charge-dist-key. Le save button data-testid=inv-save-btn.",
+  "rca of the issue": "N/A - feature valide et fonctionnelle."
+}
