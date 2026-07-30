@@ -1565,6 +1565,20 @@ def create_import_wizard_router(db):
                 head["montant_ht"] = total_ht
                 head["montant_tvac"] = total_tvac
                 head["montant_tva"] = round(total_tvac - total_ht, 2)
+                # iter93bq : quand une facture regroupe plusieurs comptes
+                # (ex: 61060 charges communes + 643 frais privatifs), on doit
+                # retenir un compte "principal" qui reflete la nature dominante.
+                # Si UN des split_lines a un compte 643xxx, on promeut ce compte
+                # au niveau tete pour que `is_private_fee` (ligne 2013) soit
+                # correctement flag et que le review-mode iter93bi/bl declenche.
+                # Sinon les frais privatifs de la facture sont silencieusement
+                # ignores dans le review + bilan (bug utilisateur signale).
+                for l in lines:
+                    acc = (l.get("account_number") or "").strip()
+                    if acc.startswith("643"):
+                        head["account_number"] = acc
+                        head["account_label"] = (l.get("account_label") or "").strip()
+                        break
             head["_split_lines"] = [
                 {
                     "account_number": (l.get("account_number") or "").strip(),

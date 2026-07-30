@@ -762,3 +762,27 @@ Accepte dots, hyphens, whitespaces internes. Le non-greedy `*?` garantit qu'on s
 - Nouveau test `tests/test_iter93bp_dist_keys_dotted_labels.py` : PDF Finlead 2 pages -> 102 lignes extraites, total_quotities=100000.0. Validation des formats G.3-* (page 1) et G34-P* (page 2).
 - Regression : `test_iter90gi_distribution_keys_total_quotities.py` OK, `test_iter93af_security_hardening.py` OK, `test_iter93bg_private_fee_owner_required.py` 6/6 OK.
 
+
+## iter93bq - Fix : frais privatifs 643 silencieusement ignores dans merge invoices (Feb 2026 - DONE)
+
+### Contexte
+Utilisateur (screenshot Excel INV/2026/24) : "des frais privatifs ont ete ignores dans le wizzard ce qui n'est pas normal" (aucun message d'erreur, silent skip). Consequence : le bilan comptable OD d'ouverture n'etait plus equilibre (Actif 9 255 vs Passif 42 066 attendu).
+
+### Root cause
+`routes/import_wizard.py:1554-1582` merge les lignes CSV Optipro partageant le meme `internal_ref` (une facture avec 2 lignes de comptes : 61060 charges communes + 643 frais privatifs). Le merge faisait `head = dict(lines[0])` -> le compte de la 1re ligne (61060) etait retenu au niveau tete. Consequence : ligne 2013 `is_private_fee = account_num.startswith("643")` renvoyait `False`, le review-mode iter93bi/bl ne se declenchait PAS, et les frais privatifs partageaient le compte 61060 (donc pas d'allocation proprio).
+
+### Fix
+Apres construction du `head` avec les totaux mergees, boucle sur `_split_lines` et **promeut le compte 643xxx au head level** si l'une des lignes en a un. Le `is_private_fee` est donc correctement flag et le review-mode se declenche.
+
+### Testing
+- Nouveau `tests/test_iter93bq_merge_promotes_643.py` (2 tests) OK.
+- Regression : `test_iter93bg_private_fee_owner_required.py` 6/6 OK, `test_iter93bp_dist_keys_dotted_labels.py` OK.
+
+## iter93bq bis - P1 : Parser OD d'ouverture PDF Finlead (Feb 2026 - PARTIAL)
+
+### Constat
+User a upload bilan PDF `Bilan comptable au 31_03_2026.pdf` (SRL Finlead) via wizard etape 7/8 "OD d'ouverture". Actif reel = 42 066,57 mais wizard n'a detecte que 9 255,54. Difference : le parser skip la plupart des lignes 410xxxxx (Copropriétaires en creances) et 55xxxxxx (comptes bancaires).
+
+### Status
+**NON RESOLU dans cette session** - documenter comme P1 (priorite haute) pour la prochaine session. Le fix iter93bq (invoices merge 643) devrait CORRIGER l'origine du desequilibre pour les futurs imports. Pour les bilans PDF externes deja produits, un fix specifique du parser `parse_opening_balance_pdf` est requis.
+
