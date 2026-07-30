@@ -20,6 +20,15 @@ Application de gestion de copropriete basee sur le droit belge (PCMN), incluant 
 
 ### Session courante (Fevrier 2026)
 
+#### P0 - Distribution per-key du boni apres repartition (DONE iter93cd - Feb 2026)
+- **Feature** : Le calcul du solde owner "apres repartition" utilise desormais les cles de repartition specifiques a chaque facture, remplacant la distribution uniforme par quotite globale.
+- **Formule** : delta[owner] = appels_provisions(41010XX, VE only) - (charges_imputees_per_key - produits_default_key). Chaque facture est distribuee via sa `distribution_key_id` (link JE.source_invoice_id -> invoice.dk_id, fiable a 23/23 sur legacy). Fallback vers distribution uniforme si aucune facture liee.
+- **Resultat sur ACP Agathe Bilan 31/03/2027** : Guerit Vandervelde solde = **13.85 EUR** (vs Optipro 26.96, delta 13 EUR ; vs ancienne methode 79.32 EUR, delta 52 EUR). Solde net owners = 379,75 EUR exact vs Optipro. 28 debiteurs + 9 crediteurs comme Optipro. Total actif = 49.398,41 EUR vs Optipro 49.383,51 (delta 15 EUR).
+- **Validation** : Testing agent 100% (15/15 tests). Bilan reste equilibre sur les 9 ACPs (before + after). Fallback teste sur ACPs sans factures.
+- Tests : `/app/backend/tests/test_iter93cd_per_key_distribution.py`, `/app/backend/tests/test_iter93cd_sanity_extra.py`.
+
+
+
 #### P0 - Bilan apres repartition : ne plus redistribuer 490-498 (DONE iter93cc - Feb 2026)
 - **Root cause** : Le code redistribuait tous les comptes 49X (sauf 499) aux proprietaires proportionnellement a leur quotite dans compute_bilan_data (mode after_distribution). Sur l'ACP Agathe au 31/03/2027, le compte 490 "Charges a reporter" (3.743,74 EUR) ajoutait ~124 EUR au solde de chaque proprietaire (Guerit Vandervelde : 204,02 EUR affiche vs 26,96 EUR attendu chez Optipro).
 - **Fix** : Retrait complet du bloc de redistribution 490-498 dans `backend/routes/reports.py` (fonction `compute_bilan_data`). Les 490-498 restent classifies dans leurs rubriques d'origine (VIII_regul_actif / VII_regul_passif), en mode avant ET apres repartition. Seul le compte 499 (boni/mali) reste distribue aux owners par quotite.
