@@ -20,6 +20,15 @@ Application de gestion de copropriete basee sur le droit belge (PCMN), incluant 
 
 ### Session courante (Fevrier 2026)
 
+#### P2 - Chatbot analyse multi-documents (DONE iter93ci - Feb 2026)
+- **Feature** : Le syndic peut joindre 1 a 3 documents (PDF ou CSV) simultanement au chatbot pour comparaison automatique.
+- **Frontend** : Input file avec `multiple=true` + validation (max 3 fichiers, chacun < 10 MB, types PDF/CSV). Upload sequentiel pour eviter les extractions concurrentes serveur-CPU. Badge document affiche par fichier. Toast final agregeant le total de caracteres extraits.
+- **Backend** : Le prompt LLM detecte automatiquement quand >= 2 documents sont attaches et injecte un hint explicite demandant un TABLEAU comparatif (Document | Compte | Valeur) avec mise en evidence des ecarts chiffres et citation des regles metier iter93cc a iter93cg pour expliquer les divergences.
+- **Validation E2E** : Testing agent 100% (5/5 backend pytest + Playwright frontend PASS). Sur upload Bilan Optipro PDF + CSV NextGe, le LLM produit un vrai tableau markdown avec les deux sources, calcule l'ecart 0,01 EUR, le qualifie de conforme rounding iter93cg, et cite les regles applicables.
+- Tests : `/app/backend/tests/test_iter93ci_multi_upload.py`.
+
+
+
 #### P1 - Chatbot analyse documents PDF/CSV + regles metier complet (DONE iter93ch - Feb 2026)
 - **Feature** : Le chatbot support peut desormais analyser des documents PDF/CSV uploades par le syndic (bilans Optipro, balances tiers, extraits bancaires, journaux comptables).
 - **Backend** : Nouvel endpoint `POST /api/support/conversations/{conv_id}/attach` (multipart PDF/CSV, max 10 MB). Extraction via `pdfplumber` pour PDF et `csv.reader` avec sniff auto-detect delimiteur pour CSV. Contenu extrait tronque a 30 000 caracteres. Documents recents (10 derniers messages) automatiquement injectes dans le prompt LLM.
