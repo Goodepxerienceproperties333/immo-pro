@@ -20,6 +20,14 @@ Application de gestion de copropriete basee sur le droit belge (PCMN), incluant 
 
 ### Session courante (Fevrier 2026)
 
+#### P0 - Bilan apres repartition : ne plus redistribuer 490-498 (DONE iter93cc - Feb 2026)
+- **Root cause** : Le code redistribuait tous les comptes 49X (sauf 499) aux proprietaires proportionnellement a leur quotite dans compute_bilan_data (mode after_distribution). Sur l'ACP Agathe au 31/03/2027, le compte 490 "Charges a reporter" (3.743,74 EUR) ajoutait ~124 EUR au solde de chaque proprietaire (Guerit Vandervelde : 204,02 EUR affiche vs 26,96 EUR attendu chez Optipro).
+- **Fix** : Retrait complet du bloc de redistribution 490-498 dans `backend/routes/reports.py` (fonction `compute_bilan_data`). Les 490-498 restent classifies dans leurs rubriques d'origine (VIII_regul_actif / VII_regul_passif), en mode avant ET apres repartition. Seul le compte 499 (boni/mali) reste distribue aux owners par quotite.
+- **Verifie** : Testing agent 100% backend success, ACP Agathe Bilan structure alignee avec Optipro (Total actif = 49.314,11 EUR vs Optipro 49.383,51 EUR, 490 = 3.743,74 EUR en VIII, 499603 sinistre en VI.D, tous les bilans equilibres sur les 9 ACPs).
+- **Limitation residuelle** (~52 EUR sur Guerit) : la distribution par quotite globale au lieu de per-charge distribution keys - hors scope de ce fix, backlog pour une iteration future.
+- Tests : `/app/backend/tests/test_iter93cc_490_regul_no_redistribution.py`, `/app/backend/tests/test_iter93cc_api_regression.py`
+
+
 #### P1 - Export Journaux CSV / PDF avec selecteur de dates (DONE - 7/7 backend + E2E iter 76)
 - Backend: /api/exports/journals.csv et /api/exports/journals.pdf (routes/exports.py)
 - Filtres: copropriete_id, journal_type (OD/AC/VE/FI/AN/AP), date_from, date_to, include_reversals
