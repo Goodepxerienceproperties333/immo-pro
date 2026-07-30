@@ -740,3 +740,25 @@ En mode CREATE :
 - `testing_agent_v3_fork` iteration_99 : frontend 100%, cross-check avec 56-68 orphelins en DB - ZERO PII visible dans le HTML avant upload.
 - 0 regression sur le matching auto lot-owner (fetch conserve en interne).
 
+
+## iter93bp - Parser cles de repartition : libelles dotted/hyphen multi-pages (Feb 2026 - DONE)
+
+### Contexte
+Utilisateur : "des cles de repartitions peuvent avoir plusieurs pages ce n'est pas normal adoucis le parsing pour que tout soit identifie". PDF Finlead "Cle de repartition" 2 pages avec libelles format `G.3-A.1.1 - APPARTEMENT C1004 ...` et `G34-P21 - PARKING EXT. ...`. Le parser detectait la cle "0001 Charges communes" mais retournait **0 lignes** ("Aucune ligne de detail extraite").
+
+### Root cause
+Le regex fallback texte dans `parse_distribution_keys_pdf` (pdf_utils.py ligne 1548) exigeait `[A-Z]\s+[A-Za-z0-9]...` : lettre + espace + alphanumerique. Ne matchait donc PAS :
+- `G.3-A.1.1` (dots + tirets, sans espace initial)
+- `G34-P21` (chiffres directement apres la lettre)
+
+### Fix
+Regex assoupli :
+```
+^(?P<libelle>[A-Z][A-Za-z0-9.\- ]*?)\s+[-–]\s+
+```
+Accepte dots, hyphens, whitespaces internes. Le non-greedy `*?` garantit qu'on s'arrete au premier ` - TYPE`.
+
+### Testing
+- Nouveau test `tests/test_iter93bp_dist_keys_dotted_labels.py` : PDF Finlead 2 pages -> 102 lignes extraites, total_quotities=100000.0. Validation des formats G.3-* (page 1) et G34-P* (page 2).
+- Regression : `test_iter90gi_distribution_keys_total_quotities.py` OK, `test_iter93af_security_hardening.py` OK, `test_iter93bg_private_fee_owner_required.py` 6/6 OK.
+

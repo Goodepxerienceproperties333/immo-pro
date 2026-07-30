@@ -1541,11 +1541,18 @@ def parse_distribution_keys_pdf(raw: bytes) -> dict:
         # Ex : "A G01 - GARAGE C0233 - Mme DEFALQUE Tatienne - 24.550000"     (garage)
         # Ex : "A Pex7 - PARKING EXT. - 21.820000"                    (parking sans owner)
         # Ex : "B 009-010 - APPARTEMENT C0208 - M. FORSTER Sven - 400.000000" (composite)
+        # Ex : "G.3-A.1.1 - APPARTEMENT C1004 - Vanrobaeys Pierre - 2859.000000" (dotted, iter93bp)
+        # Ex : "G34-P21 - PARKING EXT. C0982 - Hautot Dimitri - 220.000000"     (hyphen-only, iter93bp)
+        # Ex : "G.3- A.1.1 - APPARTEMENT ..."                          (espace interne, iter93bp)
         #
         # iter93z : le libelle peut etre alphanumerique (G01, Pex7) ou composite
         # (009-010). L'owner et son code C\d{3,5} sont OPTIONNELS.
+        # iter93bp : le libelle peut aussi contenir des POINTS (G.3-A.1.1) et
+        # etre SANS espace initial (G34-P21) ou avec espaces internes (G.3- A.1.1).
+        # Nouveau pattern accepte : [A-Z][A-Za-z0-9.\- ]*? (non-greedy, autorise
+        # dots, hyphens, whitespaces internes).
         detail_pat = re.compile(
-            r"^(?P<libelle>[A-Z]\s+[A-Za-z0-9][A-Za-z0-9\-]*)\s+[-–]\s+"
+            r"^(?P<libelle>[A-Z][A-Za-z0-9.\- ]*?)\s+[-–]\s+"
             r"(?P<type>[A-Z][A-ZÀ-Ÿ .]+?)"
             r"(?:\s+(?P<owner>C\d{3,5}\s*[-–]\s*[^\n]+?))?"
             r"\s+(?:[-–]|\d+)\s+"
