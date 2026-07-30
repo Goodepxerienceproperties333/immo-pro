@@ -108,6 +108,10 @@ async def _cleanup(db, cid):
     await db.coproprietes.delete_one({"id": cid})
 
 
+import pytest
+
+
+@pytest.mark.asyncio
 async def test_boni_499_isolated_from_sinistre_499603():
     """Le boni redistribue = 499 SEUL (pas VII total avec 499603)."""
     db = await _mongo()

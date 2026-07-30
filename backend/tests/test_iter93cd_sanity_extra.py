@@ -44,7 +44,10 @@ async def test_compte_499_identical_before_after_agathe():
 
 
 @pytest.mark.asyncio
-async def test_guerit_close_to_13_85_target():
+async def test_guerit_close_to_iter93cf_target():
+    """iter93cf superseded iter93cd. Guerit now targets 26.92 (via invoice.distribution_lines
+    autoritatifs). Le residu 13.85 de iter93cd est obsolete.
+    """
     db = _db()
     data = await compute_bilan_data(
         db, CID_AGATHE, date_to="2027-03-31", view_mode="after_distribution"
@@ -55,8 +58,8 @@ async def test_guerit_close_to_13_85_target():
             if "uérit" in a.get("account_name", ""):
                 guerit = a["amount"]
     assert guerit is not None
-    # Target per iter93cd: ~13.85 EUR
-    assert abs(guerit - 13.85) < 5.0, f"Guerit={guerit}, expected ~13.85"
+    # Target iter93cf : 26.92 EUR (source Optipro authoritative)
+    assert abs(guerit - 26.92) < 1.0, f"Guerit={guerit}, expected ~26.92"
 
 
 @pytest.mark.asyncio

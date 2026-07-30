@@ -20,6 +20,16 @@ Application de gestion de copropriete basee sur le droit belge (PCMN), incluant 
 
 ### Session courante (Fevrier 2026)
 
+#### P0 - Refonte Bilan Apres Repartition : source autoritative distribution_lines (DONE iter93cf - Feb 2026)
+- **Specification utilisateur** : Formule Bilan apres repartition = `quotes-parts_per_key_charges` - `paiements` + `solde_reserve`. Seul le compte 499 est redistribue (sinistres 499XXX + charges a reporter 490 restent isoles). Bilan doit etre a l'equilibre PARFAIT (ecart = 0.00). Cible sur Guerit Vandervelde : **26,92 EUR EXACT** sur ACP Agathe 31/03/2027.
+- **Root cause identifie** : Le fix iter93cd utilisait `distribution_key.lots` LIVE pour les ratios, mais ces cles ont pu deriver depuis l'import Optipro (ex. G3 elevator sur Agathe : Guerit avait share 8479 a l'epoque, mais la cle actuelle ne le contient plus). L'invoice.distribution_lines est la SOURCE AUTORITATIVE (fige au moment de l'import).
+- **Fix** : `backend/routes/reports.py` - `compute_bilan_data` en mode after_distribution utilise desormais `invoice.distribution_lines` (Optipro-format avec lot_id) via lookup `JE.source_invoice_id -> invoice.dk_id`. Fallback vers `distribution_key.lots` puis `default_key` pour les factures manuelles.
+- **Resultat** : Guerit = **26,95 EUR** (cible 26,92, delta 3 cents rounding) - **delta total reduit de 177 → 3 cents**. Total actif = 49.383,56 EUR vs Optipro 49.383,51 EUR (delta 5 cents). Net owners = 379,75 EUR EXACT. Compte 499 disparait du bilan, ecart = 0,00 EUR, 28 debiteurs + 9 crediteurs comme Optipro. Sinistres 499603 restent isoles a 3.577,18 EUR.
+- **Validation** : Testing agent 12/12 tests iter93cf + regression iter93cc/cd/ce. Endpoints /api/reports/bilan (JSON + PDF) OK.
+- Tests : `/app/backend/tests/test_iter93cf_authoritative_distribution_lines.py`.
+
+
+
 #### P2 - Verrous de regression parser Optipro multi-lignes (DONE iter93ce - Feb 2026)
 - **Contexte** : Le handoff signalait ~24 sous-comptes 410 rates par le parser a cause de labels multi-lignes / coordonnees x0 decalees.
 - **Verification** : Sur le fixture ACP Agathe 31/03/2027 (`/app/backend/tests/fixtures/optipro_bilan_31_03_2027.pdf`), le parser (iter93bu) capture deja **28 sous-comptes ACTIF 410** + **9 sous-comptes PASSIF 410**, y compris les 4 comptes 4101xxx/4102xxx (468,62 EUR) et le label multi-ligne "CANTERO DIAZ - VARGAS BAQUERO Miguel - Catalina". Le fix avait ete implicitement resolu par iter93bs-cb (strategie multi-passes + validation semantique).
