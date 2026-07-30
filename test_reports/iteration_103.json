@@ -1,0 +1,26 @@
+{
+  "summary": "Backend-only regression testing for iter93ce Optipro parser multi-line 410 subaccounts. Ran all iter93bu/cc/cd/ce tests (21 tests) + expanded regression across all optipro/bilan-related suites (44 tests). 100% pass. Parser correctly captures 28 ACTIF 410 subaccounts (including 4 x 4101/4102 = 468.62 EUR), 9 PASSIF 410 subaccounts (2389.75 EUR total, incl. 4101003 SRL Smarteon 538.10), multi-line label 'M. et Mme CANTERO DIAZ - VARGAS BAQUERO Miguel - Catalina' (4100970 = 570.22), 8-digit bank accounts (55011383, 55114766), compte 490 Charges a reporter (3743.74). Bilan on fixture 31/03/2027 is balanced with total_actif=total_passif=49383.51, ecart=0, strategy='standard'. No 'sum mismatch' warnings on account 410. No regressions on prior iter93bu/cc/cd baselines.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter93ce_optipro_parser_multiline_410.py",
+    "/app/backend/tests/test_iter93bu_optipro_parser.py",
+    "/app/backend/tests/test_iter93cc_490_regul_no_redistribution.py",
+    "/app/backend/tests/test_iter93cd_per_key_distribution.py",
+    "/app/backend/tests/test_iter93cd_sanity_extra.py",
+    "/app/test_reports/pytest/iter93ce_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "optipro_parser.py is ~414 lines with multi-pass strategy (standard/widened_xtol/widened_full) + semantic validation; well-scoped, no immediate refactor needed.",
+    "Handoff summary was outdated: the '24 missing 410 subaccounts' issue was already implicitly resolved by iter93bs-cb. iter93ce tests are pure regression locks - good hygiene."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (44/44 targeted + 21/21 iter93ce/bu/cc/cd)", "frontend": "N/A (skipped per request)"},
+  "test_credentials": "N/A - pure parser tests, no auth",
+  "seed_data_creation": "None - uses existing fixture /app/backend/tests/fixtures/optipro_bilan_31_03_2027.pdf",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Optipro parser is stable on fixture 2027. 21 iter93bu/cc/cd/ce tests + 44 broader optipro/bilan regression tests all green. Parser produces balanced=True, strategy='standard', all 28 ACTIF 410 + 9 PASSIF 410 subaccounts captured, multi-line labels + 8-digit banks + compte 490 all OK. Safe to move forward.",
+  "rca of the issue": "No bug present. Handoff described a phantom regression ('parser misses ~24 subaccounts 410'). Empirical verification via new iter93ce tests confirms parser already handles all cases correctly - fix was implicit via prior iter93bs-cb multi-pass + semantic validation work. iter93ce adds 7 regression locks to prevent future breakage."
+}
