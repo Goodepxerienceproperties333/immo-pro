@@ -718,3 +718,25 @@ Dans `properties.py:find_duplicate_owner` :
 - E2E idempotent : import du PDF 2x -> 12 crees run1, 12 reused run2, DB=12 owners uniques.
 - Multi-ACP consolidation : meme VCS sur ACP A + B -> single owner avec `copropriete_ids=[cid_a, cid_b]`.
 
+
+## iter93bo - GDPR CRITIQUE : Fuite proprios orphelins dans wizard create ACP (Feb 2026 - DONE)
+
+### Contexte
+Utilisateur (screenshot) : "erreur GDPR - Liste de proprietaires orphelins mentionnes directement sans que le document ne soit charge c'est une erreur critique". Dans le wizard "Nouvelle ACP" > etape 2/5 "IMPORTER LA LISTE DES PROPRIETAIRES", **11 proprietaires reels s'affichaient avec nom+code+email AVANT tout upload**. Chinese Wall breach + violation GDPR.
+
+### Root cause
+`CoproprietesPage.js` (6 endroits) fetchait `GET /api/owners?unassigned_only=true` en mode CREATE et affichait les orphelins pre-emptivement dans le recap "N proprietaire(s) charge(s)".
+
+### Fix
+En mode CREATE :
+- **DISPLAY (setOwners)** : uniquement `sessionOwners` (proprios ajoutes lors de cette session d'import).
+- **MATCHING (fetch en interne)** : preserve dans `nextOwners` variable locale pour permettre au matching lot-owner par aux_code de fonctionner. Le fetch se fait toujours mais le resultat n'atteint PAS le state React d'affichage.
+- Mode EDIT preserve le comportement historique (proprios lies visibles).
+
+### Files touched
+- 6 blocs de code dans `/app/frontend/src/pages/CoproprietesPage.js` (useEffect initial, refreshOwnersIfStale, retry-match btn, post-PDF import, post-homonymes confirm, import lots CSV).
+
+### Testing
+- `testing_agent_v3_fork` iteration_99 : frontend 100%, cross-check avec 56-68 orphelins en DB - ZERO PII visible dans le HTML avant upload.
+- 0 regression sur le matching auto lot-owner (fetch conserve en interne).
+
