@@ -78,14 +78,16 @@ export default function ExpenseCategoriesPage() {
     });
     setDialogOpen(true);
   };
-  // Auto-complete entre occupant_pct et proprietaire_pct (somme = 100)
+  // iter93dn : bugfix - `fmtEUR` retourne une string virgule (ex. "70,00")
+  // que `+` ne peut pas caster en number -> NaN dans l'autre champ.
+  // On garde directement l'entier arrondi.
   const setOccupant = (val) => {
     const v = Math.max(0, Math.min(100, parseFloat(val) || 0));
-    setForm(f => ({ ...f, default_occupant_pct: v, default_proprietaire_pct: +fmtEUR((100 - v)) }));
+    setForm(f => ({ ...f, default_occupant_pct: v, default_proprietaire_pct: Math.round((100 - v) * 100) / 100 }));
   };
   const setProprietaire = (val) => {
     const v = Math.max(0, Math.min(100, parseFloat(val) || 0));
-    setForm(f => ({ ...f, default_proprietaire_pct: v, default_occupant_pct: +fmtEUR((100 - v)) }));
+    setForm(f => ({ ...f, default_proprietaire_pct: v, default_occupant_pct: Math.round((100 - v) * 100) / 100 }));
   };
   const save = async () => {
     if (!form.name || !form.account_number) { toast.error('Nom et compte obligatoires'); return; }
