@@ -293,12 +293,45 @@ def create_communication_router(db):
     # ============== Owners avec balance (pour UI selection) ==============
 
     @router.get("/owners-balances")
-    async def owners_balances(copropriete_id: str, request: Request):
+    async def owners_balances(
+        copropriete_id: str, request: Request,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+    ):
         """Retourne la balance des tiers formatee pour l'UI de selection.
-        Reutilise la logique de /reports/balance-tiers/owners."""
-        # Delegue le calcul au router reports pour ne pas dupliquer la logique
-        from routes.reports import _compute_balance_tiers_for_ui
+        Reutilise la logique de /reports/balance-tiers/owners.
+
+        iter93dk : si start_date/end_date sont fournis, calcule le solde
+        PAR PERIODE pour chaque proprietaire (identique au "A REGLER" du
+        PDF Situation de compte et a la variable {balance} des templates).
+        Cela permet a l'UI d'afficher un solde COHERENT entre le tableau,
+        le PDF et le mail.
+        """
+        from routes.reports import _compute_balance_tiers_for_ui, _compute_owner_period_balance
         data = await _compute_balance_tiers_for_ui(db, copropriete_id)
+        if not (start_date or end_date):
+            return data
+        # Recompute per-period balance
+        total_deb = 0.0
+        total_cred = 0.0
+        new_owners = []
+        for o in data.get("owners", []) or []:
+            pb, _ = await _compute_owner_period_balance(
+                db, o["owner_id"], copropriete_id,
+                start_date=start_date or None,
+                end_date=end_date or None,
+            )
+            o2 = dict(o)
+            o2["balance"] = round(pb, 2)  # convention debiteur+ (aligne PDF)
+            if pb > 0.01:
+                total_deb += pb
+            elif pb < -0.01:
+                total_cred += -pb
+            new_owners.append(o2)
+        data["owners"] = new_owners
+        data["total_debiteurs"] = round(total_deb, 2)
+        data["total_crediteurs"] = round(total_cred, 2)
+        data["period"] = {"start_date": start_date or "", "end_date": end_date or ""}
         return data
 
     # ============== Envoi generique ==============

@@ -19,7 +19,8 @@ import {
 import { toast } from 'sonner';
 import {
   Mail, Send, Users, FileSignature, Inbox, TriangleAlert, Trash2, Plus,
-  ArrowDownRight, ArrowUpRight, RefreshCw, Search, Eye,
+  ArrowDownRight, ArrowUpRight, RefreshCw, Search, Eye, Calendar as CalendarIcon,
+  FileText,
 } from 'lucide-react';
 
 const currency = (v) => (v || 0).toLocaleString('fr-BE', { style: 'currency', currency: 'EUR' });
@@ -197,19 +198,27 @@ function SendActionDialog({
   copropriete_id,
   fiscalYears,
   onSent,
+  initialStartDate = '',
+  initialEndDate = '',
 }) {
   const [open, setOpen] = useState(false);
   const [from_mailbox, setFrom] = useState('');
   const [subject, setSubject] = useState('');
   const [body_html, setBody] = useState('');
   const [include_signature, setIncSig] = useState(true);
-  const [start_date, setStart] = useState('');
-  const [end_date, setEnd] = useState('');
+  const [start_date, setStart] = useState(initialStartDate);
+  const [end_date, setEnd] = useState(initialEndDate);
   const [fiscal_year_id, setFy] = useState('');
   const [sending, setSending] = useState(false);
   // iter90aw : template
   const [templates, setTemplates] = useState([]);
   const [template_id, setTemplateId] = useState('');
+
+  // iter93dk : synchronise avec le date-picker de la page parent
+  useEffect(() => {
+    if (initialStartDate) setStart(initialStartDate);
+    if (initialEndDate) setEnd(initialEndDate);
+  }, [initialStartDate, initialEndDate]);
   // iter90fv : previsualisation email + PJ PDF
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -960,6 +969,10 @@ export default function CommunicationPage() {
   const [selected, setSelected] = useState(new Set());
   const [filter, setFilter] = useState('all'); // all | debtors | creditors | with_email
   const [search, setSearch] = useState('');
+  // iter93dk : filtre de periode pour aligner soldes tableau / PDF / email.
+  // Vide = cumul all-time (comportement historique).
+  const [periodStart, setPeriodStart] = useState('');
+  const [periodEnd, setPeriodEnd] = useState('');
 
   const loadOwners = useCallback(async () => {
     if (!selectedCopro || selectedCopro === 'all') {
@@ -968,13 +981,16 @@ export default function CommunicationPage() {
     }
     setLoading(true);
     try {
-      const r = await api.get('/communication/owners-balances');
+      const params = {};
+      if (periodStart) params.start_date = periodStart;
+      if (periodEnd) params.end_date = periodEnd;
+      const r = await api.get('/communication/owners-balances', { params });
       setOwners(r.data.owners || []);
       setTotals({ debiteurs: r.data.total_debiteurs || 0, crediteurs: r.data.total_crediteurs || 0 });
     } catch (e) {
       toast.error(extractApiError(e, 'Chargement des soldes echoue'));
     } finally { setLoading(false); }
-  }, [selectedCopro]);
+  }, [selectedCopro, periodStart, periodEnd]);
 
   useEffect(() => { loadOwners(); setSelected(new Set()); }, [loadOwners]);
 
@@ -1041,6 +1057,44 @@ export default function CommunicationPage() {
         </TabsList>
 
         <TabsContent value="send" className="space-y-4">
+          {/* iter93dk : selecteur de periode - soldes tableau alignes avec
+              le PDF et les mails envoyes pour la meme periode. */}
+          <Card className="border-slate-200">
+            <CardContent className="p-3 flex flex-wrap items-end gap-3">
+              <div className="flex items-center gap-2 text-xs font-medium text-slate-700">
+                <CalendarIcon className="h-4 w-4 text-[#022D52]" />
+                Periode d&apos;arrete
+              </div>
+              <div>
+                <Label htmlFor="periodStart" className="text-[10px] uppercase tracking-wider text-slate-500">Du</Label>
+                <Input id="periodStart" type="date" value={periodStart}
+                       onChange={(e) => setPeriodStart(e.target.value)}
+                       className="h-8 text-xs w-40"
+                       data-testid="input-period-start" />
+              </div>
+              <div>
+                <Label htmlFor="periodEnd" className="text-[10px] uppercase tracking-wider text-slate-500">Au</Label>
+                <Input id="periodEnd" type="date" value={periodEnd}
+                       onChange={(e) => setPeriodEnd(e.target.value)}
+                       className="h-8 text-xs w-40"
+                       data-testid="input-period-end" />
+              </div>
+              {(periodStart || periodEnd) && (
+                <Button variant="ghost" size="sm"
+                        onClick={() => { setPeriodStart(''); setPeriodEnd(''); }}
+                        className="h-8 text-xs text-slate-500"
+                        data-testid="btn-clear-period">
+                  Reinitialiser
+                </Button>
+              )}
+              <div className="text-[11px] text-slate-500 italic ml-auto">
+                {periodStart || periodEnd
+                  ? 'Soldes calcules sur la periode (alignes avec PDF et mail)'
+                  : 'Soldes cumules all-time (vide = tous les mouvements)'}
+              </div>
+            </CardContent>
+          </Card>
+
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <Card><CardContent className="p-4">
               <div className="text-xs text-slate-500">Total debiteurs</div>
@@ -1107,6 +1161,8 @@ export default function CommunicationPage() {
                   copropriete_id={selectedCopro}
                   fiscalYears={fiscalYears}
                   onSent={() => setSelected(new Set())}
+                  initialStartDate={periodStart}
+                  initialEndDate={periodEnd}
                 />
                 <SendActionDialog
                   action="decompte"
@@ -1115,6 +1171,8 @@ export default function CommunicationPage() {
                   copropriete_id={selectedCopro}
                   fiscalYears={fiscalYears}
                   onSent={() => setSelected(new Set())}
+                  initialStartDate={periodStart}
+                  initialEndDate={periodEnd}
                 />
               </div>
 
@@ -1160,7 +1218,20 @@ export default function CommunicationPage() {
                           {o.email ? (
                             <span className="font-mono text-xs">{o.email}</span>
                           ) : (
-                            <span className="text-xs text-red-500">manquant</span>
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs text-red-500">manquant</span>
+                              {/* iter93dl : bouton PDF pour envoi postal quand pas d'email */}
+                              <a
+                                href={`${process.env.REACT_APP_BACKEND_URL}/api/reports/situation-compte/${o.owner_id}/pdf?copropriete_id=${selectedCopro}${periodStart ? `&start_date=${periodStart}` : ''}${periodEnd ? `&end_date=${periodEnd}` : ''}`}
+                                target="_blank"
+                                rel="noreferrer"
+                                title="Imprimer la situation de compte (envoi postal)"
+                                className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-red-50 hover:bg-red-100 text-red-700 text-[11px] font-medium border border-red-200 transition-colors"
+                                data-testid={`btn-print-postal-${o.owner_id}`}
+                              >
+                                <FileText size={12} /> PDF postal
+                              </a>
+                            </div>
                           )}
                         </td>
                         <td className="px-3 py-2 text-right">
