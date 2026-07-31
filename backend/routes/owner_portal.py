@@ -148,23 +148,50 @@ def create_owner_portal_router(db):
         result = []
         for ba in bank_list:
             iban = ba.get("iban", "") or ""
+            iban_norm = iban.replace(" ", "").upper()
             pcmn = ba.get("pcmn_number", "") or ""
             acc_type = ba.get("account_type", "") or ""
             label = ba.get("label") or ("Compte a vue" if acc_type == "vue" else "Compte epargne")
+
+            # iter93cl : matching robuste bank_account <-> journal_entries + bank_statements
+            # Config initiale : (iban, pcmn_number) mais souvent le pcmn_number
+            # dans copro.bank_accounts ne correspond PAS au compte reellement
+            # utilise dans les journal_entries (ex. ACP Agathe : pcmn config
+            # = 55176600 mais JE utilisent 55114766 - meme IBAN, PCMN divergent).
+            #
+            # Strategie de fallback :
+            # 1. Chercher les bank_statements de l'ACP dont account_number.last4
+            #    matche IBAN.last4 (identification robuste par suffixe IBAN)
+            # 2. Deduire le vrai PCMN JE depuis statements.account_number
+            # 3. Recalculer balance et filtrer statements avec le vrai PCMN
+            iban_last4 = iban_norm[-4:] if iban_norm else ""
+            actual_pcmn_from_stmt = ""
+            if iban_last4 and iban_last4.isdigit():
+                async for st in db.bank_statements.find(
+                    {"copropriete_id": copropriete_id},
+                    {"_id": 0, "account_number": 1},
+                ):
+                    st_acc = (st.get("account_number") or "").replace(" ", "").upper()
+                    if st_acc.isdigit() and st_acc.endswith(iban_last4):
+                        # Trouve le vrai PCMN utilise dans les statements
+                        actual_pcmn_from_stmt = st_acc
+                        break
+            # Si aucun statement ne matche, on garde pcmn config (comportement historique)
+            effective_pcmn = actual_pcmn_from_stmt or (pcmn or "")
 
             # Solde = somme debit - credit sur pcmn_number dans journal_entries
             # (solde COMPTABLE global, independant du filtre de date : le
             # proprio veut voir le solde actuel meme si la periode est passee)
             balance = 0.0
-            if pcmn:
+            if effective_pcmn:
                 async for e in db.journal_entries.find(
                     {"copropriete_id": copropriete_id,
-                     "lines.account_number": pcmn,
+                     "lines.account_number": effective_pcmn,
                      "reversed": {"$ne": True}, "is_reversal": {"$ne": True}},
                     {"_id": 0, "lines": 1},
                 ):
                     for ln in e.get("lines", []) or []:
-                        if ln.get("account_number") == pcmn:
+                        if ln.get("account_number") == effective_pcmn:
                             balance += float(ln.get("debit", 0) or 0)
                             balance -= float(ln.get("credit", 0) or 0)
 
@@ -176,7 +203,7 @@ def create_owner_portal_router(db):
             # On charge tous les statements de l'ACP puis on filtre en Python
             # apres normalisation (strip + upper).
             iban_norm = iban.replace(" ", "").upper()
-            pcmn_norm = (pcmn or "").strip()
+            pcmn_norm = (effective_pcmn or pcmn or "").strip()
             statement_ids: list[str] = []
             async for st in db.bank_statements.find(
                 {"copropriete_id": copropriete_id},
@@ -555,56 +582,70 @@ def create_owner_portal_router(db):
                 total_paid += st["total_paid"]
 
             # ===============================================================
-            # 2) Pending calls : parcourir les fund_calls mais utiliser
-            #    tp_owner_id des VE pour retrouver ceux qui concernent
-            #    reellement le proprietaire actuel (post-mutation aussi).
+            # 2) Pending calls (iter93ck) - MIROIR de la comptabilite via FIFO
+            #
+            # Bug fix : l'ancienne logique utilisait `distribution[owner_id].paid`
+            # (flag manuel non-mis-a-jour apres les paiements). Consequence :
+            # T1 apparaissait toujours "en attente" meme quand le proprietaire
+            # avait paye plus tard (ex. Guerit : T1 paye par FI + AN credit,
+            # T2 pas encore paye - mais UI affichait T1 en attente).
+            #
+            # Nouvelle logique (miroir compta) :
+            # 1. Enumerer les appels par date ASC via fund_calls.distribution
+            #    (source de verite historique - fund_call_id manque sur VE)
+            # 2. Cumuler les paiements totaux (credits sur tier owner) - deja
+            #    calcule dans stats_by_acp[cp]["total_paid"]
+            # 3. FIFO : les appels sont soldes dans l'ordre chronologique
+            #    tant que cumul_appels <= total_paiements
+            # 4. Le premier appel dont cumul_apres > total_paiements est le
+            #    prochain paiement (montant restant du = solde partiel).
             # ===============================================================
             all_fund_calls = await db.fund_calls.find(
                 {"copropriete_id": {"$in": copro_ids}}, {"_id": 0}
-            ).sort("due_date", 1).to_list(10000)
+            ).sort("date", 1).to_list(10000)
 
-            # Map fund_call_id -> journal_entry lines (VE) sur tier owner
-            fc_ids = [fc.get("id") for fc in all_fund_calls if fc.get("id")]
-            ve_by_fc = {}
-            if fc_ids:
-                ve_entries = await db.journal_entries.find({
-                    "copropriete_id": {"$in": copro_ids},
-                    "journal_type": "VE",
-                    "fund_call_id": {"$in": fc_ids},
-                    "reversed": {"$ne": True},
-                    "is_reversal": {"$ne": True},
-                }, {"_id": 0}).to_list(50000)
-                for ve in ve_entries:
-                    fcid = ve.get("fund_call_id")
-                    cp = ve.get("copropriete_id", "")
-                    valid_accs = tier_accounts_by_copro.get(cp, set())
-                    for ln in ve.get("lines", []) or []:
-                        tpid = ln.get("third_party_id")
-                        acc = ln.get("account_number", "")
-                        if tpid in owner_id_set or (not tpid and acc in valid_accs):
-                            amt = float(ln.get("debit", 0) or 0)
-                            if amt > 0.01:
-                                ve_by_fc[fcid] = ve_by_fc.get(fcid, 0.0) + amt
-
-            # Determiner quels fund_calls sont "impayes" pour ce proprietaire
-            # (via balance globale + heuristique proportion)
+            # iter93ck : appels de CE proprietaire, tries par date (miroir compta)
+            appels_owner = []
             for fc in all_fund_calls:
-                fcid = fc.get("id")
-                amt_owed_originally = ve_by_fc.get(fcid, 0.0)
-                if amt_owed_originally < 0.01:
-                    continue  # Ce fund_call ne concerne pas ce proprietaire
-                # Heuristique : si distribution[owner_id].paid=true, on considere paye
-                # Sinon, on marque en attente (le detail est fait via /movements)
-                dist = next((d for d in fc.get("distribution", [])
-                            if d.get("owner_id") in owner_id_set), None)
-                is_paid = dist.get("paid", False) if dist else False
-                if not is_paid:
+                owner_amount = 0.0
+                dist_match = None
+                for d in fc.get("distribution", []):
+                    if d.get("owner_id") in owner_id_set:
+                        owner_amount += float(d.get("amount", 0) or 0)
+                        if dist_match is None:
+                            dist_match = d
+                if owner_amount < 0.01:
+                    continue
+                appels_owner.append({
+                    "fc": fc,
+                    "date_key": fc.get("date", "") or fc.get("due_date", ""),
+                    "amount": round(owner_amount, 2),
+                    "vcs_code": (dist_match or {}).get("vcs_code", owner.get("vcs_code", "")),
+                })
+            appels_owner.sort(key=lambda x: x["date_key"])
+
+            # FIFO par ACP : les credits paient les appels dans l'ordre chronologique
+            appels_by_cp = {}
+            for a in appels_owner:
+                cp = a["fc"].get("copropriete_id", "")
+                appels_by_cp.setdefault(cp, []).append(a)
+
+            for cp, cp_appels in appels_by_cp.items():
+                remaining_credit = stats_by_acp.get(cp, {}).get("total_paid", 0.0)
+                for a in cp_appels:
+                    if remaining_credit >= a["amount"] - 0.01:
+                        # Appel entierement paye par les credits FIFO
+                        remaining_credit -= a["amount"]
+                        continue
+                    # Appel partiellement ou totalement impaye
+                    unpaid = round(a["amount"] - remaining_credit, 2)
+                    remaining_credit = 0.0
                     pending_calls.append({
-                        "fund_call_name": fc.get("name", ""),
-                        "due_date": fc.get("due_date", ""),
-                        "amount": round(amt_owed_originally, 2),
-                        "vcs_code": (dist or {}).get("vcs_code", owner.get("vcs_code", "")),
-                        "copropriete_id": fc.get("copropriete_id", ""),
+                        "fund_call_name": a["fc"].get("name", ""),
+                        "due_date": a["fc"].get("due_date", ""),
+                        "amount": unpaid,
+                        "vcs_code": a["vcs_code"],
+                        "copropriete_id": cp,
                     })
 
         balance = round(total_called - total_paid, 2)
@@ -898,6 +939,62 @@ def create_owner_portal_router(db):
                 if total > 0.005:
                     ve_amount_by_fc[fcid] = round(total, 2)
 
+        # iter93cm : FIFO sur les paiements pour calculer unpaid_amount reel
+        # par fund_call (miroir compta). Regroupement par ACP : les credits
+        # d'une ACP paient les appels de la MEME ACP dans l'ordre chronologique.
+        # Total credits par ACP (payments + AN opening credits)
+        credits_by_cp: dict = {}
+        if all_calls:
+            tier_accs_flat: dict = {}
+            for cp, accs in tier_accs_by_copro.items():
+                tier_accs_flat[cp] = accs
+            copros_for_credits = list(tier_accs_flat.keys())
+            if copros_for_credits:
+                # Charger toutes les ecritures FI/AN (paiements + opening balance)
+                # sur les comptes tier owner par ACP
+                cred_entries = await db.journal_entries.find({
+                    "copropriete_id": {"$in": copros_for_credits},
+                    "$or": [
+                        {"journal_type": "FI"},
+                        {"journal_type": "AN", "is_opening_balance": True},
+                    ],
+                    "reversed": {"$ne": True},
+                    "is_reversal": {"$ne": True},
+                }, {"_id": 0, "copropriete_id": 1, "lines": 1}).to_list(50000)
+                for ce in cred_entries:
+                    cp = ce.get("copropriete_id", "")
+                    valid_accs = tier_accs_flat.get(cp, set())
+                    for ln in ce.get("lines", []) or []:
+                        tpid = ln.get("third_party_id")
+                        acc = ln.get("account_number", "")
+                        if tpid in owner_id_set or (not tpid and acc in valid_accs):
+                            credits_by_cp[cp] = credits_by_cp.get(cp, 0.0) + float(ln.get("credit", 0) or 0)
+
+        # Preparer le tri chronologique par ACP pour FIFO
+        # Note: all_calls est deja trie par date DESC ; on veut ASC pour FIFO
+        calls_by_cp_asc: dict = {}
+        for fc in sorted(all_calls, key=lambda x: x.get("date", "")):
+            fcid = fc.get("id")
+            real_amt = ve_amount_by_fc.get(fcid, 0.0)
+            if real_amt < 0.005:
+                my_share = next((d for d in fc.get("distribution", []) if d.get("owner_id") in owner_id_set), None)
+                if my_share:
+                    real_amt = float(my_share.get("amount", 0) or 0)
+            if real_amt < 0.005:
+                continue
+            calls_by_cp_asc.setdefault(fc.get("copropriete_id", ""), []).append((fcid, real_amt))
+
+        unpaid_by_fc: dict = {}
+        for cp, cp_calls in calls_by_cp_asc.items():
+            remaining = credits_by_cp.get(cp, 0.0)
+            for fcid, amt in cp_calls:
+                if remaining >= amt - 0.01:
+                    remaining -= amt
+                    unpaid_by_fc[fcid] = 0.0  # entierement paye
+                else:
+                    unpaid_by_fc[fcid] = round(amt - remaining, 2)
+                    remaining = 0.0
+
         result = []
         for fc in all_calls:
             my_share = next((d for d in fc.get("distribution", []) if d.get("owner_id") in owner_id_set), None)
@@ -909,6 +1006,7 @@ def create_owner_portal_router(db):
             if real_amount < 0.005 and not my_share:
                 continue  # Aucun lien avec ce proprio
             copro = copro_map.get(fc.get("copropriete_id", "")) or {}
+            unpaid = unpaid_by_fc.get(fcid, real_amount)  # non-calcule = totalement du
             result.append({
                 "id": fcid,
                 "name": fc.get("name", ""),
@@ -921,7 +1019,8 @@ def create_owner_portal_router(db):
                 "my_amount": round(real_amount, 2),
                 "my_share": (my_share or {}).get("share", 0),
                 "vcs_code": (my_share or {}).get("vcs_code", owner.get("vcs_code", "")),
-                "paid": (my_share or {}).get("paid", False),
+                "paid": unpaid < 0.01,  # iter93cm : miroir compta FIFO
+                "unpaid_amount": unpaid,  # iter93cm : nouveau champ pour UI
                 "paid_date": (my_share or {}).get("paid_date", ""),
             })
         return result

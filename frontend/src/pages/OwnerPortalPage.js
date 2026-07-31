@@ -2375,7 +2375,12 @@ function MovementsTab({
     }, 0);
     // Ajouter le solde d'ouverture (a nouveau)
     const opening = Number(openingBalance || 0);
-    return Math.max(0, +fmtEUR((sum + opening)));
+    // iter93cn : garder la valeur numerique (Math.round pour eviter float noise).
+    // Bug prec : `+fmtEUR(x)` renvoyait NaN car fmtEUR sort une string avec
+    // virgule fr-BE ("475,94") impossible a re-parser via `+`. Consequence :
+    // "Situation en regle" affichee alors que le proprietaire doit 475.94 EUR.
+    const total = Math.round((sum + opening) * 100) / 100;
+    return Math.max(0, total);
   }, [movements, openingBalance]);
   // iter90hx : URL du QR code, rafraichie a chaque changement de periode
   const qrHref = useMemo(() => {
