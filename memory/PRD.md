@@ -20,6 +20,15 @@ Application de gestion de copropriete basee sur le droit belge (PCMN), incluant 
 
 ### Session courante (Fevrier 2026)
 
+#### P0 - Portail Proprietaire : KPI Cards + Prochain Paiement FIFO (DONE iter93cr - Feb 2026)
+- **Root cause** : Multiple `+fmtEUR(x)` dans `useMemo` (annualStats/nextAnnualCall/quarterStats/movementStats) produisaient NaN. `fmtEUR` retourne "x,yz" (virgule fr-BE), `+string_with_comma` = NaN. Consequence : les 3 KPI cards en haut affichaient 0,00 EUR alors que le backend renvoyait les vraies valeurs, et `nextAnnualCall` choisissait T1 (NaN < amt est false, cumul FIFO ne s'incrementait pas au-dela de T1).
+- **Fix** : `Math.round(x * 100) / 100` remplace `+fmtEUR(x)` a 10 occurrences dans `OwnerPortalPage.js` (ligne 475-476, 516-521, 524, 560, 606-608, 2752-2754).
+- **Resultat portail Guerit (validated Playwright)** : TOTAL APPELE = 2 103,74 EUR / TOTAL PAYE = 675,86 EUR / SOLDE = 1 427,88 EUR debiteur / Prochain paiement = Trimestriel 2/4 (475,94 EUR restant apres FIFO) / mention explicite "Solde partiel restant apres imputation FIFO".
+- **Validation** : Testing agent **100% frontend PASS** Playwright sur real portal Guerit. Aucune regression sur charges donut, pending calls, appels a venir, situation card.
+- **Nits residuels (non-blocking)** : (a) Recharts container size race warnings, (b) Radix DialogContent aria-describedby a11y warnings.
+
+
+
 #### P0 - Portail Proprietaire : miroir compta strict (DONE iter93ck-cq - Feb 2026)
 - **Regle** : Cote proprietaire, tous les affichages doivent etre un miroir fidele de la comptabilite (journal_entries). Plus de flags manuels ni de donnees derivees.
 - **iter93ck DASHBOARD FIFO** : pending_calls calcule par FIFO chronologique paiements vs appels par ACP au lieu du flag manuel `distribution.paid`. Guerit T1 paye -> T2 en premier pending a 475.94 EUR.
