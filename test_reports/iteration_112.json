@@ -1,0 +1,29 @@
+{
+  "summary": "iter93cr (2 bugs) fully validated end-to-end via Playwright on real /portal (Guerit owner). BUG1 KPI Cards FIXED: TOTAL APPELE = 2 103,74 EUR (expected ~2103.74), SOLDE = 1 427,88 EUR debiteur (expected ~1427.88), TOTAL PAYE = 675,86 EUR (expected ~675.86), Appels a venir = 951,94 EUR - all previously showing 0,00 EUR. BUG2 Prochain Paiement Sync FIXED: card now shows 'Trimestriel 2/4 - 2026-2027' (was T1), remaining amount 475,94 EUR (was 475,97 EUR), VCS +++201/4071/94024+++ matching T2, mention 'Solde partiel restant apres i[mputation FIFO]' confirming reuse of FIFO logic. Root cause (fmtEUR returning fr-BE virgule string breaking +string coercion to NaN) correctly addressed by Math.round(x*100)/100 in annualStats/nextAnnualCall/quarterStats/movementStats/totalCredit-Debit. No regression observed: charges donut, pending calls list, appels a venir list, situation card all continue to render correctly. Backend not re-tested (pure frontend fix, iter111 already validated backend endpoints).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/test_reports/iter93cr_full.png"
+  ],
+  "action_items": [
+    "OPEN FROM iter111 (still valid): Restore Guerit owner password - currently set to 'TestOwnerIter93CK!' (temp). Consider forgot-password flow or re-invitation.",
+    "OPTIONAL nit: Console shows two Recharts 'width(-1) height(-1)' warnings (chart container mount race) and two Radix DialogContent 'Missing Description or aria-describedby' a11y warnings. Non-blocking."
+  ],
+  "critical_code_review_comments": [
+    "OwnerPortalPage.js:475-477, 519-521, 524, 560, 606-608 iter93cr : Math.round(x*100)/100 fix is correct and consistent across all 5 useMemo aggregators. Great single-pattern fix.",
+    "Suggestion (out of scope): create a helper `round2(x)` utility to avoid repetition of Math.round(x*100)/100 across the file (~10 occurrences). Would also make future refactor easier if precision requirements change.",
+    "Suggestion (out of scope): fmtEUR itself is the root cause since +fmtEUR(x) was ever tempting - consider co-locating an `eur2num` inverse helper next to fmtEUR to make round-tripping explicit."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "not re-tested (frontend-only fix)", "frontend": "100% (both iter93cr bugs verified fixed on real portal)"},
+  "test_credentials": "admin@copro.be / admin123 (superadmin) ; Guerit owner evrard.gerald@outlook.be / TestOwnerIter93CK! (temp from iter93co - see action_items)",
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "iter93cr closes the two backlog UI bugs open since iter110/111. All values now match backend: KPI cards render annualStats correctly, Prochain paiement reuses FIFO. Only outstanding non-scope items: (a) restore Guerit password to original, (b) minor console warnings (Recharts container size race, Radix DialogContent aria-describedby).",
+  "rca of the issue": "fmtEUR uses fr-BE Intl.NumberFormat producing 'x,yz' (virgule). Using +fmtEUR(number) coerced 'x,yz' string via unary plus which returns NaN. This NaN silently propagated in useMemo return objects so total_called/total_paid/balance/remainingOnCurrent/totalCalledQuarter/totalPaidQuarter/totalCredit-Debit-net all rendered as 0,00 EUR (or picked wrong FIFO call because remainingOnCurrent was NaN and comparison 'NaN < amount - 0.01' is false, so is_partial_covered wrongly false and cumul logic never advanced past T1). Fix: replace +fmtEUR(x) with Math.round(x*100)/100 - keeps numeric type, rounds to 2 decimals equivalent to display precision, no locale round-trip. Verified: TOTAL APPELE 2103,74 / TOTAL PAYE 675,86 / SOLDE 1427,88 debiteur / Prochain paiement Trimestriel 2/4 475,94 EUR."
+}

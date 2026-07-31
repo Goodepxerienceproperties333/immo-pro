@@ -472,8 +472,9 @@ export default function OwnerPortalPage() {
     }
     return {
       // Trimestriels (informatif uniquement)
-      totalCalledQuarter: +fmtEUR(calledQ),
-      totalPaidQuarter: +fmtEUR(paidQ),
+      // iter93cr : Math.round au lieu de +fmtEUR (evite NaN sur decimales fr-BE)
+      totalCalledQuarter: Math.round(calledQ * 100) / 100,
+      totalPaidQuarter: Math.round(paidQ * 100) / 100,
       pendingCount,
       nextCall,
     };
@@ -513,12 +514,14 @@ export default function OwnerPortalPage() {
       sumCreditPaid += Number(m.credit || 0);
     }
     const openCreditor = annualOpeningBalance < 0 ? -annualOpeningBalance : 0;
-    const total_paid = +fmtEUR((openCreditor + sumCreditPaid));
-    total_called = +fmtEUR(total_called);
-    const balance = +fmtEUR((total_called - total_paid));
+    // iter93cr : Math.round au lieu de +fmtEUR (evite NaN sur decimales fr-BE
+    // qui donnaient TOTAL APPELE=0 / SOLDE=0 dans les KPI cards)
+    const total_paid = Math.round((openCreditor + sumCreditPaid) * 100) / 100;
+    total_called = Math.round(total_called * 100) / 100;
+    const balance = Math.round((total_called - total_paid) * 100) / 100;
     return {
       total_called,
-      total_upcoming: +fmtEUR(total_upcoming),
+      total_upcoming: Math.round(total_upcoming * 100) / 100,
       total_paid,
       balance,
       status: balance > 0.01 ? 'debiteur' : balance < -0.01 ? 'crediteur' : 'solde',
@@ -552,7 +555,9 @@ export default function OwnerPortalPage() {
         continue;
       }
       currentCall = fc;
-      remainingOnCurrent = +fmtEUR((amt - Math.max(0, totalPaid - cumul)));
+      // iter93cr : Math.round au lieu de +fmtEUR (evite NaN qui affichait
+      // toujours T1 comme prochain paiement au lieu de T2 FIFO)
+      remainingOnCurrent = Math.round((amt - Math.max(0, totalPaid - cumul)) * 100) / 100;
       break;
     }
     if (!currentCall) return null;
@@ -598,9 +603,9 @@ export default function OwnerPortalPage() {
     }
     const openDebtor = openingBalance > 0 ? openingBalance : 0;
     const openCreditor = openingBalance < 0 ? -openingBalance : 0;
-    const total_called = +fmtEUR((openDebtor + sumDebit));
-    const total_paid = +fmtEUR((openCreditor + sumCredit));
-    const balance = +fmtEUR(Number(closingBalance || 0));
+    const total_called = Math.round((openDebtor + sumDebit) * 100) / 100;
+    const total_paid = Math.round((openCreditor + sumCredit) * 100) / 100;
+    const balance = Math.round(Number(closingBalance || 0) * 100) / 100;
     return {
       total_called,
       total_paid,
@@ -2744,9 +2749,9 @@ function BankAccountsTab({
         else totalDebit += Math.abs(amt);
       }
       return {
-        totalCredit: +fmtEUR(totalCredit),
-        totalDebit: +fmtEUR(totalDebit),
-        net: +fmtEUR((totalCredit - totalDebit)),
+        totalCredit: Math.round(totalCredit * 100) / 100,
+        totalDebit: Math.round(totalDebit * 100) / 100,
+        net: Math.round((totalCredit - totalDebit) * 100) / 100,
         count: mvs.length,
       };
     });
