@@ -893,8 +893,14 @@ def create_communication_router(db):
                     ctx["balance"] = _fmt_eur(_b, with_suffix=False)
                     ctx["abs_balance"] = _fmt_eur(abs(_b), with_suffix=False)
                     ctx["balance_status"] = "debiteur" if _b > 0 else ("crediteur" if _b < 0 else "solde")
-                    subj = render_template(tpl.get("subject", "") or subject_default, ctx)
-                    body_rendered = render_body_html(tpl.get("body_html", "") or body_default, ctx)
+                    # iter93cz : si l'utilisateur a modifie le sujet/corps dans
+                    # le dialogue d'envoi, prendre SES valeurs plutot que celles
+                    # du template. Le template sert juste a pre-remplir le
+                    # formulaire ; les edits manuels du user sont prioritaires.
+                    subj_src = (payload.subject or "").strip() or tpl.get("subject", "") or subject_default
+                    body_src = (payload.body_html or "").strip() or tpl.get("body_html", "") or body_default
+                    subj = render_template(subj_src, ctx)
+                    body_rendered = render_body_html(body_src, ctx)
                 else:
                     subj = payload.subject.strip() or subject_default
                     body_rendered = ensure_html_paragraphs(payload.body_html.strip() or body_default)
@@ -994,8 +1000,11 @@ def create_communication_router(db):
             try:
                 if tpl:
                     ctx = await build_owner_email_context(db, oid, payload.copropriete_id, current_user)
-                    subj = render_template(tpl.get("subject", "") or subj_default, ctx)
-                    body_rendered = render_body_html(tpl.get("body_html", "") or body_default, ctx)
+                    # iter93cz : edits manuels prioritaires sur le template
+                    subj_src = (payload.subject or "").strip() or tpl.get("subject", "") or subj_default
+                    body_src = (payload.body_html or "").strip() or tpl.get("body_html", "") or body_default
+                    subj = render_template(subj_src, ctx)
+                    body_rendered = render_body_html(body_src, ctx)
                 else:
                     subj = payload.subject.strip() or subj_default
                     body_rendered = ensure_html_paragraphs(payload.body_html.strip() or body_default)
@@ -1106,8 +1115,12 @@ def create_communication_router(db):
                 ctx["balance_status"] = (
                     "debiteur" if bal > 0 else ("crediteur" if bal < 0 else "solde")
                 )
-            subj = render_template(tpl.get("subject", "") or subject_default, ctx)
-            body_rendered = render_body_html(tpl.get("body_html", "") or body_default, ctx)
+            # iter93cz : edits manuels du user (dans le dialogue Envoi)
+            # prioritaires sur le template pour l'apercu ET l'envoi reel.
+            subj_src = (subject_in or "").strip() or tpl.get("subject", "") or subject_default
+            body_src = (body_in or "").strip() or tpl.get("body_html", "") or body_default
+            subj = render_template(subj_src, ctx)
+            body_rendered = render_body_html(body_src, ctx)
         else:
             subj = (subject_in or "").strip() or subject_default
             body_rendered = ensure_html_paragraphs((body_in or "").strip() or body_default)
