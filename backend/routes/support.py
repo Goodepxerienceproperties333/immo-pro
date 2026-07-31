@@ -327,11 +327,13 @@ Landscape A4, multi-page, centre, fonts 11pt (headers) / 9pt (contenu). Adaptati
 
 === ANALYSE DE DOCUMENTS UPLOADES ===
 
-Le syndic peut te joindre des DOCUMENTS (PDF ou CSV) via l'icone trombone dans le chat. Ces documents seront prealablement extraits en texte brut et injectes dans le contexte de ta reponse. Types typiques :
+Le syndic peut te joindre des DOCUMENTS (PDF ou CSV) ou des IMAGES (PNG, JPG, WEBP) via l'icone trombone dans le chat. Types typiques :
 - Bilans Optipro (PDF) : reference pour comparaison avec le bilan generes par NextGe Copro
 - Balances tiers (PDF/CSV) : verification des soldes proprietaires
 - Extraits bancaires (PDF/CSV) : diagnostic paiements
 - Journaux comptables (PDF/CSV) : audit des ecritures
+- **Screenshots (PNG/JPG/WEBP) : captures d'ecran d'un decompte, d'un tableau Excel, d'une notification erreur, etc. Tu VOIS l'image en direct via Claude Vision - lis les chiffres, noms, tableaux qu'elle contient.**
+- **Photos de factures papier (JPG) : extrais fournisseur, date, montant HT/TVA/TTC, numero facture pour aider a la saisie.**
 
 Quand un document est fourni :
 1. Analyse-le avec attention (les formats belges utilisent virgule decimale : "26,95" = 26.95 EUR)
@@ -495,8 +497,17 @@ async def _get_user(request: Request):
 
 # iter93ch : Extraction de texte pour analyse par le chatbot
 # Supporte PDF (pdfplumber) et CSV (csv module).
+# iter93cj : Support images (PNG, JPEG, WEBP) via Claude Vision.
 _MAX_ATTACHMENT_TEXT_LEN = 30000  # ~7500 tokens, evite depassement contexte LLM
-_ALLOWED_ATTACHMENT_EXTS = {".pdf", ".csv"}
+_ALLOWED_ATTACHMENT_EXTS = {".pdf", ".csv", ".png", ".jpg", ".jpeg", ".webp"}
+_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
+_IMAGE_MIME_MAP = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+}
+_MAX_IMAGE_DIM = 1600  # px, resize down pour eviter payloads enormes
 
 
 def _extract_text_from_pdf(content: bytes) -> str:
@@ -523,6 +534,50 @@ def _extract_text_from_pdf(content: bytes) -> str:
     if len(out) > _MAX_ATTACHMENT_TEXT_LEN:
         out = out[:_MAX_ATTACHMENT_TEXT_LEN] + "\n[...tronque a 30 000 caracteres...]"
     return out
+
+
+def _process_image(content: bytes, ext: str) -> tuple[str, str]:
+    """iter93cj : Redimensionne et re-encode l'image, retourne (base64, mime).
+
+    - Resize si dimension > _MAX_IMAGE_DIM (evite payload LLM enorme)
+    - Preserve le format d'origine (PNG/JPEG/WEBP)
+    - Extrait la 1ere frame si anime (WEBP anime, APNG)
+    - Le testing playbook interdit les images uniformes/blanches - c'est au
+      caller frontend de garantir un contenu reel (screenshot ou photo).
+    """
+    import base64
+    import io
+
+    from PIL import Image
+
+    img = Image.open(io.BytesIO(content))
+    # Frame 1 si anime
+    if getattr(img, "is_animated", False):
+        img.seek(0)
+    # Convertir palette/mode non standard vers RGB pour compat
+    if img.mode not in ("RGB", "RGBA", "L"):
+        img = img.convert("RGB")
+    # Resize proportionnel si trop grand
+    w, h = img.size
+    if max(w, h) > _MAX_IMAGE_DIM:
+        ratio = _MAX_IMAGE_DIM / max(w, h)
+        img = img.resize((int(w * ratio), int(h * ratio)), Image.LANCZOS)
+    # Re-encode dans le format d'origine (JPEG/PNG/WEBP)
+    buf = io.BytesIO()
+    fmt = {"jpg": "JPEG", "jpeg": "JPEG"}.get(ext.lstrip("."), ext.lstrip(".").upper())
+    if fmt == "JPEG" and img.mode == "RGBA":
+        # JPEG ne supporte pas la transparence - fond blanc
+        bg = Image.new("RGB", img.size, (255, 255, 255))
+        bg.paste(img, mask=img.split()[-1])
+        img = bg
+    save_kwargs = {"format": fmt}
+    if fmt == "JPEG":
+        save_kwargs["quality"] = 85
+        save_kwargs["optimize"] = True
+    img.save(buf, **save_kwargs)
+    b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+    mime = _IMAGE_MIME_MAP.get(ext, "image/jpeg")
+    return b64, mime
 
 
 def _extract_text_from_csv(content: bytes) -> str:
@@ -683,9 +738,25 @@ def create_support_router(db):
             if ext == ".pdf":
                 extracted = _extract_text_from_pdf(content)
                 file_type = "pdf"
-            else:
+                image_base64 = None
+                image_mime = None
+            elif ext == ".csv":
                 extracted = _extract_text_from_csv(content)
                 file_type = "csv"
+                image_base64 = None
+                image_mime = None
+            elif ext in _IMAGE_EXTS:
+                # iter93cj : image traitee et encodee en base64 pour LLM Vision
+                image_base64, image_mime = _process_image(content, ext)
+                extracted = (
+                    f"[Image {ext.lstrip('.').upper()} - "
+                    f"{len(image_base64)} caracteres base64]"
+                )
+                file_type = "image"
+            else:
+                raise HTTPException(400, f"Extension non supportee : {ext}")
+        except HTTPException:
+            raise
         except Exception as e:
             logger.exception("Extraction document echouee")
             raise HTTPException(
@@ -705,6 +776,9 @@ def create_support_router(db):
             "content": f"[Document joint : {filename} ({len(extracted)} caracteres)]",
             "created_at": _now(),
         }
+        if image_base64:
+            msg["image_base64"] = image_base64
+            msg["image_mime"] = image_mime
         await db.support_messages.insert_one(msg)
         msg.pop("_id", None)
 
@@ -723,6 +797,7 @@ def create_support_router(db):
             "extracted_length": len(extracted),
             "preview": preview,
             "created_at": msg["created_at"],
+            "is_image": bool(image_base64),
         }
 
 
@@ -730,7 +805,7 @@ def create_support_router(db):
     @router.post("/conversations/{conv_id}/chat")
     async def chat(conv_id: str, data: ChatMessageInput, request: Request,
                    background: BackgroundTasks):
-        from emergentintegrations.llm.chat import LlmChat, UserMessage
+        from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
         user_id = await _get_user(request)
         conv = await _load_conversation(db, conv_id, user_id)
         user_msg = (data.message or "").strip()
@@ -780,14 +855,19 @@ def create_support_router(db):
         # iter93ch : documents attaches recents (dans les 10 derniers messages)
         # sont injectes dans le contexte pour analyse par le LLM.
         # iter93ci : detection multi-documents pour comparaison automatique.
+        # iter93cj : les images sont passees via ImageContent (Claude Vision).
         attachments_context = ""
+        image_attachments = []  # list of ImageContent for Claude Vision
         recent_attachments = [
             m for m in history[-10:]
-            if m.get("role") == "user_attachment" and m.get("extracted_text")
+            if m.get("role") == "user_attachment"
         ]
-        if recent_attachments:
+        text_attachments = [m for m in recent_attachments if m.get("extracted_text") and not m.get("image_base64")]
+        image_msgs = [m for m in recent_attachments if m.get("image_base64")]
+
+        if text_attachments:
             att_parts = []
-            for idx, att in enumerate(recent_attachments, start=1):
+            for idx, att in enumerate(text_attachments, start=1):
                 att_parts.append(
                     f"=== DOCUMENT #{idx} JOINT: {att.get('filename', '?')} "
                     f"(type: {att.get('file_type', '?')}) ===\n"
@@ -795,17 +875,37 @@ def create_support_router(db):
                     f"=== FIN DOCUMENT #{idx} ==="
                 )
             attachments_context = "\n\n".join(att_parts)
-            # iter93ci : hint explicite pour la comparaison multi-docs
-            if len(recent_attachments) >= 2:
-                attachments_context = (
-                    f"[CONTEXTE : le syndic a joint {len(recent_attachments)} "
-                    f"documents ci-dessous. Si sa question porte sur une "
-                    f"comparaison ou un ecart, presente un TABLEAU comparatif "
-                    f"clair (Document | Compte | Valeur) et met en evidence "
-                    f"les differences chiffrees. Cite les regles metier "
-                    f"iter93cc a iter93cg pour expliquer les ecarts.]\n\n"
-                    + attachments_context
-                )
+
+        if image_msgs:
+            for img_msg in image_msgs:
+                image_attachments.append(ImageContent(
+                    image_base64=img_msg["image_base64"],
+                ))
+
+        # iter93ci : hint explicite pour la comparaison multi-docs
+        total_docs = len(text_attachments) + len(image_msgs)
+        if total_docs >= 2:
+            hint = (
+                f"[CONTEXTE : le syndic a joint {total_docs} "
+                f"documents (dont {len(image_msgs)} image(s) et "
+                f"{len(text_attachments)} document(s) texte). Si sa question "
+                f"porte sur une comparaison ou un ecart, presente un TABLEAU "
+                f"comparatif clair (Document | Compte | Valeur) et met en "
+                f"evidence les differences chiffrees. Cite les regles metier "
+                f"iter93cc a iter93cg pour expliquer les ecarts.]\n\n"
+            )
+            attachments_context = hint + attachments_context
+
+        if image_msgs and not text_attachments:
+            # Cas image(s) seule(s) : signaler au LLM qu'il doit analyser l'image
+            attachments_context = (
+                f"[CONTEXTE : le syndic a joint {len(image_msgs)} image(s) "
+                f"(screenshot ou photo). Analyse-les visuellement pour "
+                f"extraire les chiffres/soldes/noms visibles et compare-les "
+                f"aux regles metier iter93cc a iter93cg. Si les chiffres "
+                f"semblent incoherents avec les regles, explique la cause "
+                f"probable.]"
+            )
 
         full_prompt = user_msg
         if past_context.strip() or diag_context or attachments_context:
@@ -819,7 +919,10 @@ def create_support_router(db):
             parts.append(f"Nouvelle question du syndic : {user_msg}")
             full_prompt = "\n\n".join(parts)
         try:
-            ai_resp = await chat_obj.send_message(UserMessage(text=full_prompt))
+            user_msg_obj = UserMessage(text=full_prompt)
+            if image_attachments:
+                user_msg_obj.file_contents = image_attachments
+            ai_resp = await chat_obj.send_message(user_msg_obj)
         except Exception as e:
             logger.exception("Support LLM call failed")
             raise HTTPException(502, f"IA indisponible : {str(e)[:150]}")

@@ -1,0 +1,34 @@
+{
+  "summary": "iter93cj (Chatbot Vision - image attachments) VALIDATED end-to-end. Backend pytest 14/14 PASS (25.4s incl. real Claude Vision E2E call): (1) POST /api/support/conversations/{id}/attach accepts PNG/JPEG/WEBP -> file_type='image', is_image=True; (2) GIF/BMP/SVG/TIFF rejected with HTTP 400 (parametrized); (3) large image (2400x1500) processed via Pillow LANCZOS resize (persisted OK); (4) palette-mode PNG converted to RGB successfully; (5) REGRESSION: PDF/CSV still return file_type='pdf'/'csv' with is_image=False and extracted text >500 chars; (6) E2E VISION: uploading a Balance-de-Tiers PNG (900x500 with 4 owners + amounts, real visual content per image_testing.md rules) and asking 'Liste les proprietaires visibles dans le tableau joint et leur solde exact' - Claude Sonnet 4.5 correctly extracted all 4 owners (Guerit, CANTERO, Van Damme, De Le Hoye) AND all 4 exact figures (26,95 / 570,22 / 215,64 / 428,61); (7) mixed image+PDF in same conversation both persist as user_attachment messages and follow-up chat returns 200; (8) list conversations still 200. Frontend Playwright E2E (superadmin -> Mode syndic -> support FAB -> new conv -> Question operationnelle): (a) hidden file input has accept='.pdf,.csv,.png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp' with multiple attribute; (b) attach button title='Joindre des documents (PDF, CSV) ou images (PNG, JPG, WEBP) - max 3 fichiers'; (c) uploading balance PNG -> emerald-styled badge with ImageIcon and label 'IMAGE - analyse par Vision' (bg-emerald-50 border-emerald-200); (d) uploading .gif triggers sonner toast 'test_iter93cj.gif : type non supporte (PDF, CSV, PNG, JPG ou WEBP uniquement)'. All acceptance criteria met. No blocking issues.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter93cj_vision.py",
+    "/app/backend/tests/fixtures/make_balance_image.py",
+    "/app/backend/tests/fixtures/balance_tiers_iter93cj.png",
+    "/app/test_reports/pytest/iter93cj.xml",
+    "/app/test_reports/iter93cj_badge.png",
+    "/app/test_reports/iter93cj_gif_reject.png"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "support.py:502-510 - _IMAGE_EXTS/_IMAGE_MIME_MAP/_MAX_IMAGE_DIM globals are clear and single-source-of-truth; _ALLOWED_ATTACHMENT_EXTS union is used at the endpoint gate. Clean.",
+    "support.py:539-580 _process_image - correctly handles: (a) is_animated -> seek(0) first frame, (b) non-RGB/RGBA/L modes -> convert('RGB') (fixes palette PNG regression), (c) proportional resize when max(w,h)>1600 via LANCZOS, (d) JPEG-with-alpha -> white background paste. Note: fmt lookup uses ext.lstrip('.').upper() which yields JPG for '.jpg' but the dict override maps jpg/jpeg -> JPEG (correct). No issues.",
+    "support.py:724-729 - error message says 'Types acceptes : PDF, CSV.' but now also PNG/JPG/JPEG/WEBP - MINOR user-facing message drift (fix: update the message string to mention images too). Non-blocking.",
+    "support.py:879-908 - ImageContent injection via UserMessage.file_contents is correct pattern for Claude Sonnet 4.5 Vision via emergentintegrations; the image-only context hint (899-908) correctly nudges the LLM to visually extract when no text docs are present.",
+    "SupportChatBubble.js:126 - client-side extension validation list matches backend _ALLOWED_ATTACHMENT_EXTS exactly. Symmetric.",
+    "SupportChatBubble.js:379-395 - conditional rendering of ImageIcon (emerald) vs FileText (blue) is clean; label 'analyse par Vision' vs 'X car. extraits' communicates the difference well to the user."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter93cj_vision.py (new)",
+    "/app/backend/tests/fixtures/make_balance_image.py (new)",
+    "/app/backend/tests/fixtures/balance_tiers_iter93cj.png (new fixture)"
+  ],
+  "success_rate": {"backend": "100% (14/14 iter93cj tests PASS)", "frontend": "100% (accept + badge + GIF toast all PASS)"},
+  "test_credentials": "admin@copro.be / admin123 (cookie auth)",
+  "seed_data_creation": "Ephemeral TEST_iter93cj_<uuid> support conversations created and cleaned up in fixture teardown. No prod pollution.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "iter93cj fully green. Reusable balance_tiers_iter93cj.png fixture (900x500 PNG, real text content, 15KB) is ideal for any future Vision-LLM regression - contains 4 owners with distinct amounts that Claude Sonnet 4.5 extracts reliably. Assertions are lenient (>=3 of 4 owners + >=3 of 4 figures) to survive minor LLM drifts. E2E test hits real claude-sonnet-4-5 (~10-15s). If future changes break Vision, first check that support.py:879-883 still passes ImageContent(image_base64=...) into UserMessage.file_contents. Minor nit: HTTPException detail at support.py:727-729 says 'PDF, CSV' only - suggest updating message text for iter93ck.",
+  "rca of the issue": "N/A - feature works as designed. iter93cj is a clean additive integration of Pillow-based image preprocessing + emergentintegrations ImageContent passing to Claude Vision."
+}

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { HelpCircle, MessageSquare, X, Send, Plus, Trash2, ArrowLeft, Mail, Bot, User as UserIcon, Loader2, CheckCircle2, AlertCircle, Bug, Ticket, MessageCircleQuestion, Paperclip, FileText } from 'lucide-react';
+import { HelpCircle, MessageSquare, X, Send, Plus, Trash2, ArrowLeft, Mail, Bot, User as UserIcon, Loader2, CheckCircle2, AlertCircle, Bug, Ticket, MessageCircleQuestion, Paperclip, FileText, Image as ImageIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -123,8 +123,8 @@ export default function SupportChatBubble() {
     // Validate all files first
     for (const file of files) {
       const ext = (file.name.split('.').pop() || '').toLowerCase();
-      if (!['pdf', 'csv'].includes(ext)) {
-        toast.error(`${file.name} : type non supporte (PDF ou CSV uniquement)`);
+      if (!['pdf', 'csv', 'png', 'jpg', 'jpeg', 'webp'].includes(ext)) {
+        toast.error(`${file.name} : type non supporte (PDF, CSV, PNG, JPG ou WEBP uniquement)`);
         return;
       }
       if (file.size > 10 * 1024 * 1024) {
@@ -377,15 +377,18 @@ export default function SupportChatBubble() {
                   )}
                   {msgs.map(m => {
                     if (m.role === 'user_attachment') {
+                      const isImage = m.file_type === 'image';
                       return (
                         <div key={m.id} className="flex justify-end" data-testid={`support-attachment-${m.id}`}>
-                          <div className="flex items-center gap-2 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 max-w-[85%]">
-                            <FileText size={14} className="text-blue-600 shrink-0" />
+                          <div className={`flex items-center gap-2 border rounded-lg px-3 py-2 max-w-[85%] ${isImage ? 'bg-emerald-50 border-emerald-200' : 'bg-blue-50 border-blue-200'}`}>
+                            {isImage ? <ImageIcon size={14} className="text-emerald-600 shrink-0" /> : <FileText size={14} className="text-blue-600 shrink-0" />}
                             <div className="text-xs">
                               <div className="font-medium text-slate-800 truncate">{m.filename || 'document'}</div>
                               <div className="text-[10px] text-slate-500">
                                 {(m.file_type || '').toUpperCase()}
-                                {m.extracted_length && ` · ${m.extracted_length} car. extraits`}
+                                {isImage
+                                  ? ` · analyse par Vision`
+                                  : (m.extracted_length && ` · ${m.extracted_length} car. extraits`)}
                               </div>
                             </div>
                           </div>
@@ -444,7 +447,7 @@ export default function SupportChatBubble() {
                   <input
                     ref={fileInputRef}
                     type="file"
-                    accept=".pdf,.csv"
+                    accept=".pdf,.csv,.png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp"
                     multiple
                     onChange={uploadDocument}
                     className="hidden"
@@ -456,7 +459,7 @@ export default function SupportChatBubble() {
                       disabled={uploading || sending}
                       variant="ghost"
                       className="h-9 w-9 p-0 shrink-0 text-slate-500 hover:text-[#022D52]"
-                      title="Joindre des documents (PDF ou CSV, max 3 fichiers)"
+                      title="Joindre des documents (PDF, CSV) ou images (PNG, JPG, WEBP) - max 3 fichiers"
                       data-testid="support-attach-btn"
                     >
                       {uploading ? <Loader2 size={14} className="animate-spin" /> : <Paperclip size={14} />}
