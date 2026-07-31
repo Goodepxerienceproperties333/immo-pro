@@ -927,7 +927,7 @@ def create_communication_router(db):
             raise HTTPException(400, "Aucun proprietaire selectionne")
 
         # Import lazy pour eviter la circularite de routes
-        from routes.reports import _build_situation_compte_pdf, _compute_balance_tiers_for_ui
+        from routes.reports import _build_situation_compte_pdf, _compute_balance_tiers_for_ui, _compute_owner_period_balance
         from routes.email_templates import get_template_by_id, render_template, render_body_html, ensure_html_paragraphs, build_owner_email_context
 
         # iter90aw : charge le template si demande (une seule fois)
@@ -938,9 +938,12 @@ def create_communication_router(db):
             if not tpl:
                 raise HTTPException(404, f"Template '{payload.template_id}' non trouve")
 
-        # Precharge les balances pour substituer {balance} dans les templates
+        # iter93da : quand une periode est saisie (start_date + end_date), on
+        # calcule le solde PAR PROPRIETAIRE sur cette periode, IDENTIQUE au
+        # "A REGLER" du PDF joint. Sinon, on garde le cumul all-time.
+        period_scoped = bool(payload.start_date or payload.end_date)
         balances_map = {}
-        if tpl:
+        if tpl and not period_scoped:
             bal_data = await _compute_balance_tiers_for_ui(db, payload.copropriete_id)
             balances_map = {b["owner_id"]: b["balance"] for b in bal_data.get("owners", [])}
 
@@ -963,7 +966,16 @@ def create_communication_router(db):
                     ctx = await build_owner_email_context(db, oid, payload.copropriete_id, current_user)
                     # iter93ac : format unifie plateforme pour les emails
                     from utils.format import fmt_eur as _fmt_eur
-                    _b = balances_map.get(oid, 0.0)
+                    # iter93da : si periode saisie, utiliser le solde PERIODE
+                    # (identique au "A REGLER" du PDF). Sinon, cumul all-time.
+                    if period_scoped:
+                        _b, _ = await _compute_owner_period_balance(
+                            db, oid, payload.copropriete_id,
+                            start_date=payload.start_date or None,
+                            end_date=payload.end_date or None,
+                        )
+                    else:
+                        _b = balances_map.get(oid, 0.0)
                     ctx["balance"] = _fmt_eur(_b, with_suffix=False)
                     ctx["abs_balance"] = _fmt_eur(abs(_b), with_suffix=False)
                     ctx["balance_status"] = "debiteur" if _b > 0 else ("crediteur" if _b < 0 else "solde")

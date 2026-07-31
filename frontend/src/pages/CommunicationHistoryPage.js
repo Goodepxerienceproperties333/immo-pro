@@ -61,6 +61,18 @@ function fmtSize(bytes) {
   return `${(n / (1024 * 1024)).toFixed(2)} Mo`;
 }
 
+// iter93di : formatage defensif des body_html legacy stockes en texte brut
+// (envois anterieurs a iter93cy). Convertit \n\n -> paragraphes et \n -> <br>.
+const HTML_BLOCK_RE = /<\s*(p|div|br|ul|ol|li|table|tr|td|h[1-6]|blockquote|pre|hr)\b/i;
+function autoFormatBody(html) {
+  if (!html) return '';
+  if (HTML_BLOCK_RE.test(html)) return html; // deja formate
+  const normalized = String(html).replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
+  const paragraphs = normalized.split(/\n\s*\n/).map(p => p.trim()).filter(Boolean);
+  if (!paragraphs.length) return `<p>${normalized}</p>`;
+  return paragraphs.map(p => `<p>${p.replace(/\n/g, '<br>')}</p>`).join('');
+}
+
 function StatusBadge({ row }) {
   if (row.dry_run) {
     return <Badge className="bg-slate-100 text-slate-700 border border-slate-200" data-testid={`status-badge-${row._id}`}>Dry-run</Badge>;
@@ -342,7 +354,7 @@ export default function CommunicationHistoryPage() {
                   <div
                     className="rounded border border-slate-200 bg-white p-3 text-xs prose prose-sm max-w-none max-h-72 overflow-auto"
                     data-testid="history-detail-body"
-                    dangerouslySetInnerHTML={{ __html: sanitizeHtml(detailRow.body_html || detailRow.body_preview || '') }}
+                    dangerouslySetInnerHTML={{ __html: sanitizeHtml(autoFormatBody(detailRow.body_html || detailRow.body_preview || '')) }}
                   />
                 </div>
               )}
