@@ -44,7 +44,10 @@ export default function SuppliersPage() {
     return () => { cancelled = true; };
   }, [selectedCopro]);
 
-  const filtered = suppliers;
+  // iter93dh : tri alphabetique FR (accents/casse) sur le nom du fournisseur.
+  const filtered = [...suppliers].sort((a, b) =>
+    (a.name || '').localeCompare(b.name || '', 'fr-BE', { sensitivity: 'base' })
+  );
   const openCreate = () => { setEditing(null); setForm({ name:'', vat_number:'', bce_number:'', address:'', postal_code:'', city:'', country:'Belgique', phone:'', email:'', iban:'', bic:'', default_account:'', notes:'' }); setBceCandidates([]); setDialogOpen(true); };
   const openEdit = async (s) => {
     setEditing(s);

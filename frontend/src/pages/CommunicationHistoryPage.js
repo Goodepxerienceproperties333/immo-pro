@@ -24,7 +24,8 @@ import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { toast } from 'sonner';
-import { Send, RefreshCw, AlertTriangle, CheckCircle2, Filter, FileText, Search, Info, Loader2 } from 'lucide-react';
+import { Send, RefreshCw, AlertTriangle, CheckCircle2, Filter, FileText, Search, Info, Loader2, Paperclip, User, Building2, Mail } from 'lucide-react';
+import { sanitizeHtml } from '@/lib/sanitizeHtml';
 
 const KIND_LABEL = {
   generic: 'Message libre',
@@ -34,9 +35,30 @@ const KIND_LABEL = {
   invitation: 'Invitation',
 };
 
-function formatDate(iso) {
+// iter93df : formatage GMT+1/+2 Europe/Brussels (heure d'ete automatique via Intl)
+function formatDate(iso, opts = {}) {
   if (!iso) return '-';
-  return String(iso).replace('T', ' ').slice(0, 19);
+  try {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return String(iso);
+    const { withSeconds = true } = opts;
+    return new Intl.DateTimeFormat('fr-BE', {
+      timeZone: 'Europe/Brussels',
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit',
+      ...(withSeconds ? { second: '2-digit' } : {}),
+    }).format(d);
+  } catch {
+    return String(iso).replace('T', ' ').slice(0, 19);
+  }
+}
+
+function fmtSize(bytes) {
+  const n = Number(bytes || 0);
+  if (!n) return '';
+  if (n < 1024) return `${n} o`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} Ko`;
+  return `${(n / (1024 * 1024)).toFixed(2)} Mo`;
 }
 
 function StatusBadge({ row }) {
@@ -237,7 +259,7 @@ export default function CommunicationHistoryPage() {
 
       {/* Dialog detail */}
       <Dialog open={!!detailRow} onOpenChange={(open) => !open && setDetailRow(null)}>
-        <DialogContent className="max-w-2xl" data-testid="history-detail-dialog">
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto" data-testid="history-detail-dialog">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <FileText className="h-5 w-5 text-[#022D52]" />
@@ -245,35 +267,87 @@ export default function CommunicationHistoryPage() {
             </DialogTitle>
           </DialogHeader>
           {detailRow && (
-            <div className="space-y-3 text-sm">
-              <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-4 text-sm">
+              {/* Meta grid */}
+              <div className="grid grid-cols-2 gap-3 rounded-md bg-slate-50 border border-slate-200 p-3">
                 <div>
-                  <div className="text-xs uppercase text-slate-500">Date/heure</div>
-                  <div className="font-mono">{formatDate(detailRow.sent_at)}</div>
+                  <div className="text-[10px] uppercase tracking-wider text-slate-500">Date &amp; heure (Belgique)</div>
+                  <div className="font-mono text-xs">{formatDate(detailRow.sent_at)}</div>
                 </div>
                 <div>
-                  <div className="text-xs uppercase text-slate-500">Statut</div>
-                  <div><StatusBadge row={detailRow} /></div>
+                  <div className="text-[10px] uppercase tracking-wider text-slate-500">Statut</div>
+                  <div className="mt-0.5"><StatusBadge row={detailRow} /></div>
                 </div>
                 <div>
-                  <div className="text-xs uppercase text-slate-500">Type</div>
-                  <div>{KIND_LABEL[detailRow.kind] || detailRow.kind}</div>
+                  <div className="text-[10px] uppercase tracking-wider text-slate-500">Type</div>
+                  <div>{KIND_LABEL[detailRow.kind] || detailRow.kind || '-'}</div>
                 </div>
                 <div>
-                  <div className="text-xs uppercase text-slate-500">Boite d&apos;envoi</div>
+                  <div className="text-[10px] uppercase tracking-wider text-slate-500 flex items-center gap-1"><Building2 size={11}/> Copropriete</div>
+                  <div>{detailRow.copropriete_name || <span className="text-slate-400 italic">-</span>}</div>
+                </div>
+                <div className="col-span-2">
+                  <div className="text-[10px] uppercase tracking-wider text-slate-500 flex items-center gap-1"><Mail size={11}/> Boite d&apos;envoi</div>
                   <div className="font-mono text-xs">{detailRow.from_mailbox}</div>
                 </div>
+                {(detailRow.sent_by_name || detailRow.sent_by_email) && (
+                  <div className="col-span-2">
+                    <div className="text-[10px] uppercase tracking-wider text-slate-500 flex items-center gap-1"><User size={11}/> Envoye par</div>
+                    <div className="text-xs">
+                      {detailRow.sent_by_name || 'Utilisateur'}
+                      {detailRow.sent_by_email ? <span className="text-slate-500 font-mono ml-2">({detailRow.sent_by_email})</span> : null}
+                    </div>
+                  </div>
+                )}
               </div>
+
+              {/* Destinataires (avec noms si connus) */}
               <div>
-                <div className="text-xs uppercase text-slate-500 mb-1">Destinataire(s)</div>
-                <div className="font-mono text-xs bg-slate-50 rounded p-2 whitespace-pre-wrap">
-                  {Array.isArray(detailRow.to) ? detailRow.to.join('\n') : String(detailRow.to || '')}
+                <div className="text-[10px] uppercase tracking-wider text-slate-500 mb-1">Destinataire(s)</div>
+                <div className="rounded border border-slate-200 bg-white p-2 space-y-1">
+                  {(Array.isArray(detailRow.to) ? detailRow.to : [detailRow.to]).filter(Boolean).map((email, idx) => {
+                    const ownerName = (detailRow.owner_names || [])[idx];
+                    return (
+                      <div key={idx} className="flex items-center gap-2 text-xs">
+                        <Mail size={11} className="text-slate-400 flex-shrink-0" />
+                        {ownerName && <span className="font-medium">{ownerName}</span>}
+                        <span className="font-mono text-slate-600">{ownerName ? `<${email}>` : email}</span>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
+
+              {/* Sujet */}
               <div>
-                <div className="text-xs uppercase text-slate-500 mb-1">Sujet</div>
-                <div className="text-sm">{detailRow.subject || '-'}</div>
+                <div className="text-[10px] uppercase tracking-wider text-slate-500 mb-1">Sujet</div>
+                <div className="text-sm font-semibold text-slate-900">{detailRow.subject || <span className="text-slate-400 italic">(sans sujet)</span>}</div>
               </div>
+
+              {/* Piece jointe */}
+              {detailRow.has_attachment && (
+                <div className="rounded border border-blue-200 bg-blue-50 p-2 flex items-center gap-2 text-xs">
+                  <Paperclip size={13} className="text-[#022D52] flex-shrink-0" />
+                  <span className="font-mono flex-1 truncate">{detailRow.attachment_filename || 'document'}</span>
+                  {detailRow.attachment_size ? (
+                    <span className="text-slate-500 font-mono">{fmtSize(detailRow.attachment_size)}</span>
+                  ) : null}
+                </div>
+              )}
+
+              {/* Corps du mail */}
+              {(detailRow.body_html || detailRow.body_preview) && (
+                <div>
+                  <div className="text-[10px] uppercase tracking-wider text-slate-500 mb-1">Contenu du mail</div>
+                  <div
+                    className="rounded border border-slate-200 bg-white p-3 text-xs prose prose-sm max-w-none max-h-72 overflow-auto"
+                    data-testid="history-detail-body"
+                    dangerouslySetInnerHTML={{ __html: sanitizeHtml(detailRow.body_html || detailRow.body_preview || '') }}
+                  />
+                </div>
+              )}
+
+              {/* Erreur Microsoft */}
               {detailRow.status === 'failed' && detailRow.error_msg && (
                 <div className="rounded border border-red-200 bg-red-50 p-3 text-xs text-red-900">
                   <div className="font-semibold mb-1 flex items-center gap-1">
@@ -284,17 +358,12 @@ export default function CommunicationHistoryPage() {
                   </div>
                 </div>
               )}
+
               {detailRow.dry_run && (
                 <div className="rounded border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
                   <strong>Mode dry-run :</strong> ce mail n&apos;a pas ete envoye reellement.
                   Configurez Microsoft Graph (ou SMTP) dans{' '}
                   <a href="/mon-bureau" className="underline">Mon bureau</a> puis testez a nouveau.
-                </div>
-              )}
-              {detailRow.attachment_name && (
-                <div>
-                  <div className="text-xs uppercase text-slate-500">Piece jointe</div>
-                  <div className="text-xs font-mono">{detailRow.attachment_name}</div>
                 </div>
               )}
             </div>

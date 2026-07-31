@@ -769,10 +769,55 @@ def create_communication_router(db):
         if only_failed:
             query["status"] = "failed"
         rows = await db.sent_communications.find(query).sort("sent_at", -1).limit(min(limit, 500)).to_list(500)
+        # iter93df : enrichir la reponse avec les libelles pour un affichage
+        # complet dans la modale de detail (nom ACP, noms proprios, expediteur).
+        copro_ids = {r.get("copropriete_id") for r in rows if r.get("copropriete_id")}
+        copro_map: dict = {}
+        if copro_ids:
+            async for c in db.coproprietes.find(
+                {"id": {"$in": list(copro_ids)}}, {"_id": 0, "id": 1, "name": 1}
+            ):
+                copro_map[c["id"]] = c.get("name", "")
+        owner_ids_all = set()
+        for r in rows:
+            for oid in (r.get("owner_ids") or []):
+                if oid:
+                    owner_ids_all.add(oid)
+        owner_map: dict = {}
+        if owner_ids_all:
+            async for o in db.owners.find(
+                {"id": {"$in": list(owner_ids_all)}}, {"_id": 0, "id": 1, "name": 1, "email": 1}
+            ):
+                owner_map[o["id"]] = {"name": o.get("name", ""), "email": o.get("email", "")}
+        sender_ids = {r.get("sent_by_user_id") for r in rows if r.get("sent_by_user_id")}
+        sender_map: dict = {}
+        if sender_ids:
+            from bson import ObjectId
+            sender_oids = []
+            for s in sender_ids:
+                try:
+                    sender_oids.append(ObjectId(s))
+                except Exception:
+                    pass
+            if sender_oids:
+                async for u in db.users.find(
+                    {"_id": {"$in": sender_oids}}, {"_id": 1, "name": 1, "email": 1}
+                ):
+                    sender_map[str(u["_id"])] = {
+                        "name": u.get("name", ""), "email": u.get("email", ""),
+                    }
         for r in rows:
             r["_id"] = str(r.get("_id", ""))
-            # Retirer html_body volumineux du payload (envois de masse)
-            r.pop("html_body", None)
+            # iter93df : garder body_html (deja cappe a 100k) pour permettre
+            # la lecture du mail depuis la modale de detail.
+            r["copropriete_name"] = copro_map.get(r.get("copropriete_id"), "")
+            r["owner_names"] = [
+                owner_map.get(oid, {}).get("name", "") or oid
+                for oid in (r.get("owner_ids") or [])
+            ]
+            sb = sender_map.get(r.get("sent_by_user_id", ""), {})
+            r["sent_by_name"] = sb.get("name", "")
+            r["sent_by_email"] = sb.get("email", "")
         # Statistiques rapides
         total = len(rows)
         counts = {"sent": 0, "failed": 0, "dry_run": 0}

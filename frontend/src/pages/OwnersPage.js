@@ -82,7 +82,14 @@ export default function OwnersPage() {
 
   // iter90go : plus de filtre client (search server-side). On garde le nom `filtered`
   // pour minimiser le diff dans la table plus bas.
-  const filtered = owners;
+  // iter93dh : tri alphabetique FR (accents/casse) sur nom puis prenom.
+  const filtered = [...owners].sort((a, b) => {
+    const nA = (a.last_name || a.name || '').trim();
+    const nB = (b.last_name || b.name || '').trim();
+    const cmp = nA.localeCompare(nB, 'fr-BE', { sensitivity: 'base' });
+    if (cmp !== 0) return cmp;
+    return (a.first_name || '').localeCompare(b.first_name || '', 'fr-BE', { sensitivity: 'base' });
+  });
   const pageStart = total === 0 ? 0 : (page * PAGE_SIZE) + 1;
   const pageEnd = Math.min(total, (page + 1) * PAGE_SIZE);
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));

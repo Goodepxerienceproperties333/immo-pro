@@ -42,11 +42,15 @@ const sections = [
   { title: 'Rapports', accent: 'amber', items: [
     { to: '/reports', icon: BarChart3, label: 'Bilan & Resultats' },
     { to: '/balance-tiers', icon: Users, label: 'Balance de Tiers' },
+    { to: '/documents', icon: FolderOpen, label: 'Documents' },
+  ]},
+  // iter93dg : onglet dedie "Communication" regroupant tous les outils
+  // d'echange avec les proprietaires (rappels, envois, historique, modeles).
+  { title: 'Communication', accent: 'sky', items: [
     { to: '/reminders', icon: Bell, label: 'Rappels paiement' },
-    { to: '/communication', icon: Mail, label: 'Communication' },
+    { to: '/communication', icon: Mail, label: 'Envoi email' },
     { to: '/communication/history', icon: Send, label: 'Historique envois' },
     { to: '/email-templates', icon: FileText, label: 'Modeles emails' },
-    { to: '/documents', icon: FolderOpen, label: 'Documents' },
   ]},
   // iter90g4 : onglet "Support" pour permettre au syndic de suivre ses tickets bug.
   { title: 'Support', accent: 'blue', items: [
