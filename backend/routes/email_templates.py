@@ -40,9 +40,15 @@ SUPPORTED_VARIABLES = {
     "syndic_name": "Nom du cabinet syndic",
     "manager_name": "Prenom Nom du gestionnaire connecte",
     "manager_email": "Email du gestionnaire connecte",
+    "manager_phone": "GSM du gestionnaire (ou telephone cabinet syndic)",
     "today": "Date d'envoi (JJ/MM/AAAA)",
     "iban": "IBAN du compte de la copropriete",
     "bic": "BIC du compte",
+    # iter93cx : reperes temporels comptables
+    "fiscal_year_start": "Date de debut de l'exercice comptable en cours (JJ/MM/AAAA)",
+    "fiscal_year_end": "Date de fin de l'exercice comptable en cours (JJ/MM/AAAA)",
+    "fiscal_year_label": "Libelle de l'exercice (ex : Exercice 2026-2027)",
+    "last_bank_statement_date": "Date du dernier extrait comptabilise (JJ/MM/AAAA)",
 }
 
 
@@ -117,6 +123,54 @@ DEFAULT_TEMPLATES = [
         ),
         "is_default": True,
     },
+    {
+        # iter93cy : template professionnel pour la situation de compte
+        # trimestrielle / annuelle. Utilise les variables fiscal_year_*,
+        # last_bank_statement_date et manager_phone.
+        "id": "default_situation_compte",
+        "name": "Situation de compte",
+        "category": "information",
+        "subject": "{copropriete_name} - Votre situation de compte au {today}",
+        "body_html": (
+            "<p>Madame, Monsieur <b>{owner_name}</b>,</p>"
+            "<p>Vous trouverez en piece jointe votre <b>situation de compte</b> "
+            "pour la copropriete <b>{copropriete_name}</b>, arretee au {today}.</p>"
+            "<p>Cette situation reprend les elements suivants :</p>"
+            "<ul>"
+            "<li>Votre solde reporte au debut de l'exercice comptable (le <b>{fiscal_year_start}</b>).</li>"
+            "<li>Vos appels de provisions pour charges trimestrielles.</li>"
+            "<li>Votre eventuel appel de fonds de reserve decide lors de la derniere assemblee generale.</li>"
+            "<li>Votre eventuel ajustement de fonds de roulement decide lors de la derniere assemblee generale.</li>"
+            "<li>Vos paiements recus jusqu'au <b>{last_bank_statement_date}</b> "
+            "(les paiements realises apres cette date seront comptabilises lors de la prochaine importation bancaire).</li>"
+            "</ul>"
+            "<p><b>Votre solde a ce jour : {abs_balance} EUR ({balance_status}).</b></p>"
+            "<p>Si votre compte presente un solde debiteur, nous vous invitons a proceder au reglement "
+            "au profit de la copropriete au moyen des elements suivants :</p>"
+            "<ul>"
+            "<li>Beneficiaire : <b>{copropriete_name}</b></li>"
+            "<li>IBAN : <b>{iban}</b>{bic}</li>"
+            "<li>Communication structuree : <b>{vcs_code}</b></li>"
+            "</ul>"
+            "<p>Nous vous remercions d'effectuer le versement dans les meilleurs delais, "
+            "et au plus tard le 25 du mois en cours.</p>"
+            "<p>En cas de solde crediteur, aucune action n'est requise de votre part. "
+            "Les remboursements eventuels sont effectues uniquement sur demande, "
+            "a l'issue de l'assemblee generale annuelle.</p>"
+            "<p>Pour toute question relative a ce document, notre service de gestion "
+            "reste a votre disposition :</p>"
+            "<ul>"
+            "<li>Gestionnaire : <b>{manager_name}</b></li>"
+            "<li>Email : <a href=\"mailto:{manager_email}\">{manager_email}</a></li>"
+            "<li>Telephone : <b>{manager_phone}</b></li>"
+            "</ul>"
+            "<p>Nous vous remercions pour votre confiance.</p>"
+            "<p>Bien cordialement,<br>"
+            "<b>{manager_name}</b><br>"
+            "{syndic_name}</p>"
+        ),
+        "is_default": True,
+    },
 ]
 
 
@@ -141,6 +195,48 @@ def render_template(text: str, context: dict) -> str:
     except Exception:
         # Si un accolade orpheline crash la substitution, on tolere
         return text
+
+
+# iter93cy : detection HTML block-level pour auto-formatage.
+# Si un template body_html est saisi en texte brut (aucune balise <p>, <br>,
+# <div>, <ul>...), la reception via Outlook/Gmail affiche un pave illisible.
+# On auto-enveloppe alors les lignes en paragraphes.
+import re as _re
+_HTML_BLOCK_RE = _re.compile(
+    r"<\s*(p|div|br|ul|ol|li|table|tr|td|h[1-6]|blockquote|pre|hr)\b",
+    _re.IGNORECASE,
+)
+
+
+def ensure_html_paragraphs(html_or_text: str) -> str:
+    """Auto-format : si aucune balise block-level detectee, on convertit
+    les sauts de ligne doubles en paragraphes et simples en <br>.
+    Preserve les templates HTML existants sans modification.
+    """
+    if not html_or_text:
+        return ""
+    if _HTML_BLOCK_RE.search(html_or_text):
+        return html_or_text  # Deja formate HTML -> ne pas toucher
+    # Normalise les sauts de ligne, decoupe en paragraphes
+    normalized = html_or_text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    # Segments separes par ligne(s) vide(s)
+    paragraphs = [p.strip() for p in _re.split(r"\n\s*\n", normalized) if p.strip()]
+    if not paragraphs:
+        # Une seule ligne : traite comme un paragraphe
+        paragraphs = [normalized] if normalized else []
+    html_parts = []
+    for p in paragraphs:
+        # Sauts de ligne simples -> <br>
+        p_with_br = p.replace("\n", "<br>")
+        html_parts.append(f"<p>{p_with_br}</p>")
+    return "\n".join(html_parts)
+
+
+def render_body_html(text: str, context: dict) -> str:
+    """Rend un template body_html : substitution + auto-format paragraphes.
+    A utiliser partout ou l'on genere le corps final d'un email."""
+    rendered = render_template(text, context)
+    return ensure_html_paragraphs(rendered)
 
 
 async def get_template_by_id(db, syndic_user_id: str, template_id: str) -> Optional[dict]:
@@ -289,13 +385,19 @@ def create_email_templates_router(db):
             "syndic_name": "Cabinet Syndic Demo",
             "manager_name": "Jean DUPONT",
             "manager_email": "jean.dupont@cabinet.be",
+            "manager_phone": "+32 475 12 34 56",
             "today": datetime.now().strftime("%d/%m/%Y"),
             "iban": "BE68 5390 0754 7034",
             "bic": "BBRUBEBB",
+            # iter93cx : valeurs demo pour les reperes temporels
+            "fiscal_year_start": "01/04/2026",
+            "fiscal_year_end": "31/03/2027",
+            "fiscal_year_label": "Exercice 2026-2027",
+            "last_bank_statement_date": datetime.now().strftime("%d/%m/%Y"),
         }
         return {
             "subject": render_template(tpl.get("subject", ""), demo_ctx),
-            "body_html": render_template(tpl.get("body_html", ""), demo_ctx),
+            "body_html": render_body_html(tpl.get("body_html", ""), demo_ctx),
             "variables_used": [k for k in demo_ctx if "{" + k + "}" in (tpl.get("subject", "") + tpl.get("body_html", ""))],
         }
 
@@ -319,6 +421,76 @@ async def build_owner_email_context(db, owner_id: str, copropriete_id: str, curr
     balance = 0.0  # sera injecte par le caller si connu
     # iter93ac : format espace millier + virgule decimale pour emails
     from utils.format import fmt_eur as _fmt_eur
+
+    # iter93cx : exercice comptable en cours (statut 'open') de l'ACP.
+    # Fallback : le plus recent par date de debut.
+    def _fmt_date_fr(iso_or_date: str) -> str:
+        if not iso_or_date:
+            return ""
+        s = str(iso_or_date)[:10]  # YYYY-MM-DD
+        try:
+            y, m, d = s.split("-")
+            return f"{d}/{m}/{y}"
+        except Exception:
+            return s
+
+    fy_start = fy_end = fy_label = ""
+    if copropriete_id:
+        fy = await db.fiscal_years.find_one(
+            {"copropriete_id": copropriete_id, "status": "open"},
+            {"_id": 0, "name": 1, "start_date": 1, "end_date": 1},
+            sort=[("start_date", -1)],
+        )
+        if not fy:
+            fy = await db.fiscal_years.find_one(
+                {"copropriete_id": copropriete_id},
+                {"_id": 0, "name": 1, "start_date": 1, "end_date": 1},
+                sort=[("start_date", -1)],
+            )
+        if fy:
+            fy_start = _fmt_date_fr(fy.get("start_date", ""))
+            fy_end = _fmt_date_fr(fy.get("end_date", ""))
+            fy_label = fy.get("name", "") or ""
+
+    # iter93cx : dernier extrait bancaire comptabilise (statut 'posted').
+    # Fallback : dernier extrait tous statuts confondus.
+    last_stmt_date = ""
+    if copropriete_id:
+        last_stmt = await db.bank_statements.find_one(
+            {"copropriete_id": copropriete_id, "status": "posted"},
+            {"_id": 0, "date": 1},
+            sort=[("date", -1), ("created_at", -1)],
+        )
+        if not last_stmt:
+            last_stmt = await db.bank_statements.find_one(
+                {"copropriete_id": copropriete_id},
+                {"_id": 0, "date": 1},
+                sort=[("date", -1), ("created_at", -1)],
+            )
+        if last_stmt:
+            last_stmt_date = _fmt_date_fr(last_stmt.get("date", ""))
+
+    # iter93cx : manager_phone -> priorite user.phone, fallback syndic_configs.phone
+    manager_phone = ""
+    if current_user and current_user.get("phone"):
+        manager_phone = str(current_user.get("phone", "")).strip()
+    if not manager_phone:
+        try:
+            # Retrouver la config du syndic parent du user connecte
+            syndic_uid = None
+            if current_user:
+                syndic_uid = current_user.get("parent_syndic_id") or (
+                    str(current_user.get("_id", "")) if current_user.get("role") == "syndic" else None
+                )
+            if syndic_uid:
+                sc = await db.syndic_configs.find_one(
+                    {"syndic_user_id": syndic_uid}, {"_id": 0, "phone": 1}
+                )
+                if sc and sc.get("phone"):
+                    manager_phone = str(sc["phone"]).strip()
+        except Exception:
+            pass
+
     return {
         "owner_name": owner.get("name", ""),
         "owner_email": owner.get("email", ""),
@@ -331,7 +503,13 @@ async def build_owner_email_context(db, owner_id: str, copropriete_id: str, curr
         "syndic_name": copro.get("syndic_name", ""),
         "manager_name": (current_user or {}).get("name", ""),
         "manager_email": (current_user or {}).get("email", ""),
+        "manager_phone": manager_phone,
         "today": datetime.now().strftime("%d/%m/%Y"),
         "iban": iban,
         "bic": bic,
+        # iter93cx : reperes temporels comptables
+        "fiscal_year_start": fy_start,
+        "fiscal_year_end": fy_end,
+        "fiscal_year_label": fy_label,
+        "last_bank_statement_date": last_stmt_date,
     }

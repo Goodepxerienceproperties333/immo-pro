@@ -854,7 +854,7 @@ def create_communication_router(db):
 
         # Import lazy pour eviter la circularite de routes
         from routes.reports import _build_situation_compte_pdf, _compute_balance_tiers_for_ui
-        from routes.email_templates import get_template_by_id, render_template, build_owner_email_context
+        from routes.email_templates import get_template_by_id, render_template, render_body_html, ensure_html_paragraphs, build_owner_email_context
 
         # iter90aw : charge le template si demande (une seule fois)
         tpl = None
@@ -894,10 +894,10 @@ def create_communication_router(db):
                     ctx["abs_balance"] = _fmt_eur(abs(_b), with_suffix=False)
                     ctx["balance_status"] = "debiteur" if _b > 0 else ("crediteur" if _b < 0 else "solde")
                     subj = render_template(tpl.get("subject", "") or subject_default, ctx)
-                    body_rendered = render_template(tpl.get("body_html", "") or body_default, ctx)
+                    body_rendered = render_body_html(tpl.get("body_html", "") or body_default, ctx)
                 else:
                     subj = payload.subject.strip() or subject_default
-                    body_rendered = payload.body_html.strip() or body_default
+                    body_rendered = ensure_html_paragraphs(payload.body_html.strip() or body_default)
                 html = await _build_html_with_signature(request, body_rendered, payload.include_signature)
                 # iter90fv fix : `_build_situation_compte_pdf` retourne un
                 # tuple (pdf_bytes, filename). L'ancien code passait la tuple
@@ -927,7 +927,7 @@ def create_communication_router(db):
             raise HTTPException(400, "Aucun proprietaire selectionne")
 
         from routes.reports import _build_decompte_annuel_pdf
-        from routes.email_templates import get_template_by_id, render_template, build_owner_email_context
+        from routes.email_templates import get_template_by_id, render_template, render_body_html, ensure_html_paragraphs, build_owner_email_context
         from bson import ObjectId as _oid
 
         # iter90aw : template optionnel
@@ -995,10 +995,10 @@ def create_communication_router(db):
                 if tpl:
                     ctx = await build_owner_email_context(db, oid, payload.copropriete_id, current_user)
                     subj = render_template(tpl.get("subject", "") or subj_default, ctx)
-                    body_rendered = render_template(tpl.get("body_html", "") or body_default, ctx)
+                    body_rendered = render_body_html(tpl.get("body_html", "") or body_default, ctx)
                 else:
                     subj = payload.subject.strip() or subj_default
-                    body_rendered = payload.body_html.strip() or body_default
+                    body_rendered = ensure_html_paragraphs(payload.body_html.strip() or body_default)
                 html = await _build_html_with_signature(request, body_rendered, payload.include_signature)
                 pdf_bytes, _ = await _build_decompte_annuel_pdf(
                     db, oid, payload.copropriete_id, payload.fiscal_year_id,
@@ -1083,7 +1083,8 @@ def create_communication_router(db):
         exactement comme les endpoints send/situation et send/decompte, pour
         garantir que l'apercu est FIDELE a ce qui sera envoye."""
         from routes.email_templates import (
-            get_template_by_id, render_template, build_owner_email_context,
+            get_template_by_id, render_template, render_body_html,
+            ensure_html_paragraphs, build_owner_email_context,
         )
         from bson import ObjectId as _oid
 
@@ -1106,10 +1107,10 @@ def create_communication_router(db):
                     "debiteur" if bal > 0 else ("crediteur" if bal < 0 else "solde")
                 )
             subj = render_template(tpl.get("subject", "") or subject_default, ctx)
-            body_rendered = render_template(tpl.get("body_html", "") or body_default, ctx)
+            body_rendered = render_body_html(tpl.get("body_html", "") or body_default, ctx)
         else:
             subj = (subject_in or "").strip() or subject_default
-            body_rendered = (body_in or "").strip() or body_default
+            body_rendered = ensure_html_paragraphs((body_in or "").strip() or body_default)
         html = await _build_html_with_signature(request, body_rendered, include_signature)
         return subj, html
 
