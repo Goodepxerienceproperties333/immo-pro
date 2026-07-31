@@ -753,8 +753,30 @@ def create_reminders_router(db):
                 if not agg["vcs_code"] and d.get("vcs_code"):
                     agg["vcs_code"] = d.get("vcs_code")
 
+        # iter93dq : exclure les anciens proprietaires (data-quality safety).
+        # Un proprio ancien peut apparaitre a tort si des appels historiques
+        # existent dans la copro. On construit un set des "current_owner_ids"
+        # par copropriete = liste des owners ayant AU MOINS un lot actif.
+        current_owners_by_copro: dict[str, set] = {}
+        needed_copros_full = {fc.get("copropriete_id", "") for fc in fund_calls if fc.get("copropriete_id")}
+        for cid in needed_copros_full:
+            lots = await db.lots.find(
+                {"copropriete_id": cid}, {"_id": 0, "owner_id": 1, "owner_ids": 1}
+            ).to_list(10000)
+            active = set()
+            for lt in lots:
+                if lt.get("owner_id"):
+                    active.add(lt["owner_id"])
+                for oid in (lt.get("owner_ids") or []):
+                    if oid:
+                        active.add(oid)
+            current_owners_by_copro[cid] = active
+
         late = []
         for (fc_copro, owner_id), agg in per_owner.items():
+            # iter93dq : filtrer les anciens proprietaires
+            if owner_id not in current_owners_by_copro.get(fc_copro, set()):
+                continue
             # iter90hk/ho : filtre sur solde tier reel > 0.01 EUR
             bal = round(tier_balances.get((fc_copro, owner_id), 0.0), 2)
             if bal <= 0.01:

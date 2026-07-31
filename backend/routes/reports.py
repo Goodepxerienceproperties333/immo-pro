@@ -764,58 +764,65 @@ async def _build_decompte_annuel_pdf(db, owner_id, copropriete_id, fiscal_year_i
     return pdf_bytes, filename
 
 
-async def _compute_balance_tiers_for_ui(db, copropriete_id):
+async def _compute_balance_tiers_for_ui(db, copropriete_id, include_former: bool = False):
     """iter90au : version legere de balance_tiers_owners destinee a l'UI de
     selection des proprietaires (module communication). Retourne pour chaque
     proprietaire de l'ACP : {owner_id, owner_name, email, phone, balance, status,
     account_provisions, account_reserve}. Le solde est CUMULATIF (toutes dates,
-    hors extournes)."""
+    hors extournes).
+
+    iter93dr : par defaut, on EXCLUT les anciens proprietaires (owners qui
+    n'ont plus de lot actif dans l'ACP). Ce filtre elimine les "imports
+    fantomes" (ex. proprietaire lie a une ACP par erreur via journal_entries
+    ou tier_accounts mais qui n'a jamais eu de lot). Passer include_former=True
+    pour reactiver l'ancien comportement (rapport comptable de balance
+    detaillee uniquement).
+    """
     if not copropriete_id or copropriete_id == "all":
         return {"owners": [], "total_debiteurs": 0.0, "total_crediteurs": 0.0}
 
     lots = await db.lots.find({"copropriete_id": copropriete_id}, {"_id": 0}).to_list(10000)
-    owner_ids = set(lt.get("owner_id") for lt in lots if lt.get("owner_id"))
-    # Inclure aussi les co-proprietaires (owner_ids pluriel sur les lots)
+    lot_ids = {lt.get("id") for lt in lots if lt.get("id")}
+    # iter93ds : VEROUILLAGE ANTI-PHANTOME.
+    # Un proprio est "lie a l'ACP" UNIQUEMENT si :
+    #   (a) il possede actuellement un lot dans cette ACP, OU
+    #   (b) il a possede un lot de cette ACP dans le passe (mutation dont
+    #       lot_id appartient a l'ACP - verification stricte, pas seulement
+    #       copropriete_id de la mutation).
+    # On IGNORE :
+    #   - tier_accounts orphelins (import fantome)
+    #   - journal_entries.third_party_id sans lot associe
+    # Cela empeche un CALLENS 'invente' d'apparaitre uniquement parce que
+    # son ID traine dans un JE ou son tier_accounts a ete pollue par un
+    # import passe.
+    current_owner_ids = set()
     for lt in lots:
+        if lt.get("owner_id"):
+            current_owner_ids.add(lt["owner_id"])
         for oid in (lt.get("owner_ids") or []):
             if oid:
-                owner_ids.add(oid)
+                current_owner_ids.add(oid)
 
-    # Proprietaires avec tier_accounts configures pour cette ACP
-    tier_candidates = await db.owners.find(
-        {f"tier_accounts.{copropriete_id}": {"$exists": True}},
-        {"_id": 0, "id": 1},
-    ).to_list(10000)
-    for c in tier_candidates:
-        owner_ids.add(c["id"])
+    owner_ids = set(current_owner_ids)
 
-    # Anciens proprietaires via mutations
-    muts = await db.mutations.find(
-        {"copropriete_id": copropriete_id},
-        {"_id": 0, "from_owner_id": 1, "to_owner_id": 1},
-    ).to_list(10000)
-    for m in muts:
-        if m.get("from_owner_id"):
-            owner_ids.add(m["from_owner_id"])
-        if m.get("to_owner_id"):
-            owner_ids.add(m["to_owner_id"])
+    # Anciens proprietaires : uniquement via mutations dont le lot appartient
+    # explicitement a l'ACP (double check contre les mutations fantomes).
+    if lot_ids:
+        muts = await db.mutations.find(
+            {"copropriete_id": copropriete_id, "lot_id": {"$in": list(lot_ids)}},
+            {"_id": 0, "from_owner_id": 1, "to_owner_id": 1},
+        ).to_list(10000)
+        for m in muts:
+            if m.get("from_owner_id"):
+                owner_ids.add(m["from_owner_id"])
+            if m.get("to_owner_id"):
+                owner_ids.add(m["to_owner_id"])
 
-    third_party_ids_in_je = await db.journal_entries.distinct(
-        "lines.third_party_id", {"copropriete_id": copropriete_id}
-    )
-    for tpid in third_party_ids_in_je:
-        if tpid:
-            owner_ids.add(tpid)
     owner_ids = list(owner_ids)
     owners = (
         await db.owners.find({"id": {"$in": owner_ids}}, {"_id": 0}).sort("name", 1).to_list(1000)
         if owner_ids else []
     )
-    current_owner_ids = set(lt.get("owner_id") for lt in lots if lt.get("owner_id"))
-    for lt in lots:
-        for oid in (lt.get("owner_ids") or []):
-            if oid:
-                current_owner_ids.add(oid)
 
     # Cumul entries (toutes dates, hors extournes)
     # iter90ia : appliquer le MEME filtre AN que la Situation de compte et
@@ -893,6 +900,9 @@ async def _compute_balance_tiers_for_ui(db, copropriete_id):
         })
     # Sort by name
     result.sort(key=lambda x: (x["owner_name"] or "").lower())
+    # iter93dr : filtre par defaut - exclut les "imports fantomes"
+    if not include_former:
+        result = [r for r in result if not r.get("is_former_owner")]
     total_debiteurs = round(sum(r["balance"] for r in result if r["balance"] > 0), 2)
     total_crediteurs = round(sum(abs(r["balance"]) for r in result if r["balance"] < 0), 2)
     return {"owners": result, "total_debiteurs": total_debiteurs, "total_crediteurs": total_crediteurs}
@@ -3062,6 +3072,7 @@ def create_reports_router(db):
         copropriete_id: Optional[str] = None,
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
+        include_former: bool = False,
     ):
         """Balance de tiers proprietaires (basee sur le grand livre).
 
@@ -3079,6 +3090,7 @@ def create_reports_router(db):
             return {"owners": [], "total_debiteurs": 0, "total_crediteurs": 0}
 
         lots = await db.lots.find({"copropriete_id": copropriete_id}, {"_id": 0}).to_list(10000)
+        lot_ids = {lt.get("id") for lt in lots if lt.get("id")}
         owner_ids = set(lt.get("owner_id") for lt in lots if lt.get("owner_id"))
         # Inclure aussi les co-proprietaires (owner_ids pluriel sur les lots)
         for lt in lots:
@@ -3086,37 +3098,22 @@ def create_reports_router(db):
                 if oid:
                     owner_ids.add(oid)
 
-        # Proprietaires avec tier_accounts configures pour cette ACP
-        # (ex: promoteurs comme Matexi qui n'ont pas de lots mais des comptes)
-        tier_candidates = await db.owners.find(
-            {f"tier_accounts.{copropriete_id}": {"$exists": True}},
-            {"_id": 0, "id": 1},
-        ).to_list(10000)
-        for c in tier_candidates:
-            owner_ids.add(c["id"])
-
-        # Anciens proprietaires via mutations
-        muts = await db.mutations.find(
-            {"copropriete_id": copropriete_id},
-            {"_id": 0, "from_owner_id": 1, "to_owner_id": 1},
-        ).to_list(10000)
-        for m in muts:
-            if m.get("from_owner_id"):
-                owner_ids.add(m["from_owner_id"])
-            if m.get("to_owner_id"):
-                owner_ids.add(m["to_owner_id"])
-
-        # Aussi inclure les anciens proprietaires (vendus) qui ont encore un
-        # mouvement / solde sur leurs comptes tiers dans cette ACP.
-        # On scanne les journal_entries pour trouver tous les third_party_id et
-        # tous les comptes 40000XXX/40010XXX rencontres, puis on retrouve les owners
-        # qui ont ces comptes en tier_accounts[copropriete_id].
-        third_party_ids_in_je = await db.journal_entries.distinct(
-            "lines.third_party_id", {"copropriete_id": copropriete_id}
-        )
-        for tpid in third_party_ids_in_je:
-            if tpid:
-                owner_ids.add(tpid)
+        # iter93ds : VEROUILLAGE ANTI-PHANTOME.
+        # On N'INCLUT PAS tier_accounts orphelins ni JE third_party_id
+        # sans lot associe -> evite qu'un import fantome fasse remonter
+        # un proprietaire qui n'a jamais eu de lot dans cette ACP.
+        # Anciens proprietaires uniquement via mutations dont le lot_id
+        # appartient explicitement a l'ACP (double check).
+        if lot_ids:
+            muts = await db.mutations.find(
+                {"copropriete_id": copropriete_id, "lot_id": {"$in": list(lot_ids)}},
+                {"_id": 0, "from_owner_id": 1, "to_owner_id": 1},
+            ).to_list(10000)
+            for m in muts:
+                if m.get("from_owner_id"):
+                    owner_ids.add(m["from_owner_id"])
+                if m.get("to_owner_id"):
+                    owner_ids.add(m["to_owner_id"])
         owner_ids = list(owner_ids)
         owners = await db.owners.find({"id": {"$in": owner_ids}}, {"_id": 0}).sort("name", 1).to_list(1000) if owner_ids else []
         # Set of owners that still hold at least one lot in this ACP
@@ -3351,6 +3348,16 @@ def create_reports_router(db):
 
         # Hide ex-proprietaires that have a zero balance and no movement
         result = [r for r in result if not (r.get("is_former_owner") and abs(r["balance"]) < 0.01 and r["movements_count"] == 0)]
+        # iter93dr : filtre "imports fantomes" - exclut TOUS les anciens
+        # proprietaires (quel que soit leur solde ou nombre de mouvements),
+        # sauf si le client demande explicitement de les inclure via le
+        # parametre include_former=true. Un proprietaire ne doit plus jamais
+        # apparaitre dans une ACP ou il n'a jamais eu de lot.
+        # Le parametre est expose sur l'endpoint /balance-tiers/owners pour
+        # que les audits comptables puissent toujours consulter les anciens
+        # si necessaire (ex: verification historique de solde apres mutation).
+        if not include_former:
+            result = [r for r in result if not r.get("is_former_owner")]
 
         # iter90ak / iter91c : ajouter des lignes synthetiques pour les comptes tiers
         # avec solde non nul mais qui ne sont rattaches a AUCUN proprietaire

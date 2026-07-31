@@ -1,0 +1,23 @@
+{
+  "summary": "iter93ds anti-phantom lockdown verified on backend. All 7 backend tests pass on preview URL. Agathe ACP returns exactly 36 owners in both /api/communication/owners-balances and /api/reports/balance-tiers/owners (default AND include_former=true). Totals match spec (debiteurs=40462.63 EUR, crediteurs=168.10 EUR). Direct DB phantom injection (orphan owner + tier_accounts + journal_entries.third_party_id WITHOUT lot) confirmed BLOCKED in all three endpoints. Legitimate owner 'M. CANTERO DIAZ' (97df0cde, has lot) stays; orphan 'M. et Mme CANTERO DIAZ - VARGAS BAQUERO' (29034c0d, created_from_orphan_account, no lot) correctly excluded. Other ACPs unaffected (regression test passed).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter93ds_antiphantom.py",
+    "/app/test_reports/pytest/iter93ds_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Both endpoints (reports.py:767 helper and reports.py:3070 balance-tiers/owners) apply the SAME source-based whitelist: lots.owner_id + lots.owner_ids + mutations{copropriete_id, lot_id in acp_lot_ids}. tier_accounts and journal_entries.third_party_id are no longer sources for owner discovery. Lockdown is consistent across both code paths.",
+    "The include_former parameter (line 3075) does NOT re-open the phantom pathway; it only affects downstream filtering. Verified by injecting an orphan owner + tier_account + JE and confirming exclusion with include_former=true.",
+    "Minor: /api/reports/balance-tiers/owners duplicates the lot->owner_ids collection logic (lines 3094-3099 and 3120-3124). Consider refactoring to a single helper to prevent divergence with _compute_balance_tiers_for_ui."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter93ds_antiphantom.py"],
+  "success_rate": {"backend": "100%", "frontend": "N/A (skipped per request)"},
+  "test_credentials": "admin@copro.be / admin123 (superadmin, cookie-based JWT via access_token cookie)",
+  "seed_data_creation": "Temporary phantom owner + tier_account + journal_entry injected then cleaned up in test_phantom_injection_blocked (TEST_PHANTOM_* prefix). No residual data.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Anti-phantom lockdown iter93ds is validated. If similar owner-source bugs appear in other reports (bilan, situation de compte, decomptes individuels), extend the same whitelist pattern: lots.owner_id/owner_ids + mutations{lot_id in acp_lot_ids}. Never trust tier_accounts.copropriete_id or journal_entries.third_party_id alone. Auth uses cookie access_token (not header) on this preview.",
+  "rca of the issue": "PRODUCTION had orphan tier_accounts referring to Agathe for owner 'CALLENS Bernadette' (never had a lot in this ACP). Previous code discovered owners via UNION of (lots.owner_id, tier_accounts.{copropriete_id}, journal_entries.third_party_id, mutations.{copropriete_id}). The orphan tier_accounts row was enough to pull CALLENS into the balance de tiers, bilan, and communication lists. Fix (iter93ds): restrict owner discovery to authoritative sources only - lots.owner_id/owner_ids + mutations where lot_id belongs to the ACP. tier_accounts and JE.third_party_id are no longer considered as inclusion sources. Verified via direct DB injection that phantom owners are now blocked in all three endpoints."
+}
