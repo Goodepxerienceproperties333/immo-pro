@@ -586,8 +586,15 @@ def create_communication_router(db):
         l'onglet Documents et de le consulter depuis l'onglet Communications.
         """
         sent_by = ""
+        syndic_uid = ""
         if request is not None:
             sent_by = getattr(request.state, "user_id", "") or ""
+            # iter93dd : resoudre le syndic_user_id pour le scope multi-cabinet.
+            # Sans ce champ, la page "Historique des envois email" affiche 0 ligne.
+            try:
+                _, syndic_uid = await _resolve_syndic_scope(db, request)
+            except Exception:
+                syndic_uid = ""
         comm_id = str(uuid.uuid4())
 
         # iter90hs : persist PJ en GridFS (une seule fois) + docs par proprio
@@ -677,6 +684,8 @@ def create_communication_router(db):
             "dry_run": bool(dry_run),
             "status": status or "sent",
             "error_msg": error_msg or "",
+            # iter93dd : necessaire au filtre /api/communication/sent-log
+            "syndic_user_id": syndic_uid or "",
         }
         await db.sent_communications.insert_one(doc)
 
@@ -734,9 +743,29 @@ def create_communication_router(db):
         licence Exchange, Application Access Policy restrictive).
         """
         _, scope_id = await _resolve_syndic_scope(db, request)
-        query = {"syndic_user_id": scope_id}
+        # iter93dd : retro-compat pour les envois legacy (sans syndic_user_id).
+        # On cherche par syndic_user_id explicite OU par copropriete_id des
+        # ACPs accessibles par le user courant.
+        user = await _get_current_user(db, request)
+        user_acps = user.get("copropriete_ids") or []
+        legacy_clause = {"syndic_user_id": {"$in": ["", None]}}
+        if user_acps and user.get("role") != "superadmin":
+            legacy_clause["copropriete_id"] = {"$in": user_acps}
+        query = {
+            "$or": [
+                {"syndic_user_id": scope_id},
+                legacy_clause,
+            ]
+        }
         if copropriete_id:
-            query["copropriete_id"] = copropriete_id
+            # Filtre plus strict quand ACP specifique demandee
+            query = {
+                "copropriete_id": copropriete_id,
+                "$or": [
+                    {"syndic_user_id": scope_id},
+                    {"syndic_user_id": {"$in": ["", None]}},
+                ],
+            }
         if only_failed:
             query["status"] = "failed"
         rows = await db.sent_communications.find(query).sort("sent_at", -1).limit(min(limit, 500)).to_list(500)

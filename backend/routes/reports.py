@@ -477,6 +477,86 @@ async def _build_situation_compte_pdf(db, owner_id, copropriete_id, start_date=N
     return pdf_bytes, filename
 
 
+async def _compute_owner_period_balance(db, owner_id, copropriete_id, start_date=None, end_date=None):
+    """iter93da : calcule le solde de fin de periode pour un proprietaire,
+    IDENTIQUE a la valeur "A REGLER" du PDF Situation de compte.
+
+    Retourne (period_balance_debtor, opening_balance) ou :
+      - period_balance_debtor > 0 = le proprio DOIT (debiteur)
+      - period_balance_debtor < 0 = credit en sa faveur
+      - opening_balance : solde reporte au debut de la periode (POV proprio)
+
+    Utilise par communication.py pour substituer {abs_balance} dans les
+    templates d'email en coherence avec le PDF joint.
+    """
+    owner = await db.owners.find_one({"id": owner_id}, {"_id": 0})
+    if not owner:
+        return 0.0, 0.0
+    tier_acc = (owner.get("tier_accounts") or {}).get(copropriete_id, {}) or {}
+    acc_prov = tier_acc.get("provisions", "")
+    acc_res = tier_acc.get("reserve", "")
+    valid_accs = {a for a in (acc_prov, acc_res) if a}
+
+    entries_q = {
+        "copropriete_id": copropriete_id,
+        "$or": [
+            {"journal_type": {"$ne": "AN"}},
+            {"journal_type": "AN", "is_opening_balance": True},
+        ],
+    }
+    _exclude_reversals(entries_q)
+    entries = await db.journal_entries.find(entries_q, {"_id": 0}).to_list(100000)
+
+    def _in_range(d):
+        if start_date and d < start_date:
+            return "before"
+        if end_date and d > end_date:
+            return "after"
+        return "in"
+
+    opening = 0.0
+    period_delta = 0.0  # POV proprio : credit - debit
+    seen = set()
+    for e in entries:
+        for idx, ln in enumerate(e.get("lines", []) or []):
+            acc = ln.get("account_number", "")
+            tpid = ln.get("third_party_id")
+            if acc not in valid_accs and tpid != owner_id:
+                continue
+            key = (e.get("id"), idx)
+            if key in seen:
+                continue
+            seen.add(key)
+            d_val = float(ln.get("debit", 0) or 0)
+            c_val = float(ln.get("credit", 0) or 0)
+            pos = _in_range(e.get("date", ""))
+            if pos == "before":
+                opening += c_val - d_val
+            elif pos == "in":
+                period_delta += c_val - d_val
+
+    # Paiements bancaires non lettres
+    all_bank_txns = await db.bank_transactions.find(
+        {"copropriete_id": copropriete_id}, {"_id": 0}
+    ).to_list(100000)
+    for txn in all_bank_txns:
+        if txn.get("matched"):
+            continue
+        comm = (txn.get("communication", "") or "").replace("+", "").replace("/", "").replace(" ", "")
+        if comm != owner.get("vcs_digits") and comm != owner.get("vcs_code"):
+            continue
+        pos = _in_range(txn.get("date", ""))
+        amt = abs(float(txn.get("amount", 0) or 0))
+        if pos == "before":
+            opening += amt
+        elif pos == "in":
+            period_delta += amt
+
+    period_balance_pov_owner = opening + period_delta
+    # Convention debiteur : positif = doit payer (inverse POV proprio)
+    return -period_balance_pov_owner, opening
+
+
 async def _build_decompte_annuel_pdf(db, owner_id, copropriete_id, fiscal_year_id=None, preview=True):
     """iter90au : helper reutilisable qui construit les bytes PDF du decompte
     annuel + le nom de fichier. Utilise par le download endpoint et par le

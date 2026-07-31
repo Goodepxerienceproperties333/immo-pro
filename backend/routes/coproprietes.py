@@ -187,12 +187,19 @@ def create_coproprietes_router(db):
             copros = await db.coproprietes.find(q, {"_id": 0}).sort("reference", -1).to_list(1000)
         else:
             # Syndic / gestionnaire / owner : ne voient QUE leurs ACPs (copropriete_ids)
-            # + filtre syndic_id pour isolation multi-syndic
             user_copro_ids = user.get("copropriete_ids", []) or []
             if not user_copro_ids:
                 return []
             q["id"] = {"$in": user_copro_ids}
-            q.update(syndic_query(request))
+            # iter93dc : l'assignation explicite via `copropriete_ids` est la source
+            # d'autorite. Le filtre `syndic_query` (syndic_id) reste applique aux
+            # syndic pour couvrir le cas ou copropriete_ids est vide mais des ACPs
+            # existent dans le cabinet (retro-compat). Il est SKIP pour les
+            # gestionnaires car ils n'ont acces qu'a ce qu'on leur donne
+            # explicitement, et sinon les ACPs legacy sans `syndic_id` sont
+            # invisibles meme si assignees.
+            if role == "syndic":
+                q.update(syndic_query(request))
             copros = await db.coproprietes.find(q, {"_id": 0}).sort("reference", -1).to_list(1000)
         return copros
 

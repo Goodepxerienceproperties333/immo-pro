@@ -293,6 +293,10 @@ function SendActionDialog({
     if (!from_mailbox) return toast.error('Choisissez une boite expeditrice');
     if (selectedOwners.length === 0) return toast.error('Selectionnez au moins un proprietaire');
     if (action === 'decompte' && !fiscal_year_id) return toast.error('Choisissez un exercice');
+    // iter93db : la date de fin est OBLIGATOIRE pour la situation de compte,
+    // afin d'aligner le solde de l'email avec le PDF joint.
+    if (action === 'situation' && !end_date) return toast.error('Saisissez la date de fin de periode (Au)');
+    if (action === 'situation' && !start_date) return toast.error('Saisissez la date de debut de periode (Du)');
     setSending(true);
     try {
       const payload = {
@@ -429,13 +433,15 @@ function SendActionDialog({
           {action === 'situation' && (
             <div className="grid grid-cols-2 gap-2">
               <div>
-                <Label className="text-xs">Du (optionnel)</Label>
+                <Label className="text-xs">Du *</Label>
                 <Input type="date" value={start_date} onChange={(e) => setStart(e.target.value)}
+                       required
                        data-testid="input-start-date" />
               </div>
               <div>
-                <Label className="text-xs">Au (optionnel)</Label>
+                <Label className="text-xs">Au *</Label>
                 <Input type="date" value={end_date} onChange={(e) => setEnd(e.target.value)}
+                       required
                        data-testid="input-end-date" />
               </div>
             </div>
