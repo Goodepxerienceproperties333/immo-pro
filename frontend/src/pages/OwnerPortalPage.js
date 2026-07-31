@@ -16,6 +16,7 @@ import { sanitizeHtml } from '@/lib/sanitizeHtml';
 import OwnerOnboardingTour, { ownerTourStorageKey } from '@/components/OwnerOnboardingTour';
 
 import { fmtEUR, round2 } from '@/lib/format';
+import DocumentViewerModal from '@/components/DocumentViewerModal';
 // Iter90db : palette couleur deterministe par nom de categorie de document
 // (index -> style bordure/fond/texte). Le hash simple s'assure que la meme
 // categorie recoit toujours la meme couleur, meme entre sessions/machines.
@@ -61,6 +62,8 @@ export default function OwnerPortalPage() {
   const [fundCalls, setFundCalls] = useState([]);
   const [charges, setCharges] = useState([]);
   const [documents, setDocuments] = useState([]);
+  // iter93ct : document en cours de visualisation dans DocumentViewerModal
+  const [viewerDoc, setViewerDoc] = useState(null);
   const [communications, setCommunications] = useState([]);
   const [selectedComm, setSelectedComm] = useState(null); // detail email ouvert
   // iter90do : selectedAcp commence a null -> ecran de selection ACP obligatoire.
@@ -1218,7 +1221,7 @@ export default function OwnerPortalPage() {
           </TabsContent>
 
           <TabsContent value="documents" className="mt-0">
-            <OwnerDocumentsView documents={filteredDocs} />
+            <OwnerDocumentsView documents={filteredDocs} onView={setViewerDoc} />
           </TabsContent>
 
           {/* iter90hw + iter90hz + iter90i0 : nouvel onglet "Comptes bancaires"
@@ -1525,6 +1528,12 @@ export default function OwnerPortalPage() {
           <a href="/legal/cookies" target="_blank" rel="noopener noreferrer" className="hover:text-[#022D52] hover:underline">Cookies</a>
         </div>
       </footer>
+      {/* iter93ct : DocumentViewerModal partagee (documents + PJ communications) */}
+      <DocumentViewerModal
+        open={!!viewerDoc}
+        onClose={() => setViewerDoc(null)}
+        doc={viewerDoc}
+      />
     </div>
   );
 }
@@ -2070,7 +2079,7 @@ function DocumentCategoryLegend({ documents }) {
 // - Encart "Dernier document ajoute" en haut
 // - Tuiles par categorie avec code couleur (grand format cliquable)
 // - Click sur une tuile -> vue detaillee des documents de cette categorie
-function OwnerDocumentsView({ documents }) {
+function OwnerDocumentsView({ documents, onView }) {
   const [selectedCategory, setSelectedCategory] = useState(null);
   if (!documents || documents.length === 0) {
     return (
@@ -2126,14 +2135,15 @@ function OwnerDocumentsView({ documents }) {
                 <div className="flex items-center justify-between mt-2 gap-2">
                   <span className="text-[10px] text-slate-400">{fmtDate(d.created_at)}</span>
                   {(d.filename || d.gridfs_id) && (
-                    <a
-                      href={`${process.env.REACT_APP_BACKEND_URL}/api/documents/${d.id}/download`}
-                      target="_blank" rel="noreferrer"
+                    <button
+                      type="button"
+                      onClick={() => onView && onView(d)}
                       className="text-[#022D52] hover:bg-blue-50 p-1 rounded flex items-center gap-1 text-[11px]"
-                      title="Telecharger"
+                      title="Visualiser"
+                      data-testid={`owner-doc-view-${d.id}`}
                     >
-                      <ArrowDownToLine size={13} /> Consulter
-                    </a>
+                      <Eye size={13} /> Consulter
+                    </button>
                   )}
                 </div>
               </CardContent>
@@ -2165,14 +2175,14 @@ function OwnerDocumentsView({ documents }) {
                 </div>
               </div>
               {(lastDoc.filename || lastDoc.gridfs_id) && (
-                <a
-                  href={`${process.env.REACT_APP_BACKEND_URL}/api/documents/${lastDoc.id}/download`}
-                  target="_blank" rel="noreferrer"
+                <button
+                  type="button"
+                  onClick={() => onView && onView(lastDoc)}
                   className="bg-[#022D52] hover:bg-[#1D4ED8] text-white px-3 py-1.5 rounded text-xs flex items-center gap-1"
-                  data-testid="owner-docs-latest-download"
+                  data-testid="owner-docs-latest-view"
                 >
-                  <ArrowDownToLine size={13} /> Consulter
-                </a>
+                  <Eye size={13} /> Consulter
+                </button>
               )}
             </div>
           </CardContent>

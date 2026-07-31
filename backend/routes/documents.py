@@ -285,12 +285,20 @@ def create_documents_router(db):
         return {k: v for k, v in doc.items() if k != "_id"}
 
     @router.get("/{doc_id}/download")
-    async def download_document(doc_id: str):
+    async def download_document(doc_id: str, inline: int = 0):
+        """Return the document file.
+
+        - Default: `Content-Disposition: attachment` (forces download).
+        - `?inline=1`: `Content-Disposition: inline` (embed in iframe / <img>).
+          Utilise par le composant DocumentViewerModal cote syndic ET
+          proprietaire pour afficher PDF et images directement dans l'app.
+        """
         doc = await db.documents.find_one({"id": doc_id}, {"_id": 0})
         if not doc:
             raise HTTPException(404, "Document non trouve")
         media_type = doc.get("mime_type") or "application/octet-stream"
         filename = doc.get("filename") or doc.get("stored_name") or "document"
+        disposition = "inline" if inline else "attachment"
         # iter87 : prefer GridFS (new), fallback to disk (legacy)
         gid = doc.get("gridfs_id")
         if gid:
@@ -303,12 +311,17 @@ def create_documents_router(db):
             return Response(
                 content=data,
                 media_type=media_type,
-                headers={"Content-Disposition": f'attachment; filename="{safe_name}"'},
+                headers={"Content-Disposition": f'{disposition}; filename="{safe_name}"'},
             )
         path = doc.get("stored_path", "")
         if not path or not os.path.exists(path):
             raise HTTPException(404, "Fichier supprime du disque")
-        return FileResponse(path, media_type=media_type, filename=filename)
+        return FileResponse(
+            path,
+            media_type=media_type,
+            filename=filename,
+            content_disposition_type=disposition,
+        )
 
     @router.put("/{doc_id}")
     async def update_document(doc_id: str, data: DocumentInput):

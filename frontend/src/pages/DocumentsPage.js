@@ -10,7 +10,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { toast } from 'sonner';
-import { Plus, Trash2, Pencil, FileText, Tag, Upload, Loader2, Download, Sparkles } from 'lucide-react';
+import { Plus, Trash2, Pencil, FileText, Tag, Upload, Loader2, Download, Sparkles, Eye } from 'lucide-react';
+import DocumentViewerModal from '@/components/DocumentViewerModal';
 
 export default function DocumentsPage() {
   const [tab, setTab] = useState('documents');
@@ -24,6 +25,7 @@ export default function DocumentsPage() {
   const [docForm, setDocForm] = useState({ title: '', description: '', category_id: '', content: '' });
   const [catForm, setCatForm] = useState({ name: '', description: '' });
   const [uploading, setUploading] = useState(false);
+  const [viewerDoc, setViewerDoc] = useState(null); // Document en cours de visualisation
   const fileInputRef = useRef(null);
 
   const load = useCallback(async () => {
@@ -151,15 +153,26 @@ export default function DocumentsPage() {
                 <Card key={doc.id} className="border-slate-200 hover:shadow-md transition-shadow" data-testid={`doc-card-${doc.id}`}>
                   <CardContent className="p-4">
                     <div className="flex items-start justify-between mb-2">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <FileText size={16} className="text-[#022D52] flex-shrink-0" />
-                        <span className="font-medium text-sm text-slate-900 truncate">{doc.title}</span>
-                      </div>
+                      <button
+                        type="button"
+                        onClick={() => (doc.gridfs_id || doc.stored_path) && setViewerDoc(doc)}
+                        className="flex items-center gap-2 min-w-0 text-left hover:text-[#1D4ED8] group"
+                        title={(doc.gridfs_id || doc.stored_path) ? 'Cliquer pour visualiser' : 'Aucun fichier associe'}
+                        data-testid={`doc-open-${doc.id}`}
+                      >
+                        <FileText size={16} className="text-[#022D52] flex-shrink-0 group-hover:text-[#1D4ED8]" />
+                        <span className="font-medium text-sm text-slate-900 truncate group-hover:text-[#1D4ED8]">{doc.title}</span>
+                      </button>
                       <div className="flex gap-0 flex-shrink-0">
                         {(doc.stored_path || doc.gridfs_id) && (
-                          <Button variant="ghost" size="sm" onClick={() => window.open(`${process.env.REACT_APP_BACKEND_URL}/api/documents/${doc.id}/download`, '_blank')} className="h-6 w-6 p-0 text-slate-400" title="Telecharger" data-testid={`doc-download-${doc.id}`}>
-                            <Download size={12} />
-                          </Button>
+                          <>
+                            <Button variant="ghost" size="sm" onClick={() => setViewerDoc(doc)} className="h-6 w-6 p-0 text-slate-400 hover:text-[#022D52]" title="Visualiser" data-testid={`doc-view-${doc.id}`}>
+                              <Eye size={12} />
+                            </Button>
+                            <Button variant="ghost" size="sm" onClick={() => window.open(`${process.env.REACT_APP_BACKEND_URL}/api/documents/${doc.id}/download`, '_blank')} className="h-6 w-6 p-0 text-slate-400" title="Telecharger" data-testid={`doc-download-${doc.id}`}>
+                              <Download size={12} />
+                            </Button>
+                          </>
                         )}
                         {/* iter90ht : bouton edition pour reclasser / renommer */}
                         <Button variant="ghost" size="sm" onClick={() => openEditDoc(doc)} className="h-6 w-6 p-0 text-slate-400 hover:text-[#022D52]" title="Modifier" data-testid={`doc-edit-${doc.id}`}>
@@ -265,6 +278,12 @@ export default function DocumentsPage() {
           </div>
         </DialogContent>
       </Dialog>
+      {/* Document Viewer Modal (iter93ct) */}
+      <DocumentViewerModal
+        open={!!viewerDoc}
+        onClose={() => setViewerDoc(null)}
+        doc={viewerDoc}
+      />
     </div>
   );
 }
