@@ -2013,9 +2013,23 @@ def create_owner_portal_router(db):
         """Owner self-updates his coordinates. Trigger syndic email notification."""
         owner = await _resolve_owner(db, request)
         owner_id = owner["id"]
+        # iter93cu : libelles humains pour l'email pro (au lieu de "postal_code")
+        FIELD_LABELS = {
+            "first_name": "Prenom",
+            "last_name": "Nom",
+            "address": "Adresse",
+            "postal_code": "Code postal",
+            "city": "Ville",
+            "country": "Pays",
+            "email": "Email principal",
+            "email2": "Email secondaire",
+            "phone": "Telephone",
+            "phone2": "Telephone secondaire",
+        }
         # Build update payload : only whitelisted fields, only non-None values
         update = {}
         diffs = []
+        changes = []  # iter93cu : structure {label, before, after} pour email pro
         for field, new_val in data.model_dump(exclude_none=True).items():
             if field not in OWNER_SELF_EDITABLE:
                 continue
@@ -2024,6 +2038,12 @@ def create_owner_portal_router(db):
             if (new_val_str or "") != (old_val or ""):
                 update[field] = new_val_str
                 diffs.append(f"{field} : '{old_val}' -> '{new_val_str}'")
+                changes.append({
+                    "label": FIELD_LABELS.get(field, field),
+                    "field": field,
+                    "before": old_val,
+                    "after": new_val_str,
+                })
         if not update:
             return {"updated": False, "message": "Aucune modification detectee", "owner": owner}
         # Recompute `name` if last/first changed
@@ -2042,11 +2062,21 @@ def create_owner_portal_router(db):
         updated_owner = await db.owners.find_one({"id": owner_id}, {"_id": 0})
         # Notify syndic
         copro_ids = await _owner_copropriete_ids(owner_id)
+        # iter93cu : recuperer le(s) nom(s) de copropriete(s) pour l'email pro.
+        # Un proprio peut avoir des lots dans plusieurs ACPs -> concat.
+        copro_name = ""
+        if copro_ids:
+            copros = await db.coproprietes.find(
+                {"id": {"$in": copro_ids}}, {"_id": 0, "name": 1}
+            ).to_list(20)
+            copro_name = ", ".join(c["name"] for c in copros if c.get("name"))
         notif_result = await notify_syndic_of_owner_change(
             db, updated_owner,
             change_type="modifier ses coordonnees",
             summary_lines=diffs,
             copropriete_ids=copro_ids,
+            copropriete_name=copro_name,
+            changes=changes,
         )
         # iter90hz : si l'email a change, sync le user account lie et
         # renvoyer une invitation au NOUVEL email. Le proprio devra alors
@@ -2217,7 +2247,18 @@ def create_owner_portal_router(db):
         if len(owned_lots) != len(set(lot_ids_req)):
             raise HTTPException(403, "Au moins un des nouveaux lots ne vous appartient pas")
         copro_id = owned_lots[0].get("copropriete_id", existing.get("copropriete_id", ""))
+        # iter93cu : libelles humains pour email pro
+        TENANT_LABELS = {
+            "name": "Nom du locataire",
+            "email": "Email",
+            "phone": "Telephone",
+            "lease_start": "Debut du bail",
+            "lease_end": "Fin du bail",
+            "mailbox_names": "Noms boite/sonnette",
+            "lot_ids": "Lots loues",
+        }
         diffs = []
+        changes = []
         new_email = (data.email or "").strip()
         new_phone = (data.phone or "").strip()
         new_mailbox = (data.mailbox_names or "").strip()
@@ -2232,6 +2273,15 @@ def create_owner_portal_router(db):
         ]:
             if old != new:
                 diffs.append(f"{k} : '{old}' -> '{new}'")
+                # Rendu lisible pour lot_ids (liste -> string)
+                before_str = ", ".join(old) if isinstance(old, list) else str(old or "")
+                after_str = ", ".join(new) if isinstance(new, list) else str(new or "")
+                changes.append({
+                    "label": TENANT_LABELS.get(k, k),
+                    "field": k,
+                    "before": before_str,
+                    "after": after_str,
+                })
         update = {
             "name": data.name.strip(), "email": new_email, "phone": new_phone,
             "lot_ids": lot_ids_req,
@@ -2257,6 +2307,7 @@ def create_owner_portal_router(db):
                 summary_lines=diffs,
                 copropriete_ids=[update["copropriete_id"]] if update.get("copropriete_id") else [],
                 copropriete_name=(copro or {}).get("name", ""),
+                changes=changes,
             )
         return updated
 
