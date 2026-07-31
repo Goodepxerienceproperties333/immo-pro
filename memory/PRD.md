@@ -20,6 +20,17 @@ Application de gestion de copropriete basee sur le droit belge (PCMN), incluant 
 
 ### Session courante (Fevrier 2026)
 
+#### P2 - Chatbot Vision (analyse images) (DONE iter93cj - Feb 2026)
+- **Feature** : Le chatbot accepte desormais des images (PNG, JPG, JPEG, WEBP) en plus des PDF/CSV. Le LLM (Claude Sonnet 4.5 Vision) analyse visuellement l'image pour extraire chiffres, noms, tableaux.
+- **Backend** : Fonction `_process_image` (Pillow) - resize proportionnel si > 1600 px, 1ere frame si anime, conversion palette->RGB, fond blanc si JPEG avec transparence, re-encode dans format d'origine. Image stockee en base64 + mime dans le message. Endpoint chat injecte via `ImageContent(image_base64=...)` dans `UserMessage.file_contents`.
+- **Frontend** : File input elargi (accept .pdf,.csv,.png,.jpg,.jpeg,.webp), badge differencie (ImageIcon vert "analyse par Vision" vs FileText bleu "X car. extraits"), validation client rejette GIF/BMP/SVG.
+- **Cas d'usage** : screenshots de decomptes, photos de factures papier, captures de tableaux Excel, notifications d'erreur. Le syndic photographie/screenshotte et le LLM extrait les donnees comptables + les compare aux regles iter93cc a iter93cg.
+- **Validation E2E** : Testing agent 100% (14/14 backend + Playwright frontend PASS). Sur upload PNG (Balance de Tiers avec 4 lignes), Claude Vision extrait EXACTEMENT les 4 proprietaires + les 4 soldes (Guerit 26,95 / CANTERO 570,22 / Van Damme 215,64 / De Le Hoye 428,61).
+- Tests : `/app/backend/tests/test_iter93cj_vision.py`, fixture reutilisable : `/app/backend/tests/fixtures/balance_tiers_iter93cj.png`.
+- Playbook regles image : `/app/image_testing.md` (JPEG/PNG/WEBP only, pas de blank/uniform).
+
+
+
 #### P2 - Chatbot analyse multi-documents (DONE iter93ci - Feb 2026)
 - **Feature** : Le syndic peut joindre 1 a 3 documents (PDF ou CSV) simultanement au chatbot pour comparaison automatique.
 - **Frontend** : Input file avec `multiple=true` + validation (max 3 fichiers, chacun < 10 MB, types PDF/CSV). Upload sequentiel pour eviter les extractions concurrentes serveur-CPU. Badge document affiche par fichier. Toast final agregeant le total de caracteres extraits.

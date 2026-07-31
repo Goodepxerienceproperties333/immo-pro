@@ -725,7 +725,7 @@ def create_support_router(db):
             raise HTTPException(
                 400,
                 f"Type de fichier non supporte : {ext}. "
-                f"Types acceptes : PDF, CSV.",
+                f"Types acceptes : PDF, CSV, PNG, JPG, JPEG, WEBP.",
             )
 
         content = await file.read()
