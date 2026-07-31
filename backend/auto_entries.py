@@ -418,6 +418,12 @@ async def generate_purchase_entry(db, invoice: dict) -> dict | None:
             # --- Ecriture 2 : OD (Operations Diverses) - refacturation N owners ---
             # N x DR owner_prov + N x CR 643. Equilibre par construction.
             od_lines = []
+            # iter93do : inclut la description de la facture dans le libelle
+            # pour que la Situation de compte affiche "Frais privatif :
+            # Entretien jardin 2T2026" au lieu du seul "Frais privatif -
+            # <owner>".
+            inv_desc = (invoice.get("description") or "").strip()
+            desc_suffix = f" : {inv_desc}" if inv_desc else ""
             for r in owner_rows:
                 od_lines.append({
                     "account_number": r["owner_prov"],
@@ -425,7 +431,7 @@ async def generate_purchase_entry(db, invoice: dict) -> dict | None:
                     "debit": r["amount"], "credit": 0.0,
                     "third_party_id": r["owner_id"],
                     "third_party_name": r["owner_name"],
-                    "line_description": f"Frais privatif - {r['owner_name']}",
+                    "line_description": f"Frais privatif{desc_suffix} - {r['owner_name']}",
                 })
                 od_lines.append({
                     "account_number": "643",
@@ -433,7 +439,7 @@ async def generate_purchase_entry(db, invoice: dict) -> dict | None:
                     "debit": 0.0, "credit": r["amount"],
                     "third_party_id": None,
                     "third_party_name": f"Imputation - {r['owner_name']}",
-                    "line_description": f"Imputation frais privatif - {r['owner_name']}",
+                    "line_description": f"Imputation frais privatif{desc_suffix} - {r['owner_name']}",
                 })
             total_od = round(sum(r["amount"] for r in owner_rows), 2)
             od_doc = {

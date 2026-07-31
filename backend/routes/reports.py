@@ -385,9 +385,30 @@ async def _build_situation_compte_pdf(db, owner_id, copropriete_id, start_date=N
             elif position == "in":
                 line_desc = (ln.get("line_description") or "").strip()
                 entry_desc = (e.get("description", "") or "").strip()
+                desc = line_desc or entry_desc
+                # iter93do : retro-compat pour les OD Frais privatifs anciennes
+                # (line_description = "Frais privatif - <owner>" sans description
+                # de la facture). On recupere la description via le reference
+                # "OD-PRIV-<invoice_number>" pour enrichir le libelle.
+                if desc.startswith("Frais privatif") and "OD-PRIV-" in (e.get("reference") or ""):
+                    ref = e.get("reference", "")
+                    inv_num = ref.replace("OD-PRIV-", "").strip()
+                    if inv_num:
+                        inv = await db.invoices.find_one(
+                            {"number": inv_num, "copropriete_id": copropriete_id},
+                            {"_id": 0, "description": 1},
+                        )
+                        inv_desc = ((inv or {}).get("description") or "").strip()
+                        if inv_desc and ":" not in desc:
+                            # Injecter la description apres "Frais privatif"
+                            desc = desc.replace(
+                                "Frais privatif",
+                                f"Frais privatif : {inv_desc}",
+                                1,
+                            )
                 movements.append({
                     "date": date_str,
-                    "description": line_desc or entry_desc,
+                    "description": desc,
                     "reference": e.get("reference", "") or "",
                     "entry_id": e.get("id", "") or "",
                     "account_number": acc,
