@@ -30,6 +30,39 @@ function _toNumber(v) {
 }
 
 /**
+ * Arrondit un nombre a 2 decimales, retourne un vrai `number` (pas de string).
+ * Utiliser au lieu de `+fmtEUR(x)` qui produit NaN car fmtEUR retourne "x,yz"
+ * (virgule fr-BE) et `+string_with_comma` = NaN.
+ *
+ * @param {number|string} value
+ * @returns {number} - toujours un nombre fini (0 si input invalide)
+ */
+export function round2(value) {
+  const n = _toNumber(value);
+  return Math.round(n * 100) / 100;
+}
+
+/**
+ * Parse une chaine formatee EUR (avec virgule et espaces) en `number`.
+ * Inverse de `fmtEUR` : eur2num(fmtEUR(1234.56)) === 1234.56
+ *
+ * @param {string|number} value
+ * @returns {number}
+ */
+export function eur2num(value) {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+  if (value === null || value === undefined || value === '') return 0;
+  const cleaned = String(value)
+    .replace(/\s|\u00A0/g, '')  // espaces (incl. insecables) supprimes
+    .replace(/[^\d,.\-]/g, '')  // conserver chiffres, virgule, point, moins
+    .replace(',', '.');          // virgule fr-BE -> point standard JS
+  const n = Number(cleaned);
+  return Number.isFinite(n) ? n : 0;
+}
+
+
+
+/**
  * Formate un montant EUR avec espace comme separateur de milliers et virgule
  * comme separateur decimal. Toujours 2 decimales.
  * @param {number|string} value

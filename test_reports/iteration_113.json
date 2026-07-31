@@ -1,0 +1,28 @@
+{
+  "summary": "iter93cr (round2 helper refactor) + iter93cs (UI scope text) validated end-to-end via Playwright on Guerit owner portal (evrard.gerald@outlook.be on ACP Agathe). REGRESSION iter93cr : All KPIs unchanged - TOTAL APPELE 2 103,74 EUR, TOTAL PAYE 675,86 EUR, SOLDE 1 427,88 EUR (A PAYER T2 2026-2027), Appels a venir 951,94 EUR, Prochain paiement Trimestriel 2/4 - 2026-2027 with 475,94 EUR restant apres imputation FIFO, VCS +++201/4071/94024+++. Confirmed 10 usages of round2() at lines 476,477,519,520,521,524,560,606,607,608,634,2394,2404,2762,2763,2764 replacing prior Math.round(x*100)/100 pattern; round2 imported from @/lib/format at line 18. iter93cs : NEW element data-testid='situation-solde-scope' renders 'pour l'ensemble de l'exercice restant' in italic (class 'mt-1 text-[10px] italic text-red-700 opacity-80'), positioned directly under the 1 427,88 EUR amount inside situation-solde-card. Edge case (balance <= 0.01) code-verified : same `balance > 0.01` conditional gates both the scope div AND the switch to 'Aucun montant du' label, so scope text is guaranteed hidden when nothing is due. All other portal cards (charges donut T2 79,53 EUR, prochain paiement, appels a venir, situation) continue to render without regression. Non-blocking console warnings from iter112 still present (Recharts width/height mount race, Radix DialogContent aria-describedby).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": ["/app/test_reports/iter93cs_solde.png"],
+  "action_items": [
+    "OPEN FROM iter111/112 : Guerit owner password remains 'TestOwnerIter93CK!' (temp) - restore via forgot-password or re-invitation.",
+    "OPTIONAL: existing console warnings (Recharts, Radix DialogContent aria-describedby) still non-blocking."
+  ],
+  "critical_code_review_comments": [
+    "format.js: round2() and eur2num() are well-documented, tolerant to null/undefined/NaN, and correctly co-located next to fmtEUR. Good use of a shared _toNumber helper.",
+    "OwnerPortalPage.js line 18: import { fmtEUR, round2 } from '@/lib/format' - clean. Grep confirms 15 round2() call sites (5 more than the ~10 initially cited, which is fine - includes movements section 2762-2764 and payment link 2394/2404).",
+    "OwnerPortalPage.js:1698-1705 iter93cs : conditional div is correctly gated on balance > 0.01 (same threshold used at line 1692 for switching to 'Aucun montant du'), guaranteeing consistent visibility. Italic class + opacity-80 gives subtle visual hierarchy under the main amount. data-testid='situation-solde-scope' present.",
+    "Suggestion (out of scope): eur2num() is exported but not yet consumed in OwnerPortalPage - consider using it wherever backend returns a display-formatted string (currently everything is numeric already, so lint OK)."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "not tested (frontend-only refactor + UI add)", "frontend": "100% (regression + new UI element verified live)"},
+  "test_credentials": "admin@copro.be / admin123 ; evrard.gerald@outlook.be / TestOwnerIter93CK! (temp)",
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "iter93cr+cs green. round2 helper is now the canonical way to round 2 decimals in the codebase - future PRs should use it. eur2num is available but unused so far. Scope text 'pour l'ensemble de l'exercice restant' is now the standard visual disambiguation under debtor solde on owner portal.",
+  "rca of the issue": "N/A - purely refactor + UI addition, no bug."
+}

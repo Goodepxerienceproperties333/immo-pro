@@ -15,7 +15,7 @@ import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RechartsTooltip } 
 import { sanitizeHtml } from '@/lib/sanitizeHtml';
 import OwnerOnboardingTour, { ownerTourStorageKey } from '@/components/OwnerOnboardingTour';
 
-import { fmtEUR } from '@/lib/format';
+import { fmtEUR, round2 } from '@/lib/format';
 // Iter90db : palette couleur deterministe par nom de categorie de document
 // (index -> style bordure/fond/texte). Le hash simple s'assure que la meme
 // categorie recoit toujours la meme couleur, meme entre sessions/machines.
@@ -473,8 +473,8 @@ export default function OwnerPortalPage() {
     return {
       // Trimestriels (informatif uniquement)
       // iter93cr : Math.round au lieu de +fmtEUR (evite NaN sur decimales fr-BE)
-      totalCalledQuarter: Math.round(calledQ * 100) / 100,
-      totalPaidQuarter: Math.round(paidQ * 100) / 100,
+      totalCalledQuarter: round2(calledQ),
+      totalPaidQuarter: round2(paidQ),
       pendingCount,
       nextCall,
     };
@@ -516,12 +516,12 @@ export default function OwnerPortalPage() {
     const openCreditor = annualOpeningBalance < 0 ? -annualOpeningBalance : 0;
     // iter93cr : Math.round au lieu de +fmtEUR (evite NaN sur decimales fr-BE
     // qui donnaient TOTAL APPELE=0 / SOLDE=0 dans les KPI cards)
-    const total_paid = Math.round((openCreditor + sumCreditPaid) * 100) / 100;
-    total_called = Math.round(total_called * 100) / 100;
-    const balance = Math.round((total_called - total_paid) * 100) / 100;
+    const total_paid = round2(openCreditor + sumCreditPaid);
+    total_called = round2(total_called);
+    const balance = round2(total_called - total_paid);
     return {
       total_called,
-      total_upcoming: Math.round(total_upcoming * 100) / 100,
+      total_upcoming: round2(total_upcoming),
       total_paid,
       balance,
       status: balance > 0.01 ? 'debiteur' : balance < -0.01 ? 'crediteur' : 'solde',
@@ -557,7 +557,7 @@ export default function OwnerPortalPage() {
       currentCall = fc;
       // iter93cr : Math.round au lieu de +fmtEUR (evite NaN qui affichait
       // toujours T1 comme prochain paiement au lieu de T2 FIFO)
-      remainingOnCurrent = Math.round((amt - Math.max(0, totalPaid - cumul)) * 100) / 100;
+      remainingOnCurrent = round2(amt - Math.max(0, totalPaid - cumul));
       break;
     }
     if (!currentCall) return null;
@@ -603,9 +603,9 @@ export default function OwnerPortalPage() {
     }
     const openDebtor = openingBalance > 0 ? openingBalance : 0;
     const openCreditor = openingBalance < 0 ? -openingBalance : 0;
-    const total_called = Math.round((openDebtor + sumDebit) * 100) / 100;
-    const total_paid = Math.round((openCreditor + sumCredit) * 100) / 100;
-    const balance = Math.round(Number(closingBalance || 0) * 100) / 100;
+    const total_called = round2(openDebtor + sumDebit);
+    const total_paid = round2(openCreditor + sumCredit);
+    const balance = round2(Number(closingBalance || 0));
     return {
       total_called,
       total_paid,
@@ -631,7 +631,7 @@ export default function OwnerPortalPage() {
     // mais on n'affiche dans le DONUT que les valeurs > 0 (le reste va dans
     // "Reductions" separement en legende).
     return Object.entries(totals)
-      .map(([name, value]) => ({ name, value: Math.round(value * 100) / 100 }))
+      .map(([name, value]) => ({ name, value: round2(value) }))
       .sort((a, b) => b.value - a.value);
   }, [chargesMemo, inQuarter]);
   const upcomingWithCountdown = useMemo(() => {
@@ -1693,6 +1693,16 @@ function SituationHero({ status, balance, totalCalled, totalPaid, totalUpcoming,
               <span className="text-2xl">Aucun montant du</span>
             )}
           </div>
+          {/* iter93cs : preciser le perimetre du solde (regle user
+              "pour l'ensemble de l'exercice restant") */}
+          {balance > 0.01 && (
+            <div
+              className={`mt-1 text-[10px] italic ${soldeText} opacity-80`}
+              data-testid="situation-solde-scope"
+            >
+              pour l&apos;ensemble de l&apos;exercice restant
+            </div>
+          )}
           <div className="mt-3 text-[11px] text-slate-600 space-y-0.5">
             <div className="flex justify-between"><span>Total appele :</span><span className="font-mono">{fmt(totalCalled)}</span></div>
             <div className="flex justify-between"><span>Total paye :</span><span className="font-mono">{fmt(totalPaid)}</span></div>
@@ -2381,7 +2391,7 @@ function MovementsTab({
     // Bug prec : `+fmtEUR(x)` renvoyait NaN car fmtEUR sort une string avec
     // virgule fr-BE ("475,94") impossible a re-parser via `+`. Consequence :
     // "Situation en regle" affichee alors que le proprietaire doit 475.94 EUR.
-    const total = Math.round((sum + opening) * 100) / 100;
+    const total = round2(sum + opening);
     return Math.max(0, total);
   }, [movements, openingBalance]);
   // iter90hx : URL du QR code, rafraichie a chaque changement de periode
@@ -2391,7 +2401,7 @@ function MovementsTab({
     // iter93cp : envoyer le montant en format numerique brut (dot decimal),
     // pas via fmtEUR qui produit "475,94" (virgule fr-BE) - la virgule casse
     // le parsing float cote FastAPI -> 400 -> QR PNG cassee.
-    if (amountToPay > 0) p.set('amount', String(Math.round(amountToPay * 100) / 100));
+    if (amountToPay > 0) p.set('amount', String(round2(amountToPay)));
     // Nonce sur le hash pour forcer le refresh de l'image cote navigateur
     const url = `${process.env.REACT_APP_BACKEND_URL}/api/owner/payment-qr/${copropriete_id}`;
     return `${url}?${p.toString()}&t=${Date.now()}`;
@@ -2749,9 +2759,9 @@ function BankAccountsTab({
         else totalDebit += Math.abs(amt);
       }
       return {
-        totalCredit: Math.round(totalCredit * 100) / 100,
-        totalDebit: Math.round(totalDebit * 100) / 100,
-        net: Math.round((totalCredit - totalDebit) * 100) / 100,
+        totalCredit: round2(totalCredit),
+        totalDebit: round2(totalDebit),
+        net: round2(totalCredit - totalDebit),
         count: mvs.length,
       };
     });
