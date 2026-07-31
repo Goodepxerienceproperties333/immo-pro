@@ -1085,6 +1085,49 @@ def create_owner_portal_router(db):
 
         invoices = await db.invoices.find(inv_q, {"_id": 0}).sort("date", -1).to_list(10000)
 
+        # iter93cv : precharge les categories de charges pour rendre le libelle
+        # humain sur la donut proprietaire ("Ascenseurs - contrat d'entretien"
+        # au lieu de "Autres" quand invoice.category est vide). On construit
+        # deux index :
+        #   - by_id : expense_category_id -> nom
+        #   - by_account : account_number PCMN -> nom (fallback pour factures
+        #     sans expense_category_id, ex. imports Optipro anciens).
+        cats_by_id: dict = {}
+        cats_by_account: dict = {}
+        cat_scope_ids = list({lt["copropriete_id"] for lt in my_lots}) if not copropriete_id else [copropriete_id]
+        if cat_scope_ids:
+            async for ec in db.expense_categories.find(
+                {"copropriete_id": {"$in": cat_scope_ids}},
+                {"_id": 0, "id": 1, "name": 1, "label": 1, "account_number": 1, "account_name": 1},
+            ):
+                nm = ec.get("name") or ec.get("label") or ec.get("account_name") or ""
+                if ec.get("id"):
+                    cats_by_id[ec["id"]] = nm
+                acc = str(ec.get("account_number", "") or "").strip()
+                if acc and acc not in cats_by_account:
+                    cats_by_account[acc] = nm
+
+        def _resolve_category(inv: dict) -> str:
+            """Retourne le libelle humain de la nature de depense."""
+            # 1) champ category legacy si deja peuple
+            existing = (inv.get("category") or "").strip()
+            if existing and existing.lower() != "autres":
+                return existing
+            # 2) via expense_category_id
+            ec_id = inv.get("expense_category_id") or ""
+            if ec_id and ec_id in cats_by_id:
+                return cats_by_id[ec_id]
+            # 3) via account_number PCMN de la facture
+            acc = str(inv.get("account_number", "") or "").strip()
+            if acc and acc in cats_by_account:
+                return cats_by_account[acc]
+            # 4) via account_number sur une ligne (imports Optipro multi-lignes)
+            for ln in inv.get("lines", []) or []:
+                lacc = str(ln.get("account_number", "") or "").strip()
+                if lacc and lacc in cats_by_account:
+                    return cats_by_account[lacc]
+            return "Autres"
+
         # iter90fz : cache des Distribution Keys pour eviter N+1
         dk_ids_needed = list({inv.get("distribution_key_id") for inv in invoices if inv.get("distribution_key_id")})
         dk_map: dict = {}
@@ -1169,7 +1212,7 @@ def create_owner_portal_router(db):
                 "distribution_key_name": dk_doc.get("name", ""),
                 "copropriete_id": inv.get("copropriete_id", ""),
                 "status": inv.get("status", "unpaid"),
-                "category": inv.get("category", ""),
+                "category": _resolve_category(inv),  # iter93cv : libelle humain
                 "attachments": atts,
                 "source": "invoice",  # iter90g0
             })
@@ -1242,7 +1285,14 @@ def create_owner_portal_router(db):
                         "distribution_key_name": dk.get("name", ""),
                         "copropriete_id": je.get("copropriete_id", ""),
                         "status": "od",
-                        "category": "od",
+                        # iter93cv : libelle humain (nom compte / expense_category)
+                        # au lieu de "od" -> categorise dans la donut.
+                        "category": (
+                            cats_by_account.get(acc)
+                            or ln.get("account_name")
+                            or ln.get("label")
+                            or f"Compte {acc}"
+                        ),
                         "attachments": [],
                         "source": "od",  # marqueur UI : OD manuelle
                         "account_number": acc,

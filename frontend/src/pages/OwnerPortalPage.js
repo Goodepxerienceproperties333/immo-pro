@@ -1871,17 +1871,20 @@ function SituationHero({ status, balance, totalCalled, totalPaid, totalUpcoming,
 
 function ChargesDonut({ data, total, periodLabel }) {
   // iter93cq : selon regle user "base toi uniquement sur la liste des depenses"
-  // -> on n'affiche que les charges POSITIVES (top 5 natures) issues des
-  // journal_entries reels. Plus de ligne synthetique "Financement par
-  // fonds/reserve" (celle-ci apparaissait a tort meme quand aucune OD
-  // reserve n'existait dans le journal).
-  // iter90h6 : le PieChart n'accepte que des valeurs positives (sinon
-  // superposition d'anneaux). Uniquement top 5 par montant desc.
+  // -> on n'affiche que les charges POSITIVES issues des journal_entries reels.
+  // iter93cv : le donut reste sur le Top 5 pour lisibilite, MAIS la legende
+  // detaille TOUTES les natures de depenses avec un scroll si necessaire.
   const positiveData = data
     .filter(d => d.value > 0.005)
-    .sort((a, b) => b.value - a.value)
-    .slice(0, 5);
+    .sort((a, b) => b.value - a.value);
+  const top5 = positiveData.slice(0, 5);
+  const rest = positiveData.slice(5);
+  const restTotal = rest.reduce((s, d) => s + d.value, 0);
   const positiveTotal = positiveData.reduce((s, d) => s + d.value, 0);
+  // Donut : Top5 + agregat "Autres natures" si besoin
+  const donutData = restTotal > 0.01
+    ? [...top5, { name: `Autres natures (${rest.length})`, value: round2(restTotal), _agg: true }]
+    : top5;
   return (
     <Card className="lg:col-span-3 border-slate-200" data-testid="situation-donut-card">
       <CardHeader className="pb-2">
@@ -1903,11 +1906,11 @@ function ChargesDonut({ data, total, periodLabel }) {
         ) : (
           <div className="flex flex-col md:flex-row items-center gap-4">
             <div className="w-full md:w-1/2 h-64 relative">
-              {positiveData.length > 0 ? (
+              {donutData.length > 0 ? (
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
                     <Pie
-                      data={positiveData}
+                      data={donutData}
                       cx="50%"
                       cy="50%"
                       innerRadius={55}
@@ -1916,7 +1919,7 @@ function ChargesDonut({ data, total, periodLabel }) {
                       dataKey="value"
                       isAnimationActive={false}
                     >
-                      {positiveData.map((entry, index) => (
+                      {donutData.map((entry, index) => (
                         <Cell key={entry.name} fill={CHARGE_COLORS[index % CHARGE_COLORS.length]} />
                       ))}
                     </Pie>
@@ -1936,26 +1939,31 @@ function ChargesDonut({ data, total, periodLabel }) {
                 <div className="text-lg font-bold text-slate-900" style={{fontFamily:'Chivo,sans-serif'}}>{fmt(total)}</div>
               </div>
             </div>
-            <div className="w-full md:w-1/2 space-y-2">
+            {/* Legende detaillee : toutes les natures, scroll si > 6 */}
+            <div
+              className="w-full md:w-1/2 space-y-1.5 max-h-64 overflow-y-auto pr-2"
+              data-testid="donut-legend-scroll"
+            >
               {positiveData.map((entry, index) => {
                 const pct = positiveTotal > 0 ? (entry.value / positiveTotal) * 100 : 0;
+                // Couleur : Top5 gardent leur couleur ; le reste utilise la
+                // couleur "Autres natures" (index 5) pour rester coherent avec
+                // le donut.
+                const colorIdx = index < 5 ? index : 5;
                 return (
                   <div key={entry.name} className="flex items-center gap-2" data-testid={`donut-legend-${index}`}>
                     <span
                       className="w-3 h-3 rounded-sm flex-shrink-0"
-                      style={{ background: CHARGE_COLORS[index % CHARGE_COLORS.length] }}
+                      style={{ background: CHARGE_COLORS[colorIdx % CHARGE_COLORS.length] }}
                     />
                     <div className="flex-1 min-w-0">
-                      <div className="text-xs font-medium text-slate-800 truncate">{entry.name}</div>
+                      <div className="text-xs font-medium text-slate-800 truncate" title={entry.name}>{entry.name}</div>
                       <div className="text-[10px] text-slate-500">{pct.toFixed(1)}%</div>
                     </div>
-                    <div className="text-xs font-mono font-semibold text-slate-900">{fmt(entry.value)}</div>
+                    <div className="text-xs font-mono font-semibold text-slate-900 flex-shrink-0">{fmt(entry.value)}</div>
                   </div>
                 );
               })}
-              {/* iter93cq : suppression de la ligne synthetique "Financement
-                  par fonds/reserve" - regle user "base toi uniquement sur la
-                  liste des depenses" */}
             </div>
           </div>
         )}
