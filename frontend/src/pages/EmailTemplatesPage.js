@@ -46,6 +46,9 @@ function TemplateEditor({ template, onSaved, onClose, variables }) {
   });
   const [saving, setSaving] = useState(false);
   const [preview, setPreview] = useState(null);
+  // iter93cw : suivi du champ actif (sujet ou corps) pour permettre
+  // l'insertion des variables dans les deux endroits.
+  const [activeField, setActiveField] = useState('body'); // 'subject' | 'body'
 
   useEffect(() => {
     if (template) {
@@ -57,20 +60,26 @@ function TemplateEditor({ template, onSaved, onClose, variables }) {
         order: template.order || 0,
       });
       setPreview(null);
+      setActiveField('body');
     }
   }, [template]);
 
   const insertVar = (varName) => {
-    const el = document.getElementById('tpl-body');
+    const targetId = activeField === 'subject' ? 'tpl-subject' : 'tpl-body';
+    const el = document.getElementById(targetId);
     if (!el) return;
-    const start = el.selectionStart;
-    const end = el.selectionEnd;
-    const before = form.body_html.substring(0, start);
-    const after = form.body_html.substring(end);
-    setForm({ ...form, body_html: `${before}{${varName}}${after}` });
+    const fieldKey = activeField === 'subject' ? 'subject' : 'body_html';
+    const currentValue = form[fieldKey] || '';
+    const start = el.selectionStart ?? currentValue.length;
+    const end = el.selectionEnd ?? currentValue.length;
+    const before = currentValue.substring(0, start);
+    const after = currentValue.substring(end);
+    const inserted = `{${varName}}`;
+    setForm({ ...form, [fieldKey]: `${before}${inserted}${after}` });
     setTimeout(() => {
       el.focus();
-      el.selectionStart = el.selectionEnd = start + varName.length + 2;
+      const pos = start + inserted.length;
+      el.selectionStart = el.selectionEnd = pos;
     }, 10);
   };
 
@@ -147,7 +156,9 @@ function TemplateEditor({ template, onSaved, onClose, variables }) {
             </div>
             <div>
               <Label className="text-xs">Sujet *</Label>
-              <Input value={form.subject} onChange={(e) => setForm({ ...form, subject: e.target.value })}
+              <Input id="tpl-subject" value={form.subject}
+                     onChange={(e) => setForm({ ...form, subject: e.target.value })}
+                     onFocus={() => setActiveField('subject')}
                      placeholder="Rappel amiable : votre solde du {today}"
                      data-testid="tpl-input-subject" />
             </div>
@@ -155,6 +166,7 @@ function TemplateEditor({ template, onSaved, onClose, variables }) {
               <Label className="text-xs">Corps HTML *</Label>
               <Textarea id="tpl-body" rows={12} value={form.body_html}
                         onChange={(e) => setForm({ ...form, body_html: e.target.value })}
+                        onFocus={() => setActiveField('body')}
                         placeholder="Bonjour {owner_name}, il reste un solde de {abs_balance} EUR..."
                         className="font-mono text-xs"
                         data-testid="tpl-textarea-body" />
@@ -180,7 +192,10 @@ function TemplateEditor({ template, onSaved, onClose, variables }) {
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-1 text-xs">
-                <p className="text-slate-500 mb-2">Cliquez pour inserer :</p>
+                <p className="text-slate-500 mb-1">Cliquez pour inserer dans :</p>
+                <div className="mb-2 px-2 py-1 rounded bg-violet-50 border border-violet-200 text-[11px] text-violet-800 font-medium" data-testid="tpl-var-target">
+                  {activeField === 'subject' ? 'le Sujet' : 'le Corps HTML'}
+                </div>
                 {Object.entries(variables || {}).map(([k, desc]) => (
                   <button key={k}
                           onClick={() => insertVar(k)}
