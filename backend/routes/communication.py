@@ -976,8 +976,8 @@ def create_communication_router(db):
                         )
                     else:
                         _b = balances_map.get(oid, 0.0)
-                    ctx["balance"] = _fmt_eur(_b, with_suffix=False)
-                    ctx["abs_balance"] = _fmt_eur(abs(_b), with_suffix=False)
+                    ctx["balance"] = _fmt_eur(_b, with_suffix=False) + " €"
+                    ctx["abs_balance"] = _fmt_eur(abs(_b), with_suffix=False) + " €"
                     ctx["balance_status"] = "debiteur" if _b > 0 else ("crediteur" if _b < 0 else "solde")
                     # iter93cz : si l'utilisateur a modifie le sujet/corps dans
                     # le dialogue d'envoi, prendre SES valeurs plutot que celles
@@ -1196,8 +1196,8 @@ def create_communication_router(db):
                 bal = balances_map.get(owner_id, 0.0)
                 # iter93ac : format unifie plateforme pour les emails
                 from utils.format import fmt_eur as _fmt_eur
-                ctx["balance"] = _fmt_eur(bal, with_suffix=False)
-                ctx["abs_balance"] = _fmt_eur(abs(bal), with_suffix=False)
+                ctx["balance"] = _fmt_eur(bal, with_suffix=False) + " €"
+                ctx["abs_balance"] = _fmt_eur(abs(bal), with_suffix=False) + " €"
                 ctx["balance_status"] = (
                     "debiteur" if bal > 0 else ("crediteur" if bal < 0 else "solde")
                 )

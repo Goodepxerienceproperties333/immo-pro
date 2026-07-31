@@ -376,8 +376,8 @@ def create_email_templates_router(db):
         demo_ctx = {
             "owner_name": "Marie DEVOS",
             "owner_email": "marie.devos@example.be",
-            "balance": "247.50",
-            "abs_balance": "247.50",
+            "balance": "247,50 €",
+            "abs_balance": "247,50 €",
             "balance_status": "debiteur",
             "vcs_code": "+++123/4567/89012+++",
             "copropriete_name": "Residence Les Peupliers",
@@ -494,8 +494,8 @@ async def build_owner_email_context(db, owner_id: str, copropriete_id: str, curr
     return {
         "owner_name": owner.get("name", ""),
         "owner_email": owner.get("email", ""),
-        "balance": _fmt_eur(balance, with_suffix=False),
-        "abs_balance": _fmt_eur(abs(balance), with_suffix=False),
+        "balance": _fmt_eur(balance, with_suffix=False) + " €",
+        "abs_balance": _fmt_eur(abs(balance), with_suffix=False) + " €",
         "balance_status": "debiteur" if balance > 0 else ("crediteur" if balance < 0 else "solde"),
         "vcs_code": owner.get("vcs_code", ""),
         "copropriete_name": copro.get("name", ""),
