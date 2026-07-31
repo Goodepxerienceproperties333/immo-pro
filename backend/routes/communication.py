@@ -1218,7 +1218,11 @@ def create_communication_router(db):
         """Rend l'apercu du mail + PDF Situation de compte pour UN
         proprietaire, sans envoi. iter90fv."""
         await _ensure_mailbox_allowed(request, payload.from_mailbox)
-        from routes.reports import _build_situation_compte_pdf, _compute_balance_tiers_for_ui
+        from routes.reports import (
+            _build_situation_compte_pdf,
+            _compute_balance_tiers_for_ui,
+            _compute_owner_period_balance,
+        )
 
         owner = await db.owners.find_one(
             {"id": payload.owner_id},
@@ -1227,10 +1231,21 @@ def create_communication_router(db):
         if not owner:
             raise HTTPException(404, "Proprietaire introuvable")
 
+        # iter93da : si periode saisie, {balance} = solde PERIODE (identique au
+        # "A REGLER" du PDF joint). Sinon, solde cumule.
+        period_scoped = bool(payload.start_date or payload.end_date)
         balances_map = {}
         if payload.template_id:
-            bal_data = await _compute_balance_tiers_for_ui(db, payload.copropriete_id)
-            balances_map = {b["owner_id"]: b["balance"] for b in bal_data.get("owners", [])}
+            if period_scoped:
+                pb, _ = await _compute_owner_period_balance(
+                    db, payload.owner_id, payload.copropriete_id,
+                    start_date=payload.start_date or None,
+                    end_date=payload.end_date or None,
+                )
+                balances_map = {payload.owner_id: pb}
+            else:
+                bal_data = await _compute_balance_tiers_for_ui(db, payload.copropriete_id)
+                balances_map = {b["owner_id"]: b["balance"] for b in bal_data.get("owners", [])}
 
         subj, html = await _preview_common(
             request, payload.from_mailbox, payload.template_id,
