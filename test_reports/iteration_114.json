@@ -1,0 +1,22 @@
+{
+  "summary": "Verified iter93dp fix: /api/communication/owners-balances now excludes former owners (is_former_owner=true) for ACP Agathe. Balance-tiers accounting report still includes them (regression OK). 5/5 pytest tests pass.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter93dp_communication_exclude_former_owners.py",
+    "/app/test_reports/pytest/iter93dp_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Note: user report mentioned CALLENS Bernadette as the visible former owner, but current DB state shows no CALLENS entry in balance-tiers/owners (only CANTERO DIAZ - VARGAS BAQUERO tagged is_former_owner). Fix still works correctly: 1 former owner in balance-tiers (37), 0 in communication (36). Test asserts 'at least one former owner present' rather than CALLENS specifically to be robust.",
+    "Filter is applied post-hoc in communication endpoint after full compute -- acceptable perf-wise since owners list is small, but could push filter into helper for efficiency later."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter93dp_communication_exclude_former_owners.py"],
+  "success_rate": {"backend": "100% (5/5)", "frontend": "n/a"},
+  "test_credentials": "admin@copro.be / admin123 (cookie-based auth, no bearer token)",
+  "seed_data_creation": "none",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "iter93dp fix validated. Communication endpoint filters former owners via list comprehension `[o for o in owners if not o.get('is_former_owner')]` after calling shared helper _compute_balance_tiers_for_ui; totals recomputed. Balance-tiers/owners (reports.py:3060) is untouched and still returns formers. ACP Agathe id=c9cfce94-96c6-4202-8a6d-0a5627b50856: 36 active + 1 former = 37 total. Note: auth login response doesn't return token - it sets session cookie; use requests.Session() and rely on cookies.",
+  "rca of the issue": "N/A - regression verified"
+}

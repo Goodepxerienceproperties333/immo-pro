@@ -309,6 +309,16 @@ def create_communication_router(db):
         """
         from routes.reports import _compute_balance_tiers_for_ui, _compute_owner_period_balance
         data = await _compute_balance_tiers_for_ui(db, copropriete_id)
+        # iter93dp : la page Communication propose l'envoi d'emails aux
+        # proprietaires ACTIFS de l'ACP. On exclut les anciens proprietaires
+        # (mutations passees, plus aucun lot dans cette ACP) qui n'ont plus
+        # rien a payer/recevoir. Le rapport Balance de Tiers, lui, continue
+        # d'afficher les anciens pour l'integrite comptable.
+        active_owners = [o for o in (data.get("owners") or []) if not o.get("is_former_owner")]
+        data["owners"] = active_owners
+        # Recalculer les totaux sur la population filtree
+        data["total_debiteurs"] = round(sum(o["balance"] for o in active_owners if o["balance"] > 0), 2)
+        data["total_crediteurs"] = round(sum(abs(o["balance"]) for o in active_owners if o["balance"] < 0), 2)
         if not (start_date or end_date):
             return data
         # Recompute per-period balance
