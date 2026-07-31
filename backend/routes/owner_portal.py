@@ -176,6 +176,26 @@ def create_owner_portal_router(db):
                         # Trouve le vrai PCMN utilise dans les statements
                         actual_pcmn_from_stmt = st_acc
                         break
+            # iter93co : fallback direct JE si aucun bank_statement matche
+            # (ex. compte epargne sans CODA importe : IBAN...1383 mais JE
+            # utilisent 55011383 qui matche last4=1383). On explore les
+            # comptes 55XX presents dans les JE de l'ACP.
+            if not actual_pcmn_from_stmt and iban_last4 and iban_last4.isdigit():
+                seen_accs: set = set()
+                async for e in db.journal_entries.find(
+                    {"copropriete_id": copropriete_id,
+                     "lines.account_number": {"$regex": "^55"},
+                     "reversed": {"$ne": True}, "is_reversal": {"$ne": True}},
+                    {"_id": 0, "lines": 1},
+                ):
+                    for ln in e.get("lines", []) or []:
+                        acc = ln.get("account_number", "")
+                        if acc.startswith("55") and acc not in seen_accs and acc.isdigit() and acc.endswith(iban_last4):
+                            actual_pcmn_from_stmt = acc
+                            break
+                        seen_accs.add(acc)
+                    if actual_pcmn_from_stmt:
+                        break
             # Si aucun statement ne matche, on garde pcmn config (comportement historique)
             effective_pcmn = actual_pcmn_from_stmt or (pcmn or "")
 

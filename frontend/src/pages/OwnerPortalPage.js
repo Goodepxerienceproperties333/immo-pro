@@ -1846,11 +1846,17 @@ function SituationHero({ status, balance, totalCalled, totalPaid, totalUpcoming,
 }
 
 function ChargesDonut({ data, total, periodLabel }) {
+  // iter93cq : selon regle user "base toi uniquement sur la liste des depenses"
+  // -> on n'affiche que les charges POSITIVES (top 5 natures) issues des
+  // journal_entries reels. Plus de ligne synthetique "Financement par
+  // fonds/reserve" (celle-ci apparaissait a tort meme quand aucune OD
+  // reserve n'existait dans le journal).
   // iter90h6 : le PieChart n'accepte que des valeurs positives (sinon
-  // superposition d'anneaux). On sepere positives (donut) et negatives
-  // (reductions - affichees en legende avec badge vert).
-  const positiveData = data.filter(d => d.value > 0.005);
-  const negativeData = data.filter(d => d.value < -0.005);
+  // superposition d'anneaux). Uniquement top 5 par montant desc.
+  const positiveData = data
+    .filter(d => d.value > 0.005)
+    .sort((a, b) => b.value - a.value)
+    .slice(0, 5);
   const positiveTotal = positiveData.reduce((s, d) => s + d.value, 0);
   return (
     <Card className="lg:col-span-3 border-slate-200" data-testid="situation-donut-card">
@@ -1923,18 +1929,9 @@ function ChargesDonut({ data, total, periodLabel }) {
                   </div>
                 );
               })}
-              {negativeData.map((entry, index) => (
-                <div key={`neg-${entry.name}`} className="flex items-center gap-2 pt-2 border-t border-emerald-100" data-testid={`donut-reduction-${index}`}>
-                  <span className="w-3 h-3 rounded-sm flex-shrink-0 bg-emerald-500" />
-                  <div className="flex-1 min-w-0">
-                    <div className="text-xs font-medium text-emerald-700 truncate">
-                      Reduction - {entry.name}
-                    </div>
-                    <div className="text-[10px] text-emerald-600">Financement par fonds/reserve</div>
-                  </div>
-                  <div className="text-xs font-mono font-semibold text-emerald-700">{fmt(entry.value)}</div>
-                </div>
-              ))}
+              {/* iter93cq : suppression de la ligne synthetique "Financement
+                  par fonds/reserve" - regle user "base toi uniquement sur la
+                  liste des depenses" */}
             </div>
           </div>
         )}
@@ -2386,7 +2383,10 @@ function MovementsTab({
   const qrHref = useMemo(() => {
     if (!copropriete_id || !acpFiltered) return null;
     const p = new URLSearchParams();
-    if (amountToPay > 0) p.set('amount', fmtEUR(amountToPay));
+    // iter93cp : envoyer le montant en format numerique brut (dot decimal),
+    // pas via fmtEUR qui produit "475,94" (virgule fr-BE) - la virgule casse
+    // le parsing float cote FastAPI -> 400 -> QR PNG cassee.
+    if (amountToPay > 0) p.set('amount', String(Math.round(amountToPay * 100) / 100));
     // Nonce sur le hash pour forcer le refresh de l'image cote navigateur
     const url = `${process.env.REACT_APP_BACKEND_URL}/api/owner/payment-qr/${copropriete_id}`;
     return `${url}?${p.toString()}&t=${Date.now()}`;

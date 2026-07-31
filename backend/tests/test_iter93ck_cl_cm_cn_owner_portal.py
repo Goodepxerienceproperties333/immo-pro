@@ -140,10 +140,33 @@ class TestBankAccountsMatching:
         by_type = {a["type"]: a["balance"] for a in accs}
         assert "epargne" in by_type and "vue" in by_type
         # tolerance +/- 100 EUR sur les vraies balances (fluctuations possibles)
+        # iter93co : epargne doit etre ~13111.41 via fallback JE 55011383 (last4=1383)
         assert by_type["epargne"] > 1000.0, (
             f"epargne balance suspicious : {by_type['epargne']}"
         )
+        assert abs(by_type["epargne"] - 13111.41) < 5.0, (
+            f"iter93co epargne expected ~13111.41 got {by_type['epargne']}"
+        )
         assert by_type["vue"] > 1000.0, f"vue balance suspicious : {by_type['vue']}"
+
+    def test_payment_qr_with_numeric_amount(self, owner_session):
+        """iter93cp : le frontend envoie un montant numerique brut '475.94'
+        (dot decimal) - FastAPI doit le parser correctement et renvoyer un PNG."""
+        r = owner_session.get(
+            f"{BASE_URL}/api/owner/payment-qr/{COPRO_ID}?amount=475.94", timeout=30
+        )
+        assert r.status_code == 200, r.text[:300]
+        assert r.headers.get("content-type", "").startswith("image/png"), (
+            f"Expected PNG, got {r.headers.get('content-type')}"
+        )
+        assert len(r.content) > 100, "QR PNG suspiciously small"
+        # Format francais '475,94' (virgule) doit renvoyer 422
+        r2 = owner_session.get(
+            f"{BASE_URL}/api/owner/payment-qr/{COPRO_ID}?amount=475,94", timeout=30
+        )
+        assert r2.status_code in (400, 422), (
+            f"Comma format should fail parsing, got {r2.status_code}"
+        )
 
 
 # ---------- iter93cm : fund-calls unpaid_amount FIFO ----------
