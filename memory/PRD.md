@@ -20,6 +20,20 @@ Application de gestion de copropriete basee sur le droit belge (PCMN), incluant 
 
 ### Session courante (Fevrier 2026)
 
+#### P0 - Portail Proprietaire : miroir compta strict (DONE iter93ck-cq - Feb 2026)
+- **Regle** : Cote proprietaire, tous les affichages doivent etre un miroir fidele de la comptabilite (journal_entries). Plus de flags manuels ni de donnees derivees.
+- **iter93ck DASHBOARD FIFO** : pending_calls calcule par FIFO chronologique paiements vs appels par ACP au lieu du flag manuel `distribution.paid`. Guerit T1 paye -> T2 en premier pending a 475.94 EUR.
+- **iter93cl BANK ACCOUNTS** : matching robuste bank_account <-> journal_entries via IBAN.last4 vs bank_statements.account_number.last4 quand pcmn config diverge des JE.
+- **iter93cm FUND CALLS** : GET /owner/fund-calls retourne unpaid_amount par appel via FIFO. paid=(unpaid<0.01).
+- **iter93cn FRONTEND amountToPay** : Math.round(x*100)/100 au lieu de +fmtEUR qui produisait NaN (virgule fr-BE '475,94').
+- **iter93co COMPTE EPARGNE** : fallback JE 55XX quand aucun bank_statement pour un compte (matching IBAN.last4 -> JE account.last4). Compte epargne affiche 13.111,41 EUR meme sans CODA importe.
+- **iter93cp QR CODE** : amount URL param en format numerique brut (dot decimal) au lieu de fmtEUR (comma decimal fr-BE incompatible avec FastAPI float parsing).
+- **iter93cq CHARGES DONUT** : suppression de la ligne synthetique "Financement par fonds/reserve" ; top 5 real categories seulement, base uniquement sur les journal_entries.
+- **Validation** : Testing agent 100% (10/10 backend + Playwright E2E frontend PASS sur real Guerit portal).
+- **Backlog identifie (out of scope current iteration)** : (a) header KPI cards TOTAL APPELE/SOLDE affichent 0.00 EUR alors que backend renvoie 1427.88 debiteur, (b) 'Prochain paiement' card ignore FIFO et affiche T1 alors que T1 est paye.
+
+
+
 #### P2 - Chatbot Vision (analyse images) (DONE iter93cj - Feb 2026)
 - **Feature** : Le chatbot accepte desormais des images (PNG, JPG, JPEG, WEBP) en plus des PDF/CSV. Le LLM (Claude Sonnet 4.5 Vision) analyse visuellement l'image pour extraire chiffres, noms, tableaux.
 - **Backend** : Fonction `_process_image` (Pillow) - resize proportionnel si > 1600 px, 1ere frame si anime, conversion palette->RGB, fond blanc si JPEG avec transparence, re-encode dans format d'origine. Image stockee en base64 + mime dans le message. Endpoint chat injecte via `ImageContent(image_base64=...)` dans `UserMessage.file_contents`.
