@@ -1706,7 +1706,7 @@ function SituationHero({ status, balance, totalCalled, totalPaid, totalUpcoming,
               "pour l'ensemble de l'exercice restant") */}
           {balance > 0.01 && (
             <div
-              className={`mt-1 text-[10px] italic ${soldeText} opacity-80`}
+              className={`mt-1.5 text-sm font-semibold ${soldeText}`}
               data-testid="situation-solde-scope"
             >
               pour l&apos;ensemble de l&apos;exercice restant
