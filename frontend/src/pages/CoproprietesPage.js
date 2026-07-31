@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { Plus, Pencil, Trash2, Home, Search, Archive, RotateCcw, Landmark, PlusCircle, X, Eraser, Wand2, Upload, UserPlus, FileText, Download, Image as ImageIcon, CheckCircle2, ClipboardCheck, AlertTriangle, Users } from 'lucide-react';
+import { Plus, Pencil, Trash2, Home, Search, Archive, RotateCcw, Landmark, PlusCircle, X, Eraser, Wand2, Upload, UserPlus, FileText, Download, Image as ImageIcon, CheckCircle2, ClipboardCheck, AlertTriangle, Users, Loader2 } from 'lucide-react';
 import BulkCsvImportDialog from '@/components/BulkCsvImportDialog';
 import PdfImportDialog from '@/components/PdfImportDialog';
 import ImportSummary from '@/components/ImportSummary';
@@ -903,17 +903,33 @@ export default function CoproprietesPage() {
                       Importez la <em>Liste des coproprietaires</em> depuis un export PDF (Optipro/Sogis) ou CSV. Les proprietaires seront crees dans la base de donnees de votre syndic et lies a cette ACP.
                     </p>
                     <div className="flex flex-wrap gap-2 mb-3">
-                      <Button variant="outline" size="sm" onClick={() => setPdfOwnersOpen(true)} className="border-emerald-400 text-emerald-800 hover:bg-emerald-100" data-testid="import-owners-pdf-btn">
+                      <Button variant="outline" size="sm" onClick={() => setPdfOwnersOpen(true)} disabled={importingOwners} className="border-emerald-400 text-emerald-800 hover:bg-emerald-100" data-testid="import-owners-pdf-btn">
                         <FileText size={14} className="mr-1" /> Import PDF (recommande)
                       </Button>
-                      <Button variant="outline" size="sm" onClick={() => setBulkOwnersOpen(true)} className="border-emerald-400 text-emerald-800 hover:bg-emerald-100" data-testid="import-owners-csv-btn">
+                      <Button variant="outline" size="sm" onClick={() => setBulkOwnersOpen(true)} disabled={importingOwners} className="border-emerald-400 text-emerald-800 hover:bg-emerald-100" data-testid="import-owners-csv-btn">
                         <UserPlus size={14} className="mr-1" /> Import CSV
                       </Button>
                     </div>
-                    <div className="bg-white rounded-md border border-emerald-200 p-3" data-testid="owners-list-recap">
+                    {/* iter93dm : overlay de chargement pendant l'import
+                        (parsing PDF + creation des proprietaires en base) */}
+                    <div className="bg-white rounded-md border border-emerald-200 p-3 relative" data-testid="owners-list-recap">
+                      {importingOwners && (
+                        <div
+                          className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-white/85 backdrop-blur-sm rounded-md"
+                          data-testid="owners-import-loading"
+                        >
+                          <div className="flex items-center gap-3">
+                            <Loader2 className="h-6 w-6 text-emerald-600 animate-spin" />
+                            <span className="text-sm font-semibold text-emerald-900">Chargement des proprietaires en cours...</span>
+                          </div>
+                          <div className="text-xs text-emerald-700">
+                            Creation en base de donnees, verification des doublons, association a l&apos;ACP.
+                          </div>
+                        </div>
+                      )}
                       <div className="flex items-center justify-between mb-2">
                         <span className="text-xs font-semibold text-slate-700">{owners.length} proprietaire(s) charge(s)</span>
-                        {owners.length === 0 && (
+                        {owners.length === 0 && !importingOwners && (
                           <span className="text-[11px] text-amber-700 italic">Aucun - importez un PDF/CSV pour continuer</span>
                         )}
                       </div>
