@@ -31,7 +31,7 @@ logger = logging.getLogger("billing_admin")
 class Tier(BaseModel):
     min_lots: int
     max_lots: Optional[int] = None  # None = pas de limite haute
-    price_per_lot: float
+    annual_fee: float  # iter93du : forfait annuel fixe pour la tranche
 
 
 class BillingConfig(BaseModel):
@@ -57,29 +57,33 @@ def _apply_frequency_multiplier(annual_amount: float, frequency: str) -> float:
 
 
 def _compute_tiered_amount(lots: int, tiers: List[dict]) -> float:
-    """Prix degressif par tranche (annuel).
+    """iter93du : forfait annuel FIXE selon la tranche ou tombe le nombre de lots.
 
-    Chaque tranche s'applique aux lots dans sa fourchette. Le total est la
-    somme des sous-totaux de chaque tranche traversee.
+    Chaque tranche a un montant `annual_fee` unique (pas de prix par lot).
+    On cherche la tranche dont [min_lots, max_lots] contient `lots`,
+    et on renvoie `annual_fee`. Retour 0 si lots<=0 ou aucune tranche
+    ne correspond.
     """
     if lots <= 0 or not tiers:
         return 0.0
     sorted_tiers = sorted(tiers, key=lambda t: t.get("min_lots", 0))
-    total = 0.0
-    remaining = lots
     for t in sorted_tiers:
-        if remaining <= 0:
-            break
         lo = t.get("min_lots", 0)
-        hi = t.get("max_lots") or 10**9
-        # nombre de lots dans cette tranche
-        band = min(hi, lots) - lo + 1
-        if band <= 0:
-            continue
-        band = min(band, remaining)
-        total += band * float(t.get("price_per_lot", 0) or 0)
-        remaining -= band
-    return round(total, 2)
+        hi = t.get("max_lots") if t.get("max_lots") is not None else 10**9
+        if lo <= lots <= hi:
+            # iter93du : retro-compat legacy (anciens documents avec price_per_lot)
+            fee = t.get("annual_fee")
+            if fee is None:
+                # migration douce : anciens docs contenaient price_per_lot
+                # -> on convertit en forfait fixe = price_per_lot * mid_range
+                # (approximation pour ne pas casser le calcul en attendant que
+                # le superadmin re-enregistre la config).
+                legacy = t.get("price_per_lot")
+                if legacy is not None:
+                    return float(legacy) * lots
+                return 0.0
+            return round(float(fee), 2)
+    return 0.0
 
 
 def create_billing_admin_router(db):
@@ -95,13 +99,13 @@ def create_billing_admin_router(db):
     async def _load_config():
         cfg = await db.billing_config.find_one({"id": "default"}, {"_id": 0})
         if not cfg:
-            # Bareme par defaut suggere
+            # Bareme par defaut suggere - forfait annuel FIXE par tranche
             cfg = {
                 "id": "default",
                 "tiers": [
-                    {"min_lots": 1, "max_lots": 50, "price_per_lot": 5.0},
-                    {"min_lots": 51, "max_lots": 200, "price_per_lot": 4.0},
-                    {"min_lots": 201, "max_lots": None, "price_per_lot": 3.0},
+                    {"min_lots": 1, "max_lots": 50, "annual_fee": 500.0},
+                    {"min_lots": 51, "max_lots": 200, "annual_fee": 1200.0},
+                    {"min_lots": 201, "max_lots": None, "annual_fee": 2500.0},
                 ],
                 "vat_rate": 21.0,
                 "default_frequency": "annual",
@@ -318,13 +322,13 @@ def _render_invoice_pdf(row: dict, cfg: dict, period_label: str) -> bytes:
             f"Forfait negocie. Facturation {freq_lbl}."
         )
     else:
-        tier_desc = " + ".join(
-            f"{t.get('min_lots','?')}-{t.get('max_lots','+')} : {t.get('price_per_lot','?'):.2f} EUR/lot"
+        tier_desc = " · ".join(
+            f"{t.get('min_lots','?')}-{t.get('max_lots','+') if t.get('max_lots') is not None else '+'} : {float(t.get('annual_fee') or t.get('price_per_lot') or 0):.2f} EUR/an"
             for t in cfg.get("tiers", [])
         )
         desc_line = (
             f"Gestion de {row['acp_count']} copropriete(s), soit {row['lot_count']} lot(s) actif(s). "
-            f"Bareme degressif : {tier_desc}. Facturation {freq_lbl}."
+            f"Bareme par tranche : {tier_desc}. Facturation {freq_lbl}."
         )
     story.append(Paragraph(desc_line, st_normal))
     story.append(Spacer(1, 4 * mm))

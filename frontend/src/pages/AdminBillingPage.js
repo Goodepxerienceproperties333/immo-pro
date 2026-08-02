@@ -67,7 +67,7 @@ export default function AdminBillingPage() {
   const addTier = () => {
     const last = (cfg.tiers || [])[cfg.tiers.length - 1];
     const nextMin = last ? (last.max_lots || 0) + 1 : 1;
-    setCfg({ ...cfg, tiers: [...(cfg.tiers || []), { min_lots: nextMin, max_lots: nextMin + 49, price_per_lot: 0 }] });
+    setCfg({ ...cfg, tiers: [...(cfg.tiers || []), { min_lots: nextMin, max_lots: nextMin + 49, annual_fee: 0 }] });
   };
   const removeTier = (i) => {
     const tiers = [...(cfg.tiers || [])];
@@ -120,9 +120,11 @@ export default function AdminBillingPage() {
 
   const tiersPreview = useMemo(() => {
     if (!cfg?.tiers) return '';
-    return cfg.tiers.map(t =>
-      `${t.min_lots}-${t.max_lots ?? '+'} : ${Number(t.price_per_lot || 0).toFixed(2)}€/lot`
-    ).join(' → ');
+    return cfg.tiers.map(t => {
+      const fee = t.annual_fee ?? t.price_per_lot ?? 0;
+      const max = t.max_lots ?? '+';
+      return `${t.min_lots}-${max} : ${Number(fee).toFixed(2)}€/an`;
+    }).join(' · ');
   }, [cfg]);
 
   if (loading || !cfg) {
@@ -144,18 +146,18 @@ export default function AdminBillingPage() {
       {/* Bareme */}
       <Card className="border-slate-200">
         <CardHeader>
-          <CardTitle className="text-base">Bareme degressif par tranche</CardTitle>
+          <CardTitle className="text-base">Bareme par tranche - forfait annuel fixe</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="text-xs text-slate-500">
-            Pour chaque nouveau lot au-dela d&apos;une tranche, on applique le prix de la tranche suivante.
+            Chaque tranche definit un <b>forfait annuel fixe</b> selon le nombre de lots geres.
             Un forfait <b>negocie</b> par syndic prend le pas sur ce bareme.
           </div>
           <div className="space-y-2">
             <div className="grid grid-cols-12 gap-2 text-[11px] uppercase text-slate-500 font-semibold">
               <div className="col-span-3">Lots min</div>
               <div className="col-span-3">Lots max (vide = illimite)</div>
-              <div className="col-span-4">Prix par lot (EUR / an)</div>
+              <div className="col-span-4">Forfait annuel (EUR HT)</div>
               <div className="col-span-2"></div>
             </div>
             {(cfg.tiers || []).map((t, i) => (
@@ -166,8 +168,9 @@ export default function AdminBillingPage() {
                 <Input className="col-span-3" type="number" min={0} value={t.max_lots ?? ''}
                        placeholder="Illimite" onChange={e => setTier(i, 'max_lots', e.target.value)}
                        data-testid={`tier-max-${i}`} />
-                <Input className="col-span-4" type="number" step="0.01" min={0} value={t.price_per_lot ?? ''}
-                       onChange={e => setTier(i, 'price_per_lot', e.target.value)}
+                <Input className="col-span-4" type="number" step="0.01" min={0}
+                       value={t.annual_fee ?? t.price_per_lot ?? ''}
+                       onChange={e => setTier(i, 'annual_fee', e.target.value)}
                        data-testid={`tier-price-${i}`} />
                 <Button variant="ghost" size="sm" className="col-span-2 text-red-500"
                         onClick={() => removeTier(i)} data-testid={`tier-remove-${i}`}>

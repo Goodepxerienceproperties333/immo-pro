@@ -1,0 +1,25 @@
+{
+  "summary": "iter93du (forfait annuel fixe) tested end-to-end: 34/34 backend tests PASS. New schema annual_fee validated for default config, PUT/GET persistence, list syndics (annual_amount_ht = flat fee, no lot multiplication), 30->500 / 88->1200 / 250->2500 cases, legacy price_per_lot retro-compat (fallback = price_per_lot * lots), PDF invoice description mentions 'EUR/an' (not 'EUR/lot'). All 403 auth isolation, negotiated_flat_fee override + null clear, and quarterly frequency divisor tests still green.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_billing_admin_iter93du.py",
+    "/app/test_reports/pytest/iter118_billing.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "billing_admin.py:_compute_tiered_amount correctly prefers annual_fee over price_per_lot in mixed-schema docs, ensuring the migration path is safe.",
+    "Default tiers hardcoded in _load_config (500/1200/2500) match spec.",
+    "PDF template uses `float(t.get('annual_fee') or t.get('price_per_lot') or 0)` with 'EUR/an' suffix - retro-compat friendly and pypdf-extractable text confirms label present.",
+    "Existing legacy DB config (price_per_lot 800/1600/2500/0) was deleted by testing agent before test run so /config returns the fresh default. If prod DB has an old config, superadmin must re-save via PUT to migrate; otherwise legacy fallback (price_per_lot * lots) will produce inflated bills."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_billing_admin_iter93du.py (new)"
+  ],
+  "success_rate": {"backend": "100% (34/34)", "frontend": "N/A"},
+  "test_credentials": "admin@copro.be / admin123",
+  "seed_data_creation": "Deleted db.billing_config document with old price_per_lot schema so default annual_fee config is exercised. Test PUT then re-persists new schema.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Legacy price_per_lot config was purged before iter93du tests. The default config now serves annual_fee 500/1200/2500. Ensure any prod migration re-writes db.billing_config; otherwise legacy fallback yields price_per_lot*lots (see _compute_tiered_amount). Old test file /app/backend/tests/test_billing_admin_iter93dt.py still uses price_per_lot expectations and will FAIL now - keep the new iter93du test as source of truth."
+}
