@@ -1,0 +1,21 @@
+{
+  "summary": "Retest fix iter93dt-clear-nego: PUT /api/admin/billing/syndics/{id} with negotiated_flat_fee=null now correctly $unsets field. All 22 tests in test_billing_admin_iter93dt.py PASS (previously 21/22 with test_clear_negotiated_fallback_to_tiers failing). DB verification confirmed the field is truly removed (has_negotiated_field: False), not just set to null.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_billing_admin_iter93dt.py",
+    "/app/test_reports/pytest/iter117_billing.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Fix in /app/backend/routes/billing_admin.py using model_dump(exclude_unset=True) with separate $set/$unset ops is clean and idiomatic for Pydantic + PyMongo."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100%", "frontend": "N/A"},
+  "test_credentials": "admin@copro.be / admin123 (used via existing admin_session fixture)",
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Issue iter93dt-clear-nego fully resolved. PUT with negotiated_flat_fee=null correctly triggers $unset and pricing_mode falls back to 'tranches' with tiered amount computed. Verified both via test (test_clear_negotiated_fallback_to_tiers) and direct DB inspection (field absent from document).",
+  "rca of the issue": "Previous implementation relied on model_dump(exclude_none=True) which dropped null values, so sending {negotiated_flat_fee: null} was silently ignored. Fix uses model_dump(exclude_unset=True) so explicitly-provided nulls survive, then splits payload into $set (non-None) and $unset (None). Result: clients can now clear a negotiated fee via null and the syndic reverts to tiered pricing."
+}

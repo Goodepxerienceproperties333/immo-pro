@@ -206,13 +206,24 @@ def create_billing_admin_router(db):
     @router.put("/syndics/{syndic_user_id}")
     async def update_syndic_billing(syndic_user_id: str, upd: SyndicBillingUpdate, request: Request):
         await _ensure_superadmin(request)
-        doc = {"syndic_user_id": syndic_user_id, "updated_at": datetime.now(timezone.utc).isoformat()}
-        payload = upd.model_dump(exclude_none=True)
-        doc.update(payload)
+        # iter93dt-fix : distinguer un champ non-envoye (exclude_unset) d'un
+        # champ explicitement mis a null. `null` doit UNSET la valeur en DB
+        # (retour au bareme), pas etre ignore.
+        payload = upd.model_dump(exclude_unset=True)
+        set_doc = {"syndic_user_id": syndic_user_id, "updated_at": datetime.now(timezone.utc).isoformat()}
+        unset_doc: dict = {}
+        for k, v in payload.items():
+            if v is None:
+                unset_doc[k] = ""
+            else:
+                set_doc[k] = v
+        update = {"$set": set_doc}
+        if unset_doc:
+            update["$unset"] = unset_doc
         await db.syndic_billing.update_one(
-            {"syndic_user_id": syndic_user_id}, {"$set": doc}, upsert=True
+            {"syndic_user_id": syndic_user_id}, update, upsert=True
         )
-        return {"ok": True, "syndic_user_id": syndic_user_id, "billing": doc}
+        return {"ok": True, "syndic_user_id": syndic_user_id}
 
     @router.get("/invoice/{syndic_user_id}/pdf")
     async def generate_invoice_pdf(syndic_user_id: str, request: Request, period_label: str = ""):
