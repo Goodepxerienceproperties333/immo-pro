@@ -1,0 +1,36 @@
+{
+  "summary": "Retest iter121 fix persistence comm_preference/ag_convocation_mode on POST/PUT /api/owners. POST fix works correctly (persist provided values + default 'email' when absent). PUT fix is BROKEN due to Pydantic model defaults: OwnerInput.comm_preference and ag_convocation_mode default to \"\" (empty string), not None. So the guard `if data.comm_preference is not None` is always True, causing partial PUT to overwrite existing values with 'email'. Regression /api/owner/me passes.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "PUT /api/owners/{id}",
+        "issue": "Partial PUT (without comm_preference/ag_convocation_mode) overwrites existing values with 'email'. Root cause: OwnerInput model defines these fields as `Optional[str] = \"\"` (line 346-347 in /app/backend/routes/properties.py). Pydantic fills omitted fields with \"\" not None, so the guard `if data.comm_preference is not None` is always True. Fix: change model defaults to `None`, i.e. `comm_preference: Optional[str] = None` and `ag_convocation_mode: Optional[str] = None`. POST logic uses `(data.comm_preference or 'email')` so it still works with either default.",
+        "priority": "HIGH"
+      }
+    ],
+    "minor": []
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter121_owners_comm_persistence_retest.py",
+    "/app/test_reports/pytest/iter121_results.xml"
+  ],
+  "action_items": [
+    "In /app/backend/routes/properties.py lignes 346-347, changer `Optional[str] = \"\"` en `Optional[str] = None` pour `comm_preference` et `ag_convocation_mode` sur OwnerInput, afin que le guard `is not None` fonctionne au PUT. Sinon adapter le guard: `if data.comm_preference:` (truthy check) - mais cela empeche de repasser explicitement en 'email' via chaine vide."
+  ],
+  "critical_code_review_comments": [
+    "Le fix iter93dv-post-fix repose sur `if data.comm_preference is not None` mais le modele Pydantic OwnerInput a un defaut `\"\"` (empty string) au lieu de `None`. Incoherence entre le modele et la logique de garde - cassure certaine.",
+    "POST/api/owners: OK, defaut 'email' correctement applique.",
+    "PUT /api/owner/me (self-service) fonctionne correctement (utilise probablement un modele different avec defauts None ou un dict brut)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter121_owners_comm_persistence_retest.py"
+  ],
+  "success_rate": {"backend": "50%", "frontend": "N/A (skipped per request)"},
+  "test_credentials": "admin@copro.be / admin123, evrard.gerald@outlook.be / TestOwnerIter93CK!",
+  "seed_data_creation": "Aucune - copropriete Agathe c9cfce94-96c6-4202-8a6d-0a5627b50856 utilisee. Tous les owners TEST_* crees sont nettoyes en teardown via DELETE /api/owners/{id}.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Test suite complete disponible: /app/backend/tests/test_iter121_owners_comm_persistence_retest.py. 3 tests POST/PUT + 1 test regression /api/owner/me. Apres fix du modele Pydantic (defaut None), tous devraient passer.",
+  "rca of the issue": "Le fix a corrige la ligne 1092-1095 (guard is not None) mais n'a pas modifie le modele OwnerInput (lignes 346-347) qui a un defaut de chaine vide \"\". Pydantic remplit les champs manquants avec \"\", donc data.comm_preference == \"\" (jamais None) apres desemulation depuis JSON. Le guard is not None est toujours True -> overwrite systematique. Reproduction: POST owner avec comm_preference='courrier', puis PUT avec seulement {phone:'x'} -> GET renvoie comm_preference='email'. Mitigation: modifier defaut a None."
+}

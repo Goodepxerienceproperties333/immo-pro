@@ -909,6 +909,9 @@ def create_properties_router(db):
             "identifier": (data.identifier or "").strip(),
             "iban": (data.iban or "").strip(),
             "bce_number": (data.bce_number or "").strip(),
+            # iter93dv : preferences de communication (defaut 'email')
+            "comm_preference": (data.comm_preference or "email").strip() or "email",
+            "ag_convocation_mode": (data.ag_convocation_mode or "email").strip() or "email",
             "copropriete_id": data.copropriete_id,
             "created_at": datetime.now(timezone.utc).isoformat()
         }
@@ -1078,15 +1081,21 @@ def create_properties_router(db):
         new_email = ((data.email or "").lower().strip())
         email_changed = bool(new_email) and (old_email != new_email)
         from syndic_scope import syndic_query
+        set_doc = {
+            "first_name": data.first_name, "last_name": data.last_name, "name": full_name,
+            "address": data.address, "postal_code": data.postal_code, "city": data.city,
+            "country": data.country, "email": data.email, "email2": data.email2,
+            "phone": data.phone, "phone2": data.phone2,
+            "bce_number": (data.bce_number or "").strip(),
+        }
+        # iter93dv : preferences de communication - update seulement si envoyees
+        if data.comm_preference is not None:
+            set_doc["comm_preference"] = (data.comm_preference or "").strip() or "email"
+        if data.ag_convocation_mode is not None:
+            set_doc["ag_convocation_mode"] = (data.ag_convocation_mode or "").strip() or "email"
         result = await db.owners.update_one(
             {"id": owner_id, **syndic_query(request)},
-            {"$set": {
-                "first_name": data.first_name, "last_name": data.last_name, "name": full_name,
-                "address": data.address, "postal_code": data.postal_code, "city": data.city,
-                "country": data.country, "email": data.email, "email2": data.email2,
-                "phone": data.phone, "phone2": data.phone2,
-                "bce_number": (data.bce_number or "").strip(),
-            }}
+            {"$set": set_doc}
         )
         if result.matched_count == 0:
             raise HTTPException(404, "Proprietaire non trouve")

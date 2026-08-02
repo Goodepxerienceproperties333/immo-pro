@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="3" skipped="0" tests="6" time="6.470" timestamp="2026-08-02T19:29:08.454672+00:00" hostname="agent-env-c232a888-f004-4f41-8105-0b9f2a413b75"><testcase classname="backend.tests.test_iter121_owners_comm_persistence_retest.TestPostOwnersPersistence" name="test_post_with_both_fields_persists" time="0.650" /><testcase classname="backend.tests.test_iter121_owners_comm_persistence_retest.TestPostOwnersPersistence" name="test_post_without_fields_defaults_email" time="0.160" /><testcase classname="backend.tests.test_iter121_owners_comm_persistence_retest.TestPutOwnersPersistence" name="test_put_only_comm_preference_preserves_ag" time="0.274"><failure message="AssertionError: ag_convocation_mode should be preserved, got email&#10;assert 'email' == 'recommande'&#10;  &#10;  - recommande&#10;  + email">backend/tests/test_iter121_owners_comm_persistence_retest.py:109: in test_put_only_comm_preference_preserves_ag
+    assert got.get("ag_convocation_mode") == "recommande", \
+E   AssertionError: ag_convocation_mode should be preserved, got email
+E   assert 'email' == 'recommande'
+E     
+E     - recommande
+E     + email</failure></testcase><testcase classname="backend.tests.test_iter121_owners_comm_persistence_retest.TestPutOwnersPersistence" name="test_put_only_ag_convocation_preserves_comm" time="0.235"><failure message="AssertionError: comm_preference should be preserved, got email&#10;assert 'email' == 'courrier'&#10;  &#10;  - courrier&#10;  + email">backend/tests/test_iter121_owners_comm_persistence_retest.py:118: in test_put_only_ag_convocation_preserves_comm
+    assert got.get("comm_preference") == "courrier", \
+E   AssertionError: comm_preference should be preserved, got email
+E   assert 'email' == 'courrier'
+E     
+E     - courrier
+E     + email</failure></testcase><testcase classname="backend.tests.test_iter121_owners_comm_persistence_retest.TestPutOwnersPersistence" name="test_put_without_either_field_preserves_both" time="0.256"><failure message="AssertionError: comm_preference overwritten! got email&#10;assert 'email' == 'courrier'&#10;  &#10;  - courrier&#10;  + email">backend/tests/test_iter121_owners_comm_persistence_retest.py:127: in test_put_without_either_field_preserves_both
+    assert got.get("comm_preference") == "courrier", \
+E   AssertionError: comm_preference overwritten! got email
+E   assert 'email' == 'courrier'
+E     
+E     - courrier
+E     + email</failure></testcase><testcase classname="backend.tests.test_iter121_owners_comm_persistence_retest.TestOwnerMeRegression" name="test_get_and_put_owner_me" time="4.769" /></testsuite></testsuites>
