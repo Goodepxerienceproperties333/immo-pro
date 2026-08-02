@@ -3,7 +3,7 @@ import { useParams, Link, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { ArrowLeft, ScrollText, Shield, FileText, Cookie, AlertTriangle, Loader2 } from 'lucide-react';
+import { ArrowLeft, ScrollText, Shield, FileText, Cookie, AlertTriangle, Loader2, Database } from 'lucide-react';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
@@ -13,9 +13,10 @@ const SLUG_META = {
   mentions: { label: 'Mentions Legales', icon: FileText },
   cookies: { label: 'Politique de Cookies', icon: Cookie },
   disclaimer: { label: 'Disclaimer Comptable', icon: AlertTriangle },
+  'data-act': { label: 'Registre Data Act & Formats d\'export', icon: Database },
 };
 
-const ALL_SLUGS = ['cgu', 'privacy', 'mentions', 'cookies', 'disclaimer'];
+const ALL_SLUGS = ['cgu', 'privacy', 'mentions', 'cookies', 'disclaimer', 'data-act'];
 
 export default function LegalDocPage() {
   const { slug } = useParams();

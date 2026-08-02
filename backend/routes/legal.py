@@ -297,6 +297,151 @@ Sont exclus : dommages indirects, perte de bénéfice, perte de chance, préjudi
 Nous recommandons une **revue périodique par un expert-comptable** de vos états comptables et fiscaux produits par la Plateforme.
 """.strip(),
     },
+    "data-act": {
+        "title": "Registre Data Act & Formats d'export",
+        "version": 1,
+        "content": """
+# Registre Data Act & Formats d'export
+
+**Version 1 — En vigueur au [DATE_MISE_EN_LIGNE]**
+
+Le présent registre complète les Conditions Générales d'Utilisation et satisfait aux obligations de **portabilité des données** prévues par le Règlement (UE) 2023/2854 relatif à des règles harmonisées portant sur l'équité de l'accès aux données et de leur utilisation (« Data Act »), en particulier son **article 25** sur les clauses contractuelles applicables aux services de traitement de données.
+
+> **Attention** : ce document est **complémentaire** au contrat. Les catégories de données exportables, les délais de restitution et les conditions de changement de fournisseur (« switching ») restent inscrites dans les CGU/Contrat.
+
+---
+
+## 1. Données exportables par le Client
+
+Les données suivantes, générées ou saisies par le Client dans la Plateforme, peuvent être exportées à tout moment sur demande :
+
+- **Copropriétés (ACPs)** : identification, adresse, statut, statuts (RCS/BCE), quotités.
+- **Lots** : numéros, descriptions, quotités, mutations, historique d'attribution.
+- **Propriétaires** : coordonnées, communications structurées VCS, tiers comptables associés, préférences de communication.
+- **Écritures comptables** : journaux (ACH, VCS, OD, AN), grand-livre PCMN, extourne, exercices comptables clos et ouverts.
+- **Bilans & Comptes de résultat** : bilans après répartition, comptes de résultat annuels, décomptes de charges par lot.
+- **Appels de fonds & Paiements** : appels trimestriels, réserves, roulements, extraits CODA importés, transactions bancaires matchées.
+- **Factures & Justificatifs** : factures fournisseurs, pièces jointes (PDF, images), OD frais privatifs.
+- **AG & PV** : convocations, ordre du jour, votes, procès-verbaux.
+- **Documents** : PDF, images, courriers scannés stockés dans le module Documents.
+- **Communications émises** : historique des envois email, corps, destinataires, statut de livraison.
+- **Fichiers d'origine** : PDF de la liste des propriétaires importée, exports Optipro/CODA sources.
+
+---
+
+## 2. Formats disponibles
+
+| Type de données | Formats disponibles |
+|-----------------|---------------------|
+| Comptabilité (journaux, écritures, grand-livre) | **CSV** (UTF-8, séparateur `;`), **XLSX** |
+| Rapports (bilan, compte de résultat, décomptes) | **PDF** (mise en page officielle), **XLSX** |
+| Balance de tiers, appels de fonds | **CSV**, **XLSX**, **PDF** |
+| Fiches propriétaires, lots, ACPs | **CSV**, **XLSX**, **JSON** |
+| Documents & justificatifs | **Fichier original** (PDF, JPEG, PNG…) dans une archive ZIP |
+| Extraits CODA importés | **Fichier CODA original** (`.cod`) + **CSV** du parse |
+| Base de données brute | **Dump JSON** structuré (une clé par collection) sur demande explicite |
+
+---
+
+## 3. Procédure de demande d'export
+
+**Auto-service** (immédiat) :
+- Les exports CSV/XLSX/PDF sont accessibles directement depuis l'interface :
+  - Rapports > Bilan & Résultats : bouton *Exporter*
+  - Balance de Tiers : bouton *Exporter CSV / PDF*
+  - Communication > Historique envois : bouton *Exporter CSV*
+  - Facturation admin : bouton *Exporter CSV*
+
+**Sur demande** (dump complet ou fichiers d'origine en masse) :
+1. Adresser une demande écrite à **[EMAIL_SUPPORT]** avec en objet `[DATA-ACT] Demande d'export`.
+2. Préciser : ACPs concernées, période, format(s) souhaité(s).
+3. Le Client est authentifié par un utilisateur ayant le rôle *syndic* ou *admin* du compte.
+4. Accusé de réception sous **48 h ouvrées**.
+5. Livraison via lien sécurisé chiffré, valable 7 jours.
+
+---
+
+## 4. Délais de restitution et de suppression
+
+| Événement | Délai |
+|-----------|-------|
+| Export auto-service | Immédiat |
+| Export standard sur demande (dump JSON, archive PDF) | **≤ 5 jours ouvrés** |
+| Export complexe (multi-ACP, historique > 5 ans) | **≤ 30 jours ouvrés** |
+| Restitution finale à la résiliation du contrat | **≤ 30 jours** après demande écrite |
+| Suppression irréversible des données après export final | **90 jours** après restitution (délai légal de rétention comptable applicable ensuite) |
+| Purge des sauvegardes chiffrées | **12 mois maximum** |
+
+---
+
+## 5. Limitations techniques
+
+- Volume maximal d'un export unique en auto-service : **500 Mo**. Au-delà, l'export est découpé et fourni en plusieurs fichiers.
+- Les PDF signés numériquement (justificatifs) sont exportés **tels quels**, sans re-signature.
+- Les exports XLSX suivent la spécification Office Open XML — compatibles Excel 2016+, LibreOffice Calc 7+, Google Sheets.
+- Les fichiers CSV utilisent l'encodage **UTF-8 avec BOM** pour compatibilité Excel Windows.
+- Les fichiers CODA sont livrés **binaires**, sans conversion, format bancaire Febelfin.
+
+---
+
+## 6. Données INTERNES non exportables
+
+Les éléments suivants **ne sont pas** couverts par le droit à la portabilité (art. 4 Data Act & jurisprudence associée) :
+
+- **Code source** de la Plateforme (propriété exclusive de l'Éditeur).
+- **Journaux techniques de sécurité** internes (WAF, IDS, corrélation SIEM).
+- **Secrets techniques** : clés API, JWT signing keys, mots de passe hachés, données chiffrées à la volée (chiffrement au repos).
+- **Configurations propriétaires** : règles métier, algorithmes de réconciliation, modèles LLM entraînés.
+- **Journaux d'audit inter-clients** : les entrées d'audit ne concernent que le compte du Client demandeur.
+- **Statistiques agrégées** anonymisées utilisées pour l'amélioration du service.
+
+---
+
+## 7. Localisation et juridiction de l'infrastructure
+
+- **Hébergement principal** : Union européenne (Belgique / Pays-Bas).
+- **Base de données** : MongoDB — instance managée hébergée en **UE**.
+- **Sauvegardes** : chiffrées AES-256, répliquées sur région UE distincte.
+- **Prestataires sous-traitants** figurant à l'Annexe DPA du contrat.
+- **Juridiction applicable** : Droit belge et Règlement européen (RGPD, Data Act, NIS 2, DORA le cas échéant).
+- **Tribunal compétent** : tribunal de l'entreprise de **[VILLE]** (Belgique).
+
+---
+
+## 8. Mesures contre les demandes illicites d'accès gouvernemental de pays tiers
+
+Conformément à l'article 32 du Data Act, l'Éditeur s'engage à :
+
+1. **Ne pas transférer** les données du Client vers des juridictions non couvertes par une décision d'adéquation de la Commission européenne ou des clauses contractuelles types (SCCs) approuvées.
+2. **Refuser toute demande** émise par une autorité publique d'un pays tiers qui contreviendrait au droit de l'Union — sauf ordonnance judiciaire européenne ou traité d'entraide en vigueur (MLAT).
+3. **Notifier le Client** dans les **72 heures** de toute demande officielle reçue, sauf interdiction légale expresse ; dans ce cas, notification dès la levée de l'interdiction.
+4. **Contester juridiquement** toute demande manifestement disproportionnée ou contraire aux droits fondamentaux du Client, aux frais de l'Éditeur.
+5. **Publier un rapport de transparence annuel** listant le nombre et la nature des demandes reçues et la manière dont elles ont été traitées.
+
+---
+
+## 9. Changement de fournisseur (« switching »)
+
+Conformément aux articles 23 à 31 du Data Act :
+
+- Le Client peut **changer de fournisseur** de services de traitement de données à tout moment moyennant un préavis fixé au **contrat**.
+- Le processus de switching est **accompagné techniquement** par le support (préparation du dump, mapping des formats, transferts sécurisés).
+- **Aucun frais de sortie** n'est facturé au-delà des coûts opérationnels raisonnables et transparents détaillés au contrat.
+- L'Éditeur maintient la **portabilité fonctionnelle équivalente** : formats ouverts (CSV, JSON, PDF/A) permettant la reprise chez tout fournisseur concurrent.
+
+---
+
+## 10. Contact
+
+Toute demande relative au présent registre doit être adressée à :
+
+**[SOCIETE]** — Délégué à la Protection des Données
+Courriel : **[EMAIL_DPO]**
+Adresse postale : **[ADRESSE_POSTALE]**
+
+Un accusé de réception est envoyé sous **72 heures ouvrées**.
+""".strip(),
+    },
 }
 
 

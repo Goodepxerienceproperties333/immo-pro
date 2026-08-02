@@ -404,7 +404,7 @@ export default function Layout() {
               <span>·</span>
               <a href="/legal/disclaimer" target="_blank" rel="noopener noreferrer" className="hover:text-[#022D52] hover:underline">Disclaimer</a>
               <span>·</span>
-              <a href="https://www.nextgecopro.be/data-act" target="_blank" rel="noopener noreferrer" className="hover:text-[#022D52] hover:underline" data-testid="footer-data-act-link">Registre Data Act</a>
+              <a href="/legal/data-act" target="_blank" rel="noopener noreferrer" className="hover:text-[#022D52] hover:underline" data-testid="footer-data-act-link">Registre Data Act</a>
             </div>
           </footer>
         </main>
@@ -536,7 +536,7 @@ export default function Layout() {
             <span>·</span>
             <a href="/legal/disclaimer" target="_blank" rel="noopener noreferrer" className="hover:text-[#022D52] hover:underline">Disclaimer</a>
             <span>·</span>
-            <a href="https://www.nextgecopro.be/data-act" target="_blank" rel="noopener noreferrer" className="hover:text-[#022D52] hover:underline" data-testid="footer-data-act-link-2">Registre Data Act</a>
+            <a href="/legal/data-act" target="_blank" rel="noopener noreferrer" className="hover:text-[#022D52] hover:underline" data-testid="footer-data-act-link-2">Registre Data Act</a>
           </div>
         </footer>
       </main>

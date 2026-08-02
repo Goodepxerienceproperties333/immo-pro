@@ -89,9 +89,9 @@ export default function DashboardPage() {
           )}
         </div>
 
-        {/* iter93dw : Bandeau Data Act - conformite EU Data Act art. 25 */}
+        {/* iter93dw : Bandeau Data Act - conformite EU Data Act art. 25 (page interne) */}
         <a
-          href="https://www.nextgecopro.be/data-act"
+          href="/legal/data-act"
           target="_blank"
           rel="noopener noreferrer"
           data-testid="dashboard-data-act-banner"
@@ -111,7 +111,7 @@ export default function DashboardPage() {
               </div>
             </div>
             <div className="text-[11px] text-sky-700 font-medium flex-shrink-0">
-              nextgecopro.be/data-act &nbsp;&#8599;
+              Consulter &nbsp;&#8599;
             </div>
           </div>
         </a>
