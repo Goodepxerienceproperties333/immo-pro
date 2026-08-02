@@ -1,0 +1,32 @@
+{
+  "summary": "iter93dt - Backend testing of superadmin Billing (Facturation) feature. Wrote 22 pytest tests covering: unit tests of degressive tiered price calculator (_compute_tiered_amount), auth isolation (403 for syndic/gestionnaire/unauth on all 5 endpoints), GET/PUT /api/admin/billing/config with persistence check, GET /api/admin/billing/syndics structure + calculation consistency, PUT /api/admin/billing/syndics/{id} with negotiated_flat_fee + frequency multipliers (quarterly=annual/4), invoice PDF generation. 21/22 pass. 1 failure = business logic gap: PUT with negotiated_flat_fee=null does NOT clear the negotiated fee (endpoint uses exclude_none=True in pydantic dump).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "PUT /api/admin/billing/syndics/{id}", "issue": "negotiated_flat_fee=null does not remove the negotiated fee (pricing_mode stays 'negocie'). The endpoint calls upd.model_dump(exclude_none=True) which drops null fields, so an explicit null cannot unset the value. Fix: use exclude_unset=True + explicit $unset when field is set to None. Requirement explicitly states 'negotiated_flat_fee=null retire le negocie et revient au bareme'.", "priority": "MEDIUM"}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_billing_admin_iter93dt.py",
+    "/app/test_reports/pytest/iter93dt.xml"
+  ],
+  "action_items": [
+    "Fix PUT /api/admin/billing/syndics/{id}: when body contains negotiated_flat_fee=null (explicitly), unset the field in DB (use $unset, or switch to model_dump(exclude_unset=True) and detect None -> $unset). Same likely applies to 'frequency' and 'notes' fields."
+  ],
+  "critical_code_review_comments": [
+    "routes/billing_admin.py: SyndicBillingUpdate uses Optional[float] but the PUT endpoint applies model_dump(exclude_none=True), making it impossible to CLEAR negotiated_flat_fee via API. Client cannot go back from 'negocie' to 'tranches' without direct DB access.",
+    "list_syndics_billing: acps_by_syndic groups on syndic_id/syndic_user_id string but users['_id'] is ObjectId converted to str. Works, but be careful if any legacy ACP stores a UUID vs ObjectId string - current code seems consistent.",
+    "_compute_tiered_amount: correct math verified for 0/30/50/88/200/250 lots against the spec.",
+    "generate_invoice_pdf: bare 'except Exception' swallows ObjectId parse errors and returns 404 which is fine, but also silently masks DB errors. Consider narrower except (InvalidId).",
+    "No pagination on GET /api/admin/billing/syndics (to_list(1000) / to_list(2000)). Fine for now but should be documented."
+  ],
+  "updated_files": ["/app/backend/tests/test_billing_admin_iter93dt.py"],
+  "success_rate": {"backend": "95% (21/22)", "frontend": "N/A - skipped per request"},
+  "test_credentials": "admin@copro.be / admin123 (superadmin); temp syndic created via /api/auth/register during tests",
+  "seed_data_creation": "Test suite creates a temp syndic user (TEST_syndic_<uuid>@example.com) via /auth/register for 403 checks. Also mutates db.billing_config (id='default') via PUT. Cleanup performed after tests: db.syndic_billing wiped (1 doc removed). Note: existing seeded syndics remain untouched.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Feature iter93dt (routes/billing_admin.py). Endpoints all under /api/admin/billing. Cookie-based auth. Superadmin-only. Test file /app/backend/tests/test_billing_admin_iter93dt.py covers 22 cases and includes a parametrized unit test on _compute_tiered_amount plus HTTP integration tests. Known issue: negotiated_flat_fee cannot be cleared with null due to exclude_none in pydantic dump.",
+  "rca of the issue": "PUT /api/admin/billing/syndics/{id} handler does: `payload = upd.model_dump(exclude_none=True); doc.update(payload); update_one({..}, {'$set': doc}, upsert=True)`. Because exclude_none=True drops None values, sending {'negotiated_flat_fee': null} yields an empty payload for that key -> DB record keeps previous value. Fix: use exclude_unset=True; iterate fields; convert None into $unset operation, e.g. `set_doc = {k:v for k,v in payload.items() if v is not None}; unset_doc = {k:'' for k,v in payload.items() if v is None}; update_one(..., {'$set': set_doc, '$unset': unset_doc}, upsert=True)`. Reproduction: PUT with {negotiated_flat_fee: 500}; verify pricing_mode='negocie'; PUT with {negotiated_flat_fee: null}; observe pricing_mode still 'negocie' with 500."
+}

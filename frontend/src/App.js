@@ -28,6 +28,7 @@ import AdminDashboardPage from "@/pages/AdminDashboardPage";
 import AdminUnlockEntryPage from "@/pages/AdminUnlockEntryPage";
 import AdminAuditLogPage from "@/pages/AdminAuditLogPage";
 import AdminReleaseNotesPage from "@/pages/AdminReleaseNotesPage";
+import AdminBillingPage from "@/pages/AdminBillingPage";
 import AdminLoginHistoryPage from "@/pages/AdminLoginHistoryPage";
 import ImportWizardPage from "@/pages/ImportWizardPage";
 import AdminRoleTemplatesPage from "@/pages/AdminRoleTemplatesPage";
@@ -128,6 +129,7 @@ function AppRoutes() {
         <Route path="admin/unlock" element={<RequireSuperadmin><AdminUnlockEntryPage /></RequireSuperadmin>} />
         <Route path="admin/audit" element={<RequireSuperadmin><AdminAuditLogPage /></RequireSuperadmin>} />
         <Route path="admin/release-notes" element={<RequireSuperadmin><AdminReleaseNotesPage /></RequireSuperadmin>} />
+        <Route path="admin/billing" element={<RequireSuperadmin><AdminBillingPage /></RequireSuperadmin>} />
         <Route path="admin/legal" element={<RequireSuperadmin><AdminLegalDocsPage /></RequireSuperadmin>} />
         <Route path="admin/rgpd-register" element={<RequireSuperadmin><AdminRgpdRegisterPage /></RequireSuperadmin>} />
         <Route path="admin/login-history" element={<RequireSuperadmin><AdminLoginHistoryPage /></RequireSuperadmin>} />

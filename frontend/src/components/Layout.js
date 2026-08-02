@@ -417,6 +417,7 @@ export default function Layout() {
       title: 'Plateforme', accent: 'amber', items: [
         { to: '/admin', icon: Shield, label: 'Tableau admin' },
         { to: '/admin/users', icon: Shield, label: 'Utilisateurs' },
+        { to: '/admin/billing', icon: Wallet, label: 'Facturation' },
         { to: '/admin/unlock', icon: Unlock, label: 'Outils deblocage' },
         { to: '/admin/audit', icon: Activity, label: "Journal d'audit" },
         { to: '/admin/release-notes', icon: FileText, label: 'Notes de version' },

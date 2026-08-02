@@ -1519,6 +1519,7 @@ from routes.meters import create_meters_router
 from routes.banking import create_banking_router
 from routes.documents import create_documents_router
 from routes.admin import create_admin_router
+from routes.billing_admin import create_billing_admin_router
 from routes.coproprietes import create_coproprietes_router
 from routes.suppliers import create_suppliers_router
 from routes.admin_demo import create_admin_demo_router
@@ -1552,6 +1553,7 @@ app.include_router(create_meters_router(db))
 app.include_router(create_banking_router(db))
 app.include_router(create_documents_router(db))
 app.include_router(create_admin_router(db))
+app.include_router(create_billing_admin_router(db))
 app.include_router(create_team_router(db))
 app.include_router(create_import_wizard_router(db))
 app.include_router(create_coproprietes_router(db))
