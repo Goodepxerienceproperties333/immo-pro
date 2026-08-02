@@ -1,0 +1,41 @@
+{
+  "summary": "iter93dv - Tests des preferences de communication (comm_preference + ag_convocation_mode) sur les fiches proprietaires. Frontend UI OK (les 2 selects presents et fonctionnels cote syndic /owners et cote proprietaire /portal > Mon profil, la sauvegarde declenche bien la notification email au syndic). Backend PUT /api/owner/me OK (persistance + preservation partielle + labels humains dans changes[]). CRITICAL BUG cote syndic : POST /api/owners et PUT /api/owners/{id} ne persistent PAS comm_preference ni ag_convocation_mode (les champs sont dans le Pydantic OwnerInput mais absents du doc insert_one et du $set update_one).",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "POST /api/owners", "issue": "comm_preference et ag_convocation_mode acceptes dans OwnerInput mais JAMAIS ecrits dans le doc MongoDB (voir properties.py lignes 892-914 : le dict `doc` n'inclut pas ces 2 champs). Consequence : les fiches creees via le syndic n'ont pas ces prefs, GET les renvoie donc absentes/null.", "priority": "HIGH"},
+      {"endpoint": "PUT /api/owners/{id}", "issue": "Meme bug sur update : le $set (properties.py lignes 1083-1089) omet comm_preference et ag_convocation_mode. Impossible pour le syndic d'editer ces champs via /owners.", "priority": "HIGH"}
+    ],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Syndic /owners - creation/edition owner", "issue": "Les selects UI (owner-comm-preference, owner-ag-convocation-mode) sont bien affiches et fonctionnels dans le dialog, mais la valeur choisie n'est pas persistee cote backend (voir bug backend). L'UI paraitra fonctionner (pas d'erreur au submit) mais la donnee est perdue.", "affected_selectors": ["[data-testid='owner-comm-preference']", "[data-testid='owner-ag-convocation-mode']"]}
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter93dv_owner_comm_prefs.py",
+    "/app/test_reports/pytest/iter93dv.xml"
+  ],
+  "action_items": [
+    "URGENT: Ajouter comm_preference et ag_convocation_mode dans le dict `doc` de create_owner (properties.py ~ligne 892) : `'comm_preference': (data.comm_preference or '').strip(), 'ag_convocation_mode': (data.ag_convocation_mode or '').strip()`",
+    "URGENT: Ajouter les 2 memes champs dans le $set de update_owner (properties.py ~ligne 1083-1089)",
+    "Optionnel : valider strictement les valeurs autorisees (email/courrier/recommande vs email/recommande) plutot que d'accepter n'importe quelle string"
+  ],
+  "critical_code_review_comments": [
+    "OwnerInput a des champs Pydantic declares mais non utilises dans le persistence layer -> anti-pattern silencieux. Recommande d'utiliser data.model_dump() ou un helper qui synchronise Input <-> DB doc pour eviter les futurs oublis.",
+    "properties.py update_owner : le PUT ne fait PAS un merge patch, il ecrase le doc avec le sous-ensemble hardcode. Toute nouvelle option ajoutee au modele doit etre ajoutee manuellement -> risque de bug recurrent.",
+    "owner_portal.py PUT /me implementation is exemplary (whitelist OWNER_SELF_EDITABLE + boucle sur exclude_none). Idealement /api/owners devrait suivre le meme pattern."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter93dv_owner_comm_prefs.py (nouveau, 8 tests)"
+  ],
+  "success_rate": {"backend": "25% (2/8 tests passent - portail proprio OK, syndic KO)", "frontend": "100% (selects presents + fonctionnels + notification toast OK)"},
+  "test_credentials": "admin@copro.be/admin123 (superadmin), evrard.gerald@outlook.be/TestOwnerIter93CK! (owner)",
+  "seed_data_creation": "Un owner test TEST_iter93dv PrefsOwner est cree/supprime automatiquement dans les fixtures. Le compte owner (Guerit) a eu ses prefs modifiees a 'recommande'/'recommande' par les tests (etat actuel apres run).",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Apres fix cote main agent des 2 lignes manquantes dans create_owner et update_owner (properties.py), relancer : pytest backend/tests/test_iter93dv_owner_comm_prefs.py -v. Les 6 tests actuellement en echec devraient tous passer. Le frontend est deja pret et fonctionne (verifie visuellement).",
+  "rca_of_the_issue": "Root cause : le main agent E1 a bien ajoute les 2 nouveaux champs dans le Pydantic OwnerInput (properties.py:346-347) et dans le formulaire frontend (OwnersPage.js:329-344), MAIS a oublie de propager ces champs dans les 2 endroits ou le doc MongoDB est ecrit : (1) create_owner ligne 892 (dict `doc`), (2) update_owner ligne 1083 ($set clause). Reproduction : POST /api/owners avec {comm_preference:'courrier', ag_convocation_mode:'recommande'} puis GET /api/owners/{id} => les 2 champs sont absents de la reponse. Fix : ajouter litteralement 2 lignes dans chaque endpoint (create + update)."
+}

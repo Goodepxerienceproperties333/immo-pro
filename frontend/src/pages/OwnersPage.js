@@ -10,7 +10,7 @@ import { toast } from 'sonner';
 import { Plus, Pencil, Trash2, Search, AlertTriangle, ChevronLeft, ChevronRight, Sparkles } from 'lucide-react';
 import OwnerAccessSection from '@/components/OwnerAccessSection';
 
-const emptyForm = { first_name: '', last_name: '', address: '', postal_code: '', city: '', country: 'Belgique', email: '', email2: '', phone: '', phone2: '', vcs_code: '', auxiliary_code: '', bce_number: '' };
+const emptyForm = { first_name: '', last_name: '', address: '', postal_code: '', city: '', country: 'Belgique', email: '', email2: '', phone: '', phone2: '', vcs_code: '', auxiliary_code: '', bce_number: '', comm_preference: 'email', ag_convocation_mode: 'email' };
 const PAGE_SIZE = 100;
 
 export default function OwnersPage() {
@@ -112,7 +112,7 @@ export default function OwnersPage() {
       setVcsLoading(false);
     }
   };
-  const openEdit = (o) => { setEditing(o); setForm({ first_name: o.first_name || '', last_name: o.last_name || o.name || '', address: o.address || '', postal_code: o.postal_code || '', city: o.city || '', country: o.country || 'Belgique', email: o.email || '', email2: o.email2 || '', phone: o.phone || '', phone2: o.phone2 || '', vcs_code: o.vcs_code || '', auxiliary_code: o.auxiliary_code || '', bce_number: o.bce_number || '' }); setDuplicates([]); setDialogOpen(true); };
+  const openEdit = (o) => { setEditing(o); setForm({ first_name: o.first_name || '', last_name: o.last_name || o.name || '', address: o.address || '', postal_code: o.postal_code || '', city: o.city || '', country: o.country || 'Belgique', email: o.email || '', email2: o.email2 || '', phone: o.phone || '', phone2: o.phone2 || '', vcs_code: o.vcs_code || '', auxiliary_code: o.auxiliary_code || '', bce_number: o.bce_number || '', comm_preference: o.comm_preference || 'email', ag_convocation_mode: o.ag_convocation_mode || 'email' }); setDuplicates([]); setDialogOpen(true); };
 
   // Duplicate detection
   const checkDuplicate = async (field, value) => {
@@ -319,6 +319,34 @@ export default function OwnersPage() {
             <div className="grid grid-cols-2 gap-4">
               <div><label className="form-label">GSM</label><Input value={form.phone} onChange={e => setForm({...form, phone: e.target.value})} onBlur={e => checkDuplicate('phone', e.target.value)} data-testid="owner-phone-input" /></div>
               <div><label className="form-label">GSM 2</label><Input value={form.phone2} onChange={e => setForm({...form, phone2: e.target.value})} data-testid="owner-phone2-input" /></div>
+            </div>
+            {/* iter93dv : preferences de communication (modifiables aussi par le proprio) */}
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="form-label">Communication preferee</label>
+                <select
+                  className="w-full h-9 border border-slate-300 rounded-md px-2 text-sm bg-white"
+                  value={form.comm_preference || 'email'}
+                  onChange={e => setForm({...form, comm_preference: e.target.value})}
+                  data-testid="owner-comm-preference"
+                >
+                  <option value="email">Email</option>
+                  <option value="courrier">Courrier postal</option>
+                  <option value="recommande">Courrier recommande</option>
+                </select>
+              </div>
+              <div>
+                <label className="form-label">Convocation AG</label>
+                <select
+                  className="w-full h-9 border border-slate-300 rounded-md px-2 text-sm bg-white"
+                  value={form.ag_convocation_mode || 'email'}
+                  onChange={e => setForm({...form, ag_convocation_mode: e.target.value})}
+                  data-testid="owner-ag-convocation-mode"
+                >
+                  <option value="email">Email</option>
+                  <option value="recommande">Recommande</option>
+                </select>
+              </div>
             </div>
             {/* iter93bm : VCS (communication structuree belge) - unique par proprio.
                 Genere automatiquement a la creation, editable manuellement si

@@ -136,6 +136,9 @@ export default function OwnerPortalPage() {
           city: o.city || '', country: o.country || 'Belgique',
           email: o.email || '', email2: o.email2 || '',
           phone: o.phone || '', phone2: o.phone2 || '',
+          // iter93dv
+          comm_preference: o.comm_preference || 'email',
+          ag_convocation_mode: o.ag_convocation_mode || 'email',
         });
         await loadTenants();
         // Iter90dh : affiche le tour guide si pas encore vu
@@ -1318,6 +1321,40 @@ export default function OwnerPortalPage() {
                       <div>
                         <label className="text-[10px] uppercase tracking-wider text-slate-500 mb-1 block">GSM 2</label>
                         <Input value={profileForm.phone2} onChange={e => setProfileForm({...profileForm, phone2: e.target.value})} data-testid="profile-phone2" />
+                      </div>
+                    </div>
+                    {/* iter93dv : preferences de communication */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2 border-t border-slate-100">
+                      <div>
+                        <label className="text-[10px] uppercase tracking-wider text-slate-500 mb-1 block">Mon mode de communication prefere</label>
+                        <select
+                          className="w-full h-9 border border-slate-300 rounded-md px-2 text-sm bg-white"
+                          value={profileForm.comm_preference || 'email'}
+                          onChange={e => setProfileForm({...profileForm, comm_preference: e.target.value})}
+                          data-testid="profile-comm-preference"
+                        >
+                          <option value="email">Email</option>
+                          <option value="courrier">Courrier postal</option>
+                          <option value="recommande">Courrier recommande</option>
+                        </select>
+                        <p className="text-[10px] text-slate-500 mt-1">
+                          Pour vos avis d&apos;echeance, decomptes et communications courantes.
+                        </p>
+                      </div>
+                      <div>
+                        <label className="text-[10px] uppercase tracking-wider text-slate-500 mb-1 block">Mode de convocation aux AG</label>
+                        <select
+                          className="w-full h-9 border border-slate-300 rounded-md px-2 text-sm bg-white"
+                          value={profileForm.ag_convocation_mode || 'email'}
+                          onChange={e => setProfileForm({...profileForm, ag_convocation_mode: e.target.value})}
+                          data-testid="profile-ag-convocation-mode"
+                        >
+                          <option value="email">Email</option>
+                          <option value="recommande">Courrier recommande</option>
+                        </select>
+                        <p className="text-[10px] text-slate-500 mt-1">
+                          Pour la convocation officielle a l&apos;assemblee generale (art. 3.87 CC).
+                        </p>
                       </div>
                     </div>
                     <div className="pt-3 border-t border-slate-100">

@@ -340,6 +340,11 @@ def create_properties_router(db):
         iban: Optional[str] = ""
         # BCE pour les proprietaires personnes morales (societes)
         bce_number: Optional[str] = ""
+        # iter93dv : preferences de communication
+        # comm_preference: 'email' (defaut), 'courrier' (poste), 'recommande' (poste avec AR)
+        # ag_convocation_mode: 'email' (defaut), 'recommande' (AR)
+        comm_preference: Optional[str] = ""
+        ag_convocation_mode: Optional[str] = ""
 
     # ---- Helpers anti-doublon (cf. routes/suppliers.py pour la meme logique) ----
     import re as _re

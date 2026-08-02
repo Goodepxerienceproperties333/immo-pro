@@ -19,6 +19,8 @@ from owner_self_notify import notify_syndic_of_owner_change
 OWNER_SELF_EDITABLE = {
     "first_name", "last_name", "address", "postal_code", "city",
     "country", "email", "email2", "phone", "phone2",
+    # iter93dv : preferences de communication modifiables par le proprio
+    "comm_preference", "ag_convocation_mode",
 }
 
 
@@ -2050,6 +2052,9 @@ def create_owner_portal_router(db):
         email2: Optional[str] = None
         phone: Optional[str] = None
         phone2: Optional[str] = None
+        # iter93dv
+        comm_preference: Optional[str] = None  # 'email' | 'courrier' | 'recommande'
+        ag_convocation_mode: Optional[str] = None  # 'email' | 'recommande'
 
     async def _owner_copropriete_ids(owner_id: str) -> List[str]:
         lots = await db.lots.find(
@@ -2075,6 +2080,9 @@ def create_owner_portal_router(db):
             "email2": "Email secondaire",
             "phone": "Telephone",
             "phone2": "Telephone secondaire",
+            # iter93dv
+            "comm_preference": "Mode de communication prefere",
+            "ag_convocation_mode": "Mode de convocation AG",
         }
         # Build update payload : only whitelisted fields, only non-None values
         update = {}
