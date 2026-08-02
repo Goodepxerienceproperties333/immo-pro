@@ -89,6 +89,33 @@ export default function DashboardPage() {
           )}
         </div>
 
+        {/* iter93dw : Bandeau Data Act - conformite EU Data Act art. 25 */}
+        <a
+          href="https://www.nextgecopro.be/data-act"
+          target="_blank"
+          rel="noopener noreferrer"
+          data-testid="dashboard-data-act-banner"
+          className="block mb-4 rounded-lg border border-sky-200 bg-gradient-to-r from-sky-50 to-blue-50 hover:from-sky-100 hover:to-blue-100 transition-colors"
+        >
+          <div className="flex items-center gap-3 p-3">
+            <div className="flex-shrink-0 w-9 h-9 rounded-md bg-white border border-sky-200 flex items-center justify-center">
+              <FileText size={16} className="text-sky-700" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="text-sm font-semibold text-slate-900" style={{fontFamily:'Chivo,sans-serif'}}>
+                Registre Data Act et formats d&apos;export
+              </div>
+              <div className="text-xs text-slate-600 mt-0.5">
+                Consultez la liste des donnees exportables (CSV, XLSX, PDF, JSON, fichiers d&apos;origine),
+                la procedure, les delais et l&apos;infrastructure - conformite Reglement EU 2023/2854 (Data Act) art. 25.
+              </div>
+            </div>
+            <div className="text-[11px] text-sky-700 font-medium flex-shrink-0">
+              nextgecopro.be/data-act &nbsp;&#8599;
+            </div>
+          </div>
+        </a>
+
         {/* Global stats */}
         {stats && (
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
