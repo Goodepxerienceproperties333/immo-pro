@@ -1,0 +1,26 @@
+{
+  "summary": "Frontend UI-only test of the newly added 'Facturation' sidebar link in superadmin Plateforme mode. All 5 test criteria pass.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_results": {
+    "login_superadmin": "PASS - admin@copro.be logged in, redirected to /admin",
+    "sidebar_plateforme_mode": "PASS - amber Plateforme sidebar rendered on /admin",
+    "facturation_link_present": "PASS - data-testid='adm-nav-billing' visible, text='Facturation', href='/admin/billing', appears after 'Sauvegardes ACP'",
+    "billing_page_loads": "PASS - /admin/billing renders 'Facturation des syndics' title with data-testid='admin-billing-page', all 4 KPI cards present (total-lots=88, total-period-ht=402€, total-period-ttc=486.42€, total-annual-ht=402€), Syndics(5) table rendered with 5 rows",
+    "non_superadmin_guard": "PASS - Owner (evrard.gerald@outlook.be) attempting /admin/billing is redirected to /portal by RequireSuperadmin guard"
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (not tested per request)", "frontend": "100%"},
+  "test_credentials": "admin@copro.be/admin123 (superadmin), evrard.gerald@outlook.be/TestOwnerIter93CK! (owner)",
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Layout.js NavLink for /admin/billing (data-testid=adm-nav-billing) is correctly integrated. Non-superadmin access properly guarded (redirects to /portal). No issues found."
+}

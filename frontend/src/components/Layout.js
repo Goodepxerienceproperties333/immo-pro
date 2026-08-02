@@ -145,6 +145,10 @@ export default function Layout() {
             className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''} ${collapsed ? 'justify-center px-2' : ''}`}
             data-testid="adm-nav-backups"
           ><HardDrive size={16} strokeWidth={1.5} />{!collapsed && <span className="text-[13px]">Sauvegardes ACP</span>}</NavLink>
+          <NavLink to="/admin/billing" onClick={() => setMobileOpen(false)}
+            className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''} ${collapsed ? 'justify-center px-2' : ''}`}
+            data-testid="adm-nav-billing"
+          ><Wallet size={16} strokeWidth={1.5} />{!collapsed && <span className="text-[13px]">Facturation</span>}</NavLink>
           <NavLink to="/admin/tickets" onClick={() => setMobileOpen(false)}
             className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''} ${collapsed ? 'justify-center px-2' : ''}`}
             data-testid="adm-nav-tickets"
