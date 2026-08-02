@@ -115,20 +115,22 @@ Pour toute question : **welcome@goodexperienceproperties.be**
     },
     "privacy": {
         "title": "Politique de Confidentialité (RGPD)",
-        "version": 1,
+        "version": 2,
         "content": """
 # Politique de Confidentialité
 
-**Version 1 — En vigueur au [DATE_MISE_EN_LIGNE]**
+**Version 2 — En vigueur au 1er février 2026**
 
 Conforme au Règlement Général sur la Protection des Données (RGPD — UE 2016/679) et à la loi belge du 30 juillet 2018 relative à la protection des personnes physiques à l'égard des traitements de données à caractère personnel.
 
 ## 1. Responsable du traitement
-- **[SOCIETE]**, [FORME_JURIDIQUE]
-- Siège : [ADRESSE_COMPLETE]
-- N° BCE : [NUMERO_BCE]
-- Contact : welcome@goodexperienceproperties.be
-- DPO / Délégué à la protection : **welcome@goodexperienceproperties.be** (à préciser si un DPO externe est désigné)
+- **Good Experience Properties SRL**, société à responsabilité limitée de droit belge
+- Siège social : Rue René Sacré 33, 1367 Ramillies (Belgique)
+- N° d'entreprise (BCE) : **BE 1028.571.469**
+- Agréation IPI : **517595**
+- Représentant légal / Gérant : **Gérald Evrard**
+- Contact : **welcome@goodexperienceproperties.be**
+- Délégué à la protection des données (DPO) : **welcome@goodexperienceproperties.be**
 
 ## 2. Données collectées
 
@@ -203,8 +205,10 @@ Les données peuvent être traitées par Anthropic (USA) pour le fonctionnement 
 Toute modification substantielle sera notifiée par email et interstitiel dans la Plateforme au moins 30 jours avant application.
 
 ## 12. Contact
-Toute question : **welcome@goodexperienceproperties.be**
-Réclamation autorité : APD Belgique — Rue de la Presse 35 — 1000 Bruxelles — contact@apd-gba.be
+- Responsable du traitement : **Good Experience Properties SRL** — Rue René Sacré 33, 1367 Ramillies
+- Courriel : **welcome@goodexperienceproperties.be**
+- Gérant : Gérald Evrard
+- Réclamation autorité : Autorité de Protection des Données (APD) — Rue de la Presse 35, 1000 Bruxelles — contact@apd-gba.be — www.autoriteprotectiondonnees.be
 """.strip(),
     },
     "mentions": {
