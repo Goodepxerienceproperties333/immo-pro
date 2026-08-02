@@ -343,8 +343,9 @@ def create_properties_router(db):
         # iter93dv : preferences de communication
         # comm_preference: 'email' (defaut), 'courrier' (poste), 'recommande' (poste avec AR)
         # ag_convocation_mode: 'email' (defaut), 'recommande' (AR)
-        comm_preference: Optional[str] = ""
-        ag_convocation_mode: Optional[str] = ""
+        # None (defaut Pydantic) = champ non envoye, on preserve la valeur existante en update
+        comm_preference: Optional[str] = None
+        ag_convocation_mode: Optional[str] = None
 
     # ---- Helpers anti-doublon (cf. routes/suppliers.py pour la meme logique) ----
     import re as _re

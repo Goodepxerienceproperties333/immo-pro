@@ -1,0 +1,23 @@
+{
+  "summary": "Retest iter93dv-partial-put fix: OwnerInput.comm_preference and ag_convocation_mode Pydantic defaults changed from '' to None. All 6 tests PASS. POST with both fields persists correctly. POST without fields defaults to 'email'. Partial PUT (missing fields) now correctly preserves existing values (previous BUG fixed). PUT with only one of the two fields updates that field and preserves the other. Regression /api/owner/me OK.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter121_owners_comm_persistence_retest.py",
+    "/app/test_reports/pytest/iter122_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Fix applique correctement lignes 347-348 (defauts None). Le guard `if data.x is not None` fonctionne desormais coherentement avec le modele Pydantic.",
+    "POST utilise `(data.comm_preference or 'email')` -> gere None correctement.",
+    "PUT partiel preserve les valeurs existantes comme attendu."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (6/6)", "frontend": "N/A (skipped per request)"},
+  "test_credentials": "admin@copro.be / admin123",
+  "seed_data_creation": "Aucune - owners TEST_* crees/nettoyes en teardown.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Bug iter121 (partial PUT overwrite) resolu. Test suite complete /app/backend/tests/test_iter121_owners_comm_persistence_retest.py -> 6/6 passing.",
+  "rca of the issue": "Bug root cause etait defaut Pydantic '' au lieu de None. Fix: Optional[str] = None sur les 2 champs dans OwnerInput. Guard `is not None` desormais coherent. Verifie par retest complet."
+}
