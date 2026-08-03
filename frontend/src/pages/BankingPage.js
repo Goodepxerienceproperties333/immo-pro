@@ -2102,6 +2102,8 @@ export default function BankingPage() {
         owners={owners}
         suppliers={suppliers}
         invoices={invoices}
+        expenseCategories={expenseCategories}
+        pcmnAccounts={pcmnAccounts}
         onSuccess={() => { setCodaPreview(null); load(); }}
       />
 

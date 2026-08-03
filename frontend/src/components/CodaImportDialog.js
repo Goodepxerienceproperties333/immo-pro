@@ -4,8 +4,10 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Command, CommandInput, CommandList, CommandEmpty, CommandGroup, CommandItem } from '@/components/ui/command';
 import {
-  AlertTriangle, CheckCircle2, Loader2, Building2, Users, Receipt, X, Filter,
+  AlertTriangle, CheckCircle2, Loader2, Building2, Users, Receipt, X, Filter, Search, Tag, Landmark, ChevronsUpDown,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { fmtDate } from '@/lib/dateFmt';
@@ -35,12 +37,14 @@ const CONFIDENCE_LABELS = {
  *  - onClose: () => void
  *  - preview: object renvoye par /api/banking/coda/preview
  *  - copropriete_id: string
- *  - owners, suppliers, invoices: listes pour les dropdowns de match manuel
+ *  - owners, suppliers, invoices, expenseCategories, pcmnAccounts: listes
+ *    utilisees pour les dropdowns de match manuel (avec recherche).
  *  - onSuccess: () => void  // appele apres import confirme (parent recharge)
  */
 export default function CodaImportDialog({
   open, onClose, preview, copropriete_id,
   owners = [], suppliers = [], invoices = [],
+  expenseCategories = [], pcmnAccounts = [],
   onSuccess,
 }) {
   const [movements, setMovements] = useState(() =>
@@ -53,6 +57,8 @@ export default function CodaImportDialog({
   );
   const [filter, setFilter] = useState('all'); // all | unmatched | matched | excluded
   const [importing, setImporting] = useState(false);
+  // Popover ouvert pour le combobox recherchable (une seule ligne a la fois)
+  const [openPopover, setOpenPopover] = useState(null);
 
   // Recharge si preview change (nouveau fichier)
   useMemo(() => {
@@ -100,10 +106,32 @@ export default function CodaImportDialog({
   }, [movements, filter]);
 
   const matchOptions = useMemo(() => ({
-    owners: owners.map(o => ({ value: o.id, label: `${o.name || `${o.first_name||''} ${o.last_name||''}`.trim()}${o.vcs_code ? ` (${o.vcs_code})` : ''}` })),
-    suppliers: suppliers.map(s => ({ value: s.id, label: s.name || '(sans nom)' })),
-    invoices: invoices.filter(i => i.status === 'unpaid').map(i => ({ value: i.id, label: `${i.number} - ${i.supplier} (${fmtEUR((i.total_amount || 0))} EUR)` })),
-  }), [owners, suppliers, invoices]);
+    owner_payment: owners.map(o => ({
+      value: o.id,
+      label: `${o.name || `${o.first_name||''} ${o.last_name||''}`.trim()}${o.vcs_code ? ` (${o.vcs_code})` : ''}`,
+      search: [o.name, o.first_name, o.last_name, o.vcs_code, o.auxiliary_code, o.email].filter(Boolean).join(' ').toLowerCase(),
+    })),
+    supplier_payment: suppliers.map(s => ({
+      value: s.id,
+      label: s.name || '(sans nom)',
+      search: [s.name, s.vat_number, s.iban, s.bce_number].filter(Boolean).join(' ').toLowerCase(),
+    })),
+    invoice: invoices.filter(i => i.status === 'unpaid').map(i => ({
+      value: i.id,
+      label: `${i.number} - ${i.supplier} (${fmtEUR((i.total_amount || 0))} EUR)`,
+      search: [i.number, i.supplier, i.description].filter(Boolean).join(' ').toLowerCase(),
+    })),
+    expense_category: expenseCategories.map(c => ({
+      value: c.id,
+      label: `${c.code ? c.code + ' - ' : ''}${c.name}${c.account_number ? ` (${c.account_number})` : ''}`,
+      search: [c.name, c.code, c.account_number, c.account_name].filter(Boolean).join(' ').toLowerCase(),
+    })),
+    pcmn_account: pcmnAccounts.map(a => ({
+      value: a.number,
+      label: `${a.number} - ${a.name}`,
+      search: [a.number, a.name].filter(Boolean).join(' ').toLowerCase(),
+    })),
+  }), [owners, suppliers, invoices, expenseCategories, pcmnAccounts]);
 
   const confirmImport = async () => {
     if (!preview) return;
@@ -316,7 +344,7 @@ export default function CodaImportDialog({
                               manual_match_id: v === '__none__' ? '' : (v === m.suggestion?.match_type ? m.suggestion.match_id : ''),
                             })}
                           >
-                            <SelectTrigger className="h-7 text-[11px] w-[110px]" data-testid={`coda-mov-type-${idx}`}>
+                            <SelectTrigger className="h-7 text-[11px] w-[130px]" data-testid={`coda-mov-type-${idx}`}>
                               <SelectValue placeholder="Type" />
                             </SelectTrigger>
                             <SelectContent>
@@ -324,26 +352,66 @@ export default function CodaImportDialog({
                               <SelectItem value="owner_payment"><Users size={10} className="inline mr-1" />Proprietaire</SelectItem>
                               <SelectItem value="supplier_payment"><Building2 size={10} className="inline mr-1" />Fournisseur</SelectItem>
                               <SelectItem value="invoice"><Receipt size={10} className="inline mr-1" />Facture</SelectItem>
+                              <SelectItem value="expense_category"><Tag size={10} className="inline mr-1" />Categorie de depense</SelectItem>
+                              <SelectItem value="pcmn_account"><Landmark size={10} className="inline mr-1" />Compte PCMN</SelectItem>
                             </SelectContent>
                           </Select>
-                          {m.manual_match_type && (
-                            <Select
-                              value={m.manual_match_id || ''}
-                              onValueChange={(v) => updateMovement(idx, { manual_match_id: v })}
-                            >
-                              <SelectTrigger className="h-7 text-[11px] flex-1" data-testid={`coda-mov-id-${idx}`}>
-                                <SelectValue placeholder="Selectionner..." />
-                              </SelectTrigger>
-                              <SelectContent>
-                                {(m.manual_match_type === 'owner_payment' ? matchOptions.owners
-                                  : m.manual_match_type === 'supplier_payment' ? matchOptions.suppliers
-                                  : matchOptions.invoices
-                                ).map(opt => (
-                                  <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                          )}
+                          {m.manual_match_type && (() => {
+                            const opts = matchOptions[m.manual_match_type] || [];
+                            const selected = opts.find(o => o.value === m.manual_match_id);
+                            const popKey = `pop-${idx}`;
+                            const isOpen = openPopover === popKey;
+                            return (
+                              <Popover open={isOpen} onOpenChange={(o) => setOpenPopover(o ? popKey : null)}>
+                                <PopoverTrigger asChild>
+                                  <Button
+                                    variant="outline"
+                                    role="combobox"
+                                    aria-expanded={isOpen}
+                                    className="h-7 text-[11px] flex-1 justify-between font-normal px-2"
+                                    data-testid={`coda-mov-id-${idx}`}
+                                  >
+                                    <span className="truncate text-left">
+                                      {selected ? selected.label : <span className="text-slate-400 italic">Rechercher / selectionner...</span>}
+                                    </span>
+                                    <ChevronsUpDown size={11} className="ml-1 opacity-50 shrink-0" />
+                                  </Button>
+                                </PopoverTrigger>
+                                <PopoverContent className="w-[420px] p-0" align="start">
+                                  <Command
+                                    filter={(value, search) => {
+                                      // value = option.value; on cherche dans le champ "search" via la map
+                                      const opt = opts.find(o => o.value === value);
+                                      if (!opt) return 0;
+                                      const q = (search || '').toLowerCase();
+                                      if (!q) return 1;
+                                      return (opt.search || opt.label.toLowerCase()).includes(q) ? 1 : 0;
+                                    }}
+                                  >
+                                    <CommandInput placeholder="Rechercher (nom, IBAN, VCS, compte, ...)" data-testid={`coda-mov-search-${idx}`} />
+                                    <CommandList className="max-h-64">
+                                      <CommandEmpty>Aucun resultat</CommandEmpty>
+                                      <CommandGroup>
+                                        {opts.map(opt => (
+                                          <CommandItem
+                                            key={opt.value}
+                                            value={opt.value}
+                                            onSelect={(v) => {
+                                              updateMovement(idx, { manual_match_id: v });
+                                              setOpenPopover(null);
+                                            }}
+                                            data-testid={`coda-mov-opt-${idx}-${opt.value}`}
+                                          >
+                                            <span className="text-[11px]">{opt.label}</span>
+                                          </CommandItem>
+                                        ))}
+                                      </CommandGroup>
+                                    </CommandList>
+                                  </Command>
+                                </PopoverContent>
+                              </Popover>
+                            );
+                          })()}
                         </div>
                         {m.manual_match_type && m.manual_match_id && sugg.match_id === m.manual_match_id && (
                           <div className="text-[9px] text-emerald-700 mt-0.5">= suggestion auto</div>

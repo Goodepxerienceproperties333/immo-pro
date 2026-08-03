@@ -2955,7 +2955,11 @@ def create_banking_router(db):
         transaction_code: str = ""
         reference: str = ""
         # Override utilisateur (None ou {match_type, match_id})
-        manual_match_type: Optional[str] = ""  # "owner_payment" | "supplier_payment" | "invoice" | ""
+        # match_type: "owner_payment" | "supplier_payment" | "invoice"
+        #           | "expense_category" | "pcmn_account" | ""
+        # - expense_category : mid = id de la nature (categorie de depense)
+        # - pcmn_account : mid = numero de compte PCMN (ex "61300")
+        manual_match_type: Optional[str] = ""
         manual_match_id: Optional[str] = ""
         # Si False, l'utilisateur veut IGNORER ce mouvement (ne pas creer de txn)
         include: bool = True
@@ -3074,8 +3078,84 @@ def create_banking_router(db):
                 ok = (await db.suppliers.count_documents({"id": mid}, limit=1)) > 0
             elif mtype == "invoice":
                 ok = (await db.invoices.count_documents({"id": mid}, limit=1)) > 0
+            elif mtype == "expense_category":
+                # mid = expense_category_id -> categorise la transaction sur
+                # une nature (le compte PCMN + %occ/%prop sont deduits).
+                ok = (await db.expense_categories.count_documents(
+                    {"id": mid, "copropriete_id": data.copropriete_id}, limit=1)) > 0
+            elif mtype == "pcmn_account":
+                # mid = numero de compte PCMN direct (ex "61300") - categorise
+                # la transaction sur ce compte sans passer par une nature.
+                ok = bool((mid or "").strip())
             if not ok:
                 continue
+
+            if mtype in ("expense_category", "pcmn_account"):
+                # Categorise la transaction (equivalent d'un POST /categorize
+                # avec un seul split couvrant tout le montant).
+                txn_doc = await db.bank_transactions.find_one({"id": txn_id}, {"_id": 0})
+                if not txn_doc:
+                    continue
+                amount_abs = abs(float(txn_doc.get("amount", 0)))
+                cat_id = ""
+                cat_name = ""
+                account_number = ""
+                account_name = ""
+                occ_pct = 0.0
+                prop_pct = 100.0
+                if mtype == "expense_category":
+                    cat = await db.expense_categories.find_one(
+                        {"id": mid, "copropriete_id": data.copropriete_id},
+                        {"_id": 0},
+                    )
+                    if not cat:
+                        continue
+                    cat_id = cat.get("id", "")
+                    cat_name = cat.get("name", "")
+                    account_number = cat.get("account_number", "") or ""
+                    occ_pct = float(cat.get("default_occupant_pct") or 0)
+                    prop_pct = float(cat.get("default_proprietaire_pct")
+                                     if cat.get("default_proprietaire_pct") is not None
+                                     else (100 - occ_pct))
+                else:  # pcmn_account
+                    account_number = (mid or "").strip()
+                # Resout le libelle du compte PCMN
+                if account_number:
+                    pcmn = await db.pcmn_accounts.find_one(
+                        {"number": account_number,
+                         "copropriete_id": data.copropriete_id},
+                        {"_id": 0, "name": 1},
+                    )
+                    account_name = (pcmn or {}).get("name", "") if pcmn else ""
+                split = {
+                    "expense_category_id": cat_id,
+                    "expense_category_name": cat_name,
+                    "account_number": account_number,
+                    "account_name": account_name,
+                    "amount": round(amount_abs, 2),
+                    "occupant_pct": round(occ_pct, 2),
+                    "proprietaire_pct": round(prop_pct, 2),
+                    "distribution_key_id": "",
+                    "description": "",
+                }
+                await db.bank_transactions.update_one(
+                    {"id": txn_id},
+                    {"$set": {
+                        "matched": True,
+                        "matched_to": cat_id or account_number,
+                        "match_type": "expense_category",
+                        "category_splits": [split],
+                    }},
+                )
+                fresh = await db.bank_transactions.find_one({"id": txn_id}, {"_id": 0})
+                try:
+                    if fresh:
+                        await generate_bank_entry(db, fresh)
+                except Exception as e:
+                    print(f"[coda-confirmed] categorize entry failed: {e}")
+                matched_manual += 1
+                continue
+
             await db.bank_transactions.update_one(
                 {"id": txn_id},
                 {"$set": {"matched": True, "matched_to": mid, "match_type": mtype}},
