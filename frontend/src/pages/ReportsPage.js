@@ -97,7 +97,7 @@ export default function ReportsPage() {
       }
     }
   };
-  const loadResultat = async () => { setLoading(true); try { const params = {}; if (dateFrom) params.date_from = dateFrom; if (dateTo) params.date_to = dateTo; const { data } = await api.get('/reports/resultat', { params }); setResultat(data); } catch { toast.error('Erreur'); } finally { setLoading(false); } };
+  const loadResultat = async () => { setLoading(true); try { const params = {}; if (dateFrom) params.date_from = dateFrom; if (dateTo) params.date_to = dateTo; if (fiscalYearId) params.fiscal_year_id = fiscalYearId; const { data } = await api.get('/reports/resultat', { params }); setResultat(data); } catch { toast.error('Erreur'); } finally { setLoading(false); } };
   // iter90fw : auto-reload decomptes quand le filtre owner change
   // (si un chargement precedent existe deja - sinon on attend le clic
   // sur "Generer decomptes").
@@ -341,7 +341,80 @@ export default function ReportsPage() {
         </TabsContent>
 
         <TabsContent value="resultat" className="mt-0">
-          <DateFilters onLoad={loadResultat} label="Charger resultat" />
+          {/* Selecteur exercice + dates modifiables (aligne avec le Bilan).
+              L'utilisateur choisit un exercice fiscal (auto-remplit Du/Au),
+              puis peut affiner manuellement pour un arrete intermediaire. */}
+          <Card className="border-slate-200 mb-4"><CardContent className="p-4">
+            <div className="flex flex-wrap items-end gap-3">
+              <div>
+                <label className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold block mb-1">Exercice fiscal</label>
+                <select
+                  className="border border-slate-200 rounded-md px-3 py-2 text-sm bg-white min-w-[220px]"
+                  value={fiscalYearId}
+                  onChange={e => setFiscalYearId(e.target.value)}
+                  data-testid="resultat-fiscal-year-select"
+                >
+                  <option value="">— Periode libre —</option>
+                  {years.map(y => <option key={y.id} value={y.id}>{y.name} ({y.status === 'closed' ? 'cloture' : 'ouvert'})</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold block mb-1">Du</label>
+                <Input
+                  type="date"
+                  value={dateFrom}
+                  onChange={e => setDateFrom(e.target.value)}
+                  className="w-40"
+                  data-testid="resultat-date-from"
+                />
+              </div>
+              <div>
+                <label className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold block mb-1">Au</label>
+                <Input
+                  type="date"
+                  value={dateTo}
+                  onChange={e => setDateTo(e.target.value)}
+                  className="w-40"
+                  data-testid="resultat-date-to"
+                />
+              </div>
+              <Button
+                onClick={loadResultat}
+                className="bg-[#022D52] hover:bg-[#1D4ED8]"
+                disabled={loading}
+                data-testid="load-resultat-btn"
+              >
+                <BarChart3 size={16} className="mr-2" />Charger resultat
+              </Button>
+              {(dateFrom || dateTo || fiscalYearId) && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => { setFiscalYearId(''); setDateFrom(''); setDateTo(''); }}
+                  data-testid="resultat-reset-filters"
+                  className="text-slate-500"
+                >
+                  <X size={14} className="mr-1" /> Reset
+                </Button>
+              )}
+            </div>
+            {(() => {
+              const fy = years.find(y => y.id === fiscalYearId);
+              if (!fy) return null;
+              const overridden = (dateFrom && dateFrom !== fy.start_date) || (dateTo && dateTo !== fy.end_date);
+              return (
+                <div className="mt-3 text-[11px] text-slate-500" data-testid="resultat-period-info">
+                  Exercice <span className="font-semibold text-slate-700">{fy.name}</span> :
+                  {' '}du {fmtDate(fy.start_date)} au {fmtDate(fy.end_date)}
+                  {overridden && (
+                    <span className="ml-2 italic text-amber-600">
+                      (periode affinee : {fmtDate(dateFrom || fy.start_date)} → {fmtDate(dateTo || fy.end_date)})
+                    </span>
+                  )}
+                </div>
+              );
+            })()}
+          </CardContent></Card>
           {resultat && (<div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <Card className="border-slate-200"><CardHeader className="bg-red-50 rounded-t-md"><CardTitle className="text-base" style={{fontFamily:'Chivo,sans-serif'}}>CHARGES (Classe 6)</CardTitle></CardHeader><CardContent className="p-0">
               <Table><TableBody>

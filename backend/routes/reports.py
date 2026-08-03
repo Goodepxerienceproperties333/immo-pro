@@ -2300,7 +2300,12 @@ def create_reports_router(db):
         # Dedup FI auto-generees (meme algo que le bilan)
         entries = _dedup_duplicate_auto_fi_entries(entries)
 
-        # Dedup AC orphelines : ne garder que les AC liees a une facture
+        # Dedup AC orphelines : ne garder que les AC liees a une facture.
+        # Fix (2026-02) : les factures peuvent avoir un journal_entry_id
+        # obsolete (ex: apres reset/re-creation d'ecritures) tandis que le
+        # VRAI AC entry existe mais avec un autre id. On matche donc aussi
+        # par `reference` (AC.reference = f"FA-{invoice.number}") en fallback,
+        # sinon on perdait des charges legitimes dans le compte de resultat.
         inv_q_res = {"copropriete_id": copropriete_id}
         if date_from or date_to:
             inv_q_res["date"] = {}
@@ -2309,18 +2314,42 @@ def create_reports_router(db):
             if date_to:
                 inv_q_res["date"]["$lte"] = _date_lte(date_to)
         invoices_for_res = await db.invoices.find(
-            inv_q_res, {"_id": 0, "journal_entry_id": 1}
+            inv_q_res, {"_id": 0, "journal_entry_id": 1, "number": 1},
         ).to_list(50000)
         valid_ac_je_ids = {
             inv["journal_entry_id"]
             for inv in invoices_for_res
             if inv.get("journal_entry_id")
         }
-        if valid_ac_je_ids:
-            entries = [
-                e for e in entries
-                if e.get("journal_type") != "AC" or e.get("id") in valid_ac_je_ids
-            ]
+        # Set des references AC attendues (FA-{invoice_number}) pour matching
+        # de secours quand invoice.journal_entry_id pointe vers un id obsolete.
+        valid_ac_refs = {
+            f"FA-{(inv.get('number') or '').strip()}"
+            for inv in invoices_for_res
+            if (inv.get("number") or "").strip()
+        }
+        if valid_ac_je_ids or valid_ac_refs:
+            # On dedoublonne aussi par reference pour eviter les doubles-AC
+            # (meme ref) qui ont pu etre generes en base par des reruns.
+            seen_refs = set()
+            kept = []
+            for e in entries:
+                if e.get("journal_type") != "AC":
+                    kept.append(e)
+                    continue
+                eid = e.get("id")
+                ref = (e.get("reference") or "").strip()
+                linked = eid in valid_ac_je_ids
+                ref_ok = ref in valid_ac_refs
+                if not linked and not ref_ok:
+                    continue  # AC vraiment orphelin
+                # Dedup : si la meme ref revient, on ne garde que la premiere
+                if ref and ref in seen_refs:
+                    continue
+                if ref:
+                    seen_refs.add(ref)
+                kept.append(e)
+            entries = kept
 
         accounts = {}
         for entry in entries:
