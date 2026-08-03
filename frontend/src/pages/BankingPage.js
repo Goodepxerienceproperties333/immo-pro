@@ -696,7 +696,7 @@ export default function BankingPage() {
   const validateAllSuggestions = async () => {
     if (!selectedStmt) return;
     try {
-      const { data } = await api.post(`/banking/statements/${selectedStmt}/validate-all-suggestions`);
+      const { data } = await api.post(`/banking/statements/${selectedStmt.id}/validate-all-suggestions`);
       if (data.validated > 0) {
         toast.success(`${data.validated} suggestion(s) validee(s)`);
         refreshAfterLettrage();
