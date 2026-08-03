@@ -1283,7 +1283,14 @@ export default function BankingPage() {
                               toast.success('Extrait comptabilise');
                               patchSidebarStmt(selectedStmt.id, { status: 'posted' });
                               loadStmtTxns({ ...selectedStmt, status: 'posted' });
-                            } catch (e) { toast.error(e.response?.data?.detail || 'Erreur'); }
+                            } catch (e) {
+                              // 409 = IBAN non configure : detail est un objet {message, iban, errored_transactions}
+                              const d = e.response?.data?.detail;
+                              const msg = typeof d === 'string' ? d : (d?.message || 'Erreur');
+                              toast.error(msg, { duration: 10000 });
+                              // Recharge pour surfacer les txns marquees posting_error
+                              loadStmtTxns(selectedStmt);
+                            }
                           }}
                           disabled={!balanced || transactions.length === 0}
                           className={balanced && transactions.length > 0 ? "bg-green-600 hover:bg-green-700 text-white" : ""}

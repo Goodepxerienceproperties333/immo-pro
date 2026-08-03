@@ -827,9 +827,36 @@ def create_banking_router(db):
                     fi_created += 1
             except Exception as e:
                 fi_errors.append({"txn_id": t.get("id"), "error": str(e)})
+
+        # Regle stricte (2026-02) : recense les txns marquees posting_error
+        # (IBAN non configure). Si presentes, on BLOQUE la comptabilisation.
+        errored = await db.bank_transactions.find(
+            {"statement_id": stmt_id, "posting_error": {"$exists": True, "$ne": None}},
+            {"_id": 0, "id": 1, "amount": 1, "date": 1, "counterparty_name": 1,
+             "posting_error": 1, "posting_error_iban": 1},
+        ).to_list(10000)
+        if errored:
+            iban_bad = next((e.get("posting_error_iban") for e in errored if e.get("posting_error_iban")), "")
+            await db.bank_statements.update_one(
+                {"id": stmt_id},
+                {"$set": {"has_posting_error": True}},
+            )
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": (
+                        f"Impossible de comptabiliser : IBAN '{iban_bad}' non configure "
+                        f"dans la fiche ACP. Ajoutez cet IBAN et associez-le a un compte "
+                        f"55xxxx existant, puis relancez la comptabilisation."
+                    ),
+                    "iban": iban_bad,
+                    "errored_transactions": errored,
+                },
+            )
         await db.bank_statements.update_one(
             {"id": stmt_id},
-            {"$set": {"status": "posted", "posted_at": datetime.now(timezone.utc).isoformat()}}
+            {"$set": {"status": "posted", "posted_at": datetime.now(timezone.utc).isoformat()},
+             "$unset": {"has_posting_error": ""}}
         )
         return {
             "status": "ok",

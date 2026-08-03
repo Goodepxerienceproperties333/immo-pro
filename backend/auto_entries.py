@@ -18,6 +18,25 @@ from tier_accounts import (
 )
 
 
+class BankAccountNotConfigured(Exception):
+    """Levee lorsqu'un extrait bancaire arrive avec un IBAN qui n'est pas
+    configure dans les `bank_accounts` de l'ACP. Interdit la creation
+    automatique de compte 55xxxx : l'utilisateur DOIT lier manuellement
+    l'IBAN a un compte PCMN dans la fiche de l'ACP.
+    """
+    def __init__(self, iban: str, raw_account: str = "", copropriete_id: str = ""):
+        self.iban = iban
+        self.raw_account = raw_account
+        self.copropriete_id = copropriete_id
+        msg = (
+            f"IBAN '{iban or raw_account or '(inconnu)'}' non configure dans "
+            f"la fiche ACP. Ajoutez-le d'abord (Parametres > Comptes bancaires) "
+            f"et associez-le a un compte PCMN 55xxxx existant."
+        )
+        super().__init__(msg)
+
+
+
 async def _resolve_syndic_id_from_copro(db, copro_id: str) -> str:
     """Resoud le syndic_id a partir du copropriete_id (pour les utilitaires sans request)."""
     if not copro_id:
@@ -127,18 +146,20 @@ async def _resolve_or_create_supplier_account(db, supplier_name: str, copro_id: 
 
 
 async def _resolve_bank_account(db, txn: dict, copro_id: str) -> tuple[str, str]:
-    """Resout le compte PCMN bancaire a partir de la transaction.
+    """Resout STRICTEMENT le compte PCMN bancaire a partir de la transaction.
 
-    Ordre de resolution :
+    REGLE IMPERATIVE (2026-02) : lien IBAN <-> compte 55xxxx obligatoire.
+    Aucune creation automatique de compte, aucun fallback vers default.
+    Ordre :
       1) IBAN exact (txn ou statement) -> pcmn officiel de l'ACP
-      2) account_number direct == pcmn_number configure (extraits sans IBAN,
-         ex. account_number = 551618 matche pcmn_number = 551618)
-      3) Suffixe IBAN ou correspondance croisee pcmn_number
-      4) Compte PCMN bancaire existant (classe 55) dans le plan comptable
-      5) Compte par defaut de l'ACP
-      6) "" (l'appelant DOIT gerer ce cas : skip ou raise)
+      2) account_number == pcmn_number configure (extrait sans IBAN dont le
+         numero est deja le PCMN, ex 55156300)
+      3) Suffixe IBAN / correspondance croisee pcmn_number configure
 
-    Verrou iter90jj : ne cree JAMAIS de compte fantome.
+    Si aucune de ces regles ne matche, LEVE BankAccountNotConfigured pour
+    bloquer le posting et exiger la configuration manuelle de l'IBAN.
+
+    Verrou : ne cree JAMAIS de compte PCMN a la volee.
     """
     from iban_utils import normalize_iban
 
@@ -171,54 +192,34 @@ async def _resolve_bank_account(db, txn: dict, copro_id: str) -> tuple[str, str]
                 return normalize_bank_pcmn(ba["pcmn_number"]), (ba.get("label") or "Banque")
 
     # 2) Match direct : account_number == pcmn_number configure
-    #    Couvre les extraits sans IBAN ou le account_number EST le pcmn (ex. 551618).
-    #    Normalisation 8 chiffres (551618 == 55161800).
     if raw_acc:
         for ba in accounts:
             ba_pcmn = (ba.get("pcmn_number") or "").strip()
             if ba_pcmn and pcmn_bank_match(ba_pcmn, raw_acc):
                 return normalize_bank_pcmn(ba_pcmn), (ba.get("label") or "Banque")
 
-    # 3) Suffixe IBAN / correspondance croisee pcmn_number
+    # 3) Suffixe IBAN / correspondance croisee pcmn_number configure
     if raw_acc:
         digits = "".join(c for c in raw_acc if c.isdigit())
         if digits and len(digits) >= 4:
             for ba in accounts:
                 ba_iban_raw = (ba.get("iban") or "").replace(" ", "")
                 ba_pcmn = (ba.get("pcmn_number") or "").strip()
-                # suffixe de l'IBAN
                 if ba_iban_raw and ba_iban_raw.endswith(digits) and ba_pcmn:
                     return normalize_bank_pcmn(ba_pcmn), (ba.get("label") or "Banque")
-                # correspondance croisee pcmn (suffixe ou prefixe)
                 norm_pcmn = normalize_bank_pcmn(ba_pcmn) if ba_pcmn else ""
                 if norm_pcmn and not pcmn_bank_match(norm_pcmn, raw_acc) and (
                     norm_pcmn.endswith(digits) or digits.endswith(norm_pcmn)
                 ):
                     return norm_pcmn, (ba.get("label") or "Banque")
 
-    # 4) Compte PCMN bancaire existant (classe 55) dans le plan comptable
-    #    Essaie d'abord tel quel, puis normalise a 8 chiffres
-    if raw_acc:
-        digits = "".join(c for c in raw_acc if c.isdigit())
-        if digits and digits.startswith("55"):
-            norm_digits = normalize_bank_pcmn(digits)
-            # Cherche d'abord le numero normalise, puis l'original
-            for try_num in dict.fromkeys([norm_digits, digits]):
-                pcmn = await db.pcmn_accounts.find_one(
-                    {"copropriete_id": copro_id, "number": try_num},
-                    {"_id": 0, "number": 1, "name": 1},
-                )
-                if pcmn:
-                    return pcmn["number"], (pcmn.get("name") or "Banque")
-
-    # 5) Fallback : compte par defaut de l'ACP (is_default=True) ou 1er
-    if accounts:
-        default_ba = next((b for b in accounts if b.get("is_default")), None) or accounts[0]
-        if default_ba.get("pcmn_number"):
-            return normalize_bank_pcmn(default_ba["pcmn_number"]), (default_ba.get("label") or "Banque")
-
-    # 6) Ultime fallback : "" - l'appelant DOIT gerer ce cas (skip ou raise)
-    return "", "Banque"
+    # 4) Rien trouve -> BLOQUE le posting. Interdiction stricte de creer un
+    #    compte PCMN automatiquement ou d'utiliser un compte fallback.
+    raise BankAccountNotConfigured(
+        iban=iban or raw_acc or "",
+        raw_account=raw_acc or "",
+        copropriete_id=copro_id,
+    )
 
 
 async def _resolve_bank_counterpart(db, txn: dict, copro_id: str) -> tuple[str, str, str | None, str]:
@@ -769,7 +770,10 @@ async def generate_bank_entry(db, txn: dict) -> dict | None:
 
     NOTE : txn['account_number'] est un IBAN (ex BE68...). On le resout vers
     le compte PCMN bancaire (ex 55103400) via les bank_accounts de l'ACP.
-    Fallback: 550000.
+
+    REGLE STRICTE (2026-02) : si l'IBAN n'est pas configure, la txn est
+    marquee `posting_error` et AUCUNE ecriture n'est creee (empeche la
+    creation de comptes fantomes).
     """
     copro_id = txn.get("copropriete_id", "")
     if not copro_id:
@@ -780,7 +784,25 @@ async def generate_bank_entry(db, txn: dict) -> dict | None:
     if amount <= 0:
         return None
     # iter90by : resolution IBAN -> compte PCMN bancaire extraite en helper
-    bank_acc, bank_label = await _resolve_bank_account(db, txn, copro_id)
+    try:
+        bank_acc, bank_label = await _resolve_bank_account(db, txn, copro_id)
+    except BankAccountNotConfigured as e:
+        # Marque la txn en erreur pour que le UI affiche la cause exacte
+        await db.bank_transactions.update_one(
+            {"id": txn["id"]},
+            {"$set": {
+                "posting_error": str(e),
+                "posting_error_iban": e.iban,
+                "posting_error_at": datetime.now(timezone.utc).isoformat(),
+            }},
+        )
+        # Marque aussi le statement pour surface au UI
+        if txn.get("statement_id"):
+            await db.bank_statements.update_one(
+                {"id": txn["statement_id"]},
+                {"$set": {"has_posting_error": True}},
+            )
+        return None
     match_type = txn.get("match_type", "")
     txn_type = txn.get("transaction_type", "credit")
     is_credit = txn_type == "credit" or float(txn.get("amount", 0)) > 0
@@ -998,7 +1020,11 @@ async def generate_bank_entry(db, txn: dict) -> dict | None:
     await db.journal_entries.insert_one(doc)
     await db.bank_transactions.update_one(
     # iter90ji : lie la txn a ce JE nouvellement cree (piste d'audit)
+    # + efface tout ancien posting_error (l'IBAN a ete configure entre-temps)
         {"id": txn["id"]},
-        {"$set": {"matched_je_id": doc["id"], "matched_je_ref": doc["reference"], "matched_je_source": "auto"}},
+        {
+            "$set": {"matched_je_id": doc["id"], "matched_je_ref": doc["reference"], "matched_je_source": "auto"},
+            "$unset": {"posting_error": "", "posting_error_iban": "", "posting_error_at": ""},
+        },
     )
     return {k: v for k, v in doc.items() if k != "_id"}
