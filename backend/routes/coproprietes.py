@@ -108,7 +108,7 @@ def create_coproprietes_router(db):
             await db.pcmn_accounts.insert_many(docs)
 
     async def _seed_default_expense_natures(copro_id: str):
-        """Seed les natures de depense par defaut pour une nouvelle ACP.
+        """Seed les categories de depense par defaut pour une nouvelle ACP.
 
         Source : `default_expense_natures.DEFAULT_EXPENSE_NATURES` (23 entrees).
         Skip silencieux si une nature existe deja pour le meme `account_number` dans
@@ -642,7 +642,7 @@ def create_coproprietes_router(db):
         - Appels de fonds
         - Transactions bancaires
         - Budgets, exercices fiscaux, regularisations
-        - Natures de depense
+        - Categories de depense
         - Documents uploades
 
         Reserve au SUPERADMIN uniquement (operation destructive).

@@ -94,7 +94,7 @@ export default function ExpenseCategoriesPage() {
     try {
       if (editing) await api.put(`/expense-categories/${editing.id}`, form);
       else await api.post('/expense-categories', form);
-      toast.success('Nature enregistree');
+      toast.success('Categorie enregistree');
       setDialogOpen(false); load();
     } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); }
   };
@@ -115,10 +115,10 @@ export default function ExpenseCategoriesPage() {
     <div data-testid="expense-categories-page">
       <div className="page-header flex items-start justify-between">
         <div>
-          <h1 className="page-title"><Tag size={24} className="inline mr-2" />Natures de depense</h1>
-          <p className="page-subtitle">Categories metier liees aux comptes PCMN (1 nature = 1 compte). Classes 6 (Charges) et 7 (Produits).</p>
+          <h1 className="page-title"><Tag size={24} className="inline mr-2" />Categories de depense</h1>
+          <p className="page-subtitle">Categories metier liees aux comptes PCMN (1 categorie = 1 compte). Classes 6 (Charges) et 7 (Produits).</p>
         </div>
-        <Button onClick={openCreate} className="bg-[#022D52] hover:bg-[#1D4ED8]" data-testid="create-category-btn"><Plus size={16} className="mr-2" />Nouvelle nature</Button>
+        <Button onClick={openCreate} className="bg-[#022D52] hover:bg-[#1D4ED8]" data-testid="create-category-btn"><Plus size={16} className="mr-2" />Nouvelle categorie</Button>
       </div>
 
       <div className="mb-3 relative max-w-sm">
@@ -130,7 +130,7 @@ export default function ExpenseCategoriesPage() {
         <Table>
           <TableHeader><TableRow>
             <TableHead className="w-16">Code</TableHead>
-            <TableHead>Nature</TableHead><TableHead>Compte PCMN</TableHead>
+            <TableHead>Categorie</TableHead><TableHead>Compte PCMN</TableHead>
             <TableHead className="w-20">TVA</TableHead>
             <TableHead className="w-20">Type</TableHead>
             <TableHead>Cle defaut</TableHead>
@@ -140,7 +140,7 @@ export default function ExpenseCategoriesPage() {
           </TableRow></TableHeader>
           <TableBody>
             {filtered.length === 0 ? (
-              <TableRow><TableCell colSpan={9} className="text-center py-10 text-slate-400">Aucune nature - creez-en une pour faciliter la saisie des factures</TableCell></TableRow>
+              <TableRow><TableCell colSpan={9} className="text-center py-10 text-slate-400">Aucune categorie - creez-en une pour faciliter la saisie des factures</TableCell></TableRow>
             ) : filtered.map(c => (
               <TableRow key={c.id} className="hover:bg-slate-50/50" data-testid={`category-row-${c.id}`}>
                 <TableCell className="font-mono text-xs text-slate-500">{c.code || '-'}</TableCell>
@@ -179,7 +179,7 @@ export default function ExpenseCategoriesPage() {
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent className="max-w-lg">
-          <DialogHeader><DialogTitle style={{fontFamily:'Chivo,sans-serif'}}>{editing ? 'Modifier' : 'Nouvelle'} nature de depense</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle style={{fontFamily:'Chivo,sans-serif'}}>{editing ? 'Modifier' : 'Nouvelle'} categorie de depense</DialogTitle></DialogHeader>
           <div className="space-y-4 mt-2">
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -192,7 +192,7 @@ export default function ExpenseCategoriesPage() {
               </div>
             </div>
             <div>
-              <label className="form-label">Nom de la nature *</label>
+              <label className="form-label">Nom de la categorie *</label>
               <Input value={form.name} onChange={e => setForm({...form, name: e.target.value})} placeholder="Ex: Entretien ascenseur cage A" data-testid="category-name-input" />
             </div>
             <div>
@@ -225,7 +225,7 @@ export default function ExpenseCategoriesPage() {
                   </Command>
                 </PopoverContent>
               </Popover>
-              <p className="text-[11px] text-slate-500 mt-1">Plusieurs natures peuvent partager le meme compte PCMN.</p>
+              <p className="text-[11px] text-slate-500 mt-1">Plusieurs categories peuvent partager le meme compte PCMN.</p>
             </div>
             <div>
               <label className="form-label">Description (optionnel)</label>
@@ -269,7 +269,7 @@ export default function ExpenseCategoriesPage() {
                 Cle de repartition par defaut
               </div>
               <p className="text-[11px] text-slate-600">
-                Quand vous selectionnez cette nature sur une facture ou ligne de budget,
+                Quand vous selectionnez cette categorie sur une facture ou ligne de budget,
                 la cle de repartition est <b>automatiquement pre-remplie</b> avec celle-ci.
                 Laissez vide pour utiliser les tantiemes generaux par defaut.
               </p>

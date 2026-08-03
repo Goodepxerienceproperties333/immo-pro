@@ -4,7 +4,7 @@ Optimise pour LECTURE par des proprietaires non-comptables :
 - Dates au format jj/mm/aaaa
 - Libelles parlants, mise en page aeree
 - Carte recap visible avec solde colore (rouge=a payer / vert=en votre faveur)
-- Detail des charges groupees par nature de depense (lisible)
+- Detail des charges groupees par categorie de depense (lisible)
 - Instructions de paiement claires (IBAN + communication structuree)
 """
 from io import BytesIO
@@ -807,7 +807,7 @@ def build_decompte_pdf(
     elems.append(Paragraph("1. Detail de vos charges", h2))
     elems.append(Paragraph(
         "Les depenses de la copropriete sont reparties selon les cles applicables. "
-        "Pour chaque cle, le detail est donne par nature de depense, avec la part "
+        "Pour chaque cle, le detail est donne par categorie de depense, avec la part "
         "refacturable a l'occupant (locataire) et la part definitive du proprietaire.",
         sub_style,
     ))
@@ -1061,14 +1061,14 @@ def build_decompte_pdf(
         elems.append(Paragraph("2. Recapitulatif des charges locataire", h2))
         elems.append(Paragraph(
             "Synthese des charges refacturables a votre locataire (parts \"occupant\"), "
-            "detaillees par nature de depense. Ce recapitulatif vous permet d'etablir "
+            "detaillees par categorie de depense. Ce recapitulatif vous permet d'etablir "
             "le decompte annuel des charges locatives.",
             sub_style,
         ))
         elems.append(Spacer(1, 3 * mm))
 
         rec_rows = [[
-            Paragraph("<b>Nature de la depense</b>", designation_style),
+            Paragraph("<b>Categorie de la depense</b>", designation_style),
             Paragraph("<b>Compte</b>", ParagraphStyle("h", parent=designation_style, alignment=1)),
             Paragraph("<b>Montant a refacturer<br/>au locataire</b>", ParagraphStyle("h", parent=designation_style, alignment=2)),
         ]]
@@ -1126,7 +1126,7 @@ def build_decompte_pdf(
         elems.append(Spacer(1, 2 * mm))
         elems.append(Paragraph(
             "<font size='7.5' color='#64748B'><i>Repartition occupant/proprietaire definie "
-            "par nature de depense conformement aux usages locatifs belges (RD du 12/07/2024 "
+            "par categorie de depense conformement aux usages locatifs belges (RD du 12/07/2024 "
             "relatif aux charges locatives). A confronter, le cas echeant, avec les "
             "stipulations particulieres du bail.</i></font>",
             small,

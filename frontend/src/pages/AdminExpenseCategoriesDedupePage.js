@@ -1,4 +1,4 @@
-// iter91e : Page admin pour dedupliquer les Natures de depense
+// iter91e : Page admin pour dedupliquer les Categories de depense
 import { useState, useCallback, useEffect } from 'react';
 import api from '@/lib/api';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -127,7 +127,7 @@ export default function AdminExpenseCategoriesDedupePage() {
     <div className="p-6 space-y-4" data-testid="admin-dedupe-page">
       <div>
         <h1 className="text-2xl font-bold" style={{ fontFamily: 'Chivo, sans-serif' }}>
-          Nettoyage des Natures de depense
+          Nettoyage des Categories de depense
         </h1>
         <p className="text-sm text-slate-500">
           Detecte et fusionne les Natures dupliquees (accents, casse) et les libelles mal formes sur l&apos;ACP selectionnee.
@@ -272,7 +272,7 @@ export default function AdminExpenseCategoriesDedupePage() {
                   </div>
                 ))}
                 <p className="text-[11px] text-slate-500 mt-2">
-                  Les libelles malformes peuvent etre renommes ou fusionnes via l&apos;interface Comptabilite &gt; Natures de depense.
+                  Les libelles malformes peuvent etre renommes ou fusionnes via l&apos;interface Comptabilite &gt; Categories de depense.
                 </p>
               </CardContent>
             </Card>

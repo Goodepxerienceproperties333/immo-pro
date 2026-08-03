@@ -267,7 +267,7 @@ export default function InvoicesPage() {
 
   const openEditInvoice = (inv) => {
     setEditingInvoice(inv);
-    // P1 fix (iter90fo) : bug "nature de depense grisee, impossible de
+    // P1 fix (iter90fo) : bug "categorie de depense grisee, impossible de
     // changer / modification non enregistree". Root cause : de nombreuses
     // factures (import CODA/Optipro, extraction IA) sont stockees avec un
     // tableau `lines` contenant UNE SEULE ligne (meme si conceptuellement
@@ -363,14 +363,14 @@ export default function InvoicesPage() {
               occupant_pct: (first.occupant_pct == null && sug.occupant_pct != null) ? Number(sug.occupant_pct) : first.occupant_pct,
               proprietaire_pct: (first.proprietaire_pct == null && sug.occupant_pct != null) ? +fmtEUR((100 - Number(sug.occupant_pct))) : first.proprietaire_pct,
             };
-            toast.success(`Nature apprise : ${sug.expense_category_name} (${sug.usage_count} facture${sug.usage_count > 1 ? 's' : ''} de ${name})`);
+            toast.success(`Categorie apprise : ${sug.expense_category_name} (${sug.usage_count} facture${sug.usage_count > 1 ? 's' : ''} de ${name})`);
             return { ...f, lines: newLines };
           }
           return f;
         }
         // Mode 1-nature : ne pre-remplir que si nature ET compte sont vides
         if (!f.expense_category_id && !f.account_number) {
-          toast.success(`Nature apprise : ${sug.expense_category_name} (${sug.usage_count} facture${sug.usage_count > 1 ? 's' : ''} de ${name})`);
+          toast.success(`Categorie apprise : ${sug.expense_category_name} (${sug.usage_count} facture${sug.usage_count > 1 ? 's' : ''} de ${name})`);
           return {
             ...f,
             expense_category_id: sug.expense_category_id,
@@ -523,7 +523,7 @@ export default function InvoicesPage() {
         const hasCategory = (invForm.expense_category_id || '').trim();
         if (!hasAccount && !hasCategory) {
           toast.error(
-            'Compte comptable requis : selectionnez une nature de depense OU '
+            'Compte comptable requis : selectionnez une categorie de depense OU '
             + 'saisissez directement un numero de compte PCMN. Une facture ne '
             + 'peut jamais etre enregistree sans compte.',
             { duration: 6000 }
@@ -584,7 +584,7 @@ export default function InvoicesPage() {
           const hasCommonCat = (invForm.common_charge_expense_category_id || '').trim();
           if (!hasCommonAcc && !hasCommonCat) {
             toast.error(
-              `Portion charges communes (${fmtEUR((totalCents-sumCents)/100)} EUR) : selectionne une nature de depense OU un compte PCMN dans l'encadre ambre "Portion charges communes".`,
+              `Portion charges communes (${fmtEUR((totalCents-sumCents)/100)} EUR) : selectionne une categorie de depense OU un compte PCMN dans l'encadre ambre "Portion charges communes".`,
               { duration: 6000 }
             );
             return;
@@ -702,7 +702,7 @@ export default function InvoicesPage() {
                         proprietaire_pct: occ != null ? +fmtEUR((100 - occ)) : f.proprietaire_pct,
                       }));
                     }
-                    toast.success(`Nature apprise : ${sug.expense_category_name} (${sug.usage_count} facture${sug.usage_count > 1 ? 's' : ''} de ${decision.name})`);
+                    toast.success(`Categorie apprise : ${sug.expense_category_name} (${sug.usage_count} facture${sug.usage_count > 1 ? 's' : ''} de ${decision.name})`);
                   }
                 }
               } catch { /* suggestion best-effort, non bloquante */ }
@@ -1144,7 +1144,7 @@ export default function InvoicesPage() {
                       // iter85e : affichage cascade de la cle de repartition
                       //   1. invoice.distribution_key_id direct
                       //   2. distinct keys utilisees dans invoice.lines
-                      //   3. default_distribution_key_id de la nature de depense
+                      //   3. default_distribution_key_id de la categorie de depense
                       //   4. '-' si vraiment aucune cle
                       const directKey = distKeys.find(k => k.id === inv.distribution_key_id);
                       if (directKey) return directKey.name;
@@ -1158,7 +1158,7 @@ export default function InvoicesPage() {
                         const defKey = distKeys.find(k => k.id === cat.default_distribution_key_id);
                         if (defKey) {
                           return (
-                            <span className="text-slate-500 italic" title="Cle par defaut (via nature de depense)">
+                            <span className="text-slate-500 italic" title="Cle par defaut (via categorie de depense)">
                               {defKey.name}
                             </span>
                           );
@@ -1444,7 +1444,7 @@ export default function InvoicesPage() {
                   value={invForm.supplier}
                   onChange={(name) => {
                     setInvForm(f => ({ ...f, supplier: name }));
-                    // Auto-apprentissage : pre-remplit la nature de depense
+                    // Auto-apprentissage : pre-remplit la categorie de depense
                     // la plus utilisee pour ce fournisseur (non-destructif).
                     if (name) applySupplierSuggestion(name);
                   }}
@@ -1678,7 +1678,7 @@ export default function InvoicesPage() {
                     </p>
                     {/* iter93bs : Encadre dedie "Portion charges communes"
                         Visible uniquement en mode HYBRIDE (partial < total).
-                        Permet au syndic de choisir la NATURE DE DEPENSE, le
+                        Permet au syndic de choisir la CATEGORIE DE DEPENSE, le
                         compte PCMN et la cle de repartition pour la portion
                         des charges communes (Total - somme des allocations
                         privatif). */}
@@ -1698,7 +1698,7 @@ export default function InvoicesPage() {
                         <div className="grid grid-cols-3 gap-3">
                           <div>
                             <label className="text-[11px] font-medium text-amber-900">
-                              Nature de depense <span className="text-rose-600" title="Nature OU compte PCMN requis">*</span>
+                              Categorie de depense <span className="text-rose-600" title="Nature OU compte PCMN requis">*</span>
                             </label>
                             <Select
                               value={invForm.common_charge_expense_category_id || 'none'}
@@ -1732,7 +1732,7 @@ export default function InvoicesPage() {
                                   </SelectItem>
                                 ))}
                                 <SelectItem value="__create__" className="text-[#022D52] font-semibold">
-                                  + Creer une nature de depense...
+                                  + Creer une categorie de depense...
                                 </SelectItem>
                               </SelectContent>
                             </Select>
@@ -1782,7 +1782,7 @@ export default function InvoicesPage() {
                 );
               })()}
             </div>
-            {/* iter93bs : la section "NATURE DE DEPENSE" du bas n'est PLUS
+            {/* iter93bs : la section "CATEGORIE DE DEPENSE" du bas n'est PLUS
                 utilisee en mode frais privatif. Le dedicated encart
                 "Portion charges communes" (ci-dessus, ambre) prend le relais
                 pour la portion charges communes des factures hybrides. */}
@@ -1802,7 +1802,7 @@ export default function InvoicesPage() {
               return 'grid grid-cols-3 gap-4';
             })()}>
               <div><label className="form-label">
-                Nature de depense
+                Categorie de depense
                 {!invForm.is_private_fee && !(invForm.lines && invForm.lines.length > 0) && (
                   <span className="text-rose-500 ml-1" title="Nature OU compte PCMN requis">*</span>
                 )}
@@ -1830,7 +1830,7 @@ export default function InvoicesPage() {
                   <SelectContent>
                     <SelectItem value="none">— Aucune —</SelectItem>
                     {categories.map(c => <SelectItem key={c.id} value={c.id}>{c.name} <span className="text-slate-400 ml-2 font-mono text-xs">({c.account_number})</span></SelectItem>)}
-                    <SelectItem value="__create__" className="text-[#022D52] font-semibold">+ Creer une nature de depense...</SelectItem>
+                    <SelectItem value="__create__" className="text-[#022D52] font-semibold">+ Creer une categorie de depense...</SelectItem>
                   </SelectContent>
                 </Select>
                 <p className="text-[10px] text-slate-400 mt-1">Pre-rempli le compte PCMN + repartition occupant/proprio</p>
@@ -1890,7 +1890,7 @@ export default function InvoicesPage() {
                   className="text-xs text-[#022D52] hover:text-[#1D4ED8] underline"
                   data-testid="enable-multi-lines-btn"
                 >
-                  <Plus size={11} className="inline mr-1" /> Splitter en plusieurs natures de depense
+                  <Plus size={11} className="inline mr-1" /> Splitter en plusieurs categories de depense
                 </button>
               </div>
             )}
@@ -1920,7 +1920,7 @@ export default function InvoicesPage() {
                     {invForm.lines.map((ln, idx) => (
                       <div key={ln._key || idx} className="grid grid-cols-[repeat(15,minmax(0,1fr))] gap-2 items-end bg-white rounded border border-slate-200 px-2 py-1.5" data-testid={`invoice-line-${idx}`}>
                         <div className="col-span-3">
-                          {idx === 0 && <label className="form-label text-[10px]">Nature</label>}
+                          {idx === 0 && <label className="form-label text-[10px]">Categorie</label>}
                           <Select
                             value={ln.expense_category_id || 'none'}
                             onValueChange={v => {
@@ -2172,7 +2172,7 @@ export default function InvoicesPage() {
                   <div className="font-mono font-semibold text-[#01213e]">{fmtEUR(((Number(invForm.total_amount) || 0) * (Number(invForm.proprietaire_pct) || 0) / 100))} EUR</div>
                 </div>
               </div>
-              <p className="text-[11px] text-slate-500">Total doit etre 100%. Pre-rempli depuis la nature de depense si selectionnee.</p>
+              <p className="text-[11px] text-slate-500">Total doit etre 100%. Pre-rempli depuis la categorie de depense si selectionnee.</p>
             </div>
 
             <div className="flex gap-3 justify-end">
@@ -2422,7 +2422,7 @@ export default function InvoicesPage() {
       }}>
         <DialogContent className="max-w-md" data-testid="new-category-dialog">
           <DialogHeader>
-            <DialogTitle style={{fontFamily:'Chivo,sans-serif'}}>Nouvelle nature de depense</DialogTitle>
+            <DialogTitle style={{fontFamily:'Chivo,sans-serif'}}>Nouvelle categorie de depense</DialogTitle>
           </DialogHeader>
           <div className="space-y-3 mt-2">
             <div>
@@ -2466,7 +2466,7 @@ export default function InvoicesPage() {
                       account_number: newCatForm.account_number.trim(),
                       description: newCatForm.description.trim(),
                     });
-                    toast.success('Nature de depense creee');
+                    toast.success('Categorie de depense creee');
                     setCategories(prev => [...prev, data].sort((a, b) => (a.name || '').localeCompare(b.name || '')));
                     setInvForm(f => ({...f, expense_category_id: data.id, account_number: data.account_number}));
                     setNewCatForm({ name: '', account_number: '', description: '' });

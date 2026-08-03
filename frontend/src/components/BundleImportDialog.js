@@ -651,7 +651,7 @@ function BlockCreationForm({ form, onChange, suppliers, usedSupplierNames, accou
 
       {/* Expense category */}
       <div>
-        <label className="text-[11px] font-medium text-slate-600 mb-1 block">Nature de depense</label>
+        <label className="text-[11px] font-medium text-slate-600 mb-1 block">Categorie de depense</label>
         <Select
           value={form.expense_category_id || 'none'}
           onValueChange={v => {

@@ -400,7 +400,7 @@ export default function FundCallsPage() {
               <CardContent>
                 {selectedCall.lines && selectedCall.lines.length > 0 && (
                   <div className="mb-4 border rounded-md overflow-hidden" data-testid="call-lines-table">
-                    <div className="bg-slate-50 px-3 py-1.5 text-xs uppercase tracking-wide text-slate-600 font-semibold border-b">Detail par nature de depense</div>
+                    <div className="bg-slate-50 px-3 py-1.5 text-xs uppercase tracking-wide text-slate-600 font-semibold border-b">Detail par categorie de depense</div>
                     <table className="w-full text-sm">
                       <thead><tr className="text-xs text-slate-500">
                         <th className="p-2 text-left">Compte</th>
@@ -660,11 +660,11 @@ export default function FundCallsPage() {
                 <span className="font-medium">Appel special</span>
                 <span className="text-[11px] opacity-70">- {CALL_TYPES.special.desc}</span>
               </button>
-              {/* Info : pas de nature de depense pour les fonds permanents */}
+              {/* Info : pas de categorie de depense pour les fonds permanents */}
               {(form.call_type === 'reserve' || form.call_type === 'roulement') && (
                 <div className={`mt-2 rounded-md border ${CALL_TYPES[form.call_type].color} px-3 py-2 text-[11px]`} data-testid="call-type-info">
                   Ce type d&apos;appel alimente directement le compte capital
-                  (classe 1). Aucune nature de depense a specifier - juste un
+                  (classe 1). Aucune categorie de depense a specifier - juste un
                   montant et une cle de repartition.
                 </div>
               )}

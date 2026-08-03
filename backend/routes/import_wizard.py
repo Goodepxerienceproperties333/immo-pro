@@ -1511,7 +1511,7 @@ def create_import_wizard_router(db):
         cats_by_code: dict[str, str] = {}
         cats_by_account: dict[str, str] = {}
         # iter90g9 : conserve la liste complete pour deriver account_number a partir
-        # de la nature de depense quand le fichier source ne fournit pas de compte.
+        # de la categorie de depense quand le fichier source ne fournit pas de compte.
         expense_cats: list[dict] = []
         async for c in db.expense_categories.find({"copropriete_id": copro_id}, {"_id": 0, "id": 1, "code": 1, "account_number": 1}):
             expense_cats.append(c)
@@ -1813,7 +1813,7 @@ def create_import_wizard_router(db):
                     matched_category += 1
 
                 # iter90g9 : si le fichier source Optipro/CODA n'a pas fourni
-                # de compte comptable ET qu'une nature de depense a ete
+                # de compte comptable ET qu'une categorie de depense a ete
                 # matchee, derive account_num de la nature (elle-meme liee
                 # a un compte PCMN). Sans cela, la facture serait importee
                 # sans account_number -> tombe dans "Autres charges" du
@@ -1836,7 +1836,7 @@ def create_import_wizard_router(db):
                         "error": (
                             "Compte comptable manquant (ni nature_code, ni "
                             "account_number resoluble). Corrigez le fichier "
-                            "source ou creez la nature de depense correspondante."
+                            "source ou creez la categorie de depense correspondante."
                         ),
                     })
                     continue
@@ -3547,7 +3547,7 @@ def create_import_wizard_router(db):
         })
         return {"inserted": inserted, "errors": errors, "default_start_date": default_start}
 
-    # ----- K: EXPENSE CATEGORIES (natures de depense) -----
+    # ----- K: EXPENSE CATEGORIES (categories de depense) -----
     @router.post("/sessions/{session_id}/commit-natures")
     async def commit_natures(session_id: str, data: CommitNaturesInput, request: Request):
         session = await db.import_sessions.find_one({"id": session_id})
@@ -4144,7 +4144,7 @@ def create_import_wizard_router(db):
         if counts["distribution_keys"] == 0:
             missing.append({"key": "distribution_keys", "label": "Cles de repartition", "critical": True})
         if counts["natures"] == 0:
-            missing.append({"key": "natures", "label": "Natures de depense", "critical": False})
+            missing.append({"key": "natures", "label": "Categories de depense", "critical": False})
         if opening_od == 0:
             missing.append({"key": "opening_balance", "label": "OD d'ouverture", "critical": False})
 

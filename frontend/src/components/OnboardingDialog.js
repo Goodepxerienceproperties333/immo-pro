@@ -75,7 +75,7 @@ const SYNDIC_STEPS = [
           <li><b>Facturation</b> : saisie manuelle ou extraction PDF par IA</li>
           <li><b>Cles de repartition</b> : par tantiemes, surface, ou consommation reelle</li>
           <li><b>Banque</b> : import CODA + auto-lettrage par VCS</li>
-          <li><b>Decompte annuel</b> : PDF detaille par lot, cle et nature (modele Finlead)</li>
+          <li><b>Decompte annuel</b> : PDF detaille par lot, cle et categorie (modele Finlead)</li>
         </ul>
         <p className="text-xs bg-blue-50 border-l-4 border-blue-400 p-2 text-blue-900">
           <Wallet size={12} className="inline mr-1" /> Repartition <b>occupant / proprietaire</b> automatique selon RD du 12/07/2024 sur les charges locatives.

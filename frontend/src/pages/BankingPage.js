@@ -81,7 +81,7 @@ export default function BankingPage() {
   //   { matched, match_type, lettrage_code, invoices[], owner, supplier, sibling_transactions[] }
   const [letteredLinks, setLetteredLinks] = useState(null);
   const [letteredLinksLoading, setLetteredLinksLoading] = useState(false);
-  // ----- iter90k : Categorisation par nature de depense/revenu -----
+  // ----- iter90k : Categorisation par categorie de depense/revenu -----
   const [expenseCategories, setExpenseCategories] = useState([]);
   const [distributionKeys, setDistributionKeys] = useState([]);
   const [pcmnAccounts, setPcmnAccounts] = useState([]);
@@ -664,13 +664,13 @@ export default function BankingPage() {
     const payload = { splits: categorizeSplits.map(({ _key, ...s }) => ({ ...s, amount: Number(s.amount) })) };
     try {
       await api.post(`/banking/transactions/${categorizeTarget.id}/categorize`, payload);
-      toast.success(`Categorisation OK (${payload.splits.length} nature${payload.splits.length > 1 ? 's' : ''})`);
+      toast.success(`Categorisation OK (${payload.splits.length} categorie${payload.splits.length > 1 ? 's' : ''})`);
       setCategorizeDialog(false);
       refreshAfterLettrage();
     } catch (err) { toast.error(err.response?.data?.detail || 'Erreur'); }
   };
   const uncategorize = async (id) => {
-    if (!window.confirm('Retirer la nature de cette transaction ?')) return;
+    if (!window.confirm('Retirer la categorie de cette transaction ?')) return;
     try {
       await api.delete(`/banking/transactions/${id}/categorize`);
       toast.success('Categorisation retiree');
@@ -1520,8 +1520,8 @@ export default function BankingPage() {
                             txn.match_type === 'supplier_payment' ? 'Fourn.' :
                             txn.match_type === 'expense_category' ? (
                               (txn.category_splits && txn.category_splits.length > 1)
-                                ? `Nature (${txn.category_splits.length})`
-                                : 'Nature'
+                                ? `Categorie (${txn.category_splits.length})`
+                                : 'Categorie'
                             ) :
                             'Fact.'
                           }</Badge> : txn.suggested_match_to ? (
@@ -1536,7 +1536,7 @@ export default function BankingPage() {
                             <Button variant="ghost" size="sm" onClick={() => startEdit(txn)} className="h-6 w-6 p-0 text-slate-400" title="Editer" data-testid={`edit-txn-${txn.id}`}><Pencil size={11} /></Button>
                             {txn.matched ? (
                               txn.match_type === 'expense_category'
-                                ? <Button variant="ghost" size="sm" onClick={() => uncategorize(txn.id)} className="text-purple-600 h-6 w-6 p-0" title="Retirer la nature" data-testid={`uncategorize-${txn.id}`}><Unlink size={11} /></Button>
+                                ? <Button variant="ghost" size="sm" onClick={() => uncategorize(txn.id)} className="text-purple-600 h-6 w-6 p-0" title="Retirer la categorie" data-testid={`uncategorize-${txn.id}`}><Unlink size={11} /></Button>
                                 : <Button variant="ghost" size="sm" onClick={() => unlettrage(txn.id)} className="text-orange-500 h-6 w-6 p-0" title="Delettrer"><Unlink size={11} /></Button>
                             ) : txn.suggested_match_to ? (
                               <>
@@ -1547,7 +1547,7 @@ export default function BankingPage() {
                             ) : (
                               <>
                                 <Button variant="ghost" size="sm" onClick={() => openLettrage(txn)} className="text-[#022D52] h-6 w-6 p-0" title="Lettrer" data-testid={`lettrage-${txn.id}`}><Link2 size={11} /></Button>
-                                <Button variant="ghost" size="sm" onClick={() => openCategorize(txn)} className="text-purple-600 h-6 w-6 p-0" title="Categoriser (nature de depense/revenu)" data-testid={`categorize-${txn.id}`}><Tag size={11} /></Button>
+                                <Button variant="ghost" size="sm" onClick={() => openCategorize(txn)} className="text-purple-600 h-6 w-6 p-0" title="Categoriser (categorie de depense/revenu)" data-testid={`categorize-${txn.id}`}><Tag size={11} /></Button>
                               </>
                             )}
                             <Button variant="ghost" size="sm" onClick={() => deleteTxn(txn.id)} className="h-6 w-6 p-0 text-red-400" title="Supprimer" data-testid={`delete-txn-${txn.id}`}><Trash2 size={11} /></Button>

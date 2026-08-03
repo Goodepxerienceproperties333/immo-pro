@@ -175,7 +175,7 @@ export default function AdminQualityAuditPage() {
   };
   const runDedupNatures = async (dryRun) => {
     if (!dryRun && !window.confirm(
-      "Fusionner les natures de depenses dupliquees ?\n\n" +
+      "Fusionner les categories de depenses dupliquees ?\n\n" +
       "* Idempotent - regroupe par (ACP, compte comptable).\n" +
       "* Le PLUS ANCIEN est garde, les autres sont supprimes.\n" +
       "* Les factures pointant vers les doublons sont repointees vers le survivant.\n\n" +
@@ -188,9 +188,9 @@ export default function AdminQualityAuditPage() {
       const { data } = await api.post(`/admin/heal-duplicate-natures?${q}dry_run=${dryRun}`);
       setDedupNatResult(data);
       if (dryRun) toast.info(`Dry-run : ${data.duplicate_groups} groupe(s) a nettoyer`, { duration: 6000 });
-      else toast.success(`${data.deleted_natures} nature(s) supprimee(s), ${data.invoices_repointed} facture(s) repointee(s)`, { duration: 8000 });
+      else toast.success(`${data.deleted_natures} categorie(s) supprimee(s), ${data.invoices_repointed} facture(s) repointee(s)`, { duration: 8000 });
     } catch (err) {
-      toast.error(err.response?.data?.detail || 'Erreur dedup natures');
+      toast.error(err.response?.data?.detail || 'Erreur dedup categories');
     } finally { setDedupNatBusy(false); }
   };
   const runDedupPcmn = async (dryRun) => {
@@ -1242,12 +1242,12 @@ export default function AdminQualityAuditPage() {
       <Card className="border-cyan-200 bg-cyan-50/40">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-cyan-900 text-base">
-            Doublons natures de depenses / comptes PCMN
+            Doublons categories de depenses / comptes PCMN
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
           <p className="text-xs text-cyan-900 leading-relaxed">
-            Chaque relance du wizard d&apos;import creait auparavant de nouveaux doublons de natures (jusqu&apos;a 4x observees). Le fix preventif est actif (idempotence sur ACP+compte). Ce healing nettoie les ACP deja polluees. Les factures pointant vers un doublon sont repointees vers la nature la plus ancienne.
+            Chaque relance du wizard d&apos;import creait auparavant de nouveaux doublons de categories (jusqu&apos;a 4x observees). Le fix preventif est actif (idempotence sur ACP+compte). Ce healing nettoie les ACP deja polluees. Les factures pointant vers un doublon sont repointees vers la categorie la plus ancienne.
           </p>
           <div className="flex gap-2 items-center">
             <Select value={dedupCopro} onValueChange={setDedupCopro}>
@@ -1264,7 +1264,7 @@ export default function AdminQualityAuditPage() {
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div className="bg-white border border-cyan-200 rounded p-3 space-y-2">
-              <div className="font-semibold text-sm text-cyan-900">Natures de depenses</div>
+              <div className="font-semibold text-sm text-cyan-900">Categories de depenses</div>
               <div className="flex gap-2">
                 <Button variant="outline" size="sm" onClick={() => runDedupNatures(true)} disabled={dedupNatBusy} data-testid="dedup-nat-dry-btn">
                   {dedupNatBusy ? '...' : 'Dry-run'}

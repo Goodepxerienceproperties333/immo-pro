@@ -183,7 +183,7 @@ def build_budget_pdf(
 
     header = [
         Paragraph("<b>Compte</b>", body_small),
-        Paragraph("<b>Nature de depense</b>", body_small),
+        Paragraph("<b>Categorie de depense</b>", body_small),
         Paragraph("<b>Cle de repartition</b>", body_small),
         Paragraph("<b>Montant HTVA</b>", body_small),
     ]

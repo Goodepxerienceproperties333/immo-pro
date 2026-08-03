@@ -117,7 +117,7 @@ export default function ExpensesPage() {
     if (!supplierRow.suggestion) return;
     if (!window.confirm(
       `Appliquer le compte ${supplierRow.suggestion.account_number} `
-      + `(${supplierRow.suggestion.expense_category_name || 'nature auto'}) `
+      + `(${supplierRow.suggestion.expense_category_name || 'categorie auto'}) `
       + `sur ${supplierRow.invoice_count} facture(s) de "${supplierRow.supplier}" ?`
     )) return;
     setApplyingSupplier(supplierRow.supplier);
@@ -304,7 +304,7 @@ export default function ExpensesPage() {
       if (!g1.natures.has(k2)) {
         g1.natures.set(k2, {
           nature_id: r.expense_category_id || '',
-          nature_name: r.expense_category_name || r.account_name || 'Sans nature',
+          nature_name: r.expense_category_name || r.account_name || 'Sans categorie',
           nature_code: r.expense_category_code || '',
           subtotal: 0,
           count: 0,
@@ -350,7 +350,7 @@ export default function ExpensesPage() {
       <div className="page-header flex flex-col md:flex-row md:items-center md:justify-between gap-3">
         <div>
           <h1 className="page-title"><Receipt size={24} className="inline mr-2" />Depenses de l&apos;exercice</h1>
-          <p className="page-subtitle">Vue hierarchique : Cle de repartition &rarr; Nature &rarr; Compte comptable</p>
+          <p className="page-subtitle">Vue hierarchique : Cle de repartition &rarr; Categorie &rarr; Compte comptable</p>
         </div>
         <div className="flex items-center gap-2">
           {/* View mode toggle : Flat list vs Grouped hierarchy */}
@@ -418,7 +418,7 @@ export default function ExpensesPage() {
             <div>
               <label className="form-label text-xs">
                 <span className="text-[10px] font-bold text-[#022D52] mr-1">N2</span>
-                Nature de depense
+                Categorie de depense
               </label>
               <Select value={filters.expense_category_id || ALL} onValueChange={v => setField('expense_category_id', v)}>
                 <SelectTrigger data-testid="filter-nature"><SelectValue placeholder="Toutes" /></SelectTrigger>
@@ -529,7 +529,7 @@ export default function ExpensesPage() {
               <TableHead>N&deg; facture</TableHead>
               <TableHead>Fournisseur</TableHead>
               <TableHead>Description</TableHead>
-              <TableHead className="text-xs">Nature</TableHead>
+              <TableHead className="text-xs">Categorie</TableHead>
               <TableHead className="text-xs">Cle</TableHead>
               <TableHead className="text-xs text-right" title="Repartition Occupant / Proprietaire">%Occ / %Prop</TableHead>
               <TableHead className="text-right w-24">Montant</TableHead>
@@ -617,7 +617,7 @@ export default function ExpensesPage() {
                   const c2 = collapsed[k2];
                   return (
                     <div key={k2} className="border-t border-slate-100" data-testid={`group-nature-${g2.nature_id}`}>
-                      {/* Niveau 2 : Nature de depense */}
+                      {/* Niveau 2 : Categorie de depense */}
                       <button onClick={() => toggleCollapse(k2)} className="w-full flex items-center gap-2 pl-10 pr-4 py-2 bg-amber-50/60 hover:bg-amber-50 text-left">
                         {c2 ? <ChevronRight size={12} className="text-amber-700" /> : <ChevronDown size={12} className="text-amber-700" />}
                         <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-600 text-white">N2 NATURE</span>
@@ -748,7 +748,7 @@ export default function ExpensesPage() {
               <div>
                 <label className="form-label">
                   <span className="text-[10px] font-bold text-amber-700 mr-1">N2</span>
-                  Nature de depense
+                  Categorie de depense
                 </label>
                 <Select
                   value={quickEdit.expense_category_id || '__none'}

@@ -53,7 +53,7 @@ La sidebar est organisee en 5 sections :
 - Journaux (ACH, VE, FI, OD)
 - Grand Livre
 - Cles de repartition
-- Natures de depense
+- Categories de depense
 
 **FINANCE** (emeraude) :
 - Facturation
@@ -102,7 +102,7 @@ Utilise le wizard en 6 etapes explicites :
    - **Proprietaires** : lettrer vers un proprietaire (match_type=owner_payment).
    - **Fournisseurs** : lettrer vers un fournisseur (match_type=supplier_payment).
    - **Compte PCMN** : lier a un compte comptable direct (ex : 58xxx virements internes).
-   - **Nature** : categoriser via une nature de depense (multi-natures split possible).
+   - **Nature** : categoriser via une categorie de depense (multi-natures split possible).
 6. Selectionner la cible puis confirmer
 
 --- DELETTRAGE ---
@@ -131,7 +131,7 @@ Le delettrage se fait UNIQUEMENT depuis "Banque", jamais depuis "Facturation".
 Creation manuelle :
 1. Aller dans "Facturation"
 2. Cliquer "Nouvelle facture"
-3. Remplir : numero, date, fournisseur, description, montant TTC, TVA, nature de depense, compte PCMN 6xxx, cle de repartition
+3. Remplir : numero, date, fournisseur, description, montant TTC, TVA, categorie de depense, compte PCMN 6xxx, cle de repartition
 4. Enregistrer → ecriture ACH generee automatiquement
 
 Extraction IA (facture unitaire) :
@@ -240,7 +240,7 @@ Quand un syndic te demande "pourquoi mon bilan n'est pas equilibre" ou similaire
 
 **Causes classiques d'un COMPTE DE RESULTATS ANORMAL** :
 1. Produits classe 7 saisis en positif dans un budget mais oublies en negatif -> Verifier les budgets, chaque ligne classe 7 doit etre negative.
-2. Charges 6xxx sans nature de depense assignee -> Rapport "Grand Livre" filtre par 6xx sans distribution key.
+2. Charges 6xxx sans categorie de depense assignee -> Rapport "Grand Livre" filtre par 6xx sans distribution key.
 
 **Causes classiques d'un EXTRAIT BANCAIRE NON EQUILIBRE** :
 1. Solde ouverture + somme mouvements != solde fermeture -> Corriger le solde saisi manuellement ou reimporter le CODA/PDF.

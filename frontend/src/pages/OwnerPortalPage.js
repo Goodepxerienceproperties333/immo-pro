@@ -1910,7 +1910,7 @@ function ChargesDonut({ data, total, periodLabel }) {
   // iter93cq : selon regle user "base toi uniquement sur la liste des depenses"
   // -> on n'affiche que les charges POSITIVES issues des journal_entries reels.
   // iter93cv : le donut reste sur le Top 5 pour lisibilite, MAIS la legende
-  // detaille TOUTES les natures de depenses avec un scroll si necessaire.
+  // detaille TOUTES les categories de depenses avec un scroll si necessaire.
   const positiveData = data
     .filter(d => d.value > 0.005)
     .sort((a, b) => b.value - a.value);
@@ -1920,7 +1920,7 @@ function ChargesDonut({ data, total, periodLabel }) {
   const positiveTotal = positiveData.reduce((s, d) => s + d.value, 0);
   // Donut : Top5 + agregat "Autres natures" si besoin
   const donutData = restTotal > 0.01
-    ? [...top5, { name: `Autres natures (${rest.length})`, value: round2(restTotal), _agg: true }]
+    ? [...top5, { name: `Autres categories (${rest.length})`, value: round2(restTotal), _agg: true }]
     : top5;
   return (
     <Card className="lg:col-span-3 border-slate-200" data-testid="situation-donut-card">

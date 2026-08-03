@@ -1,5 +1,5 @@
 """Generateur PDF 'Synthese des depenses' - format portrait, groupe par
-nature de depense (iter91d).
+categorie de depense (iter91d).
 
 Complement du `build_liste_depenses_pdf` (paysage detaille).
 Utilise dans l'envoi automatique du decompte annuel (email) pour joindre
@@ -7,7 +7,7 @@ un recapitulatif synthetique en plus du detail.
 
 Structure :
   - En-tete cabinet + ACP + periode
-  - Tableau agrege : Nature de depense | Compte | Nb lignes | TVAC total
+  - Tableau agrege : Categorie de depense | Compte | Nb lignes | TVAC total
   - Sous-total par cle de repartition (si groupement demande)
   - Total general immeuble
 """

@@ -6,7 +6,7 @@ Structure (modele utilisateur Finlead) :
       Date valeur | Libelle | Fournisseur | Ref. interne | Montant | Part proprietaire | Part occupant
   - Groupement hierarchique :
       Cle de repartition
-        -> Nature de depense (compte PCMN en italique)
+        -> Categorie de depense (compte PCMN en italique)
             -> Lignes de detail
             -> Sous-total nature
         -> Sous-total cle
@@ -68,7 +68,7 @@ def build_liste_depenses_pdf(
                                # proprietaire_amount.
     distribution_keys: list,
     pcmn_map: dict,            # {account_number: account_name}
-    expense_categories: list,  # natures de depense
+    expense_categories: list,  # categories de depense
     syndic_pdf_ctx: dict = None,
 ) -> bytes:
     """Render le PDF 'Liste des depenses' en bytes. iter90e : aligned with

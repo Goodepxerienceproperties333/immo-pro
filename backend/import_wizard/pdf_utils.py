@@ -40,7 +40,7 @@ def extract_pdf(raw: bytes) -> dict:
 
 
 def parse_natures_pdf(raw: bytes) -> dict:
-    """Parse 'Liste des natures de depense' PDF from Optipro.
+    """Parse 'Liste des categories de depense' PDF from Optipro.
 
     pdfplumber may extract the whole table as a single row where each cell
     contains newline-separated values. We split each cell by `\\n` and zip

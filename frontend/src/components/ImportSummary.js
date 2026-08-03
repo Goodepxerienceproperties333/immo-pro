@@ -22,7 +22,7 @@ export default function ImportSummary({ summary, compact = false }) {
     { icon: Building2, label: 'Exercice fiscal', value: fy ? `${fy.name} (${fy.status})` : null, ok: !!fy, critical: true },
     { icon: Users, label: 'Lots', value: counts.lots, ok: counts.lots > 0, critical: true },
     { icon: PieChart, label: 'Cles de repartition', value: counts.distribution_keys, ok: counts.distribution_keys > 0, critical: true },
-    { icon: Tag, label: 'Natures de depense', value: counts.natures, ok: counts.natures > 0, critical: false },
+    { icon: Tag, label: 'Categories de depense', value: counts.natures, ok: counts.natures > 0, critical: false },
     { icon: Wallet, label: 'Budget previsionnel', value: budget ? `${budget.lines_count} lignes - ${fmtEUR(Number(budget.total_amount))} EUR` : null, ok: !!budget, critical: false },
     { icon: Truck, label: 'Fournisseurs', value: counts.suppliers, ok: counts.suppliers > 0, critical: false },
     { icon: FileText, label: 'Factures importees', value: counts.invoices, ok: counts.invoices > 0, critical: false },

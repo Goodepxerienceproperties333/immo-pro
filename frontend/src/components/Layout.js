@@ -30,7 +30,7 @@ const sections = [
     { to: '/journals', icon: FileText, label: 'Journaux' },
     { to: '/grand-livre', icon: BookMarked, label: 'Grand Livre' },
     { to: '/distribution-keys', icon: Key, label: 'Cles de repartition' },
-    { to: '/expense-categories', icon: Tag, label: 'Natures de depense' },
+    { to: '/expense-categories', icon: Tag, label: 'Categories de depense' },
   ]},
   { title: 'Finance', accent: 'emerald', items: [
     { to: '/invoices', icon: Receipt, label: 'Facturation' },

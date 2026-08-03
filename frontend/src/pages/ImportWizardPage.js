@@ -5,7 +5,7 @@
  *  A) Propriétaires (CSV)
  *  C) Fournisseurs (CSV)
  *  D) Lots (CSV)
- *  K) Natures de dépense (PDF)
+ *  K) Catégories de dépense (PDF)
  *
  * Workflow par étape :
  *   1. Upload du fichier
@@ -44,7 +44,7 @@ const STEPS = [
   // creation. Users see one less step; downstream commits still find the FY
   // via `session.steps.fiscal_year.fiscal_year_id`.
   { key: 'suppliers', label: 'Fournisseurs',      icon: Truck,    optional: true, kind: 'csv_or_pdf' },
-  { key: 'natures',   label: 'Natures depense',   icon: Tag,      optional: true, kind: 'pdf' },
+  { key: 'natures',   label: 'Categories depense',   icon: Tag,      optional: true, kind: 'pdf' },
   { key: 'budget',    label: 'Budget',            icon: Wallet,   optional: true,  kind: 'pdf' },
   { key: 'distribution_keys', label: 'Cles de repartition', icon: PieChart, optional: true, kind: 'pdf' },
   { key: 'invoices',  label: 'Factures',          icon: FileText, optional: true,  kind: 'csv_or_pdf' },
@@ -514,7 +514,7 @@ export default function ImportWizardPage() {
         const summaryStr =
           `${m.inserted} facture(s) validee(s)${m.grouped ? ` (${m.grouped} lignes de detail regroupees)` : ''} + ${m.journal_entries || 0} ecriture(s) AC creee(s)` +
           (m.pcmn_created ? ` - ${m.pcmn_created} compte(s) PCMN auto-ajoutes` : '') +
-          ` - ${m.matched_supplier} avec fournisseur, ${m.matched_key} avec cle, ${m.matched_category} avec nature` +
+          ` - ${m.matched_supplier} avec fournisseur, ${m.matched_key} avec cle, ${m.matched_category} avec categorie` +
           (m.private_fees_detected ? ` - ${m.private_fees_detected} FRAIS PRIVATIF(S) 643 detecte(s) : assignez les proprietaires en fin de wizard` : '');
         // iter90gq : afficher les erreurs backend (Periode fermee, PCMN manquant, etc.)
         // Sans ce feedback l'utilisateur voyait "0 validee(s)" en toast SUCCESS
@@ -567,7 +567,7 @@ export default function ImportWizardPage() {
         toast.success(`${r.data.inserted} ${step.label.toLowerCase()} importes`);
       } else if (step.key === 'natures') {
         r = await api.post(`/import-wizard/sessions/${session.id}/commit-natures`, { natures: naturesParsed });
-        toast.success(`${r.data.inserted} natures importees`);
+        toast.success(`${r.data.inserted} categories importees`);
       } else if (step.key === 'budget') {
         // iter90gi : le backend resout `fiscal_year_id` automatiquement via
         // l'exercice ouvert de l'ACP si absent (l'etape fiscal_year est
@@ -944,7 +944,7 @@ export default function ImportWizardPage() {
             <div className="flex-1 text-sm">
               <div className="font-bold text-orange-900">Mutations intra-exercice en attente</div>
               <div className="text-orange-800">
-                Vous avez declare des ventes de lots pendant l&apos;exercice. Terminez d&apos;abord ce wizard d&apos;import (fournisseurs, natures, budget, factures, journaux, OD). A la <strong>fin</strong>, vous serez redirige vers la page Lots pour saisir les mutations.
+                Vous avez declare des ventes de lots pendant l&apos;exercice. Terminez d&apos;abord ce wizard d&apos;import (fournisseurs, categories, budget, factures, journaux, OD). A la <strong>fin</strong>, vous serez redirige vers la page Lots pour saisir les mutations.
               </div>
             </div>
           </div>
@@ -1717,14 +1717,14 @@ function NaturesPreview({ natures, setNatures }) {
   if (!natures?.length) {
     return (
       <div className="text-center py-6 text-amber-600 text-sm">
-        <AlertTriangle size={24} className="inline mr-1" /> Aucune nature extraite du PDF.
+        <AlertTriangle size={24} className="inline mr-1" /> Aucune categorie extraite du PDF.
       </div>
     );
   }
   return (
     <div className="space-y-3">
       <div className="bg-blue-50 border border-blue-200 rounded p-3 text-xs text-blue-900">
-        <strong>Verifiez puis modifiez si necessaire</strong> les natures extraites du PDF. Vous pouvez editer chaque ligne directement, ou supprimer celles qui ne sont pas pertinentes.
+        <strong>Verifiez puis modifiez si necessaire</strong> les categories extraites du PDF. Vous pouvez editer chaque ligne directement, ou supprimer celles qui ne sont pas pertinentes.
       </div>
       <div className="border border-slate-200 rounded overflow-x-auto max-h-96 overflow-y-auto">
         <table className="w-full text-xs">
@@ -1754,7 +1754,7 @@ function NaturesPreview({ natures, setNatures }) {
           </tbody>
         </table>
       </div>
-      <div className="text-xs text-slate-500">{natures.length} nature(s) detectee(s)</div>
+      <div className="text-xs text-slate-500">{natures.length} categorie(s) detectee(s)</div>
     </div>
   );
 }
@@ -2382,7 +2382,7 @@ function InvoicesPreview({ invoices, setInvoices }) {
       )}
       <div className="text-[11px] text-amber-700 bg-amber-50 border border-amber-100 rounded p-2">
         <AlertTriangle size={11} className="inline mr-1" /> Les factures seront auto-rattachees aux fournisseurs (via code <span className="font-mono">F0XXX</span>),
-        aux cles de repartition et aux natures de depense importes precedemment.
+        aux cles de repartition et aux categories de depense importes precedemment.
       </div>
       <div className="border border-slate-200 rounded overflow-x-auto max-h-[420px] overflow-y-auto">
         <table className="w-full text-[11px]">

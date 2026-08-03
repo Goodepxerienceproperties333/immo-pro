@@ -44,7 +44,7 @@ class DistKeyInput(BaseModel):
     # Permet de classer les cles (ex: "001 - General", "002 - Ascenseur").
     code: Optional[str] = ""
     # iter88 : clé par defaut pour cette ACP. Une seule peut etre True par ACP.
-    # Utilisee comme fallback quand une nature de depense n'a pas de cle
+    # Utilisee comme fallback quand une categorie de depense n'a pas de cle
     # explicite et que la facture n'en specifie pas non plus.
     is_default: Optional[bool] = False
     # iter90ie : cles basees sur les compteurs (releves eau/gaz/elec/chaudiere).
@@ -114,7 +114,7 @@ class InvoiceInput(BaseModel):
     # Somme doit etre 100.
     occupant_pct: Optional[float] = None  # None = inherit from category
     proprietaire_pct: Optional[float] = None
-    # Lignes multiples (split par nature de depense). Si fourni et non-vide,
+    # Lignes multiples (split par categorie de depense). Si fourni et non-vide,
     # le total des lignes doit egal total_amount. Une ecriture comptable
     # unique sera generee avec N debits (un par ligne) + 1 credit fournisseur.
     lines: Optional[List[InvoiceLineInput]] = None
@@ -1148,7 +1148,7 @@ def create_invoices_router(db):
         lines: Optional[list] = None,
     ) -> None:
         """iter90ed : Apprentissage automatique de la repartition
-        occupant/proprietaire par nature de depense.
+        occupant/proprietaire par categorie de depense.
 
         Quand l'utilisateur enregistre une facture avec une repartition
         explicite (occupant_pct fourni != None), on met a jour
@@ -1641,7 +1641,7 @@ def create_invoices_router(db):
         supplier: str,
         copropriete_id: Optional[str] = None,
     ):
-        """Retourne la nature de depense la plus utilisee pour ce fournisseur
+        """Retourne la categorie de depense la plus utilisee pour ce fournisseur
         au sein d'une ACP (Chinese walls STRICT). Auto-apprentissage pour
         pre-remplir la nature/compte/cle lors de la saisie d'une nouvelle
         facture.
@@ -2259,7 +2259,7 @@ def create_invoices_router(db):
         if data.lines is not None:
             update["lines"] = resolved_lines
         elif len(existing_lines) == 1 and not data.is_private_fee:
-            # P1 fix (iter90fo) : bug "nature de depense grisee / modification
+            # P1 fix (iter90fo) : bug "categorie de depense grisee / modification
             # non enregistree". De nombreuses factures legacy (import
             # CODA/Optipro, extraction IA) sont stockees avec `lines` = UNE
             # seule entree, meme si conceptuellement c'est une facture a

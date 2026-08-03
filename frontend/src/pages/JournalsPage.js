@@ -40,7 +40,7 @@ export default function JournalsPage() {
   const [entries, setEntries] = useState([]);
   const [accounts, setAccounts] = useState([]);
   const [categories, setCategories] = useState([]);
-  // iter90g1 : Distribution Keys de l'ACP - dispo dans le selecteur "Nature de depense" par ligne d'OD
+  // iter90g1 : Distribution Keys de l'ACP - dispo dans le selecteur "Categorie de depense" par ligne d'OD
   const [distKeys, setDistKeys] = useState([]);
   const [journalType, setJournalType] = useState('OD');
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -154,7 +154,7 @@ export default function JournalsPage() {
   const updateLine = (i, field, value) => {
     const lines = [...form.lines];
     lines[i] = { ...lines[i], [field]: value };
-    // iter91b : selection d'une Nature de depense -> auto-remplit et verrouille
+    // iter91b : selection d'une Categorie de depense -> auto-remplit et verrouille
     // le Compte Comptable + %Occ/%Prop + Cle de repartition par defaut.
     if (field === 'expense_category_id') {
       const cat = (categories || []).find(c => c.id === value);
@@ -195,7 +195,7 @@ export default function JournalsPage() {
         lines[i].occupant_pct = null;
         lines[i].proprietaire_pct = null;
       }
-      // iter90g1 : auto-suggerer la Distribution Key (nature de depense)
+      // iter90g1 : auto-suggerer la Distribution Key (categorie de depense)
       // - Si compte de charge 6xxx : pre-remplir avec la DK par defaut de l'ACP
       // - Compte de bilan/produit : effacer
       if (value && (value.startsWith('6') || value.startsWith('7'))) {
@@ -644,8 +644,8 @@ export default function JournalsPage() {
               <div className="border rounded-md overflow-x-auto">
                 <table className="w-full text-sm min-w-[1180px]">
                   <thead><tr className="bg-slate-50 text-xs text-slate-600 uppercase">
-                    <th className="p-2 text-left" style={{ minWidth: 200 }} title="Nature de depense (categorie): auto-remplit le compte comptable, les %, et la cle de repartition">Nature de depense</th>
-                    <th className="p-2 text-left" style={{ minWidth: 240 }} title="Compte comptable PCMN (auto-rempli et verrouille quand une Nature de depense est selectionnee)">Compte</th>
+                    <th className="p-2 text-left" style={{ minWidth: 200 }} title="Categorie de depense (categorie): auto-remplit le compte comptable, les %, et la cle de repartition">Categorie de depense</th>
+                    <th className="p-2 text-left" style={{ minWidth: 240 }} title="Compte comptable PCMN (auto-rempli et verrouille quand une Categorie de depense est selectionnee)">Compte</th>
                     <th className="p-2 text-left">Libelle</th>
                     <th className="p-2 text-left" style={{ minWidth: 180 }} title="Cle de repartition utilisee pour projeter la quote-part sur les proprietaires">Cle de repartition</th>
                     <th className="p-2 text-right" style={{ minWidth: 110 }}>Debit</th>
@@ -690,7 +690,7 @@ export default function JournalsPage() {
                         </td>
                         <td className="p-1" style={{ minWidth: 240 }}>
                           {hasCategory ? (
-                            <div className="h-8 px-2 flex items-center bg-slate-100 border border-slate-200 rounded text-xs font-mono text-slate-700" title="Auto-rempli via la Nature de depense" data-testid={`journal-line-${i}-account-locked`}>
+                            <div className="h-8 px-2 flex items-center bg-slate-100 border border-slate-200 rounded text-xs font-mono text-slate-700" title="Auto-rempli via la Categorie de depense" data-testid={`journal-line-${i}-account-locked`}>
                               {line.account_number || '—'}
                               {line.account_name && <span className="ml-2 text-slate-500 truncate">{line.account_name}</span>}
                             </div>

@@ -377,11 +377,11 @@ export default function CoproprietesPage() {
           const msg = hadIntraFySales
             ? `L'ACP "${newCopro.name}" a ete creee avec ${nLots} lot(s).\n\n`
               + `Vous avez declare des VENTES intra-exercice. Le workflow recommande :\n\n`
-              + `[OK] : Lancer le wizard d'import Optipro (fournisseurs, natures, budget, factures, journaux...). Les mutations seront saisies A LA FIN.\n`
+              + `[OK] : Lancer le wizard d'import Optipro (fournisseurs, categories, budget, factures, journaux...). Les mutations seront saisies A LA FIN.\n`
               + `[Annuler] : Passer directement a la saisie des mutations (les autres imports pourront etre faits plus tard).`
             : `L'ACP "${newCopro.name}" a ete creee.\n\n`
               + `S'agit-il d'une REPRISE depuis Optipro / Sogis ?\n\n`
-              + `[OK] : Lancer le wizard d'import (fournisseurs, natures, budget, factures...).\n`
+              + `[OK] : Lancer le wizard d'import (fournisseurs, categories, budget, factures...).\n`
               + `[Annuler] : Continuer normalement.`;
           const goWizard = window.confirm(msg);
           if (goWizard) {
@@ -457,7 +457,7 @@ export default function CoproprietesPage() {
                 + ` • Appels de fonds + ecritures liees\n`
                 + ` • Transactions bancaires + extraits\n`
                 + ` • Budgets et exercices fiscaux (cloture comprise)\n`
-                + ` • Regularisations, natures de depense, documents\n\n`
+                + ` • Regularisations, categories de depense, documents\n\n`
                 + `Seront CONSERVES (structure de l'ACP) :\n`
                 + ` • Lots et quotites\n`
                 + ` • Proprietaires + fournisseurs (collections globales)\n`
@@ -1722,7 +1722,7 @@ export default function CoproprietesPage() {
         columns={[
           { key: 'code', label: 'Code', monospace: true, width: 70 },
           { key: 'reference', label: 'Reference', width: 100 },
-          { key: 'nature', label: 'Nature' },
+          { key: 'nature', label: 'Categorie' },
           { key: 'batiment', label: 'Batiment' },
           { key: 'quotities_value', label: 'Quotites' },
           { key: 'owner_auxiliary_code', label: 'Code prop.', monospace: true },

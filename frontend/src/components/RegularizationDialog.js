@@ -57,7 +57,7 @@ export default function RegularizationDialog({ fiscalYearId, open, onClose, onDo
             </div>
 
             <div className="mt-4">
-              <div className="text-xs font-semibold text-slate-700 mb-2">Detail par nature de depense et cle de repartition</div>
+              <div className="text-xs font-semibold text-slate-700 mb-2">Detail par categorie de depense et cle de repartition</div>
               <div className="border rounded max-h-32 overflow-y-auto">
                 <Table>
                   <TableHeader><TableRow><TableHead>Compte</TableHead><TableHead>Cle</TableHead><TableHead className="text-right">Montant</TableHead></TableRow></TableHeader>

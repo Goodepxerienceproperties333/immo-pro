@@ -1,4 +1,4 @@
-"""Expense categories (Natures de depense).
+"""Expense categories (Categories de depense).
 
 Niveau metier intermediaire entre Cle de repartition et Compte PCMN.
 Relation 1:1 avec un compte PCMN classe 6.
@@ -116,7 +116,7 @@ def create_expense_categories_router(db):
         if abs((occ + prop) - 100) > 0.01:
             raise HTTPException(400, f"La somme % occupant ({occ}) + % proprietaire ({prop}) doit etre 100 (recu {occ + prop})")
         # iter90ii : UNICITE du NOM par ACP. Regle metier utilisateur :
-        # "tu ne peux pas avoir deux fois le meme nom de nature de depense".
+        # "tu ne peux pas avoir deux fois le meme nom de categorie de depense".
         # Plusieurs natures peuvent partager le meme compte PCMN, mais pas le
         # meme nom. Le check est case-insensitive + trim.
         name_clean = (data.name or "").strip()
@@ -131,7 +131,7 @@ def create_expense_categories_router(db):
             if existing_name:
                 raise HTTPException(
                     409,
-                    f"Une nature de depense avec le nom '{name_clean}' existe deja "
+                    f"Une categorie de depense avec le nom '{name_clean}' existe deja "
                     f"dans cette ACP (id {existing_name.get('id','')[:8]}). "
                     "Choisissez un nom different ou modifiez la nature existante.",
                 )
@@ -154,7 +154,7 @@ def create_expense_categories_router(db):
                             f"'{name_clean}' qui est un doublon potentiel."
                         )
         # iter90ex : suppression du blocage 1:1 (compte PCMN <-> nature).
-        # Plusieurs natures de depense peuvent partager le meme compte
+        # Plusieurs categories de depense peuvent partager le meme compte
         # PCMN (ex: "RC copro" et "Assurance RC CoC & Comm.aux comptes"
         # tous deux sur 6141). Les ecritures comptables restent
         # correctes puisque tout le systeme downstream identifie la
@@ -221,7 +221,7 @@ def create_expense_categories_router(db):
             if existing_name:
                 raise HTTPException(
                     409,
-                    f"Une nature de depense avec le nom '{new_name}' existe deja "
+                    f"Une categorie de depense avec le nom '{new_name}' existe deja "
                     f"dans cette ACP (id {existing_name.get('id','')[:8]}).",
                 )
         # If account changed: valider que le compte existe et est de la
