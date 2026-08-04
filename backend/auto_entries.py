@@ -1018,6 +1018,17 @@ async def generate_bank_entry(db, txn: dict) -> dict | None:
     if _sid:
         doc["syndic_id"] = _sid
     await db.journal_entries.insert_one(doc)
+    # Si match_type=invoice, marque la facture comme payee (statut coherent
+    # avec le flux CODA/manual match).
+    if match_type == "invoice" and txn.get("matched_to"):
+        await db.invoices.update_one(
+            {"id": txn["matched_to"]},
+            {"$set": {
+                "status": "paid",
+                "paid_at": txn.get("date"),
+                "paid_by_transaction_id": txn["id"],
+            }},
+        )
     await db.bank_transactions.update_one(
     # iter90ji : lie la txn a ce JE nouvellement cree (piste d'audit)
     # + efface tout ancien posting_error (l'IBAN a ete configure entre-temps)

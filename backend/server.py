@@ -1554,6 +1554,8 @@ app.include_router(create_banking_router(db))
 app.include_router(create_documents_router(db))
 app.include_router(create_admin_router(db))
 app.include_router(create_billing_admin_router(db))
+from routes.e2e_test import create_e2e_test_router
+app.include_router(create_e2e_test_router(db))
 app.include_router(create_team_router(db))
 app.include_router(create_import_wizard_router(db))
 app.include_router(create_coproprietes_router(db))

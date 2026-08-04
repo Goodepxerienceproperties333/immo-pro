@@ -29,6 +29,7 @@ import AdminUnlockEntryPage from "@/pages/AdminUnlockEntryPage";
 import AdminAuditLogPage from "@/pages/AdminAuditLogPage";
 import AdminReleaseNotesPage from "@/pages/AdminReleaseNotesPage";
 import AdminBillingPage from "@/pages/AdminBillingPage";
+import AdminE2ETestPage from "@/pages/AdminE2ETestPage";
 import AdminLoginHistoryPage from "@/pages/AdminLoginHistoryPage";
 import ImportWizardPage from "@/pages/ImportWizardPage";
 import AdminRoleTemplatesPage from "@/pages/AdminRoleTemplatesPage";
@@ -130,6 +131,7 @@ function AppRoutes() {
         <Route path="admin/audit" element={<RequireSuperadmin><AdminAuditLogPage /></RequireSuperadmin>} />
         <Route path="admin/release-notes" element={<RequireSuperadmin><AdminReleaseNotesPage /></RequireSuperadmin>} />
         <Route path="admin/billing" element={<RequireSuperadmin><AdminBillingPage /></RequireSuperadmin>} />
+        <Route path="admin/e2e-test" element={<RequireSuperadmin><AdminE2ETestPage /></RequireSuperadmin>} />
         <Route path="admin/legal" element={<RequireSuperadmin><AdminLegalDocsPage /></RequireSuperadmin>} />
         <Route path="admin/rgpd-register" element={<RequireSuperadmin><AdminRgpdRegisterPage /></RequireSuperadmin>} />
         <Route path="admin/login-history" element={<RequireSuperadmin><AdminLoginHistoryPage /></RequireSuperadmin>} />
