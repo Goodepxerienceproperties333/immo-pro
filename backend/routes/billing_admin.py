@@ -47,6 +47,12 @@ class BillingConfig(BaseModel):
 class SyndicBillingUpdate(BaseModel):
     frequency: Optional[str] = None
     negotiated_flat_fee: Optional[float] = None
+    # Geste commercial (2026-02) : remise appliquee APRES calcul du bareme
+    # ou forfait negocie. Si les deux sont remplis, seul commercial_discount_pct
+    # est utilise (priorite au pourcentage).
+    commercial_discount_amount: Optional[float] = None  # EUR HT annuel
+    commercial_discount_pct: Optional[float] = None     # 0-100
+    commercial_discount_reason: Optional[str] = None
     notes: Optional[str] = None
 
 
@@ -265,6 +271,14 @@ def create_billing_admin_router(db):
             else:
                 annual_amount = _compute_tiered_amount(lot_count, tiers)
                 pricing_mode = "tranches"
+            # Applique le geste commercial (2026-02) : remise % > montant fixe
+            disc_pct = billing.get("commercial_discount_pct")
+            disc_amt = billing.get("commercial_discount_amount")
+            annual_before_discount = annual_amount
+            if disc_pct is not None and disc_pct > 0:
+                annual_amount = max(0.0, annual_amount * (1 - float(disc_pct) / 100.0))
+            elif disc_amt is not None and disc_amt > 0:
+                annual_amount = max(0.0, annual_amount - float(disc_amt))
             period_amount = _apply_frequency_multiplier(annual_amount, freq)
             rows.append({
                 "syndic_user_id": uid,
@@ -275,6 +289,10 @@ def create_billing_admin_router(db):
                 "lot_count": lot_count,
                 "frequency": freq,
                 "negotiated_flat_fee": nego,
+                "commercial_discount_amount": disc_amt,
+                "commercial_discount_pct": disc_pct,
+                "commercial_discount_reason": billing.get("commercial_discount_reason", ""),
+                "annual_before_discount_ht": round(annual_before_discount, 2),
                 "pricing_mode": pricing_mode,
                 "annual_amount_ht": round(annual_amount, 2),
                 "period_amount_ht": round(period_amount, 2),

@@ -104,6 +104,9 @@ export default function AdminBillingPage() {
       await api.put(`/admin/billing/syndics/${dlg.syndic_user_id}`, {
         frequency: dlg.frequency,
         negotiated_flat_fee: dlg.negotiated_flat_fee === '' || dlg.negotiated_flat_fee == null ? null : Number(dlg.negotiated_flat_fee),
+        commercial_discount_amount: dlg.commercial_discount_amount === '' || dlg.commercial_discount_amount == null ? null : Number(dlg.commercial_discount_amount),
+        commercial_discount_pct: dlg.commercial_discount_pct === '' || dlg.commercial_discount_pct == null ? null : Number(dlg.commercial_discount_pct),
+        commercial_discount_reason: dlg.commercial_discount_reason || '',
         notes: dlg.notes || '',
       });
       toast.success('Enregistre');
@@ -190,17 +193,37 @@ export default function AdminBillingPage() {
               <Wallet size={14} className="mr-1" /> Appliquer bareme standard belge
             </Button>
           </div>
+          <div className="flex flex-wrap gap-3 items-end pb-2 border-b border-slate-200">
+            <div>
+              <label className="text-[10px] uppercase text-slate-500 font-semibold block mb-1">
+                Forfait de base (EUR HT / mois)
+              </label>
+              <Input
+                type="number" step="0.01" min={0}
+                className="w-40 font-mono font-semibold"
+                value={((cfg.tiers?.[0]?.annual_fee ?? 0) / 12).toFixed(2)}
+                onChange={e => {
+                  const monthly = Number(e.target.value) || 0;
+                  const tiers = [...(cfg.tiers || [])];
+                  if (tiers[0]) tiers[0] = { ...tiers[0], annual_fee: monthly * 12 };
+                  setCfg({ ...cfg, tiers });
+                }}
+                data-testid="base-monthly-fee"
+              />
+              <div className="text-[10px] text-slate-500 mt-1">
+                Applique pour lots {cfg.tiers?.[0]?.min_lots ?? 1}-{cfg.tiers?.[0]?.max_lots ?? '-'}
+              </div>
+            </div>
+          </div>
           <div className="space-y-2">
             <div className="grid grid-cols-12 gap-2 text-[11px] uppercase text-slate-500 font-semibold">
-              <div className="col-span-2">Lots min</div>
-              <div className="col-span-2">Lots max</div>
-              <div className="col-span-2">Forfait annuel (EUR HT)</div>
+              <div className="col-span-3">Lots min</div>
+              <div className="col-span-3">Lots max</div>
               <div className="col-span-2">Marginal (EUR/lot/mois)</div>
               <div className="col-span-2 text-right">Cumule a la limite</div>
               <div className="col-span-2"></div>
             </div>
             {(cfg.tiers || []).map((t, i) => {
-              // Calcul cumulatif au max de la tranche (frontend, prévisualisation)
               const tiersSorted = [...(cfg.tiers || [])].sort((a, b) => (a.min_lots || 0) - (b.min_lots || 0));
               const upper = t.max_lots || (t.min_lots || 0);
               let monthlyAcc = 0;
@@ -221,16 +244,12 @@ export default function AdminBillingPage() {
               const cumulMonthly = cumulHTVA / 12;
               return (
               <div key={i} className="grid grid-cols-12 gap-2 items-center">
-                <Input className="col-span-2" type="number" min={0} value={t.min_lots ?? ''}
+                <Input className="col-span-3" type="number" min={0} value={t.min_lots ?? ''}
                        onChange={e => setTier(i, 'min_lots', e.target.value)}
                        data-testid={`tier-min-${i}`} />
-                <Input className="col-span-2" type="number" min={0} value={t.max_lots ?? ''}
+                <Input className="col-span-3" type="number" min={0} value={t.max_lots ?? ''}
                        placeholder="Illimite" onChange={e => setTier(i, 'max_lots', e.target.value)}
                        data-testid={`tier-max-${i}`} />
-                <Input className="col-span-2" type="number" step="0.01" min={0}
-                       value={t.annual_fee ?? t.price_per_lot ?? ''}
-                       onChange={e => setTier(i, 'annual_fee', e.target.value)}
-                       data-testid={`tier-price-${i}`} />
                 <Input className="col-span-2" type="number" step="0.01" min={0}
                        value={t.marginal_per_lot ?? 0}
                        placeholder="0.00"
@@ -327,10 +346,17 @@ export default function AdminBillingPage() {
       </Card>
 
       {/* Totaux */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
         <Card><CardContent className="p-4">
           <div className="text-xs text-slate-500">Total lots actifs</div>
           <div className="text-2xl font-bold text-slate-900" data-testid="total-lots">{totals.lot_count}</div>
+        </CardContent></Card>
+        <Card><CardContent className="p-4">
+          <div className="text-xs text-slate-500">Moyenne lots / syndic</div>
+          <div className="text-2xl font-bold text-slate-900" data-testid="avg-lots-per-syndic">
+            {rows.length > 0 ? Math.round(totals.lot_count / rows.length) : 0}
+          </div>
+          <div className="text-[10px] text-slate-500 mt-0.5">{rows.length} syndic(s)</div>
         </CardContent></Card>
         <Card><CardContent className="p-4">
           <div className="text-xs text-slate-500">Total HT / periode</div>
@@ -434,6 +460,37 @@ export default function AdminBillingPage() {
                        onChange={e => setDlg({ ...dlg, negotiated_flat_fee: e.target.value })}
                        placeholder="Vide = bareme"
                        data-testid="edit-nego" />
+              </div>
+              <div className="p-3 rounded-md border border-amber-200 bg-amber-50/50">
+                <Label className="text-xs font-semibold text-amber-900">Geste commercial</Label>
+                <div className="grid grid-cols-2 gap-2 mt-1">
+                  <div>
+                    <label className="text-[10px] text-slate-500">Remise annuelle (EUR HT)</label>
+                    <Input type="number" step="0.01" min={0}
+                           value={dlg.commercial_discount_amount ?? ''}
+                           onChange={e => setDlg({ ...dlg, commercial_discount_amount: e.target.value })}
+                           placeholder="Ex: 100.00"
+                           data-testid="edit-discount-amount" />
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-slate-500">OU Remise en %</label>
+                    <Input type="number" step="0.1" min={0} max={100}
+                           value={dlg.commercial_discount_pct ?? ''}
+                           onChange={e => setDlg({ ...dlg, commercial_discount_pct: e.target.value })}
+                           placeholder="Ex: 10"
+                           data-testid="edit-discount-pct" />
+                  </div>
+                </div>
+                <div className="mt-2">
+                  <label className="text-[10px] text-slate-500">Motif du geste</label>
+                  <Input value={dlg.commercial_discount_reason || ''}
+                         onChange={e => setDlg({ ...dlg, commercial_discount_reason: e.target.value })}
+                         placeholder="Ex: Ancien client fidele, contrat 3 ans, parrainage..."
+                         data-testid="edit-discount-reason" />
+                </div>
+                <div className="text-[10px] text-slate-500 mt-1 italic">
+                  La remise s&apos;applique apres calcul du bareme ou forfait negocie. Si les 2 champs remise sont remplis, seul le pourcentage est utilise.
+                </div>
               </div>
               <div>
                 <Label className="text-xs">Notes</Label>
