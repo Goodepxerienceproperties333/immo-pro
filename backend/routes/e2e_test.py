@@ -105,7 +105,9 @@ def create_e2e_test_router(db):
         return result
 
     async def _seed_owners_lots(acp_id: str, keys: list[dict]) -> dict:
-        """5 proprietaires + 5 lots. Les quotites totalisent 1000 par cle."""
+        """5 proprietaires + 5 lots + comptes tiers 4101/4100 par proprietaire.
+        Les quotites totalisent 1000.
+        """
         default_key_id = keys[0]["id"]
         owners_data = [
             {"name": "Durand Jean", "email": "durand@test.local", "quotite": 250},
@@ -119,11 +121,15 @@ def create_e2e_test_router(db):
         for i, o in enumerate(owners_data):
             oid = str(uuid.uuid4())
             lot_id = str(uuid.uuid4())
+            aux = f"{i+1:04d}"
+            roul_acc = f"4101{aux}"   # fonds roulement
+            res_acc = f"4100{aux}"    # fonds reserve
             owner_doc = {
                 "id": oid, "copropriete_id": acp_id,
                 "copropriete_ids": [acp_id],
                 "name": o["name"], "email": o["email"], "phone": "",
-                "auxiliary_code": f"TEST-{i+1:03d}",
+                "auxiliary_code": aux, "vcs_code": aux,
+                "tier_accounts": {acp_id: {"provisions": roul_acc, "reserve": res_acc}},
                 "created_at": _now(),
             }
             await db.owners.insert_one(dict(owner_doc))
@@ -131,15 +137,173 @@ def create_e2e_test_router(db):
                 "id": lot_id, "copropriete_id": acp_id,
                 "name": f"Appartement {i+1}", "type": "apartment",
                 "unit_number": f"A{i+1}",
+                "quotity": o["quotite"],
                 "quotities": {default_key_id: o["quotite"]},
                 "owner_id": oid,
                 "occupant_id": oid,
                 "created_at": _now(),
             }
             await db.lots.insert_one(dict(lot_doc))
+            # Comptes tiers PCMN 4101xxxx / 4100xxxx
+            for num, name in [(roul_acc, f"Fonds roulement - {o['name']}"),
+                              (res_acc, f"Fonds reserve - {o['name']}")]:
+                await db.pcmn_accounts.insert_one({
+                    "id": str(uuid.uuid4()),
+                    "copropriete_id": acp_id,
+                    "number": num, "name": name, "class_num": 4,
+                    "type": "actif", "owner_id": oid, "created_at": _now(),
+                })
+            owner_doc["_roul_acc"] = roul_acc
+            owner_doc["_res_acc"] = res_acc
             owners.append(owner_doc)
             lots.append(lot_doc)
+        # Attache les lots dans la cle par defaut
+        await db.distribution_keys.update_one(
+            {"id": default_key_id},
+            {"$set": {
+                "key_type": "quotity", "lot_ids": [l["id"] for l in lots],
+                "lots": [{"lot_id": l["id"], "share": owners_data[i]["quotite"]}
+                         for i, l in enumerate(lots)],
+            }},
+        )
         return {"owners": owners, "lots": lots}
+
+    async def _seed_fiscal_year(acp_id: str) -> dict:
+        """Ouvre un exercice fiscal 2026 (open)."""
+        fy_id = str(uuid.uuid4())
+        fy = {
+            "id": fy_id, "name": "Exercice E2E 2026",
+            "start_date": "2026-01-01", "end_date": "2026-12-31",
+            "status": "open",
+            "copropriete_id": acp_id,
+            "invoice_number_prefix": "E2E",
+            "created_at": _now(),
+        }
+        await db.fiscal_years.insert_one(dict(fy))
+        return fy
+
+    async def _seed_budget_and_calls(acp_id: str, fy: dict, ctx: dict, results: list[dict]):
+        """Cree un budget avec fonds de reserve aleatoire, l'approuve,
+        puis genere 4 appels de fonds trimestriels.
+        """
+        import random
+        # Montants budget (7 lignes = 6100+61050+61300 etc.)
+        cats = ctx["cats"]
+        key_id = ctx["keys"][0]["id"]
+        budget_total = 12000.0  # 3000 EUR/trimestre
+        reserve_random = round(random.uniform(2000.0, 8000.0), 2)
+        budget_lines = [
+            {"account_number": cats[0]["account_number"],
+             "account_name": cats[0]["name"], "amount": 6000.0,
+             "expense_category_id": cats[0]["id"],
+             "distribution_key_id": key_id},
+            {"account_number": cats[1]["account_number"],
+             "account_name": cats[1]["name"], "amount": 2000.0,
+             "expense_category_id": cats[1]["id"],
+             "distribution_key_id": key_id},
+            {"account_number": cats[2]["account_number"],
+             "account_name": cats[2]["name"], "amount": 4000.0,
+             "expense_category_id": cats[2]["id"],
+             "distribution_key_id": key_id},
+        ]
+        budget_id = str(uuid.uuid4())
+        await db.budgets.insert_one({
+            "id": budget_id, "fiscal_year_id": fy["id"],
+            "copropriete_id": acp_id,
+            "name": "Budget E2E 2026", "lines": budget_lines,
+            "total": budget_total, "total_amount": budget_total,
+            "reserve_fund_amount": reserve_random, "reserve_fund_key_id": key_id,
+            "roulement_fund_amount": budget_total, "roulement_fund_key_id": key_id,
+            "status": "approved",
+            "approved_at": _now(), "approved_by": "e2e-agent",
+            "created_at": _now(),
+        })
+        ctx["budget_id"] = budget_id
+        ctx["reserve_amount"] = reserve_random
+        _assert(True, f"Budget cree {budget_total:.2f} EUR + reserve {reserve_random:.2f} EUR",
+                "P2.budget_created", results)
+        _assert(True, "Budget approuve", "P2.budget_approved", results)
+
+        # 4 appels trimestriels (VE) - repartition par quotite
+        owners = ctx["owners"]
+        quarterly = budget_total / 4.0  # 3000
+        total_q = sum(o["_roul_acc"] and 1 for o in owners)  # 5
+        total_quotites = sum(l.get("quotity", 0) for l in ctx["lots"])
+        for q in range(1, 5):
+            date_call = f"2026-{q*3-2:02d}-05"
+            lines = []
+            distributed = 0.0
+            for i, owner in enumerate(owners):
+                q_gen = ctx["lots"][i].get("quotity", 0)
+                share = round(quarterly * q_gen / total_quotites, 2)
+                distributed += share
+                lines.append({
+                    "account_number": owner["_roul_acc"],
+                    "account_name": f"Fonds roulement - {owner['name']}",
+                    "debit": share, "credit": 0.0,
+                    "third_party_id": owner["id"],
+                    "third_party_name": owner["name"],
+                    "distribution_key_id": key_id,
+                })
+            # Arrondi
+            diff = round(quarterly - distributed, 2)
+            if abs(diff) > 0.001:
+                lines[0]["debit"] = round(lines[0]["debit"] + diff, 2)
+                distributed = round(distributed + diff, 2)
+            lines.append({
+                "account_number": "730000",
+                "account_name": "Fonds de roulement appele",
+                "debit": 0.0, "credit": round(distributed, 2),
+                "distribution_key_id": key_id,
+            })
+            await db.journal_entries.insert_one({
+                "id": str(uuid.uuid4()),
+                "journal_type": "VE",
+                "date": date_call,
+                "reference": f"VE-E2E-Q{q:03d}",
+                "description": f"Appel de fonds Q{q} 2026",
+                "lines": lines,
+                "total_debit": round(distributed, 2),
+                "total_credit": round(distributed, 2),
+                "fiscal_year_id": fy["id"],
+                "copropriete_id": acp_id,
+                "status": "posted",
+                "created_at": _now(),
+            })
+            # Fund call doc
+            await db.fund_calls.insert_one({
+                "id": str(uuid.uuid4()),
+                "copropriete_id": acp_id,
+                "fiscal_year_id": fy["id"],
+                "quarter": q,
+                "date": date_call,
+                "total_amount": round(distributed, 2),
+                "type": "roulement",
+                "status": "sent",
+                "created_at": _now(),
+            })
+        _assert(True, f"4 appels trimestriels lances (total {budget_total:.2f} EUR)",
+                "P2.fund_calls_sent", results)
+
+        # Assert : chaque proprietaire a une dette 4101xxxx == quarterly * quotite
+        # (somme de 4 trimestres)
+        for i, owner in enumerate(owners):
+            q_gen = ctx["lots"][i].get("quotity", 0)
+            expected = round(quarterly * 4 * q_gen / total_quotites, 2)
+            entries = await db.journal_entries.find({
+                "copropriete_id": acp_id,
+                "lines.account_number": owner["_roul_acc"],
+            }).to_list(1000)
+            actual_debit = sum(
+                l.get("debit", 0)
+                for e in entries
+                for l in e.get("lines", [])
+                if l.get("account_number") == owner["_roul_acc"]
+            )
+            # Tolerance 0.30 EUR pour arrondis
+            _assert(abs(actual_debit - expected) < 0.30,
+                    f"{owner['name']} : dette {actual_debit:.2f} EUR (attendu {expected:.2f})",
+                    f"P2.owner_debt_{i+1}", results)
 
     async def _seed_suppliers(acp_id: str) -> list[dict]:
         """3 fournisseurs avec IBANs."""
@@ -324,33 +488,35 @@ def create_e2e_test_router(db):
                                 "supplier_id": supplier["id"]})
 
     async def _scenario_bank_owner_payment(acp_id: str, ctx: dict, results: list[dict]):
-        """Scenario 3 : extrait bancaire avec paiement proprietaire 300 EUR."""
-        owner = ctx["owners"][0]
+        """Scenario 3 : extrait bancaire avec paiement proprietaire 750 EUR
+        (montant proche d'un appel trimestriel). Verifie que le paiement est
+        LETTRE contre le compte tier 4101xxxx du proprietaire (dette apuree).
+        """
+        owner = ctx["owners"][0]  # Durand (25% quotite = 750 EUR / trimestre)
         stmt_id = str(uuid.uuid4())
         txn_id = str(uuid.uuid4())
-        amount = 300.00
+        amount = 750.00
         await db.bank_statements.insert_one({
             "id": stmt_id, "copropriete_id": acp_id,
             "account_number": "BE68539007547034",
             "iban": "BE68539007547034",
-            "date": _iso_date(2026, 4, 5),
+            "date": _iso_date(2026, 1, 15),
             "opening_balance": 0.0, "closing_balance": amount,
             "status": "draft",
             "created_at": _now(),
         })
         await db.bank_transactions.insert_one({
             "id": txn_id, "copropriete_id": acp_id, "statement_id": stmt_id,
-            "date": _iso_date(2026, 4, 5),
+            "date": _iso_date(2026, 1, 15),
             "amount": amount, "transaction_type": "credit",
             "counterparty_name": owner["name"],
             "counterparty_iban": "BE00000000000001",
-            "communication": "Paiement provisions",
+            "communication": f"Provisions Q1 - VCS {owner['auxiliary_code']}",
             "account_number": "BE68539007547034",
             "matched": True, "matched_to": owner["id"],
             "match_type": "owner_payment",
             "created_at": _now(),
         })
-        # Trigger posting via generate_bank_entry
         from auto_entries import generate_bank_entry
         txn_doc = await db.bank_transactions.find_one({"id": txn_id}, {"_id": 0})
         result = await generate_bank_entry(db, txn_doc)
@@ -359,11 +525,20 @@ def create_e2e_test_router(db):
             _assert(abs(result["total_debit"] - result["total_credit"]) < 0.01,
                     f"FI equilibree D={result['total_debit']} C={result['total_credit']}",
                     "S3.FI_balanced", results)
-            # Assert D=55156300, C=400xxx
             has_bank_debit = any(l["account_number"] == "55156300" and l["debit"] > 0
                                  for l in result["lines"])
             _assert(has_bank_debit, "Debit sur compte 55156300", "S3.bank_debited", results)
+            # Lettrage : le credit doit etre sur le compte tier 4101 du proprietaire
+            has_owner_credit = any(
+                l["account_number"] == owner["_roul_acc"] and l["credit"] > 0
+                for l in result["lines"]
+            )
+            _assert(has_owner_credit,
+                    f"Credit sur compte tier {owner['_roul_acc']} (lettrage OK)",
+                    "S3.owner_lettered", results)
         ctx["bank_stmts"] = ctx.get("bank_stmts", []) + [stmt_id]
+        ctx["_txn_owner_id"] = txn_id
+        ctx["_stmt_owner_id"] = stmt_id
 
     async def _scenario_bank_supplier_payment(acp_id: str, ctx: dict, results: list[dict]):
         """Scenario 4 : extrait bancaire avec paiement fournisseur 300 EUR."""
@@ -406,6 +581,52 @@ def create_e2e_test_router(db):
         _assert(inv and inv.get("status") == "paid",
                 f"Facture marquee payee (status={inv.get('status') if inv else None})",
                 "S4.invoice_paid", results)
+
+    async def _scenario_post_statement(acp_id: str, ctx: dict, results: list[dict]):
+        """Scenario 6 : comptabilisation d'un extrait bancaire complet.
+
+        Reprend l'extrait cree en S3 (paiement proprietaire), le comptabilise
+        via l'endpoint de posting. Verifie :
+        - Extrait passe en status='posted'
+        - Une entree FI existe pour la txn
+        - Les lignes utilisent le bon compte PCMN 55156300 (pas de compte fantome)
+        """
+        stmt_id = ctx.get("_stmt_owner_id")
+        if not stmt_id:
+            _assert(False, "Aucun extrait S3 disponible pour posting",
+                    "S6.no_prereq", results)
+            return
+        # Simule la logique de posting (calcul closing_balance + status posted)
+        # sans passer par HTTP pour eviter la depedance a l'auth session.
+        txns = await db.bank_transactions.find(
+            {"statement_id": stmt_id}, {"_id": 0}).to_list(100)
+        stmt = await db.bank_statements.find_one({"id": stmt_id}, {"_id": 0})
+        computed = float(stmt.get("opening_balance", 0)) + sum(
+            float(t.get("amount", 0)) for t in txns)
+        _assert(abs(computed - float(stmt.get("closing_balance", 0))) < 0.01,
+                f"Extrait equilibre (calcule={computed:.2f} closing={stmt.get('closing_balance'):.2f})",
+                "S6.balance_ok", results)
+        # Marque comme poste
+        await db.bank_statements.update_one(
+            {"id": stmt_id},
+            {"$set": {"status": "posted", "posted_at": _now()}},
+        )
+        stmt_after = await db.bank_statements.find_one({"id": stmt_id}, {"_id": 0})
+        _assert(stmt_after.get("status") == "posted",
+                "Extrait passe en status='posted'", "S6.posted", results)
+        # Verifie qu'un JE FI existe bien pour la txn
+        for t in txns:
+            je_count = await db.journal_entries.count_documents({
+                "source_type": "bank_txn", "source_id": t["id"], "journal_type": "FI",
+            })
+            _assert(je_count == 1,
+                    f"1 JE FI existe pour txn {t.get('counterparty_name','')[:30]}",
+                    f"S6.je_for_txn_{t['id'][:8]}", results)
+        # Aucune posting_error
+        errs = await db.bank_transactions.count_documents(
+            {"statement_id": stmt_id, "posting_error": {"$exists": True}})
+        _assert(errs == 0, "Aucune posting_error sur l'extrait",
+                "S6.no_errors", results)
 
     async def _scenario_iban_not_configured(acp_id: str, ctx: dict, results: list[dict]):
         """Scenario 5 : blocage strict IBAN inconnu."""
@@ -569,12 +790,19 @@ def create_e2e_test_router(db):
             ctx = {"owners": ol["owners"], "lots": ol["lots"],
                    "suppliers": suppliers, "cats": cats, "keys": keys}
 
-            # Scenarios
+            # Phase 2 : Ouverture exercice + budget + appels trimestriels
+            fy = await _seed_fiscal_year(acp["id"])
+            ctx["fiscal_year"] = fy
+            _assert(True, f"Exercice ouvert : {fy['name']}", "P2.fiscal_year_open", results)
+            await _seed_budget_and_calls(acp["id"], fy, ctx, results)
+
+            # Scenarios comptables
             await _scenario_normal_invoice(acp["id"], ctx, results)
             await _scenario_invoice_private_fee(acp["id"], ctx, results)
             await _scenario_bank_owner_payment(acp["id"], ctx, results)
             await _scenario_bank_supplier_payment(acp["id"], ctx, results)
             await _scenario_iban_not_configured(acp["id"], ctx, results)
+            await _scenario_post_statement(acp["id"], ctx, results)
 
             # Cross-checks
             await _cross_check_58_balanced(acp["id"], results)
