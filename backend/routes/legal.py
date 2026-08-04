@@ -303,11 +303,11 @@ Nous recommandons une **revue périodique par un expert-comptable** de vos état
     },
     "data-act": {
         "title": "Registre Data Act & Formats d'export",
-        "version": 1,
+        "version": 2,
         "content": """
 # Registre Data Act & Formats d'export
 
-**Version 1 — En vigueur au [DATE_MISE_EN_LIGNE]**
+**Version 2 — En vigueur au 4 février 2026**
 
 Le présent registre complète les Conditions Générales d'Utilisation et satisfait aux obligations de **portabilité des données** prévues par le Règlement (UE) 2023/2854 relatif à des règles harmonisées portant sur l'équité de l'accès aux données et de leur utilisation (« Data Act »), en particulier son **article 25** sur les clauses contractuelles applicables aux services de traitement de données.
 
@@ -357,7 +357,7 @@ Les données suivantes, générées ou saisies par le Client dans la Plateforme,
   - Facturation admin : bouton *Exporter CSV*
 
 **Sur demande** (dump complet ou fichiers d'origine en masse) :
-1. Adresser une demande écrite à **[EMAIL_SUPPORT]** avec en objet `[DATA-ACT] Demande d'export`.
+1. Adresser une demande écrite à **welcome@goodexperienceproperties.be** avec en objet `[DATA-ACT] Demande d'export`.
 2. Préciser : ACPs concernées, période, format(s) souhaité(s).
 3. Le Client est authentifié par un utilisateur ayant le rôle *syndic* ou *admin* du compte.
 4. Accusé de réception sous **48 h ouvrées**.
