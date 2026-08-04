@@ -628,6 +628,188 @@ def create_e2e_test_router(db):
         _assert(errs == 0, "Aucune posting_error sur l'extrait",
                 "S6.no_errors", results)
 
+    async def _scenario_regularization(acp_id: str, ctx: dict, results: list[dict]):
+        """Scenario 7 : Regularisation annuelle.
+
+        Calcule l'ecart provisions appelees vs charges reellement engagees,
+        cree une OD de regularisation par proprietaire (is_regularization=True).
+        """
+        fy = ctx["fiscal_year"]
+        # Somme charges (classe 6) posted dans l'exercice
+        entries = await db.journal_entries.find({
+            "copropriete_id": acp_id,
+            "date": {"$gte": fy["start_date"], "$lte": fy["end_date"]},
+            "is_regularization": {"$ne": True},
+            "is_reversal": {"$ne": True},
+            "reversed": {"$ne": True},
+        }).to_list(10000)
+        total_charges = 0.0
+        for e in entries:
+            for l in e.get("lines", []):
+                acc = (l.get("account_number") or "")
+                if acc.startswith("6"):
+                    total_charges += float(l.get("debit", 0)) - float(l.get("credit", 0))
+        # Total appele = 12000 (P2 fund calls) - repartition par quotite
+        # Ecart = appele - charges (surplus a rembourser)
+        total_appele = 12000.0
+        total_quotites = sum(l.get("quotity", 0) for l in ctx["lots"])
+        # Cree une OD-REG par proprietaire avec sa part d'ecart
+        for i, owner in enumerate(ctx["owners"]):
+            q_gen = ctx["lots"][i].get("quotity", 0)
+            appele_owner = round(total_appele * q_gen / total_quotites, 2)
+            charge_owner = round(total_charges * q_gen / total_quotites, 2)
+            ecart = round(appele_owner - charge_owner, 2)
+            if abs(ecart) < 0.01:
+                continue
+            # Surplus (appele > charge) : D 4101 owner / C 700000
+            # (rembourse le trop-percu en creditant le compte de provisions)
+            lines = []
+            if ecart > 0:
+                lines = [
+                    {"account_number": "700000",
+                     "account_name": "Provisions charges courantes",
+                     "debit": ecart, "credit": 0.0},
+                    {"account_number": owner["_roul_acc"],
+                     "account_name": f"Fonds roulement - {owner['name']}",
+                     "debit": 0.0, "credit": ecart,
+                     "third_party_id": owner["id"],
+                     "third_party_name": owner["name"],
+                     "line_description": f"Regularisation - surplus provisions"},
+                ]
+            else:
+                lines = [
+                    {"account_number": owner["_roul_acc"],
+                     "account_name": f"Fonds roulement - {owner['name']}",
+                     "debit": abs(ecart), "credit": 0.0,
+                     "third_party_id": owner["id"],
+                     "third_party_name": owner["name"],
+                     "line_description": f"Regularisation - complement provisions"},
+                    {"account_number": "700000",
+                     "account_name": "Provisions charges courantes",
+                     "debit": 0.0, "credit": abs(ecart)},
+                ]
+            await db.journal_entries.insert_one({
+                "id": str(uuid.uuid4()),
+                "journal_type": "OD",
+                "date": fy["end_date"],
+                "reference": f"OD-REG-{owner['auxiliary_code']}",
+                "description": f"Regularisation annuelle - {owner['name']}",
+                "lines": lines,
+                "total_debit": abs(ecart), "total_credit": abs(ecart),
+                "fiscal_year_id": fy["id"],
+                "copropriete_id": acp_id,
+                "is_regularization": True,
+                "status": "posted",
+                "created_at": _now(),
+            })
+        # Verifications
+        regul_count = await db.journal_entries.count_documents({
+            "copropriete_id": acp_id, "is_regularization": True,
+        })
+        _assert(regul_count == len(ctx["owners"]),
+                f"OD de regularisation creees ({regul_count}/{len(ctx['owners'])})",
+                "S7.regul_count", results)
+        # Chaque OD-REG doit etre equilibree
+        regul_entries = await db.journal_entries.find(
+            {"copropriete_id": acp_id, "is_regularization": True}).to_list(100)
+        unbalanced = [e for e in regul_entries
+                      if abs(e.get("total_debit", 0) - e.get("total_credit", 0)) > 0.01]
+        _assert(not unbalanced,
+                f"Toutes les OD-REG equilibrees ({len(regul_entries) - len(unbalanced)}/{len(regul_entries)})",
+                "S7.regul_balanced", results)
+        _assert(total_charges > 0,
+                f"Total charges exercice = {total_charges:.2f} EUR",
+                "S7.charges_computed", results)
+
+    async def _scenario_close_fiscal_year(acp_id: str, ctx: dict, results: list[dict]):
+        """Scenario 8 : Cloture de l'exercice fiscal + AN d'ouverture.
+
+        - Marque le fiscal_year en status='closed'
+        - Genere une ecriture AN d'ouverture pour l'exercice suivant :
+          soldes des comptes de bilan (classes 1, 4, 5) reconduits.
+        """
+        fy = ctx["fiscal_year"]
+        # Compute balances des comptes de bilan
+        entries = await db.journal_entries.find({
+            "copropriete_id": acp_id,
+            "date": {"$gte": fy["start_date"], "$lte": fy["end_date"]},
+            "is_reversal": {"$ne": True},
+            "reversed": {"$ne": True},
+        }).to_list(20000)
+        from collections import defaultdict
+        balances = defaultdict(float)
+        acc_names = {}
+        for e in entries:
+            for l in e.get("lines", []):
+                acc = (l.get("account_number") or "")
+                if not acc:
+                    continue
+                # Classes de bilan uniquement (1, 4, 5) - pas les charges/produits 6/7
+                if acc[0] in ("1", "4", "5"):
+                    balances[acc] += float(l.get("debit", 0)) - float(l.get("credit", 0))
+                    acc_names[acc] = l.get("account_name", "")
+        # Cree l'AN d'ouverture pour l'exercice suivant (2027)
+        an_lines = []
+        total_d = total_c = 0.0
+        for acc, solde in balances.items():
+            if abs(solde) < 0.01:
+                continue
+            if solde > 0:
+                an_lines.append({"account_number": acc, "account_name": acc_names.get(acc, ""),
+                                 "debit": round(solde, 2), "credit": 0.0})
+                total_d += solde
+            else:
+                an_lines.append({"account_number": acc, "account_name": acc_names.get(acc, ""),
+                                 "debit": 0.0, "credit": round(-solde, 2)})
+                total_c += -solde
+        # Equilibrage : ajoute une ligne compte de resultat 130 (report a nouveau) si desequilibre
+        diff = round(total_d - total_c, 2)
+        if abs(diff) > 0.01:
+            if diff > 0:
+                an_lines.append({"account_number": "130000", "account_name": "Report a nouveau",
+                                 "debit": 0.0, "credit": abs(diff)})
+                total_c += abs(diff)
+            else:
+                an_lines.append({"account_number": "130000", "account_name": "Report a nouveau",
+                                 "debit": abs(diff), "credit": 0.0})
+                total_d += abs(diff)
+        an_id = str(uuid.uuid4())
+        await db.journal_entries.insert_one({
+            "id": an_id,
+            "journal_type": "AN",
+            "date": "2027-01-01",
+            "reference": "AN-E2E-2027-001",
+            "description": "A-Nouveau ouverture 2027 (cloture 2026)",
+            "lines": an_lines,
+            "total_debit": round(total_d, 2), "total_credit": round(total_c, 2),
+            "copropriete_id": acp_id,
+            "is_opening_balance": True,
+            "status": "posted",
+            "created_at": _now(),
+        })
+        # Marque exercice cloture
+        await db.fiscal_years.update_one(
+            {"id": fy["id"]},
+            {"$set": {"status": "closed", "closed_at": _now()}},
+        )
+        # Verifications
+        fy_after = await db.fiscal_years.find_one({"id": fy["id"]}, {"_id": 0})
+        _assert(fy_after.get("status") == "closed",
+                "Exercice fiscal marque en status='closed'",
+                "S8.fy_closed", results)
+        an = await db.journal_entries.find_one({"id": an_id}, {"_id": 0})
+        _assert(an is not None, "Ecriture AN d'ouverture creee", "S8.an_created", results)
+        _assert(abs(an["total_debit"] - an["total_credit"]) < 0.01,
+                f"AN equilibree D={an['total_debit']:.2f} C={an['total_credit']:.2f}",
+                "S8.an_balanced", results)
+        _assert(an.get("is_opening_balance") is True,
+                "AN marquee is_opening_balance=True",
+                "S8.an_flagged", results)
+        # Nb comptes reconduits (au moins 4101/4100 pour proprietaires + banque)
+        _assert(len(an_lines) >= 5,
+                f"AN contient {len(an_lines)} lignes de reconduction",
+                "S8.an_multi_lines", results)
+
     async def _scenario_iban_not_configured(acp_id: str, ctx: dict, results: list[dict]):
         """Scenario 5 : blocage strict IBAN inconnu."""
         stmt_id = str(uuid.uuid4())
@@ -803,6 +985,9 @@ def create_e2e_test_router(db):
             await _scenario_bank_supplier_payment(acp["id"], ctx, results)
             await _scenario_iban_not_configured(acp["id"], ctx, results)
             await _scenario_post_statement(acp["id"], ctx, results)
+            # Regularisation + cloture (fin d'exercice)
+            await _scenario_regularization(acp["id"], ctx, results)
+            await _scenario_close_fiscal_year(acp["id"], ctx, results)
 
             # Cross-checks
             await _cross_check_58_balanced(acp["id"], results)

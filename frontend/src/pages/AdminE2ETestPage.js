@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import api from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -6,7 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
 import {
   Activity, Play, Trash2, CheckCircle2, XCircle, AlertTriangle, Loader2,
-  Building2, RefreshCw, ChevronDown, ChevronRight,
+  Building2, RefreshCw, ChevronDown, ChevronRight, ExternalLink,
 } from 'lucide-react';
 
 /**
@@ -22,6 +23,7 @@ const StatusIcon = ({ status }) => {
 };
 
 export default function AdminE2ETestPage() {
+  const navigate = useNavigate();
   const [runs, setRuns] = useState([]);
   const [loading, setLoading] = useState(false);
   const [running, setRunning] = useState(false);
@@ -92,6 +94,12 @@ export default function AdminE2ETestPage() {
     } catch (e) {
       toast.error(e.response?.data?.detail || 'Erreur purge globale');
     }
+  };
+
+  const openAcp = (acpId) => {
+    if (!acpId) return;
+    try { localStorage.setItem('selectedCopro', acpId); } catch (e) { /* ignore */ }
+    navigate('/');
   };
 
   const renderRunSteps = (run) => (
@@ -225,7 +233,15 @@ export default function AdminE2ETestPage() {
           </CardHeader>
           <CardContent>
             {renderRunSteps(currentRun)}
-            <div className="mt-3 flex justify-end">
+            <div className="mt-3 flex justify-end gap-2">
+              <Button
+                size="sm"
+                className="bg-[#022D52] hover:bg-[#1D4ED8] text-white"
+                onClick={() => openAcp(currentRun.acp_id)}
+                data-testid="e2e-open-current"
+              >
+                <ExternalLink size={13} className="mr-1" /> Ouvrir cette ACP TEST
+              </Button>
               <Button
                 variant="outline" size="sm"
                 className="text-red-600 hover:bg-red-50"
@@ -275,6 +291,15 @@ export default function AdminE2ETestPage() {
                           {s.failed > 0 && ` · ${s.failed} FAIL`}
                         </div>
                       </div>
+                      <Button
+                        variant="ghost" size="sm"
+                        className="text-[#01213e] hover:bg-blue-50 h-7 px-2"
+                        onClick={(e) => { e.stopPropagation(); openAcp(run.acp_id); }}
+                        data-testid={`e2e-open-${run.id}`}
+                        title="Ouvrir cette ACP TEST dans le portail syndic"
+                      >
+                        <ExternalLink size={12} />
+                      </Button>
                       <Button
                         variant="ghost" size="sm"
                         className="text-red-600 hover:bg-red-50 h-7 px-2"
