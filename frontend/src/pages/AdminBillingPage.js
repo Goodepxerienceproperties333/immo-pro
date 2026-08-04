@@ -194,11 +194,32 @@ export default function AdminBillingPage() {
             <div className="grid grid-cols-12 gap-2 text-[11px] uppercase text-slate-500 font-semibold">
               <div className="col-span-2">Lots min</div>
               <div className="col-span-2">Lots max</div>
-              <div className="col-span-3">Forfait annuel (EUR HT)</div>
-              <div className="col-span-3">Marginal (EUR/lot/mois)</div>
+              <div className="col-span-2">Forfait annuel (EUR HT)</div>
+              <div className="col-span-2">Marginal (EUR/lot/mois)</div>
+              <div className="col-span-2 text-right">Cumule a la limite</div>
               <div className="col-span-2"></div>
             </div>
-            {(cfg.tiers || []).map((t, i) => (
+            {(cfg.tiers || []).map((t, i) => {
+              // Calcul cumulatif au max de la tranche (frontend, prévisualisation)
+              const tiersSorted = [...(cfg.tiers || [])].sort((a, b) => (a.min_lots || 0) - (b.min_lots || 0));
+              const upper = t.max_lots || (t.min_lots || 0);
+              let monthlyAcc = 0;
+              let annualAdd = 0;
+              for (const tt of tiersSorted) {
+                const lo = Number(tt.min_lots || 0);
+                const hi = tt.max_lots ? Number(tt.max_lots) : 1e9;
+                if (upper < lo) break;
+                annualAdd += Number(tt.annual_fee || 0);
+                const marg = Number(tt.marginal_per_lot || 0);
+                if (marg > 0) {
+                  const span = Math.min(upper, hi) - lo + 1;
+                  if (span > 0) monthlyAcc += span * marg;
+                }
+                if (upper <= hi) break;
+              }
+              const cumulHTVA = annualAdd + monthlyAcc * 12;
+              const cumulMonthly = cumulHTVA / 12;
+              return (
               <div key={i} className="grid grid-cols-12 gap-2 items-center">
                 <Input className="col-span-2" type="number" min={0} value={t.min_lots ?? ''}
                        onChange={e => setTier(i, 'min_lots', e.target.value)}
@@ -206,21 +227,25 @@ export default function AdminBillingPage() {
                 <Input className="col-span-2" type="number" min={0} value={t.max_lots ?? ''}
                        placeholder="Illimite" onChange={e => setTier(i, 'max_lots', e.target.value)}
                        data-testid={`tier-max-${i}`} />
-                <Input className="col-span-3" type="number" step="0.01" min={0}
+                <Input className="col-span-2" type="number" step="0.01" min={0}
                        value={t.annual_fee ?? t.price_per_lot ?? ''}
                        onChange={e => setTier(i, 'annual_fee', e.target.value)}
                        data-testid={`tier-price-${i}`} />
-                <Input className="col-span-3" type="number" step="0.01" min={0}
+                <Input className="col-span-2" type="number" step="0.01" min={0}
                        value={t.marginal_per_lot ?? 0}
                        placeholder="0.00"
                        onChange={e => setTier(i, 'marginal_per_lot', e.target.value)}
                        data-testid={`tier-marginal-${i}`} />
+                <div className="col-span-2 text-right text-xs font-mono" data-testid={`tier-cumul-${i}`}>
+                  <div className="font-semibold text-[#022D52]">{cumulHTVA.toFixed(2)} EUR/an</div>
+                  <div className="text-[10px] text-slate-500">{cumulMonthly.toFixed(2)} EUR/mois</div>
+                </div>
                 <Button variant="ghost" size="sm" className="col-span-2 text-red-500"
                         onClick={() => removeTier(i)} data-testid={`tier-remove-${i}`}>
                   <Trash2 size={14} className="mr-1" /> Retirer
                 </Button>
               </div>
-            ))}
+            );})}
             <Button variant="outline" size="sm" onClick={addTier} data-testid="tier-add">
               <Plus size={14} className="mr-1" /> Ajouter une tranche
             </Button>
