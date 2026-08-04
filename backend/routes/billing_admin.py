@@ -31,7 +31,10 @@ logger = logging.getLogger("billing_admin")
 class Tier(BaseModel):
     min_lots: int
     max_lots: Optional[int] = None  # None = pas de limite haute
-    annual_fee: float  # iter93du : forfait annuel fixe pour la tranche
+    annual_fee: float = 0.0  # forfait annuel FIXE ajoute au debut de la tranche
+    marginal_per_lot: float = 0.0  # EUR/lot/mois marginal DANS cette tranche
+    # NOTE: le calcul cumulatif est active des qu'AU MOINS UNE tranche a
+    # marginal_per_lot > 0. Sinon on garde le mode "forfait fixe par tranche".
 
 
 class BillingConfig(BaseModel):
@@ -57,27 +60,61 @@ def _apply_frequency_multiplier(annual_amount: float, frequency: str) -> float:
 
 
 def _compute_tiered_amount(lots: int, tiers: List[dict]) -> float:
-    """iter93du : forfait annuel FIXE selon la tranche ou tombe le nombre de lots.
+    """Calcule le montant ANNUEL total pour un nombre de lots.
 
-    Chaque tranche a un montant `annual_fee` unique (pas de prix par lot).
-    On cherche la tranche dont [min_lots, max_lots] contient `lots`,
-    et on renvoie `annual_fee`. Retour 0 si lots<=0 ou aucune tranche
-    ne correspond.
+    Deux modes :
+    1) FORFAIT FIXE par tranche : chaque tranche a un `annual_fee` unique
+       (pas de prix par lot). On renvoie le forfait de la tranche contenant `lots`.
+    2) CUMULATIF MARGINAL (2026-02) : chaque tranche peut definir
+       `marginal_per_lot` (EUR/lot/mois). Le montant est calcule en
+       accumulant tranche par tranche jusqu'a `lots`. Active des qu'AU
+       MOINS UNE tranche a `marginal_per_lot > 0`.
+
+    Exemple bareme belge standard :
+      - Base 1-50    : 99 EUR/mois (forfait, marginal=0)
+      - 51-150       : +0.60 EUR/lot/mois pour lots 51..150
+      - 151-500      : +0.24 EUR/lot/mois pour lots 151..500
+      - etc.
+
+    Retour : montant ANNUEL en EUR (converti via *12 pour marginal_per_lot).
     """
     if lots <= 0 or not tiers:
         return 0.0
     sorted_tiers = sorted(tiers, key=lambda t: t.get("min_lots", 0))
+    has_marginal = any(float(t.get("marginal_per_lot") or 0) > 0 for t in sorted_tiers)
+
+    if has_marginal:
+        # Mode CUMULATIF : on accumule tranche par tranche
+        monthly_total = 0.0
+        annual_add = 0.0
+        for t in sorted_tiers:
+            lo = int(t.get("min_lots", 0))
+            hi = t.get("max_lots")
+            hi = int(hi) if hi is not None else 10**9
+            if lots < lo:
+                break
+            # Portion fixe : forfait de tranche (converti mensuel dans le
+            # cadre du bareme belge : base = 99 EUR/mois, donc annual_fee=1188).
+            # On considere annual_fee comme un montant ANNUEL fixe additionnel
+            # pour cette tranche, ajoute une seule fois.
+            annual_add += float(t.get("annual_fee") or 0)
+            # Portion marginale : nb de lots dans la tranche * marginal_per_lot * 12
+            marginal = float(t.get("marginal_per_lot") or 0)
+            if marginal > 0:
+                span_lots = min(lots, hi) - lo + 1
+                if span_lots > 0:
+                    monthly_total += span_lots * marginal
+            if lots <= hi:
+                break
+        return round(annual_add + monthly_total * 12, 2)
+
+    # Mode FORFAIT FIXE (retro-compat)
     for t in sorted_tiers:
         lo = t.get("min_lots", 0)
         hi = t.get("max_lots") if t.get("max_lots") is not None else 10**9
         if lo <= lots <= hi:
-            # iter93du : retro-compat legacy (anciens documents avec price_per_lot)
             fee = t.get("annual_fee")
             if fee is None:
-                # migration douce : anciens docs contenaient price_per_lot
-                # -> on convertit en forfait fixe = price_per_lot * mid_range
-                # (approximation pour ne pas casser le calcul en attendant que
-                # le superadmin re-enregistre la config).
                 legacy = t.get("price_per_lot")
                 if legacy is not None:
                     return float(legacy) * lots
@@ -112,6 +149,54 @@ def create_billing_admin_router(db):
                 "admin_info": {},
             }
         return cfg
+
+    @router.post("/apply-preset")
+    async def apply_belgian_preset(request: Request):
+        """Applique le bareme standard belge de facturation syndic
+        (base 99 EUR/mois + tranches marginales par lot).
+        """
+        await _ensure_superadmin(request)
+        # Bareme standard 2026 : base fixe + marges cumulatives
+        # Note: annual_fee sur la tranche BASE = 99 EUR/mois * 12 = 1188 EUR/an
+        # Les autres tranches n'ajoutent QUE du marginal (pas d'annual_fee)
+        tiers = [
+            {"min_lots": 1,    "max_lots": 50,   "annual_fee": 1188.0, "marginal_per_lot": 0.0},
+            {"min_lots": 51,   "max_lots": 150,  "annual_fee": 0.0,    "marginal_per_lot": 0.60},
+            {"min_lots": 151,  "max_lots": 500,  "annual_fee": 0.0,    "marginal_per_lot": 0.24},
+            {"min_lots": 501,  "max_lots": 1000, "annual_fee": 0.0,    "marginal_per_lot": 0.20},
+            {"min_lots": 1001, "max_lots": 2000, "annual_fee": 0.0,    "marginal_per_lot": 0.15},
+            {"min_lots": 2001, "max_lots": None, "annual_fee": 0.0,    "marginal_per_lot": 0.10},
+        ]
+        doc = {
+            "id": "default",
+            "tiers": tiers,
+            "vat_rate": 21.0,
+            "default_frequency": "monthly",
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        await db.billing_config.update_one(
+            {"id": "default"},
+            {"$set": doc},
+            upsert=True,
+        )
+        # Verifications : quelques montants de reference
+        samples = {n: _compute_tiered_amount(n, tiers) for n in [50, 150, 500, 1000, 2000, 3000]}
+        return {"ok": True, "config": doc, "samples_annual_eur": samples}
+
+    @router.get("/simulate")
+    async def simulate_fee(lots: int, request: Request):
+        """Simule le calcul pour un nombre de lots donne. Utile pour l'UI
+        preview du bareme.
+        """
+        await _ensure_superadmin(request)
+        cfg = await _load_config()
+        annual = _compute_tiered_amount(lots, cfg.get("tiers", []))
+        return {
+            "lots": lots,
+            "annual_htva": round(annual, 2),
+            "monthly_htva": round(annual / 12, 2),
+            "annual_tvac": round(annual * (1 + cfg.get("vat_rate", 21) / 100), 2),
+        }
 
     @router.get("/config")
     async def get_config(request: Request):

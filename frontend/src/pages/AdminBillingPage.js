@@ -75,6 +75,29 @@ export default function AdminBillingPage() {
     setCfg({ ...cfg, tiers });
   };
 
+  const applyBelgianPreset = async () => {
+    if (!window.confirm('Ecraser la configuration actuelle par le bareme standard belge (99 EUR/mois base + tranches marginales) ?')) return;
+    try {
+      const { data } = await api.post('/admin/billing/apply-preset');
+      setCfg(data.config);
+      toast.success('Bareme standard belge applique', { duration: 5000 });
+      await load();
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Erreur');
+    }
+  };
+
+  const [simulLots, setSimulLots] = useState(100);
+  const [simulResult, setSimulResult] = useState(null);
+  const runSimulation = async () => {
+    try {
+      const { data } = await api.get('/admin/billing/simulate', { params: { lots: simulLots } });
+      setSimulResult(data);
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Erreur simulation');
+    }
+  };
+
   const saveSyndic = async () => {
     if (!dlg) return;
     try {
@@ -122,8 +145,12 @@ export default function AdminBillingPage() {
     if (!cfg?.tiers) return '';
     return cfg.tiers.map(t => {
       const fee = t.annual_fee ?? t.price_per_lot ?? 0;
+      const marg = t.marginal_per_lot ?? 0;
       const max = t.max_lots ?? '+';
-      return `${t.min_lots}-${max} : ${Number(fee).toFixed(2)}€/an`;
+      const parts = [];
+      if (Number(fee) > 0) parts.push(`${Number(fee).toFixed(2)}€/an`);
+      if (Number(marg) > 0) parts.push(`+${Number(marg).toFixed(2)}€/lot/mois`);
+      return `${t.min_lots}-${max} : ${parts.join(' ') || '0'}`;
     }).join(' · ');
   }, [cfg]);
 
@@ -150,28 +177,44 @@ export default function AdminBillingPage() {
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="text-xs text-slate-500">
-            Chaque tranche definit un <b>forfait annuel fixe</b> selon le nombre de lots geres.
+            Chaque tranche definit un <b>forfait annuel fixe</b> (a ajouter une fois par tranche activee)
+            et/ou un <b>tarif marginal par lot/mois</b> qui s&apos;accumule dans la tranche.
             Un forfait <b>negocie</b> par syndic prend le pas sur ce bareme.
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="outline" size="sm" className="text-[#022D52] border-[#022D52]/40"
+              onClick={applyBelgianPreset} data-testid="apply-belgian-preset"
+              title="Applique le bareme standard belge (99 EUR/mois base + tranches marginales)"
+            >
+              <Wallet size={14} className="mr-1" /> Appliquer bareme standard belge
+            </Button>
           </div>
           <div className="space-y-2">
             <div className="grid grid-cols-12 gap-2 text-[11px] uppercase text-slate-500 font-semibold">
-              <div className="col-span-3">Lots min</div>
-              <div className="col-span-3">Lots max (vide = illimite)</div>
-              <div className="col-span-4">Forfait annuel (EUR HT)</div>
+              <div className="col-span-2">Lots min</div>
+              <div className="col-span-2">Lots max</div>
+              <div className="col-span-3">Forfait annuel (EUR HT)</div>
+              <div className="col-span-3">Marginal (EUR/lot/mois)</div>
               <div className="col-span-2"></div>
             </div>
             {(cfg.tiers || []).map((t, i) => (
               <div key={i} className="grid grid-cols-12 gap-2 items-center">
-                <Input className="col-span-3" type="number" min={0} value={t.min_lots ?? ''}
+                <Input className="col-span-2" type="number" min={0} value={t.min_lots ?? ''}
                        onChange={e => setTier(i, 'min_lots', e.target.value)}
                        data-testid={`tier-min-${i}`} />
-                <Input className="col-span-3" type="number" min={0} value={t.max_lots ?? ''}
+                <Input className="col-span-2" type="number" min={0} value={t.max_lots ?? ''}
                        placeholder="Illimite" onChange={e => setTier(i, 'max_lots', e.target.value)}
                        data-testid={`tier-max-${i}`} />
-                <Input className="col-span-4" type="number" step="0.01" min={0}
+                <Input className="col-span-3" type="number" step="0.01" min={0}
                        value={t.annual_fee ?? t.price_per_lot ?? ''}
                        onChange={e => setTier(i, 'annual_fee', e.target.value)}
                        data-testid={`tier-price-${i}`} />
+                <Input className="col-span-3" type="number" step="0.01" min={0}
+                       value={t.marginal_per_lot ?? 0}
+                       placeholder="0.00"
+                       onChange={e => setTier(i, 'marginal_per_lot', e.target.value)}
+                       data-testid={`tier-marginal-${i}`} />
                 <Button variant="ghost" size="sm" className="col-span-2 text-red-500"
                         onClick={() => removeTier(i)} data-testid={`tier-remove-${i}`}>
                   <Trash2 size={14} className="mr-1" /> Retirer
@@ -181,6 +224,39 @@ export default function AdminBillingPage() {
             <Button variant="outline" size="sm" onClick={addTier} data-testid="tier-add">
               <Plus size={14} className="mr-1" /> Ajouter une tranche
             </Button>
+          </div>
+          {/* Simulateur : verifie le montant pour un nombre de lots donne */}
+          <div className="mt-4 p-3 rounded-md border border-slate-200 bg-slate-50/50">
+            <div className="text-[11px] uppercase text-slate-500 font-semibold mb-2">Simulateur</div>
+            <div className="flex flex-wrap items-end gap-2">
+              <div>
+                <label className="text-[10px] text-slate-500">Nombre de lots</label>
+                <Input
+                  type="number" min={0} value={simulLots}
+                  onChange={e => setSimulLots(Number(e.target.value) || 0)}
+                  className="w-32" data-testid="simul-lots"
+                />
+              </div>
+              <Button size="sm" onClick={runSimulation} data-testid="simul-run">
+                Calculer
+              </Button>
+              {simulResult && (
+                <div className="flex items-center gap-4 text-sm ml-3">
+                  <div>
+                    <span className="text-slate-500 text-xs mr-1">Mensuel HTVA :</span>
+                    <span className="font-mono font-semibold text-[#022D52]">{simulResult.monthly_htva.toFixed(2)} €</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-500 text-xs mr-1">Annuel HTVA :</span>
+                    <span className="font-mono font-semibold">{simulResult.annual_htva.toFixed(2)} €</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-500 text-xs mr-1">Annuel TVAC :</span>
+                    <span className="font-mono font-semibold text-emerald-700">{simulResult.annual_tvac.toFixed(2)} €</span>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
           <div className="grid grid-cols-3 gap-3 pt-3 border-t border-slate-200">
             <div>
