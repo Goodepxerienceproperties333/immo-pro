@@ -1492,8 +1492,49 @@ async def startup():
                 id="acp_daily_backup",
                 replace_existing=True,
             )
+
+            # E2E test purge : supprime les ACP de test agees de > 24h
+            # Tourne toutes les heures a HH:05.
+            async def _e2e_purge_job():
+                try:
+                    from datetime import datetime, timezone, timedelta
+                    cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+                    acps = await db.coproprietes.find(
+                        {"is_e2e_test": True, "created_at": {"$lt": cutoff}},
+                        {"_id": 0, "id": 1, "name": 1},
+                    ).to_list(500)
+                    if not acps:
+                        return
+                    collections = [
+                        "journal_entries", "bank_transactions", "bank_statements",
+                        "invoices", "owners", "lots", "suppliers",
+                        "expense_categories", "distribution_keys",
+                        "pcmn_accounts", "fund_calls", "meter_readings",
+                        "meters", "documents", "sent_communications",
+                    ]
+                    total_deleted = 0
+                    for acp in acps:
+                        for coll in collections:
+                            r = await db[coll].delete_many({"copropriete_id": acp["id"]})
+                            total_deleted += r.deleted_count
+                        await db.coproprietes.delete_one({"id": acp["id"]})
+                        total_deleted += 1
+                    # Purge aussi les users syndics fictifs orphelins
+                    u = await db.users.delete_many({"is_e2e_test": True, "role": "syndic"})
+                    total_deleted += u.deleted_count
+                    print(f"[e2e-purge] purged {len(acps)} test ACP(s), {total_deleted} docs")
+                except Exception as e:  # noqa: BLE001
+                    print(f"[e2e-purge] failed: {e}")
+
+            _backup_scheduler.add_job(
+                _e2e_purge_job,
+                trigger=CronTrigger(minute=5, timezone="Europe/Brussels"),
+                id="e2e_test_purge",
+                replace_existing=True,
+            )
             _backup_scheduler.start()
             print("[startup] backup scheduler started (00:00 Europe/Brussels)")
+            print("[startup] E2E purge scheduler started (every hour at :05)")
     except Exception as _e:
         print(f"[startup] backup scheduler skipped: {_e}")
 

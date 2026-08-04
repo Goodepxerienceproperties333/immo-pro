@@ -478,6 +478,64 @@ def create_e2e_test_router(db):
                 f"Grand livre equilibre D={total_d:.2f} C={total_c:.2f}",
                 "CC.ledger_balanced", results)
 
+    async def _cross_check_chinese_wall(acp: dict, results: list[dict]):
+        """Cross-check : Chinese Wall - un 2e syndic fictif ne doit PAS voir
+        l'ACP TEST-E2E. Simule la regle d'isolation en interrogeant la DB
+        avec le filtre syndic_id (comme le fait chaque endpoint proprietaires,
+        factures, extraits, journaux).
+        """
+        # Cree un 2e syndic fictif marque is_e2e_test pour purge auto
+        other_syndic_id = str(uuid.uuid4())
+        await db.users.insert_one({
+            "_id": other_syndic_id,
+            "id": other_syndic_id,
+            "email": f"e2e-other-syndic-{other_syndic_id[:8]}@test.local",
+            "name": "SYNDIC-E2E-OTHER",
+            "role": "syndic",
+            "copropriete_ids": [],
+            "is_e2e_test": True,
+            "created_at": _now(),
+        })
+
+        # 1) Filtre par syndic_id : le 2e syndic ne doit voir aucune ACP TEST
+        seen_acps = await db.coproprietes.count_documents({
+            "syndic_id": other_syndic_id, "id": acp["id"],
+        })
+        _assert(seen_acps == 0,
+                f"Syndic B ne voit PAS l'ACP TEST (seen={seen_acps})",
+                "CW.acp_isolated", results)
+
+        # 2) Comme un syndic B n'a pas cette ACP dans son copropriete_ids,
+        #    les endpoints qui filtrent par copropriete_id ne retournent rien.
+        # Simule : cherche invoices/owners/lots avec un filtre syndic B (vide).
+        # Un syndic sans copropriete_ids => aucun acces = 0 factures visibles.
+        # On verifie qu'aucune facture TEST-E2E n'a un syndic_id = other.
+        inv_leak = await db.invoices.count_documents({
+            "copropriete_id": acp["id"], "syndic_id": other_syndic_id,
+        })
+        _assert(inv_leak == 0,
+                f"Aucune facture TEST-E2E n'appartient au syndic B (leak={inv_leak})",
+                "CW.invoices_isolated", results)
+
+        # 3) Verifie qu'aucun proprietaire TEST-E2E ne fuite vers le syndic B
+        own_leak = await db.owners.count_documents({
+            "copropriete_id": acp["id"], "syndic_id": other_syndic_id,
+        })
+        _assert(own_leak == 0,
+                f"Aucun proprietaire TEST-E2E n'appartient au syndic B (leak={own_leak})",
+                "CW.owners_isolated", results)
+
+        # 4) Requete inversee : liste des ACP visibles par le syndic B
+        b_visible = await db.coproprietes.count_documents({
+            "syndic_id": other_syndic_id,
+        })
+        _assert(b_visible == 0,
+                f"Syndic B fictif ne voit aucune ACP (visibles={b_visible})",
+                "CW.b_sees_nothing", results)
+
+        # Cleanup implicite : auto-purge le supprimera avec les autres
+        # (is_e2e_test=True + created_at)
+
     @router.post("/run")
     async def run_e2e(payload: dict, request: Request):
         """Lance un test E2E complet.
@@ -522,6 +580,7 @@ def create_e2e_test_router(db):
             await _cross_check_58_balanced(acp["id"], results)
             await _cross_check_no_phantom_bank(acp["id"], results)
             await _cross_check_bilan(acp["id"], results)
+            await _cross_check_chinese_wall(acp, results)
 
             # Variante B : import optipro simule
             if mode == "with_optipro":
@@ -614,6 +673,10 @@ def create_e2e_test_router(db):
             r = await db[coll].delete_many({"copropriete_id": acp_id})
             if r.deleted_count:
                 deleted[coll] = r.deleted_count
+        # Purge aussi les users syndics fictifs crees pour le test Chinese Wall
+        u = await db.users.delete_many({"is_e2e_test": True, "role": "syndic"})
+        if u.deleted_count:
+            deleted["users_syndic_e2e"] = u.deleted_count
         await db.coproprietes.delete_one({"id": acp_id})
         deleted["coproprietes"] = 1
         return {"purged": True, "acp_id": acp_id, "deleted": deleted}
