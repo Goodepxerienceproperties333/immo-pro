@@ -163,7 +163,7 @@ export default function JournalsPage() {
         lines[i].account_name = cat.account_name || '';
         if (cat.default_occupant_pct != null) {
           lines[i].occupant_pct = Number(cat.default_occupant_pct);
-          lines[i].proprietaire_pct = +fmtEUR((100 - Number(cat.default_occupant_pct)));
+          lines[i].proprietaire_pct = Math.round((100 - Number(cat.default_occupant_pct) * 100) / 100);
         }
         if (cat.default_distribution_key_id) {
           lines[i].distribution_key_id = cat.default_distribution_key_id;
@@ -183,7 +183,7 @@ export default function JournalsPage() {
       const cat = (categories || []).find(c => c.account_number === value);
       if (cat && cat.default_occupant_pct != null) {
         lines[i].occupant_pct = Number(cat.default_occupant_pct);
-        lines[i].proprietaire_pct = +fmtEUR((100 - Number(cat.default_occupant_pct)));
+        lines[i].proprietaire_pct = Math.round((100 - Number(cat.default_occupant_pct) * 100) / 100);
       } else if (value && (value.startsWith('6') || value.startsWith('7'))) {
         // Compte de charge sans categorie -> 0% occupant par defaut
         if (lines[i].occupant_pct == null) {
@@ -210,12 +210,12 @@ export default function JournalsPage() {
     if (field === 'occupant_pct') {
       const v = Math.max(0, Math.min(100, parseFloat(value) || 0));
       lines[i].occupant_pct = v;
-      lines[i].proprietaire_pct = +fmtEUR((100 - v));
+      lines[i].proprietaire_pct = Math.round((100 - v) * 100) / 100;
     }
     if (field === 'proprietaire_pct') {
       const v = Math.max(0, Math.min(100, parseFloat(value) || 0));
       lines[i].proprietaire_pct = v;
-      lines[i].occupant_pct = +fmtEUR((100 - v));
+      lines[i].occupant_pct = Math.round((100 - v) * 100) / 100;
     }
     setForm({ ...form, lines });
   };

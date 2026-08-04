@@ -361,7 +361,7 @@ export default function InvoicesPage() {
               // la meme regle que la selection manuelle (non-destructif : ligne
               // sans pct explicite uniquement).
               occupant_pct: (first.occupant_pct == null && sug.occupant_pct != null) ? Number(sug.occupant_pct) : first.occupant_pct,
-              proprietaire_pct: (first.proprietaire_pct == null && sug.occupant_pct != null) ? +fmtEUR((100 - Number(sug.occupant_pct))) : first.proprietaire_pct,
+              proprietaire_pct: (first.proprietaire_pct == null && sug.occupant_pct != null) ? Math.round((100 - Number(sug.occupant_pct)) * 100) / 100 : first.proprietaire_pct,
             };
             toast.success(`Categorie apprise : ${sug.expense_category_name} (${sug.usage_count} facture${sug.usage_count > 1 ? 's' : ''} de ${name})`);
             return { ...f, lines: newLines };
@@ -379,7 +379,7 @@ export default function InvoicesPage() {
             // iter90fj : repartition Occ/Prop apprise, au meme titre que la
             // selection manuelle de la nature (cf. onValueChange plus bas).
             occupant_pct: sug.occupant_pct != null ? Number(sug.occupant_pct) : f.occupant_pct,
-            proprietaire_pct: sug.occupant_pct != null ? +fmtEUR((100 - Number(sug.occupant_pct))) : f.proprietaire_pct,
+            proprietaire_pct: sug.occupant_pct != null ? Math.round((100 - Number(sug.occupant_pct)) * 100) / 100 : f.proprietaire_pct,
           };
         }
         return f;
@@ -680,7 +680,7 @@ export default function InvoicesPage() {
                         account_number: sug.account_number || payload.lines[0].account_number,
                         distribution_key_id: sug.distribution_key_id || payload.lines[0].distribution_key_id,
                         occupant_pct: occ,
-                        proprietaire_pct: occ != null ? +fmtEUR((100 - occ)) : payload.lines[0].proprietaire_pct,
+                        proprietaire_pct: occ != null ? Math.round((100 - occ) * 100) / 100 : payload.lines[0].proprietaire_pct,
                       };
                       setInvForm(f => {
                         if (!f.lines || f.lines.length === 0) return f;
@@ -692,14 +692,14 @@ export default function InvoicesPage() {
                       payload.expense_category_id = sug.expense_category_id;
                       payload.account_number = sug.account_number || payload.account_number;
                       payload.distribution_key_id = sug.distribution_key_id || payload.distribution_key_id;
-                      if (occ != null) { payload.occupant_pct = occ; payload.proprietaire_pct = +fmtEUR((100 - occ)); }
+                      if (occ != null) { payload.occupant_pct = occ; payload.proprietaire_pct = Math.round((100 - occ) * 100) / 100; }
                       setInvForm(f => ({
                         ...f,
                         expense_category_id: sug.expense_category_id,
                         account_number: sug.account_number || f.account_number,
                         distribution_key_id: sug.distribution_key_id || f.distribution_key_id,
                         occupant_pct: occ != null ? occ : f.occupant_pct,
-                        proprietaire_pct: occ != null ? +fmtEUR((100 - occ)) : f.proprietaire_pct,
+                        proprietaire_pct: occ != null ? Math.round((100 - occ) * 100) / 100 : f.proprietaire_pct,
                       }));
                     }
                     toast.success(`Categorie apprise : ${sug.expense_category_name} (${sug.usage_count} facture${sug.usage_count > 1 ? 's' : ''} de ${decision.name})`);
@@ -1821,7 +1821,7 @@ export default function InvoicesPage() {
                       expense_category_id: v,
                       account_number: cat?.account_number || f.account_number,
                       occupant_pct: occ != null ? Number(occ) : f.occupant_pct,
-                      proprietaire_pct: occ != null ? +fmtEUR((100 - Number(occ))) : f.proprietaire_pct,
+                      proprietaire_pct: occ != null ? Math.round((100 - Number(occ)) * 100) / 100 : f.proprietaire_pct,
                       distribution_key_id: defKey || f.distribution_key_id,
                     }));
                   }}
@@ -1899,7 +1899,7 @@ export default function InvoicesPage() {
             {!invForm.is_private_fee && invForm.lines && invForm.lines.length > 0 && (() => {
               const linesSum = invForm.lines.reduce((s, l) => s + (Number(l.amount) || 0), 0);
               const totalAmt = Number(invForm.total_amount) || 0;
-              const diff = +fmtEUR((linesSum - totalAmt));
+              const diff = Math.round((linesSum - totalAmt) * 100) / 100;
               const ok = Math.abs(diff) < 0.01;
               return (
                 <div className="rounded-md border-2 border-[#022D52]/30 bg-[#022D52]/5 p-3 space-y-2" data-testid="multi-lines-block">
@@ -2147,7 +2147,7 @@ export default function InvoicesPage() {
                     value={invForm.occupant_pct}
                     onChange={e => {
                       const v = Math.max(0, Math.min(100, parseFloat(e.target.value) || 0));
-                      setInvForm(f => ({ ...f, occupant_pct: v, proprietaire_pct: +fmtEUR((100 - v)) }));
+                      setInvForm(f => ({ ...f, occupant_pct: v, proprietaire_pct: Math.round((100 - v) * 100) / 100 }));
                     }}
                     data-testid="inv-occupant-pct"
                   />
@@ -2158,7 +2158,7 @@ export default function InvoicesPage() {
                     value={invForm.proprietaire_pct}
                     onChange={e => {
                       const v = Math.max(0, Math.min(100, parseFloat(e.target.value) || 0));
-                      setInvForm(f => ({ ...f, proprietaire_pct: v, occupant_pct: +fmtEUR((100 - v)) }));
+                      setInvForm(f => ({ ...f, proprietaire_pct: v, occupant_pct: Math.round((100 - v) * 100) / 100 }));
                     }}
                     data-testid="inv-proprietaire-pct"
                   />

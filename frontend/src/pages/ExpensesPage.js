@@ -180,11 +180,11 @@ export default function ExpensesPage() {
 
   const setOccupant = (val) => {
     const v = Math.max(0, Math.min(100, parseFloat(val) || 0));
-    setQuickEdit(q => ({ ...q, occupant_pct: v, proprietaire_pct: +fmtEUR((100 - v)) }));
+    setQuickEdit(q => ({ ...q, occupant_pct: v, proprietaire_pct: Math.round((100 - v) * 100) / 100 }));
   };
   const setProprio = (val) => {
     const v = Math.max(0, Math.min(100, parseFloat(val) || 0));
-    setQuickEdit(q => ({ ...q, proprietaire_pct: v, occupant_pct: +fmtEUR((100 - v)) }));
+    setQuickEdit(q => ({ ...q, proprietaire_pct: v, occupant_pct: Math.round((100 - v) * 100) / 100 }));
   };
 
   const saveQuickEdit = async () => {
