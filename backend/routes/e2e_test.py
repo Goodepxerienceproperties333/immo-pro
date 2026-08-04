@@ -652,6 +652,39 @@ def create_e2e_test_router(db):
             raise HTTPException(404, "Run non trouve")
         return run
 
+    @router.post("/purge-all")
+    async def purge_all_test_acps(request: Request):
+        """Purge IMMEDIATE de toutes les ACP de test (is_e2e_test=True)
+        sans condition d'anciennete. Utile pour un cleanup manuel entre 2 runs.
+        """
+        await _get_superadmin(request)
+        acps = await db.coproprietes.find(
+            {"is_e2e_test": True},
+            {"_id": 0, "id": 1, "name": 1},
+        ).to_list(500)
+        collections = [
+            "journal_entries", "bank_transactions", "bank_statements",
+            "invoices", "owners", "lots", "suppliers",
+            "expense_categories", "distribution_keys",
+            "pcmn_accounts", "fund_calls", "meter_readings",
+            "meters", "documents", "sent_communications",
+        ]
+        total_docs = 0
+        for acp in acps:
+            for coll in collections:
+                r = await db[coll].delete_many({"copropriete_id": acp["id"]})
+                total_docs += r.deleted_count
+            await db.coproprietes.delete_one({"id": acp["id"]})
+            total_docs += 1
+        # Purge les users syndic fictifs orphelins
+        u = await db.users.delete_many({"is_e2e_test": True, "role": "syndic"})
+        return {
+            "purged_acps": len(acps),
+            "deleted_docs": total_docs,
+            "deleted_test_users": u.deleted_count,
+            "acps": [a["name"] for a in acps],
+        }
+
     @router.post("/purge/{acp_id}")
     async def purge_test_acp(acp_id: str, request: Request):
         """Purge une ACP de test (marquee is_e2e_test=True) et toutes ses donnees."""

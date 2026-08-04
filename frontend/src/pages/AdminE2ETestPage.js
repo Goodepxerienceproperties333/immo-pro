@@ -15,6 +15,12 @@ import {
  * seeding d'une ACP fictive + scenarios comptables + assertions
  * transverses. Ideal apres chaque deploiement/refactoring pour smoke test.
  */
+const StatusIcon = ({ status }) => {
+  if (status === 'PASS') return <CheckCircle2 size={14} className="text-emerald-600" />;
+  if (status === 'FAIL') return <XCircle size={14} className="text-red-600" />;
+  return <AlertTriangle size={14} className="text-amber-600" />;
+};
+
 export default function AdminE2ETestPage() {
   const [runs, setRuns] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -73,10 +79,19 @@ export default function AdminE2ETestPage() {
     }
   };
 
-  const StatusIcon = ({ status }) => {
-    if (status === 'PASS') return <CheckCircle2 size={14} className="text-emerald-600" />;
-    if (status === 'FAIL') return <XCircle size={14} className="text-red-600" />;
-    return <AlertTriangle size={14} className="text-amber-600" />;
+  const purgeAll = async () => {
+    if (!window.confirm('Purger TOUTES les ACP de test (is_e2e_test=true) immediatement ? Cette action est irreversible.')) return;
+    try {
+      const { data } = await api.post('/admin/e2e-test/purge-all');
+      toast.success(
+        `${data.purged_acps} ACP(s) purgee(s), ${data.deleted_docs} document(s), ${data.deleted_test_users} user(s) test`,
+        { duration: 8000 },
+      );
+      await loadHistory();
+      setCurrentRun(null);
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Erreur purge globale');
+    }
   };
 
   const renderRunSteps = (run) => (
@@ -117,9 +132,20 @@ export default function AdminE2ETestPage() {
             Utilisez apres chaque deploiement pour un smoke test complet.
           </p>
         </div>
-        <Button variant="outline" size="sm" onClick={loadHistory} disabled={loading} data-testid="e2e-refresh">
-          <RefreshCw size={14} className={`mr-1 ${loading ? 'animate-spin' : ''}`} /> Actualiser
-        </Button>
+        <div className="flex gap-2 flex-wrap">
+          <Button variant="outline" size="sm" onClick={loadHistory} disabled={loading} data-testid="e2e-refresh">
+            <RefreshCw size={14} className={`mr-1 ${loading ? 'animate-spin' : ''}`} /> Actualiser
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={purgeAll}
+            className="text-red-600 border-red-200 hover:bg-red-50"
+            data-testid="e2e-purge-all"
+          >
+            <Trash2 size={14} className="mr-1" /> Purger toutes les ACP TEST
+          </Button>
+        </div>
       </div>
 
       {/* Panneau de lancement */}

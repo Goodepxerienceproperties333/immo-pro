@@ -149,6 +149,10 @@ export default function Layout() {
             className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''} ${collapsed ? 'justify-center px-2' : ''}`}
             data-testid="adm-nav-billing"
           ><Wallet size={16} strokeWidth={1.5} />{!collapsed && <span className="text-[13px]">Facturation</span>}</NavLink>
+          <NavLink to="/admin/e2e-test" onClick={() => setMobileOpen(false)}
+            className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''} ${collapsed ? 'justify-center px-2' : ''}`}
+            data-testid="adm-nav-e2e-test"
+          ><Activity size={16} strokeWidth={1.5} />{!collapsed && <span className="text-[13px]">Tests E2E</span>}</NavLink>
           <NavLink to="/admin/tickets" onClick={() => setMobileOpen(false)}
             className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''} ${collapsed ? 'justify-center px-2' : ''}`}
             data-testid="adm-nav-tickets"
