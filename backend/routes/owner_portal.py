@@ -1279,7 +1279,14 @@ def create_owner_portal_router(db):
                         "number": (je.get("reference") or "")[:60],
                         "date": je.get("date", ""),
                         "supplier": ln.get("account_name") or ln.get("label") or acc,
-                        "description": (ln.get("description") or je.get("description") or "")[:200],
+                        # Priorite line_description (specifique au proprietaire concerne
+                        # pour les OD-PRIV multi-owners) puis description generique.
+                        "description": (
+                            ln.get("line_description")
+                            or ln.get("description")
+                            or je.get("description")
+                            or ""
+                        )[:200],
                         "total_amount": round(net_charge, 2),
                         "my_amount": my_amt,
                         "my_share_pct": pct,
