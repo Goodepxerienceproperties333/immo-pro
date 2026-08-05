@@ -10,7 +10,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { toast } from 'sonner';
-import { Plus, Trash2, Upload, Link2, Unlink, Search, Landmark, PlusCircle, Save, Pencil, X, CheckCircle2, AlertTriangle, Eye, Tag, Zap, Check, XCircle, FileText, Loader2, Sparkles } from 'lucide-react';
+import { Plus, Trash2, Upload, Link2, Unlink, Search, Landmark, PlusCircle, Save, Pencil, X, CheckCircle2, AlertTriangle, Eye, Tag, Zap, Check, XCircle, FileText, Loader2, Sparkles, Settings2, RefreshCw } from 'lucide-react';
 import { useFiscalYearParams } from '@/hooks/useFiscalYearParams';
 import { useAuth } from '@/contexts/AuthContext';
 import CounterpartySearchSelect from '@/components/CounterpartySearchSelect';
@@ -24,6 +24,7 @@ export default function BankingPage() {
   const navigate = useNavigate();
   const fyParams = useFiscalYearParams();
   const [statements, setStatements] = useState([]);
+  const [blockedStmts, setBlockedStmts] = useState([]);
   // iter90gr : nombre TOTAL d'extraits toutes periodes confondues (sans filtre FY).
   // Sert a detecter le cas "l'utilisateur a des extraits en base mais le filtre
   // FY courant les masque tous" - on l'aide alors a comprendre la situation.
@@ -188,6 +189,14 @@ export default function BankingPage() {
         setReadiness(rs.data);
       } catch {
         setReadiness({ total: 0, draft: 0, posted: 0, ready_to_post: 0, needs_review: 0, draft_ids_ready: [], draft_ids_needs_review: [] });
+      }
+      // Charge la liste des extraits bloques (has_posting_error=true)
+      try {
+        const params = { copropriete_id: selectedCopro };
+        const rb = await api.get('/banking/statements/blocked', { params });
+        setBlockedStmts(rb.data?.blocked || []);
+      } catch {
+        setBlockedStmts([]);
       }
     }
     } finally {
@@ -960,6 +969,55 @@ export default function BankingPage() {
           </Button>
         </div>
       </div>
+
+      {/* Widget : Extraits bloques (IBAN non configure) */}
+      {blockedStmts.length > 0 && (
+        <div className="my-3 p-4 rounded-lg border-2 border-rose-300 bg-rose-50/70" data-testid="blocked-stmts-widget">
+          <div className="flex items-start gap-3">
+            <AlertTriangle size={22} className="text-rose-600 flex-shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <div className="text-sm font-bold text-rose-900">
+                {blockedStmts.length} extrait(s) bloque(s) - IBAN non configure dans la fiche ACP
+              </div>
+              <div className="text-xs text-rose-800 mt-0.5 mb-2">
+                Ces extraits ne peuvent pas etre comptabilises tant que leur IBAN n&apos;est pas relie
+                a un compte PCMN 55xxxx dans les parametres de l&apos;ACP.
+              </div>
+              <div className="space-y-1">
+                {blockedStmts.slice(0, 5).map(s => (
+                  <div key={s.id} className="text-[11px] font-mono flex items-center gap-2 py-1 px-2 bg-white/60 rounded border border-rose-200"
+                       data-testid={`blocked-stmt-${s.id}`}>
+                    <span className="text-slate-600">{s.date}</span>
+                    <span className="font-semibold text-rose-900">IBAN {s.error_iban || s.account_number || '?'}</span>
+                    <span className="text-slate-500 truncate flex-1">{(s.error_message || '').slice(0, 80)}</span>
+                    <span className="text-slate-400">{s.reference}</span>
+                  </div>
+                ))}
+                {blockedStmts.length > 5 && (
+                  <div className="text-[10px] text-rose-700 italic">... et {blockedStmts.length - 5} autre(s)</div>
+                )}
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Button
+                  size="sm"
+                  className="bg-rose-600 hover:bg-rose-700 text-white"
+                  onClick={() => navigate(`/coproprietes?edit=${selectedCopro}#bank-accounts`)}
+                  data-testid="configure-iban-btn"
+                >
+                  <Settings2 size={13} className="mr-1" /> Configurer l&apos;IBAN
+                </Button>
+                <Button
+                  size="sm" variant="outline"
+                  onClick={() => load()}
+                  data-testid="refresh-blocked"
+                >
+                  <RefreshCw size={13} className="mr-1" /> Actualiser
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* iter90ja : Barre de filtres cascade + bouton "Tout comptabiliser" */}
       <div className="my-3 flex items-center gap-3 flex-wrap p-3 rounded-lg bg-slate-50 border border-slate-200" data-testid="banking-filter-bar">
