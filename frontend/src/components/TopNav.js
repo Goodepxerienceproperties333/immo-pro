@@ -25,32 +25,41 @@ export default function TopNav({ sections, extraSections = [] }) {
   const allSections = [...sections, ...extraSections];
 
   const accentClass = (accent, isActive) => {
-    // iter90bq : gradients doux + rounded-full sur les triggers pour un rendu
-    // plus "sexy". Couleurs sectorielles alignees sur design_guidelines.json.
+    // Onglets plus grands + contraste marque + COULEURS DISTINCTES par section
+    // (2026-02 : chaque section garde sa couleur propre pour aider a la
+    // memorisation et l'orientation visuelle rapide).
     const baseMap = {
-      blue: 'text-[#01213e]',
-      violet: 'text-violet-700',
-      emerald: 'text-emerald-700',
-      amber: 'text-amber-700',
-      slate: 'text-slate-700',
+      blue: 'text-[#022D52] bg-blue-50 hover:bg-blue-100 border-2 border-blue-200 hover:border-blue-400',
+      violet: 'text-violet-800 bg-violet-50 hover:bg-violet-100 border-2 border-violet-200 hover:border-violet-400',
+      emerald: 'text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border-2 border-emerald-200 hover:border-emerald-400',
+      amber: 'text-amber-800 bg-amber-50 hover:bg-amber-100 border-2 border-amber-200 hover:border-amber-400',
+      sky: 'text-sky-800 bg-sky-50 hover:bg-sky-100 border-2 border-sky-200 hover:border-sky-400',
+      rose: 'text-rose-800 bg-rose-50 hover:bg-rose-100 border-2 border-rose-200 hover:border-rose-400',
+      indigo: 'text-indigo-800 bg-indigo-50 hover:bg-indigo-100 border-2 border-indigo-200 hover:border-indigo-400',
+      slate: 'text-slate-800 bg-slate-100 hover:bg-slate-200 border-2 border-slate-300 hover:border-slate-400',
     };
     const activeMap = {
-      blue: 'text-white bg-gradient-to-r from-blue-500 to-blue-600 shadow-sm shadow-blue-500/30',
-      violet: 'text-white bg-gradient-to-r from-violet-500 to-violet-600 shadow-sm shadow-violet-500/30',
-      emerald: 'text-white bg-gradient-to-r from-emerald-500 to-emerald-600 shadow-sm shadow-emerald-500/30',
-      amber: 'text-white bg-gradient-to-r from-amber-500 to-amber-600 shadow-sm shadow-amber-500/30',
-      slate: 'text-white bg-gradient-to-r from-slate-600 to-slate-700 shadow-sm shadow-slate-500/30',
+      blue: 'text-white bg-gradient-to-r from-[#022D52] to-[#1D4ED8] shadow-lg shadow-blue-500/50 border-2 border-blue-800',
+      violet: 'text-white bg-gradient-to-r from-violet-600 to-violet-700 shadow-lg shadow-violet-500/50 border-2 border-violet-800',
+      emerald: 'text-white bg-gradient-to-r from-emerald-600 to-emerald-700 shadow-lg shadow-emerald-500/50 border-2 border-emerald-800',
+      amber: 'text-white bg-gradient-to-r from-amber-600 to-amber-700 shadow-lg shadow-amber-500/50 border-2 border-amber-800',
+      sky: 'text-white bg-gradient-to-r from-sky-600 to-sky-700 shadow-lg shadow-sky-500/50 border-2 border-sky-800',
+      rose: 'text-white bg-gradient-to-r from-rose-600 to-rose-700 shadow-lg shadow-rose-500/50 border-2 border-rose-800',
+      indigo: 'text-white bg-gradient-to-r from-indigo-600 to-indigo-700 shadow-lg shadow-indigo-500/50 border-2 border-indigo-800',
+      slate: 'text-white bg-gradient-to-r from-slate-700 to-slate-800 shadow-lg shadow-slate-500/50 border-2 border-slate-900',
     };
     if (isActive) return activeMap[accent] || activeMap.blue;
-    return `${baseMap[accent] || baseMap.blue} hover:bg-slate-100/70`;
+    return baseMap[accent] || baseMap.blue;
   };
   const dotClass = (accent) => {
-    // Dot color-coded avant le titre (visible en permanence)
     const map = {
       blue: 'bg-[#022D52]',
       violet: 'bg-violet-500',
       emerald: 'bg-emerald-500',
       amber: 'bg-amber-500',
+      sky: 'bg-sky-500',
+      rose: 'bg-rose-500',
+      indigo: 'bg-indigo-500',
       slate: 'bg-slate-400',
     };
     return map[accent] || map.blue;
@@ -61,17 +70,22 @@ export default function TopNav({ sections, extraSections = [] }) {
       violet: 'data-[highlighted]:bg-violet-50 data-[highlighted]:text-violet-700',
       emerald: 'data-[highlighted]:bg-emerald-50 data-[highlighted]:text-emerald-700',
       amber: 'data-[highlighted]:bg-amber-50 data-[highlighted]:text-amber-700',
+      sky: 'data-[highlighted]:bg-sky-50 data-[highlighted]:text-sky-700',
+      rose: 'data-[highlighted]:bg-rose-50 data-[highlighted]:text-rose-700',
+      indigo: 'data-[highlighted]:bg-indigo-50 data-[highlighted]:text-indigo-700',
       slate: 'data-[highlighted]:bg-slate-100',
     };
     return map[accent] || map.blue;
   };
   const contentAccentClass = (accent) => {
-    // Bordure gauche coloree du dropdown menu (rappel visuel de la section)
     const map = {
       blue: 'border-l-4 border-l-[#022D52]',
       violet: 'border-l-4 border-l-violet-500',
       emerald: 'border-l-4 border-l-emerald-500',
       amber: 'border-l-4 border-l-amber-500',
+      sky: 'border-l-4 border-l-sky-500',
+      rose: 'border-l-4 border-l-rose-500',
+      indigo: 'border-l-4 border-l-indigo-500',
       slate: 'border-l-4 border-l-slate-400',
     };
     return map[accent] || map.blue;
@@ -82,6 +96,9 @@ export default function TopNav({ sections, extraSections = [] }) {
       violet: 'text-violet-700',
       emerald: 'text-emerald-700',
       amber: 'text-amber-700',
+      sky: 'text-sky-700',
+      rose: 'text-rose-700',
+      indigo: 'text-indigo-700',
       slate: 'text-slate-600',
     };
     return map[accent] || map.blue;
@@ -89,8 +106,8 @@ export default function TopNav({ sections, extraSections = [] }) {
 
   return (
     <nav
-      className="bg-white/90 backdrop-blur border-b border-slate-200/60 sticky top-12 z-20 px-4 lg:px-6 flex items-center gap-1 overflow-x-auto shadow-glass"
-      style={{ height: 44 }}
+      className="bg-white/95 backdrop-blur border-b-2 border-slate-200 sticky top-12 z-20 px-4 lg:px-6 flex items-center gap-2 overflow-x-auto shadow-md"
+      style={{ height: 56 }}
       data-testid="top-nav"
     >
       {allSections.map(sec => {
@@ -101,12 +118,12 @@ export default function TopNav({ sections, extraSections = [] }) {
           <DropdownMenu key={sec.title}>
             <DropdownMenuTrigger asChild>
               <button
-                className={`inline-flex items-center gap-2 h-9 px-3.5 rounded-full text-[13px] font-semibold transition-all duration-200 ${accentClass(sec.accent, containsActive)}`}
+                className={`inline-flex items-center gap-2 h-11 px-5 rounded-full text-[15px] font-bold transition-all duration-200 ${accentClass(sec.accent, containsActive)}`}
                 data-testid={`top-nav-trigger-${sec.title.toLowerCase()}`}
               >
-                <span className={`h-2 w-2 rounded-full ${containsActive ? 'bg-white/80' : dotClass(sec.accent)}`} />
+                <span className={`h-2.5 w-2.5 rounded-full ${containsActive ? 'bg-white' : dotClass(sec.accent)}`} />
                 {sec.title}
-                <ChevronDown size={13} className={containsActive ? 'text-white/80' : 'opacity-50'} />
+                <ChevronDown size={15} className={containsActive ? 'text-white/90' : 'opacity-60'} />
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" className={`min-w-[240px] rounded-2xl shadow-dropdown border-slate-200/60 ${contentAccentClass(sec.accent)}`}>

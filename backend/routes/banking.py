@@ -550,6 +550,30 @@ def create_banking_router(db):
         return empty
 
     # ---- BANK STATEMENTS ----
+    @router.get("/statements/blocked")
+    async def list_blocked_statements(request: Request, copropriete_id: Optional[str] = None):
+        """Liste les extraits en `has_posting_error=True` pour l'ACP courante.
+        Utilise par le widget de dashboard "Extraits bloques" pour surfacer
+        les IBAN non configures a corriger d'urgence.
+        """
+        if not copropriete_id:
+            copropriete_id = request.headers.get("X-Copropriete-Id") or None
+        if not copropriete_id:
+            return {"blocked": [], "count": 0}
+        stmts = await db.bank_statements.find(
+            {"copropriete_id": copropriete_id, "has_posting_error": True},
+            {"_id": 0},
+        ).sort("date", -1).to_list(200)
+        # Enrichir avec le premier IBAN en erreur (issu des txns)
+        for s in stmts:
+            first_err = await db.bank_transactions.find_one(
+                {"statement_id": s["id"], "posting_error_iban": {"$exists": True, "$ne": ""}},
+                {"_id": 0, "posting_error_iban": 1, "posting_error": 1},
+            )
+            s["error_iban"] = (first_err or {}).get("posting_error_iban", "")
+            s["error_message"] = (first_err or {}).get("posting_error", "")
+        return {"blocked": stmts, "count": len(stmts)}
+
     @router.get("/statements")
     async def list_statements(request: Request, copropriete_id: Optional[str] = None,
                               date_from: Optional[str] = None, date_to: Optional[str] = None):

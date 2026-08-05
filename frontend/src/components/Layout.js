@@ -53,7 +53,7 @@ const sections = [
     { to: '/email-templates', icon: FileText, label: 'Modeles emails' },
   ]},
   // iter90g4 : onglet "Support" pour permettre au syndic de suivre ses tickets bug.
-  { title: 'Support', accent: 'blue', items: [
+  { title: 'Support', accent: 'rose', items: [
     { to: '/support/tickets', icon: Ticket, label: 'Mes tickets' },
   ]},
 ];
@@ -424,7 +424,7 @@ export default function Layout() {
   const extraSections = [];
   if (isSuperadmin) {
     extraSections.push({
-      title: 'Plateforme', accent: 'amber', items: [
+      title: 'Plateforme', accent: 'indigo', items: [
         { to: '/admin', icon: Shield, label: 'Tableau admin' },
         { to: '/admin/users', icon: Shield, label: 'Utilisateurs' },
         { to: '/admin/billing', icon: Wallet, label: 'Facturation' },
