@@ -18,6 +18,16 @@ billing.
 - Production : https://immo-pcmn.emergent.host
 
 ## Recent changes (Feb 2026)
+- **2026-02-06 (iter94c)** : Backend crash après import extrait bancaire.
+  `POST /api/banking/statements/import-files` déclenche une extraction IA
+  (Claude Sonnet 4.5) qui peut dépasser 60s sur des PDFs volumineux. Le
+  `RequestTimeoutMiddleware` (60s) l'annulait -> `RuntimeError: No response
+  returned` -> chaîne de middleware corrompue -> requêtes suivantes
+  (login, auth/me) bloquées -> preview affiche écran blanc infini.
+  **Fix** (`/app/backend/server.py`) : ajout de `/api/banking/statements/import-files`,
+  `/api/banking/import-`, `/api/invoices/import`, `/api/invoices/analyze` à
+  `_REQUEST_TIMEOUT_SKIP_PREFIXES`. Backend restart -> login=500ms,
+  auth/me=133ms, banking/statements=213ms (vs 60s+ timeout avant).
 - **2026-02-06 (iter94b)** : Parser Bilan PDF - fix phantom sub-accounts.
   Sur les montants belges avec espace en séparateur de milliers ("131 472,36"),
   le fragment "131" était mal identifié comme un code de sous-compte (regex

@@ -151,6 +151,17 @@ _REQUEST_TIMEOUT_SKIP_PREFIXES = (
     "/api/backups/",             # backup / restore
     "/api/communication/send/",  # envoi email groupe (peut etre long)
     "/api/reports/decompte",     # PDF decomptes de masse
+    # iter94c : /api/banking/statements/import-files fait extraction IA
+    # (Claude/OpenAI) sur PDF bancaires en parallele (5 concurrent). Un
+    # PDF de 100+ transactions peut prendre 90-120s. Sans skip, le
+    # RequestTimeoutMiddleware annule au bout de 60s -> RuntimeError
+    # "No response returned" -> pollue les middlewares et corrompt le
+    # backend pour les requetes suivantes (login/auth deviennent bloquants
+    # -> preview affiche ecran blanc infini).
+    "/api/banking/statements/import-files",
+    "/api/banking/import-",       # import-coda, import-pdf, etc.
+    "/api/invoices/import",       # import factures IA
+    "/api/invoices/analyze",      # AI extraction factures
 )
 
 
