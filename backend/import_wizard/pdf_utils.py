@@ -1271,6 +1271,18 @@ def parse_balance_pdf(raw: bytes) -> dict:
                 # Side detection : center x of the word relative to split
                 cx = (w["x0"] + w["x1"]) / 2
                 side = "actif" if cx < split_x else "passif"
+                # iter94b : REJECT anchors that fall inside the AMOUNT column
+                # of their side. Belgian format uses space as thousand separator,
+                # so an amount like "131 472,36" is extracted as TWO words:
+                # "131" and "472,36". The leading "131" matches `\d{2,10}` and
+                # would be mis-identified as a sub-account (creating a phantom
+                # line with amount = the trailing fragment). This corrupts the
+                # opening balance sum by exactly the trailing fragment value.
+                # Amount columns start at x0 >= 350 (actif) or x0 >= 730 (passif).
+                if side == "actif" and w["x0"] >= 350:
+                    continue
+                if side == "passif" and w["x0"] >= 730:
+                    continue
                 # Sub-account if x0 > 60 (Actif) or x0 > 435 (Passif)
                 if side == "actif":
                     is_sub = w["x0"] > 60
