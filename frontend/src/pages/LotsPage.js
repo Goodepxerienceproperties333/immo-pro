@@ -1100,9 +1100,15 @@ export default function LotsPage() {
       localStorage.setItem('selectedCopro', searchParams.get('copropriete_id'));
     }
     const lotsParams = coproIdParam ? { copropriete_id: coproIdParam } : {};
+    // iter94a (Chinese Wall STRICT / RGPD) : ne charge QUE les proprietaires
+    // de l'ACP courante. Sinon la page laisse fuiter les noms de proprios
+    // d'autres ACP dans le dropdown d'assignation lot->owner.
+    const ownersParams = coproIdParam
+      ? { copropriete_id: coproIdParam, include_unassigned: true }
+      : { syndic_wide: true };
     const [lotsRes, ownersRes] = await Promise.all([
       api.get('/lots', { params: lotsParams }),
-      api.get('/owners', { params: { syndic_wide: true } }),
+      api.get('/owners', { params: ownersParams }),
     ]);
     setLots(lotsRes.data);
     setOwners(ownersRes.data);

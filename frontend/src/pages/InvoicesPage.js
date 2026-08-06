@@ -38,7 +38,7 @@ export default function InvoicesPage() {
   // iter92e : toggle "afficher tous les proprietaires du syndic" pour
   // l'allocation des frais privatifs. Par defaut OFF -> filtre stricte
   // par ACP courante (evite d'allouer a un proprio d'une autre ACP).
-  const [allocShowAllOwners, setAllocShowAllOwners] = useState(false);
+  // iter94a : suppression toggle allocShowAllOwners (RGPD Chinese Wall strict)
   const [invForm, setInvForm] = useState({ number: '', date: '', due_date: '', supplier: '', description: '', total_amount: 0, vat_amount: 0, account_number: '', expense_category_id: '', distribution_key_id: '', status: 'unpaid', is_private_fee: false, private_fee_owner_id: '', private_fee_allocations: [], common_charge_expense_category_id: '', common_charge_account_number: '', common_charge_distribution_key_id: '', occupant_pct: 0, proprietaire_pct: 100, lines: [] });
   const [owners, setOwners] = useState([]);
   const [ownerSearch, setOwnerSearch] = useState('');
@@ -172,14 +172,14 @@ export default function InvoicesPage() {
     const invParams = reviewSid
       ? { import_session_id: reviewSid, copropriete_id: copro }
       : fyParams;
-    // iter90d : pour le combobox d'allocation des frais privatifs, on doit
-    // voir TOUS les proprietaires du syndic (pas juste ceux ayant un lot dans
-    // l'ACP courante), sinon l'utilisateur ne retrouve pas un proprio existant
-    // et finit par creer un doublon -> nouveau compte auxiliaire 40000XXX au
-    // lieu de reutiliser le compte principal du proprio. Le backend
-    // `assign_owner_accounts` recree idempotemment les comptes 4000/4001 dans
-    // l'ACP cible quand le proprio est selectionne, donc aucun risque de fuite.
-    const ownersConfig = { params: { syndic_wide: true } };
+    // iter94a (Chinese Wall STRICT / RGPD) : le combobox d'allocation des frais
+    // privatifs ne doit JAMAIS voir de proprietaires appartenant a d'autres ACP.
+    // On charge STRICTEMENT les proprios de l'ACP courante. Si `copropriete_id`
+    // n'est pas defini, on ne charge aucun proprio (l'utilisateur doit d'abord
+    // selectionner une ACP).
+    const ownersConfig = copro
+      ? { params: { copropriete_id: copro } }
+      : { params: { copropriete_id: '__none__' } };
     const [inv, dk, acc, lt, cat, ow, sup] = await Promise.all([
       api.get('/invoices', { params: invParams }), api.get('/distribution-keys'),
       api.get('/accounting/pcmn', { params: { class_num: 6 } }), api.get('/lots'),
@@ -1539,19 +1539,10 @@ export default function InvoicesPage() {
                         data-testid="add-private-fee-allocation"
                       >+ Ajouter un proprietaire</button>
                     </div>
-                    {/* iter92e : toggle scope pour eviter d'allouer un frais a un
-                        proprietaire d'une autre ACP */}
-                    <label className="flex items-center gap-1.5 text-[11px] text-slate-600 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={allocShowAllOwners}
-                        onChange={(e) => setAllocShowAllOwners(e.target.checked)}
-                        data-testid="alloc-show-all-owners"
-                        className="rounded border-slate-300"
-                      />
-                      Afficher tous les proprietaires du syndic
-                      <span className="text-slate-400 italic">(par defaut : seulement ceux de cette ACP)</span>
-                    </label>
+                    {/* iter94a (Chinese Wall STRICT / RGPD) : le toggle "Afficher
+                        tous les proprietaires du syndic" a ete supprime. Un frais
+                        privatif ne peut concerner QUE des proprietaires de l'ACP
+                        courante. */}
                     {allocs.length === 0 && (
                       <div
                         className="text-xs text-rose-800 bg-rose-50 border border-rose-300 rounded p-2 font-medium"
@@ -1574,17 +1565,19 @@ export default function InvoicesPage() {
                     )}
                     {allocs.map((a, idx) => {
                       const selOwner = owners.find(o => o.id === a.owner_id);
-                      // iter85i : combobox avec recherche (nom, prenom, VCS, email)
-                      // au lieu du Select shadcn (inutilisable au-dela de 20 owners).
-                      // iter92e : filtre les proprietaires par ACP courante par defaut
-                      // pour eviter d'assigner un frais privatif a un proprio d'une
-                      // autre ACP (bug remonte par user). Le syndic peut toggle vers
-                      // "syndic_wide" via le checkbox global de la modale.
+                      // iter94a (Chinese Wall STRICT / RGPD) : la liste `owners`
+                      // est deja strictement filtree sur l'ACP courante par le
+                      // backend (chargement via `copropriete_id`). On n'a plus
+                      // besoin de re-filtrer cote client, mais on garde une
+                      // safety net au cas ou le backend renverrait plus.
                       const excludedIds = allocs.filter((b, j) => j !== idx && b.owner_id).map(b => b.owner_id);
                       const coproId = (invForm?.copropriete_id) || localStorage.getItem('selectedCopro') || '';
-                      const scopedOwners = (allocShowAllOwners || !coproId)
-                        ? owners
-                        : owners.filter(o => (o.copropriete_ids || []).includes(coproId));
+                      const scopedOwners = coproId
+                        ? owners.filter(o =>
+                            (o.copropriete_ids || []).includes(coproId) ||
+                            o.copropriete_id === coproId
+                          )
+                        : owners;
                       return (
                         <div key={a._key || idx} className="flex gap-2 items-start bg-white border border-amber-100 rounded p-2">
                           <div className="flex-1">

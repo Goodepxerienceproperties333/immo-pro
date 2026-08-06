@@ -18,6 +18,14 @@ billing.
 - Production : https://immo-pcmn.emergent.host
 
 ## Recent changes (Feb 2026)
+- **2026-02-06 (iter94a)** : Chinese Wall STRICT (RGPD/P0). Frontend
+  `InvoicesPage` (allocation frais privatifs) et `LotsPage` (dropdown
+  assignation lot->owner) ne chargent plus les proprios via `syndic_wide=true`.
+  Ils utilisent strictement `copropriete_id` = ACP courante. Toggle
+  "Afficher tous les proprietaires du syndic" supprime (fuite RGPD).
+  Backend `/api/owners?copropriete_id=X` deja OK (middleware bloque 403 sur
+  ACPs hors scope + filtre `_allowed_owner_ids`). Cross-syndic isolation
+  intacte via `syndic_id` sur owners + `syndic_query()`.
 - **2026-02-02** : Politique de Confidentialité (RGPD) mise à jour avec
   données société réelles. `_DEFAULT_DOCS["privacy"]` v2, DB bumpée v1→v2.
   Section 1 (Responsable du traitement) et Section 12 (Contact) mises à jour.
@@ -32,9 +40,11 @@ billing.
 - 2026-02 : RBAC `require_permission` sur routes Invoice.
 
 ## Backlog
-- **P1 (récurrent, oublié 8×)** : TEUWEN legacy lot mapping dans
+- **P1 (récurrent, oublié 9×)** : TEUWEN legacy lot mapping dans
   `reports.py` et `pdf_decompte.py` — aligner `lot.owner_id` avec
   `distribution_keys`.
+- P2 : UI Frontend Audit Bancaire Superadmin (`/api/admin/bank-audit/scan`).
+- P2 : Outil admin bulk-recalcul factures legacy (fmtEUR NaN cleanup).
 - P2 : Outil admin bulk-reset factures payées legacy → impayé.
 - P3 : Certificat fiscal annuel.
 - P4 : Emails automatiques de relance (APScheduler quotidien).
