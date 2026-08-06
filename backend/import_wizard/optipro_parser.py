@@ -234,6 +234,17 @@ def _parse_page(
         else:
             is_sub = w["x0"] > 435
             amount_xmin = passif_xmin
+        # iter94b : REJECT anchors dans la colonne MONTANT (>= amount_xmin).
+        # Les montants belges "131 472,36" sont extraits en 2 mots
+        # ("131" + "472,36"). Le premier fragment matche `\d{2,10}` et etait
+        # mal identifie comme sous-compte, creant une ligne fantome dont
+        # montant = fragment suivant. Ex bilan Finlead 30/09/2025 : phantom
+        # "131 - Compte Belfius = 472,26" (Actif) + "105 - Fournisseurs =
+        # 370,44" (Passif) => ecart de 101,82 EUR. Filtrer par x0 elimine
+        # ces faux positifs sans risque : un vrai code compte est TOUJOURS
+        # aligne a gauche de sa colonne, jamais dans la zone montant.
+        if w["x0"] >= amount_xmin:
+            continue
         # Rejette faux positifs : codes 2-digit dans zone sub-account
         # (souvent des fragments de montant type "10" dans "10 262,39")
         if len(w["text"]) == 2 and is_sub:

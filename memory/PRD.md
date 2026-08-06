@@ -20,14 +20,18 @@ billing.
 ## Recent changes (Feb 2026)
 - **2026-02-06 (iter94b)** : Parser Bilan PDF - fix phantom sub-accounts.
   Sur les montants belges avec espace en séparateur de milliers ("131 472,36"),
-  la fragment "131" était mal identifié comme un code de sous-compte (regex
+  le fragment "131" était mal identifié comme un code de sous-compte (regex
   `\d{2,10}`) créant une ligne fantôme dont le libellé = compte parent et
   montant = fragment suivant. Reproduit sur `Bilan comptable au 30_09_2025.pdf`
   (SA Finlead Properties) : écart 101,82 EUR entre Actif (228 796,36) et
   Passif (228 694,54) = différence des 2 fantômes (472,26 côté Actif, 370,44
   côté Passif). Correctif : rejeter les ancres dont x0 tombe dans la colonne
-  montant (>= 350 côté Actif, >= 730 côté Passif). Résultat : Actif = Passif
-  = 228 324,10 (bilan équilibré).
+  montant (>= amount_xmin de la stratégie active). Fix appliqué sur **les
+  deux parsers** : `pdf_utils.parse_balance_pdf` (legacy) et
+  `optipro_parser._parse_page` (moteur wizard iter93bu). 15 tests parser
+  passent. Résultat : Actif = Passif = 228 324,10 (bilan équilibré).
+  ⚠️ Utilisateur doit **re-uploader le PDF** dans le wizard pour ré-appliquer
+  le parseur - l'ancien parse cache est stocke en DB session.
 - **2026-02-06 (iter94a)** : Chinese Wall STRICT (RGPD/P0). Frontend
   `InvoicesPage` (allocation frais privatifs) et `LotsPage` (dropdown
   assignation lot->owner) ne chargent plus les proprios via `syndic_wide=true`.
