@@ -127,6 +127,21 @@ export default function AdminBackupsPage() {
     } catch (e) { toast.error(extractApiError(e)); }
   };
 
+  // iter94e : export PDF synthese (une page par collection principale)
+  const downloadPdf = async (b) => {
+    try {
+      toast.info('Generation PDF en cours...');
+      const r = await api.get(`/admin/backups/${b.backup_id}/download-pdf`, { responseType: 'blob' });
+      const url = URL.createObjectURL(new Blob([r.data], { type: 'application/pdf' }));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `backup_${b.copropriete_name}_${b.created_at.slice(0, 10)}.pdf`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success('PDF telecharge');
+    } catch (e) { toast.error(extractApiError(e)); }
+  };
+
   const openRestore = (b) => {
     setRestoreDialog(b);
     setRestoreDryRun(true);
@@ -354,6 +369,12 @@ export default function AdminBackupsPage() {
                                 className="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border-emerald-200"
                                 data-testid={`btn-download-xlsx-${b.backup_id}`}>
                           Excel
+                        </Button>
+                        <Button size="sm" variant="outline" onClick={() => downloadPdf(b)}
+                                title="Telecharger PDF de synthese"
+                                className="bg-rose-50 hover:bg-rose-100 text-rose-700 border-rose-200"
+                                data-testid={`btn-download-pdf-${b.backup_id}`}>
+                          PDF
                         </Button>
                         <Button size="sm" variant="outline" onClick={() => download(b)}
                                 title="Telecharger ZIP brut (JSONL)"

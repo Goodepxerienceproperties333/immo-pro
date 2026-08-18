@@ -18,6 +18,15 @@ billing.
 - Production : https://immo-pcmn.emergent.host
 
 ## Recent changes (Feb 2026)
+- **2026-02-06 (iter94e)** : Export PDF de synthèse des backups ACP. Nouvel
+  endpoint `GET /api/admin/backups/{backup_id}/download-pdf` qui génère un
+  PDF paysage A4 : page de garde (nom ACP + stats) + une section par
+  collection principale (Propriétaires, Lots, Factures, Écritures, Appels
+  de fonds, Extraits bancaires, Transactions, Fournisseurs, Exercices, Clés
+  de répartition, Catégories, Mutations). Colonnes clés uniquement, texte
+  tronqué à 90 char, max 200 lignes par section (au-delà : renvoi vers
+  l'Excel). Bouton "PDF" rose ajouté sur `AdminBackupsPage.js`. Testé :
+  backup Maria → 12 pages en 218 ms.
 - **2026-02-06 (iter94d)** : Export Excel des backups ACP. Le ZIP de backup
   contenait des `.jsonl` illisibles sans outil. Nouvel endpoint
   `GET /api/admin/backups/{backup_id}/download-xlsx` qui convertit le ZIP

@@ -323,6 +323,235 @@ def create_backups_router(db):
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
 
+    @router.get("/admin/backups/{backup_id}/download-pdf")
+    async def download_backup_pdf(backup_id: str, request: Request):
+        """iter94e : synthese PDF d'un backup ACP.
+        Un PDF paysage avec :
+        - Page de garde (nom ACP, date, stats)
+        - Onglet par collection principale (Proprietaires, Lots, Factures,
+          Ecritures, Appels de fonds, Fournisseurs) avec tableau resume
+          (colonnes cles uniquement). Truncate au-dela de 200 lignes.
+        """
+        await _require_superadmin(request)
+        from gridfs_storage import GridFSStorage
+        import io as _io
+        import json as _json
+        import zipfile as _zipfile
+        from reportlab.lib.pagesizes import A4, landscape
+        from reportlab.lib import colors
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.units import mm
+        from reportlab.platypus import (
+            SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak,
+        )
+
+        storage = GridFSStorage(db, bucket_name="acp_backups")
+        info = await db.backups_index.find_one({"backup_id": backup_id})
+        if not info:
+            raise HTTPException(404, "Backup introuvable")
+        try:
+            data = await storage.download(backup_id)
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(500, f"Erreur GridFS : {e}") from e
+
+        # Parse ZIP
+        manifest = {}
+        copro_doc = {}
+        owners = []
+        collections_data: dict[str, list] = {}
+        try:
+            with _zipfile.ZipFile(_io.BytesIO(data)) as z:
+                try:
+                    manifest = _json.loads(z.read("manifest.json").decode("utf-8"))
+                except KeyError:
+                    pass
+                try:
+                    copro_doc = _json.loads(z.read("copropriete.json").decode("utf-8"))
+                except KeyError:
+                    pass
+                try:
+                    owners = _json.loads(z.read("owners.json").decode("utf-8"))
+                except KeyError:
+                    pass
+                for nm in z.namelist():
+                    if not nm.startswith("collections/") or not nm.endswith(".jsonl"):
+                        continue
+                    coll = nm[len("collections/"):-len(".jsonl")]
+                    raw = z.read(nm).decode("utf-8")
+                    if not raw.strip():
+                        continue
+                    docs = []
+                    for line in raw.strip().split("\n"):
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            docs.append(_json.loads(line))
+                        except Exception:
+                            continue
+                    if docs:
+                        collections_data[coll] = docs
+        except _zipfile.BadZipFile as e:
+            raise HTTPException(500, f"Backup ZIP corrompu : {e}") from e
+
+        # Build PDF
+        buf = _io.BytesIO()
+        doc = SimpleDocTemplate(
+            buf, pagesize=landscape(A4),
+            leftMargin=10 * mm, rightMargin=10 * mm,
+            topMargin=10 * mm, bottomMargin=10 * mm,
+            title=f"Backup {info.get('copropriete_name', 'ACP')}",
+        )
+        styles = getSampleStyleSheet()
+        h1 = ParagraphStyle("h1", parent=styles["Heading1"], fontSize=18,
+                            textColor=colors.HexColor("#022D52"))
+        h2 = ParagraphStyle("h2", parent=styles["Heading2"], fontSize=13,
+                            textColor=colors.HexColor("#022D52"))
+        small = ParagraphStyle("small", parent=styles["Normal"], fontSize=8)
+        story = []
+
+        # Page de garde
+        story.append(Paragraph(
+            f"Sauvegarde ACP — {info.get('copropriete_name', 'ACP')}", h1
+        ))
+        story.append(Spacer(1, 4 * mm))
+        story.append(Paragraph(
+            f"Backup du {info.get('created_at', '')[:19].replace('T', ' ')} — "
+            f"Type {info.get('type', 'daily')} — "
+            f"Taille {info.get('size_bytes', 0):,} octets", styles["Normal"]
+        ))
+        story.append(Spacer(1, 6 * mm))
+        # Table meta
+        meta_rows = [["Cle", "Valeur"]]
+        for k in ("copropriete_id", "reference", "owners_count", "created_at"):
+            v = manifest.get(k) or copro_doc.get(k) or info.get(k) or ""
+            meta_rows.append([str(k), str(v)[:80]])
+        meta_rows.append(["Nb collections", str(len(collections_data))])
+        meta_rows.append(["Nb proprietaires", str(len(owners))])
+        t = Table(meta_rows, colWidths=[50 * mm, 200 * mm])
+        t.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#022D52")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.whitesmoke),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE", (0, 0), (-1, -1), 9),
+            ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ]))
+        story.append(t)
+        story.append(PageBreak())
+
+        # Definition des vues par collection : (label, cles a afficher, largeurs mm)
+        views = {
+            "_owners": ("Proprietaires",
+                        ["last_name", "first_name", "email", "phone", "vcs_code"],
+                        [50, 40, 70, 40, 40]),
+            "lots": ("Lots",
+                     ["number", "name", "quotas", "owner_id", "type"],
+                     [30, 60, 30, 60, 30]),
+            "invoices": ("Factures",
+                         ["number", "date", "supplier", "amount",
+                          "description", "status"],
+                         [30, 25, 60, 25, 90, 20]),
+            "journal_entries": ("Ecritures comptables",
+                                ["journal_type", "date", "reference",
+                                 "description", "amount"],
+                                [20, 25, 40, 130, 30]),
+            "fund_calls": ("Appels de fonds",
+                           ["number", "date", "description", "amount", "type"],
+                           [30, 25, 130, 25, 30]),
+            "bank_statements": ("Extraits bancaires",
+                                ["number", "date", "account_number",
+                                 "opening_balance", "closing_balance", "status"],
+                                [25, 25, 60, 30, 30, 25]),
+            "bank_transactions": ("Transactions bancaires",
+                                  ["date", "amount", "counterparty_name",
+                                   "communication", "transaction_type"],
+                                  [25, 25, 60, 100, 25]),
+            "suppliers": ("Fournisseurs",
+                          ["name", "vat_number", "email", "iban"],
+                          [70, 40, 70, 60]),
+            "fiscal_years": ("Exercices fiscaux",
+                             ["reference", "date_start", "date_end", "status"],
+                             [40, 30, 30, 25]),
+            "distribution_keys": ("Cles de repartition",
+                                  ["name", "description", "coefficients"],
+                                  [50, 100, 100]),
+            "expense_categories": ("Categories de depense",
+                                   ["code", "name", "account_number"],
+                                   [30, 130, 30]),
+            "mutations": ("Mutations",
+                          ["date", "lot_id", "from_owner_id", "to_owner_id",
+                           "roulement_quota"],
+                          [25, 60, 60, 60, 30]),
+        }
+
+        def _render_table(label: str, docs: list, cols: list, widths: list):
+            if not docs:
+                return
+            story.append(Paragraph(f"{label} ({len(docs)} entree(s))", h2))
+            story.append(Spacer(1, 2 * mm))
+            trunc = len(docs) > 200
+            rows_docs = docs[:200]
+            header = cols
+            rows = [header]
+            for d in rows_docs:
+                r = []
+                for k in cols:
+                    v = d.get(k, "")
+                    if isinstance(v, (list, dict)):
+                        v = _json.dumps(v, ensure_ascii=False, default=str)
+                    v = str(v)
+                    # Limiter chaque cellule
+                    if len(v) > 90:
+                        v = v[:87] + "..."
+                    r.append(v)
+                rows.append(r)
+            tbl = Table(rows, colWidths=[w * mm for w in widths], repeatRows=1)
+            tbl.setStyle(TableStyle([
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1F4E78")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.whitesmoke),
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("FONTSIZE", (0, 0), (-1, -1), 7),
+                ("GRID", (0, 0), (-1, -1), 0.15, colors.lightgrey),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1),
+                 [colors.white, colors.HexColor("#F5F8FB")]),
+            ]))
+            story.append(tbl)
+            if trunc:
+                story.append(Spacer(1, 2 * mm))
+                story.append(Paragraph(
+                    f"<i>... {len(docs) - 200} lignes supplementaires "
+                    f"tronquees. Utilisez l'export Excel pour la liste "
+                    f"complete.</i>", small,
+                ))
+            story.append(PageBreak())
+
+        # Proprietaires
+        if owners:
+            lbl, cols, widths = views["_owners"]
+            _render_table(lbl, owners, cols, widths)
+
+        # Autres collections dans l'ordre defini
+        for coll, (lbl, cols, widths) in views.items():
+            if coll.startswith("_"):
+                continue
+            docs = collections_data.get(coll) or []
+            if docs:
+                _render_table(lbl, docs, cols, widths)
+
+        doc.build(story)
+        buf.seek(0)
+        filename = (
+            f"backup_{info.get('copropriete_name', 'acp')}_"
+            f"{info['created_at'][:10]}.pdf"
+        )
+        return StreamingResponse(
+            iter([buf.getvalue()]),
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
     @router.delete("/admin/backups/{backup_id}")
     async def delete_backup(backup_id: str, request: Request):
         await _require_superadmin(request)
