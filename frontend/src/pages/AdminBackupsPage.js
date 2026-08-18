@@ -112,6 +112,21 @@ export default function AdminBackupsPage() {
     } catch (e) { toast.error(extractApiError(e)); }
   };
 
+  // iter94d : export Excel lisible (multi-onglets) - remplace le JSONL brut
+  const downloadXlsx = async (b) => {
+    try {
+      toast.info('Generation Excel en cours...');
+      const r = await api.get(`/admin/backups/${b.backup_id}/download-xlsx`, { responseType: 'blob' });
+      const url = URL.createObjectURL(new Blob([r.data]));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `backup_${b.copropriete_name}_${b.created_at.slice(0, 10)}.xlsx`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success('Excel telecharge');
+    } catch (e) { toast.error(extractApiError(e)); }
+  };
+
   const openRestore = (b) => {
     setRestoreDialog(b);
     setRestoreDryRun(true);
@@ -334,7 +349,14 @@ export default function AdminBackupsPage() {
                         {Object.values(b.collections_counts || {}).reduce((a, x) => a + x, 0)}
                       </TableCell>
                       <TableCell className="text-right space-x-1">
+                        <Button size="sm" variant="outline" onClick={() => downloadXlsx(b)}
+                                title="Telecharger Excel (multi-onglets lisibles)"
+                                className="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border-emerald-200"
+                                data-testid={`btn-download-xlsx-${b.backup_id}`}>
+                          Excel
+                        </Button>
                         <Button size="sm" variant="outline" onClick={() => download(b)}
+                                title="Telecharger ZIP brut (JSONL)"
                                 data-testid={`btn-download-${b.backup_id}`}>
                           <Download className="h-3 w-3" />
                         </Button>

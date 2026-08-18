@@ -162,6 +162,7 @@ _REQUEST_TIMEOUT_SKIP_PREFIXES = (
     "/api/banking/import-",       # import-coda, import-pdf, etc.
     "/api/invoices/import",       # import factures IA
     "/api/invoices/analyze",      # AI extraction factures
+    "/api/admin/backups/",         # download / download-xlsx / restore (peuvent etre longs sur gros backups)
 )
 
 

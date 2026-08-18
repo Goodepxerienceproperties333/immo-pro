@@ -18,6 +18,16 @@ billing.
 - Production : https://immo-pcmn.emergent.host
 
 ## Recent changes (Feb 2026)
+- **2026-02-06 (iter94d)** : Export Excel des backups ACP. Le ZIP de backup
+  contenait des `.jsonl` illisibles sans outil. Nouvel endpoint
+  `GET /api/admin/backups/{backup_id}/download-xlsx` qui convertit le ZIP
+  en fichier `.xlsx` multi-onglets lisibles : un onglet par collection
+  (Propriétaires, Lots, Écritures, Factures, Appels de fonds, Transactions,
+  Fournisseurs, Exercices, etc.) + onglet `_Manifest` avec les metadata.
+  Colonnes triées par pertinence (id, number, date, name, amount en tête),
+  header stylé, freeze pane, largeurs auto. Bouton "Excel" ajouté sur la
+  page `AdminBackupsPage.js` à côté du bouton ZIP classique. Vérifié sur
+  backup Maria (14 onglets, 30KB in → 70KB xlsx out, généré en 268ms).
 - **2026-02-06 (iter94c)** : Backend crash après import extrait bancaire.
   `POST /api/banking/statements/import-files` déclenche une extraction IA
   (Claude Sonnet 4.5) qui peut dépasser 60s sur des PDFs volumineux. Le

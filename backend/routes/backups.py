@@ -151,6 +151,178 @@ def create_backups_router(db):
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
 
+    @router.get("/admin/backups/{backup_id}/download-xlsx")
+    async def download_backup_xlsx(backup_id: str, request: Request):
+        """iter94d : convertit le backup ZIP (JSONL brut) en Excel multi-onglets.
+        Un onglet par collection avec entêtes lisibles, tri par date desc si dispo.
+        Facilite la consultation par le syndic sans outil de lecture JSONL.
+        """
+        await _require_superadmin(request)
+        from gridfs_storage import GridFSStorage
+        import io as _io
+        import json as _json
+        import zipfile as _zipfile
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill, Alignment
+        from openpyxl.utils import get_column_letter
+
+        storage = GridFSStorage(db, bucket_name="acp_backups")
+        info = await db.backups_index.find_one({"backup_id": backup_id})
+        if not info:
+            raise HTTPException(404, "Backup introuvable")
+        try:
+            data = await storage.download(backup_id)
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(500, f"Erreur GridFS : {e}") from e
+
+        wb = Workbook()
+        wb.remove(wb.active)  # supprime la sheet par defaut
+        header_font = Font(bold=True, color="FFFFFF")
+        header_fill = PatternFill("solid", fgColor="1F4E78")
+        center = Alignment(horizontal="center", vertical="center")
+
+        def _flatten(doc: dict) -> dict:
+            """Aplati les valeurs listes/dicts en JSON string pour Excel."""
+            out = {}
+            for k, v in (doc or {}).items():
+                if k.startswith("_"):
+                    continue
+                if isinstance(v, (list, dict)):
+                    out[k] = _json.dumps(v, ensure_ascii=False, default=str)[:32000]
+                elif v is None:
+                    out[k] = ""
+                else:
+                    out[k] = v
+            return out
+
+        def _add_sheet(name: str, docs: list):
+            """Ajoute un onglet nomme `name` avec en-tetes + lignes."""
+            if not docs:
+                return
+            # Sheet name limit 31 chars, no special chars
+            safe = name.replace("/", "_").replace("\\", "_")[:31]
+            ws = wb.create_sheet(safe)
+            flat = [_flatten(d) for d in docs]
+            # Colonnes = union des cles, ordre stable : cles frequentes d'abord
+            keys_freq = {}
+            for d in flat:
+                for k in d.keys():
+                    keys_freq[k] = keys_freq.get(k, 0) + 1
+            priority = ["id", "number", "date", "name", "last_name", "first_name",
+                        "email", "amount", "description", "label", "reference",
+                        "status", "copropriete_id", "created_at"]
+            all_keys = list(keys_freq.keys())
+            ordered = [k for k in priority if k in keys_freq] + \
+                      sorted([k for k in all_keys if k not in priority])
+            # Header row
+            for i, k in enumerate(ordered, 1):
+                cell = ws.cell(row=1, column=i, value=k)
+                cell.font = header_font
+                cell.fill = header_fill
+                cell.alignment = center
+            # Data rows
+            for r_idx, d in enumerate(flat, 2):
+                for c_idx, k in enumerate(ordered, 1):
+                    val = d.get(k, "")
+                    if isinstance(val, (dict, list)):
+                        val = _json.dumps(val, ensure_ascii=False, default=str)[:32000]
+                    ws.cell(row=r_idx, column=c_idx, value=val)
+            # Auto column width (rough)
+            for c_idx, k in enumerate(ordered, 1):
+                max_len = max(
+                    [len(str(k))] + [len(str(d.get(k, ""))[:60]) for d in flat[:200]]
+                )
+                ws.column_dimensions[get_column_letter(c_idx)].width = min(max(12, max_len + 2), 50)
+            ws.freeze_panes = "A2"
+
+        # Parse ZIP
+        try:
+            with _zipfile.ZipFile(_io.BytesIO(data)) as z:
+                names = z.namelist()
+                # Manifest
+                try:
+                    manifest = _json.loads(z.read("manifest.json").decode("utf-8"))
+                    ws = wb.create_sheet("_Manifest", 0)
+                    ws["A1"] = "Sauvegarde ACP"
+                    ws["A1"].font = Font(bold=True, size=14)
+                    row = 3
+                    for k, v in manifest.items():
+                        ws.cell(row=row, column=1, value=k).font = Font(bold=True)
+                        ws.cell(
+                            row=row, column=2,
+                            value=_json.dumps(v, ensure_ascii=False, default=str)
+                            if isinstance(v, (dict, list)) else v,
+                        )
+                        row += 1
+                    ws.column_dimensions["A"].width = 30
+                    ws.column_dimensions["B"].width = 60
+                except KeyError:
+                    pass
+                # Copropriete
+                try:
+                    copro_doc = _json.loads(z.read("copropriete.json").decode("utf-8"))
+                    _add_sheet("Copropriete", [copro_doc])
+                except KeyError:
+                    pass
+                # Owners
+                try:
+                    owners = _json.loads(z.read("owners.json").decode("utf-8"))
+                    _add_sheet("Proprietaires", owners)
+                except KeyError:
+                    pass
+                # Collections JSONL
+                for nm in names:
+                    if not nm.startswith("collections/") or not nm.endswith(".jsonl"):
+                        continue
+                    coll = nm[len("collections/"):-len(".jsonl")]
+                    try:
+                        raw = z.read(nm).decode("utf-8")
+                    except Exception:
+                        continue
+                    if not raw.strip():
+                        continue
+                    docs = []
+                    for line in raw.strip().split("\n"):
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            docs.append(_json.loads(line))
+                        except Exception:
+                            continue
+                    if docs:
+                        # Renommer certaines collections pour l'onglet
+                        label = {
+                            "lots": "Lots",
+                            "invoices": "Factures",
+                            "bank_statements": "Extraits bancaires",
+                            "bank_transactions": "Transactions",
+                            "journal_entries": "Ecritures",
+                            "fund_calls": "Appels de fonds",
+                            "distribution_keys": "Cles de repartition",
+                            "expense_categories": "Categories de depense",
+                            "suppliers": "Fournisseurs",
+                            "fiscal_years": "Exercices",
+                            "mutations": "Mutations",
+                        }.get(coll, coll)
+                        _add_sheet(label, docs)
+        except _zipfile.BadZipFile as e:
+            raise HTTPException(500, f"Backup ZIP corrompu : {e}") from e
+
+        # Serialize
+        out = _io.BytesIO()
+        wb.save(out)
+        out.seek(0)
+        filename = (
+            f"backup_{info.get('copropriete_name','acp')}_"
+            f"{info['created_at'][:10]}.xlsx"
+        )
+        return StreamingResponse(
+            iter([out.getvalue()]),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
     @router.delete("/admin/backups/{backup_id}")
     async def delete_backup(backup_id: str, request: Request):
         await _require_superadmin(request)
