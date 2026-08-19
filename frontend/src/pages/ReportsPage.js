@@ -216,7 +216,41 @@ export default function ReportsPage() {
 
   return (
     <div data-testid="reports-page">
-      <div className="page-header"><h1 className="page-title"><BarChart3 size={24} className="inline mr-2" />Rapports Financiers</h1><p className="page-subtitle">Bilan, compte de resultats, balance et decomptes</p></div>
+      <div className="page-header flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="page-title"><BarChart3 size={24} className="inline mr-2" />Rapports Financiers</h1>
+          <p className="page-subtitle">Bilan, compte de resultats, balance et decomptes</p>
+        </div>
+        <Button
+          onClick={async () => {
+            if (!selectedCopro) { toast.error('Selectionne d\'abord une ACP'); return; }
+            try {
+              toast.info('Generation du dossier comptable complet en cours...');
+              const params = { copropriete_id: selectedCopro };
+              if (fiscalYearId) params.fiscal_year_id = fiscalYearId;
+              if (dateFrom) params.date_from = dateFrom;
+              if (dateTo) params.date_to = dateTo;
+              const r = await api.get(
+                `/coproprietes/${selectedCopro}/dossier-comptable.zip`,
+                { params, responseType: 'blob' },
+              );
+              const url = URL.createObjectURL(new Blob([r.data]));
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = `dossier_comptable_${selectedCopro.slice(0,8)}.zip`;
+              a.click();
+              URL.revokeObjectURL(url);
+              toast.success('Dossier comptable telecharge');
+            } catch (e) {
+              toast.error(e?.response?.data?.detail || 'Echec de la generation');
+            }
+          }}
+          className="bg-rose-600 hover:bg-rose-700 text-white"
+          data-testid="btn-dossier-comptable-zip"
+        >
+          <Download size={16} className="mr-2" /> Dossier comptable complet (ZIP)
+        </Button>
+      </div>
       <Tabs value={tab} onValueChange={(v) => { setTab(v); setSearchParams(v === 'balance' ? {} : { tab: v }, { replace: true }); }}>
         <TabsList className="mb-4"><TabsTrigger value="balance">Balance</TabsTrigger><TabsTrigger value="bilan">Bilan</TabsTrigger><TabsTrigger value="resultat">Resultat</TabsTrigger><TabsTrigger value="decomptes">Decomptes</TabsTrigger></TabsList>
 

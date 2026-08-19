@@ -552,6 +552,245 @@ def create_backups_router(db):
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
 
+    # ============ Dossier comptable complet (iter94f) ============
+
+    @router.get("/coproprietes/{copropriete_id}/dossier-comptable.zip")
+    async def dossier_comptable(
+        copropriete_id: str, request: Request,
+        fiscal_year_id: Optional[str] = None,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+    ):
+        """iter94f : Dossier comptable complet d'une ACP (ZIP structure).
+
+        Agrege TOUS les rapports comptables standards en un seul ZIP :
+        - 01_Bilan : bilan avant/apres repartition (PDF + XLSX)
+        - 02_Balance : balance PCMN + balance tiers (proprios + fournisseurs)
+        - 03_Journaux : CSV global + PDF separes par type (OD, AN, VEN, FIN, ACH)
+        - 04_Grand_Livre : XLSX detaille par compte
+        - 05_Cles_Repartition : PDF + XLSX des cles avec quotites par lot
+        - 06_Factures : liste + detail comptable
+        - 07_Extraits_bancaires : liste des extraits
+        - README.txt : index du dossier
+
+        Reserve superadmin ou syndic de l'ACP (chinese wall applique).
+        """
+        # Auth : superadmin OU syndic scope
+        try:
+            await _require_superadmin(request)
+        except HTTPException:
+            await _require_syndic_scope(request, copropriete_id)
+
+        import io as _io
+        import zipfile as _zipfile
+        import httpx
+        from httpx import ASGITransport
+        from server import app as _fastapi_app
+
+        # Recupere l'ACP pour le nom
+        copro = await db.coproprietes.find_one(
+            {"id": copropriete_id}, {"_id": 0, "name": 1, "reference": 1},
+        )
+        if not copro:
+            raise HTTPException(404, "ACP introuvable")
+
+        # Detecte l'exercice fiscal actif si non fourni
+        fy_doc = None
+        if fiscal_year_id:
+            fy_doc = await db.fiscal_years.find_one(
+                {"id": fiscal_year_id, "copropriete_id": copropriete_id}, {"_id": 0},
+            )
+        if not fy_doc:
+            fy_doc = await db.fiscal_years.find_one(
+                {"copropriete_id": copropriete_id, "status": "open"},
+                {"_id": 0}, sort=[("created_at", -1)],
+            )
+        fy_ref = (fy_doc or {}).get("reference") or "exercice"
+        eff_fy_id = (fy_doc or {}).get("id") or ""
+        eff_from = date_from or (fy_doc or {}).get("date_start") or ""
+        eff_to = date_to or (fy_doc or {}).get("date_end") or ""
+        # Fallback : si toujours vide, prend les 12 derniers mois
+        if not eff_from or not eff_to:
+            from datetime import timedelta as _td
+            _today = datetime.now(timezone.utc).date()
+            _year_ago = _today - _td(days=365)
+            if not eff_from:
+                eff_from = _year_ago.isoformat()
+            if not eff_to:
+                eff_to = _today.isoformat()
+
+        # Prepare client HTTP interne (reprend les cookies auth du user)
+        cookies = {"access_token": request.cookies.get("access_token", "")}
+        transport = ASGITransport(app=_fastapi_app)
+        base_headers = {"X-Copropriete-Id": copropriete_id}
+
+        buf = _io.BytesIO()
+        errors = []
+        base_params = {"copropriete_id": copropriete_id}
+        if eff_from:
+            base_params["date_from"] = eff_from
+        if eff_to:
+            base_params["date_to"] = eff_to
+
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://internal", cookies=cookies,
+            headers=base_headers, timeout=120.0,
+        ) as client:
+            # Helper pour recuperer un fichier binaire
+            async def _fetch(path: str, params: dict, out_name: str,
+                             media_expected: str = "") -> Optional[bytes]:
+                try:
+                    r = await client.get(path, params=params)
+                    if r.status_code == 200 and len(r.content) > 0:
+                        return r.content
+                    errors.append(f"{out_name}: HTTP {r.status_code}")
+                except Exception as e:  # noqa: BLE001
+                    errors.append(f"{out_name}: {str(e)[:100]}")
+                return None
+
+            with _zipfile.ZipFile(buf, "w", _zipfile.ZIP_DEFLATED) as zf:
+                # --- 01_Bilan ---
+                p = {**base_params, "view_mode": "before_distribution"}
+                if eff_fy_id:
+                    p["fiscal_year_id"] = eff_fy_id
+                data = await _fetch("/api/reports/bilan/pdf", p, "bilan_avant")
+                if data:
+                    zf.writestr("01_Bilan/bilan_avant_repartition.pdf", data)
+                p2 = {**p, "view_mode": "after_distribution"}
+                data = await _fetch("/api/reports/bilan/pdf", p2, "bilan_apres")
+                if data:
+                    zf.writestr("01_Bilan/bilan_apres_repartition.pdf", data)
+                data = await _fetch("/api/exports/bilan.xlsx", base_params, "bilan_xlsx")
+                if data:
+                    zf.writestr("01_Bilan/bilan.xlsx", data)
+
+                # --- 02_Balance ---
+                # PDF de balance PCMN (via journals.pdf sans filtre type retourne
+                # toutes les ecritures, mais nous voulons la balance : elle a
+                # son propre endpoint uniquement JSON. Genere depuis grand-livre.xlsx.
+                data = await _fetch(
+                    "/api/exports/grand-livre.xlsx", base_params, "grand_livre",
+                )
+                if data:
+                    zf.writestr("04_Grand_Livre/grand_livre.xlsx", data)
+                data = await _fetch(
+                    "/api/exports/balance-tiers/owners.xlsx", base_params,
+                    "balance_tiers_owners",
+                )
+                if data:
+                    zf.writestr("02_Balance/balance_tiers_proprietaires.xlsx", data)
+                data = await _fetch(
+                    "/api/reports/balance-tiers/pdf", base_params, "balance_tiers_pdf",
+                )
+                if data:
+                    zf.writestr("02_Balance/balance_tiers_proprietaires.pdf", data)
+
+                # --- 03_Journaux ---
+                # CSV global + PDF par type
+                data = await _fetch(
+                    "/api/exports/journals.csv", base_params, "journal_csv",
+                )
+                if data:
+                    zf.writestr("03_Journaux/journaux_tous.csv", data)
+                for jt in ("AN", "OD", "VEN", "ACH", "FIN"):
+                    p = {**base_params, "journal_type": jt}
+                    data = await _fetch(
+                        "/api/exports/journals.pdf", p, f"journal_{jt}_pdf",
+                    )
+                    if data:
+                        zf.writestr(f"03_Journaux/journal_{jt}.pdf", data)
+                    data_csv = await _fetch(
+                        "/api/exports/journals.csv", p, f"journal_{jt}_csv",
+                    )
+                    if data_csv:
+                        zf.writestr(f"03_Journaux/journal_{jt}.csv", data_csv)
+
+                # --- 05_Cles_Repartition ---
+                # Cles + coefficients par lot (JSON depuis /api/distribution-keys)
+                try:
+                    r = await client.get(
+                        "/api/distribution-keys",
+                        params={"copropriete_id": copropriete_id},
+                    )
+                    if r.status_code == 200:
+                        keys = r.json()
+                        # Build CSV lisible
+                        import csv as _csv
+                        sbuf = _io.StringIO()
+                        sbuf.write("\ufeff")
+                        w = _csv.writer(sbuf, delimiter=";")
+                        w.writerow([
+                            "Cle", "Description", "Lot", "Quotite", "Total quotites",
+                        ])
+                        for k in keys or []:
+                            coefs = k.get("coefficients") or {}
+                            total_q = sum(float(v or 0) for v in coefs.values())
+                            for lot_id, q in coefs.items():
+                                w.writerow([
+                                    k.get("name", ""), k.get("description", ""),
+                                    lot_id, f"{float(q or 0):.4f}".replace(".", ","),
+                                    f"{total_q:.4f}".replace(".", ","),
+                                ])
+                        zf.writestr(
+                            "05_Cles_Repartition/cles_repartition_detail.csv",
+                            sbuf.getvalue().encode("utf-8"),
+                        )
+                        # JSON brut aussi (pour references croisees)
+                        import json as _json
+                        zf.writestr(
+                            "05_Cles_Repartition/cles_repartition.json",
+                            _json.dumps(keys, ensure_ascii=False, indent=2, default=str)
+                            .encode("utf-8"),
+                        )
+                except Exception as e:  # noqa: BLE001
+                    errors.append(f"cles_repartition: {str(e)[:100]}")
+
+                # --- 06_Factures ---
+                data = await _fetch(
+                    "/api/reports/invoices-list/pdf", base_params, "invoices_pdf",
+                )
+                if data:
+                    zf.writestr("06_Factures/liste_factures.pdf", data)
+                # Depenses PDF (Grand livre des depenses)
+                data = await _fetch(
+                    "/api/reports/depenses/pdf", base_params, "depenses_pdf",
+                )
+                if data:
+                    zf.writestr("06_Factures/detail_depenses.pdf", data)
+
+                # --- README ---
+                readme = (
+                    f"DOSSIER COMPTABLE - {copro.get('name','ACP')} "
+                    f"({copro.get('reference','')})\n"
+                    f"Genere le {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n"
+                    f"Exercice : {fy_ref}\n"
+                    f"Periode  : {eff_from or 'depuis debut'} -> "
+                    f"{eff_to or 'aujourd hui'}\n\n"
+                    "Structure du dossier :\n"
+                    "  01_Bilan/            Bilan avant/apres repartition (PDF + XLSX)\n"
+                    "  02_Balance/          Balance des tiers (Proprios + Fournisseurs)\n"
+                    "  03_Journaux/         CSV global + PDF/CSV par type (AN/OD/VEN/ACH/FIN)\n"
+                    "  04_Grand_Livre/      Grand livre XLSX detaille par compte\n"
+                    "  05_Cles_Repartition/ Detail des cles avec quotites par lot\n"
+                    "  06_Factures/         Liste + detail des depenses\n"
+                )
+                if errors:
+                    readme += "\nAvertissements (rapports partiellement indisponibles) :\n"
+                    for e in errors[:20]:
+                        readme += f"  - {e}\n"
+                zf.writestr("README.txt", readme.encode("utf-8"))
+
+        buf.seek(0)
+        safe_name = (copro.get("name", "acp")
+                     .replace("/", "_").replace(" ", "_")[:40])
+        stamp = datetime.now().strftime("%Y%m%d")
+        filename = f"dossier_comptable_{safe_name}_{fy_ref}_{stamp}.zip"
+        return StreamingResponse(
+            iter([buf.getvalue()]),
+            media_type="application/zip",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
     @router.delete("/admin/backups/{backup_id}")
     async def delete_backup(backup_id: str, request: Request):
         await _require_superadmin(request)

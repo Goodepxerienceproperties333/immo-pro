@@ -18,6 +18,23 @@ billing.
 - Production : https://immo-pcmn.emergent.host
 
 ## Recent changes (Feb 2026)
+- **2026-02-06 (iter94f)** : Dossier comptable complet en ZIP. Nouvel
+  endpoint `GET /api/coproprietes/{id}/dossier-comptable.zip` qui agrege
+  TOUS les rapports comptables standards via appels HTTP internes
+  (ASGITransport) - pas de duplication de code. Structure du ZIP :
+    - `01_Bilan/` bilan avant + après répartition (PDF) + bilan.xlsx
+    - `02_Balance/` balance tiers proprios (PDF + XLSX)
+    - `03_Journaux/` journal_all.csv + PDF/CSV séparés par type
+       (AN, OD, VEN, ACH, FIN)
+    - `04_Grand_Livre/` grand livre XLSX détaillé par compte
+    - `05_Cles_Repartition/` CSV lisible + JSON avec quotités par lot
+    - `06_Factures/` liste_factures.pdf + detail_depenses.pdf
+    - `README.txt` index + avertissements
+  Bouton "Dossier comptable complet (ZIP)" rouge sur la page Reports.
+  Fallback dates : si pas d'exercice fiscal ouvert, prend les 12 derniers
+  mois. Testé sur ACP Agathe → **22 fichiers, 785 KB, généré en 5.9 s**
+  (bilan avant/après, journaux AN/OD complets avec 194 KB CSV, grand
+  livre 220 KB, factures + dépenses).
 - **2026-02-06 (iter94e)** : Export PDF de synthèse des backups ACP. Nouvel
   endpoint `GET /api/admin/backups/{backup_id}/download-pdf` qui génère un
   PDF paysage A4 : page de garde (nom ACP + stats) + une section par
