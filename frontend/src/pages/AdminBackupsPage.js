@@ -12,7 +12,7 @@ import {
 import { toast } from 'sonner';
 import {
   Archive, Download, Trash2, PlayCircle, RefreshCw, HardDrive, Clock,
-  CheckCircle2, XCircle, RotateCcw, Building2, DatabaseZap,
+  CheckCircle2, XCircle, RotateCcw, Building2, DatabaseZap, FileText,
 } from 'lucide-react';
 
 const BACKEND = process.env.REACT_APP_BACKEND_URL || '';
@@ -335,11 +335,34 @@ export default function AdminBackupsPage() {
       <div className="space-y-4">
         {Object.entries(byAcp).sort((a, b) => a[1].name.localeCompare(b[1].name)).map(([cid, group]) => (
           <Card key={cid} data-testid={`acp-backups-${cid}`}>
-            <CardHeader className="pb-2">
+            <CardHeader className="pb-2 flex flex-row items-center justify-between">
               <CardTitle className="text-sm flex items-center gap-2">
                 <Building2 className="h-4 w-4 text-[#022D52]" />
                 {group.name} <span className="text-xs text-slate-400 font-normal">({group.items.length} backups)</span>
               </CardTitle>
+              <Button
+                size="sm"
+                onClick={async () => {
+                  try {
+                    toast.info('Generation du dossier comptable complet...');
+                    const r = await api.get(
+                      `/coproprietes/${cid}/dossier-comptable.zip`,
+                      { responseType: 'blob' }
+                    );
+                    const url = URL.createObjectURL(new Blob([r.data]));
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `dossier_comptable_${(group.name || cid.slice(0,8)).replace(/\s+/g,'_')}.zip`;
+                    a.click();
+                    URL.revokeObjectURL(url);
+                    toast.success('Dossier comptable telecharge');
+                  } catch (e) { toast.error(extractApiError(e)); }
+                }}
+                className="bg-rose-600 hover:bg-rose-700 text-white text-xs h-7"
+                data-testid={`btn-dossier-comptable-${cid}`}
+              >
+                <FileText className="h-3 w-3 mr-1" /> Dossier comptable complet
+              </Button>
             </CardHeader>
             <CardContent className="p-0">
               <Table>
