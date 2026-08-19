@@ -665,6 +665,94 @@ def create_backups_router(db):
                     zf.writestr("01_Bilan/bilan.xlsx", data)
 
                 # --- 02_Balance ---
+                # Balance PCMN synthetique en PDF (genere depuis JSON)
+                try:
+                    r = await client.get("/api/reports/balance", params=base_params)
+                    if r.status_code == 200:
+                        bal_data = r.json()
+                        from reportlab.lib.pagesizes import A4, landscape
+                        from reportlab.lib import colors as _colors
+                        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+                        from reportlab.lib.units import mm as _mm
+                        from reportlab.platypus import (
+                            SimpleDocTemplate, Table as _Table, TableStyle as _TS,
+                            Paragraph as _P, Spacer as _Sp,
+                        )
+                        _buf = _io.BytesIO()
+                        _doc = SimpleDocTemplate(
+                            _buf, pagesize=landscape(A4),
+                            leftMargin=10 * _mm, rightMargin=10 * _mm,
+                            topMargin=10 * _mm, bottomMargin=10 * _mm,
+                            title=f"Balance PCMN - {copro.get('name','ACP')}",
+                        )
+                        _styles = getSampleStyleSheet()
+                        _h1 = ParagraphStyle("h1b", parent=_styles["Heading1"],
+                                             fontSize=16,
+                                             textColor=_colors.HexColor("#022D52"))
+                        _story = [
+                            _P(f"Balance PCMN — {copro.get('name','ACP')}", _h1),
+                            _Sp(1, 3 * _mm),
+                            _P(
+                                f"Periode : {eff_from} → {eff_to} — "
+                                f"Exercice : {fy_ref}",
+                                _styles["Normal"],
+                            ),
+                            _Sp(1, 5 * _mm),
+                        ]
+                        _rows = [[
+                            "Compte", "Libelle",
+                            "Total Debit", "Total Credit",
+                            "Solde Debit", "Solde Credit",
+                        ]]
+                        for a in bal_data.get("accounts", []):
+                            _rows.append([
+                                str(a.get("account_number", "")),
+                                str(a.get("account_name", ""))[:60],
+                                f"{a.get('total_debit', 0):,.2f}".replace(",", " "),
+                                f"{a.get('total_credit', 0):,.2f}".replace(",", " "),
+                                (f"{a.get('solde_debit', 0):,.2f}".replace(",", " ")
+                                 if a.get("solde_debit", 0) > 0 else ""),
+                                (f"{a.get('solde_credit', 0):,.2f}".replace(",", " ")
+                                 if a.get("solde_credit", 0) > 0 else ""),
+                            ])
+                        totals = bal_data.get("totals", {})
+                        _rows.append([
+                            "TOTAUX", "",
+                            f"{totals.get('total_debit', 0):,.2f}".replace(",", " "),
+                            f"{totals.get('total_credit', 0):,.2f}".replace(",", " "),
+                            f"{totals.get('solde_debit', 0):,.2f}".replace(",", " "),
+                            f"{totals.get('solde_credit', 0):,.2f}".replace(",", " "),
+                        ])
+                        _tbl = _Table(
+                            _rows,
+                            colWidths=[30 * _mm, 100 * _mm, 32 * _mm, 32 * _mm,
+                                       32 * _mm, 32 * _mm],
+                            repeatRows=1,
+                        )
+                        _tbl.setStyle(_TS([
+                            ("BACKGROUND", (0, 0), (-1, 0),
+                             _colors.HexColor("#022D52")),
+                            ("TEXTCOLOR", (0, 0), (-1, 0), _colors.whitesmoke),
+                            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                            ("FONTSIZE", (0, 0), (-1, -1), 8),
+                            ("ALIGN", (2, 1), (-1, -1), "RIGHT"),
+                            ("BACKGROUND", (0, -1), (-1, -1),
+                             _colors.HexColor("#F5F8FB")),
+                            ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
+                            ("GRID", (0, 0), (-1, -1), 0.15,
+                             _colors.lightgrey),
+                            ("ROWBACKGROUNDS", (0, 1), (-1, -2),
+                             [_colors.white, _colors.HexColor("#FAFBFC")]),
+                        ]))
+                        _story.append(_tbl)
+                        _doc.build(_story)
+                        _buf.seek(0)
+                        zf.writestr("02_Balance/balance_pcmn.pdf", _buf.getvalue())
+                    else:
+                        errors.append(f"balance_pcmn: HTTP {r.status_code}")
+                except Exception as e:  # noqa: BLE001
+                    errors.append(f"balance_pcmn: {str(e)[:100]}")
+
                 # PDF de balance PCMN (via journals.pdf sans filtre type retourne
                 # toutes les ecritures, mais nous voulons la balance : elle a
                 # son propre endpoint uniquement JSON. Genere depuis grand-livre.xlsx.
@@ -758,6 +846,62 @@ def create_backups_router(db):
                 if data:
                     zf.writestr("06_Factures/detail_depenses.pdf", data)
 
+                # --- 08_Decomptes : PDF individuel par proprietaire actif ---
+                # Recupere la liste des proprios de l'ACP puis genere un PDF
+                # /api/reports/decompte/pdf/{owner_id} pour chacun.
+                try:
+                    r = await client.get(
+                        "/api/owners",
+                        params={"copropriete_id": copropriete_id},
+                    )
+                    owners_list = r.json() if r.status_code == 200 else []
+                    if isinstance(owners_list, dict):
+                        owners_list = owners_list.get("items") or []
+                    decompte_count = 0
+                    for own in owners_list:
+                        oid = own.get("id")
+                        if not oid:
+                            continue
+                        # nom sûr pour le fichier
+                        raw_name = (own.get("name")
+                                    or f"{own.get('last_name','')}_"
+                                       f"{own.get('first_name','')}").strip()
+                        safe = "".join(
+                            c if c.isalnum() or c in " _-" else "_"
+                            for c in raw_name
+                        )[:60].strip().replace(" ", "_") or oid[:8]
+                        p = {"copropriete_id": copropriete_id}
+                        if eff_fy_id:
+                            p["fiscal_year_id"] = eff_fy_id
+                        # iter94g : le decompte annuel definitif exige un
+                        # exercice clos. Si l'exercice est encore ouvert,
+                        # on demande le mode preview (decompte previsionnel).
+                        if (fy_doc or {}).get("status") != "closed":
+                            p["preview"] = "true"
+                        try:
+                            rr = await client.get(
+                                f"/api/reports/decompte/pdf/{oid}", params=p,
+                            )
+                            if rr.status_code == 200 and len(rr.content) > 500:
+                                zf.writestr(
+                                    f"08_Decomptes/decompte_{safe}.pdf",
+                                    rr.content,
+                                )
+                                decompte_count += 1
+                            elif rr.status_code not in (200, 404):
+                                errors.append(
+                                    f"decompte {safe}: HTTP {rr.status_code}"
+                                )
+                        except Exception as e:  # noqa: BLE001
+                            errors.append(f"decompte {safe}: {str(e)[:80]}")
+                    if decompte_count == 0 and owners_list:
+                        errors.append(
+                            f"08_Decomptes: aucun decompte generable "
+                            f"(0/{len(owners_list)} proprios)"
+                        )
+                except Exception as e:  # noqa: BLE001
+                    errors.append(f"08_Decomptes: {str(e)[:100]}")
+
                 # --- README ---
                 readme = (
                     f"DOSSIER COMPTABLE - {copro.get('name','ACP')} "
@@ -768,11 +912,12 @@ def create_backups_router(db):
                     f"{eff_to or 'aujourd hui'}\n\n"
                     "Structure du dossier :\n"
                     "  01_Bilan/            Bilan avant/apres repartition (PDF + XLSX)\n"
-                    "  02_Balance/          Balance des tiers (Proprios + Fournisseurs)\n"
+                    "  02_Balance/          Balance PCMN + Balance des tiers (Proprios)\n"
                     "  03_Journaux/         CSV global + PDF/CSV par type (AN/OD/VEN/ACH/FIN)\n"
                     "  04_Grand_Livre/      Grand livre XLSX detaille par compte\n"
                     "  05_Cles_Repartition/ Detail des cles avec quotites par lot\n"
                     "  06_Factures/         Liste + detail des depenses\n"
+                    "  08_Decomptes/        1 PDF par proprietaire (situation compte)\n"
                 )
                 if errors:
                     readme += "\nAvertissements (rapports partiellement indisponibles) :\n"

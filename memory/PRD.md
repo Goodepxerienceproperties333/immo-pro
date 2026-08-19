@@ -18,6 +18,16 @@ billing.
 - Production : https://immo-pcmn.emergent.host
 
 ## Recent changes (Feb 2026)
+- **2026-02-06 (iter94g)** : Dossier comptable enrichi.
+    - **`02_Balance/balance_pcmn.pdf`** ajouté : PDF paysage A4 avec table
+      Compte / Libelle / Total Débit / Total Crédit / Solde Débit / Solde
+      Crédit + ligne TOTAUX (styles Ellevate #022D52). Généré depuis
+      `/api/reports/balance` JSON via reportlab.
+    - **`08_Decomptes/`** ajouté : un PDF individuel par propriétaire de
+      l'ACP (endpoint `/api/reports/decompte/pdf/{owner_id}`). Passe
+      `preview=true` si l'exercice n'est pas clôturé (décompte
+      prévisionnel). Testé sur Agathe : **37 décomptes générés**
+      (14 KB à 28 KB chacun). Nom fichier basé sur `owner.name` sanitized.
 - **2026-02-06 (iter94f)** : Dossier comptable complet en ZIP. Nouvel
   endpoint `GET /api/coproprietes/{id}/dossier-comptable.zip` qui agrege
   TOUS les rapports comptables standards via appels HTTP internes
