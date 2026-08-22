@@ -18,6 +18,23 @@ billing.
 - Production : https://immo-pcmn.emergent.host
 
 ## Recent changes (Feb 2026)
+- **2026-02-06 (iter94j) SPRINT 2 OpenBanking** : Sync auto des transactions.
+    - Nouveau module `/app/backend/openbanking_sync.py` : `sync_session()`
+      (fetch accounts + transactions Enable Banking, pagination continuation_key,
+      dedup vs OB existant + vs CODA/PDF), `sync_all_active()` (boucle sur
+      sessions actives, tolerant aux erreurs).
+    - Job APScheduler `openbanking_sync` : tourne toutes les 4h a HH:15
+      (Europe/Brussels) sur toutes les sessions status != reauthorization_required.
+    - Endpoint manuel `POST /api/banking/enablebanking/sync-now?copropriete_id=X`
+      pour resync immediate d'une ACP.
+    - Regle de dedup : `openbanking_txn_id` unique par ACP + signature
+      (date + amount + communication normalisee + last-10 chars IBAN) contre
+      les transactions CODA/PDF existantes -> match enrichit l'existant sans
+      creer doublon.
+    - Bank statements virtuels mensuels : `OB-YYYY-MM-<last4>` par (compte, mois)
+      auto-crees a la volee. `source: 'openbanking'`.
+    - UI : panneau vert "Comptes deja connectes" dans OpenBankingConnectDialog
+      + bouton "Synchroniser maintenant".
 - **2026-02-06 (iter94i)** : Fix REDIRECT_URI_NOT_ALLOWED. Le proxy Emergent
   renvoie un `Host` header INTERNE Kubernetes (`cluster-XX.preview.emergentcf.cloud`)
   different du domaine public. On lisait `request.headers['host']` -> URL callback

@@ -335,4 +335,46 @@ def create_openbanking_router(db):
                 )
             raise
 
+    # iter94j : Sprint 2 - synchronisation transactions
+    @router.post("/sync-now")
+    async def sync_now(
+        request: Request,
+        copropriete_id: str = Query(...),
+        days_back: int = Query(30, ge=1, le=365),
+    ):
+        """Declenche une sync IMMEDIATE des sessions d'une ACP."""
+        await _require_syndic_scope(request, copropriete_id)
+        from openbanking_sync import sync_session
+        sessions = await db.openbanking_sessions.find(
+            {
+                "copropriete_id": copropriete_id,
+                "status": {"$ne": "reauthorization_required"},
+            },
+            {"_id": 0, "session_id": 1},
+        ).to_list(50)
+        if not sessions:
+            return {
+                "message": "Aucune session active. Connecte d'abord une banque.",
+                "sessions": 0,
+            }
+        results = []
+        for s in sessions:
+            try:
+                r = await sync_session(db, s["session_id"], days_back=days_back)
+                results.append(r)
+            except Exception as e:  # noqa: BLE001
+                results.append({"session_id": s["session_id"],
+                                "error": str(e)[:200]})
+        # Totaux
+        inserted = sum(r.get("inserted", 0) for r in results)
+        enriched = sum(r.get("matched_to_existing", 0) for r in results)
+        dup = sum(r.get("skipped_duplicate", 0) for r in results)
+        return {
+            "sessions": len(sessions),
+            "inserted": inserted,
+            "enriched_from_coda": enriched,
+            "skipped_duplicate": dup,
+            "details": results,
+        }
+
     return router

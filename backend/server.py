@@ -1549,9 +1549,29 @@ async def startup():
                 id="e2e_test_purge",
                 replace_existing=True,
             )
+
+            # iter94j : Sprint 2 - Sync auto Open Banking toutes les 4h
+            async def _openbanking_sync_job():
+                try:
+                    from openbanking_sync import sync_all_active
+                    summary = await sync_all_active(db)
+                    print(f"[openbanking-sync] done: "
+                          f"{summary['success']}/{summary['total']} sessions OK, "
+                          f"{summary['failed']} failed")
+                except Exception as e:  # noqa: BLE001
+                    print(f"[openbanking-sync] FAILED: {e}")
+
+            _backup_scheduler.add_job(
+                _openbanking_sync_job,
+                trigger=CronTrigger(hour="*/4", minute=15,
+                                    timezone="Europe/Brussels"),
+                id="openbanking_sync",
+                replace_existing=True,
+            )
             _backup_scheduler.start()
             print("[startup] backup scheduler started (00:00 Europe/Brussels)")
             print("[startup] E2E purge scheduler started (every hour at :05)")
+            print("[startup] OpenBanking sync scheduler started (every 4h at :15)")
     except Exception as _e:
         print(f"[startup] backup scheduler skipped: {_e}")
 

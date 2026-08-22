@@ -2209,6 +2209,7 @@ export default function BankingPage() {
         open={openbankingDialog}
         onOpenChange={setOpenbankingDialog}
         coproId={selectedCopro}
+        onSynced={() => load()}
       />
 
       {/* iter90k : Categorize dialog — Saisie directe par compte PCMN */}
