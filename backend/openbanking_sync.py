@@ -199,20 +199,46 @@ async def sync_session(
             )
         return {"session_id": session_id, "error": msg[:200]}
 
-    accounts = fresh.get("accounts", [])
+    # iter94l : Enable Banking retourne accounts sous 2 formes :
+    #  - `accounts` : liste de uids (strings)
+    #  - `accounts_data` : liste enrichie avec uid + identification_hash + iban
+    # Le Mock ASPSP sandbox n'expose pas /accounts/{uid} (404), donc on
+    # ne fait PAS de call detail - on va directement chercher les
+    # transactions.
+    accounts_data = fresh.get("accounts_data") or []
+    accounts_raw = fresh.get("accounts", [])
+    stats = {"session_id": session_id, "accounts": 0, "inserted": 0,
+             "matched_to_existing": 0, "skipped_duplicate": 0, "errors": []}
+    accounts: list[dict] = []
+    if accounts_data:
+        for entry in accounts_data:
+            if isinstance(entry, dict) and entry.get("uid"):
+                accounts.append(entry)
+    else:
+        for entry in accounts_raw:
+            if isinstance(entry, str):
+                accounts.append({"uid": entry})
+            elif isinstance(entry, dict) and entry.get("uid"):
+                accounts.append(entry)
     # date range
     date_from = (datetime.now(timezone.utc).date()
                  - timedelta(days=days_back)).isoformat()
     date_to = datetime.now(timezone.utc).date().isoformat()
 
-    stats = {"session_id": session_id, "accounts": 0, "inserted": 0,
-             "matched_to_existing": 0, "skipped_duplicate": 0, "errors": []}
-
     for account in accounts:
         account_uid = account.get("uid")
-        account_iban = (account.get("account_id", {}) or {}).get("iban") or ""
-        if not account_uid or not account_iban:
+        account_iban = (
+            (account.get("account_id") or {}).get("iban")
+            or account.get("iban")
+            or ""
+        )
+        if not account_uid:
             continue
+        # Fallback IBAN si sandbox Mock (utilise identification_hash tronque
+        # pour rester dedup-stable entre syncs).
+        if not account_iban:
+            id_hash = account.get("identification_hash") or account_uid
+            account_iban = f"OB-{id_hash[:16]}"
         stats["accounts"] += 1
         # Fetch transactions (paginated via continuation_key)
         continuation = None

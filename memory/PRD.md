@@ -18,6 +18,22 @@ billing.
 - Production : https://immo-pcmn.emergent.host
 
 ## Recent changes (Feb 2026)
+- **2026-02-06 (iter94l) SPRINT 2 - Fixes**  :
+    - **Bug 1** : Enable Banking retourne `accounts` sous 2 formes (liste de
+      uids strings ou liste enrichie `accounts_data`). Le sync utilisait
+      `dict.get()` -> crash silencieux sur strings. **Fix** : lire
+      `accounts_data` en priorite, puis fallback sur `accounts`.
+    - **Bug 2** : `/accounts/{uid}` retourne 404 sur Mock ASPSP sandbox.
+      **Fix** : on saute cet appel et on va direct `/accounts/{uid}/transactions`.
+    - **Bug 3** : IBAN absent dans Mock ASPSP. **Fix** : fallback IBAN =
+      `OB-<identification_hash[:16]>` pour rester dedup-stable.
+    - **Bug 4** : callback crashait sur `TypeError` naive/aware datetime.
+      **Fix** : conversion en UTC aware avant comparaison.
+    - **Amelioration UX (iter94l)** : callback declenche desormais une sync
+      IMMEDIATE en background (asyncio.create_task) + le frontend re-sync
+      apres 6s au retour du callback pour afficher les transactions
+      instantanement. Testé : **12 transactions Mock ASPSP importees**
+      en ~2s, extrait virtuel `OB-2026-08-cF9u` visible dans /banking.
 - **2026-02-06 (iter94k) SPRINT 4 OpenBanking** : Consentement 90j.
     - `expires_at` stocke lors du callback (Enable Banking `access.valid_until`).
     - Job APScheduler `openbanking_expiration_check` quotidien 08:30 :

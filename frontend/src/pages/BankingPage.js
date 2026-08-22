@@ -24,24 +24,44 @@ export default function BankingPage() {
   const { selectedCopro, selectedFiscalYear, selectedFiscalYearId, setSelectedFiscalYearId } = useAuth();
   const navigate = useNavigate();
   const fyParams = useFiscalYearParams();
-  // iter94h : detection retour callback OpenBanking (?openbanking_success=1 ou _error=X)
+  // iter94h + iter94l : detection retour callback OpenBanking (?openbanking_success=1 ou _error=X)
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const success = params.get('openbanking_success');
     const error = params.get('openbanking_error');
     if (success) {
+      const sessionId = params.get('session_id');
       toast.success(
-        'Compte bancaire connecte avec succes. Les mouvements seront synchronises prochainement.'
+        'Compte bancaire connecte avec succes. Synchronisation en cours...'
       );
-      // nettoyage URL
+      // nettoyage URL puis re-sync au bout de 6s pour laisser Enable Banking preparer les données
       navigate('/banking', { replace: true });
+      if (sessionId) {
+        setTimeout(async () => {
+          try {
+            const { data } = await api.post(
+              `/banking/enablebanking/sync-now?copropriete_id=${selectedCopro}&days_back=90`,
+            );
+            if (data.inserted > 0) {
+              toast.success(
+                `${data.inserted} transaction(s) importee(s) depuis ta banque`
+              );
+            } else if (data.sessions > 0) {
+              toast.info('Aucune nouvelle transaction sur les 90 derniers jours');
+            }
+            load();
+          } catch (e) {
+            // Silencieux : le job APScheduler prendra le relais toutes les 4h
+          }
+        }, 6000);
+      }
     } else if (error) {
       const msg = params.get('msg') ? ` (${params.get('msg')})` : '';
       toast.error(`Echec de la connexion bancaire : ${error}${msg}`);
       navigate('/banking', { replace: true });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [selectedCopro]);
   const [statements, setStatements] = useState([]);
   const [blockedStmts, setBlockedStmts] = useState([]);
   // iter90gr : nombre TOTAL d'extraits toutes periodes confondues (sans filtre FY).

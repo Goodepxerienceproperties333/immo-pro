@@ -318,6 +318,14 @@ def create_openbanking_router(db):
                     "renewed_at": datetime.now(timezone.utc).isoformat(),
                 }},
             )
+        # iter94l : declenche une sync initiale IMMEDIATE (fire and forget)
+        # pour que le user voie tout de suite ses transactions au retour.
+        import asyncio as _asyncio
+        try:
+            from openbanking_sync import sync_session
+            _asyncio.create_task(sync_session(db, session_id, days_back=90))
+        except Exception:  # noqa: BLE001
+            pass  # non-bloquant
         # Redirection frontend avec message succes
         return RedirectResponse(
             f"{front}/banking?openbanking_success=1&session_id={session_id}"
