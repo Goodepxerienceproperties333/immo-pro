@@ -120,6 +120,7 @@ export default function OpenBankingConnectDialog({ open, onOpenChange, coproId, 
         ) : (
           <div className="space-y-4">
             {/* iter94j : Sessions actives + bouton Sync now */}
+            {/* iter94k : Alerte expiration 15j + bouton Renouveler */}
             {sessions.length > 0 && (
               <div className="rounded border border-emerald-200 bg-emerald-50 p-3 space-y-2">
                 <div className="flex items-center justify-between">
@@ -142,18 +143,70 @@ export default function OpenBankingConnectDialog({ open, onOpenChange, coproId, 
                   </Button>
                 </div>
                 <div className="space-y-1 text-xs text-emerald-900">
-                  {sessions.map((s) => (
-                    <div key={s.session_id} className="flex justify-between">
-                      <span>
-                        <b>{s.aspsp_name}</b> — {(s.accounts || []).length} compte(s)
-                      </span>
-                      <span className="text-emerald-600">
-                        {s.last_sync_at
-                          ? `sync: ${s.last_sync_at.slice(0, 16).replace('T', ' ')}`
-                          : 'jamais synchro'}
-                      </span>
-                    </div>
-                  ))}
+                  {sessions.map((s) => {
+                    const needsRenew = s.renewal_needed || s.expired;
+                    return (
+                      <div key={s.session_id}
+                           className={`flex flex-col gap-1 rounded px-2 py-1 ${
+                             s.expired ? 'bg-red-100 border border-red-300' :
+                             s.renewal_needed ? 'bg-amber-100 border border-amber-300' :
+                             ''
+                           }`}>
+                        <div className="flex justify-between items-center">
+                          <span>
+                            <b>{s.aspsp_name}</b> — {(s.accounts || []).length} compte(s)
+                          </span>
+                          <span className={
+                            s.expired ? 'text-red-700 font-semibold' :
+                            s.renewal_needed ? 'text-amber-700 font-semibold' :
+                            'text-emerald-600'
+                          }>
+                            {s.expired ? 'CONSENTEMENT EXPIRE' :
+                             s.days_until_expiration != null
+                               ? `expire dans ${Math.max(0, Math.round(s.days_until_expiration))}j`
+                               : ''}
+                          </span>
+                        </div>
+                        <div className="flex justify-between items-center">
+                          <span className="text-slate-500">
+                            {s.last_sync_at
+                              ? `sync: ${s.last_sync_at.slice(0, 16).replace('T', ' ')}`
+                              : 'jamais synchro'}
+                          </span>
+                          {needsRenew && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={async () => {
+                                try {
+                                  const { data } = await api.post(
+                                    '/banking/enablebanking/sessions/renew',
+                                    { session_id: s.session_id },
+                                  );
+                                  if (data.url) {
+                                    toast.info('Redirection vers la banque...');
+                                    window.location.assign(data.url);
+                                  }
+                                } catch (err) {
+                                  toast.error(err.response?.data?.detail
+                                              || 'Echec du renouvellement');
+                                }
+                              }}
+                              className={`h-6 text-xs ${
+                                s.expired
+                                  ? 'bg-red-600 hover:bg-red-700 text-white border-red-700'
+                                  : 'bg-amber-500 hover:bg-amber-600 text-white border-amber-600'
+                              }`}
+                              data-testid={`renew-session-${s.session_id}`}
+                            >
+                              <RefreshCw className="h-3 w-3 mr-1" />
+                              Renouveler
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             )}

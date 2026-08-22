@@ -18,6 +18,20 @@ billing.
 - Production : https://immo-pcmn.emergent.host
 
 ## Recent changes (Feb 2026)
+- **2026-02-06 (iter94k) SPRINT 4 OpenBanking** : Consentement 90j.
+    - `expires_at` stocke lors du callback (Enable Banking `access.valid_until`).
+    - Job APScheduler `openbanking_expiration_check` quotidien 08:30 :
+      marque `renewal_needed=True` a J-15, `status=expired` a J-0.
+    - Endpoint `POST /sessions/renew` : cree une nouvelle authorization
+      avec meme ASPSP -> renewal_of_session_id trace + ancienne session
+      passe en status='renewed' avec `replaced_by_session_id`.
+    - `GET /sessions` retourne desormais `days_until_expiration`, `expired`,
+      `renewal_needed` calcules dynamiquement.
+    - UI : lignes de session colorees ambre (renewal_needed) / rouge (expired)
+      + bouton "Renouveler" par session declenchant re-authorization avec
+      redirection banque.
+    - Fix bug datetime naive/aware : MongoDB stocke BSON dates sans tz -> on
+      convertit en UTC aware avant comparaison.
 - **2026-02-06 (iter94j) SPRINT 2 OpenBanking** : Sync auto des transactions.
     - Nouveau module `/app/backend/openbanking_sync.py` : `sync_session()`
       (fetch accounts + transactions Enable Banking, pagination continuation_key,

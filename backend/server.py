@@ -1568,10 +1568,55 @@ async def startup():
                 id="openbanking_sync",
                 replace_existing=True,
             )
+
+            # iter94k : Sprint 4 - check consent expiration daily at 08:30
+            async def _openbanking_expiration_job():
+                try:
+                    from datetime import datetime, timezone, timedelta
+                    now = datetime.now(timezone.utc)
+                    threshold = (now + timedelta(days=15)).isoformat()
+                    expiring = await db.openbanking_sessions.find(
+                        {
+                            "status": "active",
+                            "expires_at": {"$lte": threshold},
+                        },
+                        {"_id": 0, "session_id": 1, "copropriete_id": 1,
+                         "aspsp_name": 1, "expires_at": 1},
+                    ).to_list(500)
+                    for s in expiring:
+                        # Mark expired vs renewal_needed
+                        try:
+                            exp_dt = datetime.fromisoformat(
+                                s["expires_at"].replace("Z", "+00:00")
+                            )
+                            is_expired = exp_dt < now
+                        except Exception:
+                            is_expired = False
+                        await db.openbanking_sessions.update_one(
+                            {"session_id": s["session_id"]},
+                            {"$set": {
+                                "renewal_needed": True,
+                                "status": ("expired" if is_expired else "active"),
+                                "last_expiration_check": now.isoformat(),
+                            }},
+                        )
+                    print(f"[openbanking-expiration] {len(expiring)} session(s) "
+                          f"expiring in <= 15 days")
+                except Exception as e:  # noqa: BLE001
+                    print(f"[openbanking-expiration] FAILED: {e}")
+
+            _backup_scheduler.add_job(
+                _openbanking_expiration_job,
+                trigger=CronTrigger(hour=8, minute=30,
+                                    timezone="Europe/Brussels"),
+                id="openbanking_expiration_check",
+                replace_existing=True,
+            )
             _backup_scheduler.start()
             print("[startup] backup scheduler started (00:00 Europe/Brussels)")
             print("[startup] E2E purge scheduler started (every hour at :05)")
             print("[startup] OpenBanking sync scheduler started (every 4h at :15)")
+            print("[startup] OpenBanking expiration check started (daily 08:30)")
     except Exception as _e:
         print(f"[startup] backup scheduler skipped: {_e}")
 

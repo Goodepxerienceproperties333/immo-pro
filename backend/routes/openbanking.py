@@ -256,12 +256,17 @@ def create_openbanking_router(db):
             return RedirectResponse(
                 f"{front}/banking?openbanking_error=invalid_state"
             )
-        if saved.get("expires_at") and saved["expires_at"] < datetime.now(
-            timezone.utc,
-        ):
-            return RedirectResponse(
-                f"{front}/banking?openbanking_error=expired_state"
-            )
+        if saved.get("expires_at"):
+            exp_saved = saved["expires_at"]
+            # MongoDB retourne des datetimes naive (BSON) - on les remet en UTC aware
+            if isinstance(exp_saved, datetime) and exp_saved.tzinfo is None:
+                exp_saved = exp_saved.replace(tzinfo=timezone.utc)
+            elif isinstance(exp_saved, str):
+                exp_saved = datetime.fromisoformat(exp_saved.replace("Z", "+00:00"))
+            if exp_saved < datetime.now(timezone.utc):
+                return RedirectResponse(
+                    f"{front}/banking?openbanking_error=expired_state"
+                )
         # Echange code -> session_id
         try:
             session = await _eb("POST", "/sessions", json={"code": code})
@@ -275,6 +280,21 @@ def create_openbanking_router(db):
                 f"{front}/banking?openbanking_error=no_session_id"
             )
         # Persiste la session pour l'ACP
+        # iter94k : store expiration for consent renewal alerts (Sprint 4)
+        # Enable Banking access.valid_until = 90 days max
+        access = session.get("access", {}) or {}
+        expires_at_iso = access.get("valid_until")
+        expires_at_dt = None
+        if expires_at_iso:
+            try:
+                # Normalize timezone
+                cleaned = expires_at_iso.replace("Z", "+00:00")
+                expires_at_dt = datetime.fromisoformat(cleaned)
+            except Exception:
+                expires_at_dt = datetime.now(timezone.utc) + timedelta(days=90)
+        else:
+            expires_at_dt = datetime.now(timezone.utc) + timedelta(days=90)
+
         await db.openbanking_sessions.insert_one({
             "session_id": session_id,
             "user_id": saved["user_id"],
@@ -282,9 +302,22 @@ def create_openbanking_router(db):
             "aspsp_name": saved["aspsp_name"],
             "aspsp_country": saved["aspsp_country"],
             "accounts": session.get("accounts", []),
-            "access": session.get("access", {}),
+            "access": access,
+            "expires_at": expires_at_dt.isoformat(),
+            "status": "active",
+            "renewal_needed": False,
             "created_at": datetime.now(timezone.utc),
         })
+        # iter94k : Si c'est un renouvellement, archive l'ancienne session
+        if saved.get("renewal_of_session_id"):
+            await db.openbanking_sessions.update_one(
+                {"session_id": saved["renewal_of_session_id"]},
+                {"$set": {
+                    "status": "renewed",
+                    "replaced_by_session_id": session_id,
+                    "renewed_at": datetime.now(timezone.utc).isoformat(),
+                }},
+            )
         # Redirection frontend avec message succes
         return RedirectResponse(
             f"{front}/banking?openbanking_success=1&session_id={session_id}"
@@ -301,10 +334,25 @@ def create_openbanking_router(db):
             {"copropriete_id": copropriete_id},
             {"_id": 0},
         ).sort("created_at", -1).to_list(50)
-        # Serialize datetimes
+        # Serialize datetimes + iter94k: compute expiration flags
+        now = datetime.now(timezone.utc)
         for s in sessions:
             if isinstance(s.get("created_at"), datetime):
                 s["created_at"] = s["created_at"].isoformat()
+            # Sprint 4 : days until expiration
+            exp = s.get("expires_at")
+            if exp:
+                try:
+                    exp_dt = (
+                        datetime.fromisoformat(exp.replace("Z", "+00:00"))
+                        if isinstance(exp, str) else exp
+                    )
+                    delta = (exp_dt - now).total_seconds() / 86400
+                    s["days_until_expiration"] = round(delta, 1)
+                    s["expired"] = delta < 0
+                    s["renewal_needed"] = 0 <= delta <= 15
+                except Exception:
+                    s["days_until_expiration"] = None
         return {"sessions": sessions, "count": len(sessions)}
 
     @router.get("/sessions/{session_id}/accounts")
@@ -376,5 +424,49 @@ def create_openbanking_router(db):
             "skipped_duplicate": dup,
             "details": results,
         }
+
+    # iter94k : Sprint 4 - renouvellement consentement 90j
+    class RenewSessionRequest(BaseModel):
+        session_id: str
+
+    @router.post("/sessions/renew")
+    async def renew_session(body: RenewSessionRequest, request: Request):
+        """Cree une nouvelle authorization pour renouveler le consentement
+        d'une session existante. Retourne l'URL vers la banque, comme
+        authorize/start. La session actuelle sera archivee au retour du callback."""
+        record = await db.openbanking_sessions.find_one(
+            {"session_id": body.session_id},
+        )
+        if not record:
+            raise HTTPException(404, "Session inconnue")
+        await _require_syndic_scope(request, record["copropriete_id"])
+        state = _secrets.token_urlsafe(32)
+        valid_until = (
+            datetime.now(timezone.utc) + timedelta(days=90)
+        ).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        callback = _callback_url(request)
+        payload = {
+            "access": {"valid_until": valid_until},
+            "aspsp": {
+                "name": record["aspsp_name"],
+                "country": record["aspsp_country"],
+            },
+            "state": state,
+            "redirect_url": callback,
+            "psu_type": "personal",
+        }
+        await db.openbanking_states.insert_one({
+            "state": state,
+            "user_id": str(record["user_id"]),
+            "copropriete_id": record["copropriete_id"],
+            "aspsp_name": record["aspsp_name"],
+            "aspsp_country": record["aspsp_country"],
+            "renewal_of_session_id": body.session_id,
+            "created_at": datetime.now(timezone.utc),
+            "expires_at": datetime.now(timezone.utc) + timedelta(minutes=15),
+            "used": False,
+        })
+        result = await _eb("POST", "/auth", json=payload)
+        return {"url": result.get("url"), "state": state}
 
     return router
