@@ -35,7 +35,7 @@ class StartAuthRequest(BaseModel):
 
 
 def create_openbanking_router(db):
-    router = APIRouter(prefix="/api/banking/openbanking")
+    router = APIRouter(prefix="/api/banking/enablebanking")
 
     # ---------- Config ----------
     APP_ID = os.environ.get("ENABLE_APP_ID", "")
@@ -114,10 +114,35 @@ def create_openbanking_router(db):
         return u
 
     def _callback_url(request: Request) -> str:
-        """Construit l'URL de callback publique (preview ou prod)."""
-        # Force le scheme https (proxy Emergent termine SSL en front)
-        host = request.headers.get("host", "").split(",")[0].strip()
-        return f"https://{host}/api/banking/openbanking/callback"
+        """Construit l'URL de callback publique (preview ou prod).
+        iter94i : le proxy Emergent renvoie un Host header INTERNE
+        (cluster-XX.preview.emergentcf.cloud) different du domaine public
+        (preview.emergentagent.com / immo-pcmn.emergent.host). On lit dans
+        l'ordre : env ENABLE_CALLBACK_URL > X-Forwarded-Host > Origin > Host.
+        Cette URL DOIT etre enregistree dans le Control Panel Enable Banking
+        sinon REDIRECT_URI_NOT_ALLOWED (400)."""
+        # 1. Env override (le plus fiable en prod)
+        env_url = os.environ.get("ENABLE_CALLBACK_URL", "").strip()
+        if env_url:
+            return env_url.rstrip("/")
+        # 2. X-Forwarded-Host (souvent pose par les ingress K8s / CF)
+        fwd_host = (request.headers.get("x-forwarded-host") or "").split(",")[0].strip()
+        # 3. Origin (envoye par le frontend, https://<domain>)
+        origin = (request.headers.get("origin") or "").strip()
+        # 4. Host (interne cluster.local -> a eviter mais fallback ultime)
+        host = (request.headers.get("host") or "").split(",")[0].strip()
+        # Choisis le premier qui ne ressemble PAS a un host interne cluster.
+        candidates = [fwd_host, origin, host]
+        for c in candidates:
+            if not c:
+                continue
+            if "cluster-" in c or ".emergentcf.cloud" in c or ".local" in c:
+                continue
+            # Origin est deja https://host ; sinon on prefixe https://
+            base = c if c.startswith("http") else f"https://{c}"
+            return base.rstrip("/") + "/api/banking/enablebanking/callback"
+        # Dernier recours : reprend Host tel quel
+        return f"https://{host}/api/banking/enablebanking/callback"
 
     def _frontend_url(request: Request) -> str:
         host = request.headers.get("host", "").split(",")[0].strip()
@@ -170,6 +195,17 @@ def create_openbanking_router(db):
             datetime.now(timezone.utc) + timedelta(days=90)
         ).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
+        callback = _callback_url(request)
+        # iter94i : log l'URL exacte + longueur pour debugger mismatch
+        # avec le Control Panel (REDIRECT_URI_NOT_ALLOWED).
+        import logging as _logging
+        _log = _logging.getLogger("openbanking")
+        _log.warning(
+            "EnableBanking POST /auth redirect_url=%r len=%d bytes_hex=%s",
+            callback, len(callback),
+            callback.encode("utf-8").hex()[:200],
+        )
+
         payload = {
             "access": {"valid_until": valid_until},
             "aspsp": {
@@ -177,7 +213,7 @@ def create_openbanking_router(db):
                 "country": body.aspsp_country,
             },
             "state": state,
-            "redirect_url": _callback_url(request),
+            "redirect_url": callback,
             "psu_type": body.psu_type,
         }
         # Persiste le state avec le contexte user + ACP pour verifier au callback

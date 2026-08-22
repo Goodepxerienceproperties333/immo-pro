@@ -33,8 +33,8 @@ export default function OpenBankingConnectDialog({ open, onOpenChange, coproId }
       try {
         setLoading(true);
         const [statusRes, aspspsRes] = await Promise.all([
-          api.get('/banking/openbanking/status'),
-          api.get('/banking/openbanking/aspsps?country=BE'),
+          api.get('/banking/enablebanking/status'),
+          api.get('/banking/enablebanking/aspsps?country=BE'),
         ]);
         setStatus(statusRes.data);
         setAspsps(aspspsRes.data.aspsps || []);
@@ -50,7 +50,7 @@ export default function OpenBankingConnectDialog({ open, onOpenChange, coproId }
     if (!selected || !coproId) return;
     try {
       setLoading(true);
-      const { data } = await api.post('/banking/openbanking/authorize/start', {
+      const { data } = await api.post('/banking/enablebanking/authorize/start', {
         aspsp_name: selected,
         aspsp_country: 'BE',
         copropriete_id: coproId,

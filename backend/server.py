@@ -163,7 +163,7 @@ _REQUEST_TIMEOUT_SKIP_PREFIXES = (
     "/api/invoices/import",       # import factures IA
     "/api/invoices/analyze",      # AI extraction factures
     "/api/admin/backups/",         # download / download-xlsx / restore (peuvent etre longs sur gros backups)
-    "/api/banking/openbanking/",   # flow OAuth Enable Banking (peut prendre 20-30s selon banque)
+    "/api/banking/enablebanking/",   # flow OAuth Enable Banking (peut prendre 20-30s selon banque)
 )
 
 
@@ -282,7 +282,7 @@ AUTH_EXEMPT_PATHS = {
     # iter94h : callback bank Enable Banking (retour banque, pas de cookie
     # user car cross-domain redirect). Le state signe + verifie dans le
     # handler assure la protection CSRF.
-    "/api/banking/openbanking/callback",
+    "/api/banking/enablebanking/callback",
 }
 
 # Prefix-based exemption for public legal document reads (unauthenticated users

@@ -18,6 +18,15 @@ billing.
 - Production : https://immo-pcmn.emergent.host
 
 ## Recent changes (Feb 2026)
+- **2026-02-06 (iter94i)** : Fix REDIRECT_URI_NOT_ALLOWED. Le proxy Emergent
+  renvoie un `Host` header INTERNE Kubernetes (`cluster-XX.preview.emergentcf.cloud`)
+  different du domaine public. On lisait `request.headers['host']` -> URL callback
+  transmise a Enable Banking = URL interne, jamais dans la whitelist du
+  Control Panel. **Fix** : `_callback_url()` lit dans l'ordre `ENABLE_CALLBACK_URL`
+  env > `X-Forwarded-Host` > `Origin` > `Host`, en filtrant les hosts
+  contenant `cluster-`, `.emergentcf.cloud`, `.local`. Env variable
+  `ENABLE_CALLBACK_URL` ajoutee au backend/.env. **Testé OK** : Enable
+  Banking retourne bien l'URL sandbox tilisy avec sessionid.
 - **2026-02-06 (iter94h) SPRINT 1 OpenBanking** : integration Enable Banking
   (PSD2 Belgique) - UI de connexion bancaire. Nouvelle route backend
   `/api/banking/openbanking/*` (aspsps, authorize/start, callback,
