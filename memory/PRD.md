@@ -18,6 +18,23 @@ billing.
 - Production : https://immo-pcmn.emergent.host
 
 ## Recent changes (Feb 2026)
+- **2026-02-06 (iter94h) SPRINT 1 OpenBanking** : integration Enable Banking
+  (PSD2 Belgique) - UI de connexion bancaire. Nouvelle route backend
+  `/api/banking/openbanking/*` (aspsps, authorize/start, callback,
+  sessions, sessions/{id}/accounts). Nouveau composant frontend
+  `OpenBankingConnectDialog` + bouton vert "Connecter banque" sur la page
+  Banking. Auth via JWT RS256 signe (kid=APP_ID, iss=enablebanking.com,
+  aud=api.enablebanking.com, cle privee RSA 4096 stockee dans
+  /app/backend/secrets/enablebanking_private.pem, chmod 600).
+  Callback exempte de l'auth cookie (state one-shot CSRF-safe).
+  Collections MongoDB : openbanking_states (short-lived 15min) et
+  openbanking_sessions (90 jours consent PSD2).
+  Testé : JWT signe OK, /aspsps?country=BE retourne 2 banques sandbox
+  (BBVA, Mock ASPSP), UI modal fonctionnelle.
+  **Coût prod** : ~0,45€ HT / compte / mois (Enable Banking) apres KYB.
+  **Sprints suivants** : Sprint 2 (sync auto transactions), Sprint 3
+  (mapping PCMN + suggestions lettrage), Sprint 4 (renouvellement 90j),
+  Sprint 5 (alertes + monitoring).
 - **2026-02-06 (iter94g)** : Dossier comptable enrichi.
     - **`02_Balance/balance_pcmn.pdf`** ajouté : PDF paysage A4 avec table
       Compte / Libelle / Total Débit / Total Crédit / Solde Débit / Solde

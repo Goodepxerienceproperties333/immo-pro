@@ -16,6 +16,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import CounterpartySearchSelect from '@/components/CounterpartySearchSelect';
 import AccountSearchSelect from '@/components/AccountSearchSelect';
 import CodaImportDialog from '@/components/CodaImportDialog';
+import OpenBankingConnectDialog from '@/components/OpenBankingConnectDialog';
 import { fmtDate } from '@/lib/dateFmt';
 
 import { fmtEUR } from '@/lib/format';
@@ -23,6 +24,24 @@ export default function BankingPage() {
   const { selectedCopro, selectedFiscalYear, selectedFiscalYearId, setSelectedFiscalYearId } = useAuth();
   const navigate = useNavigate();
   const fyParams = useFiscalYearParams();
+  // iter94h : detection retour callback OpenBanking (?openbanking_success=1 ou _error=X)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const success = params.get('openbanking_success');
+    const error = params.get('openbanking_error');
+    if (success) {
+      toast.success(
+        'Compte bancaire connecte avec succes. Les mouvements seront synchronises prochainement.'
+      );
+      // nettoyage URL
+      navigate('/banking', { replace: true });
+    } else if (error) {
+      const msg = params.get('msg') ? ` (${params.get('msg')})` : '';
+      toast.error(`Echec de la connexion bancaire : ${error}${msg}`);
+      navigate('/banking', { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [statements, setStatements] = useState([]);
   const [blockedStmts, setBlockedStmts] = useState([]);
   // iter90gr : nombre TOTAL d'extraits toutes periodes confondues (sans filtre FY).
@@ -47,6 +66,8 @@ export default function BankingPage() {
   const codaRef = useRef(null);
   const [codaPreview, setCodaPreview] = useState(null);
   const [codaDialogOpen, setCodaDialogOpen] = useState(false);
+  // iter94h : dialog de connexion bancaire OpenBanking (Enable Banking PSD2)
+  const [openbankingDialog, setOpenbankingDialog] = useState(false);
   // iter90l : import PDF/CSV multi-fichiers d'extraits (IA + regex CSV)
   const importRef = useRef(null);
   const [importUploading, setImportUploading] = useState(false);
@@ -939,6 +960,17 @@ export default function BankingPage() {
             data-testid="import-files-btn"
             className="border-purple-200 text-purple-700 hover:bg-purple-50">
             <Upload size={16} className="mr-2" /> {importUploading ? 'Extraction IA en cours...' : 'Importer PDF/CSV'}
+          </Button>
+          {/* iter94h : connexion bancaire temps reel via Enable Banking PSD2 */}
+          <Button
+            onClick={() => setOpenbankingDialog(true)}
+            variant="outline"
+            disabled={!selectedCopro}
+            title={selectedCopro ? "Connecter le compte bancaire de l'ACP pour synchronisation automatique" : "Selectionnez une copropriete"}
+            data-testid="openbanking-connect-btn-header"
+            className="border-emerald-300 text-emerald-700 hover:bg-emerald-50"
+          >
+            <Landmark size={16} className="mr-2" /> Connecter banque
           </Button>
           <Button onClick={() => {
             const def = bankAccounts.find(b => b.is_default) || bankAccounts[0];
@@ -2170,6 +2202,13 @@ export default function BankingPage() {
         expenseCategories={expenseCategories}
         pcmnAccounts={pcmnAccounts}
         onSuccess={() => { setCodaPreview(null); load(); }}
+      />
+
+      {/* iter94h : OpenBanking connect dialog (Enable Banking PSD2) */}
+      <OpenBankingConnectDialog
+        open={openbankingDialog}
+        onOpenChange={setOpenbankingDialog}
+        coproId={selectedCopro}
       />
 
       {/* iter90k : Categorize dialog — Saisie directe par compte PCMN */}

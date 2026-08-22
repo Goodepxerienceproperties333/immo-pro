@@ -163,6 +163,7 @@ _REQUEST_TIMEOUT_SKIP_PREFIXES = (
     "/api/invoices/import",       # import factures IA
     "/api/invoices/analyze",      # AI extraction factures
     "/api/admin/backups/",         # download / download-xlsx / restore (peuvent etre longs sur gros backups)
+    "/api/banking/openbanking/",   # flow OAuth Enable Banking (peut prendre 20-30s selon banque)
 )
 
 
@@ -278,6 +279,10 @@ AUTH_EXEMPT_PATHS = {
     "/api/health",
     "/api/health/live",
     "/api/health/ready",
+    # iter94h : callback bank Enable Banking (retour banque, pas de cookie
+    # user car cross-domain redirect). Le state signe + verifie dans le
+    # handler assure la protection CSRF.
+    "/api/banking/openbanking/callback",
 }
 
 # Prefix-based exemption for public legal document reads (unauthenticated users
@@ -1611,6 +1616,8 @@ from routes.e2e_test import create_e2e_test_router
 app.include_router(create_e2e_test_router(db))
 from routes.bank_audit import create_bank_audit_router
 app.include_router(create_bank_audit_router(db))
+from routes.openbanking import create_openbanking_router
+app.include_router(create_openbanking_router(db))
 app.include_router(create_team_router(db))
 app.include_router(create_import_wizard_router(db))
 app.include_router(create_coproprietes_router(db))
