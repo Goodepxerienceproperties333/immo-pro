@@ -18,6 +18,17 @@ billing.
 - Production : https://immo-pcmn.emergent.host
 
 ## Recent changes (Feb 2026)
+- **2026-02-06 (iter94m)** : Revocation d'un consentement Open Banking.
+    - Nouvel endpoint `DELETE /api/banking/enablebanking/sessions/{session_id}?delete_transactions=<bool>`.
+      Appelle `DELETE /sessions/{id}` cote Enable Banking (best effort,
+      tolerant si session deja fermee) puis marque `status='revoked'` +
+      `revoked_at`. Option `delete_transactions=true` supprime aussi les
+      bank_transactions liees (sinon conserves pour audit trail).
+    - `GET /sessions` cache par defaut les sessions status IN
+      (revoked, renewed) - override via `?include_revoked=true`.
+    - UI : icone poubelle rouge par ligne de session dans la modal
+      OpenBanking, avec double confirmation (revoker OUI + supprimer
+      transactions OUI/NON). Refresh de la liste local apres succes.
 - **2026-02-06 (iter94l) SPRINT 2 - Fixes**  :
     - **Bug 1** : Enable Banking retourne `accounts` sous 2 formes (liste de
       uids strings ou liste enrichie `accounts_data`). Le sync utilisait

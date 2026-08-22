@@ -335,12 +335,17 @@ def create_openbanking_router(db):
     async def list_sessions(
         request: Request,
         copropriete_id: str = Query(...),
+        include_revoked: bool = Query(False),
     ):
-        """Liste les sessions bancaires ouvertes pour une ACP."""
+        """Liste les sessions bancaires ouvertes pour une ACP.
+        Par defaut on cache les sessions revoquees/renouvelees pour
+        garder l'UI propre. Passer `include_revoked=true` pour tout voir."""
         await _require_syndic_scope(request, copropriete_id)
+        q: dict = {"copropriete_id": copropriete_id}
+        if not include_revoked:
+            q["status"] = {"$nin": ["revoked", "renewed"]}
         sessions = await db.openbanking_sessions.find(
-            {"copropriete_id": copropriete_id},
-            {"_id": 0},
+            q, {"_id": 0},
         ).sort("created_at", -1).to_list(50)
         # Serialize datetimes + iter94k: compute expiration flags
         now = datetime.now(timezone.utc)
@@ -476,5 +481,71 @@ def create_openbanking_router(db):
         })
         result = await _eb("POST", "/auth", json=payload)
         return {"url": result.get("url"), "state": state}
+
+    # iter94m : revocation d'une session (unlink bank account)
+    @router.delete("/sessions/{session_id}")
+    async def revoke_session(
+        session_id: str, request: Request,
+        delete_transactions: bool = Query(
+            False,
+            description="Si true, supprime aussi les bank_transactions "
+                        "importees depuis cette session"
+        ),
+    ):
+        """Revoque le consentement PSD2 : DELETE cote Enable Banking +
+        marque la session 'revoked' en base. Les transactions deja
+        importees sont conservees par defaut (audit trail)."""
+        record = await db.openbanking_sessions.find_one(
+            {"session_id": session_id},
+        )
+        if not record:
+            raise HTTPException(404, "Session inconnue")
+        await _require_syndic_scope(request, record["copropriete_id"])
+
+        # 1. Revoke cote Enable Banking (best effort, on continue si erreur)
+        eb_error = None
+        try:
+            await _eb("DELETE", f"/sessions/{session_id}")
+        except HTTPException as e:
+            # 404 = deja revoquee cote EB, on ignore. Autres erreurs = warning.
+            if e.status_code != 404:
+                eb_error = f"EB {e.status_code}: {str(e.detail)[:120]}"
+
+        # 2. Marque la session en base comme revoked
+        await db.openbanking_sessions.update_one(
+            {"session_id": session_id},
+            {"$set": {
+                "status": "revoked",
+                "revoked_at": datetime.now(timezone.utc).isoformat(),
+                "revocation_error": eb_error,
+            }},
+        )
+
+        # 3. Optionnel : nettoie les transactions liees
+        deleted_txn_count = 0
+        if delete_transactions:
+            r = await db.bank_transactions.delete_many({
+                "openbanking_session_id": session_id,
+                "source": "openbanking",
+            })
+            deleted_txn_count = r.deleted_count
+            # Marque aussi les extraits virtuels lies comme "revoked"
+            # (on ne les supprime pas pour garder l'historique compta)
+            await db.bank_statements.update_many(
+                {
+                    "copropriete_id": record["copropriete_id"],
+                    "source": "openbanking",
+                    "number": {"$regex": "^OB-"},
+                },
+                {"$set": {"openbanking_session_revoked": True}},
+            )
+
+        return {
+            "session_id": session_id,
+            "status": "revoked",
+            "eb_revoke_ok": eb_error is None,
+            "eb_error": eb_error,
+            "deleted_transactions": deleted_txn_count,
+        }
 
     return router

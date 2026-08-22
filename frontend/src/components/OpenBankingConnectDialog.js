@@ -8,7 +8,7 @@ import {
   DialogFooter,
   DialogDescription,
 } from '@/components/ui/dialog';
-import { Landmark, ExternalLink, Loader2, RefreshCw, CheckCircle2 } from 'lucide-react';
+import { Landmark, ExternalLink, Loader2, RefreshCw, CheckCircle2, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import api from '@/lib/api';
 
@@ -74,6 +74,37 @@ export default function OpenBankingConnectDialog({ open, onOpenChange, coproId, 
       toast.error(err.response?.data?.detail || 'Echec de la synchro');
     } finally {
       setSyncing(false);
+    }
+  };
+
+  // iter94m : revoquer une session (unlink) avec confirmation double
+  const revokeSession = async (session) => {
+    const bank = session.aspsp_name || 'cette banque';
+    const first = window.confirm(
+      `Revoquer l'acces a ${bank} ?\n\n`
+      + `Le consentement PSD2 sera annule cote banque. `
+      + `Les transactions deja importees seront conservees (audit trail).`
+    );
+    if (!first) return;
+    const alsoDelete = window.confirm(
+      `Voulez-vous aussi SUPPRIMER les transactions Open Banking `
+      + `deja importees depuis ${bank} ?\n\n`
+      + `OK = supprime les transactions. Annuler = conserve l'historique.`
+    );
+    try {
+      const { data } = await api.delete(
+        `/banking/enablebanking/sessions/${session.session_id}`
+        + `?delete_transactions=${alsoDelete ? 'true' : 'false'}`,
+      );
+      const msg = alsoDelete
+        ? `Acces revoque et ${data.deleted_transactions} transaction(s) supprimee(s)`
+        : 'Acces revoque, transactions conservees';
+      toast.success(msg);
+      // Refresh sessions list
+      setSessions(sessions.filter(s => s.session_id !== session.session_id));
+      if (onSynced) onSynced();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Echec de la revocation');
     }
   };
 
@@ -173,36 +204,49 @@ export default function OpenBankingConnectDialog({ open, onOpenChange, coproId, 
                               ? `sync: ${s.last_sync_at.slice(0, 16).replace('T', ' ')}`
                               : 'jamais synchro'}
                           </span>
-                          {needsRenew && (
+                          <div className="flex gap-1">
+                            {needsRenew && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={async () => {
+                                  try {
+                                    const { data } = await api.post(
+                                      '/banking/enablebanking/sessions/renew',
+                                      { session_id: s.session_id },
+                                    );
+                                    if (data.url) {
+                                      toast.info('Redirection vers la banque...');
+                                      window.location.assign(data.url);
+                                    }
+                                  } catch (err) {
+                                    toast.error(err.response?.data?.detail
+                                                || 'Echec du renouvellement');
+                                  }
+                                }}
+                                className={`h-6 text-xs ${
+                                  s.expired
+                                    ? 'bg-red-600 hover:bg-red-700 text-white border-red-700'
+                                    : 'bg-amber-500 hover:bg-amber-600 text-white border-amber-600'
+                                }`}
+                                data-testid={`renew-session-${s.session_id}`}
+                              >
+                                <RefreshCw className="h-3 w-3 mr-1" />
+                                Renouveler
+                              </Button>
+                            )}
+                            {/* iter94m : revoker l'acces */}
                             <Button
                               size="sm"
-                              variant="outline"
-                              onClick={async () => {
-                                try {
-                                  const { data } = await api.post(
-                                    '/banking/enablebanking/sessions/renew',
-                                    { session_id: s.session_id },
-                                  );
-                                  if (data.url) {
-                                    toast.info('Redirection vers la banque...');
-                                    window.location.assign(data.url);
-                                  }
-                                } catch (err) {
-                                  toast.error(err.response?.data?.detail
-                                              || 'Echec du renouvellement');
-                                }
-                              }}
-                              className={`h-6 text-xs ${
-                                s.expired
-                                  ? 'bg-red-600 hover:bg-red-700 text-white border-red-700'
-                                  : 'bg-amber-500 hover:bg-amber-600 text-white border-amber-600'
-                              }`}
-                              data-testid={`renew-session-${s.session_id}`}
+                              variant="ghost"
+                              onClick={() => revokeSession(s)}
+                              className="h-6 text-xs text-red-600 hover:bg-red-100 hover:text-red-700"
+                              title="Revoquer le consentement bancaire"
+                              data-testid={`revoke-session-${s.session_id}`}
                             >
-                              <RefreshCw className="h-3 w-3 mr-1" />
-                              Renouveler
+                              <Trash2 className="h-3 w-3" />
                             </Button>
-                          )}
+                          </div>
                         </div>
                       </div>
                     );
