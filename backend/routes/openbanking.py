@@ -570,4 +570,110 @@ def create_openbanking_router(db):
             "deleted_transactions": deleted_txn_count,
         }
 
+    # iter94o : Panneau detaille des comptes synchronises (avec IBAN + solde)
+    @router.get("/accounts")
+    async def list_synced_accounts(
+        request: Request, copropriete_id: str = Query(...),
+    ):
+        """Retourne tous les comptes bancaires actuellement synchronises
+        pour une ACP, avec IBAN + solde + statut d'exclusion.
+        Utilise pour le panneau de gestion granulaire des comptes."""
+        await _require_syndic_scope(request, copropriete_id)
+        sessions = await db.openbanking_sessions.find(
+            {
+                "copropriete_id": copropriete_id,
+                "status": {"$nin": ["revoked", "renewed"]},
+            },
+            {"_id": 0},
+        ).to_list(50)
+
+        result = []
+        for s in sessions:
+            excluded = set(s.get("excluded_account_uids") or [])
+            accounts_data = s.get("accounts_data") or []
+            accounts_raw = s.get("accounts") or []
+            # Normalise en dicts complets
+            accounts = accounts_data if accounts_data else [
+                {"uid": u} if isinstance(u, str) else u for u in accounts_raw
+            ]
+            for a in accounts:
+                uid = a.get("uid")
+                if not uid:
+                    continue
+                iban = (
+                    (a.get("account_id") or {}).get("iban")
+                    or a.get("iban") or ""
+                )
+                # Recupere le dernier solde connu depuis Enable Banking
+                balance = None
+                balance_error = None
+                try:
+                    bal = await _eb(
+                        "GET", f"/accounts/{uid}/balances",
+                    )
+                    # Extrait la premiere balance disponible
+                    balances = bal.get("balances") or []
+                    if balances:
+                        first = balances[0]
+                        amt = (first.get("balance_amount") or {})
+                        balance = {
+                            "amount": amt.get("amount"),
+                            "currency": amt.get("currency", "EUR"),
+                            "type": first.get("balance_type"),
+                            "date": (first.get("reference_date")
+                                     or first.get("last_change_date_time")),
+                        }
+                except HTTPException as e:
+                    balance_error = f"HTTP {e.status_code}"
+                except Exception as e:  # noqa: BLE001
+                    balance_error = str(e)[:80]
+
+                # Compte des transactions locales
+                tx_count = await db.bank_transactions.count_documents({
+                    "copropriete_id": copropriete_id,
+                    "openbanking_session_id": s["session_id"],
+                    "account_uid": uid,
+                })
+
+                result.append({
+                    "session_id": s["session_id"],
+                    "aspsp_name": s.get("aspsp_name"),
+                    "account_uid": uid,
+                    "iban": iban or f"OB-{uid[:12]}",
+                    "excluded": uid in excluded,
+                    "balance": balance,
+                    "balance_error": balance_error,
+                    "transaction_count": tx_count,
+                })
+        return {"accounts": result, "count": len(result)}
+
+    class ExcludeAccountRequest(BaseModel):
+        session_id: str
+        account_uid: str
+        excluded: bool  # true = exclure du sync, false = re-inclure
+
+    @router.post("/accounts/exclude")
+    async def toggle_exclude_account(
+        body: ExcludeAccountRequest, request: Request,
+    ):
+        """Exclut ou re-inclut un compte specifique du sync automatique
+        sans revoquer toute la session PSD2. Stocke la liste des uids
+        exclus dans `openbanking_sessions.excluded_account_uids`."""
+        session_doc = await db.openbanking_sessions.find_one(
+            {"session_id": body.session_id},
+        )
+        if not session_doc:
+            raise HTTPException(404, "Session inconnue")
+        await _require_syndic_scope(request, session_doc["copropriete_id"])
+        op = "$addToSet" if body.excluded else "$pull"
+        await db.openbanking_sessions.update_one(
+            {"session_id": body.session_id},
+            {op: {"excluded_account_uids": body.account_uid}},
+        )
+        return {
+            "session_id": body.session_id,
+            "account_uid": body.account_uid,
+            "excluded": body.excluded,
+        }
+
     return router

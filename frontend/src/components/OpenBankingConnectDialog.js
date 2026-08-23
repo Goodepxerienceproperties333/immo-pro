@@ -8,7 +8,7 @@ import {
   DialogFooter,
   DialogDescription,
 } from '@/components/ui/dialog';
-import { Landmark, ExternalLink, Loader2, RefreshCw, CheckCircle2, Trash2 } from 'lucide-react';
+import { Landmark, ExternalLink, Loader2, RefreshCw, CheckCircle2, Trash2, Eye, EyeOff, Wallet } from 'lucide-react';
 import { toast } from 'sonner';
 import api from '@/lib/api';
 
@@ -23,7 +23,21 @@ export default function OpenBankingConnectDialog({ open, onOpenChange, coproId, 
   const [selected, setSelected] = useState('');
   const [status, setStatus] = useState(null);
   const [sessions, setSessions] = useState([]);
+  const [accounts, setAccounts] = useState([]);
+  const [loadingAccounts, setLoadingAccounts] = useState(false);
   const [syncing, setSyncing] = useState(false);
+
+  const reloadAccounts = async () => {
+    if (!coproId) return;
+    setLoadingAccounts(true);
+    try {
+      const r = await api.get(
+        `/banking/enablebanking/accounts?copropriete_id=${coproId}`,
+      );
+      setAccounts(r.data.accounts || []);
+    } catch { /* silent */ }
+    finally { setLoadingAccounts(false); }
+  };
 
   useEffect(() => {
     if (!open) return;
@@ -44,6 +58,8 @@ export default function OpenBankingConnectDialog({ open, onOpenChange, coproId, 
             );
             setSessions(sessionsRes.data.sessions || []);
           } catch { /* silent */ }
+          // iter94o : charge le detail des comptes avec IBAN + solde
+          reloadAccounts();
         }
       } catch (err) {
         toast.error(err.response?.data?.detail || 'Impossible de charger les banques');
@@ -105,6 +121,25 @@ export default function OpenBankingConnectDialog({ open, onOpenChange, coproId, 
       if (onSynced) onSynced();
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Echec de la revocation');
+    }
+  };
+
+  // iter94o : toggle exclusion d'un compte specifique
+  const toggleAccount = async (acc) => {
+    try {
+      await api.post('/banking/enablebanking/accounts/exclude', {
+        session_id: acc.session_id,
+        account_uid: acc.account_uid,
+        excluded: !acc.excluded,
+      });
+      toast.success(
+        acc.excluded
+          ? 'Compte reactive dans le sync'
+          : 'Compte retire du sync (transactions futures ignorees)'
+      );
+      reloadAccounts();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Echec');
     }
   };
 
@@ -252,6 +287,69 @@ export default function OpenBankingConnectDialog({ open, onOpenChange, coproId, 
                     );
                   })}
                 </div>
+              </div>
+            )}
+            {/* iter94o : Panneau detaille des comptes synchronises */}
+            {accounts.length > 0 && (
+              <div className="rounded border border-slate-200 bg-white p-3 space-y-2">
+                <div className="text-sm font-semibold text-slate-700 flex items-center gap-2">
+                  <Wallet className="h-4 w-4 text-[#022D52]" />
+                  Comptes synchronises ({accounts.filter(a => !a.excluded).length} actif(s) / {accounts.length})
+                </div>
+                <div className="space-y-1 text-xs">
+                  {accounts.map((a) => (
+                    <div
+                      key={`${a.session_id}-${a.account_uid}`}
+                      className={`flex items-center justify-between rounded px-2 py-2 border ${
+                        a.excluded
+                          ? 'bg-slate-100 border-slate-300 opacity-70'
+                          : 'bg-white border-slate-200'
+                      }`}
+                      data-testid={`ob-account-${a.account_uid}`}
+                    >
+                      <div className="flex-1 min-w-0">
+                        <div className="font-mono text-slate-800 truncate">
+                          {a.iban}
+                        </div>
+                        <div className="text-slate-500 flex gap-3">
+                          <span>{a.aspsp_name}</span>
+                          <span>{a.transaction_count} tx</span>
+                          {a.balance && a.balance.amount != null && (
+                            <span className="font-semibold text-emerald-700">
+                              {Number(a.balance.amount).toLocaleString('fr-BE', {
+                                minimumFractionDigits: 2, maximumFractionDigits: 2,
+                              })} {a.balance.currency || 'EUR'}
+                            </span>
+                          )}
+                          {a.balance_error && (
+                            <span className="text-amber-600">solde N/A</span>
+                          )}
+                        </div>
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => toggleAccount(a)}
+                        className={`h-7 text-xs ml-2 ${
+                          a.excluded
+                            ? 'text-emerald-600 hover:bg-emerald-50'
+                            : 'text-slate-600 hover:bg-slate-100'
+                        }`}
+                        title={a.excluded ? 'Reactiver le sync de ce compte' : 'Retirer ce compte du sync'}
+                        data-testid={`ob-toggle-account-${a.account_uid}`}
+                      >
+                        {a.excluded
+                          ? <><Eye className="h-3 w-3 mr-1" /> Reactiver</>
+                          : <><EyeOff className="h-3 w-3 mr-1" /> Retirer</>}
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+                {loadingAccounts && (
+                  <div className="text-xs text-slate-400 italic">
+                    Mise a jour des soldes...
+                  </div>
+                )}
               </div>
             )}
             {status && !status.configured && (

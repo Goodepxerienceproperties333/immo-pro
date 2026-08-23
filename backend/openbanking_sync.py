@@ -234,8 +234,9 @@ async def sync_session(
         )
         if not account_uid:
             continue
-        # Fallback IBAN si sandbox Mock (utilise identification_hash tronque
-        # pour rester dedup-stable entre syncs).
+        # iter94o : skip comptes exclus manuellement par le syndic
+        if account_uid in set(session_doc.get("excluded_account_uids") or []):
+            continue
         if not account_iban:
             id_hash = account.get("identification_hash") or account_uid
             account_iban = f"OB-{id_hash[:16]}"

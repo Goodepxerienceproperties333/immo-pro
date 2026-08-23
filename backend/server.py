@@ -1581,8 +1581,10 @@ async def startup():
                             "expires_at": {"$lte": threshold},
                         },
                         {"_id": 0, "session_id": 1, "copropriete_id": 1,
-                         "aspsp_name": 1, "expires_at": 1},
+                         "aspsp_name": 1, "expires_at": 1, "user_id": 1,
+                         "renewal_email_sent_at": 1},
                     ).to_list(500)
+                    email_sent = 0
                     for s in expiring:
                         # Mark expired vs renewal_needed
                         try:
@@ -1590,8 +1592,10 @@ async def startup():
                                 s["expires_at"].replace("Z", "+00:00")
                             )
                             is_expired = exp_dt < now
+                            days_left = int((exp_dt - now).total_seconds() / 86400)
                         except Exception:
                             is_expired = False
+                            days_left = None
                         await db.openbanking_sessions.update_one(
                             {"session_id": s["session_id"]},
                             {"$set": {
@@ -1600,8 +1604,69 @@ async def startup():
                                 "last_expiration_check": now.isoformat(),
                             }},
                         )
+                        # iter94p : envoi email au syndic (une fois par session)
+                        if not s.get("renewal_email_sent_at"):
+                            try:
+                                from graph_email import send_html_email
+                                from bson import ObjectId
+                                # Recupere email syndic proprietaire de la session
+                                u = await db.users.find_one(
+                                    {"_id": ObjectId(s["user_id"])},
+                                    {"email": 1, "name": 1},
+                                )
+                                # Recupere nom ACP
+                                acp = await db.coproprietes.find_one(
+                                    {"id": s["copropriete_id"]},
+                                    {"name": 1},
+                                )
+                                acp_name = (acp or {}).get("name", "ACP")
+                                if u and u.get("email"):
+                                    subject = (
+                                        f"[NextGe Copro] Renouveler consentement "
+                                        f"bancaire ({s.get('aspsp_name')} / {acp_name})"
+                                    )
+                                    urgency = ("EXPIRE" if is_expired
+                                               else f"expire dans {days_left}j")
+                                    html = f"""
+                                    <p>Bonjour {u.get('name', '')},</p>
+                                    <p>Le consentement PSD2 pour la banque
+                                    <b>{s.get('aspsp_name')}</b> lie a
+                                    l'ACP <b>{acp_name}</b> <b>{urgency}</b>.</p>
+                                    <p>Pour continuer a synchroniser
+                                    automatiquement les mouvements bancaires,
+                                    connectez-vous a NextGe puis :</p>
+                                    <ol>
+                                      <li>Menu <b>Finance -&gt; Banque</b></li>
+                                      <li>Selectionner l'ACP {acp_name}</li>
+                                      <li>Bouton <b>Connecter banque</b></li>
+                                      <li>Cliquer <b>Renouveler</b> sur la
+                                      session concernee</li>
+                                    </ol>
+                                    <p>Le renouvellement prend 2 minutes et
+                                    utilise itsme ou votre lecteur de carte
+                                    bancaire.</p>
+                                    <p>Cordialement,<br>L'equipe NextGe Copro</p>
+                                    """
+                                    await send_html_email(
+                                        recipients=[u["email"]],
+                                        subject=subject,
+                                        html_body=html,
+                                        db=db,
+                                        for_syndic_user_id=s["user_id"],
+                                    )
+                                    await db.openbanking_sessions.update_one(
+                                        {"session_id": s["session_id"]},
+                                        {"$set": {
+                                            "renewal_email_sent_at":
+                                                now.isoformat(),
+                                        }},
+                                    )
+                                    email_sent += 1
+                            except Exception as e:  # noqa: BLE001
+                                print(f"[openbanking-expiration] email FAILED "
+                                      f"for session {s['session_id']}: {e}")
                     print(f"[openbanking-expiration] {len(expiring)} session(s) "
-                          f"expiring in <= 15 days")
+                          f"expiring, {email_sent} email(s) sent")
                 except Exception as e:  # noqa: BLE001
                     print(f"[openbanking-expiration] FAILED: {e}")
 

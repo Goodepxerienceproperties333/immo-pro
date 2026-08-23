@@ -18,6 +18,20 @@ billing.
 - Production : https://immo-pcmn.emergent.host
 
 ## Recent changes (Feb 2026)
+- **2026-02-06 (iter94o/p)** : UI Comptes synchronises + Email J-15.
+    - **UI (iter94o)** : Nouveau panneau "Comptes synchronises" dans la modal
+      OpenBankingConnectDialog listant tous les comptes actifs (IBAN + banque
+      + solde en temps reel via `/accounts/{uid}/balances` + nb transactions
+      importees) avec bouton oeil-barre "Retirer ce compte du sync" par ligne.
+      Backend : nouveaux endpoints `GET /accounts` (agregation multi-session)
+      et `POST /accounts/exclude` (stocke `excluded_account_uids` sur la
+      session). `sync_session` skip desormais les uids exclus.
+    - **Email J-15 (iter94p)** : Le job APScheduler quotidien 08:30
+      `_openbanking_expiration_job` envoie desormais un email HTML au syndic
+      proprietaire de la session via `graph_email.send_html_email()` (config
+      par-syndic supportee). Une seule fois par session
+      (`renewal_email_sent_at`). Contenu : nom banque + nom ACP + urgence
+      (X jours restants ou EXPIRE) + procedure de renouvellement.
 - **2026-02-06 (iter94n)** : Normalisation UTC tz-aware datetime dans le
   callback OpenBanking. Extrait un helper `_to_utc_aware(value)` qui gere :
   `datetime` naive (BSON MongoDB) -> UTC aware ; `datetime` aware autre
