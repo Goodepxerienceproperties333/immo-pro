@@ -29,15 +29,23 @@ _log = logging.getLogger("openbanking.sync")
 
 APP_ID = os.environ.get("ENABLE_APP_ID", "")
 KEY_PATH = os.environ.get("ENABLE_PRIVATE_KEY_PATH", "")
+KEY_PEM = os.environ.get("ENABLE_PRIVATE_KEY_PEM", "")
 API_URL = os.environ.get(
     "ENABLE_API_URL", "https://api.enablebanking.com",
 ).rstrip("/")
 
 
 def _private_key() -> bytes:
-    if not KEY_PATH or not Path(KEY_PATH).exists():
-        raise RuntimeError("ENABLE_PRIVATE_KEY_PATH manquant ou fichier absent")
-    return Path(KEY_PATH).read_bytes()
+    """iter94q : priorite au contenu PEM inline en env (portable sur
+    Emergent Deploy / Docker sans volume), fallback fichier local."""
+    if KEY_PEM.strip():
+        return KEY_PEM.encode("utf-8")
+    if KEY_PATH and Path(KEY_PATH).exists():
+        return Path(KEY_PATH).read_bytes()
+    raise RuntimeError(
+        "Aucune cle privee Enable Banking configuree : definir "
+        "ENABLE_PRIVATE_KEY_PEM (env) ou ENABLE_PRIVATE_KEY_PATH (fichier)"
+    )
 
 
 def enable_headers() -> dict:

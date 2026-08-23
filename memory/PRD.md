@@ -18,6 +18,12 @@ billing.
 - Production : https://immo-pcmn.emergent.host
 
 ## Recent changes (Feb 2026)
+- **2026-02-06 (iter94q)** : Portabilite prod - cle privee Enable Banking
+  lue depuis `ENABLE_PRIVATE_KEY_PEM` (env var) en priorite, fallback
+  fichier local via `ENABLE_PRIVATE_KEY_PATH`. Necessaire pour Emergent
+  Deploy prod (pas de volume persistant pour uploader un fichier). Applique
+  dans `routes/openbanking.py` ET `openbanking_sync.py`. Testé preview OK,
+  status endpoint retourne `configured=true`.
 - **2026-02-06 (iter94o/p)** : UI Comptes synchronises + Email J-15.
     - **UI (iter94o)** : Nouveau panneau "Comptes synchronises" dans la modal
       OpenBankingConnectDialog listant tous les comptes actifs (IBAN + banque

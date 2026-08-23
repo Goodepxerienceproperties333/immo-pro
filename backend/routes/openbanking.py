@@ -73,13 +73,18 @@ def create_openbanking_router(db):
     # ---------- Config ----------
     APP_ID = os.environ.get("ENABLE_APP_ID", "")
     KEY_PATH = os.environ.get("ENABLE_PRIVATE_KEY_PATH", "")
+    KEY_PEM = os.environ.get("ENABLE_PRIVATE_KEY_PEM", "")
     API_URL = os.environ.get(
         "ENABLE_API_URL", "https://api.enablebanking.com"
     ).rstrip("/")
-    # URL de callback publique (preview / prod) - construite dynamiquement
-    # depuis le referer ou le Host header.
+    # iter94q : cle privee lue depuis ENV en prod (Emergent Deploy) ou depuis
+    # un fichier local en dev. La var ENV a priorite pour la portabilite.
     _private_key: Optional[bytes] = None
-    if KEY_PATH and Path(KEY_PATH).exists():
+    if KEY_PEM.strip():
+        # Env variable contient tout le contenu PEM (recommande en prod)
+        _private_key = KEY_PEM.encode("utf-8")
+    elif KEY_PATH and Path(KEY_PATH).exists():
+        # Fallback : fichier local (dev / preview)
         _private_key = Path(KEY_PATH).read_bytes()
 
     def _configured() -> bool:
