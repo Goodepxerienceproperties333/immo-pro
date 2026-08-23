@@ -18,6 +18,14 @@ billing.
 - Production : https://immo-pcmn.emergent.host
 
 ## Recent changes (Feb 2026)
+- **2026-02-06 (iter94n)** : Normalisation UTC tz-aware datetime dans le
+  callback OpenBanking. Extrait un helper `_to_utc_aware(value)` qui gere :
+  `datetime` naive (BSON MongoDB) -> UTC aware ; `datetime` aware autre
+  timezone -> converti en UTC ; string ISO-8601 avec `Z`, `+HH:MM` ou
+  sans tz -> UTC aware ; None/invalide -> None. Applique aux 2 comparaisons
+  du callback (state expiration + session valid_until Enable Banking).
+  7 cas testes, aucun `TypeError: can't compare offset-naive and
+  offset-aware`.
 - **2026-02-06 (iter94m)** : Revocation d'un consentement Open Banking.
     - Nouvel endpoint `DELETE /api/banking/enablebanking/sessions/{session_id}?delete_transactions=<bool>`.
       Appelle `DELETE /sessions/{id}` cote Enable Banking (best effort,

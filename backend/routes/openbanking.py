@@ -34,6 +34,39 @@ class StartAuthRequest(BaseModel):
     psu_type: str = "personal"  # ou "business"
 
 
+def _to_utc_aware(value) -> Optional[datetime]:
+    """iter94n : Normalise n'importe quelle valeur date en `datetime` UTC
+    tz-aware avant comparaison.
+
+    Gere :
+     - `datetime` deja aware -> converti en UTC
+     - `datetime` naive -> assume UTC (BSON MongoDB stocke sans tz)
+     - `str` ISO-8601 (`2026-11-20T19:57:43Z` ou `+00:00` ou `+02:00`)
+     - `str` sans info tz -> assume UTC
+     - None / autre -> None
+
+    Utilise systematiquement AVANT toute comparaison < / > / == entre dates
+    pour eviter `TypeError: can't compare offset-naive and offset-aware`.
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+    if isinstance(value, str):
+        try:
+            # Accepte suffixes Z ou +hh:mm ; fromisoformat gere le reste
+            cleaned = value.strip().replace("Z", "+00:00")
+            dt = datetime.fromisoformat(cleaned)
+            if dt.tzinfo is None:
+                return dt.replace(tzinfo=timezone.utc)
+            return dt.astimezone(timezone.utc)
+        except (ValueError, TypeError):
+            return None
+    return None
+
+
 def create_openbanking_router(db):
     router = APIRouter(prefix="/api/banking/enablebanking")
 
@@ -256,17 +289,13 @@ def create_openbanking_router(db):
             return RedirectResponse(
                 f"{front}/banking?openbanking_error=invalid_state"
             )
-        if saved.get("expires_at"):
-            exp_saved = saved["expires_at"]
-            # MongoDB retourne des datetimes naive (BSON) - on les remet en UTC aware
-            if isinstance(exp_saved, datetime) and exp_saved.tzinfo is None:
-                exp_saved = exp_saved.replace(tzinfo=timezone.utc)
-            elif isinstance(exp_saved, str):
-                exp_saved = datetime.fromisoformat(exp_saved.replace("Z", "+00:00"))
-            if exp_saved < datetime.now(timezone.utc):
-                return RedirectResponse(
-                    f"{front}/banking?openbanking_error=expired_state"
-                )
+        # iter94n : normalisation UTC tz-aware sur les DEUX cotes avant compare
+        exp_saved = _to_utc_aware(saved.get("expires_at"))
+        now_utc = datetime.now(timezone.utc)
+        if exp_saved is not None and exp_saved < now_utc:
+            return RedirectResponse(
+                f"{front}/banking?openbanking_error=expired_state"
+            )
         # Echange code -> session_id
         try:
             session = await _eb("POST", "/sessions", json={"code": code})
@@ -280,19 +309,12 @@ def create_openbanking_router(db):
                 f"{front}/banking?openbanking_error=no_session_id"
             )
         # Persiste la session pour l'ACP
-        # iter94k : store expiration for consent renewal alerts (Sprint 4)
-        # Enable Banking access.valid_until = 90 days max
+        # iter94k/n : store expiration for consent renewal alerts, en
+        # normalisant systematiquement en UTC tz-aware (Enable Banking
+        # renvoie `2026-11-20T19:57:43Z` -> converti proprement).
         access = session.get("access", {}) or {}
-        expires_at_iso = access.get("valid_until")
-        expires_at_dt = None
-        if expires_at_iso:
-            try:
-                # Normalize timezone
-                cleaned = expires_at_iso.replace("Z", "+00:00")
-                expires_at_dt = datetime.fromisoformat(cleaned)
-            except Exception:
-                expires_at_dt = datetime.now(timezone.utc) + timedelta(days=90)
-        else:
+        expires_at_dt = _to_utc_aware(access.get("valid_until"))
+        if expires_at_dt is None:
             expires_at_dt = datetime.now(timezone.utc) + timedelta(days=90)
 
         await db.openbanking_sessions.insert_one({
