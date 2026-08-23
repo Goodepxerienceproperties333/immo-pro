@@ -18,6 +18,19 @@ billing.
 - Production : https://immo-pcmn.emergent.host
 
 ## Recent changes (Feb 2026)
+- **2026-02-06 (iter94s)** : Force `psu_type='business'` pour toutes les
+  connexions bancaires. Les comptes ACP en Belgique sont TOUJOURS business
+  (obligation art. 3.89 §5 Code civil belge). Impacts :
+    - Frontend : suppression du selecteur personal/business, remplace par
+      un bandeau bleu informatif. `psuType = 'business'` en dur.
+    - Backend `StartAuthRequest.psu_type` default = 'business'. Enforcement
+      cote serveur meme si un client envoie 'personal' (defense en
+      profondeur).
+    - Renewal endpoint egalement force business.
+    - Filtre frontend : ne montre que les 45/47 banques belges qui
+      supportent 'business' (exclut Wise / Bpost Bank retail-only).
+  Corrige le bug BNP -> Easy Banking Retail (montrait uniquement le compte
+  perso EVRARD GERALD au lieu des comptes ACP).
 - **2026-02-06 (iter94q)** : Portabilite prod - cle privee Enable Banking
   lue depuis `ENABLE_PRIVATE_KEY_PEM` (env var) en priorite, fallback
   fichier local via `ENABLE_PRIVATE_KEY_PATH`. Necessaire pour Emergent

@@ -21,6 +21,10 @@ export default function OpenBankingConnectDialog({ open, onOpenChange, coproId, 
   const [loading, setLoading] = useState(false);
   const [aspsps, setAspsps] = useState([]);
   const [selected, setSelected] = useState('');
+  // iter94s : Les comptes ACP en Belgique sont TOUJOURS des comptes
+  // business (obligation legale art. 3.89 §5 Code civil). On force donc
+  // psu_type='business' - pas de choix personal possible.
+  const psuType = 'business';
   const [status, setStatus] = useState(null);
   const [sessions, setSessions] = useState([]);
   const [accounts, setAccounts] = useState([]);
@@ -151,6 +155,7 @@ export default function OpenBankingConnectDialog({ open, onOpenChange, coproId, 
         aspsp_name: selected,
         aspsp_country: 'BE',
         copropriete_id: coproId,
+        psu_type: psuType,
       });
       if (data.url) {
         toast.info('Redirection vers la banque...');
@@ -365,11 +370,20 @@ export default function OpenBankingConnectDialog({ open, onOpenChange, coproId, 
             )}
             {aspsps.length > 0 && (
               <>
+                {/* iter94s : psu_type='business' forcé (comptes ACP = business obligatoire) */}
+                <div className="rounded border border-blue-200 bg-blue-50 p-2 text-xs text-blue-900">
+                  ℹ️ Les comptes des ACPs sont des comptes <b>professionnels</b>
+                  (obligation légale art. 3.89 §5 Code civil belge). La
+                  connexion se fait automatiquement en mode <b>Easy Banking
+                  Business</b> / KBC-Live Pro / ING Business Online.
+                </div>
                 <label className="block text-sm font-medium text-slate-700">
-                  Choisissez votre banque
+                  Choisissez la banque de l&apos;ACP
                 </label>
                 <div className="max-h-72 overflow-y-auto space-y-1 border rounded p-2 bg-slate-50">
-                  {aspsps.map((a) => (
+                  {aspsps
+                    .filter(a => !a.psu_types || a.psu_types.length === 0 || a.psu_types.includes(psuType))
+                    .map((a) => (
                     <button
                       key={a.name}
                       onClick={() => setSelected(a.name)}

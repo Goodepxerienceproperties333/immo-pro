@@ -31,7 +31,11 @@ class StartAuthRequest(BaseModel):
     aspsp_name: str
     aspsp_country: str = "BE"
     copropriete_id: str
-    psu_type: str = "personal"  # ou "business"
+    # iter94s : les comptes ACP en Belgique sont TOUJOURS business
+    # (art. 3.89 §5 Code civil). Le frontend n'expose plus le choix,
+    # mais on force cote backend au cas ou un ancien client enverrait
+    # encore personal.
+    psu_type: str = "business"
 
 
 def _to_utc_aware(value) -> Optional[datetime]:
@@ -234,6 +238,8 @@ def create_openbanking_router(db):
         ).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
         callback = _callback_url(request)
+        # iter94s : force business (les comptes ACP sont toujours business)
+        payload_psu = "business" if body.psu_type != "business" else body.psu_type
         # iter94i : log l'URL exacte + longueur pour debugger mismatch
         # avec le Control Panel (REDIRECT_URI_NOT_ALLOWED).
         import logging as _logging
@@ -252,7 +258,7 @@ def create_openbanking_router(db):
             },
             "state": state,
             "redirect_url": callback,
-            "psu_type": body.psu_type,
+            "psu_type": payload_psu,
         }
         # Persiste le state avec le contexte user + ACP pour verifier au callback
         await db.openbanking_states.insert_one({
@@ -493,7 +499,7 @@ def create_openbanking_router(db):
             },
             "state": state,
             "redirect_url": callback,
-            "psu_type": "personal",
+            "psu_type": "business",  # iter94s : ACP = business
         }
         await db.openbanking_states.insert_one({
             "state": state,
