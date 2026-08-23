@@ -18,6 +18,13 @@ billing.
 - Production : https://immo-pcmn.emergent.host
 
 ## Recent changes (Feb 2026)
+- **2026-02-23 (iter95a)** : Bouton "Connecter banque" (OpenBanking PSD2)
+  masque temporairement dans `BankingPage.js` via un flag module-level
+  `OPENBANKING_ENABLED = false`. En attente d'approbation KYB commerciale
+  Enable Banking (1-2 semaines) pour acceder aux comptes Business belges
+  (BNP, KBC, Belfius). Le code d'integration reste 100% fonctionnel et le
+  `.env` est en mode Sandbox (Mock ASPSP). Reactivation = passer le flag a
+  `true`. Aucun impact sur les autres flux (CODA, PDF/CSV, VCS).
 - **2026-02-06 (iter94s)** : Force `psu_type='business'` pour toutes les
   connexions bancaires. Les comptes ACP en Belgique sont TOUJOURS business
   (obligation art. 3.89 §5 Code civil belge). Impacts :

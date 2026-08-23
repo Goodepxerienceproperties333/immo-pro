@@ -20,6 +20,12 @@ import OpenBankingConnectDialog from '@/components/OpenBankingConnectDialog';
 import { fmtDate } from '@/lib/dateFmt';
 
 import { fmtEUR } from '@/lib/format';
+
+// TODO: Passer a true quand l'approbation KYB commerciale Enable Banking sera obtenue
+// pour permettre la connexion PSD2 aux comptes Business belges (BNP, KBC, Belfius...).
+// Delai estime : 1-2 semaines (validation KYB commerciale Enable Banking).
+const OPENBANKING_ENABLED = false;
+
 export default function BankingPage() {
   const { selectedCopro, selectedFiscalYear, selectedFiscalYearId, setSelectedFiscalYearId } = useAuth();
   const navigate = useNavigate();
@@ -982,6 +988,8 @@ export default function BankingPage() {
             <Upload size={16} className="mr-2" /> {importUploading ? 'Extraction IA en cours...' : 'Importer PDF/CSV'}
           </Button>
           {/* iter94h : connexion bancaire temps reel via Enable Banking PSD2 */}
+          {/* Masque temporairement en attendant l'approbation KYB commerciale d'Enable Banking */}
+          {OPENBANKING_ENABLED && (
           <Button
             onClick={() => setOpenbankingDialog(true)}
             variant="outline"
@@ -992,6 +1000,7 @@ export default function BankingPage() {
           >
             <Landmark size={16} className="mr-2" /> Connecter banque
           </Button>
+          )}
           <Button onClick={() => {
             const def = bankAccounts.find(b => b.is_default) || bankAccounts[0];
             setStmtForm({ number: '', date: new Date().toISOString().split('T')[0], account_number: def?.iban || '', opening_balance: 0, closing_balance: 0 });
