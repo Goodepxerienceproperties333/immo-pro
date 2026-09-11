@@ -18,6 +18,33 @@ billing.
 - Production : https://immo-pcmn.emergent.host
 
 ## Recent changes (Feb 2026)
+- **2026-02-23 (iter95n)** : Mot de passe SMTP One2Net mis a jour dans
+  `backend/.env` (`SMTP_PASSWORD=Source1367$$%`, 13 chars). SMTP auth
+  desormais accepte -> envoi via `mail01.one2net.net:465` OK sans
+  passer par le fallback Graph. Verifie via `_send_via_smtp` direct +
+  `POST /api/admin/users` : `invitation_sent=true`. **Action prod** :
+  mettre a jour egalement le secret `SMTP_PASSWORD` dans les Secrets
+  du deploiement Emergent (les modifications de `.env` en preview ne se
+  propagent pas en prod).
+- **2026-02-23 (iter95m)** : Fix critique - les emails d'invitation syndic
+  ne partaient plus. Cause racine : le SMTP One2Net (mail01.one2net.net)
+  rejette l'authentification (`535 5.7.8 Error: authentication failed`)
+  pour `info@nextgecopro.be` (mdp probablement change/expire cote
+  fournisseur). Comme le code utilisait `asyncio.create_task` fire-and-forget
+  et retournait `invitation_sent=true` inconditionnellement, l'echec etait
+  totalement invisible.
+  Fixes :
+    1. `graph_email.send_html_email` : fallback automatique **SMTP -> Graph**
+       si SMTP echoue et Graph est configure (les 2 sont dans `.env`).
+    2. `routes/admin.create_user` + `routes/team.add_member` : envoi
+       synchrone (`await`) + remontee honnete de `invitation_sent` et
+       `invitation_error` (extrait) dans la reponse HTTP.
+    3. Test regression `tests/test_iter95m_smtp_graph_fallback.py` (3
+       scenarios : SMTP OK sans fallback, SMTP KO -> Graph, SMTP KO
+       sans Graph -> raise).
+  Actions utilisateur possibles : (a) mettre a jour `SMTP_PASSWORD` dans
+  les Secrets prod avec le nouveau mot de passe One2Net, OU (b) laisser
+  le fallback Graph gerer les envois (100% fonctionnel en preview).
 - **2026-02-23 (iter95l)** : Combobox natif (Popover + Command shadcn) pour
   l'affectation lot -> proprietaire dans le wizard ACP (etape 5).
   Remplace l'autocomplete precedent qui posait deux problemes :

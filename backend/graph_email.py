@@ -193,14 +193,32 @@ async def send_html_email(
     # iter90fv : Chemin SMTP prioritaire quand SMTP_HOST est configure.
     # Fait totalement bypass de Graph API. Le check MAIL_ENABLED a deja ete
     # applique ci-dessus.
+    # iter95m : si SMTP echoue (auth 535, connexion refusee, timeout), on
+    # bascule automatiquement sur Graph API si celui-ci est configure - afin
+    # d'eviter que les invitations restent bloquees en cas de mot de passe
+    # SMTP expire cote fournisseur.
     if not per_syndic and _smtp_configured():
-        await _send_via_smtp(
-            recipients=list(recipients),
-            subject=subject,
-            html_body=html_body,
-            reply_to=reply_to,
-        )
-        return
+        try:
+            await _send_via_smtp(
+                recipients=list(recipients),
+                subject=subject,
+                html_body=html_body,
+                reply_to=reply_to,
+            )
+            return
+        except Exception as smtp_exc:
+            graph_ready = bool(_TENANT_ID and _CLIENT_ID and _CLIENT_SECRET and (sender_upn or _SENDER_UPN))
+            if not graph_ready:
+                logger.error(
+                    "SMTP failed and Graph not configured - no fallback available. SMTP error: %s",
+                    smtp_exc,
+                )
+                raise
+            logger.warning(
+                "SMTP send failed (%s), falling back to Microsoft Graph API...",
+                smtp_exc,
+            )
+            # Passe la main a la logique Graph ci-dessous (ne pas return ici).
 
     sender = sender_upn or _SENDER_UPN
     if not sender:

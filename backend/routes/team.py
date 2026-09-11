@@ -162,11 +162,14 @@ def create_team_router(db):
             "created_by": user.get("_id") or user.get("id"),
         }
         result = await db.users.insert_one(doc)
-        # Envoi de l'invitation par email via MSGRAPH (non bloquant)
+        # iter95m : envoi synchrone (await) au lieu de fire-and-forget pour
+        # remonter honnetement l'echec eventuel a l'utilisateur.
+        # send_html_email fait deja fallback SMTP -> Graph automatiquement.
         invitation_sent = False
+        invitation_error = None
         try:
             from graph_email import is_configured, send_html_email, build_invitation_email
-            import os, asyncio
+            import os
             if doc["must_change_password"] and is_configured():
                 frontend_url = os.environ.get("FRONTEND_URL", "")
                 setup_url = f"{frontend_url}/login?invite={email}"
@@ -182,17 +185,19 @@ def create_team_router(db):
                     inviter_name=user.get("name"),
                     inviter_email=user.get("email"),
                 )
-                asyncio.create_task(send_html_email([email], subject, html))
+                await send_html_email([email], subject, html)
                 invitation_sent = True
         except Exception as e:
             import logging
             logging.warning(f"Envoi invitation echoue pour gestionnaire {email}: {e}")
+            invitation_error = str(e)[:200]
         return {"id": str(result.inserted_id), "email": email, "name": data.name,
                 "role": "gestionnaire", "parent_syndic_id": scope,
                 "copropriete_ids": doc["copropriete_ids"],
                 "role_template_id": doc["role_template_id"],
                 "permissions": doc["permissions"],
-                "invitation_sent": invitation_sent}
+                "invitation_sent": invitation_sent,
+                "invitation_error": invitation_error}
 
     @router.post("/members/{member_id}/resend-invitation")
     async def resend_member_invitation(member_id: str, request: Request):

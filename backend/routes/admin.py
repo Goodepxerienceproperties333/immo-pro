@@ -113,26 +113,35 @@ def create_admin_router(db):
             "created_by": str(request.state.user.get("_id", "")) if hasattr(request, "state") and hasattr(request.state, "user") else None,
         }
         result = await db.users.insert_one(doc)
-        # Envoi de l'invitation par email via Microsoft Graph (background, ne bloque pas)
-        try:
-            from graph_email import is_configured, send_html_email, build_invitation_email
-            import os, asyncio
-            if must_change and is_configured():
-                frontend_url = os.environ.get("FRONTEND_URL", "")
-                setup_url = f"{frontend_url}/login?invite={email}"
-                inviter = request.state.user if hasattr(request, "state") and hasattr(request.state, "user") else None
-                role_label = "Super Administrateur" if data.role == "superadmin" else "Syndic"
-                subject, html = build_invitation_email(
-                    recipient_name=data.name,
-                    role_label=role_label,
-                    setup_url=setup_url,
-                    inviter_name=(inviter or {}).get("name"),
-                    inviter_email=(inviter or {}).get("email"),
-                )
-                asyncio.create_task(send_html_email([email], subject, html))
-        except Exception as e:
-            import logging
-            logging.warning(f"Envoi invitation echoue pour {email}: {e}")
+        # iter95m : envoi synchrone (await) pour remonter honnetement l'echec
+        # a l'utilisateur (au lieu du fire-and-forget qui masquait les erreurs).
+        # `send_html_email` fait deja fallback SMTP -> Graph automatiquement.
+        invitation_sent = False
+        invitation_error = None
+        if must_change:
+            try:
+                from graph_email import is_configured, send_html_email, build_invitation_email
+                import os
+                if is_configured():
+                    frontend_url = os.environ.get("FRONTEND_URL", "")
+                    setup_url = f"{frontend_url}/login?invite={email}"
+                    inviter = request.state.user if hasattr(request, "state") and hasattr(request.state, "user") else None
+                    role_label = "Super Administrateur" if data.role == "superadmin" else "Syndic"
+                    subject, html = build_invitation_email(
+                        recipient_name=data.name,
+                        role_label=role_label,
+                        setup_url=setup_url,
+                        inviter_name=(inviter or {}).get("name"),
+                        inviter_email=(inviter or {}).get("email"),
+                    )
+                    await send_html_email([email], subject, html)
+                    invitation_sent = True
+                else:
+                    invitation_error = "Service email non configure"
+            except Exception as e:
+                import logging
+                logging.warning(f"Envoi invitation echoue pour {email}: {e}")
+                invitation_error = str(e)[:200]
         return {
             "id": str(result.inserted_id),
             "email": email,
@@ -142,7 +151,8 @@ def create_admin_router(db):
             "must_change_password": must_change,
             "role_template_id": None,
             "permissions": None,
-            "invitation_sent": must_change,
+            "invitation_sent": invitation_sent,
+            "invitation_error": invitation_error,
         }
 
     @router.post("/users/{user_id}/resend-invitation")
