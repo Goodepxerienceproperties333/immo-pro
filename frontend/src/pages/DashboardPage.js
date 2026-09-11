@@ -5,6 +5,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { toast } from 'sonner';
 import { Users, Building2, UserCheck, Receipt, AlertCircle, TrendingUp, Home, ArrowLeft, Landmark, FileText, Megaphone, Sparkles, Loader2, Scale, ArrowLeftRight, FileBarChart, Truck } from 'lucide-react';
 import { fmtDate } from '@/lib/dateFmt';
@@ -33,6 +34,41 @@ export default function DashboardPage() {
       });
   }, [selectedCopro]);
   const [seeding, setSeeding] = useState(false);
+  // iter95o : filtre superadmin par Syndic pour eviter les melanges de donnees
+  // entre syndics lors de l'assistance. Persiste dans localStorage pour
+  // survivre aux rechargements de page.
+  const [syndicsList, setSyndicsList] = useState([]);
+  const [syndicFilter, setSyndicFilter] = useState(() => {
+    try { return localStorage.getItem('superadmin_syndic_filter') || 'all'; }
+    catch { return 'all'; }
+  });
+  useEffect(() => {
+    if (!isSuperadmin) return;
+    api.get('/admin/syndics-overview').then(r => {
+      setSyndicsList((r.data || []).map(s => ({
+        syndic_id: s.syndic_id,
+        name: s.name || s.email,
+        email: s.email,
+        copros_count: s.copros_count || 0,
+        copro_ids: (s.coproprietes || []).map(c => c.id),
+      })));
+    }).catch(() => {});
+  }, [isSuperadmin]);
+  const updateSyndicFilter = (v) => {
+    setSyndicFilter(v);
+    try {
+      if (v === 'all') localStorage.removeItem('superadmin_syndic_filter');
+      else localStorage.setItem('superadmin_syndic_filter', v);
+    } catch { /* ignore quota */ }
+  };
+  // Applique le filtre superadmin cote client sur la liste des ACPs
+  const filteredCoproprietes = (isSuperadmin && syndicFilter !== 'all')
+    ? coproprietes.filter(c => {
+        const sy = syndicsList.find(s => s.syndic_id === syndicFilter);
+        if (!sy) return c.syndic_id === syndicFilter;
+        return sy.copro_ids.includes(c.id) || c.syndic_id === syndicFilter;
+      })
+    : coproprietes;
 
   const reload = useCallback(() => {
     api.get('/coproprietes?include_archived=true').then(r => setCoproprietes(r.data)).catch(() => {});
@@ -120,7 +156,7 @@ export default function DashboardPage() {
         {stats && (
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
             {[
-              { label: 'Coproprietes', value: stats.coproprietes_count || coproprietes.length, icon: Home, color: '#022D52' },
+              { label: 'Coproprietes', value: (isSuperadmin && syndicFilter !== 'all') ? filteredCoproprietes.length : (stats.coproprietes_count || coproprietes.length), icon: Home, color: '#022D52' },
               { label: 'Proprietaires', value: stats.owners_count || 0, icon: Users, color: '#0284C7' },
               { label: 'Lots', value: stats.lots_count || 0, icon: Building2, color: '#00A650' },
               { label: 'Factures impayees', value: stats.unpaid_invoices || 0, icon: AlertCircle, color: '#DC2626' },
@@ -147,12 +183,43 @@ export default function DashboardPage() {
           </TabsList>
 
           <TabsContent value="acps" data-testid="tab-content-acps">
+            {/* iter95o : filtre par Syndic - visible UNIQUEMENT en mode superadmin.
+                Permet d'isoler l'assistance a un syndic donne sans melanger les
+                donnees. Persiste dans localStorage. */}
+            {isSuperadmin && syndicsList.length > 0 && (
+              <div className="flex items-center gap-2 mb-3 bg-amber-50 border border-amber-200 rounded-md p-2" data-testid="superadmin-syndic-filter-bar">
+                <Users size={14} className="text-amber-700 shrink-0" />
+                <span className="text-[11px] font-semibold text-amber-900 uppercase tracking-wide">Assistance superadmin - Filtrer par syndic :</span>
+                <Select value={syndicFilter} onValueChange={updateSyndicFilter}>
+                  <SelectTrigger className="h-7 text-xs w-[280px] bg-white" data-testid="superadmin-syndic-filter-select">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all" data-testid="syndic-filter-all">Tous les syndics ({coproprietes.length} ACP)</SelectItem>
+                    {syndicsList.map(s => (
+                      <SelectItem key={s.syndic_id} value={s.syndic_id} data-testid={`syndic-filter-${s.syndic_id}`}>
+                        {s.name} ({s.copros_count} ACP)
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {syndicFilter !== 'all' && (
+                  <Button variant="ghost" size="sm" className="h-7 text-[11px] text-amber-800" onClick={() => updateSyndicFilter('all')} data-testid="syndic-filter-reset">
+                    Reinitialiser
+                  </Button>
+                )}
+              </div>
+            )}
             <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Vos coproprietes</div>
-            {coproprietes.length === 0 ? (
-              <Card className="border-slate-200"><CardContent className="p-8 text-center text-slate-400">Aucune copropriete creee. Allez dans Coproprietes pour en creer une.</CardContent></Card>
+            {filteredCoproprietes.length === 0 ? (
+              <Card className="border-slate-200"><CardContent className="p-8 text-center text-slate-400">
+                {isSuperadmin && syndicFilter !== 'all'
+                  ? 'Aucune copropriete pour ce syndic.'
+                  : 'Aucune copropriete creee. Allez dans Coproprietes pour en creer une.'}
+              </CardContent></Card>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                {coproprietes.map(c => {
+                {filteredCoproprietes.map(c => {
                   const isArchived = c.status === 'archived';
                   return (
                   <Card
@@ -187,11 +254,11 @@ export default function DashboardPage() {
           </TabsContent>
 
           <TabsContent value="owners" data-testid="tab-content-owners">
-            <SyndicOwnersGlobalTab coproprietes={coproprietes} />
+            <SyndicOwnersGlobalTab coproprietes={filteredCoproprietes} />
           </TabsContent>
 
           <TabsContent value="suppliers" data-testid="tab-content-suppliers">
-            <SyndicSuppliersGlobalTab coproprietes={coproprietes} />
+            <SyndicSuppliersGlobalTab coproprietes={filteredCoproprietes} />
           </TabsContent>
         </Tabs>
       </div>

@@ -18,6 +18,17 @@ billing.
 - Production : https://immo-pcmn.emergent.host
 
 ## Recent changes (Feb 2026)
+- **2026-02-23 (iter95o)** : Filtre "Assistance superadmin - Filtrer par
+  syndic" dans le tableau de bord (`pages/DashboardPage.js`). Visible
+  UNIQUEMENT quand `isSuperadmin=true` (aucun changement pour les
+  syndics/gestionnaires). Le select liste tous les syndics via
+  `GET /api/admin/syndics-overview` avec leur compteur d'ACPs, applique
+  un filtre client-side sur la grille des coproprietes ainsi que sur
+  les tabs "Tous mes proprietaires" et "Tous mes fournisseurs".
+  Le KPI "Coproprietes" reflete le filtre. Choix persiste dans
+  localStorage (`superadmin_syndic_filter`) pour survivre aux reloads.
+  Objectif : eviter les melanges de donnees entre syndics lors des
+  operations d'assistance / debug.
 - **2026-02-23 (iter95n)** : Mot de passe SMTP One2Net mis a jour dans
   `backend/.env` (`SMTP_PASSWORD=Source1367$$%`, 13 chars). SMTP auth
   desormais accepte -> envoi via `mail01.one2net.net:465` OK sans
