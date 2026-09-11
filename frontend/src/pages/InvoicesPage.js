@@ -1457,19 +1457,14 @@ export default function InvoicesPage() {
               </div>
               <div><label className="form-label">Description *</label><Input value={invForm.description} onChange={e => setInvForm({...invForm, description: e.target.value})} placeholder="Ex : Reparation ascenseur cage B - visite 04/05/2026" data-testid="inv-description" required /></div>
             </div>
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-2 gap-4">
               <div><label className="form-label">Montant TTC *</label><Input type="number" step="0.01" value={invForm.total_amount} onChange={e => setInvForm({...invForm, total_amount: e.target.value})} data-testid="inv-amount" /></div>
               <div><label className="form-label">TVA</label><Input type="number" step="0.01" value={invForm.vat_amount} onChange={e => setInvForm({...invForm, vat_amount: e.target.value})} /></div>
-              <div><label className="form-label">Statut</label>
-                <Select value={invForm.status} onValueChange={v => setInvForm({...invForm, status: v})}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="draft">Brouillon</SelectItem>
-                    <SelectItem value="unpaid">Impayee</SelectItem>
-                    <SelectItem value="paid">Payee</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
+              {/* iter95p : champ STATUT supprime de l'interface a la demande de l'utilisateur.
+                  Le status reste gere automatiquement par le backend :
+                  - `unpaid` par defaut a la creation (voir invForm initial state)
+                  - `paid` bascule quand un paiement est lettre
+                  Rien ne change cote donnees / API. */}
             </div>
             <div className="rounded-md border border-amber-200 bg-amber-50/50 p-3">
               <label className="flex items-center gap-2 cursor-pointer text-sm font-medium text-amber-900">

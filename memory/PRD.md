@@ -18,6 +18,14 @@ billing.
 - Production : https://immo-pcmn.emergent.host
 
 ## Recent changes (Feb 2026)
+- **2026-02-23 (iter95p)** : Suppression du champ STATUT dans le formulaire
+  de creation/edition de facture (`pages/InvoicesPage.js`). Le status
+  restait un choix libre (`draft` / `unpaid` / `paid`) alors qu'il est
+  gere automatiquement par le backend (`unpaid` par defaut, `paid`
+  quand un paiement est lettre via CODA/OpenBanking). Grid des champs
+  Montant/TVA passee de `grid-cols-3` a `grid-cols-2` pour rester
+  aligne. Le filtre STATUT en tete de tableau (recherche) est
+  conserve.
 - **2026-02-23 (iter95o)** : Filtre "Assistance superadmin - Filtrer par
   syndic" dans le tableau de bord (`pages/DashboardPage.js`). Visible
   UNIQUEMENT quand `isSuperadmin=true` (aucun changement pour les
