@@ -1,18 +1,25 @@
-"""iter95f - Webhook sortant vers une plateforme AG (Assemblee Generale)
-lors de la creation d'une copropriete (ACP).
+"""iter95g - Webhooks sortants vers la plateforme AG (Assemblee Generale).
 
-Se declenche a la fin de `POST /api/coproprietes` avec un payload minimal
-`{copropriete_id, name, address}` protege par le meme `X-Sync-Token` que
-l'endpoint `GET /api/export/owners/...` (partage `EXPORT_SYNC_TOKEN`).
+Evenements pris en charge :
+- `new-acp`       : creation d'une copropriete (POST /api/coproprietes)
+- `acp-updated`   : modification d'une copropriete (PUT /api/coproprietes/{id})
+- `acp-archived`  : archivage d'une copropriete (POST /api/coproprietes/{id}/archive)
 
-Le webhook est :
-- Optionnel : desactive si `AG_WEBHOOK_URL` n'est pas defini (log info).
-- Non-bloquant : lance en `asyncio.create_task` pour ne pas retarder la
-  reponse HTTP au syndic.
-- Idempotent cote destinataire : le `copropriete_id` (UUID) doit servir
-  de cle d'unicite.
-- Robuste : en cas de timeout / erreur reseau, on log un warning mais on
-  ne casse jamais la creation de l'ACP.
+Chaque webhook envoie un POST JSON `{copropriete_id, name, address}` avec
+le header `X-Sync-Token` = `EXPORT_SYNC_TOKEN`.
+
+Configuration :
+- `AG_WEBHOOK_BASE_URL` (recommande) : URL de base, ex
+  `https://ag.example.com/api/webhooks`. Chaque event est appendu comme
+  segment (`/new-acp`, `/acp-updated`, `/acp-archived`).
+- `AG_WEBHOOK_URL` (legacy iter95f) : URL du seul endpoint `new-acp`.
+  Retro-compat : si `AG_WEBHOOK_BASE_URL` est absent, on tente d'en deriver
+  la base en supprimant le suffixe `/new-acp`.
+
+Best-effort :
+- Fire-and-forget (`asyncio.create_task`) : ne bloque jamais la reponse HTTP.
+- Timeout 5s, echec reseau logge en warning mais silencieux pour l'appelant.
+- Si aucune URL configuree : webhook desactive (log info).
 """
 import asyncio
 import logging
@@ -23,10 +30,26 @@ import httpx
 logger = logging.getLogger(__name__)
 
 WEBHOOK_TIMEOUT_S = 5.0
+SUPPORTED_EVENTS = ("new-acp", "acp-updated", "acp-archived")
+
+
+def _base_url() -> str:
+    """URL de base pour tous les webhooks AG. Vide = webhook desactive."""
+    base = (os.environ.get("AG_WEBHOOK_BASE_URL") or "").strip()
+    if base:
+        return base.rstrip("/")
+    # Retro-compat iter95f : `AG_WEBHOOK_URL` pointait sur `.../new-acp`.
+    legacy = (os.environ.get("AG_WEBHOOK_URL") or "").strip().rstrip("/")
+    if legacy:
+        # Retire `/new-acp` si present pour reconstruire la base.
+        if legacy.endswith("/new-acp"):
+            legacy = legacy[: -len("/new-acp")]
+        return legacy
+    return ""
 
 
 def _compose_address(doc: dict) -> str:
-    """Construit une adresse postale complete a partir des champs de l'ACP."""
+    """Adresse postale complete = rue, CP + ville, pays."""
     parts = [
         (doc.get("address") or "").strip(),
         " ".join(
@@ -40,27 +63,24 @@ def _compose_address(doc: dict) -> str:
     return ", ".join(p for p in parts if p)
 
 
-async def _send_new_acp_webhook(copro_doc: dict) -> None:
-    """Emet le webhook `new-acp` en tache de fond (best-effort)."""
-    url = (os.environ.get("AG_WEBHOOK_URL") or "").strip()
-    if not url:
+async def _send(event: str, payload: dict) -> None:
+    """Emission bas-niveau d'un webhook. Silencieux sur erreur."""
+    base = _base_url()
+    if not base:
         logger.info(
-            "AG_WEBHOOK_URL non defini : webhook new-acp non emis pour %s",
-            copro_doc.get("id"),
+            "AG webhook (%s) non emis : ni AG_WEBHOOK_BASE_URL ni AG_WEBHOOK_URL defini (copro=%s)",
+            event, payload.get("copropriete_id"),
         )
         return
     token = (os.environ.get("EXPORT_SYNC_TOKEN") or "").strip()
     if not token:
         logger.warning(
-            "EXPORT_SYNC_TOKEN absent : webhook new-acp abandonne (secret manquant)",
+            "EXPORT_SYNC_TOKEN absent : AG webhook (%s) abandonne (copro=%s)",
+            event, payload.get("copropriete_id"),
         )
         return
 
-    payload = {
-        "copropriete_id": copro_doc.get("id", ""),
-        "name": copro_doc.get("name", ""),
-        "address": _compose_address(copro_doc),
-    }
+    url = f"{base}/{event}"
     headers = {
         "X-Sync-Token": token,
         "Content-Type": "application/json",
@@ -69,34 +89,44 @@ async def _send_new_acp_webhook(copro_doc: dict) -> None:
     try:
         async with httpx.AsyncClient(timeout=WEBHOOK_TIMEOUT_S) as client:
             resp = await client.post(url, json=payload, headers=headers)
-        if resp.status_code >= 400:
-            logger.warning(
-                "Webhook new-acp -> %s : HTTP %s (copro=%s)",
-                url, resp.status_code, payload["copropriete_id"],
-            )
-        else:
-            logger.info(
-                "Webhook new-acp -> %s : HTTP %s (copro=%s)",
-                url, resp.status_code, payload["copropriete_id"],
-            )
+        level = logger.warning if resp.status_code >= 400 else logger.info
+        level(
+            "AG webhook %s -> %s : HTTP %s (copro=%s)",
+            event, url, resp.status_code, payload.get("copropriete_id"),
+        )
     except Exception as exc:
         logger.warning(
-            "Webhook new-acp -> %s : echec (%s) copro=%s",
-            url, exc, payload["copropriete_id"],
+            "AG webhook %s -> %s : echec (%s) copro=%s",
+            event, url, exc, payload.get("copropriete_id"),
         )
 
 
-def fire_new_acp_webhook(copro_doc: dict) -> None:
-    """Fire-and-forget : ne bloque pas la reponse HTTP.
+def fire_acp_webhook(event: str, copro_doc: dict) -> None:
+    """Fire-and-forget d'un webhook ACP (event = new-acp / acp-updated / acp-archived).
 
-    A appeler apres l'insertion reussie en base. Toute erreur cote reseau
-    est loggee mais silencieuse pour l'appelant.
+    Ne leve JAMAIS d'exception : les erreurs sont loggees. A appeler juste
+    apres l'ecriture reussie en base.
     """
+    if event not in SUPPORTED_EVENTS:
+        logger.warning("AG webhook : event inconnu '%s' (ignore)", event)
+        return
+    payload = {
+        "copropriete_id": copro_doc.get("id", ""),
+        "name": copro_doc.get("name", ""),
+        "address": _compose_address(copro_doc),
+    }
     try:
-        asyncio.create_task(_send_new_acp_webhook(copro_doc))
+        asyncio.create_task(_send(event, payload))
     except RuntimeError:
-        # Pas de loop actif (context script/CLI) : execution synchrone.
+        # Pas de loop asyncio actif (script CLI) : execution synchrone.
         try:
-            asyncio.run(_send_new_acp_webhook(copro_doc))
+            asyncio.run(_send(event, payload))
         except Exception as exc:
-            logger.warning("Impossible d'emettre le webhook new-acp: %s", exc)
+            logger.warning("AG webhook %s : impossible d'emettre : %s", event, exc)
+
+
+# --- Retro-compat iter95f -------------------------------------------------
+# Alias historique conservant l'ancienne signature `fire_new_acp_webhook(doc)`.
+
+def fire_new_acp_webhook(copro_doc: dict) -> None:
+    fire_acp_webhook("new-acp", copro_doc)

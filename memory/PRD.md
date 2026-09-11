@@ -18,6 +18,20 @@ billing.
 - Production : https://immo-pcmn.emergent.host
 
 ## Recent changes (Feb 2026)
+- **2026-02-23 (iter95g)** : Extension des webhooks sortants AG a 2 nouveaux
+  evenements + generalisation du module `webhooks_out.py`.
+  Evenements pris en charge (fire-and-forget non-bloquant, timeout 5s) :
+    - `POST {base}/new-acp`      : creation ACP (existant iter95f)
+    - `POST {base}/acp-updated`  : `PUT /api/coproprietes/{id}` reussi
+    - `POST {base}/acp-archived` : `POST /api/coproprietes/{id}/archive`
+  Payload identique : `{copropriete_id, name, address}`. Header
+  `X-Sync-Token` = `EXPORT_SYNC_TOKEN`.
+  Nouvelle variable env `AG_WEBHOOK_BASE_URL` (recommandee) ; la variable
+  legacy `AG_WEBHOOK_URL` reste supportee : si elle finit par `/new-acp`,
+  le suffix est retire pour reconstituer la base. Fonction unifiee
+  `fire_acp_webhook(event, doc)`, alias legacy `fire_new_acp_webhook`
+  conserve. Test e2e : `tests/test_iter95g_webhook_update_archive.py`
+  (mock HTTP capturant les 3 events, PASS).
 - **2026-02-23 (iter95f)** : Webhook sortant `new-acp` lors de la creation
   d'une copropriete. Nouveau module `/app/backend/webhooks_out.py`
   (`fire_new_acp_webhook`) branche a la fin de `POST /api/coproprietes`

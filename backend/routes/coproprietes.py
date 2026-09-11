@@ -434,14 +434,14 @@ def create_coproprietes_router(db):
         # iter92c : signaler au frontend les owners non rattaches (aux_code duplique)
         if skipped_dup_aux:
             result["_warning_skipped_owners"] = skipped_dup_aux
-        # iter95f : webhook sortant "new-acp" (fire-and-forget, non-bloquant).
-        # Cible : AG_WEBHOOK_URL (env), header X-Sync-Token = EXPORT_SYNC_TOKEN.
+        # iter95f/g : webhook sortant "new-acp" (fire-and-forget, non-bloquant).
+        # Cible : AG_WEBHOOK_BASE_URL (env), header X-Sync-Token = EXPORT_SYNC_TOKEN.
         try:
-            from webhooks_out import fire_new_acp_webhook
-            fire_new_acp_webhook(doc)
+            from webhooks_out import fire_acp_webhook
+            fire_acp_webhook("new-acp", doc)
         except Exception as _wh_exc:
             import logging as _lg
-            _lg.getLogger(__name__).warning("fire_new_acp_webhook init: %s", _wh_exc)
+            _lg.getLogger(__name__).warning("fire_acp_webhook(new-acp): %s", _wh_exc)
         return result
 
     @router.put("/{copro_id}")
@@ -477,7 +477,15 @@ def create_coproprietes_router(db):
         if result.matched_count == 0:
             raise HTTPException(404, "Copropriete non trouvee")
         await _create_pcmn_accounts(bank_accounts, copro_id)
-        return await db.coproprietes.find_one({"id": copro_id}, {"_id": 0})
+        updated = await db.coproprietes.find_one({"id": copro_id}, {"_id": 0})
+        # iter95g : webhook sortant "acp-updated" (fire-and-forget)
+        try:
+            from webhooks_out import fire_acp_webhook
+            fire_acp_webhook("acp-updated", updated or {"id": copro_id, "name": data.name})
+        except Exception as _wh_exc:
+            import logging as _lg
+            _lg.getLogger(__name__).warning("fire_acp_webhook(acp-updated): %s", _wh_exc)
+        return updated
 
     @router.get("/{copro_id}")
     async def get_copropriete(copro_id: str, request: Request):
@@ -600,6 +608,14 @@ def create_coproprietes_router(db):
         result = await db.coproprietes.update_one({"id": copro_id}, {"$set": {"status": "archived"}})
         if result.matched_count == 0:
             raise HTTPException(404, "Copropriete non trouvee")
+        # iter95g : webhook sortant "acp-archived" (fire-and-forget)
+        archived = await db.coproprietes.find_one({"id": copro_id}, {"_id": 0})
+        try:
+            from webhooks_out import fire_acp_webhook
+            fire_acp_webhook("acp-archived", archived or {"id": copro_id})
+        except Exception as _wh_exc:
+            import logging as _lg
+            _lg.getLogger(__name__).warning("fire_acp_webhook(acp-archived): %s", _wh_exc)
         return {"message": "Copropriete archivee"}
 
     @router.post("/{copro_id}/unarchive")
