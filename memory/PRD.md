@@ -18,6 +18,19 @@ billing.
 - Production : https://immo-pcmn.emergent.host
 
 ## Recent changes (Feb 2026)
+- **2026-02-23 (iter95q)** : Explication + fallback pour l'erreur "IBAN non
+  configure dans la fiche ACP" (`auto_entries.py`). Cause frequente :
+  l'extrait CODA/PDF a ete importe sans l'IBAN reel, seul le code PCMN
+  (ex `551000`) sert d'identifiant de compte. Deux ameliorations :
+    1. **Message clarifie** : quand l'"IBAN" est en fait un code PCMN
+       (chiffres uniquement, prefixe 55, 3-8 chars), le message
+       distingue explicitement ce cas et guide vers Parametres >
+       Comptes bancaires pour lier le PCMN a son IBAN reel.
+    2. **Fallback pcmn_accounts** : si aucun `bank_accounts` de l'ACP
+       ne matche mais que le compte PCMN existe dans le plan comptable
+       (`pcmn_accounts`), on l'utilise directement au lieu de bloquer.
+  Tests : `tests/test_iter95q_pcmn_fallback.py` (4 PASS incluant
+  priorite bank_account vs fallback + 2 formats de message).
 - **2026-02-23 (iter95p)** : Suppression du champ STATUT dans le formulaire
   de creation/edition de facture (`pages/InvoicesPage.js`). Le status
   restait un choix libre (`draft` / `unpaid` / `paid`) alors qu'il est

@@ -28,11 +28,29 @@ class BankAccountNotConfigured(Exception):
         self.iban = iban
         self.raw_account = raw_account
         self.copropriete_id = copropriete_id
-        msg = (
-            f"IBAN '{iban or raw_account or '(inconnu)'}' non configure dans "
-            f"la fiche ACP. Ajoutez-le d'abord (Parametres > Comptes bancaires) "
-            f"et associez-le a un compte PCMN 55xxxx existant."
+        # iter95q : distingue le cas ou l'"IBAN" est en realite un code PCMN
+        # (ex `551000`, `55103400`) - cas frequent quand l'extrait CODA/PDF
+        # a ete importe sans le vrai IBAN.
+        identifier = iban or raw_account or ""
+        digits_only = identifier.replace(" ", "").isdigit()
+        looks_like_pcmn = (
+            digits_only
+            and identifier.replace(" ", "").startswith("55")
+            and 3 <= len(identifier.replace(" ", "")) <= 8
         )
+        if looks_like_pcmn:
+            msg = (
+                f"Le compte '{identifier}' ressemble a un numero PCMN (55xxxx) et "
+                f"non a un vrai IBAN. L'extrait a probablement ete importe sans "
+                f"l'IBAN du compte bancaire. Ouvrez Parametres > Comptes bancaires "
+                f"de l'ACP et associez ce compte PCMN a son IBAN reel (ex BE68 ...)."
+            )
+        else:
+            msg = (
+                f"IBAN '{identifier or '(inconnu)'}' non configure dans "
+                f"la fiche ACP. Ajoutez-le d'abord (Parametres > Comptes bancaires) "
+                f"et associez-le a un compte PCMN 55xxxx existant."
+            )
         super().__init__(msg)
 
 
@@ -212,6 +230,21 @@ async def _resolve_bank_account(db, txn: dict, copro_id: str) -> tuple[str, str]
                     norm_pcmn.endswith(digits) or digits.endswith(norm_pcmn)
                 ):
                     return norm_pcmn, (ba.get("label") or "Banque")
+
+    # iter95q : 3bis) Fallback si l'"IBAN" est en realite un code PCMN 55xxxx
+    # (import CODA/PDF sans vrai IBAN). On tente une resolution directe contre
+    # la collection `pcmn_accounts` de l'ACP - c'est un match "large" qui evite
+    # de bloquer inutilement quand le compte 55xxxx est deja existant dans le
+    # plan comptable de l'ACP meme s'il n'a pas de fiche bank_account officielle.
+    candidate = (iban or raw_acc or "").replace(" ", "")
+    if candidate and candidate.isdigit() and candidate.startswith("55") and 3 <= len(candidate) <= 8:
+        norm_candidate = normalize_bank_pcmn(candidate)
+        existing = await db.pcmn_accounts.find_one(
+            {"copropriete_id": copro_id, "number": norm_candidate},
+            {"_id": 0, "number": 1, "name": 1},
+        )
+        if existing:
+            return norm_candidate, (existing.get("name") or "Banque")
 
     # 4) Rien trouve -> BLOQUE le posting. Interdiction stricte de creer un
     #    compte PCMN automatiquement ou d'utiliser un compte fallback.
