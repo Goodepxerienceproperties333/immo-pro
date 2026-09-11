@@ -827,7 +827,7 @@ def create_admin_router(db):
         await db.role_templates.insert_one(new_tpl)
         await _audit(admin, "role_template_create", "role_template", new_tpl["id"],
                      details={"name": name, "perms_count": len(permissions)})
-        return new_tpl
+        return {k: v for k, v in new_tpl.items() if k != "_id"}
 
     @router.put("/role-templates/{template_id}")
     async def update_role_template(template_id: str, request: Request):

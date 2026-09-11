@@ -3107,7 +3107,7 @@ function BankAccountsTab({
                                 <span className="text-slate-300 italic">Non renseigne</span>
                               )}
                               {mv.counterparty_account && (
-                                <div className="text-[10px] font-mono text-slate-400 truncate" title={mv.counterparty_account}>
+                                <div className="text-[10px] font-mono text-slate-400 truncate">
                                   {mv.counterparty_account}
                                 </div>
                               )}

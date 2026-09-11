@@ -159,21 +159,32 @@ def create_coproprietes_router(db):
         return f"{prefix}-{str(count + 1).zfill(3)}"
 
     async def _create_pcmn_accounts(bank_accounts, copro_id: str):
-        """Auto-create PCMN accounts for bank accounts, scoped by ACP."""
+        """Auto-create or sync PCMN accounts for bank accounts, scoped by ACP.
+
+        iter95b : quand le libelle (`bank_accounts.label`) change, on propage
+        egalement vers `pcmn_accounts.name` pour eviter les incoherences.
+        """
         for ba in bank_accounts:
             pcmn_number = _generate_pcmn_number(ba["iban"], ba["account_type"])
-            label = f"Banque {'epargne' if ba['account_type'] == 'epargne' else 'compte a vue'} {ba['iban'][-4:]}"
+            default_label = f"Banque {'epargne' if ba['account_type'] == 'epargne' else 'compte a vue'} {ba['iban'][-4:]}"
+            desired_name = ba.get("label") or default_label
             existing = await db.pcmn_accounts.find_one({"number": pcmn_number, "copropriete_id": copro_id})
             if not existing:
                 await db.pcmn_accounts.insert_one({
                     "number": pcmn_number,
-                    "name": ba.get("label") or label,
+                    "name": desired_name,
                     "class_num": 5,
                     "parent": "550000",
                     "type": "balance",
                     "copropriete_id": copro_id,
                     "active": True,  # bank accounts are always active
                 })
+            elif existing.get("name") != desired_name:
+                # Propage le renommage du compte bancaire vers le PCMN existant
+                await db.pcmn_accounts.update_one(
+                    {"number": pcmn_number, "copropriete_id": copro_id},
+                    {"$set": {"name": desired_name, "active": True}},
+                )
 
     @router.get("")
     async def list_coproprietes(request: Request, show_archived: Optional[bool] = False):

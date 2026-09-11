@@ -60,7 +60,7 @@ def test_copro(auth_session):
     # Cleanup
     try:
         auth_session.delete(f"{BASE_URL}/api/coproprietes/{copro['id']}")
-    except:
+    except Exception:
         pass
 
 

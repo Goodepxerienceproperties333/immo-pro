@@ -18,6 +18,21 @@ billing.
 - Production : https://immo-pcmn.emergent.host
 
 ## Recent changes (Feb 2026)
+- **2026-02-23 (iter95c)** : RGPD - masquage de l'IBAN de contrepartie
+  (`counterparty_account`) dans les mouvements bancaires du portail
+  proprietaire. Le champ est desormais retourne masque
+  (BE04XXXXXXXX9331) depuis `/api/owner/bank-accounts/{copro_id}` dans
+  `routes/owner_portal.py`. Suppression aussi de l'attribut `title`
+  cote frontend (`OwnerPortalPage.js`) qui exposait l'IBAN complet en
+  tooltip. Protege les donnees des tiers (autres proprietaires,
+  fournisseurs) qui n'ont pas a etre visibles par le proprietaire
+  connecte. Test unitaire : `tests/test_iter95c_mask_counterparty_iban.py`.
+- **2026-02-23 (iter95b)** : Bug propagation label bancaire. La fonction
+  `_create_pcmn_accounts` dans `routes/coproprietes.py` creait un PCMN
+  a la creation mais ne repercutait JAMAIS un renommage
+  (`bank_accounts.label`) vers `pcmn_accounts.name`. Correctif :
+  branche `elif existing.get("name") != desired_name: UPDATE`.
+  Test unitaire : `tests/test_pcmn_sync_iter95b.py` (4 scenarios OK).
 - **2026-02-23 (iter95a)** : Bouton "Connecter banque" (OpenBanking PSD2)
   masque temporairement dans `BankingPage.js` via un flag module-level
   `OPENBANKING_ENABLED = false`. En attente d'approbation KYB commerciale

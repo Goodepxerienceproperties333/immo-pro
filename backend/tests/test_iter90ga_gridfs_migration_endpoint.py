@@ -126,7 +126,7 @@ def test_iter90ga_gridfs_migration_apply_writes_gridfs_id():
         finally:
             await db.invoices.delete_one({"id": inv_id})
             try: os.remove(fp)
-            except: pass
+            except Exception: pass
     asyncio.run(_run())
 
 

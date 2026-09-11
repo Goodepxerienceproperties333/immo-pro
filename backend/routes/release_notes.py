@@ -145,7 +145,7 @@ def create_release_notes_router(db):
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
         await db.release_notes.insert_one(doc)
-        return doc
+        return {k: v for k, v in doc.items() if k != "_id"}
 
     @router.put("/{note_id}")
     async def update_note(note_id: str, data: ReleaseNoteInput,

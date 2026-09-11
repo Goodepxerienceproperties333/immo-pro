@@ -100,11 +100,11 @@ class TestSimplifiedCategorization:
         # Cleanup
         try:
             self.session.delete(f"{BASE_URL}/api/banking/statements/{self.stmt_id}")
-        except:
+        except Exception:
             pass
         try:
             self.session.delete(f"{BASE_URL}/api/coproprietes/{self.copro_id}")
-        except:
+        except Exception:
             pass
     
     def test_categorize_with_direct_account_number(self):

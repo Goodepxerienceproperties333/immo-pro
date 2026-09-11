@@ -260,6 +260,13 @@ def create_owner_portal_router(db):
                 txn_query["$or"] = or_clauses
             if date_filter:
                 txn_query["date"] = date_filter
+            # Masquage IBAN : BE04XXXXXXXX9331 (helper reutilisable)
+            def _mask_iban(v: str) -> str:
+                s = (v or "").replace(" ", "").upper()
+                if len(s) >= 8:
+                    return s[:4] + "X" * (len(s) - 8) + s[-4:]
+                return s
+
             movements = []
             async for txn in db.bank_transactions.find(
                 txn_query,
@@ -272,11 +279,15 @@ def create_owner_portal_router(db):
                 # Le sens du montant : le vrai signe est amount ; transaction_type
                 # est redondant mais fournit une lecture rapide (credit=entree,
                 # debit=sortie de l'ACP).
+                # iter95c : masque l'IBAN de la contrepartie (RGPD/protection
+                # des donnees des tiers - l'IBAN complet d'un tiers ne doit
+                # jamais etre expose dans le portail proprietaire).
+                cp_acc_raw = txn.get("counterparty_account", "") or ""
                 movements.append({
                     "date": txn.get("date", ""),
                     "amount": amount,
                     "counterparty": txn.get("counterparty_name", "") or "",
-                    "counterparty_account": txn.get("counterparty_account", "") or "",
+                    "counterparty_account": _mask_iban(cp_acc_raw) if cp_acc_raw else "",
                     "communication": (txn.get("communication", "") or "")[:120],
                     "matched": bool(txn.get("matched")),
                     "transaction_type": txn.get("transaction_type") or (
@@ -288,10 +299,7 @@ def create_owner_portal_router(db):
             # Total du nombre de mouvements sur la periode (peut depasser limit)
             total_count = await db.bank_transactions.count_documents(txn_query)
 
-            # Masquage IBAN : BE04XXXXXXXX9331
-            masked = iban
-            if iban and len(iban) >= 8:
-                masked = iban[:4] + "X" * (len(iban) - 8) + iban[-4:]
+            masked = _mask_iban(iban)
 
             result.append({
                 "iban": masked,
