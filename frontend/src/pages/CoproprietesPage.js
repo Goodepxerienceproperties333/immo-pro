@@ -9,6 +9,8 @@ import { Textarea } from '@/components/ui/textarea';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
@@ -17,6 +19,70 @@ import BulkCsvImportDialog from '@/components/BulkCsvImportDialog';
 import PdfImportDialog from '@/components/PdfImportDialog';
 import ImportSummary from '@/components/ImportSummary';
 import { useDirtyGuard } from '@/hooks/useDirtyGuard';
+
+// iter95l : combobox (Popover + Command) - dropdown avec liste + champ recherche.
+// Remplace l'autocomplete precedent qui posait probleme (utilisateur clique sur
+// suggestion mais assignation pas garantie). Ici : bouton "Selectionner..." ->
+// popover avec search input + liste, click = affectation immediate + badge.
+function LotOwnerCombobox({ lotIdx, options, onPick, ownersEmpty }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className="ml-auto min-w-[240px] h-7 px-2 text-[11px] border border-slate-200 rounded-md bg-white text-left hover:bg-slate-50 flex items-center justify-between gap-2"
+          data-testid={`lot-${lotIdx}-owner-search`}
+        >
+          <span className="text-slate-500 truncate">
+            {options.length === 0 && ownersEmpty
+              ? 'Aucun proprietaire dispo'
+              : options.length === 0
+                ? 'Tous deja affectes'
+                : `Affecter un proprietaire (${options.length})`}
+          </span>
+          <svg width="10" height="10" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+            <path d="M6 8l4 4 4-4" stroke="#64748b" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-[300px] p-0" data-testid={`lot-${lotIdx}-suggestions`}>
+        <Command>
+          <CommandInput placeholder="Rechercher..." className="h-8 text-[11px]" data-testid={`lot-${lotIdx}-combobox-input`} />
+          <CommandList className="max-h-56 overflow-y-auto">
+            <CommandEmpty className="py-3 text-center text-[11px] text-slate-500">
+              {ownersEmpty ? "Retournez a l'etape 2 pour ajouter des proprietaires" : 'Aucun resultat'}
+            </CommandEmpty>
+            <CommandGroup>
+              {options.map(o => {
+                const label = `${o.name || `${o.last_name || ''} ${o.first_name || ''}`.trim()} ${o.email || ''} ${o.auxiliary_code || ''} ${o.vcs_code || ''}`;
+                return (
+                  <CommandItem
+                    key={o.id}
+                    value={label + ' ' + o.id}
+                    onSelect={() => { onPick(o.id); setOpen(false); }}
+                    className="text-[11px] cursor-pointer"
+                    data-testid={`lot-${lotIdx}-suggestion-${o.id}`}
+                  >
+                    <div className="flex flex-col">
+                      <span className="font-medium">
+                        {o.name || `${o.last_name || ''} ${o.first_name || ''}`.trim()}
+                        {o.auxiliary_code && <span className="ml-1 font-mono text-[9px] text-slate-500">({o.auxiliary_code})</span>}
+                      </span>
+                      {(o.email || o.phone) && (
+                        <span className="text-[9px] text-slate-500">{[o.email, o.phone].filter(Boolean).join(' - ')}</span>
+                      )}
+                    </div>
+                  </CommandItem>
+                );
+              })}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  );
+}
 
 // iter95k : dropdown en portail avec position fixed pour eviter le clipping
 // par le parent scrollable (max-h-[380px] overflow-y-auto de la liste des lots).
@@ -528,6 +594,14 @@ export default function CoproprietesPage() {
       }
     } catch { /* ignore */ }
   };
+
+  // iter95l : rafraichit le pool des proprietaires quand on entre en substep
+  // 'assign' pour que le combobox ait la liste a jour (avait ete cree par
+  // refreshOwnersIfStale sur onFocus dans le vieil autocomplete).
+  useEffect(() => {
+    if (substep === 'assign') { refreshOwnersIfStale(); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [substep, sessionOwners]);
 
   // Bank accounts management
   const addBankAccount = () => setForm({ ...form, bank_accounts: [...form.bank_accounts, { ...emptyBank }] });
@@ -1434,20 +1508,15 @@ export default function CoproprietesPage() {
                               ) : (
                                 <span className="text-[10px] text-slate-400 italic">Aucun proprietaire</span>
                               )}
-                              <div className="relative ml-auto min-w-[220px]">
-                                <Search size={10} className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none z-10" />
-                                <LotOwnerSearchInput
-                                  lotIdx={i}
-                                  value={ownerSearchByLot[i] || ''}
-                                  onChange={v => setOwnerSearchByLot({...ownerSearchByLot, [i]: v})}
-                                  onFocusLot={() => { setOwnerFocusLot(i); refreshOwnersIfStale(); }}
-                                  onBlurLot={() => { setTimeout(() => setOwnerFocusLot(prev => prev === i ? null : prev), 180); }}
-                                  focused={ownerFocusLot === i}
-                                  suggestions={getOwnerSuggestions(i)}
-                                  ownersEmpty={owners.length === 0}
-                                  onPick={(oid) => { addOwnerToLot(i, oid); setOwnerSearchByLot({...ownerSearchByLot, [i]: ''}); }}
-                                />
-                              </div>
+                              <LotOwnerCombobox
+                                lotIdx={i}
+                                options={(() => {
+                                  const taken = form.lots[i].owner_ids || [];
+                                  return owners.filter(o => !taken.includes(o.id));
+                                })()}
+                                ownersEmpty={owners.length === 0}
+                                onPick={(oid) => addOwnerToLot(i, oid)}
+                              />
                             </div>
                           )}
                         </div>

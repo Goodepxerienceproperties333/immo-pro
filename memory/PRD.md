@@ -18,6 +18,20 @@ billing.
 - Production : https://immo-pcmn.emergent.host
 
 ## Recent changes (Feb 2026)
+- **2026-02-23 (iter95l)** : Combobox natif (Popover + Command shadcn) pour
+  l'affectation lot -> proprietaire dans le wizard ACP (etape 5).
+  Remplace l'autocomplete precedent qui posait deux problemes :
+    1. clipping du dropdown par le parent scrollable (bug rapporte a
+       partir du 2e lot),
+    2. click sur suggestion parfois avale par la selection de texte /
+       le blur immediat -> affectation silencieusement non appliquee.
+  Nouveau composant `LotOwnerCombobox` : bouton trigger indiquant
+  "Affecter un proprietaire (N)" + Popover avec CommandInput
+  (recherche filtre au top) et CommandList (liste deroulante) qui
+  utilise `onSelect` officiel Radix -> affectation immediate et
+  fermeture du popover. `refreshOwnersIfStale()` est appele
+  automatiquement quand on entre en substep 'assign' pour garantir que
+  la liste est a jour.
 - **2026-02-23 (iter95h-k)** : Assistant creation ACP - ajout manuel de
   proprietaires et lots + fix dropdown affectation.
   Frontend (`pages/CoproprietesPage.js`) :
