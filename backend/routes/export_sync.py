@@ -58,6 +58,15 @@ def create_export_sync_router(db):
     ):
         """Retourne la liste JSON des proprietaires d'une ACP avec leurs lots.
 
+        Les quotites sont calculees a partir des `distribution_keys` (cles de
+        repartition PCMN), qui sont la source de verite du reglement de
+        copropriete. Chaque lot expose :
+        - `quotity_founder` : quotite fondatrice (millemes du titre initial)
+        - `quotity_default` : part exacte sur la cle marquee `is_default`
+          (typiquement "Charges generales"), ou `null` si le lot n'y figure pas
+        - `quotities` : detail exhaustif { key_name, is_default, share } pour
+          toutes les cles de repartition non-excluantes ou le lot est inscrit
+
         Reponse (schema stable pour integrations externes) :
         ```
         {
@@ -82,11 +91,19 @@ def create_export_sync_router(db):
                 "full": "Rue X 12, 1000 Bruxelles, Belgique"
               },
               "lots": [
-                {"id": "...", "number": "1A", "description": "...",
-                 "lot_type": "apartment", "floor": 1, "area": 85.0,
-                 "quotity": 125.5}
+                {
+                  "id": "...", "number": "1A", "description": "...",
+                  "type": "apartment", "floor": 1, "area": 85.0,
+                  "quotity_founder": 125.5,
+                  "quotity_default": 130.0,
+                  "quotities": [
+                    {"key_name": "Charges generales", "is_default": true, "share": 130.0},
+                    {"key_name": "Ascenseur", "is_default": false, "share": 145.0}
+                  ]
+                }
               ],
-              "total_quotity": 125.5
+              "total_quotity_default": 130.0,
+              "total_quotity_founder": 125.5
             }
           ]
         }
@@ -109,23 +126,72 @@ def create_export_sync_router(db):
              "lot_type": 1, "floor": 1, "area": 1, "quotity": 1,
              "owner_id": 1, "owner_ids": 1},
         )
+        lots_raw: List[dict] = []
+        async for lot in lots_cursor:
+            lots_raw.append(lot)
+
+        # 2bis. Recupere toutes les cles de repartition de l'ACP et indexe par lot_id.
+        # C'est la SOURCE DE VERITE des quotites : le champ `lot.quotity` n'est
+        # que la quotite fondatrice (millemes), tandis que `distribution_keys`
+        # contient les vraies parts par cle (charges generales, ascenseur, etc.).
+        keys_cursor = db.distribution_keys.find(
+            {"copropriete_id": copropriete_id},
+            {"_id": 0, "id": 1, "name": 1, "is_default": 1, "lots": 1},
+        )
+        # shares_by_lot : lot_id -> list of {key_id, key_name, is_default, share}
+        shares_by_lot: dict[str, List[dict]] = {}
+        async for k in keys_cursor:
+            key_id = k.get("id", "")
+            key_name = (k.get("name") or "").strip()
+            is_default = bool(k.get("is_default", False))
+            for kl in (k.get("lots") or []):
+                if kl.get("excluded"):
+                    continue
+                lid = kl.get("lot_id")
+                if not lid:
+                    continue
+                share = float(kl.get("share", 0) or 0)
+                shares_by_lot.setdefault(lid, []).append({
+                    "key_id": key_id,
+                    "key_name": key_name,
+                    "is_default": is_default,
+                    "share": round(share, 4),
+                })
+
+        # Construit map owner_id -> [lots_enrichis avec quotites detaillees]
         lots_by_owner: dict[str, List[dict]] = {}
         owner_ids: set[str] = set()
-        async for lot in lots_cursor:
+        for lot in lots_raw:
             lot_owners = []
             if lot.get("owner_id"):
                 lot_owners.append(lot["owner_id"])
             for oid in lot.get("owner_ids") or []:
                 if oid and oid not in lot_owners:
                     lot_owners.append(oid)
+
+            quotities = shares_by_lot.get(lot["id"], [])
+            # Tri : cle par defaut en premier, puis alphabetique
+            quotities_sorted = sorted(quotities, key=lambda q: (not q["is_default"], q["key_name"].lower()))
+            # Quotite "par defaut" (cle marquee is_default) - facilite les
+            # integrations qui n'ont besoin que d'une valeur unique.
+            default_share = next((q["share"] for q in quotities_sorted if q["is_default"]), None)
+
             lot_data = {
                 "id": lot.get("id", ""),
                 "number": lot.get("number", ""),
                 "description": lot.get("description", "") or "",
-                "lot_type": lot.get("lot_type", "") or "",
+                "type": lot.get("lot_type", "") or "",
                 "floor": lot.get("floor", 0) or 0,
                 "area": float(lot.get("area", 0) or 0),
-                "quotity": float(lot.get("quotity", 0) or 0),
+                # Quotite fondatrice (millemes) inscrite au reglement de copro.
+                "quotity_founder": float(lot.get("quotity", 0) or 0),
+                # Part exacte sur la cle par defaut (source PCMN de repartition
+                # des charges generales). None si aucune cle par defaut ne
+                # comporte ce lot.
+                "quotity_default": default_share,
+                # Detail complet : une entree par cle de repartition ou le lot
+                # est present et non exclu. `share` = part exacte de la cle.
+                "quotities": quotities_sorted,
             }
             for oid in lot_owners:
                 lots_by_owner.setdefault(oid, []).append(lot_data)
@@ -157,7 +223,16 @@ def create_export_sync_router(db):
                 fn = parts[0] if parts else ""
                 ln = parts[1] if len(parts) > 1 else ""
             lots = lots_by_owner.get(o["id"], [])
-            total_q = round(sum(l["quotity"] for l in lots), 4)
+            # Total exacte des parts sur la cle de repartition par defaut
+            # (typiquement "Charges generales"). Ne totalise que les lots pour
+            # lesquels la cle par defaut definit une part explicite.
+            total_default = round(
+                sum(l["quotity_default"] for l in lots if l["quotity_default"] is not None),
+                4,
+            )
+            # Total des quotites fondatrices (millemes) - reste dispo pour les
+            # integrations legacy qui s'appuyaient sur `lot.quotity`.
+            total_founder = round(sum(l["quotity_founder"] for l in lots), 4)
             result_owners.append({
                 "id": o["id"],
                 "civility": o.get("civility", "") or "",
@@ -175,7 +250,8 @@ def create_export_sync_router(db):
                     "full": _full_address(o),
                 },
                 "lots": lots,
-                "total_quotity": total_q,
+                "total_quotity_default": total_default,
+                "total_quotity_founder": total_founder,
             })
 
         # Tri stable par nom pour un output deterministe (facilite les diffs)

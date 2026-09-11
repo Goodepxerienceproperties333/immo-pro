@@ -18,6 +18,19 @@ billing.
 - Production : https://immo-pcmn.emergent.host
 
 ## Recent changes (Feb 2026)
+- **2026-02-23 (iter95e)** : Enrichissement de l'endpoint sync
+  `/api/export/owners/{copropriete_id}` - les quotites sont desormais
+  calculees a partir des **cles de repartition** (`distribution_keys`),
+  source de verite PCMN, et non du champ `lot.quotity` fondateur.
+  Chaque lot expose :
+    - `quotity_founder` : quotite fondatrice (millemes du reglement)
+    - `quotity_default` : part exacte sur la cle marquee `is_default`
+    - `quotities` : liste complete des cles ou le lot est inscrit
+      (non-exclu), avec `{key_id, key_name, is_default, share}`.
+  Aggregats par owner : `total_quotity_default` + `total_quotity_founder`.
+  Tri des lots stable (cle par defaut en premier). Tests e2e :
+  `tests/test_iter95e_export_sync_distribution_keys.py` (6 PASS incluant
+  verification que les shares proviennent bien des `distribution_keys`).
 - **2026-02-23 (iter95d)** : Nouveau endpoint sync securise
   `GET /api/export/owners/{copropriete_id}` (`routes/export_sync.py`).
   Retourne en JSON la liste des proprietaires d'une ACP avec nom,
