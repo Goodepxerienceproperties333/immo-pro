@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import api from '@/lib/api';
 import { useAuth } from '@/contexts/AuthContext';
@@ -16,6 +17,83 @@ import BulkCsvImportDialog from '@/components/BulkCsvImportDialog';
 import PdfImportDialog from '@/components/PdfImportDialog';
 import ImportSummary from '@/components/ImportSummary';
 import { useDirtyGuard } from '@/hooks/useDirtyGuard';
+
+// iter95k : dropdown en portail avec position fixed pour eviter le clipping
+// par le parent scrollable (max-h-[380px] overflow-y-auto de la liste des lots).
+function PortalDropdown({ anchorRef, open, children, testId }) {
+  const [pos, setPos] = useState(null);
+  useEffect(() => {
+    if (!open || !anchorRef.current) { setPos(null); return; }
+    const update = () => {
+      const el = anchorRef.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      setPos({ top: r.bottom + 4, left: r.left, width: Math.max(r.width, 240) });
+    };
+    update();
+    window.addEventListener('scroll', update, true);
+    window.addEventListener('resize', update);
+    return () => {
+      window.removeEventListener('scroll', update, true);
+      window.removeEventListener('resize', update);
+    };
+  }, [open, anchorRef]);
+  if (!open || !pos) return null;
+  return createPortal(
+    <div
+      className="bg-white border border-slate-200 rounded-md shadow-lg max-h-56 overflow-y-auto"
+      style={{ position: 'fixed', top: pos.top, left: pos.left, width: pos.width, zIndex: 9999 }}
+      onMouseDown={e => e.preventDefault()}
+      data-testid={testId}
+    >
+      {children}
+    </div>,
+    document.body
+  );
+}
+
+// iter95k : Input + dropdown en portail (evite le clipping par overflow parent)
+function LotOwnerSearchInput({ lotIdx, value, onChange, onFocusLot, onBlurLot, focused, suggestions, ownersEmpty, onPick }) {
+  const inputRef = useRef(null);
+  return (
+    <>
+      <input
+        ref={inputRef}
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        onFocus={onFocusLot}
+        onBlur={onBlurLot}
+        placeholder="Rechercher proprio..."
+        className="pl-6 h-6 text-[11px] w-full rounded-md border border-slate-200 bg-white px-3 py-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-950 focus-visible:ring-offset-2"
+        data-testid={`lot-${lotIdx}-owner-search`}
+      />
+      <PortalDropdown anchorRef={inputRef} open={focused} testId={`lot-${lotIdx}-suggestions`}>
+        {suggestions.length > 0 ? (
+          suggestions.map(o => (
+            <button key={o.id} type="button"
+              onMouseDown={e => { e.preventDefault(); onPick(o.id); }}
+              className="w-full text-left px-2 py-1 hover:bg-[#022D52]/5 border-b last:border-b-0 border-slate-100 text-[11px] select-none cursor-pointer"
+              data-testid={`lot-${lotIdx}-suggestion-${o.id}`}
+            >
+              <div className="font-medium pointer-events-none">{o.name} {o.auxiliary_code && <span className="font-mono text-[9px] text-slate-500">({o.auxiliary_code})</span>}</div>
+              {(o.email || o.phone) && (
+                <div className="text-[9px] text-slate-500 truncate pointer-events-none">{[o.email, o.phone].filter(Boolean).join(' - ')}</div>
+              )}
+            </button>
+          ))
+        ) : (
+          <div className="px-2 py-2 text-[11px] text-slate-500 italic" data-testid={`lot-${lotIdx}-suggestions-empty`}>
+            {(value || '').trim()
+              ? `Aucun proprietaire ne correspond a "${value}"`
+              : ownersEmpty
+                ? "Aucun proprietaire disponible - retournez a l'etape 2 pour en ajouter"
+                : "Tous les proprietaires sont deja affectes a ce lot"}
+          </div>
+        )}
+      </PortalDropdown>
+    </>
+  );
+}
 
 const emptyBank = { iban: '', bic: '', account_type: 'vue', is_default: false, label: '' };
 const emptyLot = { number: '', description: '', lot_type: 'apartment', floor: 0, area: 0, quotity: 0, parent_lot_number: '' };
@@ -48,6 +126,15 @@ export default function CoproprietesPage() {
   const [pdfOwnersOpen, setPdfOwnersOpen] = useState(false);
   const [pdfLotsOpen, setPdfLotsOpen] = useState(false);
   const [importingOwners, setImportingOwners] = useState(false);
+  // iter95h : dialogs "ajouter manuellement" pour proprietaires et lots
+  const emptyManualOwner = { last_name: '', first_name: '', email: '', phone: '', address: '', postal_code: '', city: '', country: 'Belgique' };
+  const [manualOwnerOpen, setManualOwnerOpen] = useState(false);
+  const [manualOwner, setManualOwner] = useState(emptyManualOwner);
+  const [savingManualOwner, setSavingManualOwner] = useState(false);
+  // iter95i : candidats de reutilisation quand un homonyme est detecte
+  const [manualOwnerHomonyms, setManualOwnerHomonyms] = useState([]);
+  const [manualLotOpen, setManualLotOpen] = useState(false);
+  const [manualLot, setManualLot] = useState({ ...emptyLot });
   // iter90gk : dialog interactif pour les homonymes owner detectes en batch
   // (PDF Optipro). Structure : {rows: [{row, message}], resolved: {rowIdx: 'force'|'skip'}}
   const [ownerHomonymsDialog, setOwnerHomonymsDialog] = useState(null);
@@ -147,6 +234,132 @@ export default function CoproprietesPage() {
 
   // Lots on the fly (only used at creation time)
   const addLot = () => setForm({ ...form, lots: [...(form.lots || []), { ...emptyLot, owner_ids: [] }] });
+
+  // iter95h : ouverture des dialogs "ajouter manuellement"
+  const openManualOwnerDialog = () => { setManualOwner(emptyManualOwner); setManualOwnerHomonyms([]); setManualOwnerOpen(true); };
+  const openManualLotDialog = () => { setManualLot({ ...emptyLot }); setManualLotOpen(true); };
+
+  // iter95i : ajoute un proprio existant a la liste (reutilisation)
+  const reuseExistingOwner = (existing) => {
+    if (!existing?.id) return;
+    setOwners(prev => prev.some(o => o.id === existing.id) ? prev : [...prev, existing]);
+    setSessionOwners(prev => prev.some(o => o.id === existing.id) ? prev : [...prev, existing]);
+    toast.success(`Proprietaire "${existing.name || existing.last_name}" reutilise`);
+    setManualOwnerHomonyms([]);
+    setManualOwnerOpen(false);
+  };
+
+  const submitManualOwner = async (opts = {}) => {
+    const forceHomonym = !!opts.force;
+    const acceptReuse = !!opts.acceptReuse;
+    const last = (manualOwner.last_name || '').trim();
+    if (!last) { toast.error('Le nom est obligatoire'); return; }
+    if (savingManualOwner) return;
+    setSavingManualOwner(true);
+    try {
+      const first = (manualOwner.first_name || '').trim();
+      const name = (last + ' ' + first).trim();
+      // iter95j : en ajout MANUEL on ne fusionne PAS silencieusement (bug UX
+      // remonte : l'utilisateur croyait ajouter "Jean Sait rien" et voyait
+      // apparaitre la fiche existante avec le meme email).
+      // - Sans opts : creation STRICTE (409 si email/phone/BCE existe deja)
+      // - opts.acceptReuse : autorise la reutilisation apres confirmation utilisateur
+      // - opts.force : force la creation malgre un homonyme (nom identique)
+      const params = new URLSearchParams();
+      if (acceptReuse) params.set('reuse_on_duplicate', 'true');
+      if (forceHomonym) params.set('force_create_despite_homonym', 'true');
+      const url = params.toString() ? `/owners?${params.toString()}` : '/owners';
+      const resp = await api.post(url, {
+        first_name: first, last_name: last, name,
+        address: manualOwner.address || '',
+        postal_code: manualOwner.postal_code || '',
+        city: manualOwner.city || '',
+        country: manualOwner.country || 'Belgique',
+        email: manualOwner.email || '',
+        phone: manualOwner.phone || '',
+      });
+      const created = resp?.data;
+      if (created?.id) {
+        setOwners(prev => prev.some(o => o.id === created.id) ? prev : [...prev, created]);
+        setSessionOwners(prev => prev.some(o => o.id === created.id) ? prev : [...prev, created]);
+        if (created._reused) {
+          toast.success(`Fiche existante reutilisee : ${created.name}`);
+        } else {
+          toast.success(`Proprietaire "${created.name}" ajoute`);
+        }
+        setManualOwnerHomonyms([]);
+        setManualOwnerOpen(false);
+      } else {
+        toast.error('Reponse inattendue du serveur');
+      }
+    } catch (err) {
+      const status = err.response?.status;
+      const msg = err.response?.data?.detail || 'Echec de la creation du proprietaire';
+      const msgLower = typeof msg === 'string' ? msg.toLowerCase() : '';
+      const isStrict = status === 409 && msgLower.includes('doublon strict');
+      const isHomonym = status === 409 && msgLower.includes('homonyme');
+      if (isStrict || isHomonym) {
+        // Cherche les candidats similaires pour proposer la reutilisation.
+        // Priorite au match par email/phone (STRICT), fallback nom (HOMONYM).
+        try {
+          const em = (manualOwner.email || '').trim();
+          const ph = (manualOwner.phone || '').trim();
+          let candidates = [];
+          if (em) {
+            const r = await api.get('/owners', { params: { search: em, include_unassigned: true, copropriete_id: 'all', limit: 8 } });
+            candidates = r.data || [];
+          }
+          if (!candidates.length && ph) {
+            const r2 = await api.get('/owners', { params: { search: ph, include_unassigned: true, copropriete_id: 'all', limit: 8 } });
+            candidates = r2.data || [];
+          }
+          if (!candidates.length) {
+            const r3 = await api.get('/owners', { params: { search: last, include_unassigned: true, copropriete_id: 'all', limit: 8 } });
+            candidates = (r3.data || []).filter(o => {
+              const n = (o.name || (o.last_name || '') + ' ' + (o.first_name || '')).toLowerCase();
+              return n.includes(last.toLowerCase());
+            });
+          }
+          if (candidates.length > 0) {
+            // Attache le contexte (strict vs homonym) pour adapter les CTA du bloc
+            setManualOwnerHomonyms(candidates.map(c => ({ ...c, _dup_kind: isStrict ? 'strict' : 'homonym' })));
+            toast.info(isStrict
+              ? "Un proprietaire avec ces coordonnees (email/telephone) existe deja"
+              : "Un proprietaire au nom similaire existe deja");
+          } else {
+            toast.error(typeof msg === 'string' ? msg : JSON.stringify(msg));
+          }
+        } catch (_e) {
+          toast.error(typeof msg === 'string' ? msg : JSON.stringify(msg));
+        }
+      } else {
+        toast.error(typeof msg === 'string' ? msg : JSON.stringify(msg));
+      }
+    } finally {
+      setSavingManualOwner(false);
+    }
+  };
+
+  const submitManualLot = () => {
+    const n = (manualLot.number || '').trim();
+    if (!n) { toast.error('Le numero de lot est obligatoire'); return; }
+    const existing = (form.lots || []).some(l => (l.number || '').trim().toLowerCase() === n.toLowerCase());
+    if (existing) { toast.error(`Un lot avec le numero "${n}" existe deja`); return; }
+    setForm(f => ({
+      ...f,
+      lots: [...(f.lots || []), {
+        ...manualLot,
+        number: n,
+        floor: Number(manualLot.floor) || 0,
+        area: Number(manualLot.area) || 0,
+        quotity: Number(manualLot.quotity) || 0,
+        owner_ids: [],
+      }],
+    }));
+    toast.success(`Lot ${n} ajoute`);
+    setManualLotOpen(false);
+  };
+
   const removeLot = (i) => setForm({ ...form, lots: form.lots.filter((_, idx) => idx !== i) });
   const updateLot = (i, field, value) => {
     const ls = [...form.lots];
@@ -264,7 +477,9 @@ export default function CoproprietesPage() {
     }
   };
   const getOwnerSuggestions = (i) => {
-    const q = (ownerSearchByLot[i] || '').trim().toLowerCase();
+    // iter95j : normalise accents/diacritiques pour matcher "Brouwers" quand on tape "brou"
+    const _stripAccents = (s) => (s || '').normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase();
+    const q = _stripAccents((ownerSearchByLot[i] || '').trim());
     const taken = form.lots[i].owner_ids || [];
     const available = owners.filter(o => !taken.includes(o.id));
     // iter90gh : dedup UI par nom normalise. Si plusieurs fiches partagent
@@ -281,7 +496,7 @@ export default function CoproprietesPage() {
     const _norm = (s) => (s || '').trim().toLowerCase().replace(/\s+/g, ' ');
     const bestByName = new Map();
     for (const o of available) {
-      const key = _norm(o.name);
+      const key = _norm(o.name) || _norm((o.last_name || '') + ' ' + (o.first_name || ''));
       if (!key) continue;
       const cur = bestByName.get(key);
       if (!cur || _score(o) > _score(cur)) bestByName.set(key, o);
@@ -291,12 +506,13 @@ export default function CoproprietesPage() {
       if (ownerFocusLot === i) return deduped.slice(0, 50);
       return [];
     }
-    return deduped.filter(o =>
-      (o.name || '').toLowerCase().includes(q) ||
-      (o.email || '').toLowerCase().includes(q) ||
-      (o.auxiliary_code || '').toLowerCase().includes(q) ||
-      (o.vcs_code || '').includes(q)
-    ).slice(0, 12);
+    return deduped.filter(o => {
+      const fields = [
+        o.name, o.last_name, o.first_name,
+        o.email, o.auxiliary_code, o.vcs_code,
+      ].map(_stripAccents);
+      return fields.some(f => f.includes(q));
+    }).slice(0, 25);
   };
 
   // Refetch owners on focus to ensure freshly-imported owners are visible.
@@ -900,7 +1116,7 @@ export default function CoproprietesPage() {
                   <div className="bg-emerald-50 border-2 border-emerald-300 rounded-lg p-4" data-testid="owners-import-block">
                     <div className="text-sm font-bold text-emerald-900 uppercase tracking-wide mb-1">Etape 2/5 : Importer la liste des proprietaires</div>
                     <p className="text-xs text-emerald-800 mb-3">
-                      Importez la <em>Liste des coproprietaires</em> depuis un export PDF (Optipro/Sogis) ou CSV. Les proprietaires seront crees dans la base de donnees de votre syndic et lies a cette ACP.
+                      Importez la <em>Liste des coproprietaires</em> depuis un export PDF (Optipro/Sogis) ou CSV, ou <strong>ajoutez-les manuellement</strong>. Les proprietaires seront crees dans la base de donnees de votre syndic et lies a cette ACP.
                     </p>
                     <div className="flex flex-wrap gap-2 mb-3">
                       <Button variant="outline" size="sm" onClick={() => setPdfOwnersOpen(true)} disabled={importingOwners} className="border-emerald-400 text-emerald-800 hover:bg-emerald-100" data-testid="import-owners-pdf-btn">
@@ -908,6 +1124,9 @@ export default function CoproprietesPage() {
                       </Button>
                       <Button variant="outline" size="sm" onClick={() => setBulkOwnersOpen(true)} disabled={importingOwners} className="border-emerald-400 text-emerald-800 hover:bg-emerald-100" data-testid="import-owners-csv-btn">
                         <UserPlus size={14} className="mr-1" /> Import CSV
+                      </Button>
+                      <Button variant="outline" size="sm" onClick={openManualOwnerDialog} disabled={importingOwners} className="border-emerald-400 text-emerald-800 hover:bg-emerald-100" data-testid="add-owner-manual-btn">
+                        <PlusCircle size={14} className="mr-1" /> Ajouter manuellement
                       </Button>
                     </div>
                     {/* iter93dm : overlay de chargement pendant l'import
@@ -930,7 +1149,7 @@ export default function CoproprietesPage() {
                       <div className="flex items-center justify-between mb-2">
                         <span className="text-xs font-semibold text-slate-700">{owners.length} proprietaire(s) charge(s)</span>
                         {owners.length === 0 && !importingOwners && (
-                          <span className="text-[11px] text-amber-700 italic">Aucun - importez un PDF/CSV pour continuer</span>
+                          <span className="text-[11px] text-amber-700 italic">Aucun - importez un PDF/CSV ou ajoutez manuellement</span>
                         )}
                       </div>
                       {owners.length > 0 && (
@@ -1072,7 +1291,7 @@ export default function CoproprietesPage() {
                       <Button variant="outline" size="sm" onClick={() => setBulkLotsOpen(true)} className="border-blue-400 text-[#01213e] hover:bg-blue-100" data-testid="import-lots-csv-btn">
                         <Upload size={14} className="mr-1" /> Import CSV
                       </Button>
-                      <Button variant="outline" size="sm" onClick={addLot} data-testid="add-lot-btn">
+                      <Button variant="outline" size="sm" onClick={openManualLotDialog} data-testid="add-lot-btn">
                         <PlusCircle size={14} className="mr-1" /> Ajouter manuellement
                       </Button>
                     </div>
@@ -1215,26 +1434,19 @@ export default function CoproprietesPage() {
                               ) : (
                                 <span className="text-[10px] text-slate-400 italic">Aucun proprietaire</span>
                               )}
-                              <div className="relative ml-auto min-w-[180px]">
-                                <Search size={10} className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400" />
-                                <Input
+                              <div className="relative ml-auto min-w-[220px]">
+                                <Search size={10} className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none z-10" />
+                                <LotOwnerSearchInput
+                                  lotIdx={i}
                                   value={ownerSearchByLot[i] || ''}
-                                  onChange={e => setOwnerSearchByLot({...ownerSearchByLot, [i]: e.target.value})}
-                                  onFocus={() => { setOwnerFocusLot(i); refreshOwnersIfStale(); }}
-                                  onBlur={() => { setTimeout(() => setOwnerFocusLot(prev => prev === i ? null : prev), 180); }}
-                                  placeholder="Rechercher proprio..."
-                                  className="pl-6 h-6 text-[11px]"
-                                  data-testid={`lot-${i}-owner-search`}
+                                  onChange={v => setOwnerSearchByLot({...ownerSearchByLot, [i]: v})}
+                                  onFocusLot={() => { setOwnerFocusLot(i); refreshOwnersIfStale(); }}
+                                  onBlurLot={() => { setTimeout(() => setOwnerFocusLot(prev => prev === i ? null : prev), 180); }}
+                                  focused={ownerFocusLot === i}
+                                  suggestions={getOwnerSuggestions(i)}
+                                  ownersEmpty={owners.length === 0}
+                                  onPick={(oid) => { addOwnerToLot(i, oid); setOwnerSearchByLot({...ownerSearchByLot, [i]: ''}); }}
                                 />
-                                {getOwnerSuggestions(i).length > 0 && (
-                                  <div className="absolute z-50 left-0 right-0 mt-1 bg-white border border-slate-200 rounded-md shadow-lg max-h-40 overflow-y-auto" data-testid={`lot-${i}-suggestions`}>
-                                    {getOwnerSuggestions(i).map(o => (
-                                      <button key={o.id} type="button" onMouseDown={e => e.preventDefault()} onClick={() => { addOwnerToLot(i, o.id); setOwnerSearchByLot({...ownerSearchByLot, [i]: ''}); }} className="w-full text-left px-2 py-1 hover:bg-[#022D52]/5 border-b last:border-b-0 border-slate-100 text-[11px]" data-testid={`lot-${i}-suggestion-${o.id}`}>
-                                        {o.name} {o.auxiliary_code && <span className="font-mono text-[9px] text-slate-500">({o.auxiliary_code})</span>}
-                                      </button>
-                                    ))}
-                                  </div>
-                                )}
                               </div>
                             </div>
                           )}
@@ -1428,6 +1640,159 @@ export default function CoproprietesPage() {
                 })()}
               </div>
             </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* iter95h : dialog "Ajouter proprietaire manuellement" */}
+      <Dialog open={manualOwnerOpen} onOpenChange={(v) => { setManualOwnerOpen(v); if (!v) setManualOwnerHomonyms([]); }}>
+        <DialogContent className="max-w-lg" data-testid="manual-owner-dialog">
+          <DialogHeader>
+            <DialogTitle>Ajouter un proprietaire manuellement</DialogTitle>
+          </DialogHeader>
+          {manualOwnerHomonyms.length > 0 && (
+            <div className="bg-amber-50 border border-amber-300 rounded-md p-3 mb-2" data-testid="manual-owner-homonyms">
+              <div className="flex items-start gap-2 mb-2">
+                <AlertTriangle className="h-4 w-4 text-amber-600 mt-0.5 shrink-0" />
+                <div className="text-xs text-amber-900">
+                  {manualOwnerHomonyms[0]?._dup_kind === 'strict' ? (
+                    <>
+                      <div className="font-semibold">Coordonnees deja utilisees (email/telephone)</div>
+                      <div>La regle metier interdit deux fiches avec le meme email/telephone. Reutilisez la fiche ci-dessous, ou modifiez l&apos;email/telephone puis reessayez.</div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="font-semibold">Un proprietaire au nom similaire existe deja</div>
+                      <div>Cliquez sur une fiche pour la reutiliser, ou creez quand meme une nouvelle fiche (les emails/telephones doivent etre differents).</div>
+                    </>
+                  )}
+                </div>
+              </div>
+              <div className="space-y-1.5 max-h-40 overflow-y-auto">
+                {manualOwnerHomonyms.map(c => (
+                  <button
+                    type="button"
+                    key={c.id}
+                    onClick={() => reuseExistingOwner(c)}
+                    className="w-full text-left bg-white hover:bg-amber-100 border border-amber-200 rounded px-2 py-1.5 text-xs transition-colors"
+                    data-testid={`manual-owner-homonym-${c.id}`}
+                  >
+                    <div className="font-medium text-slate-800">{c.name || `${c.last_name || ''} ${c.first_name || ''}`.trim()}</div>
+                    <div className="text-[10px] text-slate-500 flex gap-2 flex-wrap mt-0.5">
+                      {c.email && <span>{c.email}</span>}
+                      {c.phone && <span>{c.phone}</span>}
+                      {(c.address || c.city) && <span>{[c.address, c.postal_code, c.city].filter(Boolean).join(' ')}</span>}
+                    </div>
+                  </button>
+                ))}
+              </div>
+              <div className="mt-2 pt-2 border-t border-amber-200 flex gap-2">
+                {manualOwnerHomonyms[0]?._dup_kind === 'strict' ? (
+                  <Button size="sm" variant="outline" onClick={() => setManualOwnerHomonyms([])} className="text-[11px] h-7 border-amber-400 text-amber-800 hover:bg-amber-100" data-testid="manual-owner-edit-input">
+                    Modifier mon saisie (email/telephone)
+                  </Button>
+                ) : (
+                  <Button size="sm" variant="outline" onClick={() => submitManualOwner({ force: true })} disabled={savingManualOwner} className="text-[11px] h-7 border-amber-400 text-amber-800 hover:bg-amber-100" data-testid="manual-owner-force-create">
+                    Creer quand meme une nouvelle fiche
+                  </Button>
+                )}
+              </div>
+            </div>
+          )}
+          <div className="grid grid-cols-2 gap-3 pt-2">
+            <div className="col-span-1">
+              <label className="form-label">Nom *</label>
+              <Input value={manualOwner.last_name} onChange={e => setManualOwner({ ...manualOwner, last_name: e.target.value })} data-testid="manual-owner-last-name" />
+            </div>
+            <div className="col-span-1">
+              <label className="form-label">Prenom</label>
+              <Input value={manualOwner.first_name} onChange={e => setManualOwner({ ...manualOwner, first_name: e.target.value })} data-testid="manual-owner-first-name" />
+            </div>
+            <div className="col-span-2">
+              <label className="form-label">Email</label>
+              <Input type="email" value={manualOwner.email} onChange={e => setManualOwner({ ...manualOwner, email: e.target.value })} data-testid="manual-owner-email" />
+            </div>
+            <div className="col-span-2">
+              <label className="form-label">GSM / Telephone</label>
+              <Input value={manualOwner.phone} onChange={e => setManualOwner({ ...manualOwner, phone: e.target.value })} placeholder="+32 4 ..." data-testid="manual-owner-phone" />
+            </div>
+            <div className="col-span-2">
+              <label className="form-label">Adresse</label>
+              <Input value={manualOwner.address} onChange={e => setManualOwner({ ...manualOwner, address: e.target.value })} data-testid="manual-owner-address" />
+            </div>
+            <div className="col-span-1">
+              <label className="form-label">Code postal</label>
+              <Input value={manualOwner.postal_code} onChange={e => setManualOwner({ ...manualOwner, postal_code: e.target.value })} data-testid="manual-owner-postal-code" />
+            </div>
+            <div className="col-span-1">
+              <label className="form-label">Ville</label>
+              <Input value={manualOwner.city} onChange={e => setManualOwner({ ...manualOwner, city: e.target.value })} data-testid="manual-owner-city" />
+            </div>
+            <div className="col-span-2">
+              <label className="form-label">Pays</label>
+              <Input value={manualOwner.country} onChange={e => setManualOwner({ ...manualOwner, country: e.target.value })} data-testid="manual-owner-country" />
+            </div>
+          </div>
+          <div className="flex justify-end gap-2 pt-3">
+            <Button variant="outline" onClick={() => setManualOwnerOpen(false)} disabled={savingManualOwner} data-testid="manual-owner-cancel">Annuler</Button>
+            <Button onClick={() => submitManualOwner()} disabled={savingManualOwner || !(manualOwner.last_name || '').trim()} className="bg-emerald-600 hover:bg-emerald-700 text-white" data-testid="manual-owner-submit">
+              {savingManualOwner ? <><Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> Enregistrement...</> : 'Ajouter le proprietaire'}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* iter95h : dialog "Ajouter lot manuellement" */}
+      <Dialog open={manualLotOpen} onOpenChange={setManualLotOpen}>
+        <DialogContent className="max-w-lg" data-testid="manual-lot-dialog">
+          <DialogHeader>
+            <DialogTitle>Ajouter un lot manuellement</DialogTitle>
+          </DialogHeader>
+          <div className="grid grid-cols-2 gap-3 pt-2">
+            <div className="col-span-1">
+              <label className="form-label">Numero du lot *</label>
+              <Input value={manualLot.number} onChange={e => setManualLot({ ...manualLot, number: e.target.value })} placeholder="ex: A1.01" data-testid="manual-lot-number" />
+            </div>
+            <div className="col-span-1">
+              <label className="form-label">Type</label>
+              <Select value={manualLot.lot_type} onValueChange={v => setManualLot({ ...manualLot, lot_type: v })}>
+                <SelectTrigger data-testid="manual-lot-type"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="apartment">Appartement</SelectItem>
+                  <SelectItem value="parking">Parking / Garage</SelectItem>
+                  <SelectItem value="cave">Cave</SelectItem>
+                  <SelectItem value="commercial">Commercial</SelectItem>
+                  <SelectItem value="office">Bureau</SelectItem>
+                  <SelectItem value="storage">Rangement</SelectItem>
+                  <SelectItem value="other">Autre</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="col-span-2">
+              <label className="form-label">Description</label>
+              <Input value={manualLot.description} onChange={e => setManualLot({ ...manualLot, description: e.target.value })} placeholder="ex: 2 chambres, 3e etage" data-testid="manual-lot-description" />
+            </div>
+            <div className="col-span-1">
+              <label className="form-label">Etage</label>
+              <Input type="number" value={manualLot.floor} onChange={e => setManualLot({ ...manualLot, floor: e.target.value })} data-testid="manual-lot-floor" />
+            </div>
+            <div className="col-span-1">
+              <label className="form-label">Surface (m2)</label>
+              <Input type="number" step="0.01" value={manualLot.area} onChange={e => setManualLot({ ...manualLot, area: e.target.value })} data-testid="manual-lot-area" />
+            </div>
+            <div className="col-span-2">
+              <label className="form-label">Quotite fondatrice (millemes)</label>
+              <Input type="number" step="0.01" value={manualLot.quotity} onChange={e => setManualLot({ ...manualLot, quotity: e.target.value })} placeholder="ex: 125.5" data-testid="manual-lot-quotity" />
+              <p className="text-[10px] text-slate-500 mt-1">
+                Quotite du reglement de copro. Les parts par cle de repartition seront ajustables plus tard (etape Affectation).
+              </p>
+            </div>
+          </div>
+          <div className="flex justify-end gap-2 pt-3">
+            <Button variant="outline" onClick={() => setManualLotOpen(false)} data-testid="manual-lot-cancel">Annuler</Button>
+            <Button onClick={submitManualLot} disabled={!(manualLot.number || '').trim()} className="bg-[#022D52] hover:bg-[#1D4ED8] text-white" data-testid="manual-lot-submit">
+              Ajouter le lot
+            </Button>
           </div>
         </DialogContent>
       </Dialog>

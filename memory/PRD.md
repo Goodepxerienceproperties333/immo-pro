@@ -18,6 +18,27 @@ billing.
 - Production : https://immo-pcmn.emergent.host
 
 ## Recent changes (Feb 2026)
+- **2026-02-23 (iter95h-k)** : Assistant creation ACP - ajout manuel de
+  proprietaires et lots + fix dropdown affectation.
+  Frontend (`pages/CoproprietesPage.js`) :
+    - Etape 2/5 PROPRIETAIRES : nouveau bouton "Ajouter manuellement"
+      ouvrant un dialog avec les champs nom*, prenom, email, GSM, adresse
+      complete. En cas de doublon strict (email/telephone existant) OU
+      d'homonyme (meme nom), l'UI propose de reutiliser une fiche
+      existante (liste de candidats cliquables) ou modifier / forcer
+      selon le type de conflit.
+    - Etape 4/5 LOTS : "Ajouter manuellement" ouvre desormais un dialog
+      avec numero*, type, description, etage, surface, quotite (au lieu
+      d'ajouter une ligne vide invisible).
+    - Etape 5/5 AFFECTATION : dropdown de recherche proprietaire refait
+      via un portail (`createPortal` + `position: fixed`) pour eviter le
+      clipping par le parent scrollable `max-h-[380px] overflow-y-auto`
+      (bug rapporte : "a partir du 2e lot la liste ne s'ouvre pas").
+      Rendu toujours visible au focus (fallback message si vide), search
+      insensible aux accents et matchant aussi first_name/last_name.
+      Clic robustifie via `onMouseDown` + `pointer-events-none` sur les
+      enfants + `select-none` pour eviter que la selection de texte
+      n'avale le clic.
 - **2026-02-23 (iter95g)** : Extension des webhooks sortants AG a 2 nouveaux
   evenements + generalisation du module `webhooks_out.py`.
   Evenements pris en charge (fire-and-forget non-bloquant, timeout 5s) :
