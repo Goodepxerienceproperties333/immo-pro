@@ -434,6 +434,14 @@ def create_coproprietes_router(db):
         # iter92c : signaler au frontend les owners non rattaches (aux_code duplique)
         if skipped_dup_aux:
             result["_warning_skipped_owners"] = skipped_dup_aux
+        # iter95f : webhook sortant "new-acp" (fire-and-forget, non-bloquant).
+        # Cible : AG_WEBHOOK_URL (env), header X-Sync-Token = EXPORT_SYNC_TOKEN.
+        try:
+            from webhooks_out import fire_new_acp_webhook
+            fire_new_acp_webhook(doc)
+        except Exception as _wh_exc:
+            import logging as _lg
+            _lg.getLogger(__name__).warning("fire_new_acp_webhook init: %s", _wh_exc)
         return result
 
     @router.put("/{copro_id}")

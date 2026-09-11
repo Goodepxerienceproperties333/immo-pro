@@ -18,6 +18,22 @@ billing.
 - Production : https://immo-pcmn.emergent.host
 
 ## Recent changes (Feb 2026)
+- **2026-02-23 (iter95f)** : Webhook sortant `new-acp` lors de la creation
+  d'une copropriete. Nouveau module `/app/backend/webhooks_out.py`
+  (`fire_new_acp_webhook`) branche a la fin de `POST /api/coproprietes`
+  dans `routes/coproprietes.py`.
+  Comportement :
+    - URL cible : variable env `AG_WEBHOOK_URL` (vide = webhook desactive,
+      aucun envoi, aucun bruit dans les logs).
+    - Payload JSON : `{copropriete_id, name, address}` (adresse postale
+      composee : rue + code postal + ville + pays).
+    - Header : `X-Sync-Token` = `EXPORT_SYNC_TOKEN` (meme secret que
+      l'endpoint GET /api/export/owners).
+    - Fire-and-forget via `asyncio.create_task` : ne bloque jamais la
+      reponse HTTP au syndic, timeout 5s, tout echec reseau est logge
+      en warning mais n'echoue jamais la creation de l'ACP.
+  Test e2e : `tests/test_iter95f_webhook_new_acp.py` (mock HTTP local
+  port 9999, PASS - payload/headers verifies).
 - **2026-02-23 (iter95e)** : Enrichissement de l'endpoint sync
   `/api/export/owners/{copropriete_id}` - les quotites sont desormais
   calculees a partir des **cles de repartition** (`distribution_keys`),
