@@ -289,6 +289,10 @@ AUTH_EXEMPT_PATHS = {
 # must be able to read CGU/Privacy/Cookies/Mentions before login).
 AUTH_EXEMPT_PREFIXES = (
     "/api/legal/documents",
+    # iter95d : export sync securise via X-Sync-Token (EXPORT_SYNC_TOKEN env var).
+    # L'endpoint fait sa propre verification en tete de handler ; sans token
+    # valide il retourne 401. Le middleware auth ne doit pas exiger de JWT.
+    "/api/export/",
 )
 
 # RBAC: paths that require admin role (superadmin/syndic) for any write/destructive action.
@@ -1717,6 +1721,7 @@ from routes.fund_calls import create_fund_calls_router
 from routes.demo_seed import create_demo_router
 from routes.owner_portal import create_owner_portal_router
 from routes.exports import create_exports_router, create_reminders_router
+from routes.export_sync import create_export_sync_router
 from routes.invoice_ai import create_invoice_ai_router
 from routes.invoice_templates import create_invoice_templates_router, try_apply_supplier_template
 from routes.expense_categories import create_expense_categories_router
@@ -1759,6 +1764,7 @@ app.include_router(create_fund_calls_router(db))
 app.include_router(create_demo_router(db))
 app.include_router(create_owner_portal_router(db))
 app.include_router(create_exports_router(db))
+app.include_router(create_export_sync_router(db))
 app.include_router(create_reminders_router(db))
 app.include_router(create_invoice_ai_router(db))
 app.include_router(create_invoice_templates_router(db))

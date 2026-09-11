@@ -18,6 +18,18 @@ billing.
 - Production : https://immo-pcmn.emergent.host
 
 ## Recent changes (Feb 2026)
+- **2026-02-23 (iter95d)** : Nouveau endpoint sync securise
+  `GET /api/export/owners/{copropriete_id}` (`routes/export_sync.py`).
+  Retourne en JSON la liste des proprietaires d'une ACP avec nom,
+  prenom, email, GSM (phone/phone2), adresse postale complete, et le
+  detail des lots + quotites (agrege owner_id ET owner_ids). Securite
+  par header `X-Sync-Token` compare en temps constant a la variable env
+  `EXPORT_SYNC_TOKEN`. Si la variable est absente, l'endpoint est
+  desactive (503) pour eviter tout trou. Ajout du prefix `/api/export/`
+  a `AUTH_EXEMPT_PREFIXES` pour laisser passer l'authentification par
+  header. **Action utilisateur** : definir `EXPORT_SYNC_TOKEN` dans les
+  Secrets du deploiement. Tests : `tests/test_iter95d_export_sync_token.py`
+  (6 assertions PASS) + validation curl e2e (401/404/200/503).
 - **2026-02-23 (iter95c)** : RGPD - masquage de l'IBAN de contrepartie
   (`counterparty_account`) dans les mouvements bancaires du portail
   proprietaire. Le champ est desormais retourne masque
