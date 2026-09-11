@@ -18,6 +18,25 @@ billing.
 - Production : https://immo-pcmn.emergent.host
 
 ## Recent changes (Feb 2026)
+- **2026-02-23 (iter95r)** : Detection immediate a l'import + mini-guide
+  In-App PCMN vs IBAN pour eviter l'erreur de comptabilisation trop
+  tardive.
+  Backend (`routes/banking.py`) :
+    - Helper `_looks_like_pcmn_code(v)` : detecte si l'"IBAN" est en
+      fait un code 55xxxx (chiffres, prefixe 55, 3-8 chars).
+    - Ajout d'un champ `pcmn_import_warning` sur `bank_statements` +
+      dans la reponse des endpoints `POST /banking/coda/import` et
+      `POST /banking/statements/import-files`.
+    - Tests : `tests/test_iter95r_pcmn_detector.py` (3 PASS).
+  Frontend :
+    - `BankingPage.js` : badge amber "IBAN?" avec tooltip sur les
+      lignes/cards d'extraits ayant `pcmn_import_warning=true` +
+      toast d'avertissement 15s lors de l'import PDF/CSV listant les
+      fichiers concernes.
+    - `CoproprietesPage.js` : bouton "Que faut-il saisir ?" a cote du
+      titre "Comptes bancaires" ouvre un Popover pedagogique
+      comparant IBAN vs PCMN cote a cote (regle 1-1 + rappel du cas
+      "IBAN 551000") pour un onboarding immediat.
 - **2026-02-23 (iter95q)** : Explication + fallback pour l'erreur "IBAN non
   configure dans la fiche ACP" (`auto_entries.py`). Cause frequente :
   l'extrait CODA/PDF a ete importe sans l'IBAN reel, seul le code PCMN

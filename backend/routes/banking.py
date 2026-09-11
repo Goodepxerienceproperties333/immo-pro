@@ -13,6 +13,29 @@ from auto_entries import generate_bank_entry, _delete_auto_entries
 from iban_utils import normalize_iban
 
 
+def _looks_like_pcmn_code(v: str) -> bool:
+    """iter95r : detecte si `v` ressemble a un code PCMN 55xxxx (chiffres
+    uniquement, prefixe 55, 3-8 chars) plutot qu'a un vrai IBAN.
+
+    Cas frequent des imports CODA/PDF ou l'IBAN n'a pas ete correctement
+    extrait et seul le numero de compte comptable (551000, 55103400...) est
+    disponible. Utilise pour afficher un warning immediat a l'utilisateur
+    au moment de l'import (au lieu de laisser passer jusqu'a la comptabilisation).
+    """
+    s = (v or "").replace(" ", "").replace("-", "")
+    return bool(s) and s.isdigit() and s.startswith("55") and 3 <= len(s) <= 8
+
+
+def _build_pcmn_warning(account_id: str) -> str:
+    """Message court affiche cote UI quand un identifiant PCMN est detecte."""
+    return (
+        f"Le numero de compte '{account_id}' ressemble a un code PCMN 55xxxx "
+        f"et non a un vrai IBAN. Ouvrez Parametres > Comptes bancaires de "
+        f"l'ACP pour associer ce compte a son IBAN reel (ex BE68...) avant "
+        f"de comptabiliser cet extrait."
+    )
+
+
 class StatementInput(BaseModel):
     number: str
     date: str
@@ -2734,6 +2757,12 @@ def create_banking_router(db):
                 "copropriete_id": copropriete_id,
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
+            # iter95r : detecte si l'IBAN extrait est en realite un code PCMN
+            pcmn_warning = None
+            if _looks_like_pcmn_code(account_number):
+                pcmn_warning = _build_pcmn_warning(account_number)
+                stmt_doc["warnings"] = list(stmt_doc["warnings"]) + [pcmn_warning]
+                stmt_doc["pcmn_import_warning"] = True
             from syndic_scope import inject_syndic as _inj
             _inj(stmt_doc, request)
             await db.bank_statements.insert_one(stmt_doc)
@@ -2772,6 +2801,7 @@ def create_banking_router(db):
                 "transactions_count": len(txns_docs),
                 "extraction_method": extracted.get("extraction_method"),
                 "warnings": extracted.get("warnings", []),
+                "pcmn_import_warning": pcmn_warning,  # iter95r
                 "period_from": period_from, "period_to": period_to,
             })
 
@@ -2870,6 +2900,12 @@ def create_banking_router(db):
             "copropriete_id": copropriete_id or "",
             "created_at": datetime.now(timezone.utc).isoformat()
         }
+        # iter95r : detecte si l'IBAN CODA est en realite un code PCMN
+        pcmn_warning = None
+        if _looks_like_pcmn_code(account_num):
+            pcmn_warning = _build_pcmn_warning(account_num)
+            statement["warnings"] = [pcmn_warning]
+            statement["pcmn_import_warning"] = True
         await db.bank_statements.insert_one(statement)
 
         # Create transactions
@@ -2903,7 +2939,8 @@ def create_banking_router(db):
             "statement_id": stmt_id,
             "transactions_count": len(transactions),
             "opening_balance": statement["opening_balance"],
-            "closing_balance": statement["closing_balance"]
+            "closing_balance": statement["closing_balance"],
+            "pcmn_import_warning": pcmn_warning,  # iter95r
         }
 
     # ---- CODA PREVIEW + CONFIRMED IMPORT (mapping UI) ----

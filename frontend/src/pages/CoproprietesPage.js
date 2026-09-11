@@ -1094,7 +1094,40 @@ export default function CoproprietesPage() {
             {/* Comptes bancaires */}
             <div>
               <div className="flex items-center justify-between mb-2">
-                <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Comptes bancaires</div>
+                <div className="flex items-center gap-2">
+                  <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Comptes bancaires</div>
+                  {/* iter95r : mini-guide PCMN vs IBAN */}
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <button type="button" className="text-[10px] text-slate-500 hover:text-[#022D52] underline decoration-dotted" data-testid="pcmn-vs-iban-guide-trigger">
+                        Que faut-il saisir ?
+                      </button>
+                    </PopoverTrigger>
+                    <PopoverContent align="start" className="w-[380px] text-xs" data-testid="pcmn-vs-iban-guide">
+                      <div className="space-y-2">
+                        <div className="font-semibold text-[#022D52] text-sm">IBAN vs code PCMN : quelle difference ?</div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <div className="border border-emerald-200 bg-emerald-50 rounded p-2">
+                            <div className="text-[10px] font-semibold text-emerald-800 uppercase">IBAN</div>
+                            <div className="font-mono text-[11px] text-emerald-900">BE68 5390 0754 7034</div>
+                            <div className="text-[10px] text-emerald-700 mt-1">Vrai numero de compte bancaire (chez BNP, KBC...). Utilise pour les virements.</div>
+                          </div>
+                          <div className="border border-blue-200 bg-blue-50 rounded p-2">
+                            <div className="text-[10px] font-semibold text-blue-800 uppercase">PCMN 55xxxx</div>
+                            <div className="font-mono text-[11px] text-blue-900">551034</div>
+                            <div className="text-[10px] text-blue-700 mt-1">Code comptable belge (Classe 5 Financier). Sert au bilan.</div>
+                          </div>
+                        </div>
+                        <div className="pt-1 border-t border-slate-200 text-[11px] text-slate-700">
+                          <strong>Regle 1-1</strong> : chaque IBAN reel de l'ACP correspond a UN compte PCMN 55xxxx. Le champ IBAN ici accepte uniquement le vrai numero bancaire (commence par BE...). Le code PCMN est genere automatiquement en 55xxxx a partir des 4 derniers chiffres.
+                        </div>
+                        <div className="bg-amber-50 border border-amber-200 rounded p-2 text-[11px] text-amber-900">
+                          Si vous voyez apparaitre &quot;IBAN&nbsp;551000&quot; a l'import CODA/PDF : c'est un code PCMN saisi a la place de l'IBAN. Corrigez ici pour debloquer la comptabilisation.
+                        </div>
+                      </div>
+                    </PopoverContent>
+                  </Popover>
+                </div>
                 <Button variant="outline" size="sm" onClick={addBankAccount}><PlusCircle size={14} className="mr-1" /> Ajouter compte</Button>
               </div>
               {form.bank_accounts.length === 0 ? (

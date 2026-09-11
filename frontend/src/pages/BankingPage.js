@@ -488,6 +488,17 @@ export default function BankingPage() {
           duration: 8000,
         });
       }
+      // iter95r : toast d'avertissement si un IBAN extrait ressemble a un code PCMN
+      const pcmnWarnings = (data.results || []).filter(r => r.pcmn_import_warning);
+      if (pcmnWarnings.length > 0) {
+        toast.warning(
+          `${pcmnWarnings.length} extrait${pcmnWarnings.length > 1 ? 's' : ''} : numero de compte suspect (code PCMN au lieu d'un IBAN)`,
+          {
+            description: pcmnWarnings.map(r => `${r.filename} : ${r.pcmn_import_warning}`).join('\n'),
+            duration: 15000,
+          },
+        );
+      }
       if (errCount > 0 && !okCount) {
         toast.error(`${errCount} fichier(s) en erreur`, {
           description: data.results.filter(r => r.status === 'error').map(r => `${r.filename}: ${r.error || 'inconnu'}`).join(' • '),
@@ -880,6 +891,14 @@ export default function BankingPage() {
           {s.source === 'PDF' && <span className="text-[9px] px-1 py-0.5 rounded bg-purple-50 text-purple-700 border border-purple-200">PDF</span>}
           {s.source === 'CSV' && <span className="text-[9px] px-1 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200">CSV</span>}
           {s.source === 'CODA' && <span className="text-[9px] px-1 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-200">CODA</span>}
+          {/* iter95r : badge d'avertissement quand l'IBAN extrait est en realite un code PCMN */}
+          {s.pcmn_import_warning && (
+            <span
+              className="text-[9px] px-1 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-300 cursor-help"
+              title={`Import IA/CODA : le compte '${s.account_number}' ressemble a un code PCMN 55xxxx et non a un vrai IBAN. Configurez l'IBAN dans Parametres > Comptes bancaires avant la comptabilisation.`}
+              data-testid={`stmt-row-pcmn-warning-${s.id}`}
+            >IBAN?</span>
+          )}
         </div>
       </div>
     );
