@@ -272,6 +272,48 @@ async def _resolve_bank_account(db, txn: dict, copro_id: str) -> tuple[str, str]
         if existing:
             return norm_candidate, (existing.get("name") or "Banque")
 
+    # SEC-audit / hotfix: 3ter) Cas reel client (ACP LEFRANCQ, 2026-02) :
+    # une transaction a ete importee AVANT que le syndic ne renomme le
+    # `pcmn_number` du bank_account (ex : `551000` -> `55163400`). Le
+    # `raw_acc` stocke est l'ancien code, mais le default_pcmn genere
+    # depuis l'IBAN actuel ne correspond pas non plus (car l'ancien
+    # code n'etait PAS derive de l'IBAN mais choisi manuellement au moment
+    # de la creation de l'ACP).
+    #
+    # Regle : si `raw_acc` ressemble a un code PCMN bancaire 55xxxx ET
+    # que l'ACP a exactement UN seul bank_account configure, la resolution
+    # est sans ambiguite -> on retourne ce bank_account. Ce cas represente
+    # la majorite des petites ACPs (une seule banque) et le comportement
+    # est totalement previsible : le pcmn_number courant de l'unique
+    # bank_account est le bon.
+    if raw_acc:
+        cand_bank = raw_acc.replace(" ", "")
+        if cand_bank.isdigit() and cand_bank.startswith("55") and 3 <= len(cand_bank) <= 8:
+            configured = [ba for ba in accounts if (ba.get("pcmn_number") or "").strip()]
+            if len(configured) == 1:
+                ba = configured[0]
+                return normalize_bank_pcmn(ba["pcmn_number"]), (ba.get("label") or "Banque")
+
+    # SEC-audit / hotfix: 3quater) Meme cas mais plusieurs bank_accounts
+    # dans l'ACP. On tente une resolution via l'IBAN du statement parent :
+    # si le statement pointe sur un IBAN precis correspondant a un
+    # bank_account, on retourne le pcmn_number courant de CE bank_account.
+    # Utile quand l'IBAN n'est pas propage sur la transaction elle-meme
+    # mais existe sur le statement.
+    if txn.get("statement_id"):
+        stmt2 = await db.bank_statements.find_one(
+            {"id": txn["statement_id"]},
+            {"_id": 0, "iban": 1, "account_number": 1},
+        )
+        stmt_iban_norm = normalize_iban(
+            (stmt2 or {}).get("iban") or (stmt2 or {}).get("account_number") or ""
+        )
+        if stmt_iban_norm:
+            for ba in accounts:
+                ba_iban_n = normalize_iban(ba.get("iban"))
+                if ba_iban_n and ba_iban_n == stmt_iban_norm and ba.get("pcmn_number"):
+                    return normalize_bank_pcmn(ba["pcmn_number"]), (ba.get("label") or "Banque")
+
     # 4) Rien trouve -> BLOQUE le posting. Interdiction stricte de creer un
     #    compte PCMN automatiquement ou d'utiliser un compte fallback.
     raise BankAccountNotConfigured(
