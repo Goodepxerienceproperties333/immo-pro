@@ -15,11 +15,13 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogD
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { fmtEUR } from '@/lib/format';
+import { useAuth } from '@/contexts/AuthContext';
 // iter90je : SupplierMergeDialog import retire (fusion UI obsolete post Chinese Wall strict).
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
 export default function BalanceTiersPage() {
+  const { selectedFiscalYear } = useAuth() || {};
   const [tab, setTab] = useState('owners');
   const [ownersData, setOwnersData] = useState(null);
   const [suppliersData, setSuppliersData] = useState(null);
@@ -64,8 +66,17 @@ export default function BalanceTiersPage() {
     setLoading(true);
     try {
       const params = {};
-      if (filters.startDate) params.start_date = filters.startDate;
-      if (filters.endDate) params.end_date = filters.endDate;
+      // Filtre par periode : les dates manuelles saisies par l'utilisateur
+      // (champs DU/AU) sont prioritaires. Sinon on utilise automatiquement
+      // la fenetre de l'exercice fiscal actuellement selectionne dans le
+      // header (dropdown "Exercice XXXX"). Ceci evite d'agreger des
+      // ecritures multi-exercices dans la balance de tiers.
+      const fyStart = selectedFiscalYear?.start_date || '';
+      const fyEnd = selectedFiscalYear?.end_date || '';
+      const effectiveStart = filters.startDate || fyStart;
+      const effectiveEnd = filters.endDate || fyEnd;
+      if (effectiveStart) params.start_date = effectiveStart;
+      if (effectiveEnd) params.end_date = effectiveEnd;
       const [o, s] = await Promise.all([
         api.get('/reports/balance-tiers/owners', { params }),
         api.get('/reports/balance-tiers/suppliers', { params }),
@@ -73,14 +84,27 @@ export default function BalanceTiersPage() {
       setOwnersData(o.data); setSuppliersData(s.data);
     } catch { toast.error('Erreur de chargement'); }
     finally { setLoading(false); }
-  }, [filters.startDate, filters.endDate]);
+  }, [filters.startDate, filters.endDate, selectedFiscalYear?.start_date, selectedFiscalYear?.end_date]);
   useEffect(() => { load(); }, [load]);
+
+  // Meme regle pour les endpoints de detail : la fenetre de l'exercice
+  // fiscal selectionne est utilisee comme fallback quand aucune date
+  // manuelle n'a ete saisie. Extrait dans un helper pour eviter la
+  // duplication entre viewOwnerDetail, viewSupplierDetail et exports.
+  const buildPeriodParams = useCallback(() => {
+    const p = {};
+    const fyStart = selectedFiscalYear?.start_date || '';
+    const fyEnd = selectedFiscalYear?.end_date || '';
+    const effectiveStart = filters.startDate || fyStart;
+    const effectiveEnd = filters.endDate || fyEnd;
+    if (effectiveStart) p.start_date = effectiveStart;
+    if (effectiveEnd) p.end_date = effectiveEnd;
+    return p;
+  }, [filters.startDate, filters.endDate, selectedFiscalYear?.start_date, selectedFiscalYear?.end_date]);
 
   const viewOwnerDetail = async (ownerId, grouped = true) => {
     try {
-      const params = { group_by_owner: grouped };
-      if (filters.startDate) params.start_date = filters.startDate;
-      if (filters.endDate) params.end_date = filters.endDate;
+      const params = { group_by_owner: grouped, ...buildPeriodParams() };
       const { data } = await api.get(`/reports/balance-tiers/owners/${ownerId}`, { params });
       setDetail(data); setDetailType('owner');
       setDetailOwnerId(ownerId);
@@ -89,9 +113,7 @@ export default function BalanceTiersPage() {
   };
   const viewSupplierDetail = async (supplierId) => {
     try {
-      const params = {};
-      if (filters.startDate) params.start_date = filters.startDate;
-      if (filters.endDate) params.end_date = filters.endDate;
+      const params = buildPeriodParams();
       const { data } = await api.get(`/reports/balance-tiers/suppliers/${supplierId}`, { params });
       setDetail(data); setDetailType('supplier');
     } catch { toast.error('Erreur'); }
@@ -107,9 +129,7 @@ export default function BalanceTiersPage() {
       if (!coproId || coproId === 'all') {
         toast.error('Selectionnez une ACP avant de telecharger'); return;
       }
-      const params = { copropriete_id: coproId };
-      if (filters.startDate) params.start_date = filters.startDate;
-      if (filters.endDate) params.end_date = filters.endDate;
+      const params = { copropriete_id: coproId, ...buildPeriodParams() };
       const r = await api.get(`/reports/balance-tiers/suppliers/${supplierId}/pdf`, { params, responseType: 'blob' });
       const url = window.URL.createObjectURL(new Blob([r.data], { type: 'application/pdf' }));
       const a = document.createElement('a');
@@ -221,8 +241,11 @@ export default function BalanceTiersPage() {
     const c = localStorage.getItem('selectedCopro') || localStorage.getItem('copropriete_id') || '';
     if (!c || c === 'all') { toast.error('Selectionnez une ACP specifique en haut de page'); return; }
     const params = new URLSearchParams({ copropriete_id: c, scope, view });
-    if (filters.startDate) params.set('start_date', filters.startDate);
-    if (filters.endDate) params.set('end_date', filters.endDate);
+    // Meme regle : dates manuelles prioritaires, sinon fallback sur la
+    // fenetre de l'exercice fiscal selectionne.
+    const period = buildPeriodParams();
+    if (period.start_date) params.set('start_date', period.start_date);
+    if (period.end_date) params.set('end_date', period.end_date);
     window.open(`${API}/api/reports/balance-tiers/pdf?${params.toString()}`, '_blank');
   };
 
@@ -304,12 +327,19 @@ export default function BalanceTiersPage() {
           storageKey="balance-tiers-filters"
           onChange={setFilters}
         />
-        {(filters.startDate || filters.endDate) && (
+        {(filters.startDate || filters.endDate) ? (
           <div className="mb-3 text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-1.5 inline-block">
             Colonnes <b>Facture / Paye</b> = mouvements sur la periode {filters.startDate || '…'} a {filters.endDate || '…'}.
             Colonne <b>Solde</b> = solde cumulatif du compte tier jusqu&apos;au {filters.endDate || 'jour courant'}.
           </div>
-        )}
+        ) : selectedFiscalYear ? (
+          <div className="mb-3 text-[11px] text-slate-600 bg-slate-50 border border-slate-200 rounded px-3 py-1.5 inline-block" data-testid="balance-tiers-fy-hint">
+            Filtre applique automatiquement sur l&apos;exercice <b>{selectedFiscalYear.year || selectedFiscalYear.name || 'selectionne'}</b>
+            {selectedFiscalYear.start_date && selectedFiscalYear.end_date
+              ? <> ({selectedFiscalYear.start_date} &rarr; {selectedFiscalYear.end_date})</>
+              : null}. Saisissez des dates DU/AU pour outrepasser.
+          </div>
+        ) : null}
 
         <TabsContent value="owners" className="mt-0">
           {ownersData && (
