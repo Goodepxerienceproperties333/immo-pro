@@ -402,7 +402,7 @@ def create_tickets_router(db):
             "syndic_id": None,  # annonce = pas de syndic proprietaire
             "copropriete_id": None,
             "attachments": [],
-            "status": "in_progress",  # deja pris en charge par le superadmin
+            "status": "open",  # annonce ouverte a la lecture / discussion
             "assigned_to_user_id": user_id,
             "assigned_to_name": admin_ctx.get("name", "Super Administrateur"),
             "linked_conversation_id": None,
@@ -419,7 +419,7 @@ def create_tickets_router(db):
             "event_type": "admin_announced",
             "actor_user_id": user_id, "actor_name": admin_ctx.get("name", ""),
             "actor_role": "superadmin",
-            "old_status": None, "new_status": "in_progress",
+            "old_status": None, "new_status": "open",
             "comment": f"Annonce diffusee a {len(targets)} syndic(s)"
                        + (" (tous)" if data.target == "all" else ""),
             "created_at": now,
