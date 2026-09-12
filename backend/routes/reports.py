@@ -4014,11 +4014,22 @@ def create_reports_router(db):
 
         # Solde COMPTABLE REEL : recharge toutes les ecritures (y compris annulations
         # masquees) pour rester aligne avec le bilan.
-        all_debit = 0.0
-        all_credit = 0.0
+        # BUG-FIX (2026-02) : incorpore aussi le REPORT PRE-PERIODE (an_debit /
+        # an_credit calcules plus haut) sinon la `balance` renvoyee ici est la
+        # variation nette DE LA PERIODE seule, alors que la balance des tiers
+        # (liste) affiche le SOLDE CUMULATIF. Sans ce cumul, le detail affichait
+        # 100 eur debiteur pendant que la balance des tiers affichait 334.33 eur
+        # crediteur pour un meme proprietaire au 31/12 (cas client LEFRANCQ).
+        # `an_debit`/`an_credit` regroupent DEJA les AN de la periode + les
+        # mouvements pre-periode - on EXCLUT donc les AN du loop `entries`
+        # ci-dessous pour eviter le double comptage.
+        all_debit = float(an_debit or 0)
+        all_credit = float(an_credit or 0)
         hidden_count = 0
         if not show_all:
             for e in entries:
+                if (e.get("journal_type") or "") == "AN":
+                    continue  # deja compte dans an_debit / an_credit
                 for ln in e.get("lines", []) or []:
                     acc = ln.get("account_number", "")
                     tpid = ln.get("third_party_id")
