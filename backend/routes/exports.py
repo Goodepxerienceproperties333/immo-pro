@@ -131,59 +131,69 @@ def create_exports_router(db):
 
     @router.get("/bilan.xlsx")
     async def export_bilan(copropriete_id: Optional[str] = None, date_to: Optional[str] = None,
-                           fiscal_year_id: Optional[str] = None):
-        """Export Bilan en Excel avec structure PCMN belge."""
-        q = {"copropriete_id": copropriete_id} if copropriete_id else {}
-        if date_to:
-            q["date"] = {"$lte": date_to}
-        if fiscal_year_id:
-            await db.fiscal_years.find_one({"id": fiscal_year_id}, {"_id": 0})
+                           fiscal_year_id: Optional[str] = None,
+                           view_mode: str = "before_distribution"):
+        """Export Bilan en Excel avec structure PCMN belge.
 
-        entries = await db.journal_entries.find(q, {"_id": 0}).to_list(100000)
-        balances = {}
-        for e in entries:
-            for line in e.get("lines", []):
-                acc = line["account_number"]
-                if not acc or acc[0] not in "12345":
-                    continue
-                if acc not in balances:
-                    balances[acc] = {"name": line.get("account_name", ""), "debit": 0.0, "credit": 0.0}
-                balances[acc]["debit"] += line.get("debit", 0)
-                balances[acc]["credit"] += line.get("credit", 0)
+        BUG-FIX SEC-audit (2026-02) : utilise `compute_bilan_data()` (SOURCE
+        UNIQUE DE VERITE) au lieu d'une agregation naive des journal_entries.
+        Avant ce fix, l'Excel etait DESEQUILIBRE (TOTAL ACTIF != TOTAL PASSIF)
+        pour toute ACP dont le bilan applique la logique de repartition boni /
+        mali (compte 499), les exclusions de reversals, ou l'agregation par
+        proprietaire (V.A / VI.A). Cf. ticket client ACP LEFRANCQ ou l'Excel
+        affichait ACTIF=25 891.78 vs PASSIF=33 135.87 alors que la vue HTML
+        etait bien equilibree a 16 844.09.
 
-        actif, passif = [], []
-        for acc, b in sorted(balances.items()):
-            solde = round(b["debit"] - b["credit"], 2)
-            if abs(solde) < 0.01:
-                continue
-            if solde > 0:
-                actif.append((acc, b["name"], solde))
-            else:
-                passif.append((acc, b["name"], -solde))
+        La sortie respecte desormais exactement les meme rubriques que la vue
+        HTML/PDF officielle (rubr_actif / rubr_passif).
+        """
+        from routes.reports import compute_bilan_data
+
+        if not copropriete_id:
+            return StreamingResponse(io.BytesIO(),
+                                     media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                     headers={"Content-Disposition": 'attachment; filename="bilan_vide.xlsx"'})
+
+        data = await compute_bilan_data(
+            db, copropriete_id=copropriete_id,
+            date_to=date_to, fiscal_year_id=fiscal_year_id,
+            view_mode=view_mode,
+        )
 
         wb = Workbook()
         ws = wb.active
         ws.title = "Bilan"
 
-        ws.cell(row=1, column=1, value="BILAN PCMN").font = Font(bold=True, size=14, color=DARK_GREY)
         copro = await db.coproprietes.find_one({"id": copropriete_id}, {"_id": 0}) if copropriete_id else None
+        ws.cell(row=1, column=1, value="BILAN PCMN").font = Font(bold=True, size=14, color=DARK_GREY)
         ws.cell(row=2, column=1, value=f"Copropriete: {copro['name']}" if copro else "").font = Font(size=10)
-        ws.cell(row=3, column=1, value=f"Au {date_to or datetime.now().strftime('%Y-%m-%d')}").font = Font(size=10)
+        ws.cell(row=3, column=1, value=f"Au {data.get('date') or datetime.now().strftime('%Y-%m-%d')}").font = Font(size=10)
+        vm_lbl = "Apres repartition (499 ventile)" if view_mode == "after_distribution" else "Avant repartition (499 visible)"
+        ws.cell(row=4, column=1, value=f"Vue : {vm_lbl}").font = Font(size=10, italic=True)
 
         # ACTIF
-        ws.cell(row=5, column=1, value="ACTIF").font = Font(bold=True, size=12, color=BLUE)
-        ws.cell(row=6, column=1, value="N°")
-        ws.cell(row=6, column=2, value="Libelle")
-        ws.cell(row=6, column=3, value="Montant")
-        _style_header(ws, 6, 3)
-        row = 7
-        for acc, name, amt in actif:
-            ws.cell(row=row, column=1, value=acc)
-            ws.cell(row=row, column=2, value=name)
-            ws.cell(row=row, column=3, value=amt).number_format = "#,##0.00 EUR"
+        ws.cell(row=6, column=1, value="ACTIF").font = Font(bold=True, size=12, color=BLUE)
+        ws.cell(row=7, column=1, value="Rubrique / N°")
+        ws.cell(row=7, column=2, value="Libelle")
+        ws.cell(row=7, column=3, value="Montant")
+        _style_header(ws, 7, 3)
+        row = 8
+        for rubr in data.get("actif", []):
+            if abs(rubr.get("total", 0)) < 0.01 and not rubr.get("accounts"):
+                continue
+            # Titre de rubrique
+            ws.cell(row=row, column=1, value=rubr.get("label", "")).font = Font(bold=True, size=10)
+            ws.cell(row=row, column=3, value=round(rubr.get("total", 0), 2)).number_format = "#,##0.00 EUR"
+            ws.cell(row=row, column=3).font = Font(bold=True)
             row += 1
-        total_actif = round(sum(a[2] for a in actif), 2)
-        ws.cell(row=row, column=2, value="TOTAL ACTIF")
+            # Details lignes
+            for item in rubr.get("accounts", []) or []:
+                ws.cell(row=row, column=1, value=item.get("account_number", ""))
+                ws.cell(row=row, column=2, value=item.get("account_name", ""))
+                ws.cell(row=row, column=3, value=round(abs(item.get("amount", 0)), 2)).number_format = "#,##0.00 EUR"
+                row += 1
+        total_actif = round(data.get("total_actif", 0), 2)
+        ws.cell(row=row, column=2, value="TOTAL ACTIF").font = Font(bold=True)
         ws.cell(row=row, column=3, value=total_actif).number_format = "#,##0.00 EUR"
         _style_total(ws, row, 3)
 
@@ -191,20 +201,33 @@ def create_exports_router(db):
         row += 3
         ws.cell(row=row, column=1, value="PASSIF").font = Font(bold=True, size=12, color=BLUE)
         row += 1
-        ws.cell(row=row, column=1, value="N°")
+        ws.cell(row=row, column=1, value="Rubrique / N°")
         ws.cell(row=row, column=2, value="Libelle")
         ws.cell(row=row, column=3, value="Montant")
         _style_header(ws, row, 3)
         row += 1
-        for acc, name, amt in passif:
-            ws.cell(row=row, column=1, value=acc)
-            ws.cell(row=row, column=2, value=name)
-            ws.cell(row=row, column=3, value=amt).number_format = "#,##0.00 EUR"
+        for rubr in data.get("passif", []):
+            if abs(rubr.get("total", 0)) < 0.01 and not rubr.get("accounts"):
+                continue
+            ws.cell(row=row, column=1, value=rubr.get("label", "")).font = Font(bold=True, size=10)
+            ws.cell(row=row, column=3, value=round(rubr.get("total", 0), 2)).number_format = "#,##0.00 EUR"
+            ws.cell(row=row, column=3).font = Font(bold=True)
             row += 1
-        total_passif = round(sum(p[2] for p in passif), 2)
-        ws.cell(row=row, column=2, value="TOTAL PASSIF")
+            for item in rubr.get("accounts", []) or []:
+                ws.cell(row=row, column=1, value=item.get("account_number", ""))
+                ws.cell(row=row, column=2, value=item.get("account_name", ""))
+                ws.cell(row=row, column=3, value=round(abs(item.get("amount", 0)), 2)).number_format = "#,##0.00 EUR"
+                row += 1
+        total_passif = round(data.get("total_passif", 0), 2)
+        ws.cell(row=row, column=2, value="TOTAL PASSIF").font = Font(bold=True)
         ws.cell(row=row, column=3, value=total_passif).number_format = "#,##0.00 EUR"
         _style_total(ws, row, 3)
+
+        # Verification d'equilibre
+        row += 2
+        eq_label = "Bilan equilibre" if data.get("equilibre") else f"BILAN DESEQUILIBRE (ecart : {data.get('ecart', 0):.2f} EUR)"
+        eq_color = "008000" if data.get("equilibre") else "CC0000"
+        ws.cell(row=row, column=1, value=eq_label).font = Font(bold=True, size=11, color=eq_color)
 
         _auto_size(ws)
         buf = io.BytesIO()

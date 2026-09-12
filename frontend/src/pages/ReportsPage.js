@@ -195,7 +195,17 @@ export default function ReportsPage() {
   // iter88b : scope ACP via useAuth (chinese wall reactif) au lieu de localStorage
   const copro = selectedCopro || '';
   const xlsxParam = copro ? `?copropriete_id=${copro}` : '';
-  const exportBilanXlsx = () => window.open(`${API}/api/exports/bilan.xlsx${xlsxParam}${dateTo ? (xlsxParam ? '&' : '?') + 'date_to=' + dateTo : ''}`, '_blank');
+  const exportBilanXlsx = () => {
+    const params = new URLSearchParams();
+    if (copro) params.set('copropriete_id', copro);
+    if (dateTo) params.set('date_to', dateTo);
+    // BUG-FIX SEC-audit : transmet le meme view_mode que la vue HTML pour
+    // que l'Excel reflete exactement le bilan affiche (avant ou apres
+    // repartition du 499). Sans ceci l'Excel etait desequilibre.
+    if (viewMode) params.set('view_mode', viewMode);
+    const qs = params.toString();
+    window.open(`${API}/api/exports/bilan.xlsx${qs ? '?' + qs : ''}`, '_blank');
+  };
   const exportBalanceTiersXlsx = () => window.open(`${API}/api/exports/balance-tiers/owners.xlsx${xlsxParam}`, '_blank');
   const exportGrandLivreXlsx = () => {
     const params = new URLSearchParams();
