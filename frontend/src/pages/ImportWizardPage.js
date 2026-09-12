@@ -27,6 +27,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
 import {
   Upload, Truck, Tag, CheckCircle2, X, AlertTriangle,
   ChevronRight, ChevronLeft, FileWarning, Loader2, RotateCcw,
@@ -119,6 +120,12 @@ export default function ImportWizardPage() {
     },
   });
   const [odEntriesParsed, setOdEntriesParsed] = useState({ format: '', entries: [], total_count: 0, total_amount: 0, period_start: '', period_end: '' });
+  // SEC-audit hotfix (2026-02) : dialogue de mise en garde avant l'upload
+  // du bilan d'ouverture. Le PDF DOIT etre le bilan detaille APRES
+  // repartition de l'exercice clos precedent - sans quoi les comptes
+  // 700xxx (charges reparties) ne sont pas soldes et generent des
+  // orphelins non compensables lors du commit.
+  const [showBalanceWarning, setShowBalanceWarning] = useState(false);
   // iter90if : ecran de recap final apres derniere etape du wizard.
   const [finalSummary, setFinalSummary] = useState(null);
   // iter93w : verification des lots absents de la cle par defaut.
@@ -1079,7 +1086,20 @@ export default function ImportWizardPage() {
                   </Button>
                 </div>
               ) : (
-                <Button onClick={() => document.getElementById('file-input').click()} disabled={sniffing} className="bg-[#022D52] hover:bg-[#1D4ED8]">
+                <Button
+                  onClick={() => {
+                    // SEC-audit hotfix : avertissement obligatoire avant
+                    // upload du bilan d'ouverture (evite les orphelins).
+                    if (step.key === 'opening_balance') {
+                      setShowBalanceWarning(true);
+                    } else {
+                      document.getElementById('file-input').click();
+                    }
+                  }}
+                  disabled={sniffing}
+                  className="bg-[#022D52] hover:bg-[#1D4ED8]"
+                  data-testid="choose-file-btn"
+                >
                   {sniffing ? <><Loader2 size={14} className="animate-spin mr-1" /> Analyse en cours...</> : <><Upload size={14} className="mr-1" /> Choisir le fichier</>}
                 </Button>
               )}
@@ -1563,6 +1583,77 @@ export default function ImportWizardPage() {
         </div>
       </div>
       </>)}
+
+      {/* SEC-audit hotfix : dialogue de mise en garde avant upload du bilan */}
+      <Dialog open={showBalanceWarning} onOpenChange={setShowBalanceWarning}>
+        <DialogContent className="max-w-xl" data-testid="balance-warning-dialog">
+          <DialogHeader>
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center flex-shrink-0">
+                <AlertTriangle size={20} className="text-amber-600" />
+              </div>
+              <div className="flex-1">
+                <DialogTitle className="text-lg" style={{ fontFamily: 'Chivo, sans-serif' }}>
+                  Bilan detaille APRES repartition requis
+                </DialogTitle>
+                <DialogDescription className="mt-2 text-sm text-slate-600">
+                  Avant de charger le fichier, verifiez qu&apos;il s&apos;agit bien du bon document.
+                </DialogDescription>
+              </div>
+            </div>
+          </DialogHeader>
+          <div className="space-y-3 text-sm">
+            <div className="p-3 rounded border border-amber-300 bg-amber-50">
+              <p className="font-semibold text-amber-900 mb-1">Document obligatoire :</p>
+              <p className="text-amber-900">
+                <strong>Bilan detaille APRES repartition</strong> de l&apos;exercice cloture precedent
+                (celui qui vient juste avant l&apos;exercice a importer).
+              </p>
+            </div>
+            <div className="p-3 rounded border border-rose-300 bg-rose-50">
+              <p className="font-semibold text-rose-900 mb-1">Attention :</p>
+              <ul className="list-disc ml-5 text-rose-900 space-y-1">
+                <li>
+                  Si le bilan est <strong>avant repartition</strong> ou si la <strong>repartition
+                  aux copropri&eacute;taires n&apos;a pas &eacute;t&eacute; effectu&eacute;e</strong>,
+                  les comptes de charges (700xxx) ne sont pas sold&eacute;s.
+                </li>
+                <li>
+                  Le bilan ne sera <strong>pas &eacute;quilibr&eacute;</strong> et l&apos;import
+                  cr&eacute;era des <strong>comptes orphelins</strong> impossibles &agrave; r&eacute;concilier.
+                </li>
+                <li>
+                  Les d&eacute;comptes des copropri&eacute;taires de l&apos;exercice suivant seront
+                  <strong> incorrects</strong>.
+                </li>
+              </ul>
+            </div>
+            <div className="text-xs text-slate-500 pt-1">
+              Dans Optipro : <em>Comptabilite &gt; Editions &gt; Bilan &gt; Bilan detaille apres repartition</em>.
+              La date doit correspondre au dernier jour de l&apos;exercice cloture.
+            </div>
+          </div>
+          <DialogFooter className="gap-2">
+            <Button
+              variant="outline"
+              onClick={() => setShowBalanceWarning(false)}
+              data-testid="balance-warning-cancel"
+            >
+              Annuler
+            </Button>
+            <Button
+              onClick={() => {
+                setShowBalanceWarning(false);
+                setTimeout(() => document.getElementById('file-input').click(), 0);
+              }}
+              className="bg-[#022D52] hover:bg-[#1D4ED8]"
+              data-testid="balance-warning-confirm"
+            >
+              <CheckCircle2 size={14} className="mr-1" /> J&apos;ai le bon fichier - Continuer
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* iter91f : dialogue de confirmation des proprietaires orphelins */}
       {orphanOwners && (
