@@ -1,7 +1,9 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { ArrowLeft, MessageSquare, Paperclip, Send, Loader2, ChevronRight, RefreshCw } from 'lucide-react';
+import { ArrowLeft, MessageSquare, Paperclip, Send, Loader2, ChevronRight, RefreshCw, Megaphone } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
+import { Input } from '@/components/ui/input';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
@@ -47,6 +49,49 @@ export default function SupportTicketsList({ superadmin = false, onBack = null, 
   const [posting, setPosting] = useState(false);
   const [filterStatus, setFilterStatus] = useState('all');
   const [search, setSearch] = useState('');
+  // iter95s : dialog annonce superadmin
+  const [announceOpen, setAnnounceOpen] = useState(false);
+  const [announceForm, setAnnounceForm] = useState({ title: '', description: '', target: 'all', target_syndic_ids: [] });
+  const [syndicsList, setSyndicsList] = useState([]);
+  const [posting_announce, setPostingAnnounce] = useState(false);
+
+  useEffect(() => {
+    if (!superadmin) return;
+    api.get('/admin/syndics-overview').then(r => {
+      setSyndicsList((r.data || []).map(s => ({
+        id: s.syndic_id, name: s.name || s.email, email: s.email,
+      })));
+    }).catch(() => {});
+  }, [superadmin]);
+
+  const submitAnnounce = async () => {
+    if (announceForm.title.trim().length < 5) { toast.error('Titre trop court (min 5)'); return; }
+    if (announceForm.description.trim().length < 10) { toast.error('Description trop courte (min 10)'); return; }
+    if (announceForm.target === 'specific' && announceForm.target_syndic_ids.length === 0) {
+      toast.error('Selectionnez au moins un syndic'); return;
+    }
+    setPostingAnnounce(true);
+    try {
+      const { data } = await api.post('/tickets/admin/announce', {
+        title: announceForm.title.trim(),
+        description: announceForm.description.trim(),
+        target: announceForm.target,
+        target_syndic_ids: announceForm.target_syndic_ids,
+        notify_email: true,
+      });
+      toast.success(
+        `Ticket ${data.number} cree - ${data.notified_recipients}/${data.total_targets} email(s) envoye(s)`,
+        { duration: 6000 },
+      );
+      setAnnounceOpen(false);
+      setAnnounceForm({ title: '', description: '', target: 'all', target_syndic_ids: [] });
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Echec creation annonce');
+    } finally {
+      setPostingAnnounce(false);
+    }
+  };
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -325,7 +370,117 @@ export default function SupportTicketsList({ superadmin = false, onBack = null, 
         >
           {loading ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
         </button>
+        {/* iter95s : nouveau ticket-annonce (superadmin uniquement) */}
+        {superadmin && (
+          <Button
+            size="sm"
+            onClick={() => setAnnounceOpen(true)}
+            className="h-7 text-[11px] bg-amber-500 hover:bg-amber-600 text-white gap-1"
+            data-testid="tickets-new-announcement-btn"
+          >
+            <Megaphone size={12} /> Annoncer
+          </Button>
+        )}
       </div>
+
+      {/* iter95s : Dialog creation annonce superadmin */}
+      <Dialog open={announceOpen} onOpenChange={setAnnounceOpen}>
+        <DialogContent className="max-w-lg" data-testid="admin-announce-dialog">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Megaphone size={16} className="text-amber-600" />
+              Nouvelle annonce superadmin
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 pt-2">
+            <div>
+              <label className="text-[11px] font-semibold text-slate-600 uppercase">Titre *</label>
+              <Input
+                value={announceForm.title}
+                onChange={e => setAnnounceForm({ ...announceForm, title: e.target.value })}
+                placeholder="Ex : Maintenance planifiee 24/02 22h"
+                data-testid="announce-title"
+              />
+            </div>
+            <div>
+              <label className="text-[11px] font-semibold text-slate-600 uppercase">Description *</label>
+              <Textarea
+                value={announceForm.description}
+                onChange={e => setAnnounceForm({ ...announceForm, description: e.target.value })}
+                rows={4}
+                placeholder="Explication detaillee du sujet (interruption, bug en cours de resolution, information generale...)"
+                data-testid="announce-description"
+              />
+            </div>
+            <div>
+              <label className="text-[11px] font-semibold text-slate-600 uppercase">Destinataires</label>
+              <div className="flex gap-2 items-center mt-1">
+                <Select value={announceForm.target} onValueChange={v => setAnnounceForm({ ...announceForm, target: v, target_syndic_ids: v === 'all' ? [] : announceForm.target_syndic_ids })}>
+                  <SelectTrigger className="h-8 text-xs w-[180px]" data-testid="announce-target">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Tous les syndics ({syndicsList.length})</SelectItem>
+                    <SelectItem value="specific">Syndics specifiques</SelectItem>
+                  </SelectContent>
+                </Select>
+                <span className="text-[11px] text-slate-500">
+                  {announceForm.target === 'all'
+                    ? `Le ticket sera visible par les ${syndicsList.length} syndic(s) actifs`
+                    : `${announceForm.target_syndic_ids.length} syndic(s) selectionne(s)`}
+                </span>
+              </div>
+            </div>
+            {announceForm.target === 'specific' && (
+              <div className="border border-slate-200 rounded-md p-2 max-h-40 overflow-y-auto space-y-1" data-testid="announce-syndics-picker">
+                {syndicsList.length === 0 ? (
+                  <div className="text-[11px] italic text-slate-400 text-center py-2">Chargement des syndics...</div>
+                ) : (
+                  syndicsList.map(s => {
+                    const checked = announceForm.target_syndic_ids.includes(s.id);
+                    return (
+                      <label key={s.id} className="flex items-center gap-2 p-1 hover:bg-slate-50 rounded cursor-pointer" data-testid={`announce-syndic-${s.id}`}>
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => setAnnounceForm(f => ({
+                            ...f,
+                            target_syndic_ids: checked
+                              ? f.target_syndic_ids.filter(x => x !== s.id)
+                              : [...f.target_syndic_ids, s.id],
+                          }))}
+                        />
+                        <div className="flex-1">
+                          <div className="text-xs font-medium">{s.name}</div>
+                          <div className="text-[10px] text-slate-500">{s.email}</div>
+                        </div>
+                      </label>
+                    );
+                  })
+                )}
+              </div>
+            )}
+            <div className="bg-blue-50 border border-blue-200 rounded p-2 text-[11px] text-blue-900">
+              Un email sera envoye automatiquement aux syndics cibles pour les informer.
+              Le ticket sera cree avec le statut &quot;En cours de developpement&quot; et vous
+              en serez le responsable.
+            </div>
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" onClick={() => setAnnounceOpen(false)} disabled={posting_announce} data-testid="announce-cancel">
+              Annuler
+            </Button>
+            <Button
+              onClick={submitAnnounce}
+              disabled={posting_announce}
+              className="bg-amber-500 hover:bg-amber-600 text-white"
+              data-testid="announce-submit"
+            >
+              {posting_announce ? <><Loader2 size={12} className="mr-1 animate-spin" /> Envoi...</> : <><Send size={12} className="mr-1" /> Publier l&apos;annonce</>}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
       <div className="px-3 py-2 border-b border-slate-100 flex items-center gap-2">
         <Select value={filterStatus} onValueChange={setFilterStatus}>
           <SelectTrigger className="h-8 text-xs w-[140px]" data-testid="tickets-filter-status">
@@ -367,6 +522,12 @@ export default function SupportTicketsList({ superadmin = false, onBack = null, 
                     <Badge className={`${STATUS_COLORS[t.status] || 'bg-slate-100'} text-[9px]`}>
                       {statusLabel[t.status] || t.status_label || t.status}
                     </Badge>
+                    {/* iter95s : badge annonce superadmin */}
+                    {t.is_admin_announcement && (
+                      <Badge className="bg-amber-100 text-amber-800 border border-amber-300 text-[9px]" data-testid={`ticket-announce-badge-${t.id}`}>
+                        <Megaphone size={9} className="mr-0.5" /> Annonce
+                      </Badge>
+                    )}
                     {t.attachments && t.attachments.length > 0 && (
                       <span className="text-[9px] text-slate-400 inline-flex items-center gap-0.5">
                         <Paperclip size={9} /> {t.attachments.length}

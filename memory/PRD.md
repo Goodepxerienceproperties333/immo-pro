@@ -18,6 +18,24 @@ billing.
 - Production : https://immo-pcmn.emergent.host
 
 ## Recent changes (Feb 2026)
+- **2026-02-23 (iter95s)** : Annonces support superadmin -> syndics.
+  Nouveau endpoint `POST /api/tickets/admin/announce` (superadmin
+  only) permettant de creer un ticket-annonce visible par :
+    - `target: "all"` : tous les syndics actifs (broadcast)
+    - `target: "specific"` : liste `target_syndic_ids` (multi-select)
+  Chaque ticket porte `is_admin_announcement=True`, `target_syndic_ids`
+  (list) et un statut initial `in_progress` avec le superadmin en
+  assigne. Un email HTML est envoye a chaque syndic cible pour
+  l'informer de la creation (via SMTP One2Net + fallback Graph).
+  Visibilite : les syndics voient dans leur liste (via `GET /tickets`)
+  les annonces qui les ciblent + les broadcasts `"*"` en plus des
+  tickets qu'ils ont ouverts eux-memes.
+  Frontend : bouton "Annoncer" (Megaphone) dans le header
+  `SupportTicketsList` (superadmin uniquement) + dialog avec select
+  destinataires + checkboxes syndics + badge "Annonce" ambré sur
+  chaque ticket-annonce dans la liste.
+  Verifie e2e via curl (target=all 7/7 emails + target=specific 1
+  syndic) et visuellement via screenshot.
 - **2026-02-23 (iter95r)** : Detection immediate a l'import + mini-guide
   In-App PCMN vs IBAN pour eviter l'erreur de comptabilisation trop
   tardive.

@@ -145,6 +145,53 @@ async def _send_ticket_created_email(*, support_email: str, ticket: dict) -> Non
     )
 
 
+async def _send_admin_announcement_email(*, recipients: list, ticket: dict,
+                                          admin_name: str, target_scope: str,
+                                          target_count: int) -> None:
+    """iter95s : email d'annonce du superadmin aux syndics."""
+    if not recipients:
+        return
+    from graph_email import send_html_email
+    number = ticket["number"]
+    scope_label = "tous les syndics" if target_scope == "all" else f"{target_count} syndic(s) cible(s)"
+    subject = f"[NextGe Copro] Annonce support {number} — {ticket['title']}"
+    body = f"""
+<div style="font-family:system-ui,Segoe UI,Arial,sans-serif;max-width:640px;">
+  <div style="background:#022D52;color:white;padding:12px 16px;border-radius:8px 8px 0 0;">
+    <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;opacity:0.85;">Communication support NextGe Copro</div>
+    <h2 style="margin:4px 0 0 0;">Annonce support</h2>
+  </div>
+  <div style="border:1px solid #E5E7EB;border-top:none;padding:16px;border-radius:0 0 8px 8px;">
+    <p style="color:#374151;font-size:13px;line-height:1.5;">
+      Bonjour,<br/>
+      <b>{admin_name}</b> a ouvert un ticket de suivi qui vous concerne
+      (destinataire : <i>{scope_label}</i>).
+    </p>
+    <div style="background:#F9FAFB;border:1px solid #E5E7EB;border-radius:8px;padding:12px;margin:12px 0;">
+      <div style="font-size:11px;color:#6B7280;text-transform:uppercase;letter-spacing:0.5px;">Ticket #{number}</div>
+      <h3 style="margin:4px 0 8px 0;color:#111827;">{ticket.get('title','')}</h3>
+      <div style="white-space:pre-wrap;font-size:13px;color:#374151;">{ticket.get('description','')}</div>
+    </div>
+    <p style="color:#374151;font-size:13px;">
+      Vous pouvez suivre l'avancement (statut, commentaires) directement dans votre
+      espace <b>Support</b> de l'application. Toute mise a jour vous sera notifiee
+      automatiquement par email.
+    </p>
+    <hr style="margin:20px 0;border:none;border-top:1px solid #E5E7EB;"/>
+    <p style="color:#9CA3AF;font-size:11px;">
+      Vous recevez cet email car un ticket support ouvert par l'equipe NextGe Copro
+      vous concerne. Pour toute question, repondez a ce mail.
+    </p>
+  </div>
+</div>
+""".strip()
+    await send_html_email(
+        recipients=recipients,
+        subject=subject,
+        html_body=body,
+    )
+
+
 async def _send_status_changed_email(
     *, requester_email: str, ticket: dict, old_status: str, new_status: str,
     comment: str, actor_name: str,
@@ -234,6 +281,12 @@ async def _load_ticket_scoped(db, ticket_id: str, request: Request) -> dict:
         return t
     if sid and t.get("syndic_id") == sid:
         return t
+    # iter95s : annonces superadmin visibles par les syndics cibles ou tous
+    targets = t.get("target_syndic_ids") or []
+    if t.get("is_admin_announcement") and (
+        "*" in targets or (sid and sid in targets)
+    ):
+        return t
     raise HTTPException(403, "Acces refuse a ce ticket (chinese wall)")
 
 
@@ -257,6 +310,138 @@ def create_tickets_router(db):
     async def list_statuses(request: Request):
         """Liste des statuts disponibles + labels FR."""
         return [{"key": k, "label": STATUS_LABELS[k]} for k in STATUSES]
+
+    # iter95s : annonces superadmin -> syndics
+    class _AdminAnnounceInput(BaseModel):
+        title: str
+        description: str
+        target: str = "all"  # "all" ou "specific"
+        target_syndic_ids: List[str] = []  # utilise si target=="specific"
+        notify_email: bool = True
+
+    @router.post("/admin/announce")
+    async def admin_announce(request: Request, data: _AdminAnnounceInput, background: BackgroundTasks):
+        """iter95s : le superadmin cree un ticket-annonce visible par un ou
+        plusieurs syndics (`target="all"` OU `target="specific"` +
+        `target_syndic_ids`). Un email est envoye a chaque syndic cible.
+        """
+        role = getattr(request.state, "user_role", "") or ""
+        if not _is_superadmin(role):
+            raise HTTPException(403, "Superadmin uniquement")
+        title = (data.title or "").strip()
+        description = (data.description or "").strip()
+        if len(title) < 5:
+            raise HTTPException(400, "Titre trop court (min 5 caracteres)")
+        if len(description) < 10:
+            raise HTTPException(400, "Description trop courte (min 10 caracteres)")
+        if data.target not in ("all", "specific"):
+            raise HTTPException(400, "target doit etre 'all' ou 'specific'")
+
+        # Resolution des syndics cibles
+        if data.target == "all":
+            # Les users ont un _id ObjectId - on cast en string cote sortie
+            targets = []
+            async for u in db.users.find(
+                {"role": "syndic", "must_change_password": {"$ne": True}},
+                {"_id": 1, "email": 1, "name": 1},
+            ):
+                targets.append({
+                    "id": str(u["_id"]),
+                    "email": u.get("email"),
+                    "name": u.get("name"),
+                })
+            target_ids = ["*"]  # marque broadcast
+        else:
+            if not data.target_syndic_ids:
+                raise HTTPException(400, "target_syndic_ids requis pour target='specific'")
+            # Les syndics n'ont souvent qu'un `_id` (ObjectId) - on cherche
+            # d'abord par ObjectId, puis par `id` string en fallback.
+            from bson import ObjectId
+            oids = []
+            for sid in data.target_syndic_ids:
+                try: oids.append(ObjectId(sid))
+                except Exception: pass
+            targets = []
+            if oids:
+                async for u in db.users.find(
+                    {"_id": {"$in": oids}, "role": "syndic"},
+                    {"email": 1, "name": 1},
+                ):
+                    targets.append({
+                        "id": str(u["_id"]),
+                        "email": u.get("email"),
+                        "name": u.get("name"),
+                    })
+            if not targets:
+                async for u in db.users.find(
+                    {"id": {"$in": data.target_syndic_ids}, "role": "syndic"},
+                    {"_id": 0, "id": 1, "email": 1, "name": 1},
+                ):
+                    targets.append(u)
+            target_ids = data.target_syndic_ids
+
+        # Contexte superadmin (createur)
+        user_id = getattr(request.state, "user_id", "") or ""
+        admin_ctx = await _load_user_context(db, user_id)
+
+        number = await _next_ticket_number(db)
+        ticket_id = str(uuid.uuid4())
+        now = _now()
+        ticket = {
+            "id": ticket_id,
+            "number": number,
+            "title": title[:200],
+            "description": description[:10000],
+            "steps_to_reproduce": "",
+            "expected_behavior": "",
+            "observed_behavior": "",
+            "requester_user_id": user_id,
+            "requester_email": admin_ctx.get("email", ""),
+            "requester_name": admin_ctx.get("name", "Super Administrateur"),
+            "requester_role": "superadmin",
+            "syndic_id": None,  # annonce = pas de syndic proprietaire
+            "copropriete_id": None,
+            "attachments": [],
+            "status": "in_progress",  # deja pris en charge par le superadmin
+            "assigned_to_user_id": user_id,
+            "assigned_to_name": admin_ctx.get("name", "Super Administrateur"),
+            "linked_conversation_id": None,
+            "is_admin_announcement": True,
+            "target_syndic_ids": target_ids,  # ["*"] ou liste
+            "target_syndic_count": len(targets),
+            "created_at": now,
+            "updated_at": now,
+            "closed_at": None,
+        }
+        await db.support_tickets.insert_one(ticket)
+        await db.support_ticket_events.insert_one({
+            "id": str(uuid.uuid4()), "ticket_id": ticket_id,
+            "event_type": "admin_announced",
+            "actor_user_id": user_id, "actor_name": admin_ctx.get("name", ""),
+            "actor_role": "superadmin",
+            "old_status": None, "new_status": "in_progress",
+            "comment": f"Annonce diffusee a {len(targets)} syndic(s)"
+                       + (" (tous)" if data.target == "all" else ""),
+            "created_at": now,
+        })
+
+        # Email de notification aux syndics cibles (best-effort)
+        if data.notify_email and targets:
+            recipients = [t["email"] for t in targets if t.get("email")]
+            background.add_task(
+                _send_admin_announcement_email,
+                recipients=recipients,
+                ticket=ticket,
+                admin_name=admin_ctx.get("name", "Super Administrateur"),
+                target_scope=data.target,
+                target_count=len(recipients),
+            )
+
+        return {
+            **_mask_ticket(ticket),
+            "notified_recipients": len([t for t in targets if t.get("email")]),
+            "total_targets": len(targets),
+        }
 
     @router.post("")
     async def create_ticket(
@@ -389,12 +574,15 @@ def create_tickets_router(db):
             if syndic_id:
                 q["syndic_id"] = syndic_id
         else:
-            # Isolation : soit ticket ouvert par cet user, soit meme syndic_id
+            # Isolation : soit ticket ouvert par cet user, soit meme syndic_id,
+            # soit annonce superadmin ciblant ce syndic (iter95s).
             sid = getattr(request.state, "syndic_id", None)
             user_id = getattr(request.state, "user_id", "")
             or_conds = [{"requester_user_id": user_id}]
             if sid:
                 or_conds.append({"syndic_id": sid})
+                or_conds.append({"target_syndic_ids": sid})       # annonce ciblee
+            or_conds.append({"target_syndic_ids": "*"})           # broadcast
             q["$or"] = or_conds
         if status:
             if status not in STATUSES:
