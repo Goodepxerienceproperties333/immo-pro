@@ -597,6 +597,75 @@ def create_banking_router(db):
             s["error_message"] = (first_err or {}).get("posting_error", "")
         return {"blocked": stmts, "count": len(stmts)}
 
+    @router.post("/statements/blocked/revalidate")
+    async def revalidate_blocked_statements(request: Request, copropriete_id: Optional[str] = None):
+        """SEC-audit hotfix (2026-02) : re-teste chaque extrait marque
+        `has_posting_error=True` avec la logique de resolution PCMN
+        courante. Si le bank_account correspondant est desormais
+        configure (ou si un nouveau fallback resout le raw_acc), le flag
+        est efface pour desengorger le widget "extraits bloques".
+
+        N'effectue AUCUNE ecriture comptable : c'est purement un rescan
+        des erreurs persistees. Le user devra ensuite cliquer
+        "Comptabiliser" pour chaque extrait desormais eligible.
+
+        Retourne : {cleared: N, still_blocked: M}.
+        """
+        from auto_entries import _resolve_bank_account, BankAccountNotConfigured
+
+        if not copropriete_id:
+            copropriete_id = request.headers.get("X-Copropriete-Id") or None
+        if not copropriete_id:
+            raise HTTPException(400, "copropriete_id requis")
+
+        stmts = await db.bank_statements.find(
+            {"copropriete_id": copropriete_id, "has_posting_error": True},
+            {"_id": 0, "id": 1},
+        ).to_list(500)
+
+        cleared = 0
+        still_blocked = 0
+        for s in stmts:
+            errored_txns = await db.bank_transactions.find(
+                {"statement_id": s["id"], "posting_error": {"$exists": True, "$ne": None}},
+                {"_id": 0, "id": 1, "account_number": 1, "statement_id": 1},
+            ).to_list(10000)
+            if not errored_txns:
+                # Aucune erreur restante : nettoie l'indicateur au niveau statement.
+                await db.bank_statements.update_one(
+                    {"id": s["id"]},
+                    {"$unset": {"has_posting_error": ""}},
+                )
+                cleared += 1
+                continue
+            # Pour chaque txn en erreur, teste la resolution actuelle.
+            all_resolved = True
+            for t in errored_txns:
+                try:
+                    await _resolve_bank_account(db, t, copropriete_id)
+                except BankAccountNotConfigured:
+                    all_resolved = False
+                    break
+                except Exception:
+                    # Toute autre erreur inattendue : on ne clear pas.
+                    all_resolved = False
+                    break
+            if all_resolved:
+                await db.bank_transactions.update_many(
+                    {"statement_id": s["id"], "posting_error": {"$exists": True}},
+                    {"$unset": {"posting_error": "", "posting_error_iban": "",
+                                "posting_error_at": ""}},
+                )
+                await db.bank_statements.update_one(
+                    {"id": s["id"]},
+                    {"$unset": {"has_posting_error": ""}},
+                )
+                cleared += 1
+            else:
+                still_blocked += 1
+
+        return {"cleared": cleared, "still_blocked": still_blocked, "scanned": len(stmts)}
+
     @router.get("/statements")
     async def list_statements(request: Request, copropriete_id: Optional[str] = None,
                               date_from: Optional[str] = None, date_to: Optional[str] = None):

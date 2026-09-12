@@ -1088,7 +1088,25 @@ export default function BankingPage() {
                 </Button>
                 <Button
                   size="sm" variant="outline"
-                  onClick={() => load()}
+                  onClick={async () => {
+                    try {
+                      const res = await api.post('/banking/statements/blocked/revalidate', null, {
+                        params: { copropriete_id: selectedCopro },
+                      });
+                      const c = res.data?.cleared || 0;
+                      const sb = res.data?.still_blocked || 0;
+                      if (c > 0) {
+                        toast.success(`${c} extrait(s) debloque(s)` + (sb > 0 ? `, ${sb} restant(s)` : ''));
+                      } else if (sb > 0) {
+                        toast.info(`${sb} extrait(s) toujours bloque(s) - IBAN a configurer`);
+                      } else {
+                        toast.success('Aucun extrait bloque');
+                      }
+                    } catch (e) {
+                      toast.error('Revalidation impossible : ' + (e?.response?.data?.detail || e.message));
+                    }
+                    await load();
+                  }}
                   data-testid="refresh-blocked"
                 >
                   <RefreshCw size={13} className="mr-1" /> Actualiser
