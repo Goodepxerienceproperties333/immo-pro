@@ -18,6 +18,23 @@ billing.
 - Production : https://immo-pcmn.emergent.host
 
 ## Recent changes (Feb 2026)
+- **2026-02-23 (iter95u)** : Fix bloquant pour les extraits importes avant
+  qu'un syndic ne change le PCMN par defaut de son compte bancaire.
+  Scenario reproduit : IBAN BE68...1000 -> PCMN auto `55100000` ->
+  import CODA -> syndic renomme le PCMN a `55163400` -> toutes les
+  comptabilisations restaient bloquees avec "IBAN '551000' non
+  configure" (12 extraits en attente cote user).
+  Correctif dans `_resolve_bank_account` (auto_entries.py) : nouvelle
+  etape 2bis qui regenere le PCMN par defaut a partir de `ba.iban`
+  (551000 dans l'exemple) et matche `raw_acc` dessus. Si match, on
+  renvoie le PCMN CONFIGURE actuel (55163400) au lieu de bloquer.
+  Priorite maintenue : match direct sur `pcmn_number` configure >
+  match sur default_pcmn IBAN-derived. Tests unitaires :
+  `tests/test_iter95u_pcmn_renamed.py` (4 PASS incluant regression).
+- **2026-02-23 (iter95t)** : Notifications email pour le threading sur
+  les annonces (`routes/tickets.add_comment`) - syndic repond -> email
+  au superadmin auteur ; superadmin repond -> fan-out a tous les
+  syndics cibles ; ticket classique inchange.
 - **2026-02-23 (iter95s)** : Annonces support superadmin -> syndics.
   Nouveau endpoint `POST /api/tickets/admin/announce` (superadmin
   only) permettant de creer un ticket-annonce visible par :

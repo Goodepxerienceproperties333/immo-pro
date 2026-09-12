@@ -702,26 +702,66 @@ def create_tickets_router(db):
             or os.environ.get("SUPPORT_EMAIL", "").strip() \
             or "support@nextgecopro.be"
         if _is_superadmin(ctx["role"]):
-            # Superadmin -> demandeur
-            background.add_task(
-                _send_comment_notification_email,
-                recipient_email=t.get("requester_email", ""),
-                ticket=t,
-                comment=comment,
-                actor_name=ctx["name"],
-                actor_role="Support",
-            )
+            # Superadmin -> demandeur (ou aux syndics cibles si c'est une annonce)
+            targets = []
+            if t.get("is_admin_announcement"):
+                # iter95t : sur une annonce, une reponse superadmin notifie
+                # les syndics cibles du thread pour qu'ils voient la reponse.
+                target_ids = t.get("target_syndic_ids") or []
+                if "*" in target_ids:
+                    async for u in db.users.find(
+                        {"role": "syndic", "must_change_password": {"$ne": True}},
+                        {"email": 1},
+                    ):
+                        if u.get("email"):
+                            targets.append(u["email"])
+                else:
+                    from bson import ObjectId
+                    oids = []
+                    for sid in target_ids:
+                        try: oids.append(ObjectId(sid))
+                        except Exception: pass
+                    if oids:
+                        async for u in db.users.find({"_id": {"$in": oids}}, {"email": 1}):
+                            if u.get("email"):
+                                targets.append(u["email"])
+            else:
+                if t.get("requester_email"):
+                    targets = [t.get("requester_email")]
+            for rec in targets:
+                background.add_task(
+                    _send_comment_notification_email,
+                    recipient_email=rec,
+                    ticket=t,
+                    comment=comment,
+                    actor_name=ctx["name"],
+                    actor_role="Support",
+                )
         else:
-            # Syndic/owner -> support (avec reply-to = demandeur)
-            background.add_task(
-                _send_comment_notification_email,
-                recipient_email=support_email,
-                ticket=t,
-                comment=comment,
-                actor_name=ctx["name"],
-                actor_role=ctx["role"],
-                reply_to=ctx["email"] or t.get("requester_email", "") or None,
-            )
+            # iter95t : syndic/owner qui repond a une annonce -> notifie
+            # directement le superadmin auteur de l'annonce (au lieu de
+            # support@ generique) pour un thread efficace.
+            if t.get("is_admin_announcement") and t.get("requester_email"):
+                background.add_task(
+                    _send_comment_notification_email,
+                    recipient_email=t["requester_email"],
+                    ticket=t,
+                    comment=comment,
+                    actor_name=ctx["name"],
+                    actor_role=ctx["role"],
+                    reply_to=ctx["email"] or None,
+                )
+            else:
+                # Syndic/owner -> support (avec reply-to = demandeur)
+                background.add_task(
+                    _send_comment_notification_email,
+                    recipient_email=support_email,
+                    ticket=t,
+                    comment=comment,
+                    actor_name=ctx["name"],
+                    actor_role=ctx["role"],
+                    reply_to=ctx["email"] or t.get("requester_email", "") or None,
+                )
         return event
 
     @router.post("/{ticket_id}/resend-support-email")

@@ -216,6 +216,32 @@ async def _resolve_bank_account(db, txn: dict, copro_id: str) -> tuple[str, str]
             if ba_pcmn and pcmn_bank_match(ba_pcmn, raw_acc):
                 return normalize_bank_pcmn(ba_pcmn), (ba.get("label") or "Banque")
 
+    # iter95u : 2bis) Match sur le PCMN "par defaut" auto-genere depuis l'IBAN.
+    # Ce chemin resout le cas ou le syndic a renomme le pcmn_number apres qu'un
+    # extrait ait ete importe avec l'ancien code auto-genere (551000 -> 55163400
+    # par exemple). On genere le PCMN par defaut depuis l'IBAN de chaque
+    # bank_account et on compare avec le raw_acc. Si match, on renvoie le
+    # PCMN configure actuel (l'utilisateur veut que les prochaines
+    # comptabilisations utilisent le NOUVEAU code).
+    if raw_acc:
+        def _default_pcmn_from_iban(_iban: str, _atype: str) -> str:
+            clean = (_iban or "").replace(" ", "").replace("-", "")
+            last3 = clean[-3:] if len(clean) >= 3 else clean.zfill(3)
+            prefix = "550" if _atype == "epargne" else "551"
+            return normalize_bank_pcmn(f"{prefix}{last3}00")
+
+        for ba in accounts:
+            ba_iban_raw = ba.get("iban") or ""
+            ba_atype = ba.get("account_type") or "vue"
+            default_pcmn = _default_pcmn_from_iban(ba_iban_raw, ba_atype)
+            ba_pcmn = (ba.get("pcmn_number") or "").strip()
+            if default_pcmn and pcmn_bank_match(default_pcmn, raw_acc):
+                # On retourne le pcmn_number CONFIGURE (peut avoir ete
+                # renomme) plutot que le default_pcmn - c'est la source
+                # de verite metier.
+                target_pcmn = normalize_bank_pcmn(ba_pcmn) if ba_pcmn else default_pcmn
+                return target_pcmn, (ba.get("label") or "Banque")
+
     # 3) Suffixe IBAN / correspondance croisee pcmn_number configure
     if raw_acc:
         digits = "".join(c for c in raw_acc if c.isdigit())

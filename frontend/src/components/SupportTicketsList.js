@@ -216,6 +216,25 @@ export default function SupportTicketsList({ superadmin = false, onBack = null, 
           )}
         </div>
         <div className="flex-1 overflow-y-auto p-3 space-y-3 bg-slate-50/40">
+          {/* iter95t : bandeau annonce dans la vue detail */}
+          {activeTicket.is_admin_announcement && (
+            <section className="bg-amber-50 border border-amber-300 rounded-lg p-3 text-xs" data-testid="announcement-detail-banner">
+              <div className="flex items-center gap-2 mb-1">
+                <Megaphone size={14} className="text-amber-600" />
+                <span className="font-semibold text-amber-900">Annonce support</span>
+                <span className="text-[10px] bg-amber-200 text-amber-900 px-1.5 py-0.5 rounded">
+                  {(activeTicket.target_syndic_ids || []).includes('*')
+                    ? 'Diffusion generale'
+                    : `${(activeTicket.target_syndic_ids || []).length} syndic(s) cible(s)`}
+                </span>
+              </div>
+              <div className="text-[11px] text-amber-800">
+                {superadmin
+                  ? 'Vous etes l\'auteur de cette annonce. Les reponses des syndics vous seront notifiees par email.'
+                  : 'Ceci est une communication du support NextGe Copro. Utilisez le champ de reponse en bas pour poser vos questions ou signaler un impact - le support sera notifie directement.'}
+              </div>
+            </section>
+          )}
           {/* Ticket infos */}
           <section className="bg-white rounded-lg border border-slate-200 p-3 text-xs space-y-2">
             <div className="flex justify-between text-[10px] text-slate-500">
@@ -302,10 +321,27 @@ export default function SupportTicketsList({ superadmin = false, onBack = null, 
 
         {/* Actions bar */}
         <div className="p-3 border-t border-slate-100 bg-white space-y-2">
+          {/* iter95t : bandeau contextuel pour le fil de discussion sur une annonce */}
+          {activeTicket.is_admin_announcement && !superadmin && (
+            <div className="bg-amber-50 border border-amber-200 rounded p-2 text-[11px] text-amber-900 flex items-start gap-2" data-testid="announcement-reply-hint">
+              <Megaphone size={12} className="mt-0.5 shrink-0 text-amber-600" />
+              <div>
+                Ceci est une <b>annonce du support</b>. Vous pouvez repondre ci-dessous
+                pour poser une question ou signaler un impact - l&apos;equipe support
+                sera notifiee par email.
+              </div>
+            </div>
+          )}
           <Textarea
             value={comment}
             onChange={e => setComment(e.target.value)}
-            placeholder={superadmin ? 'Commentaire (optionnel avec changement de statut)' : 'Ajouter un commentaire...'}
+            placeholder={
+              activeTicket.is_admin_announcement && !superadmin
+                ? 'Repondre a l\'annonce (question, impact sur votre ACP...)'
+                : superadmin
+                  ? 'Commentaire (optionnel avec changement de statut)'
+                  : 'Ajouter un commentaire...'
+            }
             rows={2}
             className="text-xs"
             data-testid="ticket-comment-input"
