@@ -453,11 +453,47 @@ def create_properties_router(db):
         if exclude_id:
             base_query["id"] = {"$ne": exclude_id}
             aux_query["id"] = {"$ne": exclude_id}
-        if request:
+        # SEC-audit hotfix (2026-02) : Chinese Wall multi-tenant.
+        # PRIORITE 1 : si `copro_id` est fourni, on derive le syndic_id de
+        #              l'ACP cible et on scope la recherche a CE syndic. Cas
+        #              typique : un SUPERADMIN cree une nouvelle ACP pour un
+        #              nouveau syndic ; sans cette derivation, `syndic_query`
+        #              retourne {} pour le superadmin -> recherche globale
+        #              cross-tenants -> faux positifs de doublon (BERNARD chez
+        #              syndic A remonte pour le syndic B, violant le
+        #              Chinese Wall).
+        # PRIORITE 2 : fallback historique sur le syndic_id de l'utilisateur
+        #              connecte (syndic classique).
+        # PRIORITE 3 : SUPERADMIN sans copro_id (wizard etape 2 : owners
+        #              importes AVANT que l'ACP ne soit committee) -> aucun
+        #              scope tenant possible. On DESACTIVE la detection de
+        #              doublons pour ne pas violer le Chinese Wall par des
+        #              lectures cross-tenants. Les eventuels doublons intra-
+        #              tenant seront detectes au moment du commit final quand
+        #              l'ACP+syndic_id existeront.
+        scope_applied = False
+        if copro_id:
+            copro_doc = await db.coproprietes.find_one(
+                {"id": copro_id}, {"_id": 0, "syndic_id": 1}
+            )
+            target_sid = (copro_doc or {}).get("syndic_id")
+            if target_sid:
+                base_query["syndic_id"] = target_sid
+                aux_query["syndic_id"] = target_sid
+                scope_applied = True
+        if not scope_applied and request:
             from syndic_scope import syndic_query
             sq = syndic_query(request)
-            base_query.update(sq)
-            aux_query.update(sq)
+            if sq:
+                base_query.update(sq)
+                aux_query.update(sq)
+                scope_applied = True
+        if not scope_applied:
+            # Superadmin sans scope tenant identifiable : ne PAS chercher
+            # globalement (violation Chinese Wall). Retourne None (pas de
+            # doublon detecte). Le commit final avec syndic_id assigne
+            # re-verifera intra-tenant.
+            return None
         # Candidats cross-ACP (scope syndic) pour identifiants uniques
         candidates = await db.owners.find(base_query, {"_id": 0}).to_list(5000)
         # Candidats locaux ACP pour aux_code
