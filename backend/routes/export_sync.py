@@ -10,33 +10,78 @@ Securite :
 - Valeur lue depuis la variable d'environnement `EXPORT_SYNC_TOKEN`.
 - Comparaison en temps constant (hmac.compare_digest) pour empecher les
   attaques par timing.
+- Fail-closed : refus si le token n'est pas configure OU s'il ressemble
+  a une valeur factice / de developpement (SEC-002).
 - Aucun cookie / JWT / session : pas de trace utilisateur, pas de risque
   de fuite via CSRF.
-- Si la variable env n'est PAS definie, l'endpoint renvoie 503 (l'export
-  est desactive tant que le secret n'est pas configure).
+- Scope tenant optionnel : si `EXPORT_SYNC_ALLOWED_COPROPRIETES` est
+  defini (liste d'ids separes par des virgules), seules ces ACPs
+  peuvent etre exportees. Sinon toutes (comportement historique).
 """
 import hmac
+import logging
 import os
 from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Header
 
 
+logger = logging.getLogger(__name__)
+
+# SEC-002 : liste noire de valeurs factices / defauts developpement pour
+# empecher un deploiement accidentel avec un secret trivial.
+_WEAK_TOKEN_MARKERS = (
+    "change-me",
+    "changeme",
+    "dev-sync-token",
+    "default",
+    "placeholder",
+    "example",
+    "test",
+)
+
+
 def create_export_sync_router(db):
     router = APIRouter(prefix="/api/export")
 
     def _check_token(x_sync_token: Optional[str]) -> None:
-        expected = os.environ.get("EXPORT_SYNC_TOKEN", "")
+        expected = os.environ.get("EXPORT_SYNC_TOKEN", "").strip()
         if not expected:
-            # Secret non configure -> endpoint indisponible plutot que d'ouvrir un trou.
             raise HTTPException(
                 503,
                 "Export sync desactive : la variable d'environnement "
                 "EXPORT_SYNC_TOKEN n'est pas definie.",
             )
+        # Fail-closed sur secrets manifestement faibles / defauts.
+        low = expected.lower()
+        if len(expected) < 24 or any(m in low for m in _WEAK_TOKEN_MARKERS):
+            logger.error(
+                "EXPORT_SYNC_TOKEN configure avec une valeur faible / par "
+                "defaut. Endpoint desactive par securite."
+            )
+            raise HTTPException(
+                503,
+                "Export sync desactive : EXPORT_SYNC_TOKEN doit etre un "
+                "secret aleatoire fort (>= 24 caracteres, non generique).",
+            )
         provided = x_sync_token or ""
         if not hmac.compare_digest(provided, expected):
             raise HTTPException(401, "Token de synchronisation invalide")
+
+    def _check_copro_allowed(copropriete_id: str) -> None:
+        """Optionnel : restreint les ACPs exportables via env var.
+
+        Si `EXPORT_SYNC_ALLOWED_COPROPRIETES` est vide, toutes les ACPs
+        sont autorisees (retro-compat). Sinon, seuls les ids listes le
+        sont. Permet un scope tenant strict quand plusieurs partenaires
+        externes utilisent le meme jeton.
+        """
+        allow = (os.environ.get("EXPORT_SYNC_ALLOWED_COPROPRIETES") or "").strip()
+        if not allow:
+            return
+        allowed = {p.strip() for p in allow.split(",") if p.strip()}
+        if copropriete_id not in allowed:
+            raise HTTPException(403, "Copropriete non autorisee pour cet export")
 
     def _full_address(o: dict) -> str:
         parts = [
@@ -110,6 +155,7 @@ def create_export_sync_router(db):
         ```
         """
         _check_token(x_sync_token)
+        _check_copro_allowed(copropriete_id)
 
         # 1. Verifie que la copropriete existe (evite les 200 vides silencieux)
         copro = await db.coproprietes.find_one(

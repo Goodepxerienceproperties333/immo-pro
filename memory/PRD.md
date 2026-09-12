@@ -18,6 +18,32 @@ billing.
 - Production : https://immo-pcmn.emergent.host
 
 ## Recent changes (Feb 2026)
+- **2026-02-23 (SEC-audit)** : Audit de sécurité complet - correctifs P0/P1/P2/P3.
+  - **SEC-001 (P0)** : `ADMIN_PASSWORD` par défaut `admin123` révoqué,
+    remplacé par un secret aléatoire fort (28 caractères). Le hash de
+    l'admin est automatiquement mis à jour au prochain seed via
+    `seed_admin()` (server.py:1190-1191). Nouveau credential dans
+    `/app/memory/test_credentials.md`.
+  - **SEC-002 (P1)** : `EXPORT_SYNC_TOKEN` faible remplacé par un token
+    urlsafe 48 octets. Nouveau fail-closed dans
+    `routes/export_sync.py::_check_token` : refus (503) si le token
+    est manifestement faible (< 24 chars, contient `change-me`,
+    `dev-`, `test`, `default`, etc.). Nouveau scope tenant optionnel
+    via `EXPORT_SYNC_ALLOWED_COPROPRIETES` (liste CSV d'ids autorisés).
+  - **SEC-003 (P2)** : `JWT_SECRET` rotaté (token hex 48 octets).
+    Toutes les sessions existantes sont invalidées ; les utilisateurs
+    doivent se re-logger. Les autres secrets tiers (SMTP One2Net,
+    Azure Graph, EMAIL_CONFIG_KEY Fernet, EMERGENT_LLM_KEY) sont
+    conservés car leur rotation nécessite une action côté fournisseur
+    (à faire manuellement quand possible ; EMAIL_CONFIG_KEY ne DOIT
+    PAS être rotaté car elle déchiffre les configs email stockées).
+  - **P3 Cookie** : Override `COOKIE_SECURE=false` retiré de `.env`.
+    L'auto-détection HTTPS (`server.py:568-572`) active désormais
+    `Secure=true` en production (FRONTEND_URL commence par https://).
+  - **P3 Regex** : Escape systématique des inputs utilisateur dans les
+    requêtes `$regex` MongoDB (`routes/accounting.py::list_pcmn` +
+    `routes/admin.py` unicité role_templates) pour prévenir ReDoS.
+
 - **2026-02-23 (iter95u)** : Fix bloquant pour les extraits importes avant
   qu'un syndic ne change le PCMN par defaut de son compte bancaire.
   Scenario reproduit : IBAN BE68...1000 -> PCMN auto `55100000` ->

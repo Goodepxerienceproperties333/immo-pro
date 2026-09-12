@@ -4,6 +4,7 @@ from typing import Optional, List
 from bson import ObjectId
 from datetime import datetime, timezone
 import uuid
+import re
 
 
 class UserCreateInput(BaseModel):
@@ -819,8 +820,9 @@ def create_admin_router(db):
         if invalid:
             raise HTTPException(400, f"Permissions inconnues : {', '.join(invalid)}")
         # Verifier unicite du nom (insensible a la casse)
+        # SEC-P3 : escape user input to prevent ReDoS / regex injection
         existing = await db.role_templates.find_one(
-            {"name": {"$regex": f"^{name}$", "$options": "i"}}
+            {"name": {"$regex": f"^{re.escape(name)}$", "$options": "i"}}
         )
         if existing:
             raise HTTPException(400, f"Un profil nomme '{name}' existe deja")

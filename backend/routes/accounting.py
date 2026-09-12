@@ -112,9 +112,11 @@ def create_accounting_router(db):
         if only_active:
             query["active"] = True
         if search:
+            # SEC-P3 : escape user input to prevent ReDoS / regex injection
+            safe = re.escape(search)
             query["$or"] = [
-                {"number": {"$regex": search, "$options": "i"}},
-                {"name": {"$regex": search, "$options": "i"}}
+                {"number": {"$regex": safe, "$options": "i"}},
+                {"name": {"$regex": safe, "$options": "i"}}
             ]
         if class_num is not None:
             query["class_num"] = class_num
