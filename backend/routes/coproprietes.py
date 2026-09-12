@@ -18,6 +18,12 @@ class BankAccountInput(BaseModel):
     account_type: str = "vue"  # vue or epargne
     is_default: Optional[bool] = False
     label: Optional[str] = ""
+    # SEC-audit hotfix (2026-02) : permet au syndic de fournir un code
+    # PCMN explicite pour le compte bancaire (ex : `55163400` au lieu du
+    # `551000` auto-genere depuis l'IBAN). Si vide/None, le systeme
+    # continue de generer automatiquement via `_generate_pcmn_number`.
+    # Si fourni, il est utilise TEL QUEL apres normalisation.
+    pcmn_number: Optional[str] = ""
 
 
 class LotInlineInput(BaseModel):
@@ -163,9 +169,26 @@ def create_coproprietes_router(db):
 
         iter95b : quand le libelle (`bank_accounts.label`) change, on propage
         egalement vers `pcmn_accounts.name` pour eviter les incoherences.
+
+        SEC-audit hotfix (2026-02) : utilise le `pcmn_number` fourni par le
+        syndic tel quel (apres normalisation), au lieu de forcer une valeur
+        auto-generee. Le code auto-genere n'est utilise qu'en fallback
+        (aucun code explicite fourni). Ceci permet au syndic de personnaliser
+        les codes bancaires (ex : `55163400` au lieu du defaut `551000`).
         """
+        from pcmn_utils import normalize_bank_pcmn
         for ba in bank_accounts:
-            pcmn_number = _generate_pcmn_number(ba["iban"], ba["account_type"])
+            # SEC-audit : si le syndic a fourni un pcmn_number explicite,
+            # on l'utilise apres normalisation. Sinon, fallback historique.
+            raw_provided = (ba.get("pcmn_number") or "").strip()
+            if raw_provided:
+                pcmn_number = normalize_bank_pcmn(raw_provided)
+            else:
+                pcmn_number = _generate_pcmn_number(ba["iban"], ba["account_type"])
+            # Persiste le code effectif dans `bank_accounts` pour que le
+            # document ACP soit une source coherente (evite les divergences
+            # entre `bank_accounts.pcmn_number` et `pcmn_accounts.number`).
+            ba["pcmn_number"] = pcmn_number
             default_label = f"Banque {'epargne' if ba['account_type'] == 'epargne' else 'compte a vue'} {ba['iban'][-4:]}"
             desired_name = ba.get("label") or default_label
             existing = await db.pcmn_accounts.find_one({"number": pcmn_number, "copropriete_id": copro_id})
@@ -238,9 +261,14 @@ def create_coproprietes_router(db):
                 if ba["account_type"] == "vue":
                     ba["is_default"] = True
                     break
-        # Add PCMN number to each bank account
+        # Add PCMN number to each bank account.
+        # SEC-audit hotfix (2026-02) : respecte le pcmn_number explicitement
+        # fourni par le syndic (apres normalisation). Ne genere automatiquement
+        # que si le champ est vide/None.
+        from pcmn_utils import normalize_bank_pcmn
         for ba in bank_accounts:
-            ba["pcmn_number"] = _generate_pcmn_number(ba["iban"], ba["account_type"])
+            raw = (ba.get("pcmn_number") or "").strip()
+            ba["pcmn_number"] = normalize_bank_pcmn(raw) if raw else _generate_pcmn_number(ba["iban"], ba["account_type"])
 
         doc = {
             "id": str(uuid.uuid4()),
@@ -462,8 +490,28 @@ def create_coproprietes_router(db):
             seen.add(key)
             deduped.append(ba)
         bank_accounts = deduped
+        # SEC-audit hotfix (2026-02) : respecte pcmn_number fourni.
+        # Preserve aussi les pcmn_number DEJA renommes dans le document
+        # existant : si le syndic renomme le PCMN via l'UI banking (ex :
+        # 551000 -> 55163400), l'edition ulterieure de l'ACP (sans
+        # renseigner le champ pcmn_number) ne doit PAS regenerer le code
+        # historique. On lookup l'existant par IBAN dans le document
+        # actuel pour preserver la personnalisation.
+        from pcmn_utils import normalize_bank_pcmn
+        existing_copro = await db.coproprietes.find_one(
+            {**sq, "id": copro_id}, {"_id": 0, "bank_accounts": 1}
+        )
+        existing_map = {(eba.get("iban") or ""): (eba.get("pcmn_number") or "")
+                        for eba in ((existing_copro or {}).get("bank_accounts") or [])}
         for ba in bank_accounts:
-            ba["pcmn_number"] = _generate_pcmn_number(ba["iban"], ba["account_type"])
+            raw = (ba.get("pcmn_number") or "").strip()
+            if raw:
+                ba["pcmn_number"] = normalize_bank_pcmn(raw)
+            elif existing_map.get(ba.get("iban", "")):
+                # Preserve le code existant (potentiellement renomme).
+                ba["pcmn_number"] = existing_map[ba["iban"]]
+            else:
+                ba["pcmn_number"] = _generate_pcmn_number(ba["iban"], ba["account_type"])
         update = {
             "name": data.name, "bce": data.bce,
             "address": data.address, "postal_code": data.postal_code,

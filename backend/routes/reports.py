@@ -1323,10 +1323,16 @@ async def compute_bilan_data(db, copropriete_id: str, date_to: Optional[str] = N
         }
 
     def _rub(label, accounts):
+        # SEC-audit hotfix (2026-02) : `abs(a["amount"]) > 0.01` au lieu de
+        # `a["amount"] > 0.01` afin de conserver les entrees a montant NEGATIF.
+        # Cas : compte 55/57/58 avec solde crediteur (decouvert bancaire ou
+        # anomalie de transfert) place dans la tresorerie avec un amount
+        # negatif. Sans ce fix, l'entree etait silencieusement filtree et
+        # le bilan devenait desequilibre.
         return {
             "label": label,
             "total": round(sum(a["amount"] for a in accounts), 2),
-            "accounts": [a for a in accounts if a["amount"] > 0.01],
+            "accounts": [a for a in accounts if abs(a["amount"]) > 0.01],
         }
 
     # Classify into Belgian PCMN rubriques (default: net debit -> actif, net credit -> passif)
@@ -1437,6 +1443,34 @@ async def compute_bilan_data(db, copropriete_id: str, date_to: Optional[str] = N
                     passif_buckets["VI_dettes_sinistres"].append(item)
                 else:
                     passif_buckets["VII_regul_passif"].append(item)
+            # SEC-audit hotfix (2026-02) : classe 5 avec solde CREDITEUR.
+            # Cas legitimes :
+            #  - 54xx / 55xx / 57xx (banques / caisses) creditrices = decouvert
+            #    ou compte epargne mal-oriente. On les GARDE en tresorerie
+            #    (VII_disponibilites cote ACTIF, montant NEGATIF pour refleter
+            #    le decouvert). Le total net de la tresorerie s'en trouve
+            #    diminue. Les qualifier de "dettes court terme" fausserait
+            #    la lecture du bilan et masquerait l'anomalie de tresorerie.
+            #  - 58xx (virements internes / comptes de transit) devrait TOUJOURS
+            #    etre solde a 0 apres la contre-passation. Un solde crediteur
+            #    est une ANOMALIE de rapprochement (transfert non equilibre).
+            #    On le laisse aussi en tresorerie, marque `_anomaly=transfer_unbalanced`.
+            #  - 50xx / 51xx / 52xx / 53xx (placements) creditrices = decouvert
+            #    sur ligne de placement, reste en VI_placements.
+            # Sans cette clause, ces comptes tombaient dans le `else` final
+            # -> "VI. Autres dettes court terme" ce qui est comptablement faux.
+            elif acc.startswith(("50", "51", "52", "53")):
+                item["amount"] = -abs(solde)
+                actif_buckets["VI_placements"].append(item)
+            elif acc.startswith(("54", "55", "57")):
+                item["amount"] = -abs(solde)
+                actif_buckets["VII_disponibilites"].append(item)
+            elif acc.startswith("58"):
+                # ANOMALIE : compte de transit non solde. Reste visible en
+                # tresorerie mais tagge pour l'audit qualite.
+                item["amount"] = -abs(solde)
+                item["_anomaly"] = "transfer_unbalanced"
+                actif_buckets["VII_disponibilites"].append(item)
             else:
                 passif_buckets["VI_dettes_autres"].append(item)
 
