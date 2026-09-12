@@ -3,7 +3,7 @@ import {
   DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem,
   DropdownMenuLabel, DropdownMenuSeparator,
 } from '@/components/ui/dropdown-menu';
-import { ChevronDown } from 'lucide-react';
+import { ChevronDown, ExternalLink } from 'lucide-react';
 
 /**
  * TopNav - Barre de navigation horizontale (iter90bk).
@@ -19,8 +19,10 @@ import { ChevronDown } from 'lucide-react';
  * Props :
  *  - sections : [{title, accent, items:[{to, icon, label, end?}]}]
  *  - extraSections : [{title, accent, items}] (superadmin, compte, etc.)
+ *  - externalLinks : [{label, href, icon, accent}] - liens externes
+ *    autonomes (redirect vers site tiers, sans dropdown).
  */
-export default function TopNav({ sections, extraSections = [] }) {
+export default function TopNav({ sections, extraSections = [], externalLinks = [] }) {
   const location = useLocation();
   const allSections = [...sections, ...extraSections];
 
@@ -151,6 +153,29 @@ export default function TopNav({ sections, extraSections = [] }) {
           </DropdownMenu>
         );
       })}
+      {externalLinks.length > 0 && (
+        <div className="flex items-center gap-2 ml-1 pl-3 border-l-2 border-slate-200">
+          {externalLinks.map(link => {
+            const Icon = link.icon;
+            return (
+              <a
+                key={link.href}
+                href={link.href}
+                target="_blank"
+                rel="noopener noreferrer"
+                className={`inline-flex items-center gap-2 h-11 px-5 rounded-full text-[15px] font-bold transition-all duration-200 ${accentClass(link.accent || 'indigo', false)}`}
+                data-testid={`top-nav-external-${(link.label || '').toLowerCase().replace(/\s+/g, '-')}`}
+                title={`Ouvrir ${link.label} dans un nouvel onglet`}
+              >
+                <span className={`h-2.5 w-2.5 rounded-full ${dotClass(link.accent || 'indigo')}`} />
+                {Icon && <Icon size={16} strokeWidth={2} />}
+                {link.label}
+                <ExternalLink size={13} className="opacity-60" />
+              </a>
+            );
+          })}
+        </div>
+      )}
     </nav>
   );
 }

@@ -6,7 +6,7 @@ import {
   LayoutDashboard, Users, Building2, UserCheck, BookOpen, FileText,
   Receipt, Gauge, Landmark, FolderOpen, LogOut, ChevronLeft, ChevronRight,
   Menu, Shield, Home, Truck, Calendar, BookMarked, Megaphone, BarChart3, Bell, Wallet, Tag, UserCog, Pencil,
-  ShieldAlert, Unlock, ScrollText, IdCard, Activity, FileCheck, FileArchive, Mail, HardDrive, Key, Send, Ticket
+  ShieldAlert, Unlock, ScrollText, IdCard, Activity, FileCheck, FileArchive, Mail, HardDrive, Key, Send, Ticket, Gavel
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -280,6 +280,20 @@ export default function Layout() {
               className={({ isActive }) => `sidebar-link sidebar-link-slate ${isActive ? 'active' : ''} ${collapsed ? 'justify-center px-2' : ''}`}
               data-testid="nav-profile"
             ><span className="sidebar-icon-wrap"><UserCog size={18} strokeWidth={2} /></span>{!collapsed && <span className="text-[13.5px] font-medium">Mon profil</span>}</NavLink>
+            {(user?.role === 'syndic' || user?.role === 'admin' || user?.role === 'superadmin') && (
+              <a
+                href="https://github-project-saver.emergent.host"
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={() => setMobileOpen(false)}
+                className={`sidebar-link sidebar-link-indigo ${collapsed ? 'justify-center px-2' : ''}`}
+                data-testid="nav-tenue-ag-sidebar"
+                title="Ouvrir Tenue d'AG dans un nouvel onglet"
+              >
+                <span className="sidebar-icon-wrap"><Gavel size={18} strokeWidth={2} /></span>
+                {!collapsed && <span className="text-[13.5px] font-medium">Tenue d&apos;AG</span>}
+              </a>
+            )}
           </div>
         </nav>
       </ScrollArea>
@@ -379,6 +393,18 @@ export default function Layout() {
           <NavLink to="/coproprietes" className="text-slate-400 hover:text-white text-xs flex items-center gap-1.5 transition-colors" data-testid="nav-coproprietes-top">
             <Home size={14} /> Gerer les ACP
           </NavLink>
+          {(user?.role === 'syndic' || user?.role === 'admin' || user?.role === 'superadmin') && (
+            <a
+              href="https://github-project-saver.emergent.host"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-indigo-300 hover:text-indigo-200 text-xs flex items-center gap-1.5 transition-colors font-semibold"
+              data-testid="nav-tenue-ag-top-noacp"
+              title="Ouvrir Tenue d'AG dans un nouvel onglet"
+            >
+              <Gavel size={14} /> Tenue d&apos;AG
+            </a>
+          )}
           <Separator orientation="vertical" className="h-6 bg-slate-700" />
           <SupportChatBubble />
           <NavLink
@@ -442,6 +468,20 @@ export default function Layout() {
   }
   accountItems.push({ to: '/profile', icon: UserCog, label: 'Mon profil' });
   extraSections.push({ title: 'Compte', accent: 'slate', items: accountItems });
+
+  // Onglet externe : redirection vers la plateforme dediee a la tenue
+  // d'Assemblees Generales. Ouvre dans un nouvel onglet, sans transporter
+  // les cookies de session ; l'auth se fait cote AG via l'API
+  // /api/auth/syndic-check exposee sur ce backend.
+  const externalLinks = [];
+  if (user?.role === 'syndic' || user?.role === 'admin' || user?.role === 'superadmin') {
+    externalLinks.push({
+      label: "Tenue d'AG",
+      href: 'https://github-project-saver.emergent.host',
+      icon: Gavel,
+      accent: 'indigo',
+    });
+  }
 
   return (
     <div className="flex flex-col h-screen overflow-hidden bg-[#FAFAFA]">
@@ -524,7 +564,7 @@ export default function Layout() {
 
       {/* iter90bk : TopNav horizontal (desktop uniquement) */}
       <div className="hidden lg:block">
-        <TopNav sections={sections} extraSections={extraSections} />
+        <TopNav sections={sections} extraSections={extraSections} externalLinks={externalLinks} />
       </div>
 
       <main className="flex-1 overflow-y-auto overflow-x-hidden p-4 lg:p-6">
