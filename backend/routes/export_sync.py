@@ -389,6 +389,7 @@ def create_syndic_check_router(db):
             "name": "Cabinet X",
             "role": "syndic",
             "copropriete_ids": ["..."],
+            "module_ag_active": true,
             "last_login_at": "2026-02-23T09:00:00+00:00"
           }
         }
@@ -401,6 +402,9 @@ def create_syndic_check_router(db):
         - `{"detail": "Compte suspendu"}` (403) si `is_suspended`.
         - `{"detail": "Compte non initialise"}` (403) si
           `must_change_password`.
+        - `{"detail": "Module AG non active pour ce compte"}` (403) si
+          `module_ag_active` est absent ou False (opt-in par le superadmin
+          dans /admin/users).
         """
         _check_token(x_sync_token)
 
@@ -438,6 +442,19 @@ def create_syndic_check_router(db):
         if not ok:
             raise HTTPException(401, "Identifiants invalides")
 
+        # Module "Tenue d'AG" : verification opt-in. Meme si mdp correct,
+        # refuse la connexion au module si le superadmin n'a pas active le
+        # module pour ce compte. Le refus est un 403 explicite (pas un 401
+        # generique) car les identifiants sont valides : c'est l'ABONNEMENT
+        # au module qui manque. L'utilisateur peut ainsi contacter son
+        # superadmin en connaissance de cause.
+        if not bool(user.get("module_ag_active", False)):
+            raise HTTPException(
+                403,
+                "Module AG non active pour ce compte. "
+                "Contactez votre superadmin pour activer l'acces."
+            )
+
         # Trace la verification reussie (audit trail) - format aligne sur
         # /api/auth/login pour uniformite des logs de securite.
         try:
@@ -456,6 +473,7 @@ def create_syndic_check_router(db):
                 "name": user.get("name", ""),
                 "role": "syndic",
                 "copropriete_ids": user.get("copropriete_ids") or [],
+                "module_ag_active": True,
                 "last_login_at": user.get("last_login_at"),
             },
         }

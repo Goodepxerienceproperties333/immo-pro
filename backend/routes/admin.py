@@ -26,6 +26,9 @@ class UserUpdateInput(BaseModel):
     must_change_password: Optional[bool] = None
     role_template_id: Optional[str] = None
     permissions: Optional[List[str]] = None
+    # Module "Tenue d'AG" (site github-project-saver.emergent.host).
+    # Superadmin uniquement. `null` = pas de changement. `True/False` = set.
+    module_ag_active: Optional[bool] = None
 
 
 def create_admin_router(db):
@@ -65,6 +68,8 @@ def create_admin_router(db):
                 "must_change_password": u.get("must_change_password", False),
                 "role_template_id": u.get("role_template_id"),
                 "permissions": u.get("permissions"),
+                # Module "Tenue d'AG" : defaut False (opt-in par le superadmin).
+                "module_ag_active": bool(u.get("module_ag_active", False)),
                 "created_at": u.get("created_at", ""),
             })
         return result
@@ -349,6 +354,13 @@ def create_admin_router(db):
                 # When (re)activating, blank-out the password so login is impossible
                 placeholder = uuid.uuid4().hex + uuid.uuid4().hex
                 update["password_hash"] = hash_password(placeholder)
+        # Module "Tenue d'AG" : bascule activation. N'a de sens que pour un
+        # compte de role 'syndic' (les proprietaires n'ont pas acces a AG).
+        # Le champ est neanmoins tolere pour tout role afin d'eviter des
+        # 400 lors de bascules multiples ; le controle final est dans
+        # /api/auth/syndic-check qui refuse l'auth si module_ag_active=False.
+        if data.module_ag_active is not None:
+            update["module_ag_active"] = bool(data.module_ag_active)
         if update:
             update["updated_at"] = datetime.now(timezone.utc).isoformat()
             await db.users.update_one({"_id": ObjectId(user_id)}, {"$set": update})
@@ -361,6 +373,7 @@ def create_admin_router(db):
             "copropriete_ids": updated.get("copropriete_ids", []),
             "role_template_id": updated.get("role_template_id"),
             "permissions": updated.get("permissions"),
+            "module_ag_active": bool(updated.get("module_ag_active", False)),
         }
 
     @router.delete("/users/{user_id}")

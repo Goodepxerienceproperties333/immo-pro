@@ -9,7 +9,8 @@ import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { toast } from 'sonner';
-import { Plus, Pencil, Trash2, Shield, Search, Building, Info, Mail, AlertTriangle, Flame } from 'lucide-react';
+import { Plus, Pencil, Trash2, Shield, Search, Building, Info, Mail, AlertTriangle, Flame, Gavel } from 'lucide-react';
+import { Switch } from '@/components/ui/switch';
 import { fmtDate } from '@/lib/dateFmt';
 
 // iter90h0 : le superadmin peut creer des comptes 'syndic' OU 'superadmin'.
@@ -74,6 +75,25 @@ export default function AdminUsersPage() {
     setEditing(u);
     setForm({ email: u.email, password: '', name: u.name, role: u.role, must_change_password: false });
     setDialogOpen(true);
+  };
+
+  // Bascule rapide du module "Tenue d'AG" (superadmin uniquement).
+  // Optimistic update : on modifie l'etat local immediatement, on rollback
+  // en cas d'erreur API.
+  const toggleModuleAG = async (u, checked) => {
+    const previous = users;
+    setUsers(users.map(x => x.id === u.id ? { ...x, module_ag_active: checked } : x));
+    try {
+      await api.put(`/admin/users/${u.id}`, { module_ag_active: checked });
+      toast.success(
+        checked
+          ? `Module AG active pour ${u.name}`
+          : `Module AG desactive pour ${u.name}`
+      );
+    } catch (e) {
+      setUsers(previous);
+      toast.error("Impossible de basculer le module : " + (e?.response?.data?.detail || e.message));
+    }
   };
 
   const handleSave = async () => {
@@ -204,18 +224,33 @@ export default function AdminUsersPage() {
             <TableHead>Email</TableHead>
             <TableHead>Role</TableHead>
             <TableHead className="text-center"><Building size={12} className="inline" /> ACPs</TableHead>
+            <TableHead className="text-center" title="Module Tenue d'AG"><Gavel size={12} className="inline" /> AG</TableHead>
             <TableHead>Cree le</TableHead>
             <TableHead className="w-24">Actions</TableHead>
           </TableRow></TableHeader>
           <TableBody>
             {filtered.length === 0 ? (
-              <TableRow><TableCell colSpan={6} className="text-center py-8 text-slate-400">Aucun compte</TableCell></TableRow>
+              <TableRow><TableCell colSpan={7} className="text-center py-8 text-slate-400">Aucun compte</TableCell></TableRow>
             ) : filtered.map(u => (
               <TableRow key={u.id} className="hover:bg-slate-50/50">
                 <TableCell className="font-medium text-slate-900">{u.name}</TableCell>
                 <TableCell className="text-slate-600 font-mono text-xs">{u.email}</TableCell>
                 <TableCell>{roleBadge(u.role)}</TableCell>
                 <TableCell className="text-center text-xs text-slate-500">{(u.copropriete_ids || []).length}</TableCell>
+                <TableCell className="text-center">
+                  {u.role === 'syndic' ? (
+                    <Switch
+                      checked={!!u.module_ag_active}
+                      onCheckedChange={(checked) => toggleModuleAG(u, checked)}
+                      data-testid={`module-ag-toggle-${u.id}`}
+                      title={u.module_ag_active
+                        ? "Module AG actif - le syndic peut se connecter sur github-project-saver.emergent.host"
+                        : "Module AG desactive - la connexion au module de vote sera refusee"}
+                    />
+                  ) : (
+                    <span className="text-slate-300 text-xs" title="Reserve aux comptes syndic">-</span>
+                  )}
+                </TableCell>
                 <TableCell className="text-xs text-slate-500">{fmtDate(u.created_at)}</TableCell>
                 <TableCell>
                   <div className="flex gap-1">
