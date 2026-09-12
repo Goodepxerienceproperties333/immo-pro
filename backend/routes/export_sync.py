@@ -23,7 +23,9 @@ import logging
 import os
 from typing import List, Optional
 
+import bcrypt
 from fastapi import APIRouter, HTTPException, Header
+from pydantic import BaseModel, EmailStr
 
 
 logger = logging.getLogger(__name__)
@@ -308,6 +310,154 @@ def create_export_sync_router(db):
             "copropriete_name": copro.get("name", ""),
             "count": len(result_owners),
             "owners": result_owners,
+        }
+
+    return router
+
+
+def create_syndic_check_router(db):
+    """Router separe pour l'API POST /api/auth/syndic-check.
+
+    Objectif : permettre a un service tiers (ex: portail marketing,
+    plateforme de gestion cliente) de verifier qu'un couple email/mot de
+    passe correspond bien a un compte SYNDIC (ni proprietaire ni
+    superadmin) sans exposer les cookies de session ni emettre de JWT.
+
+    Securite (defense en profondeur) :
+    - Header `X-Sync-Token` obligatoire (meme mecanisme que /export/*)
+      -> gate machine-a-machine, empeche l'usage direct par un
+      utilisateur final ou un proprietaire.
+    - Fail-closed sur secret faible/defaut (via `_check_token`).
+    - Ne renvoie AUCUN token d'authentification : uniquement une
+      confirmation booleenne + metadonnees minimales du syndic (id,
+      email, nom, coproprietes autorisees). Impossible d'usurper une
+      session avec cette reponse.
+    - Blocage strict role != 'syndic' : les proprietaires ne peuvent
+      pas s'authentifier via cette route, meme avec des identifiants
+      valides.
+    - Respecte les flags `is_suspended` et `must_change_password` :
+      un compte suspendu ou non initialise est refuse.
+    """
+    from datetime import datetime, timezone
+    router = APIRouter(prefix="/api/auth")
+
+    _WEAK_TOKEN_MARKERS_LOCAL = (
+        "change-me", "changeme", "dev-sync-token", "default",
+        "placeholder", "example", "test",
+    )
+
+    def _check_token(x_sync_token: Optional[str]) -> None:
+        expected = os.environ.get("EXPORT_SYNC_TOKEN", "").strip()
+        if not expected:
+            raise HTTPException(
+                503,
+                "Syndic-check desactive : EXPORT_SYNC_TOKEN non defini.",
+            )
+        low = expected.lower()
+        if len(expected) < 24 or any(m in low for m in _WEAK_TOKEN_MARKERS_LOCAL):
+            logger.error(
+                "EXPORT_SYNC_TOKEN configure avec une valeur faible. "
+                "Endpoint /api/auth/syndic-check desactive par securite."
+            )
+            raise HTTPException(
+                503,
+                "Syndic-check desactive : EXPORT_SYNC_TOKEN doit etre un "
+                "secret aleatoire fort (>= 24 caracteres, non generique).",
+            )
+        if not hmac.compare_digest((x_sync_token or ""), expected):
+            raise HTTPException(401, "Token de synchronisation invalide")
+
+    class SyndicCheckIn(BaseModel):
+        email: EmailStr
+        password: str
+
+    @router.post("/syndic-check")
+    async def syndic_check(
+        payload: SyndicCheckIn,
+        x_sync_token: Optional[str] = Header(default=None, alias="X-Sync-Token"),
+    ):
+        """Verifie qu'un couple email/mot de passe correspond a un
+        compte SYNDIC actif.
+
+        Retour succes (200) :
+        ```
+        {
+          "valid": true,
+          "user": {
+            "id": "...",
+            "email": "syndic@example.be",
+            "name": "Cabinet X",
+            "role": "syndic",
+            "copropriete_ids": ["..."],
+            "last_login_at": "2026-02-23T09:00:00+00:00"
+          }
+        }
+        ```
+
+        Retour echec (401) :
+        - `{"detail": "Identifiants invalides"}` si email inconnu, mdp faux
+          OU si le compte n'a pas le role `syndic` (proprietaire, admin
+          -> refuses avec le meme message pour eviter l'enumeration).
+        - `{"detail": "Compte suspendu"}` (403) si `is_suspended`.
+        - `{"detail": "Compte non initialise"}` (403) si
+          `must_change_password`.
+        """
+        _check_token(x_sync_token)
+
+        email_norm = (payload.email or "").strip().lower()
+        if not email_norm or not payload.password:
+            raise HTTPException(401, "Identifiants invalides")
+
+        user = await db.users.find_one({"email": email_norm})
+        if not user:
+            raise HTTPException(401, "Identifiants invalides")
+
+        # SECURITE : refuse strictement tout compte non-syndic.
+        # Les proprietaires (role="owner") ne peuvent PAS s'authentifier
+        # via ce endpoint, meme avec des identifiants valides.
+        # Le meme message que "identifiants invalides" est renvoye afin
+        # d'eviter l'enumeration de comptes.
+        if (user.get("role") or "").strip() != "syndic":
+            raise HTTPException(401, "Identifiants invalides")
+
+        if user.get("is_suspended"):
+            raise HTTPException(403, "Compte suspendu")
+        if user.get("must_change_password"):
+            raise HTTPException(403, "Compte non initialise")
+
+        pwd_hash = user.get("password_hash") or ""
+        if not pwd_hash:
+            raise HTTPException(401, "Identifiants invalides")
+        try:
+            ok = bcrypt.checkpw(
+                payload.password.encode("utf-8"),
+                pwd_hash.encode("utf-8"),
+            )
+        except Exception:
+            ok = False
+        if not ok:
+            raise HTTPException(401, "Identifiants invalides")
+
+        # Trace la verification reussie (audit trail) - format aligne sur
+        # /api/auth/login pour uniformite des logs de securite.
+        try:
+            await db.users.update_one(
+                {"_id": user["_id"]},
+                {"$set": {"last_login_at": datetime.now(timezone.utc).isoformat()}},
+            )
+        except Exception:
+            pass
+
+        return {
+            "valid": True,
+            "user": {
+                "id": str(user["_id"]),
+                "email": user.get("email", ""),
+                "name": user.get("name", ""),
+                "role": "syndic",
+                "copropriete_ids": user.get("copropriete_ids") or [],
+                "last_login_at": user.get("last_login_at"),
+            },
         }
 
     return router
